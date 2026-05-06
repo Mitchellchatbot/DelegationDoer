@@ -1,11 +1,26 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { requireCurrentUserId } from "@/lib/session";
-import { getUserById } from "@/lib/server-data";
+import { getAllTasks, getUserById } from "@/lib/server-data";
 import { notifyAssignment } from "@/lib/slack";
 
-// POST /api/tickets — create a new ticket. Returns the inserted row.
-// The new ticket has no row in assignment_acknowledgements, so the widget
+export const dynamic = "force-dynamic";
+
+// GET /api/tasks — every task in the system, in the camelCase shape the UI
+// expects. Used by the board (and anywhere that needs a fresh org-wide
+// snapshot). No filtering server-side; clients filter as they like.
+export async function GET() {
+  try {
+    const tasks = await getAllTasks();
+    return NextResponse.json({ tasks });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "unknown error";
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
+}
+
+// POST /api/tasks — create a new task. Returns the inserted row.
+// The new task has no row in assignment_acknowledgements, so the widget
 // will fire its alert + sound on the next 15-second poll.
 
 export async function POST(req: NextRequest) {
@@ -41,14 +56,14 @@ export async function POST(req: NextRequest) {
       inactive_flag: false,
       last_activity_at: now,
       created_at: now,
-      blocks_ticket_ids: [],
+      blocks_task_ids: [],
       client_name: typeof body.clientName === "string" && body.clientName.trim() ? body.clientName.trim() : null,
       website: typeof body.website === "string" && body.website.trim() ? body.website.trim() : null
     };
 
     const supabase = getSupabaseAdmin();
     const { data, error } = await supabase
-      .from("tickets")
+      .from("tasks")
       .insert(row)
       .select()
       .single();
@@ -58,7 +73,7 @@ export async function POST(req: NextRequest) {
     // Log the creation as activity.
     await supabase.from("activity_logs").insert({
       id: `a_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
-      ticket_id: id,
+      task_id: id,
       user_id: userId,
       action: "created",
       detail: row.assignee_id ? `Assigned to ${row.assignee_id}` : "Created (unassigned)"
@@ -79,7 +94,7 @@ export async function POST(req: NextRequest) {
           const r = await notifyAssignment({
             assigneeEmail: assignee.email,
             assignerName: assigner.name,
-            ticketId: id,
+            taskId: id,
             title: row.title,
             description: row.description,
             priority: row.priority,
@@ -94,7 +109,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    return NextResponse.json({ ticket: data, slack });
+    return NextResponse.json({ task: data, slack });
   } catch (err) {
     const message = err instanceof Error ? err.message : "unknown error";
     return NextResponse.json({ error: message }, { status: 500 });

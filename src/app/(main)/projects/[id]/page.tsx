@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { projects, milestones, raciEntries, users, tickets, departments } from "@/lib/mock-data";
-import { TicketCard } from "@/components/TicketCard";
+import { projects, milestones, raciEntries, users, tasks, departments } from "@/lib/mock-data";
+import { TaskCard } from "@/components/TaskCard";
 import { RACITable } from "@/components/RACITable";
 import { formatDate } from "@/lib/utils";
 import { CheckCircle2, Circle, Clock, ArrowLeft } from "lucide-react";
@@ -13,7 +13,7 @@ export default function ProjectDetailPage({ params }: { params: { id: string } }
 
   const dept = departments.find((d) => d.id === project.departmentId);
   const mils = milestones.filter((m) => m.projectId === project.id);
-  const projectTickets = tickets.filter((t) => t.projectId === project.id);
+  const projectTasks = tasks.filter((t) => t.projectId === project.id);
   const raci = raciEntries.filter((r) => r.projectId === project.id);
 
   return (
@@ -60,9 +60,9 @@ export default function ProjectDetailPage({ params }: { params: { id: string } }
       </section>
 
       <section>
-        <div className="text-sm font-medium mb-3">Tickets <span className="text-muted">· {projectTickets.length}</span></div>
+        <div className="text-sm font-medium mb-3">Tasks <span className="text-muted">· {projectTasks.length}</span></div>
         <div className="grid grid-cols-3 gap-3">
-          {projectTickets.map((t) => <TicketCard key={t.id} ticket={t} />)}
+          {projectTasks.map((t) => <TaskCard key={t.id} task={t} />)}
         </div>
       </section>
     </div>

@@ -9,7 +9,7 @@ export const runtime = "nodejs"; // crypto needs Node runtime, not Edge
 //   2. Signed event_callback payloads — verify signature, ack within 3s.
 //   3. Anything else — 200 ok so Slack doesn't retry.
 //
-// Heavy work (Claude classification, ticket creation) belongs out of this
+// Heavy work (Claude classification, task creation) belongs out of this
 // handler — Slack times out at 3s and will retry on non-2xx. For now we just
 // pass URL verification and stub the event handler.
 
@@ -62,13 +62,13 @@ export async function POST(req: NextRequest) {
   }
 
   // Step 2 — real event delivery. Ack fast; defer real work until the
-  // classifier + ticket pipeline lands.
+  // classifier + task pipeline lands.
   if (payload.type === "event_callback") {
     // TODO: enqueue payload.event for async processing:
     //   - filter by source (DMs + channels you watch)
     //   - heuristic gate (imperative cues)
     //   - batched Haiku classification
-    //   - create ticket if classified as task-for-you
+    //   - create task if classified as task-for-you
     return NextResponse.json({ ok: true });
   }
 

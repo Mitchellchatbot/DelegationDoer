@@ -1,21 +1,21 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { tickets as mockTickets, userById, deptById, projectById, activity as mockActivity } from "@/lib/mock-data";
+import { tasks as mockTasks, userById, deptById, projectById, activity as mockActivity } from "@/lib/mock-data";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { PriorityBadge, StatusPill, Tag, StalledBadge } from "@/components/Badges";
 import { Avatar } from "@/components/Avatar";
 import { Countdown } from "@/components/Countdown";
-import { TicketActions, CommentForm } from "@/components/TicketActions";
+import { TaskActions, CommentForm } from "@/components/TaskActions";
 import { formatDate, relativeTime } from "@/lib/utils";
 import { ArrowLeft, Clock, Calendar } from "lucide-react";
-import type { Ticket, ActivityLog } from "@/lib/types";
+import type { Task, ActivityLog } from "@/lib/types";
 
 // Always read fresh — comments / status changes need to surface immediately.
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-// Server component. Tickets are sourced from Supabase first (so newly-created
-// rows from the New Ticket form show up); falls back to in-memory mock-data
+// Server component. Tasks are sourced from Supabase first (so newly-created
+// rows from the New Task form show up); falls back to in-memory mock-data
 // for the seeded set in case Supabase isn't reachable.
 
 interface Extension {
@@ -28,18 +28,18 @@ interface Extension {
   createdAt: string;
 }
 
-async function loadTicket(id: string): Promise<{ ticket: Ticket; log: ActivityLog[]; extensions: Extension[] } | null> {
+async function loadTask(id: string): Promise<{ task: Task; log: ActivityLog[]; extensions: Extension[] } | null> {
   // Try Supabase first.
   try {
     const supabase = getSupabaseAdmin();
     const { data: t, error } = await supabase
-      .from("tickets")
+      .from("tasks")
       .select("*")
       .eq("id", id)
       .maybeSingle();
 
     if (!error && t) {
-      const ticket: Ticket = {
+      const task: Task = {
         id: t.id,
         title: t.title,
         description: t.description ?? "",
@@ -56,19 +56,19 @@ async function loadTicket(id: string): Promise<{ ticket: Ticket; log: ActivityLo
         inactiveFlag: !!t.inactive_flag,
         lastActivityAt: t.last_activity_at,
         createdAt: t.created_at,
-        blocksTicketIds: t.blocks_ticket_ids ?? [],
+        blocksTaskIds: t.blocks_task_ids ?? [],
         clientName: t.client_name ?? null,
         website: t.website ?? null
       };
 
       const [{ data: rawLog }, { data: rawExt }] = await Promise.all([
-        supabase.from("activity_logs").select("*").eq("ticket_id", id).order("created_at", { ascending: false }),
-        supabase.from("ticket_extensions").select("*").eq("ticket_id", id).order("created_at", { ascending: false })
+        supabase.from("activity_logs").select("*").eq("task_id", id).order("created_at", { ascending: false }),
+        supabase.from("task_extensions").select("*").eq("task_id", id).order("created_at", { ascending: false })
       ]);
 
       const log: ActivityLog[] = (rawLog ?? []).map((a) => ({
         id: a.id,
-        ticketId: a.ticket_id,
+        taskId: a.task_id,
         userId: a.user_id,
         action: a.action,
         detail: a.detail ?? "",
@@ -84,56 +84,56 @@ async function loadTicket(id: string): Promise<{ ticket: Ticket; log: ActivityLo
         reason: e.reason,
         createdAt: e.created_at
       }));
-      return { ticket, log, extensions };
+      return { task, log, extensions };
     }
   } catch { /* fall through to mock */ }
 
   // Fallback for the seeded data when Supabase isn't reachable.
-  const m = mockTickets.find((t) => t.id === id);
+  const m = mockTasks.find((t) => t.id === id);
   if (!m) return null;
   const log = mockActivity
-    .filter((a) => a.ticketId === id)
+    .filter((a) => a.taskId === id)
     .sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt));
-  return { ticket: m, log, extensions: [] };
+  return { task: m, log, extensions: [] };
 }
 
-export default async function TicketDetailPage({ params }: { params: { id: string } }) {
-  const loaded = await loadTicket(params.id);
+export default async function TaskDetailPage({ params }: { params: { id: string } }) {
+  const loaded = await loadTask(params.id);
   if (!loaded) return notFound();
-  const { ticket, log, extensions } = loaded;
+  const { task, log, extensions } = loaded;
   const totalHoursAdded = extensions.reduce((s, e) => s + e.hoursAdded, 0);
 
-  const assignee = userById(ticket.assigneeId);
-  const creator = userById(ticket.creatorId);
-  const dept = deptById(ticket.departmentId);
-  const project = projectById(ticket.projectId);
+  const assignee = userById(task.assigneeId);
+  const creator = userById(task.creatorId);
+  const dept = deptById(task.departmentId);
+  const project = projectById(task.projectId);
 
   return (
     <div className="space-y-5 max-w-5xl">
-      <Link href="/tickets" className="text-xs text-muted hover:text-ink inline-flex items-center gap-1">
-        <ArrowLeft className="w-3 h-3" /> Back to tickets
+      <Link href="/tasks" className="text-xs text-muted hover:text-ink inline-flex items-center gap-1">
+        <ArrowLeft className="w-3 h-3" /> Back to tasks
       </Link>
 
       <div className="flex items-start justify-between gap-4">
         <div>
           <div className="flex items-center gap-2 mb-2">
-            <StatusPill status={ticket.status} />
-            <PriorityBadge priority={ticket.priority} />
-            {ticket.inactiveFlag && <StalledBadge />}
+            <StatusPill status={task.status} />
+            <PriorityBadge priority={task.priority} />
+            {task.inactiveFlag && <StalledBadge />}
           </div>
-          <h1 className="text-xl font-medium">{ticket.title}</h1>
-          <div className="text-xs text-muted mt-1">#{ticket.id} · created by {creator?.name ?? "—"} · {relativeTime(ticket.createdAt)}</div>
+          <h1 className="text-xl font-medium">{task.title}</h1>
+          <div className="text-xs text-muted mt-1">#{task.id} · created by {creator?.name ?? "—"} · {relativeTime(task.createdAt)}</div>
         </div>
-        <TicketActions ticket={ticket} />
+        <TaskActions task={task} />
       </div>
 
       <div className="grid grid-cols-3 gap-4">
         <div className="col-span-2 space-y-4">
           <section className="card p-4">
             <div className="text-sm font-medium mb-2">Description</div>
-            <p className="text-sm text-ink/90 whitespace-pre-wrap">{ticket.description}</p>
+            <p className="text-sm text-ink/90 whitespace-pre-wrap">{task.description}</p>
             <div className="mt-3 flex items-center gap-1.5 flex-wrap">
-              {ticket.tags.map((t) => <Tag key={t}>{t}</Tag>)}
+              {task.tags.map((t) => <Tag key={t}>{t}</Tag>)}
             </div>
           </section>
 
@@ -170,7 +170,7 @@ export default async function TicketDetailPage({ params }: { params: { id: strin
               })}
               {log.length === 0 && <div className="text-sm text-muted">No activity yet.</div>}
             </ul>
-            <CommentForm ticketId={ticket.id} />
+            <CommentForm taskId={task.id} />
           </section>
 
           {extensions.length > 0 && (
@@ -219,21 +219,21 @@ export default async function TicketDetailPage({ params }: { params: { id: strin
           </Field>
           <Field label="Department">{dept?.name ?? "—"}</Field>
           <Field label="Project">{project ? <Link href={`/projects/${project.id}`} className="text-accent hover:underline">{project.name}</Link> : "—"}</Field>
-          <Field label="Client">{ticket.clientName || <span className="text-muted">internal</span>}</Field>
-          <Field label="Website">{ticket.website
-            ? <a href={ticket.website.startsWith("http") ? ticket.website : `https://${ticket.website}`} target="_blank" rel="noreferrer" className="text-accent hover:underline">{ticket.website}</a>
+          <Field label="Client">{task.clientName || <span className="text-muted">internal</span>}</Field>
+          <Field label="Website">{task.website
+            ? <a href={task.website.startsWith("http") ? task.website : `https://${task.website}`} target="_blank" rel="noreferrer" className="text-accent hover:underline">{task.website}</a>
             : "—"}</Field>
-          <Field label="Estimate"><span className="inline-flex items-center gap-1"><Clock className="w-3 h-3" />{ticket.estimatedHours}h</span></Field>
-          <Field label="Actual">{ticket.actualHours}h</Field>
+          <Field label="Estimate"><span className="inline-flex items-center gap-1"><Clock className="w-3 h-3" />{task.estimatedHours}h</span></Field>
+          <Field label="Actual">{task.actualHours}h</Field>
           <Field label="Due">
             <div className="space-y-0.5">
               <div className="inline-flex items-center gap-1">
                 <Calendar className="w-3 h-3 text-muted" />
-                <Countdown iso={ticket.dueDate} />
+                <Countdown iso={task.dueDate} />
               </div>
-              {ticket.dueDate && (
+              {task.dueDate && (
                 <div className="text-[11px] text-muted">
-                  {new Date(ticket.dueDate).toLocaleString(undefined, {
+                  {new Date(task.dueDate).toLocaleString(undefined, {
                     weekday: "short",
                     month: "short",
                     day: "numeric",
@@ -248,7 +248,7 @@ export default async function TicketDetailPage({ params }: { params: { id: strin
               )}
             </div>
           </Field>
-          <Field label="Last activity">{relativeTime(ticket.lastActivityAt)}</Field>
+          <Field label="Last activity">{relativeTime(task.lastActivityAt)}</Field>
         </aside>
       </div>
     </div>

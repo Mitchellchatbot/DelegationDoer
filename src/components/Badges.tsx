@@ -1,4 +1,4 @@
-import type { Priority, TicketStatus } from "@/lib/types";
+import type { Priority, TaskStatus } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 export function PriorityBadge({ priority }: { priority: Priority }) {
@@ -11,7 +11,7 @@ export function PriorityBadge({ priority }: { priority: Priority }) {
   return <span className={cn("badge", map[priority])}>{priority}</span>;
 }
 
-const STATUS_COPY: Record<TicketStatus, string> = {
+const STATUS_COPY: Record<TaskStatus, string> = {
   pending: "Pending",
   in_progress: "In Progress",
   urgent: "Urgent",
@@ -19,7 +19,7 @@ const STATUS_COPY: Record<TicketStatus, string> = {
   done: "Done"
 };
 
-export function StatusPill({ status }: { status: TicketStatus }) {
+export function StatusPill({ status }: { status: TaskStatus }) {
   const tone = {
     pending: "text-muted border-border bg-surface2",
     in_progress: "text-accent border-accent/30 bg-accent/10",

@@ -1,31 +1,31 @@
 import { currentUser } from "@/lib/mock-data";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
-import { TicketCard } from "@/components/TicketCard";
-import type { Ticket } from "@/lib/types";
+import { TaskCard } from "@/components/TaskCard";
+import type { Task } from "@/lib/types";
 
-// Source of truth for tickets is now Supabase. Server component so we read
+// Source of truth for tasks is now Supabase. Server component so we read
 // fresh on every navigation; opt out of route-handler-style caching.
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 const PRIORITY_RANK: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
 
-function focusSort(a: Ticket, b: Ticket) {
+function focusSort(a: Task, b: Task) {
   const pr = PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority];
   if (pr !== 0) return pr;
-  const aBlocks = a.blocksTicketIds.length, bBlocks = b.blocksTicketIds.length;
+  const aBlocks = a.blocksTaskIds.length, bBlocks = b.blocksTaskIds.length;
   if (aBlocks !== bBlocks) return bBlocks - aBlocks;
   const aDue = a.dueDate ? new Date(a.dueDate).getTime() : Infinity;
   const bDue = b.dueDate ? new Date(b.dueDate).getTime() : Infinity;
   return aDue - bDue;
 }
 
-function isImminent(t: Ticket) {
+function isImminent(t: Task) {
   if (!t.dueDate) return false;
   return new Date(t.dueDate).getTime() < Date.now() + 3 * 86400000;
 }
 
-function rowToTicket(t: any): Ticket {
+function rowToTask(t: any): Task {
   return {
     id: t.id,
     title: t.title,
@@ -43,29 +43,29 @@ function rowToTicket(t: any): Ticket {
     inactiveFlag: !!t.inactive_flag,
     lastActivityAt: t.last_activity_at,
     createdAt: t.created_at,
-    blocksTicketIds: t.blocks_ticket_ids ?? []
+    blocksTaskIds: t.blocks_task_ids ?? []
   };
 }
 
 export default async function MyTasksPage() {
   const supabase = getSupabaseAdmin();
   const { data: rows } = await supabase
-    .from("tickets")
+    .from("tasks")
     .select("*")
     .eq("assignee_id", currentUser.id)
     .neq("status", "done");
 
-  const mine = (rows ?? []).map(rowToTicket).sort(focusSort);
+  const mine = (rows ?? []).map(rowToTask).sort(focusSort);
 
   const urgentCount = mine.filter((t) => t.priority === "critical" || t.status === "urgent").length;
   const dueWeek = mine.filter((t) => t.dueDate && new Date(t.dueDate).getTime() < Date.now() + 7 * 86400000).length;
 
   // "Blocked / waiting" should reflect the user's own queue, not the whole
-  // org. Counts tickets in waiting_on_client status assigned to me.
+  // org. Counts tasks in waiting_on_client status assigned to me.
   const blocked = mine.filter((t) => t.status === "waiting_on_client").length;
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-5 max-w-7xl mx-auto">
       <div className="card p-5">
         <div className="text-sm text-muted">What actually matters today</div>
         <div className="mt-2 flex items-center gap-6">
@@ -82,7 +82,7 @@ export default async function MyTasksPage() {
         ) : (
           <div className="grid grid-cols-2 gap-3">
             {mine.map((t) => (
-              <TicketCard key={t.id} ticket={t} dim={t.priority === "low" && !isImminent(t)} />
+              <TaskCard key={t.id} task={t} dim={t.priority === "low" && !isImminent(t)} />
             ))}
           </div>
         )}

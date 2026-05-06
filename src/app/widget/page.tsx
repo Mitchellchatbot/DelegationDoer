@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { Check, Clock, Minus, X, AlertTriangle, Plus, Bell, ArrowLeft, Image as ImageIcon } from "lucide-react";
 import { Countdown } from "@/components/Countdown";
 
-interface WidgetTicket {
+interface WidgetTask {
   id: string;
   title: string;
   description?: string | null;
@@ -48,7 +48,7 @@ function playAlertSound() {
 
 export default function WidgetPage() {
   const [state, setState] = useState<WidgetState>("bubble");
-  const [tickets, setTickets] = useState<WidgetTicket[]>([]);
+  const [tasks, setTasks] = useState<WidgetTask[]>([]);
   const seenIdsRef = useRef<Set<string>>(new Set());
   const lastFetchedRef = useRef<number>(0);
 
@@ -74,12 +74,12 @@ export default function WidgetPage() {
     });
   }, []);
 
-  const fetchTickets = useCallback(async () => {
+  const fetchTasks = useCallback(async () => {
     try {
-      const res = await fetch("/api/widget/my-tickets", { cache: "no-store" });
+      const res = await fetch("/api/widget/my-tasks", { cache: "no-store" });
       if (!res.ok) return;
       const data = await res.json();
-      const next: WidgetTicket[] = data.tickets ?? [];
+      const next: WidgetTask[] = data.tasks ?? [];
       const unackedNow = next.filter((t) => t.needsAck);
 
       // New unacked id → play the alarm.
@@ -87,7 +87,7 @@ export default function WidgetPage() {
       if (fresh.length > 0) playAlertSound();
       seenIdsRef.current = new Set(unackedNow.map((t) => t.id));
 
-      setTickets(next);
+      setTasks(next);
       lastFetchedRef.current = Date.now();
 
       // Auto state transitions based on unacked count.
@@ -101,10 +101,10 @@ export default function WidgetPage() {
   // Initial fetch + 15s polling. (Tighter than the old 60s so the alarm
   // feels live; cheap because it's a single Postgres query each time.)
   useEffect(() => {
-    fetchTickets();
-    const id = setInterval(fetchTickets, 15_000);
+    fetchTasks();
+    const id = setInterval(fetchTasks, 15_000);
     return () => clearInterval(id);
-  }, [fetchTickets]);
+  }, [fetchTasks]);
 
   // While in alert state, replay the alarm every 25s until acked. Annoying-
   // by-design — that was the brief.
@@ -114,23 +114,23 @@ export default function WidgetPage() {
     return () => clearInterval(id);
   }, [state]);
 
-  const unacked = tickets.filter((t) => t.needsAck);
+  const unacked = tasks.filter((t) => t.needsAck);
 
-  async function acknowledge(ticketId: string) {
+  async function acknowledge(taskId: string) {
     // Optimistic
-    setTickets((cur) => cur.map((t) => t.id === ticketId ? { ...t, needsAck: false } : t));
-    seenIdsRef.current.delete(ticketId);
+    setTasks((cur) => cur.map((t) => t.id === taskId ? { ...t, needsAck: false } : t));
+    seenIdsRef.current.delete(taskId);
     try {
       await fetch("/api/widget/acknowledge", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ticketId })
+        body: JSON.stringify({ taskId })
       });
     } catch { /* surfaced via next poll if it actually failed */ }
     // After acking the last one, drop back to bubble (unless user opened panel).
     setState((prev) => {
       if (prev === "panel") return "panel";
-      const remaining = tickets.filter((t) => t.needsAck && t.id !== ticketId);
+      const remaining = tasks.filter((t) => t.needsAck && t.id !== taskId);
       return remaining.length > 0 ? "alert" : "bubble";
     });
   }
@@ -141,8 +141,8 @@ export default function WidgetPage() {
     setState(unacked.length > 0 ? "alert" : "bubble");
   }
 
-  if (state === "panel") return <Panel tickets={tickets} unacked={unacked} onAck={acknowledge} onCollapse={collapseToBubble} onUpdated={fetchTickets} />;
-  if (state === "alert") return <Alert ticket={unacked[0]} unackedCount={unacked.length} onAck={acknowledge} onExpand={expandToPanel} />;
+  if (state === "panel") return <Panel tasks={tasks} unacked={unacked} onAck={acknowledge} onCollapse={collapseToBubble} onUpdated={fetchTasks} />;
+  if (state === "alert") return <Alert task={unacked[0]} unackedCount={unacked.length} onAck={acknowledge} onExpand={expandToPanel} />;
   return <Bubble onExpand={expandToPanel} unackedCount={unacked.length} />;
 }
 
@@ -247,14 +247,14 @@ function Bubble({ onExpand, unackedCount }: { onExpand: () => void; unackedCount
 /* ============================ ALERT (speech bubble) ============================ */
 
 function Alert({
-  ticket, unackedCount, onAck, onExpand
+  task, unackedCount, onAck, onExpand
 }: {
-  ticket: WidgetTicket | undefined;
+  task: WidgetTask | undefined;
   unackedCount: number;
   onAck: (id: string) => void;
   onExpand: () => void;
 }) {
-  if (!ticket) return null;
+  if (!task) return null;
   return (
     <div
       // Drag region on the speech bubble area so it can still be moved.
@@ -271,19 +271,19 @@ function Alert({
         <div className="bg-white rounded-2xl border border-amber-300 shadow-[0_8px_24px_rgba(60,40,20,0.25)] px-3 py-2.5 pr-4">
           <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-amber-700 font-semibold">
             <Bell className="w-3 h-3" />
-            New {priorityLabel(ticket.priority)} task
+            New {priorityLabel(task.priority)} task
             {unackedCount > 1 && <span className="ml-auto text-amber-700/70">+{unackedCount - 1} more</span>}
           </div>
           <div className="text-[13px] text-slate-900 font-medium leading-snug mt-0.5 line-clamp-2">
-            {ticket.title}
+            {task.title}
           </div>
           <div className="mt-1.5 flex items-center justify-between gap-2">
             <span className="text-[10px] inline-flex items-center gap-1">
               <Clock className="w-3 h-3 text-slate-400" />
-              <Countdown iso={ticket.dueDate} className="text-[10px]" />
+              <Countdown iso={task.dueDate} className="text-[10px]" />
             </span>
             <button
-              onClick={(e) => { e.stopPropagation(); onAck(ticket.id); }}
+              onClick={(e) => { e.stopPropagation(); onAck(task.id); }}
               // @ts-ignore
               style={{ WebkitAppRegion: "no-drag" } as any}
               className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-emerald-500 hover:bg-emerald-600 text-white text-[11px] font-medium shadow-sm"
@@ -322,31 +322,31 @@ function Alert({
   );
 }
 
-function priorityLabel(p: WidgetTicket["priority"]) {
+function priorityLabel(p: WidgetTask["priority"]) {
   return p === "critical" ? "CRITICAL" : p;
 }
 
 /* ============================ PANEL ============================ */
 
 function Panel({
-  tickets, unacked, onAck, onCollapse, onUpdated
+  tasks, unacked, onAck, onCollapse, onUpdated
 }: {
-  tickets: WidgetTicket[];
-  unacked: WidgetTicket[];
+  tasks: WidgetTask[];
+  unacked: WidgetTask[];
   onAck: (id: string) => void;
   onCollapse: () => void;
   onUpdated: () => void;
 }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const acked = tickets.filter((t) => !t.needsAck).sort(
+  const acked = tasks.filter((t) => !t.needsAck).sort(
     (a, b) => PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority]
   );
 
-  const selected = selectedId ? tickets.find((t) => t.id === selectedId) : null;
+  const selected = selectedId ? tasks.find((t) => t.id === selectedId) : null;
   if (selected) {
     return (
       <UpdateView
-        ticket={selected}
+        task={selected}
         onClose={() => setSelectedId(null)}
         onUpdated={() => { onUpdated(); setSelectedId(null); }}
       />
@@ -472,13 +472,13 @@ const STATUS_OPTIONS: { value: string; label: string; tone: string }[] = [
 ];
 
 function UpdateView({
-  ticket, onClose, onUpdated
+  task, onClose, onUpdated
 }: {
-  ticket: WidgetTicket;
+  task: WidgetTask;
   onClose: () => void;
   onUpdated: () => void;
 }) {
-  const [status, setStatus] = useState<string>(ticket.status);
+  const [status, setStatus] = useState<string>(task.status);
   const [comment, setComment] = useState("");
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
@@ -498,7 +498,7 @@ function UpdateView({
     setImagePreview(null);
   }
 
-  const dirty = status !== ticket.status || comment.trim().length > 0 || imageFile !== null;
+  const dirty = status !== task.status || comment.trim().length > 0 || imageFile !== null;
 
   async function save() {
     if (!dirty || submitting) return;
@@ -509,14 +509,14 @@ function UpdateView({
       if (imageFile) {
         const fd = new FormData();
         fd.append("file", imageFile);
-        fd.append("ticketId", ticket.id);
+        fd.append("taskId", task.id);
         const upRes = await fetch("/api/upload", { method: "POST", body: fd });
         const upData = await upRes.json();
         if (!upRes.ok) throw new Error(upData?.error ?? "upload failed");
         imageUrl = upData.url;
       }
 
-      const res = await fetch(`/api/tickets/${ticket.id}`, {
+      const res = await fetch(`/api/tasks/${task.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ status, comment: comment.trim() || null, imageUrl })
@@ -548,7 +548,7 @@ function UpdateView({
           >
             <ArrowLeft className="w-4 h-4" />
           </button>
-          <div className="text-xs font-medium text-slate-700 truncate flex-1 text-center px-2">Update ticket</div>
+          <div className="text-xs font-medium text-slate-700 truncate flex-1 text-center px-2">Update task</div>
           <button
             onClick={() => (window as any).widgetAPI?.hide?.()}
             className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100"
@@ -563,15 +563,15 @@ function UpdateView({
         <div className="flex-1 overflow-y-auto p-3 space-y-3">
           <div>
             <div className="flex items-start justify-between gap-2">
-              <div className="text-sm font-semibold leading-snug">{ticket.title}</div>
-              <span className="badge-pill shrink-0">{ticket.priority}</span>
+              <div className="text-sm font-semibold leading-snug">{task.title}</div>
+              <span className="badge-pill shrink-0">{task.priority}</span>
             </div>
-            {ticket.description && (
-              <div className="text-[11px] text-slate-600 mt-1 line-clamp-3 whitespace-pre-wrap">{ticket.description}</div>
+            {task.description && (
+              <div className="text-[11px] text-slate-600 mt-1 line-clamp-3 whitespace-pre-wrap">{task.description}</div>
             )}
             <div className="mt-1.5 text-[11px] text-slate-500 inline-flex items-center gap-1">
               <Clock className="w-3 h-3" />
-              <Countdown iso={ticket.dueDate} className="text-[11px]" />
+              <Countdown iso={task.dueDate} className="text-[11px]" />
             </div>
           </div>
 
@@ -591,7 +591,7 @@ function UpdateView({
                   }
                 >
                   {s.label}
-                  {s.value === ticket.status && status !== s.value && <span className="text-[9px] ml-1 text-slate-400">(now)</span>}
+                  {s.value === task.status && status !== s.value && <span className="text-[9px] ml-1 text-slate-400">(now)</span>}
                 </button>
               ))}
             </div>

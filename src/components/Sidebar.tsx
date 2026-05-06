@@ -11,7 +11,7 @@ import { useState } from "react";
 import { ReportIncidentDialog } from "./ReportIncidentDialog";
 import { AIAssistantDrawer } from "./AIAssistantDrawer";
 import { RaiseLink } from "./RaiseLink";
-import { isCEO } from "@/lib/auth";
+import { isCEO, isHead } from "@/lib/auth";
 import type { User } from "@/lib/types";
 
 const BASE_NAV = [
@@ -23,16 +23,22 @@ const BASE_NAV = [
   { href: "/incidents", label: "Incidents", icon: ShieldAlert }
 ];
 const CEO_NAV = [{ href: "/ceo", label: "CEO Console", icon: Crown }];
+// Dept heads get a scoped org-chart view — same component as the CEO's,
+// filtered to their department(s).
+const HEAD_NAV = [{ href: "/team-overview", label: "Team Overview", icon: Users }];
 
 export function Sidebar({ user }: { user: User }) {
   const path = usePathname();
   const [incidentOpen, setIncidentOpen] = useState(false);
   const [aiOpen, setAiOpen] = useState(false);
   // CEOs land on /ceo (Dashboard redirects there for them) so we drop the
-  // Dashboard entry and lead with CEO Console.
+  // Dashboard entry and lead with CEO Console. Dept heads get a Team
+  // Overview entry inserted above the existing /team link.
   const NAV = isCEO(user)
     ? [...CEO_NAV, ...BASE_NAV.filter((i) => i.href !== "/")]
-    : BASE_NAV;
+    : isHead(user)
+      ? [...BASE_NAV.slice(0, 4), ...HEAD_NAV, ...BASE_NAV.slice(4)]
+      : BASE_NAV;
 
   return (
     <aside className="w-60 shrink-0 h-screen sticky top-0 border-r border-border bg-surface/60 backdrop-blur flex flex-col">

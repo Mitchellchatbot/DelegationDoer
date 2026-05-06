@@ -17,12 +17,12 @@ export function Topbar({ user }: { user: User }) {
       <div className="flex items-center gap-2 max-w-md w-full">
         <div className="relative w-full">
           <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
-          <input className="input pl-9" placeholder="Search tickets, projects, people…" />
+          <input className="input pl-9" placeholder="Search tasks, projects, people…" />
         </div>
       </div>
       <div className="ml-auto flex items-center gap-2">
-        <Link href="/tickets/new" className="btn-primary">
-          <Plus className="w-4 h-4" /> New ticket
+        <Link href="/tasks/new" className="btn-primary">
+          <Plus className="w-4 h-4" /> New task
         </Link>
         <button className="btn"><Bell className="w-4 h-4" /></button>
         <div className="flex items-center gap-2 px-2 py-1 rounded-xl border border-border">

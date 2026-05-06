@@ -5,7 +5,7 @@ import { requireCurrentUserId } from "@/lib/session";
 export const dynamic = "force-dynamic";
 
 // POST /api/incidents — create an incident_log row AND a high-priority,
-// urgent-status ticket assigned to whoever the routing table points at for
+// urgent-status task assigned to whoever the routing table points at for
 // that issue type. The widget will alert that person on its next poll.
 export async function POST(req: NextRequest) {
   try {
@@ -26,7 +26,7 @@ export async function POST(req: NextRequest) {
     ]);
     const assignedToId: string | null = routeRow?.user_id ?? fallbackRow?.user_id ?? null;
 
-    // First department the assignee is in, used to tag the ticket.
+    // First department the assignee is in, used to tag the task.
     let departmentId: string | null = null;
     if (assignedToId) {
       const { data: dm } = await supabase
@@ -40,7 +40,7 @@ export async function POST(req: NextRequest) {
 
     const now = new Date().toISOString();
     const incidentId = `i_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
-    const ticketId   = `t_inc_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+    const taskId   = `t_inc_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
 
     const { data: incident, error: ie } = await supabase
       .from("incident_logs")
@@ -55,10 +55,10 @@ export async function POST(req: NextRequest) {
       .single();
     if (ie) return NextResponse.json({ error: ie.message }, { status: 500 });
 
-    const { data: ticket, error: te } = await supabase
-      .from("tickets")
+    const { data: task, error: te } = await supabase
+      .from("tasks")
       .insert({
-        id: ticketId,
+        id: taskId,
         title: `[Incident] ${issueType} — ${affectedUrl ?? "no url"}`,
         description,
         status: "urgent",
@@ -73,22 +73,22 @@ export async function POST(req: NextRequest) {
         due_date: now,
         inactive_flag: false,
         last_activity_at: now,
-        blocks_ticket_ids: []
+        blocks_task_ids: []
       })
       .select()
       .single();
     if (te) return NextResponse.json({ error: te.message }, { status: 500 });
 
-    // Activity row so the ticket detail page shows it was incident-created.
+    // Activity row so the task detail page shows it was incident-created.
     await supabase.from("activity_logs").insert({
       id: `a_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
-      ticket_id: ticketId,
+      task_id: taskId,
       user_id: userId,
       action: "created",
       detail: `Incident: ${issueType}${affectedUrl ? " — " + affectedUrl : ""}`
     });
 
-    return NextResponse.json({ incident, ticket });
+    return NextResponse.json({ incident, task });
   } catch (err) {
     const message = err instanceof Error ? err.message : "unknown error";
     return NextResponse.json({ error: message }, { status: 500 });

@@ -1,6 +1,6 @@
 "use client";
 
-import { departments, users, tickets, TAG_PRESETS, distinctClients, distinctWebsites } from "@/lib/mock-data";
+import { departments, users, tasks, TAG_PRESETS, distinctClients, distinctWebsites } from "@/lib/mock-data";
 import { suggestAssignees } from "@/lib/delegation";
 import { userCapacity, etaDays, deadlineFromEstimate } from "@/lib/capacity";
 import { assignableTargets, ROLE_LABELS } from "@/lib/auth";
@@ -11,7 +11,7 @@ import { Sparkles, Wand2, Crown, ShieldCheck } from "lucide-react";
 import { Avatar } from "@/components/Avatar";
 import { toast } from "sonner";
 
-export default function NewTicketPage() {
+export default function NewTaskPage() {
   const currentUser = useCurrentUser();
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -32,7 +32,7 @@ export default function NewTicketPage() {
   const clientList = useMemo(() => distinctClients(), []);
   const websiteList = useMemo(() => distinctWebsites(), []);
 
-  // Who is the current user allowed to assign tickets to? Recomputes when
+  // Who is the current user allowed to assign tasks to? Recomputes when
   // the auth'd user changes (e.g. logout/login as a different role).
   const targets = useMemo(() => assignableTargets(currentUser), [currentUser]);
   const targetIds = useMemo(() => new Set(targets.map((u) => u.id)), [targets]);
@@ -40,14 +40,14 @@ export default function NewTicketPage() {
   const suggestions = useMemo(() => {
     // Filter the auto-suggestions to only include people the actor is allowed
     // to delegate to. Workers see only themselves regardless of skill match.
-    const all = suggestAssignees({ title, description, departmentId, tags }, tickets);
+    const all = suggestAssignees({ title, description, departmentId, tags }, tasks);
     return all.filter((s) => targetIds.has(s.user.id));
   }, [title, description, departmentId, tags, targetIds]);
 
   const eta = useMemo(() => {
     const u = users.find((x) => x.id === (assigneeId || suggestions[0]?.user.id));
     if (!u) return null;
-    return etaDays(estimate, userCapacity(u, tickets));
+    return etaDays(estimate, userCapacity(u, tasks));
   }, [assigneeId, suggestions, estimate]);
 
   const computedDueDate = useMemo(() => {
@@ -98,7 +98,7 @@ export default function NewTicketPage() {
     }
     setSubmitting(true);
     try {
-      const res = await fetch("/api/tickets", {
+      const res = await fetch("/api/tasks", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -118,7 +118,7 @@ export default function NewTicketPage() {
       if (!res.ok) {
         const msg = data?.error ?? `Failed (${res.status})`;
         setSubmitError(msg);
-        toast.error(`Couldn't create ticket: ${msg}`);
+        toast.error(`Couldn't create task: ${msg}`);
         setSubmitting(false);
         return;
       }
@@ -127,18 +127,18 @@ export default function NewTicketPage() {
       // and was invisible — failures looked like everything worked.
       const slack = data.slack as { delivery: "sent" | "skipped" | "failed"; error?: string } | undefined;
       if (slack?.delivery === "sent") {
-        toast.success("Ticket created — Slack DM sent to assignee.");
+        toast.success("Task created — Slack DM sent to assignee.");
       } else if (slack?.delivery === "failed") {
-        toast.warning(`Ticket created, but Slack DM failed: ${slack.error ?? "unknown"}`);
+        toast.warning(`Task created, but Slack DM failed: ${slack.error ?? "unknown"}`);
       } else {
-        toast.success("Ticket created.");
+        toast.success("Task created.");
       }
 
       // Mirror into the in-memory mock array so the rest of the app (board,
-      // my-tasks, ticket detail) sees it on this navigation. Supabase has the
+      // my-tasks, task detail) sees it on this navigation. Supabase has the
       // canonical row; mock-data is a session-local cache until we migrate.
-      const t = data.ticket;
-      tickets.push({
+      const t = data.task;
+      tasks.push({
         id: t.id,
         title: t.title,
         description: t.description ?? "",
@@ -155,14 +155,14 @@ export default function NewTicketPage() {
         inactiveFlag: !!t.inactive_flag,
         lastActivityAt: t.last_activity_at,
         createdAt: t.created_at,
-        blocksTicketIds: t.blocks_ticket_ids ?? []
+        blocksTaskIds: t.blocks_task_ids ?? []
       });
-      router.push(`/tickets/${t.id}`);
+      router.push(`/tasks/${t.id}`);
       router.refresh();
     } catch (err) {
       const msg = err instanceof Error ? err.message : "network error";
       setSubmitError(msg);
-      toast.error(`Couldn't create ticket: ${msg}`);
+      toast.error(`Couldn't create task: ${msg}`);
       setSubmitting(false);
     }
   }
@@ -177,13 +177,13 @@ export default function NewTicketPage() {
         .join(", ");
       return `As a Department Head you can assign to anyone in: ${deptNames || "your departments"}.`;
     }
-    return "Workers can create tickets only for themselves.";
+    return "Workers can create tasks only for themselves.";
   })();
 
   return (
     <div className="max-w-3xl space-y-5">
       <div>
-        <h1 className="text-lg font-medium">New ticket</h1>
+        <h1 className="text-lg font-medium">New task</h1>
         <div className="mt-1 inline-flex items-center gap-1.5 text-xs text-muted">
           <ShieldCheck className="w-3 h-3" /> {delegateBlurb}
         </div>
@@ -362,7 +362,7 @@ export default function NewTicketPage() {
           disabled={submitting || !title.trim() || !assigneeId}
           className="btn-primary disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          {submitting ? "Creating…" : "Create ticket"}
+          {submitting ? "Creating…" : "Create task"}
         </button>
       </div>
     </div>

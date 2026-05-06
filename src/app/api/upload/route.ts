@@ -4,7 +4,7 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 export const dynamic = "force-dynamic";
 
 // POST /api/upload — multipart/form-data
-// Fields: file (binary), ticketId (optional, for path)
+// Fields: file (binary), taskId (optional, for path)
 // Stores in Supabase Storage bucket "ticket-attachments" and returns the
 // public URL. No size validation here — add when this hits real users.
 
@@ -17,7 +17,7 @@ export async function POST(req: NextRequest) {
   try {
     const form = await req.formData();
     const file = form.get("file");
-    const ticketId = (form.get("ticketId") as string | null) ?? "misc";
+    const taskId = (form.get("taskId") as string | null) ?? "misc";
 
     if (!(file instanceof File)) {
       return NextResponse.json({ error: "file required" }, { status: 400 });
@@ -30,7 +30,7 @@ export async function POST(req: NextRequest) {
     }
 
     const safeName = file.name.replace(/[^a-z0-9._-]+/gi, "_").slice(0, 80);
-    const key = `${ticketId}/${Date.now()}-${Math.random().toString(36).slice(2, 7)}-${safeName}`;
+    const key = `${taskId}/${Date.now()}-${Math.random().toString(36).slice(2, 7)}-${safeName}`;
     const bytes = await file.arrayBuffer();
 
     const supabase = getSupabaseAdmin();

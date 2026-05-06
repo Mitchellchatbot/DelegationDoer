@@ -8,12 +8,18 @@
 //    yet share session cookies. Removed when the widget gets its own auth
 //    flow in Phase 4.
 
+import { cache } from "react";
 import { getSupabaseServer } from "@/lib/supabase-server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 
 export const CURRENT_USER_ID = "u_1";
 
-export async function getCurrentUserId(): Promise<string | null> {
+// Wrapped in React.cache so multiple callers within the same render tree
+// (e.g. layout AND a server-component page calling requireCurrentUserId in
+// a route handler) share one DB roundtrip instead of paying it per call.
+export const getCurrentUserId = cache(_getCurrentUserId);
+
+async function _getCurrentUserId(): Promise<string | null> {
   const supabase = getSupabaseServer();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return null;

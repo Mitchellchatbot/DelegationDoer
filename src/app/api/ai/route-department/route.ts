@@ -10,7 +10,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "no departments configured" }, { status: 500 });
     }
 
-    const systemPrompt = `You classify support / project tickets into ONE of these departments at a digital agency:
+    const systemPrompt = `You classify support / project tasks into ONE of these departments at a digital agency:
 
 ${departments.map((d) =>
   `- ${d.name} (id: "${d.id}"): ${d.description}\n  Owns: ${d.taskTypes.join(", ")}`

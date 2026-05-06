@@ -1,4 +1,4 @@
-import type { Ticket, User } from "./types";
+import type { Task, User } from "./types";
 
 export interface CapacityInfo {
   user: User;
@@ -9,8 +9,8 @@ export interface CapacityInfo {
   overSoft: boolean; // > 80%
 }
 
-export function userCapacity(user: User, openTickets: Ticket[]): CapacityInfo {
-  const mine = openTickets.filter(
+export function userCapacity(user: User, openTasks: Task[]): CapacityInfo {
+  const mine = openTasks.filter(
     (t) => t.assigneeId === user.id && t.status !== "done" && t.status !== "waiting_on_client"
   );
   const usedHours = mine.reduce((s, t) => s + Math.max(0, t.estimatedHours - t.actualHours), 0);

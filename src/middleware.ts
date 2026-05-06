@@ -4,16 +4,14 @@ import { createServerClient } from "@supabase/ssr";
 // Auth gate. Anything not in PUBLIC_ROUTES requires a Supabase session.
 // Also refreshes the session cookie so it doesn't drop mid-tab.
 //
-// Widget routes (/widget, /api/widget/*) are intentionally public for now —
-// the Electron BrowserWindow doesn't share session cookies yet. They get
-// their own auth flow in Phase 4.
+// Widget routes used to be public (placeholder hardcoded user). Now they
+// require auth like everything else — the Electron BrowserWindow handles
+// /login redirects in-window and persists the session cookie across launches.
 
 const PUBLIC_PREFIXES = [
   "/login",
   "/signup",
-  "/widget",
   "/api/auth",
-  "/api/widget",
   "/api/debug"
 ];
 

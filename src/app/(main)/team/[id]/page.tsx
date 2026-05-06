@@ -1,9 +1,9 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { users, tickets, skillProfiles, departments, managerOf } from "@/lib/mock-data";
+import { users, tasks, skillProfiles, departments, managerOf } from "@/lib/mock-data";
 import { Avatar } from "@/components/Avatar";
 import { CapacityBar } from "@/components/CapacityBar";
-import { TicketCard } from "@/components/TicketCard";
+import { TaskCard } from "@/components/TaskCard";
 import { userCapacity } from "@/lib/capacity";
 import { ROLE_LABELS } from "@/lib/auth";
 import { ArrowLeft, Crown } from "lucide-react";
@@ -12,8 +12,8 @@ export default function ProfilePage({ params }: { params: { id: string } }) {
   const user = users.find((u) => u.id === params.id);
   if (!user) return notFound();
   const userDepts = user.departmentIds.map((id) => departments.find((d) => d.id === id)).filter(Boolean) as { id: string; name: string }[];
-  const cap = userCapacity(user, tickets);
-  const myTickets = tickets.filter((t) => t.assigneeId === user.id);
+  const cap = userCapacity(user, tasks);
+  const myTasks = tasks.filter((t) => t.assigneeId === user.id);
   const skills = skillProfiles.filter((s) => s.userId === user.id);
   const taskTypeHistory = Array.from(new Set(skills.flatMap((s) => s.taskTypes)));
   const manager = managerOf(user);
@@ -96,9 +96,9 @@ export default function ProfilePage({ params }: { params: { id: string } }) {
       </div>
 
       <section>
-        <div className="text-sm font-medium mb-3">Assigned tickets</div>
+        <div className="text-sm font-medium mb-3">Assigned tasks</div>
         <div className="grid grid-cols-3 gap-3">
-          {myTickets.map((t) => <TicketCard key={t.id} ticket={t} />)}
+          {myTasks.map((t) => <TaskCard key={t.id} task={t} />)}
         </div>
       </section>
     </div>

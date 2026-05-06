@@ -6,10 +6,12 @@
 //   of 8 anchors (4 corners + 4 edge midpoints) on whichever display it's on.
 // - That anchor is remembered, so collapse/expand keeps the same corner/edge.
 
-const { app, BrowserWindow, Tray, Menu, nativeImage, screen, ipcMain, shell, Notification } = require("electron");
+const { app, BrowserWindow, Tray, Menu, nativeImage, screen, ipcMain, net, shell, Notification } = require("electron");
 const path = require("path");
 
-const APP_URL = process.env.DD_APP_URL || "http://localhost:3000";
+// Production deploy by default. `DD_APP_URL=http://localhost:3000 npm run electron`
+// for local dev against the Next.js dev server.
+const APP_URL = process.env.DD_APP_URL || "https://delegationdoer-production.up.railway.app";
 const WIDGET_URL = `${APP_URL}/widget`;
 
 // 88x88 collapsed window with the 64x64 icon centered inside. The 12-px
@@ -29,7 +31,7 @@ let currentAnchor = "br";
 
 let widget = null;
 let tray = null;
-let lastTicketIds = new Set();
+let lastTaskIds = new Set();
 let dragOffset = null;
 
 function currentDisplay() {
@@ -120,6 +122,17 @@ function createWidget() {
     }, 500);
   });
 
+  // When the widget gets bounced to /login (or similar full-page route),
+  // expand to panel size so the form is usable. When it lands back on
+  // /widget proper, the renderer JS controls the size via IPC.
+  widget.webContents.on("did-navigate", (_e, url) => {
+    if (!url) return;
+    const path = new URL(url).pathname;
+    if (path.startsWith("/login") || path.startsWith("/signup")) {
+      setSize(PANEL);
+    }
+  });
+
   widget.loadURL(WIDGET_URL);
 
   widget.on("close", (e) => {
@@ -162,23 +175,31 @@ function buildTray() {
 }
 
 async function pollAssignments() {
+  if (!widget || widget.isDestroyed()) return;
   try {
-    const res = await fetch(`${APP_URL}/api/widget/my-tickets`);
-    if (!res.ok) return;
+    // Use Electron's net.fetch with the BrowserWindow's session so the
+    // session cookie set by /login is carried automatically. A plain
+    // global fetch() has no cookies and would redirect to /login forever.
+    const res = await net.fetch(`${APP_URL}/api/widget/my-tasks`, {
+      session: widget.webContents.session,
+      credentials: "include"
+    });
+    if (!res.ok) return; // 401 before login — no-op until user authenticates
     const data = await res.json();
-    const ids = new Set(data.tickets.map((t) => t.id));
+    const tasks = data.tasks ?? [];
+    const ids = new Set(tasks.map((t) => t.id));
 
-    if (lastTicketIds.size > 0) {
-      for (const t of data.tickets) {
-        if (!lastTicketIds.has(t.id)) {
-          new Notification({ title: "New ticket assigned", body: t.title }).show();
+    if (lastTaskIds.size > 0) {
+      for (const t of tasks) {
+        if (!lastTaskIds.has(t.id)) {
+          new Notification({ title: "New task assigned", body: t.title }).show();
         }
       }
     }
-    lastTicketIds = ids;
+    lastTaskIds = ids;
 
     if (widget && !widget.isDestroyed()) {
-      widget.webContents.send("widget:tickets", data.tickets);
+      widget.webContents.send("widget:tasks", tasks);
     }
   } catch {
     // App not running yet; silent.

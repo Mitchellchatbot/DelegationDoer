@@ -1,5 +1,5 @@
 export type Role = "ceo" | "department_head" | "worker";
-export type TicketStatus = "pending" | "in_progress" | "urgent" | "waiting_on_client" | "done";
+export type TaskStatus = "pending" | "in_progress" | "urgent" | "waiting_on_client" | "done";
 export type Priority = "low" | "medium" | "high" | "critical";
 export type MilestoneStatus = "pending" | "in_progress" | "done" | "delayed";
 export type RaciRole = "responsible" | "accountable" | "consulted" | "informed";
@@ -26,11 +26,11 @@ export interface Department {
   taskTypes: string[];
 }
 
-export interface Ticket {
+export interface Task {
   id: string;
   title: string;
   description: string;
-  status: TicketStatus;
+  status: TaskStatus;
   priority: Priority;
   estimatedHours: number;
   actualHours: number;
@@ -43,7 +43,7 @@ export interface Ticket {
   inactiveFlag: boolean;
   lastActivityAt: string;
   createdAt: string;
-  blocksTicketIds: string[];
+  blocksTaskIds: string[];
   clientName?: string | null;
   website?: string | null;
 }
@@ -93,7 +93,7 @@ export interface SkillProfile {
 
 export interface ActivityLog {
   id: string;
-  ticketId: string;
+  taskId: string;
   userId: string;
   action: string;
   detail: string;

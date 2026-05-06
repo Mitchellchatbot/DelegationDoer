@@ -4,8 +4,9 @@
 // that haven't been ported yet, but is no longer the source of truth on the
 // server.
 
+import { cache } from "react";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
-import type { Department, Ticket, User } from "@/lib/types";
+import type { Department, Task, User } from "@/lib/types";
 
 // Row shapes mirror the snake_case columns in the migrations.
 interface UserRow {
@@ -24,12 +25,12 @@ interface DepartmentRow {
   description: string | null;
   task_types: string[];
 }
-interface TicketRow {
+interface TaskRow {
   id: string;
   title: string;
   description: string | null;
-  status: Ticket["status"];
-  priority: Ticket["priority"];
+  status: Task["status"];
+  priority: Task["priority"];
   estimated_hours: number;
   actual_hours: number;
   tags: string[];
@@ -41,7 +42,7 @@ interface TicketRow {
   inactive_flag: boolean;
   last_activity_at: string;
   created_at: string;
-  blocks_ticket_ids: string[];
+  blocks_task_ids: string[];
   client_name: string | null;
   website: string | null;
 }
@@ -77,7 +78,7 @@ function departmentFromRow(row: DepartmentRow): Department {
   };
 }
 
-function ticketFromRow(row: TicketRow): Ticket {
+function taskFromRow(row: TaskRow): Task {
   return {
     id: row.id,
     title: row.title,
@@ -95,13 +96,17 @@ function ticketFromRow(row: TicketRow): Ticket {
     inactiveFlag: row.inactive_flag,
     lastActivityAt: row.last_activity_at,
     createdAt: row.created_at,
-    blocksTicketIds: row.blocks_ticket_ids,
+    blocksTaskIds: row.blocks_task_ids,
     clientName: row.client_name,
     website: row.website
   };
 }
 
-export async function getUserById(id: string | null | undefined): Promise<User | null> {
+// Wrapped in React.cache so the layout + a child page asking for the same
+// user only hit Supabase once per request.
+export const getUserById = cache(_getUserById);
+
+async function _getUserById(id: string | null | undefined): Promise<User | null> {
   if (!id) return null;
   const supabase = getSupabaseAdmin();
   const { data: row } = await supabase
@@ -114,7 +119,9 @@ export async function getUserById(id: string | null | undefined): Promise<User |
   return userFromRow(row as UserRow, departmentIds);
 }
 
-export async function getDepartments(): Promise<Department[]> {
+export const getDepartments = cache(_getDepartments);
+
+async function _getDepartments(): Promise<Department[]> {
   const { data } = await getSupabaseAdmin()
     .from("departments")
     .select("id,name,description,task_types")
@@ -135,11 +142,11 @@ export async function getDepartmentById(id: string | null | undefined): Promise<
 const TICKET_COLS =
   "id,title,description,status,priority,estimated_hours,actual_hours,tags," +
   "department_id,assignee_id,creator_id,project_id,due_date,inactive_flag," +
-  "last_activity_at,created_at,blocks_ticket_ids,client_name,website";
+  "last_activity_at,created_at,blocks_task_ids,client_name,website";
 
-export async function getAllTickets(): Promise<Ticket[]> {
+export async function getAllTasks(): Promise<Task[]> {
   const { data } = await getSupabaseAdmin()
-    .from("tickets")
+    .from("tasks")
     .select(TICKET_COLS);
-  return (data ?? []).map((r) => ticketFromRow(r as unknown as TicketRow));
+  return (data ?? []).map((r) => taskFromRow(r as unknown as TaskRow));
 }

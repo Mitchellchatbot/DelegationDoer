@@ -1,6 +1,6 @@
 import { departments, users, skillProfiles } from "./mock-data";
 import { userCapacity } from "./capacity";
-import type { Ticket, User } from "./types";
+import type { Task, User } from "./types";
 
 export interface DelegationSuggestion {
   user: User;
@@ -11,18 +11,18 @@ export interface DelegationSuggestion {
 // Naive scoring: department match → skill match → capacity slack.
 // Never recommend someone above 85% utilization.
 export function suggestAssignees(
-  ticket: Pick<Ticket, "title" | "description" | "departmentId" | "tags">,
-  openTickets: Ticket[],
+  task: Pick<Task, "title" | "description" | "departmentId" | "tags">,
+  openTasks: Task[],
   taskType?: string
 ): DelegationSuggestion[] {
-  const dept = departments.find((d) => d.id === ticket.departmentId);
-  const candidates = users.filter((u) => !ticket.departmentId || u.departmentIds.includes(ticket.departmentId));
+  const dept = departments.find((d) => d.id === task.departmentId);
+  const candidates = users.filter((u) => !task.departmentId || u.departmentIds.includes(task.departmentId));
 
-  const text = `${ticket.title} ${ticket.description ?? ""}`.toLowerCase();
+  const text = `${task.title} ${task.description ?? ""}`.toLowerCase();
   const inferredType = taskType ?? dept?.taskTypes.find((t) => text.includes(t.toLowerCase()));
 
   const scored = candidates.map((u) => {
-    const cap = userCapacity(u, openTickets);
+    const cap = userCapacity(u, openTasks);
     const skills = skillProfiles.filter((s) => s.userId === u.id);
     const skillHit = skills.some((s) =>
       inferredType ? s.taskTypes.includes(inferredType) : false
@@ -37,7 +37,7 @@ export function suggestAssignees(
 
     let reason = "";
     if (skillHit && inferredType) reason = `Owns "${inferredType}" task type and is at ${Math.round(cap.pct * 100)}% capacity`;
-    else if (skillKeyword) reason = `Skills overlap with the ticket; ${Math.round(cap.pct * 100)}% capacity`;
+    else if (skillKeyword) reason = `Skills overlap with the task; ${Math.round(cap.pct * 100)}% capacity`;
     else if (dept && u.departmentIds.includes(dept.id)) reason = `In ${dept.name}; ${Math.round(cap.pct * 100)}% capacity`;
     else reason = `Available cross-department; ${Math.round(cap.pct * 100)}% capacity`;
 

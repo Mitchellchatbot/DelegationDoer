@@ -1,13 +1,13 @@
 "use client";
 
-import { tickets as allTickets, departments, users, distinctClients, distinctWebsites } from "@/lib/mock-data";
-import { TicketCard } from "@/components/TicketCard";
+import { tasks as allTasks, departments, users, distinctClients, distinctWebsites } from "@/lib/mock-data";
+import { TaskCard } from "@/components/TaskCard";
 import { useMemo, useState } from "react";
-import type { Ticket } from "@/lib/types";
+import type { Task } from "@/lib/types";
 
 const PRIORITY_RANK: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
 
-const SORTS: Record<string, (a: Ticket, b: Ticket) => number> = {
+const SORTS: Record<string, (a: Task, b: Task) => number> = {
   recent:    (a, b) => +new Date(b.lastActivityAt) - +new Date(a.lastActivityAt),
   oldest:    (a, b) => +new Date(a.createdAt) - +new Date(b.createdAt),
   priority:  (a, b) => PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority],
@@ -17,7 +17,7 @@ const SORTS: Record<string, (a: Ticket, b: Ticket) => number> = {
   client:    (a, b) => (a.clientName ?? "~").localeCompare(b.clientName ?? "~")
 };
 
-export default function TicketsListPage() {
+export default function TasksListPage() {
   const [status, setStatus] = useState<string>("all");
   const [dept, setDept] = useState<string>("all");
   const [assignee, setAssignee] = useState<string>("all");
@@ -29,7 +29,7 @@ export default function TicketsListPage() {
   const websiteOptions = useMemo(() => distinctWebsites(), []);
 
   const filtered = useMemo(() => {
-    let list = [...allTickets];
+    let list = [...allTasks];
     if (status !== "all") list = list.filter((t) => t.status === status);
     if (dept !== "all") list = list.filter((t) => t.departmentId === dept);
     if (assignee !== "all") list = list.filter((t) => t.assigneeId === assignee);
@@ -40,9 +40,9 @@ export default function TicketsListPage() {
   }, [status, dept, assignee, client, website, sort]);
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 max-w-7xl mx-auto">
       <div className="flex items-center justify-between">
-        <h1 className="text-lg font-medium">All tickets <span className="text-muted text-sm">· {filtered.length}</span></h1>
+        <h1 className="text-lg font-medium">All tasks <span className="text-muted text-sm">· {filtered.length}</span></h1>
       </div>
 
       <div className="card p-3 flex items-center gap-2 flex-wrap">
@@ -78,7 +78,7 @@ export default function TicketsListPage() {
       <div className="grid grid-cols-3 gap-3">
         {filtered.map((t, i) => (
           <div key={t.id} className="anim-fade-in-up" style={{ animationDelay: `${Math.min(i * 25, 400)}ms` }}>
-            <TicketCard ticket={t} />
+            <TaskCard task={t} />
           </div>
         ))}
       </div>

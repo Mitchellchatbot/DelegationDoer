@@ -1,11 +1,11 @@
 "use client";
 
 import * as Dialog from "@radix-ui/react-dialog";
-import { incidents, incidentRouting, userById, tickets, currentUser } from "@/lib/mock-data";
+import { incidents, incidentRouting, userById, tasks, currentUser } from "@/lib/mock-data";
 import { useMemo, useState } from "react";
 import { AlertTriangle, X } from "lucide-react";
 import { relativeTime } from "@/lib/utils";
-import type { IncidentLog, Ticket } from "@/lib/types";
+import type { IncidentLog, Task } from "@/lib/types";
 
 type IssueType = "site down" | "malware" | "form broken" | "other";
 
@@ -42,7 +42,7 @@ export function ReportIncidentDialog({
 
       // Mirror to client mock-data so /incidents and /board show it instantly
       // for the rest of this session (until those pages are also Supabase-backed).
-      const inc = data.incident, t = data.ticket;
+      const inc = data.incident, t = data.task;
       incidents.unshift({
         id: inc.id,
         issueType: inc.issue_type,
@@ -53,7 +53,7 @@ export function ReportIncidentDialog({
         resolvedAt: null,
         createdAt: inc.created_at
       });
-      tickets.unshift({
+      tasks.unshift({
         id: t.id,
         title: t.title,
         description: t.description ?? "",
@@ -70,7 +70,7 @@ export function ReportIncidentDialog({
         inactiveFlag: !!t.inactive_flag,
         lastActivityAt: t.last_activity_at,
         createdAt: t.created_at,
-        blocksTicketIds: t.blocks_ticket_ids ?? []
+        blocksTaskIds: t.blocks_task_ids ?? []
       });
 
       setUrl(""); setDesc(""); setIssueType("site down");

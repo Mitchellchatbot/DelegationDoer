@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { users, departments, tickets, skillProfiles, headsOf, workersOf } from "@/lib/mock-data";
+import { users, departments, tasks, skillProfiles, headsOf, workersOf } from "@/lib/mock-data";
 import { Avatar } from "@/components/Avatar";
 import { CapacityBar } from "@/components/CapacityBar";
 import { userCapacity } from "@/lib/capacity";
@@ -11,7 +11,7 @@ export default function TeamPage() {
   const ceo = users.find((u) => u.role === "ceo");
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 max-w-7xl mx-auto">
       <div>
         <h1 className="text-lg font-medium">Team</h1>
         <p className="text-sm text-muted mt-1">Org reports up to the CEO. Click anyone to see their profile.</p>
@@ -74,7 +74,7 @@ export default function TeamPage() {
 }
 
 function PersonCard({ user, accent }: { user: User; accent?: boolean }) {
-  const cap = userCapacity(user, tickets);
+  const cap = userCapacity(user, tasks);
   const skills = skillProfiles.filter((s) => s.userId === user.id);
   return (
     <Link

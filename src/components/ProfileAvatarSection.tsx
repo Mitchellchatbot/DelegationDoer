@@ -17,11 +17,11 @@ export function ProfileAvatarSection({ user }: { user: User }) {
     setBusy("uploading");
     try {
       // Upload to existing /api/upload (Supabase Storage). Reusing the same
-      // bucket as ticket attachments — fine for now; can split into a
+      // bucket as task attachments — fine for now; can split into a
       // dedicated avatars bucket later if we want different lifetime rules.
       const form = new FormData();
       form.append("file", file);
-      form.append("ticketId", `avatars/${user.id}`);
+      form.append("taskId", `avatars/${user.id}`);
       const upRes = await fetch("/api/upload", { method: "POST", body: form });
       const upData = await upRes.json();
       if (!upRes.ok) throw new Error(upData?.error ?? `upload failed (${upRes.status})`);

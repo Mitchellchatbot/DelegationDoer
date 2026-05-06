@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
-import { CURRENT_USER_ID } from "@/lib/session";
+import { requireCurrentUserId } from "@/lib/session";
 
-// Returns the current user's open tickets and which ones still need to be
+// Returns the current user's open tasks and which ones still need to be
 // acknowledged (no row in assignment_acknowledgements yet).
 
 // Opt out of Next.js route-handler caching — this endpoint is read every
@@ -15,11 +15,12 @@ const SELECT_COLS = "id, title, priority, status, due_date, estimated_hours, ina
 
 export async function GET() {
   try {
+    const userId = await requireCurrentUserId();
     const supabase = getSupabaseAdmin();
 
     // Three parallel queries:
-    //   - My open tickets (assigned to me).
-    //   - Every open incident-tagged ticket (broadcast to everyone — when
+    //   - My open tasks (assigned to me).
+    //   - Every open incident-tagged task (broadcast to everyone — when
     //     something is on fire, the whole org should see it on their widget,
     //     not just the routed owner).
     //   - My ack rows.
@@ -28,21 +29,21 @@ export async function GET() {
       { data: incidents, error: ie },
       { data: acks,  error: ae }
     ] = await Promise.all([
-      supabase.from("tickets").select(SELECT_COLS)
-        .eq("assignee_id", CURRENT_USER_ID).neq("status", "done")
+      supabase.from("tasks").select(SELECT_COLS)
+        .eq("assignee_id", userId).neq("status", "done")
         .order("created_at", { ascending: false }),
-      supabase.from("tickets").select(SELECT_COLS)
+      supabase.from("tasks").select(SELECT_COLS)
         .contains("tags", ["incident"]).neq("status", "done")
         .order("created_at", { ascending: false }),
-      supabase.from("assignment_acknowledgements").select("ticket_id")
-        .eq("user_id", CURRENT_USER_ID)
+      supabase.from("assignment_acknowledgements").select("task_id")
+        .eq("user_id", userId)
     ]);
 
     if (me) return NextResponse.json({ error: me.message }, { status: 500 });
     if (ie) return NextResponse.json({ error: ie.message }, { status: 500 });
     if (ae) return NextResponse.json({ error: ae.message }, { status: 500 });
 
-    // Merge + dedupe by id (an incident ticket assigned to me would otherwise
+    // Merge + dedupe by id (an incident task assigned to me would otherwise
     // appear twice).
     const seen = new Set<string>();
     const merged = [...(mine ?? []), ...(incidents ?? [])].filter((t) => {
@@ -51,7 +52,7 @@ export async function GET() {
       return true;
     });
 
-    const acked = new Set((acks ?? []).map((a) => a.ticket_id));
+    const acked = new Set((acks ?? []).map((a) => a.task_id));
     const out = merged.map((t) => ({
       id: t.id,
       title: t.title,
@@ -67,7 +68,7 @@ export async function GET() {
       needsAck: !acked.has(t.id)
     }));
 
-    return NextResponse.json({ tickets: out });
+    return NextResponse.json({ tasks: out });
   } catch (err) {
     const message = err instanceof Error ? err.message : "unknown error";
     return NextResponse.json({ error: message }, { status: 500 });

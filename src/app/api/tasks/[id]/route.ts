@@ -10,7 +10,7 @@ const PRIORITIES = ["low", "medium", "high", "critical"] as const;
 
 export const dynamic = "force-dynamic";
 
-// PATCH /api/tickets/[id] — partial update.
+// PATCH /api/tasks/[id] — partial update.
 // Body shape (all optional): { title, description, priority, status, estimatedHours, dueDate, tags }.
 // Logs an activity row when status changes.
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
@@ -22,12 +22,12 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     // Fetch current row so we know whether status actually changed and so we
     // have the creator/assignee/title for the completion notification.
     const { data: before, error: beErr } = await supabase
-      .from("tickets")
+      .from("tasks")
       .select("status, creator_id, assignee_id, title, estimated_hours, actual_hours, client_name")
       .eq("id", params.id)
       .maybeSingle();
     if (beErr) return NextResponse.json({ error: beErr.message }, { status: 500 });
-    if (!before) return NextResponse.json({ error: "ticket not found" }, { status: 404 });
+    if (!before) return NextResponse.json({ error: "task not found" }, { status: 404 });
 
     const update: Record<string, unknown> = { last_activity_at: new Date().toISOString() };
     if (typeof body.title === "string" && body.title.trim()) update.title = body.title.trim();
@@ -43,7 +43,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     else if (typeof body.website === "string") update.website = body.website.trim() || null;
 
     const { data, error } = await supabase
-      .from("tickets")
+      .from("tasks")
       .update(update)
       .eq("id", params.id)
       .select()
@@ -59,7 +59,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       const transition = `${before.status} → ${update.status}`;
       await supabase.from("activity_logs").insert({
         id: `a_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
-        ticket_id: params.id,
+        task_id: params.id,
         user_id: userId,
         action: "status_change",
         detail: comment ? `${transition}\n${comment}` : transition,
@@ -69,7 +69,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       // No status change but the user attached a note/image — log as comment.
       await supabase.from("activity_logs").insert({
         id: `a_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
-        ticket_id: params.id,
+        task_id: params.id,
         user_id: userId,
         action: "comment",
         detail: comment,
@@ -93,7 +93,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
         creatorEmail,
         assigneeName: assignee?.name ?? "Someone",
         assigneeEmail: assignee?.email ?? null,
-        ticketId: params.id,
+        taskId: params.id,
         title: before.title,
         estimateHours: Number(before.estimated_hours ?? 0),
         actualHours: Number(before.actual_hours ?? 0),
@@ -101,7 +101,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       });
     }
 
-    return NextResponse.json({ ticket: data, slack });
+    return NextResponse.json({ task: data, slack });
   } catch (err) {
     const message = err instanceof Error ? err.message : "unknown error";
     return NextResponse.json({ error: message }, { status: 500 });

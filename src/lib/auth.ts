@@ -14,7 +14,7 @@ export function isHead(u: User | null | undefined): boolean {
   return !!u && u.role === "department_head";
 }
 
-// Who is `actor` allowed to assign tickets to?
+// Who is `actor` allowed to assign tasks to?
 //   CEO -> anyone in the org (the previous "only department heads" rule was
 //          too restrictive — CEO often needs to push work past a head when
 //          things are on fire, or assign across teams).
@@ -36,7 +36,7 @@ export function assignableTargets(actor: User, pool: User[] = users): User[] {
   return candidates.some((u) => u.id === actor.id) ? candidates : [actor, ...candidates];
 }
 
-export function canCreateTicketsForOthers(actor: User): boolean {
+export function canCreateTasksForOthers(actor: User): boolean {
   return actor.role === "ceo" || actor.role === "department_head";
 }
 

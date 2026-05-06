@@ -1,7 +1,7 @@
 "use client";
 
-import { tickets as initialTickets, departments, users, distinctClients, distinctWebsites } from "@/lib/mock-data";
-import { useMemo, useState } from "react";
+import { departments, users, distinctClients, distinctWebsites } from "@/lib/mock-data";
+import { useEffect, useMemo, useState } from "react";
 import { DragDropContext, Droppable, Draggable, type DropResult } from "@hello-pangea/dnd";
 import { PriorityBadge, StalledBadge, Tag } from "@/components/Badges";
 import { Avatar } from "@/components/Avatar";
@@ -9,13 +9,13 @@ import { Countdown } from "@/components/Countdown";
 import { userById } from "@/lib/mock-data";
 import { useCurrentUser } from "@/lib/user-context";
 import { cn } from "@/lib/utils";
-import type { Ticket, TicketStatus } from "@/lib/types";
+import type { Task, TaskStatus } from "@/lib/types";
 import { Clock, Globe2, Building2, Users as UsersIcon, FolderKanban, User as UserIcon } from "lucide-react";
 import { toast } from "sonner";
 
 type BoardView = "all" | "byDept" | "mine";
 
-const COLS: { id: TicketStatus; label: string; tone: string }[] = [
+const COLS: { id: TaskStatus; label: string; tone: string }[] = [
   { id: "pending", label: "Pending", tone: "border-border" },
   { id: "urgent", label: "Urgent", tone: "border-urgent/40" },
   { id: "in_progress", label: "In Progress", tone: "border-accent/30" },
@@ -25,7 +25,7 @@ const COLS: { id: TicketStatus; label: string; tone: string }[] = [
 
 const PRIORITY_RANK: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
 
-const SORTS: Record<string, (a: Ticket, b: Ticket) => number> = {
+const SORTS: Record<string, (a: Task, b: Task) => number> = {
   recent:       (a, b) => +new Date(b.lastActivityAt) - +new Date(a.lastActivityAt),
   priority:     (a, b) => PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority],
   due:          (a, b) => (a.dueDate ? +new Date(a.dueDate) : Infinity) - (b.dueDate ? +new Date(b.dueDate) : Infinity),
@@ -35,13 +35,34 @@ const SORTS: Record<string, (a: Ticket, b: Ticket) => number> = {
 
 export default function BoardPage() {
   const currentUser = useCurrentUser();
-  const [tickets, setTickets] = useState<Ticket[]>(initialTickets);
+  // Source of truth is Supabase; mock-data is no longer used here. Empty
+  // state on first paint, then a single fetch hydrates the board. After
+  // that, drag-drop mutates state optimistically and persists via PATCH.
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [loading, setLoading] = useState(true);
   const [view, setView] = useState<BoardView>("all");
   const [filterDept, setFilterDept] = useState("all");
   const [filterUser, setFilterUser] = useState("all");
   const [filterClient, setFilterClient] = useState("all");
   const [filterWebsite, setFilterWebsite] = useState("all");
   const [sort, setSort] = useState("priority");
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/tasks", { cache: "no-store" })
+      .then((r) => r.json())
+      .then((data) => {
+        if (cancelled) return;
+        setTasks(data.tasks ?? []);
+        setLoading(false);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        toast.error(`Couldn't load tasks: ${err instanceof Error ? err.message : "network error"}`);
+        setLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, []);
 
   // View buttons are shortcuts — they just preset the filters. Users can
   // still tweak after; the view chip stays highlighted as long as the
@@ -65,35 +86,35 @@ export default function BoardPage() {
   const clientOptions = useMemo(() => distinctClients(), []);
   const websiteOptions = useMemo(() => distinctWebsites(), []);
 
-  const visible = useMemo(() => tickets.filter((t) =>
+  const visible = useMemo(() => tasks.filter((t) =>
     (filterDept === "all" || t.departmentId === filterDept) &&
     (filterUser === "all" || t.assigneeId === filterUser) &&
     (filterClient === "all" || (filterClient === "__internal" ? !t.clientName : t.clientName === filterClient)) &&
     (filterWebsite === "all" || (filterWebsite === "__internal" ? !t.website : t.website === filterWebsite))
-  ), [tickets, filterDept, filterUser, filterClient, filterWebsite]);
+  ), [tasks, filterDept, filterUser, filterClient, filterWebsite]);
 
   const grouped = useMemo(() => {
-    const map: Record<TicketStatus, Ticket[]> = {
+    const map: Record<TaskStatus, Task[]> = {
       pending: [], in_progress: [], urgent: [], waiting_on_client: [], done: []
     };
     visible.forEach((t) => map[t.status].push(t));
     const sorter = SORTS[sort] ?? SORTS.priority;
-    Object.keys(map).forEach((k) => map[k as TicketStatus].sort(sorter));
+    Object.keys(map).forEach((k) => map[k as TaskStatus].sort(sorter));
     return map;
   }, [visible, sort]);
 
   async function onDragEnd(result: DropResult) {
     if (!result.destination) return;
-    const dest = result.destination.droppableId as TicketStatus;
+    const dest = result.destination.droppableId as TaskStatus;
     const id = result.draggableId;
-    const before = tickets.find((t) => t.id === id);
+    const before = tasks.find((t) => t.id === id);
     if (!before || before.status === dest) return;
 
     // Optimistic
-    setTickets((cur) => cur.map((t) => t.id === id ? { ...t, status: dest, lastActivityAt: new Date().toISOString() } : t));
+    setTasks((cur) => cur.map((t) => t.id === id ? { ...t, status: dest, lastActivityAt: new Date().toISOString() } : t));
     // Persist
     try {
-      const res = await fetch(`/api/tickets/${id}`, {
+      const res = await fetch(`/api/tasks/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ status: dest })
@@ -118,7 +139,7 @@ export default function BoardPage() {
       const msg = err instanceof Error ? err.message : "network error";
       toast.error(`Status change failed: ${msg}`);
       // Revert on failure
-      setTickets((cur) => cur.map((t) => t.id === id ? { ...t, status: before.status } : t));
+      setTasks((cur) => cur.map((t) => t.id === id ? { ...t, status: before.status } : t));
     }
   }
 

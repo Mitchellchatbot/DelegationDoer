@@ -13,3 +13,6 @@ supabase/.branches/
 *.pem
 .idea
 .vscode/*.log
+
+# electron-builder output
+dist-electron/

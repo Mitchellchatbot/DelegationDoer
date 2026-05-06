@@ -33,7 +33,7 @@ export default async function MainLayout({ children }: { children: React.ReactNo
         <Sidebar user={user} />
         <div className="flex-1 min-w-0">
           <Topbar user={user} />
-          <main className="p-6 anim-fade-in-up">{children}</main>
+          <main className="p-6">{children}</main>
         </div>
       </div>
       <Toaster position="bottom-right" richColors closeButton />

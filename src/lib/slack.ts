@@ -104,7 +104,7 @@ export interface NotifyResult {
 export async function notifyAssignment(args: {
   assigneeEmail: string;
   assignerName: string;
-  ticketId: string;
+  taskId: string;
   title: string;
   description?: string | null;
   priority: string;
@@ -129,7 +129,7 @@ export async function notifyAssignment(args: {
   }
 
   const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
-  const ticketUrl = `${baseUrl}/tickets/${args.ticketId}`;
+  const taskUrl = `${baseUrl}/tasks/${args.taskId}`;
 
   const dueLabel = args.dueDate
     ? new Date(args.dueDate).toLocaleString(undefined, {
@@ -164,7 +164,7 @@ export async function notifyAssignment(args: {
     },
     {
       type: "section",
-      text: { type: "mrkdwn", text: `*<${ticketUrl}|${args.title}>*` }
+      text: { type: "mrkdwn", text: `*<${taskUrl}|${args.title}>*` }
     },
     ...(args.description
       ? [{ type: "section", text: { type: "mrkdwn", text: args.description.slice(0, 2900) } }]
@@ -176,7 +176,7 @@ export async function notifyAssignment(args: {
         {
           type: "button",
           text: { type: "plain_text", text: "Open in DelegationDoer", emoji: true },
-          url: ticketUrl,
+          url: taskUrl,
           style: "primary"
         }
       ]
@@ -207,14 +207,14 @@ async function postCompletionBlocks(args: {
   channel: string;
   assigneeName: string;
   assigneeSlackId?: string | null;
-  ticketId: string;
+  taskId: string;
   title: string;
   estimateHours: number;
   actualHours: number;
   clientName?: string | null;
 }): Promise<NotifyResult> {
   const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
-  const ticketUrl = `${baseUrl}/tickets/${args.ticketId}`;
+  const taskUrl = `${baseUrl}/tasks/${args.taskId}`;
   const text = `${args.assigneeName} completed: ${args.title}`;
 
   const mention = args.assigneeSlackId ? `<@${args.assigneeSlackId}>` : `*${args.assigneeName}*`;
@@ -242,7 +242,7 @@ async function postCompletionBlocks(args: {
     },
     {
       type: "section",
-      text: { type: "mrkdwn", text: `*<${ticketUrl}|${args.title}>*` }
+      text: { type: "mrkdwn", text: `*<${taskUrl}|${args.title}>*` }
     },
     { type: "section", fields },
     {
@@ -251,7 +251,7 @@ async function postCompletionBlocks(args: {
         {
           type: "button",
           text: { type: "plain_text", text: "Open in DelegationDoer", emoji: true },
-          url: ticketUrl,
+          url: taskUrl,
           style: "primary"
         }
       ]
@@ -285,7 +285,7 @@ export async function notifyCompletion(args: {
   creatorEmail: string | null;
   assigneeName: string;
   assigneeEmail?: string | null; // for @-mention in the channel post
-  ticketId: string;
+  taskId: string;
   title: string;
   estimateHours: number;
   actualHours: number;

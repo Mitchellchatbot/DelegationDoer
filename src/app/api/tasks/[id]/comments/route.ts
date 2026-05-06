@@ -4,7 +4,7 @@ import { requireCurrentUserId } from "@/lib/session";
 
 export const dynamic = "force-dynamic";
 
-// POST /api/tickets/[id]/comments — add a comment as an activity_log row.
+// POST /api/tasks/[id]/comments — add a comment as an activity_log row.
 // Body: { content: string }.
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   try {
@@ -23,7 +23,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       .from("activity_logs")
       .insert({
         id: `a_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
-        ticket_id: params.id,
+        task_id: params.id,
         user_id: userId,
         action: "comment",
         detail: text || null,
@@ -34,8 +34,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-    // Bump the ticket's last_activity_at so it doesn't get marked stalled.
-    await supabase.from("tickets").update({ last_activity_at: now, inactive_flag: false }).eq("id", params.id);
+    // Bump the task's last_activity_at so it doesn't get marked stalled.
+    await supabase.from("tasks").update({ last_activity_at: now, inactive_flag: false }).eq("id", params.id);
 
     return NextResponse.json({ comment: data });
   } catch (err) {

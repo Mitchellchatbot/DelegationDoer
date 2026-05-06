@@ -1,5 +1,5 @@
 import type {
-  User, Department, Ticket, Project, Milestone, RACIEntry,
+  User, Department, Task, Project, Milestone, RACIEntry,
   IncidentLog, SkillProfile, ActivityLog
 } from "./types";
 
@@ -107,16 +107,16 @@ export const milestones: Milestone[] = [
   { id: "m_4", projectId: "p_2", name: "Keyword map", dueDate: daysAhead(2), deliverables: ["1000 keywords", "Cluster doc"], status: "in_progress" },
   { id: "m_5", projectId: "p_2", name: "First 50 pages live", dueDate: daysAhead(14), deliverables: ["50 location pages indexed"], status: "pending" },
   { id: "m_6", projectId: "p_3", name: "Welcome series", dueDate: daysAhead(5), deliverables: ["6 emails", "Triggers"], status: "in_progress" },
-  { id: "m_7", projectId: "p_4", name: "v1 internal launch", dueDate: daysAhead(10), deliverables: ["Auth", "Tickets", "Board"], status: "in_progress" }
+  { id: "m_7", projectId: "p_4", name: "v1 internal launch", dueDate: daysAhead(10), deliverables: ["Auth", "Tasks", "Board"], status: "in_progress" }
 ];
 
-export const tickets: Ticket[] = [
+export const tasks: Task[] = [
   {
     id: "t_1", title: "Build /locations/[city] template", description: "Programmatic template w/ schema, FAQ, internal links. Lighthouse 90+.",
     status: "in_progress", priority: "high", estimatedHours: 6, actualHours: 2.5,
     tags: ["story", "performance"], departmentId: "dep_web", assigneeId: "u_5", creatorId: "u_1",
     projectId: "p_1", dueDate: daysAhead(2), inactiveFlag: false,
-    lastActivityAt: hoursAgo(3), createdAt: hoursAgo(30), blocksTicketIds: ["t_5", "t_6"]
+    lastActivityAt: hoursAgo(3), createdAt: hoursAgo(30), blocksTaskIds: ["t_5", "t_6"]
   },
   {
     id: "t_2", title: "Site down — acme-insurance.com 502s",
@@ -124,7 +124,7 @@ export const tickets: Ticket[] = [
     status: "urgent", priority: "critical", estimatedHours: 2, actualHours: 0.5,
     tags: ["urgent", "client-request"], departmentId: "dep_web", assigneeId: "u_7", creatorId: "u_5",
     projectId: null, dueDate: daysAhead(0), inactiveFlag: false,
-    lastActivityAt: hoursAgo(1), createdAt: hoursAgo(2), blocksTicketIds: []
+    lastActivityAt: hoursAgo(1), createdAt: hoursAgo(2), blocksTaskIds: []
   },
   {
     id: "t_3", title: "Schema markup audit — Lawsmith Group",
@@ -132,7 +132,7 @@ export const tickets: Ticket[] = [
     status: "pending", priority: "medium", estimatedHours: 4, actualHours: 0,
     tags: ["day-task"], departmentId: "dep_seo", assigneeId: "u_9", creatorId: "u_2",
     projectId: "p_2", dueDate: daysAhead(3), inactiveFlag: false,
-    lastActivityAt: hoursAgo(8), createdAt: hoursAgo(8), blocksTicketIds: []
+    lastActivityAt: hoursAgo(8), createdAt: hoursAgo(8), blocksTaskIds: []
   },
   {
     id: "t_4", title: "10 location pages — insurance vertical",
@@ -140,14 +140,14 @@ export const tickets: Ticket[] = [
     status: "in_progress", priority: "medium", estimatedHours: 8, actualHours: 3,
     tags: ["story"], departmentId: "dep_seo", assigneeId: "u_3", creatorId: "u_2",
     projectId: "p_2", dueDate: daysAhead(5), inactiveFlag: false,
-    lastActivityAt: hoursAgo(60), createdAt: hoursAgo(80), blocksTicketIds: []
+    lastActivityAt: hoursAgo(60), createdAt: hoursAgo(80), blocksTaskIds: []
   },
   {
     id: "t_5", title: "Wire contact form to HubSpot", description: "Forms submit to /api/lead and forward to HubSpot. Validate spam.",
     status: "waiting_on_client", priority: "medium", estimatedHours: 3, actualHours: 1,
     tags: ["client-request"], departmentId: "dep_web", assigneeId: "u_7", creatorId: "u_5",
     projectId: "p_1", dueDate: daysAhead(4), inactiveFlag: true,
-    lastActivityAt: hoursAgo(72), createdAt: hoursAgo(120), blocksTicketIds: []
+    lastActivityAt: hoursAgo(72), createdAt: hoursAgo(120), blocksTaskIds: []
   },
   {
     id: "t_6", title: "QA pass on templates",
@@ -155,7 +155,7 @@ export const tickets: Ticket[] = [
     status: "pending", priority: "low", estimatedHours: 4, actualHours: 0,
     tags: ["day-task"], departmentId: "dep_web", assigneeId: null, creatorId: "u_5",
     projectId: "p_1", dueDate: daysAhead(10), inactiveFlag: false,
-    lastActivityAt: hoursAgo(20), createdAt: hoursAgo(20), blocksTicketIds: []
+    lastActivityAt: hoursAgo(20), createdAt: hoursAgo(20), blocksTaskIds: []
   },
   {
     id: "t_7", title: "Welcome email #3 copy",
@@ -163,7 +163,7 @@ export const tickets: Ticket[] = [
     status: "in_progress", priority: "medium", estimatedHours: 2, actualHours: 0.5,
     tags: ["story"], departmentId: "dep_mkt", assigneeId: "u_6", creatorId: "u_4",
     projectId: "p_3", dueDate: daysAhead(1), inactiveFlag: false,
-    lastActivityAt: hoursAgo(4), createdAt: hoursAgo(48), blocksTicketIds: []
+    lastActivityAt: hoursAgo(4), createdAt: hoursAgo(48), blocksTaskIds: []
   },
   {
     id: "t_8", title: "Meta ads — Spring promo creatives",
@@ -171,7 +171,7 @@ export const tickets: Ticket[] = [
     status: "pending", priority: "high", estimatedHours: 5, actualHours: 0,
     tags: ["story"], departmentId: "dep_mkt", assigneeId: "u_4", creatorId: "u_1",
     projectId: "p_3", dueDate: daysAhead(2), inactiveFlag: false,
-    lastActivityAt: hoursAgo(10), createdAt: hoursAgo(10), blocksTicketIds: []
+    lastActivityAt: hoursAgo(10), createdAt: hoursAgo(10), blocksTaskIds: []
   },
   {
     id: "t_9", title: "Outreach — 30 prospect domains for Lawsmith",
@@ -179,7 +179,7 @@ export const tickets: Ticket[] = [
     status: "in_progress", priority: "medium", estimatedHours: 3, actualHours: 1.5,
     tags: ["day-task"], departmentId: "dep_seo", assigneeId: "u_3", creatorId: "u_2",
     projectId: "p_2", dueDate: daysAhead(2), inactiveFlag: false,
-    lastActivityAt: hoursAgo(6), createdAt: hoursAgo(50), blocksTicketIds: []
+    lastActivityAt: hoursAgo(6), createdAt: hoursAgo(50), blocksTaskIds: []
   },
   {
     id: "t_10", title: "Migrate hosting from Pantheon to Vercel",
@@ -187,15 +187,15 @@ export const tickets: Ticket[] = [
     status: "done", priority: "high", estimatedHours: 10, actualHours: 11,
     tags: ["story"], departmentId: "dep_web", assigneeId: "u_5", creatorId: "u_1",
     projectId: "p_1", dueDate: daysAhead(-2), inactiveFlag: false,
-    lastActivityAt: hoursAgo(48), createdAt: hoursAgo(240), blocksTicketIds: []
+    lastActivityAt: hoursAgo(48), createdAt: hoursAgo(240), blocksTaskIds: []
   },
   {
     id: "t_11", title: "Ship DelegationDoer v1",
-    description: "Internal release of the org's task tool. Auth, tickets, board, focus mode.",
+    description: "Internal release of the org's task tool. Auth, tasks, board, focus mode.",
     status: "in_progress", priority: "high", estimatedHours: 16, actualHours: 8,
     tags: ["story", "internal"], departmentId: "dep_software", assigneeId: "u_8", creatorId: "u_5",
     projectId: "p_4", dueDate: daysAhead(7), inactiveFlag: false,
-    lastActivityAt: hoursAgo(2), createdAt: hoursAgo(120), blocksTicketIds: []
+    lastActivityAt: hoursAgo(2), createdAt: hoursAgo(120), blocksTaskIds: []
   },
   {
     id: "t_12", title: "Critical: malware flag on lawsmith.com",
@@ -203,15 +203,15 @@ export const tickets: Ticket[] = [
     status: "urgent", priority: "critical", estimatedHours: 4, actualHours: 0.5,
     tags: ["urgent"], departmentId: "dep_web", assigneeId: "u_5", creatorId: "u_2",
     projectId: null, dueDate: daysAhead(0), inactiveFlag: false,
-    lastActivityAt: hoursAgo(2), createdAt: hoursAgo(2), blocksTicketIds: []
+    lastActivityAt: hoursAgo(2), createdAt: hoursAgo(2), blocksTaskIds: []
   },
   {
-    id: "t_13", title: "Slack ↔ ticket sync integration",
-    description: "Post a thread in #ops when a ticket flips to urgent.",
+    id: "t_13", title: "Slack ↔ task sync integration",
+    description: "Post a thread in #ops when a task flips to urgent.",
     status: "pending", priority: "medium", estimatedHours: 6, actualHours: 0,
     tags: ["story", "internal"], departmentId: "dep_software", assigneeId: "u_8", creatorId: "u_1",
     projectId: "p_4", dueDate: daysAhead(9), inactiveFlag: false,
-    lastActivityAt: hoursAgo(14), createdAt: hoursAgo(14), blocksTicketIds: []
+    lastActivityAt: hoursAgo(14), createdAt: hoursAgo(14), blocksTaskIds: []
   }
 ];
 
@@ -249,13 +249,13 @@ export const skillProfiles: SkillProfile[] = [
 ];
 
 export const activity: ActivityLog[] = [
-  { id: "a_1", ticketId: "t_1", userId: "u_1", action: "created", detail: "Created and assigned to Diego (Website lead)", createdAt: hoursAgo(30) },
-  { id: "a_2", ticketId: "t_1", userId: "u_5", action: "status_change", detail: "pending → in_progress", createdAt: hoursAgo(28) },
-  { id: "a_3", ticketId: "t_1", userId: "u_5", action: "comment", detail: "First template scaffolded; FAQ schema next.", createdAt: hoursAgo(3) },
-  { id: "a_4", ticketId: "t_2", userId: "u_5", action: "created", detail: "Reported by Diego from monitoring", createdAt: hoursAgo(2) },
-  { id: "a_5", ticketId: "t_2", userId: "u_7", action: "status_change", detail: "pending → urgent", createdAt: hoursAgo(1) },
-  { id: "a_6", ticketId: "t_5", userId: "u_7", action: "status_change", detail: "in_progress → waiting_on_client", createdAt: hoursAgo(72) },
-  { id: "a_7", ticketId: "t_11", userId: "u_5", action: "comment", detail: "Auth flows wrapped, working on tickets API next.", createdAt: hoursAgo(2) }
+  { id: "a_1", taskId: "t_1", userId: "u_1", action: "created", detail: "Created and assigned to Diego (Website lead)", createdAt: hoursAgo(30) },
+  { id: "a_2", taskId: "t_1", userId: "u_5", action: "status_change", detail: "pending → in_progress", createdAt: hoursAgo(28) },
+  { id: "a_3", taskId: "t_1", userId: "u_5", action: "comment", detail: "First template scaffolded; FAQ schema next.", createdAt: hoursAgo(3) },
+  { id: "a_4", taskId: "t_2", userId: "u_5", action: "created", detail: "Reported by Diego from monitoring", createdAt: hoursAgo(2) },
+  { id: "a_5", taskId: "t_2", userId: "u_7", action: "status_change", detail: "pending → urgent", createdAt: hoursAgo(1) },
+  { id: "a_6", taskId: "t_5", userId: "u_7", action: "status_change", detail: "in_progress → waiting_on_client", createdAt: hoursAgo(72) },
+  { id: "a_7", taskId: "t_11", userId: "u_5", action: "comment", detail: "Auth flows wrapped, working on tasks API next.", createdAt: hoursAgo(2) }
 ];
 
 export const incidentRouting: Record<string, string> = {
@@ -267,8 +267,8 @@ export const incidentRouting: Record<string, string> = {
 
 export const TAG_PRESETS = ["day-task", "story", "urgent", "client-request", "performance", "a11y", "internal"];
 
-// Backfill client/website on the seeded tickets to match the Supabase migration.
-// Heuristic: derive from projectId; specific overrides for project-less tickets.
+// Backfill client/website on the seeded tasks to match the Supabase migration.
+// Heuristic: derive from projectId; specific overrides for project-less tasks.
 const CLIENT_BY_PROJECT: Record<string, { clientName: string | null; website: string | null }> = {
   p_1: { clientName: "Acme Insurance",       website: "acme-insurance.com" },
   p_2: { clientName: "Lawsmith Group",       website: "lawsmith.com" },
@@ -279,7 +279,7 @@ const TICKET_OVERRIDES: Record<string, { clientName: string | null; website: str
   t_2:  { clientName: "Acme Insurance", website: "acme-insurance.com" },
   t_12: { clientName: "Lawsmith Group", website: "lawsmith.com" }
 };
-for (const t of tickets) {
+for (const t of tasks) {
   const fromProject = t.projectId ? CLIENT_BY_PROJECT[t.projectId] : undefined;
   const override = TICKET_OVERRIDES[t.id];
   const enrich = override ?? fromProject;
@@ -290,10 +290,10 @@ for (const t of tickets) {
 }
 
 export function distinctClients(): string[] {
-  return Array.from(new Set(tickets.map((t) => t.clientName).filter(Boolean) as string[])).sort();
+  return Array.from(new Set(tasks.map((t) => t.clientName).filter(Boolean) as string[])).sort();
 }
 export function distinctWebsites(): string[] {
-  return Array.from(new Set(tickets.map((t) => t.website).filter(Boolean) as string[])).sort();
+  return Array.from(new Set(tasks.map((t) => t.website).filter(Boolean) as string[])).sort();
 }
 
 export function userById(id: string | null | undefined): User | undefined {
@@ -305,8 +305,8 @@ export function deptById(id: string | null | undefined): Department | undefined 
 export function projectById(id: string | null | undefined): Project | undefined {
   return projects.find((p) => p.id === id);
 }
-export function ticketById(id: string): Ticket | undefined {
-  return tickets.find((t) => t.id === id);
+export function taskById(id: string): Task | undefined {
+  return tasks.find((t) => t.id === id);
 }
 
 // Heads of a given department.

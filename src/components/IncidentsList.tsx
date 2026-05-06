@@ -18,7 +18,7 @@ export function IncidentsList({ incidents }: { incidents: EnrichedIncident[] }) 
   ), [type, status, incidents]);
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 max-w-7xl mx-auto">
       <div className="flex items-center justify-between">
         <h1 className="text-lg font-medium">Incidents <span className="text-muted text-sm">· {list.length}</span></h1>
         <div className="flex items-center gap-2">

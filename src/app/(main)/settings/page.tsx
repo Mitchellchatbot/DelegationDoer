@@ -3,6 +3,7 @@ import { ROLE_LABELS } from "@/lib/auth";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { ProfileAvatarSection } from "@/components/ProfileAvatarSection";
+import { DesktopAppSection } from "@/components/DesktopAppSection";
 
 export default async function SettingsPage() {
   const userId = await requireCurrentUserId();
@@ -13,6 +14,8 @@ export default async function SettingsPage() {
       <h1 className="text-lg font-medium">Settings</h1>
 
       {me && <ProfileAvatarSection user={me} />}
+
+      <DesktopAppSection />
 
       <section className="card p-4">
         <div className="text-sm font-medium mb-3">Department task-type ownership</div>

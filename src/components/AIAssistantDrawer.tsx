@@ -3,7 +3,7 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { Sparkles, Send, X } from "lucide-react";
 import { useState } from "react";
-import { currentUser, tickets } from "@/lib/mock-data";
+import { currentUser, tasks } from "@/lib/mock-data";
 import { RaiseLink } from "./RaiseLink";
 
 interface Message { role: "user" | "assistant"; content: string }
@@ -75,7 +75,7 @@ export function AIAssistantDrawer({
                   ))}
                 </div>
                 <div className="mt-4 p-3 rounded-xl border border-border bg-surface2 text-[11px] text-muted">
-                  Context loaded: {currentUser.name}, {tickets.filter((t) => t.assigneeId === currentUser.id && t.status !== "done").length} open tickets, {tickets.filter((t) => t.inactiveFlag).length} stalled.
+                  Context loaded: {currentUser.name}, {tasks.filter((t) => t.assigneeId === currentUser.id && t.status !== "done").length} open tasks, {tasks.filter((t) => t.inactiveFlag).length} stalled.
                 </div>
               </div>
             )}

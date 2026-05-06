@@ -80,7 +80,7 @@ export async function GET(req: NextRequest) {
   // Step 5: directly post the same Block Kit payload notifyAssignment would
   // build. Surfaces any block validation errors raw, since the helper
   // currently swallows them.
-  const ticketUrl = `${process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000"}/tickets/t_debug_dummy`;
+  const taskUrl = `${process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000"}/tasks/t_debug_dummy`;
   const fields = [
     { type: "mrkdwn", text: `*Priority*\nmedium` },
     { type: "mrkdwn", text: `*Estimate*\n2h` },
@@ -100,7 +100,7 @@ export async function GET(req: NextRequest) {
     },
     {
       type: "section",
-      text: { type: "mrkdwn", text: `*<${ticketUrl}|Debug: Block Kit payload test>*` }
+      text: { type: "mrkdwn", text: `*<${taskUrl}|Debug: Block Kit payload test>*` }
     },
     {
       type: "section",
@@ -113,7 +113,7 @@ export async function GET(req: NextRequest) {
         {
           type: "button",
           text: { type: "plain_text", text: "Open in DelegationDoer", emoji: true },
-          url: ticketUrl,
+          url: taskUrl,
           style: "primary"
         }
       ]

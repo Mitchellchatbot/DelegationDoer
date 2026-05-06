@@ -5,9 +5,9 @@ import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Check, ChevronDown, X, Send, Pencil, CalendarPlus } from "lucide-react";
-import type { Priority, Ticket, TicketStatus } from "@/lib/types";
+import type { Priority, Task, TaskStatus } from "@/lib/types";
 
-const STATUS_OPTIONS: { value: TicketStatus; label: string }[] = [
+const STATUS_OPTIONS: { value: TaskStatus; label: string }[] = [
   { value: "pending",            label: "Pending" },
   { value: "in_progress",        label: "In progress" },
   { value: "urgent",             label: "Urgent" },
@@ -17,27 +17,27 @@ const STATUS_OPTIONS: { value: TicketStatus; label: string }[] = [
 
 const PRIORITIES: Priority[] = ["low", "medium", "high", "critical"];
 
-export function TicketActions({ ticket }: { ticket: Ticket }) {
+export function TaskActions({ task }: { task: Task }) {
   return (
     <div className="flex items-center gap-2">
-      <ExtendButton ticket={ticket} />
-      <EditButton ticket={ticket} />
-      <MoveStatus ticket={ticket} />
+      <ExtendButton task={task} />
+      <EditButton task={task} />
+      <MoveStatus task={task} />
     </div>
   );
 }
 
 /* ---------- Move status ---------- */
 
-function MoveStatus({ ticket }: { ticket: Ticket }) {
+function MoveStatus({ task }: { task: Task }) {
   const router = useRouter();
-  const [pending, setPending] = useState<TicketStatus | null>(null);
+  const [pending, setPending] = useState<TaskStatus | null>(null);
 
-  async function setStatus(status: TicketStatus) {
-    if (status === ticket.status) return;
+  async function setStatus(status: TaskStatus) {
+    if (status === task.status) return;
     setPending(status);
     try {
-      const res = await fetch(`/api/tickets/${ticket.id}`, {
+      const res = await fetch(`/api/tasks/${task.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ status })
@@ -64,9 +64,9 @@ function MoveStatus({ ticket }: { ticket: Ticket }) {
               onSelect={() => setStatus(s.value)}
               className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-sm text-ink hover:bg-surface2 cursor-pointer outline-none data-[highlighted]:bg-surface2"
             >
-              {s.value === ticket.status ? <Check className="w-3.5 h-3.5 text-accent" /> : <span className="w-3.5" />}
+              {s.value === task.status ? <Check className="w-3.5 h-3.5 text-accent" /> : <span className="w-3.5" />}
               <span>{s.label}</span>
-              {s.value === ticket.status && <span className="text-[10px] text-muted ml-auto">current</span>}
+              {s.value === task.status && <span className="text-[10px] text-muted ml-auto">current</span>}
             </DropdownMenu.Item>
           ))}
         </DropdownMenu.Content>
@@ -77,14 +77,14 @@ function MoveStatus({ ticket }: { ticket: Ticket }) {
 
 /* ---------- Edit dialog ---------- */
 
-function EditButton({ ticket }: { ticket: Ticket }) {
+function EditButton({ task }: { task: Task }) {
   const [open, setOpen] = useState(false);
-  const [title, setTitle] = useState(ticket.title);
-  const [description, setDescription] = useState(ticket.description ?? "");
-  const [priority, setPriority] = useState<Priority>(ticket.priority);
-  const [estimate, setEstimate] = useState<number>(ticket.estimatedHours);
-  const [clientName, setClientName] = useState(ticket.clientName ?? "");
-  const [website, setWebsite] = useState(ticket.website ?? "");
+  const [title, setTitle] = useState(task.title);
+  const [description, setDescription] = useState(task.description ?? "");
+  const [priority, setPriority] = useState<Priority>(task.priority);
+  const [estimate, setEstimate] = useState<number>(task.estimatedHours);
+  const [clientName, setClientName] = useState(task.clientName ?? "");
+  const [website, setWebsite] = useState(task.website ?? "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const router = useRouter();
@@ -94,7 +94,7 @@ function EditButton({ ticket }: { ticket: Ticket }) {
     setSaving(true);
     setError(null);
     try {
-      const res = await fetch(`/api/tickets/${ticket.id}`, {
+      const res = await fetch(`/api/tasks/${task.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -127,7 +127,7 @@ function EditButton({ ticket }: { ticket: Ticket }) {
         <Dialog.Overlay className="fixed inset-0 bg-black/25 backdrop-blur-sm z-40" />
         <Dialog.Content className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-50 w-[560px] max-w-[calc(100vw-2rem)] card p-5">
           <div className="flex items-start justify-between mb-3">
-            <Dialog.Title className="text-base font-medium">Edit ticket</Dialog.Title>
+            <Dialog.Title className="text-base font-medium">Edit task</Dialog.Title>
             <Dialog.Close className="btn p-1.5"><X className="w-3.5 h-3.5" /></Dialog.Close>
           </div>
           <div className="space-y-3">
@@ -183,7 +183,7 @@ const QUICK_HOURS = [
   { label: "+1wk",  hours: 168 }
 ];
 
-function ExtendButton({ ticket }: { ticket: Ticket }) {
+function ExtendButton({ task }: { task: Task }) {
   const [open, setOpen] = useState(false);
   const [hours, setHours] = useState<number>(24);
   const [reason, setReason] = useState("");
@@ -199,7 +199,7 @@ function ExtendButton({ ticket }: { ticket: Ticket }) {
     if (submitting || hours <= 0) return;
     setSubmitting(true); setError(null);
     try {
-      const res = await fetch(`/api/tickets/${ticket.id}/extend`, {
+      const res = await fetch(`/api/tasks/${task.id}/extend`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ hours, reason })
@@ -271,9 +271,9 @@ function ExtendButton({ ticket }: { ticket: Ticket }) {
               />
             </div>
             <div className="text-[11px] text-muted">
-              Current due: {ticket.dueDate ? new Date(ticket.dueDate).toLocaleString() : "no date"}
-              {hours > 0 && ticket.dueDate && (
-                <> → <span className="text-ink">{new Date(Math.max(Date.now(), new Date(ticket.dueDate).getTime()) + hours * 36e5).toLocaleString()}</span></>
+              Current due: {task.dueDate ? new Date(task.dueDate).toLocaleString() : "no date"}
+              {hours > 0 && task.dueDate && (
+                <> → <span className="text-ink">{new Date(Math.max(Date.now(), new Date(task.dueDate).getTime()) + hours * 36e5).toLocaleString()}</span></>
               )}
             </div>
           </div>
@@ -298,7 +298,7 @@ function ExtendButton({ ticket }: { ticket: Ticket }) {
 
 /* ---------- Comment form ---------- */
 
-export function CommentForm({ ticketId }: { ticketId: string }) {
+export function CommentForm({ taskId }: { taskId: string }) {
   const [content, setContent] = useState("");
   const [posting, setPosting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -309,7 +309,7 @@ export function CommentForm({ ticketId }: { ticketId: string }) {
     setPosting(true);
     setError(null);
     try {
-      const res = await fetch(`/api/tickets/${ticketId}/comments`, {
+      const res = await fetch(`/api/tasks/${taskId}/comments`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ content })

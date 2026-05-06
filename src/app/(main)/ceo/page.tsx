@@ -3,26 +3,27 @@
 import { useMemo, useState } from "react";
 import {
   users as initialUsers, departments as initialDepartments,
-  tickets, currentUser, headsOf, workersOf
+  tasks, headsOf, workersOf
 } from "@/lib/mock-data";
 import { Avatar } from "@/components/Avatar";
 import { CapacityBar } from "@/components/CapacityBar";
-import { AssignTaskDialog } from "@/components/AssignTaskDialog";
+import { OrgChart } from "@/components/OrgChart";
 import { userCapacity } from "@/lib/capacity";
 import { ROLE_LABELS } from "@/lib/auth";
+import { useCurrentUser } from "@/lib/user-context";
 import type { Role, User, Department } from "@/lib/types";
 import {
-  Crown, Users as UsersIcon, Building2, ListChecks, Plus, X, ShieldAlert, Send
+  Crown, Users as UsersIcon, Building2, ListChecks, Plus, X, ShieldAlert
 } from "lucide-react";
 
 const TABS = ["People", "Departments", "Org chart", "All tasks"] as const;
 type Tab = typeof TABS[number];
 
 export default function CEOConsolePage() {
+  const currentUser = useCurrentUser();
   const [tab, setTab] = useState<Tab>("People");
   const [people, setPeople] = useState<User[]>(initialUsers);
   const [depts, setDepts] = useState<Department[]>(initialDepartments);
-  const [assignOpen, setAssignOpen] = useState(false);
 
   // Gate the page itself.
   if (currentUser.role !== "ceo") {
@@ -36,21 +37,14 @@ export default function CEOConsolePage() {
   }
 
   return (
-    <div className="space-y-5">
-      <header className="flex items-start justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-2 text-xs text-muted uppercase tracking-wide">
-            <Crown className="w-3 h-3" /> CEO Console
-          </div>
-          <h1 className="text-xl font-medium mt-1">Company-wide control</h1>
-          <p className="text-sm text-muted mt-1">Manage people, departments, and see the whole org's progress at a glance.</p>
+    <div className="space-y-5 max-w-7xl mx-auto">
+      <header>
+        <div className="flex items-center gap-2 text-xs text-muted uppercase tracking-wide">
+          <Crown className="w-3 h-3" /> CEO Console
         </div>
-        <button onClick={() => setAssignOpen(true)} className="btn-primary shrink-0 px-4 py-2.5">
-          <Send className="w-4 h-4" /> Assign new task
-        </button>
+        <h1 className="text-xl font-medium mt-1">Company-wide control</h1>
+        <p className="text-sm text-muted mt-1">Manage people, departments, and see the whole org's progress at a glance.</p>
       </header>
-
-      <AssignTaskDialog open={assignOpen} onOpenChange={setAssignOpen} />
 
       <div className="flex items-center gap-1 border-b border-border">
         {TABS.map((t) => {
@@ -276,60 +270,15 @@ function DepartmentsTab({
 /* ---------------- Org chart ---------------- */
 
 function OrgChartTab({ people, departments }: { people: User[]; departments: Department[] }) {
-  const ceo = people.find((u) => u.role === "ceo");
-
+  const ceo = people.find((u) => u.role === "ceo") ?? null;
   return (
-    <div className="card p-6">
-      {ceo && (
-        <div className="flex flex-col items-center">
-          <Node user={ceo} subtitle="CEO" tone="warn" />
-          <Connector />
-          <div className="grid gap-6" style={{ gridTemplateColumns: `repeat(${departments.length}, minmax(0, 1fr))` }}>
-            {departments.map((d) => {
-              const heads = people.filter((u) => u.role === "department_head" && u.departmentIds.includes(d.id));
-              const workers = people.filter((u) => u.role === "worker" && u.departmentIds.includes(d.id));
-              return (
-                <div key={d.id} className="flex flex-col items-center">
-                  <div className="text-xs uppercase tracking-wide text-muted mb-2">{d.name}</div>
-                  <div className="flex flex-col items-center gap-2">
-                    {heads.length === 0
-                      ? <div className="badge badge-tag">No head</div>
-                      : heads.map((h) => <Node key={h.id} user={h} subtitle="Head" tone="accent" />)
-                    }
-                  </div>
-                  {workers.length > 0 && <Connector />}
-                  <div className="space-y-1.5">
-                    {workers.map((w) => <Node key={w.id} user={w} subtitle="Worker" tone="muted" />)}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-    </div>
+    <OrgChart
+      ceo={ceo}
+      users={people}
+      departments={departments}
+      tasks={tasks}
+    />
   );
-}
-
-function Node({ user, subtitle, tone }: { user: User; subtitle: string; tone: "warn" | "accent" | "muted" }) {
-  const t = {
-    warn: "border-warn/40 bg-warn/10",
-    accent: "border-accent/30 bg-accent/10",
-    muted: "border-border bg-surface2"
-  }[tone];
-  return (
-    <div className={"flex items-center gap-2 px-3 py-1.5 rounded-2xl border " + t}>
-      <Avatar name={user.name} size={22} />
-      <div className="leading-tight">
-        <div className="text-xs">{user.name}</div>
-        <div className="text-[10px] text-muted">{subtitle}</div>
-      </div>
-    </div>
-  );
-}
-
-function Connector() {
-  return <div className="w-px h-6 bg-border my-2" />;
 }
 
 /* ---------------- All tasks ---------------- */
@@ -339,7 +288,7 @@ function AllTasksTab({ people, departments }: { people: User[]; departments: Dep
     return departments.map((d) => {
       const members = people.filter((u) => u.departmentIds.includes(d.id));
       const rows = members.map((u) => {
-        const my = tickets.filter((t) => t.assigneeId === u.id);
+        const my = tasks.filter((t) => t.assigneeId === u.id);
         const open = my.filter((t) => t.status !== "done");
         return {
           user: u,
@@ -348,7 +297,7 @@ function AllTasksTab({ people, departments }: { people: User[]; departments: Dep
           urgent: my.filter((t) => t.status === "urgent" || t.priority === "critical").length,
           stalled: my.filter((t) => t.inactiveFlag).length,
           done: my.filter((t) => t.status === "done").length,
-          cap: userCapacity(u, tickets)
+          cap: userCapacity(u, tasks)
         };
       });
       return { dept: d, rows };

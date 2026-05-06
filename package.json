@@ -11,7 +11,40 @@
     "prisma:generate": "prisma generate",
     "prisma:push": "prisma db push",
     "electron": "electron electron/main.js",
-    "electron:dev": "concurrently \"npm run dev\" \"wait-on http://localhost:3000/widget && electron electron/main.js\""
+    "electron:dev": "concurrently \"npm run dev\" \"wait-on http://localhost:3000/widget && DD_APP_URL=http://localhost:3000 electron electron/main.js\"",
+    "electron:build": "electron-builder",
+    "electron:build:mac": "electron-builder --mac",
+    "electron:build:win": "electron-builder --win"
+  },
+  "build": {
+    "appId": "com.scaledai.delegationdoer",
+    "productName": "DelegationDoer",
+    "directories": {
+      "output": "dist-electron",
+      "buildResources": "electron/assets"
+    },
+    "files": [
+      "electron/**/*",
+      "!electron/assets/**/*.psd"
+    ],
+    "mac": {
+      "target": "dmg",
+      "category": "public.app-category.productivity",
+      "identity": null,
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false
+    },
+    "dmg": {
+      "writeUpdateInfo": false
+    },
+    "win": {
+      "target": "nsis",
+      "signtoolOptions": null
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.32.1",
@@ -46,6 +79,7 @@
     "autoprefixer": "^10.4.20",
     "concurrently": "^9.0.1",
     "electron": "^32.1.2",
+    "electron-builder": "^26.8.1",
     "eslint": "^8.57.1",
     "eslint-config-next": "14.2.35",
     "postcss": "^8.4.47",

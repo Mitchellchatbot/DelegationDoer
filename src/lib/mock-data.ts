@@ -39,7 +39,7 @@ export const departments: Department[] = [
 // Workers report to their department head; heads report to the CEO.
 export const users: User[] = [
   {
-    id: "u_1", name: "Henry Chen", email: "henry@scaledai.org",
+    id: "u_1", name: "Shaheer Khosa", email: "shaheerkhosa6@gmail.com",
     role: "ceo", departmentIds: [],
     skills: ["strategy", "operations"], dailyCapacity: 8, throughput: {}
   },

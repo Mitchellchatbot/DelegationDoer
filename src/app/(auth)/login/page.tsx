@@ -1,11 +1,22 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { getSupabaseBrowser } from "@/lib/supabase-browser";
 
+// Wrapper exists so the inner form (which uses useSearchParams) is inside a
+// Suspense boundary. Next.js 14 build fails to prerender otherwise:
+// "useSearchParams() should be wrapped in a suspense boundary at page /login".
 export default function LoginPage() {
+  return (
+    <Suspense fallback={null}>
+      <LoginForm />
+    </Suspense>
+  );
+}
+
+function LoginForm() {
   const router = useRouter();
   const search = useSearchParams();
   const next = search.get("next") || "/";

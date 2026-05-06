@@ -57,8 +57,9 @@ export async function POST(req: NextRequest) {
           type: "text",
           text: buildSystemPrompt(),
           // System prompt is stable across turns; caching cuts repeated input cost.
+          // cache_control is supported at runtime in SDK 0.32.x but not yet in its types.
           cache_control: { type: "ephemeral" }
-        }
+        } as any
       ],
       messages: messages.map((m) => ({ role: m.role, content: m.content }))
     });

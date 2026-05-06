@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
-import { CURRENT_USER_ID } from "@/lib/session";
+import { requireCurrentUserId } from "@/lib/session";
 
 export const dynamic = "force-dynamic";
 
@@ -8,6 +8,7 @@ export const dynamic = "force-dynamic";
 // Body: { content: string }.
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   try {
+    const userId = await requireCurrentUserId();
     const { content, imageUrl } = await req.json();
     const text = (content ?? "").trim();
     const image = typeof imageUrl === "string" ? imageUrl : null;
@@ -23,7 +24,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       .insert({
         id: `a_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
         ticket_id: params.id,
-        user_id: CURRENT_USER_ID,
+        user_id: userId,
         action: "comment",
         detail: text || null,
         image_url: image

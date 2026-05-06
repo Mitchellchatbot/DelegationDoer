@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
-import { CURRENT_USER_ID } from "@/lib/session";
+import { requireCurrentUserId } from "@/lib/session";
 
 export const dynamic = "force-dynamic";
 
@@ -9,6 +9,7 @@ export const dynamic = "force-dynamic";
 // that issue type. The widget will alert that person on its next poll.
 export async function POST(req: NextRequest) {
   try {
+    const userId = await requireCurrentUserId();
     const body = await req.json();
     const description = (body.description ?? "").trim();
     if (!description) return NextResponse.json({ error: "description required" }, { status: 400 });
@@ -67,7 +68,7 @@ export async function POST(req: NextRequest) {
         tags: ["urgent", "incident"],
         department_id: departmentId,
         assignee_id: assignedToId,
-        creator_id: CURRENT_USER_ID,
+        creator_id: userId,
         project_id: null,
         due_date: now,
         inactive_flag: false,
@@ -82,7 +83,7 @@ export async function POST(req: NextRequest) {
     await supabase.from("activity_logs").insert({
       id: `a_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
       ticket_id: ticketId,
-      user_id: CURRENT_USER_ID,
+      user_id: userId,
       action: "created",
       detail: `Incident: ${issueType}${affectedUrl ? " — " + affectedUrl : ""}`
     });

@@ -15,23 +15,25 @@ export function isHead(u: User | null | undefined): boolean {
 }
 
 // Who is `actor` allowed to assign tickets to?
-//   CEO -> any department head, plus self
-//   Department head -> workers in any department they lead, plus self
-//   Worker -> only themselves
+//   CEO -> anyone in the org (the previous "only department heads" rule was
+//          too restrictive — CEO often needs to push work past a head when
+//          things are on fire, or assign across teams).
+//   Department head -> anyone whose home is one of their departments (workers
+//                       and other heads), plus themselves.
+//   Worker -> only themselves.
 // Anyone can always self-assign regardless of role.
-export function assignableTargets(actor: User): User[] {
-  let pool: User[];
+export function assignableTargets(actor: User, pool: User[] = users): User[] {
+  let candidates: User[];
   if (actor.role === "ceo") {
-    pool = users.filter((u) => u.role === "department_head");
+    candidates = pool.slice();
   } else if (actor.role === "department_head") {
-    pool = users.filter(
-      (u) => u.role === "worker" && u.departmentIds.some((d) => actor.departmentIds.includes(d))
+    candidates = pool.filter((u) =>
+      u.id === actor.id || u.departmentIds.some((d) => actor.departmentIds.includes(d))
     );
   } else {
-    pool = [actor];
+    candidates = [actor];
   }
-  // Always allow self-assignment, deduped.
-  return pool.some((u) => u.id === actor.id) ? pool : [actor, ...pool];
+  return candidates.some((u) => u.id === actor.id) ? candidates : [actor, ...candidates];
 }
 
 export function canCreateTicketsForOthers(actor: User): boolean {

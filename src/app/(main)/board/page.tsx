@@ -7,9 +7,13 @@ import { PriorityBadge, StalledBadge, Tag } from "@/components/Badges";
 import { Avatar } from "@/components/Avatar";
 import { Countdown } from "@/components/Countdown";
 import { userById } from "@/lib/mock-data";
+import { useCurrentUser } from "@/lib/user-context";
 import { cn } from "@/lib/utils";
 import type { Ticket, TicketStatus } from "@/lib/types";
-import { Clock, Globe2, Building2 } from "lucide-react";
+import { Clock, Globe2, Building2, Users as UsersIcon, FolderKanban, User as UserIcon } from "lucide-react";
+import { toast } from "sonner";
+
+type BoardView = "all" | "byDept" | "mine";
 
 const COLS: { id: TicketStatus; label: string; tone: string }[] = [
   { id: "pending", label: "Pending", tone: "border-border" },
@@ -30,12 +34,33 @@ const SORTS: Record<string, (a: Ticket, b: Ticket) => number> = {
 };
 
 export default function BoardPage() {
+  const currentUser = useCurrentUser();
   const [tickets, setTickets] = useState<Ticket[]>(initialTickets);
+  const [view, setView] = useState<BoardView>("all");
   const [filterDept, setFilterDept] = useState("all");
   const [filterUser, setFilterUser] = useState("all");
   const [filterClient, setFilterClient] = useState("all");
   const [filterWebsite, setFilterWebsite] = useState("all");
   const [sort, setSort] = useState("priority");
+
+  // View buttons are shortcuts — they just preset the filters. Users can
+  // still tweak after; the view chip stays highlighted as long as the
+  // filters haven't been changed away from its preset.
+  function selectView(next: BoardView) {
+    setView(next);
+    if (next === "all") {
+      setFilterDept("all");
+      setFilterUser("all");
+    } else if (next === "byDept") {
+      // Default to the actor's first home dept; CEO with no home dept gets
+      // the first dept in the list as a starting point.
+      setFilterDept(currentUser.departmentIds[0] ?? departments[0]?.id ?? "all");
+      setFilterUser("all");
+    } else if (next === "mine") {
+      setFilterDept("all");
+      setFilterUser(currentUser.id);
+    }
+  }
 
   const clientOptions = useMemo(() => distinctClients(), []);
   const websiteOptions = useMemo(() => distinctWebsites(), []);
@@ -68,12 +93,30 @@ export default function BoardPage() {
     setTickets((cur) => cur.map((t) => t.id === id ? { ...t, status: dest, lastActivityAt: new Date().toISOString() } : t));
     // Persist
     try {
-      await fetch(`/api/tickets/${id}`, {
+      const res = await fetch(`/api/tickets/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ status: dest })
       });
-    } catch {
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error ?? `failed (${res.status})`);
+
+      if (dest === "done") {
+        // Server returns { slack: { creatorDm, channelPost } } on completion.
+        const slack = data.slack as { creatorDm?: { ok: boolean; error?: string }; channelPost?: { ok: boolean; error?: string } } | null;
+        const dm = slack?.creatorDm;
+        const ch = slack?.channelPost;
+        if (dm?.ok || ch?.ok) {
+          toast.success(`✅ Marked done · ${before.title}`);
+        } else if (dm && dm.error !== "skipped") {
+          toast.warning(`Marked done, but Slack failed: ${dm.error}`);
+        } else {
+          toast.success(`Marked done · ${before.title}`);
+        }
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "network error";
+      toast.error(`Status change failed: ${msg}`);
       // Revert on failure
       setTickets((cur) => cur.map((t) => t.id === id ? { ...t, status: before.status } : t));
     }
@@ -81,8 +124,13 @@ export default function BoardPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-3">
         <h1 className="text-lg font-medium">Board <span className="text-muted text-sm">· {visible.length}</span></h1>
+        <div className="inline-flex items-center rounded-xl border border-border bg-surface p-0.5">
+          <ViewBtn active={view === "all"} onClick={() => selectView("all")} icon={<UsersIcon className="w-3.5 h-3.5" />} label="All team" />
+          <ViewBtn active={view === "byDept"} onClick={() => selectView("byDept")} icon={<FolderKanban className="w-3.5 h-3.5" />} label="By department" />
+          <ViewBtn active={view === "mine"} onClick={() => selectView("mine")} icon={<UserIcon className="w-3.5 h-3.5" />} label="My tasks" />
+        </div>
       </div>
 
       <div className="card p-3 flex items-center gap-2 flex-wrap">
@@ -189,5 +237,24 @@ function Select({ label, value, onChange, options }: {
         {options.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
       </select>
     </label>
+  );
+}
+
+function ViewBtn({ active, onClick, icon, label }: {
+  active: boolean; onClick: () => void; icon: React.ReactNode; label: string;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={cn(
+        "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs transition-colors",
+        active
+          ? "bg-accent text-white"
+          : "text-muted hover:text-ink hover:bg-surface2"
+      )}
+    >
+      {icon}
+      {label}
+    </button>
   );
 }

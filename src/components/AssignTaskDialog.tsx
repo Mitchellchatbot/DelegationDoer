@@ -4,11 +4,12 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { useMemo, useState } from "react";
 import { Crown, Users, Send, X, Check, User as UserIcon } from "lucide-react";
 import {
-  departments, tickets, currentUser, headsOf, workersOf, userById,
+  departments, tickets, headsOf, workersOf, userById,
   distinctClients, distinctWebsites
 } from "@/lib/mock-data";
 import { deadlineFromEstimate } from "@/lib/capacity";
 import { Avatar } from "./Avatar";
+import { useCurrentUser } from "@/lib/user-context";
 import type { Priority, Ticket } from "@/lib/types";
 
 type Target = "head" | "workers" | "self";
@@ -16,6 +17,7 @@ type Target = "head" | "workers" | "self";
 export function AssignTaskDialog({
   open, onOpenChange
 }: { open: boolean; onOpenChange: (b: boolean) => void }) {
+  const currentUser = useCurrentUser();
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [departmentId, setDepartmentId] = useState(departments[0]?.id ?? "");

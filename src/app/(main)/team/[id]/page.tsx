@@ -30,7 +30,7 @@ export default function ProfilePage({ params }: { params: { id: string } }) {
       </Link>
 
       <div className="card p-5 flex items-start gap-4">
-        <Avatar name={user.name} size={56} />
+        <Avatar name={user.name} imageUrl={user.avatarUrl} size={56} />
         <div className="flex-1">
           <div className="text-lg font-medium flex items-center gap-2">
             {user.name}

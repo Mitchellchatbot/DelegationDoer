@@ -11,8 +11,8 @@ import { useState } from "react";
 import { ReportIncidentDialog } from "./ReportIncidentDialog";
 import { AIAssistantDrawer } from "./AIAssistantDrawer";
 import { RaiseLink } from "./RaiseLink";
-import { currentUser } from "@/lib/mock-data";
 import { isCEO } from "@/lib/auth";
+import type { User } from "@/lib/types";
 
 const BASE_NAV = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
@@ -24,13 +24,13 @@ const BASE_NAV = [
 ];
 const CEO_NAV = [{ href: "/ceo", label: "CEO Console", icon: Crown }];
 
-export function Sidebar() {
+export function Sidebar({ user }: { user: User }) {
   const path = usePathname();
   const [incidentOpen, setIncidentOpen] = useState(false);
   const [aiOpen, setAiOpen] = useState(false);
   // CEOs land on /ceo (Dashboard redirects there for them) so we drop the
   // Dashboard entry and lead with CEO Console.
-  const NAV = isCEO(currentUser)
+  const NAV = isCEO(user)
     ? [...CEO_NAV, ...BASE_NAV.filter((i) => i.href !== "/")]
     : BASE_NAV;
 

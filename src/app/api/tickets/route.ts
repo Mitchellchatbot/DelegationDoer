@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
-import { CURRENT_USER_ID } from "@/lib/session";
+import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { notifyAssignment } from "@/lib/slack";
 
@@ -10,6 +10,7 @@ import { notifyAssignment } from "@/lib/slack";
 
 export async function POST(req: NextRequest) {
   try {
+    const userId = await requireCurrentUserId();
     const body = await req.json();
 
     const title = (body.title ?? "").trim();
@@ -34,7 +35,7 @@ export async function POST(req: NextRequest) {
       tags: Array.isArray(body.tags) ? body.tags.filter((t: unknown) => typeof t === "string") : [],
       department_id: typeof body.departmentId === "string" && body.departmentId.length > 0 ? body.departmentId : null,
       assignee_id: typeof body.assigneeId === "string" && body.assigneeId.length > 0 ? body.assigneeId : null,
-      creator_id: CURRENT_USER_ID,
+      creator_id: userId,
       project_id: typeof body.projectId === "string" && body.projectId.length > 0 ? body.projectId : null,
       due_date: typeof body.dueDate === "string" ? body.dueDate : null,
       inactive_flag: false,
@@ -58,7 +59,7 @@ export async function POST(req: NextRequest) {
     await supabase.from("activity_logs").insert({
       id: `a_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
       ticket_id: id,
-      user_id: CURRENT_USER_ID,
+      user_id: userId,
       action: "created",
       detail: row.assignee_id ? `Assigned to ${row.assignee_id}` : "Created (unassigned)"
     });
@@ -71,7 +72,7 @@ export async function POST(req: NextRequest) {
     if (row.assignee_id) {
       const [assignee, assigner] = await Promise.all([
         getUserById(row.assignee_id),
-        getUserById(CURRENT_USER_ID)
+        getUserById(userId)
       ]);
       if (assignee?.email && assigner?.name) {
         try {

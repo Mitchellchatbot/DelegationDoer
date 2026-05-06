@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
-import { CURRENT_USER_ID } from "@/lib/session";
+import { requireCurrentUserId } from "@/lib/session";
 
 export const dynamic = "force-dynamic";
 
@@ -10,6 +10,7 @@ export const dynamic = "force-dynamic";
 // so dept heads and the CEO can see how often / how much a ticket has slipped.
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   try {
+    const userId = await requireCurrentUserId();
     const { hours, reason } = await req.json();
     const h = Number(hours);
     if (!Number.isFinite(h) || h <= 0 || h > 24 * 30) {
@@ -45,7 +46,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       .insert({
         id: extensionId,
         ticket_id: params.id,
-        user_id: CURRENT_USER_ID,
+        user_id: userId,
         previous_due_date: ticket.due_date,
         new_due_date: newDue.toISOString(),
         hours_added: h,
@@ -58,7 +59,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     await supabase.from("activity_logs").insert({
       id: `a_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
       ticket_id: params.id,
-      user_id: CURRENT_USER_ID,
+      user_id: userId,
       action: "extended",
       detail: `+${h}h${cleanReason ? ` — ${cleanReason}` : ""}`
     });

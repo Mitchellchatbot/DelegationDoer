@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
-import { CURRENT_USER_ID } from "@/lib/session";
+import { requireCurrentUserId } from "@/lib/session";
+import { getUserById } from "@/lib/server-data";
+import { notifyCompletion, type CompletionResult } from "@/lib/slack";
 
 const ALLOWED_FIELDS = ["title", "description", "priority", "status", "estimated_hours", "due_date", "tags", "client_name", "website"] as const;
 const STATUSES = ["pending", "in_progress", "urgent", "waiting_on_client", "done"] as const;
@@ -13,13 +15,15 @@ export const dynamic = "force-dynamic";
 // Logs an activity row when status changes.
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
   try {
+    const userId = await requireCurrentUserId();
     const body = await req.json();
     const supabase = getSupabaseAdmin();
 
-    // Fetch current row so we know whether status actually changed.
+    // Fetch current row so we know whether status actually changed and so we
+    // have the creator/assignee/title for the completion notification.
     const { data: before, error: beErr } = await supabase
       .from("tickets")
-      .select("status")
+      .select("status, creator_id, assignee_id, title, estimated_hours, actual_hours, client_name")
       .eq("id", params.id)
       .maybeSingle();
     if (beErr) return NextResponse.json({ error: beErr.message }, { status: 500 });
@@ -56,7 +60,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       await supabase.from("activity_logs").insert({
         id: `a_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
         ticket_id: params.id,
-        user_id: CURRENT_USER_ID,
+        user_id: userId,
         action: "status_change",
         detail: comment ? `${transition}\n${comment}` : transition,
         image_url: imageUrl
@@ -66,14 +70,38 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       await supabase.from("activity_logs").insert({
         id: `a_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
         ticket_id: params.id,
-        user_id: CURRENT_USER_ID,
+        user_id: userId,
         action: "comment",
         detail: comment,
         image_url: imageUrl
       });
     }
 
-    return NextResponse.json({ ticket: data });
+    // If status flipped to "done", DM the creator and (if configured) post
+    // to the team channel. Failures are folded into the response so the UI
+    // can surface them via toast — they don't block the PATCH itself.
+    let slack: CompletionResult | null = null;
+    if (statusChanged && update.status === "done") {
+      const [creator, assignee] = await Promise.all([
+        getUserById(before.creator_id),
+        before.assignee_id ? getUserById(before.assignee_id) : Promise.resolve(null)
+      ]);
+      // Don't ping the creator if they completed their own task.
+      const creatorEmail =
+        creator && creator.id !== userId ? creator.email : null;
+      slack = await notifyCompletion({
+        creatorEmail,
+        assigneeName: assignee?.name ?? "Someone",
+        assigneeEmail: assignee?.email ?? null,
+        ticketId: params.id,
+        title: before.title,
+        estimateHours: Number(before.estimated_hours ?? 0),
+        actualHours: Number(before.actual_hours ?? 0),
+        clientName: before.client_name
+      });
+    }
+
+    return NextResponse.json({ ticket: data, slack });
   } catch (err) {
     const message = err instanceof Error ? err.message : "unknown error";
     return NextResponse.json({ error: message }, { status: 500 });

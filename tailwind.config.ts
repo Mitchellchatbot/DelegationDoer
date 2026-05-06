@@ -5,19 +5,19 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        // Friendly light palette. Warm cream page, pure white cards, warm
-        // earth tones for accents — pulls from the icon's #F5EFE3 background.
-        bg: "#FAF6EF",
+        // Bright SaaS palette. Off-white page, pure white cards, slate text,
+        // vivid blue accent.
+        bg: "#F8FAFC",
         surface: "#FFFFFF",
-        surface2: "#F4EBDA",
-        border: "#E5DBC4",
-        ink: "#2A2622",
-        muted: "#857662",
-        accent: "#4D7BD9",
-        warn: "#C28344",
-        urgent: "#C8504A",
-        ok: "#5BA45F",
-        stalled: "#D89A4A"
+        surface2: "#F1F5F9",
+        border: "#E2E8F0",
+        ink: "#0F172A",
+        muted: "#64748B",
+        accent: "#2563EB",
+        warn: "#D97706",
+        urgent: "#DC2626",
+        ok: "#16A34A",
+        stalled: "#CA8A04"
       },
       fontFamily: {
         sans: ["ui-sans-serif", "system-ui", "-apple-system", "Segoe UI", "Roboto", "sans-serif"],
@@ -25,9 +25,8 @@ const config: Config = {
       },
       borderRadius: { xl: "12px", "2xl": "16px" },
       boxShadow: {
-        // Subtle warm-tinted shadow for elevated cards.
-        soft: "0 1px 2px rgba(60,40,20,0.05), 0 4px 12px -6px rgba(60,40,20,0.08)",
-        lift: "0 2px 4px rgba(60,40,20,0.06), 0 12px 28px -10px rgba(60,40,20,0.18)"
+        soft: "0 1px 2px rgba(15,23,42,0.04), 0 4px 12px -6px rgba(15,23,42,0.08)",
+        lift: "0 2px 4px rgba(15,23,42,0.06), 0 12px 28px -10px rgba(37,99,235,0.18)"
       }
     }
   },

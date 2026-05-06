@@ -82,7 +82,7 @@ function PersonCard({ user, accent }: { user: User; accent?: boolean }) {
       className={"card card-hover p-4 block " + (accent ? "border-accent/30" : "")}
     >
       <div className="flex items-center gap-3">
-        <Avatar name={user.name} size={36} />
+        <Avatar name={user.name} imageUrl={user.avatarUrl} size={36} />
         <div className="flex-1 min-w-0">
           <div className="text-sm font-medium truncate flex items-center gap-1.5">
             {user.name}

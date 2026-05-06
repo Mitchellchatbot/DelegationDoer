@@ -5,21 +5,21 @@
 :root { color-scheme: light; }
 
 /* No background on html/body so the /widget route can stay transparent.
-   The dark/light app chrome lives on the .app-shell wrapper inside
+   The light app chrome lives on the .app-shell wrapper inside
    (main)/layout.tsx. */
-html, body { background: transparent; color: #2A2622; margin: 0; }
+html, body { background: transparent; color: #0F172A; margin: 0; }
 body { font-feature-settings: "ss01", "cv11"; }
 
 ::-webkit-scrollbar { width: 10px; height: 10px; }
-::-webkit-scrollbar-thumb { background: #E5DBC4; border-radius: 6px; }
-::-webkit-scrollbar-thumb:hover { background: #D9CDB1; }
+::-webkit-scrollbar-thumb { background: #E2E8F0; border-radius: 6px; }
+::-webkit-scrollbar-thumb:hover { background: #CBD5E1; }
 ::-webkit-scrollbar-track { background: transparent; }
 
 .app-shell {
-  background: #FAF6EF;
+  background: #F8FAFC;
   background-image:
-    radial-gradient(1200px 600px at 100% -10%, rgba(77,123,217,0.06), transparent 60%),
-    radial-gradient(900px 500px at -10% 110%, rgba(216,154,74,0.07), transparent 60%);
+    radial-gradient(1200px 600px at 100% -10%, rgba(37,99,235,0.08), transparent 60%),
+    radial-gradient(900px 500px at -10% 110%, rgba(99,102,241,0.06), transparent 60%);
   background-attachment: fixed;
   min-height: 100vh;
 }
@@ -106,10 +106,10 @@ body { font-feature-settings: "ss01", "cv11"; }
 
 .scroll-shadow {
   background:
-    linear-gradient(#FAF6EF 30%, rgba(250,246,239,0)) center top,
-    linear-gradient(rgba(250,246,239,0), #FAF6EF 70%) center bottom,
-    radial-gradient(farthest-side at 50% 0, rgba(60,40,20,.10), rgba(60,40,20,0)) center top,
-    radial-gradient(farthest-side at 50% 100%, rgba(60,40,20,.10), rgba(60,40,20,0)) center bottom;
+    linear-gradient(#F8FAFC 30%, rgba(248,250,252,0)) center top,
+    linear-gradient(rgba(248,250,252,0), #F8FAFC 70%) center bottom,
+    radial-gradient(farthest-side at 50% 0, rgba(15,23,42,.08), rgba(15,23,42,0)) center top,
+    radial-gradient(farthest-side at 50% 100%, rgba(15,23,42,.08), rgba(15,23,42,0)) center bottom;
   background-repeat: no-repeat;
   background-size: 100% 24px, 100% 24px, 100% 8px, 100% 8px;
   background-attachment: local, local, scroll, scroll;

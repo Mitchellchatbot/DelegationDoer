@@ -174,7 +174,7 @@ function BubbleIcon({ unackedCount }: { unackedCount: number }) {
           position: "absolute", top: -2, right: -2,
           minWidth: 18, height: 18, padding: "0 5px",
           borderRadius: 999,
-          background: "#C8504A",
+          background: "#DC2626",
           color: "white",
           fontSize: 11, fontWeight: 600,
           display: "flex", alignItems: "center", justifyContent: "center",

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAnthropic, MODELS } from "@/lib/anthropic-client";
-import { CURRENT_USER_ID } from "@/lib/session";
+import { requireCurrentUserId } from "@/lib/session";
 import {
   getAllTickets, getDepartmentById, getUserById
 } from "@/lib/server-data";
@@ -14,9 +14,10 @@ function summarise(t: Ticket, assigneeName: string): string {
 }
 
 async function buildSystemPrompt(): Promise<string> {
-  const currentUser = await getUserById(CURRENT_USER_ID);
+  const userId = await requireCurrentUserId();
+  const currentUser = await getUserById(userId);
   if (!currentUser) {
-    throw new Error(`Current user ${CURRENT_USER_ID} not found in DB`);
+    throw new Error(`Current user ${userId} not found in DB`);
   }
 
   const allTickets = await getAllTickets();

@@ -30,7 +30,7 @@ export function TicketCard({ ticket, dim }: { ticket: Ticket; dim?: boolean }) {
       </div>
       <div className="mt-3 flex items-center justify-between text-xs text-muted">
         <div className="flex items-center gap-2">
-          {assignee ? <Avatar name={assignee.name} size={20} /> : <span className="text-muted">Unassigned</span>}
+          {assignee ? <Avatar name={assignee.name} imageUrl={assignee.avatarUrl} size={20} /> : <span className="text-muted">Unassigned</span>}
           {assignee && <span>{assignee.name}</span>}
         </div>
         <div className="flex items-center gap-1">

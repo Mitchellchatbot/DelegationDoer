@@ -1,12 +1,17 @@
 "use client";
 
-import { Search, Bell, Plus } from "lucide-react";
+import { Search, Bell, Plus, LogOut } from "lucide-react";
 import { Avatar } from "./Avatar";
-import { currentUser } from "@/lib/mock-data";
 import { ROLE_LABELS } from "@/lib/auth";
 import Link from "next/link";
+import type { User } from "@/lib/types";
 
-export function Topbar() {
+export function Topbar({ user }: { user: User }) {
+  async function logout() {
+    await fetch("/api/auth/logout", { method: "POST" });
+    window.location.href = "/login";
+  }
+
   return (
     <header className="h-14 border-b border-border bg-bg/80 backdrop-blur sticky top-0 z-10 flex items-center gap-3 px-5">
       <div className="flex items-center gap-2 max-w-md w-full">
@@ -21,12 +26,15 @@ export function Topbar() {
         </Link>
         <button className="btn"><Bell className="w-4 h-4" /></button>
         <div className="flex items-center gap-2 px-2 py-1 rounded-xl border border-border">
-          <Avatar name={currentUser.name} size={22} />
+          <Avatar name={user.name} imageUrl={user.avatarUrl} size={22} />
           <div className="text-xs leading-tight">
-            <div className="text-ink">{currentUser.name}</div>
-            <div className="text-muted">{ROLE_LABELS[currentUser.role]}</div>
+            <div className="text-ink">{user.name}</div>
+            <div className="text-muted">{ROLE_LABELS[user.role]}</div>
           </div>
         </div>
+        <button onClick={logout} className="btn" title="Log out">
+          <LogOut className="w-4 h-4" />
+        </button>
       </div>
     </header>
   );

@@ -199,3 +199,126 @@ export async function notifyAssignment(args: {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
 }
+
+// Build the celebratory "task completed" Block Kit payload and post it to
+// the given Slack channel id (DM or team channel). Returns ok=true on
+// success, or ok=false with a specific reason.
+async function postCompletionBlocks(args: {
+  channel: string;
+  assigneeName: string;
+  assigneeSlackId?: string | null;
+  ticketId: string;
+  title: string;
+  estimateHours: number;
+  actualHours: number;
+  clientName?: string | null;
+}): Promise<NotifyResult> {
+  const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
+  const ticketUrl = `${baseUrl}/tickets/${args.ticketId}`;
+  const text = `${args.assigneeName} completed: ${args.title}`;
+
+  const mention = args.assigneeSlackId ? `<@${args.assigneeSlackId}>` : `*${args.assigneeName}*`;
+  const variance =
+    args.estimateHours > 0
+      ? Math.round((args.actualHours / args.estimateHours) * 100) + "%"
+      : "—";
+
+  const fields: { type: "mrkdwn"; text: string }[] = [
+    { type: "mrkdwn", text: `*Estimate*\n${args.estimateHours}h` },
+    { type: "mrkdwn", text: `*Actual*\n${args.actualHours}h (${variance})` }
+  ];
+  if (args.clientName) {
+    fields.push({ type: "mrkdwn", text: `*Client*\n${args.clientName}` });
+  }
+
+  const blocks: unknown[] = [
+    {
+      type: "header",
+      text: { type: "plain_text", text: "✅ Task completed", emoji: true }
+    },
+    {
+      type: "section",
+      text: { type: "mrkdwn", text: `${mention} just finished:` }
+    },
+    {
+      type: "section",
+      text: { type: "mrkdwn", text: `*<${ticketUrl}|${args.title}>*` }
+    },
+    { type: "section", fields },
+    {
+      type: "actions",
+      elements: [
+        {
+          type: "button",
+          text: { type: "plain_text", text: "Open in DelegationDoer", emoji: true },
+          url: ticketUrl,
+          style: "primary"
+        }
+      ]
+    }
+  ];
+
+  try {
+    await slackCall<{ ok: true; ts: string }>("chat.postMessage", {
+      channel: args.channel,
+      text,
+      blocks,
+      unfurl_links: false,
+      unfurl_media: false
+    });
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+export interface CompletionResult {
+  creatorDm: NotifyResult | { ok: false; error: "skipped" };
+  channelPost: NotifyResult | { ok: false; error: "skipped" };
+}
+
+// Two-target completion fan-out:
+//   1) DM the creator (the person who delegated). Always.
+//   2) Post to SLACK_COMPLETED_CHANNEL if set (env-gated).
+// Both calls run in parallel; failures don't cascade.
+export async function notifyCompletion(args: {
+  creatorEmail: string | null;
+  assigneeName: string;
+  assigneeEmail?: string | null; // for @-mention in the channel post
+  ticketId: string;
+  title: string;
+  estimateHours: number;
+  actualHours: number;
+  clientName?: string | null;
+}): Promise<CompletionResult> {
+  if (!process.env.SLACK_BOT_TOKEN) {
+    return {
+      creatorDm: { ok: false, error: "SLACK_BOT_TOKEN missing" },
+      channelPost: { ok: false, error: "SLACK_BOT_TOKEN missing" }
+    };
+  }
+
+  // Resolve assignee's Slack id once, for nicer @-mention in both messages.
+  let assigneeSlackId: string | null = null;
+  if (args.assigneeEmail) {
+    try { assigneeSlackId = await lookupUserByEmail(args.assigneeEmail); } catch { /* leave null */ }
+  }
+
+  const completedChannelId = process.env.SLACK_COMPLETED_CHANNEL ?? null;
+
+  const dmTask: Promise<NotifyResult | { ok: false; error: "skipped" }> = (async () => {
+    if (!args.creatorEmail) return { ok: false, error: "skipped" } as const;
+    let dmChannel: string;
+    try { dmChannel = await openDm(await lookupUserByEmail(args.creatorEmail)); }
+    catch (err) { return { ok: false, error: err instanceof Error ? err.message : String(err) }; }
+    return postCompletionBlocks({ ...args, channel: dmChannel, assigneeSlackId });
+  })();
+
+  const channelTask: Promise<NotifyResult | { ok: false; error: "skipped" }> = (async () => {
+    if (!completedChannelId) return { ok: false, error: "skipped" } as const;
+    return postCompletionBlocks({ ...args, channel: completedChannelId, assigneeSlackId });
+  })();
+
+  const [creatorDm, channelPost] = await Promise.all([dmTask, channelTask]);
+  return { creatorDm, channelPost };
+}

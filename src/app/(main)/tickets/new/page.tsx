@@ -1,15 +1,18 @@
 "use client";
 
-import { departments, users, tickets, currentUser, TAG_PRESETS, distinctClients, distinctWebsites } from "@/lib/mock-data";
+import { departments, users, tickets, TAG_PRESETS, distinctClients, distinctWebsites } from "@/lib/mock-data";
 import { suggestAssignees } from "@/lib/delegation";
 import { userCapacity, etaDays, deadlineFromEstimate } from "@/lib/capacity";
 import { assignableTargets, ROLE_LABELS } from "@/lib/auth";
+import { useCurrentUser } from "@/lib/user-context";
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Sparkles, Wand2, Crown, ShieldCheck } from "lucide-react";
 import { Avatar } from "@/components/Avatar";
+import { toast } from "sonner";
 
 export default function NewTicketPage() {
+  const currentUser = useCurrentUser();
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [departmentId, setDepartmentId] = useState<string>(departments[0]?.id ?? "");
@@ -29,8 +32,9 @@ export default function NewTicketPage() {
   const clientList = useMemo(() => distinctClients(), []);
   const websiteList = useMemo(() => distinctWebsites(), []);
 
-  // Who is the current user allowed to assign tickets to?
-  const targets = useMemo(() => assignableTargets(currentUser), []);
+  // Who is the current user allowed to assign tickets to? Recomputes when
+  // the auth'd user changes (e.g. logout/login as a different role).
+  const targets = useMemo(() => assignableTargets(currentUser), [currentUser]);
   const targetIds = useMemo(() => new Set(targets.map((u) => u.id)), [targets]);
 
   const suggestions = useMemo(() => {
@@ -112,10 +116,24 @@ export default function NewTicketPage() {
       });
       const data = await res.json();
       if (!res.ok) {
-        setSubmitError(data?.error ?? `Failed (${res.status})`);
+        const msg = data?.error ?? `Failed (${res.status})`;
+        setSubmitError(msg);
+        toast.error(`Couldn't create ticket: ${msg}`);
         setSubmitting(false);
         return;
       }
+
+      // Surface Slack delivery status. Previously this lived in `data.slack`
+      // and was invisible — failures looked like everything worked.
+      const slack = data.slack as { delivery: "sent" | "skipped" | "failed"; error?: string } | undefined;
+      if (slack?.delivery === "sent") {
+        toast.success("Ticket created — Slack DM sent to assignee.");
+      } else if (slack?.delivery === "failed") {
+        toast.warning(`Ticket created, but Slack DM failed: ${slack.error ?? "unknown"}`);
+      } else {
+        toast.success("Ticket created.");
+      }
+
       // Mirror into the in-memory mock array so the rest of the app (board,
       // my-tasks, ticket detail) sees it on this navigation. Supabase has the
       // canonical row; mock-data is a session-local cache until we migrate.
@@ -144,17 +162,21 @@ export default function NewTicketPage() {
     } catch (err) {
       const msg = err instanceof Error ? err.message : "network error";
       setSubmitError(msg);
+      toast.error(`Couldn't create ticket: ${msg}`);
       setSubmitting(false);
     }
   }
 
   // Role-aware blurb shown above the assignee list.
   const delegateBlurb = (() => {
-    if (currentUser.role === "ceo") return "As CEO you can assign to any Department Head.";
-    if (currentUser.role === "department_head")
-      return `As a Department Head you can assign to workers in: ${
-        currentUser.departmentIds.map((d) => departments.find((x) => x.id === d)?.name).filter(Boolean).join(", ")
-      }.`;
+    if (currentUser.role === "ceo") return "As CEO you can assign to anyone in the org.";
+    if (currentUser.role === "department_head") {
+      const deptNames = currentUser.departmentIds
+        .map((d) => departments.find((x) => x.id === d)?.name)
+        .filter(Boolean)
+        .join(", ");
+      return `As a Department Head you can assign to anyone in: ${deptNames || "your departments"}.`;
+    }
     return "Workers can create tickets only for themselves.";
   })();
 

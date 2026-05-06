@@ -1,10 +1,18 @@
 import { departments, users } from "@/lib/mock-data";
 import { ROLE_LABELS } from "@/lib/auth";
+import { requireCurrentUserId } from "@/lib/session";
+import { getUserById } from "@/lib/server-data";
+import { ProfileAvatarSection } from "@/components/ProfileAvatarSection";
 
-export default function SettingsPage() {
+export default async function SettingsPage() {
+  const userId = await requireCurrentUserId();
+  const me = await getUserById(userId);
+
   return (
     <div className="space-y-5 max-w-4xl">
       <h1 className="text-lg font-medium">Settings</h1>
+
+      {me && <ProfileAvatarSection user={me} />}
 
       <section className="card p-4">
         <div className="text-sm font-medium mb-3">Department task-type ownership</div>

@@ -1,0 +1,168 @@
+// Prisma schema for DelegationDoer.
+// Run: npx prisma generate && npx prisma db push (after setting DATABASE_URL).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ceo
+  department_head
+  worker
+}
+
+enum TicketStatus {
+  pending
+  in_progress
+  urgent
+  waiting_on_client
+  done
+}
+
+enum Priority {
+  low
+  medium
+  high
+  critical
+}
+
+enum MilestoneStatus {
+  pending
+  in_progress
+  done
+  delayed
+}
+
+enum RaciRole {
+  responsible
+  accountable
+  consulted
+  informed
+}
+
+model User {
+  id              String         @id @default(cuid())
+  name            String
+  email           String         @unique
+  role            Role           @default(worker)
+  // Many-to-many: a worker belongs to one department, a department head can
+  // lead several. The CEO can have zero departments.
+  departments     Department[]   @relation("DepartmentMembers")
+  skills          String[]       @default([])
+  dailyCapacity   Float          @default(8)
+  throughput      Json?          // { "insurance_pages_per_day": 10, ... }
+  avatarUrl       String?
+  createdAt       DateTime       @default(now())
+
+  ticketsCreated  Ticket[]       @relation("TicketCreator")
+  ticketsAssigned Ticket[]       @relation("TicketAssignee")
+  raciEntries     RACIEntry[]
+  incidents       IncidentLog[]
+  skillProfiles   SkillProfile[]
+  activity        ActivityLog[]
+}
+
+model Department {
+  id              String    @id @default(cuid())
+  name            String    @unique
+  description     String?
+  taskTypes       String[]  @default([])
+  members         User[]    @relation("DepartmentMembers")
+  tickets         Ticket[]
+  projects        Project[]
+}
+
+model Ticket {
+  id               String        @id @default(cuid())
+  title            String
+  description      String?
+  status           TicketStatus  @default(pending)
+  priority         Priority      @default(medium)
+  estimatedHours   Float         @default(2)
+  actualHours      Float         @default(0)
+  tags             String[]      @default([])
+  departmentId     String?
+  department       Department?   @relation(fields: [departmentId], references: [id])
+  assigneeId       String?
+  assignee         User?         @relation("TicketAssignee", fields: [assigneeId], references: [id])
+  creatorId        String
+  creator          User          @relation("TicketCreator", fields: [creatorId], references: [id])
+  projectId        String?
+  project          Project?      @relation(fields: [projectId], references: [id])
+  dueDate          DateTime?
+  inactiveFlag     Boolean       @default(false)
+  lastActivityAt   DateTime      @default(now())
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+  activity         ActivityLog[]
+  blocksTicketIds  String[]      @default([])
+}
+
+model Project {
+  id            String       @id @default(cuid())
+  name          String
+  description   String?
+  departmentId  String?
+  department    Department?  @relation(fields: [departmentId], references: [id])
+  tickets       Ticket[]
+  milestones    Milestone[]
+  raciEntries   RACIEntry[]
+  createdAt     DateTime     @default(now())
+}
+
+model Milestone {
+  name         String
+  dueDate      DateTime
+  deliverables String[]        @default([])
+  status       MilestoneStatus @default(pending)
+  projectId    String
+  project      Project         @relation(fields: [projectId], references: [id])
+  id           String          @id @default(cuid())
+}
+
+model RACIEntry {
+  id        String   @id @default(cuid())
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id])
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  area      String
+  role      RaciRole
+}
+
+model IncidentLog {
+  id              String    @id @default(cuid())
+  issueType       String
+  affectedUrl     String?
+  description     String
+  assignedToId    String?
+  assignedTo      User?     @relation(fields: [assignedToId], references: [id])
+  resolutionNotes String?
+  resolvedAt      DateTime?
+  createdAt       DateTime  @default(now())
+}
+
+model SkillProfile {
+  id              String   @id @default(cuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id])
+  skillName       String
+  experienceLevel Int      @default(1) // 1-5
+  taskTypes       String[] @default([])
+}
+
+model ActivityLog {
+  id        String   @id @default(cuid())
+  ticketId  String
+  ticket    Ticket   @relation(fields: [ticketId], references: [id])
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  action    String
+  detail    String?
+  createdAt DateTime @default(now())
+}

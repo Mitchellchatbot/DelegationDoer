@@ -1,0 +1,7 @@
+{
+  "name": "delegation-doer-widget",
+  "version": "0.1.0",
+  "private": true,
+  "main": "main.js",
+  "description": "DelegationDoer desktop widget (Electron shell loading /widget from the Next.js app)."
+}

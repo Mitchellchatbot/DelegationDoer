@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
-import { CURRENT_USER_ID } from "@/lib/mock-data";
+import { CURRENT_USER_ID, userById } from "@/lib/mock-data";
+import { notifyAssignment } from "@/lib/slack";
 
 // POST /api/tickets — create a new ticket. Returns the inserted row.
 // The new ticket has no row in assignment_acknowledgements, so the widget
@@ -61,7 +62,30 @@ export async function POST(req: NextRequest) {
       detail: row.assignee_id ? `Assigned to ${row.assignee_id}` : "Created (unassigned)"
     });
 
-    return NextResponse.json({ ticket: data });
+    // Fire-and-forget Slack DM to the assignee. Don't await — Slack outages
+    // shouldn't block the user's ticket creation. Errors are swallowed inside
+    // notifyAssignment.
+    let slackDelivery: "queued" | "skipped" = "skipped";
+    if (row.assignee_id) {
+      const assignee = userById(row.assignee_id);
+      const assigner = userById(CURRENT_USER_ID);
+      if (assignee?.email && assigner?.name) {
+        slackDelivery = "queued";
+        notifyAssignment({
+          assigneeEmail: assignee.email,
+          assignerName: assigner.name,
+          ticketId: id,
+          title: row.title,
+          description: row.description,
+          priority: row.priority,
+          estimateHours: row.estimated_hours,
+          dueDate: row.due_date,
+          clientName: row.client_name
+        }).catch(() => {/* logged in slack.ts */});
+      }
+    }
+
+    return NextResponse.json({ ticket: data, slack: slackDelivery });
   } catch (err) {
     const message = err instanceof Error ? err.message : "unknown error";
     return NextResponse.json({ error: message }, { status: 500 });

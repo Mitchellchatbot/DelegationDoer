@@ -35,31 +35,44 @@ async function slackCall<T extends SlackResponse>(
   return data;
 }
 
-export async function lookupUserByEmail(email: string): Promise<string | null> {
-  try {
-    const data = await slackCall<{ ok: true; user: { id: string } }>(
-      "users.lookupByEmail",
-      { email }
-    );
-    return data.user.id;
-  } catch (err) {
-    // Common cases: users_not_found (the person isn't in the workspace),
-    // missing_scope (permissions). We don't want a missing person to fail
-    // the whole ticket-creation flow.
-    return null;
+// GET variant for the methods that don't accept JSON-encoded bodies.
+// users.lookupByEmail is the one we hit — Slack returns invalid_arguments
+// on POST application/json for it, even though chat.postMessage and
+// conversations.open are happy with JSON.
+async function slackGet<T extends SlackResponse>(
+  method: string,
+  params: Record<string, string>,
+  token: string = process.env.SLACK_BOT_TOKEN ?? ""
+): Promise<T> {
+  if (!token) {
+    throw new Error("SLACK_BOT_TOKEN missing");
   }
+  const qs = new URLSearchParams(params).toString();
+  const res = await fetch(`${SLACK_API}/${method}?${qs}`, {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  const data = (await res.json()) as T;
+  if (!data.ok) {
+    console.error(`[slack] ${method} failed:`, JSON.stringify(data));
+    throw new Error(`slack:${method} → ${data.error ?? "unknown"}`);
+  }
+  return data;
 }
 
-export async function openDm(slackUserId: string): Promise<string | null> {
-  try {
-    const data = await slackCall<{ ok: true; channel: { id: string } }>(
-      "conversations.open",
-      { users: slackUserId }
-    );
-    return data.channel.id;
-  } catch {
-    return null;
-  }
+export async function lookupUserByEmail(email: string): Promise<string> {
+  const data = await slackGet<{ ok: true; user: { id: string } }>(
+    "users.lookupByEmail",
+    { email }
+  );
+  return data.user.id;
+}
+
+export async function openDm(slackUserId: string): Promise<string> {
+  const data = await slackCall<{ ok: true; channel: { id: string } }>(
+    "conversations.open",
+    { users: slackUserId }
+  );
+  return data.channel.id;
 }
 
 export async function postMessage(
@@ -101,11 +114,19 @@ export async function notifyAssignment(args: {
 }): Promise<NotifyResult> {
   if (!process.env.SLACK_BOT_TOKEN) return { ok: false, error: "SLACK_BOT_TOKEN missing" };
 
-  const slackUserId = await lookupUserByEmail(args.assigneeEmail);
-  if (!slackUserId) return { ok: false, error: `lookupByEmail failed for ${args.assigneeEmail}` };
+  let slackUserId: string;
+  try {
+    slackUserId = await lookupUserByEmail(args.assigneeEmail);
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
 
-  const channel = await openDm(slackUserId);
-  if (!channel) return { ok: false, error: `openDm failed for ${slackUserId}` };
+  let channel: string;
+  try {
+    channel = await openDm(slackUserId);
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
 
   const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
   const ticketUrl = `${baseUrl}/tickets/${args.ticketId}`;

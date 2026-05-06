@@ -66,7 +66,7 @@ export async function GET(req: NextRequest) {
 
   if (!open.ok) return NextResponse.json(out);
 
-  // Step 4: send message
+  // Step 4: send simple text message (this works — sanity check)
   const post = await call(
     "chat.postMessage",
     {
@@ -76,6 +76,62 @@ export async function GET(req: NextRequest) {
     token
   );
   out.post = post;
+
+  // Step 5: directly post the same Block Kit payload notifyAssignment would
+  // build. Surfaces any block validation errors raw, since the helper
+  // currently swallows them.
+  const ticketUrl = `${process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000"}/tickets/t_debug_dummy`;
+  const fields = [
+    { type: "mrkdwn", text: `*Priority*\nmedium` },
+    { type: "mrkdwn", text: `*Estimate*\n2h` },
+    { type: "mrkdwn", text: `*Due*\nno deadline` }
+  ];
+  const blocks = [
+    {
+      type: "header",
+      text: { type: "plain_text", text: "👋 New task assigned", emoji: true }
+    },
+    {
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: `<@${lookup.user.id}> — *Debug Tester* assigned you a task.`
+      }
+    },
+    {
+      type: "section",
+      text: { type: "mrkdwn", text: `*<${ticketUrl}|Debug: Block Kit payload test>*` }
+    },
+    {
+      type: "section",
+      text: { type: "mrkdwn", text: "If this lands, your Block Kit payload is valid." }
+    },
+    { type: "section", fields },
+    {
+      type: "actions",
+      elements: [
+        {
+          type: "button",
+          text: { type: "plain_text", text: "Open in DelegationDoer", emoji: true },
+          url: ticketUrl,
+          style: "primary"
+        }
+      ]
+    }
+  ];
+
+  const blockPost = await call(
+    "chat.postMessage",
+    {
+      channel: open.channel.id,
+      text: "Block Kit debug",
+      blocks,
+      unfurl_links: false,
+      unfurl_media: false
+    },
+    token
+  );
+  out.blockKitPost = blockPost;
 
   return NextResponse.json(out);
 }

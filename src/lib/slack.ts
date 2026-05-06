@@ -28,6 +28,8 @@ async function slackCall<T extends SlackResponse>(
   });
   const data = (await res.json()) as T;
   if (!data.ok) {
+    // Surface the full payload so we can see block-kit validation errors etc.
+    console.error(`[slack] ${method} failed:`, JSON.stringify(data));
     throw new Error(`slack:${method} → ${data.error ?? "unknown"}`);
   }
   return data;

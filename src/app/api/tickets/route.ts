@@ -62,26 +62,31 @@ export async function POST(req: NextRequest) {
       detail: row.assignee_id ? `Assigned to ${row.assignee_id}` : "Created (unassigned)"
     });
 
-    // Fire-and-forget Slack DM to the assignee. Don't await — Slack outages
-    // shouldn't block the user's ticket creation. Errors are swallowed inside
-    // notifyAssignment.
-    let slackDelivery: "queued" | "skipped" = "skipped";
+    // Awaited Slack DM (was fire-and-forget but Railway was occasionally
+    // tearing down the request before the outbound fetch flushed).
+    // ~300ms latency cost is fine; the assignee actually getting their DM
+    // matters more.
+    let slackDelivery: "sent" | "skipped" | "failed" = "skipped";
     if (row.assignee_id) {
       const assignee = userById(row.assignee_id);
       const assigner = userById(CURRENT_USER_ID);
       if (assignee?.email && assigner?.name) {
-        slackDelivery = "queued";
-        notifyAssignment({
-          assigneeEmail: assignee.email,
-          assignerName: assigner.name,
-          ticketId: id,
-          title: row.title,
-          description: row.description,
-          priority: row.priority,
-          estimateHours: row.estimated_hours,
-          dueDate: row.due_date,
-          clientName: row.client_name
-        }).catch(() => {/* logged in slack.ts */});
+        try {
+          const ok = await notifyAssignment({
+            assigneeEmail: assignee.email,
+            assignerName: assigner.name,
+            ticketId: id,
+            title: row.title,
+            description: row.description,
+            priority: row.priority,
+            estimateHours: row.estimated_hours,
+            dueDate: row.due_date,
+            clientName: row.client_name
+          });
+          slackDelivery = ok ? "sent" : "failed";
+        } catch {
+          slackDelivery = "failed";
+        }
       }
     }
 

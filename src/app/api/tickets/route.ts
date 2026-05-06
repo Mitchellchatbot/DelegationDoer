@@ -66,31 +66,31 @@ export async function POST(req: NextRequest) {
     // tearing down the request before the outbound fetch flushed).
     // ~300ms latency cost is fine; the assignee actually getting their DM
     // matters more.
-    let slackDelivery: "sent" | "skipped" | "failed" = "skipped";
+    let slack: { delivery: "sent" | "skipped" | "failed"; error?: string } = { delivery: "skipped" };
     if (row.assignee_id) {
       const assignee = userById(row.assignee_id);
       const assigner = userById(CURRENT_USER_ID);
       if (assignee?.email && assigner?.name) {
         try {
-          const ok = await notifyAssignment({
+          const r = await notifyAssignment({
             assigneeEmail: assignee.email,
             assignerName: assigner.name,
             ticketId: id,
             title: row.title,
             description: row.description,
             priority: row.priority,
-            estimateHours: row.estimated_hours,
+            estimateHours: Number(row.estimated_hours),
             dueDate: row.due_date,
             clientName: row.client_name
           });
-          slackDelivery = ok ? "sent" : "failed";
-        } catch {
-          slackDelivery = "failed";
+          slack = r.ok ? { delivery: "sent" } : { delivery: "failed", error: r.error };
+        } catch (err) {
+          slack = { delivery: "failed", error: err instanceof Error ? err.message : String(err) };
         }
       }
     }
 
-    return NextResponse.json({ ticket: data, slack: slackDelivery });
+    return NextResponse.json({ ticket: data, slack });
   } catch (err) {
     const message = err instanceof Error ? err.message : "unknown error";
     return NextResponse.json({ error: message }, { status: 500 });

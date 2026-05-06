@@ -81,8 +81,13 @@ export async function postMessage(
   }
 }
 
-// One-shot: given a Slack user id (or null), build the assignment block kit
-// payload and DM them. Returns true if posted, false otherwise.
+export interface NotifyResult {
+  ok: boolean;
+  error?: string;
+}
+
+// One-shot: given an email, build the assignment block kit payload and DM
+// them. Returns ok=true on success, or ok=false with the specific reason.
 export async function notifyAssignment(args: {
   assigneeEmail: string;
   assignerName: string;
@@ -93,14 +98,14 @@ export async function notifyAssignment(args: {
   estimateHours: number;
   dueDate: string | null;
   clientName?: string | null;
-}): Promise<boolean> {
-  if (!process.env.SLACK_BOT_TOKEN) return false;
+}): Promise<NotifyResult> {
+  if (!process.env.SLACK_BOT_TOKEN) return { ok: false, error: "SLACK_BOT_TOKEN missing" };
 
   const slackUserId = await lookupUserByEmail(args.assigneeEmail);
-  if (!slackUserId) return false;
+  if (!slackUserId) return { ok: false, error: `lookupByEmail failed for ${args.assigneeEmail}` };
 
   const channel = await openDm(slackUserId);
-  if (!channel) return false;
+  if (!channel) return { ok: false, error: `openDm failed for ${slackUserId}` };
 
   const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
   const ticketUrl = `${baseUrl}/tickets/${args.ticketId}`;
@@ -157,6 +162,19 @@ export async function notifyAssignment(args: {
     }
   ];
 
-  const result = await postMessage(channel, text, blocks);
-  return !!result;
+  // Inline the postMessage with explicit error capture so we don't lose the
+  // Slack response shape (which is the only thing that tells us why a Block
+  // Kit payload is being rejected).
+  try {
+    await slackCall<{ ok: true; ts: string }>("chat.postMessage", {
+      channel,
+      text,
+      blocks,
+      unfurl_links: false,
+      unfurl_media: false
+    });
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
 }

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
-import { CURRENT_USER_ID } from "@/lib/mock-data";
+import { CURRENT_USER_ID } from "@/lib/session";
 
 const ALLOWED_FIELDS = ["title", "description", "priority", "status", "estimated_hours", "due_date", "tags", "client_name", "website"] as const;
 const STATUSES = ["pending", "in_progress", "urgent", "waiting_on_client", "done"] as const;

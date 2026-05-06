@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
-import { CURRENT_USER_ID, userById } from "@/lib/mock-data";
+import { CURRENT_USER_ID } from "@/lib/session";
+import { getUserById } from "@/lib/server-data";
 import { notifyAssignment } from "@/lib/slack";
 
 // POST /api/tickets — create a new ticket. Returns the inserted row.
@@ -68,8 +69,10 @@ export async function POST(req: NextRequest) {
     // matters more.
     let slack: { delivery: "sent" | "skipped" | "failed"; error?: string } = { delivery: "skipped" };
     if (row.assignee_id) {
-      const assignee = userById(row.assignee_id);
-      const assigner = userById(CURRENT_USER_ID);
+      const [assignee, assigner] = await Promise.all([
+        getUserById(row.assignee_id),
+        getUserById(CURRENT_USER_ID)
+      ]);
       if (assignee?.email && assigner?.name) {
         try {
           const r = await notifyAssignment({

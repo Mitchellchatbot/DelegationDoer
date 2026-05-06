@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
-import { CURRENT_USER_ID } from "@/lib/mock-data";
+import { CURRENT_USER_ID } from "@/lib/session";
 
 // Records that the current user has explicitly acknowledged a ticket.
 // Idempotent — pressing ✓ twice is a no-op via primary-key conflict.

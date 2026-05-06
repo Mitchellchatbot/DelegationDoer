@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
-import { CURRENT_USER_ID } from "@/lib/mock-data";
+import { CURRENT_USER_ID } from "@/lib/session";
 
 export const dynamic = "force-dynamic";
 

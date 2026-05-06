@@ -82,6 +82,11 @@ export const users: User[] = [
     id: "u_9", name: "Jamal Reed", email: "jamal@scaledai.org",
     role: "worker", departmentIds: ["dep_seo"],
     skills: ["content", "keyword research"], dailyCapacity: 7, throughput: { briefs_per_day: 4 }
+  },
+  {
+    id: "u_10", name: "Mitchell Price", email: "mitchell@scaledai.org",
+    role: "worker", departmentIds: ["dep_software"],
+    skills: ["typescript", "react"], dailyCapacity: 8, throughput: { features_per_week: 3 }
   }
 ];
 

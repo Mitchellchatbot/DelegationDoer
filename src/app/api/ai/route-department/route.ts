@@ -1,8 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAnthropic, MODELS } from "@/lib/anthropic-client";
-import { departments } from "@/lib/mock-data";
+import { getDepartments } from "@/lib/server-data";
 
-const SYSTEM_PROMPT = `You classify support / project tickets into ONE of these departments at a digital agency:
+export async function POST(req: NextRequest) {
+  try {
+    const { title, description } = await req.json();
+    const departments = await getDepartments();
+    if (departments.length === 0) {
+      return NextResponse.json({ error: "no departments configured" }, { status: 500 });
+    }
+
+    const systemPrompt = `You classify support / project tickets into ONE of these departments at a digital agency:
 
 ${departments.map((d) =>
   `- ${d.name} (id: "${d.id}"): ${d.description}\n  Owns: ${d.taskTypes.join(", ")}`
@@ -13,15 +21,11 @@ Return STRICT JSON in exactly this shape — no preamble, no code fences:
 
 If the title is genuinely ambiguous, pick the closest fit and say so in the reason.`;
 
-export async function POST(req: NextRequest) {
-  try {
-    const { title, description } = await req.json();
-
     const client = await getAnthropic();
     const result = await client.messages.create({
       model: MODELS.classify,
       max_tokens: 200,
-      system: SYSTEM_PROMPT,
+      system: systemPrompt,
       messages: [{
         role: "user",
         content: `Title: ${title ?? ""}\nDescription: ${description ?? ""}`

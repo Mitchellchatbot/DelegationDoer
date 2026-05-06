@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
-import { CURRENT_USER_ID } from "@/lib/mock-data";
+import { CURRENT_USER_ID } from "@/lib/session";
 
 // Returns the current user's open tickets and which ones still need to be
 // acknowledged (no row in assignment_acknowledgements yet).

@@ -1,18 +1,22 @@
 import { NextResponse } from "next/server";
-import { tickets } from "@/lib/mock-data";
+import { getSupabaseAdmin } from "@/lib/supabase-admin";
 
 // Hourly cron — flags any open ticket with no activity in 48h.
 // In production: wire to Vercel Cron (vercel.json) or node-cron from a long-lived process.
 export async function GET() {
-  const now = Date.now();
-  let flagged = 0;
-  for (const t of tickets) {
-    if (t.status === "done") continue;
-    const stale = (now - new Date(t.lastActivityAt).getTime()) / 36e5 >= 48;
-    if (stale && !t.inactiveFlag) {
-      t.inactiveFlag = true; // mock-data is in-memory; in real DB this is an UPDATE
-      flagged++;
-    }
-  }
-  return NextResponse.json({ ok: true, flagged });
+  const supabase = getSupabaseAdmin();
+  const cutoff = new Date(Date.now() - 48 * 36e5).toISOString();
+
+  // Only the rows we'll actually flip — open tickets, not yet flagged,
+  // last activity older than the cutoff.
+  const { data, error } = await supabase
+    .from("tickets")
+    .update({ inactive_flag: true })
+    .neq("status", "done")
+    .eq("inactive_flag", false)
+    .lt("last_activity_at", cutoff)
+    .select("id");
+
+  if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
+  return NextResponse.json({ ok: true, flagged: data?.length ?? 0 });
 }

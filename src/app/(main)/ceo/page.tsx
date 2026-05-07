@@ -13,7 +13,8 @@ import { ROLE_LABELS } from "@/lib/auth";
 import { useCurrentUser } from "@/lib/user-context";
 import type { Role, User, Department } from "@/lib/types";
 import {
-  Crown, Users as UsersIcon, Building2, ListChecks, Plus, X, ShieldAlert
+  Crown, Users as UsersIcon, Building2, ListChecks, Plus, X, ShieldAlert,
+  CheckCircle2, AlertTriangle, Timer
 } from "lucide-react";
 
 const TABS = ["People", "Departments", "Org chart", "All tasks"] as const;
@@ -286,13 +287,83 @@ function DepartmentsTab({
 
 function OrgChartTab({ people, departments }: { people: User[]; departments: Department[] }) {
   const ceo = people.find((u) => u.role === "ceo") ?? null;
+
+  // Org-wide aggregates. "Completed this week" counts tasks whose status is
+  // `done` AND whose lastActivityAt — the timestamp the task changed state —
+  // landed within the last 7 days. There's no separate completedAt column
+  // but lastActivityAt is the canonical write on status change.
+  const weekAgo = Date.now() - 7 * 86_400_000;
+  const completedThisWeek = tasks.filter(
+    (t) => t.status === "done" && new Date(t.lastActivityAt).getTime() >= weekAgo
+  ).length;
+  const openCount = tasks.filter((t) => t.status !== "done").length;
+  const urgentCount = tasks.filter(
+    (t) => (t.status === "urgent" || t.priority === "critical") && t.status !== "done"
+  ).length;
+  const stalledCount = tasks.filter((t) => t.inactiveFlag && t.status !== "done").length;
+
   return (
-    <OrgChart
-      ceo={ceo}
-      users={people}
-      departments={departments}
-      tasks={tasks}
-    />
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5">
+        <OrgStat
+          label="Completed this week"
+          value={completedThisWeek}
+          icon={<CheckCircle2 className="w-3.5 h-3.5" />}
+          tone="indigo"
+        />
+        <OrgStat
+          label="Open across org"
+          value={openCount}
+          icon={<ListChecks className="w-3.5 h-3.5" />}
+          tone="blue"
+        />
+        <OrgStat
+          label="Urgent / critical"
+          value={urgentCount}
+          icon={<AlertTriangle className="w-3.5 h-3.5" />}
+          tone="purple"
+        />
+        <OrgStat
+          label="Stalled"
+          value={stalledCount}
+          icon={<Timer className="w-3.5 h-3.5" />}
+          tone="violet"
+        />
+      </div>
+
+      <OrgChart
+        ceo={ceo}
+        users={people}
+        departments={departments}
+        tasks={tasks}
+      />
+    </div>
+  );
+}
+
+function OrgStat({
+  label, value, icon, tone
+}: {
+  label: string; value: number; icon: React.ReactNode;
+  tone: "blue" | "indigo" | "violet" | "purple";
+}) {
+  const TONES = {
+    blue:   { bg: "from-blue-100 to-blue-50",     iconBg: "bg-blue-500",   iconText: "text-blue-700" },
+    indigo: { bg: "from-indigo-100 to-indigo-50", iconBg: "bg-indigo-500", iconText: "text-indigo-700" },
+    violet: { bg: "from-violet-100 to-violet-50", iconBg: "bg-violet-500", iconText: "text-violet-700" },
+    purple: { bg: "from-purple-100 to-purple-50", iconBg: "bg-purple-500", iconText: "text-purple-700" }
+  } as const;
+  const t = TONES[tone];
+  return (
+    <div className={`rounded-xl border border-white/60 shadow-soft bg-gradient-to-br ${t.bg} px-3 py-2.5 flex items-center gap-2.5`}>
+      <div className={`w-7 h-7 rounded-lg grid place-items-center text-white shrink-0 ${t.iconBg}`}>
+        {icon}
+      </div>
+      <div className="min-w-0">
+        <div className="text-[10px] uppercase tracking-wide text-ink/60 truncate">{label}</div>
+        <div className={`text-lg font-semibold tabular-nums ${t.iconText}`}>{value}</div>
+      </div>
+    </div>
   );
 }
 

@@ -6,7 +6,7 @@ import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
 import {
   LayoutDashboard, ListTodo, Columns3, FolderKanban, Users, ShieldAlert,
-  Sparkles, Settings, AlertTriangle, Crown, Mail
+  Sparkles, Settings, AlertTriangle, Crown, Mail, Briefcase
 } from "lucide-react";
 import { useState } from "react";
 import { ReportIncidentDialog } from "./ReportIncidentDialog";
@@ -28,7 +28,7 @@ const BASE_NAV: NavItem[] = [
   { href: "/my-tasks",  label: "My Tasks",  icon: ListTodo,        tone: "indigo" },
   { href: "/board",     label: "Board",     icon: Columns3,        tone: "violet" },
   { href: "/inboxes",   label: "Inboxes",   icon: Mail,            tone: "purple" },
-  { href: "/projects",  label: "Projects",  icon: FolderKanban,    tone: "indigo" },
+  { href: "/clients",   label: "Clients",   icon: Briefcase,       tone: "indigo" },
   { href: "/team",      label: "Team",      icon: Users,           tone: "blue" },
   { href: "/incidents", label: "Incidents", icon: ShieldAlert,     tone: "violet" }
 ];

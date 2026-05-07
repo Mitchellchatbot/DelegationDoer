@@ -7,7 +7,8 @@ import { Avatar } from "@/components/Avatar";
 import { Countdown } from "@/components/Countdown";
 import { TaskActions, CommentForm } from "@/components/TaskActions";
 import { formatDate, relativeTime } from "@/lib/utils";
-import { ArrowLeft, Clock, Calendar } from "lucide-react";
+import { Clock, Calendar } from "lucide-react";
+import { BackPill } from "@/components/BackPill";
 import type { Task, ActivityLog } from "@/lib/types";
 
 // Always read fresh — comments / status changes need to surface immediately.
@@ -110,9 +111,7 @@ export default async function TaskDetailPage({ params }: { params: { id: string 
 
   return (
     <div className="space-y-5 max-w-5xl">
-      <Link href="/tasks" className="text-xs text-muted hover:text-ink inline-flex items-center gap-1">
-        <ArrowLeft className="w-3 h-3" /> Back to tasks
-      </Link>
+      <BackPill href="/tasks" label="Back to tasks" />
 
       <div className="flex items-start justify-between gap-4">
         <div>

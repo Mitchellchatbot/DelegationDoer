@@ -38,12 +38,27 @@ export default function CEOConsolePage() {
 
   return (
     <div className="space-y-5 max-w-7xl mx-auto">
-      <header>
-        <div className="flex items-center gap-2 text-xs text-muted uppercase tracking-wide">
-          <Crown className="w-3 h-3" /> CEO Console
+      <header
+        className="relative overflow-hidden rounded-2xl border border-border shadow-soft p-6"
+        style={{
+          background: "linear-gradient(120deg, #DBEAFE 0%, #C7D2FE 35%, #DDD6FE 70%, #E9D5FF 100%)"
+        }}
+      >
+        <div className="relative flex items-center gap-3">
+          <span className="text-3xl">👑</span>
+          <div>
+            <div className="text-[11px] uppercase tracking-wide text-ink/60">CEO Console</div>
+            <h1 className="text-2xl font-semibold mt-0.5">Company-wide control</h1>
+            <p className="text-sm text-ink/60 mt-1">
+              People, departments, the org chart, every task in flight — all in one place.
+            </p>
+          </div>
         </div>
-        <h1 className="text-xl font-medium mt-1">Company-wide control</h1>
-        <p className="text-sm text-muted mt-1">Manage people, departments, and see the whole org's progress at a glance.</p>
+        <div
+          aria-hidden
+          className="absolute -top-10 -right-8 w-40 h-40 rounded-full pointer-events-none"
+          style={{ background: "radial-gradient(circle, rgba(139,92,246,0.22), transparent 70%)" }}
+        />
       </header>
 
       <div className="flex items-center gap-1 border-b border-border">
@@ -54,12 +69,12 @@ export default function CEOConsolePage() {
               key={t}
               onClick={() => setTab(t)}
               className={
-                "relative px-3.5 py-2 text-sm transition-colors " +
+                "relative px-3.5 py-2 text-sm font-medium transition-colors " +
                 (active ? "text-ink" : "text-muted hover:text-ink")
               }
             >
               {t}
-              {active && <span className="absolute left-0 right-0 -bottom-px h-px bg-accent" />}
+              {active && <span className="absolute left-0 right-0 -bottom-px h-0.5 bg-accent rounded-full" />}
             </button>
           );
         })}

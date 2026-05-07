@@ -6,7 +6,8 @@ import { CapacityBar } from "@/components/CapacityBar";
 import { TaskCard } from "@/components/TaskCard";
 import { userCapacity } from "@/lib/capacity";
 import { ROLE_LABELS } from "@/lib/auth";
-import { ArrowLeft, Crown } from "lucide-react";
+import { Crown } from "lucide-react";
+import { BackPill } from "@/components/BackPill";
 
 export default function ProfilePage({ params }: { params: { id: string } }) {
   const user = users.find((u) => u.id === params.id);
@@ -25,9 +26,7 @@ export default function ProfilePage({ params }: { params: { id: string } }) {
 
   return (
     <div className="space-y-5 max-w-5xl">
-      <Link href="/team" className="text-xs text-muted hover:text-ink inline-flex items-center gap-1">
-        <ArrowLeft className="w-3 h-3" /> Team
-      </Link>
+      <BackPill href="/team" label="Team" />
 
       <div className="card p-5 flex items-start gap-4">
         <Avatar name={user.name} imageUrl={user.avatarUrl} size={56} />

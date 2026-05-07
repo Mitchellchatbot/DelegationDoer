@@ -40,12 +40,28 @@ export default function TasksListPage() {
   }, [status, dept, assignee, client, website, sort]);
 
   return (
-    <div className="space-y-4 max-w-7xl mx-auto">
-      <div className="flex items-center justify-between">
-        <h1 className="text-lg font-medium">All tasks <span className="text-muted text-sm">· {filtered.length}</span></h1>
-      </div>
+    <div className="space-y-5 max-w-7xl mx-auto">
+      <header
+        className="relative overflow-hidden rounded-2xl border border-white/60 shadow-soft p-5"
+        style={{ background: "linear-gradient(120deg, #DBEAFE 0%, #C7D2FE 50%, #DDD6FE 100%)" }}
+      >
+        <div className="relative flex items-center gap-3">
+          <span className="text-3xl">📋</span>
+          <div>
+            <h1 className="text-xl font-semibold">
+              All tasks <span className="text-ink/50 text-base font-normal">· {filtered.length}</span>
+            </h1>
+            <p className="text-sm text-ink/60 mt-0.5">Filter and sort the entire ticket queue.</p>
+          </div>
+        </div>
+        <div
+          aria-hidden
+          className="absolute -top-10 right-12 w-32 h-32 rounded-full pointer-events-none"
+          style={{ background: "radial-gradient(circle, rgba(99,102,241,0.18), transparent 70%)" }}
+        />
+      </header>
 
-      <div className="card p-3 flex items-center gap-2 flex-wrap">
+      <div className="rounded-2xl border border-white/60 shadow-soft bg-white/70 backdrop-blur-sm p-3 flex items-center gap-2 flex-wrap">
         <Select label="Status" value={status} onChange={setStatus} options={[
           ["all", "All statuses"], ["pending", "Pending"], ["in_progress", "In progress"],
           ["urgent", "Urgent"], ["waiting_on_client", "Waiting on client"], ["done", "Done"]

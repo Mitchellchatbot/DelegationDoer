@@ -1,6 +1,11 @@
-import { currentUser } from "@/lib/mock-data";
+import { redirect } from "next/navigation";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
+import { requireCurrentUserId } from "@/lib/session";
+import { getUserById } from "@/lib/server-data";
 import { TaskCard } from "@/components/TaskCard";
+import { StatCard } from "@/components/StatCard";
+import { PageStagger } from "@/components/PageStagger";
+import { AlertTriangle, Clock, Hourglass, Target, ListChecks } from "lucide-react";
 import type { Task } from "@/lib/types";
 
 // Source of truth for tasks is now Supabase. Server component so we read
@@ -48,37 +53,54 @@ function rowToTask(t: any): Task {
 }
 
 export default async function MyTasksPage() {
+  const userId = await requireCurrentUserId();
+  const me = await getUserById(userId);
+  if (!me) redirect("/login");
+
   const supabase = getSupabaseAdmin();
   const { data: rows } = await supabase
     .from("tasks")
     .select("*")
-    .eq("assignee_id", currentUser.id)
+    .eq("assignee_id", me.id)
     .neq("status", "done");
 
   const mine = (rows ?? []).map(rowToTask).sort(focusSort);
 
   const urgentCount = mine.filter((t) => t.priority === "critical" || t.status === "urgent").length;
   const dueWeek = mine.filter((t) => t.dueDate && new Date(t.dueDate).getTime() < Date.now() + 7 * 86400000).length;
-
-  // "Blocked / waiting" should reflect the user's own queue, not the whole
-  // org. Counts tasks in waiting_on_client status assigned to me.
   const blocked = mine.filter((t) => t.status === "waiting_on_client").length;
 
   return (
-    <div className="space-y-5 max-w-7xl mx-auto">
-      <div className="card p-5">
-        <div className="text-sm text-muted">What actually matters today</div>
-        <div className="mt-2 flex items-center gap-6">
-          <div><span className="text-2xl font-medium text-urgent">{urgentCount}</span> <span className="text-muted text-sm">urgent</span></div>
-          <div><span className="text-2xl font-medium">{dueWeek}</span> <span className="text-muted text-sm">due this week</span></div>
-          <div><span className="text-2xl font-medium text-warn">{blocked}</span> <span className="text-muted text-sm">blocked / waiting</span></div>
-        </div>
+    <PageStagger className="space-y-5 max-w-7xl mx-auto">
+      <div>
+        <h1 className="text-xl font-semibold">My focus</h1>
+        <p className="text-sm text-muted mt-1">
+          Sorted by priority → blockers → deadline. Low-priority items further out are dimmed.
+        </p>
+      </div>
+
+      <div className="grid grid-cols-4 gap-3">
+        <StatCard label="Open" value={mine.length} icon={<ListChecks className="w-4 h-4" />} tone="blue" delay={0.04} />
+        <StatCard label="Urgent" value={urgentCount} icon={<AlertTriangle className="w-4 h-4" />} tone="purple" delay={0.10} />
+        <StatCard label="Due this week" value={dueWeek} icon={<Clock className="w-4 h-4" />} tone="violet" delay={0.16} />
+        <StatCard label="Blocked / waiting" value={blocked} icon={<Hourglass className="w-4 h-4" />} tone="indigo" delay={0.22} />
       </div>
 
       <div>
-        <h2 className="text-sm font-medium mb-3">Focus queue · sorted by priority → blockers → deadline</h2>
+        <h2 className="text-sm font-semibold mb-3 flex items-center gap-2">
+          <Target className="w-4 h-4 text-accent" />
+          Focus queue
+        </h2>
         {mine.length === 0 ? (
-          <div className="card p-6 text-sm text-muted text-center">Nothing assigned to you right now.</div>
+          <div className="card p-10 text-center">
+            <div className="w-16 h-16 rounded-2xl bg-violet-100 text-violet-600 grid place-items-center mx-auto mb-3">
+              <ListChecks className="w-8 h-8" />
+            </div>
+            <div className="text-base font-medium">Inbox zero 🎉</div>
+            <div className="text-sm text-muted mt-1">
+              Nothing assigned to you right now. Take a beat, then queue something up.
+            </div>
+          </div>
         ) : (
           <div className="grid grid-cols-2 gap-3">
             {mine.map((t) => (
@@ -87,6 +109,6 @@ export default async function MyTasksPage() {
           </div>
         )}
       </div>
-    </div>
+    </PageStagger>
   );
 }

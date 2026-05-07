@@ -4,7 +4,8 @@ import { projects, milestones, raciEntries, users, tasks, departments } from "@/
 import { TaskCard } from "@/components/TaskCard";
 import { RACITable } from "@/components/RACITable";
 import { formatDate } from "@/lib/utils";
-import { CheckCircle2, Circle, Clock, ArrowLeft } from "lucide-react";
+import { CheckCircle2, Circle, Clock } from "lucide-react";
+import { BackPill } from "@/components/BackPill";
 import type { MilestoneStatus } from "@/lib/types";
 
 export default function ProjectDetailPage({ params }: { params: { id: string } }) {
@@ -18,9 +19,7 @@ export default function ProjectDetailPage({ params }: { params: { id: string } }
 
   return (
     <div className="space-y-5 max-w-6xl">
-      <Link href="/projects" className="text-xs text-muted hover:text-ink inline-flex items-center gap-1">
-        <ArrowLeft className="w-3 h-3" /> All projects
-      </Link>
+      <BackPill href="/projects" label="All projects" />
 
       <div>
         <div className="text-xs text-muted">{dept?.name}</div>

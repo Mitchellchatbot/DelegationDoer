@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { Toaster } from "sonner";
 import { Sidebar } from "@/components/Sidebar";
 import { Topbar } from "@/components/Topbar";
+import { BackgroundOrbs } from "@/components/BackgroundOrbs";
 import { getCurrentUserId } from "@/lib/session";
 import { getSupabaseServer } from "@/lib/supabase-server";
 import { getUserById } from "@/lib/server-data";
@@ -29,11 +30,18 @@ export default async function MainLayout({ children }: { children: React.ReactNo
 
   return (
     <UserProvider user={user}>
-      <div className="app-shell flex">
+      {/* Floating-panels layout: sidebar, topbar, and main are each their
+          own rounded card with a 12px gutter between them. The page bg
+          (app-shell gradient) shows through the gaps so each panel feels
+          like it's floating on the canvas. */}
+      <div className="app-shell flex gap-3 p-3 min-h-screen">
         <Sidebar user={user} />
-        <div className="flex-1 min-w-0">
+        <div className="flex-1 min-w-0 flex flex-col gap-3">
           <Topbar user={user} />
-          <main className="p-6">{children}</main>
+          <div className="relative overflow-hidden rounded-3xl border border-white/50 shadow-soft flex-1 bg-white/40 backdrop-blur-sm">
+            <BackgroundOrbs variant="canvas" />
+            <main className="relative z-10 p-6">{children}</main>
+          </div>
         </div>
       </div>
       <Toaster position="bottom-right" richColors closeButton />

@@ -38,7 +38,12 @@ export default async function MainLayout({ children }: { children: React.ReactNo
         <Sidebar user={user} />
         <div className="flex-1 min-w-0 flex flex-col gap-3">
           <Topbar user={user} />
-          <div className="relative overflow-hidden rounded-3xl border border-white/50 shadow-soft flex-1 bg-white/40 backdrop-blur-sm">
+          {/* No `backdrop-filter` on this panel — it creates a containing
+              block for position:fixed descendants, which breaks
+              @hello-pangea/dnd's drag clone positioning (the dragged item
+              "teleports" to the wrong coords). bg-white/40 alone is
+              enough; the orbs inside provide the soft visual depth. */}
+          <div className="relative overflow-hidden rounded-3xl border border-white/50 shadow-soft flex-1 bg-white/40">
             <BackgroundOrbs variant="canvas" />
             <main className="relative z-10 p-6">{children}</main>
           </div>

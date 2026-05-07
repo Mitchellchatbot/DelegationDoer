@@ -4,6 +4,7 @@ import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { ProfileAvatarSection } from "@/components/ProfileAvatarSection";
 import { DesktopAppSection } from "@/components/DesktopAppSection";
+import { MissiveIntegrationSection } from "@/components/MissiveIntegrationSection";
 
 export default async function SettingsPage() {
   const userId = await requireCurrentUserId();
@@ -30,6 +31,8 @@ export default async function SettingsPage() {
       </header>
 
       {me && <ProfileAvatarSection user={me} />}
+
+      <MissiveIntegrationSection />
 
       <DesktopAppSection />
 

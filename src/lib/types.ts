@@ -46,6 +46,39 @@ export interface Task {
   blocksTaskIds: string[];
   clientName?: string | null;
   website?: string | null;
+  // Notion-style project fields, all optional.
+  clientEmail?: string | null;
+  clientFolderUrl?: string | null;
+  stagingServer?: string | null;
+  markupLink?: string | null;
+  hostingAccess?: string | null;
+  missiveThreadUrl?: string | null;
+  // Org-wide custom field values, keyed by field id. Shape per value
+  // depends on the matching CustomField.type (string for text/url/date/
+  // select, number for number, boolean for checkbox, string[] for
+  // multiselect).
+  custom?: Record<string, unknown>;
+}
+
+// Org-wide custom field definition. Managed in Settings; rendered on the
+// new-task form and task detail.
+export type CustomFieldType =
+  | "text" | "number" | "url" | "date" | "checkbox" | "select" | "multiselect";
+
+export interface CustomFieldOption {
+  value: string;
+  label: string;
+  color?: string;
+}
+
+export interface CustomField {
+  id: string;
+  name: string;
+  type: CustomFieldType;
+  options: CustomFieldOption[] | null;
+  position: number;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface Project {

@@ -1,0 +1,34 @@
+"use client";
+
+import { Avatar } from "./Avatar";
+import { usePresence } from "@/lib/presence-context";
+
+// Smart avatar that auto-pulls presence + status emoji from the
+// PresenceProvider. Drop-in for `<Avatar>` whenever the data passes
+// through a userId — every place a person is mentioned should use this
+// so their status is visible everywhere.
+//
+// Fallbacks: if the presence provider hasn't loaded yet, or the user
+// isn't in the cache (deleted, external email, etc.), we fall through
+// to the props-only data — same behavior as plain <Avatar>.
+export function PersonAvatar({
+  userId, name, imageUrl, size, className
+}: {
+  userId: string | null | undefined;
+  name: string;
+  imageUrl?: string | null;
+  size?: number;
+  className?: string;
+}) {
+  const live = usePresence(userId);
+  return (
+    <Avatar
+      name={live?.name ?? name}
+      imageUrl={live?.avatarUrl ?? imageUrl ?? null}
+      size={size}
+      className={className}
+      presence={live?.presence ?? null}
+      emoji={live?.statusEmoji ?? null}
+    />
+  );
+}

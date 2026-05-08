@@ -5,6 +5,7 @@ import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Check, ChevronDown, X, Send, Pencil, CalendarPlus } from "lucide-react";
+import { toast } from "sonner";
 import type { Priority, Task, TaskStatus } from "@/lib/types";
 
 const STATUS_OPTIONS: { value: TaskStatus; label: string }[] = [
@@ -42,7 +43,17 @@ function MoveStatus({ task }: { task: Task }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ status })
       });
-      if (res.ok) router.refresh();
+      if (res.ok) {
+        const data = await res.json().catch(() => null);
+        // If marking done bumped some skill rows, surface a celebratory
+        // toast that lists which skills got XP.
+        const gains = data?.skillGains as { tag: string; gain: number; total: number }[] | undefined;
+        if (status === "done" && gains && gains.length > 0) {
+          const list = gains.map((g) => `+${g.gain} #${g.tag}`).join(" · ");
+          toast.success(`✨ Skill XP gained: ${list}`, { duration: 4500 });
+        }
+        router.refresh();
+      }
     } finally {
       setPending(null);
     }

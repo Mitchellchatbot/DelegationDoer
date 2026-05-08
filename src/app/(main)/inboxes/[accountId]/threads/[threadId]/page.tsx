@@ -77,7 +77,7 @@ export default async function ThreadDetailPage({
               target="_blank"
               rel="noopener noreferrer"
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium text-white shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-lift"
-              style={{ background: "linear-gradient(135deg, #2563EB 0%, #7C3AED 100%)" }}
+              style={{ background: "linear-gradient(135deg, #2563EB 0%, #1e63ff 100%)" }}
             >
               <Reply className="w-3.5 h-3.5" /> Reply in Missive
             </a>
@@ -97,7 +97,7 @@ export default async function ThreadDetailPage({
               whole conversation. */}
           <header
             className="relative overflow-hidden rounded-2xl border border-white/60 shadow-soft p-5"
-            style={{ background: "linear-gradient(120deg, #DBEAFE 0%, #C7D2FE 50%, #DDD6FE 100%)" }}
+            style={{ background: "linear-gradient(120deg, #DBEAFE 0%, #C7D2FE 50%, #C7D2FE 100%)" }}
           >
             <div className="relative">
               <h1 className="text-xl font-semibold text-ink">
@@ -135,7 +135,7 @@ export default async function ThreadDetailPage({
                     "relative overflow-hidden rounded-2xl border shadow-soft hover:shadow-lift transition-shadow animate-rise " +
                     (outbound
                       ? "border-blue-200/60 bg-gradient-to-br from-blue-50 to-white"
-                      : "border-violet-200/60 bg-white")
+                      : "border-indigo-200/60 bg-white")
                   }
                   style={{ animationDelay: `${Math.min(i * 0.05, 0.5)}s` }}
                 >
@@ -144,7 +144,7 @@ export default async function ThreadDetailPage({
                     aria-hidden
                     className={
                       "absolute left-0 top-0 bottom-0 w-1 " +
-                      (outbound ? "bg-blue-400" : "bg-violet-400")
+                      (outbound ? "bg-blue-400" : "bg-indigo-400")
                     }
                   />
 
@@ -166,7 +166,7 @@ export default async function ThreadDetailPage({
                             "inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full border " +
                             (outbound
                               ? "bg-blue-100 text-blue-700 border-blue-200/60"
-                              : "bg-violet-100 text-violet-700 border-violet-200/60")
+                              : "bg-indigo-100 text-indigo-700 border-indigo-200/60")
                           }
                         >
                           {outbound ? <Send className="w-2.5 h-2.5" /> : <Inbox className="w-2.5 h-2.5" />}

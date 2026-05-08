@@ -48,7 +48,7 @@ export function NewClientDialog() {
       <button
         onClick={() => setOpen(true)}
         className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-sm font-medium text-white shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-lift"
-        style={{ background: "linear-gradient(135deg, #2563EB 0%, #7C3AED 100%)" }}
+        style={{ background: "linear-gradient(135deg, #2563EB 0%, #1e63ff 100%)" }}
       >
         <Plus className="w-4 h-4" /> New client
       </button>
@@ -113,7 +113,7 @@ export function NewClientDialog() {
                 onClick={submit}
                 disabled={submitting || !name.trim()}
                 className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-sm font-medium text-white shadow-sm disabled:opacity-50"
-                style={{ background: "linear-gradient(135deg, #2563EB 0%, #7C3AED 100%)" }}
+                style={{ background: "linear-gradient(135deg, #2563EB 0%, #1e63ff 100%)" }}
               >
                 {submitting ? "Creating…" : "Create client"}
               </button>

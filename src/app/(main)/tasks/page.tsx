@@ -2,7 +2,9 @@
 
 import { tasks as allTasks, departments, users, distinctClients, distinctWebsites } from "@/lib/mock-data";
 import { TaskCard } from "@/components/TaskCard";
+import { PageHero } from "@/components/PageHero";
 import { useMemo, useState } from "react";
+import { ListTodo } from "lucide-react";
 import type { Task } from "@/lib/types";
 
 const PRIORITY_RANK: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
@@ -41,25 +43,13 @@ export default function TasksListPage() {
 
   return (
     <div className="space-y-5 max-w-7xl mx-auto">
-      <header
-        className="relative overflow-hidden rounded-2xl border border-white/60 shadow-soft p-5"
-        style={{ background: "linear-gradient(120deg, #DBEAFE 0%, #C7D2FE 50%, #DDD6FE 100%)" }}
-      >
-        <div className="relative flex items-center gap-3">
-          <span className="text-3xl">📋</span>
-          <div>
-            <h1 className="text-xl font-semibold">
-              All tasks <span className="text-ink/50 text-base font-normal">· {filtered.length}</span>
-            </h1>
-            <p className="text-sm text-ink/60 mt-0.5">Filter and sort the entire ticket queue.</p>
-          </div>
-        </div>
-        <div
-          aria-hidden
-          className="absolute -top-10 right-12 w-32 h-32 rounded-full pointer-events-none"
-          style={{ background: "radial-gradient(circle, rgba(99,102,241,0.18), transparent 70%)" }}
-        />
-      </header>
+      <PageHero
+        eyebrow={`All tasks · ${filtered.length}`}
+        headline={["Filter and ", { accent: "sort the queue" }]}
+        subtitle="Slice the org's task list by status, department, assignee, client, or website."
+        icon={<ListTodo />}
+        iconTone="indigo"
+      />
 
       <div className="rounded-2xl border border-white/60 shadow-soft bg-white/70 backdrop-blur-sm p-3 flex items-center gap-2 flex-wrap">
         <Select label="Status" value={status} onChange={setStatus} options={[

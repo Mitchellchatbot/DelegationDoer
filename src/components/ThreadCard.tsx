@@ -68,7 +68,7 @@ export function ThreadCard({
           {to.slice(0, 2).map((r, idx) => (
             <span
               key={idx}
-              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] bg-violet-100 text-violet-700 border border-violet-200/60"
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] bg-indigo-100 text-indigo-700 border border-indigo-200/60"
             >
               <SendHorizontal className="w-3 h-3" />
               <span className="truncate max-w-[140px]">{shortAddress(r)}</span>
@@ -82,7 +82,7 @@ export function ThreadCard({
         <div
           aria-hidden
           className="absolute -bottom-8 -right-8 w-28 h-28 rounded-full pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity"
-          style={{ background: "radial-gradient(circle, rgba(139,92,246,0.18), transparent 70%)" }}
+          style={{ background: "radial-gradient(circle, rgba(99,102,241,0.18), transparent 70%)" }}
         />
       </Link>
 
@@ -107,7 +107,7 @@ export function ThreadCard({
 export function StatusPill({ status }: { status: MissiveThread["status"] }) {
   const tone =
     status === "open" ? "bg-blue-100 text-blue-700 border-blue-200/60"
-    : status === "pending" ? "bg-violet-100 text-violet-700 border-violet-200/60"
+    : status === "pending" ? "bg-indigo-100 text-indigo-700 border-indigo-200/60"
     : "bg-slate-100 text-slate-600 border-slate-200/60";
   return (
     <span className={`text-[10px] px-2 py-0.5 rounded-full border shrink-0 ${tone}`}>

@@ -31,10 +31,10 @@ export async function MissiveIntegrationSection() {
   }
 
   return (
-    <section className="rounded-2xl border border-white/60 shadow-soft bg-gradient-to-br from-violet-50/60 to-white p-5">
+    <section className="rounded-2xl border border-white/60 shadow-soft bg-gradient-to-br from-indigo-50/60 to-white p-5">
       <div className="flex items-start justify-between gap-3 mb-3 flex-wrap">
         <div className="flex items-center gap-2.5">
-          <div className="w-9 h-9 rounded-xl bg-violet-500 text-white grid place-items-center shadow-sm">
+          <div className="w-9 h-9 rounded-xl bg-indigo-500 text-white grid place-items-center shadow-sm">
             <Mail className="w-4 h-4" />
           </div>
           <div>
@@ -53,7 +53,7 @@ export async function MissiveIntegrationSection() {
             target="_blank"
             rel="noopener noreferrer"
             className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium text-white shadow-sm transition-all hover:-translate-y-0.5"
-            style={{ background: "linear-gradient(135deg, #2563EB 0%, #7C3AED 100%)" }}
+            style={{ background: "linear-gradient(135deg, #2563EB 0%, #1e63ff 100%)" }}
           >
             <ExternalLink className="w-3.5 h-3.5" /> Open Missive
           </a>
@@ -149,24 +149,24 @@ function StatusPill({ status }: { status: "connected" | "missing-vars" | "auth-f
 
 function SetupInstructions() {
   return (
-    <div className="rounded-xl border border-violet-200/60 bg-white/70 p-3 text-xs space-y-2">
+    <div className="rounded-xl border border-indigo-200/60 bg-white/70 p-3 text-xs space-y-2">
       <div className="font-medium text-ink/80">
         Connect Missive in three steps
       </div>
       <ol className="list-decimal pl-5 space-y-1 text-ink/70">
         <li>
           Stand up your Missive clone (it's already on Railway at{" "}
-          <code className="bg-violet-50 px-1 py-0.5 rounded">missiveclone-production.up.railway.app</code>{" "}
+          <code className="bg-indigo-50 px-1 py-0.5 rounded">missiveclone-production.up.railway.app</code>{" "}
           or wherever you deployed it).
         </li>
         <li>
           Log in to Missive in your browser, open DevTools → Application → Local Storage, copy the
-          value of <code className="bg-violet-50 px-1 py-0.5 rounded">missive_clone_token</code>.
+          value of <code className="bg-indigo-50 px-1 py-0.5 rounded">missive_clone_token</code>.
         </li>
         <li>
           On the DelegationDoer Railway service → Variables, add{" "}
-          <code className="bg-violet-50 px-1 py-0.5 rounded">MISSIVE_API_URL</code> (your missive URL)
-          and <code className="bg-violet-50 px-1 py-0.5 rounded">MISSIVE_API_TOKEN</code> (the token).
+          <code className="bg-indigo-50 px-1 py-0.5 rounded">MISSIVE_API_URL</code> (your missive URL)
+          and <code className="bg-indigo-50 px-1 py-0.5 rounded">MISSIVE_API_TOKEN</code> (the token).
           Redeploy.
         </li>
       </ol>

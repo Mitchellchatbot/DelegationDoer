@@ -8,8 +8,8 @@ import { FolderKanban } from "lucide-react";
 const PALETTE = [
   { ring: "ring-blue-300/40",   from: "from-blue-50",    iconBg: "bg-blue-500" },
   { ring: "ring-indigo-300/40", from: "from-indigo-50",  iconBg: "bg-indigo-500" },
-  { ring: "ring-violet-300/40", from: "from-violet-50",  iconBg: "bg-violet-500" },
-  { ring: "ring-purple-300/40", from: "from-purple-50",  iconBg: "bg-purple-500" }
+  { ring: "ring-indigo-300/40", from: "from-indigo-50",  iconBg: "bg-indigo-500" },
+  { ring: "ring-blue-300/40", from: "from-blue-50",  iconBg: "bg-blue-500" }
 ];
 
 export default function ProjectsListPage() {
@@ -17,7 +17,7 @@ export default function ProjectsListPage() {
     <div className="space-y-5 max-w-7xl mx-auto">
       <header
         className="relative overflow-hidden rounded-2xl border border-white/60 shadow-soft p-5"
-        style={{ background: "linear-gradient(120deg, #DBEAFE 0%, #C7D2FE 50%, #DDD6FE 100%)" }}
+        style={{ background: "linear-gradient(120deg, #DBEAFE 0%, #C7D2FE 50%, #C7D2FE 100%)" }}
       >
         <div className="relative flex items-center gap-3">
           <span className="text-3xl">📁</span>
@@ -72,7 +72,7 @@ export default function ProjectsListPage() {
               <div
                 aria-hidden
                 className="absolute -bottom-8 -right-8 w-28 h-28 rounded-full pointer-events-none opacity-0 group-hover:opacity-60 transition-opacity"
-                style={{ background: "radial-gradient(circle, rgba(139,92,246,0.18), transparent 70%)" }}
+                style={{ background: "radial-gradient(circle, rgba(99,102,241,0.18), transparent 70%)" }}
               />
             </Link>
           );

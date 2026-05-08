@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import gsap from "gsap";
 import { Mail, X, Link2 } from "lucide-react";
 import { toast } from "sonner";
-import { Avatar } from "./Avatar";
+import { PersonAvatar } from "./PersonAvatar";
 import { ROLE_LABELS } from "@/lib/auth";
 import type { Department, User } from "@/lib/types";
 import type { MissiveAccount } from "@/lib/missive-client";
@@ -354,7 +354,7 @@ export function InboxAssignmentGraph({ users, inboxes, departments, initialAssig
           <defs>
             <linearGradient id="conn-gradient" x1="0" x2="1" y1="0" y2="0">
               <stop offset="0%" stopColor="#2563EB" />
-              <stop offset="100%" stopColor="#7C3AED" />
+              <stop offset="100%" stopColor="#1e63ff" />
             </linearGradient>
           </defs>
 
@@ -436,12 +436,12 @@ function PersonNode({
       className={
         "absolute rounded-2xl bg-white border shadow-sm flex items-center gap-2.5 px-3 cursor-grab active:cursor-grabbing transition-shadow group " +
         (moving || connecting
-          ? "ring-2 ring-violet-400 shadow-lift border-violet-300"
+          ? "ring-2 ring-indigo-400 shadow-lift border-indigo-300"
           : "border-slate-200 hover:shadow-lift")
       }
       style={{ left: x, top: y, width: NODE_W, height: NODE_H }}
     >
-      <Avatar name={user.name} imageUrl={user.avatarUrl} size={40} className="shadow-sm shrink-0" />
+      <PersonAvatar userId={user.id} name={user.name} imageUrl={user.avatarUrl} size={40} className="shadow-sm shrink-0" />
       <div className="min-w-0 flex-1">
         <div className="text-[13px] font-semibold text-ink truncate leading-tight">{user.name}</div>
         <div className="text-[10px] text-muted truncate mt-0.5">{ROLE_LABELS[user.role]}</div>
@@ -479,16 +479,16 @@ function InboxNode({
       onMouseDown={onBodyDown}
       className={
         "absolute rounded-2xl border shadow-sm flex items-center gap-2.5 px-3 cursor-grab active:cursor-grabbing transition-shadow group " +
-        (moving || connecting ? "ring-2 ring-violet-400 shadow-lift" : "hover:shadow-lift")
+        (moving || connecting ? "ring-2 ring-indigo-400 shadow-lift" : "hover:shadow-lift")
       }
       style={{
         left: x, top: y, width: NODE_W, height: NODE_H,
-        background: "linear-gradient(135deg, #DBEAFE 0%, #DDD6FE 100%)",
+        background: "linear-gradient(135deg, #DBEAFE 0%, #C7D2FE 100%)",
         borderColor: moving || connecting ? "#A78BFA" : "rgba(124, 58, 237, 0.25)"
       }}
     >
       <ConnectPort side="left" onMouseDown={onPortDown} />
-      <div className="w-9 h-9 rounded-xl bg-white/70 border border-white grid place-items-center text-violet-600 shrink-0">
+      <div className="w-9 h-9 rounded-xl bg-white/70 border border-white grid place-items-center text-indigo-600 shrink-0">
         <Mail className="w-4 h-4" />
       </div>
       <div className="min-w-0 flex-1">
@@ -513,7 +513,7 @@ function ConnectPort({
       title="Drag to connect"
       className={
         `absolute ${positionClass} top-1/2 -translate-y-1/2 w-5 h-5 rounded-full grid place-items-center cursor-crosshair shadow-sm transition-transform hover:scale-110 ` +
-        "bg-gradient-to-br from-blue-500 to-violet-500 text-white border-2 border-white"
+        "bg-gradient-to-br from-blue-500 to-indigo-500 text-white border-2 border-white"
       }
     >
       <Link2 className="w-2.5 h-2.5" />

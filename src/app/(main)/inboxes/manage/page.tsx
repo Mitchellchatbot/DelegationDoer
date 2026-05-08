@@ -55,7 +55,7 @@ export default async function ManageInboxesPage() {
 
       <header
         className="relative overflow-hidden rounded-2xl border border-white/60 shadow-soft p-5"
-        style={{ background: "linear-gradient(120deg, #DBEAFE 0%, #C7D2FE 50%, #DDD6FE 100%)" }}
+        style={{ background: "linear-gradient(120deg, #DBEAFE 0%, #C7D2FE 50%, #C7D2FE 100%)" }}
       >
         <div className="relative flex items-start justify-between gap-3 flex-wrap">
           <div className="flex items-center gap-3">
@@ -101,7 +101,7 @@ export default async function ManageInboxesPage() {
 
       {!fetchError && inboxes.length === 0 ? (
         <div className="card p-10 text-center">
-          <div className="w-16 h-16 rounded-2xl bg-violet-100 text-violet-600 grid place-items-center mx-auto mb-3">
+          <div className="w-16 h-16 rounded-2xl bg-indigo-100 text-indigo-600 grid place-items-center mx-auto mb-3">
             <Layers className="w-8 h-8" />
           </div>
           <div className="text-base font-medium">No inboxes connected in Missive yet</div>
@@ -114,7 +114,7 @@ export default async function ManageInboxesPage() {
               target="_blank"
               rel="noopener noreferrer"
               className="mt-4 inline-flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-medium text-white shadow-sm transition-all hover:-translate-y-0.5"
-              style={{ background: "linear-gradient(135deg, #2563EB 0%, #7C3AED 100%)" }}
+              style={{ background: "linear-gradient(135deg, #2563EB 0%, #1e63ff 100%)" }}
             >
               <ExternalLink className="w-4 h-4" /> Connect a mailbox in Missive
             </a>

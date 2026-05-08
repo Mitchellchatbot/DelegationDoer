@@ -1,7 +1,7 @@
 "use client";
 
 import type { RACIEntry, User, RaciRole } from "@/lib/types";
-import { Avatar } from "./Avatar";
+import { PersonAvatar } from "./PersonAvatar";
 import { useMemo, useState } from "react";
 
 const ROLES: (RaciRole | "")[] = ["", "responsible", "accountable", "consulted", "informed"];
@@ -51,7 +51,7 @@ export function RACITable({ raci, users }: { raci: RACIEntry[]; users: User[] })
             <tr key={u.id} className="border-b border-border/60">
               <td className="py-2 pr-3">
                 <div className="flex items-center gap-2">
-                  <Avatar name={u.name} size={22} />
+                  <PersonAvatar userId={u.id} name={u.name} imageUrl={u.avatarUrl} size={22} />
                   <span>{u.name}</span>
                 </div>
               </td>

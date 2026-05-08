@@ -4,6 +4,7 @@ import { tasks, users, departments, activity, userById } from "@/lib/mock-data";
 import { TaskCard } from "@/components/TaskCard";
 import { CapacityBar } from "@/components/CapacityBar";
 import { Avatar } from "@/components/Avatar";
+import { PersonAvatar } from "@/components/PersonAvatar";
 import { StatCard } from "@/components/StatCard";
 import { DashboardHero } from "@/components/DashboardHero";
 import { PageStagger } from "@/components/PageStagger";
@@ -119,7 +120,7 @@ export default async function DashboardPage() {
               return (
                 <div key={u.id}>
                   <div className="flex items-center gap-2 mb-1">
-                    <Avatar name={u.name} imageUrl={u.avatarUrl} size={20} />
+                    <PersonAvatar userId={u.id} name={u.name} imageUrl={u.avatarUrl} size={20} />
                     <div className="text-sm">{u.name}</div>
                     <div className="text-[11px] text-muted ml-auto">
                       {u.departmentIds.map((id) => departments.find((d) => d.id === id)?.name).filter(Boolean).join(" · ") || "—"}
@@ -155,7 +156,7 @@ export default async function DashboardPage() {
               const t = tasks.find((x) => x.id === a.taskId);
               return (
                 <li key={a.id} className="py-2.5 flex items-center gap-3 text-sm group">
-                  {u && <Avatar name={u.name} imageUrl={u.avatarUrl} size={22} />}
+                  {u && <PersonAvatar userId={u.id} name={u.name} imageUrl={u.avatarUrl} size={22} />}
                   <div className="text-ink font-medium">{u?.name}</div>
                   <ActionPill action={a.action} />
                   <Link
@@ -178,9 +179,9 @@ export default async function DashboardPage() {
 function ActionPill({ action }: { action: string }) {
   const tone =
     action === "created" ? "bg-blue-100 text-blue-700 border-blue-200"
-    : action === "status_change" ? "bg-violet-100 text-violet-700 border-violet-200"
+    : action === "status_change" ? "bg-indigo-100 text-indigo-700 border-indigo-200"
     : action === "comment" ? "bg-indigo-100 text-indigo-700 border-indigo-200"
-    : action === "extended" ? "bg-purple-100 text-purple-700 border-purple-200"
+    : action === "extended" ? "bg-blue-100 text-blue-700 border-blue-200"
     : "bg-slate-100 text-slate-600 border-slate-200";
   return (
     <span className={`text-[10px] px-1.5 py-0.5 rounded-md border ${tone}`}>

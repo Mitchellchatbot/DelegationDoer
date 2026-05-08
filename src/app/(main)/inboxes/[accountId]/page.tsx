@@ -76,7 +76,7 @@ export default async function InboxThreadsPage({
 
       <header
         className="relative overflow-hidden rounded-2xl border border-border shadow-soft p-5"
-        style={{ background: "linear-gradient(120deg, #DBEAFE 0%, #C7D2FE 35%, #DDD6FE 70%, #E9D5FF 100%)" }}
+        style={{ background: "linear-gradient(120deg, #DBEAFE 0%, #C7D2FE 35%, #C7D2FE 70%, #DBEAFE 100%)" }}
       >
         <div className="relative flex items-center gap-3">
           <div className="w-12 h-12 rounded-xl bg-white/60 backdrop-blur border border-white/60 grid place-items-center">
@@ -106,7 +106,7 @@ export default async function InboxThreadsPage({
 
       {!fetchError && threads.length === 0 && (
         <div className="card p-10 text-center">
-          <div className="w-16 h-16 rounded-2xl bg-violet-100 text-violet-600 grid place-items-center mx-auto mb-3">
+          <div className="w-16 h-16 rounded-2xl bg-indigo-100 text-indigo-600 grid place-items-center mx-auto mb-3">
             <Mail className="w-8 h-8" />
           </div>
           <div className="text-base font-medium">

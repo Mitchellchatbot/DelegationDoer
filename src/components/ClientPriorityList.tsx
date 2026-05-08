@@ -22,13 +22,13 @@ import type { Client } from "@/lib/clients-data";
 const PALETTE = [
   { ring: "ring-blue-300/40",   from: "from-blue-100",    iconBg: "bg-blue-500" },
   { ring: "ring-indigo-300/40", from: "from-indigo-100",  iconBg: "bg-indigo-500" },
-  { ring: "ring-violet-300/40", from: "from-violet-100",  iconBg: "bg-violet-500" },
-  { ring: "ring-purple-300/40", from: "from-purple-100",  iconBg: "bg-purple-500" }
+  { ring: "ring-indigo-300/40", from: "from-indigo-100",  iconBg: "bg-indigo-500" },
+  { ring: "ring-blue-300/40", from: "from-blue-100",  iconBg: "bg-blue-500" }
 ] as const;
 
 const PRIORITY_TONES = {
-  high:   "bg-purple-100 text-purple-700 border-purple-200/60",
-  medium: "bg-violet-100 text-violet-700 border-violet-200/60",
+  high:   "bg-blue-100 text-blue-700 border-blue-200/60",
+  medium: "bg-indigo-100 text-indigo-700 border-indigo-200/60",
   low:    "bg-slate-100 text-slate-600 border-slate-200/60"
 } as const;
 
@@ -71,7 +71,7 @@ export function ClientPriorityList({ initial, openCounts, canEdit }: Props) {
   if (clients.length === 0) {
     return (
       <div className="card p-10 text-center">
-        <div className="w-16 h-16 rounded-2xl bg-violet-100 text-violet-600 grid place-items-center mx-auto mb-3">
+        <div className="w-16 h-16 rounded-2xl bg-indigo-100 text-indigo-600 grid place-items-center mx-auto mb-3">
           <Folder className="w-8 h-8" />
         </div>
         <div className="text-base font-medium">No clients yet</div>
@@ -107,7 +107,7 @@ export function ClientPriorityList({ initial, openCounts, canEdit }: Props) {
                         className={cn(
                           `relative overflow-hidden rounded-2xl border ring-1 ${tone.ring} bg-gradient-to-br ${tone.from} to-white p-3.5 flex items-center gap-3 transition-shadow duration-150`,
                           snap.isDragging
-                            ? "shadow-lift ring-2 ring-violet-400 border-violet-300"
+                            ? "shadow-lift ring-2 ring-indigo-400 border-indigo-300"
                             : "shadow-soft border-white/60 hover:shadow-lift"
                         )}
                       >
@@ -122,7 +122,7 @@ export function ClientPriorityList({ initial, openCounts, canEdit }: Props) {
                             {...p.dragHandleProps}
                             aria-label="Drag to reorder"
                             role="button"
-                            className="shrink-0 text-muted hover:text-ink cursor-grab active:cursor-grabbing transition-colors outline-none focus-visible:text-violet-600"
+                            className="shrink-0 text-muted hover:text-ink cursor-grab active:cursor-grabbing transition-colors outline-none focus-visible:text-indigo-600"
                           >
                             <GripVertical className="w-4 h-4" />
                           </span>
@@ -136,7 +136,7 @@ export function ClientPriorityList({ initial, openCounts, canEdit }: Props) {
                         {/* Title + meta */}
                         <Link
                           href={`/clients/${encodeURIComponent(c.id)}`}
-                          className="min-w-0 flex-1 group rounded-md outline-none focus-visible:ring-2 focus-visible:ring-violet-400/40"
+                          className="min-w-0 flex-1 group rounded-md outline-none focus-visible:ring-2 focus-visible:ring-indigo-400/40"
                         >
                           <div className="text-sm font-semibold truncate group-hover:text-accent transition-colors">
                             {c.name}

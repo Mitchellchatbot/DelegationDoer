@@ -100,7 +100,32 @@ function createWidget() {
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      // Allow DevTools so we can debug the renderer in dev. We open it
+      // automatically when pointed at localhost (see below).
+      devTools: true
+    }
+  });
+
+  // Auto-open DevTools when running against the dev server. Detached so
+  // it doesn't try to fit inside the 88x88 widget window.
+  if (APP_URL.includes("localhost") || APP_URL.includes("127.0.0.1")) {
+    widget.webContents.openDevTools({ mode: "detach" });
+  }
+
+  // Wire keyboard shortcuts on the widget itself: Cmd/Ctrl+Opt+I to
+  // toggle DevTools, Cmd/Ctrl+R to force reload. Default Electron menu
+  // accelerators don't fire on a frameless transparent window like ours.
+  widget.webContents.on("before-input-event", (_e, input) => {
+    const mod = process.platform === "darwin" ? input.meta : input.control;
+    if (!mod) return;
+    if (input.alt && (input.key === "i" || input.key === "I")) {
+      widget.webContents.isDevToolsOpened()
+        ? widget.webContents.closeDevTools()
+        : widget.webContents.openDevTools({ mode: "detach" });
+    }
+    if (input.key === "r" || input.key === "R") {
+      widget.webContents.reloadIgnoringCache();
     }
   });
 
@@ -163,6 +188,20 @@ function buildTray() {
     { label: "Expand", click: () => { setSize(PANEL); widget?.webContents.send("widget:set-expanded", true); } },
     { type: "separator" },
     { label: "Open full app", click: () => shell.openExternal(APP_URL) },
+    { type: "separator" },
+    {
+      label: "Reload widget",
+      click: () => widget?.webContents.reloadIgnoringCache()
+    },
+    {
+      label: "Toggle DevTools",
+      click: () => {
+        if (!widget) return;
+        widget.webContents.isDevToolsOpened()
+          ? widget.webContents.closeDevTools()
+          : widget.webContents.openDevTools({ mode: "detach" });
+      }
+    },
     { type: "separator" },
     { label: "Quit", click: () => { app.isQuitting = true; app.quit(); } }
   ]);

@@ -6,6 +6,12 @@ import { notifyAssignment } from "@/lib/slack";
 
 export const dynamic = "force-dynamic";
 
+function trimOrNull(v: unknown): string | null {
+  if (typeof v !== "string") return null;
+  const t = v.trim();
+  return t || null;
+}
+
 // GET /api/tasks — every task in the system, in the camelCase shape the UI
 // expects. Used by the board (and anywhere that needs a fresh org-wide
 // snapshot). No filtering server-side; clients filter as they like.
@@ -58,7 +64,21 @@ export async function POST(req: NextRequest) {
       created_at: now,
       blocks_task_ids: [],
       client_name: typeof body.clientName === "string" && body.clientName.trim() ? body.clientName.trim() : null,
-      website: typeof body.website === "string" && body.website.trim() ? body.website.trim() : null
+      website: typeof body.website === "string" && body.website.trim() ? body.website.trim() : null,
+      // Notion-style project fields. All optional. Empty/whitespace
+      // strings → null so the UI's "empty state" rendering works.
+      client_email: trimOrNull(body.clientEmail),
+      client_folder_url: trimOrNull(body.clientFolderUrl),
+      staging_server: trimOrNull(body.stagingServer),
+      markup_link: trimOrNull(body.markupLink),
+      hosting_access: trimOrNull(body.hostingAccess),
+      missive_thread_url: trimOrNull(body.missiveThreadUrl),
+      // Custom-field values keyed by field id. Validated structurally on
+      // write (must be a plain object) but not type-checked against field
+      // defs — that's enforced at edit time on the client.
+      custom: body.custom && typeof body.custom === "object" && !Array.isArray(body.custom)
+        ? body.custom
+        : {}
     };
 
     const supabase = getSupabaseAdmin();

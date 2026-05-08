@@ -1,20 +1,24 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import {
   users as initialUsers, departments as initialDepartments,
   tasks, headsOf, workersOf
 } from "@/lib/mock-data";
 import { Avatar } from "@/components/Avatar";
+import { PersonAvatar } from "@/components/PersonAvatar";
 import { CapacityBar } from "@/components/CapacityBar";
 import { OrgChart } from "@/components/OrgChart";
+import { PageHero } from "@/components/PageHero";
 import { userCapacity } from "@/lib/capacity";
 import { ROLE_LABELS } from "@/lib/auth";
 import { useCurrentUser } from "@/lib/user-context";
 import type { Role, User, Department } from "@/lib/types";
+import Link from "next/link";
 import {
   Crown, Users as UsersIcon, Building2, ListChecks, Plus, X, ShieldAlert,
-  CheckCircle2, AlertTriangle, Timer
+  CheckCircle2, AlertTriangle, Timer, ArrowRight
 } from "lucide-react";
 
 const TABS = ["People", "Departments", "Org chart", "All tasks"] as const;
@@ -39,30 +43,15 @@ export default function CEOConsolePage() {
 
   return (
     <div className="space-y-5 max-w-7xl mx-auto">
-      <header
-        className="relative overflow-hidden rounded-2xl border border-border shadow-soft p-6"
-        style={{
-          background: "linear-gradient(120deg, #DBEAFE 0%, #C7D2FE 35%, #DDD6FE 70%, #E9D5FF 100%)"
-        }}
-      >
-        <div className="relative flex items-center gap-3">
-          <span className="text-3xl">👑</span>
-          <div>
-            <div className="text-[11px] uppercase tracking-wide text-ink/60">CEO Console</div>
-            <h1 className="text-2xl font-semibold mt-0.5">Company-wide control</h1>
-            <p className="text-sm text-ink/60 mt-1">
-              People, departments, the org chart, every task in flight — all in one place.
-            </p>
-          </div>
-        </div>
-        <div
-          aria-hidden
-          className="absolute -top-10 -right-8 w-40 h-40 rounded-full pointer-events-none"
-          style={{ background: "radial-gradient(circle, rgba(139,92,246,0.22), transparent 70%)" }}
-        />
-      </header>
+      <PageHero
+        eyebrow="CEO Console"
+        headline={["Company-wide ", { accent: "control" }]}
+        subtitle="People, departments, the org chart, every task in flight — all in one place."
+        icon={<Crown />}
+        iconTone="amber"
+      />
 
-      <div className="flex items-center gap-1 border-b border-border">
+      <div className="flex items-center gap-1 border-b border-slate-200/70">
         {TABS.map((t) => {
           const active = tab === t;
           return (
@@ -70,21 +59,41 @@ export default function CEOConsolePage() {
               key={t}
               onClick={() => setTab(t)}
               className={
-                "relative px-3.5 py-2 text-sm font-medium transition-colors " +
-                (active ? "text-ink" : "text-muted hover:text-ink")
+                "relative px-5 py-3 text-[16px] font-semibold transition-colors " +
+                (active ? "text-accent" : "text-muted hover:text-ink")
               }
             >
               {t}
-              {active && <span className="absolute left-0 right-0 -bottom-px h-0.5 bg-accent rounded-full" />}
+              {/* Shared layoutId makes framer-motion FLIP-animate this
+                  underline between tabs instead of hard-swapping it. */}
+              {active && (
+                <motion.span
+                  layoutId="ceo-tab-underline"
+                  className="absolute left-3 right-3 -bottom-px h-0.5 bg-accent rounded-full"
+                  transition={{ type: "spring", stiffness: 480, damping: 36 }}
+                />
+              )}
             </button>
           );
         })}
       </div>
 
-      {tab === "People" && <PeopleTab people={people} setPeople={setPeople} departments={depts} />}
-      {tab === "Departments" && <DepartmentsTab departments={depts} setDepartments={setDepts} people={people} />}
-      {tab === "Org chart" && <OrgChartTab people={people} departments={depts} />}
-      {tab === "All tasks" && <AllTasksTab people={people} departments={depts} />}
+      {/* AnimatePresence lets the outgoing tab fade out before the new one
+          slides in. mode="wait" keeps the layout stable (no overlap). */}
+      <AnimatePresence mode="wait">
+        <motion.div
+          key={tab}
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -6 }}
+          transition={{ duration: 0.18, ease: [0.2, 0.8, 0.2, 1] }}
+        >
+          {tab === "People" && <PeopleTab people={people} setPeople={setPeople} departments={depts} />}
+          {tab === "Departments" && <DepartmentsTab departments={depts} setDepartments={setDepts} people={people} />}
+          {tab === "Org chart" && <OrgChartTab people={people} departments={depts} />}
+          {tab === "All tasks" && <AllTasksTab people={people} departments={depts} />}
+        </motion.div>
+      </AnimatePresence>
     </div>
   );
 }
@@ -136,7 +145,7 @@ function PeopleTab({
                 <tr key={u.id} className="border-t border-border/60">
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-2.5">
-                      <Avatar name={u.name} size={26} />
+                      <PersonAvatar userId={u.id} name={u.name} imageUrl={u.avatarUrl} size={26} />
                       <div>
                         <div>{u.name}</div>
                         <div className="text-xs text-muted">{u.email}</div>
@@ -215,17 +224,28 @@ function DepartmentsTab({
         {departments.map((d) => {
           const heads = people.filter((u) => u.role === "department_head" && u.departmentIds.includes(d.id));
           const workers = people.filter((u) => u.role === "worker" && u.departmentIds.includes(d.id));
+          // Open task count for the "View tasks" deep link.
+          const openTaskCount = tasks.filter((t) => t.departmentId === d.id && t.status !== "done").length;
           return (
             <div key={d.id} className="card p-4">
-              <div className="flex items-start justify-between">
-                <div>
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
                   <div className="flex items-center gap-2">
                     <Building2 className="w-4 h-4 text-muted" />
                     <div className="text-sm font-medium">{d.name}</div>
                   </div>
                   <div className="text-xs text-muted mt-0.5 max-w-md">{d.description}</div>
                 </div>
-                <span className="text-[11px] text-muted">{workers.length + heads.length} member{workers.length + heads.length === 1 ? "" : "s"}</span>
+                <div className="flex flex-col items-end gap-1.5 shrink-0">
+                  <span className="text-[11px] text-muted">{workers.length + heads.length} member{workers.length + heads.length === 1 ? "" : "s"}</span>
+                  <Link
+                    href={`/board?dept=${encodeURIComponent(d.id)}`}
+                    className="inline-flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-full bg-gradient-to-r from-blue-100 to-indigo-100 text-indigo-700 border border-indigo-200/60 hover:shadow-sm hover:-translate-y-0.5 transition-all"
+                  >
+                    View {openTaskCount} task{openTaskCount === 1 ? "" : "s"}
+                    <ArrowRight className="w-3 h-3" />
+                  </Link>
+                </div>
               </div>
 
               <div className="mt-3">
@@ -234,7 +254,7 @@ function DepartmentsTab({
                   {heads.length === 0 && <span className="text-xs text-muted">— no head assigned —</span>}
                   {heads.map((h) => (
                     <span key={h.id} className="inline-flex items-center gap-1.5 px-2 py-1 rounded-full bg-accent/10 border border-accent/30 text-accent text-xs">
-                      <Avatar name={h.name} size={16} /> {h.name}
+                      <PersonAvatar userId={h.id} name={h.name} imageUrl={h.avatarUrl} size={16} /> {h.name}
                     </span>
                   ))}
                 </div>
@@ -245,7 +265,7 @@ function DepartmentsTab({
                 <div className="flex flex-wrap gap-2">
                   {workers.map((w) => (
                     <span key={w.id} className="inline-flex items-center gap-1.5 px-2 py-1 rounded-full bg-surface2 border border-border text-xs">
-                      <Avatar name={w.name} size={16} /> {w.name}
+                      <PersonAvatar userId={w.id} name={w.name} imageUrl={w.avatarUrl} size={16} /> {w.name}
                     </span>
                   ))}
                 </div>
@@ -350,8 +370,8 @@ function OrgStat({
   const TONES = {
     blue:   { bg: "from-blue-100 to-blue-50",     iconBg: "bg-blue-500",   iconText: "text-blue-700" },
     indigo: { bg: "from-indigo-100 to-indigo-50", iconBg: "bg-indigo-500", iconText: "text-indigo-700" },
-    violet: { bg: "from-violet-100 to-violet-50", iconBg: "bg-violet-500", iconText: "text-violet-700" },
-    purple: { bg: "from-purple-100 to-purple-50", iconBg: "bg-purple-500", iconText: "text-purple-700" }
+    violet: { bg: "from-indigo-100 to-indigo-50", iconBg: "bg-indigo-500", iconText: "text-indigo-700" },
+    purple: { bg: "from-blue-100 to-blue-50", iconBg: "bg-blue-500", iconText: "text-blue-700" }
   } as const;
   const t = TONES[tone];
   return (
@@ -416,7 +436,7 @@ function AllTasksTab({ people, departments }: { people: User[]; departments: Dep
                 <tr key={user.id} className="border-t border-border/60">
                   <td className="px-4 py-2.5">
                     <div className="flex items-center gap-2">
-                      <Avatar name={user.name} size={22} />
+                      <PersonAvatar userId={user.id} name={user.name} imageUrl={user.avatarUrl} size={22} />
                       <span>{user.name}</span>
                       <span className="text-[10px] text-muted">{ROLE_LABELS[user.role]}</span>
                     </div>

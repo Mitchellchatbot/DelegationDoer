@@ -61,7 +61,7 @@ export function DashboardHero({
       className="relative overflow-hidden rounded-2xl border border-border shadow-soft p-6"
       style={{
         background:
-          "linear-gradient(120deg, #DBEAFE 0%, #C7D2FE 35%, #DDD6FE 70%, #E9D5FF 100%)"
+          "linear-gradient(120deg, #DBEAFE 0%, #C7D2FE 35%, #C7D2FE 70%, #DBEAFE 100%)"
       }}
     >
       {/* drifting gradient orbs */}

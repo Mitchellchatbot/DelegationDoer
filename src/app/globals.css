@@ -1,14 +1,47 @@
+@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-:root { color-scheme: light; }
+/* HSL-variable token system. Colors are still authored as CSS variables so
+   we can rebrand by changing one hue (current hue: 222 = blue) without
+   touching component classes. Tailwind tokens in tailwind.config.ts read
+   the same variables via theme `colors` aliases. */
+:root {
+  color-scheme: light;
+
+  --bg:        222 40% 98%;     /* off-white */
+  --surface:   0   0%  100%;
+  --surface-2: 222 25% 96%;     /* slate-100 */
+  --border:    222 22% 90%;
+  --ink:       222 47% 11%;     /* slate-900 */
+  --muted:     222 14% 46%;     /* slate-500 */
+
+  --accent:    219 100% 56%;    /* #1e63ff */
+  --accent-2:  256 90% 64%;     /* indigo-500 */
+  --brand-2:   263 90% 66%;     /* indigo-500 */
+  --brand-3:   270 95% 75%;     /* blue-400 */
+
+  --ok:        158 64% 45%;
+  --warn:      30  90% 50%;
+  --urgent:    0   85% 60%;
+  --stalled:   38  92% 50%;
+
+  --radius: 0.75rem;
+}
 
 /* No background on html/body so the /widget route can stay transparent.
    The light app chrome lives on the .app-shell wrapper inside
    (main)/layout.tsx. */
-html, body { background: transparent; color: #0F172A; margin: 0; }
-body { font-feature-settings: "ss01", "cv11"; }
+html, body { background: transparent; color: hsl(var(--ink)); margin: 0; }
+body {
+  font-family: 'Poppins', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+    Inter, 'Helvetica Neue', Arial, sans-serif;
+  font-feature-settings: "ss01", "cv11";
+  font-size: 15px;        /* bump base from default 16 → effectively 15 → 16 lh */
+  line-height: 1.55;
+}
 
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-thumb { background: #E2E8F0; border-radius: 6px; }
@@ -17,9 +50,15 @@ body { font-feature-settings: "ss01", "cv11"; }
 
 .app-shell {
   background: #F8FAFC;
+  /* Tasteful grid-paper backdrop: 1px slate lines every 32px, faint enough
+     not to fight content but visible enough to give the canvas texture.
+     Plus the existing soft ambient blobs in the corners. */
   background-image:
-    radial-gradient(1200px 600px at 100% -10%, rgba(37,99,235,0.08), transparent 60%),
-    radial-gradient(900px 500px at -10% 110%, rgba(99,102,241,0.06), transparent 60%);
+    linear-gradient(rgba(15, 23, 42, 0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(15, 23, 42, 0.045) 1px, transparent 1px),
+    radial-gradient(1200px 600px at 100% -10%, rgba(30, 99, 255, 0.07), transparent 60%),
+    radial-gradient(900px 500px at -10% 110%, rgba(99, 102, 241, 0.05), transparent 60%);
+  background-size: 32px 32px, 32px 32px, auto, auto;
   background-attachment: fixed;
   min-height: 100vh;
 }

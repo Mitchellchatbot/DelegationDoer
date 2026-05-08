@@ -45,6 +45,13 @@ interface TaskRow {
   blocks_task_ids: string[];
   client_name: string | null;
   website: string | null;
+  client_email: string | null;
+  client_folder_url: string | null;
+  staging_server: string | null;
+  markup_link: string | null;
+  hosting_access: string | null;
+  missive_thread_url: string | null;
+  custom: Record<string, unknown> | null;
 }
 
 async function userDepartmentIds(userId: string): Promise<string[]> {
@@ -98,7 +105,14 @@ function taskFromRow(row: TaskRow): Task {
     createdAt: row.created_at,
     blocksTaskIds: row.blocks_task_ids,
     clientName: row.client_name,
-    website: row.website
+    website: row.website,
+    clientEmail: row.client_email,
+    clientFolderUrl: row.client_folder_url,
+    stagingServer: row.staging_server,
+    markupLink: row.markup_link,
+    hostingAccess: row.hosting_access,
+    missiveThreadUrl: row.missive_thread_url,
+    custom: row.custom ?? {}
   };
 }
 
@@ -142,11 +156,26 @@ export async function getDepartmentById(id: string | null | undefined): Promise<
 const TICKET_COLS =
   "id,title,description,status,priority,estimated_hours,actual_hours,tags," +
   "department_id,assignee_id,creator_id,project_id,due_date,inactive_flag," +
-  "last_activity_at,created_at,blocks_task_ids,client_name,website";
+  "last_activity_at,created_at,blocks_task_ids,client_name,website," +
+  "client_email,client_folder_url,staging_server,markup_link,hosting_access," +
+  "missive_thread_url,custom";
 
 export async function getAllTasks(): Promise<Task[]> {
   const { data } = await getSupabaseAdmin()
     .from("tasks")
     .select(TICKET_COLS);
   return (data ?? []).map((r) => taskFromRow(r as unknown as TaskRow));
+}
+
+// Lightweight users-list, used when components only need to render avatars +
+// names (e.g. handoff dropdown, thread author resolution). Skips the
+// per-user department-members join.
+export async function getAllUsersLight(): Promise<User[]> {
+  const { data } = await getSupabaseAdmin()
+    .from("users")
+    .select("id,name,email,role,daily_capacity,throughput,skills,avatar_url")
+    .order("name");
+  return (data ?? []).map((r) =>
+    userFromRow(r as UserRow, [])
+  );
 }

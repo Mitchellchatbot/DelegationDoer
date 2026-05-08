@@ -69,7 +69,7 @@ export function AddResourceForm({
   }
 
   return (
-    <div className="rounded-xl border border-violet-200/60 bg-violet-50/50 p-3 space-y-2">
+    <div className="rounded-xl border border-indigo-200/60 bg-indigo-50/50 p-3 space-y-2">
       <div className="flex items-center justify-between">
         <div className="text-xs font-medium text-ink/80">New {meta.label.toLowerCase()}</div>
         <button onClick={() => { setOpen(false); reset(); }} className="text-muted hover:text-ink">
@@ -110,7 +110,7 @@ export function AddResourceForm({
           onClick={submit}
           disabled={submitting || !title.trim()}
           className="inline-flex items-center gap-1 text-xs px-3 py-1.5 rounded-full font-medium text-white shadow-sm disabled:opacity-50"
-          style={{ background: "linear-gradient(135deg, #2563EB 0%, #7C3AED 100%)" }}
+          style={{ background: "linear-gradient(135deg, #2563EB 0%, #1e63ff 100%)" }}
         >
           {submitting ? "Adding…" : "Add"}
         </button>

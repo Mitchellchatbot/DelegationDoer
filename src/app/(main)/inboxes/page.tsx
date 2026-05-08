@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { Mail, Settings as SettingsIcon, Inbox, Layers } from "lucide-react";
+import { PageHero } from "@/components/PageHero";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { listAccounts, type MissiveAccount } from "@/lib/missive-client";
@@ -13,8 +14,8 @@ export const dynamic = "force-dynamic";
 const PALETTE = [
   { ring: "ring-blue-400/30",   bg: "from-blue-100 to-blue-50",     iconBg: "bg-blue-500 text-white" },
   { ring: "ring-indigo-400/30", bg: "from-indigo-100 to-indigo-50", iconBg: "bg-indigo-500 text-white" },
-  { ring: "ring-violet-400/30", bg: "from-violet-100 to-violet-50", iconBg: "bg-violet-500 text-white" },
-  { ring: "ring-purple-400/30", bg: "from-purple-100 to-purple-50", iconBg: "bg-purple-500 text-white" }
+  { ring: "ring-indigo-400/30", bg: "from-indigo-100 to-indigo-50", iconBg: "bg-indigo-500 text-white" },
+  { ring: "ring-blue-400/30", bg: "from-blue-100 to-blue-50", iconBg: "bg-blue-500 text-white" }
 ];
 
 export default async function InboxesPage() {
@@ -38,53 +39,35 @@ export default async function InboxesPage() {
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
-      <header
-        className="relative overflow-hidden rounded-2xl border border-border shadow-soft p-6"
-        style={{
-          background: "linear-gradient(120deg, #DBEAFE 0%, #C7D2FE 35%, #DDD6FE 70%, #E9D5FF 100%)"
-        }}
-      >
-        <div className="relative flex items-start justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <span className="text-3xl">📬</span>
-            <div>
-              <div className="text-[11px] uppercase tracking-wide text-ink/60">Inboxes</div>
-              <h1 className="text-2xl font-semibold mt-0.5">
-                {me.role === "ceo"
-                  ? "Every shared inbox"
-                  : me.role === "department_head"
-                    ? "Your team's inboxes"
-                    : "Your assigned inboxes"}
-              </h1>
-              <p className="text-sm text-ink/60 mt-1">
-                {me.role === "ceo"
-                  ? "All shared inboxes connected through Missive."
-                  : me.role === "department_head"
-                    ? "Inboxes assigned to anyone on your team. Click to read threads."
-                    : "Open a card to read its threads. Need access to another? Ask your CEO or department head."}
-              </p>
-            </div>
-          </div>
-          {canManageAssignments(me) && (
+      <PageHero
+        eyebrow="Inboxes"
+        headline={
+          me.role === "ceo"
+            ? ["Every ", { accent: "shared inbox" }]
+            : me.role === "department_head"
+              ? ["Your team's ", { accent: "inboxes" }]
+              : ["Your assigned ", { accent: "inboxes" }]
+        }
+        subtitle={
+          me.role === "ceo"
+            ? "All shared inboxes connected through Missive."
+            : me.role === "department_head"
+              ? "Inboxes assigned to anyone on your team. Click to read threads."
+              : "Open a card to read its threads. Need access to another? Ask your CEO or department head."
+        }
+        icon={<Mail />}
+        iconTone="fuchsia"
+        trailing={
+          canManageAssignments(me) && (
             <Link
               href="/inboxes/manage"
-              className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium bg-white/70 hover:bg-white border border-white/60 backdrop-blur transition-all hover:-translate-y-0.5"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border border-slate-300 bg-white hover:bg-slate-50 hover:border-slate-400 transition-all"
             >
               <SettingsIcon className="w-3.5 h-3.5" /> Manage assignments
             </Link>
-          )}
-        </div>
-        <div
-          aria-hidden
-          className="absolute -top-12 right-12 w-44 h-44 rounded-full pointer-events-none"
-          style={{ background: "radial-gradient(circle, rgba(99,102,241,0.18), transparent 70%)" }}
-        />
-        <div
-          aria-hidden
-          className="absolute -bottom-10 -left-8 w-36 h-36 rounded-full pointer-events-none"
-          style={{ background: "radial-gradient(circle, rgba(167,139,250,0.25), transparent 70%)" }}
-        />
-      </header>
+          )
+        }
+      />
 
       {fetchError && (
         <div className="card p-4 border-urgent/30 bg-urgent/5 text-sm text-urgent">
@@ -114,11 +97,11 @@ export default async function InboxesPage() {
       {inboxes.length > 0 && (inboxes.length > 1 || me.role === "ceo") && (
         <Link
           href="/inboxes/all"
-          className="group relative overflow-hidden rounded-2xl border border-white/60 ring-1 ring-violet-300/40 shadow-soft hover:shadow-lift transition-all hover:-translate-y-0.5 p-4 flex items-center gap-3 animate-rise"
-          style={{ background: "linear-gradient(120deg, #DBEAFE 0%, #DDD6FE 60%, #E9D5FF 100%)" }}
+          className="group relative overflow-hidden rounded-2xl border border-white/60 ring-1 ring-indigo-300/40 shadow-soft hover:shadow-lift transition-all hover:-translate-y-0.5 p-4 flex items-center gap-3 animate-rise"
+          style={{ background: "linear-gradient(120deg, #DBEAFE 0%, #C7D2FE 60%, #DBEAFE 100%)" }}
         >
           <div className="w-12 h-12 rounded-xl bg-white/70 border border-white/80 grid place-items-center shadow-sm shrink-0">
-            <Layers className="w-6 h-6 text-violet-600" />
+            <Layers className="w-6 h-6 text-indigo-600" />
           </div>
           <div className="flex-1 min-w-0">
             <div className="text-sm font-semibold">
@@ -128,7 +111,7 @@ export default async function InboxesPage() {
               Combined view across {inboxes.length} inbox{inboxes.length === 1 ? "" : "es"} · with status / search filters
             </div>
           </div>
-          <span className="text-[10px] uppercase tracking-wide text-violet-700 bg-white/70 px-2 py-0.5 rounded-full border border-violet-200/60">
+          <span className="text-[10px] uppercase tracking-wide text-indigo-700 bg-white/70 px-2 py-0.5 rounded-full border border-indigo-200/60">
             Merged
           </span>
         </Link>

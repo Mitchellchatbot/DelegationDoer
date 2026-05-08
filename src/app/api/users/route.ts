@@ -1,0 +1,69 @@
+import { NextResponse } from "next/server";
+import { getSupabaseAdmin } from "@/lib/supabase-admin";
+import { requireCurrentUserId } from "@/lib/session";
+
+export const dynamic = "force-dynamic";
+
+interface UserRow {
+  id: string;
+  name: string;
+  email: string;
+  role: string;
+  avatar_url?: string | null;
+  presence?: string | null;
+  presence_updated_at?: string | null;
+  status_emoji?: string | null;
+}
+
+// GET /api/users — lightweight list of every user with whatever
+// presence + emoji data the schema currently has. Resilient to partial
+// migrations: if `status_emoji` (or presence columns) haven't been added
+// yet, we fall back to a smaller select rather than 500ing.
+export async function GET() {
+  await requireCurrentUserId();
+  const supabase = getSupabaseAdmin();
+
+  // First try: full shape including presence + emoji.
+  let rows: UserRow[] | null = null;
+  let lastError: string | null = null;
+
+  const tries = [
+    "id, name, email, role, avatar_url, presence, presence_updated_at, status_emoji",
+    "id, name, email, role, avatar_url, presence, presence_updated_at",
+    "id, name, email, role, avatar_url"
+  ];
+
+  for (const cols of tries) {
+    const { data, error } = await supabase.from("users").select(cols).order("name");
+    if (!error) {
+      rows = (data ?? []) as unknown as UserRow[];
+      break;
+    }
+    lastError = error.message;
+    // Only fall through on "column does not exist". Anything else is a
+    // real failure and shouldn't be papered over.
+    if (!/column .* does not exist/i.test(error.message)) {
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+  }
+
+  if (!rows) {
+    return NextResponse.json(
+      { error: lastError ?? "users query failed" },
+      { status: 500 }
+    );
+  }
+
+  return NextResponse.json({
+    users: rows.map((u) => ({
+      id: u.id,
+      name: u.name,
+      email: u.email,
+      role: u.role,
+      avatarUrl: u.avatar_url ?? null,
+      presence: (u.presence as "available" | "focus" | "eating" | "away" | null | undefined) ?? null,
+      presenceUpdatedAt: u.presence_updated_at ?? null,
+      statusEmoji: u.status_emoji ?? null
+    }))
+  });
+}

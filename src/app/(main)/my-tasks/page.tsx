@@ -3,9 +3,9 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { TaskCard } from "@/components/TaskCard";
-import { StatCard } from "@/components/StatCard";
 import { PageStagger } from "@/components/PageStagger";
-import { AlertTriangle, Clock, Hourglass, Target, ListChecks } from "lucide-react";
+import { Target, ListChecks, AlertTriangle, Clock, Hourglass } from "lucide-react";
+import { PageHero } from "@/components/PageHero";
 import type { Task } from "@/lib/types";
 
 // Source of truth for tasks is now Supabase. Server component so we read
@@ -72,43 +72,62 @@ export default async function MyTasksPage() {
 
   return (
     <PageStagger className="space-y-5 max-w-7xl mx-auto">
-      <div>
-        <h1 className="text-xl font-semibold">My focus</h1>
-        <p className="text-sm text-muted mt-1">
-          Sorted by priority → blockers → deadline. Low-priority items further out are dimmed.
-        </p>
-      </div>
-
-      <div className="grid grid-cols-4 gap-3">
-        <StatCard label="Open" value={mine.length} icon={<ListChecks className="w-4 h-4" />} tone="blue" delay={0.04} />
-        <StatCard label="Urgent" value={urgentCount} icon={<AlertTriangle className="w-4 h-4" />} tone="purple" delay={0.10} />
-        <StatCard label="Due this week" value={dueWeek} icon={<Clock className="w-4 h-4" />} tone="violet" delay={0.16} />
-        <StatCard label="Blocked / waiting" value={blocked} icon={<Hourglass className="w-4 h-4" />} tone="indigo" delay={0.22} />
-      </div>
-
-      <div>
-        <h2 className="text-sm font-semibold mb-3 flex items-center gap-2">
-          <Target className="w-4 h-4 text-accent" />
-          Focus queue
-        </h2>
-        {mine.length === 0 ? (
-          <div className="card p-10 text-center">
-            <div className="w-16 h-16 rounded-2xl bg-violet-100 text-violet-600 grid place-items-center mx-auto mb-3">
-              <ListChecks className="w-8 h-8" />
-            </div>
-            <div className="text-base font-medium">Inbox zero 🎉</div>
-            <div className="text-sm text-muted mt-1">
-              Nothing assigned to you right now. Take a beat, then queue something up.
-            </div>
+      <PageHero
+        eyebrow={`Hey ${me.name.split(" ")[0]}`}
+        headline={["Here's what's ", { accent: "on your plate" }]}
+        subtitle="Top of the list first. Sorted by priority → blockers → deadline."
+        icon={<Target />}
+        iconTone="emerald"
+        trailing={
+          <div className="flex flex-wrap gap-2 text-xs">
+            <SummaryPill icon={<ListChecks className="w-3 h-3" />} label="Open" value={mine.length} tone="blue" />
+            <SummaryPill icon={<AlertTriangle className="w-3 h-3" />} label="Urgent" value={urgentCount} tone="rose" />
+            <SummaryPill icon={<Clock className="w-3 h-3" />} label="Due this week" value={dueWeek} tone="violet" />
+            <SummaryPill icon={<Hourglass className="w-3 h-3" />} label="Waiting" value={blocked} tone="indigo" />
           </div>
-        ) : (
-          <div className="grid grid-cols-2 gap-3">
-            {mine.map((t) => (
-              <TaskCard key={t.id} task={t} dim={t.priority === "low" && !isImminent(t)} />
-            ))}
+        }
+      />
+
+      {mine.length === 0 ? (
+        <div className="card p-10 text-center">
+          <div className="w-16 h-16 rounded-2xl bg-indigo-100 text-indigo-600 grid place-items-center mx-auto mb-3">
+            <ListChecks className="w-8 h-8" />
           </div>
-        )}
-      </div>
+          <div className="text-base font-medium">Inbox zero 🎉</div>
+          <div className="text-sm text-muted mt-1">
+            Nothing assigned to you right now. Take a beat, then queue something up.
+          </div>
+        </div>
+      ) : (
+        <div className="grid grid-cols-2 gap-3">
+          {mine.map((t) => (
+            <TaskCard key={t.id} task={t} dim={t.priority === "low" && !isImminent(t)} />
+          ))}
+        </div>
+      )}
     </PageStagger>
+  );
+}
+
+function SummaryPill({
+  icon, label, value, tone
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: number;
+  tone: "blue" | "rose" | "violet" | "indigo";
+}) {
+  const cls = {
+    blue: "bg-blue-100/80 text-blue-700 border-blue-200/60",
+    rose: "bg-rose-100/80 text-rose-700 border-rose-200/60",
+    violet: "bg-indigo-100/80 text-indigo-700 border-indigo-200/60",
+    indigo: "bg-indigo-100/80 text-indigo-700 border-indigo-200/60"
+  }[tone];
+  return (
+    <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border ${cls}`}>
+      {icon}
+      <span className="font-medium">{value}</span>
+      <span className="text-ink/60">{label}</span>
+    </span>
   );
 }

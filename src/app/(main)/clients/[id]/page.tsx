@@ -9,8 +9,8 @@ import { AddResourceForm, DeleteResourceButton } from "@/components/AddResourceF
 export const dynamic = "force-dynamic";
 
 const PRIORITY_TONES = {
-  high:   "bg-purple-100 text-purple-700 border-purple-200/60",
-  medium: "bg-violet-100 text-violet-700 border-violet-200/60",
+  high:   "bg-blue-100 text-blue-700 border-blue-200/60",
+  medium: "bg-indigo-100 text-indigo-700 border-indigo-200/60",
   low:    "bg-slate-100 text-slate-600 border-slate-200/60"
 } as const;
 
@@ -41,11 +41,11 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
 
       <header
         className="relative overflow-hidden rounded-2xl border border-white/60 shadow-soft p-5"
-        style={{ background: "linear-gradient(120deg, #DBEAFE 0%, #C7D2FE 50%, #DDD6FE 100%)" }}
+        style={{ background: "linear-gradient(120deg, #DBEAFE 0%, #C7D2FE 50%, #C7D2FE 100%)" }}
       >
         <div className="relative flex items-start justify-between gap-3 flex-wrap">
           <div className="flex items-center gap-3">
-            <div className="w-12 h-12 rounded-xl bg-white/70 border border-white/80 grid place-items-center text-violet-600 shadow-sm">
+            <div className="w-12 h-12 rounded-xl bg-white/70 border border-white/80 grid place-items-center text-indigo-600 shadow-sm">
               <Briefcase className="w-6 h-6" />
             </div>
             <div>
@@ -142,10 +142,10 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
           <Link
             key={t.id}
             href={`/tasks/${t.id}`}
-            className="group flex items-center gap-2 p-2.5 rounded-xl bg-white/80 border border-white/70 hover:border-purple-200 hover:bg-purple-50/40 transition-colors"
+            className="group flex items-center gap-2 p-2.5 rounded-xl bg-white/80 border border-white/70 hover:border-blue-200 hover:bg-blue-50/40 transition-colors"
           >
             <div className="text-sm flex-1 truncate group-hover:text-accent">{t.title}</div>
-            <span className="text-[10px] px-2 py-0.5 rounded-full bg-violet-100 text-violet-700 border border-violet-200/60 capitalize">
+            <span className="text-[10px] px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700 border border-indigo-200/60 capitalize">
               {t.status.replace("_", " ")}
             </span>
           </Link>
@@ -172,8 +172,8 @@ function Section<T>({
   const TONES = {
     blue:   { bg: "from-blue-50/60 to-white",     dot: "bg-blue-500" },
     indigo: { bg: "from-indigo-50/60 to-white",   dot: "bg-indigo-500" },
-    violet: { bg: "from-violet-50/60 to-white",   dot: "bg-violet-500" },
-    purple: { bg: "from-purple-50/60 to-white",   dot: "bg-purple-500" }
+    violet: { bg: "from-indigo-50/60 to-white",   dot: "bg-indigo-500" },
+    purple: { bg: "from-blue-50/60 to-white",   dot: "bg-blue-500" }
   } as const;
   const t = TONES[tone];
   return (
@@ -208,7 +208,7 @@ function ResourceRow({
   tone: "blue" | "indigo";
 }) {
   return (
-    <div className="group flex items-center gap-2 p-2.5 rounded-xl bg-white/80 border border-white/70 hover:border-violet-200 transition-colors">
+    <div className="group flex items-center gap-2 p-2.5 rounded-xl bg-white/80 border border-white/70 hover:border-indigo-200 transition-colors">
       <div className="shrink-0">{icon}</div>
       <div className="min-w-0 flex-1">
         <div className="text-sm font-medium truncate">{resource.title}</div>
@@ -232,9 +232,9 @@ function SuggestionRow({
   clientId, resource
 }: { clientId: string; resource: ClientResource }) {
   return (
-    <div className="group rounded-xl bg-white/80 border border-white/70 p-3 hover:border-violet-200 transition-colors">
+    <div className="group rounded-xl bg-white/80 border border-white/70 p-3 hover:border-indigo-200 transition-colors">
       <div className="flex items-start gap-2">
-        <Lightbulb className="w-3.5 h-3.5 text-violet-600 shrink-0 mt-0.5" />
+        <Lightbulb className="w-3.5 h-3.5 text-indigo-600 shrink-0 mt-0.5" />
         <div className="min-w-0 flex-1">
           <div className="text-sm font-medium">{resource.title}</div>
           {resource.body && (

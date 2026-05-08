@@ -2,11 +2,11 @@ import { redirect } from "next/navigation";
 import { Toaster } from "sonner";
 import { Sidebar } from "@/components/Sidebar";
 import { Topbar } from "@/components/Topbar";
-import { BackgroundOrbs } from "@/components/BackgroundOrbs";
 import { getCurrentUserId } from "@/lib/session";
 import { getSupabaseServer } from "@/lib/supabase-server";
 import { getUserById } from "@/lib/server-data";
 import { UserProvider } from "@/lib/user-context";
+import { PresenceProvider } from "@/lib/presence-context";
 
 export default async function MainLayout({ children }: { children: React.ReactNode }) {
   // Three legitimate states:
@@ -30,6 +30,7 @@ export default async function MainLayout({ children }: { children: React.ReactNo
 
   return (
     <UserProvider user={user}>
+      <PresenceProvider>
       {/* Floating-panels layout: sidebar, topbar, and main are each their
           own rounded card with a 12px gutter between them. The page bg
           (app-shell gradient) shows through the gaps so each panel feels
@@ -43,13 +44,16 @@ export default async function MainLayout({ children }: { children: React.ReactNo
               @hello-pangea/dnd's drag clone positioning (the dragged item
               "teleports" to the wrong coords). bg-white/40 alone is
               enough; the orbs inside provide the soft visual depth. */}
-          <div className="relative overflow-hidden rounded-3xl border border-white/50 shadow-soft flex-1 bg-white/40">
-            <BackgroundOrbs variant="canvas" />
+          {/* No bg fill on the main panel — lets the app-shell's grid
+              pattern show through as the canvas. Content sits on white
+              cards on top of the grid. */}
+          <div className="relative flex-1">
             <main className="relative z-10 p-6">{children}</main>
           </div>
         </div>
       </div>
       <Toaster position="bottom-right" richColors closeButton />
+      </PresenceProvider>
     </UserProvider>
   );
 }

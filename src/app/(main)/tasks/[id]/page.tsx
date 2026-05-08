@@ -4,10 +4,16 @@ import { tasks as mockTasks, userById, deptById, projectById, activity as mockAc
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { PriorityBadge, StatusPill, Tag, StalledBadge } from "@/components/Badges";
 import { Avatar } from "@/components/Avatar";
+import { PersonAvatar } from "@/components/PersonAvatar";
 import { Countdown } from "@/components/Countdown";
 import { TaskActions, CommentForm } from "@/components/TaskActions";
+import { HandoffButton, HandoffTimeline } from "@/components/HandoffPanel";
+import { TaskThread } from "@/components/TaskThread";
+import { TaskFields } from "@/components/TaskFields";
+import { getAllUsersLight } from "@/lib/server-data";
+import { requireCurrentUserId } from "@/lib/session";
 import { formatDate, relativeTime } from "@/lib/utils";
-import { Clock, Calendar } from "lucide-react";
+import { Clock, Calendar, MessageCircle, History } from "lucide-react";
 import { BackPill } from "@/components/BackPill";
 import type { Task, ActivityLog } from "@/lib/types";
 
@@ -59,7 +65,14 @@ async function loadTask(id: string): Promise<{ task: Task; log: ActivityLog[]; e
         createdAt: t.created_at,
         blocksTaskIds: t.blocks_task_ids ?? [],
         clientName: t.client_name ?? null,
-        website: t.website ?? null
+        website: t.website ?? null,
+        clientEmail: t.client_email ?? null,
+        clientFolderUrl: t.client_folder_url ?? null,
+        stagingServer: t.staging_server ?? null,
+        markupLink: t.markup_link ?? null,
+        hostingAccess: t.hosting_access ?? null,
+        missiveThreadUrl: t.missive_thread_url ?? null,
+        custom: (t.custom as Record<string, unknown> | null) ?? {}
       };
 
       const [{ data: rawLog }, { data: rawExt }] = await Promise.all([
@@ -99,13 +112,22 @@ async function loadTask(id: string): Promise<{ task: Task; log: ActivityLog[]; e
 }
 
 export default async function TaskDetailPage({ params }: { params: { id: string } }) {
-  const loaded = await loadTask(params.id);
+  const [loaded, allUsers, currentUserId] = await Promise.all([
+    loadTask(params.id),
+    getAllUsersLight(),
+    requireCurrentUserId()
+  ]);
   if (!loaded) return notFound();
   const { task, log, extensions } = loaded;
   const totalHoursAdded = extensions.reduce((s, e) => s + e.hoursAdded, 0);
 
-  const assignee = userById(task.assigneeId);
-  const creator = userById(task.creatorId);
+  // Prefer the live users list for the assignee/creator labels so renames
+  // surface immediately; fall back to the mock-data lookup if a user has
+  // been deleted (orphan reference).
+  const userFromAll = (id: string | null) =>
+    id ? allUsers.find((u) => u.id === id) ?? userById(id) ?? null : null;
+  const assignee = userFromAll(task.assigneeId);
+  const creator = userFromAll(task.creatorId);
   const dept = deptById(task.departmentId);
   const project = projectById(task.projectId);
 
@@ -123,7 +145,14 @@ export default async function TaskDetailPage({ params }: { params: { id: string 
           <h1 className="text-xl font-medium">{task.title}</h1>
           <div className="text-xs text-muted mt-1">#{task.id} · created by {creator?.name ?? "—"} · {relativeTime(task.createdAt)}</div>
         </div>
-        <TaskActions task={task} />
+        <div className="flex items-center gap-2">
+          <HandoffButton
+            taskId={task.id}
+            currentAssigneeId={task.assigneeId}
+            users={allUsers}
+          />
+          <TaskActions task={task} />
+        </div>
       </div>
 
       <div className="grid grid-cols-3 gap-4">
@@ -143,7 +172,7 @@ export default async function TaskDetailPage({ params }: { params: { id: string 
                 const u = userById(a.userId);
                 return (
                   <li key={a.id} className="flex items-start gap-3 text-sm">
-                    {u && <Avatar name={u.name} size={22} />}
+                    {u && <PersonAvatar userId={u.id} name={u.name} imageUrl={u.avatarUrl} size={22} />}
                     <div className="flex-1 min-w-0">
                       <div className="text-ink">
                         <span className="font-medium">{u?.name ?? "—"}</span>{" "}
@@ -172,6 +201,22 @@ export default async function TaskDetailPage({ params }: { params: { id: string 
             <CommentForm taskId={task.id} />
           </section>
 
+          <section className="card p-4">
+            <div className="text-sm font-medium mb-3 flex items-center gap-2">
+              <MessageCircle className="w-4 h-4 text-accent" />
+              Thread
+            </div>
+            <TaskThread taskId={task.id} users={allUsers} currentUserId={currentUserId} />
+          </section>
+
+          <section className="card p-4">
+            <div className="text-sm font-medium mb-3 flex items-center gap-2">
+              <History className="w-4 h-4 text-accent" />
+              Handoff timeline
+            </div>
+            <HandoffTimeline taskId={task.id} users={allUsers} />
+          </section>
+
           {extensions.length > 0 && (
             <section className="card p-4 border-warn/30 bg-warn/5">
               <div className="flex items-center justify-between mb-3">
@@ -185,7 +230,7 @@ export default async function TaskDetailPage({ params }: { params: { id: string 
                   const u = userById(e.userId);
                   return (
                     <li key={e.id} className="flex items-start gap-3 text-sm">
-                      {u && <Avatar name={u.name} size={22} />}
+                      {u && <PersonAvatar userId={u.id} name={u.name} imageUrl={u.avatarUrl} size={22} />}
                       <div className="flex-1">
                         <div className="text-ink">
                           <span className="font-medium">{u?.name ?? "—"}</span>{" "}
@@ -213,7 +258,7 @@ export default async function TaskDetailPage({ params }: { params: { id: string 
         <aside className="card p-4 space-y-4 h-fit">
           <Field label="Assignee">
             {assignee ? (
-              <div className="flex items-center gap-2"><Avatar name={assignee.name} size={22} /> {assignee.name}</div>
+              <div className="flex items-center gap-2"><PersonAvatar userId={assignee.id} name={assignee.name} imageUrl={assignee.avatarUrl} size={22} /> {assignee.name}</div>
             ) : <span className="text-muted">Unassigned</span>}
           </Field>
           <Field label="Department">{dept?.name ?? "—"}</Field>
@@ -248,6 +293,14 @@ export default async function TaskDetailPage({ params }: { params: { id: string 
             </div>
           </Field>
           <Field label="Last activity">{relativeTime(task.lastActivityAt)}</Field>
+
+          {/* Project links + custom fields. Renders the Notion-style block
+              of inline-editable rows: client email, folder, staging URL,
+              etc., plus whatever the team has defined under Settings →
+              Custom fields. */}
+          <div className="pt-3 border-t border-border/60">
+            <TaskFields task={task} />
+          </div>
         </aside>
       </div>
     </div>

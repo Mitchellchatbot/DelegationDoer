@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Avatar } from "./Avatar";
+import { PersonAvatar } from "./PersonAvatar";
 import { Countdown } from "./Countdown";
 import type { Department, Task, User } from "@/lib/types";
 
@@ -66,9 +66,27 @@ export function OrgChart({
           {departments.map((d) => {
             const heads = users.filter((u) => u.role === "department_head" && u.departmentIds.includes(d.id));
             const workers = users.filter((u) => u.role === "worker" && u.departmentIds.includes(d.id));
+            const memberIds = new Set([...heads, ...workers].map((u) => u.id));
+            const completedThisWeek = tasks.filter((t) =>
+              t.assigneeId &&
+              memberIds.has(t.assigneeId) &&
+              t.status === "done" &&
+              new Date(t.lastActivityAt).getTime() > Date.now() - 7 * 86400000
+            ).length;
+            const completedAll = tasks.filter((t) =>
+              t.assigneeId && memberIds.has(t.assigneeId) && t.status === "done"
+            ).length;
             return (
               <div key={d.id} className="flex flex-col items-center">
-                <div className="text-xs uppercase tracking-wide text-muted mb-2">{d.name}</div>
+                <div className="text-xs uppercase tracking-wide text-muted mb-1">{d.name}</div>
+                <div className="flex items-center gap-1 mb-2 text-[10px]">
+                  <span
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 border border-emerald-200/70"
+                    title={`${completedAll} all-time`}
+                  >
+                    ✓ {completedThisWeek} this week
+                  </span>
+                </div>
                 <div className="flex flex-col items-stretch gap-2 w-full">
                   {heads.length === 0
                     ? <div className="badge badge-tag self-center">No head</div>
@@ -137,7 +155,7 @@ function PersonNode({
   return (
     <div className={"rounded-2xl border p-3 w-full max-w-[280px] mx-auto " + headerToneClass}>
       <Link href={`/team/${user.id}`} className="flex items-center gap-2 group">
-        <Avatar name={user.name} imageUrl={user.avatarUrl} size={28} />
+        <PersonAvatar userId={user.id} name={user.name} imageUrl={user.avatarUrl} size={28} />
         <div className="leading-tight min-w-0 flex-1">
           <div className="text-sm font-medium truncate group-hover:text-accent transition-colors">{user.name}</div>
           <div className="text-[10px] text-muted flex items-center gap-1">

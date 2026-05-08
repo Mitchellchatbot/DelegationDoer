@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
-import { Check, Clock, Minus, X, AlertTriangle, Plus, Bell, ArrowLeft, Image as ImageIcon } from "lucide-react";
+import { Check, Clock, Minus, X, AlertTriangle, Plus, Bell, ArrowLeft, Image as ImageIcon, Focus, Coffee, Moon, Smile, Sparkles } from "lucide-react";
 import { Countdown } from "@/components/Countdown";
 
 interface WidgetTask {
@@ -14,6 +14,14 @@ interface WidgetTask {
   estimatedHours: number;
   inactiveFlag: boolean;
   needsAck: boolean;
+}
+
+interface WidgetKudos {
+  id: string;
+  message: string;
+  emoji: string;
+  createdAt: string;
+  from: { name: string; avatarUrl: string | null } | null;
 }
 
 type WidgetState = "bubble" | "alert" | "panel";
@@ -46,10 +54,43 @@ function playAlertSound() {
   } catch { /* renderer doesn't support audio context */ }
 }
 
+// Celebratory rising chime for kudos. Different from the task alarm so
+// you can tell at a glance whether the widget is shouting at you (task)
+// or hugging you (kudos).
+function playKudosChime() {
+  try {
+    const Ctx = (window as any).AudioContext || (window as any).webkitAudioContext;
+    if (!Ctx) return;
+    const ctx = new Ctx();
+    const tone = (freq: number, when: number, duration: number) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "triangle";
+      osc.frequency.setValueAtTime(freq, ctx.currentTime + when);
+      gain.gain.setValueAtTime(0.0001, ctx.currentTime + when);
+      gain.gain.exponentialRampToValueAtTime(0.3, ctx.currentTime + when + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + when + duration);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(ctx.currentTime + when);
+      osc.stop(ctx.currentTime + when + duration);
+    };
+    // C5 → E5 → G5 ascending major triad — happy.
+    tone(523.25, 0,     0.18);
+    tone(659.25, 0.10,  0.18);
+    tone(783.99, 0.20,  0.30);
+    setTimeout(() => ctx.close(), 700);
+  } catch { /* ignore */ }
+}
+
 export default function WidgetPage() {
   const [state, setState] = useState<WidgetState>("bubble");
   const [tasks, setTasks] = useState<WidgetTask[]>([]);
+  const [kudos, setKudos] = useState<WidgetKudos[]>([]);
+  // Tracks whether the widget's API polls are returning 401. When true
+  // we render a sign-in prompt instead of the normal task/kudos UI.
+  const [signedOut, setSignedOut] = useState(false);
   const seenIdsRef = useRef<Set<string>>(new Set());
+  const seenKudosRef = useRef<Set<string>>(new Set());
   const lastFetchedRef = useRef<number>(0);
 
   // Make the BrowserWindow's transparent flag actually show through, and
@@ -76,24 +117,46 @@ export default function WidgetPage() {
 
   const fetchTasks = useCallback(async () => {
     try {
-      const res = await fetch("/api/widget/my-tasks", { cache: "no-store" });
-      if (!res.ok) return;
-      const data = await res.json();
-      const next: WidgetTask[] = data.tasks ?? [];
+      // Run both polls in parallel — they're independent reads on the
+      // same Supabase connection.
+      const [taskRes, kudosRes] = await Promise.all([
+        fetch("/api/widget/my-tasks", { cache: "no-store" }),
+        fetch("/api/widget/kudos", { cache: "no-store" })
+      ]);
+      // 401 → no session in this Electron renderer. Show the sign-in
+      // prompt and stop trying to render normal UI on stale/empty data.
+      if (taskRes.status === 401 || kudosRes.status === 401) {
+        setSignedOut(true);
+        setState((prev) => prev === "panel" ? "panel" : "bubble");
+        return;
+      }
+      if (!taskRes.ok) return;
+      setSignedOut(false);
+      const taskData = await taskRes.json();
+      const next: WidgetTask[] = taskData.tasks ?? [];
       const unackedNow = next.filter((t) => t.needsAck);
 
-      // New unacked id → play the alarm.
+      const kudosData = kudosRes.ok ? await kudosRes.json() : { kudos: [] };
+      const nextKudos: WidgetKudos[] = kudosData.kudos ?? [];
+
+      // Fresh task → harsh alarm. Fresh kudos → celebratory chime.
+      // Both can fire independently in the same tick.
       const fresh = unackedNow.filter((t) => !seenIdsRef.current.has(t.id));
       if (fresh.length > 0) playAlertSound();
+      const freshKudos = nextKudos.filter((k) => !seenKudosRef.current.has(k.id));
+      if (freshKudos.length > 0) playKudosChime();
       seenIdsRef.current = new Set(unackedNow.map((t) => t.id));
+      seenKudosRef.current = new Set(nextKudos.map((k) => k.id));
 
       setTasks(next);
+      setKudos(nextKudos);
       lastFetchedRef.current = Date.now();
 
-      // Auto state transitions based on unacked count.
+      // Auto state transitions based on whether there's something to
+      // surface (tasks need ack OR there's an unread kudos).
       setState((prev) => {
         if (prev === "panel") return "panel"; // user is already looking
-        return unackedNow.length > 0 ? "alert" : "bubble";
+        return unackedNow.length > 0 || nextKudos.length > 0 ? "alert" : "bubble";
       });
     } catch { /* ignore network blips */ }
   }, []);
@@ -115,6 +178,21 @@ export default function WidgetPage() {
   }, [state]);
 
   const unacked = tasks.filter((t) => t.needsAck);
+
+  async function acknowledgeKudos(kudosId: string) {
+    // Optimistic — drop it from local state, fire the server in the
+    // background. Failures will resurface on the next poll.
+    setKudos((cur) => cur.filter((k) => k.id !== kudosId));
+    seenKudosRef.current.delete(kudosId);
+    try {
+      await fetch(`/api/widget/kudos/${kudosId}/acknowledge`, { method: "POST" });
+    } catch { /* ignore */ }
+    setState((prev) => {
+      if (prev === "panel") return "panel";
+      const remainingKudos = kudos.filter((k) => k.id !== kudosId);
+      return unacked.length > 0 || remainingKudos.length > 0 ? "alert" : "bubble";
+    });
+  }
 
   async function acknowledge(taskId: string) {
     // Optimistic
@@ -141,9 +219,26 @@ export default function WidgetPage() {
     setState(unacked.length > 0 ? "alert" : "bubble");
   }
 
-  if (state === "panel") return <Panel tasks={tasks} unacked={unacked} onAck={acknowledge} onCollapse={collapseToBubble} onUpdated={fetchTasks} />;
-  if (state === "alert") return <Alert task={unacked[0]} unackedCount={unacked.length} onAck={acknowledge} onExpand={expandToPanel} />;
-  return <Bubble onExpand={expandToPanel} unackedCount={unacked.length} />;
+  // Signed-out state takes priority. Bubble shows a generic icon (no
+  // notif badge), panel shows the sign-in prompt. We don't want to show
+  // task alerts or kudos banners when we have no session at all.
+  if (signedOut) {
+    if (state === "panel") return <SignInPanel onCollapse={collapseToBubble} />;
+    return <Bubble onExpand={expandToPanel} unackedCount={0} />;
+  }
+
+  if (state === "panel") return <Panel tasks={tasks} unacked={unacked} kudos={kudos} onAck={acknowledge} onAckKudos={acknowledgeKudos} onCollapse={collapseToBubble} onUpdated={fetchTasks} />;
+  if (state === "alert") {
+    // Prefer task alert when both fire. If only kudos, render the
+    // kudos banner instead of the task one.
+    if (unacked.length > 0) {
+      return <Alert task={unacked[0]} unackedCount={unacked.length} onAck={acknowledge} onExpand={expandToPanel} />;
+    }
+    if (kudos.length > 0) {
+      return <KudosAlert kudos={kudos[0]} count={kudos.length} onAck={acknowledgeKudos} onExpand={expandToPanel} />;
+    }
+  }
+  return <Bubble onExpand={expandToPanel} unackedCount={unacked.length + kudos.length} />;
 }
 
 /* ============================ ICON ============================ */
@@ -326,14 +421,238 @@ function priorityLabel(p: WidgetTask["priority"]) {
   return p === "critical" ? "CRITICAL" : p;
 }
 
+/* ============================ SIGN-IN PANEL ============================ */
+// Rendered when the widget's API polls return 401 — i.e. no session in
+// the Electron cookie jar. Click "Open in browser" to sign in via the
+// main app; once the cookie is set the next 15s poll picks it up and the
+// widget transitions to the normal task/kudos UI on its own.
+
+function SignInPanel({ onCollapse }: { onCollapse: () => void }) {
+  function signIn() {
+    // Navigate the widget itself to the login form. Once submitted, the
+    // login page redirects back to /widget (via the `next` param), and
+    // the auth cookie sticks in Electron's session. No browser hand-off
+    // needed — Electron doesn't share cookies with Chrome.
+    window.location.href = "/login?next=/widget";
+  }
+  function openMain() {
+    (window as any).widgetAPI?.openMain?.();
+  }
+  return (
+    <div className="h-screen w-screen p-2 anim-fade-in">
+      <div className="h-full w-full flex flex-col text-slate-900 rounded-[28px] overflow-hidden border border-slate-200/70 bg-white shadow-[0_20px_60px_-20px_rgba(15,23,42,0.25),0_8px_24px_-12px_rgba(15,23,42,0.15)]">
+        <div
+          className="h-12 flex items-center justify-between px-4 border-b border-slate-100"
+          // @ts-ignore — Electron-only
+          style={{ WebkitAppRegion: "drag" }}
+        >
+          <div className="flex items-center gap-2 text-xs">
+            <div className="w-6 h-6 rounded-full overflow-hidden border border-slate-200 ring-1 ring-white shadow-sm">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src="/widget-icon.png" alt="" className="w-full h-full object-cover" draggable={false} />
+            </div>
+            <span className="font-semibold text-ink">DelegationDoer</span>
+          </div>
+          <div className="flex items-center gap-0.5" style={{ WebkitAppRegion: "no-drag" } as any}>
+            <button title="Collapse" className="p-1.5 rounded-lg text-slate-500 hover:text-ink hover:bg-slate-100 transition-colors" onClick={onCollapse}>
+              <Minus className="w-3.5 h-3.5" />
+            </button>
+            <button title="Hide" className="p-1.5 rounded-lg text-slate-500 hover:text-ink hover:bg-slate-100 transition-colors" onClick={() => (window as any).widgetAPI?.hide?.()}>
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+
+        <div className="flex-1 flex flex-col items-center justify-center text-center px-6 py-8">
+          <div className="text-[11px] uppercase tracking-[0.18em] font-semibold text-accent mb-2">
+            Welcome
+          </div>
+          <div className="w-14 h-14 rounded-2xl bg-blue-50 ring-1 ring-blue-200/60 grid place-items-center mb-4">
+            <Sparkles className="w-7 h-7 text-accent" />
+          </div>
+          <div className="text-lg font-bold text-ink leading-tight tracking-tight">
+            Sign in to <span className="text-accent">DelegationDoer</span>
+          </div>
+          <div className="text-[12px] text-ink/60 mt-1.5 max-w-[260px] leading-relaxed">
+            Once you're logged in in the browser, this widget picks it up automatically — usually within 15 seconds.
+          </div>
+          <button
+            onClick={signIn}
+            className="mt-5 inline-flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-medium text-white bg-accent hover:bg-accent/90 shadow-sm transition-all hover:-translate-y-0.5"
+          >
+            Sign in here →
+          </button>
+          <button
+            onClick={openMain}
+            className="mt-2 text-[11px] text-muted hover:text-ink underline-offset-2 hover:underline transition-colors"
+          >
+            or open the main app in your browser
+          </button>
+          <div className="mt-3 text-[11px] text-muted">
+            The widget keeps its own session — sign in here once and it sticks.
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ============================ KUDOS ALERT ============================ */
+// Same speech-bubble shape as Alert(), but tinted fuchsia and pointing at
+// the bubble icon. Fires when there's a new kudos and no task alerts.
+
+function KudosAlert({
+  kudos: k, count, onAck, onExpand
+}: {
+  kudos: WidgetKudos;
+  count: number;
+  onAck: (id: string) => void;
+  onExpand: () => void;
+}) {
+  return (
+    <div
+      // @ts-ignore — Electron-only
+      style={{ width: "100vw", height: "100vh", display: "flex", alignItems: "center", justifyContent: "flex-end", padding: 8, gap: 8, background: "transparent", WebkitAppRegion: "drag" } as any}
+    >
+      <div
+        onClick={onExpand}
+        // @ts-ignore
+        style={{ WebkitAppRegion: "no-drag" } as any}
+        className="relative flex-1 cursor-pointer anim-pop-bubble"
+      >
+        <div className="bg-gradient-to-br from-fuchsia-50 to-pink-50 rounded-2xl border border-fuchsia-300 shadow-[0_8px_24px_rgba(120,40,120,0.25)] px-3 py-2.5 pr-4">
+          <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-fuchsia-700 font-semibold">
+            <Sparkles className="w-3 h-3" />
+            {k.from?.name ?? "Someone"} sent you kudos
+            {count > 1 && <span className="ml-auto text-fuchsia-700/70">+{count - 1} more</span>}
+          </div>
+          <div className="text-[13px] text-slate-900 font-medium leading-snug mt-0.5 line-clamp-2 flex items-start gap-1.5">
+            <span className="text-base shrink-0 leading-none mt-0.5">{k.emoji || "👏"}</span>
+            <span>{k.message}</span>
+          </div>
+          <div className="mt-1.5 flex items-center justify-end gap-2">
+            <button
+              onClick={(e) => { e.stopPropagation(); onAck(k.id); }}
+              // @ts-ignore
+              style={{ WebkitAppRegion: "no-drag" } as any}
+              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-fuchsia-500 hover:bg-fuchsia-600 text-white text-[11px] font-medium shadow-sm"
+            >
+              <Check className="w-3 h-3" /> Thanks
+            </button>
+          </div>
+        </div>
+
+        <div
+          className="absolute"
+          style={{
+            right: -7, top: "50%", transform: "translateY(-50%) rotate(45deg)",
+            width: 14, height: 14,
+            background: "rgb(253, 232, 247)",
+            borderRight: "1px solid #E879F9",
+            borderTop: "1px solid #E879F9"
+          }}
+        />
+      </div>
+
+      <button
+        onClick={onExpand}
+        // @ts-ignore
+        style={{ WebkitAppRegion: "no-drag", padding: 0, border: "none", background: "transparent" } as any}
+        className="shrink-0 wg-bubble-btn anim-scale-in"
+        aria-label="Open"
+      >
+        <BubbleIcon unackedCount={count} />
+      </button>
+    </div>
+  );
+}
+
+/* ============================ PRESENCE ============================ */
+
+type PresenceState = "available" | "focus" | "eating" | "away";
+
+const PRESENCE_OPTIONS: {
+  value: PresenceState;
+  label: string;
+  icon: React.ComponentType<{ className?: string }>;
+  cls: string;
+  activeCls: string;
+}[] = [
+  { value: "available", label: "Available", icon: Smile, cls: "text-emerald-600", activeCls: "bg-gradient-to-r from-emerald-500 to-teal-500 text-white" },
+  { value: "focus",     label: "Focus",     icon: Focus, cls: "text-indigo-600", activeCls: "bg-gradient-to-r from-indigo-500 to-blue-500 text-white" },
+  { value: "eating",    label: "Eating",    icon: Coffee, cls: "text-amber-600", activeCls: "bg-gradient-to-r from-amber-500 to-orange-500 text-white" },
+  { value: "away",      label: "Away",      icon: Moon,  cls: "text-slate-600", activeCls: "bg-gradient-to-r from-slate-500 to-slate-600 text-white" }
+];
+
+function PresenceRow() {
+  const [state, setState] = useState<PresenceState>("available");
+  const [pending, setPending] = useState<PresenceState | null>(null);
+
+  // Hydrate from server on mount so the widget reflects whatever was set
+  // last (e.g. yesterday's "Away") instead of always starting "Available".
+  useEffect(() => {
+    fetch("/api/users/me/presence", { cache: "no-store" })
+      .then((r) => r.ok ? r.json() : null)
+      .then((d) => {
+        if (d && typeof d.state === "string") setState(d.state as PresenceState);
+      })
+      .catch(() => { /* offline; keep default */ });
+  }, []);
+
+  async function pick(next: PresenceState) {
+    if (next === state) return;
+    setPending(next);
+    try {
+      const res = await fetch("/api/users/me/presence", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ state: next })
+      });
+      if (res.ok) setState(next);
+    } catch { /* ignore */ }
+    setPending(null);
+  }
+
+  return (
+    <div className="px-3 pt-3">
+      <div className="text-[10px] uppercase tracking-[0.18em] text-accent mb-1.5 font-semibold">Status</div>
+      <div className="grid grid-cols-4 gap-1">
+        {PRESENCE_OPTIONS.map((opt) => {
+          const Icon = opt.icon;
+          const active = state === opt.value;
+          const isPending = pending === opt.value;
+          return (
+            <button
+              key={opt.value}
+              onClick={() => pick(opt.value)}
+              disabled={isPending}
+              className={
+                "flex flex-col items-center gap-0.5 px-1 py-2 rounded-xl text-[10px] font-medium transition-all border " +
+                (active
+                  ? opt.activeCls + " border-transparent shadow-sm"
+                  : "bg-white border-slate-200/70 text-ink/65 hover:text-ink hover:border-slate-300 hover:bg-slate-50")
+              }
+            >
+              <Icon className={"w-4 h-4 " + (active ? "text-white" : opt.cls)} />
+              <span>{opt.label}</span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 /* ============================ PANEL ============================ */
 
 function Panel({
-  tasks, unacked, onAck, onCollapse, onUpdated
+  tasks, unacked, kudos, onAck, onAckKudos, onCollapse, onUpdated
 }: {
   tasks: WidgetTask[];
   unacked: WidgetTask[];
+  kudos: WidgetKudos[];
   onAck: (id: string) => void;
+  onAckKudos: (id: string) => void;
   onCollapse: () => void;
   onUpdated: () => void;
 }) {
@@ -355,33 +674,72 @@ function Panel({
 
   return (
     <div className="h-screen w-screen p-2 anim-fade-in">
-      <div className="h-full w-full flex flex-col bg-white text-slate-900 rounded-[28px] overflow-hidden border border-slate-200 shadow-[0_20px_60px_-20px_rgba(0,0,0,0.35),0_8px_24px_-12px_rgba(0,0,0,0.2)]">
+      <div className="h-full w-full flex flex-col text-slate-900 rounded-[28px] overflow-hidden border border-slate-200/70 bg-white shadow-[0_20px_60px_-20px_rgba(15,23,42,0.25),0_8px_24px_-12px_rgba(15,23,42,0.15)]">
         <div
-          className="h-10 flex items-center justify-between px-4 border-b border-slate-100"
+          className="h-12 flex items-center justify-between px-4 border-b border-slate-100"
           // @ts-ignore — Electron-only
           style={{ WebkitAppRegion: "drag" }}
         >
           <div className="flex items-center gap-2 text-xs">
-            <div className="w-5 h-5 rounded-full overflow-hidden bg-[#F5EFE3] border border-black/10">
+            <div className="w-6 h-6 rounded-full overflow-hidden border border-slate-200 ring-1 ring-white shadow-sm">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src="/widget-icon.png" alt="" className="w-full h-full object-cover" draggable={false} />
             </div>
-            <span className="font-medium">DelegationDoer</span>
+            <span className="font-semibold text-ink">DelegationDoer</span>
           </div>
           <div className="flex items-center gap-0.5" style={{ WebkitAppRegion: "no-drag" } as any}>
-            <button title="Collapse" className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors" onClick={onCollapse}>
+            <button title="Collapse" className="p-1.5 rounded-lg text-slate-500 hover:text-ink hover:bg-slate-100 transition-colors" onClick={onCollapse}>
               <Minus className="w-3.5 h-3.5" />
             </button>
-            <button title="Hide" className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors" onClick={() => (window as any).widgetAPI?.hide?.()}>
+            <button title="Hide" className="p-1.5 rounded-lg text-slate-500 hover:text-ink hover:bg-slate-100 transition-colors" onClick={() => (window as any).widgetAPI?.hide?.()}>
               <X className="w-3.5 h-3.5" />
             </button>
           </div>
         </div>
 
+        <PresenceRow />
+
         <div className="flex-1 overflow-y-auto">
+          {kudos.length > 0 && (
+            <div className="px-3 pt-3">
+              <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-fuchsia-600 mb-2 inline-flex items-center gap-1.5">
+                <Sparkles className="w-3 h-3" /> Kudos · {kudos.length}
+              </div>
+              <div className="space-y-2">
+                {kudos.map((k, i) => (
+                  <div
+                    key={k.id}
+                    style={{ animationDelay: `${i * 35}ms` }}
+                    className="wg-card anim-fade-in-up rounded-2xl p-3 border bg-gradient-to-br from-fuchsia-50 to-pink-50/60 border-fuchsia-200/70 shadow-sm"
+                  >
+                    <div className="flex items-start gap-2.5">
+                      <div className="text-2xl shrink-0 leading-none mt-0.5">
+                        {k.emoji || "👏"}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-[11px] font-semibold text-fuchsia-700">
+                          {k.from?.name ?? "Someone"} sent you a kudos
+                        </div>
+                        <div className="text-[13px] text-slate-900 leading-snug mt-0.5">
+                          {k.message}
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => onAckKudos(k.id)}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-white/85 hover:bg-white text-fuchsia-700 text-[11px] font-medium border border-fuchsia-300/70 transition-all active:scale-95 shrink-0"
+                      >
+                        <Check className="w-3 h-3" /> Thanks
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {unacked.length > 0 && (
             <div className="px-3 pt-3">
-              <div className="text-[11px] font-semibold uppercase tracking-wide text-amber-700 mb-2 inline-flex items-center gap-1">
+              <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-600 mb-2 inline-flex items-center gap-1.5">
                 <AlertTriangle className="w-3 h-3" /> Action required · {unacked.length}
               </div>
               <div className="space-y-2">
@@ -391,7 +749,7 @@ function Panel({
                     role="button"
                     onClick={() => setSelectedId(t.id)}
                     style={{ animationDelay: `${i * 35}ms` }}
-                    className="wg-card anim-fade-in-up rounded-2xl bg-amber-50 border border-amber-300 p-3 cursor-pointer hover:bg-amber-100/60"
+                    className="wg-card anim-fade-in-up rounded-2xl bg-amber-50 border border-amber-200/80 p-3 cursor-pointer hover:bg-amber-100/70 transition-colors shadow-sm"
                   >
                     <div className="flex items-start justify-between gap-2">
                       <div className="text-[13px] font-medium leading-snug">{t.title}</div>
@@ -415,7 +773,9 @@ function Panel({
 
           {acked.length > 0 && (
             <div className="px-3 pt-4 pb-3">
-              <div className="text-[11px] font-medium text-slate-500 uppercase tracking-wide mb-2">Today's focus</div>
+              <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-accent mb-2 inline-flex items-center gap-1.5">
+                <Bell className="w-3 h-3" /> Today's focus
+              </div>
               <div className="space-y-2">
                 {acked.map((t, i) => (
                   <div
@@ -423,7 +783,7 @@ function Panel({
                     role="button"
                     onClick={() => setSelectedId(t.id)}
                     style={{ animationDelay: `${(unacked.length + i) * 35}ms` }}
-                    className={"wg-card anim-fade-in-up rounded-2xl bg-white p-3 border cursor-pointer hover:border-slate-300 hover:shadow-sm " + (t.inactiveFlag ? "border-amber-300" : "border-slate-200")}
+                    className={"wg-card anim-fade-in-up rounded-2xl bg-white p-3 border cursor-pointer hover:border-accent/30 hover:shadow-sm transition-all " + (t.inactiveFlag ? "border-amber-300/70" : "border-slate-200/70")}
                   >
                     <div className="flex items-start justify-between gap-2">
                       <div className="text-[13px] leading-snug font-medium">{t.title}</div>
@@ -439,14 +799,14 @@ function Panel({
             </div>
           )}
 
-          {unacked.length === 0 && acked.length === 0 && (
+          {unacked.length === 0 && acked.length === 0 && kudos.length === 0 && (
             <div className="text-xs text-slate-400 text-center py-10">All clear.</div>
           )}
         </div>
 
-        <div className="border-t border-slate-100 px-4 py-2 flex items-center justify-between text-[11px] text-slate-500">
-          <button onClick={() => (window as any).widgetAPI?.openMain?.()} className="hover:text-slate-900">Open full app →</button>
-          <span>tap a card to update</span>
+        <div className="border-t border-slate-100 px-4 py-2 flex items-center justify-between text-[11px] text-slate-600">
+          <button onClick={() => (window as any).widgetAPI?.openMain?.()} className="font-medium text-accent hover:text-accent/80 transition-colors">Open full app →</button>
+          <span className="text-slate-400">tap a card to update</span>
         </div>
 
         <style>{`

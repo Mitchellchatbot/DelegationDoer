@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { users, tasks, skillProfiles, departments, managerOf } from "@/lib/mock-data";
 import { Avatar } from "@/components/Avatar";
+import { PersonAvatar } from "@/components/PersonAvatar";
 import { CapacityBar } from "@/components/CapacityBar";
 import { TaskCard } from "@/components/TaskCard";
 import { userCapacity } from "@/lib/capacity";
@@ -29,7 +30,7 @@ export default function ProfilePage({ params }: { params: { id: string } }) {
       <BackPill href="/team" label="Team" />
 
       <div className="card p-5 flex items-start gap-4">
-        <Avatar name={user.name} imageUrl={user.avatarUrl} size={56} />
+        <PersonAvatar userId={user.id} name={user.name} imageUrl={user.avatarUrl} size={56} />
         <div className="flex-1">
           <div className="text-lg font-medium flex items-center gap-2">
             {user.name}
@@ -55,7 +56,7 @@ export default function ProfilePage({ params }: { params: { id: string } }) {
           <div className="flex flex-wrap gap-2">
             {directReports.map((r) => (
               <Link key={r.id} href={`/team/${r.id}`} className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-full bg-surface2 border border-border hover:border-accent/40 text-xs">
-                <Avatar name={r.name} size={18} /> {r.name}
+                <PersonAvatar userId={r.id} name={r.name} imageUrl={r.avatarUrl} size={18} /> {r.name}
                 <span className="text-muted">· {ROLE_LABELS[r.role]}</span>
               </Link>
             ))}

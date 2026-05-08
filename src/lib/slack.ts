@@ -322,3 +322,55 @@ export async function notifyCompletion(args: {
   const [creatorDm, channelPost] = await Promise.all([dmTask, channelTask]);
   return { creatorDm, channelPost };
 }
+
+// FYI fan-out used when a request is auto-routed to a department head and
+// we want the rest of the team to know it's in flight (e.g. the SEO
+// report-request flow). Best-effort per recipient — failures don't fail
+// the whole call.
+export async function notifyTeamFyi(args: {
+  recipientEmails: string[];
+  headline: string;
+  body: string;
+  taskId: string;
+  taskTitle: string;
+}): Promise<{ sent: number; failed: number }> {
+  if (!process.env.SLACK_BOT_TOKEN || args.recipientEmails.length === 0) {
+    return { sent: 0, failed: 0 };
+  }
+  const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
+  const taskUrl = `${baseUrl}/tasks/${args.taskId}`;
+
+  const blocks: unknown[] = [
+    { type: "header", text: { type: "plain_text", text: args.headline, emoji: true } },
+    { type: "section", text: { type: "mrkdwn", text: args.body } },
+    { type: "section", text: { type: "mrkdwn", text: `*<${taskUrl}|${args.taskTitle}>*` } },
+    {
+      type: "actions",
+      elements: [{
+        type: "button",
+        text: { type: "plain_text", text: "Open in DelegationDoer", emoji: true },
+        url: taskUrl
+      }]
+    }
+  ];
+
+  const results = await Promise.allSettled(
+    args.recipientEmails.map(async (email) => {
+      const slackUserId = await lookupUserByEmail(email);
+      const channel = await openDm(slackUserId);
+      await slackCall("chat.postMessage", {
+        channel,
+        text: args.headline,
+        blocks,
+        unfurl_links: false,
+        unfurl_media: false
+      });
+    })
+  );
+  let sent = 0, failed = 0;
+  for (const r of results) {
+    if (r.status === "fulfilled") sent++; else failed++;
+  }
+  return { sent, failed };
+}
+

@@ -2,6 +2,7 @@
 
 import { departments, users, distinctClients, distinctWebsites, userById } from "@/lib/mock-data";
 import { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { useSearchParams } from "next/navigation";
 import { DragDropContext, Droppable, Draggable, type DropResult } from "@hello-pangea/dnd";
 import { PriorityBadge, StalledBadge, Tag } from "@/components/Badges";
@@ -369,46 +370,58 @@ export default function BoardPage() {
                     >
                       {(grouped[col.id] ?? []).map((t, i) => (
                         <Draggable draggableId={t.id} index={i} key={t.id}>
-                          {(p, s) => (
-                            <div
-                              ref={p.innerRef}
-                              {...p.draggableProps}
-                              {...p.dragHandleProps}
-                              style={{ ...p.draggableProps.style, animationDelay: `${i * 30}ms` }}
-                              className={cn(
-                                "card p-3 anim-fade-in-up transition-shadow hover:shadow-lift",
-                                t.inactiveFlag && "border-stalled/50",
-                                s.isDragging && "ring-1 ring-accent/40 shadow-lift"
-                              )}
-                            >
-                              <div className="flex items-start justify-between gap-2">
-                                <div className="text-sm leading-snug">{t.title}</div>
-                                <PriorityBadge priority={t.priority} />
-                              </div>
-                              {(t.clientName || t.website) && (
-                                <div className="mt-1 flex flex-wrap gap-2 text-[11px] text-muted">
-                                  {t.clientName && (
-                                    <span className="inline-flex items-center gap-0.5"><Building2 className="w-3 h-3" />{t.clientName}</span>
-                                  )}
-                                  {t.website && (
-                                    <span className="inline-flex items-center gap-0.5"><Globe2 className="w-3 h-3" />{t.website}</span>
-                                  )}
+                          {(p, s) => {
+                            const card = (
+                              <div
+                                ref={p.innerRef}
+                                {...p.draggableProps}
+                                {...p.dragHandleProps}
+                                style={{
+                                  ...p.draggableProps.style,
+                                  animationDelay: `${i * 30}ms`,
+                                  ...(s.isDragging ? { zIndex: 9999 } : null)
+                                }}
+                                className={cn(
+                                  "card p-3 anim-fade-in-up transition-shadow hover:shadow-lift",
+                                  t.inactiveFlag && "border-stalled/50",
+                                  s.isDragging && "ring-1 ring-accent/40 shadow-lift"
+                                )}
+                              >
+                                <div className="flex items-start justify-between gap-2">
+                                  <div className="text-sm leading-snug">{t.title}</div>
+                                  <PriorityBadge priority={t.priority} />
                                 </div>
-                              )}
-                              <div className="mt-1.5 flex flex-wrap gap-1">
-                                {t.tags.slice(0, 2).map((x) => <Tag key={x}>{x}</Tag>)}
-                                {t.inactiveFlag && <StalledBadge />}
-                              </div>
-                              <div className="mt-2 flex items-center justify-between text-xs text-muted">
-                                <div className="flex items-center gap-1.5">
-                                  {t.assigneeId
-                                    ? <PersonAvatar userId={t.assigneeId} name={userById(t.assigneeId)?.name ?? ""} size={18} />
-                                    : <span>—</span>}
+                                {(t.clientName || t.website) && (
+                                  <div className="mt-1 flex flex-wrap gap-2 text-[11px] text-muted">
+                                    {t.clientName && (
+                                      <span className="inline-flex items-center gap-0.5"><Building2 className="w-3 h-3" />{t.clientName}</span>
+                                    )}
+                                    {t.website && (
+                                      <span className="inline-flex items-center gap-0.5"><Globe2 className="w-3 h-3" />{t.website}</span>
+                                    )}
+                                  </div>
+                                )}
+                                <div className="mt-1.5 flex flex-wrap gap-1">
+                                  {t.tags.slice(0, 2).map((x) => <Tag key={x}>{x}</Tag>)}
+                                  {t.inactiveFlag && <StalledBadge />}
                                 </div>
-                                <span className="inline-flex items-center gap-1"><Clock className="w-3 h-3" /><Countdown iso={t.dueDate} /></span>
+                                <div className="mt-2 flex items-center justify-between text-xs text-muted">
+                                  <div className="flex items-center gap-1.5">
+                                    {t.assigneeId
+                                      ? <PersonAvatar userId={t.assigneeId} name={userById(t.assigneeId)?.name ?? ""} size={18} />
+                                      : <span>—</span>}
+                                  </div>
+                                  <span className="inline-flex items-center gap-1"><Clock className="w-3 h-3" /><Countdown iso={t.dueDate} /></span>
+                                </div>
                               </div>
-                            </div>
-                          )}
+                            );
+                            // Portal the dragged card to <body> so it can
+                            // never be trapped behind a column's stacking
+                            // context. Only when actively dragging.
+                            return s.isDragging && typeof window !== "undefined"
+                              ? createPortal(card, document.body)
+                              : card;
+                          }}
                         </Draggable>
                       ))}
                       {prov.placeholder}

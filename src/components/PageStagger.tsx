@@ -36,7 +36,13 @@ export function PageStagger({
         duration: 0.5,
         delay,
         stagger: 0.07,
-        ease: "power3.out"
+        ease: "power3.out",
+        // Drop the inline transform/opacity GSAP leaves behind after the
+        // animation. Otherwise the leftover `transform: matrix(...)` makes
+        // each child a containing block for position:fixed, which breaks
+        // @hello-pangea/dnd drag clones nested inside (e.g. the kanban
+        // on /my-tasks would let dragged cards "stick" mid-flight).
+        clearProps: "transform,opacity"
       });
     }, root);
     return () => ctx.revert();

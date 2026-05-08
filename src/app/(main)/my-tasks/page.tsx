@@ -2,8 +2,7 @@ import { redirect } from "next/navigation";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
-import { TaskCard } from "@/components/TaskCard";
-import { PageStagger } from "@/components/PageStagger";
+import { MyTasksKanban } from "@/components/MyTasksKanban";
 import { Target, ListChecks, AlertTriangle, Clock, Hourglass } from "lucide-react";
 import { PageHero } from "@/components/PageHero";
 import type { Task } from "@/lib/types";
@@ -58,20 +57,30 @@ export default async function MyTasksPage() {
   if (!me) redirect("/login");
 
   const supabase = getSupabaseAdmin();
-  const { data: rows } = await supabase
-    .from("tasks")
-    .select("*")
-    .eq("assignee_id", me.id)
-    .neq("status", "done");
+  // Fetch open tasks + the most recent ~30 done tasks so the Done column
+  // has something to show without dragging in years of history.
+  const [openRes, doneRes] = await Promise.all([
+    supabase.from("tasks").select("*").eq("assignee_id", me.id).neq("status", "done"),
+    supabase
+      .from("tasks")
+      .select("*")
+      .eq("assignee_id", me.id)
+      .eq("status", "done")
+      .order("last_activity_at", { ascending: false })
+      .limit(30)
+  ]);
 
-  const mine = (rows ?? []).map(rowToTask).sort(focusSort);
+  const open = (openRes.data ?? []).map(rowToTask).sort(focusSort);
+  const done = (doneRes.data ?? []).map(rowToTask);
+  const mine = open;
+  const allMine = [...open, ...done];
 
   const urgentCount = mine.filter((t) => t.priority === "critical" || t.status === "urgent").length;
   const dueWeek = mine.filter((t) => t.dueDate && new Date(t.dueDate).getTime() < Date.now() + 7 * 86400000).length;
   const blocked = mine.filter((t) => t.status === "waiting_on_client").length;
 
   return (
-    <PageStagger className="space-y-5 max-w-7xl mx-auto">
+    <div className="space-y-5 max-w-7xl mx-auto">
       <PageHero
         eyebrow={`Hey ${me.name.split(" ")[0]}`}
         headline={["Here's what's ", { accent: "on your plate" }]}
@@ -88,7 +97,7 @@ export default async function MyTasksPage() {
         }
       />
 
-      {mine.length === 0 ? (
+      {allMine.length === 0 ? (
         <div className="card p-10 text-center">
           <div className="w-16 h-16 rounded-2xl bg-indigo-100 text-indigo-600 grid place-items-center mx-auto mb-3">
             <ListChecks className="w-8 h-8" />
@@ -99,13 +108,9 @@ export default async function MyTasksPage() {
           </div>
         </div>
       ) : (
-        <div className="grid grid-cols-2 gap-3">
-          {mine.map((t) => (
-            <TaskCard key={t.id} task={t} dim={t.priority === "low" && !isImminent(t)} />
-          ))}
-        </div>
+        <MyTasksKanban initialTasks={allMine} />
       )}
-    </PageStagger>
+    </div>
   );
 }
 

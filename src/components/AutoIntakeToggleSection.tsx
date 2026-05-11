@@ -59,7 +59,7 @@ export function AutoIntakeToggleSection({
   return (
     <section className="rounded-2xl border border-slate-200/70 bg-white shadow-soft p-5">
       <div className="flex items-center gap-2 mb-1">
-        <span className="w-8 h-8 rounded-lg bg-emerald-100 text-emerald-600 grid place-items-center">
+        <span className="w-8 h-8 rounded-lg bg-blue-100 text-blue-600 grid place-items-center">
           <Bot className="w-4 h-4" />
         </span>
         <div>
@@ -98,7 +98,7 @@ export function AutoIntakeToggleSection({
                 onClick={() => toggle(a.id, !enabled)}
                 className={
                   "relative inline-flex items-center h-6 w-11 rounded-full transition-colors shrink-0 " +
-                  (enabled ? "bg-emerald-500" : "bg-slate-300") +
+                  (enabled ? "bg-blue-500" : "bg-slate-300") +
                   (isPending ? " opacity-60 cursor-not-allowed" : " cursor-pointer")
                 }
               >

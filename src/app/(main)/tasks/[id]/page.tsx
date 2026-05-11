@@ -7,6 +7,7 @@ import { Avatar } from "@/components/Avatar";
 import { PersonAvatar } from "@/components/PersonAvatar";
 import { Countdown } from "@/components/Countdown";
 import { TaskActions, CommentForm } from "@/components/TaskActions";
+import { TaskTimerButton } from "@/components/TaskTimerButton";
 import { HandoffButton, HandoffTimeline } from "@/components/HandoffPanel";
 import { TaskThread } from "@/components/TaskThread";
 import { TaskFields } from "@/components/TaskFields";
@@ -53,7 +54,16 @@ async function loadTask(id: string): Promise<{ task: Task; log: ActivityLog[]; e
         status: t.status,
         priority: t.priority,
         estimatedHours: Number(t.estimated_hours),
-        actualHours: Number(t.actual_hours ?? 0),
+        // Override wins over the time_entries-derived denorm. Matches the
+        // override-precedence rule in src/lib/server-data.ts.
+        actualHours:
+          t.actual_hours_override !== null && t.actual_hours_override !== undefined
+            ? Number(t.actual_hours_override)
+            : Number(t.actual_hours ?? 0),
+        actualHoursOverride:
+          t.actual_hours_override !== null && t.actual_hours_override !== undefined
+            ? Number(t.actual_hours_override)
+            : null,
         tags: t.tags ?? [],
         departmentId: t.department_id,
         assigneeId: t.assignee_id,
@@ -268,7 +278,17 @@ export default async function TaskDetailPage({ params }: { params: { id: string 
             ? <a href={task.website.startsWith("http") ? task.website : `https://${task.website}`} target="_blank" rel="noreferrer" className="text-accent hover:underline">{task.website}</a>
             : "—"}</Field>
           <Field label="Estimate"><span className="inline-flex items-center gap-1"><Clock className="w-3 h-3" />{task.estimatedHours}h</span></Field>
-          <Field label="Actual">{task.actualHours}h</Field>
+          <Field label="Actual">
+            <span className="inline-flex items-center gap-1">
+              {Number(task.actualHours ?? 0).toFixed(1)}h
+              {task.actualHoursOverride !== null && task.actualHoursOverride !== undefined && (
+                <span className="text-[10px] uppercase tracking-wide text-amber-600 ml-1">override</span>
+              )}
+            </span>
+          </Field>
+          <Field label="Time">
+            <TaskTimerButton taskId={task.id} />
+          </Field>
           <Field label="Due">
             <div className="space-y-0.5">
               <div className="inline-flex items-center gap-1">

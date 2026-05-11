@@ -4,9 +4,9 @@ import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { listAccounts, listThreads, type MissiveThread } from "@/lib/missive-client";
 import { visibleAccountIdsFor } from "@/lib/inbox-access";
-import { BackPill } from "@/components/BackPill";
 import { ThreadFilters } from "@/components/ThreadFilters";
-import { ThreadCard } from "@/components/ThreadCard";
+import { ThreadList } from "@/components/ThreadList";
+import { readStateForThreads, isThreadUnread } from "@/lib/thread-read-state";
 
 export const dynamic = "force-dynamic";
 
@@ -33,14 +33,11 @@ export default async function AllInboxesPage({
   let threads: MissiveThread[] = [];
   let fetchError: string | null = null;
   try {
+    // Always fetch every thread — flipping filter pills filters this
+    // set client-side so we never round-trip Missive on a filter change.
     const [allAccounts, fetched, visibleIds] = await Promise.all([
       listAccounts(),
-      listThreads({
-        folder: "INBOX",
-        status: searchParams.status,
-        q: searchParams.q,
-        limit: 200
-      }),
+      listThreads({ folder: "INBOX", limit: 200 }),
       visibleAccountIdsFor(me)
     ]);
 
@@ -52,18 +49,18 @@ export default async function AllInboxesPage({
     fetchError = err instanceof Error ? err.message : "unknown error";
   }
 
-  // Sort client-side (Missive's threads endpoint returns recent-first by default).
-  if (searchParams.sort === "oldest") {
-    threads = [...threads].reverse();
-  }
-
   const inboxCount = inboxes.length;
   const missiveAppUrl = (process.env.MISSIVE_API_URL ?? "").replace(/\/$/, "");
 
-  return (
-    <div className="space-y-5 max-w-7xl mx-auto">
-      <BackPill href="/inboxes" label="Inboxes" />
+  const readByThread = await readStateForThreads(userId, threads.map((t) => t.id));
+  const decoratedThreads = threads.map((t) => ({
+    thread: t,
+    unread: isThreadUnread(t.last_message_at, readByThread.get(t.id))
+  }));
+  const unreadCount = decoratedThreads.filter((d) => d.unread).length;
 
+  return (
+    <div className="space-y-5">
       <header
         className="relative overflow-hidden rounded-2xl border border-white/60 shadow-soft p-5"
         style={{ background: "linear-gradient(120deg, #DBEAFE 0%, #C7D2FE 50%, #C7D2FE 100%)" }}
@@ -105,33 +102,18 @@ export default async function AllInboxesPage({
         </div>
       )}
 
-      {!fetchError && threads.length === 0 && (
-        <div className="card p-10 text-center">
-          <div className="w-16 h-16 rounded-2xl bg-indigo-100 text-indigo-600 grid place-items-center mx-auto mb-3">
-            <Mail className="w-8 h-8" />
-          </div>
-          <div className="text-base font-medium">No threads match</div>
-          <div className="text-sm text-muted mt-1 max-w-md mx-auto">
-            Try clearing the filter or search.
-          </div>
+      {!fetchError && unreadCount > 0 && (
+        <div className="text-xs text-ink/60 px-1">
+          <span className="font-semibold text-accent">{unreadCount}</span> unread of {threads.length}
         </div>
       )}
 
-      {threads.length > 0 && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-          {threads.map((t, i) => (
-            <ThreadCard
-              key={t.id}
-              thread={t}
-              // No specific accountId here — link via the first visible account
-              // so the user lands on a consistent breadcrumb. Falls back to the
-              // first inbox the actor can see.
-              href={`/inboxes/${encodeURIComponent(inboxes[0]?.id ?? "all")}/threads/${encodeURIComponent(t.id)}`}
-              missiveUrl={missiveAppUrl ? `${missiveAppUrl}/?thread=${encodeURIComponent(t.id)}` : undefined}
-              animationDelay={Math.min(i * 0.02, 0.5)}
-            />
-          ))}
-        </div>
+      {!fetchError && (
+        <ThreadList
+          threads={decoratedThreads}
+          linkAccountId={inboxes[0]?.id ?? "all"}
+          missiveAppUrl={missiveAppUrl || undefined}
+        />
       )}
     </div>
   );

@@ -3,7 +3,7 @@
 import { departments, users, distinctClients, distinctWebsites, userById } from "@/lib/mock-data";
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
-import { useSearchParams } from "next/navigation";
+import { useSearchParams, useRouter } from "next/navigation";
 import { DragDropContext, Droppable, Draggable, type DropResult } from "@hello-pangea/dnd";
 import { PriorityBadge, StalledBadge, Tag } from "@/components/Badges";
 import { Avatar } from "@/components/Avatar";
@@ -64,6 +64,7 @@ const SORTS: Record<string, (a: Task, b: Task) => number> = {
 export default function BoardPage() {
   const currentUser = useCurrentUser();
   const searchParams = useSearchParams();
+  const router = useRouter();
   const [tasks, setTasks] = useState<Task[]>([]);
   const [, setLoading] = useState(true);
 
@@ -376,10 +377,18 @@ export default function BoardPage() {
                                 ref={p.innerRef}
                                 {...p.draggableProps}
                                 {...p.dragHandleProps}
+                                // dnd suppresses onClick automatically when
+                                // a real drag occurred, so plain onClick is
+                                // safe — it only fires on actual clicks.
+                                onClick={() => {
+                                  if (s.isDragging) return;
+                                  router.push(`/tasks/${t.id}`);
+                                }}
                                 style={{
                                   ...p.draggableProps.style,
                                   animationDelay: `${i * 30}ms`,
-                                  ...(s.isDragging ? { zIndex: 9999 } : null)
+                                  ...(s.isDragging ? { zIndex: 9999 } : null),
+                                  cursor: s.isDragging ? "grabbing" : "pointer"
                                 }}
                                 className={cn(
                                   "card p-3 anim-fade-in-up transition-shadow hover:shadow-lift",

@@ -90,13 +90,25 @@ export async function POST(req: NextRequest) {
 
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-    // Log the creation as activity.
+    // Log the creation as activity. Resolve the assignee's name so the
+    // log reads "Assigned to Shaheer Khosa" instead of the raw user id.
+    let assigneeName: string | null = null;
+    if (row.assignee_id) {
+      const { data: u } = await supabase
+        .from("users")
+        .select("name")
+        .eq("id", row.assignee_id)
+        .maybeSingle();
+      assigneeName = (u?.name as string) ?? null;
+    }
     await supabase.from("activity_logs").insert({
       id: `a_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
       task_id: id,
       user_id: userId,
       action: "created",
-      detail: row.assignee_id ? `Assigned to ${row.assignee_id}` : "Created (unassigned)"
+      detail: row.assignee_id
+        ? `Assigned to ${assigneeName ?? row.assignee_id}`
+        : "Created (unassigned)"
     });
 
     // Awaited Slack DM (was fire-and-forget but Railway was occasionally

@@ -1,7 +1,9 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback } from "react";
-import { Check, Clock, Minus, X, AlertTriangle, Plus, Bell, ArrowLeft, Image as ImageIcon, Focus, Coffee, Moon, Smile, Sparkles } from "lucide-react";
+import { useEffect, useRef, useState, useCallback, createContext, useContext } from "react";
+import { Check, Clock, Minus, X, AlertTriangle, Plus, Bell, ArrowLeft, Image as ImageIcon, Focus, Coffee, Moon, Smile, Sparkles, Play, Square, Crown, Settings as SettingsIcon, LogOut, Camera } from "lucide-react";
+import { toast } from "sonner";
+import { AvatarCropper } from "@/components/AvatarCropper";
 import { Countdown } from "@/components/Countdown";
 
 interface WidgetTask {
@@ -12,6 +14,10 @@ interface WidgetTask {
   status: string;
   dueDate: string | null;
   estimatedHours: number;
+  // Truth-value actual hours: server-side override-wins (override ??
+  // time_entries-derived denorm). Drives "logged 1.5h" displays.
+  actualHours?: number;
+  actualHoursOverride?: number | null;
   inactiveFlag: boolean;
   needsAck: boolean;
 }
@@ -22,6 +28,15 @@ interface WidgetKudos {
   emoji: string;
   createdAt: string;
   from: { name: string; avatarUrl: string | null } | null;
+}
+
+interface EomState {
+  // Whether the *current user* is the Employee of the Month right now.
+  // Drives the crown overlay on the bubble + the celebration banner.
+  isMe: boolean;
+  // Holder's name + month for the banner copy.
+  name: string | null;
+  month: string | null;
 }
 
 type WidgetState = "bubble" | "alert" | "panel";
@@ -52,6 +67,37 @@ function playAlertSound() {
     tone(880, 0.32, 0.22);
     setTimeout(() => ctx.close(), 800);
   } catch { /* renderer doesn't support audio context */ }
+}
+
+// Coronation fanfare for "you just got crowned Employee of the Month".
+// Bigger, more triumphant than the kudos chime — three rising chords
+// with overlap so it actually feels like an event.
+function playCoronationFanfare() {
+  try {
+    const Ctx = (window as any).AudioContext || (window as any).webkitAudioContext;
+    if (!Ctx) return;
+    const ctx = new Ctx();
+    const chord = (freqs: number[], when: number, dur: number) => {
+      for (const f of freqs) {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = "triangle";
+        osc.frequency.setValueAtTime(f, ctx.currentTime + when);
+        gain.gain.setValueAtTime(0.0001, ctx.currentTime + when);
+        gain.gain.exponentialRampToValueAtTime(0.18, ctx.currentTime + when + 0.04);
+        gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + when + dur);
+        osc.connect(gain).connect(ctx.destination);
+        osc.start(ctx.currentTime + when);
+        osc.stop(ctx.currentTime + when + dur);
+      }
+    };
+    // C major → F → G → C, classic V-I lift.
+    chord([523.25, 659.25, 783.99], 0,    0.45);
+    chord([587.33, 698.46, 880.00], 0.20, 0.45);
+    chord([659.25, 783.99, 987.77], 0.40, 0.55);
+    chord([523.25, 659.25, 783.99, 1046.50], 0.65, 1.20);
+    setTimeout(() => ctx.close(), 2200);
+  } catch { /* ignore */ }
 }
 
 // Celebratory rising chime for kudos. Different from the task alarm so
@@ -89,8 +135,23 @@ export default function WidgetPage() {
   // Tracks whether the widget's API polls are returning 401. When true
   // we render a sign-in prompt instead of the normal task/kudos UI.
   const [signedOut, setSignedOut] = useState(false);
+  const [eom, setEom] = useState<EomState>({ isMe: false, name: null, month: null });
+  // Per-user customization for the bubble image. Falls back to the
+  // shared brand logo when null. Fetched once on auth + whenever the
+  // settings view saves.
+  const [widgetIconUrl, setWidgetIconUrl] = useState<string | null>(null);
+  const fetchMe = useCallback(async () => {
+    try {
+      const r = await fetch("/api/users/me", { cache: "no-store" });
+      if (!r.ok) return;
+      const d = await r.json();
+      setWidgetIconUrl(d.user?.widgetIconUrl ?? null);
+    } catch { /* leave default */ }
+  }, []);
+  useEffect(() => { void fetchMe(); }, [fetchMe]);
   const seenIdsRef = useRef<Set<string>>(new Set());
   const seenKudosRef = useRef<Set<string>>(new Set());
+  const seenEomMonthRef = useRef<string | null>(null);
   const lastFetchedRef = useRef<number>(0);
 
   // Make the BrowserWindow's transparent flag actually show through, and
@@ -119,9 +180,10 @@ export default function WidgetPage() {
     try {
       // Run both polls in parallel — they're independent reads on the
       // same Supabase connection.
-      const [taskRes, kudosRes] = await Promise.all([
+      const [taskRes, kudosRes, eomRes] = await Promise.all([
         fetch("/api/widget/my-tasks", { cache: "no-store" }),
-        fetch("/api/widget/kudos", { cache: "no-store" })
+        fetch("/api/widget/kudos", { cache: "no-store" }),
+        fetch("/api/eom", { cache: "no-store" })
       ]);
       // 401 → no session in this Electron renderer. Show the sign-in
       // prompt and stop trying to render normal UI on stale/empty data.
@@ -138,6 +200,25 @@ export default function WidgetPage() {
 
       const kudosData = kudosRes.ok ? await kudosRes.json() : { kudos: [] };
       const nextKudos: WidgetKudos[] = kudosData.kudos ?? [];
+
+      // Employee of the Month — celebrate the first time we see "isMe"
+      // for a fresh month. Also drive the bubble crown overlay.
+      if (eomRes.ok) {
+        const eomData = await eomRes.json();
+        const month = eomData.month ?? null;
+        const isMe = !!eomData.isMe;
+        const name = eomData.eom?.name ?? null;
+        // Fire the fanfare once per crowned-month for "me". Tracking by
+        // month means re-crowning in the same month doesn't re-trigger,
+        // but a fresh month will.
+        if (isMe && month && seenEomMonthRef.current !== month) {
+          seenEomMonthRef.current = month;
+          playCoronationFanfare();
+        }
+        // Reset the ref when no longer EOM so a future re-crown fires.
+        if (!isMe) seenEomMonthRef.current = null;
+        setEom({ isMe, name, month });
+      }
 
       // Fresh task → harsh alarm. Fresh kudos → celebratory chime.
       // Both can fire independently in the same tick.
@@ -224,21 +305,25 @@ export default function WidgetPage() {
   // task alerts or kudos banners when we have no session at all.
   if (signedOut) {
     if (state === "panel") return <SignInPanel onCollapse={collapseToBubble} />;
-    return <Bubble onExpand={expandToPanel} unackedCount={0} />;
+    return <Bubble onExpand={expandToPanel} unackedCount={0} iconUrl={widgetIconUrl} />;
   }
 
-  if (state === "panel") return <Panel tasks={tasks} unacked={unacked} kudos={kudos} onAck={acknowledge} onAckKudos={acknowledgeKudos} onCollapse={collapseToBubble} onUpdated={fetchTasks} />;
+  if (state === "panel") return (
+    <ClockProvider>
+      <Panel tasks={tasks} unacked={unacked} kudos={kudos} eom={eom} onAck={acknowledge} onAckKudos={acknowledgeKudos} onCollapse={collapseToBubble} onUpdated={fetchTasks} widgetIconUrl={widgetIconUrl} onIconChanged={fetchMe} />
+    </ClockProvider>
+  );
   if (state === "alert") {
     // Prefer task alert when both fire. If only kudos, render the
     // kudos banner instead of the task one.
     if (unacked.length > 0) {
-      return <Alert task={unacked[0]} unackedCount={unacked.length} onAck={acknowledge} onExpand={expandToPanel} />;
+      return <Alert task={unacked[0]} unackedCount={unacked.length} onAck={acknowledge} onExpand={expandToPanel} crowned={eom.isMe} iconUrl={widgetIconUrl} />;
     }
     if (kudos.length > 0) {
-      return <KudosAlert kudos={kudos[0]} count={kudos.length} onAck={acknowledgeKudos} onExpand={expandToPanel} />;
+      return <KudosAlert kudos={kudos[0]} count={kudos.length} onAck={acknowledgeKudos} onExpand={expandToPanel} crowned={eom.isMe} iconUrl={widgetIconUrl} />;
     }
   }
-  return <Bubble onExpand={expandToPanel} unackedCount={unacked.length + kudos.length} />;
+  return <Bubble onExpand={expandToPanel} unackedCount={unacked.length + kudos.length} crowned={eom.isMe} iconUrl={widgetIconUrl} />;
 }
 
 /* ============================ ICON ============================ */
@@ -247,23 +332,64 @@ export default function WidgetPage() {
 // the icon's circular alpha mask rather than the rectangular button box —
 // otherwise the bubble reads as a squircle even though the icon is round.
 
-function BubbleIcon({ unackedCount }: { unackedCount: number }) {
+function BubbleIcon({ unackedCount, crowned = false, iconUrl }: { unackedCount: number; crowned?: boolean; iconUrl?: string | null }) {
   return (
     <div style={{ position: "relative", width: 64, height: 64 }}>
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
-        src="/widget-icon.png"
+        src={iconUrl || "/widget-icon.png"}
         alt="DelegationDoer"
         draggable={false}
         style={{
           width: 64,
           height: 64,
           display: "block",
+          objectFit: "cover",
+          borderRadius: "50%",
           userSelect: "none",
           pointerEvents: "none",
-          filter: "drop-shadow(0 4px 10px rgba(0,0,0,0.35))"
+          filter: crowned
+            ? "drop-shadow(0 4px 10px rgba(0,0,0,0.35)) drop-shadow(0 0 12px rgba(245,158,11,0.55))"
+            : "drop-shadow(0 4px 10px rgba(0,0,0,0.35))"
         }}
       />
+      {/* Employee of the Month crown floats above the bubble. SVG with a
+          gold gradient + jewels, gently rotated for character. */}
+      {crowned && (
+        <span
+          aria-label="Employee of the Month"
+          style={{
+            position: "absolute",
+            top: -16,
+            left: "50%",
+            transform: "translateX(-50%) rotate(-8deg)",
+            width: 32,
+            height: 32,
+            pointerEvents: "none",
+            filter: "drop-shadow(0 3px 6px rgba(180,120,0,0.55))"
+          }}
+        >
+          <svg viewBox="0 0 24 24" width={32} height={32}>
+            <defs>
+              <linearGradient id="bubbleCrown" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="#FCD34D" />
+                <stop offset="60%" stopColor="#F59E0B" />
+                <stop offset="100%" stopColor="#D97706" />
+              </linearGradient>
+            </defs>
+            <path
+              d="M3 7l4 4 5-7 5 7 4-4-1.6 11H4.6L3 7z"
+              fill="url(#bubbleCrown)"
+              stroke="#92400E"
+              strokeWidth="1"
+              strokeLinejoin="round"
+            />
+            <circle cx="3" cy="7" r="1.4" fill="#FFFBEB" stroke="#92400E" strokeWidth="0.8" />
+            <circle cx="12" cy="4" r="1.4" fill="#FFFBEB" stroke="#92400E" strokeWidth="0.8" />
+            <circle cx="21" cy="7" r="1.4" fill="#FFFBEB" stroke="#92400E" strokeWidth="0.8" />
+          </svg>
+        </span>
+      )}
       {unackedCount > 0 && (
         <span style={{
           position: "absolute", top: -2, right: -2,
@@ -285,7 +411,7 @@ function BubbleIcon({ unackedCount }: { unackedCount: number }) {
 
 const DRAG_THRESHOLD = 4;
 
-function Bubble({ onExpand, unackedCount }: { onExpand: () => void; unackedCount: number }) {
+function Bubble({ onExpand, unackedCount, crowned = false, iconUrl }: { onExpand: () => void; unackedCount: number; crowned?: boolean; iconUrl?: string | null }) {
   const startRef = useRef<{ x: number; y: number; dragging: boolean } | null>(null);
   function api() { return (window as any).widgetAPI; }
 
@@ -333,7 +459,7 @@ function Bubble({ onExpand, unackedCount }: { onExpand: () => void; unackedCount
           cursor: "grab"
         }}
       >
-        <BubbleIcon unackedCount={unackedCount} />
+        <BubbleIcon unackedCount={unackedCount} crowned={crowned} iconUrl={iconUrl} />
       </button>
     </div>
   );
@@ -342,19 +468,21 @@ function Bubble({ onExpand, unackedCount }: { onExpand: () => void; unackedCount
 /* ============================ ALERT (speech bubble) ============================ */
 
 function Alert({
-  task, unackedCount, onAck, onExpand
+  task, unackedCount, onAck, onExpand, crowned = false, iconUrl
 }: {
   task: WidgetTask | undefined;
   unackedCount: number;
   onAck: (id: string) => void;
   onExpand: () => void;
+  crowned?: boolean;
+  iconUrl?: string | null;
 }) {
   if (!task) return null;
   return (
     <div
       // Drag region on the speech bubble area so it can still be moved.
       // @ts-ignore — Electron-only
-      style={{ width: "100vw", height: "100vh", display: "flex", alignItems: "center", justifyContent: "flex-end", padding: 8, gap: 8, background: "transparent", WebkitAppRegion: "drag" } as any}
+      style={{ width: "100vw", height: "100vh", display: "flex", alignItems: "center", justifyContent: "flex-end", padding: 20, gap: 8, background: "transparent", WebkitAppRegion: "drag" } as any}
     >
       {/* Speech bubble */}
       <div
@@ -410,7 +538,7 @@ function Alert({
         className="shrink-0 wg-bubble-btn anim-scale-in"
         aria-label="Open"
       >
-        <BubbleIcon unackedCount={unackedCount} />
+        <BubbleIcon unackedCount={unackedCount} crowned={crowned} iconUrl={iconUrl} />
       </button>
 
     </div>
@@ -439,7 +567,7 @@ function SignInPanel({ onCollapse }: { onCollapse: () => void }) {
     (window as any).widgetAPI?.openMain?.();
   }
   return (
-    <div className="h-screen w-screen p-2 anim-fade-in">
+    <div className="h-screen w-screen p-5 anim-fade-in">
       <div className="h-full w-full flex flex-col text-slate-900 rounded-[28px] overflow-hidden border border-slate-200/70 bg-white shadow-[0_20px_60px_-20px_rgba(15,23,42,0.25),0_8px_24px_-12px_rgba(15,23,42,0.15)]">
         <div
           className="h-12 flex items-center justify-between px-4 border-b border-slate-100"
@@ -502,17 +630,19 @@ function SignInPanel({ onCollapse }: { onCollapse: () => void }) {
 // the bubble icon. Fires when there's a new kudos and no task alerts.
 
 function KudosAlert({
-  kudos: k, count, onAck, onExpand
+  kudos: k, count, onAck, onExpand, crowned = false, iconUrl
 }: {
   kudos: WidgetKudos;
   count: number;
   onAck: (id: string) => void;
   onExpand: () => void;
+  crowned?: boolean;
+  iconUrl?: string | null;
 }) {
   return (
     <div
       // @ts-ignore — Electron-only
-      style={{ width: "100vw", height: "100vh", display: "flex", alignItems: "center", justifyContent: "flex-end", padding: 8, gap: 8, background: "transparent", WebkitAppRegion: "drag" } as any}
+      style={{ width: "100vw", height: "100vh", display: "flex", alignItems: "center", justifyContent: "flex-end", padding: 20, gap: 8, background: "transparent", WebkitAppRegion: "drag" } as any}
     >
       <div
         onClick={onExpand}
@@ -561,7 +691,7 @@ function KudosAlert({
         className="shrink-0 wg-bubble-btn anim-scale-in"
         aria-label="Open"
       >
-        <BubbleIcon unackedCount={count} />
+        <BubbleIcon unackedCount={count} crowned={crowned} iconUrl={iconUrl} />
       </button>
     </div>
   );
@@ -584,33 +714,75 @@ const PRESENCE_OPTIONS: {
   { value: "away",      label: "Away",      icon: Moon,  cls: "text-slate-600", activeCls: "bg-gradient-to-r from-slate-500 to-slate-600 text-white" }
 ];
 
-function PresenceRow() {
-  const [state, setState] = useState<PresenceState>("available");
-  const [pending, setPending] = useState<PresenceState | null>(null);
+// Cache key for the last-known presence so the widget can render
+// immediately on cold launch without flashing "Available" then snapping
+// to whatever the server actually has.
+const PRESENCE_CACHE_KEY = "wg.presence.v1";
 
-  // Hydrate from server on mount so the widget reflects whatever was set
-  // last (e.g. yesterday's "Away") instead of always starting "Available".
+function readCachedPresence(): PresenceState | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const v = window.localStorage.getItem(PRESENCE_CACHE_KEY);
+    if (v === "available" || v === "focus" || v === "eating" || v === "away") return v;
+  } catch { /* private mode etc. */ }
+  return null;
+}
+
+function writeCachedPresence(v: PresenceState) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(PRESENCE_CACHE_KEY, v);
+  } catch { /* ignore */ }
+}
+
+function PresenceRow() {
+  // Lazy initial state from localStorage — instant render, no network.
+  const [state, setStateInternal] = useState<PresenceState>(
+    () => readCachedPresence() ?? "available"
+  );
+
+  // Wraps the state setter so every change persists to the cache too.
+  function setState(next: PresenceState) {
+    setStateInternal(next);
+    writeCachedPresence(next);
+  }
+
+  // Background refresh: hit the server in the background. If the value
+  // matches what we already had, no re-render. If it's different, take
+  // the server's word for it. Avoids spurious flicker on cold open.
   useEffect(() => {
+    let cancelled = false;
     fetch("/api/users/me/presence", { cache: "no-store" })
-      .then((r) => r.ok ? r.json() : null)
+      .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
-        if (d && typeof d.state === "string") setState(d.state as PresenceState);
+        if (cancelled || !d) return;
+        const next = (d.state as PresenceState) ?? "available";
+        // Only update if it actually differs from the cached value.
+        // Prevents an unnecessary re-render every time the panel opens.
+        setStateInternal((cur) => (cur === next ? cur : next));
+        writeCachedPresence(next);
       })
-      .catch(() => { /* offline; keep default */ });
+      .catch(() => { /* offline; cached state stands */ });
+    return () => { cancelled = true; };
   }, []);
 
   async function pick(next: PresenceState) {
     if (next === state) return;
-    setPending(next);
+    // Optimistic: paint the new state immediately. Cache the new value
+    // so a quick reopen also shows it. If the network call fails, roll
+    // back both.
+    const prev = state;
+    setState(next);
     try {
       const res = await fetch("/api/users/me/presence", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ state: next })
       });
-      if (res.ok) setState(next);
-    } catch { /* ignore */ }
-    setPending(null);
+      if (!res.ok) throw new Error(`failed (${res.status})`);
+    } catch {
+      setState(prev);
+    }
   }
 
   return (
@@ -620,12 +792,10 @@ function PresenceRow() {
         {PRESENCE_OPTIONS.map((opt) => {
           const Icon = opt.icon;
           const active = state === opt.value;
-          const isPending = pending === opt.value;
           return (
             <button
               key={opt.value}
               onClick={() => pick(opt.value)}
-              disabled={isPending}
               className={
                 "flex flex-col items-center gap-0.5 px-1 py-2 rounded-xl text-[10px] font-medium transition-all border " +
                 (active
@@ -643,20 +813,412 @@ function PresenceRow() {
   );
 }
 
+/* ============================ EOM BANNER ============================ */
+// Triumphant strip that lives at the top of the panel when the current
+// user is Employee of the Month. Animated gradient sweep + sparkles +
+// rotating crown so it actually feels like a celebration the first time
+// someone sees it.
+
+function EomBanner({ month }: { month: string | null }) {
+  const monthLabel = month ? prettyMonth(month) : "this month";
+  return (
+    <div className="px-3 pt-3">
+      <div
+        className="relative overflow-hidden rounded-2xl border border-amber-300/70 px-3 py-2.5 shadow-sm"
+        style={{
+          background:
+            "linear-gradient(120deg, #FEF3C7 0%, #FDE68A 50%, #FBBF24 100%)"
+        }}
+      >
+        {/* Diagonal sheen that drifts across the banner forever */}
+        <span
+          aria-hidden
+          className="absolute inset-y-0 -inset-x-1/4 pointer-events-none"
+          style={{
+            background:
+              "linear-gradient(115deg, transparent 35%, rgba(255,255,255,0.55) 50%, transparent 65%)",
+            animation: "ddSheen 2.6s ease-in-out infinite"
+          }}
+        />
+        <div className="relative flex items-center gap-2.5">
+          <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-amber-400 to-orange-500 grid place-items-center shadow-sm">
+            <Crown className="w-4 h-4 text-white" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="text-[10px] uppercase tracking-[0.16em] font-semibold text-amber-700 leading-none">
+              Employee of the month
+            </div>
+            <div className="text-[13px] font-bold text-amber-900 mt-0.5 leading-tight">
+              You're crowned for {monthLabel} 👑
+            </div>
+          </div>
+        </div>
+      </div>
+      <style>{`
+        @keyframes ddSheen {
+          0%   { transform: translateX(-30%); opacity: 0; }
+          25%  { opacity: 0.8; }
+          75%  { opacity: 0.8; }
+          100% { transform: translateX(60%);  opacity: 0; }
+        }
+      `}</style>
+    </div>
+  );
+}
+
+function prettyMonth(key: string): string {
+  const [y, m] = key.split("-");
+  const d = new Date(Number(y), Number(m) - 1, 1);
+  return d.toLocaleDateString(undefined, { month: "long", year: "numeric" });
+}
+
+/* ============================ CLOCK SECTION ============================ */
+// Clock-in / clock-out + task timer for the widget. ClockProvider is the
+// single source of truth that polls /api/clock every 10s; ClockSection
+// (header) and the per-task Start/Stop buttons both subscribe via useClock.
+
+function formatHMS(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  const pad = (n: number) => n.toString().padStart(2, "0");
+  return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
+}
+
+// Clock state cached per-widget so reopening doesn't flash the off-shift
+// state before the network catches up.
+const CLOCK_CACHE_KEY = "wg.clock.v2";
+
+interface ClockCache {
+  open: { id: string; startedAt: string; taskId: string | null } | null;
+  dailyCapacityHours: number;
+}
+
+function readCachedClock(): ClockCache | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(CLOCK_CACHE_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw) as ClockCache;
+  } catch { return null; }
+}
+
+function writeCachedClock(c: ClockCache) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(CLOCK_CACHE_KEY, JSON.stringify(c));
+  } catch { /* ignore */ }
+}
+
+interface ClockState {
+  open: { id: string; startedAt: string; taskId: string | null } | null;
+  todayMs: number;
+  dailyCapacityHours: number;
+  workdayRemainingMs: number;
+  // Hours logged today per task id (closed segments + live-running). Lets
+  // task rows render "1.5h today" alongside the per-task lifetime actual.
+  hoursByTask: Record<string, number>;
+}
+
+interface ClockApi {
+  clock: ClockState;
+  refresh: () => Promise<void>;
+  toggleShift: () => Promise<void>;
+  startTask: (taskId: string) => Promise<void>;
+  stopTask: (taskId: string) => Promise<void>;
+  // Ticks every second while a shift is open so consumers re-render the
+  // live timer smoothly. The value is meaningless; subscribe to force
+  // re-render.
+  tick: number;
+}
+
+const ClockContext = createContext<ClockApi | null>(null);
+
+function useClock(): ClockApi {
+  const v = useContext(ClockContext);
+  if (!v) throw new Error("useClock used outside <ClockProvider>");
+  return v;
+}
+
+function ClockProvider({ children }: { children: React.ReactNode }) {
+  const cached = typeof window !== "undefined" ? readCachedClock() : null;
+  const [clock, setClock] = useState<ClockState>(() => ({
+    open: cached?.open ?? null,
+    todayMs: 0,
+    dailyCapacityHours: cached?.dailyCapacityHours ?? 8,
+    workdayRemainingMs: (cached?.dailyCapacityHours ?? 8) * 3_600_000,
+    hoursByTask: {}
+  }));
+  const [tick, setTick] = useState(0);
+
+  const refresh = useCallback(async () => {
+    try {
+      const res = await fetch("/api/clock", { cache: "no-store" });
+      if (!res.ok) return;
+      const data = await res.json();
+      const next: ClockState = {
+        open: data.open ?? null,
+        todayMs: Number(data.todayMs ?? 0),
+        dailyCapacityHours: Number(data.dailyCapacityHours ?? 8),
+        workdayRemainingMs: Number(data.workdayRemainingMs ?? 0),
+        hoursByTask: (data.hoursByTask as Record<string, number>) ?? {}
+      };
+      setClock(next);
+      writeCachedClock({ open: next.open, dailyCapacityHours: next.dailyCapacityHours });
+    } catch { /* ignore */ }
+  }, []);
+
+  useEffect(() => {
+    refresh();
+    const poll = setInterval(refresh, 10_000);
+    return () => clearInterval(poll);
+  }, [refresh]);
+
+  // Live tick while anything is open (shift or task segment).
+  useEffect(() => {
+    if (!clock.open) return;
+    const t = setInterval(() => setTick((n) => n + 1), 1000);
+    return () => clearInterval(t);
+  }, [clock.open]);
+
+  const toggleShift = useCallback(async () => {
+    const prev = clock;
+    const isOn = Boolean(prev.open);
+    // Optimistic flip.
+    setClock((c) => ({
+      ...c,
+      open: isOn
+        ? null
+        : { id: `tmp_${Date.now().toString(36)}`, startedAt: new Date().toISOString(), taskId: null }
+    }));
+    try {
+      const res = await fetch("/api/clock", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: isOn ? "out" : "in" })
+      });
+      if (!res.ok) throw new Error(`failed (${res.status})`);
+      await refresh();
+    } catch {
+      setClock(prev);
+    }
+  }, [clock, refresh]);
+
+  const startTask = useCallback(async (taskId: string) => {
+    const prev = clock;
+    // Optimistic: pretend the segment is already running.
+    setClock((c) => ({
+      ...c,
+      open: { id: `tmp_${Date.now().toString(36)}`, startedAt: new Date().toISOString(), taskId }
+    }));
+    try {
+      const res = await fetch(`/api/tasks/${taskId}/timer`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "start" })
+      });
+      if (!res.ok) throw new Error(`failed (${res.status})`);
+      await refresh();
+    } catch {
+      setClock(prev);
+      toast.error("Couldn't start timer");
+    }
+  }, [clock, refresh]);
+
+  const stopTask = useCallback(async (taskId: string) => {
+    const prev = clock;
+    setClock((c) => ({
+      ...c,
+      open: c.open && c.open.taskId === taskId
+        ? { id: c.open.id, startedAt: new Date().toISOString(), taskId: null }
+        : c.open
+    }));
+    try {
+      const res = await fetch(`/api/tasks/${taskId}/timer`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "stop" })
+      });
+      if (!res.ok) throw new Error(`failed (${res.status})`);
+      await refresh();
+    } catch {
+      setClock(prev);
+      toast.error("Couldn't stop timer");
+    }
+  }, [clock, refresh]);
+
+  return (
+    <ClockContext.Provider value={{ clock, refresh, toggleShift, startTask, stopTask, tick }}>
+      {children}
+    </ClockContext.Provider>
+  );
+}
+
+function ClockSection() {
+  const { clock, toggleShift, tick } = useClock();
+  void tick;
+  const open = clock.open;
+  const liveElapsed = open ? Date.now() - new Date(open.startedAt).getTime() : 0;
+  // Workday remaining ticks down live while on shift. We anchor it to the
+  // last poll's workdayRemainingMs and subtract the seconds since we got
+  // it (only while a shift is open; otherwise it's frozen).
+  const remainingMs = open
+    ? Math.max(0, clock.workdayRemainingMs - liveElapsed + (open.startedAt ? 0 : 0))
+    : clock.workdayRemainingMs;
+  void remainingMs;
+  // Actually: workdayRemainingMs from the server already accounts for the
+  // open segment up to the moment of the request. The smooth countdown
+  // = workdayRemainingMs as of last poll, minus (now - lastPollAt). We
+  // don't track lastPollAt explicitly — instead just show the polled
+  // value; it updates every 10s. Good enough for a "Workday remaining"
+  // pill — precision-to-the-second is unnecessary.
+  const wrHours = clock.workdayRemainingMs / 3_600_000;
+  const dailyCap = clock.dailyCapacityHours;
+  const pctUsed = Math.min(1, Math.max(0, 1 - wrHours / Math.max(1, dailyCap)));
+
+  return (
+    <div className="px-3 pt-3 space-y-2">
+      <div className="text-[10px] uppercase tracking-[0.18em] text-accent font-semibold flex items-center justify-between">
+        <span>Time clock</span>
+        <span className="text-muted normal-case font-medium tracking-normal">
+          {formatHMS(clock.todayMs)} today
+        </span>
+      </div>
+      {open ? (
+        <button
+          onClick={toggleShift}
+          className="w-full inline-flex items-center justify-between gap-2 px-3 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 text-white shadow-sm hover:shadow-lift transition-all active:scale-[0.98]"
+        >
+          <span className="inline-flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-white anim-pulse-dot" />
+            <span className="text-[13px] font-semibold">
+              {open.taskId ? "On task" : "On shift"}
+            </span>
+          </span>
+          <span className="text-[13px] font-mono tabular-nums">
+            {formatHMS(liveElapsed)}
+          </span>
+          <span className="inline-flex items-center gap-1 text-[11px] font-medium opacity-90">
+            <Square className="w-3 h-3" />
+            Clock out
+          </span>
+        </button>
+      ) : (
+        <button
+          onClick={toggleShift}
+          className="w-full inline-flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl border border-slate-200 bg-white text-ink hover:border-accent/40 hover:bg-accent/5 transition-colors"
+        >
+          <Play className="w-4 h-4 text-accent" />
+          <span className="text-[13px] font-semibold">Clock in</span>
+        </button>
+      )}
+      <div>
+        <div className="flex items-center justify-between text-[10px] text-muted">
+          <span>Workday remaining</span>
+          <span className="font-mono tabular-nums text-ink/80">
+            {wrHours.toFixed(1)}h / {dailyCap}h
+          </span>
+        </div>
+        <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden mt-1">
+          <div
+            className={
+              "h-full rounded-full transition-all " +
+              (pctUsed > 0.85
+                ? "bg-rose-500"
+                : pctUsed > 0.7
+                ? "bg-amber-400"
+                : "bg-emerald-500")
+            }
+            style={{ width: `${Math.round(pctUsed * 100)}%` }}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Tiny inline Start/Stop pill for a task row inside the widget panel. Uses
+// the shared ClockProvider so all rows agree on which task is active.
+function TaskTimerButton({ taskId, compact = false }: { taskId: string; compact?: boolean }) {
+  const { clock, startTask, stopTask, tick } = useClock();
+  void tick;
+  const isActive = clock.open?.taskId === taskId;
+  const hoursToday = clock.hoursByTask?.[taskId] ?? 0;
+  const liveBoost =
+    isActive && clock.open
+      ? (Date.now() - new Date(clock.open.startedAt).getTime()) / 3_600_000
+      : 0;
+  // The server-side hoursByTask already includes the open segment up to
+  // its computation time; adding liveBoost would double-count for ~10s
+  // until the next poll. Cheap fix: only show the polled value; it
+  // refreshes every 10s.
+  void liveBoost;
+  const onClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (isActive) stopTask(taskId);
+    else startTask(taskId);
+  };
+  if (compact) {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        title={isActive ? "Stop timer" : "Start timer"}
+        className={
+          "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium transition-all active:scale-95 border " +
+          (isActive
+            ? "bg-emerald-500 border-emerald-600 text-white"
+            : "bg-white border-slate-200 text-slate-600 hover:border-accent/40 hover:text-accent")
+        }
+      >
+        {isActive ? <Square className="w-2.5 h-2.5" /> : <Play className="w-2.5 h-2.5" />}
+        <span className="tabular-nums">
+          {hoursToday > 0 ? `${hoursToday.toFixed(1)}h` : isActive ? "stop" : "start"}
+        </span>
+      </button>
+    );
+  }
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={
+        "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-medium transition-all active:scale-95 border " +
+        (isActive
+          ? "bg-emerald-500 border-emerald-600 text-white"
+          : "bg-white border-slate-200 text-slate-700 hover:border-accent/40 hover:text-accent")
+      }
+    >
+      {isActive ? <Square className="w-3 h-3" /> : <Play className="w-3 h-3" />}
+      {isActive ? "Stop timer" : "Start timer"}
+      {hoursToday > 0 && (
+        <span className="ml-1 text-[10px] opacity-80 tabular-nums">{hoursToday.toFixed(1)}h today</span>
+      )}
+    </button>
+  );
+}
+
 /* ============================ PANEL ============================ */
 
 function Panel({
-  tasks, unacked, kudos, onAck, onAckKudos, onCollapse, onUpdated
+  tasks, unacked, kudos, eom, onAck, onAckKudos, onCollapse, onUpdated,
+  widgetIconUrl, onIconChanged
 }: {
   tasks: WidgetTask[];
   unacked: WidgetTask[];
   kudos: WidgetKudos[];
+  eom: EomState;
   onAck: (id: string) => void;
   onAckKudos: (id: string) => void;
   onCollapse: () => void;
   onUpdated: () => void;
+  widgetIconUrl: string | null;
+  onIconChanged: () => void;
 }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [showingSettings, setShowingSettings] = useState(false);
   const acked = tasks.filter((t) => !t.needsAck).sort(
     (a, b) => PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority]
   );
@@ -672,8 +1234,27 @@ function Panel({
     );
   }
 
+  if (showingSettings) {
+    return (
+      <SettingsView
+        onClose={() => setShowingSettings(false)}
+        onIconChanged={onIconChanged}
+        widgetIconUrl={widgetIconUrl}
+      />
+    );
+  }
+
+  if (creating) {
+    return (
+      <CreateTaskView
+        onClose={() => setCreating(false)}
+        onCreated={() => { onUpdated(); setCreating(false); }}
+      />
+    );
+  }
+
   return (
-    <div className="h-screen w-screen p-2 anim-fade-in">
+    <div className="h-screen w-screen p-5 anim-fade-in">
       <div className="h-full w-full flex flex-col text-slate-900 rounded-[28px] overflow-hidden border border-slate-200/70 bg-white shadow-[0_20px_60px_-20px_rgba(15,23,42,0.25),0_8px_24px_-12px_rgba(15,23,42,0.15)]">
         <div
           className="h-12 flex items-center justify-between px-4 border-b border-slate-100"
@@ -683,11 +1264,25 @@ function Panel({
           <div className="flex items-center gap-2 text-xs">
             <div className="w-6 h-6 rounded-full overflow-hidden border border-slate-200 ring-1 ring-white shadow-sm">
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src="/widget-icon.png" alt="" className="w-full h-full object-cover" draggable={false} />
+              <img src={widgetIconUrl || "/widget-icon.png"} alt="" className="w-full h-full object-cover" draggable={false} />
             </div>
             <span className="font-semibold text-ink">DelegationDoer</span>
           </div>
           <div className="flex items-center gap-0.5" style={{ WebkitAppRegion: "no-drag" } as any}>
+            <button
+              title="New task"
+              onClick={() => setCreating(true)}
+              className="p-1.5 rounded-lg text-accent hover:bg-accent hover:text-white transition-colors"
+            >
+              <Plus className="w-3.5 h-3.5" />
+            </button>
+            <button
+              title="Settings"
+              onClick={() => setShowingSettings(true)}
+              className="p-1.5 rounded-lg text-slate-500 hover:text-ink hover:bg-slate-100 transition-colors"
+            >
+              <SettingsIcon className="w-3.5 h-3.5" />
+            </button>
             <button title="Collapse" className="p-1.5 rounded-lg text-slate-500 hover:text-ink hover:bg-slate-100 transition-colors" onClick={onCollapse}>
               <Minus className="w-3.5 h-3.5" />
             </button>
@@ -698,6 +1293,8 @@ function Panel({
         </div>
 
         <PresenceRow />
+        <ClockSection />
+        {eom.isMe && <EomBanner month={eom.month} />}
 
         <div className="flex-1 overflow-y-auto">
           {kudos.length > 0 && (
@@ -758,12 +1355,15 @@ function Panel({
                     {t.description && <div className="text-[11px] text-slate-600 mt-1 line-clamp-2">{t.description}</div>}
                     <div className="mt-2 flex items-center justify-between text-[11px] text-slate-500">
                       <span className="inline-flex items-center gap-1"><Clock className="w-3 h-3" /><Countdown iso={t.dueDate} /></span>
-                      <button
-                        onClick={(e) => { e.stopPropagation(); onAck(t.id); }}
-                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-emerald-500 hover:bg-emerald-600 text-white text-[11px] font-medium transition-all active:scale-90"
-                      >
-                        <Check className="w-3 h-3" /> Acknowledge
-                      </button>
+                      <div className="flex items-center gap-1.5">
+                        <TaskTimerButton taskId={t.id} compact />
+                        <button
+                          onClick={(e) => { e.stopPropagation(); onAck(t.id); }}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-emerald-500 hover:bg-emerald-600 text-white text-[11px] font-medium transition-all active:scale-90"
+                        >
+                          <Check className="w-3 h-3" /> Acknowledge
+                        </button>
+                      </div>
                     </div>
                   </div>
                 ))}
@@ -791,7 +1391,14 @@ function Panel({
                     </div>
                     <div className="mt-1.5 flex items-center justify-between text-[11px] text-slate-500">
                       <span className="inline-flex items-center gap-1"><Clock className="w-3 h-3" /><Countdown iso={t.dueDate} /></span>
-                      <span className="text-slate-400">est {t.estimatedHours}h</span>
+                      <span className="text-slate-400">
+                        {typeof t.actualHours === "number" && t.actualHours > 0
+                          ? `${t.actualHours.toFixed(1)} / ${t.estimatedHours}h`
+                          : `est ${t.estimatedHours}h`}
+                      </span>
+                    </div>
+                    <div className="mt-2 flex justify-end" onClick={(e) => e.stopPropagation()}>
+                      <TaskTimerButton taskId={t.id} compact />
                     </div>
                   </div>
                 ))}
@@ -892,7 +1499,7 @@ function UpdateView({
   }
 
   return (
-    <div className="h-screen w-screen p-2 anim-slide-in-right">
+    <div className="h-screen w-screen p-5 anim-slide-in-right">
       <div className="h-full w-full flex flex-col bg-white text-slate-900 rounded-[28px] overflow-hidden border border-slate-200 shadow-[0_20px_60px_-20px_rgba(0,0,0,0.35),0_8px_24px_-12px_rgba(0,0,0,0.2)]">
         <div
           className="h-10 flex items-center justify-between px-2 border-b border-slate-100"
@@ -929,9 +1536,17 @@ function UpdateView({
             {task.description && (
               <div className="text-[11px] text-slate-600 mt-1 line-clamp-3 whitespace-pre-wrap">{task.description}</div>
             )}
-            <div className="mt-1.5 text-[11px] text-slate-500 inline-flex items-center gap-1">
-              <Clock className="w-3 h-3" />
-              <Countdown iso={task.dueDate} className="text-[11px]" />
+            <div className="mt-1.5 flex items-center justify-between gap-2">
+              <div className="text-[11px] text-slate-500 inline-flex items-center gap-1">
+                <Clock className="w-3 h-3" />
+                <Countdown iso={task.dueDate} className="text-[11px]" />
+                <span className="ml-2 text-slate-400 tabular-nums">
+                  {typeof task.actualHours === "number" && task.actualHours > 0
+                    ? `${task.actualHours.toFixed(1)} / ${task.estimatedHours}h`
+                    : `est ${task.estimatedHours}h`}
+                </span>
+              </div>
+              <TaskTimerButton taskId={task.id} />
             </div>
           </div>
 
@@ -1026,4 +1641,508 @@ function UpdateView({
 function fmtDate(iso: string | null) {
   if (!iso) return "—";
   return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+/* ============================ CREATE TASK VIEW ============================ */
+
+interface WidgetUser {
+  id: string;
+  name: string;
+  email: string;
+  avatarUrl?: string | null;
+}
+
+const PRIORITY_OPTIONS: { value: "low" | "medium" | "high" | "critical"; label: string; tone: string }[] = [
+  { value: "low",      label: "Low",      tone: "border-slate-300 bg-slate-50 text-slate-700" },
+  { value: "medium",   label: "Medium",   tone: "border-blue-300 bg-blue-50 text-blue-800" },
+  { value: "high",     label: "High",     tone: "border-amber-300 bg-amber-50 text-amber-800" },
+  { value: "critical", label: "Critical", tone: "border-rose-300 bg-rose-50 text-rose-700" }
+];
+
+// Full-screen create-task view inside the widget. Mirrors UpdateView's
+// layout (title strip, scrollable body, footer). Submits POST /api/tasks
+// then bounces back to the panel so the new task appears in the list.
+function CreateTaskView({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
+  const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+  const [priority, setPriority] = useState<"low" | "medium" | "high" | "critical">("medium");
+  const [estimateHours, setEstimateHours] = useState<number>(2);
+  const [assigneeId, setAssigneeId] = useState<string>("");
+  const [users, setUsers] = useState<WidgetUser[]>([]);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/users", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : { users: [] }))
+      .then((d) => {
+        if (cancelled) return;
+        setUsers(d.users ?? []);
+      })
+      .catch(() => { /* widget still works without the picker */ });
+    return () => { cancelled = true; };
+  }, []);
+
+  async function submit() {
+    if (!title.trim()) {
+      toast.error("Title required");
+      return;
+    }
+    setBusy(true);
+    try {
+      const res = await fetch("/api/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: title.trim(),
+          description: description.trim() || undefined,
+          priority,
+          estimatedHours: estimateHours,
+          assigneeId: assigneeId || undefined
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(data.error ?? "couldn't create task");
+        return;
+      }
+      const target = assigneeId ? users.find((u) => u.id === assigneeId) : null;
+      toast.success(target ? `Assigned to ${target.name} ✨` : "Task created ✨");
+      onCreated();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "network error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="h-screen w-screen p-5 anim-fade-in">
+      <div className="h-full w-full flex flex-col text-slate-900 rounded-[28px] overflow-hidden border border-slate-200/70 bg-white shadow-[0_20px_60px_-20px_rgba(15,23,42,0.25),0_8px_24px_-12px_rgba(15,23,42,0.15)]">
+        {/* Header — drag region + back/close. */}
+        <div
+          className="h-12 flex items-center justify-between px-3 border-b border-slate-100"
+          // @ts-ignore — Electron-only
+          style={{ WebkitAppRegion: "drag" }}
+        >
+          <button
+            onClick={onClose}
+            className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium text-slate-600 hover:text-ink hover:bg-slate-100 transition-colors"
+            style={{ WebkitAppRegion: "no-drag" } as any}
+          >
+            <ArrowLeft className="w-3.5 h-3.5" /> Back
+          </button>
+          <span className="text-[12px] font-semibold text-ink inline-flex items-center gap-1.5">
+            <Sparkles className="w-3.5 h-3.5 text-accent" /> New task
+          </span>
+          <button
+            onClick={onClose}
+            className="p-1.5 rounded-lg text-slate-500 hover:text-ink hover:bg-slate-100 transition-colors"
+            style={{ WebkitAppRegion: "no-drag" } as any}
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+
+        {/* Form body */}
+        <div className="flex-1 overflow-y-auto p-3 space-y-3">
+          <div>
+            <label className="text-[10px] uppercase tracking-wide font-semibold text-slate-500 px-1">Title</label>
+            <input
+              autoFocus
+              type="text"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="What needs doing?"
+              className="mt-1 w-full px-3 py-2 text-[13px] bg-white border border-slate-200/80 rounded-xl outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent/40 transition-all"
+            />
+          </div>
+
+          <div>
+            <label className="text-[10px] uppercase tracking-wide font-semibold text-slate-500 px-1">Description</label>
+            <textarea
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="Optional notes, links, requirements…"
+              rows={3}
+              className="mt-1 w-full px-3 py-2 text-[13px] bg-white border border-slate-200/80 rounded-xl outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent/40 transition-all resize-none"
+            />
+          </div>
+
+          <div>
+            <label className="text-[10px] uppercase tracking-wide font-semibold text-slate-500 px-1">Priority</label>
+            <div className="mt-1 grid grid-cols-2 gap-1.5">
+              {PRIORITY_OPTIONS.map((p) => {
+                const active = priority === p.value;
+                return (
+                  <button
+                    key={p.value}
+                    type="button"
+                    onClick={() => setPriority(p.value)}
+                    className={"text-left text-[12px] font-medium border rounded-lg px-2.5 py-1.5 transition-all active:scale-95 " +
+                      (active ? p.tone : "border-slate-200 bg-white text-slate-600 hover:border-slate-300")
+                    }
+                  >
+                    {p.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div>
+            <label className="text-[10px] uppercase tracking-wide font-semibold text-slate-500 px-1">Estimate</label>
+            <div className="mt-1 flex items-center gap-2">
+              <input
+                type="number"
+                min={0.5}
+                step={0.5}
+                value={estimateHours}
+                onChange={(e) => setEstimateHours(Math.max(0.5, Number(e.target.value) || 0))}
+                className="w-20 px-2.5 py-1.5 text-[13px] bg-white border border-slate-200/80 rounded-lg outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent/40 tabular-nums"
+              />
+              <span className="text-[11px] text-slate-500">hours</span>
+            </div>
+          </div>
+
+          <div>
+            <label className="text-[10px] uppercase tracking-wide font-semibold text-slate-500 px-1">Assign to</label>
+            <div className="mt-1 space-y-1 max-h-44 overflow-y-auto pr-1">
+              <AssigneeRow
+                userId=""
+                name="Leave unassigned"
+                email=""
+                selected={assigneeId === ""}
+                onPick={() => setAssigneeId("")}
+              />
+              {users.map((u) => (
+                <AssigneeRow
+                  key={u.id}
+                  userId={u.id}
+                  name={u.name}
+                  email={u.email}
+                  avatarUrl={u.avatarUrl ?? null}
+                  selected={assigneeId === u.id}
+                  onPick={() => setAssigneeId(u.id)}
+                />
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="border-t border-slate-100 px-3 py-2.5 flex items-center justify-end gap-2">
+          <button
+            onClick={onClose}
+            className="px-3 py-1.5 rounded-full text-[11px] font-medium text-slate-600 hover:text-ink hover:bg-slate-100 transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={submit}
+            disabled={busy || !title.trim()}
+            className={
+              "inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full text-[11px] font-semibold text-white shadow-sm transition-all hover:-translate-y-0.5 active:scale-95 " +
+              (busy || !title.trim() ? "opacity-50 cursor-not-allowed hover:translate-y-0" : "")
+            }
+            style={{ background: "linear-gradient(135deg, #2563EB 0%, #1e63ff 100%)" }}
+          >
+            <Sparkles className="w-3 h-3" />
+            {busy ? "Creating…" : "Create task"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AssigneeRow({
+  userId, name, email, avatarUrl, selected, onPick
+}: {
+  userId: string;
+  name: string;
+  email: string;
+  avatarUrl?: string | null;
+  selected: boolean;
+  onPick: () => void;
+}) {
+  const ini = name.split(" ").map((w) => w[0]).slice(0, 2).join("").toUpperCase();
+  return (
+    <button
+      type="button"
+      onClick={onPick}
+      className={
+        "w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-left transition-all active:scale-[0.98] " +
+        (selected
+          ? "bg-accent/10 border border-accent/40 text-ink"
+          : "border border-transparent hover:bg-slate-50")
+      }
+    >
+      {userId === "" ? (
+        <div className="w-6 h-6 rounded-full bg-slate-100 border border-slate-200 grid place-items-center text-[10px] text-slate-500">
+          ∅
+        </div>
+      ) : avatarUrl ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={avatarUrl}
+          alt={name}
+          className="w-6 h-6 rounded-full object-cover ring-1 ring-white shadow-sm"
+        />
+      ) : (
+        <div className="w-6 h-6 rounded-full bg-gradient-to-br from-blue-200 to-blue-100 text-blue-700 grid place-items-center text-[10px] font-semibold">
+          {ini || "?"}
+        </div>
+      )}
+      <div className="flex-1 min-w-0">
+        <div className="text-[12px] font-medium truncate">{name}</div>
+        {email && <div className="text-[10px] text-slate-500 truncate">{email}</div>}
+      </div>
+      {selected && <Check className="w-3.5 h-3.5 text-accent shrink-0" />}
+    </button>
+  );
+}
+
+/* ============================ SETTINGS VIEW ============================ */
+
+// Fetches the current user once so we can render their current avatar
+// + name. The widget has no shared user-context provider so we hit
+// /api/users/me directly.
+interface WidgetMe {
+  id: string;
+  name: string;
+  email: string;
+}
+
+const DEFAULT_WIDGET_ICON = "/widget-icon.png";
+
+function SettingsView({
+  onClose, widgetIconUrl, onIconChanged
+}: {
+  onClose: () => void;
+  widgetIconUrl: string | null;
+  onIconChanged: () => void;
+}) {
+  const [me, setMe] = useState<WidgetMe | null>(null);
+  const [stagedFile, setStagedFile] = useState<File | string | null>(null);
+  const [localIconUrl, setLocalIconUrl] = useState<string | null>(widgetIconUrl);
+  const [signingOut, setSigningOut] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/users/me", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (cancelled || !d) return;
+        setMe({
+          id: d.user?.id ?? d.id ?? "",
+          name: d.user?.name ?? d.name ?? "You",
+          email: d.user?.email ?? d.email ?? ""
+        });
+        if (d.user?.widgetIconUrl !== undefined) {
+          setLocalIconUrl(d.user.widgetIconUrl);
+        }
+      })
+      .catch(() => { /* leave me=null; UI shows fallback */ });
+    return () => { cancelled = true; };
+  }, []);
+
+  async function saveCroppedBlob(blob: Blob) {
+    if (!me) return;
+    try {
+      const form = new FormData();
+      const f = new File([blob], `widget-${me.id}.png`, { type: "image/png" });
+      form.append("file", f);
+      // Store widget icons alongside avatars but in a distinct sub-key.
+      form.append("taskId", `widget-icons/${me.id}`);
+      const upRes = await fetch("/api/upload", { method: "POST", body: form });
+      const upData = await upRes.json();
+      if (!upRes.ok) throw new Error(upData?.error ?? `upload failed (${upRes.status})`);
+      const url: string = upData.url;
+
+      const saveRes = await fetch("/api/users/me/widget-icon", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url })
+      });
+      const saveData = await saveRes.json();
+      if (!saveRes.ok) throw new Error(saveData?.error ?? `save failed (${saveRes.status})`);
+
+      setLocalIconUrl(url);
+      setStagedFile(null);
+      toast.success("Widget picture updated ✨");
+      onIconChanged();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "save failed");
+    }
+  }
+
+  async function resetToDefault() {
+    try {
+      const res = await fetch("/api/users/me/widget-icon", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: null })
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => null);
+        throw new Error(d?.error ?? "couldn't reset");
+      }
+      setLocalIconUrl(null);
+      toast.success("Reverted to the default");
+      onIconChanged();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "couldn't reset");
+    }
+  }
+
+  async function signOut() {
+    setSigningOut(true);
+    try {
+      // Hit our auth route — same one the web /logout button uses.
+      const res = await fetch("/api/auth/logout", { method: "POST" });
+      if (!res.ok && res.status !== 204) {
+        const d = await res.json().catch(() => null);
+        throw new Error(d?.error ?? `signout failed (${res.status})`);
+      }
+      toast.success("Signed out");
+      // Reload the widget so it re-checks auth + flips to sign-in panel.
+      window.location.reload();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "signout failed");
+    } finally {
+      setSigningOut(false);
+    }
+  }
+
+  return (
+    <div className="h-screen w-screen p-5 anim-fade-in">
+      <div className="h-full w-full flex flex-col text-slate-900 rounded-[28px] overflow-hidden border border-slate-200/70 bg-white shadow-[0_20px_60px_-20px_rgba(15,23,42,0.25),0_8px_24px_-12px_rgba(15,23,42,0.15)]">
+        <div
+          className="h-12 flex items-center justify-between px-3 border-b border-slate-100"
+          // @ts-ignore — Electron-only
+          style={{ WebkitAppRegion: "drag" }}
+        >
+          <button
+            onClick={onClose}
+            className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium text-slate-600 hover:text-ink hover:bg-slate-100 transition-colors"
+            style={{ WebkitAppRegion: "no-drag" } as any}
+          >
+            <ArrowLeft className="w-3.5 h-3.5" /> Back
+          </button>
+          <span className="text-[12px] font-semibold text-ink inline-flex items-center gap-1.5">
+            <SettingsIcon className="w-3.5 h-3.5 text-accent" /> Settings
+          </span>
+          <button
+            onClick={onClose}
+            className="p-1.5 rounded-lg text-slate-500 hover:text-ink hover:bg-slate-100 transition-colors"
+            style={{ WebkitAppRegion: "no-drag" } as any}
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+          {/* Widget bubble picture editor */}
+          <section>
+            <div className="text-[10px] uppercase tracking-wide font-semibold text-slate-500 px-1 mb-2">
+              Widget bubble
+            </div>
+            {stagedFile ? (
+              <div className="rounded-2xl border border-slate-200/70 bg-slate-50/60 p-3">
+                <AvatarCropper
+                  source={stagedFile}
+                  previewSize={260}
+                  onCancel={() => setStagedFile(null)}
+                  onSave={saveCroppedBlob}
+                />
+              </div>
+            ) : (
+              <div className="flex items-center gap-3">
+                {/* Live bubble preview — same 64×64 styling as the
+                    floating bubble so users see exactly what they'll get. */}
+                <div className="w-16 h-16 rounded-full overflow-hidden border border-slate-200 ring-2 ring-white shadow-md shrink-0">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={localIconUrl || DEFAULT_WIDGET_ICON}
+                    alt="Widget bubble preview"
+                    className="w-full h-full object-cover"
+                  />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-medium">
+                    {localIconUrl ? "Custom picture" : "Default brand logo"}
+                  </div>
+                  <div className="text-[11px] text-slate-500">
+                    {localIconUrl
+                      ? "Shown on the floating bubble"
+                      : "Pick an image to personalize"}
+                  </div>
+                  <div className="mt-2 flex items-center gap-1.5 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={() => fileRef.current?.click()}
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium bg-white border border-slate-200 hover:border-accent/40 hover:text-accent text-ink/75 transition-colors active:scale-95"
+                    >
+                      <Camera className="w-3 h-3" /> Choose image
+                    </button>
+                    {localIconUrl && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => setStagedFile(localIconUrl)}
+                          className="text-[11px] text-slate-500 hover:text-accent transition-colors px-1"
+                        >
+                          Re-crop
+                        </button>
+                        <button
+                          type="button"
+                          onClick={resetToDefault}
+                          className="text-[11px] text-slate-500 hover:text-rose-600 transition-colors px-1"
+                        >
+                          Reset to default
+                        </button>
+                      </>
+                    )}
+                  </div>
+                  <input
+                    ref={fileRef}
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (f) setStagedFile(f);
+                      if (fileRef.current) fileRef.current.value = "";
+                    }}
+                  />
+                </div>
+              </div>
+            )}
+            <p className="text-[10px] text-slate-500 mt-2 px-1">
+              Drag the image inside the circle, scroll or pinch to zoom, then
+              save. The picture you crop becomes the floating widget bubble.
+            </p>
+          </section>
+
+          {/* Account section */}
+          <section className="rounded-2xl border border-slate-200/70 bg-slate-50/40 p-3">
+            <div className="text-[10px] uppercase tracking-wide font-semibold text-slate-500 mb-2">
+              Account
+            </div>
+            <button
+              type="button"
+              onClick={signOut}
+              disabled={signingOut}
+              className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl text-sm font-medium border border-rose-200 bg-white text-rose-700 hover:bg-rose-50 transition-colors disabled:opacity-60"
+            >
+              <LogOut className="w-4 h-4" />
+              {signingOut ? "Signing out…" : "Sign out"}
+            </button>
+          </section>
+        </div>
+      </div>
+    </div>
+  );
 }

@@ -4,6 +4,7 @@ import { users, tasks, skillProfiles, departments, managerOf } from "@/lib/mock-
 import { Avatar } from "@/components/Avatar";
 import { PersonAvatar } from "@/components/PersonAvatar";
 import { CapacityBar } from "@/components/CapacityBar";
+import { ProfileDialog } from "@/components/ProfileDialog";
 import { TaskCard } from "@/components/TaskCard";
 import { userCapacity } from "@/lib/capacity";
 import { ROLE_LABELS } from "@/lib/auth";
@@ -47,7 +48,10 @@ export default function ProfilePage({ params }: { params: { id: string } }) {
           </div>
           <div className="mt-3 max-w-sm"><CapacityBar pct={cap.pct} overSoft={cap.overSoft} overBuffer={cap.overBuffer} /></div>
         </div>
-        <button className="btn">Edit profile</button>
+        <ProfileDialog
+          userId={user.id}
+          trigger={<button className="btn">Edit profile</button>}
+        />
       </div>
 
       {directReports.length > 0 && (

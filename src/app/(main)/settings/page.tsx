@@ -7,6 +7,7 @@ import { DesktopAppSection } from "@/components/DesktopAppSection";
 import { MissiveIntegrationSection } from "@/components/MissiveIntegrationSection";
 import { CustomFieldsSection } from "@/components/CustomFieldsSection";
 import { SkillsSection } from "@/components/SkillsSection";
+import { ResponsibilitiesSection } from "@/components/ResponsibilitiesSection";
 import { PageHero } from "@/components/PageHero";
 import { Settings as SettingsIcon } from "lucide-react";
 
@@ -27,6 +28,8 @@ export default async function SettingsPage() {
       {me && <ProfileAvatarSection user={me} />}
 
       <SkillsSection canManage={me?.role === "ceo" || me?.role === "department_head"} />
+
+      <ResponsibilitiesSection canManage={me?.role === "ceo"} />
 
       <CustomFieldsSection canManage={me?.role === "ceo" || me?.role === "department_head"} />
 

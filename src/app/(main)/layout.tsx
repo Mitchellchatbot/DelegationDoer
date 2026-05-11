@@ -7,6 +7,7 @@ import { getSupabaseServer } from "@/lib/supabase-server";
 import { getUserById } from "@/lib/server-data";
 import { UserProvider } from "@/lib/user-context";
 import { PresenceProvider } from "@/lib/presence-context";
+import { ClockProvider } from "@/components/ClockContext";
 
 export default async function MainLayout({ children }: { children: React.ReactNode }) {
   // Three legitimate states:
@@ -31,6 +32,7 @@ export default async function MainLayout({ children }: { children: React.ReactNo
   return (
     <UserProvider user={user}>
       <PresenceProvider>
+      <ClockProvider>
       {/* Floating-panels layout: sidebar, topbar, and main are each their
           own rounded card with a 12px gutter between them. The page bg
           (app-shell gradient) shows through the gaps so each panel feels
@@ -53,6 +55,7 @@ export default async function MainLayout({ children }: { children: React.ReactNo
         </div>
       </div>
       <Toaster position="bottom-right" richColors closeButton />
+      </ClockProvider>
       </PresenceProvider>
     </UserProvider>
   );

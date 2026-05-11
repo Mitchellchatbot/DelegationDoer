@@ -4,9 +4,19 @@ import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { listAccounts, listTeamMembers, type MissiveAccount } from "@/lib/missive-client";
 import { canManageAssignments, getAllAssignments, syncMissiveOwnership, type InboxAssignment } from "@/lib/inbox-access";
+import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { users as mockUsers, departments as mockDepartments } from "@/lib/mock-data";
 import { InboxAssignmentGraph } from "@/components/InboxAssignmentGraph";
-import { BackPill } from "@/components/BackPill";
+import { AutoIntakeToggleSection } from "@/components/AutoIntakeToggleSection";
+import { ConnectInboxDialog } from "@/components/ConnectInboxDialog";
+import { InboxInviteList } from "@/components/InboxInviteList";
+import { Plug } from "lucide-react";
+
+interface AutoIntakeRow {
+  account_id: string;
+  auto_intake_enabled: boolean;
+  last_polled_at: string | null;
+}
 
 export const dynamic = "force-dynamic";
 
@@ -29,6 +39,7 @@ export default async function ManageInboxesPage() {
 
   let inboxes: MissiveAccount[] = [];
   let assignments: InboxAssignment[] = [];
+  let autoIntakeSettings: AutoIntakeRow[] = [];
   let fetchError: string | null = null;
   try {
     // Fetch missive accounts + team members in parallel; then mirror their
@@ -43,6 +54,12 @@ export default async function ManageInboxesPage() {
     }
     // Read assignments AFTER the sync so the page reflects the merged state.
     assignments = await getAllAssignments();
+
+    // Auto-intake settings — degrade silently if migration hasn't shipped.
+    const { data: settings } = await getSupabaseAdmin()
+      .from("missive_account_settings")
+      .select("account_id, auto_intake_enabled, last_polled_at");
+    autoIntakeSettings = (settings ?? []) as AutoIntakeRow[];
   } catch (err) {
     fetchError = err instanceof Error ? err.message : "unknown error";
   }
@@ -50,9 +67,7 @@ export default async function ManageInboxesPage() {
   const missiveAppUrl = (process.env.MISSIVE_API_URL ?? "").replace(/\/$/, "");
 
   return (
-    <div className="space-y-5 max-w-7xl mx-auto">
-      <BackPill href="/inboxes" label="Inboxes" />
-
+    <div className="space-y-5">
       <header
         className="relative overflow-hidden rounded-2xl border border-white/60 shadow-soft p-5"
         style={{ background: "linear-gradient(120deg, #DBEAFE 0%, #C7D2FE 50%, #C7D2FE 100%)" }}
@@ -68,16 +83,29 @@ export default async function ManageInboxesPage() {
               </p>
             </div>
           </div>
-          {missiveAppUrl && (
-            <a
-              href={missiveAppUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-white/80 border border-white/80 text-ink/80 hover:text-accent transition-all hover:-translate-y-0.5 shadow-sm"
-            >
-              <ExternalLink className="w-3.5 h-3.5" /> Open Missive
-            </a>
-          )}
+          <div className="shrink-0 flex items-center gap-2 flex-wrap">
+            <ConnectInboxDialog
+              trigger={
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold text-white shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-lift active:scale-95"
+                  style={{ background: "linear-gradient(135deg, #2563EB 0%, #1e63ff 100%)" }}
+                >
+                  <Plug className="w-3.5 h-3.5" /> Connect inbox
+                </button>
+              }
+            />
+            {missiveAppUrl && (
+              <a
+                href={missiveAppUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-white/80 border border-white/80 text-ink/80 hover:text-accent transition-all hover:-translate-y-0.5 shadow-sm"
+              >
+                <ExternalLink className="w-3.5 h-3.5" /> Open Missive
+              </a>
+            )}
+          </div>
         </div>
         <div
           aria-hidden
@@ -104,31 +132,35 @@ export default async function ManageInboxesPage() {
           <div className="w-16 h-16 rounded-2xl bg-indigo-100 text-indigo-600 grid place-items-center mx-auto mb-3">
             <Layers className="w-8 h-8" />
           </div>
-          <div className="text-base font-medium">No inboxes connected in Missive yet</div>
+          <div className="text-base font-medium">No inboxes connected yet</div>
           <div className="text-sm text-muted mt-1 max-w-md mx-auto">
-            Connect at least one IMAP mailbox over there, then come back to assign it to people.
+            Hit "Connect inbox" above to link a mailbox over IMAP/SMTP.
           </div>
-          {missiveAppUrl && (
-            <a
-              href={missiveAppUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="mt-4 inline-flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-medium text-white shadow-sm transition-all hover:-translate-y-0.5"
-              style={{ background: "linear-gradient(135deg, #2563EB 0%, #1e63ff 100%)" }}
-            >
-              <ExternalLink className="w-4 h-4" /> Connect a mailbox in Missive
-            </a>
-          )}
         </div>
       ) : null}
 
       {!fetchError && inboxes.length > 0 && (
-        <InboxAssignmentGraph
-          users={mockUsers}
-          inboxes={inboxes}
-          departments={mockDepartments}
-          initialAssignments={assignments}
-        />
+        <>
+          <InboxInviteList
+            inboxes={inboxes.map((a) => ({
+              id: a.id,
+              email: a.email,
+              displayName: a.display_name
+            }))}
+            users={mockUsers}
+            initialAssignments={assignments}
+          />
+          <InboxAssignmentGraph
+            users={mockUsers}
+            inboxes={inboxes}
+            departments={mockDepartments}
+            initialAssignments={assignments}
+          />
+          <AutoIntakeToggleSection
+            inboxes={inboxes}
+            initialSettings={autoIntakeSettings}
+          />
+        </>
       )}
     </div>
   );

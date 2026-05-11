@@ -6,7 +6,8 @@ import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
 import {
   LayoutDashboard, ListTodo, Columns3, Users, ShieldAlert,
-  Sparkles, Settings, AlertTriangle, Crown, Mail, Briefcase, BarChart3, Search
+  Sparkles, Settings, AlertTriangle, Crown, Mail, Briefcase, BarChart3, Search,
+  Network, Camera
 } from "lucide-react";
 import { useState } from "react";
 import { ReportIncidentDialog } from "./ReportIncidentDialog";
@@ -26,10 +27,12 @@ type Tone = "blue" | "indigo" | "teal" | "emerald" | "amber" | "rose" | "fuchsia
 interface NavItem { href: string; label: string; icon: typeof LayoutDashboard; tone: Tone }
 
 const BASE_NAV: NavItem[] = [
-  { href: "/",          label: "Dashboard", icon: LayoutDashboard, tone: "blue"     },
+  { href: "/org-chart", label: "Org Chart", icon: Network,         tone: "indigo"   },
+  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, tone: "blue"     },
   { href: "/my-tasks",  label: "My Tasks",  icon: ListTodo,        tone: "indigo"   },
   { href: "/board",     label: "Board",     icon: Columns3,        tone: "teal"     },
   { href: "/inboxes",   label: "Inboxes",   icon: Mail,            tone: "fuchsia"  },
+  { href: "/moments",   label: "Moments",   icon: Camera,          tone: "fuchsia"  },
   { href: "/clients",     label: "Clients",     icon: Briefcase,   tone: "amber"    },
   { href: "/team",        label: "Team",        icon: Users,       tone: "emerald"  },
   { href: "/seo-reports", label: "SEO Reports", icon: Search,      tone: "fuchsia"  },
@@ -60,10 +63,14 @@ export function Sidebar({ user }: { user: User }) {
   const [incidentOpen, setIncidentOpen] = useState(false);
   const [aiOpen, setAiOpen] = useState(false);
 
+  // Org Chart (BASE_NAV[0]) is always the very first item — that's the
+  // default landing tab for everyone. Role-specific items slot in
+  // immediately after.
+  const [orgChart, ...rest] = BASE_NAV;
   const NAV: NavItem[] = isCEO(user)
-    ? [...CEO_NAV, ...BASE_NAV.filter((i) => i.href !== "/")]
+    ? [orgChart, ...CEO_NAV, ...rest]
     : isHead(user)
-      ? [...BASE_NAV.slice(0, 4), ...HEAD_NAV, ...BASE_NAV.slice(4)]
+      ? [orgChart, ...rest.slice(0, 4), ...HEAD_NAV, ...rest.slice(4)]
       : BASE_NAV;
 
   return (

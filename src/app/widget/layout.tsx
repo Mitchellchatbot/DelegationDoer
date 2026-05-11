@@ -1,3 +1,5 @@
+import { Toaster } from "sonner";
+
 // Server component: injects a <style> tag into the initial HTML so html/body
 // are transparent on first paint. Two things to defeat:
 //   1) Global `bg-bg` / cream background from globals.css filling the 64x64
@@ -96,6 +98,7 @@ export default function WidgetLayout({ children }: { children: React.ReactNode }
         }}
       />
       {children}
+      <Toaster position="top-center" richColors closeButton />
     </>
   );
 }

@@ -1,11 +1,13 @@
 import { redirect } from "next/navigation";
-import { AtSign, SendHorizontal, Inbox, Send, ExternalLink, Reply } from "lucide-react";
+import { AtSign, SendHorizontal, Inbox, Send, ExternalLink } from "lucide-react";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { getThread, type MissiveMessage } from "@/lib/missive-client";
 import { visibleAccountIdsFor } from "@/lib/inbox-access";
-import { BackPill } from "@/components/BackPill";
 import { Avatar } from "@/components/Avatar";
+import { CreateTaskFromThreadButton } from "@/components/CreateTaskFromThreadButton";
+import { ReplyComposer } from "@/components/ReplyComposer";
+import { ThreadAutoMarkRead } from "@/components/ThreadAutoMarkRead";
 
 export const dynamic = "force-dynamic";
 
@@ -56,14 +58,14 @@ export default async function ThreadDetailPage({
     : null;
 
   return (
-    <div className="space-y-5 max-w-4xl mx-auto">
-      <div className="flex items-center justify-between gap-2 flex-wrap">
-        <BackPill
-          href={`/inboxes/${encodeURIComponent(params.accountId)}`}
-          label="Threads"
-        />
-        {missiveThreadUrl && (
-          <div className="flex items-center gap-2">
+    <div className="space-y-5">
+      <div className="flex items-center justify-end gap-2 flex-wrap">
+        <div className="flex items-center gap-2">
+          <CreateTaskFromThreadButton
+            accountId={params.accountId}
+            threadId={params.threadId}
+          />
+          {missiveThreadUrl && (
             <a
               href={missiveThreadUrl}
               target="_blank"
@@ -72,17 +74,8 @@ export default async function ThreadDetailPage({
             >
               <ExternalLink className="w-3.5 h-3.5" /> Open in Missive
             </a>
-            <a
-              href={missiveThreadUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium text-white shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-lift"
-              style={{ background: "linear-gradient(135deg, #2563EB 0%, #1e63ff 100%)" }}
-            >
-              <Reply className="w-3.5 h-3.5" /> Reply in Missive
-            </a>
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
       {fetchError && (
@@ -212,6 +205,24 @@ export default async function ThreadDetailPage({
               );
             })}
           </div>
+
+          {/* Inline reply — Gmail-style folded composer that expands
+              when the user clicks. */}
+          <ReplyComposer
+            threadId={params.threadId}
+            accountId={params.accountId}
+            defaultTo={(() => {
+              const lastInbound = [...messages].reverse().find((m) => m.direction === "inbound");
+              return lastInbound ? rawEmail(lastInbound.from_addr) : null;
+            })()}
+          />
+
+          {/* Mark-as-read upsert fires on mount — silent. */}
+          <ThreadAutoMarkRead
+            threadId={params.threadId}
+            accountId={params.accountId}
+            readThroughAt={messages.at(-1)?.sent_at ?? null}
+          />
         </>
       )}
     </div>

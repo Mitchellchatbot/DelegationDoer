@@ -35,6 +35,13 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     if (PRIORITIES.includes(body.priority)) update.priority = body.priority;
     if (STATUSES.includes(body.status)) update.status = body.status;
     if (typeof body.estimatedHours === "number" && body.estimatedHours > 0) update.estimated_hours = body.estimatedHours;
+    // Manual override for actual hours. Pass a number to pin actuals to that
+    // value (off-clock work, backfill); pass null to clear and fall back to
+    // the time_entries-derived value.
+    if (body.actualHoursOverride === null) update.actual_hours_override = null;
+    else if (typeof body.actualHoursOverride === "number" && body.actualHoursOverride >= 0) {
+      update.actual_hours_override = body.actualHoursOverride;
+    }
     if (body.dueDate === null || typeof body.dueDate === "string") update.due_date = body.dueDate || null;
     if (Array.isArray(body.tags)) update.tags = body.tags.filter((t: unknown) => typeof t === "string");
     if (body.clientName === null) update.client_name = null;
@@ -131,14 +138,24 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
         reason,
         held_minutes: heldMinutes
       });
+      // Resolve "from" + "to" names so the activity log row reads
+      // "Handed off to Shaheer" instead of leaving the reader to
+      // recognize raw ids. Two cheap lookups; misses degrade gracefully.
+      const handoffPartyIds = [before.assignee_id, update.assignee_id]
+        .filter((v): v is string => typeof v === "string");
+      const { data: partyRows } = handoffPartyIds.length > 0
+        ? await supabase.from("users").select("id, name").in("id", handoffPartyIds)
+        : { data: [] };
+      const nameById = new Map((partyRows ?? []).map((r) => [r.id, r.name as string]));
+      const fromName = before.assignee_id ? nameById.get(before.assignee_id) ?? "Unassigned" : "Unassigned";
+      const toName = update.assignee_id ? nameById.get(update.assignee_id) ?? "Unassigned" : "Unassigned";
+      const handoffSuffix = [stage ? `[${stage}]` : "", reason ?? ""].filter(Boolean).join(" ").trim();
       await supabase.from("activity_logs").insert({
         id: `a_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
         task_id: params.id,
         user_id: userId,
         action: "handoff",
-        detail: stage || reason
-          ? `${stage ? `[${stage}] ` : ""}${reason ?? ""}`.trim()
-          : null
+        detail: `${fromName} → ${toName}${handoffSuffix ? `\n${handoffSuffix}` : ""}`
       });
     }
 

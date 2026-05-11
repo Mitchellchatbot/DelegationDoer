@@ -14,12 +14,18 @@ const path = require("path");
 const APP_URL = process.env.DD_APP_URL || "https://delegationdoer-production.up.railway.app";
 const WIDGET_URL = `${APP_URL}/widget`;
 
-// 88x88 collapsed window with the 64x64 icon centered inside. The 12-px
-// transparent margin around the icon prevents macOS from painting a default
-// opaque backdrop at the icon's edge — that "white squircle" effect.
-const BUBBLE = { w: 88, h: 88 };
-const ALERT  = { w: 380, h: 100 };
-const PANEL  = { w: 380, h: 520 };
+// Each window is sized larger than its visible content so the rounded
+// card's drop shadow has somewhere to render without being clipped at
+// the window edge. The renderer adds matching padding (p-5 / 20px) so
+// the visible card stays the same size as before.
+//
+// BUBBLE: 64x64 icon + ~16px margin each side for the icon's drop-shadow
+//   (and the gold EOM crown glow when crowned).
+// ALERT/PANEL: ~20px shadow margin per side on top of the card's natural
+//   width/height.
+const BUBBLE = { w: 96, h: 96 };
+const ALERT  = { w: 420, h: 140 };
+const PANEL  = { w: 420, h: 560 };
 const MARGIN = 16;
 
 function sizeForState(state) {

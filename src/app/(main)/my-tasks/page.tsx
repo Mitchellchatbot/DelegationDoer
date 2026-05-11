@@ -80,7 +80,7 @@ export default async function MyTasksPage() {
   const blocked = mine.filter((t) => t.status === "waiting_on_client").length;
 
   return (
-    <div className="space-y-5 max-w-7xl mx-auto">
+    <div className="space-y-5">
       <PageHero
         eyebrow={`Hey ${me.name.split(" ")[0]}`}
         headline={["Here's what's ", { accent: "on your plate" }]}

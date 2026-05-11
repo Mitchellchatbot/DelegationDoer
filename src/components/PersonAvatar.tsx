@@ -1,7 +1,7 @@
 "use client";
 
 import { Avatar } from "./Avatar";
-import { usePresence } from "@/lib/presence-context";
+import { usePresence, useEomUserId } from "@/lib/presence-context";
 
 // Smart avatar that auto-pulls presence + status emoji from the
 // PresenceProvider. Drop-in for `<Avatar>` whenever the data passes
@@ -21,6 +21,8 @@ export function PersonAvatar({
   className?: string;
 }) {
   const live = usePresence(userId);
+  const eomUserId = useEomUserId();
+  const crowned = !!userId && eomUserId === userId;
   return (
     <Avatar
       name={live?.name ?? name}
@@ -29,6 +31,7 @@ export function PersonAvatar({
       className={className}
       presence={live?.presence ?? null}
       emoji={live?.statusEmoji ?? null}
+      crowned={crowned}
     />
   );
 }

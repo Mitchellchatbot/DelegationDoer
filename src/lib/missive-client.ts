@@ -73,13 +73,18 @@ function token(): string {
 }
 
 async function missiveFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
+  // FormData bodies set their own Content-Type with a boundary param —
+  // forcing application/json would corrupt the multipart parse on the
+  // clone side. Detect FormData and skip the default.
+  const isMultipart =
+    typeof FormData !== "undefined" && init.body instanceof FormData;
+  const baseHeaders: Record<string, string> = {
+    Authorization: `Bearer ${token()}`
+  };
+  if (!isMultipart) baseHeaders["Content-Type"] = "application/json";
   const res = await fetch(`${baseUrl()}${path}`, {
     ...init,
-    headers: {
-      Authorization: `Bearer ${token()}`,
-      "Content-Type": "application/json",
-      ...(init.headers ?? {})
-    },
+    headers: { ...baseHeaders, ...(init.headers ?? {}) },
     cache: "no-store"
   });
   if (!res.ok) {
@@ -177,6 +182,118 @@ export async function getThread(threadId: string): Promise<MissiveThreadDetail> 
     thread: normalizeThread(data.thread),
     messages: (data.messages ?? []).map(normalizeMessage)
   };
+}
+
+// Create a new inbox connection on the Missive clone. Body shape mirrors
+// the clone's `POST /api/accounts` endpoint as best we know it. The clone
+// is the source of truth for which fields are required — anything missing
+// will surface as a clone-side error here, which we propagate to the UI.
+export interface CreateAccountArgs {
+  email: string;
+  display_name?: string;
+  provider?: string;     // "gmail" | "outlook" | "imap" — clone-specific.
+  imap_host?: string;
+  imap_port?: number;
+  imap_user?: string;
+  imap_password?: string;
+  smtp_host?: string;
+  smtp_port?: number;
+  smtp_user?: string;
+  smtp_password?: string;
+}
+
+export async function createAccount(args: CreateAccountArgs): Promise<MissiveAccount> {
+  const data = await missiveFetch<{ account: MissiveAccount }>(
+    "/api/accounts",
+    {
+      method: "POST",
+      body: JSON.stringify(args)
+    }
+  );
+  return {
+    ...data.account,
+    last_synced_at: data.account.last_synced_at
+      ? toIsoString(data.account.last_synced_at)
+      : null
+  };
+}
+
+// Send a reply on an existing thread. The clone's reply endpoint expects
+// a JSON payload with the message body + recipient list; we read those
+// off the most recent message in the thread when the caller doesn't pass
+// them explicitly. Returns the created message so the caller can append
+// it optimistically.
+export interface ReplyArgs {
+  threadId: string;
+  bodyText: string;
+  bodyHtml?: string;
+  // The Missive account the reply is sent FROM. The clone routes the
+  // SMTP send through this account's provider config.
+  fromAccountId: string;
+  to: string[];
+  cc?: string[];
+  subject?: string;        // Defaults to "Re: <original subject>" on the clone side.
+  inReplyTo?: string;      // Message-id to thread on.
+}
+
+export async function sendReply(args: ReplyArgs): Promise<MissiveMessage> {
+  // The clone's reply endpoint is multipart/form-data: a `payload` JSON
+  // string + optional `files[]`. Plain JSON makes req.body.payload
+  // undefined on the server, which silently parses to {} and surfaces as
+  // "account_id invalid" downstream. We send multipart even without
+  // attachments so the contract matches.
+  const payload = {
+    account_id: args.fromAccountId,
+    body_text: args.bodyText,
+    body_html: args.bodyHtml ?? null,
+    to: args.to.join(", "),
+    cc: (args.cc ?? []).join(", "),
+    subject: args.subject ?? null
+  };
+  const form = new FormData();
+  form.append("payload", JSON.stringify(payload));
+  const data = await missiveFetch<{ message: MissiveMessage }>(
+    `/api/threads/${encodeURIComponent(args.threadId)}/reply`,
+    { method: "POST", body: form }
+  );
+  return normalizeMessage(data.message);
+}
+
+// Compose a brand-new outbound thread. Hits the clone's "new message"
+// endpoint, which creates a thread + sends via the from-account's SMTP.
+export interface ComposeArgs {
+  fromAccountId: string;
+  to: string[];
+  cc?: string[];
+  bcc?: string[];
+  subject: string;
+  bodyText: string;
+  bodyHtml?: string;
+}
+
+export async function composeNewThread(args: ComposeArgs): Promise<{
+  threadId: string;
+  messageId: string;
+}> {
+  // Mounted at /api/compose (NOT /api/messages). Multipart with a single
+  // `payload` JSON string; the clone expects `to`/`cc`/`bcc` as scalar
+  // strings (joined), not arrays.
+  const payload = {
+    account_id: args.fromAccountId,
+    to: args.to.join(", "),
+    cc: (args.cc ?? []).join(", "),
+    bcc: (args.bcc ?? []).join(", "),
+    subject: args.subject,
+    body_text: args.bodyText,
+    body_html: args.bodyHtml ?? null
+  };
+  const form = new FormData();
+  form.append("payload", JSON.stringify(payload));
+  const data = await missiveFetch<{ thread_id: string; message_id: string }>(
+    "/api/compose",
+    { method: "POST", body: form }
+  );
+  return { threadId: data.thread_id, messageId: data.message_id };
 }
 
 // Filter threads by account. The clone's API doesn't expose a per-account

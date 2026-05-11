@@ -10,6 +10,8 @@ import { toast } from "sonner";
 import { ROLE_LABELS } from "@/lib/auth";
 import { initials, cn } from "@/lib/utils";
 import { useCurrentUser } from "@/lib/user-context";
+import { usePresence } from "@/lib/presence-context";
+import { ProfileDialog } from "./ProfileDialog";
 import { SendKudosDialog } from "./SendKudosDialog";
 import type { User, Department } from "@/lib/types";
 
@@ -444,12 +446,17 @@ export function TeamCarousel({ users, departments }: Props) {
               {ROLE_LABELS[current.role]}{deptNames ? ` · ${deptNames}` : ""}
             </p>
             <div className="mt-4 inline-flex items-center gap-3">
-              <Link
-                href={`/team/${current.id}`}
-                className="inline-flex items-center gap-1.5 text-[13px] text-accent hover:underline font-medium"
-              >
-                View profile →
-              </Link>
+              <ProfileDialog
+                userId={current.id}
+                trigger={
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-1.5 text-[13px] text-accent hover:underline font-medium"
+                  >
+                    View profile →
+                  </button>
+                }
+              />
               <SendKudosDialog
                 recipientId={current.id}
                 recipientName={current.name}
@@ -626,14 +633,19 @@ function EmojiPickerTrigger({
 /* ============================ CARD FACE ============================ */
 
 function CardFace({ user, isCenter }: { user: User; isCenter: boolean }) {
-  // Image card if we have an avatar URL, otherwise a vibrant
-  // initials-on-gradient placeholder colored by role.
-  if (user.avatarUrl) {
+  // The mock-data User passed in here may not have the latest
+  // avatarUrl — settings uploads land in the DB, which the
+  // PresenceProvider hydrates. Fall through to the live cache when the
+  // prop is empty so newly-uploaded avatars surface here.
+  const live = usePresence(user.id);
+  const avatarUrl = user.avatarUrl ?? live?.avatarUrl ?? null;
+
+  if (avatarUrl) {
     return (
       <>
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
-          src={user.avatarUrl}
+          src={avatarUrl}
           alt={user.name}
           draggable={false}
           className={cn(

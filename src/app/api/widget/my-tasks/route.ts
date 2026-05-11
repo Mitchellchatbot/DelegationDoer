@@ -11,7 +11,7 @@ import { requireCurrentUserId } from "@/lib/session";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-const SELECT_COLS = "id, title, priority, status, due_date, estimated_hours, inactive_flag, created_at, description, tags, client_name, website";
+const SELECT_COLS = "id, title, priority, status, due_date, estimated_hours, actual_hours, actual_hours_override, inactive_flag, created_at, description, tags, client_name, website";
 
 export async function GET() {
   try {
@@ -53,20 +53,32 @@ export async function GET() {
     });
 
     const acked = new Set((acks ?? []).map((a) => a.task_id));
-    const out = merged.map((t) => ({
-      id: t.id,
-      title: t.title,
-      description: t.description,
-      priority: t.priority,
-      status: t.status,
-      dueDate: t.due_date,
-      estimatedHours: Number(t.estimated_hours),
-      inactiveFlag: t.inactive_flag,
-      clientName: t.client_name,
-      website: t.website,
-      isIncident: Array.isArray(t.tags) && t.tags.includes("incident"),
-      needsAck: !acked.has(t.id)
-    }));
+    const out = merged.map((t) => {
+      // Same override-wins rule as src/lib/server-data.ts.
+      const actualHours =
+        t.actual_hours_override !== null && t.actual_hours_override !== undefined
+          ? Number(t.actual_hours_override)
+          : Number(t.actual_hours ?? 0);
+      return {
+        id: t.id,
+        title: t.title,
+        description: t.description,
+        priority: t.priority,
+        status: t.status,
+        dueDate: t.due_date,
+        estimatedHours: Number(t.estimated_hours),
+        actualHours,
+        actualHoursOverride:
+          t.actual_hours_override !== null && t.actual_hours_override !== undefined
+            ? Number(t.actual_hours_override)
+            : null,
+        inactiveFlag: t.inactive_flag,
+        clientName: t.client_name,
+        website: t.website,
+        isIncident: Array.isArray(t.tags) && t.tags.includes("incident"),
+        needsAck: !acked.has(t.id)
+      };
+    });
 
     return NextResponse.json({ tasks: out });
   } catch (err) {

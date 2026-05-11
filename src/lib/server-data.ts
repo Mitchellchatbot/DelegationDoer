@@ -33,6 +33,7 @@ interface TaskRow {
   priority: Task["priority"];
   estimated_hours: number;
   actual_hours: number;
+  actual_hours_override: number | null;
   tags: string[];
   department_id: string | null;
   assignee_id: string | null;
@@ -93,7 +94,17 @@ function taskFromRow(row: TaskRow): Task {
     status: row.status,
     priority: row.priority,
     estimatedHours: Number(row.estimated_hours),
-    actualHours: Number(row.actual_hours),
+    // Override wins: if a user pinned actuals manually (off-clock work
+    // etc.) that value is the truth; otherwise use the time_entries-
+    // derived denorm in actual_hours.
+    actualHours:
+      row.actual_hours_override !== null && row.actual_hours_override !== undefined
+        ? Number(row.actual_hours_override)
+        : Number(row.actual_hours),
+    actualHoursOverride:
+      row.actual_hours_override !== null && row.actual_hours_override !== undefined
+        ? Number(row.actual_hours_override)
+        : null,
     tags: row.tags,
     departmentId: row.department_id,
     assigneeId: row.assignee_id,
@@ -154,7 +165,7 @@ export async function getDepartmentById(id: string | null | undefined): Promise<
 }
 
 const TICKET_COLS =
-  "id,title,description,status,priority,estimated_hours,actual_hours,tags," +
+  "id,title,description,status,priority,estimated_hours,actual_hours,actual_hours_override,tags," +
   "department_id,assignee_id,creator_id,project_id,due_date,inactive_flag," +
   "last_activity_at,created_at,blocks_task_ids,client_name,website," +
   "client_email,client_folder_url,staging_server,markup_link,hosting_access," +
@@ -177,5 +188,40 @@ export async function getAllUsersLight(): Promise<User[]> {
     .order("name");
   return (data ?? []).map((r) =>
     userFromRow(r as UserRow, [])
+  );
+}
+
+// Full users-list with department membership joined in. Used by views
+// that need departmentIds for filtering or routing (org chart, CEO
+// console). Two queries — users + department_members — joined in memory
+// so we don't fan out N+1 lookups. Errors degrade to an empty list
+// rather than throwing so a missing table can't 500 the whole page.
+export async function getAllUsers(): Promise<User[]> {
+  const supabase = getSupabaseAdmin();
+  const [usersRes, membersRes] = await Promise.all([
+    supabase
+      .from("users")
+      .select("id,name,email,role,daily_capacity,throughput,skills,avatar_url")
+      .order("name"),
+    supabase
+      .from("department_members")
+      .select("user_id, department_id")
+  ]);
+  if (usersRes.error) {
+    console.error("[getAllUsers] users select failed:", usersRes.error.message);
+    return [];
+  }
+  if (membersRes.error) {
+    // Members are optional — log + continue with empty membership.
+    console.warn("[getAllUsers] department_members select failed:", membersRes.error.message);
+  }
+  const byUser = new Map<string, string[]>();
+  for (const m of (membersRes.data ?? []) as { user_id: string; department_id: string }[]) {
+    const arr = byUser.get(m.user_id) ?? [];
+    arr.push(m.department_id);
+    byUser.set(m.user_id, arr);
+  }
+  return ((usersRes.data ?? []) as UserRow[]).map((r) =>
+    userFromRow(r, byUser.get(r.id) ?? [])
   );
 }

@@ -13,6 +13,9 @@ const PUBLIC_PREFIXES = [
   "/signup",
   "/api/auth",
   "/api/debug",
+  // Cron routes carry their own CRON_SECRET check inside the handler.
+  // Don't gate on a Supabase session — Vercel cron has no cookies.
+  "/api/cron",
   // The widget renderer must be reachable inside Electron without a
   // session — when the cookie jar is empty (fresh launch) we want the
   // widget to render its own "Sign in" state rather than redirect to

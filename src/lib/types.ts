@@ -33,7 +33,13 @@ export interface Task {
   status: TaskStatus;
   priority: Priority;
   estimatedHours: number;
+  // The "displayed" actual hours: override if set, else derived from the
+  // time_entries log. Reads should treat this as the truth.
   actualHours: number;
+  // When set, the user has manually pinned actuals (off-clock work or
+  // historical backfill) and the time-log sum is ignored. Lets the UI
+  // surface "overridden" affordances and offer a clear-override action.
+  actualHoursOverride?: number | null;
   tags: string[];
   departmentId: string | null;
   assigneeId: string | null;

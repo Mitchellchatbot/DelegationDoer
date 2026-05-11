@@ -12,6 +12,8 @@ interface AvatarProps {
   presence?: Presence;
   // Optional status emoji bubble in the opposite corner.
   emoji?: string | null;
+  // True → render a tiny crown above the avatar (Employee of the Month).
+  crowned?: boolean;
 }
 
 const DOT_CLASS: Record<Exclude<Presence, null | undefined>, string> = {
@@ -21,12 +23,13 @@ const DOT_CLASS: Record<Exclude<Presence, null | undefined>, string> = {
   away: "bg-slate-400"
 };
 
-export function Avatar({ name, imageUrl, size = 24, className, presence, emoji }: AvatarProps) {
+export function Avatar({ name, imageUrl, size = 24, className, presence, emoji, crowned }: AvatarProps) {
   const s = `${size}px`;
   const fontSize = Math.max(10, size * 0.42);
   const dotSize = Math.max(8, Math.round(size * 0.32));
   const emojiSize = Math.max(14, Math.round(size * 0.5));
   const emojiFont = Math.max(10, Math.round(size * 0.32));
+  const crownSize = Math.max(12, Math.round(size * 0.42));
 
   const inner = imageUrl ? (
     // eslint-disable-next-line @next/next/no-img-element
@@ -48,16 +51,51 @@ export function Avatar({ name, imageUrl, size = 24, className, presence, emoji }
   );
 
   // No overlays — keep the markup simple for the most common case.
-  if (!presence && !emoji) {
+  if (!presence && !emoji && !crowned) {
     return <span className={cn("inline-block", className)}>{inner}</span>;
   }
 
   return (
     <span
       className={cn("relative inline-block leading-none", className)}
-      title={`${name}${presence ? ` · ${presence}` : ""}`}
+      title={`${name}${presence ? ` · ${presence}` : ""}${crowned ? " · Employee of the Month" : ""}`}
     >
       {inner}
+      {crowned && (
+        <span
+          aria-label="Employee of the Month"
+          className="absolute pointer-events-none drop-shadow-[0_2px_4px_rgba(180,120,0,0.55)]"
+          style={{
+            // Center horizontally above the avatar; nudge up by half its
+            // own height so it floats just outside the top edge.
+            top: -Math.round(crownSize * 0.7),
+            left: "50%",
+            transform: "translateX(-50%) rotate(-8deg)",
+            width: crownSize,
+            height: crownSize
+          }}
+        >
+          <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" width={crownSize} height={crownSize}>
+            <defs>
+              <linearGradient id="crownGold" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="#FCD34D" />
+                <stop offset="60%" stopColor="#F59E0B" />
+                <stop offset="100%" stopColor="#D97706" />
+              </linearGradient>
+            </defs>
+            <path
+              d="M3 7l4 4 5-7 5 7 4-4-1.6 11H4.6L3 7z"
+              fill="url(#crownGold)"
+              stroke="#92400E"
+              strokeWidth="1"
+              strokeLinejoin="round"
+            />
+            <circle cx="3" cy="7" r="1.4" fill="#FFFBEB" stroke="#92400E" strokeWidth="0.8" />
+            <circle cx="12" cy="4" r="1.4" fill="#FFFBEB" stroke="#92400E" strokeWidth="0.8" />
+            <circle cx="21" cy="7" r="1.4" fill="#FFFBEB" stroke="#92400E" strokeWidth="0.8" />
+          </svg>
+        </span>
+      )}
       {emoji && (
         <span
           className="absolute -top-1 -right-1 rounded-full bg-white border border-slate-200 shadow-sm grid place-items-center leading-none"

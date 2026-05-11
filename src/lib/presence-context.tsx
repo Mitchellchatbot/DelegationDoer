@@ -19,6 +19,10 @@ export interface PresenceEntry {
 
 interface PresenceContextValue {
   byId: Map<string, PresenceEntry>;
+  // Current Employee of the Month — userId, or null when no one's
+  // crowned for the current calendar month. Drives the crown overlay
+  // on every PersonAvatar in the app.
+  eomUserId: string | null;
   refresh: () => Promise<void>;
   loaded: boolean;
 }
@@ -27,6 +31,7 @@ const PresenceContext = createContext<PresenceContextValue | null>(null);
 
 export function PresenceProvider({ children }: { children: React.ReactNode }) {
   const [byId, setById] = useState<Map<string, PresenceEntry>>(new Map());
+  const [eomUserId, setEomUserId] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
   // Track whether a load is already in flight so the visibility listener +
   // interval don't double up.
@@ -36,25 +41,36 @@ export function PresenceProvider({ children }: { children: React.ReactNode }) {
     if (inflightRef.current) return;
     inflightRef.current = true;
     try {
-      const res = await fetch("/api/users", { cache: "no-store" });
-      if (!res.ok) return;
-      const data = await res.json();
-      const next = new Map<string, PresenceEntry>();
-      for (const u of (data.users ?? []) as {
-        id: string;
-        name: string;
-        avatarUrl: string | null;
-        presence: Presence;
-        statusEmoji: string | null;
-      }[]) {
-        next.set(u.id, {
-          presence: u.presence,
-          statusEmoji: u.statusEmoji,
-          name: u.name,
-          avatarUrl: u.avatarUrl
-        });
+      // Fan out both reads — they're independent. EOM rarely changes,
+      // so this is mostly for the avatar-crown overlay to stay live
+      // after a CEO crowns someone.
+      const [usersRes, eomRes] = await Promise.all([
+        fetch("/api/users", { cache: "no-store" }),
+        fetch("/api/eom", { cache: "no-store" })
+      ]);
+      if (usersRes.ok) {
+        const data = await usersRes.json();
+        const next = new Map<string, PresenceEntry>();
+        for (const u of (data.users ?? []) as {
+          id: string;
+          name: string;
+          avatarUrl: string | null;
+          presence: Presence;
+          statusEmoji: string | null;
+        }[]) {
+          next.set(u.id, {
+            presence: u.presence,
+            statusEmoji: u.statusEmoji,
+            name: u.name,
+            avatarUrl: u.avatarUrl
+          });
+        }
+        setById(next);
       }
-      setById(next);
+      if (eomRes.ok) {
+        const data = await eomRes.json();
+        setEomUserId(data.eom?.userId ?? null);
+      }
       setLoaded(true);
     } catch { /* ignore */ } finally {
       inflightRef.current = false;
@@ -74,8 +90,18 @@ export function PresenceProvider({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
-  const value = useMemo<PresenceContextValue>(() => ({ byId, refresh, loaded }), [byId, loaded]);
+  const value = useMemo<PresenceContextValue>(
+    () => ({ byId, eomUserId, refresh, loaded }),
+    [byId, eomUserId, loaded]
+  );
   return <PresenceContext.Provider value={value}>{children}</PresenceContext.Provider>;
+}
+
+// Read the current EOM userId from anywhere in the tree. Returns null
+// when no one's crowned (or the provider isn't mounted yet).
+export function useEomUserId(): string | null {
+  const ctx = useContext(PresenceContext);
+  return ctx?.eomUserId ?? null;
 }
 
 // Read presence + emoji for a single user. Returns null when the

@@ -38,8 +38,12 @@ export function ThreadFilters({ totalCount }: { totalCount: number }) {
       else next.set(k, v);
     }
     const qs = next.toString();
+    // replace (not push) + `scroll: false` keeps this snappy — the
+    // server-rendered thread list is filtered client-side via
+    // useSearchParams, so we never need a roundtrip to Missive when
+    // the user flicks between Open/Pending/Closed.
     startTransition(() => {
-      router.push(qs ? `?${qs}` : window.location.pathname);
+      router.replace(qs ? `?${qs}` : window.location.pathname, { scroll: false });
     });
   }
 

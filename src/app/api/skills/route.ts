@@ -17,11 +17,15 @@ interface SkillRow {
 }
 
 // Anyone can read the skills matrix — useful for tooltips, ranking
-// suggestions, etc. Only managers can write.
-async function isManager(): Promise<boolean> {
-  const id = await requireCurrentUserId();
-  const u = await getUserById(id);
-  return !!u && (u.role === "ceo" || u.role === "department_head");
+// suggestions, etc. Writes are scoped per-call: managers can edit anyone,
+// everyone else can only edit their own row. Resolved by the caller.
+async function authContext(): Promise<{ userId: string; isManager: boolean }> {
+  const userId = await requireCurrentUserId();
+  const u = await getUserById(userId);
+  return {
+    userId,
+    isManager: !!u && (u.role === "ceo" || u.role === "department_head")
+  };
 }
 
 function rowToJson(r: SkillRow) {
@@ -55,19 +59,20 @@ export async function GET(req: NextRequest) {
   });
 }
 
-// POST /api/skills — admin upsert. Body: { userId, tag, manualLevel }.
-// Auto-scores aren't writable from this endpoint (those move via the
-// task-completion handler).
+// POST /api/skills — upsert manual_level. Body: { userId, tag, manualLevel }.
+// Self-edits always allowed; managers can edit anyone. Auto-scores aren't
+// writable from this endpoint (those move via the task-completion handler).
 export async function POST(req: NextRequest) {
-  if (!(await isManager())) {
-    return NextResponse.json({ error: "forbidden" }, { status: 403 });
-  }
+  const { userId: meId, isManager } = await authContext();
   const body = await req.json();
   const userId = typeof body.userId === "string" ? body.userId : "";
   const tag = typeof body.tag === "string" ? body.tag.trim().toLowerCase() : "";
   const manualLevel = Number(body.manualLevel ?? 0);
   if (!userId || !tag) {
     return NextResponse.json({ error: "userId + tag required" }, { status: 400 });
+  }
+  if (!isManager && userId !== meId) {
+    return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
   if (!Number.isInteger(manualLevel) || manualLevel < 0 || manualLevel > 5) {
     return NextResponse.json({ error: "manualLevel must be 0-5" }, { status: 400 });
@@ -101,15 +106,25 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({ skill: rowToJson(data as SkillRow) });
 }
 
-// DELETE /api/skills?id= — drop a skill row. Manager only.
+// DELETE /api/skills?id= — drop a skill row. Self-edits allowed when the
+// row's user_id matches the caller; managers can drop anyone's.
 export async function DELETE(req: NextRequest) {
-  if (!(await isManager())) {
-    return NextResponse.json({ error: "forbidden" }, { status: 403 });
-  }
+  const { userId: meId, isManager } = await authContext();
   const { searchParams } = new URL(req.url);
   const id = searchParams.get("id");
   if (!id) return NextResponse.json({ error: "id required" }, { status: 400 });
   const supabase = getSupabaseAdmin();
+  // Look up the owning user before deleting — cheap and lets us return a
+  // useful error rather than silently no-op.
+  const { data: row } = await supabase
+    .from("user_skills")
+    .select("user_id")
+    .eq("id", id)
+    .maybeSingle();
+  if (!row) return NextResponse.json({ error: "not found" }, { status: 404 });
+  if (!isManager && row.user_id !== meId) {
+    return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  }
   const { error } = await supabase.from("user_skills").delete().eq("id", id);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json({ ok: true });

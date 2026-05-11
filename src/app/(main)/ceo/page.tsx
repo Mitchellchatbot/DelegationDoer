@@ -10,6 +10,8 @@ import { Avatar } from "@/components/Avatar";
 import { PersonAvatar } from "@/components/PersonAvatar";
 import { CapacityBar } from "@/components/CapacityBar";
 import { OrgChart } from "@/components/OrgChart";
+import { OnShiftList } from "@/components/OnShiftList";
+import { PerformanceReview } from "@/components/PerformanceReview";
 import { PageHero } from "@/components/PageHero";
 import { userCapacity } from "@/lib/capacity";
 import { ROLE_LABELS } from "@/lib/auth";
@@ -21,7 +23,7 @@ import {
   CheckCircle2, AlertTriangle, Timer, ArrowRight
 } from "lucide-react";
 
-const TABS = ["People", "Departments", "Org chart", "All tasks"] as const;
+const TABS = ["People", "Departments", "Org chart", "Performance", "All tasks"] as const;
 type Tab = typeof TABS[number];
 
 export default function CEOConsolePage() {
@@ -91,6 +93,7 @@ export default function CEOConsolePage() {
           {tab === "People" && <PeopleTab people={people} setPeople={setPeople} departments={depts} />}
           {tab === "Departments" && <DepartmentsTab departments={depts} setDepartments={setDepts} people={people} />}
           {tab === "Org chart" && <OrgChartTab people={people} departments={depts} />}
+          {tab === "Performance" && <PerformanceReview canCrown={currentUser.role === "ceo"} />}
           {tab === "All tasks" && <AllTasksTab people={people} departments={depts} />}
         </motion.div>
       </AnimatePresence>
@@ -350,6 +353,8 @@ function OrgChartTab({ people, departments }: { people: User[]; departments: Dep
           tone="violet"
         />
       </div>
+
+      <OnShiftList />
 
       <OrgChart
         ceo={ceo}

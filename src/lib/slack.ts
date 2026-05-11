@@ -79,19 +79,19 @@ export async function postMessage(
   channel: string,
   text: string,
   blocks?: unknown[]
-): Promise<{ ts: string } | null> {
-  try {
-    const data = await slackCall<{ ok: true; ts: string }>("chat.postMessage", {
-      channel,
-      text, // fallback for notifications / older clients
-      blocks,
-      unfurl_links: false,
-      unfurl_media: false
-    });
-    return { ts: data.ts };
-  } catch {
-    return null;
-  }
+): Promise<{ ts: string }> {
+  // Propagate failures so callers can surface a specific reason
+  // (not_in_channel, channel_not_found, missing_scope, etc.) instead of
+  // a silently-swallowed "sent ok" lie. Callers that want best-effort
+  // can wrap this in their own try/catch.
+  const data = await slackCall<{ ok: true; ts: string }>("chat.postMessage", {
+    channel,
+    text,
+    blocks,
+    unfurl_links: false,
+    unfurl_media: false
+  });
+  return { ts: data.ts };
 }
 
 export interface NotifyResult {

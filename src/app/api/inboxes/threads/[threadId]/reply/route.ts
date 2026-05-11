@@ -85,7 +85,7 @@ export async function POST(
       );
     }
 
-    const message = await sendReply({
+    const result = await sendReply({
       threadId: params.threadId,
       fromAccountId: accountId,
       bodyText,
@@ -96,7 +96,7 @@ export async function POST(
       inReplyTo
     });
 
-    return NextResponse.json({ ok: true, message });
+    return NextResponse.json({ ok: true, messageId: result.messageId });
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "unknown error" },

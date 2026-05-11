@@ -236,12 +236,15 @@ export interface ReplyArgs {
   inReplyTo?: string;      // Message-id to thread on.
 }
 
-export async function sendReply(args: ReplyArgs): Promise<MissiveMessage> {
+export async function sendReply(args: ReplyArgs): Promise<{ messageId: string }> {
   // The clone's reply endpoint is multipart/form-data: a `payload` JSON
   // string + optional `files[]`. Plain JSON makes req.body.payload
   // undefined on the server, which silently parses to {} and surfaces as
   // "account_id invalid" downstream. We send multipart even without
   // attachments so the contract matches.
+  //
+  // The clone returns `{ ok, message_id }` (not a full message object) —
+  // callers refresh the thread afterward, so the id is all we need.
   const payload = {
     account_id: args.fromAccountId,
     body_text: args.bodyText,
@@ -252,11 +255,11 @@ export async function sendReply(args: ReplyArgs): Promise<MissiveMessage> {
   };
   const form = new FormData();
   form.append("payload", JSON.stringify(payload));
-  const data = await missiveFetch<{ message: MissiveMessage }>(
+  const data = await missiveFetch<{ message_id: string }>(
     `/api/threads/${encodeURIComponent(args.threadId)}/reply`,
     { method: "POST", body: form }
   );
-  return normalizeMessage(data.message);
+  return { messageId: data.message_id };
 }
 
 // Compose a brand-new outbound thread. Hits the clone's "new message"

@@ -1,11 +1,12 @@
 "use client";
 
-import { Fragment, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   users as initialUsers, departments as initialDepartments,
   tasks, headsOf, workersOf
 } from "@/lib/mock-data";
+import type { Task } from "@/lib/types";
 import { Avatar } from "@/components/Avatar";
 import { PersonAvatar } from "@/components/PersonAvatar";
 import { CapacityBar } from "@/components/CapacityBar";
@@ -109,11 +110,25 @@ function PeopleTab({
   people, setPeople, departments
 }: { people: User[]; setPeople: (u: User[]) => void; departments: Department[] }) {
   const currentUser = useCurrentUser();
-  // Expanded user-id state. Single-open behavior: clicking another
-  // person's chevron collapses the previous one. Click the same chevron
-  // again to collapse. Independent of the avatar/name → ProfileDialog
-  // gesture (modal view) — this is the lightweight inline drilldown.
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  // The rest of the CEO page reads from mock tasks for legacy capacity
+  // math (visualisations don't depend on real-time accuracy), but the
+  // inline drilldown DOES need the real tasks — otherwise we render
+  // "nothing assigned" for someone with 22 urgent tasks in Supabase.
+  // Fetch once when the tab mounts. The /api/tasks route already
+  // returns the org-wide snapshot.
+  const [liveTasks, setLiveTasks] = useState<Task[] | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/tasks", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (cancelled) return;
+        if (data?.tasks) setLiveTasks(data.tasks as Task[]);
+      })
+      .catch(() => { /* leave null → falls back to mock */ });
+    return () => { cancelled = true; };
+  }, []);
 
   function setRole(id: string, role: Role) {
     setPeople(people.map((u) => u.id === id ? { ...u, role } : u));
@@ -238,7 +253,7 @@ function PeopleTab({
                   <tr className="bg-slate-50/40">
                     <td className="w-8" />
                     <td colSpan={5} className="px-4 py-3">
-                      <PersonTaskList userId={u.id} />
+                      <PersonTaskList userId={u.id} tasks={liveTasks} />
                     </td>
                   </tr>
                 )}
@@ -253,14 +268,18 @@ function PeopleTab({
 }
 
 // Inline "their tasks" view shown when a People row's chevron is
-// expanded. Pulls open tasks for this user out of the same mock-data
-// the rest of the page uses; groups them by status so the row reads
-// like a compact briefing rather than a flat list.
-function PersonTaskList({ userId }: { userId: string }) {
-  const mine = useMemo(
-    () => tasks.filter((t) => t.assigneeId === userId),
-    [userId]
-  );
+// expanded. Uses the live /api/tasks snapshot passed in via the
+// `tasks` prop; falls back to a loading state while that's mid-fetch
+// (rather than rendering "nothing assigned" which is misleading).
+function PersonTaskList({ userId, tasks: liveTasks }: { userId: string; tasks: Task[] | null }) {
+  if (liveTasks === null) {
+    return (
+      <div className="text-xs text-muted italic py-2">
+        Loading tasks…
+      </div>
+    );
+  }
+  const mine = liveTasks.filter((t) => t.assigneeId === userId);
   if (mine.length === 0) {
     return (
       <div className="text-xs text-muted italic py-2">

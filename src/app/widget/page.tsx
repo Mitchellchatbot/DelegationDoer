@@ -136,6 +136,13 @@ export default function WidgetPage() {
   // we render a sign-in prompt instead of the normal task/kudos UI.
   const [signedOut, setSignedOut] = useState(false);
   const [eom, setEom] = useState<EomState>({ isMe: false, name: null, month: null });
+  // Birthdays: who's celebrating today (year-agnostic match), plus whether
+  // the current user has filled in their own bday. Drives a celebratory
+  // banner and a one-time prompt card respectively.
+  const [birthdays, setBirthdays] = useState<{
+    hasBirthday: boolean;
+    celebrantsToday: { id: string; name: string; avatarUrl: string | null; isMe: boolean }[];
+  }>({ hasBirthday: true, celebrantsToday: [] });
   // Per-user customization for the bubble image. Falls back to the
   // shared brand logo when null. Fetched once on auth + whenever the
   // settings view saves.
@@ -180,10 +187,11 @@ export default function WidgetPage() {
     try {
       // Run both polls in parallel — they're independent reads on the
       // same Supabase connection.
-      const [taskRes, kudosRes, eomRes] = await Promise.all([
+      const [taskRes, kudosRes, eomRes, bdayRes] = await Promise.all([
         fetch("/api/widget/my-tasks", { cache: "no-store" }),
         fetch("/api/widget/kudos", { cache: "no-store" }),
-        fetch("/api/eom", { cache: "no-store" })
+        fetch("/api/eom", { cache: "no-store" }),
+        fetch("/api/widget/birthdays", { cache: "no-store" })
       ]);
       // 401 → no session in this Electron renderer. Show the sign-in
       // prompt and stop trying to render normal UI on stale/empty data.
@@ -231,6 +239,13 @@ export default function WidgetPage() {
 
       setTasks(next);
       setKudos(nextKudos);
+      if (bdayRes.ok) {
+        const bd = await bdayRes.json();
+        setBirthdays({
+          hasBirthday: !!bd.hasBirthday,
+          celebrantsToday: bd.celebrantsToday ?? []
+        });
+      }
       lastFetchedRef.current = Date.now();
 
       // Auto state transitions based on whether there's something to
@@ -310,7 +325,7 @@ export default function WidgetPage() {
 
   if (state === "panel") return (
     <ClockProvider>
-      <Panel tasks={tasks} unacked={unacked} kudos={kudos} eom={eom} onAck={acknowledge} onAckKudos={acknowledgeKudos} onCollapse={collapseToBubble} onUpdated={fetchTasks} widgetIconUrl={widgetIconUrl} onIconChanged={fetchMe} />
+      <Panel tasks={tasks} unacked={unacked} kudos={kudos} eom={eom} birthdays={birthdays} onAck={acknowledge} onAckKudos={acknowledgeKudos} onCollapse={collapseToBubble} onUpdated={fetchTasks} widgetIconUrl={widgetIconUrl} onIconChanged={fetchMe} />
     </ClockProvider>
   );
   if (state === "alert") {
@@ -1202,13 +1217,17 @@ function TaskTimerButton({ taskId, compact = false }: { taskId: string; compact?
 /* ============================ PANEL ============================ */
 
 function Panel({
-  tasks, unacked, kudos, eom, onAck, onAckKudos, onCollapse, onUpdated,
+  tasks, unacked, kudos, eom, birthdays, onAck, onAckKudos, onCollapse, onUpdated,
   widgetIconUrl, onIconChanged
 }: {
   tasks: WidgetTask[];
   unacked: WidgetTask[];
   kudos: WidgetKudos[];
   eom: EomState;
+  birthdays: {
+    hasBirthday: boolean;
+    celebrantsToday: { id: string; name: string; avatarUrl: string | null; isMe: boolean }[];
+  };
   onAck: (id: string) => void;
   onAckKudos: (id: string) => void;
   onCollapse: () => void;
@@ -1295,6 +1314,10 @@ function Panel({
         <PresenceRow />
         <ClockSection />
         {eom.isMe && <EomBanner month={eom.month} />}
+        {birthdays.celebrantsToday.length > 0 && (
+          <BirthdayBanner celebrants={birthdays.celebrantsToday} />
+        )}
+        {!birthdays.hasBirthday && <BirthdayPrompt onSaved={onUpdated} />}
 
         <div className="flex-1 overflow-y-auto">
           {kudos.length > 0 && (

@@ -104,13 +104,20 @@ export function ComposeButton({
                 className="fixed inset-0 z-50 bg-slate-950/40 backdrop-blur-sm"
               />
             </Dialog.Overlay>
-            <Dialog.Content asChild>
+            <Dialog.Content
+              aria-describedby={undefined}
+              className="fixed inset-0 z-50 outline-none pointer-events-none flex items-center justify-center px-4 lg:pl-[264px]"
+            >
+              {/* lg:pl-[264px] = 12px outer p-3 + 240px sidebar + 12px gap.
+                  Centers the card over the main content panel instead of
+                  the full viewport so it doesn't sit half under the
+                  sidebar on lg+ screens. */}
               <motion.div
                 initial={{ opacity: 0, y: 24, scale: 0.96 }}
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 exit={{ opacity: 0, y: 24, scale: 0.96 }}
                 transition={{ duration: 0.22, ease: [0.2, 0.8, 0.2, 1] }}
-                className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-50 w-[640px] max-w-[92vw] rounded-2xl border border-slate-200/70 bg-white shadow-[0_30px_60px_-20px_rgba(15,23,42,0.35)] overflow-hidden"
+                className="pointer-events-auto w-[640px] max-w-full rounded-2xl border border-slate-200/70 bg-white shadow-[0_30px_60px_-20px_rgba(15,23,42,0.35)] overflow-hidden"
               >
                 <header
                   className="px-5 py-3 flex items-center justify-between border-b border-slate-100"

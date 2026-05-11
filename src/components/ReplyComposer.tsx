@@ -48,9 +48,22 @@ export function ReplyComposer({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ accountId, to: toList, subject: subject.trim() || undefined, bodyText })
       });
-      const data = await res.json();
+      // Read as text first so HTML error pages (auth redirect, Next 500,
+      // Railway 502 during deploy) don't crash JSON.parse — surface them
+      // with a meaningful status code instead.
+      const raw = await res.text();
+      let data: { error?: string; ok?: boolean } = {};
+      try { data = raw ? JSON.parse(raw) : {}; }
+      catch { /* leave data empty; we'll fall through to the status hint */ }
       if (!res.ok) {
-        toast.error(data.error ?? "couldn't send");
+        const hint = res.status === 401
+          ? "Session expired — refresh the page"
+          : res.status === 502 || res.status === 503
+          ? "Missive backend unavailable — redeploy in progress?"
+          : raw.startsWith("<")
+          ? `Server returned HTML (status ${res.status}) — check the dev server logs`
+          : data.error ?? `Send failed (status ${res.status})`;
+        toast.error(hint);
         return;
       }
       toast.success("Reply sent ✉️");

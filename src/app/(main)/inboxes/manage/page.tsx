@@ -5,11 +5,10 @@ import { getUserById } from "@/lib/server-data";
 import { listAccounts, listTeamMembers, type MissiveAccount } from "@/lib/missive-client";
 import { canManageAssignments, getAllAssignments, syncMissiveOwnership, type InboxAssignment } from "@/lib/inbox-access";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
-import { users as mockUsers, departments as mockDepartments } from "@/lib/mock-data";
-import { InboxAssignmentGraph } from "@/components/InboxAssignmentGraph";
+import { users as mockUsers } from "@/lib/mock-data";
+import { InboxAssignmentCards } from "@/components/InboxAssignmentCards";
 import { AutoIntakeToggleSection } from "@/components/AutoIntakeToggleSection";
 import { ConnectInboxDialog } from "@/components/ConnectInboxDialog";
-import { InboxInviteList } from "@/components/InboxInviteList";
 import { Plug } from "lucide-react";
 
 interface AutoIntakeRow {
@@ -141,19 +140,13 @@ export default async function ManageInboxesPage() {
 
       {!fetchError && inboxes.length > 0 && (
         <>
-          <InboxInviteList
+          <InboxAssignmentCards
+            users={mockUsers}
             inboxes={inboxes.map((a) => ({
               id: a.id,
               email: a.email,
-              displayName: a.display_name
+              display_name: a.display_name
             }))}
-            users={mockUsers}
-            initialAssignments={assignments}
-          />
-          <InboxAssignmentGraph
-            users={mockUsers}
-            inboxes={inboxes}
-            departments={mockDepartments}
             initialAssignments={assignments}
           />
           <AutoIntakeToggleSection

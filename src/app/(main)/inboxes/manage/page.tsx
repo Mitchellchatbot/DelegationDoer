@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { redirect } from "next/navigation";
 import { ShieldAlert, ExternalLink, Layers } from "lucide-react";
 import { requireCurrentUserId } from "@/lib/session";
@@ -140,15 +141,20 @@ export default async function ManageInboxesPage() {
 
       {!fetchError && inboxes.length > 0 && (
         <>
-          <InboxAssignmentCards
-            users={mockUsers}
-            inboxes={inboxes.map((a) => ({
-              id: a.id,
-              email: a.email,
-              display_name: a.display_name
-            }))}
-            initialAssignments={assignments}
-          />
+          {/* Suspense boundary required because InboxAssignmentCards calls
+              useSearchParams() (for the ?connectedAccount=... deep-link
+              after OAuth). Next 14 hydration breaks without this. */}
+          <Suspense fallback={<div className="card p-6 text-sm text-muted">Loading inboxes…</div>}>
+            <InboxAssignmentCards
+              users={mockUsers}
+              inboxes={inboxes.map((a) => ({
+                id: a.id,
+                email: a.email,
+                display_name: a.display_name
+              }))}
+              initialAssignments={assignments}
+            />
+          </Suspense>
           <AutoIntakeToggleSection
             inboxes={inboxes}
             initialSettings={autoIntakeSettings}

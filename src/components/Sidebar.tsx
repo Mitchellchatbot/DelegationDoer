@@ -33,6 +33,7 @@ const BASE_NAV: NavItem[] = [
   { href: "/board",     label: "Board",     icon: Columns3,        tone: "teal"     },
   { href: "/inboxes",   label: "Inboxes",   icon: Mail,            tone: "fuchsia"  },
   { href: "/clients",     label: "Clients",     icon: Briefcase,   tone: "amber"    },
+  { href: "/eod",         label: "EOD",         icon: Sparkles,    tone: "fuchsia"  },
   { href: "/seo-reports", label: "SEO Reports", icon: Search,      tone: "fuchsia"  },
   { href: "/incidents",   label: "Incidents",   icon: ShieldAlert, tone: "rose"     },
   // Moments + Team pinned to the bottom of the base nav by request, so

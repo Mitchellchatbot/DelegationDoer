@@ -16,6 +16,7 @@ import { PerformanceReview } from "@/components/PerformanceReview";
 import { PageHero } from "@/components/PageHero";
 import { ProfileDialog } from "@/components/ProfileDialog";
 import { SendKudosDialog } from "@/components/SendKudosDialog";
+import { DepartmentSlackSection } from "@/components/DepartmentSlackSection";
 import { userCapacity } from "@/lib/capacity";
 import { ROLE_LABELS } from "@/lib/auth";
 import { useCurrentUser } from "@/lib/user-context";
@@ -394,8 +395,14 @@ function DepartmentsTab({
     setDraftName(""); setDraftDesc("");
   }
 
+  const currentUser = useCurrentUser();
   return (
     <div className="space-y-4">
+      {/* Mirror of the same section in Settings — keeps the EOD channel
+          mapping reachable from wherever the CEO is editing the org
+          structure. CEO-only edit. */}
+      <DepartmentSlackSection canEdit={currentUser?.role === "ceo"} />
+
       <div className="grid grid-cols-2 gap-3">
         {departments.map((d) => {
           const heads = people.filter((u) => u.role === "department_head" && u.departmentIds.includes(d.id));

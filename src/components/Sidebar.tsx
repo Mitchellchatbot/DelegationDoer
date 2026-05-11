@@ -32,11 +32,13 @@ const BASE_NAV: NavItem[] = [
   { href: "/my-tasks",  label: "My Tasks",  icon: ListTodo,        tone: "indigo"   },
   { href: "/board",     label: "Board",     icon: Columns3,        tone: "teal"     },
   { href: "/inboxes",   label: "Inboxes",   icon: Mail,            tone: "fuchsia"  },
-  { href: "/moments",   label: "Moments",   icon: Camera,          tone: "fuchsia"  },
   { href: "/clients",     label: "Clients",     icon: Briefcase,   tone: "amber"    },
-  { href: "/team",        label: "Team",        icon: Users,       tone: "emerald"  },
   { href: "/seo-reports", label: "SEO Reports", icon: Search,      tone: "fuchsia"  },
-  { href: "/incidents",   label: "Incidents",   icon: ShieldAlert, tone: "rose"     }
+  { href: "/incidents",   label: "Incidents",   icon: ShieldAlert, tone: "rose"     },
+  // Moments + Team pinned to the bottom of the base nav by request, so
+  // the higher-traffic work surfaces read first.
+  { href: "/moments",     label: "Moments",     icon: Camera,      tone: "fuchsia"  },
+  { href: "/team",        label: "Team",        icon: Users,       tone: "emerald"  }
 ];
 const CEO_NAV: NavItem[] = [
   { href: "/ceo",       label: "CEO Console", icon: Crown,    tone: "amber" },

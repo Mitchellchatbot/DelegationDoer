@@ -9,7 +9,6 @@ import { NewTaskForm } from "./NewTaskForm";
 import { ROLE_LABELS } from "@/lib/auth";
 import type { User } from "@/lib/types";
 import { toast } from "sonner";
-import { WorkdayRemainingPill } from "./WorkdayRemainingPill";
 
 export function Topbar({ user }: { user: User }) {
   const [newTaskOpen, setNewTaskOpen] = useState(false);
@@ -97,8 +96,6 @@ export function Topbar({ user }: { user: User }) {
             </Dialog.Content>
           </Dialog.Portal>
         </Dialog.Root>
-
-        <WorkdayRemainingPill />
 
         <button
           aria-label="Notifications"

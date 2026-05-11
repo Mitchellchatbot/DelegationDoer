@@ -12,7 +12,8 @@
 
 import * as Tabs from "@radix-ui/react-tabs";
 import { motion, AnimatePresence, useAnimation, type PanInfo } from "framer-motion";
-import { forwardRef, useMemo, useRef, useState } from "react";
+import { forwardRef, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Mail, UserPlus, Users as UsersIcon, Inbox as InboxIcon } from "lucide-react";
 import { toast } from "sonner";
 import { PersonAvatar } from "./PersonAvatar";
@@ -36,8 +37,31 @@ interface Props {
 type Zone = "hand" | "deck";
 
 export function InboxAssignmentCards({ inboxes, users, initialAssignments }: Props) {
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const [assignments, setAssignments] = useState<InboxAssignment[]>(initialAssignments);
-  const [activeId, setActiveId] = useState<string>(inboxes[0]?.id ?? "");
+  const [activeId, setActiveId] = useState<string>(() => {
+    // Deep-link from the Microsoft OAuth callback: if the URL points us
+    // at a freshly-connected account, open its tab on first render
+    // instead of defaulting to the first inbox.
+    const connected = searchParams?.get("connectedAccount");
+    if (connected && inboxes.some((i) => i.id === connected)) return connected;
+    return inboxes[0]?.id ?? "";
+  });
+
+  // Clear the OAuth query params after the deep-link has been honored so
+  // a refresh doesn't keep snapping back to that tab — and toast the
+  // success once.
+  useEffect(() => {
+    const oauth = searchParams?.get("oauth");
+    const connected = searchParams?.get("connectedAccount");
+    const email = searchParams?.get("connectedEmail");
+    if (oauth === "microsoft_ok" && connected) {
+      toast.success(email ? `Connected ${email}` : "Inbox connected");
+      router.replace("/inboxes/manage", { scroll: false });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Index assignments by inbox once; cheap re-derive on mutations.
   const memberIdsByInbox = useMemo(() => {

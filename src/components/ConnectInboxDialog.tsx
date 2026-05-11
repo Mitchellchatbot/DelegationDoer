@@ -158,6 +158,41 @@ export function ConnectInboxDialog({ trigger }: { trigger: React.ReactNode }) {
                 </header>
 
                 <div className="p-4 space-y-3">
+                  {/* Microsoft OAuth (preferred for Microsoft 365 / Outlook
+                      tenants — basic-auth IMAP is disabled on most tenants
+                      now). Full top-level redirect: server-side route
+                      asks Missive for the authorize URL and 302s the
+                      browser to Microsoft. */}
+                  <a
+                    href="/api/inboxes/oauth/microsoft/redirect"
+                    className="flex items-center gap-3 px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white hover:border-accent/40 hover:bg-blue-50/30 transition-colors group"
+                  >
+                    <span className="w-8 h-8 rounded-lg bg-[#0078D4]/10 grid place-items-center shrink-0">
+                      {/* Microsoft logo, simple 4-square mark. */}
+                      <svg viewBox="0 0 21 21" className="w-4 h-4" aria-hidden>
+                        <rect x="1" y="1" width="9" height="9" fill="#F25022" />
+                        <rect x="11" y="1" width="9" height="9" fill="#7FBA00" />
+                        <rect x="1" y="11" width="9" height="9" fill="#00A4EF" />
+                        <rect x="11" y="11" width="9" height="9" fill="#FFB900" />
+                      </svg>
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-sm font-semibold">Continue with Microsoft</div>
+                      <div className="text-[11px] text-ink/55">
+                        Outlook / Microsoft 365 — recommended
+                      </div>
+                    </div>
+                    <ChevronDown className="w-4 h-4 -rotate-90 text-ink/40 group-hover:text-accent transition-colors shrink-0" />
+                  </a>
+
+                  <div className="flex items-center gap-3">
+                    <div className="flex-1 h-px bg-slate-200/70" />
+                    <span className="text-[10px] uppercase tracking-wider font-semibold text-ink/40">
+                      or with password
+                    </span>
+                    <div className="flex-1 h-px bg-slate-200/70" />
+                  </div>
+
                   {/* Provider segmented control. */}
                   <div>
                     <div className="text-[10px] uppercase tracking-wide font-semibold text-ink/45 px-1 mb-1.5">

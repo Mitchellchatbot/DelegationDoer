@@ -13,6 +13,8 @@ import { OrgChart } from "@/components/OrgChart";
 import { OnShiftList } from "@/components/OnShiftList";
 import { PerformanceReview } from "@/components/PerformanceReview";
 import { PageHero } from "@/components/PageHero";
+import { ProfileDialog } from "@/components/ProfileDialog";
+import { SendKudosDialog } from "@/components/SendKudosDialog";
 import { userCapacity } from "@/lib/capacity";
 import { ROLE_LABELS } from "@/lib/auth";
 import { useCurrentUser } from "@/lib/user-context";
@@ -20,7 +22,7 @@ import type { Role, User, Department } from "@/lib/types";
 import Link from "next/link";
 import {
   Crown, Users as UsersIcon, Building2, ListChecks, Plus, X, ShieldAlert,
-  CheckCircle2, AlertTriangle, Timer, ArrowRight
+  CheckCircle2, AlertTriangle, Timer, ArrowRight, Sparkles
 } from "lucide-react";
 
 const TABS = ["People", "Departments", "Org chart", "Performance", "All tasks"] as const;
@@ -106,6 +108,7 @@ export default function CEOConsolePage() {
 function PeopleTab({
   people, setPeople, departments
 }: { people: User[]; setPeople: (u: User[]) => void; departments: Department[] }) {
+  const currentUser = useCurrentUser();
 
   function setRole(id: string, role: Role) {
     setPeople(people.map((u) => u.id === id ? { ...u, role } : u));
@@ -131,6 +134,7 @@ function PeopleTab({
               <th className="px-4 py-2.5 font-normal">Role</th>
               <th className="px-4 py-2.5 font-normal">Departments</th>
               <th className="px-4 py-2.5 font-normal">Reports to</th>
+              <th className="px-4 py-2.5 font-normal text-right">Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -145,15 +149,24 @@ function PeopleTab({
                       return head?.name ?? "—";
                     })();
               return (
-                <tr key={u.id} className="border-t border-border/60">
+                <tr key={u.id} className="border-t border-border/60 hover:bg-slate-50/60 transition-colors">
                   <td className="px-4 py-3">
-                    <div className="flex items-center gap-2.5">
-                      <PersonAvatar userId={u.id} name={u.name} imageUrl={u.avatarUrl} size={26} />
-                      <div>
-                        <div>{u.name}</div>
-                        <div className="text-xs text-muted">{u.email}</div>
-                      </div>
-                    </div>
+                    <ProfileDialog
+                      userId={u.id}
+                      trigger={
+                        <button
+                          type="button"
+                          className="flex items-center gap-2.5 text-left hover:text-accent transition-colors"
+                          title="Open profile"
+                        >
+                          <PersonAvatar userId={u.id} name={u.name} imageUrl={u.avatarUrl} size={26} />
+                          <div>
+                            <div className="font-medium">{u.name}</div>
+                            <div className="text-xs text-muted">{u.email}</div>
+                          </div>
+                        </button>
+                      }
+                    />
                   </td>
                   <td className="px-4 py-3">
                     <RolePicker role={u.role} onChange={(r) => setRole(u.id, r)} />
@@ -175,6 +188,27 @@ function PeopleTab({
                     </div>
                   </td>
                   <td className="px-4 py-3 text-muted">{reportsTo}</td>
+                  <td className="px-4 py-3 text-right">
+                    {/* Self-row gets no Send-kudos button (you can't kudos
+                        yourself); everyone else does. */}
+                    {u.id !== currentUser?.id && (
+                      <SendKudosDialog
+                        recipientId={u.id}
+                        recipientName={u.name}
+                        recipientAvatarUrl={u.avatarUrl ?? null}
+                        trigger={
+                          <button
+                            type="button"
+                            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium border border-fuchsia-200 bg-fuchsia-50/60 text-fuchsia-700 hover:bg-fuchsia-100 hover:border-fuchsia-300 transition-colors active:scale-95"
+                            title={`Send a kudos to ${u.name}`}
+                          >
+                            <Sparkles className="w-3 h-3" />
+                            Kudos
+                          </button>
+                        }
+                      />
+                    )}
+                  </td>
                 </tr>
               );
             })}

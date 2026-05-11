@@ -13,7 +13,7 @@ import { cn } from "@/lib/utils";
 // refreshes the thread so the new message appears in the list.
 
 export function ReplyComposer({
-  threadId, accountId, defaultTo
+  threadId, accountId, defaultTo, defaultSubject
 }: {
   threadId: string;
   accountId: string;
@@ -21,11 +21,14 @@ export function ReplyComposer({
   // in automatically when omitted; we pre-fill the field so the user
   // can adjust it before sending.
   defaultTo: string | null;
+  // Original thread subject; we prepend "Re: " if it's not already there.
+  defaultSubject: string | null;
 }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [to, setTo] = useState(defaultTo ?? "");
+  const [subject, setSubject] = useState(prefixRe(defaultSubject ?? ""));
   const [bodyText, setBodyText] = useState("");
 
   async function send() {
@@ -43,7 +46,7 @@ export function ReplyComposer({
       const res = await fetch(`/api/inboxes/threads/${encodeURIComponent(threadId)}/reply`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ accountId, to: toList, bodyText })
+        body: JSON.stringify({ accountId, to: toList, subject: subject.trim() || undefined, bodyText })
       });
       const data = await res.json();
       if (!res.ok) {
@@ -113,7 +116,7 @@ export function ReplyComposer({
 
             <div className="p-3 space-y-2.5">
               <div className="flex items-center gap-2 px-3 py-2 rounded-xl border border-slate-200/70 bg-white/60 focus-within:ring-2 focus-within:ring-accent/30 focus-within:border-accent/40 transition-all">
-                <span className="text-[11px] uppercase tracking-wide font-semibold text-ink/45 w-8 shrink-0">
+                <span className="text-[11px] uppercase tracking-wide font-semibold text-ink/45 w-14 shrink-0">
                   To
                 </span>
                 <input
@@ -123,6 +126,19 @@ export function ReplyComposer({
                   className="flex-1 bg-transparent text-sm outline-none placeholder:text-ink/40"
                   placeholder="recipient@example.com"
                   autoFocus
+                />
+              </div>
+
+              <div className="flex items-center gap-2 px-3 py-2 rounded-xl border border-slate-200/70 bg-white/60 focus-within:ring-2 focus-within:ring-accent/30 focus-within:border-accent/40 transition-all">
+                <span className="text-[11px] uppercase tracking-wide font-semibold text-ink/45 w-14 shrink-0">
+                  Subject
+                </span>
+                <input
+                  type="text"
+                  value={subject}
+                  onChange={(e) => setSubject(e.target.value)}
+                  className="flex-1 bg-transparent text-sm outline-none placeholder:text-ink/40"
+                  placeholder="Re: …"
                 />
               </div>
 
@@ -162,4 +178,10 @@ export function ReplyComposer({
       </AnimatePresence>
     </div>
   );
+}
+
+function prefixRe(s: string): string {
+  const trimmed = s.trim();
+  if (!trimmed) return "";
+  return /^re:\s*/i.test(trimmed) ? trimmed : `Re: ${trimmed}`;
 }

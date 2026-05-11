@@ -32,6 +32,10 @@ export async function POST(
     const accountId = typeof body.accountId === "string" ? body.accountId : "";
     const bodyText = typeof body.bodyText === "string" ? body.bodyText.trim() : "";
     const bodyHtml = typeof body.bodyHtml === "string" ? body.bodyHtml : undefined;
+    // Caller-supplied subject wins; otherwise we derive "Re: …" below.
+    const explicitSubject = typeof body.subject === "string" && body.subject.trim().length > 0
+      ? body.subject.trim()
+      : undefined;
     if (!accountId || !bodyText) {
       return NextResponse.json(
         { error: "accountId + bodyText required" },
@@ -53,20 +57,24 @@ export async function POST(
     const cc: string[] = Array.isArray(body.cc)
       ? body.cc.filter((s: unknown): s is string => typeof s === "string")
       : [];
-    let subject: string | undefined;
+    let subject: string | undefined = explicitSubject;
     let inReplyTo: string | undefined;
 
-    if (to.length === 0) {
+    if (to.length === 0 || !subject) {
       const detail = await getThread(params.threadId);
-      const lastInbound = [...detail.messages]
-        .reverse()
-        .find((m) => m.direction === "inbound");
-      const fromAddr = lastInbound?.from_addr ?? detail.messages.at(-1)?.from_addr ?? "";
-      const justEmail = fromAddr.match(/<([^>]+)>/)?.[1] ?? fromAddr;
-      if (justEmail) to = [justEmail];
-      subject = detail.thread.subject?.startsWith("Re:")
-        ? detail.thread.subject
-        : `Re: ${detail.thread.subject ?? ""}`;
+      if (to.length === 0) {
+        const lastInbound = [...detail.messages]
+          .reverse()
+          .find((m) => m.direction === "inbound");
+        const fromAddr = lastInbound?.from_addr ?? detail.messages.at(-1)?.from_addr ?? "";
+        const justEmail = fromAddr.match(/<([^>]+)>/)?.[1] ?? fromAddr;
+        if (justEmail) to = [justEmail];
+      }
+      if (!subject) {
+        subject = detail.thread.subject?.startsWith("Re:")
+          ? detail.thread.subject
+          : `Re: ${detail.thread.subject ?? ""}`;
+      }
       inReplyTo = detail.messages.at(-1)?.message_id ?? undefined;
     }
 

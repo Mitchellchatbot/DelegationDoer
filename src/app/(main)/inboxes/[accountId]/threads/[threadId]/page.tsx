@@ -215,6 +215,7 @@ export default async function ThreadDetailPage({
               const lastInbound = [...messages].reverse().find((m) => m.direction === "inbound");
               return lastInbound ? rawEmail(lastInbound.from_addr) : null;
             })()}
+            defaultSubject={thread.subject ?? null}
           />
 
           {/* Mark-as-read upsert fires on mount — silent. */}

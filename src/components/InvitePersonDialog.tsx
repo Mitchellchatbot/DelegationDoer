@@ -14,7 +14,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
-import { UserPlus, Mail, X, Loader2, Crown, Hammer, Briefcase, Check } from "lucide-react";
+import { UserPlus, Mail, X, Loader2, Crown, Hammer, Briefcase, Check, Copy, Link2 } from "lucide-react";
 import { toast } from "sonner";
 
 type Role = "worker" | "department_head" | "leader";
@@ -30,6 +30,16 @@ export function InvitePersonDialog({ trigger }: { trigger: React.ReactNode }) {
   const [role, setRole] = useState<Role>("worker");
   const [departments, setDepartments] = useState<DepartmentLite[]>([]);
   const [selectedDepts, setSelectedDepts] = useState<Set<string>>(new Set());
+  // Captured from the invite response when the user already exists —
+  // a fresh magic link to share. Dialog stays open so the leader can
+  // copy it before closing.
+  const [postInvite, setPostInvite] = useState<{
+    magicLink: string | null;
+    slackDm: "sent" | "skipped" | "failed";
+    invitedNew: boolean;
+    name: string;
+    email: string;
+  } | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -49,6 +59,7 @@ export function InvitePersonDialog({ trigger }: { trigger: React.ReactNode }) {
     setEmail("");
     setRole("worker");
     setSelectedDepts(new Set());
+    setPostInvite(null);
   }
 
   function toggleDept(id: string) {
@@ -100,9 +111,23 @@ export function InvitePersonDialog({ trigger }: { trigger: React.ReactNode }) {
           <div className="text-[11px] text-ink/55 mt-0.5">{data.message}</div>
         </div>
       );
-      reset();
-      setOpen(false);
       router.refresh();
+      // If we got a magic link back (only happens for existing users
+      // since brand-new invites auto-send via Supabase email), stash
+      // it and stay in the dialog so the leader can copy it. New
+      // invites just close.
+      if (!data.invitedNew && data.magicLink) {
+        setPostInvite({
+          magicLink: data.magicLink,
+          slackDm: data.slackDm ?? "skipped",
+          invitedNew: data.invitedNew,
+          name: name.trim(),
+          email: email.trim()
+        });
+      } else {
+        reset();
+        setOpen(false);
+      }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "network error");
     } finally {
@@ -160,6 +185,18 @@ export function InvitePersonDialog({ trigger }: { trigger: React.ReactNode }) {
                 </header>
 
                 <div className="flex-1 overflow-y-auto p-4 space-y-3">
+                  {postInvite && postInvite.magicLink && (
+                    <MagicLinkBox
+                      magicLink={postInvite.magicLink}
+                      slackDm={postInvite.slackDm}
+                      name={postInvite.name}
+                      email={postInvite.email}
+                      onDismiss={() => {
+                        reset();
+                        setOpen(false);
+                      }}
+                    />
+                  )}
                   <Field label="Full name">
                     <input
                       autoFocus
@@ -287,6 +324,74 @@ export function InvitePersonDialog({ trigger }: { trigger: React.ReactNode }) {
         )}
       </AnimatePresence>
     </Dialog.Root>
+  );
+}
+
+// In-dialog panel shown after re-inviting an existing user. Surfaces
+// the freshly-generated magic link so the leader can copy + share it
+// (and tells them whether the Slack DM landed).
+function MagicLinkBox({
+  magicLink, slackDm, name, email, onDismiss
+}: {
+  magicLink: string;
+  slackDm: "sent" | "skipped" | "failed";
+  name: string;
+  email: string;
+  onDismiss: () => void;
+}) {
+  const [copied, setCopied] = useState(false);
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(magicLink);
+      setCopied(true);
+      toast.success("Sign-in link copied");
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      toast.error("Clipboard unavailable — select and copy manually");
+    }
+  }
+  const slackLabel =
+    slackDm === "sent"
+      ? "✓ Slack-DMed them"
+      : slackDm === "failed"
+        ? "Slack DM failed — share the link below"
+        : "Slack DM not configured — share the link below";
+  return (
+    <div className="rounded-xl border border-blue-200/80 bg-blue-50/40 p-3 space-y-2">
+      <div className="text-[12px] font-semibold text-ink inline-flex items-center gap-1.5">
+        <Link2 className="w-3.5 h-3.5 text-blue-600" />
+        Sign-in link for {name} &lt;{email}&gt;
+      </div>
+      <div className="text-[11px] text-ink/60">{slackLabel}</div>
+      <div className="flex items-center gap-1.5">
+        <input
+          readOnly
+          value={magicLink}
+          onClick={(e) => (e.target as HTMLInputElement).select()}
+          className="flex-1 px-2.5 py-1.5 rounded-lg border border-blue-200/70 bg-white text-[11px] font-mono outline-none focus:ring-2 focus:ring-blue-300/50"
+        />
+        <button
+          type="button"
+          onClick={copy}
+          className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold text-white bg-blue-600 hover:bg-blue-700 transition-colors active:scale-95"
+        >
+          {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+          {copied ? "Copied" : "Copy"}
+        </button>
+      </div>
+      <div className="text-[11px] text-ink/55">
+        One-time use. If they don't open it, you can re-invite them with the form below.
+      </div>
+      <div className="flex justify-end">
+        <button
+          type="button"
+          onClick={onDismiss}
+          className="text-[11px] text-ink/55 hover:text-ink underline"
+        >
+          Done
+        </button>
+      </div>
+    </div>
   );
 }
 

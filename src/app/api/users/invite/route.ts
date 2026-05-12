@@ -3,6 +3,7 @@ import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { isLeader } from "@/lib/access";
+import { lookupUserByEmail, openDm, postMessage } from "@/lib/slack";
 
 export const dynamic = "force-dynamic";
 
@@ -138,6 +139,70 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // 4) For existing users we never trigger a fresh invite email
+    //    above, so they have no way to log in unless we send them
+    //    one. Generate a magic link via the admin API, try to DM it
+    //    on Slack, and ALWAYS include it in the response so the
+    //    leader can copy-paste / forward it if Slack didn't fire.
+    let magicLink: string | null = null;
+    let slackDm: "sent" | "skipped" | "failed" = "skipped";
+    let slackError: string | null = null;
+    if (!invitedNew) {
+      try {
+        const origin = new URL(req.url).origin;
+        const { data: linkData, error: linkErr } =
+          await supabase.auth.admin.generateLink({
+            type: "magiclink",
+            email,
+            options: { redirectTo: `${origin}/` }
+          });
+        if (linkErr) throw linkErr;
+        magicLink = linkData?.properties?.action_link ?? null;
+      } catch (err) {
+        // Non-fatal — the role + dept update still went through, we
+        // just couldn't generate a sign-in URL. The leader can
+        // resend later or have the user use /login directly.
+        magicLink = null;
+        console.warn("[invite] generateLink failed:", err);
+      }
+      if (magicLink && process.env.SLACK_BOT_TOKEN) {
+        try {
+          const slackId = await lookupUserByEmail(email);
+          const channel = await openDm(slackId);
+          await postMessage(
+            channel,
+            `${name}, you've been added to DelegationDoer. Click to sign in: ${magicLink}`,
+            [
+              {
+                type: "section",
+                text: {
+                  type: "mrkdwn",
+                  text:
+                    `👋 *${name}* — you've been added to *DelegationDoer*.\n` +
+                    `Click below to sign in. The link is one-time use; if it expires, ask the leader to resend.`
+                }
+              },
+              {
+                type: "actions",
+                elements: [
+                  {
+                    type: "button",
+                    text: { type: "plain_text", text: "Sign in" },
+                    url: magicLink,
+                    style: "primary"
+                  }
+                ]
+              }
+            ]
+          );
+          slackDm = "sent";
+        } catch (err) {
+          slackDm = "failed";
+          slackError = err instanceof Error ? err.message : String(err);
+        }
+      }
+    }
+
     return NextResponse.json({
       ok: true,
       userId: authUserId,
@@ -145,9 +210,16 @@ export async function POST(req: NextRequest) {
       role,
       departmentIds,
       invitedNew,
+      magicLink,
+      slackDm,
+      slackError,
       message: invitedNew
         ? "Invite email sent — they'll show up here once they accept."
-        : "User already existed; role and departments updated."
+        : magicLink
+          ? slackDm === "sent"
+            ? "User existed — Slack-DMed them a fresh sign-in link."
+            : "User existed — copy the sign-in link below and share it with them."
+          : "User existed; role and departments updated."
     });
   } catch (err) {
     return NextResponse.json(

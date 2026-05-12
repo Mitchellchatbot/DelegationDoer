@@ -35,8 +35,51 @@ type Tab = typeof TABS[number];
 export default function LeaderConsolePage() {
   const currentUser = useCurrentUser();
   const [tab, setTab] = useState<Tab>("People");
+  // Seed with mock so the layout renders instantly while the live
+  // fetch resolves. The merge below replaces with the Supabase rows
+  // once they arrive so newly-invited users appear here.
   const [people, setPeople] = useState<User[]>(initialUsers);
   const [depts, setDepts] = useState<Department[]>(initialDepartments);
+
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([
+      fetch("/api/users", { cache: "no-store" }).then((r) => (r.ok ? r.json() : null)),
+      fetch("/api/departments", { cache: "no-store" }).then((r) => (r.ok ? r.json() : null))
+    ])
+      .then(([uRes, dRes]) => {
+        if (cancelled) return;
+        if (Array.isArray(uRes?.users)) {
+          // Normalize: /api/users returns presence + departmentIds but
+          // not throughput / skills / dailyCapacity (the page doesn't
+          // read those in PeopleTab anyway — we keep minimal fields).
+          const live: User[] = uRes.users.map((u: any) => ({
+            id: u.id,
+            name: u.name,
+            email: u.email,
+            role: u.role,
+            departmentIds: u.departmentIds ?? [],
+            skills: [],
+            dailyCapacity: 8,
+            throughput: {},
+            avatarUrl: u.avatarUrl ?? undefined
+          }));
+          setPeople(live);
+        }
+        if (Array.isArray(dRes?.departments)) {
+          setDepts(
+            dRes.departments.map((d: any) => ({
+              id: d.id,
+              name: d.name,
+              description: "",
+              taskTypes: []
+            }))
+          );
+        }
+      })
+      .catch(() => { /* leave mock seed */ });
+    return () => { cancelled = true; };
+  }, []);
 
   // Gate the page itself.
   if (currentUser.role !== "leader") {

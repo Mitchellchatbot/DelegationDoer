@@ -8,6 +8,10 @@ import { PersonAvatar } from "@/components/PersonAvatar";
 import { Countdown } from "@/components/Countdown";
 import { TaskActions, CommentForm } from "@/components/TaskActions";
 import { TaskTimerButton } from "@/components/TaskTimerButton";
+import { NotifyTeammatesDialog } from "@/components/NotifyTeammatesDialog";
+import { canNotifyOnTask } from "@/lib/access";
+import { getUserById } from "@/lib/server-data";
+import { Megaphone } from "lucide-react";
 import { HandoffButton, HandoffTimeline } from "@/components/HandoffPanel";
 import { TaskThread } from "@/components/TaskThread";
 import { TaskFields } from "@/components/TaskFields";
@@ -128,6 +132,9 @@ export default async function TaskDetailPage({ params }: { params: { id: string 
     requireCurrentUserId()
   ]);
   if (!loaded) return notFound();
+  // Fetch the current user's full record (incl. departmentIds) so the
+  // access helper has a real shape to evaluate.
+  const me = await getUserById(currentUserId);
   const { task, log, extensions } = loaded;
   const totalHoursAdded = extensions.reduce((s, e) => s + e.hoursAdded, 0);
 
@@ -161,6 +168,23 @@ export default async function TaskDetailPage({ params }: { params: { id: string 
             currentAssigneeId={task.assigneeId}
             users={allUsers}
           />
+          {canNotifyOnTask(me, task) && (
+            <NotifyTeammatesDialog
+              taskId={task.id}
+              taskDepartmentId={task.departmentId}
+              meId={currentUserId}
+              trigger={
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold border border-fuchsia-200 bg-fuchsia-50/60 text-fuchsia-700 hover:bg-fuchsia-100 hover:border-fuchsia-300 transition-colors active:scale-95"
+                  title="Slack-DM teammates a heads-up with a link to this task"
+                >
+                  <Megaphone className="w-3.5 h-3.5" />
+                  Notify teammates
+                </button>
+              }
+            />
+          )}
           <TaskActions task={task} />
         </div>
       </div>

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
-import { notifyAssignment, notifyTeamFyi } from "@/lib/slack";
+import { notifyAssignment } from "@/lib/slack";
 
 export const dynamic = "force-dynamic";
 
@@ -173,23 +173,16 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // 5) FYI to the rest of the SEO team.
-    const teammateEmails = teammates.map((u) => u.email).filter((e): e is string => !!e);
-    const fyi = await notifyTeamFyi({
-      recipientEmails: teammateEmails,
-      headline: `📊 SEO report requested: ${clientName}`,
-      body:
-        `*${requester?.name ?? "Someone"}* requested an SEO report.\n` +
-        `Routed to *${head.name}* (head of ${dept.name}). ` +
-        (reportTypes.length ? `Focus: ${reportTypes.join(", ")}.` : ""),
-      taskId,
-      taskTitle: insertRow.title
-    });
+    // No automatic team-wide FYI on creation anymore. Previously this
+    // route DM'd every SEO teammate; now only the head gets pinged so
+    // they can triage, then use "Notify teammates" on the task detail
+    // page to loop in specific people with context. Less noise, more
+    // intentional.
+    void teammates; // intentionally unused; preserved for symmetry
 
     return NextResponse.json({
       task,
       routedTo: { id: head.id, name: head.name, email: head.email },
-      teamFyi: { sent: fyi.sent, failed: fyi.failed, total: teammateEmails.length },
       slack: { headDm }
     });
   } catch (err) {

@@ -54,6 +54,19 @@ export async function GET() {
     );
   }
 
+  // Department memberships join — used by the notify-teammates picker
+  // and any other surface that wants to group people by team. Failures
+  // here degrade to empty arrays rather than 500ing.
+  const departmentsByUser = new Map<string, string[]>();
+  const { data: memberRows } = await supabase
+    .from("department_members")
+    .select("user_id, department_id");
+  for (const r of memberRows ?? []) {
+    const arr = departmentsByUser.get(r.user_id as string) ?? [];
+    arr.push(r.department_id as string);
+    departmentsByUser.set(r.user_id as string, arr);
+  }
+
   return NextResponse.json({
     users: rows.map((u) => ({
       id: u.id,
@@ -63,7 +76,8 @@ export async function GET() {
       avatarUrl: u.avatar_url ?? null,
       presence: (u.presence as "available" | "focus" | "eating" | "away" | null | undefined) ?? null,
       presenceUpdatedAt: u.presence_updated_at ?? null,
-      statusEmoji: u.status_emoji ?? null
+      statusEmoji: u.status_emoji ?? null,
+      departmentIds: departmentsByUser.get(u.id) ?? []
     }))
   });
 }

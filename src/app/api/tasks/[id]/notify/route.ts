@@ -1,0 +1,95 @@
+import { NextRequest, NextResponse } from "next/server";
+import { requireCurrentUserId } from "@/lib/session";
+import { getUserById, getAllUsersLight } from "@/lib/server-data";
+import { getSupabaseAdmin } from "@/lib/supabase-admin";
+import { notifyTeamFyi } from "@/lib/slack";
+import { canNotifyOnTask } from "@/lib/access";
+
+export const dynamic = "force-dynamic";
+
+// POST /api/tasks/[id]/notify — { userIds: string[], note?: string }.
+// Slack-DMs each picked teammate with a contextual heads-up linking
+// back to the task, and writes a single activity_log row capturing
+// who was looped in (so the audit trail shows it).
+//
+// Allowed callers: anyone canNotifyOnTask sees as a stakeholder
+// (assignee, creator, dept head of the task's department, CEO).
+export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+  try {
+    const userId = await requireCurrentUserId();
+    const me = await getUserById(userId);
+    if (!me) return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
+
+    const supabase = getSupabaseAdmin();
+    const { data: taskRow } = await supabase
+      .from("tasks")
+      .select("id, title, creator_id, assignee_id, department_id, status, priority")
+      .eq("id", params.id)
+      .maybeSingle();
+    if (!taskRow) return NextResponse.json({ error: "task not found" }, { status: 404 });
+
+    const taskForAccess = {
+      creatorId: taskRow.creator_id as string,
+      assigneeId: (taskRow.assignee_id as string | null) ?? null,
+      departmentId: (taskRow.department_id as string | null) ?? null
+    };
+    if (!canNotifyOnTask(me, taskForAccess as any)) {
+      return NextResponse.json({ error: "forbidden" }, { status: 403 });
+    }
+
+    const body = await req.json();
+    const userIds: string[] = Array.isArray(body.userIds)
+      ? body.userIds.filter((s: unknown): s is string => typeof s === "string")
+      : [];
+    const note = typeof body.note === "string" ? body.note.trim() : "";
+    if (userIds.length === 0) {
+      return NextResponse.json({ error: "pick at least one teammate" }, { status: 400 });
+    }
+    // No-op self-pings.
+    const recipients = userIds.filter((id) => id !== userId);
+    if (recipients.length === 0) {
+      return NextResponse.json({ error: "skipped: only self in list" }, { status: 400 });
+    }
+
+    // Resolve emails for Slack lookup + names for the activity log.
+    const users = await getAllUsersLight();
+    const byId = new Map(users.map((u) => [u.id, u]));
+    const recipientUsers = recipients
+      .map((id) => byId.get(id))
+      .filter((u): u is NonNullable<typeof u> => !!u);
+    if (recipientUsers.length === 0) {
+      return NextResponse.json({ error: "no valid recipients" }, { status: 400 });
+    }
+    const emails = recipientUsers
+      .map((u) => u.email)
+      .filter((e): e is string => !!e);
+
+    const headline = `${me.name} looped you in on a task`;
+    const fyi = await notifyTeamFyi({
+      recipientEmails: emails,
+      headline,
+      body: note || `Heads up — could you take a look?`,
+      taskId: params.id,
+      taskTitle: taskRow.title as string
+    });
+
+    // Activity row so the timeline shows who got notified.
+    const namedList = recipientUsers.map((u) => u.name).join(", ");
+    await supabase.from("activity_logs").insert({
+      id: `a_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
+      task_id: params.id,
+      user_id: userId,
+      action: "comment",
+      detail: note
+        ? `Notified ${namedList} — “${note}”`
+        : `Notified ${namedList}`
+    });
+
+    return NextResponse.json({ ok: true, sent: fyi.sent, failed: fyi.failed });
+  } catch (err) {
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : "unknown error" },
+      { status: 500 }
+    );
+  }
+}

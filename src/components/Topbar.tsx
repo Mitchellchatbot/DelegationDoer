@@ -12,7 +12,14 @@ import { toast } from "sonner";
 
 export function Topbar({ user }: { user: User }) {
   const [newTaskOpen, setNewTaskOpen] = useState(false);
+  const [query, setQuery] = useState("");
   const router = useRouter();
+
+  function submitSearch() {
+    const q = query.trim();
+    if (!q) return;
+    router.push(`/search?q=${encodeURIComponent(q)}`);
+  }
 
   async function logout() {
     await fetch("/api/auth/logout", { method: "POST" });
@@ -24,14 +31,23 @@ export function Topbar({ user }: { user: User }) {
       {/* Left placeholder so the search sits in the dead center of the bar */}
       <div />
 
-      {/* Centered search */}
-      <div className="relative w-[460px] max-w-full justify-self-center">
+      {/* Centered search — Enter submits, navigates to /search?q=… */}
+      <form
+        className="relative w-[460px] max-w-full justify-self-center"
+        onSubmit={(e) => {
+          e.preventDefault();
+          submitSearch();
+        }}
+      >
         <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-muted z-10" />
         <input
+          type="search"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
           className="w-full h-10 pl-10 pr-3 rounded-xl bg-slate-50 border border-slate-200 text-[15px] text-ink placeholder:text-muted focus:outline-none focus:bg-white focus:border-accent/50 focus:ring-2 focus:ring-accent/20 transition-colors"
           placeholder="Search tasks, projects, people…"
         />
-      </div>
+      </form>
 
       {/* Controls — right-aligned */}
       <div className="flex items-center gap-2 justify-self-end">

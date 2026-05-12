@@ -3,7 +3,6 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { Sparkles, Send, X } from "lucide-react";
 import { useState } from "react";
-import { currentUser, tasks } from "@/lib/mock-data";
 import { RaiseLink } from "./RaiseLink";
 
 interface Message { role: "user" | "assistant"; content: string }
@@ -11,7 +10,7 @@ interface Message { role: "user" | "assistant"; content: string }
 const SUGGESTED = [
   "What do I have today?",
   "Who should I assign a schema markup audit to?",
-  "What's blocking the Acme refresh?",
+  "What's blocking my urgent tasks?",
   "Summarise this week's progress"
 ];
 
@@ -75,7 +74,7 @@ export function AIAssistantDrawer({
                   ))}
                 </div>
                 <div className="mt-4 p-3 rounded-xl border border-border bg-surface2 text-[11px] text-muted">
-                  Context loaded: {currentUser.name}, {tasks.filter((t) => t.assigneeId === currentUser.id && t.status !== "done").length} open tasks, {tasks.filter((t) => t.inactiveFlag).length} stalled.
+                  Context: live tasks + people from your workspace are passed to the model each turn.
                 </div>
               </div>
             )}

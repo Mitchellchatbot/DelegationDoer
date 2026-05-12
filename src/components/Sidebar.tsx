@@ -9,7 +9,7 @@ import {
   Sparkles, Settings, AlertTriangle, Crown, Mail, Briefcase, BarChart3, Search,
   Network, Camera, FolderKanban
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ReportIncidentDialog } from "./ReportIncidentDialog";
 import { AIAssistantDrawer } from "./AIAssistantDrawer";
 import { RaiseLink } from "./RaiseLink";
@@ -67,6 +67,20 @@ export function Sidebar({ user }: { user: User }) {
   const path = usePathname();
   const [incidentOpen, setIncidentOpen] = useState(false);
   const [aiOpen, setAiOpen] = useState(false);
+
+  // ⌘K / Ctrl+K opens the Ask AI drawer — wires up the hint shown on
+  // the button. Suppressed when the user is mid-edit (so it doesn't
+  // hijack the shortcut for text fields that legitimately want it).
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setAiOpen((v) => !v);
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   // Org Chart (BASE_NAV[0]) is always the very first item — that's the
   // default landing tab for everyone. Role-specific items slot in

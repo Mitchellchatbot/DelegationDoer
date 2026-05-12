@@ -73,7 +73,7 @@ interface Payload {
 }
 
 // Bottleneck analytics. Lives at /analytics for everyone — the page itself
-// handles role gating (CEO sees full picture, dept_head sees a banner
+// handles role gating (Leader sees full picture, dept_head sees a banner
 // pointing to the same data, worker is bounced).
 export default function AnalyticsPage() {
   const me = useCurrentUser();
@@ -126,7 +126,7 @@ export default function AnalyticsPage() {
         <ShieldAlert className="w-8 h-8 text-warn mx-auto mb-2" />
         <div className="text-base font-medium">Leadership view</div>
         <div className="text-sm text-muted mt-1">
-          Bottleneck analytics are scoped to dept heads and the CEO.
+          Bottleneck analytics are scoped to dept heads and the Leader.
         </div>
       </div>
     );

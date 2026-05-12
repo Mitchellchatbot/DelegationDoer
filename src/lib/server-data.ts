@@ -192,7 +192,7 @@ export async function getAllUsersLight(): Promise<User[]> {
 }
 
 // Full users-list with department membership joined in. Used by views
-// that need departmentIds for filtering or routing (org chart, CEO
+// that need departmentIds for filtering or routing (org chart, Leader
 // console). Two queries — users + department_members — joined in memory
 // so we don't fan out N+1 lookups. Errors degrade to an empty list
 // rather than throwing so a missing table can't 500 the whole page.

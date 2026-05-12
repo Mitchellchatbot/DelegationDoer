@@ -239,7 +239,7 @@ function ExtendButton({ task }: { task: Task }) {
             <div>
               <Dialog.Title className="text-base font-medium">Extend deadline</Dialog.Title>
               <Dialog.Description className="text-xs text-muted mt-0.5">
-                You can self-extend, but your dept head and the CEO can see every extension and the reason.
+                You can self-extend, but your dept head and the Leader can see every extension and the reason.
               </Dialog.Description>
             </div>
             <Dialog.Close className="btn p-1.5"><X className="w-3.5 h-3.5" /></Dialog.Close>
@@ -276,7 +276,7 @@ function ExtendButton({ task }: { task: Task }) {
               <label className="label">Reason</label>
               <textarea
                 className="input min-h-[80px]"
-                placeholder="What blocked you? (visible to your dept head + CEO)"
+                placeholder="What blocked you? (visible to your dept head + Leader)"
                 value={reason}
                 onChange={(e) => setReason(e.target.value)}
               />

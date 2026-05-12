@@ -85,7 +85,7 @@ export function HandoffButton({
             <Dialog.Title className="text-base font-semibold">Hand off task</Dialog.Title>
             <Dialog.Description className="text-xs text-muted mt-0.5">
               Assign to someone else and capture what stage you're handing off at —
-              the next person sees the note, and the CEO sees the timing.
+              the next person sees the note, and the Leader sees the timing.
             </Dialog.Description>
           </div>
 

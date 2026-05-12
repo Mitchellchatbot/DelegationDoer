@@ -12,8 +12,8 @@
 
 import type { Task, User } from "@/lib/types";
 
-export function isCeo(u: Pick<User, "role"> | null | undefined): boolean {
-  return !!u && u.role === "ceo";
+export function isLeader(u: Pick<User, "role"> | null | undefined): boolean {
+  return !!u && u.role === "leader";
 }
 
 export function isDepartmentHead(u: Pick<User, "role"> | null | undefined): boolean {
@@ -44,7 +44,7 @@ export function canManageTask(
   task: Pick<Task, "creatorId" | "assigneeId" | "departmentId"> | null | undefined
 ): boolean {
   if (!actor || !task) return false;
-  if (isCeo(actor)) return true;
+  if (isLeader(actor)) return true;
   if (leadsDepartment(actor, task.departmentId)) return true;
   if (actor.id === task.assigneeId) return true;
   if (actor.id === task.creatorId) return true;
@@ -56,20 +56,20 @@ export function canManageProject(
   project: { departmentId: string | null } | null | undefined
 ): boolean {
   if (!actor || !project) return false;
-  if (isCeo(actor)) return true;
+  if (isLeader(actor)) return true;
   if (leadsDepartment(actor, project.departmentId)) return true;
   return false;
 }
 
 // View access for the department-scoped consoles (SEO console, Website
-// console, Software console — to be built). CEO sees all; department
-// heads and workers see consoles for their own department(s).
+// console, Software console — to be built). The leader sees all;
+// department heads and workers see consoles for their own department(s).
 export function canViewDepartmentConsole(
   actor: User | null | undefined,
   departmentId: string | null | undefined
 ): boolean {
   if (!actor || !departmentId) return false;
-  if (isCeo(actor)) return true;
+  if (isLeader(actor)) return true;
   return actor.departmentIds.includes(departmentId);
 }
 
@@ -83,10 +83,10 @@ export function canNotifyOnTask(
   return canManageTask(actor, task);
 }
 
-// Project creation is gated to CEO + any department head (head can
-// only create projects within their own department; the route still
-// enforces departmentId membership for non-CEO callers).
+// Project creation is gated to the leader + any department head (the
+// head can only create projects within their own department; the route
+// still enforces departmentId membership for non-leader callers).
 export function canCreateProject(actor: User | null | undefined): boolean {
   if (!actor) return false;
-  return isCeo(actor) || isDepartmentHead(actor);
+  return isLeader(actor) || isDepartmentHead(actor);
 }

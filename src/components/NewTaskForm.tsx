@@ -240,7 +240,7 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel }: Props) {
   }
 
   const delegateBlurb = (() => {
-    if (currentUser.role === "ceo") return "As CEO you can assign to anyone in the org.";
+    if (currentUser.role === "leader") return "As Leader you can assign to anyone in the org.";
     if (currentUser.role === "department_head") {
       const deptNames = currentUser.departmentIds
         .map((d) => departments.find((x) => x.id === d)?.name)
@@ -539,7 +539,7 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel }: Props) {
           </AnimatePresence>
           {ranked.length === 0 && (
             <div className="text-sm text-muted">
-              No one available from your role + selected department. Pick a different department or ask the CEO to widen your scope.
+              No one available from your role + selected department. Pick a different department or ask the Leader to widen your scope.
             </div>
           )}
         </ul>

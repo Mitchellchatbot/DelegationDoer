@@ -8,15 +8,15 @@ import { useCurrentUser } from "@/lib/user-context";
 import { Users as UsersIcon, ShieldAlert } from "lucide-react";
 
 // Org-chart view scoped to the current dept head's departments. CEOs are
-// nudged to /ceo (which has the full version + management tabs); workers
+// nudged to /leader (which has the full version + management tabs); workers
 // don't get team scope, so they're bounced home.
 export default function TeamOverviewPage() {
   const currentUser = useCurrentUser();
   const router = useRouter();
 
-  if (currentUser.role === "ceo") {
+  if (currentUser.role === "leader") {
     // SPA-friendly nudge — middleware doesn't know roles.
-    if (typeof window !== "undefined") router.replace("/ceo");
+    if (typeof window !== "undefined") router.replace("/leader");
     return null;
   }
   if (currentUser.role !== "department_head") {
@@ -70,7 +70,7 @@ export default function TeamOverviewPage() {
         users={scopedUsers}
         departments={scopedDepts}
         tasks={scopedTasks}
-        // No CEO root — dept-head view starts at the dept level.
+        // No Leader root — dept-head view starts at the dept level.
         ceo={null}
       />
     </div>

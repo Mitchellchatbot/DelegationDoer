@@ -112,7 +112,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     const assigneeChanged =
       "assignee_id" in update && update.assignee_id !== before.assignee_id;
 
-    // Handoff history — record every assignee change so the CEO can see how
+    // Handoff history — record every assignee change so the Leader can see how
     // long each person held the task. held_minutes is the time the *outgoing*
     // assignee held it, measured from the most recent handoff (or task
     // creation if this is the first handoff).

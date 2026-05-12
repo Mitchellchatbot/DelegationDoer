@@ -32,7 +32,7 @@ export interface MomentItem {
 interface Props {
   initialMoments: MomentItem[];
   currentUserId: string;
-  isCeo: boolean;
+  isLeader: boolean;
 }
 
 // Pick a grid size that scales with the number of items but never feels
@@ -53,7 +53,7 @@ const ZOOM_PRESETS = [
   { value: 0.75, label: "0.75×", hint: "tight" }
 ];
 
-export function MomentsGrid({ initialMoments, currentUserId, isCeo }: Props) {
+export function MomentsGrid({ initialMoments, currentUserId, isLeader }: Props) {
   const router = useRouter();
   const [moments, setMoments] = useState<MomentItem[]>(initialMoments);
   const gridSize = useMemo(() => Math.max(2, gridSizeFor(moments.length)), [moments.length]);
@@ -128,7 +128,7 @@ export function MomentsGrid({ initialMoments, currentUserId, isCeo }: Props) {
 
   // ---- Mutations ----
   async function deleteMoment(m: MomentItem) {
-    if (m.userId !== currentUserId && !isCeo) return;
+    if (m.userId !== currentUserId && !isLeader) return;
     if (!confirm("Delete this moment?")) return;
     try {
       const res = await fetch(`/api/moments/${encodeURIComponent(m.id)}`, {
@@ -247,7 +247,7 @@ export function MomentsGrid({ initialMoments, currentUserId, isCeo }: Props) {
                             )}
                             <span className="moments-name">{m.userName}</span>
                             <span className="moments-time">{timeAgo(m.createdAt)}</span>
-                            {(m.userId === currentUserId || isCeo) && (
+                            {(m.userId === currentUserId || isLeader) && (
                               <button
                                 type="button"
                                 onClick={(e) => { e.stopPropagation(); deleteMoment(m); }}

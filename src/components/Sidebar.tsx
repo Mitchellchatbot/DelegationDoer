@@ -13,7 +13,7 @@ import { useState } from "react";
 import { ReportIncidentDialog } from "./ReportIncidentDialog";
 import { AIAssistantDrawer } from "./AIAssistantDrawer";
 import { RaiseLink } from "./RaiseLink";
-import { isCEO, isHead } from "@/lib/auth";
+import { isLeader, isHead } from "@/lib/auth";
 import type { User } from "@/lib/types";
 
 // White-glass sidebar with colorful nav-item icons. Each item carries its
@@ -43,7 +43,7 @@ const BASE_NAV: NavItem[] = [
   { href: "/team",        label: "Team",        icon: Users,       tone: "emerald"  }
 ];
 const CEO_NAV: NavItem[] = [
-  { href: "/ceo",       label: "CEO Console", icon: Crown,    tone: "amber" },
+  { href: "/leader",       label: "Leader Console", icon: Crown,    tone: "amber" },
   { href: "/analytics", label: "Analytics",   icon: BarChart3, tone: "sky"  }
 ];
 const HEAD_NAV: NavItem[] = [
@@ -71,7 +71,7 @@ export function Sidebar({ user }: { user: User }) {
   // default landing tab for everyone. Role-specific items slot in
   // immediately after.
   const [orgChart, ...rest] = BASE_NAV;
-  const NAV: NavItem[] = isCEO(user)
+  const NAV: NavItem[] = isLeader(user)
     ? [orgChart, ...CEO_NAV, ...rest]
     : isHead(user)
       ? [orgChart, ...rest.slice(0, 4), ...HEAD_NAV, ...rest.slice(4)]

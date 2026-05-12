@@ -9,14 +9,14 @@ export const dynamic = "force-dynamic";
 // POST /api/clients/reorder
 // Body: { ids: string[] }   — array of client ids in their NEW desired
 //                              order (top of the list = most urgent).
-// CEO-only. Renumbers display_order in increments of 100 so subsequent
+// Leader-only. Renumbers display_order in increments of 100 so subsequent
 // inserts have headroom for fractional ranks.
 export async function POST(req: NextRequest) {
   try {
     const userId = await requireCurrentUserId();
     const me = await getUserById(userId);
     if (!me || !canManageAssignments(me)) {
-      return NextResponse.json({ error: "CEO only" }, { status: 403 });
+      return NextResponse.json({ error: "Leader only" }, { status: 403 });
     }
     const { ids } = await req.json();
     if (!Array.isArray(ids) || ids.some((x) => typeof x !== "string")) {

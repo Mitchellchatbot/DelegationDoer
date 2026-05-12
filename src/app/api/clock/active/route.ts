@@ -5,7 +5,7 @@ import { requireCurrentUserId } from "@/lib/session";
 export const dynamic = "force-dynamic";
 
 // GET /api/clock/active — every user with an open shift, plus how long
-// they've been on. Powers the "Who's on shift" surfaces (CEO console,
+// they've been on. Powers the "Who's on shift" surfaces (Leader console,
 // dashboard tile, etc.).
 export async function GET() {
   await requireCurrentUserId();

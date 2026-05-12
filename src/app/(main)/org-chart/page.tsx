@@ -12,7 +12,7 @@ export const dynamic = "force-dynamic";
 
 // Default landing page for everyone — top-to-bottom view of who does
 // what + what's on each plate. The chart is the same `<OrgChart>` used
-// inside CEO Console / Team Overview; this route adds a marketing-style
+// inside Leader Console / Team Overview; this route adds a marketing-style
 // hero with live stats and a peek of the team's faces.
 export default async function OrgChartPage() {
   const userId = await requireCurrentUserId();
@@ -29,14 +29,14 @@ export default async function OrgChartPage() {
     getDepartments()
   ]);
 
-  const ceo = users.find((u) => u.role === "ceo") ?? null;
+  const ceo = users.find((u) => u.role === "leader") ?? null;
   const openTasks = tasks.filter((t) => t.status !== "done").length;
 
-  // Avatar peek — show up to 6, ordered: CEO first, then heads, then
+  // Avatar peek — show up to 6, ordered: Leader first, then heads, then
   // workers — same order they appear in the chart so the hero "previews"
   // the diagram below.
   const ROLE_RANK: Record<Role, number> = {
-    ceo: 0, department_head: 1, worker: 2
+    leader: 0, department_head: 1, worker: 2
   };
   const peekAvatars = [...users]
     .sort((a, b) => ROLE_RANK[a.role] - ROLE_RANK[b.role] || a.name.localeCompare(b.name))

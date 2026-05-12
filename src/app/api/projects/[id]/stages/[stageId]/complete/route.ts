@@ -7,7 +7,7 @@ import { advanceStage } from "@/lib/project-flow";
 export const dynamic = "force-dynamic";
 
 // POST /api/projects/[id]/stages/[stageId]/complete — manually mark
-// the stage as done. Idempotent. CEO + department head only.
+// the stage as done. Idempotent. Leader + department head only.
 // On success the flow engine activates the next stage and dispatches
 // its first batch.
 export async function POST(
@@ -18,13 +18,13 @@ export async function POST(
     const userId = await requireCurrentUserId();
     const me = await getUserById(userId);
     if (!me) return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
-    if (me.role !== "ceo" && me.role !== "department_head") {
+    if (me.role !== "leader" && me.role !== "department_head") {
       return NextResponse.json({ error: "forbidden" }, { status: 403 });
     }
 
     const supabase = getSupabaseAdmin();
     // Mark every still-open task in this stage as done. Avoids the
-    // weird state where a CEO closes the stage but some tasks are
+    // weird state where a Leader closes the stage but some tasks are
     // still pending — they get archived as done so the activity log
     // is complete.
     await supabase

@@ -9,7 +9,7 @@ import { cn } from "@/lib/utils";
 // Left-rail tree for the inbox surface. Sections collapse into:
 //   • Smart — All inboxes (combined view, "/inboxes/all")
 //   • Inboxes — one entry per Missive account the user can see
-//   • Manage — link to /inboxes/manage when the actor is a CEO
+//   • Manage — link to /inboxes/manage when the actor is a Leader
 //
 // Active state slides between rows via framer-motion's `layoutId`, so the
 // person reading the inbox always sees which section they're in.

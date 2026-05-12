@@ -12,17 +12,17 @@ import { cn, initials } from "@/lib/utils";
 import type { User } from "@/lib/types";
 import type { InboxAssignment } from "@/lib/inbox-access";
 
-// Per-inbox invite dialog. CEO picks teammates → assignment is granted
+// Per-inbox invite dialog. Leader picks teammates → assignment is granted
 // in the same click → a "copy invite link" pill becomes available so
-// the CEO can paste the URL into Slack / DM / wherever. Already-assigned
+// the Leader can paste the URL into Slack / DM / wherever. Already-assigned
 // folks get the same copy pill plus a "Revoke" option.
 
 interface Props {
   inboxId: string;
   inboxEmail: string;
   inboxLabel: string;
-  // Every teammate the CEO can invite. Caller passes the full mock-data
-  // / DB users list; we exclude the CEO themself + already-assigned
+  // Every teammate the Leader can invite. Caller passes the full mock-data
+  // / DB users list; we exclude the Leader themself + already-assigned
   // users get a different affordance.
   users: User[];
   // Current assignments scoped to THIS inbox so we know who already
@@ -83,7 +83,7 @@ export function InviteToInboxDialog({
         next.add(userId);
         return next;
       });
-      // Copy the invite link automatically so the CEO can paste it
+      // Copy the invite link automatically so the Leader can paste it
       // wherever immediately after granting.
       await navigator.clipboard.writeText(inviteLinkFor(userId)).catch(() => {});
       toast.success(

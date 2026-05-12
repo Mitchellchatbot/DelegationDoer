@@ -29,9 +29,9 @@ export default async function ManageInboxesPage() {
     return (
       <div className="card p-6 max-w-lg mx-auto mt-12 text-center">
         <ShieldAlert className="w-8 h-8 text-warn mx-auto mb-2" />
-        <div className="text-base font-medium">CEO only</div>
+        <div className="text-base font-medium">Leader only</div>
         <div className="text-sm text-muted mt-1">
-          Only the CEO can reassign inboxes. Reach out if you need to grant or revoke access.
+          Only the Leader can reassign inboxes. Reach out if you need to grant or revoke access.
         </div>
       </div>
     );

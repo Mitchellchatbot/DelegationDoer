@@ -11,7 +11,7 @@ interface SettingRow {
   last_polled_at: string | null;
 }
 
-// CEO-facing per-inbox switch: when on, the email-intake cron polls this
+// Leader-facing per-inbox switch: when on, the email-intake cron polls this
 // account every 5 min and turns inbound threads into routed tasks. Off
 // by default (so connecting a new inbox is non-destructive).
 export function AutoIntakeToggleSection({

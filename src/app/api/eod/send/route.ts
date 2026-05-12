@@ -8,14 +8,14 @@ export const dynamic = "force-dynamic";
 
 // POST /api/eod/send — { departmentId?: string, date?: "YYYY-MM-DD" }.
 // If departmentId omitted, sends for every department the caller is
-// allowed to act on (CEO = all, dept head = their depts).
+// allowed to act on (Leader = all, dept head = their depts).
 // Returns per-department delivery results.
 export async function POST(req: NextRequest) {
   try {
     const userId = await requireCurrentUserId();
     const me = await getUserById(userId);
     if (!me) return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
-    if (me.role !== "ceo" && me.role !== "department_head") {
+    if (me.role !== "leader" && me.role !== "department_head") {
       return NextResponse.json({ error: "forbidden" }, { status: 403 });
     }
 
@@ -31,7 +31,7 @@ export async function POST(req: NextRequest) {
     let targetIds: string[];
     if (typeof body.departmentId === "string" && body.departmentId.length > 0) {
       targetIds = [body.departmentId];
-    } else if (me.role === "ceo") {
+    } else if (me.role === "leader") {
       const { data } = await supabase.from("departments").select("id");
       targetIds = (data ?? []).map((r) => r.id as string);
     } else {
@@ -43,9 +43,9 @@ export async function POST(req: NextRequest) {
       targetIds = (data ?? []).map((r) => r.department_id as string);
     }
 
-    // For non-CEO callers asking about a specific department, verify
+    // For non-Leader callers asking about a specific department, verify
     // membership instead of trusting the body.
-    if (me.role !== "ceo" && typeof body.departmentId === "string") {
+    if (me.role !== "leader" && typeof body.departmentId === "string") {
       const { data } = await supabase
         .from("department_members")
         .select("department_id")

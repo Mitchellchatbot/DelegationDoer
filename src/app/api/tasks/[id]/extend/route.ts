@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
 // POST /api/tasks/[id]/extend
 // Body: { hours: number, reason?: string }
 // Self-extends the task's due_date by `hours`. Tracked in task_extensions
-// so dept heads and the CEO can see how often / how much a task has slipped.
+// so dept heads and the Leader can see how often / how much a task has slipped.
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   try {
     const userId = await requireCurrentUserId();

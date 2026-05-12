@@ -34,7 +34,7 @@ export default async function InboxThreadsPage({
       <div className="card p-6 max-w-lg mx-auto mt-12 text-center">
         <div className="text-base font-medium">Access denied</div>
         <div className="text-sm text-muted mt-1">
-          You don't have access to this inbox. Ask your CEO or department head to assign it.
+          You don't have access to this inbox. Ask your Leader or department head to assign it.
         </div>
       </div>
     );

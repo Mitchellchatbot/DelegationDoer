@@ -1,6 +1,6 @@
 // Role-scoped inbox visibility.
 //
-//   CEO         -> every inbox in the workspace, regardless of assignment.
+//   Leader         -> every inbox in the workspace, regardless of assignment.
 //   Dept head   -> any inbox assigned to anyone in their department(s)
 //                  (including themselves).
 //   Worker      -> only inboxes assigned directly to them.
@@ -61,11 +61,11 @@ export async function getAssignmentsForUser(userId: string): Promise<InboxAssign
 }
 
 // Returns the set of missive_account_ids the actor can read. `null` means
-// "all accounts" (CEO scope) — caller should not filter further.
+// "all accounts" (Leader scope) — caller should not filter further.
 export async function visibleAccountIdsFor(
   actor: User
 ): Promise<Set<string> | null> {
-  if (actor.role === "ceo") return null;
+  if (actor.role === "leader") return null;
 
   if (actor.role === "department_head") {
     // Pull everyone in the actor's department(s), then their assignments.
@@ -91,7 +91,7 @@ export async function visibleAccountIdsFor(
 }
 
 export function canManageAssignments(actor: User): boolean {
-  return actor.role === "ceo";
+  return actor.role === "leader";
 }
 
 // Idempotently mirror Missive's "this user owns this email account"

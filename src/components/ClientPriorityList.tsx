@@ -10,7 +10,7 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import type { Client } from "@/lib/clients-data";
 
-// Drag-to-reorder client priority list. Top = most urgent. CEO-only edit.
+// Drag-to-reorder client priority list. Top = most urgent. Leader-only edit.
 //
 // Implementation note: @hello-pangea/dnd already handles all the position
 // animations (FLIP-style transforms on the non-dragged items, smooth ease
@@ -116,7 +116,7 @@ export function ClientPriorityList({ initial, openCounts, canEdit }: Props) {
                           {i + 1}
                         </div>
 
-                        {/* Drag handle (only for CEO) */}
+                        {/* Drag handle (only for Leader) */}
                         {canEdit && (
                           <span
                             {...p.dragHandleProps}

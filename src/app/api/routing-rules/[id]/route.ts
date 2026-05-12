@@ -8,12 +8,12 @@ export const dynamic = "force-dynamic";
 async function requireCeo() {
   const id = await requireCurrentUserId();
   const u = await getUserById(id);
-  if (!u || u.role !== "ceo") return null;
+  if (!u || u.role !== "leader") return null;
   return u;
 }
 
 // PATCH /api/routing-rules/[id] — partial update of label, keywords,
-// assignee, department, or priority. CEO-only.
+// assignee, department, or priority. Leader-only.
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
   if (!(await requireCeo())) {
     return NextResponse.json({ error: "forbidden" }, { status: 403 });

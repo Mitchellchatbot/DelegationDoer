@@ -13,7 +13,7 @@ export const dynamic = "force-dynamic";
 // who was looped in (so the audit trail shows it).
 //
 // Allowed callers: anyone canNotifyOnTask sees as a stakeholder
-// (assignee, creator, dept head of the task's department, CEO).
+// (assignee, creator, dept head of the task's department, Leader).
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   try {
     const userId = await requireCurrentUserId();

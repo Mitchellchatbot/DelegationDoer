@@ -6,7 +6,7 @@ import { canManageAssignments, getAllAssignments } from "@/lib/inbox-access";
 
 export const dynamic = "force-dynamic";
 
-// GET /api/inbox-assignments — every assignment row. CEO-only (the page
+// GET /api/inbox-assignments — every assignment row. Leader-only (the page
 // that uses this is the management view).
 export async function GET() {
   try {

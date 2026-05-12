@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
 async function requireManager() {
   const id = await requireCurrentUserId();
   const u = await getUserById(id);
-  if (!u || (u.role !== "ceo" && u.role !== "department_head")) return null;
+  if (!u || (u.role !== "leader" && u.role !== "department_head")) return null;
   return u;
 }
 

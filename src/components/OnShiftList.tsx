@@ -14,7 +14,7 @@ interface OnShift {
 }
 
 // Live "Who's on shift" panel. Polls /api/clock/active every 15s while
-// the tab is visible. Drop on /ceo or any dashboard surface.
+// the tab is visible. Drop on /leader or any dashboard surface.
 export function OnShiftList() {
   const [list, setList] = useState<OnShift[] | null>(null);
 

@@ -90,7 +90,7 @@ export async function GET(req: Request) {
   const memberIds = (memberRows ?? []).map((r) => r.user_id as string);
   if (memberIds.length === 0) {
     return NextResponse.json(
-      { error: `Department ${dept.name} has no members yet — add some on /inboxes/manage or the CEO Console first.` },
+      { error: `Department ${dept.name} has no members yet — add some on /inboxes/manage or the Leader Console first.` },
       { status: 400 }
     );
   }

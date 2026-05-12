@@ -1,6 +1,6 @@
 "use client";
 
-// CEO-only invite flow. Collects name + work email + role + (when role
+// Leader-only invite flow. Collects name + work email + role + (when role
 // is dept-head or worker) the department(s) the invitee belongs to.
 // POSTs to /api/users/invite which fires a Supabase Auth invite email
 // and pre-populates the role + department memberships so the invitee
@@ -17,7 +17,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { UserPlus, Mail, X, Loader2, Crown, Hammer, Briefcase, Check } from "lucide-react";
 import { toast } from "sonner";
 
-type Role = "worker" | "department_head" | "ceo";
+type Role = "worker" | "department_head" | "leader";
 
 interface DepartmentLite { id: string; name: string }
 
@@ -202,10 +202,10 @@ export function InvitePersonDialog({ trigger }: { trigger: React.ReactNode }) {
                         sub="Leads one or more depts"
                       />
                       <RolePill
-                        active={role === "ceo"}
-                        onClick={() => setRole("ceo")}
+                        active={role === "leader"}
+                        onClick={() => setRole("leader")}
                         icon={<Crown className="w-3.5 h-3.5" />}
-                        label="CEO"
+                        label="Leader"
                         sub="Sees everything"
                       />
                     </div>
@@ -219,7 +219,7 @@ export function InvitePersonDialog({ trigger }: { trigger: React.ReactNode }) {
                       <div className="text-[11px] text-ink/55 px-1 mb-1.5">{minDeptHint}</div>
                       {departments.length === 0 ? (
                         <div className="text-sm text-ink/45 italic px-2 py-3">
-                          No departments yet. Create one on the CEO Console first.
+                          No departments yet. Create one on the Leader Console first.
                         </div>
                       ) : (
                         <div className="grid grid-cols-2 gap-1.5">

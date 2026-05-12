@@ -32,19 +32,19 @@ import {
 const TABS = ["People", "Departments", "Org chart", "Performance", "All tasks"] as const;
 type Tab = typeof TABS[number];
 
-export default function CEOConsolePage() {
+export default function LeaderConsolePage() {
   const currentUser = useCurrentUser();
   const [tab, setTab] = useState<Tab>("People");
   const [people, setPeople] = useState<User[]>(initialUsers);
   const [depts, setDepts] = useState<Department[]>(initialDepartments);
 
   // Gate the page itself.
-  if (currentUser.role !== "ceo") {
+  if (currentUser.role !== "leader") {
     return (
       <div className="card p-6 max-w-lg mx-auto mt-12 text-center">
         <ShieldAlert className="w-8 h-8 text-warn mx-auto mb-2" />
-        <div className="text-base font-medium">CEO only</div>
-        <div className="text-sm text-muted mt-1">This page is restricted to the CEO role.</div>
+        <div className="text-base font-medium">Leader only</div>
+        <div className="text-sm text-muted mt-1">This page is restricted to the Leader role.</div>
       </div>
     );
   }
@@ -52,7 +52,7 @@ export default function CEOConsolePage() {
   return (
     <div className="space-y-5 max-w-7xl mx-auto">
       <PageHero
-        eyebrow="CEO Console"
+        eyebrow="Leader Console"
         headline={["Company-wide ", { accent: "control" }]}
         subtitle="People, departments, the org chart, every task in flight — all in one place."
         icon={<Crown />}
@@ -76,7 +76,7 @@ export default function CEOConsolePage() {
                   underline between tabs instead of hard-swapping it. */}
               {active && (
                 <motion.span
-                  layoutId="ceo-tab-underline"
+                  layoutId="leader-tab-underline"
                   className="absolute left-3 right-3 -bottom-px h-0.5 bg-accent rounded-full"
                   transition={{ type: "spring", stiffness: 480, damping: 36 }}
                 />
@@ -99,7 +99,7 @@ export default function CEOConsolePage() {
           {tab === "People" && <PeopleTab people={people} setPeople={setPeople} departments={depts} />}
           {tab === "Departments" && <DepartmentsTab departments={depts} setDepartments={setDepts} people={people} />}
           {tab === "Org chart" && <OrgChartTab people={people} departments={depts} />}
-          {tab === "Performance" && <PerformanceReview canCrown={currentUser.role === "ceo"} />}
+          {tab === "Performance" && <PerformanceReview canCrown={currentUser.role === "leader"} />}
           {tab === "All tasks" && <AllTasksTab people={people} departments={depts} />}
         </motion.div>
       </AnimatePresence>
@@ -114,7 +114,7 @@ function PeopleTab({
 }: { people: User[]; setPeople: (u: User[]) => void; departments: Department[] }) {
   const currentUser = useCurrentUser();
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  // The rest of the CEO page reads from mock tasks for legacy capacity
+  // The rest of the Leader page reads from mock tasks for legacy capacity
   // math (visualisations don't depend on real-time accuracy), but the
   // inline drilldown DOES need the real tasks — otherwise we render
   // "nothing assigned" for someone with 22 urgent tasks in Supabase.
@@ -178,10 +178,10 @@ function PeopleTab({
           </thead>
           <tbody>
             {people.map((u) => {
-              const reportsTo = u.role === "ceo"
+              const reportsTo = u.role === "leader"
                 ? "—"
                 : u.role === "department_head"
-                  ? "CEO"
+                  ? "Leader"
                   : (() => {
                       const dep = u.departmentIds[0];
                       const head = dep ? people.find((x) => x.role === "department_head" && x.departmentIds.includes(dep)) : null;
@@ -378,7 +378,7 @@ function PersonTaskList({ userId, tasks: liveTasks }: { userId: string; tasks: T
 
 function RolePicker({ role, onChange }: { role: Role; onChange: (r: Role) => void }) {
   const tone = {
-    ceo: "text-warn border-warn/40 bg-warn/10",
+    leader: "text-warn border-warn/40 bg-warn/10",
     department_head: "text-accent border-accent/30 bg-accent/10",
     worker: "text-muted border-border bg-surface2"
   }[role];
@@ -388,7 +388,7 @@ function RolePicker({ role, onChange }: { role: Role; onChange: (r: Role) => voi
       onChange={(e) => onChange(e.target.value as Role)}
       className={"badge cursor-pointer " + tone}
     >
-      <option value="ceo">CEO</option>
+      <option value="leader">Leader</option>
       <option value="department_head">Department Head</option>
       <option value="worker">Worker</option>
     </select>
@@ -416,9 +416,9 @@ function DepartmentsTab({
   return (
     <div className="space-y-4">
       {/* Mirror of the same section in Settings — keeps the EOD channel
-          mapping reachable from wherever the CEO is editing the org
-          structure. CEO-only edit. */}
-      <DepartmentSlackSection canEdit={currentUser?.role === "ceo"} />
+          mapping reachable from wherever the Leader is editing the org
+          structure. Leader-only edit. */}
+      <DepartmentSlackSection canEdit={currentUser?.role === "leader"} />
 
       <div className="grid grid-cols-2 gap-3">
         {departments.map((d) => {
@@ -506,7 +506,7 @@ function DepartmentsTab({
 /* ---------------- Org chart ---------------- */
 
 function OrgChartTab({ people, departments }: { people: User[]; departments: Department[] }) {
-  const ceo = people.find((u) => u.role === "ceo") ?? null;
+  const ceo = people.find((u) => u.role === "leader") ?? null;
 
   // Org-wide aggregates. "Completed this week" counts tasks whose status is
   // `done` AND whose lastActivityAt — the timestamp the task changed state —

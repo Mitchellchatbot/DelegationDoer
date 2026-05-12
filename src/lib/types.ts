@@ -1,4 +1,4 @@
-export type Role = "ceo" | "department_head" | "worker";
+export type Role = "leader" | "department_head" | "worker";
 export type TaskStatus = "pending" | "in_progress" | "urgent" | "waiting_on_client" | "done";
 export type Priority = "low" | "medium" | "high" | "critical";
 export type MilestoneStatus = "pending" | "in_progress" | "done" | "delayed";
@@ -11,7 +11,7 @@ export interface User {
   role: Role;
   // Departments the user belongs to. For workers this is typically one home
   // department. For department_heads, the departments they lead (one or many).
-  // For the CEO this can be empty.
+  // For the Leader this can be empty.
   departmentIds: string[];
   skills: string[];
   dailyCapacity: number;

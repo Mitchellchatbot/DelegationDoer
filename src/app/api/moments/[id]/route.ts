@@ -5,7 +5,7 @@ import { getUserById } from "@/lib/server-data";
 
 export const dynamic = "force-dynamic";
 
-// DELETE /api/moments/[id] — owner or CEO can drop a moment.
+// DELETE /api/moments/[id] — owner or Leader can drop a moment.
 export async function DELETE(
   _req: NextRequest,
   { params }: { params: { id: string } }
@@ -20,7 +20,7 @@ export async function DELETE(
     .eq("id", params.id)
     .maybeSingle();
   if (!row) return NextResponse.json({ error: "not found" }, { status: 404 });
-  if (row.user_id !== userId && me.role !== "ceo") {
+  if (row.user_id !== userId && me.role !== "leader") {
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
   const { error } = await supabase.from("moments").delete().eq("id", params.id);

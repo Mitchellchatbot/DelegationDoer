@@ -32,7 +32,7 @@ interface Eom {
   reason: string | null;
 }
 
-// CEO Console → Performance tab. Sortable leaderboard with the option to
+// Leader Console → Performance tab. Sortable leaderboard with the option to
 // crown the current Employee of the Month. Crown's effects propagate
 // app-wide (every PersonAvatar reads from the presence context which
 // also carries EOM info).

@@ -35,7 +35,7 @@ export default async function ClientsPage() {
         subtitle={
           canEdit
             ? "Drag a client up or down to set its priority — top of the list is most urgent."
-            : "Ordered by the CEO's priority — most urgent at the top."
+            : "Ordered by the Leader's priority — most urgent at the top."
         }
         icon={<Briefcase />}
         iconTone="amber"

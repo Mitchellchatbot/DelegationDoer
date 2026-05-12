@@ -16,7 +16,7 @@ import type { Department, Task, User } from "@/lib/types";
 // connectors, and a big "ORG CHART" watermark sits behind everything.
 //
 // Filtering is the caller's job — pass in the slice of users/depts/tasks
-// you want visualized. CEO console passes everything; dept-head Team
+// you want visualized. Leader console passes everything; dept-head Team
 // Overview passes only their dept's members + tasks.
 
 interface Props {
@@ -33,7 +33,7 @@ const PRIORITY_RANK: Record<string, number> = {
 };
 
 const ROLE_TONE: Record<User["role"], string> = {
-  ceo: "from-amber-200 via-amber-100 to-amber-50 text-amber-700",
+  leader: "from-amber-200 via-amber-100 to-amber-50 text-amber-700",
   department_head: "from-indigo-200 via-indigo-100 to-indigo-50 text-indigo-700",
   worker: "from-blue-200 via-blue-100 to-blue-50 text-blue-700"
 };
@@ -70,7 +70,7 @@ export function OrgChart({
   users, departments, tasks, ceo, tasksPerPerson = 2, emptyLabel = "No open tasks"
 }: Props) {
   // Refs to anchor SVG curves between tiers. Each connector pairs a
-  // "from" node (CEO or dept-head card) with a "to" node (dept column
+  // "from" node (Leader or dept-head card) with a "to" node (dept column
   // header or worker tile). We measure once on mount + on resize.
   const containerRef = useRef<HTMLDivElement | null>(null);
   const ceoRef = useRef<HTMLDivElement | null>(null);
@@ -91,7 +91,7 @@ export function OrgChart({
 
       const next: { d: string; key: string }[] = [];
 
-      // CEO → each dept's header tile.
+      // Leader → each dept's header tile.
       const ceoEl = ceoRef.current;
       if (ceoEl) {
         const c = ceoEl.getBoundingClientRect();
@@ -183,7 +183,7 @@ export function OrgChart({
             <div ref={ceoRef}>
               <PersonCard
                 user={ceo}
-                tone="ceo"
+                tone="leader"
                 tasks={openTasksFor(ceo.id, tasks)}
                 allUserTasks={tasks.filter((t) => t.assigneeId === ceo.id)}
                 tasksPerPerson={tasksPerPerson}
@@ -218,7 +218,7 @@ export function OrgChart({
                 <div key={d.id} className="flex flex-col items-center gap-6">
                   {/* Dept header — frosted-glass pill keeps the column
                       anchored visually before any cards render. The
-                      connector from CEO targets THIS element so the
+                      connector from Leader targets THIS element so the
                       curve looks like it's feeding the whole column. */}
                   <div
                     ref={(el) => { deptHeaderRefs.current.set(d.id, el); }}
@@ -300,7 +300,7 @@ function PersonCard({
   user, tone, tasks, allUserTasks, tasksPerPerson, emptyLabel, departments
 }: {
   user: User;
-  tone: "ceo" | "head" | "worker";
+  tone: "leader" | "head" | "worker";
   tasks: Task[];
   // Every task ever assigned to this user (any status). The back face
   // uses this to compute "done this week" without reaching back into
@@ -322,10 +322,10 @@ function PersonCard({
 
   const [flipped, setFlipped] = useState(false);
 
-  // Card frame — wider for the CEO so the root reads as the apex; same
+  // Card frame — wider for the Leader so the root reads as the apex; same
   // height across roles so the row baselines stay aligned.
-  const cardWidthClass = tone === "ceo" ? "w-[280px]" : "w-[240px]";
-  const cardHeightClass = tone === "ceo" ? "h-[340px]" : "h-[300px]";
+  const cardWidthClass = tone === "leader" ? "w-[280px]" : "w-[240px]";
+  const cardHeightClass = tone === "leader" ? "h-[340px]" : "h-[300px]";
 
   // Department names this person belongs to — shown on the back face so
   // the flip carries enough context to skip a profile click.
@@ -431,7 +431,7 @@ function PersonCard({
               <div className="text-[13px] font-semibold leading-tight truncate text-ink">
                 {user.name}
               </div>
-              {tone === "ceo" && <Crown className="w-3.5 h-3.5 text-amber-500 shrink-0" />}
+              {tone === "leader" && <Crown className="w-3.5 h-3.5 text-amber-500 shrink-0" />}
               <span className="ml-auto text-[10px] font-medium text-ink/65 tabular-nums shrink-0">
                 {tasks.length} open
               </span>
@@ -505,7 +505,7 @@ function BackFace({
   user, tone, openTasks, allUserTasks, avatarUrl, departmentNames, onClose
 }: {
   user: User;
-  tone: "ceo" | "head" | "worker";
+  tone: "leader" | "head" | "worker";
   openTasks: Task[];
   allUserTasks: Task[];
   avatarUrl: string | null;
@@ -588,7 +588,7 @@ function BackFace({
               <div className="text-[14px] font-semibold leading-tight truncate">
                 {user.name}
               </div>
-              {tone === "ceo" && <Crown className="w-3.5 h-3.5 text-amber-200 shrink-0" />}
+              {tone === "leader" && <Crown className="w-3.5 h-3.5 text-amber-200 shrink-0" />}
             </div>
             <div className="text-[10px] uppercase tracking-wide text-white/75">
               {ROLE_LABELS[user.role]}

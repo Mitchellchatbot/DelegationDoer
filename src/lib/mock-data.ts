@@ -34,13 +34,13 @@ export const departments: Department[] = [
   }
 ];
 
-// Henry (henry@scaledai.org) is the CEO.
+// Henry (henry@scaledai.org) is the Leader.
 // Priya heads SEO. Diego heads Website AND Software. Sara heads Marketing.
-// Workers report to their department head; heads report to the CEO.
+// Workers report to their department head; heads report to the Leader.
 export const users: User[] = [
   {
     id: "u_1", name: "Shaheer Khosa", email: "shaheerkhosa6@gmail.com",
-    role: "ceo", departmentIds: [],
+    role: "leader", departmentIds: [],
     skills: ["strategy", "operations"], dailyCapacity: 8, throughput: {}
   },
   {
@@ -318,10 +318,10 @@ export function workersOf(deptId: string): User[] {
   return users.filter((u) => u.role === "worker" && u.departmentIds.includes(deptId));
 }
 // Reporting line: a user's direct manager. Workers report to the head(s) of
-// their first department; heads report to the CEO; CEO reports to no one.
+// their first department; heads report to the Leader; Leader reports to no one.
 export function managerOf(user: User): User | null {
-  if (user.role === "ceo") return null;
-  if (user.role === "department_head") return users.find((u) => u.role === "ceo") ?? null;
+  if (user.role === "leader") return null;
+  if (user.role === "department_head") return users.find((u) => u.role === "leader") ?? null;
   const dep = user.departmentIds[0];
   return dep ? headsOf(dep)[0] ?? null : null;
 }

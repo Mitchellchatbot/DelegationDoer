@@ -25,7 +25,7 @@ export default async function DashboardPage() {
   if (!me) redirect("/login");
 
   // CEOs land on the Console instead of the personal Dashboard.
-  if (me.role === "ceo") redirect("/ceo");
+  if (me.role === "leader") redirect("/leader");
 
   const myTasks = tasks.filter((t) => t.assigneeId === me.id && t.status !== "done");
   const urgent = tasks.filter((t) => (t.status === "urgent" || t.priority === "critical") && t.status !== "done");

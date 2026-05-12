@@ -28,14 +28,14 @@ function statsFor(userId: string) {
 }
 
 export default function TeamPage() {
-  const ceo = users.find((u) => u.role === "ceo");
+  const ceo = users.find((u) => u.role === "leader");
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
       <PageHero
         eyebrow="The team"
         headline={["Everyone, ", { accent: "by department" }]}
-        subtitle="Org reports up to the CEO. Click anyone to see their profile."
+        subtitle="Org reports up to the Leader. Click anyone to see their profile."
         icon={<UsersIcon />}
         iconTone="emerald"
       />
@@ -57,7 +57,7 @@ export default function TeamPage() {
               <PersonAvatar userId={ceo.id} name={ceo.name} imageUrl={ceo.avatarUrl} size={36} />
               <div className="flex-1 min-w-0">
                 <div className="text-sm font-semibold truncate">{ceo.name}</div>
-                <div className="text-xs text-ink/60">CEO · everyone reports up here</div>
+                <div className="text-xs text-ink/60">Leader · everyone reports up here</div>
               </div>
               <span className="text-[10px] uppercase tracking-wide text-blue-700 bg-white/70 px-2 py-0.5 rounded-full border border-blue-200/60">
                 Org leader

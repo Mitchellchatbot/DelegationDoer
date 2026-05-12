@@ -54,12 +54,12 @@ export async function GET() {
   });
 }
 
-// POST /api/eom — body: { userId, reason? }. CEO only. Upserts on month
+// POST /api/eom — body: { userId, reason? }. Leader only. Upserts on month
 // (so re-crowning replaces the holder for the current month).
 export async function POST(req: NextRequest) {
   const adminId = await requireCurrentUserId();
   const me = await getUserById(adminId);
-  if (!me || me.role !== "ceo") {
+  if (!me || me.role !== "leader") {
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
   const body = await req.json();
@@ -84,11 +84,11 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({ ok: true, eom: data });
 }
 
-// DELETE /api/eom — uncrown for the current month. CEO only.
+// DELETE /api/eom — uncrown for the current month. Leader only.
 export async function DELETE() {
   const adminId = await requireCurrentUserId();
   const me = await getUserById(adminId);
-  if (!me || me.role !== "ceo") {
+  if (!me || me.role !== "leader") {
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
   const supabase = getSupabaseAdmin();

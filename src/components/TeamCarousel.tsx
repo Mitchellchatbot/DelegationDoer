@@ -59,7 +59,7 @@ interface Props {
 }
 
 const ROLE_TONE: Record<User["role"], string> = {
-  ceo: "from-amber-100 to-amber-50 text-amber-700",
+  leader: "from-amber-100 to-amber-50 text-amber-700",
   department_head: "from-indigo-100 to-indigo-50 text-indigo-700",
   worker: "from-blue-100 to-blue-50 text-blue-700"
 };
@@ -163,7 +163,7 @@ export function TeamCarousel({ users, departments }: Props) {
   }
 
   const ordered = useMemo(() => {
-    const ROLE_RANK: Record<User["role"], number> = { ceo: 0, department_head: 1, worker: 2 };
+    const ROLE_RANK: Record<User["role"], number> = { leader: 0, department_head: 1, worker: 2 };
     let list = [...users];
     if (filter !== "all") {
       list = list.filter((u) => u.departmentIds.includes(filter));
@@ -437,7 +437,7 @@ export function TeamCarousel({ users, departments }: Props) {
             <h3 className="inline-block relative text-3xl md:text-4xl font-bold text-accent tracking-tight">
               <span className="absolute top-1/2 -translate-y-1/2 -left-32 w-24 h-0.5 bg-accent/70" aria-hidden />
               {current.name}
-              {current.role === "ceo" && (
+              {current.role === "leader" && (
                 <Crown className="inline-block w-5 h-5 ml-2 mb-1 text-amber-500" />
               )}
               <span className="absolute top-1/2 -translate-y-1/2 -right-32 w-24 h-0.5 bg-accent/70" aria-hidden />

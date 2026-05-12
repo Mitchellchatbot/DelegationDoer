@@ -25,7 +25,7 @@ interface UserLite {
   role: string;
 }
 
-// Settings → Responsibilities. CEO-edits a small set of "this kind of
+// Settings → Responsibilities. Leader-edits a small set of "this kind of
 // work always goes to that person" rules. Used by:
 //   - The new-task popdown's auto-route hint
 //   - The email auto-intake pipeline (Phase 3)
@@ -80,7 +80,7 @@ export function ResponsibilitiesSection({ canManage }: { canManage: boolean }) {
         <div className="text-xs text-muted">Loading…</div>
       ) : rules.length === 0 && !adding ? (
         <div className="text-xs text-muted italic py-4 text-center">
-          No rules yet. {canManage ? "Click \"Add rule\" — e.g. \"tax → CEO\" or \"Care-Assist → Diego\"." : "Ask the CEO to add one."}
+          No rules yet. {canManage ? "Click \"Add rule\" — e.g. \"tax → Leader\" or \"Care-Assist → Diego\"." : "Ask the Leader to add one."}
         </div>
       ) : (
         <ul className="space-y-2">
@@ -195,7 +195,7 @@ function RuleRow({
                 size={18}
               />
               <span className="font-medium">{assignee.name}</span>
-              {assignee.role === "ceo" && <Crown className="w-3 h-3 text-amber-500" />}
+              {assignee.role === "leader" && <Crown className="w-3 h-3 text-amber-500" />}
             </span>
           ) : dept ? (
             <span className="inline-flex items-center gap-1.5">

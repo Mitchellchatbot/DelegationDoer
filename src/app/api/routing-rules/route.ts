@@ -5,12 +5,12 @@ import { getUserById } from "@/lib/server-data";
 
 export const dynamic = "force-dynamic";
 
-// CEO-only writes. Reads are open to any authed user so the new-task
+// Leader-only writes. Reads are open to any authed user so the new-task
 // popdown can also surface "this would be auto-routed to X" hints.
 async function requireCeo() {
   const id = await requireCurrentUserId();
   const u = await getUserById(id);
-  if (!u || u.role !== "ceo") return null;
+  if (!u || u.role !== "leader") return null;
   return u;
 }
 

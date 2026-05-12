@@ -13,7 +13,7 @@ export const dynamic = "force-dynamic";
 // On consent → Missive callback → Missive redirects back to
 // /inboxes/manage?oauth=microsoft_ok&connectedAccount=<id>.
 //
-// CEO-only (same gate as the rest of /inboxes/manage) — connecting a
+// Leader-only (same gate as the rest of /inboxes/manage) — connecting a
 // shared inbox is a workspace-wide action.
 export async function GET(req: NextRequest) {
   const userId = await requireCurrentUserId();

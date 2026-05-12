@@ -2,7 +2,7 @@
 
 // End-of-day reports. Each visible department gets its own panel
 // listing today's completers + hours logged per person + a notes
-// textarea (editable only by yourself). CEO + department heads can
+// textarea (editable only by yourself). Leader + department heads can
 // click "Send to Slack" on a panel to dispatch the digest to the
 // department's configured channel.
 
@@ -130,7 +130,7 @@ export default function EodPage() {
         </div>
       ) : summaries.length === 0 ? (
         <div className="card p-8 text-center text-sm text-muted">
-          You're not in any departments yet — ask a CEO to add you to one.
+          You're not in any departments yet — ask a Leader to add you to one.
         </div>
       ) : (
         summaries.map((d) => (
@@ -201,7 +201,7 @@ function DepartmentPanel({
                 (sending ? "opacity-60 cursor-not-allowed" : "")
               }
               style={{ background: "linear-gradient(135deg, #2563EB 0%, #1e63ff 100%)" }}
-              title={summary.slackChannelId ? "Post the EOD digest to this channel" : "Set a channel first in Settings or the CEO Console"}
+              title={summary.slackChannelId ? "Post the EOD digest to this channel" : "Set a channel first in Settings or the Leader Console"}
             >
               {sending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
               {sending ? "Sending…" : "Send to Slack"}

@@ -1,6 +1,6 @@
 "use client";
 
-// CEO-only settings card: assign a Slack channel ID to each department.
+// Leader-only settings card: assign a Slack channel ID to each department.
 // The EOD report sender uses these to route per-team digests. We store
 // channel IDs (Cxxxx form) rather than names because chat.postMessage
 // resolves names slowly and they can be renamed without a stable

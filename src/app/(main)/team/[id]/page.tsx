@@ -20,7 +20,7 @@ export default function ProfilePage({ params }: { params: { id: string } }) {
   const skills = skillProfiles.filter((s) => s.userId === user.id);
   const taskTypeHistory = Array.from(new Set(skills.flatMap((s) => s.taskTypes)));
   const manager = managerOf(user);
-  const directReports = user.role === "ceo"
+  const directReports = user.role === "leader"
     ? users.filter((u) => u.role === "department_head")
     : user.role === "department_head"
       ? users.filter((u) => u.role === "worker" && u.departmentIds.some((d) => user.departmentIds.includes(d)))
@@ -35,7 +35,7 @@ export default function ProfilePage({ params }: { params: { id: string } }) {
         <div className="flex-1">
           <div className="text-lg font-medium flex items-center gap-2">
             {user.name}
-            {user.role === "ceo" && <Crown className="w-4 h-4 text-warn" />}
+            {user.role === "leader" && <Crown className="w-4 h-4 text-warn" />}
             {user.role === "department_head" && <Crown className="w-4 h-4 text-accent" />}
           </div>
           <div className="text-sm text-muted">

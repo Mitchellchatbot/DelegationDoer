@@ -7,12 +7,12 @@ export const dynamic = "force-dynamic";
 
 // CRUD for missive_account_settings — currently only the
 // `auto_intake_enabled` flag (off by default). The /inboxes/manage page
-// hits this when the CEO toggles auto-intake on per-inbox.
+// hits this when the Leader toggles auto-intake on per-inbox.
 
 async function requireCeo() {
   const id = await requireCurrentUserId();
   const u = await getUserById(id);
-  return u && u.role === "ceo" ? u : null;
+  return u && u.role === "leader" ? u : null;
 }
 
 // GET — list every settings row. Migration may not have run yet, so we

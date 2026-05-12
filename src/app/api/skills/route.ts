@@ -24,7 +24,7 @@ async function authContext(): Promise<{ userId: string; isManager: boolean }> {
   const u = await getUserById(userId);
   return {
     userId,
-    isManager: !!u && (u.role === "ceo" || u.role === "department_head")
+    isManager: !!u && (u.role === "leader" || u.role === "department_head")
   };
 }
 

@@ -8,7 +8,7 @@ import { Plug, X, Loader2, ChevronDown, Mail } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
-// "Connect inbox" dialog — CEO-only affordance that proxies a new
+// "Connect inbox" dialog — Leader-only affordance that proxies a new
 // account create request through to the Missive clone. Two preset
 // providers (Gmail / Outlook) handle the common case; "Custom IMAP"
 // reveals the full host/port/credentials fieldset for everything else.

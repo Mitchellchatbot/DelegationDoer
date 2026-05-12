@@ -70,7 +70,7 @@ export default function BoardPage() {
 
   // View / filter state — `?dept=DEPT_ID` in the URL pre-filters the board
   // to that department on first paint. Used by the "View tasks" deep links
-  // on the CEO Console's Departments tab.
+  // on the Leader Console's Departments tab.
   const initialDept = searchParams.get("dept") ?? "all";
   const [view, setView] = useState<BoardView>(initialDept !== "all" ? "byDept" : "all");
   const [filterDept, setFilterDept] = useState(initialDept);
@@ -79,7 +79,7 @@ export default function BoardPage() {
   const [filterWebsite, setFilterWebsite] = useState("all");
   const [sort, setSort] = useState("priority");
 
-  // Column-axis state. Default to "person" — the CEO asked to see the
+  // Column-axis state. Default to "person" — the Leader asked to see the
   // board organized by who's doing what, not by status, on first load.
   const [groupBy, setGroupBy] = useState<GroupBy>("person");
   // Only used when groupBy === "person": which department's people to show

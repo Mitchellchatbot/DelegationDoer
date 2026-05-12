@@ -16,7 +16,7 @@ interface SearchParams {
   sort?: "recent" | "oldest";
 }
 
-// Combined "every inbox the actor is allowed to see" view. CEO gets the
+// Combined "every inbox the actor is allowed to see" view. Leader gets the
 // whole workspace; dept heads get their team's inboxes; workers get only
 // their assignments. Threads are fetched once from Missive (the API is
 // already workspace-scoped) and rendered in one big card grid.
@@ -71,7 +71,7 @@ export default async function AllInboxesPage({
           </div>
           <div>
             <h1 className="text-xl font-semibold">
-              {me.role === "ceo" ? "Every inbox" : "All your inboxes"}
+              {me.role === "leader" ? "Every inbox" : "All your inboxes"}
             </h1>
             <p className="text-xs text-ink/60 mt-0.5">
               {inboxCount === 0

@@ -6,13 +6,13 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 export const dynamic = "force-dynamic";
 
 // PUT /api/departments/[id]/slack — { slackChannelId: string | null }.
-// CEO-only. Updates the per-department channel target used by the
+// Leader-only. Updates the per-department channel target used by the
 // EOD report sender. Pass null/"" to clear.
 export async function PUT(req: NextRequest, { params }: { params: { id: string } }) {
   try {
     const userId = await requireCurrentUserId();
     const me = await getUserById(userId);
-    if (!me || me.role !== "ceo") {
+    if (!me || me.role !== "leader") {
       return NextResponse.json({ error: "forbidden" }, { status: 403 });
     }
     const body = await req.json();

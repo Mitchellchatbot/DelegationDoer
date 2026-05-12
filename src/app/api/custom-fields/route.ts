@@ -10,12 +10,12 @@ const TYPES: CustomFieldType[] = [
   "text", "number", "url", "date", "checkbox", "select", "multiselect"
 ];
 
-// Only CEO + dept_head can manage org-wide field defs. Workers can read
+// Only Leader + dept_head can manage org-wide field defs. Workers can read
 // them (so the form can render) but not mutate.
 async function requireManager() {
   const id = await requireCurrentUserId();
   const u = await getUserById(id);
-  if (!u || (u.role !== "ceo" && u.role !== "department_head")) {
+  if (!u || (u.role !== "leader" && u.role !== "department_head")) {
     return null;
   }
   return u;

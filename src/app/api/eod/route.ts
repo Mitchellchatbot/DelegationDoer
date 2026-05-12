@@ -7,7 +7,7 @@ import { buildEodForDepartment } from "@/lib/eod";
 export const dynamic = "force-dynamic";
 
 // GET /api/eod — returns today's EOD summaries for every department the
-// caller can see. CEO sees all; department heads see their own
+// caller can see. Leader sees all; department heads see their own
 // departments; workers see their home department(s) so they can write
 // their own note alongside teammates'.
 export async function GET(req: Request) {
@@ -19,7 +19,7 @@ export async function GET(req: Request) {
     const supabase = getSupabaseAdmin();
 
     let allowedDeptIds: string[] | null = null;
-    if (me.role === "ceo") {
+    if (me.role === "leader") {
       const { data } = await supabase.from("departments").select("id");
       allowedDeptIds = (data ?? []).map((r) => r.id as string);
     } else if (me.role === "department_head") {
@@ -47,7 +47,7 @@ export async function GET(req: Request) {
       if (s) summaries.push(s);
     }
 
-    return NextResponse.json({ summaries, canSend: me.role === "ceo" || me.role === "department_head" });
+    return NextResponse.json({ summaries, canSend: me.role === "leader" || me.role === "department_head" });
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "unknown error" },

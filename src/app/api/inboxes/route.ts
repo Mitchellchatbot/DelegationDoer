@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
 // GET /api/inboxes
 // Returns the missive email accounts the auth'd user is allowed to see,
 // scoped by role. Each item is the missive account row plus a `canManage`
-// flag for the UI (only CEO can reassign).
+// flag for the UI (only Leader can reassign).
 export async function GET() {
   try {
     const userId = await requireCurrentUserId();
@@ -27,7 +27,7 @@ export async function GET() {
 
     return NextResponse.json({
       inboxes: filtered,
-      canManage: me.role === "ceo"
+      canManage: me.role === "leader"
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "unknown error";

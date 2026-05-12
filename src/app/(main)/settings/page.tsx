@@ -28,15 +28,15 @@ export default async function SettingsPage() {
 
       {me && <ProfileAvatarSection user={me} />}
 
-      <SkillsSection canManage={me?.role === "ceo" || me?.role === "department_head"} />
+      <SkillsSection canManage={me?.role === "leader" || me?.role === "department_head"} />
 
-      <ResponsibilitiesSection canManage={me?.role === "ceo"} />
+      <ResponsibilitiesSection canManage={me?.role === "leader"} />
 
-      <CustomFieldsSection canManage={me?.role === "ceo" || me?.role === "department_head"} />
+      <CustomFieldsSection canManage={me?.role === "leader" || me?.role === "department_head"} />
 
       <MissiveIntegrationSection />
 
-      <DepartmentSlackSection canEdit={me?.role === "ceo"} />
+      <DepartmentSlackSection canEdit={me?.role === "leader"} />
 
       <DesktopAppSection />
 

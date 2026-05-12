@@ -2,12 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
-import { isCeo } from "@/lib/access";
+import { isLeader } from "@/lib/access";
 
 export const dynamic = "force-dynamic";
 
-// POST /api/users/invite — CEO-only. Body:
-//   { name, email, role: "worker"|"department_head"|"ceo", departmentIds: string[] }
+// POST /api/users/invite — Leader-only. Body:
+//   { name, email, role: "worker"|"department_head"|"leader", departmentIds: string[] }
 // Sends a Supabase Auth invite email (magic link). On accept the
 // existing on_auth_user_created trigger creates the public.users
 // row; we proactively upsert the name + role + department memberships
@@ -19,14 +19,14 @@ export const dynamic = "force-dynamic";
 // allows N users to each have role='department_head' + the same
 // department in department_members.
 
-const VALID_ROLES = new Set(["worker", "department_head", "ceo"]);
+const VALID_ROLES = new Set(["worker", "department_head", "leader"]);
 
 export async function POST(req: NextRequest) {
   try {
     const actorId = await requireCurrentUserId();
     const actor = await getUserById(actorId);
-    if (!isCeo(actor)) {
-      return NextResponse.json({ error: "CEO only" }, { status: 403 });
+    if (!isLeader(actor)) {
+      return NextResponse.json({ error: "Leader only" }, { status: 403 });
     }
 
     const body = await req.json();

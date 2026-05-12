@@ -120,7 +120,7 @@ function ProfileBody({ userId }: { userId: string }) {
     return list.map((s) => s.tag);
   }, [skills]);
   const manager = managerOf(user);
-  const directReports = user.role === "ceo"
+  const directReports = user.role === "leader"
     ? users.filter((u) => u.role === "department_head")
     : user.role === "department_head"
       ? users.filter((u) => u.role === "worker" && u.departmentIds.some((d) => user.departmentIds.includes(d)))
@@ -182,7 +182,7 @@ function ProfileBody({ userId }: { userId: string }) {
           <div className="flex-1 min-w-0">
             <div className="text-2xl font-bold text-ink leading-tight tracking-tight flex items-center gap-2">
               {user.name}
-              {user.role === "ceo" && <Crown className="w-5 h-5 text-amber-500" />}
+              {user.role === "leader" && <Crown className="w-5 h-5 text-amber-500" />}
               {user.role === "department_head" && <Crown className="w-4 h-4 text-accent" />}
             </div>
             <div className="text-sm text-ink/70 mt-1">

@@ -43,7 +43,7 @@ export function PresenceProvider({ children }: { children: React.ReactNode }) {
     try {
       // Fan out both reads — they're independent. EOM rarely changes,
       // so this is mostly for the avatar-crown overlay to stay live
-      // after a CEO crowns someone.
+      // after a Leader crowns someone.
       const [usersRes, eomRes] = await Promise.all([
         fetch("/api/users", { cache: "no-store" }),
         fetch("/api/eom", { cache: "no-store" })

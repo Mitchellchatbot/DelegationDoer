@@ -30,7 +30,7 @@ interface TaskRow {
 }
 
 // GET /api/analytics/bottlenecks — aggregates that drive the bottleneck
-// charts on the CEO Console. Computed in-handler rather than in SQL views
+// charts on the Leader Console. Computed in-handler rather than in SQL views
 // so we can iterate on the shape without a migration each time. At our
 // scale (low thousands of handoffs / tasks) this is fine in JS.
 export async function GET() {
@@ -148,7 +148,7 @@ export async function GET() {
   );
 
   // 4. Slowest tasks: total cumulative hold time across all handoffs. Helps
-  //    the CEO drill into the few tasks that bled the most clock.
+  //    the Leader drill into the few tasks that bled the most clock.
   const taskHoldTotals = new Map<string, number>();
   for (const h of handoffs) {
     if (h.held_minutes == null) continue;

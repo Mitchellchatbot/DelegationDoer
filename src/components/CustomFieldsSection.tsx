@@ -15,7 +15,7 @@ const TYPE_LABELS: Record<CustomFieldType, string> = {
   multiselect: "Multi-select"
 };
 
-// Settings → Custom task fields. Manager-only (CEO + dept_head; the API
+// Settings → Custom task fields. Manager-only (Leader + dept_head; the API
 // enforces this server-side, the UI just hides the controls for workers).
 export function CustomFieldsSection({ canManage }: { canManage: boolean }) {
   const [fields, setFields] = useState<CustomField[]>([]);

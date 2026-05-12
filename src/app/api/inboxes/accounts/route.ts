@@ -6,7 +6,7 @@ import { createAccount } from "@/lib/missive-client";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-// POST /api/inboxes/accounts — CEO-only. Proxies to the Missive clone's
+// POST /api/inboxes/accounts — Leader-only. Proxies to the Missive clone's
 // account-creation endpoint. The clone owns the SMTP/IMAP wiring; we
 // just take the form payload and forward it. Errors from the clone bubble
 // up verbatim so the UI can show the underlying reason (bad credentials,
@@ -25,8 +25,8 @@ export async function POST(req: NextRequest) {
     const userId = await requireCurrentUserId();
     const me = await getUserById(userId);
     if (!me) return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
-    if (me.role !== "ceo") {
-      return NextResponse.json({ error: "CEO only" }, { status: 403 });
+    if (me.role !== "leader") {
+      return NextResponse.json({ error: "Leader only" }, { status: 403 });
     }
 
     const body = await req.json();

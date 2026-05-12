@@ -2,29 +2,29 @@ import type { User } from "./types";
 import { users } from "./mock-data";
 
 export const ROLE_LABELS: Record<User["role"], string> = {
-  ceo: "CEO",
+  leader: "Leader",
   department_head: "Department Head",
   worker: "Worker"
 };
 
-export function isCEO(u: User | null | undefined): boolean {
-  return !!u && u.role === "ceo";
+export function isLeader(u: User | null | undefined): boolean {
+  return !!u && u.role === "leader";
 }
 export function isHead(u: User | null | undefined): boolean {
   return !!u && u.role === "department_head";
 }
 
 // Who is `actor` allowed to assign tasks to?
-//   CEO -> anyone in the org (the previous "only department heads" rule was
-//          too restrictive — CEO often needs to push work past a head when
-//          things are on fire, or assign across teams).
-//   Department head -> anyone whose home is one of their departments (workers
-//                       and other heads), plus themselves.
+//   Leader -> anyone in the org (the previous "only department heads" rule
+//             was too restrictive — the leader often needs to push work past
+//             a head when things are on fire, or assign across teams).
+//   Department head -> anyone whose home is one of their departments
+//                      (workers and other heads), plus themselves.
 //   Worker -> only themselves.
 // Anyone can always self-assign regardless of role.
 export function assignableTargets(actor: User, pool: User[] = users): User[] {
   let candidates: User[];
-  if (actor.role === "ceo") {
+  if (actor.role === "leader") {
     candidates = pool.slice();
   } else if (actor.role === "department_head") {
     candidates = pool.filter((u) =>
@@ -37,13 +37,13 @@ export function assignableTargets(actor: User, pool: User[] = users): User[] {
 }
 
 export function canCreateTasksForOthers(actor: User): boolean {
-  return actor.role === "ceo" || actor.role === "department_head";
+  return actor.role === "leader" || actor.role === "department_head";
 }
 
 export function canManagePeople(actor: User): boolean {
-  return actor.role === "ceo";
+  return actor.role === "leader";
 }
 
 export function canAddDepartments(actor: User): boolean {
-  return actor.role === "ceo";
+  return actor.role === "leader";
 }

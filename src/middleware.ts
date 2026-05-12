@@ -11,6 +11,7 @@ import { createServerClient } from "@supabase/ssr";
 const PUBLIC_PREFIXES = [
   "/login",
   "/signup",
+  "/auth",
   "/api/auth",
   "/api/debug",
   // Cron routes carry their own CRON_SECRET check inside the handler.

@@ -16,6 +16,7 @@ import { PerformanceReview } from "@/components/PerformanceReview";
 import { PageHero } from "@/components/PageHero";
 import { ProfileDialog } from "@/components/ProfileDialog";
 import { SendKudosDialog } from "@/components/SendKudosDialog";
+import { MagicLinkButton } from "@/components/MagicLinkButton";
 import { DepartmentSlackSection } from "@/components/DepartmentSlackSection";
 import { InvitePersonDialog } from "@/components/InvitePersonDialog";
 import { userCapacity } from "@/lib/capacity";
@@ -289,25 +290,28 @@ function PeopleTab({
                   </td>
                   <td className="px-4 py-3 text-muted">{reportsTo}</td>
                   <td className="px-4 py-3 text-right">
-                    {/* Self-row gets no Send-kudos button (you can't kudos
-                        yourself); everyone else does. */}
-                    {u.id !== currentUser?.id && (
-                      <SendKudosDialog
-                        recipientId={u.id}
-                        recipientName={u.name}
-                        recipientAvatarUrl={u.avatarUrl ?? null}
-                        trigger={
-                          <button
-                            type="button"
-                            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium border border-fuchsia-200 bg-fuchsia-50/60 text-fuchsia-700 hover:bg-fuchsia-100 hover:border-fuchsia-300 transition-colors active:scale-95"
-                            title={`Send a kudos to ${u.name}`}
-                          >
-                            <Sparkles className="w-3 h-3" />
-                            Kudos
-                          </button>
-                        }
-                      />
-                    )}
+                    <div className="inline-flex items-center gap-1.5 justify-end">
+                      {/* Magic link works on the current user too (handy
+                          for self-debugging); kudos hides on the self row. */}
+                      <MagicLinkButton userId={u.id} userName={u.name} userEmail={u.email} />
+                      {u.id !== currentUser?.id && (
+                        <SendKudosDialog
+                          recipientId={u.id}
+                          recipientName={u.name}
+                          recipientAvatarUrl={u.avatarUrl ?? null}
+                          trigger={
+                            <button
+                              type="button"
+                              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium border border-fuchsia-200 bg-fuchsia-50/60 text-fuchsia-700 hover:bg-fuchsia-100 hover:border-fuchsia-300 transition-colors active:scale-95"
+                              title={`Send a kudos to ${u.name}`}
+                            >
+                              <Sparkles className="w-3 h-3" />
+                              Kudos
+                            </button>
+                          }
+                        />
+                      )}
+                    </div>
                   </td>
                 </tr>
                 {isExpanded && (

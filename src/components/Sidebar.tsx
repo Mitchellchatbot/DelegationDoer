@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 import {
   LayoutDashboard, ListTodo, Columns3, Users, ShieldAlert,
   Sparkles, Settings, AlertTriangle, Crown, Mail, Briefcase, BarChart3, Search,
-  Network, Camera
+  Network, Camera, FolderKanban
 } from "lucide-react";
 import { useState } from "react";
 import { ReportIncidentDialog } from "./ReportIncidentDialog";
@@ -31,6 +31,7 @@ const BASE_NAV: NavItem[] = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, tone: "blue"     },
   { href: "/my-tasks",  label: "My Tasks",  icon: ListTodo,        tone: "indigo"   },
   { href: "/board",     label: "Board",     icon: Columns3,        tone: "teal"     },
+  { href: "/projects",  label: "Projects",  icon: FolderKanban,    tone: "indigo"   },
   { href: "/inboxes",   label: "Inboxes",   icon: Mail,            tone: "fuchsia"  },
   { href: "/clients",     label: "Clients",     icon: Briefcase,   tone: "amber"    },
   { href: "/eod",         label: "EOD",         icon: Sparkles,    tone: "fuchsia"  },

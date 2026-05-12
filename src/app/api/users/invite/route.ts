@@ -149,16 +149,19 @@ export async function POST(req: NextRequest) {
     let slackError: string | null = null;
     if (!invitedNew) {
       try {
-        const origin = new URL(req.url).origin;
-        // Must redirect to the callback route — that's where we
-        // exchange the `?code=` param into a Supabase session. Sending
-        // them to "/" just renders the home page (no exchange) and
-        // bounces them back to /login.
+        // Always target the production app, never wherever the request
+        // happens to land (localhost:3001 dev runs would otherwise
+        // generate links that only work on that one laptop). Override
+        // via NEXT_PUBLIC_APP_URL if the prod URL ever changes.
+        const baseUrl = (
+          process.env.NEXT_PUBLIC_APP_URL ||
+          "https://delegationdoer-production.up.railway.app"
+        ).replace(/\/$/, "");
         const { data: linkData, error: linkErr } =
           await supabase.auth.admin.generateLink({
             type: "magiclink",
             email,
-            options: { redirectTo: `${origin}/api/auth/callback` }
+            options: { redirectTo: `${baseUrl}/api/auth/callback` }
           });
         if (linkErr) throw linkErr;
         magicLink = linkData?.properties?.action_link ?? null;

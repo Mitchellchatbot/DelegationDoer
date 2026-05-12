@@ -17,6 +17,7 @@ import { PageHero } from "@/components/PageHero";
 import { ProfileDialog } from "@/components/ProfileDialog";
 import { SendKudosDialog } from "@/components/SendKudosDialog";
 import { DepartmentSlackSection } from "@/components/DepartmentSlackSection";
+import { InvitePersonDialog } from "@/components/InvitePersonDialog";
 import { userCapacity } from "@/lib/capacity";
 import { ROLE_LABELS } from "@/lib/auth";
 import { useCurrentUser } from "@/lib/user-context";
@@ -24,7 +25,8 @@ import type { Role, User, Department } from "@/lib/types";
 import Link from "next/link";
 import {
   Crown, Users as UsersIcon, Building2, ListChecks, Plus, X, ShieldAlert,
-  CheckCircle2, AlertTriangle, Timer, ArrowRight, Sparkles, ChevronRight, Clock
+  CheckCircle2, AlertTriangle, Timer, ArrowRight, Sparkles, ChevronRight, Clock,
+  UserPlus
 } from "lucide-react";
 
 const TABS = ["People", "Departments", "Org chart", "Performance", "All tasks"] as const;
@@ -144,8 +146,23 @@ function PeopleTab({
 
   return (
     <div className="space-y-3">
-      <div className="text-sm text-muted">
-        Click any role pill to change it. Toggle department chips to set membership / leadership.
+      <div className="flex items-center justify-between gap-3">
+        <div className="text-sm text-muted">
+          Click any role pill to change it. Toggle department chips to set membership / leadership.
+        </div>
+        <InvitePersonDialog
+          trigger={
+            <button
+              type="button"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold text-white shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-lift active:scale-95"
+              style={{ background: "linear-gradient(135deg, #2563EB 0%, #1e63ff 100%)" }}
+              title="Send a magic-link invite. Multiple department heads are supported."
+            >
+              <UserPlus className="w-3.5 h-3.5" />
+              Invite someone
+            </button>
+          }
+        />
       </div>
       <div className="card overflow-hidden">
         <table className="w-full text-sm">

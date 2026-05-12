@@ -150,11 +150,15 @@ export async function POST(req: NextRequest) {
     if (!invitedNew) {
       try {
         const origin = new URL(req.url).origin;
+        // Must redirect to the callback route — that's where we
+        // exchange the `?code=` param into a Supabase session. Sending
+        // them to "/" just renders the home page (no exchange) and
+        // bounces them back to /login.
         const { data: linkData, error: linkErr } =
           await supabase.auth.admin.generateLink({
             type: "magiclink",
             email,
-            options: { redirectTo: `${origin}/` }
+            options: { redirectTo: `${origin}/api/auth/callback` }
           });
         if (linkErr) throw linkErr;
         magicLink = linkData?.properties?.action_link ?? null;

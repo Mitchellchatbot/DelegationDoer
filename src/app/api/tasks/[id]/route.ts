@@ -3,6 +3,7 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { notifyCompletion, type CompletionResult } from "@/lib/slack";
+import { onTaskDone } from "@/lib/project-flow";
 
 const ALLOWED_FIELDS = ["title", "description", "priority", "status", "estimated_hours", "due_date", "tags", "client_name", "website"] as const;
 const STATUSES = ["pending", "in_progress", "urgent", "waiting_on_client", "done"] as const;
@@ -256,6 +257,15 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
           });
         }
       }
+    }
+
+    // If this transition closed a task that belongs to a project
+    // stage, let the flow engine consider advancing the batch / stage.
+    // Wrapped in best-effort because the rest of the response is more
+    // important than the engine's success.
+    if (statusChanged && update.status === "done") {
+      try { await onTaskDone(params.id); }
+      catch (err) { console.error("[tasks/PATCH] onTaskDone failed:", err); }
     }
 
     return NextResponse.json({ task: data, slack, skillGains });

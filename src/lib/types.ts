@@ -94,6 +94,30 @@ export interface Project {
   departmentId: string | null;
 }
 
+export type ProjectStageStatus = "locked" | "active" | "done";
+export type ProjectStageKind =
+  | "scope"
+  | "architecture"
+  | "frontend"
+  | "backend"
+  | "completed"
+  | "custom";
+
+export interface ProjectStage {
+  id: string;
+  projectId: string;
+  position: number;
+  name: string;
+  kind: ProjectStageKind;
+  status: ProjectStageStatus;
+  isIt: string[];
+  isNot: string[];
+  imageUrls: string[];
+  notes: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface Milestone {
   id: string;
   projectId: string;

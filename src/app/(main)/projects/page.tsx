@@ -2,6 +2,7 @@ import Link from "next/link";
 import { projects, departments, milestones, tasks } from "@/lib/mock-data";
 import { formatDate } from "@/lib/utils";
 import { FolderKanban } from "lucide-react";
+import { NewProjectButton } from "@/components/NewProjectButton";
 
 // Cycle a small palette across project cards so a wall of projects stays
 // visually distinguishable. Restricted to the blue→purple family.
@@ -21,10 +22,11 @@ export default function ProjectsListPage() {
       >
         <div className="relative flex items-center gap-3">
           <span className="text-3xl">📁</span>
-          <div>
+          <div className="flex-1 min-w-0">
             <h1 className="text-xl font-semibold">Projects</h1>
             <p className="text-sm text-ink/60 mt-0.5">All active engagements across the org.</p>
           </div>
+          <NewProjectButton />
         </div>
         <div
           aria-hidden

@@ -5,6 +5,7 @@ import { Check, Clock, Minus, X, AlertTriangle, Plus, Bell, ArrowLeft, Image as 
 import { toast } from "sonner";
 import { AvatarCropper } from "@/components/AvatarCropper";
 import { Countdown } from "@/components/Countdown";
+import { PersonAvatar } from "@/components/PersonAvatar";
 
 interface WidgetTask {
   id: string;
@@ -885,6 +886,128 @@ function prettyMonth(key: string): string {
   const [y, m] = key.split("-");
   const d = new Date(Number(y), Number(m) - 1, 1);
   return d.toLocaleDateString(undefined, { month: "long", year: "numeric" });
+}
+
+// Compact celebration banner shown in the panel when one or more
+// teammates are celebrating today. The self-variant ("Happy birthday,
+// you!") only fires if the celebrant list contains the current user.
+function BirthdayBanner({ celebrants }: {
+  celebrants: { id: string; name: string; avatarUrl: string | null; isMe: boolean }[];
+}) {
+  const meCelebrating = celebrants.find((c) => c.isMe);
+  const others = celebrants.filter((c) => !c.isMe);
+  let headline: string;
+  let subline: string;
+  if (meCelebrating && others.length === 0) {
+    headline = "🎂 Happy birthday, you!";
+    subline = "The team's wishing you well today.";
+  } else if (meCelebrating && others.length > 0) {
+    const names = others.slice(0, 2).map((c) => c.name).join(" & ");
+    headline = `🎂 It's your birthday — and ${names}'s too!`;
+    subline = "Big day. Send each other a kudos maybe.";
+  } else if (others.length === 1) {
+    headline = `🎂 It's ${others[0].name}'s birthday today`;
+    subline = "Drop a note in Slack or send a kudos.";
+  } else {
+    const names = others.slice(0, 2).map((c) => c.name).join(", ");
+    const more = others.length > 2 ? ` (+${others.length - 2})` : "";
+    headline = `🎂 Birthdays today: ${names}${more}`;
+    subline = "Send some love.";
+  }
+  return (
+    <div className="px-3 pt-3">
+      <div
+        className="rounded-2xl p-3 border border-fuchsia-200/70 shadow-sm"
+        style={{ background: "linear-gradient(120deg, #FCE7F3 0%, #EEF2FF 100%)" }}
+      >
+        <div className="text-[13px] font-semibold text-fuchsia-700 leading-snug">
+          {headline}
+        </div>
+        <div className="text-[11px] text-fuchsia-700/70 mt-0.5">{subline}</div>
+        <div className="flex items-center gap-1 mt-2 -space-x-1.5">
+          {celebrants.slice(0, 6).map((c) => (
+            <PersonAvatar
+              key={c.id}
+              userId={c.id}
+              name={c.name}
+              imageUrl={c.avatarUrl ?? undefined}
+              size={26}
+              className="ring-2 ring-white shadow-sm"
+            />
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// One-time prompt: shown when the current user hasn't set their
+// birthday yet. PUT /api/users/me/birthday saves it; the banner
+// disappears on next poll.
+function BirthdayPrompt({ onSaved }: { onSaved: () => void }) {
+  const [value, setValue] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [dismissed, setDismissed] = useState(false);
+
+  async function save() {
+    if (!value || saving) return;
+    setSaving(true);
+    try {
+      const res = await fetch("/api/users/me/birthday", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ birthday: value })
+      });
+      if (!res.ok) throw new Error(`status ${res.status}`);
+      toast.success("Saved your birthday 🎂");
+      setDismissed(true);
+      onSaved();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "couldn't save");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (dismissed) return null;
+  return (
+    <div className="px-3 pt-3">
+      <div className="rounded-2xl p-3 border border-amber-200/70 bg-amber-50/60 shadow-sm">
+        <div className="flex items-center justify-between gap-2">
+          <div className="text-[12px] font-semibold text-amber-800 leading-snug">
+            🎂 When's your birthday?
+          </div>
+          <button
+            type="button"
+            onClick={() => setDismissed(true)}
+            className="text-[10px] text-amber-800/60 hover:text-amber-900 underline"
+            title="Hide this prompt for now"
+          >
+            later
+          </button>
+        </div>
+        <div className="text-[11px] text-amber-800/70 mt-0.5">
+          So the team can celebrate you. Visible to everyone in the org.
+        </div>
+        <div className="mt-2 flex items-center gap-1.5">
+          <input
+            type="date"
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            className="flex-1 px-2.5 py-1.5 rounded-lg border border-amber-200/80 bg-white text-[12px] outline-none focus:ring-2 focus:ring-amber-300"
+          />
+          <button
+            type="button"
+            onClick={save}
+            disabled={!value || saving}
+            className="px-3 py-1.5 rounded-lg text-[12px] font-semibold bg-amber-500 text-white shadow-sm disabled:opacity-50 disabled:cursor-not-allowed active:scale-95 transition-all"
+          >
+            {saving ? "…" : "Save"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 /* ============================ CLOCK SECTION ============================ */

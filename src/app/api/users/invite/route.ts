@@ -116,18 +116,20 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 3) Replace department memberships. For workers + heads we set
-    //    the exact list passed in (empty list = no memberships).
-    //    Multiple heads per dept fall out naturally because nothing
-    //    in the schema unique-keys by department_id alone.
+    // 3) Replace department memberships. department_members has a
+    //    composite PK (user_id, department_id) — no synthetic id
+    //    column — so we don't generate an id and we tell upsert the
+    //    conflict target. Multiple heads per dept fall out naturally
+    //    because nothing in the schema unique-keys by department_id alone.
     await supabase.from("department_members").delete().eq("user_id", authUserId);
     if (departmentIds.length > 0) {
       const inserts = departmentIds.map((dId) => ({
-        id: `dm_${authUserId}_${dId}`,
         user_id: authUserId,
         department_id: dId
       }));
-      const { error: dmErr } = await supabase.from("department_members").upsert(inserts);
+      const { error: dmErr } = await supabase
+        .from("department_members")
+        .upsert(inserts, { onConflict: "user_id,department_id" });
       if (dmErr) {
         return NextResponse.json(
           { error: `department membership: ${dmErr.message}` },

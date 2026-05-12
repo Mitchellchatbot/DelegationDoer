@@ -24,6 +24,7 @@ import { ROLE_LABELS } from "@/lib/auth";
 import { useCurrentUser } from "@/lib/user-context";
 import type { Role, User, Department } from "@/lib/types";
 import Link from "next/link";
+import { toast } from "sonner";
 import {
   Crown, Users as UsersIcon, Building2, ListChecks, Plus, X, ShieldAlert,
   CheckCircle2, AlertTriangle, Timer, ArrowRight, Sparkles, ChevronRight, Clock,
@@ -177,15 +178,47 @@ function PeopleTab({
     return () => { cancelled = true; };
   }, []);
 
+  // Optimistic local update + PATCH /api/users/<id>. On failure we
+  // surface a toast and revert by re-fetching, so the UI doesn't lie
+  // about state we couldn't actually persist.
+  async function persistUser(
+    id: string,
+    patch: { role?: Role; departmentIds?: string[] },
+    prev: User[]
+  ) {
+    try {
+      const res = await fetch(`/api/users/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch)
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data?.error || `HTTP ${res.status}`);
+      }
+    } catch (err) {
+      toast.error(`Couldn't save — ${err instanceof Error ? err.message : "unknown error"}`);
+      setPeople(prev);
+    }
+  }
+
   function setRole(id: string, role: Role) {
-    setPeople(people.map((u) => u.id === id ? { ...u, role } : u));
+    const prev = people;
+    setPeople(prev.map((u) => u.id === id ? { ...u, role } : u));
+    void persistUser(id, { role }, prev);
   }
   function toggleDept(id: string, deptId: string) {
-    setPeople(people.map((u) => {
+    const prev = people;
+    let nextDepartmentIds: string[] = [];
+    setPeople(prev.map((u) => {
       if (u.id !== id) return u;
       const has = u.departmentIds.includes(deptId);
-      return { ...u, departmentIds: has ? u.departmentIds.filter((d) => d !== deptId) : [...u.departmentIds, deptId] };
+      nextDepartmentIds = has
+        ? u.departmentIds.filter((d) => d !== deptId)
+        : [...u.departmentIds, deptId];
+      return { ...u, departmentIds: nextDepartmentIds };
     }));
+    void persistUser(id, { departmentIds: nextDepartmentIds }, prev);
   }
 
   return (

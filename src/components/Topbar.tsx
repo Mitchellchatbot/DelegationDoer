@@ -1,25 +1,94 @@
 "use client";
 
 import * as Dialog from "@radix-ui/react-dialog";
-import { Search, Bell, Plus, LogOut, X } from "lucide-react";
+import {
+  Search, Bell, Plus, LogOut, X, ListTodo, Users as UsersIcon, FolderKanban,
+  Loader2
+} from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { PersonAvatar } from "./PersonAvatar";
 import { NewTaskForm } from "./NewTaskForm";
 import { ROLE_LABELS } from "@/lib/auth";
 import type { User } from "@/lib/types";
 import { toast } from "sonner";
 
+interface SearchResults {
+  tasks: { id: string; title: string; status: string; priority: string; assigneeName: string | null }[];
+  users: { id: string; name: string; email: string | null; avatarUrl: string | null }[];
+  projects: { id: string; name: string; departmentName: string | null }[];
+}
+const EMPTY_RESULTS: SearchResults = { tasks: [], users: [], projects: [] };
+
 export function Topbar({ user }: { user: User }) {
   const [newTaskOpen, setNewTaskOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const [results, setResults] = useState<SearchResults>(EMPTY_RESULTS);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const searchWrapRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
 
   function submitSearch() {
     const q = query.trim();
     if (!q) return;
+    setSearchOpen(false);
     router.push(`/search?q=${encodeURIComponent(q)}`);
   }
+
+  // Debounced live search. We refetch on every keystroke after a 150ms
+  // settle so quick typers don't fan out N requests; cancel on
+  // unmount/refire via AbortController so the latest query wins even
+  // if earlier ones come back out of order.
+  useEffect(() => {
+    const q = query.trim();
+    if (!q) {
+      setResults(EMPTY_RESULTS);
+      setSearchLoading(false);
+      return;
+    }
+    setSearchLoading(true);
+    const ctrl = new AbortController();
+    const t = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`, {
+          signal: ctrl.signal
+        });
+        if (!res.ok) {
+          setResults(EMPTY_RESULTS);
+          return;
+        }
+        const data = (await res.json()) as SearchResults;
+        setResults(data);
+      } catch (err) {
+        if ((err as Error).name !== "AbortError") setResults(EMPTY_RESULTS);
+      } finally {
+        setSearchLoading(false);
+      }
+    }, 150);
+    return () => {
+      clearTimeout(t);
+      ctrl.abort();
+    };
+  }, [query]);
+
+  // Click-outside dismiss so the dropdown disappears when you wander
+  // off without forcing the user to press Escape.
+  useEffect(() => {
+    function onDocClick(e: MouseEvent) {
+      if (!searchWrapRef.current) return;
+      if (!searchWrapRef.current.contains(e.target as Node)) {
+        setSearchOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, []);
+
+  const totalResults =
+    results.tasks.length + results.users.length + results.projects.length;
+  const showDropdown = searchOpen && query.trim().length > 0;
 
   async function logout() {
     await fetch("/api/auth/logout", { method: "POST" });
@@ -31,23 +100,116 @@ export function Topbar({ user }: { user: User }) {
       {/* Left placeholder so the search sits in the dead center of the bar */}
       <div />
 
-      {/* Centered search — Enter submits, navigates to /search?q=… */}
-      <form
+      {/* Centered search with live dropdown. Type → debounced query
+          to /api/search → results render below the input. Enter on a
+          non-empty query navigates to /search?q=… for the full list. */}
+      <div
+        ref={searchWrapRef}
         className="relative w-[460px] max-w-full justify-self-center"
-        onSubmit={(e) => {
-          e.preventDefault();
-          submitSearch();
-        }}
       >
-        <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-muted z-10" />
-        <input
-          type="search"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          className="w-full h-10 pl-10 pr-3 rounded-xl bg-slate-50 border border-slate-200 text-[15px] text-ink placeholder:text-muted focus:outline-none focus:bg-white focus:border-accent/50 focus:ring-2 focus:ring-accent/20 transition-colors"
-          placeholder="Search tasks, projects, people…"
-        />
-      </form>
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            submitSearch();
+          }}
+        >
+          <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-muted z-10" />
+          {searchLoading && (
+            <Loader2 className="w-4 h-4 absolute right-3.5 top-1/2 -translate-y-1/2 text-muted animate-spin z-10" />
+          )}
+          <input
+            type="search"
+            value={query}
+            onChange={(e) => {
+              setQuery(e.target.value);
+              setSearchOpen(true);
+            }}
+            onFocus={() => setSearchOpen(true)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") setSearchOpen(false);
+            }}
+            className="w-full h-10 pl-10 pr-9 rounded-xl bg-slate-50 border border-slate-200 text-[15px] text-ink placeholder:text-muted focus:outline-none focus:bg-white focus:border-accent/50 focus:ring-2 focus:ring-accent/20 transition-colors"
+            placeholder="Search tasks, projects, people…"
+          />
+        </form>
+
+        {showDropdown && (
+          <div className="absolute left-0 right-0 top-[calc(100%+6px)] z-50 rounded-2xl border border-slate-200 bg-white shadow-[0_20px_50px_-15px_rgba(15,23,42,0.35)] overflow-hidden max-h-[70vh] overflow-y-auto">
+            {totalResults === 0 && !searchLoading && (
+              <div className="px-4 py-6 text-center text-xs text-ink/55">
+                No matches for &ldquo;{query}&rdquo;.
+              </div>
+            )}
+
+            {results.tasks.length > 0 && (
+              <SearchSection icon={<ListTodo className="w-3.5 h-3.5 text-indigo-500" />} label="Tasks" count={results.tasks.length}>
+                {results.tasks.map((t) => (
+                  <Link
+                    key={t.id}
+                    href={`/tasks/${t.id}`}
+                    onClick={() => setSearchOpen(false)}
+                    className="block px-3 py-2 hover:bg-slate-50 transition-colors"
+                  >
+                    <div className="text-[13px] font-medium text-ink truncate">{t.title}</div>
+                    <div className="text-[10px] text-ink/55 mt-0.5 flex items-center gap-1.5">
+                      <span className="px-1.5 py-0.5 rounded bg-slate-100">{t.status}</span>
+                      <span className="px-1.5 py-0.5 rounded bg-slate-100">{t.priority}</span>
+                      {t.assigneeName && <span>· {t.assigneeName}</span>}
+                    </div>
+                  </Link>
+                ))}
+              </SearchSection>
+            )}
+
+            {results.users.length > 0 && (
+              <SearchSection icon={<UsersIcon className="w-3.5 h-3.5 text-emerald-500" />} label="People" count={results.users.length}>
+                {results.users.map((u) => (
+                  <Link
+                    key={u.id}
+                    href={`/team/${u.id}`}
+                    onClick={() => setSearchOpen(false)}
+                    className="flex items-center gap-2.5 px-3 py-2 hover:bg-slate-50 transition-colors"
+                  >
+                    <PersonAvatar userId={u.id} name={u.name} imageUrl={u.avatarUrl ?? undefined} size={24} />
+                    <div className="min-w-0">
+                      <div className="text-[13px] font-medium text-ink truncate">{u.name}</div>
+                      <div className="text-[10px] text-ink/55 truncate">{u.email}</div>
+                    </div>
+                  </Link>
+                ))}
+              </SearchSection>
+            )}
+
+            {results.projects.length > 0 && (
+              <SearchSection icon={<FolderKanban className="w-3.5 h-3.5 text-indigo-500" />} label="Projects" count={results.projects.length}>
+                {results.projects.map((p) => (
+                  <Link
+                    key={p.id}
+                    href={`/projects/${p.id}`}
+                    onClick={() => setSearchOpen(false)}
+                    className="block px-3 py-2 hover:bg-slate-50 transition-colors"
+                  >
+                    <div className="text-[13px] font-medium text-ink truncate">{p.name}</div>
+                    {p.departmentName && (
+                      <div className="text-[10px] text-ink/55 truncate mt-0.5">{p.departmentName}</div>
+                    )}
+                  </Link>
+                ))}
+              </SearchSection>
+            )}
+
+            {totalResults > 0 && (
+              <button
+                type="button"
+                onClick={submitSearch}
+                className="w-full px-3 py-2 text-[11px] text-accent hover:bg-slate-50 border-t border-slate-100 text-left font-medium"
+              >
+                See all results for &ldquo;{query}&rdquo; →
+              </button>
+            )}
+          </div>
+        )}
+      </div>
 
       {/* Controls — right-aligned */}
       <div className="flex items-center gap-2 justify-self-end">
@@ -135,5 +297,25 @@ export function Topbar({ user }: { user: User }) {
         </button>
       </div>
     </header>
+  );
+}
+
+function SearchSection({
+  icon, label, count, children
+}: {
+  icon: React.ReactNode;
+  label: string;
+  count: number;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="py-1">
+      <div className="px-3 pt-2 pb-1 flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-ink/45 font-semibold">
+        {icon}
+        {label}
+        <span className="text-ink/40 normal-case font-medium">· {count}</span>
+      </div>
+      {children}
+    </div>
   );
 }

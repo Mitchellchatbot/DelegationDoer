@@ -236,11 +236,26 @@ export const PROJECT_TEMPLATES: Record<string, ProjectTemplate> = {
 };
 
 export function pickTemplateForDepartment(
-  departmentId: string | null
+  departmentId: string | null,
+  departmentName?: string | null
 ): ProjectTemplate | null {
-  if (!departmentId) return null;
-  for (const tpl of Object.values(PROJECT_TEMPLATES)) {
-    if (tpl.defaultForDepartmentIds.includes(departmentId)) return tpl;
+  // Exact id match first.
+  if (departmentId) {
+    for (const tpl of Object.values(PROJECT_TEMPLATES)) {
+      if (tpl.defaultForDepartmentIds.includes(departmentId)) return tpl;
+    }
   }
-  return null;
+  // Fuzzy: department name contains "software"/"engineering" → software
+  // template. Keeps things working when the actual department id differs
+  // from the mock-data fixtures (different workspaces, renamed depts).
+  if (departmentName) {
+    const lc = departmentName.toLowerCase();
+    if (lc.includes("software") || lc.includes("engineering") || lc.includes("eng")) {
+      return SOFTWARE_TEMPLATE;
+    }
+  }
+  // Last resort: until we have department-specific templates, default
+  // every new project to the software flow. Better than landing on an
+  // empty stage list.
+  return SOFTWARE_TEMPLATE;
 }

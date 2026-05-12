@@ -35,15 +35,28 @@ export async function POST(req: NextRequest) {
         ? body.departmentId
         : null;
 
-    // Template resolution: explicit > default-for-department > none.
+    const supabase = getSupabaseAdmin();
+
+    // Resolve department name (used by the template picker's fuzzy
+    // fallback) before we insert anything.
+    let departmentName: string | null = null;
+    if (departmentId) {
+      const { data: dept } = await supabase
+        .from("departments")
+        .select("name")
+        .eq("id", departmentId)
+        .maybeSingle();
+      departmentName = (dept?.name as string | undefined) ?? null;
+    }
+
+    // Template resolution: explicit > default-for-department > fuzzy >
+    // software fallback. See pickTemplateForDepartment for precedence.
     let template: ProjectTemplate | null = null;
     if (typeof body.templateId === "string" && PROJECT_TEMPLATES[body.templateId]) {
       template = PROJECT_TEMPLATES[body.templateId];
     } else {
-      template = pickTemplateForDepartment(departmentId);
+      template = pickTemplateForDepartment(departmentId, departmentName);
     }
-
-    const supabase = getSupabaseAdmin();
     const projectId = `proj_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
     const { error: pErr } = await supabase.from("projects").insert({
       id: projectId,

@@ -4,6 +4,7 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { formatDate } from "@/lib/utils";
 import { CheckCircle2, FolderKanban, Lock, PlayCircle } from "lucide-react";
 import { NewProjectButton } from "@/components/NewProjectButton";
+import { PageHero } from "@/components/PageHero";
 
 export const dynamic = "force-dynamic";
 
@@ -121,28 +122,18 @@ export default async function ProjectsListPage() {
 
   return (
     <div className="space-y-5 max-w-7xl mx-auto">
-      <header
-        className="relative overflow-hidden rounded-2xl border border-white/60 shadow-soft p-5"
-        style={{ background: "linear-gradient(120deg, #DBEAFE 0%, #C7D2FE 50%, #C7D2FE 100%)" }}
-      >
-        <div className="relative flex items-center gap-3">
-          <span className="text-3xl">📁</span>
-          <div className="flex-1 min-w-0">
-            <h1 className="text-xl font-semibold">Projects</h1>
-            <p className="text-sm text-ink/60 mt-0.5">
-              {all.length === 0
-                ? "No projects yet. Hit New project to spin one up."
-                : `${all.length} project${all.length === 1 ? "" : "s"} across the org.`}
-            </p>
-          </div>
-          <NewProjectButton />
-        </div>
-        <div
-          aria-hidden
-          className="absolute -top-10 right-12 w-32 h-32 rounded-full"
-          style={{ background: "radial-gradient(circle, rgba(99,102,241,0.18), transparent 70%)" }}
-        />
-      </header>
+      <PageHero
+        eyebrow="Projects"
+        headline={["Everything ", { accent: "in flight" }]}
+        subtitle={
+          all.length === 0
+            ? "No projects yet. Hit New project to spin one up — the software template seeds 4 stages and auto-assigns the first batch of tasks."
+            : `${all.length} project${all.length === 1 ? "" : "s"} across the org. Click any one to drill into its stages.`
+        }
+        icon={<FolderKanban />}
+        iconTone="indigo"
+        trailing={<NewProjectButton />}
+      />
 
       {all.length === 0 ? (
         <div className="card p-8 text-center text-sm text-muted">

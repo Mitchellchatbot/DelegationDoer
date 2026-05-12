@@ -26,12 +26,13 @@ type Tone = "blue" | "indigo" | "teal" | "emerald" | "amber" | "rose" | "fuchsia
 
 interface NavItem { href: string; label: string; icon: typeof LayoutDashboard; tone: Tone }
 
+// Projects is software-team-only (+ leader); it gets spliced in
+// conditionally below rather than living in the base list.
 const BASE_NAV: NavItem[] = [
   { href: "/org-chart", label: "Org Chart", icon: Network,         tone: "indigo"   },
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, tone: "blue"     },
   { href: "/my-tasks",  label: "My Tasks",  icon: ListTodo,        tone: "indigo"   },
   { href: "/board",     label: "Board",     icon: Columns3,        tone: "teal"     },
-  { href: "/projects",  label: "Projects",  icon: FolderKanban,    tone: "indigo"   },
   { href: "/inboxes",   label: "Inboxes",   icon: Mail,            tone: "fuchsia"  },
   { href: "/clients",     label: "Clients",     icon: Briefcase,   tone: "amber"    },
   { href: "/eod",         label: "EOD",         icon: Sparkles,    tone: "fuchsia"  },
@@ -71,11 +72,29 @@ export function Sidebar({ user }: { user: User }) {
   // default landing tab for everyone. Role-specific items slot in
   // immediately after.
   const [orgChart, ...rest] = BASE_NAV;
+  // Projects is restricted to leaders and members of the software dept.
+  // It sits between Board and Inboxes in the regular flow.
+  const canSeeProjects =
+    isLeader(user) || (user.departmentIds ?? []).includes("dep_software");
+  const PROJECTS_ITEM: NavItem = {
+    href: "/projects",
+    label: "Projects",
+    icon: FolderKanban,
+    tone: "indigo"
+  };
+  const restWithProjects = canSeeProjects
+    ? [...rest.slice(0, 3), PROJECTS_ITEM, ...rest.slice(3)]
+    : rest;
   const NAV: NavItem[] = isLeader(user)
-    ? [orgChart, ...CEO_NAV, ...rest]
+    ? [orgChart, ...CEO_NAV, ...restWithProjects]
     : isHead(user)
-      ? [orgChart, ...rest.slice(0, 4), ...HEAD_NAV, ...rest.slice(4)]
-      : BASE_NAV;
+      ? [
+          orgChart,
+          ...restWithProjects.slice(0, 4),
+          ...HEAD_NAV,
+          ...restWithProjects.slice(4)
+        ]
+      : [orgChart, ...restWithProjects];
 
   return (
     <aside className="w-60 shrink-0 sticky top-3 h-[calc(100vh-1.5rem)] rounded-3xl border border-slate-200/70 bg-white/85 backdrop-blur-xl shadow-soft flex flex-col overflow-hidden">

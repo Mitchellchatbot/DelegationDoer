@@ -46,6 +46,21 @@ export default async function ThreadDetailPage({
   let fetchError: string | null = null;
   try {
     const detail = await getThread(params.threadId);
+    // Make sure the thread actually belongs to the accountId in the
+    // URL — otherwise someone with access to inbox A could view
+    // any thread by pasting its id into /inboxes/<A>/threads/<id>.
+    // Threads can span multiple accounts, so we check the per-message
+    // account_ids against the URL's accountId.
+    const threadAccountIds = new Set(
+      detail.messages.map((m) => m.account_id)
+    );
+    if (!threadAccountIds.has(params.accountId)) {
+      return (
+        <div className="card p-6 max-w-lg mx-auto mt-12 text-center">
+          <div className="text-base font-medium">Access denied</div>
+        </div>
+      );
+    }
     thread = detail.thread;
     messages = detail.messages;
   } catch (err) {

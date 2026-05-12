@@ -50,7 +50,10 @@ export default async function InboxThreadsPage({
     // Missive again after the first load.
     const [allAccounts, fetched] = await Promise.all([
       listAccounts(),
-      listThreads({ folder: "INBOX", limit: 200 })
+      // Scope server-side to this connected account. Without
+      // mailbox_id, listThreads returns every thread in the
+      // workspace, leaking other inboxes.
+      listThreads({ folder: "INBOX", limit: 200, mailboxId: params.accountId })
     ]);
     const account = allAccounts.find((a) => a.id === params.accountId);
     if (!account) notFound();

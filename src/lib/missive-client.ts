@@ -35,6 +35,10 @@ export interface MissiveThread {
   starred: boolean;
   snoozed_until: string | null;
   message_count?: number;
+  // Connected-account fan-out. The clone aggregates the email addresses
+  // of every account whose messages appear in this thread, so we can
+  // tell which inboxes a thread "belongs to" without joining per-message.
+  account_emails?: { email: string; name: string | null }[];
 }
 
 export interface MissiveMessage {
@@ -113,6 +117,10 @@ export interface ListThreadsOpts {
   status?: "open" | "pending" | "closed";
   q?: string;
   limit?: number;
+  // Server-side scope to one connected account (by id). Required for
+  // any per-inbox view — listThreads otherwise returns every thread
+  // in the workspace.
+  mailboxId?: string;
 }
 
 // Missive stores list-y fields as TEXT (joined with "; " for thread
@@ -170,6 +178,7 @@ export async function listThreads(opts: ListThreadsOpts = {}): Promise<MissiveTh
   if (opts.status) params.set("status", opts.status);
   if (opts.q) params.set("q", opts.q);
   if (opts.limit) params.set("limit", String(opts.limit));
+  if (opts.mailboxId) params.set("mailbox_id", opts.mailboxId);
   const qs = params.toString() ? `?${params}` : "";
   const data = await missiveFetch<{ threads: MissiveThread[] }>(`/api/threads${qs}`);
   return (data.threads ?? []).map(normalizeThread);

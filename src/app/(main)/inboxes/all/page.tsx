@@ -44,7 +44,24 @@ export default async function AllInboxesPage({
     inboxes = visibleIds === null
       ? allAccounts
       : allAccounts.filter((a) => visibleIds.has(a.id));
-    threads = fetched;
+    // Critical: also filter the threads themselves. listThreads is
+    // workspace-scoped on the Missive side, so without this every
+    // user with access to the page would see every thread regardless
+    // of which inboxes they're actually in. Threads expose the
+    // emails of every connected account they touch via
+    // account_emails — match against the inboxes this user can see.
+    if (visibleIds === null) {
+      threads = fetched;
+    } else {
+      const visibleEmails = new Set(
+        inboxes.map((a) => a.email.toLowerCase())
+      );
+      threads = fetched.filter((t) =>
+        (t.account_emails ?? []).some((ae) =>
+          visibleEmails.has(ae.email.toLowerCase())
+        )
+      );
+    }
   } catch (err) {
     fetchError = err instanceof Error ? err.message : "unknown error";
   }

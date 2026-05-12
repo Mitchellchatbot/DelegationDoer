@@ -12,7 +12,9 @@ const PUBLIC_PREFIXES = [
   "/login",
   "/signup",
   "/auth",
+  "/signin",
   "/api/auth",
+  "/api/signin",
   "/api/debug",
   // Cron routes carry their own CRON_SECRET check inside the handler.
   // Don't gate on a Supabase session — Vercel cron has no cookies.

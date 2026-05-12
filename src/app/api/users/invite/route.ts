@@ -141,44 +141,42 @@ export async function POST(req: NextRequest) {
 
     // 4) For existing users we never trigger a fresh invite email
     //    above, so they have no way to log in unless we send them
-    //    one. Generate a magic link via the admin API, try to DM it
-    //    on Slack, and ALWAYS include it in the response so the
-    //    leader can copy-paste / forward it if Slack didn't fire.
+    //    one. Instead of generating a Supabase magic link (which
+    //    chat-app link scanners pre-fetch and consume), create a
+    //    single-use claim and hand out a /signin/<claim_id> URL.
+    //    The real Supabase token is minted only when the recipient
+    //    actually clicks the button on that page.
     let magicLink: string | null = null;
     let slackDm: "sent" | "skipped" | "failed" = "skipped";
     let slackError: string | null = null;
     if (!invitedNew) {
-      try {
-        // Always target the production app, never wherever the request
-        // happens to land (localhost:3001 dev runs would otherwise
-        // generate links that only work on that one laptop). Override
-        // via NEXT_PUBLIC_APP_URL if the prod URL ever changes.
-        const baseUrl = (
-          process.env.NEXT_PUBLIC_APP_URL ||
-          "https://delegationdoer-production.up.railway.app"
-        ).replace(/\/$/, "");
-        const { data: linkData, error: linkErr } =
-          await supabase.auth.admin.generateLink({
-            type: "magiclink",
-            email,
-            options: { redirectTo: `${baseUrl}/auth/finish` }
-          });
-        if (linkErr) throw linkErr;
-        magicLink = linkData?.properties?.action_link ?? null;
-      } catch (err) {
-        // Non-fatal — the role + dept update still went through, we
-        // just couldn't generate a sign-in URL. The leader can
-        // resend later or have the user use /login directly.
-        magicLink = null;
-        console.warn("[invite] generateLink failed:", err);
+      const baseUrl = (
+        process.env.NEXT_PUBLIC_APP_URL ||
+        "https://delegationdoer-production.up.railway.app"
+      ).replace(/\/$/, "");
+
+      const { data: claim, error: claimErr } = await supabase
+        .from("magic_link_claims")
+        .insert({
+          email,
+          target_user_id: authUserId,
+          created_by: actorId
+        })
+        .select("id")
+        .single();
+      if (claimErr) {
+        console.warn("[invite] claim insert failed:", claimErr.message);
+      } else if (claim) {
+        magicLink = `${baseUrl}/signin/${claim.id}`;
       }
+
       if (magicLink && process.env.SLACK_BOT_TOKEN) {
         try {
           const slackId = await lookupUserByEmail(email);
           const channel = await openDm(slackId);
           await postMessage(
             channel,
-            `${name}, you've been added to DelegationDoer. Click to sign in: ${magicLink}`,
+            `${name}, you've been added to DelegationDoer.`,
             [
               {
                 type: "section",
@@ -186,7 +184,7 @@ export async function POST(req: NextRequest) {
                   type: "mrkdwn",
                   text:
                     `👋 *${name}* — you've been added to *DelegationDoer*.\n` +
-                    `Click below to sign in. The link is one-time use; if it expires, ask the leader to resend.`
+                    `Click below to sign in. Single-use; ask the leader to resend if it expires.`
                 }
               },
               {
@@ -194,7 +192,7 @@ export async function POST(req: NextRequest) {
                 elements: [
                   {
                     type: "button",
-                    text: { type: "plain_text", text: "Sign in" },
+                    text: { type: "plain_text", text: "Open sign-in page" },
                     url: magicLink,
                     style: "primary"
                   }

@@ -7,14 +7,15 @@ import { lookupUserByEmail, openDm, postMessage } from "@/lib/slack";
 
 export const dynamic = "force-dynamic";
 
-// POST /api/users/[id]/magic-link — leader-only. Generates a fresh
-// magic-link sign-in URL for an existing user (by id), best-effort
-// Slack-DMs it to them with a "Sign in" button, and returns the link
-// in the response so the leader can also copy / share manually.
+// POST /api/users/[id]/magic-link — leader-only. Creates a single-use
+// "magic_link_claim" row tied to the target user's email and returns a
+// /signin/<claim_id> URL. Slack-DMs that URL with a "Sign in" button.
 //
-// Targets the production app for the redirect so links work the same
-// regardless of where they were generated (override via
-// NEXT_PUBLIC_APP_URL).
+// We intentionally do NOT generate the Supabase verify URL here —
+// that happens server-side only when the user clicks the button on
+// /signin/<claim_id>. Otherwise Slack's safe-link scanner or Outlook
+// safe-links would pre-fetch the verify URL and burn the token before
+// the recipient ever clicks.
 export async function POST(
   _req: NextRequest,
   { params }: { params: { id: string } }
@@ -43,27 +44,25 @@ export async function POST(
     ).replace(/\/$/, "");
 
     const supabase = getSupabaseAdmin();
-    const { data: linkData, error: linkErr } = await supabase.auth.admin.generateLink({
-      type: "magiclink",
-      email: target.email,
-      options: { redirectTo: `${baseUrl}/auth/finish` }
-    });
-    if (linkErr) {
+
+    const { data: claim, error: claimErr } = await supabase
+      .from("magic_link_claims")
+      .insert({
+        email: target.email,
+        target_user_id: target.id,
+        created_by: actorId
+      })
+      .select("id")
+      .single();
+    if (claimErr || !claim) {
       return NextResponse.json(
-        { error: `generateLink: ${linkErr.message}` },
-        { status: 500 }
-      );
-    }
-    const magicLink = linkData?.properties?.action_link ?? null;
-    if (!magicLink) {
-      return NextResponse.json(
-        { error: "Supabase returned no link" },
+        { error: `claim insert: ${claimErr?.message ?? "unknown"}` },
         { status: 500 }
       );
     }
 
-    // Best-effort Slack DM. Failures are reported but don't fail the
-    // request — the leader always gets the link in the JSON response.
+    const magicLink = `${baseUrl}/signin/${claim.id}`;
+
     let slackDm: "sent" | "skipped" | "failed" = "skipped";
     let slackError: string | null = null;
     if (process.env.SLACK_BOT_TOKEN) {
@@ -72,7 +71,7 @@ export async function POST(
         const channel = await openDm(slackId);
         await postMessage(
           channel,
-          `${target.name}, here's a fresh sign-in link for DelegationDoer: ${magicLink}`,
+          `${target.name}, you have a sign-in link for DelegationDoer.`,
           [
             {
               type: "section",
@@ -80,8 +79,8 @@ export async function POST(
                 type: "mrkdwn",
                 text:
                   `👋 *${target.name}* — ${actor?.name ?? "the leader"} just sent ` +
-                  `you a fresh sign-in link for *DelegationDoer*. ` +
-                  `One-time use; expires in about an hour.`
+                  `you a sign-in link for *DelegationDoer*. ` +
+                  `Click the button when you're ready — the link is single-use.`
               }
             },
             {
@@ -89,7 +88,7 @@ export async function POST(
               elements: [
                 {
                   type: "button",
-                  text: { type: "plain_text", text: "Sign in" },
+                  text: { type: "plain_text", text: "Open sign-in page" },
                   url: magicLink,
                   style: "primary"
                 }

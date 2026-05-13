@@ -1,5 +1,5 @@
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
-import { setSlackUserStatus, PRESENCE_TO_SLACK } from "@/lib/slack";
+import { setSlackUserStatus, PRESENCE_TO_SLACK, toSlackEmojiShortcode } from "@/lib/slack";
 
 // Mirror a user's DelegationDoer presence + emoji to their connected
 // Slack account. Best-effort — failures are swallowed and logged so a
@@ -41,7 +41,12 @@ export async function syncUserStatusToSlack(userId: string): Promise<void> {
   const fromPresence = PRESENCE_TO_SLACK[presence] ?? PRESENCE_TO_SLACK.available;
   const overrideEmoji = (user.status_emoji ?? "").trim();
   const statusText = fromPresence.text;
-  const statusEmoji = overrideEmoji || fromPresence.emoji;
+  // Slack expects :colon: shortcodes — the widget stores raw glyphs,
+  // so translate before pushing. PRESENCE_TO_SLACK is already in
+  // shortcode form so it passes through unchanged.
+  const statusEmoji = overrideEmoji
+    ? toSlackEmojiShortcode(overrideEmoji)
+    : fromPresence.emoji;
 
   let okFlag = false;
   let msg = `pushed ${presence}: ${statusEmoji || "(no emoji)"} ${statusText || "(no text)"}`;

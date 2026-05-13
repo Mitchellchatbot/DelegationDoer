@@ -19,6 +19,52 @@ export const PRESENCE_TO_SLACK: Record<string, { text: string; emoji: string }> 
   available: { text: "",           emoji: ""                  }
 };
 
+// Slack's status_emoji field is keyed on shortcodes (":fire:") — raw
+// glyphs ("🔥") are silently accepted but never render. The widget
+// stores the user's pick as a glyph, so we translate at the boundary.
+// Covers the preset palette in TeamCarousel.PRESET_EMOJIS. Anything
+// outside the table falls back to empty string so we don't push
+// garbage Slack will silently swallow.
+const GLYPH_TO_SHORTCODE: Record<string, string> = {
+  "🔥": ":fire:",
+  "⚡": ":zap:", "⚡️": ":zap:",
+  "🚀": ":rocket:",
+  "🎯": ":dart:",
+  "💪": ":muscle:",
+  "🧠": ":brain:",
+  "☕": ":coffee:", "☕️": ":coffee:",
+  "🍕": ":pizza:",
+  "🥗": ":green_salad:",
+  "🌮": ":taco:",
+  "💻": ":computer:",
+  "📞": ":telephone_receiver:",
+  "📝": ":memo:",
+  "🎧": ":headphones:",
+  "🎨": ":art:",
+  "😎": ":sunglasses:",
+  "😴": ":sleeping:",
+  "🤝": ":handshake:",
+  "🎉": ":tada:",
+  "✨": ":sparkles:",
+  "🛠": ":hammer_and_wrench:", "🛠️": ":hammer_and_wrench:",
+  "🐛": ":bug:",
+  "📊": ":bar_chart:",
+  "📈": ":chart_with_upwards_trend:",
+  "🍔": ":hamburger:",
+  "🌙": ":crescent_moon:"
+};
+
+export function toSlackEmojiShortcode(input: string): string {
+  if (!input) return "";
+  // Already a shortcode? Pass through.
+  if (input.startsWith(":") && input.endsWith(":")) return input;
+  const direct = GLYPH_TO_SHORTCODE[input];
+  if (direct) return direct;
+  // Try stripping the variation selector (U+FE0F) some glyphs carry.
+  const stripped = input.replace(/️/g, "");
+  return GLYPH_TO_SHORTCODE[stripped] ?? "";
+}
+
 // Read the current Slack profile (status text/emoji/expiration) for
 // the given user token. Used by the debug endpoint so the UI can show
 // what Slack itself reports, not just what we tried to push.

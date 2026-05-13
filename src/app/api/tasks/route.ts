@@ -13,13 +13,43 @@ function trimOrNull(v: unknown): string | null {
   return t || null;
 }
 
-// GET /api/tasks — every task in the system, in the camelCase shape the UI
-// expects. Used by the board (and anywhere that needs a fresh org-wide
-// snapshot). No filtering server-side; clients filter as they like.
+// GET /api/tasks — every task in the system that the viewer is
+// allowed to see. Leaders see everything. Everyone else can see
+// their own tasks plus the tasks of any non-leader — but tasks
+// assigned to (or created by) a leader are filtered out so leader
+// work stays private to the leader cohort.
 export async function GET() {
   try {
+    const viewerId = await requireCurrentUserId();
+    const viewer = await getUserById(viewerId);
     const tasks = await getAllTasks();
-    return NextResponse.json({ tasks });
+
+    if (viewer?.role === "leader") {
+      return NextResponse.json({ tasks });
+    }
+
+    // Build the leader id set so we can filter against assignee +
+    // creator. Cached by getAllUsersLight at the page level; here
+    // we hit Supabase directly because /api/tasks is hot.
+    const supabase = getSupabaseAdmin();
+    const { data: leaderRows } = await supabase
+      .from("users")
+      .select("id")
+      .eq("role", "leader");
+    const leaderIds = new Set((leaderRows ?? []).map((u) => u.id as string));
+
+    const filtered = tasks.filter((t) => {
+      // Always show the viewer's own tasks (covers an edge case where
+      // a worker is somehow assigned a task by a leader — they still
+      // need to see what they're on the hook for).
+      if (t.assigneeId === viewerId) return true;
+      if (t.creatorId === viewerId) return true;
+      // Hide tasks owned or created by leaders from non-leaders.
+      if (t.assigneeId && leaderIds.has(t.assigneeId)) return false;
+      if (t.creatorId && leaderIds.has(t.creatorId)) return false;
+      return true;
+    });
+    return NextResponse.json({ tasks: filtered });
   } catch (err) {
     const message = err instanceof Error ? err.message : "unknown error";
     return NextResponse.json({ error: message }, { status: 500 });

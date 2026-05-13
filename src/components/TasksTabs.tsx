@@ -2,20 +2,34 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { ListTodo, Columns3, Layers } from "lucide-react";
+import { ListTodo, Columns3, Layers, ListChecks } from "lucide-react";
+import { useCurrentUser } from "@/lib/user-context";
+import { isLeader } from "@/lib/auth";
 import { cn } from "@/lib/utils";
 
-const TABS = [
+type Tab = {
+  href: string;
+  label: string;
+  icon: typeof ListTodo;
+  leaderOnly?: boolean;
+};
+
+const TABS: readonly Tab[] = [
   { href: "/tasks/mine",  label: "Mine",  icon: ListTodo },
   { href: "/tasks/board", label: "Board", icon: Columns3 },
-  { href: "/tasks/all",   label: "All",   icon: Layers }
+  { href: "/tasks/all",   label: "All",   icon: Layers   },
+  { href: "/tasks/todos", label: "Todos", icon: ListChecks, leaderOnly: true }
 ] as const;
 
 export function TasksTabs() {
   const pathname = usePathname();
+  const me = useCurrentUser();
+  const canSeeLeaderTabs = isLeader(me);
+  const tabs = TABS.filter((t) => !t.leaderOnly || canSeeLeaderTabs);
+
   return (
     <div className="inline-flex items-center rounded-xl border border-border bg-surface p-0.5">
-      {TABS.map(({ href, label, icon: Icon }) => {
+      {tabs.map(({ href, label, icon: Icon }) => {
         const active = pathname === href || pathname.startsWith(href + "/");
         return (
           <Link

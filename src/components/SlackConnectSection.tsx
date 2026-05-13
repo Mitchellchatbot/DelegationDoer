@@ -10,6 +10,9 @@ interface SlackStatus {
   slackUserId: string | null;
   slackTeamId: string | null;
   connectedAt: string | null;
+  lastSyncAt: string | null;
+  lastSyncOk: boolean | null;
+  lastSyncMsg: string | null;
 }
 
 // "Connect Slack" card on Settings. Kicks off OAuth on click, shows
@@ -60,7 +63,10 @@ function SlackCard() {
         connected: !!data?.user?.slackUserId,
         slackUserId: data?.user?.slackUserId ?? null,
         slackTeamId: data?.user?.slackTeamId ?? null,
-        connectedAt: data?.user?.slackConnectedAt ?? null
+        connectedAt: data?.user?.slackConnectedAt ?? null,
+        lastSyncAt: data?.user?.slackLastSyncAt ?? null,
+        lastSyncOk: data?.user?.slackLastSyncOk ?? null,
+        lastSyncMsg: data?.user?.slackLastSyncMsg ?? null
       });
     } catch { /* ignore */ }
   }
@@ -80,6 +86,17 @@ function SlackCard() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error ?? `failed (${res.status})`);
+
+      // The sync function captures its own success/failure on the
+      // user row; the test endpoint relays it. If Slack returned an
+      // error we should toast it as a hard failure even though the
+      // HTTP envelope was 200.
+      if (data.syncOk === false) {
+        toast.error(`Slack rejected: ${data.syncMsg ?? "unknown"}`);
+        await load();
+        return;
+      }
+
       const p = data.pushed;
       const n = data.slackNow;
       const pushedLabel = p?.statusText || p?.statusEmoji
@@ -90,9 +107,8 @@ function SlackCard() {
           ? `Slack now reports: ${n.status_emoji} ${n.status_text || "(no text)"}`
           : "Slack now reports: cleared"
         : null;
-      // If Slack's readback differs from what we pushed, the call
-      // succeeded but Slack didn't apply it (token scope / cache).
       toast.success(slackLabel ? `${pushedLabel}. ${slackLabel}` : pushedLabel);
+      await load();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "couldn't push");
     } finally {
@@ -114,6 +130,7 @@ function SlackCard() {
           ? `Cleared call sent — Slack still reports: ${n.status_emoji} ${n.status_text}`
           : "Status cleared"
       );
+      await load();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "couldn't clear");
     } finally {
@@ -165,6 +182,33 @@ function SlackCard() {
             {status?.connected && status.slackUserId && (
               <div className="text-[11px] text-ink/55 mt-1.5 font-mono">
                 {status.slackUserId}{status.slackTeamId ? ` · ${status.slackTeamId}` : ""}
+              </div>
+            )}
+            {status?.connected && status.lastSyncAt && (
+              <div
+                className={
+                  "text-[11px] mt-1.5 inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full border " +
+                  (status.lastSyncOk
+                    ? "bg-emerald-50 text-emerald-700 border-emerald-200/60"
+                    : "bg-rose-50 text-rose-700 border-rose-200/60")
+                }
+                title="Most recent attempt to mirror your widget status to Slack"
+              >
+                <span className={
+                  "w-1.5 h-1.5 rounded-full " +
+                  (status.lastSyncOk ? "bg-emerald-500" : "bg-rose-500")
+                } />
+                {status.lastSyncOk ? "Last sync ok" : "Last sync failed"}
+                <span className="text-ink/45 font-normal">
+                  · {new Date(status.lastSyncAt).toLocaleTimeString([], {
+                    hour: "2-digit", minute: "2-digit", second: "2-digit"
+                  })}
+                </span>
+              </div>
+            )}
+            {status?.connected && status.lastSyncMsg && (
+              <div className="text-[10px] text-ink/55 mt-1 font-mono break-all max-w-md">
+                {status.lastSyncMsg}
               </div>
             )}
           </div>

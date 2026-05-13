@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { requireCurrentUserId } from "@/lib/session";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
-import { setSlackUserStatus, getSlackUserProfile, PRESENCE_TO_SLACK } from "@/lib/slack";
+import { getSlackUserProfile, PRESENCE_TO_SLACK } from "@/lib/slack";
+import { syncUserStatusToSlack } from "@/lib/slack-status-sync";
 
 export const dynamic = "force-dynamic";
 
@@ -32,15 +33,26 @@ export async function POST() {
     const statusText = fromPresence.text;
     const statusEmoji = overrideEmoji || fromPresence.emoji;
 
-    await setSlackUserStatus({
-      userToken: user.slack_user_token,
-      statusText,
-      statusEmoji
-    });
+    // Go through the same path the widget uses so the debug row on
+    // the user gets the same write — confirms the entire pipeline
+    // works, not just a one-off call.
+    await syncUserStatusToSlack(userId);
 
-    // Read it back so we can show what Slack actually has now —
-    // catches the case where the set call returns ok=true but Slack
-    // silently rejects the change (token scope issue etc.).
+    // Re-read the user to surface the sync result the same way the
+    // Settings card displays it. If the call errored, the toast can
+    // show the real Slack response (missing_scope, invalid_auth, etc.)
+    // instead of a generic 200.
+    const { data: after } = await supabase
+      .from("users")
+      .select("slack_last_sync_ok, slack_last_sync_msg")
+      .eq("id", userId)
+      .maybeSingle();
+    const syncOk = (after?.slack_last_sync_ok as boolean | null) ?? null;
+    const syncMsg = (after?.slack_last_sync_msg as string | null) ?? null;
+
+    // Read it back from Slack so we can show what Slack actually has
+    // now — catches the case where the set returned ok=true but
+    // Slack silently rejected the change (token scope etc.).
     let slackNow: {
       status_text: string;
       status_emoji: string;
@@ -54,6 +66,8 @@ export async function POST() {
 
     return NextResponse.json({
       ok: true,
+      syncOk,
+      syncMsg,
       pushed: { statusText, statusEmoji, presence },
       slackNow
     });

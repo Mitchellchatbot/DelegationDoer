@@ -8,6 +8,7 @@ import { getUserById } from "@/lib/server-data";
 import { UserProvider } from "@/lib/user-context";
 import { PresenceProvider } from "@/lib/presence-context";
 import { ClockProvider } from "@/components/ClockContext";
+import { OnboardingDialog } from "@/components/OnboardingDialog";
 
 export default async function MainLayout({ children }: { children: React.ReactNode }) {
   // Three legitimate states:
@@ -55,6 +56,7 @@ export default async function MainLayout({ children }: { children: React.ReactNo
         </div>
       </div>
       <Toaster position="bottom-right" richColors closeButton />
+      <OnboardingDialog />
       </ClockProvider>
       </PresenceProvider>
     </UserProvider>

@@ -17,7 +17,7 @@ export async function GET() {
     {
       const { data, error } = await supabase
         .from("users")
-        .select("id, name, email, avatar_url, role, widget_icon_url, slack_user_id, slack_team_id, slack_connected_at")
+        .select("id, name, email, avatar_url, role, widget_icon_url, slack_user_id, slack_team_id, slack_connected_at, birthday, onboarded_at")
         .eq("id", userId)
         .maybeSingle();
       if (!error && data) row = data;
@@ -42,7 +42,9 @@ export async function GET() {
         widgetIconUrl: (row.widget_icon_url as string | null) ?? null,
         slackUserId: (row.slack_user_id as string | null) ?? null,
         slackTeamId: (row.slack_team_id as string | null) ?? null,
-        slackConnectedAt: (row.slack_connected_at as string | null) ?? null
+        slackConnectedAt: (row.slack_connected_at as string | null) ?? null,
+        birthday: (row.birthday as string | null) ?? null,
+        onboardedAt: (row.onboarded_at as string | null) ?? null
       }
     });
   } catch (err) {

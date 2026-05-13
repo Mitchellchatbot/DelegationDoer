@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { requireCurrentUserId } from "@/lib/session";
+import { syncUserStatusToSlack } from "@/lib/slack-status-sync";
 
 export const dynamic = "force-dynamic";
 
@@ -30,6 +31,9 @@ export async function PATCH(req: NextRequest) {
       })
       .eq("id", userId);
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    // Mirror to Slack best-effort. Fire-and-forget — never blocks the
+    // PATCH response and never fails it.
+    void syncUserStatusToSlack(userId);
     return NextResponse.json({ ok: true, state });
   } catch (err) {
     return NextResponse.json(

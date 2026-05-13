@@ -10,6 +10,38 @@ interface SlackResponse {
   [key: string]: unknown;
 }
 
+// Map a DelegationDoer presence state to the Slack status equivalent.
+// `null` (Available) clears the status entirely.
+export const PRESENCE_TO_SLACK: Record<string, { text: string; emoji: string }> = {
+  focus:     { text: "In focus",   emoji: ":brain:"          },
+  eating:    { text: "Eating",     emoji: ":hamburger:"       },
+  away:      { text: "Away",       emoji: ":crescent_moon:"   },
+  available: { text: "",           emoji: ""                  }
+};
+
+// users.profile.set with a user (xoxp-) token. Bots can't write
+// another user's profile so each employee has to OAuth their own
+// token first.
+export async function setSlackUserStatus(args: {
+  userToken: string;
+  statusText: string;
+  statusEmoji: string;
+  // Optional expiry (epoch seconds). 0 = never.
+  expirationEpoch?: number;
+}): Promise<void> {
+  await slackCall(
+    "users.profile.set",
+    {
+      profile: {
+        status_text: args.statusText,
+        status_emoji: args.statusEmoji,
+        status_expiration: args.expirationEpoch ?? 0
+      }
+    },
+    args.userToken
+  );
+}
+
 async function slackCall<T extends SlackResponse>(
   method: string,
   body: Record<string, unknown>,

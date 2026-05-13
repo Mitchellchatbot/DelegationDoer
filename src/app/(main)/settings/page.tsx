@@ -6,11 +6,17 @@ import { ProfileAvatarSection } from "@/components/ProfileAvatarSection";
 import { DesktopAppSection } from "@/components/DesktopAppSection";
 import { MissiveIntegrationSection } from "@/components/MissiveIntegrationSection";
 import { DepartmentSlackSection } from "@/components/DepartmentSlackSection";
+import { SlackConnectSection } from "@/components/SlackConnectSection";
 import { CustomFieldsSection } from "@/components/CustomFieldsSection";
 import { SkillsSection } from "@/components/SkillsSection";
 import { ResponsibilitiesSection } from "@/components/ResponsibilitiesSection";
 import { PageHero } from "@/components/PageHero";
 import { Settings as SettingsIcon } from "lucide-react";
+
+// useSearchParams inside SlackConnectSection means we can't prerender
+// this page statically — force dynamic so the build doesn't choke
+// trying to evaluate the client component at compile time.
+export const dynamic = "force-dynamic";
 
 export default async function SettingsPage() {
   const userId = await requireCurrentUserId();
@@ -35,6 +41,8 @@ export default async function SettingsPage() {
       <CustomFieldsSection canManage={me?.role === "leader" || me?.role === "department_head"} />
 
       <MissiveIntegrationSection />
+
+      <SlackConnectSection />
 
       <DepartmentSlackSection canEdit={me?.role === "leader"} />
 

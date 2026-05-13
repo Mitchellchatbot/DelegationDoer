@@ -135,6 +135,70 @@ export async function listUserEvents(args: {
   return ((data.items ?? []) as RawEvent[]).map(normalizeEvent);
 }
 
+// Patch an existing event. Used when a task's due date / title /
+// description shifts and we want the calendar block to follow. Pass
+// only the fields you want to change.
+export async function patchUserEvent(args: {
+  userId: string;
+  eventId: string;
+  summary?: string;
+  description?: string;
+  startISO?: string;
+  endISO?: string;
+  timeZone?: string;
+}): Promise<void> {
+  const token = await getValidAccessToken(args.userId);
+  const body: Record<string, unknown> = {};
+  if (args.summary !== undefined) body.summary = args.summary;
+  if (args.description !== undefined) body.description = args.description;
+  if (args.startISO) {
+    body.start = { dateTime: args.startISO, timeZone: args.timeZone ?? "UTC" };
+  }
+  if (args.endISO) {
+    body.end = { dateTime: args.endISO, timeZone: args.timeZone ?? "UTC" };
+  }
+  const res = await fetch(
+    `${CALENDAR_BASE}/calendars/primary/events/${encodeURIComponent(args.eventId)}`,
+    {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(body)
+    }
+  );
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(
+      `google calendar patch failed: ${data.error?.message || res.status}`
+    );
+  }
+}
+
+// Delete an event from the user's primary calendar. 404 is treated
+// as success — the event was already gone, that's fine.
+export async function deleteUserEvent(args: {
+  userId: string;
+  eventId: string;
+}): Promise<void> {
+  const token = await getValidAccessToken(args.userId);
+  const res = await fetch(
+    `${CALENDAR_BASE}/calendars/primary/events/${encodeURIComponent(args.eventId)}`,
+    {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${token}` }
+    }
+  );
+  if (res.status === 404 || res.status === 410) return;
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(
+      `google calendar delete failed: ${data.error?.message || res.status}`
+    );
+  }
+}
+
 // Create an event on the user's primary calendar. Minimal shape —
 // summary + start + end is enough. Pass `addAttendees: true` to
 // invite the listed emails (Google will email them an invitation).

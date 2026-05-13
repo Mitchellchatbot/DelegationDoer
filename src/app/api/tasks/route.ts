@@ -3,6 +3,7 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { requireCurrentUserId } from "@/lib/session";
 import { getAllTasks, getUserById } from "@/lib/server-data";
 import { notifyAssignment } from "@/lib/slack";
+import { syncTaskToCalendar } from "@/lib/task-calendar-sync";
 
 export const dynamic = "force-dynamic";
 
@@ -140,6 +141,10 @@ export async function POST(req: NextRequest) {
         }
       }
     }
+
+    // Mirror to the assignee's Google Calendar if they're connected.
+    // Fire-and-forget — never blocks the task creation response.
+    void syncTaskToCalendar(id);
 
     return NextResponse.json({ task: data, slack });
   } catch (err) {

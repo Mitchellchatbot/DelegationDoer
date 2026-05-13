@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 import {
   ListTodo, Users,
   Sparkles, Settings, AlertTriangle, Crown, Mail, Briefcase,
-  FolderKanban
+  FolderKanban, CalendarDays
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { ReportIncidentDialog } from "./ReportIncidentDialog";
@@ -32,6 +32,7 @@ interface NavItem { href: string; label: string; icon: typeof ListTodo; tone: To
 const BASE_NAV: NavItem[] = [
   { href: "/people",    label: "People",    icon: Users,           tone: "indigo"   },
   { href: "/tasks",     label: "Tasks",     icon: ListTodo,        tone: "indigo"   },
+  { href: "/schedule",  label: "Schedule",  icon: CalendarDays,    tone: "sky"      },
   { href: "/inboxes",   label: "Inboxes",   icon: Mail,            tone: "fuchsia"  },
   { href: "/clients",     label: "Clients",     icon: Briefcase,   tone: "amber"    },
   { href: "/updates",   label: "Updates",   icon: Sparkles,        tone: "fuchsia"  }

@@ -4,6 +4,7 @@ import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { notifyCompletion, type CompletionResult } from "@/lib/slack";
 import { onTaskDone } from "@/lib/project-flow";
+import { syncTaskToCalendar } from "@/lib/task-calendar-sync";
 
 const ALLOWED_FIELDS = ["title", "description", "priority", "status", "estimated_hours", "due_date", "tags", "client_name", "website"] as const;
 const STATUSES = ["pending", "in_progress", "urgent", "waiting_on_client", "done"] as const;
@@ -267,6 +268,11 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       try { await onTaskDone(params.id); }
       catch (err) { console.error("[tasks/PATCH] onTaskDone failed:", err); }
     }
+
+    // Mirror to the assignee's Google Calendar (best-effort, never
+    // blocks). Catches title / due-date / status / assignee changes
+    // and patches or deletes the linked event accordingly.
+    void syncTaskToCalendar(params.id);
 
     return NextResponse.json({ task: data, slack, skillGains });
   } catch (err) {

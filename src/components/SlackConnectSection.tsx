@@ -3,7 +3,7 @@
 import { Suspense, useEffect, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { Slack, CheckCircle2, Loader2, Link2Off, Zap } from "lucide-react";
+import { Slack, CheckCircle2, Loader2, Link2Off, Zap, Eraser } from "lucide-react";
 
 interface SlackStatus {
   connected: boolean;
@@ -81,13 +81,41 @@ function SlackCard() {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error ?? `failed (${res.status})`);
       const p = data.pushed;
-      toast.success(
-        p?.statusText || p?.statusEmoji
-          ? `Pushed: ${p.statusEmoji} ${p.statusText || "(no text)"}`
-          : "Pushed: cleared status"
-      );
+      const n = data.slackNow;
+      const pushedLabel = p?.statusText || p?.statusEmoji
+        ? `Pushed: ${p.statusEmoji} ${p.statusText || "(no text)"}`
+        : "Pushed: cleared";
+      const slackLabel = n
+        ? n.status_text || n.status_emoji
+          ? `Slack now reports: ${n.status_emoji} ${n.status_text || "(no text)"}`
+          : "Slack now reports: cleared"
+        : null;
+      // If Slack's readback differs from what we pushed, the call
+      // succeeded but Slack didn't apply it (token scope / cache).
+      toast.success(slackLabel ? `${pushedLabel}. ${slackLabel}` : pushedLabel);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "couldn't push");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function forceClear() {
+    setBusy(true);
+    try {
+      const res = await fetch("/api/integrations/slack/clear", {
+        method: "POST"
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error ?? `failed (${res.status})`);
+      const n = data.slackNow;
+      toast.success(
+        n && (n.status_text || n.status_emoji)
+          ? `Cleared call sent — Slack still reports: ${n.status_emoji} ${n.status_text}`
+          : "Status cleared"
+      );
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "couldn't clear");
     } finally {
       setBusy(false);
     }
@@ -152,7 +180,7 @@ function SlackCard() {
               Loading
             </button>
           ) : status.connected ? (
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap justify-end">
               <button
                 type="button"
                 onClick={testSync}
@@ -162,6 +190,16 @@ function SlackCard() {
               >
                 {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
                 Push now
+              </button>
+              <button
+                type="button"
+                onClick={forceClear}
+                disabled={busy}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold text-amber-700 border border-amber-200 bg-amber-50 hover:bg-amber-100 transition-colors disabled:opacity-60"
+                title="Force-clear the Slack status — useful if it's stuck"
+              >
+                {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Eraser className="w-3.5 h-3.5" />}
+                Force clear
               </button>
               <button
                 type="button"

@@ -19,6 +19,35 @@ export const PRESENCE_TO_SLACK: Record<string, { text: string; emoji: string }> 
   available: { text: "",           emoji: ""                  }
 };
 
+// Read the current Slack profile (status text/emoji/expiration) for
+// the given user token. Used by the debug endpoint so the UI can show
+// what Slack itself reports, not just what we tried to push.
+export async function getSlackUserProfile(userToken: string): Promise<{
+  status_text: string;
+  status_emoji: string;
+  status_expiration: number;
+}> {
+  const res = await fetch(`${SLACK_API}/users.profile.get`, {
+    method: "GET",
+    headers: { Authorization: `Bearer ${userToken}` }
+  });
+  const data = (await res.json()) as SlackResponse & {
+    profile?: {
+      status_text?: string;
+      status_emoji?: string;
+      status_expiration?: number;
+    };
+  };
+  if (!data.ok) {
+    throw new Error(`slack:users.profile.get → ${data.error ?? "unknown"}`);
+  }
+  return {
+    status_text: data.profile?.status_text ?? "",
+    status_emoji: data.profile?.status_emoji ?? "",
+    status_expiration: data.profile?.status_expiration ?? 0
+  };
+}
+
 // users.profile.set with a user (xoxp-) token. Bots can't write
 // another user's profile so each employee has to OAuth their own
 // token first.

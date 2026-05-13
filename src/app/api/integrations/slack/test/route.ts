@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireCurrentUserId } from "@/lib/session";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
-import { setSlackUserStatus, PRESENCE_TO_SLACK } from "@/lib/slack";
+import { setSlackUserStatus, getSlackUserProfile, PRESENCE_TO_SLACK } from "@/lib/slack";
 
 export const dynamic = "force-dynamic";
 
@@ -38,9 +38,24 @@ export async function POST() {
       statusEmoji
     });
 
+    // Read it back so we can show what Slack actually has now —
+    // catches the case where the set call returns ok=true but Slack
+    // silently rejects the change (token scope issue etc.).
+    let slackNow: {
+      status_text: string;
+      status_emoji: string;
+      status_expiration: number;
+    } | null = null;
+    try {
+      slackNow = await getSlackUserProfile(user.slack_user_token);
+    } catch (err) {
+      console.warn("[slack-test] readback failed:", err);
+    }
+
     return NextResponse.json({
       ok: true,
-      pushed: { statusText, statusEmoji, presence }
+      pushed: { statusText, statusEmoji, presence },
+      slackNow
     });
   } catch (err) {
     return NextResponse.json(

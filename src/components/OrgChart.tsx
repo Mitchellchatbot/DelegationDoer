@@ -269,8 +269,28 @@ export function OrgChart({ users, departments, tasks, ceo }: Props) {
 }
 
 function cubicPath(fromX: number, fromY: number, toX: number, toY: number): string {
-  const dy = Math.max(40, Math.abs(toY - fromY) * 0.55);
-  return `M ${fromX} ${fromY} C ${fromX} ${fromY + dy}, ${toX} ${toY - dy}, ${toX} ${toY}`;
+  // Orthogonal "elbow" connector: down → across → down, with a small
+  // rounded corner at each bend. Siblings sharing a parent overlap on
+  // the trunk + horizontal bar, so they read as one tidy family tree
+  // instead of a tangle of fanning bezier S-curves.
+  const midY = (fromY + toY) / 2;
+  const dx = toX - fromX;
+
+  if (Math.abs(dx) < 1) {
+    return `M ${fromX} ${fromY} V ${toY}`;
+  }
+
+  const sign = dx > 0 ? 1 : -1;
+  const r = Math.min(10, Math.abs(dx) / 2, Math.abs(toY - fromY) / 2);
+
+  return [
+    `M ${fromX} ${fromY}`,
+    `V ${midY - r}`,
+    `Q ${fromX} ${midY} ${fromX + sign * r} ${midY}`,
+    `H ${toX - sign * r}`,
+    `Q ${toX} ${midY} ${toX} ${midY + r}`,
+    `V ${toY}`
+  ].join(" ");
 }
 
 function PersonNode({

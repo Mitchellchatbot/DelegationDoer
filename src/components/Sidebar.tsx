@@ -5,15 +5,16 @@ import { usePathname } from "next/navigation";
 import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
 import {
-  LayoutDashboard, ListTodo, Columns3, Users, ShieldAlert,
-  Sparkles, Settings, AlertTriangle, Crown, Mail, Briefcase, BarChart3, Search,
-  Network, Camera, FolderKanban
+  ListTodo, Users,
+  Sparkles, Settings, AlertTriangle, Crown, Mail, Briefcase,
+  FolderKanban
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { ReportIncidentDialog } from "./ReportIncidentDialog";
 import { AIAssistantDrawer } from "./AIAssistantDrawer";
 import { RaiseLink } from "./RaiseLink";
 import { isLeader, isHead } from "@/lib/auth";
+import { primaryDepartment } from "@/lib/departments";
 import type { User } from "@/lib/types";
 
 // White-glass sidebar with colorful nav-item icons. Each item carries its
@@ -24,32 +25,22 @@ import type { User } from "@/lib/types";
 
 type Tone = "blue" | "indigo" | "teal" | "emerald" | "amber" | "rose" | "fuchsia" | "sky";
 
-interface NavItem { href: string; label: string; icon: typeof LayoutDashboard; tone: Tone }
+interface NavItem { href: string; label: string; icon: typeof ListTodo; tone: Tone }
 
 // Projects is software-team-only (+ leader); it gets spliced in
 // conditionally below rather than living in the base list.
 const BASE_NAV: NavItem[] = [
-  { href: "/org-chart", label: "Org Chart", icon: Network,         tone: "indigo"   },
-  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, tone: "blue"     },
-  { href: "/my-tasks",  label: "My Tasks",  icon: ListTodo,        tone: "indigo"   },
-  { href: "/board",     label: "Board",     icon: Columns3,        tone: "teal"     },
+  { href: "/people",    label: "People",    icon: Users,           tone: "indigo"   },
+  { href: "/tasks",     label: "Tasks",     icon: ListTodo,        tone: "indigo"   },
   { href: "/inboxes",   label: "Inboxes",   icon: Mail,            tone: "fuchsia"  },
   { href: "/clients",     label: "Clients",     icon: Briefcase,   tone: "amber"    },
-  { href: "/eod",         label: "EOD",         icon: Sparkles,    tone: "fuchsia"  },
-  { href: "/seo-reports", label: "SEO Reports", icon: Search,      tone: "fuchsia"  },
-  { href: "/incidents",   label: "Incidents",   icon: ShieldAlert, tone: "rose"     },
-  // Moments + Team pinned to the bottom of the base nav by request, so
-  // the higher-traffic work surfaces read first.
-  { href: "/moments",     label: "Moments",     icon: Camera,      tone: "fuchsia"  },
-  { href: "/team",        label: "Team",        icon: Users,       tone: "emerald"  }
+  { href: "/updates",   label: "Updates",   icon: Sparkles,        tone: "fuchsia"  }
 ];
 const CEO_NAV: NavItem[] = [
-  { href: "/leader",       label: "Leader Console", icon: Crown,    tone: "amber" },
-  { href: "/analytics", label: "Analytics",   icon: BarChart3, tone: "sky"  }
+  { href: "/leader", label: "Manage", icon: Crown, tone: "amber" }
 ];
 const HEAD_NAV: NavItem[] = [
-  { href: "/team-overview", label: "Team Overview", icon: Users,    tone: "emerald" },
-  { href: "/analytics",     label: "Analytics",     icon: BarChart3, tone: "sky"    }
+  { href: "/leader", label: "Manage", icon: Users, tone: "emerald" }
 ];
 
 const TONE_STYLES: Record<Tone, { idle: string; activeBg: string; activeFg: string }> = {
@@ -82,14 +73,13 @@ export function Sidebar({ user }: { user: User }) {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  // Org Chart (BASE_NAV[0]) is always the very first item — that's the
+  // People (BASE_NAV[0]) is always the very first item — that's the
   // default landing tab for everyone. Role-specific items slot in
   // immediately after.
-  const [orgChart, ...rest] = BASE_NAV;
+  const [people, ...rest] = BASE_NAV;
   // Projects is restricted to leaders and members of the software dept.
   // It sits between Board and Inboxes in the regular flow.
-  const canSeeProjects =
-    isLeader(user) || (user.departmentIds ?? []).includes("dep_software");
+  const canSeeProjects = (user.departmentIds ?? []).includes("dep_software");
   const PROJECTS_ITEM: NavItem = {
     href: "/projects",
     label: "Projects",
@@ -99,34 +89,37 @@ export function Sidebar({ user }: { user: User }) {
   const restWithProjects = canSeeProjects
     ? [...rest.slice(0, 3), PROJECTS_ITEM, ...rest.slice(3)]
     : rest;
-  // Department heads get /team-overview (which is a scoped, richer
-  // version of /team), so we drop /team from their sidebar to avoid
-  // showing two "Team" entries that do effectively the same thing.
-  const restForHead = restWithProjects.filter((i) => i.href !== "/team");
   const NAV: NavItem[] = isLeader(user)
-    ? [orgChart, ...CEO_NAV, ...restWithProjects]
+    ? [people, ...CEO_NAV, ...restWithProjects]
     : isHead(user)
       ? [
-          orgChart,
-          ...restForHead.slice(0, 4),
+          people,
+          ...restWithProjects.slice(0, 4),
           ...HEAD_NAV,
-          ...restForHead.slice(4)
+          ...restWithProjects.slice(4)
         ]
-      : [orgChart, ...restWithProjects];
+      : [people, ...restWithProjects];
 
   return (
     <aside className="w-60 shrink-0 sticky top-3 h-[calc(100vh-1.5rem)] rounded-3xl border border-slate-200/70 bg-white/85 backdrop-blur-xl shadow-soft flex flex-col overflow-hidden">
-      {/* Brand row */}
-      <div className="px-4 h-16 flex items-center gap-2.5 border-b border-slate-100">
-        <div className="w-9 h-9 rounded-full overflow-hidden border border-slate-200 shrink-0 ring-2 ring-white shadow-sm">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/widget-icon.png" alt="" className="w-full h-full object-cover" />
-        </div>
-        <div className="leading-tight">
-          <div className="text-base font-semibold text-ink">DelegationDoer</div>
-          <div className="text-[12px] text-muted">scaledai.org</div>
-        </div>
-      </div>
+      {/* Brand row — the logo's ring picks up the user's department tint
+          so each team feels at home in their own corner of the app. */}
+      {(() => {
+        const dept = !isLeader(user) ? primaryDepartment(user.departmentIds) : null;
+        const ringClass = dept ? `ring-2 ${dept.ring}` : "ring-2 ring-white";
+        return (
+          <div className="px-4 h-16 flex items-center gap-2.5 border-b border-slate-100">
+            <div className={cn("w-9 h-9 rounded-full overflow-hidden border border-slate-200 shrink-0 shadow-sm", ringClass)}>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src="/widget-icon.png" alt="" className="w-full h-full object-cover" />
+            </div>
+            <div className="leading-tight">
+              <div className="text-base font-semibold text-ink">DelegationDoer</div>
+              <div className="text-[12px] text-muted">scaledai.org</div>
+            </div>
+          </div>
+        );
+      })()}
 
       <div className="flex-1 flex flex-col gap-2 px-2 py-4 overflow-y-auto">
         <nav className="space-y-0.5">

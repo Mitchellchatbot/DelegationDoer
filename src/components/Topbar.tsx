@@ -11,6 +11,7 @@ import Link from "next/link";
 import { PersonAvatar } from "./PersonAvatar";
 import { NewTaskForm } from "./NewTaskForm";
 import { ROLE_LABELS } from "@/lib/auth";
+import { primaryDepartment } from "@/lib/departments";
 import type { User } from "@/lib/types";
 import { toast } from "sonner";
 
@@ -281,13 +282,27 @@ export function Topbar({ user }: { user: User }) {
         >
           <Bell className="w-4 h-4" />
         </button>
-        <div className="flex items-center gap-2.5 pl-1 pr-3 py-1 rounded-full border border-slate-200 bg-slate-50">
-          <PersonAvatar userId={user.id} name={user.name} imageUrl={user.avatarUrl} size={28} />
-          <div className="text-[12px] leading-tight">
-            <div className="text-ink font-semibold">{user.name}</div>
-            <div className="text-muted">{ROLE_LABELS[user.role]}</div>
-          </div>
-        </div>
+        {(() => {
+          const dept = user.role !== "leader" ? primaryDepartment(user.departmentIds) : null;
+          return (
+            <div className="flex items-center gap-2.5 pl-1 pr-3 py-1 rounded-full border border-slate-200 bg-slate-50">
+              <div className={dept ? `rounded-full ring-2 ${dept.ring}` : ""}>
+                <PersonAvatar userId={user.id} name={user.name} imageUrl={user.avatarUrl} size={28} />
+              </div>
+              <div className="text-[12px] leading-tight">
+                <div className="text-ink font-semibold">{user.name}</div>
+                <div className="flex items-center gap-1.5 mt-0.5">
+                  <span className="text-muted">{ROLE_LABELS[user.role]}</span>
+                  {dept && (
+                    <span className={`inline-flex items-center px-1.5 py-0 rounded-full border text-[10px] font-medium ${dept.chip}`}>
+                      {dept.label}
+                    </span>
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        })()}
         <button
           onClick={logout}
           title="Log out"

@@ -171,10 +171,12 @@ const TICKET_COLS =
   "client_email,client_folder_url,staging_server,markup_link,hosting_access," +
   "missive_thread_url,custom";
 
-export async function getAllTasks(): Promise<Task[]> {
-  const { data } = await getSupabaseAdmin()
+export async function getAllTasks(opts?: { includeDrafts?: boolean }): Promise<Task[]> {
+  let q = getSupabaseAdmin()
     .from("tasks")
     .select(TICKET_COLS);
+  if (!opts?.includeDrafts) q = q.eq("is_draft", false);
+  const { data } = await q;
   return (data ?? []).map((r) => taskFromRow(r as unknown as TaskRow));
 }
 

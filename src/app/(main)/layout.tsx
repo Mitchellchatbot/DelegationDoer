@@ -9,6 +9,7 @@ import { UserProvider } from "@/lib/user-context";
 import { PresenceProvider } from "@/lib/presence-context";
 import { ClockProvider } from "@/components/ClockContext";
 import { OnboardingDialog } from "@/components/OnboardingDialog";
+import { primaryDepartment } from "@/lib/departments";
 
 export default async function MainLayout({ children }: { children: React.ReactNode }) {
   // Three legitimate states:
@@ -41,6 +42,12 @@ export default async function MainLayout({ children }: { children: React.ReactNo
       <div className="app-shell flex gap-3 p-3 min-h-screen">
         <Sidebar user={user} />
         <div className="flex-1 min-w-0 flex flex-col gap-3">
+          {user.role !== "leader" && (() => {
+            const dept = primaryDepartment(user.departmentIds);
+            return dept ? (
+              <div aria-hidden className={`h-[2px] rounded-full ${dept.hairline}`} />
+            ) : null;
+          })()}
           <Topbar user={user} />
           {/* No `backdrop-filter` on this panel — it creates a containing
               block for position:fixed descendants, which breaks

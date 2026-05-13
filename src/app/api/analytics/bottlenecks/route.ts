@@ -223,6 +223,40 @@ export async function GET() {
       };
     });
 
+  // 7. Completions per day for the last 30 days. We pre-seed every date so
+  //    the chart's x-axis stays continuous even when a day has zero
+  //    completions (otherwise recharts compresses the line).
+  const DAY_MS = 86_400_000;
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+  const completionsByDayMap = new Map<string, number>();
+  for (let i = 29; i >= 0; i--) {
+    const d = new Date(todayStart.getTime() - i * DAY_MS);
+    completionsByDayMap.set(toISODate(d), 0);
+  }
+  for (const t of tasks) {
+    if (t.status !== "done" || !t.last_activity_at) continue;
+    const key = toISODate(new Date(t.last_activity_at));
+    if (completionsByDayMap.has(key)) {
+      completionsByDayMap.set(key, (completionsByDayMap.get(key) ?? 0) + 1);
+    }
+  }
+  const completionsByDay = Array.from(completionsByDayMap.entries()).map(
+    ([date, count]) => ({ date, label: date.slice(5), count })
+  );
+
+  // 8. Status distribution across all currently-open tasks. Donut chart on
+  //    the analytics page reads from this — "where's the team's work right
+  //    now?" at a glance.
+  const statusCounts = new Map<string, number>();
+  for (const t of tasks) {
+    if (t.status === "done") continue;
+    statusCounts.set(t.status, (statusCounts.get(t.status) ?? 0) + 1);
+  }
+  const statusDistribution = Array.from(statusCounts.entries())
+    .map(([status, count]) => ({ status, count }))
+    .sort((a, b) => b.count - a.count);
+
   return NextResponse.json({
     perUser: perUserArr,
     estVsActual: estVsActualArr,
@@ -230,7 +264,16 @@ export async function GET() {
     slowestTasks,
     completionsByUser: completionsByUserArr,
     recentCompletions,
+    completionsByDay,
+    statusDistribution,
     totalCompletedThisWeek: completionsByUserArr.reduce((s, u) => s + u.weekCount, 0),
     totalCompletedAllTime: completionsByUserArr.reduce((s, u) => s + u.totalCount, 0)
   });
+}
+
+function toISODate(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
 }

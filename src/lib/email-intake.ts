@@ -174,7 +174,11 @@ export async function runEmailIntake(input: IntakeInput): Promise<IntakeOutcome>
     markup_link: null,
     hosting_access: null,
     missive_thread_url: input.missiveThreadUrl,
-    custom: {}
+    custom: {},
+    // Email-intake tasks land as drafts. The relevant dept head (or the
+    // Leader if no head) approves them on /leader/team before they're
+    // promoted to active "pending" tasks.
+    is_draft: true
   };
 
   const { error: insertErr } = await supabase.from("tasks").insert(insertRow);
@@ -194,8 +198,10 @@ export async function runEmailIntake(input: IntakeInput): Promise<IntakeOutcome>
     detail: `Auto-created from email · ${reason}`
   });
 
-  // 5) Slack DM the assignee. Best-effort.
-  if (assignee?.email) {
+  // 5) Slack DM the assignee — but only for non-draft tasks. Drafts wait
+  //    on dept-head approval before pinging the assignee; the approval
+  //    endpoint fires the notification once the task goes live.
+  if (assignee?.email && !insertRow.is_draft) {
     try {
       await notifyAssignment({
         assigneeEmail: assignee.email,

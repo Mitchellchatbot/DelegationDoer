@@ -28,7 +28,7 @@ export default function ProfilePage({ params }: { params: { id: string } }) {
 
   return (
     <div className="space-y-5 max-w-5xl">
-      <BackPill href="/team" label="Team" />
+      <BackPill href="/people/list" label="People" />
 
       <div className="card p-5 flex items-start gap-4">
         <PersonAvatar userId={user.id} name={user.name} imageUrl={user.avatarUrl} size={56} />

@@ -59,35 +59,48 @@ export function Sidebar({ user }: { user: User }) {
   const [incidentOpen, setIncidentOpen] = useState(false);
   const [aiOpen, setAiOpen] = useState(false);
 
-  // Open SEO request count — surfaces as a small red pill next to
-  // the Updates nav item for anyone on the SEO team (or leader) so a
-  // new request lights up the sidebar even when they're in another
-  // section of the app.
+  // Aggregate "things waiting in /updates" badge. Folds in the open
+  // SEO request count (SEO team + leader) and the unseen-project-
+  // activity count (leader only) into one red pill next to the
+  // Updates nav item, so anything new in /updates lights up the
+  // sidebar no matter which sub-tab triggered it.
   const canSeeSeo = isLeader(user) || (user.departmentIds ?? []).includes("dep_seo");
+  const canSeeProjectUpdates = isLeader(user);
   const [openSeoCount, setOpenSeoCount] = useState<number | null>(null);
+  const [unseenProjects, setUnseenProjects] = useState<number | null>(null);
   useEffect(() => {
-    if (!canSeeSeo) return;
+    if (!canSeeSeo && !canSeeProjectUpdates) return;
     let cancelled = false;
-    async function fetchCount() {
+    async function fetchCounts() {
       try {
-        const res = await fetch("/api/seo-reports/summary", { cache: "no-store" });
-        if (!res.ok) return;
-        const data = await res.json();
-        if (!cancelled) setOpenSeoCount(data.openCount ?? 0);
+        if (canSeeSeo) {
+          const res = await fetch("/api/seo-reports/summary", { cache: "no-store" });
+          if (res.ok) {
+            const data = await res.json();
+            if (!cancelled) setOpenSeoCount(data.openCount ?? 0);
+          }
+        }
+        if (canSeeProjectUpdates) {
+          const res = await fetch("/api/projects/updates?limit=1", { cache: "no-store" });
+          if (res.ok) {
+            const data = await res.json();
+            if (!cancelled) setUnseenProjects(data.unseenCount ?? 0);
+          }
+        }
       } catch { /* ignore */ }
     }
-    fetchCount();
+    fetchCounts();
     const t = setInterval(() => {
-      if (document.visibilityState === "visible") fetchCount();
+      if (document.visibilityState === "visible") fetchCounts();
     }, 30_000);
-    const onVis = () => { if (document.visibilityState === "visible") fetchCount(); };
+    const onVis = () => { if (document.visibilityState === "visible") fetchCounts(); };
     document.addEventListener("visibilitychange", onVis);
     return () => {
       cancelled = true;
       clearInterval(t);
       document.removeEventListener("visibilitychange", onVis);
     };
-  }, [canSeeSeo]);
+  }, [canSeeSeo, canSeeProjectUpdates]);
 
   // ⌘K / Ctrl+K opens the Ask AI drawer — wires up the hint shown on
   // the button. Suppressed when the user is mid-edit (so it doesn't
@@ -157,9 +170,12 @@ export function Sidebar({ user }: { user: User }) {
             const Icon = item.icon;
             const active = path === item.href || (item.href !== "/" && path.startsWith(item.href));
             const tone = TONE_STYLES[item.tone];
+            const updatesTotal =
+              (canSeeSeo ? (openSeoCount ?? 0) : 0) +
+              (canSeeProjectUpdates ? (unseenProjects ?? 0) : 0);
             const seoBadge =
-              item.href === "/updates" && canSeeSeo && (openSeoCount ?? 0) > 0
-                ? openSeoCount
+              item.href === "/updates" && updatesTotal > 0
+                ? updatesTotal
                 : null;
             return (
               <Link

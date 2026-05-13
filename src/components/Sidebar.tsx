@@ -99,14 +99,18 @@ export function Sidebar({ user }: { user: User }) {
   const restWithProjects = canSeeProjects
     ? [...rest.slice(0, 3), PROJECTS_ITEM, ...rest.slice(3)]
     : rest;
+  // Department heads get /team-overview (which is a scoped, richer
+  // version of /team), so we drop /team from their sidebar to avoid
+  // showing two "Team" entries that do effectively the same thing.
+  const restForHead = restWithProjects.filter((i) => i.href !== "/team");
   const NAV: NavItem[] = isLeader(user)
     ? [orgChart, ...CEO_NAV, ...restWithProjects]
     : isHead(user)
       ? [
           orgChart,
-          ...restWithProjects.slice(0, 4),
+          ...restForHead.slice(0, 4),
           ...HEAD_NAV,
-          ...restWithProjects.slice(4)
+          ...restForHead.slice(4)
         ]
       : [orgChart, ...restWithProjects];
 

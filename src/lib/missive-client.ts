@@ -281,6 +281,10 @@ export interface ComposeArgs {
   subject: string;
   bodyText: string;
   bodyHtml?: string;
+  // Optional scheduled send (epoch milliseconds). When set and >30s in
+  // the future, the clone stores the message in scheduled_messages with
+  // status='pending' instead of sending immediately.
+  sendAtMs?: number;
 }
 
 export async function composeNewThread(args: ComposeArgs): Promise<{
@@ -290,7 +294,7 @@ export async function composeNewThread(args: ComposeArgs): Promise<{
   // Mounted at /api/compose (NOT /api/messages). Multipart with a single
   // `payload` JSON string; the clone expects `to`/`cc`/`bcc` as scalar
   // strings (joined), not arrays.
-  const payload = {
+  const payload: Record<string, unknown> = {
     account_id: args.fromAccountId,
     to: args.to.join(", "),
     cc: (args.cc ?? []).join(", "),
@@ -299,13 +303,20 @@ export async function composeNewThread(args: ComposeArgs): Promise<{
     body_text: args.bodyText,
     body_html: args.bodyHtml ?? null
   };
+  if (args.sendAtMs) payload.send_at = args.sendAtMs;
   const form = new FormData();
   form.append("payload", JSON.stringify(payload));
-  const data = await missiveFetch<{ thread_id: string; message_id: string }>(
-    "/api/compose",
-    { method: "POST", body: form }
-  );
-  return { threadId: data.thread_id, messageId: data.message_id };
+  // Scheduled sends return { ok: true, scheduled_id } instead of a
+  // thread/message id — handle both shapes.
+  const data = await missiveFetch<{
+    thread_id?: string;
+    message_id?: string;
+    scheduled_id?: string;
+  }>("/api/compose", { method: "POST", body: form });
+  return {
+    threadId: data.thread_id ?? "",
+    messageId: data.message_id ?? data.scheduled_id ?? ""
+  };
 }
 
 // Filter threads by account. The clone's API doesn't expose a per-account

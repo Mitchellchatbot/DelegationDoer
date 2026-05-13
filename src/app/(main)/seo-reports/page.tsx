@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import {
-  Sparkles, Plus, Clock, CheckCircle2, ListChecks, Globe2
+  Sparkles, Plus, Clock, CheckCircle2, ListChecks, Globe2, AlertTriangle, Flame
 } from "lucide-react";
 import { PageHero } from "@/components/PageHero";
 import { SeoReportRequestDialog } from "@/components/SeoReportRequestDialog";
@@ -28,6 +28,29 @@ interface RequestRow {
   last_activity_at: string;
   tags: string[];
 }
+
+// Bucket an open SEO report by how close its due date is. Drives the
+// left-stripe color on each row + the at-the-top urgency banner.
+type DueBucket = "overdue" | "today" | "soon" | "later" | "none";
+function dueBucket(r: { status: string; due_date: string | null }): DueBucket {
+  if (r.status === "done") return "none";
+  if (!r.due_date) return "none";
+  const ms = new Date(r.due_date).getTime();
+  if (Number.isNaN(ms)) return "none";
+  const now = Date.now();
+  const dayMs = 86_400_000;
+  if (ms < now) return "overdue";
+  if (ms < now + dayMs) return "today";
+  if (ms < now + 2 * dayMs) return "soon";
+  return "later";
+}
+const DUE_STRIPE: Record<DueBucket, string> = {
+  overdue: "bg-rose-500",
+  today:   "bg-amber-500",
+  soon:    "bg-blue-400",
+  later:   "bg-slate-200",
+  none:    "bg-transparent"
+};
 
 const STATUS_LABEL: Record<string, { label: string; cls: string }> = {
   pending:           { label: "Pending",            cls: "bg-slate-50 text-slate-700 border-slate-200" },
@@ -55,6 +78,8 @@ export default function SeoReportsPage() {
 
   const open = (requests ?? []).filter((r) => r.status !== "done");
   const done = (requests ?? []).filter((r) => r.status === "done");
+  const overdueCount = open.filter((r) => dueBucket(r) === "overdue").length;
+  const dueTodayCount = open.filter((r) => dueBucket(r) === "today").length;
 
   return (
     <div className="space-y-5 max-w-7xl mx-auto">
@@ -79,6 +104,50 @@ export default function SeoReportsPage() {
       {error && (
         <div className="rounded-2xl border border-urgent/30 bg-urgent/5 p-4 text-sm text-urgent">
           {error}
+        </div>
+      )}
+
+      {(overdueCount > 0 || dueTodayCount > 0) && (
+        <div
+          className={cn(
+            "rounded-2xl border p-4 flex items-center gap-3 shadow-soft",
+            overdueCount > 0
+              ? "border-rose-200/70 bg-gradient-to-r from-rose-50 to-rose-100/40"
+              : "border-amber-200/70 bg-gradient-to-r from-amber-50 to-amber-100/40"
+          )}
+        >
+          <div
+            className={cn(
+              "w-10 h-10 rounded-xl grid place-items-center text-white shadow-sm",
+              overdueCount > 0 ? "bg-rose-500" : "bg-amber-500"
+            )}
+          >
+            {overdueCount > 0 ? (
+              <AlertTriangle className="w-5 h-5" />
+            ) : (
+              <Flame className="w-5 h-5" />
+            )}
+          </div>
+          <div className="text-sm">
+            <div className="font-semibold text-ink">
+              {overdueCount > 0 && (
+                <>
+                  <span className="text-rose-700">{overdueCount} overdue</span>
+                  {dueTodayCount > 0 && (
+                    <span className="text-ink/55 font-normal"> · {dueTodayCount} due today</span>
+                  )}
+                </>
+              )}
+              {overdueCount === 0 && dueTodayCount > 0 && (
+                <span className="text-amber-700">{dueTodayCount} due today</span>
+              )}
+            </div>
+            <div className="text-[12px] text-ink/60 mt-0.5">
+              {overdueCount > 0
+                ? "Heads up SEO — get these out the door before more pile up."
+                : "Same-day deliverables for the SEO team."}
+            </div>
+          </div>
         </div>
       )}
 
@@ -134,10 +203,17 @@ function Section({ title, rows, empty, dim }: {
                 <Link
                   href={`/tasks/${r.id}`}
                   className={cn(
-                    "flex items-center gap-3 rounded-2xl border border-slate-200/70 bg-white px-4 py-3 transition-all hover:-translate-y-0.5 hover:shadow-soft",
+                    "flex items-center gap-3 rounded-2xl border border-slate-200/70 bg-white pl-3 pr-4 py-3 transition-all hover:-translate-y-0.5 hover:shadow-soft relative overflow-hidden",
                     dim && "opacity-70"
                   )}
                 >
+                  <div
+                    aria-hidden
+                    className={cn(
+                      "absolute left-0 top-0 bottom-0 w-1.5",
+                      DUE_STRIPE[dueBucket(r)]
+                    )}
+                  />
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
                       <div className="text-[15px] font-semibold text-ink truncate max-w-md">

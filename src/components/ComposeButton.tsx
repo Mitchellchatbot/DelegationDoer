@@ -4,7 +4,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
-import { PenSquare, Send, X, Loader2 } from "lucide-react";
+import { PenSquare, Send, X, Loader2, Clock } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
@@ -26,6 +26,10 @@ export function ComposeButton({
   const [subject, setSubject] = useState("");
   const [bodyText, setBodyText] = useState("");
   const [showCc, setShowCc] = useState(false);
+  const [scheduleOpen, setScheduleOpen] = useState(false);
+  // <input type="datetime-local"> value: "YYYY-MM-DDTHH:mm" (no seconds,
+  // no zone). We convert to ISO at submit time.
+  const [sendAtLocal, setSendAtLocal] = useState("");
 
   function reset() {
     setTo("");
@@ -33,6 +37,8 @@ export function ComposeButton({
     setSubject("");
     setBodyText("");
     setShowCc(false);
+    setScheduleOpen(false);
+    setSendAtLocal("");
   }
 
   async function submit() {
@@ -50,6 +56,23 @@ export function ComposeButton({
       toast.error("Write something before sending");
       return;
     }
+    // Resolve schedule. datetime-local is interpreted in the user's
+    // local timezone — we convert to a UTC ISO string before sending
+    // so the backend's "is it in the future?" check is unambiguous.
+    let sendAtISO: string | null = null;
+    if (scheduleOpen && sendAtLocal) {
+      const ms = new Date(sendAtLocal).getTime();
+      if (Number.isNaN(ms)) {
+        toast.error("Pick a valid date + time to schedule");
+        return;
+      }
+      if (ms <= Date.now() + 30_000) {
+        toast.error("Schedule a time at least a minute from now (or turn off scheduling)");
+        return;
+      }
+      sendAtISO = new Date(ms).toISOString();
+    }
+
     setBusy(true);
     try {
       const res = await fetch("/api/inboxes/compose", {
@@ -60,7 +83,8 @@ export function ComposeButton({
           to: toList,
           cc: ccList,
           subject: subject.trim(),
-          bodyText: bodyText
+          bodyText: bodyText,
+          ...(sendAtISO ? { sendAt: sendAtISO } : {})
         })
       });
       const data = await res.json();
@@ -68,7 +92,7 @@ export function ComposeButton({
         toast.error(data.error ?? "couldn't send");
         return;
       }
-      toast.success("Sent ✉️");
+      toast.success(sendAtISO ? `Scheduled for ${new Date(sendAtISO).toLocaleString()}` : "Sent ✉️");
       reset();
       setOpen(false);
       router.refresh();
@@ -201,28 +225,64 @@ export function ComposeButton({
                   />
                 </div>
 
-                <footer className="px-4 py-3 border-t border-slate-100 flex items-center justify-end gap-2 bg-slate-50/60">
-                  <Dialog.Close asChild>
+                <footer className="px-4 py-3 border-t border-slate-100 flex items-center justify-between gap-2 bg-slate-50/60 flex-wrap">
+                  <div className="flex items-center gap-2">
                     <button
                       type="button"
-                      className="px-3 py-1.5 rounded-full text-xs font-medium text-ink/70 hover:text-ink hover:bg-white transition-colors"
+                      onClick={() => setScheduleOpen((v) => !v)}
+                      className={cn(
+                        "inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-full text-[11px] font-medium border transition-colors",
+                        scheduleOpen
+                          ? "bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100"
+                          : "bg-white text-ink/65 border-slate-200 hover:text-ink hover:border-slate-300"
+                      )}
+                      title="Schedule this email instead of sending now"
                     >
-                      Discard
+                      <Clock className="w-3 h-3" />
+                      {scheduleOpen ? "Scheduled" : "Schedule send"}
                     </button>
-                  </Dialog.Close>
-                  <button
-                    type="button"
-                    onClick={submit}
-                    disabled={busy}
-                    className={cn(
-                      "inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs font-semibold text-white shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-lift active:scale-95",
-                      busy && "opacity-60 cursor-not-allowed hover:translate-y-0"
+                    {scheduleOpen && (
+                      <input
+                        type="datetime-local"
+                        value={sendAtLocal}
+                        onChange={(e) => setSendAtLocal(e.target.value)}
+                        className="text-[11px] bg-white border border-slate-200 rounded-lg px-2 py-1 outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent/40"
+                        min={new Date(Date.now() + 60_000).toISOString().slice(0, 16)}
+                      />
                     )}
-                    style={{ background: "linear-gradient(135deg, #2563EB 0%, #1e63ff 100%)" }}
-                  >
-                    {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
-                    {busy ? "Sending…" : "Send"}
-                  </button>
+                  </div>
+
+                  <div className="flex items-center gap-2 ml-auto">
+                    <Dialog.Close asChild>
+                      <button
+                        type="button"
+                        className="px-3 py-1.5 rounded-full text-xs font-medium text-ink/70 hover:text-ink hover:bg-white transition-colors"
+                      >
+                        Discard
+                      </button>
+                    </Dialog.Close>
+                    <button
+                      type="button"
+                      onClick={submit}
+                      disabled={busy}
+                      className={cn(
+                        "inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs font-semibold text-white shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-lift active:scale-95",
+                        busy && "opacity-60 cursor-not-allowed hover:translate-y-0"
+                      )}
+                      style={{ background: "linear-gradient(135deg, #2563EB 0%, #1e63ff 100%)" }}
+                    >
+                      {busy ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      ) : scheduleOpen ? (
+                        <Clock className="w-3.5 h-3.5" />
+                      ) : (
+                        <Send className="w-3.5 h-3.5" />
+                      )}
+                      {busy
+                        ? scheduleOpen ? "Scheduling…" : "Sending…"
+                        : scheduleOpen ? "Schedule" : "Send"}
+                    </button>
+                  </div>
                 </footer>
               </motion.div>
             </Dialog.Content>

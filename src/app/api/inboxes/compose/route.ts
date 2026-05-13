@@ -51,6 +51,24 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "forbidden" }, { status: 403 });
     }
 
+    // Optional scheduled send. Frontend passes an ISO string; the
+    // missive clone interprets `send_at` epoch-ms via composeNewThread.
+    const sendAt = typeof body.sendAt === "string" ? body.sendAt : null;
+    let sendAtMs: number | undefined;
+    if (sendAt) {
+      const ms = new Date(sendAt).getTime();
+      if (Number.isNaN(ms)) {
+        return NextResponse.json({ error: "sendAt is not a valid date" }, { status: 400 });
+      }
+      if (ms <= Date.now() + 30_000) {
+        return NextResponse.json(
+          { error: "sendAt must be at least 30s in the future" },
+          { status: 400 }
+        );
+      }
+      sendAtMs = ms;
+    }
+
     const result = await composeNewThread({
       fromAccountId: accountId,
       to,
@@ -58,10 +76,16 @@ export async function POST(req: NextRequest) {
       bcc,
       subject,
       bodyText,
-      bodyHtml: typeof body.bodyHtml === "string" ? body.bodyHtml : undefined
+      bodyHtml: typeof body.bodyHtml === "string" ? body.bodyHtml : undefined,
+      sendAtMs
     });
 
-    return NextResponse.json({ ok: true, ...result });
+    return NextResponse.json({
+      ok: true,
+      scheduled: !!sendAtMs,
+      sendAt: sendAtMs ? new Date(sendAtMs).toISOString() : null,
+      ...result
+    });
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "unknown error" },

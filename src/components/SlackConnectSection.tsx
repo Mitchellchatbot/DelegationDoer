@@ -3,7 +3,7 @@
 import { Suspense, useEffect, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { Slack, CheckCircle2, Loader2, Link2Off } from "lucide-react";
+import { Slack, CheckCircle2, Loader2, Link2Off, Zap } from "lucide-react";
 
 interface SlackStatus {
   connected: boolean;
@@ -72,6 +72,27 @@ function SlackCard() {
     window.location.href = "/api/integrations/slack/start";
   }
 
+  async function testSync() {
+    setBusy(true);
+    try {
+      const res = await fetch("/api/integrations/slack/test", {
+        method: "POST"
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error ?? `failed (${res.status})`);
+      const p = data.pushed;
+      toast.success(
+        p?.statusText || p?.statusEmoji
+          ? `Pushed: ${p.statusEmoji} ${p.statusText || "(no text)"}`
+          : "Pushed: cleared status"
+      );
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "couldn't push");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function disconnect() {
     setBusy(true);
     try {
@@ -131,15 +152,27 @@ function SlackCard() {
               Loading
             </button>
           ) : status.connected ? (
-            <button
-              type="button"
-              onClick={disconnect}
-              disabled={busy}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold text-ink/70 border border-slate-200 bg-white hover:bg-slate-50 hover:text-ink transition-colors disabled:opacity-60"
-            >
-              {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Link2Off className="w-3.5 h-3.5" />}
-              Disconnect
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={testSync}
+                disabled={busy}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold text-blue-700 border border-blue-200 bg-blue-50 hover:bg-blue-100 transition-colors disabled:opacity-60"
+                title="Push the current widget status to Slack now"
+              >
+                {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
+                Push now
+              </button>
+              <button
+                type="button"
+                onClick={disconnect}
+                disabled={busy}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold text-ink/70 border border-slate-200 bg-white hover:bg-slate-50 hover:text-ink transition-colors disabled:opacity-60"
+              >
+                {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Link2Off className="w-3.5 h-3.5" />}
+                Disconnect
+              </button>
+            </div>
           ) : (
             <button
               type="button"

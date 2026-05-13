@@ -1,12 +1,41 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { Briefcase, Globe2, Calendar, FileText, Lightbulb, ExternalLink, ListChecks } from "lucide-react";
+import {
+  Briefcase, Globe2, Calendar, FileText, Lightbulb, ExternalLink, ListChecks,
+  Mail, CheckCircle2
+} from "lucide-react";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { getClient, getResourcesForClient, type ClientResource } from "@/lib/clients-data";
 import { BackPill } from "@/components/BackPill";
 import { AddResourceForm, DeleteResourceButton } from "@/components/AddResourceForm";
+import { requireCurrentUserId } from "@/lib/session";
+import { getUserById } from "@/lib/server-data";
+import { visibleAccountIdsFor } from "@/lib/inbox-access";
+import { listAccounts, listThreads } from "@/lib/missive-client";
 
 export const dynamic = "force-dynamic";
+
+// Strip protocol/www/path off a website string and return the bare
+// hostname, lowercased — e.g. "https://www.rwu.com/about" → "rwu.com".
+// Used to match inbound emails to clients by sender domain.
+function extractDomain(website: string | null | undefined): string | null {
+  if (!website) return null;
+  const cleaned = website
+    .trim()
+    .replace(/^https?:\/\//i, "")
+    .replace(/^www\./i, "")
+    .split("/")[0]
+    .split(":")[0]
+    .toLowerCase();
+  return cleaned || null;
+}
+
+// Pull the lower-cased email address out of a "Name <addr>" string,
+// or fall back to the raw value when it doesn't include angle brackets.
+function parseEmail(addr: string): string {
+  const m = addr.match(/<([^>]+)>/);
+  return (m ? m[1] : addr).trim().toLowerCase();
+}
 
 const PRIORITY_TONES = {
   high:   "bg-blue-100 text-blue-700 border-blue-200/60",
@@ -18,18 +47,97 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
   const client = await getClient(params.id);
   if (!client) notFound();
 
-  const [resources, openTasks] = await Promise.all([
+  const userId = await requireCurrentUserId();
+  const me = await getUserById(userId);
+  const domain = extractDomain(client.website);
+
+  const supabase = getSupabaseAdmin();
+  const [resources, openTasksRes, doneTasksRes, visibleIds] = await Promise.all([
     getResourcesForClient(client.id),
-    // Tasks linked to this client by free-text name match. Limited to non-done.
-    getSupabaseAdmin()
+    // Open tasks for this client — by free-text name match (legacy linkage).
+    supabase
       .from("tasks")
       .select("id, title, status, priority, due_date")
       .eq("client_name", client.name)
       .neq("status", "done")
       .order("due_date", { ascending: true })
       .limit(20)
-      .then((r) => r.data ?? [])
+      .then((r) => r.data ?? []),
+    // Closed/done tasks for the "history" view.
+    supabase
+      .from("tasks")
+      .select("id, title, status, priority, last_activity_at")
+      .eq("client_name", client.name)
+      .eq("status", "done")
+      .order("last_activity_at", { ascending: false })
+      .limit(20)
+      .then((r) => r.data ?? []),
+    me ? visibleAccountIdsFor(me) : Promise.resolve(new Set<string>())
   ]);
+
+  // Email history — match by sender/recipient domain so anything from
+  // or to *@client-domain surfaces here regardless of which inbox it
+  // landed in. Scoped to the user's visible inboxes via account_emails
+  // so workers don't see threads from inboxes they couldn't otherwise
+  // reach.
+  let clientThreads: {
+    id: string;
+    subject: string;
+    accountId: string;
+    lastAt: string;
+    participants: string[];
+    status: string;
+  }[] = [];
+  if (domain) {
+    try {
+      const [allThreads, accounts] = await Promise.all([
+        listThreads({ folder: "INBOX", limit: 400 }),
+        listAccounts()
+      ]);
+      const accountIdByEmail = new Map(
+        accounts.map((a) => [a.email.toLowerCase(), a.id])
+      );
+
+      clientThreads = allThreads
+        .map((t) => {
+          // Pick the first connected-account email that the user can see
+          // for the deep-link. Without one, the user can't navigate to
+          // the thread anyway, so skip it.
+          const visibleAccountEmail = (t.account_emails ?? []).find((ae) => {
+            const accId = accountIdByEmail.get(ae.email.toLowerCase());
+            if (!accId) return false;
+            return visibleIds === null || visibleIds.has(accId);
+          });
+          if (!visibleAccountEmail) return null;
+          const accountId = accountIdByEmail.get(
+            visibleAccountEmail.email.toLowerCase()
+          )!;
+
+          const matches = (t.participants ?? []).some((p) =>
+            parseEmail(p).endsWith(`@${domain}`)
+          );
+          if (!matches) return null;
+
+          return {
+            id: t.id,
+            subject: t.subject || "(no subject)",
+            accountId,
+            lastAt: t.last_message_at,
+            participants: t.participants ?? [],
+            status: t.status as string
+          };
+        })
+        .filter((t): t is NonNullable<typeof t> => t !== null)
+        .sort(
+          (a, b) =>
+            new Date(b.lastAt).getTime() - new Date(a.lastAt).getTime()
+        )
+        .slice(0, 20);
+    } catch {
+      // missive clone down / unreachable — surface a softer empty state.
+      clientThreads = [];
+    }
+  }
 
   const meetings    = resources.filter((r) => r.kind === "meeting");
   const documents   = resources.filter((r) => r.kind === "document");
@@ -137,7 +245,7 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
         icon={<ListChecks className="w-4 h-4" />}
         tone="purple"
         empty="No open tasks linked to this client."
-        items={openTasks as { id: string; title: string; status: string; priority: string; due_date: string | null }[]}
+        items={openTasksRes as { id: string; title: string; status: string; priority: string; due_date: string | null }[]}
         renderItem={(t) => (
           <Link
             key={t.id}
@@ -148,6 +256,65 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
             <span className="text-[10px] px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700 border border-indigo-200/60 capitalize">
               {t.status.replace("_", " ")}
             </span>
+          </Link>
+        )}
+      />
+
+      <Section
+        title="Email history"
+        icon={<Mail className="w-4 h-4" />}
+        tone="blue"
+        empty={
+          domain
+            ? `No threads matching @${domain} in any inbox you can see.`
+            : "Add a website to this client to surface their email history here."
+        }
+        items={clientThreads}
+        renderItem={(t) => (
+          <Link
+            key={t.id}
+            href={`/inboxes/${t.accountId}/threads/${t.id}`}
+            className="group flex items-center gap-2 p-2.5 rounded-xl bg-white/80 border border-white/70 hover:border-blue-200 hover:bg-blue-50/40 transition-colors"
+          >
+            <Mail className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+            <div className="min-w-0 flex-1">
+              <div className="text-sm truncate group-hover:text-accent">{t.subject}</div>
+              <div className="text-[10px] text-ink/55 truncate">
+                {t.participants.slice(0, 2).join(", ")}
+                {t.participants.length > 2 ? ` +${t.participants.length - 2}` : ""}
+              </div>
+            </div>
+            <div className="text-[10px] text-ink/55 shrink-0 tabular-nums">
+              {new Date(t.lastAt).toLocaleDateString(undefined, {
+                month: "short", day: "numeric"
+              })}
+            </div>
+            <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 border border-blue-200/60 capitalize shrink-0">
+              {t.status}
+            </span>
+          </Link>
+        )}
+      />
+
+      <Section
+        title="Completed tasks"
+        icon={<CheckCircle2 className="w-4 h-4" />}
+        tone="indigo"
+        empty="No completed tasks yet."
+        items={doneTasksRes as { id: string; title: string; status: string; priority: string; last_activity_at: string }[]}
+        renderItem={(t) => (
+          <Link
+            key={t.id}
+            href={`/tasks/${t.id}`}
+            className="group flex items-center gap-2 p-2.5 rounded-xl bg-white/80 border border-white/70 hover:border-emerald-200 hover:bg-emerald-50/40 transition-colors"
+          >
+            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+            <div className="text-sm flex-1 truncate group-hover:text-accent">{t.title}</div>
+            <div className="text-[10px] text-ink/55 shrink-0 tabular-nums">
+              {new Date(t.last_activity_at).toLocaleDateString(undefined, {
+                month: "short", day: "numeric"
+              })}
+            </div>
           </Link>
         )}
       />

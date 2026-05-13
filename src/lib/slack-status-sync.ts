@@ -40,13 +40,24 @@ export async function syncUserStatusToSlack(userId: string): Promise<void> {
   const presence = (user.presence ?? "available") as keyof typeof PRESENCE_TO_SLACK;
   const fromPresence = PRESENCE_TO_SLACK[presence] ?? PRESENCE_TO_SLACK.available;
   const overrideEmoji = (user.status_emoji ?? "").trim();
-  const statusText = fromPresence.text;
+  // Precedence:
+  //   - If you're on a defined preset (focus/eating/away), the
+  //     preset's emoji + text win. That way changing your presence
+  //     in the widget actually changes the Slack emoji instead of
+  //     getting overridden by a sticky custom emoji from earlier.
+  //   - If you're "available" (no preset), your custom emoji shows
+  //     with no status text.
   // Slack expects :colon: shortcodes — the widget stores raw glyphs,
-  // so translate before pushing. PRESENCE_TO_SLACK is already in
-  // shortcode form so it passes through unchanged.
-  const statusEmoji = overrideEmoji
-    ? toSlackEmojiShortcode(overrideEmoji)
-    : fromPresence.emoji;
+  // so translate at the boundary.
+  let statusText: string;
+  let statusEmoji: string;
+  if (presence === "available") {
+    statusText = "";
+    statusEmoji = overrideEmoji ? toSlackEmojiShortcode(overrideEmoji) : "";
+  } else {
+    statusText = fromPresence.text;
+    statusEmoji = fromPresence.emoji;
+  }
 
   let okFlag = false;
   let msg = `pushed ${presence}: ${statusEmoji || "(no emoji)"} ${statusText || "(no text)"}`;

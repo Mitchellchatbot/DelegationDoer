@@ -17,7 +17,7 @@ export async function GET() {
     {
       const { data, error } = await supabase
         .from("users")
-        .select("id, name, email, avatar_url, role, widget_icon_url, slack_user_id, slack_team_id, slack_connected_at, birthday, onboarded_at, slack_last_sync_at, slack_last_sync_ok, slack_last_sync_msg, google_user_id, google_email, google_connected_at")
+        .select("id, name, email, avatar_url, role, widget_icon_url, slack_user_id, slack_team_id, slack_connected_at, birthday, onboarded_at, slack_last_sync_at, slack_last_sync_ok, slack_last_sync_msg, google_user_id, google_email, google_connected_at, clock_enabled")
         .eq("id", userId)
         .maybeSingle();
       if (!error && data) row = data;
@@ -50,7 +50,8 @@ export async function GET() {
         slackLastSyncMsg: (row.slack_last_sync_msg as string | null) ?? null,
         googleUserId: (row.google_user_id as string | null) ?? null,
         googleEmail: (row.google_email as string | null) ?? null,
-        googleConnectedAt: (row.google_connected_at as string | null) ?? null
+        googleConnectedAt: (row.google_connected_at as string | null) ?? null,
+        clockEnabled: (row.clock_enabled as boolean | null) ?? true
       }
     });
   } catch (err) {

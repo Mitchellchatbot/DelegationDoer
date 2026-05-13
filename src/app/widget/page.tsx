@@ -1194,8 +1194,27 @@ function ClockProvider({ children }: { children: React.ReactNode }) {
 }
 
 function ClockSection() {
+  // Leader can turn the clock off per user (salaried roles etc.). When
+  // disabled, this whole block disappears from the widget and the
+  // workday-remaining math is irrelevant. We poll once on mount and
+  // skip the section if clock_enabled is false.
+  const [clockEnabled, setClockEnabled] = useState<boolean | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/users/me", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (cancelled) return;
+        const enabled = d?.user?.clockEnabled;
+        setClockEnabled(enabled === false ? false : true);
+      })
+      .catch(() => setClockEnabled(true));
+    return () => { cancelled = true; };
+  }, []);
+
   const { clock, toggleShift, tick } = useClock();
   void tick;
+  if (clockEnabled === false) return null;
   const open = clock.open;
   const liveElapsed = open ? Date.now() - new Date(open.startedAt).getTime() : 0;
   // Workday remaining ticks down live while on shift. We anchor it to the
@@ -1436,13 +1455,17 @@ function Panel({
 
         <PresenceRow />
         <ClockSection />
-        {eom.isMe && <EomBanner month={eom.month} />}
-        {birthdays.celebrantsToday.length > 0 && (
-          <BirthdayBanner celebrants={birthdays.celebrantsToday} />
-        )}
-        {!birthdays.hasBirthday && <BirthdayPrompt onSaved={onUpdated} />}
 
+        {/* Everything below scrolls — including kudos, banners, birthdays,
+            today's focus, and the task list. Status + clock stay pinned
+            up top so the widget always shows the bits the user needs to
+            interact with first, even when the task list grows long. */}
         <div className="flex-1 overflow-y-auto">
+          {eom.isMe && <EomBanner month={eom.month} />}
+          {birthdays.celebrantsToday.length > 0 && (
+            <BirthdayBanner celebrants={birthdays.celebrantsToday} />
+          )}
+          {!birthdays.hasBirthday && <BirthdayPrompt onSaved={onUpdated} />}
           {kudos.length > 0 && (
             <div className="px-3 pt-3">
               <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-fuchsia-600 mb-2 inline-flex items-center gap-1.5">

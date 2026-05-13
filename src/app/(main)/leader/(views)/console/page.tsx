@@ -169,6 +169,10 @@ function PeopleTab({
   // Fetch once when the tab mounts. The /api/tasks route already
   // returns the org-wide snapshot.
   const [liveTasks, setLiveTasks] = useState<Task[] | null>(null);
+  // Per-user clock-enabled flag. Lives next to the User shape but
+  // isn't part of types.User, so we track it separately. Pulled from
+  // /api/users which already returns clockEnabled per row.
+  const [clockEnabled, setClockEnabled] = useState<Record<string, boolean>>({});
   useEffect(() => {
     let cancelled = false;
     fetch("/api/tasks", { cache: "no-store" })
@@ -178,6 +182,15 @@ function PeopleTab({
         if (data?.tasks) setLiveTasks(data.tasks as Task[]);
       })
       .catch(() => { /* leave null → falls back to mock */ });
+    fetch("/api/users", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (cancelled || !Array.isArray(data?.users)) return;
+        const ce: Record<string, boolean> = {};
+        for (const u of data.users) ce[u.id] = u.clockEnabled !== false;
+        setClockEnabled(ce);
+      })
+      .catch(() => { /* leave empty → renders as default-on */ });
     return () => { cancelled = true; };
   }, []);
 
@@ -186,7 +199,7 @@ function PeopleTab({
   // about state we couldn't actually persist.
   async function persistUser(
     id: string,
-    patch: { role?: Role; departmentIds?: string[] },
+    patch: { role?: Role; departmentIds?: string[]; clockEnabled?: boolean },
     prev: User[]
   ) {
     try {
@@ -210,6 +223,26 @@ function PeopleTab({
     setPeople(prev.map((u) => u.id === id ? { ...u, role } : u));
     void persistUser(id, { role }, prev);
   }
+  async function toggleClock(id: string) {
+    const prev = clockEnabled;
+    const next = !(prev[id] ?? true);
+    setClockEnabled({ ...prev, [id]: next });
+    try {
+      const res = await fetch(`/api/users/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ clockEnabled: next })
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        throw new Error(d?.error || `HTTP ${res.status}`);
+      }
+    } catch (err) {
+      toast.error(`Couldn't save — ${err instanceof Error ? err.message : "unknown error"}`);
+      setClockEnabled(prev);
+    }
+  }
+
   function toggleDept(id: string, deptId: string) {
     const prev = people;
     let nextDepartmentIds: string[] = [];
@@ -253,6 +286,7 @@ function PeopleTab({
               <th className="px-4 py-2.5 font-normal">Role</th>
               <th className="px-4 py-2.5 font-normal">Departments</th>
               <th className="px-4 py-2.5 font-normal">Reports to</th>
+              <th className="px-4 py-2.5 font-normal text-center" title="Whether this person needs to clock in/out via the widget">Clock</th>
               <th className="px-4 py-2.5 font-normal text-right">Actions</th>
             </tr>
           </thead>
@@ -325,6 +359,12 @@ function PeopleTab({
                     </div>
                   </td>
                   <td className="px-4 py-3 text-muted">{reportsTo}</td>
+                  <td className="px-4 py-3 text-center">
+                    <ClockSwitch
+                      enabled={clockEnabled[u.id] ?? true}
+                      onToggle={() => toggleClock(u.id)}
+                    />
+                  </td>
                   <td className="px-4 py-3 text-right">
                     <div className="inline-flex items-center gap-1.5 justify-end">
                       {/* Magic link works on the current user too (handy
@@ -353,7 +393,7 @@ function PeopleTab({
                 {isExpanded && (
                   <tr className="bg-slate-50/40">
                     <td className="w-8" />
-                    <td colSpan={5} className="px-4 py-3">
+                    <td colSpan={6} className="px-4 py-3">
                       <PersonTaskList userId={u.id} tasks={liveTasks} />
                     </td>
                   </tr>
@@ -456,6 +496,33 @@ function PersonTaskList({ userId, tasks: liveTasks }: { userId: string; tasks: T
         </div>
       )}
     </div>
+  );
+}
+
+function ClockSwitch({
+  enabled, onToggle
+}: { enabled: boolean; onToggle: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      role="switch"
+      aria-checked={enabled}
+      title={enabled ? "Clocking in: required. Click to switch off." : "Clocking in: not required. Click to switch on."}
+      className={
+        "relative inline-flex items-center w-9 h-5 rounded-full border transition-colors " +
+        (enabled
+          ? "bg-emerald-500 border-emerald-600 hover:bg-emerald-600"
+          : "bg-slate-200 border-slate-300 hover:bg-slate-300")
+      }
+    >
+      <span
+        className={
+          "absolute top-[1px] w-[16px] h-[16px] rounded-full bg-white shadow-sm transition-transform " +
+          (enabled ? "translate-x-[18px]" : "translate-x-[1px]")
+        }
+      />
+    </button>
   );
 }
 

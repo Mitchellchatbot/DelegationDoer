@@ -46,6 +46,20 @@ export async function PATCH(
       }
     }
 
+    // ---- clock enabled toggle ----
+    if (typeof body.clockEnabled === "boolean") {
+      const { error: clockErr } = await supabase
+        .from("users")
+        .update({ clock_enabled: body.clockEnabled })
+        .eq("id", params.id);
+      if (clockErr) {
+        return NextResponse.json(
+          { error: `clock toggle: ${clockErr.message}` },
+          { status: 500 }
+        );
+      }
+    }
+
     // ---- department memberships (replace) ----
     if (Array.isArray(body.departmentIds)) {
       const departmentIds: string[] = body.departmentIds.filter(

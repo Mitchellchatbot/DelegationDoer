@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
+import { motion, LayoutGroup } from "framer-motion";
 import { Sparkles, Search, ShieldAlert, Camera, FolderKanban } from "lucide-react";
 import { useCurrentUser } from "@/lib/user-context";
 import { isLeader } from "@/lib/auth";
@@ -77,45 +78,55 @@ export function UpdatesTabs() {
   }, [canSeeSeo, canSeeProjects]);
 
   return (
-    <div className="inline-flex items-center rounded-xl border border-border bg-surface p-0.5">
-      {tabs.map(({ href, label, icon: Icon }) => {
-        const active = pathname === href || pathname.startsWith(href + "/");
-        let badge: number | null = null;
-        let badgeTitle = "";
-        if (href === "/updates/seo" && (openSeoCount ?? 0) > 0) {
-          badge = openSeoCount;
-          badgeTitle = `${openSeoCount} open SEO ${openSeoCount === 1 ? "request" : "requests"}`;
-        } else if (href === "/updates/projects" && (unseenProjects ?? 0) > 0) {
-          badge = unseenProjects;
-          badgeTitle = `${unseenProjects} new project ${unseenProjects === 1 ? "update" : "updates"}`;
-        }
-        return (
-          <Link
-            key={href}
-            href={href}
-            className={cn(
-              "relative inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs transition-colors",
-              active ? "bg-accent text-white" : "text-muted hover:text-ink hover:bg-surface2"
-            )}
-          >
-            <Icon className="w-3.5 h-3.5" />
-            {label}
-            {badge !== null && (
-              <span
-                className={cn(
-                  "ml-0.5 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-bold tabular-nums",
-                  active
-                    ? "bg-white text-accent"
-                    : "bg-rose-500 text-white"
-                )}
-                title={badgeTitle}
-              >
-                {badge}
-              </span>
-            )}
-          </Link>
-        );
-      })}
-    </div>
+    <LayoutGroup id="updates-tabs">
+      <div className="inline-flex items-center rounded-xl border border-border bg-surface p-0.5">
+        {tabs.map(({ href, label, icon: Icon }) => {
+          const active = pathname === href || pathname.startsWith(href + "/");
+          let badge: number | null = null;
+          let badgeTitle = "";
+          if (href === "/updates/seo" && (openSeoCount ?? 0) > 0) {
+            badge = openSeoCount;
+            badgeTitle = `${openSeoCount} open SEO ${openSeoCount === 1 ? "request" : "requests"}`;
+          } else if (href === "/updates/projects" && (unseenProjects ?? 0) > 0) {
+            badge = unseenProjects;
+            badgeTitle = `${unseenProjects} new project ${unseenProjects === 1 ? "update" : "updates"}`;
+          }
+          return (
+            <Link
+              key={href}
+              href={href}
+              prefetch
+              className={cn(
+                "relative inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs transition-colors z-0",
+                active ? "text-white" : "text-muted hover:text-ink"
+              )}
+            >
+              {active && (
+                <motion.span
+                  layoutId="updates-tab-blob"
+                  transition={{ type: "spring", stiffness: 500, damping: 36 }}
+                  className="absolute inset-0 -z-10 rounded-lg bg-accent shadow-sm"
+                />
+              )}
+              <Icon className="w-3.5 h-3.5 relative" />
+              <span className="relative">{label}</span>
+              {badge !== null && (
+                <span
+                  className={cn(
+                    "relative ml-0.5 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-bold tabular-nums",
+                    active
+                      ? "bg-white text-accent"
+                      : "bg-rose-500 text-white"
+                  )}
+                  title={badgeTitle}
+                >
+                  {badge}
+                </span>
+              )}
+            </Link>
+          );
+        })}
+      </div>
+    </LayoutGroup>
   );
 }

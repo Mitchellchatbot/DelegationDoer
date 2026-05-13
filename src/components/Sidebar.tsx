@@ -59,6 +59,36 @@ export function Sidebar({ user }: { user: User }) {
   const [incidentOpen, setIncidentOpen] = useState(false);
   const [aiOpen, setAiOpen] = useState(false);
 
+  // Open SEO request count — surfaces as a small red pill next to
+  // the Updates nav item for anyone on the SEO team (or leader) so a
+  // new request lights up the sidebar even when they're in another
+  // section of the app.
+  const canSeeSeo = isLeader(user) || (user.departmentIds ?? []).includes("dep_seo");
+  const [openSeoCount, setOpenSeoCount] = useState<number | null>(null);
+  useEffect(() => {
+    if (!canSeeSeo) return;
+    let cancelled = false;
+    async function fetchCount() {
+      try {
+        const res = await fetch("/api/seo-reports/summary", { cache: "no-store" });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!cancelled) setOpenSeoCount(data.openCount ?? 0);
+      } catch { /* ignore */ }
+    }
+    fetchCount();
+    const t = setInterval(() => {
+      if (document.visibilityState === "visible") fetchCount();
+    }, 30_000);
+    const onVis = () => { if (document.visibilityState === "visible") fetchCount(); };
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, [canSeeSeo]);
+
   // ⌘K / Ctrl+K opens the Ask AI drawer — wires up the hint shown on
   // the button. Suppressed when the user is mid-edit (so it doesn't
   // hijack the shortcut for text fields that legitimately want it).
@@ -127,6 +157,10 @@ export function Sidebar({ user }: { user: User }) {
             const Icon = item.icon;
             const active = path === item.href || (item.href !== "/" && path.startsWith(item.href));
             const tone = TONE_STYLES[item.tone];
+            const seoBadge =
+              item.href === "/updates" && canSeeSeo && (openSeoCount ?? 0) > 0
+                ? openSeoCount
+                : null;
             return (
               <Link
                 key={item.href}
@@ -140,7 +174,15 @@ export function Sidebar({ user }: { user: User }) {
               >
                 <Icon className={cn("w-[18px] h-[18px] shrink-0", active ? tone.activeFg : tone.idle)} />
                 {item.label}
-                {active && (
+                {seoBadge !== null && (
+                  <span
+                    className="ml-auto inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full text-[10px] font-bold tabular-nums bg-rose-500 text-white shadow-sm ring-2 ring-white"
+                    title={`${seoBadge} open SEO ${seoBadge === 1 ? "request" : "requests"}`}
+                  >
+                    {seoBadge}
+                  </span>
+                )}
+                {active && seoBadge === null && (
                   <motion.span
                     layoutId="sidebar-active-dot"
                     className={cn("absolute right-3 w-1.5 h-1.5 rounded-full", tone.activeFg.replace("text-", "bg-"))}

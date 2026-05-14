@@ -20,7 +20,7 @@ export async function GET(
     const [{ data: target }, { data: viewer }] = await Promise.all([
       supabase
         .from("users")
-        .select("id, name, email, avatar_url, role, personal_email, phone, job_title, location, bio, pronouns, birthday")
+        .select("id, name, email, avatar_url, role, personal_email, phone, job_title, location, bio, pronouns, birthday, work_hours_start, work_hours_end, work_timezone")
         .eq("id", params.id)
         .maybeSingle(),
       supabase
@@ -50,7 +50,12 @@ export async function GET(
         // elsewhere); the full date stays private to self.
         birthday: isSelf ? ((target.birthday as string | null) ?? null) : null,
         personalEmail: canSeePrivate ? ((target.personal_email as string | null) ?? null) : null,
-        phone: canSeePrivate ? ((target.phone as string | null) ?? null) : null
+        phone: canSeePrivate ? ((target.phone as string | null) ?? null) : null,
+        // Work hours are workspace-public — teammates need to know
+        // when you're around. Stored in your own tz; viewer converts.
+        workHoursStart: (target.work_hours_start as string | null) ?? null,
+        workHoursEnd: (target.work_hours_end as string | null) ?? null,
+        workTimezone: (target.work_timezone as string | null) ?? null
       },
       viewer: {
         isSelf,

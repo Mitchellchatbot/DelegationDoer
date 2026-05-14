@@ -4,17 +4,27 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-  Sparkles, Camera, Cake, ChevronRight, Check, Loader2, Upload, SkipForward
+  Sparkles, Camera, Cake, ChevronRight, Check, Loader2, Upload, SkipForward,
+  Briefcase, Clock, Globe, Mail
 } from "lucide-react";
 import { toast } from "sonner";
 import { Avatar } from "./Avatar";
+import { detectTimezone, formatHHMMInViewerTz, viewerTzAbbrev, tzShortLabel } from "@/lib/work-hours";
 
 interface MeShape {
   id: string;
   name: string;
+  email: string;
   avatarUrl: string | null;
   birthday: string | null;
   onboardedAt: string | null;
+  jobTitle: string | null;
+  location: string | null;
+  pronouns: string | null;
+  personalEmail: string | null;
+  workHoursStart: string | null;
+  workHoursEnd: string | null;
+  workTimezone: string | null;
 }
 
 // First-login onboarding wizard. Pops once for any user whose
@@ -26,12 +36,22 @@ interface MeShape {
 // Mounted at the (main) layout level so it shows up on whichever page
 // they land on after sign-in. Lives client-side so it can do the
 // file upload without round-tripping the page.
+type Step = "avatar" | "birthday" | "workinfo";
+
 export function OnboardingDialog() {
   const [me, setMe] = useState<MeShape | null>(null);
   const [open, setOpen] = useState(false);
-  const [step, setStep] = useState<"avatar" | "birthday">("avatar");
+  const [step, setStep] = useState<Step>("avatar");
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
   const [birthday, setBirthday] = useState<string>("");
+  // Step 3 — work info. All optional.
+  const [jobTitle, setJobTitle] = useState("");
+  const [location, setLocation] = useState("");
+  const [pronouns, setPronouns] = useState("");
+  const [personalEmail, setPersonalEmail] = useState("");
+  const [workStart, setWorkStart] = useState("09:00");
+  const [workEnd, setWorkEnd] = useState("17:00");
+  const [workTz, setWorkTz] = useState<string>(() => detectTimezone());
   const [busy, setBusy] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -110,6 +130,41 @@ export function OnboardingDialog() {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error ?? `failed (${res.status})`);
       toast.success("Birthday saved");
+      goNextOrFinish();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "couldn't save");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveWorkInfo() {
+    setBusy(true);
+    try {
+      const trim = (s: string) => s.trim() || null;
+      const patch: Record<string, unknown> = {
+        jobTitle: trim(jobTitle),
+        location: trim(location),
+        pronouns: trim(pronouns),
+        personalEmail: trim(personalEmail),
+        workHoursStart: workStart,
+        workHoursEnd: workEnd,
+        workTimezone: workTz
+      };
+      // Drop the null entries — sending nulls clears any pre-existing
+      // values which we don't want during onboarding.
+      for (const k of Object.keys(patch)) if (patch[k] === null) delete patch[k];
+      if (Object.keys(patch).length > 0) {
+        const res = await fetch("/api/users/me", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(patch)
+        });
+        if (!res.ok) {
+          const d = await res.json().catch(() => null);
+          throw new Error(d?.error ?? `failed (${res.status})`);
+        }
+      }
       finish();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "couldn't save");
@@ -129,6 +184,7 @@ export function OnboardingDialog() {
 
   function goNextOrFinish() {
     if (step === "avatar") setStep("birthday");
+    else if (step === "birthday") setStep("workinfo");
     else finish();
   }
 
@@ -183,18 +239,29 @@ export function OnboardingDialog() {
                     Hi {me.name.split(" ")[0]} — let&apos;s set you up
                   </Dialog.Title>
                   <Dialog.Description className="text-sm text-ink/65 mt-1">
-                    Two quick things so your teammates can recognize you and we
-                    can celebrate your birthday.
+                    A few quick things so your teammates can recognize you,
+                    celebrate your birthday, and know when you&apos;re around.
                   </Dialog.Description>
                   <div className="mt-4 flex items-center gap-1.5">
-                    <StepDot active={step === "avatar"} done={step === "birthday"} />
+                    <StepDot
+                      active={step === "avatar"}
+                      done={step !== "avatar"}
+                    />
                     <div className="h-px flex-1 bg-slate-300/50" />
-                    <StepDot active={step === "birthday"} done={false} />
+                    <StepDot
+                      active={step === "birthday"}
+                      done={step === "workinfo"}
+                    />
+                    <div className="h-px flex-1 bg-slate-300/50" />
+                    <StepDot
+                      active={step === "workinfo"}
+                      done={false}
+                    />
                   </div>
                 </div>
 
                 <div className="p-6">
-                  {step === "avatar" ? (
+                  {step === "avatar" && (
                     <AvatarStep
                       name={me.name}
                       avatarUrl={avatarUrl}
@@ -202,10 +269,30 @@ export function OnboardingDialog() {
                       fileRef={fileRef}
                       onFile={(f) => uploadAvatar(f)}
                     />
-                  ) : (
+                  )}
+                  {step === "birthday" && (
                     <BirthdayStep
                       birthday={birthday}
                       setBirthday={setBirthday}
+                    />
+                  )}
+                  {step === "workinfo" && (
+                    <WorkInfoStep
+                      workEmail={me.email}
+                      personalEmail={personalEmail}
+                      setPersonalEmail={setPersonalEmail}
+                      jobTitle={jobTitle}
+                      setJobTitle={setJobTitle}
+                      location={location}
+                      setLocation={setLocation}
+                      pronouns={pronouns}
+                      setPronouns={setPronouns}
+                      workStart={workStart}
+                      setWorkStart={setWorkStart}
+                      workEnd={workEnd}
+                      setWorkEnd={setWorkEnd}
+                      workTz={workTz}
+                      setWorkTz={setWorkTz}
                     />
                   )}
                 </div>
@@ -213,32 +300,36 @@ export function OnboardingDialog() {
                 <footer className="px-6 py-4 border-t border-slate-100 flex items-center justify-between gap-2 bg-slate-50/50">
                   <button
                     type="button"
-                    onClick={() => (step === "avatar" ? goNextOrFinish() : finish())}
+                    onClick={() => (step === "workinfo" ? finish() : goNextOrFinish())}
                     disabled={busy}
                     className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium text-ink/55 hover:text-ink hover:bg-white transition-colors disabled:opacity-60"
                   >
                     <SkipForward className="w-3.5 h-3.5" />
-                    Skip {step === "avatar" ? "for now" : "this too"}
+                    Skip {step === "workinfo" ? "this too" : "for now"}
                   </button>
                   <button
                     type="button"
-                    onClick={step === "avatar" ? goNextOrFinish : saveBirthday}
+                    onClick={
+                      step === "avatar" ? goNextOrFinish :
+                      step === "birthday" ? saveBirthday :
+                      saveWorkInfo
+                    }
                     disabled={busy}
                     className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs font-semibold text-white shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-lift active:scale-95 disabled:opacity-60"
                     style={{ background: "linear-gradient(135deg, #2563EB 0%, #1e63ff 100%)" }}
                   >
                     {busy ? (
                       <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                    ) : step === "avatar" ? (
-                      <ChevronRight className="w-3.5 h-3.5" />
-                    ) : (
+                    ) : step === "workinfo" ? (
                       <Check className="w-3.5 h-3.5" />
+                    ) : (
+                      <ChevronRight className="w-3.5 h-3.5" />
                     )}
                     {busy
                       ? "Saving…"
-                      : step === "avatar"
-                        ? "Next"
-                        : "Finish"}
+                      : step === "workinfo"
+                        ? "Finish"
+                        : "Next"}
                   </button>
                 </footer>
               </motion.div>
@@ -354,6 +445,180 @@ function BirthdayStep({
         />
         <div className="text-[11px] text-ink/45 mt-2">
           We&apos;ll only show the month + day publicly.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// A common IANA list. Picker is searchable so people in obscure
+// zones can still find theirs; the default is auto-detected.
+const COMMON_TIMEZONES = [
+  "Pacific/Honolulu", "America/Anchorage", "America/Los_Angeles",
+  "America/Denver", "America/Chicago", "America/New_York",
+  "America/Toronto", "America/Mexico_City", "America/Sao_Paulo",
+  "Atlantic/Reykjavik", "Europe/London", "Europe/Lisbon", "Europe/Madrid",
+  "Europe/Paris", "Europe/Berlin", "Europe/Amsterdam", "Europe/Stockholm",
+  "Europe/Athens", "Africa/Cairo", "Africa/Johannesburg",
+  "Europe/Istanbul", "Europe/Moscow", "Asia/Dubai", "Asia/Tehran",
+  "Asia/Karachi", "Asia/Kolkata", "Asia/Dhaka", "Asia/Bangkok",
+  "Asia/Singapore", "Asia/Hong_Kong", "Asia/Shanghai", "Asia/Tokyo",
+  "Asia/Seoul", "Australia/Perth", "Australia/Sydney",
+  "Pacific/Auckland"
+];
+
+function WorkInfoStep({
+  workEmail, personalEmail, setPersonalEmail,
+  jobTitle, setJobTitle,
+  location, setLocation,
+  pronouns, setPronouns,
+  workStart, setWorkStart,
+  workEnd, setWorkEnd,
+  workTz, setWorkTz
+}: {
+  workEmail: string;
+  personalEmail: string; setPersonalEmail: (v: string) => void;
+  jobTitle: string; setJobTitle: (v: string) => void;
+  location: string; setLocation: (v: string) => void;
+  pronouns: string; setPronouns: (v: string) => void;
+  workStart: string; setWorkStart: (v: string) => void;
+  workEnd: string; setWorkEnd: (v: string) => void;
+  workTz: string; setWorkTz: (v: string) => void;
+}) {
+  // Make sure the auto-detected tz is in the dropdown even if it
+  // isn't in COMMON_TIMEZONES (e.g. some obscure city).
+  const tzOptions = COMMON_TIMEZONES.includes(workTz)
+    ? COMMON_TIMEZONES
+    : [workTz, ...COMMON_TIMEZONES];
+
+  const startPreview = formatHHMMInViewerTz(workStart, workTz);
+  const endPreview = formatHHMMInViewerTz(workEnd, workTz);
+  const viewerAb = viewerTzAbbrev();
+
+  return (
+    <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-1">
+      <div className="flex items-center gap-3">
+        <div className="w-10 h-10 rounded-xl bg-indigo-50 ring-1 ring-indigo-200/60 grid place-items-center text-indigo-700 shrink-0">
+          <Briefcase className="w-5 h-5" />
+        </div>
+        <div>
+          <div className="text-sm font-semibold">A bit about your work</div>
+          <div className="text-xs text-ink/55 mt-0.5">
+            Helps your team know what you do and when you&apos;re around.
+            Everything is optional and editable from your profile later.
+          </div>
+        </div>
+      </div>
+
+      <div className="rounded-2xl border border-slate-200/70 bg-white p-4 space-y-3">
+        <div>
+          <label className="text-[11px] uppercase tracking-wide text-ink/55 font-semibold mb-1 inline-flex items-center gap-1">
+            <Mail className="w-3 h-3" /> Work email
+          </label>
+          <div className="px-3 py-2 rounded-lg bg-slate-50 border border-slate-200 text-sm text-ink/75">
+            {workEmail}
+            <span className="text-[10px] text-ink/45 ml-2">· what you signed up with</span>
+          </div>
+        </div>
+        <div>
+          <label className="text-[11px] uppercase tracking-wide text-ink/55 font-semibold mb-1 inline-flex items-center gap-1">
+            <Mail className="w-3 h-3" /> Personal email
+            <span className="text-[10px] font-normal text-ink/45 ml-1">· private</span>
+          </label>
+          <input
+            type="email"
+            value={personalEmail}
+            onChange={(e) => setPersonalEmail(e.target.value)}
+            placeholder="you@personal.com"
+            className="w-full px-3 py-2 rounded-lg bg-slate-50 border border-slate-200 text-sm outline-none focus:bg-white focus:ring-2 focus:ring-accent/30"
+          />
+          <div className="text-[10px] text-ink/45 mt-1">
+            Only you + leaders ever see this.
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <div>
+            <label className="block text-[11px] uppercase tracking-wide text-ink/55 font-semibold mb-1">Job title</label>
+            <input
+              value={jobTitle}
+              onChange={(e) => setJobTitle(e.target.value)}
+              placeholder="Senior designer"
+              className="w-full px-3 py-2 rounded-lg bg-slate-50 border border-slate-200 text-sm outline-none focus:bg-white focus:ring-2 focus:ring-accent/30"
+            />
+          </div>
+          <div>
+            <label className="block text-[11px] uppercase tracking-wide text-ink/55 font-semibold mb-1">Pronouns</label>
+            <input
+              value={pronouns}
+              onChange={(e) => setPronouns(e.target.value)}
+              placeholder="she/her · he/him · they/them"
+              className="w-full px-3 py-2 rounded-lg bg-slate-50 border border-slate-200 text-sm outline-none focus:bg-white focus:ring-2 focus:ring-accent/30"
+            />
+          </div>
+        </div>
+        <div>
+          <label className="block text-[11px] uppercase tracking-wide text-ink/55 font-semibold mb-1">Location</label>
+          <input
+            value={location}
+            onChange={(e) => setLocation(e.target.value)}
+            placeholder="Karachi · Toronto · Remote"
+            className="w-full px-3 py-2 rounded-lg bg-slate-50 border border-slate-200 text-sm outline-none focus:bg-white focus:ring-2 focus:ring-accent/30"
+          />
+        </div>
+      </div>
+
+      <div className="rounded-2xl border border-slate-200/70 bg-white p-4 space-y-3">
+        <div className="text-[11px] uppercase tracking-wide text-ink/55 font-semibold inline-flex items-center gap-1">
+          <Clock className="w-3 h-3" /> Work hours
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <div>
+            <label className="block text-[10px] uppercase tracking-wide text-ink/55 font-semibold mb-1">Start</label>
+            <input
+              type="time"
+              value={workStart}
+              onChange={(e) => setWorkStart(e.target.value)}
+              className="w-full px-3 py-2 rounded-lg bg-slate-50 border border-slate-200 text-sm outline-none focus:bg-white focus:ring-2 focus:ring-accent/30"
+            />
+          </div>
+          <div>
+            <label className="block text-[10px] uppercase tracking-wide text-ink/55 font-semibold mb-1">End</label>
+            <input
+              type="time"
+              value={workEnd}
+              onChange={(e) => setWorkEnd(e.target.value)}
+              className="w-full px-3 py-2 rounded-lg bg-slate-50 border border-slate-200 text-sm outline-none focus:bg-white focus:ring-2 focus:ring-accent/30"
+            />
+          </div>
+        </div>
+        <div>
+          <label className="text-[10px] uppercase tracking-wide text-ink/55 font-semibold mb-1 inline-flex items-center gap-1">
+            <Globe className="w-3 h-3" /> Your timezone
+          </label>
+          <select
+            value={workTz}
+            onChange={(e) => setWorkTz(e.target.value)}
+            className="w-full px-3 py-2 rounded-lg bg-slate-50 border border-slate-200 text-sm outline-none focus:bg-white focus:ring-2 focus:ring-accent/30"
+          >
+            {tzOptions.map((tz) => (
+              <option key={tz} value={tz}>
+                {tz.replace(/_/g, " ")}
+              </option>
+            ))}
+          </select>
+        </div>
+        {/* Live preview — show how teammates in viewer's tz will see
+            these hours. Detects viewer tz from the browser so the
+            preview is honest. */}
+        <div className="rounded-lg bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200/60 px-3 py-2 text-[12px]">
+          <div className="text-ink/85">
+            <strong>{workStart}–{workEnd}</strong> in {tzShortLabel(workTz)}{" "}
+            shows up as <strong>{startPreview} – {endPreview}</strong>{" "}
+            {viewerAb && <>({viewerAb})</>} to viewers in your local timezone.
+          </div>
+          <div className="text-[10px] text-ink/55 mt-0.5">
+            Teammates in other zones see your hours converted to their own.
+          </div>
         </div>
       </div>
     </div>

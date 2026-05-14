@@ -17,7 +17,7 @@ export async function GET() {
     {
       const { data, error } = await supabase
         .from("users")
-        .select("id, name, email, avatar_url, role, widget_icon_url, slack_user_id, slack_team_id, slack_connected_at, birthday, onboarded_at, slack_last_sync_at, slack_last_sync_ok, slack_last_sync_msg, google_user_id, google_email, google_connected_at, clock_enabled, personal_email, phone, job_title, location, bio, pronouns")
+        .select("id, name, email, avatar_url, role, widget_icon_url, slack_user_id, slack_team_id, slack_connected_at, birthday, onboarded_at, slack_last_sync_at, slack_last_sync_ok, slack_last_sync_msg, google_user_id, google_email, google_connected_at, clock_enabled, personal_email, phone, job_title, location, bio, pronouns, work_hours_start, work_hours_end, work_timezone")
         .eq("id", userId)
         .maybeSingle();
       if (!error && data) row = data;
@@ -57,7 +57,10 @@ export async function GET() {
         jobTitle: (row.job_title as string | null) ?? null,
         location: (row.location as string | null) ?? null,
         bio: (row.bio as string | null) ?? null,
-        pronouns: (row.pronouns as string | null) ?? null
+        pronouns: (row.pronouns as string | null) ?? null,
+        workHoursStart: (row.work_hours_start as string | null) ?? null,
+        workHoursEnd: (row.work_hours_end as string | null) ?? null,
+        workTimezone: (row.work_timezone as string | null) ?? null
       }
     });
   } catch (err) {
@@ -98,6 +101,13 @@ export async function PATCH(req: NextRequest) {
     takeString("location",      "location",       80);
     takeString("bio",           "bio",            500);
     takeString("pronouns",      "pronouns",       30);
+    // Work hours: store HH:MM and the IANA timezone the user picked.
+    // Server doesn't validate strict timezone names — Intl on the
+    // client will silently fall back to UTC for typos, which is fine
+    // for "shipping today" semantics.
+    takeString("workHoursStart", "work_hours_start", 5);
+    takeString("workHoursEnd",   "work_hours_end",   5);
+    takeString("workTimezone",   "work_timezone",    60);
 
     if (Object.keys(update).length === 0) {
       return NextResponse.json({ error: "no editable fields supplied" }, { status: 400 });

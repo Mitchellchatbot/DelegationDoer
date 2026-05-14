@@ -5,7 +5,8 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "framer-motion";
-import { Crown, X, Pencil, Sparkles, Plus, Trash2, TrendingUp, Mail, Phone, Briefcase, MapPin } from "lucide-react";
+import { Crown, X, Pencil, Sparkles, Plus, Trash2, TrendingUp, Mail, Phone, Briefcase, MapPin, Clock } from "lucide-react";
+import { formatHHMMInViewerTz, viewerTzAbbrev, tzShortLabel } from "@/lib/work-hours";
 import { toast } from "sonner";
 import { PersonAvatar } from "./PersonAvatar";
 import { CapacityBar } from "./CapacityBar";
@@ -80,6 +81,9 @@ interface LiveProfile {
   birthday: string | null;
   personalEmail: string | null;
   phone: string | null;
+  workHoursStart: string | null;
+  workHoursEnd: string | null;
+  workTimezone: string | null;
 }
 
 function ProfileBody({ userId }: { userId: string }) {
@@ -346,6 +350,14 @@ function ProfileBody({ userId }: { userId: string }) {
                     value={profile.location}
                   />
                 )}
+                {profile.workHoursStart && profile.workHoursEnd && profile.workTimezone && (
+                  <WorkHoursRow
+                    start={profile.workHoursStart}
+                    end={profile.workHoursEnd}
+                    tz={profile.workTimezone}
+                    isSelf={isMe}
+                  />
+                )}
               </div>
               {/* Privacy footer — surfaces when the viewer COULD have
                   seen private fields but the owner hasn't filled them
@@ -494,6 +506,12 @@ function EditForm({
   const [bio, setBio] = useState(initialProfile?.bio ?? "");
   const [personalEmail, setPersonalEmail] = useState(initialProfile?.personalEmail ?? "");
   const [phone, setPhone] = useState(initialProfile?.phone ?? "");
+  const [workHoursStart, setWorkHoursStart] = useState(initialProfile?.workHoursStart ?? "");
+  const [workHoursEnd, setWorkHoursEnd] = useState(initialProfile?.workHoursEnd ?? "");
+  const [workTimezone, setWorkTimezone] = useState(
+    initialProfile?.workTimezone ??
+      (typeof window !== "undefined" ? Intl.DateTimeFormat().resolvedOptions().timeZone : "")
+  );
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
 
@@ -585,6 +603,9 @@ function EditForm({
       if (trimOrNull(bio) !== (initialProfile?.bio ?? null)) patch.bio = trimOrNull(bio);
       if (trimOrNull(personalEmail) !== (initialProfile?.personalEmail ?? null)) patch.personalEmail = trimOrNull(personalEmail);
       if (trimOrNull(phone) !== (initialProfile?.phone ?? null)) patch.phone = trimOrNull(phone);
+      if (trimOrNull(workHoursStart) !== (initialProfile?.workHoursStart ?? null)) patch.workHoursStart = trimOrNull(workHoursStart);
+      if (trimOrNull(workHoursEnd) !== (initialProfile?.workHoursEnd ?? null)) patch.workHoursEnd = trimOrNull(workHoursEnd);
+      if (trimOrNull(workTimezone) !== (initialProfile?.workTimezone ?? null)) patch.workTimezone = trimOrNull(workTimezone);
       if (Object.keys(patch).length > 0) {
         const res = await fetch("/api/users/me", {
           method: "PATCH",
@@ -753,6 +774,36 @@ function EditForm({
             {bio.length} / 500
           </div>
         </div>
+        <div>
+          <label className="label">Work hours start</label>
+          <input
+            type="time"
+            className="input"
+            value={workHoursStart}
+            onChange={(e) => setWorkHoursStart(e.target.value)}
+          />
+        </div>
+        <div>
+          <label className="label">Work hours end</label>
+          <input
+            type="time"
+            className="input"
+            value={workHoursEnd}
+            onChange={(e) => setWorkHoursEnd(e.target.value)}
+          />
+        </div>
+        <div className="col-span-2">
+          <label className="label">Your timezone</label>
+          <input
+            className="input"
+            value={workTimezone}
+            onChange={(e) => setWorkTimezone(e.target.value)}
+            placeholder="Asia/Karachi · America/New_York · Europe/London"
+          />
+          <div className="text-[10px] text-muted mt-0.5">
+            Teammates in other zones see your hours converted to their own local time.
+          </div>
+        </div>
       </div>
 
       <div>
@@ -887,6 +938,47 @@ function DraftSkillChip({
 // Compact row used in the Contact section. Icon + label + value;
 // when an `href` is provided the value becomes a clickable link
 // (mailto, tel, etc.).
+// Work-hours row in the Contact grid. Renders the user's stated
+// hours in their own timezone PLUS the converted equivalent in the
+// viewer's local timezone — so 7–2 Karachi shows up as
+// "10:00 PM – 5:00 AM EST" for someone in New York.
+function WorkHoursRow({
+  start, end, tz, isSelf
+}: { start: string; end: string; tz: string; isSelf: boolean }) {
+  const localStart = formatHHMMInViewerTz(start, tz);
+  const localEnd = formatHHMMInViewerTz(end, tz);
+  const viewerTz = (typeof window !== "undefined")
+    ? Intl.DateTimeFormat().resolvedOptions().timeZone
+    : "";
+  const showsViewerLine = !isSelf && viewerTz && viewerTz !== tz;
+  const viewerAbbrev = viewerTzAbbrev();
+  // Format the user's own hours for the headline line.
+  const ownStart = formatHHMMInViewerTz(start, tz, tz);
+  const ownEnd = formatHHMMInViewerTz(end, tz, tz);
+  const tzLabel = tzShortLabel(tz);
+  return (
+    <div className="flex items-start gap-2 px-3 py-1.5 rounded-xl bg-white/85 border border-white/70 sm:col-span-2">
+      <div className="mt-0.5 shrink-0">
+        <Clock className="w-3.5 h-3.5 text-teal-600" />
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="text-[10px] uppercase tracking-wide font-semibold text-ink/45">
+          Work hours
+        </div>
+        <div className="text-[13px] text-ink/85">
+          {ownStart} – {ownEnd}{" "}
+          <span className="text-ink/55">· {tzLabel} time</span>
+        </div>
+        {showsViewerLine && (
+          <div className="text-[11px] text-accent mt-0.5">
+            {localStart} – {localEnd}{viewerAbbrev && <> · {viewerAbbrev}</>} your time
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function ContactRow({
   icon, label, value, href
 }: {

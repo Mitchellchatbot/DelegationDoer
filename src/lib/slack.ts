@@ -188,6 +188,117 @@ export async function lookupUserByEmail(email: string): Promise<string> {
   return data.user.id;
 }
 
+// Cache for users.list — it returns the entire workspace roster which
+// is heavy. 5-minute TTL is plenty for kudos lookups; if a user
+// just joined Slack and we miss them, the next minute's call refreshes.
+interface SlackMember {
+  id: string;
+  real_name?: string;
+  profile?: { display_name?: string; real_name?: string };
+  deleted?: boolean;
+  is_bot?: boolean;
+}
+let cachedRoster: { at: number; members: SlackMember[] } | null = null;
+async function getRoster(): Promise<SlackMember[]> {
+  const now = Date.now();
+  if (cachedRoster && now - cachedRoster.at < 5 * 60_000) {
+    return cachedRoster.members;
+  }
+  const data = await slackGet<{ ok: true; members: SlackMember[] }>(
+    "users.list",
+    {}
+  );
+  const members = (data.members ?? []).filter((m) => !m.deleted && !m.is_bot);
+  cachedRoster = { at: now, members };
+  return members;
+}
+
+// Normalize for fuzzy compare: lowercase, strip punctuation/diacritics,
+// collapse whitespace. Lets "Shaheer Khosa" match "shaheer.khosa" /
+// "Shaheer Khosa 🔥" / "SHAHEER".
+function norm(s: string): string {
+  // Strip combining diacritics (U+0300–U+036F) after NFD-decomposing so
+  // "Léon" matches "leon", lowercase, then squash anything non-alnum.
+  return s.normalize("NFD").replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+// Score a candidate Slack member against the target name. Higher = better.
+//   exact match on any name field    → 100
+//   target name is a substring (or vice versa) → 60
+//   word overlap                     → up to 50
+function scoreMember(target: string, m: SlackMember): number {
+  const t = norm(target);
+  if (!t) return 0;
+  const candidates = [
+    m.real_name,
+    m.profile?.real_name,
+    m.profile?.display_name
+  ].filter(Boolean).map((s) => norm(s as string));
+  if (candidates.length === 0) return 0;
+  let best = 0;
+  for (const c of candidates) {
+    if (!c) continue;
+    if (c === t) best = Math.max(best, 100);
+    else if (c.includes(t) || t.includes(c)) best = Math.max(best, 60);
+    const targetWords = new Set(t.split(" ").filter(Boolean));
+    const candWords = c.split(" ").filter(Boolean);
+    const overlap = candWords.filter((w) => targetWords.has(w)).length;
+    if (overlap > 0) {
+      const overlapScore = (overlap / Math.max(targetWords.size, 1)) * 50;
+      best = Math.max(best, overlapScore);
+    }
+  }
+  return best;
+}
+
+// Find a Slack user by name (fuzzy match against the workspace
+// roster). Returns null if nothing scored above the threshold —
+// callers fall back to email lookup or skip the DM entirely.
+export async function findSlackUserByName(name: string): Promise<string | null> {
+  if (!name?.trim()) return null;
+  try {
+    const members = await getRoster();
+    let bestId: string | null = null;
+    let bestScore = 0;
+    for (const m of members) {
+      const s = scoreMember(name, m);
+      if (s > bestScore) {
+        bestScore = s;
+        bestId = m.id;
+      }
+    }
+    return bestScore >= 40 ? bestId : null;
+  } catch (err) {
+    console.warn("[slack] findSlackUserByName failed:", err);
+    return null;
+  }
+}
+
+// Best-effort: try email first (exact, fast), fall back to fuzzy
+// name search. Used by kudos / assignment paths so a missing email
+// (or a workspace where Slack email ≠ DD email) doesn't prevent
+// the notification.
+export async function findSlackUser(args: {
+  email?: string | null;
+  name?: string | null;
+}): Promise<string | null> {
+  if (args.email) {
+    try {
+      return await lookupUserByEmail(args.email);
+    } catch {
+      // fall through to name lookup
+    }
+  }
+  if (args.name) {
+    return findSlackUserByName(args.name);
+  }
+  return null;
+}
+
 export async function openDm(slackUserId: string): Promise<string> {
   const data = await slackCall<{ ok: true; channel: { id: string } }>(
     "conversations.open",

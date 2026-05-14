@@ -3,8 +3,9 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { motion } from "framer-motion";
-import { Inbox, Mail, Settings as SettingsIcon, Layers } from "lucide-react";
+import { Inbox, Mail, Settings as SettingsIcon, Layers, Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { ConnectInboxDialog } from "./ConnectInboxDialog";
 
 // Left-rail tree for the inbox surface. Sections collapse into:
 //   • Smart — All inboxes (combined view, "/inboxes/all")
@@ -48,7 +49,32 @@ export function InboxTree({ accounts, canManage }: Props) {
           />
         </Section>
 
-        <Section label="Inboxes" emptyHint={accounts.length === 0 ? "Nothing here yet" : undefined}>
+        <Section
+          label="Inboxes"
+          emptyHint={
+            accounts.length === 0
+              ? canManage
+                ? "Hit + below to link your first one."
+                : "Nothing here yet"
+              : undefined
+          }
+          action={
+            canManage ? (
+              <ConnectInboxDialog
+                trigger={
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-0.5 text-[10px] text-accent hover:text-accent/80 font-medium"
+                    title="Connect a new mailbox"
+                  >
+                    <Plus className="w-3 h-3" />
+                    New
+                  </button>
+                }
+              />
+            ) : null
+          }
+        >
           {accounts.map((a) => {
             const href = `/inboxes/${encodeURIComponent(a.id)}`;
             return (
@@ -81,6 +107,18 @@ export function InboxTree({ accounts, canManage }: Props) {
               label="Manage access"
               tone="amber"
             />
+            <ConnectInboxDialog
+              trigger={
+                <button
+                  type="button"
+                  className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-[13px] text-blue-700 hover:bg-blue-50 transition-colors"
+                  title="Link a new mailbox over IMAP / OAuth"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  Connect new inbox
+                </button>
+              }
+            />
           </Section>
         )}
       </div>
@@ -94,16 +132,20 @@ const DOT_TONES = [
 ];
 
 function Section({
-  label, children, emptyHint
+  label, children, emptyHint, action
 }: {
   label: string;
   children: React.ReactNode;
   emptyHint?: string;
+  action?: React.ReactNode;
 }) {
   return (
     <div>
-      <div className="text-[10px] uppercase tracking-[0.18em] font-semibold text-ink/45 px-2 mb-1">
-        {label}
+      <div className="flex items-center justify-between px-2 mb-1">
+        <div className="text-[10px] uppercase tracking-[0.18em] font-semibold text-ink/45">
+          {label}
+        </div>
+        {action}
       </div>
       <nav className="space-y-0.5">{children}</nav>
       {emptyHint && (

@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "framer-motion";
-import { Crown, X, Pencil, Sparkles, Plus, Trash2, TrendingUp } from "lucide-react";
+import { Crown, X, Pencil, Sparkles, Plus, Trash2, TrendingUp, Mail, Phone, Briefcase, MapPin } from "lucide-react";
 import { toast } from "sonner";
 import { PersonAvatar } from "./PersonAvatar";
 import { CapacityBar } from "./CapacityBar";
@@ -67,6 +67,21 @@ export function ProfileDialog({
   );
 }
 
+interface LiveProfile {
+  id: string;
+  name: string;
+  email: string;
+  avatarUrl: string | null;
+  role: string;
+  jobTitle: string | null;
+  location: string | null;
+  bio: string | null;
+  pronouns: string | null;
+  birthday: string | null;
+  personalEmail: string | null;
+  phone: string | null;
+}
+
 function ProfileBody({ userId }: { userId: string }) {
   const me = useCurrentUser();
   const isMe = me.id === userId;
@@ -74,6 +89,22 @@ function ProfileBody({ userId }: { userId: string }) {
   // Pull live data so the cover image reflects the latest avatar even
   // before mock-data updates.
   const live = usePresence(userId);
+
+  // Contact + bio fields live on the live `users` row (work email,
+  // personal email, phone, job title, location, bio, pronouns).
+  // Mock-data doesn't carry them, so we fetch separately. The
+  // endpoint sanitizes private fields based on viewer role, so
+  // workers won't get personal email + phone for other people.
+  const [profile, setProfile] = useState<LiveProfile | null>(null);
+  const [profileBump, setProfileBump] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`/api/users/${encodeURIComponent(userId)}/profile`, { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (!cancelled && d?.profile) setProfile(d.profile); })
+      .catch(() => { /* mock fallback below covers display */ });
+    return () => { cancelled = true; };
+  }, [userId, profileBump]);
 
   const user = useMemo(() => users.find((u) => u.id === userId) ?? null, [userId]);
 
@@ -180,19 +211,44 @@ function ProfileBody({ userId }: { userId: string }) {
             className="ring-4 ring-white shadow-lift"
           />
           <div className="flex-1 min-w-0">
-            <div className="text-2xl font-bold text-ink leading-tight tracking-tight flex items-center gap-2">
+            <div className="text-2xl font-bold text-ink leading-tight tracking-tight flex items-center gap-2 flex-wrap">
               {user.name}
+              {profile?.pronouns && (
+                <span className="text-[11px] font-medium text-ink/55 normal-case">
+                  ({profile.pronouns})
+                </span>
+              )}
               {user.role === "leader" && <Crown className="w-5 h-5 text-amber-500" />}
               {user.role === "department_head" && <Crown className="w-4 h-4 text-accent" />}
             </div>
-            <div className="text-sm text-ink/70 mt-1">
-              {user.email} · {ROLE_LABELS[user.role]}
-              {userDepts.length > 0 && <> · {userDepts.map((d) => d.name).join(" · ")}</>}
+            {/* Job title (real-world role) takes the prominent line —
+                "Lead designer" beats "worker" for human context. The
+                system role still shows below it as a small chip. */}
+            {profile?.jobTitle && (
+              <div className="text-sm font-medium text-ink/80 mt-0.5">
+                {profile.jobTitle}
+              </div>
+            )}
+            <div className="text-sm text-ink/70 mt-1 inline-flex items-center gap-1.5 flex-wrap">
+              <span>{ROLE_LABELS[user.role]}</span>
+              {userDepts.length > 0 && (
+                <span className="text-ink/45">· {userDepts.map((d) => d.name).join(" · ")}</span>
+              )}
+              {profile?.location && (
+                <span className="inline-flex items-center gap-1 text-ink/55">
+                  · <MapPin className="w-3 h-3" /> {profile.location}
+                </span>
+              )}
             </div>
             <div className="mt-1.5 text-[12px] text-ink/55">
               {manager ? <>Reports to <span className="text-ink/85">{manager.name}</span></> : "Top of the org"}
               {directReports.length > 0 && <> · {directReports.length} direct report{directReports.length === 1 ? "" : "s"}</>}
             </div>
+            {profile?.bio && (
+              <p className="mt-2 text-[13px] text-ink/75 leading-snug max-w-prose whitespace-pre-wrap">
+                {profile.bio}
+              </p>
+            )}
             <div className="mt-3 max-w-sm">
               <CapacityBar pct={cap.pct} overSoft={cap.overSoft} overBuffer={cap.overBuffer} />
             </div>
@@ -234,16 +290,74 @@ function ProfileBody({ userId }: { userId: string }) {
               <EditForm
                 userId={user.id}
                 initialName={user.name}
+                initialProfile={profile}
                 initialSkills={skills ?? []}
                 onCancel={() => setEditing(false)}
                 onSaved={() => {
                   setEditing(false);
                   setSkillsBump((n) => n + 1);
+                  setProfileBump((n) => n + 1);
                 }}
               />
             </motion.div>
           )}
         </AnimatePresence>
+
+        {profile && (
+          (profile.email || profile.personalEmail || profile.phone) && (
+            <section className="rounded-2xl border border-white/60 bg-white/65 backdrop-blur-md p-4 shadow-soft">
+              <div className="text-[12px] uppercase tracking-[0.18em] font-semibold text-muted mb-2.5">
+                Contact
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <ContactRow
+                  icon={<Mail className="w-3.5 h-3.5 text-blue-600" />}
+                  label="Work email"
+                  value={profile.email}
+                  href={profile.email ? `mailto:${profile.email}` : undefined}
+                />
+                {profile.personalEmail && (
+                  <ContactRow
+                    icon={<Mail className="w-3.5 h-3.5 text-fuchsia-600" />}
+                    label="Personal email"
+                    value={profile.personalEmail}
+                    href={`mailto:${profile.personalEmail}`}
+                  />
+                )}
+                {profile.phone && (
+                  <ContactRow
+                    icon={<Phone className="w-3.5 h-3.5 text-emerald-600" />}
+                    label="Phone"
+                    value={profile.phone}
+                    href={`tel:${profile.phone.replace(/[^+\d]/g, "")}`}
+                  />
+                )}
+                {profile.jobTitle && (
+                  <ContactRow
+                    icon={<Briefcase className="w-3.5 h-3.5 text-indigo-600" />}
+                    label="Title"
+                    value={profile.jobTitle}
+                  />
+                )}
+                {profile.location && (
+                  <ContactRow
+                    icon={<MapPin className="w-3.5 h-3.5 text-amber-600" />}
+                    label="Location"
+                    value={profile.location}
+                  />
+                )}
+              </div>
+              {/* Privacy footer — surfaces when the viewer COULD have
+                  seen private fields but the owner hasn't filled them
+                  in yet. Helps the user know what to add. */}
+              {isMe && (!profile.personalEmail || !profile.phone) && (
+                <div className="text-[10px] text-ink/45 mt-2.5 italic">
+                  Personal email + phone are private — only you and leaders ever see them.
+                </div>
+              )}
+            </section>
+          )
+        )}
 
         {directReports.length > 0 && (
           <section className="rounded-2xl border border-white/60 bg-white/65 backdrop-blur-md p-4 shadow-soft">
@@ -362,10 +476,11 @@ function ProfileBody({ userId }: { userId: string }) {
 /* ============================ EDIT FORM ============================ */
 
 function EditForm({
-  userId, initialName, initialSkills, onCancel, onSaved
+  userId, initialName, initialProfile, initialSkills, onCancel, onSaved
 }: {
   userId: string;
   initialName: string;
+  initialProfile: LiveProfile | null;
   initialSkills: LiveSkill[];
   onCancel: () => void;
   onSaved: () => void;
@@ -373,6 +488,12 @@ function EditForm({
   const router = useRouter();
   const refreshPresence = useRefreshPresence();
   const [name, setName] = useState(initialName);
+  const [jobTitle, setJobTitle] = useState(initialProfile?.jobTitle ?? "");
+  const [pronouns, setPronouns] = useState(initialProfile?.pronouns ?? "");
+  const [location, setLocation] = useState(initialProfile?.location ?? "");
+  const [bio, setBio] = useState(initialProfile?.bio ?? "");
+  const [personalEmail, setPersonalEmail] = useState(initialProfile?.personalEmail ?? "");
+  const [phone, setPhone] = useState(initialProfile?.phone ?? "");
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
 
@@ -452,12 +573,23 @@ function EditForm({
     }
     setSaving(true);
     try {
-      // 1) Name update.
-      if (name.trim() !== initialName) {
+      // 1) Name + contact + bio. Single PATCH so changes commit
+      // atomically. Empty strings get sent through and the API
+      // turns them into NULL — that's how the user "clears" a field.
+      const patch: Record<string, string | null> = {};
+      if (name.trim() !== initialName) patch.name = name.trim();
+      const trimOrNull = (v: string) => v.trim() ? v.trim() : null;
+      if (trimOrNull(jobTitle) !== (initialProfile?.jobTitle ?? null)) patch.jobTitle = trimOrNull(jobTitle);
+      if (trimOrNull(pronouns) !== (initialProfile?.pronouns ?? null)) patch.pronouns = trimOrNull(pronouns);
+      if (trimOrNull(location) !== (initialProfile?.location ?? null)) patch.location = trimOrNull(location);
+      if (trimOrNull(bio) !== (initialProfile?.bio ?? null)) patch.bio = trimOrNull(bio);
+      if (trimOrNull(personalEmail) !== (initialProfile?.personalEmail ?? null)) patch.personalEmail = trimOrNull(personalEmail);
+      if (trimOrNull(phone) !== (initialProfile?.phone ?? null)) patch.phone = trimOrNull(phone);
+      if (Object.keys(patch).length > 0) {
         const res = await fetch("/api/users/me", {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name: name.trim() })
+          body: JSON.stringify(patch)
         });
         if (!res.ok) {
           const d = await res.json().catch(() => null);
@@ -553,6 +685,73 @@ function EditForm({
             disabled={uploading}
             className="input py-1.5 text-sm file:mr-2 file:rounded-md file:border-0 file:bg-slate-100 file:px-2 file:py-1 file:text-xs"
           />
+        </div>
+        <div>
+          <label className="label">Job title</label>
+          <input
+            className="input"
+            value={jobTitle}
+            onChange={(e) => setJobTitle(e.target.value)}
+            placeholder="Lead designer, Senior copywriter…"
+            maxLength={60}
+          />
+        </div>
+        <div>
+          <label className="label">Pronouns</label>
+          <input
+            className="input"
+            value={pronouns}
+            onChange={(e) => setPronouns(e.target.value)}
+            placeholder="she/her · he/him · they/them"
+            maxLength={30}
+          />
+        </div>
+        <div>
+          <label className="label">Location</label>
+          <input
+            className="input"
+            value={location}
+            onChange={(e) => setLocation(e.target.value)}
+            placeholder="Toronto · Lahore · Remote"
+            maxLength={80}
+          />
+        </div>
+        <div>
+          <label className="label">Phone <span className="text-[10px] text-muted font-normal">· private</span></label>
+          <input
+            className="input"
+            value={phone}
+            onChange={(e) => setPhone(e.target.value)}
+            placeholder="+1 555 …"
+            maxLength={40}
+          />
+        </div>
+        <div className="col-span-2">
+          <label className="label">
+            Personal email <span className="text-[10px] text-muted font-normal">· private — only you + leaders see this</span>
+          </label>
+          <input
+            type="email"
+            className="input"
+            value={personalEmail}
+            onChange={(e) => setPersonalEmail(e.target.value)}
+            placeholder="you@personal.com"
+            maxLength={120}
+          />
+        </div>
+        <div className="col-span-2">
+          <label className="label">Bio</label>
+          <textarea
+            className="input"
+            rows={3}
+            value={bio}
+            onChange={(e) => setBio(e.target.value)}
+            placeholder="One or two lines — strengths, what you're working on, anything you'd want a new teammate to know."
+            maxLength={500}
+          />
+          <div className="text-[10px] text-muted mt-0.5 text-right tabular-nums">
+            {bio.length} / 500
+          </div>
         </div>
       </div>
 
@@ -680,6 +879,40 @@ function DraftSkillChip({
           <TrendingUp className="w-2.5 h-2.5" />
           {skill.taskCount}
         </span>
+      </div>
+    </div>
+  );
+}
+
+// Compact row used in the Contact section. Icon + label + value;
+// when an `href` is provided the value becomes a clickable link
+// (mailto, tel, etc.).
+function ContactRow({
+  icon, label, value, href
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: string | null;
+  href?: string;
+}) {
+  if (!value) return null;
+  return (
+    <div className="flex items-start gap-2 px-3 py-1.5 rounded-xl bg-white/85 border border-white/70">
+      <div className="mt-0.5 shrink-0">{icon}</div>
+      <div className="min-w-0 flex-1">
+        <div className="text-[10px] uppercase tracking-wide font-semibold text-ink/45">
+          {label}
+        </div>
+        {href ? (
+          <a
+            href={href}
+            className="text-[13px] text-ink/85 hover:text-accent break-all"
+          >
+            {value}
+          </a>
+        ) : (
+          <div className="text-[13px] text-ink/85 break-all">{value}</div>
+        )}
       </div>
     </div>
   );

@@ -17,7 +17,7 @@ export async function GET() {
     {
       const { data, error } = await supabase
         .from("users")
-        .select("id, name, email, avatar_url, role, widget_icon_url, slack_user_id, slack_team_id, slack_connected_at, birthday, onboarded_at, slack_last_sync_at, slack_last_sync_ok, slack_last_sync_msg, google_user_id, google_email, google_connected_at, clock_enabled")
+        .select("id, name, email, avatar_url, role, widget_icon_url, slack_user_id, slack_team_id, slack_connected_at, birthday, onboarded_at, slack_last_sync_at, slack_last_sync_ok, slack_last_sync_msg, google_user_id, google_email, google_connected_at, clock_enabled, personal_email, phone, job_title, location, bio, pronouns")
         .eq("id", userId)
         .maybeSingle();
       if (!error && data) row = data;
@@ -51,7 +51,13 @@ export async function GET() {
         googleUserId: (row.google_user_id as string | null) ?? null,
         googleEmail: (row.google_email as string | null) ?? null,
         googleConnectedAt: (row.google_connected_at as string | null) ?? null,
-        clockEnabled: (row.clock_enabled as boolean | null) ?? true
+        clockEnabled: (row.clock_enabled as boolean | null) ?? true,
+        personalEmail: (row.personal_email as string | null) ?? null,
+        phone: (row.phone as string | null) ?? null,
+        jobTitle: (row.job_title as string | null) ?? null,
+        location: (row.location as string | null) ?? null,
+        bio: (row.bio as string | null) ?? null,
+        pronouns: (row.pronouns as string | null) ?? null
       }
     });
   } catch (err) {
@@ -62,17 +68,37 @@ export async function GET() {
   }
 }
 
-// PATCH /api/users/me — edit your own profile. Currently supports name.
-// Avatar is handled via /api/users/me/avatar (multipart upload). Email
-// is read-only because it's tied to the auth identity.
+// PATCH /api/users/me — edit your own profile. Accepts name + the
+// contact / bio fields. Work email stays read-only (it's the auth
+// identity) — change `personalEmail` if you want a different
+// reach-out address. Any null clears that field.
+//
+// Field caps prevent runaway sizes but stay generous enough for
+// real values (240-char bio, 60-char job title etc.).
 export async function PATCH(req: NextRequest) {
   try {
     const userId = await requireCurrentUserId();
     const body = await req.json();
     const update: Record<string, unknown> = {};
+
+    function takeString(key: string, dbCol: string, maxLen: number) {
+      const v = body[key];
+      if (v === null) update[dbCol] = null;
+      else if (typeof v === "string") {
+        const t = v.trim().slice(0, maxLen);
+        update[dbCol] = t || null;
+      }
+    }
     if (typeof body.name === "string" && body.name.trim()) {
       update.name = body.name.trim().slice(0, 80);
     }
+    takeString("personalEmail", "personal_email", 120);
+    takeString("phone",         "phone",          40);
+    takeString("jobTitle",      "job_title",      60);
+    takeString("location",      "location",       80);
+    takeString("bio",           "bio",            500);
+    takeString("pronouns",      "pronouns",       30);
+
     if (Object.keys(update).length === 0) {
       return NextResponse.json({ error: "no editable fields supplied" }, { status: 400 });
     }
@@ -81,7 +107,7 @@ export async function PATCH(req: NextRequest) {
       .from("users")
       .update(update)
       .eq("id", userId)
-      .select("id, name, email, avatar_url")
+      .select("id, name, email, avatar_url, personal_email, phone, job_title, location, bio, pronouns")
       .single();
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
     return NextResponse.json({ user: data });

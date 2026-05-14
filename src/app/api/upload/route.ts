@@ -8,9 +8,16 @@ export const dynamic = "force-dynamic";
 // Stores in Supabase Storage bucket "ticket-attachments" and returns the
 // public URL. No size validation here — add when this hits real users.
 
-const MAX_BYTES = 8 * 1024 * 1024; // 8 MB
+// Cap covers both image posters (small) and audio clips (a few MB
+// MP3s). Audio types are spelled out because some browsers send
+// non-standard MIME for the same file (audio/mp3 vs audio/mpeg
+// vs audio/mp4 for m4a).
+const MAX_BYTES = 25 * 1024 * 1024; // 25 MB
 const ALLOWED_TYPES = new Set([
-  "image/png", "image/jpeg", "image/gif", "image/webp", "image/avif"
+  "image/png", "image/jpeg", "image/gif", "image/webp", "image/avif",
+  "audio/mpeg", "audio/mp3", "audio/mp4", "audio/m4a", "audio/x-m4a",
+  "audio/aac", "audio/wav", "audio/x-wav", "audio/ogg", "audio/webm",
+  "audio/flac", "audio/x-flac"
 ]);
 
 export async function POST(req: NextRequest) {

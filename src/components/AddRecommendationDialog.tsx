@@ -406,14 +406,27 @@ export function AddRecommendationDialog({
                         {audioUrl && (
                           <button
                             type="button"
-                            onClick={() => setAudioUrl(null)}
+                            onClick={() => {
+                              setAudioUrl(null);
+                              setLayout((l) => ({ ...l, audioStartMs: undefined, audioEndMs: undefined }));
+                            }}
                             className="text-[11px] text-ink/55 hover:text-rose-600 transition-colors"
                           >
                             Clear
                           </button>
                         )}
-                        <input ref={fileAudioRef} type="file" accept="audio/*" className="hidden" onChange={onPickAudio} />
+                        <input ref={fileAudioRef} type="file" accept="audio/*,.mp3,.m4a,.wav,.ogg,.flac" className="hidden" onChange={onPickAudio} />
                       </div>
+                      {audioUrl && (
+                        <AudioTrim
+                          src={audioUrl}
+                          startMs={layout.audioStartMs ?? 0}
+                          endMs={layout.audioEndMs}
+                          onChange={(s, e) =>
+                            setLayout((l) => ({ ...l, audioStartMs: s, audioEndMs: e }))
+                          }
+                        />
+                      )}
                     </FormSection>
                   </div>
 
@@ -581,6 +594,151 @@ export function AddRecommendationDialog({
       </AnimatePresence>
     </Dialog.Root>
   );
+}
+
+// Lightweight audio trim editor. Once an audio file is uploaded we
+// load its metadata to read duration, then surface two range
+// inputs (start + end) plus a Preview button that plays the chosen
+// segment so the EoM can quickly find the bit they want. We don't
+// re-encode the file — the crop bounds get stored in
+// recommendation.layout (audioStartMs / audioEndMs) and the canvas's
+// AudioControl respects them on playback.
+function AudioTrim({
+  src, startMs, endMs, onChange
+}: {
+  src: string;
+  startMs: number;
+  endMs: number | undefined;
+  onChange: (start: number, end: number | undefined) => void;
+}) {
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const [durationMs, setDurationMs] = useState<number | null>(null);
+  const [playing, setPlaying] = useState(false);
+
+  // Reset duration when the source changes (new upload).
+  useEffect(() => {
+    setDurationMs(null);
+    setPlaying(false);
+  }, [src]);
+
+  function onLoadedMeta() {
+    const d = audioRef.current?.duration ?? 0;
+    if (Number.isFinite(d) && d > 0) {
+      const total = Math.round(d * 1000);
+      setDurationMs(total);
+      // If no end is set yet, default to "whole track".
+      if (endMs == null) onChange(startMs, total);
+    }
+  }
+
+  function setStart(v: number) {
+    const cur = endMs ?? durationMs ?? 0;
+    const clamped = Math.min(Math.max(0, v), Math.max(0, cur - 500));
+    onChange(clamped, endMs);
+  }
+  function setEnd(v: number) {
+    const total = durationMs ?? 0;
+    const clamped = Math.min(Math.max(startMs + 500, v), total);
+    onChange(startMs, clamped);
+  }
+
+  function preview() {
+    const a = audioRef.current;
+    if (!a) return;
+    if (playing) {
+      a.pause();
+      setPlaying(false);
+      return;
+    }
+    a.currentTime = startMs / 1000;
+    function onTime() {
+      if (!a) return;
+      if (endMs != null && a.currentTime * 1000 >= endMs) {
+        a.pause();
+        setPlaying(false);
+        a.removeEventListener("timeupdate", onTime);
+      }
+    }
+    a.addEventListener("timeupdate", onTime);
+    a.play().then(() => setPlaying(true)).catch(() => { /* user-gesture race */ });
+  }
+
+  return (
+    <div className="mt-2 rounded-xl border border-slate-200 bg-white p-3 space-y-2">
+      <audio
+        ref={audioRef}
+        src={src}
+        preload="metadata"
+        onLoadedMetadata={onLoadedMeta}
+        onEnded={() => setPlaying(false)}
+      />
+      <div className="flex items-center justify-between gap-2">
+        <div className="text-[10px] uppercase tracking-wide font-semibold text-ink/55">
+          Crop
+        </div>
+        <button
+          type="button"
+          onClick={preview}
+          disabled={durationMs == null}
+          className={
+            "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium border transition-colors " +
+            (playing
+              ? "bg-rose-50 text-rose-700 border-rose-200"
+              : "bg-blue-50 text-blue-700 border-blue-200")
+          }
+        >
+          {playing ? "Stop" : "▶ Preview"}
+        </button>
+      </div>
+      {durationMs == null ? (
+        <div className="text-[10px] text-ink/45 italic">Loading audio…</div>
+      ) : (
+        <>
+          <label className="block">
+            <div className="flex justify-between text-[10px] text-ink/55 tabular-nums">
+              <span>Start · {fmt(startMs)}</span>
+              <span>{fmt(durationMs)}</span>
+            </div>
+            <input
+              type="range"
+              min={0}
+              max={Math.max(0, (endMs ?? durationMs) - 500)}
+              step={100}
+              value={startMs}
+              onChange={(e) => setStart(Number(e.target.value))}
+              className="w-full"
+            />
+          </label>
+          <label className="block">
+            <div className="flex justify-between text-[10px] text-ink/55 tabular-nums">
+              <span>End · {fmt(endMs ?? durationMs)}</span>
+              <span>{fmt(durationMs)}</span>
+            </div>
+            <input
+              type="range"
+              min={Math.min(durationMs, startMs + 500)}
+              max={durationMs}
+              step={100}
+              value={endMs ?? durationMs}
+              onChange={(e) => setEnd(Number(e.target.value))}
+              className="w-full"
+            />
+          </label>
+          <div className="text-[10px] text-ink/55 tabular-nums">
+            Clip · {fmt((endMs ?? durationMs) - startMs)}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function fmt(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) return "0:00";
+  const totalSec = Math.round(ms / 1000);
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec % 60;
+  return `${m}:${String(s).padStart(2, "0")}`;
 }
 
 function FormSection({ label, children }: { label: string; children: React.ReactNode }) {

@@ -21,6 +21,11 @@ export interface CanvasLayout {
   imageFit?: "cover" | "contain";
   imageFocalX?: number;  // 0-1
   imageFocalY?: number;  // 0-1
+  // Optional audio crop. When set, playback starts at audioStartMs
+  // (seeks on play) and pauses at audioEndMs. Lets the EoM pick a
+  // 15s loop out of a 3-min track without re-encoding the file.
+  audioStartMs?: number;
+  audioEndMs?: number;
 }
 
 export interface RecommendationCanvasProps {
@@ -159,12 +164,24 @@ export function RecommendationCanvas({
         );
       })}
 
-      {audioUrl && !small && <AudioControl src={audioUrl} />}
+      {audioUrl && !small && (
+        <AudioControl
+          src={audioUrl}
+          startMs={layout.audioStartMs}
+          endMs={layout.audioEndMs}
+        />
+      )}
     </div>
   );
 }
 
-function AudioControl({ src }: { src: string }) {
+function AudioControl({
+  src, startMs, endMs
+}: {
+  src: string;
+  startMs?: number;
+  endMs?: number;
+}) {
   const ref = useRef<HTMLAudioElement>(null);
   const [playing, setPlaying] = useState(false);
   const [muted, setMuted] = useState(false);
@@ -175,6 +192,25 @@ function AudioControl({ src }: { src: string }) {
     a.muted = muted;
   }, [muted]);
 
+  // When the EoM cropped the track, jump to the start on each play
+  // and stop at the end. Tiny overhead — one timeupdate listener
+  // bound for the duration of playback.
+  useEffect(() => {
+    const a = ref.current;
+    if (!a) return;
+    if (endMs == null) return;
+    function onTime() {
+      if (!a || endMs == null) return;
+      if (a.currentTime * 1000 >= endMs) {
+        a.pause();
+        a.currentTime = (startMs ?? 0) / 1000;
+        setPlaying(false);
+      }
+    }
+    a.addEventListener("timeupdate", onTime);
+    return () => a.removeEventListener("timeupdate", onTime);
+  }, [startMs, endMs]);
+
   function toggle() {
     const a = ref.current;
     if (!a) return;
@@ -182,6 +218,11 @@ function AudioControl({ src }: { src: string }) {
       a.pause();
       setPlaying(false);
     } else {
+      // Seek to the start of the crop window on each play so the
+      // listener always hears the chosen segment.
+      if (startMs != null) {
+        a.currentTime = startMs / 1000;
+      }
       a.play().then(() => setPlaying(true)).catch(() => { /* user gesture race */ });
     }
   }

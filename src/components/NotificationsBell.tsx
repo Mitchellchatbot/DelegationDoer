@@ -118,7 +118,7 @@ export function NotificationsBell() {
                 </button>
               )}
             </div>
-            <div className="max-h-[420px] overflow-y-auto">
+            <div className="max-h-[min(420px,60vh)] overflow-y-auto overscroll-contain">
               {loading && items.length === 0 ? (
                 <div className="p-6 text-center text-sm text-ink/55 inline-flex items-center gap-2 w-full justify-center">
                   <Loader2 className="w-4 h-4 animate-spin" /> Loading…
@@ -137,12 +137,14 @@ export function NotificationsBell() {
                 <ul className="divide-y divide-slate-100">
                   <AnimatePresence initial={false}>
                     {items.map((n) => (
+                      // No `layout` on the row — combined with the parent
+                      // overflow-y-auto, the layout transforms would
+                      // intermittently pin the row and break scrolling.
                       <motion.li
                         key={n.id}
-                        layout
-                        initial={{ opacity: 0, height: 0 }}
-                        animate={{ opacity: 1, height: "auto" }}
-                        exit={{ opacity: 0, height: 0 }}
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
                         transition={{ duration: 0.18 }}
                       >
                         <Link

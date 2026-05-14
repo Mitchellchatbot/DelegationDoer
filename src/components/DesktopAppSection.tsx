@@ -5,12 +5,17 @@ import { Apple, Monitor, Download } from "lucide-react";
 
 // "Get the desktop app" section. Detects the user's OS and highlights the
 // matching installer. URLs come from env vars so we can swap hosting later
-// without code changes:
+// without code changes, with hardcoded Supabase Storage fallbacks so the
+// download just works without a redeploy when a new build lands:
 //
 //   NEXT_PUBLIC_DESKTOP_APP_URL_MAC=https://.../DelegationDoer.dmg
 //   NEXT_PUBLIC_DESKTOP_APP_URL_WIN=https://.../DelegationDoer-Setup.exe
 //
-// If a URL is empty, that platform's button is disabled with a "Coming soon".
+// If both are empty, the platform's button is disabled with a "Coming soon".
+
+const FALLBACK_WIN_URL =
+  "https://hbmggvsmmilxvsoxcneh.supabase.co/storage/v1/object/public/desktop-app/DelegationDoer%20Setup%200.1.0.exe";
+const FALLBACK_MAC_URL = "";
 
 type OS = "mac" | "win" | "other";
 
@@ -26,8 +31,8 @@ export function DesktopAppSection() {
   const [os, setOs] = useState<OS>("other");
   useEffect(() => setOs(detectOs()), []);
 
-  const macUrl = process.env.NEXT_PUBLIC_DESKTOP_APP_URL_MAC || "";
-  const winUrl = process.env.NEXT_PUBLIC_DESKTOP_APP_URL_WIN || "";
+  const macUrl = process.env.NEXT_PUBLIC_DESKTOP_APP_URL_MAC || FALLBACK_MAC_URL;
+  const winUrl = process.env.NEXT_PUBLIC_DESKTOP_APP_URL_WIN || FALLBACK_WIN_URL;
 
   return (
     <section className="card p-4">

@@ -86,7 +86,11 @@ export function ReportIncidentDialog({
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 bg-black/60 z-40" />
-        <Dialog.Content className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-50 w-[560px] card p-5">
+        <Dialog.Content
+          aria-describedby={undefined}
+          className="fixed inset-0 z-50 outline-none pointer-events-none flex items-center justify-center px-4 lg:pl-[264px]"
+        >
+          <div className="pointer-events-auto w-[560px] max-w-[92vw] max-h-[90vh] overflow-y-auto card p-5">
           <div className="flex items-start justify-between mb-3">
             <div className="flex items-center gap-2">
               <div className="w-8 h-8 rounded-lg bg-urgent/15 border border-urgent/30 grid place-items-center text-urgent">
@@ -152,6 +156,7 @@ export function ReportIncidentDialog({
                 {submitting ? "Creating…" : "Create incident"}
               </button>
             </div>
+          </div>
           </div>
         </Dialog.Content>
       </Dialog.Portal>

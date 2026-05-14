@@ -80,7 +80,11 @@ export function HandoffButton({
       </Dialog.Trigger>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 bg-black/40 z-40" />
-        <Dialog.Content className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-50 w-[440px] card p-5 space-y-4">
+        <Dialog.Content
+          aria-describedby={undefined}
+          className="fixed inset-0 z-50 outline-none pointer-events-none flex items-center justify-center px-4 lg:pl-[264px]"
+        >
+          <div className="pointer-events-auto w-[440px] max-w-[92vw] max-h-[90vh] overflow-y-auto card p-5 space-y-4">
           <div>
             <Dialog.Title className="text-base font-semibold">Hand off task</Dialog.Title>
             <Dialog.Description className="text-xs text-muted mt-0.5">
@@ -137,6 +141,7 @@ export function HandoffButton({
             <button className="btn-primary" onClick={submit} disabled={saving || !toUserId}>
               {saving ? "Handing off…" : "Hand off"}
             </button>
+          </div>
           </div>
         </Dialog.Content>
       </Dialog.Portal>

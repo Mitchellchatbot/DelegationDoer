@@ -136,7 +136,11 @@ function EditButton({ task }: { task: Task }) {
       </Dialog.Trigger>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 bg-black/25 backdrop-blur-sm z-40" />
-        <Dialog.Content className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-50 w-[560px] max-w-[calc(100vw-2rem)] card p-5">
+        <Dialog.Content
+          aria-describedby={undefined}
+          className="fixed inset-0 z-50 outline-none pointer-events-none flex items-center justify-center px-4 lg:pl-[264px]"
+        >
+          <div className="pointer-events-auto w-[560px] max-w-[92vw] max-h-[90vh] overflow-y-auto card p-5">
           <div className="flex items-start justify-between mb-3">
             <Dialog.Title className="text-base font-medium">Edit task</Dialog.Title>
             <Dialog.Close className="btn p-1.5"><X className="w-3.5 h-3.5" /></Dialog.Close>
@@ -177,6 +181,7 @@ function EditButton({ task }: { task: Task }) {
             <button className="btn-primary disabled:opacity-50" disabled={saving || !title.trim()} onClick={save}>
               {saving ? "Saving…" : "Save changes"}
             </button>
+          </div>
           </div>
         </Dialog.Content>
       </Dialog.Portal>
@@ -234,7 +239,11 @@ function ExtendButton({ task }: { task: Task }) {
       </Dialog.Trigger>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 bg-black/25 backdrop-blur-sm z-40" />
-        <Dialog.Content className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-50 w-[520px] max-w-[calc(100vw-2rem)] card p-5">
+        <Dialog.Content
+          aria-describedby={undefined}
+          className="fixed inset-0 z-50 outline-none pointer-events-none flex items-center justify-center px-4 lg:pl-[264px]"
+        >
+          <div className="pointer-events-auto w-[520px] max-w-[92vw] max-h-[90vh] overflow-y-auto card p-5">
           <div className="flex items-start justify-between mb-3">
             <div>
               <Dialog.Title className="text-base font-medium">Extend deadline</Dialog.Title>
@@ -300,6 +309,7 @@ function ExtendButton({ task }: { task: Task }) {
             >
               <CalendarPlus className="w-4 h-4" /> {submitting ? "Extending…" : `Extend by ${hours}h`}
             </button>
+          </div>
           </div>
         </Dialog.Content>
       </Dialog.Portal>

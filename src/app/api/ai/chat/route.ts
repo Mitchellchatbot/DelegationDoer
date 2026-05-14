@@ -1,99 +1,140 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAnthropic, MODELS } from "@/lib/anthropic-client";
 import { requireCurrentUserId } from "@/lib/session";
-import {
-  getAllTasks, getDepartmentById, getUserById
-} from "@/lib/server-data";
-import type { Task } from "@/lib/types";
+import { getUserById, getDepartments } from "@/lib/server-data";
+import { AI_TOOLS, runTool } from "@/lib/ai-tools";
 
 interface ChatMessage { role: "user" | "assistant"; content: string }
 
-function summarise(t: Task, assigneeName: string): string {
-  const due = t.dueDate ? new Date(t.dueDate).toISOString().slice(0, 10) : "no date";
-  return `- [${t.priority}] "${t.title}" — ${t.status}, est ${t.estimatedHours}h, due ${due}, assignee ${assigneeName}${t.inactiveFlag ? " (STALLED)" : ""}`;
-}
-
-async function buildSystemPrompt(): Promise<string> {
-  const userId = await requireCurrentUserId();
-  const currentUser = await getUserById(userId);
-  if (!currentUser) {
-    throw new Error(`Current user ${userId} not found in DB`);
-  }
-
-  const allTasks = await getAllTasks();
-
-  // Resolve every assignee name in one batch so summarise() can run sync.
-  const assigneeIds = Array.from(new Set(allTasks.map((t) => t.assigneeId).filter(Boolean) as string[]));
-  const assignees = await Promise.all(assigneeIds.map((id) => getUserById(id)));
-  const nameById = new Map<string, string>();
-  for (const u of assignees) if (u) nameById.set(u.id, u.name);
-  const named = (t: Task) => summarise(t, t.assigneeId ? (nameById.get(t.assigneeId) ?? "unassigned") : "unassigned");
-
-  const myTasks = allTasks.filter((t) => t.assigneeId === currentUser.id && t.status !== "done");
-  const urgent = allTasks.filter((t) => t.status === "urgent" || t.priority === "critical");
-  const stalled = allTasks.filter((t) => t.inactiveFlag);
-
-  const myDeptNames = (
-    await Promise.all(currentUser.departmentIds.map((id) => getDepartmentById(id)))
-  )
-    .map((d) => d?.name)
-    .filter(Boolean)
-    .join(", ") || "—";
-
-  return `You are an AI assistant inside DelegationDoer, an internal task-management tool for a digital agency with departments SEO, Website, Software, and Marketing.
-
-Current user: ${currentUser.name} (${currentUser.email})
-Role: ${currentUser.role}
-Department(s): ${myDeptNames}
-
-Open tasks assigned to ${currentUser.name}:
-${myTasks.length ? myTasks.map(named).join("\n") : "(none)"}
-
-Urgent / critical tasks across the whole org:
-${urgent.length ? urgent.map(named).join("\n") : "(none)"}
-
-Stalled tasks (no activity in 48h+):
-${stalled.length ? stalled.map(named).join("\n") : "(none)"}
-
-Guidelines:
-- Be concise. Default to short answers; expand only when asked.
-- Reference specific task titles or assignee names when answering.
-- Do NOT invent task titles, projects, or people that aren't in the lists above.
-- When asked "what should I focus on", combine priority, due date, and stalled state — surface 1–3 items, not all of them.
-- When asked who to assign something to, name the person and a one-line reason (skill/department fit, current load).`;
-}
+// Maximum number of tool-use rounds per turn. Each round = one
+// model response that requests tools + one batch of tool_results
+// fed back. Most questions resolve in 1–3 rounds; cap at 8 so a
+// runaway loop can't burn tokens forever.
+const MAX_ROUNDS = 8;
 
 export async function POST(req: NextRequest) {
   try {
+    const userId = await requireCurrentUserId();
+    const actor = await getUserById(userId);
+    if (!actor) {
+      return NextResponse.json({ error: "user not found" }, { status: 401 });
+    }
+
     const body = await req.json();
     const messages: ChatMessage[] = Array.isArray(body?.messages) ? body.messages : [];
     if (messages.length === 0) {
       return NextResponse.json({ reply: "(say something)" });
     }
 
-    const systemPrompt = await buildSystemPrompt();
+    const departments = await getDepartments();
+    const deptLabels = actor.departmentIds
+      .map((id) => departments.find((d) => d.id === id)?.name)
+      .filter(Boolean)
+      .join(", ") || "—";
+
+    // Small system prompt + a directory of tools. The model decides
+    // which to call based on the user's question; everything else
+    // (filtering, access scoping) happens server-side inside each
+    // tool handler.
+    const systemPrompt = `You are an AI assistant inside DelegationDoer, an internal task-management tool for a digital agency (scaledai.org). The departments are SEO, Website, Software, and Marketing.
+
+Caller:
+- Name: ${actor.name}
+- Role: ${actor.role}
+- Department(s): ${deptLabels}
+- Today: ${new Date().toLocaleString()}
+
+You have access to tools that read live data from the workspace's database. Use them whenever a question depends on real data (tasks, people, projects, clients, calendar, kudos, incidents, EOD notes, recommendations). Don't invent task titles, project names, or people.
+
+Guidelines:
+- Be concise. Default to a one or two-sentence answer; expand only when asked to.
+- Use the smallest set of tool calls needed. Reach for who_am_i / find_user_by_name when you need ids or to resolve "me" / "Henry" / etc.
+- Workers see only tasks not owned/created by leaders (this is enforced server-side, you can't bypass it — if a tool returns nothing for a worker, that's by design).
+- Reference task titles, person names, project names — not raw ids.
+- When suggesting an assignee for new work, rank by capacity + role/department fit and explain the top pick in one line.`;
+
+    // Build the message list we'll feed Anthropic. We mutate this as
+    // tool rounds progress (appending each assistant tool_use + the
+    // tool_result we computed).
+    type AnyContent =
+      | { type: "text"; text: string }
+      | { type: "tool_use"; id: string; name: string; input: Record<string, unknown> }
+      | { type: "tool_result"; tool_use_id: string; content: string; is_error?: boolean };
+    type AnyMessage = { role: "user" | "assistant"; content: string | AnyContent[] };
+
+    const convo: AnyMessage[] = messages.map((m) => ({
+      role: m.role,
+      content: m.content
+    }));
+
     const client = await getAnthropic();
-    const result = await client.messages.create({
-      model: MODELS.chat,
-      max_tokens: 800,
-      system: [
-        {
-          type: "text",
-          text: systemPrompt,
-          // System prompt is stable across turns; caching cuts repeated input cost.
-          // cache_control is supported at runtime in SDK 0.32.x but not yet in its types.
-          cache_control: { type: "ephemeral" }
-        } as any
-      ],
-      messages: messages.map((m) => ({ role: m.role, content: m.content }))
+    let finalText = "";
+    const tracedToolCalls: { name: string; input: Record<string, unknown> }[] = [];
+
+    for (let round = 0; round < MAX_ROUNDS; round++) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const result: any = await client.messages.create({
+        model: MODELS.chat,
+        max_tokens: 1024,
+        system: [
+          {
+            type: "text",
+            text: systemPrompt,
+            // System prompt is stable across turns; caching saves cost.
+            // cache_control is supported at runtime in SDK 0.32.x but
+            // not always in its types — cast through any.
+            cache_control: { type: "ephemeral" }
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          } as any
+        ],
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        tools: AI_TOOLS as any,
+        messages: convo
+      });
+
+      const blocks = (result.content ?? []) as AnyContent[];
+      const stopReason = result.stop_reason as string | undefined;
+
+      if (stopReason !== "tool_use") {
+        // Final text response — accumulate every text block.
+        finalText = blocks
+          .filter((b): b is { type: "text"; text: string } => b.type === "text")
+          .map((b) => b.text)
+          .join("\n")
+          .trim();
+        break;
+      }
+
+      // Append the assistant turn (carrying the tool_use blocks) to
+      // the convo, then run each tool and append its result as a
+      // single user-role message with one content block per result.
+      convo.push({ role: "assistant", content: blocks });
+      const toolResults: AnyContent[] = [];
+      for (const block of blocks) {
+        if (block.type !== "tool_use") continue;
+        tracedToolCalls.push({ name: block.name, input: block.input });
+        const output = await runTool(block.name, block.input ?? {}, { actor });
+        toolResults.push({
+          type: "tool_result",
+          tool_use_id: block.id,
+          content: typeof output === "string" ? output : JSON.stringify(output),
+          is_error:
+            typeof output === "object" && output !== null && "error" in (output as Record<string, unknown>)
+        });
+      }
+      convo.push({ role: "user", content: toolResults });
+    }
+
+    if (!finalText) {
+      finalText = "(I got stuck reasoning through that. Try rephrasing?)";
+    }
+
+    return NextResponse.json({
+      reply: finalText,
+      // Surface what tools were called so the UI can show a small
+      // "looked at X, Y, Z" hint if it wants to.
+      toolCalls: tracedToolCalls
     });
-
-    const reply = result.content
-      .map((b) => (b.type === "text" ? b.text : ""))
-      .join("\n")
-      .trim() || "(no reply)";
-
-    return NextResponse.json({ reply });
   } catch (err) {
     const message = err instanceof Error ? err.message : "unknown error";
     return NextResponse.json({ error: message }, { status: 500 });

@@ -5,6 +5,7 @@ import { ProfileAvatarSection } from "@/components/ProfileAvatarSection";
 import { DesktopAppSection } from "@/components/DesktopAppSection";
 import { MissiveIntegrationSection } from "@/components/MissiveIntegrationSection";
 import { DepartmentSlackSection } from "@/components/DepartmentSlackSection";
+import { WorkspaceChannelsSection } from "@/components/WorkspaceChannelsSection";
 import { SlackConnectSection } from "@/components/SlackConnectSection";
 import { GoogleConnectSection } from "@/components/GoogleConnectSection";
 import { CustomFieldsSection } from "@/components/CustomFieldsSection";
@@ -49,6 +50,8 @@ export default async function SettingsPage() {
       <SlackConnectSection />
 
       <GoogleConnectSection />
+
+      <WorkspaceChannelsSection canEdit={me?.role === "leader"} />
 
       <DepartmentSlackSection canEdit={me?.role === "leader"} />
 

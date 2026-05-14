@@ -7,6 +7,14 @@
     {
       "path": "/api/cron/inactivity",
       "schedule": "0 * * * *"
+    },
+    {
+      "path": "/api/cron/eod-recap",
+      "schedule": "0 23 * * *"
+    },
+    {
+      "path": "/api/cron/eod-recap",
+      "schedule": "0 0 * * *"
     }
   ]
 }

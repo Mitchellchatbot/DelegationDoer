@@ -11,14 +11,15 @@ export async function GET() {
   await requireCurrentUserId();
   const { data, error } = await getSupabaseAdmin()
     .from("departments")
-    .select("id, name, slack_channel_id")
+    .select("id, name, slack_channel_id, task_channel_id")
     .order("name");
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json({
     departments: (data ?? []).map((d) => ({
       id: d.id,
       name: d.name,
-      slackChannelId: (d.slack_channel_id as string | null) ?? null
+      slackChannelId: (d.slack_channel_id as string | null) ?? null,
+      taskChannelId: (d.task_channel_id as string | null) ?? null
     }))
   });
 }

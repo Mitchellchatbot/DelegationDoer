@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { requireCurrentUserId } from "@/lib/session";
 import { getAllTasks, getUserById } from "@/lib/server-data";
-import { notifyAssignment } from "@/lib/slack";
+import { notifyAssignment, postMessage } from "@/lib/slack";
 import { syncTaskToCalendar } from "@/lib/task-calendar-sync";
 
 export const dynamic = "force-dynamic";
@@ -175,6 +175,48 @@ export async function POST(req: NextRequest) {
     // Mirror to the assignee's Google Calendar if they're connected.
     // Fire-and-forget — never blocks the task creation response.
     void syncTaskToCalendar(id);
+
+    // Announce the new task in the department's task_channel (e.g. the
+    // Website team's #website-to-do channel mirrors what they had in
+    // Notion). Fire-and-forget; never blocks the response.
+    if (row.department_id) {
+      void (async () => {
+        try {
+          const { data: dept } = await supabase
+            .from("departments")
+            .select("name, task_channel_id")
+            .eq("id", row.department_id)
+            .maybeSingle();
+          const channel = dept?.task_channel_id as string | undefined;
+          if (!channel) return;
+          const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? "";
+          const taskUrl = baseUrl ? `${baseUrl}/tasks/${id}` : `/tasks/${id}`;
+          const assigner = await getUserById(userId);
+          const headline = `🆕 New ${(dept?.name as string) ?? "department"} task`;
+          const assigneeLine = assigneeName ? `*Assigned to:* ${assigneeName}` : "*Unassigned*";
+          const clientLine = row.client_name ? `\n*Client:* ${row.client_name}` : "";
+          const dueLine = row.due_date
+            ? `\n*Due:* ${new Date(row.due_date).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}`
+            : "";
+          await postMessage(channel, headline, [
+            { type: "header", text: { type: "plain_text", text: headline, emoji: true } },
+            { type: "section", text: { type: "mrkdwn", text: `*<${taskUrl}|${row.title}>*${clientLine}` } },
+            { type: "section", text: { type: "mrkdwn", text: `${assigneeLine}${dueLine}\n*Priority:* ${row.priority}  ·  *Estimate:* ${row.estimated_hours}h${assigner ? `  ·  *Created by:* ${assigner.name}` : ""}` } },
+            ...(row.description ? [{ type: "section", text: { type: "mrkdwn", text: `>${row.description.slice(0, 600).replace(/\n/g, "\n>")}` } }] : []),
+            {
+              type: "actions",
+              elements: [{
+                type: "button",
+                text: { type: "plain_text", text: "Open in DelegationDoer", emoji: true },
+                url: taskUrl
+              }]
+            }
+          ]);
+        } catch (err) {
+          console.error("[tasks/POST] task_channel announcement failed:", err);
+        }
+      })();
+    }
 
     return NextResponse.json({ task: data, slack });
   } catch (err) {

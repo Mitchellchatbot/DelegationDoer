@@ -2,7 +2,7 @@
 
 import * as Dialog from "@radix-ui/react-dialog";
 import {
-  Search, Bell, Plus, LogOut, X, ListTodo, Users as UsersIcon, FolderKanban,
+  Search, Plus, LogOut, X, ListTodo, Users as UsersIcon, FolderKanban,
   Loader2
 } from "lucide-react";
 import { useRouter } from "next/navigation";
@@ -10,6 +10,7 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { PersonAvatar } from "./PersonAvatar";
 import { NewTaskForm } from "./NewTaskForm";
+import { NotificationsBell } from "./NotificationsBell";
 import { ROLE_LABELS } from "@/lib/auth";
 import { primaryDepartment } from "@/lib/departments";
 import type { User } from "@/lib/types";
@@ -276,12 +277,7 @@ export function Topbar({ user }: { user: User }) {
           </Dialog.Portal>
         </Dialog.Root>
 
-        <button
-          aria-label="Notifications"
-          className="w-10 h-10 rounded-full inline-flex items-center justify-center bg-slate-50 border border-slate-200 text-ink/65 hover:text-ink hover:bg-slate-100 transition-colors"
-        >
-          <Bell className="w-4 h-4" />
-        </button>
+        <NotificationsBell />
         {(() => {
           const dept = user.role !== "leader" ? primaryDepartment(user.departmentIds) : null;
           return (

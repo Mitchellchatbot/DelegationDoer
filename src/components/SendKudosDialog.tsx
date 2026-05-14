@@ -53,7 +53,18 @@ export function SendKudosDialog({
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error ?? `failed (${res.status})`);
-      toast.success(`${emoji} Kudos sent to ${recipientName.split(" ")[0]}!`);
+      const firstName = recipientName.split(" ")[0];
+      if (data.slackDm === "sent") {
+        toast.success(`${emoji} Kudos sent to ${firstName} — also DM'd them on Slack`);
+      } else if (data.slackNote) {
+        // Sent OK but Slack DM didn't go through. Surface the reason
+        // so the sender can connect Slack or check spelling.
+        toast.success(`${emoji} Kudos sent to ${firstName}`, {
+          description: data.slackNote
+        });
+      } else {
+        toast.success(`${emoji} Kudos sent to ${firstName}!`);
+      }
       setOpen(false);
       reset();
     } catch (e) {

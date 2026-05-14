@@ -1,18 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { requireCurrentUserId } from "@/lib/session";
-import { findSlackUser, openDm, postMessage } from "@/lib/slack";
+import { findSlackUser, openDmAsUser, postMessageAsUser } from "@/lib/slack";
 
 export const dynamic = "force-dynamic";
 
 // POST /api/kudos — send a kudos.
 // Body: { toUserId: string, message: string, emoji?: string }
 //
-// Self-kudos are rejected (you can't 👏 yourself). The recipient sees
-// it on their desktop widget on the next poll AND gets a Slack DM
-// (best-effort) with the message + emoji. Slack lookup tries email
-// first, then fuzzy-matches the user's name against the workspace
-// roster so a missing email doesn't cost them the DM.
+// The recipient sees the kudos on their desktop widget on the next
+// poll AND gets a Slack DM that comes *from the sender's Slack
+// account* (using the sender's stored user token from the Slack
+// integration). So if Mitch kudoses Henry, Henry sees a real DM
+// from Mitch in his Slack inbox, not a bot message.
+//
+// Falls back gracefully:
+//   - sender hasn't connected Slack    → skip the DM (UI nudges them)
+//   - recipient not found on Slack     → skip the DM
+//   - any Slack API error              → log + skip, kudos still saves
 export async function POST(req: NextRequest) {
   try {
     const userId = await requireCurrentUserId();
@@ -29,7 +34,7 @@ export async function POST(req: NextRequest) {
 
     const supabase = getSupabaseAdmin();
     const id = `k_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
-    const { data, error } = await supabase
+    const { data: kudosRow, error } = await supabase
       .from("kudos")
       .insert({
         id,
@@ -42,76 +47,74 @@ export async function POST(req: NextRequest) {
       .single();
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-    // Slack DM — best-effort. We resolve both sender + recipient so
-    // the message reads "{sender} sent you a kudos" with proper names.
+    // Slack DM as the sender.
     let slackDm: "sent" | "skipped" | "failed" = "skipped";
-    let slackError: string | null = null;
-    if (process.env.SLACK_BOT_TOKEN) {
-      try {
-        const [{ data: toUser }, { data: fromUser }] = await Promise.all([
-          supabase
-            .from("users")
-            .select("name, email")
-            .eq("id", toUserId)
-            .maybeSingle(),
-          supabase
-            .from("users")
-            .select("name")
-            .eq("id", userId)
-            .maybeSingle()
-        ]);
-        if (toUser) {
-          const slackId = await findSlackUser({
-            email: toUser.email as string | null,
-            name: toUser.name as string | null
-          });
-          if (slackId) {
-            const channel = await openDm(slackId);
-            const senderName = (fromUser?.name as string | null) ?? "Someone";
-            await postMessage(
-              channel,
-              `${emoji} ${senderName} sent you a kudos: ${message}`,
-              [
-                {
-                  type: "header",
-                  text: {
-                    type: "plain_text",
-                    text: `${emoji}  You got a kudos`,
-                    emoji: true
-                  }
-                },
-                {
-                  type: "section",
-                  text: {
-                    type: "mrkdwn",
-                    text: `*${senderName}* says:\n>${message.replace(/\n/g, "\n>")}`
-                  }
-                },
-                {
-                  type: "context",
-                  elements: [
-                    {
-                      type: "mrkdwn",
-                      text: "Sent via DelegationDoer"
-                    }
-                  ]
+    let slackNote: string | null = null;
+    try {
+      const [{ data: sender }, { data: recipient }] = await Promise.all([
+        supabase
+          .from("users")
+          .select("name, slack_user_token, slack_user_id")
+          .eq("id", userId)
+          .maybeSingle(),
+        supabase
+          .from("users")
+          .select("name, email")
+          .eq("id", toUserId)
+          .maybeSingle()
+      ]);
+
+      if (!sender?.slack_user_token) {
+        slackDm = "skipped";
+        slackNote = "Connect your Slack in Settings to also DM the recipient.";
+      } else if (!recipient) {
+        slackDm = "skipped";
+        slackNote = "recipient not found";
+      } else {
+        // Resolve recipient's Slack id via bot-token roster lookup
+        // (uses email fast-path, then fuzzy name match).
+        const recipientSlackId = await findSlackUser({
+          email: recipient.email as string | null,
+          name: recipient.name as string | null
+        });
+        if (!recipientSlackId) {
+          slackDm = "skipped";
+          slackNote = `couldn't find ${recipient.name ?? "recipient"} on Slack`;
+        } else {
+          const channel = await openDmAsUser(
+            sender.slack_user_token as string,
+            recipientSlackId
+          );
+          await postMessageAsUser({
+            userToken: sender.slack_user_token as string,
+            channel,
+            text: `${emoji} ${message}`,
+            blocks: [
+              {
+                type: "section",
+                text: {
+                  type: "mrkdwn",
+                  text: `${emoji}  *Kudos from ${sender.name ?? "me"}:*\n>${message.replace(/\n/g, "\n>")}`
                 }
-              ]
-            );
-            slackDm = "sent";
-          } else {
-            slackDm = "skipped";
-            slackError = "couldn't find recipient on Slack";
-          }
+              },
+              {
+                type: "context",
+                elements: [
+                  { type: "mrkdwn", text: "_sent via DelegationDoer_" }
+                ]
+              }
+            ]
+          });
+          slackDm = "sent";
         }
-      } catch (err) {
-        slackDm = "failed";
-        slackError = err instanceof Error ? err.message : String(err);
-        console.warn("[kudos] slack DM failed:", slackError);
       }
+    } catch (err) {
+      slackDm = "failed";
+      slackNote = err instanceof Error ? err.message : String(err);
+      console.warn("[kudos] slack DM failed:", slackNote);
     }
 
-    return NextResponse.json({ kudos: data, slackDm, slackError });
+    return NextResponse.json({ kudos: kudosRow, slackDm, slackNote });
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "unknown error" },

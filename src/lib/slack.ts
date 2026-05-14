@@ -307,6 +307,48 @@ export async function openDm(slackUserId: string): Promise<string> {
   return data.channel.id;
 }
 
+// Open a DM channel between the user-token holder and another user.
+// Returns the channel id you can post into.
+export async function openDmAsUser(
+  userToken: string,
+  recipientSlackId: string
+): Promise<string> {
+  const data = await slackCall<{ ok: true; channel: { id: string } }>(
+    "conversations.open",
+    { users: recipientSlackId },
+    userToken
+  );
+  return data.channel.id;
+}
+
+// Post a message AS the user — uses their xoxp- user token instead
+// of the bot. The recipient sees the DM come from the user directly
+// (so it shows up in their normal Slack inbox between them and that
+// person), not from the workspace bot. Requires the user to have
+// granted chat:write + im:write in OAuth.
+export async function postMessageAsUser(args: {
+  userToken: string;
+  channel: string;
+  text: string;
+  blocks?: unknown[];
+}): Promise<{ ts: string }> {
+  const data = await slackCall<{ ok: true; ts: string }>(
+    "chat.postMessage",
+    {
+      channel: args.channel,
+      text: args.text,
+      blocks: args.blocks,
+      // as_user is implied when posting with a user token; explicit
+      // for clarity / older API versions.
+      as_user: true,
+      unfurl_links: false,
+      unfurl_media: false
+    },
+    args.userToken
+  );
+  return { ts: data.ts };
+}
+
 export async function postMessage(
   channel: string,
   text: string,

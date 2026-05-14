@@ -35,10 +35,20 @@ export async function GET(_req: NextRequest) {
   });
 
   // user_scope (not scope) gives us a xoxp- user token. We don't ask
-  // for any bot scopes here — the bot is already installed for DMs.
+  // for any bot scopes here — the bot is already installed.
+  //   users.profile:write/read — widget status mirror
+  //   chat:write              — kudos DMs sent FROM the sender's
+  //                             own Slack account (so the recipient
+  //                             sees "Mitch sent you a kudos" from
+  //                             Mitch's user, not the DD bot)
+  //   im:write                — open a DM channel between the user
+  //                             and the recipient before posting
   const url = new URL("https://slack.com/oauth/v2/authorize");
   url.searchParams.set("client_id", clientId);
-  url.searchParams.set("user_scope", "users.profile:write,users.profile:read");
+  url.searchParams.set(
+    "user_scope",
+    "users.profile:write,users.profile:read,chat:write,im:write"
+  );
   url.searchParams.set("redirect_uri", redirectUri);
   url.searchParams.set("state", state);
 

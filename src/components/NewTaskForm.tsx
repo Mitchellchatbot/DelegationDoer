@@ -99,6 +99,35 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel }: Props) {
     )).sort(),
     [tasks]
   );
+  // Map each client to the most-recent website they were paired with.
+  // Drives the auto-fill when you pick a client from the dropdown so
+  // you don't have to retype the URL every time. We walk tasks newest
+  // → oldest so reruns of "Acme Insurance" use the latest URL on file.
+  const clientToWebsite = useMemo(() => {
+    const map = new Map<string, string>();
+    const sorted = [...tasks].sort(
+      (a, b) => +new Date(b.lastActivityAt) - +new Date(a.lastActivityAt)
+    );
+    for (const t of sorted) {
+      if (!t.clientName || !t.website) continue;
+      if (!map.has(t.clientName)) map.set(t.clientName, t.website);
+    }
+    return map;
+  }, [tasks]);
+  const [clientDropdownOpen, setClientDropdownOpen] = useState(false);
+  const clientMatches = useMemo(() => {
+    const q = clientName.trim().toLowerCase();
+    if (!q) return clientList.slice(0, 8);
+    return clientList.filter((c) => c.toLowerCase().includes(q)).slice(0, 8);
+  }, [clientList, clientName]);
+  function pickClient(name: string) {
+    setClientName(name);
+    setClientDropdownOpen(false);
+    // Auto-fill the website iff we know one for this client and the
+    // user hasn't already typed something. Their typing always wins.
+    const knownSite = clientToWebsite.get(name);
+    if (knownSite && !website.trim()) setWebsite(knownSite);
+  }
 
   // assignableTargets used to default to the mock users array; pass
   // the live pool explicitly.
@@ -334,18 +363,58 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel }: Props) {
 
         {!internal && (
           <div className="grid grid-cols-2 gap-3">
-            <div>
+            <div className="relative">
               <label className="label">Client</label>
               <input
-                list="client-options"
                 className="input"
                 value={clientName}
-                onChange={(e) => setClientName(e.target.value)}
+                onChange={(e) => { setClientName(e.target.value); setClientDropdownOpen(true); }}
+                onFocus={() => setClientDropdownOpen(true)}
+                // Delay so a click on a dropdown row registers before
+                // the blur closes the panel.
+                onBlur={() => setTimeout(() => setClientDropdownOpen(false), 120)}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") setClientDropdownOpen(false);
+                  if (e.key === "Enter" && clientMatches.length > 0 && clientDropdownOpen) {
+                    // Enter while the dropdown is open picks the first
+                    // suggestion. Stops form submission so the user
+                    // doesn't accidentally fire "Create task".
+                    e.preventDefault();
+                    pickClient(clientMatches[0]);
+                  }
+                }}
                 placeholder="e.g. Acme Insurance"
+                autoComplete="off"
               />
-              <datalist id="client-options">
-                {clientList.map((c) => <option key={c} value={c} />)}
-              </datalist>
+              {clientDropdownOpen && clientMatches.length > 0 && (
+                <div className="absolute left-0 right-0 top-full mt-1 z-20 rounded-xl border border-slate-200 bg-white shadow-lift overflow-hidden">
+                  {clientMatches.map((c) => {
+                    const site = clientToWebsite.get(c);
+                    const isExact = c.toLowerCase() === clientName.trim().toLowerCase();
+                    return (
+                      <button
+                        key={c}
+                        type="button"
+                        onMouseDown={(e) => { e.preventDefault(); pickClient(c); }}
+                        className={
+                          "w-full text-left px-3 py-2 flex items-center gap-2 hover:bg-blue-50 transition-colors " +
+                          (isExact ? "bg-blue-50/60" : "")
+                        }
+                      >
+                        <span className="text-sm flex-1 truncate">{c}</span>
+                        {site && (
+                          <span className="text-[10px] text-muted truncate max-w-[180px]">{site}</span>
+                        )}
+                      </button>
+                    );
+                  })}
+                  {clientName.trim() && !clientMatches.some((c) => c.toLowerCase() === clientName.trim().toLowerCase()) && (
+                    <div className="px-3 py-1.5 text-[11px] text-muted border-t border-slate-100 bg-slate-50/60">
+                      No match — "{clientName.trim()}" will be saved as a new client.
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
             <div>
               <label className="label">Website</label>

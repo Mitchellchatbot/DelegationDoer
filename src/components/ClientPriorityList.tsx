@@ -5,7 +5,7 @@ import { useState } from "react";
 import {
   DragDropContext, Droppable, Draggable, type DropResult
 } from "@hello-pangea/dnd";
-import { Briefcase, Globe2, GripVertical, Folder } from "lucide-react";
+import { Briefcase, Globe2, GripVertical, Folder, User as UserIcon, Mail } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import type { Client } from "@/lib/clients-data";
@@ -138,23 +138,48 @@ export function ClientPriorityList({ initial, openCounts, canEdit }: Props) {
                           href={`/clients/${encodeURIComponent(c.id)}`}
                           className="min-w-0 flex-1 group rounded-md outline-none focus-visible:ring-2 focus-visible:ring-indigo-400/40"
                         >
-                          <div className="text-sm font-semibold truncate group-hover:text-accent transition-colors">
+                          <div className="text-sm font-semibold truncate group-hover:text-accent transition-colors flex items-center gap-1.5">
                             {c.name}
+                            {c.websites.length > 1 && (
+                              <span className="text-[10px] text-ink/55 font-normal tabular-nums">
+                                · {c.websites.length} sites
+                              </span>
+                            )}
                           </div>
                           <div className="text-[11px] text-ink/60 truncate inline-flex items-center gap-2 mt-0.5">
+                            {c.contactName && (
+                              <span className="inline-flex items-center gap-1">
+                                <UserIcon className="w-3 h-3" /> {c.contactName}
+                              </span>
+                            )}
                             {c.website && (
                               <span className="inline-flex items-center gap-1">
-                                <Globe2 className="w-3 h-3" /> {c.website}
+                                <Globe2 className="w-3 h-3" />
+                                {c.website.replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/$/, "")}
                               </span>
                             )}
                             <span>· {openCount} open task{openCount === 1 ? "" : "s"}</span>
                           </div>
+                          {c.contactEmails.length > 0 && (
+                            <div className="text-[10px] text-ink/50 truncate inline-flex items-center gap-1 mt-0.5">
+                              <Mail className="w-2.5 h-2.5" />
+                              {c.contactEmails.slice(0, 2).join(", ")}
+                              {c.contactEmails.length > 2 ? ` +${c.contactEmails.length - 2}` : ""}
+                            </div>
+                          )}
                         </Link>
 
-                        {/* Priority chip */}
-                        <span className={cn("text-[10px] px-2 py-0.5 rounded-full border shrink-0 capitalize", PRIORITY_TONES[c.priority])}>
-                          {c.priority}
-                        </span>
+                        {/* Rank + priority chips */}
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          {c.priorityRank !== null && (
+                            <span className="text-[10px] font-bold tabular-nums px-1.5 py-0.5 rounded-md bg-white/85 text-ink/70 border border-white/80">
+                              #{c.priorityRank}
+                            </span>
+                          )}
+                          <span className={cn("text-[10px] px-2 py-0.5 rounded-full border capitalize", PRIORITY_TONES[c.priority])}>
+                            {c.priority}
+                          </span>
+                        </div>
                       </div>
                     </li>
                   )}

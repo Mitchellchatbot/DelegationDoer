@@ -17,10 +17,28 @@ export type ClientPriority = "low" | "medium" | "high";
 export interface Client {
   id: string;
   name: string;
+  // Primary website. Surfaced first; the additional `websites` array
+  // carries every other URL the client runs under (Villa, Pool group,
+  // etc.) so the detail page can list them all.
   website: string | null;
+  websites: string[];
   priority: ClientPriority;
+  // Numeric priority rank (1 = most urgent). Source-of-truth for the
+  // Scaled AI client sheet ordering; the `priority` bucket above is
+  // derived from this.
+  priorityRank: number | null;
   notes: string | null;
   displayOrder: number;
+  contactName: string | null;
+  contactEmails: string[];
+  startDate: string | null;
+  subscriptionDate: string | null;
+  status: string;
+  didBuildWebsite: boolean | null;
+  tawkInstalled: boolean | null;
+  googleProfileAutomation: boolean | null;
+  domainLocation: string | null;
+  hostingLocation: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -40,9 +58,21 @@ interface ClientRow {
   id: string;
   name: string;
   website: string | null;
+  websites: string[] | null;
   priority: ClientPriority;
+  priority_rank: number | null;
   notes: string | null;
   display_order: number | string; // pg numeric → string
+  contact_name: string | null;
+  contact_emails: string[] | null;
+  start_date: string | null;
+  subscription_date: string | null;
+  status: string | null;
+  did_build_website: boolean | null;
+  tawk_installed: boolean | null;
+  google_profile_automation: boolean | null;
+  domain_location: string | null;
+  hosting_location: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -63,9 +93,21 @@ function rowToClient(r: ClientRow): Client {
     id: r.id,
     name: r.name,
     website: r.website,
+    websites: r.websites ?? [],
     priority: r.priority,
+    priorityRank: r.priority_rank ?? null,
     notes: r.notes,
     displayOrder: Number(r.display_order ?? 0),
+    contactName: r.contact_name ?? null,
+    contactEmails: r.contact_emails ?? [],
+    startDate: r.start_date ?? null,
+    subscriptionDate: r.subscription_date ?? null,
+    status: r.status ?? "active",
+    didBuildWebsite: r.did_build_website ?? null,
+    tawkInstalled: r.tawk_installed ?? null,
+    googleProfileAutomation: r.google_profile_automation ?? null,
+    domainLocation: r.domain_location ?? null,
+    hostingLocation: r.hosting_location ?? null,
     createdAt: r.created_at,
     updatedAt: r.updated_at
   };

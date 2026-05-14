@@ -2,7 +2,8 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import {
   Briefcase, Globe2, Calendar, FileText, Lightbulb, ExternalLink, ListChecks,
-  Mail, CheckCircle2
+  Mail, CheckCircle2, User as UserIcon, Server, KeyRound, MessageSquare,
+  Hash, CalendarClock
 } from "lucide-react";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { getClient, getResourcesForClient, type ClientResource } from "@/lib/clients-data";
@@ -49,7 +50,15 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
 
   const userId = await requireCurrentUserId();
   const me = await getUserById(userId);
-  const domain = extractDomain(client.website);
+  // Match inbound email against every domain the client runs under —
+  // not just the primary website — so the Villa cohort's threads
+  // surface here regardless of which sister site they came in on.
+  const domains = Array.from(new Set(
+    [client.website, ...client.websites]
+      .map(extractDomain)
+      .filter((d): d is string => !!d)
+  ));
+  const domain = domains[0] ?? null;
 
   const supabase = getSupabaseAdmin();
   const [resources, openTasksRes, doneTasksRes, visibleIds] = await Promise.all([
@@ -113,9 +122,10 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
             visibleAccountEmail.email.toLowerCase()
           )!;
 
-          const matches = (t.participants ?? []).some((p) =>
-            parseEmail(p).endsWith(`@${domain}`)
-          );
+          const matches = (t.participants ?? []).some((p) => {
+            const addr = parseEmail(p);
+            return domains.some((d) => addr.endsWith(`@${d}`));
+          });
           if (!matches) return null;
 
           return {
@@ -152,26 +162,45 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
         style={{ background: "linear-gradient(120deg, #DBEAFE 0%, #C7D2FE 50%, #C7D2FE 100%)" }}
       >
         <div className="relative flex items-start justify-between gap-3 flex-wrap">
-          <div className="flex items-center gap-3">
-            <div className="w-12 h-12 rounded-xl bg-white/70 border border-white/80 grid place-items-center text-indigo-600 shadow-sm">
+          <div className="flex items-start gap-3 flex-1 min-w-0">
+            <div className="w-12 h-12 rounded-xl bg-white/70 border border-white/80 grid place-items-center text-indigo-600 shadow-sm shrink-0">
               <Briefcase className="w-6 h-6" />
             </div>
-            <div>
+            <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2 flex-wrap">
                 <h1 className="text-xl font-semibold">{client.name}</h1>
+                {client.priorityRank !== null && (
+                  <span className="text-[10px] font-bold tabular-nums px-1.5 py-0.5 rounded-md bg-white/80 text-ink/75 border border-white/80">
+                    Rank #{client.priorityRank}
+                  </span>
+                )}
                 <span className={`text-[10px] px-2 py-0.5 rounded-full border capitalize ${PRIORITY_TONES[client.priority]}`}>
                   {client.priority} priority
                 </span>
+                {client.status && client.status !== "active" && (
+                  <span className="text-[10px] px-2 py-0.5 rounded-full border capitalize bg-amber-100 text-amber-700 border-amber-200/70">
+                    {client.status}
+                  </span>
+                )}
               </div>
-              {client.website && (
-                <a
-                  href={client.website.startsWith("http") ? client.website : `https://${client.website}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-xs text-ink/60 inline-flex items-center gap-1 mt-1 hover:text-accent"
-                >
-                  <Globe2 className="w-3 h-3" /> {client.website}
-                </a>
+              {client.contactName && (
+                <div className="text-xs text-ink/70 inline-flex items-center gap-1 mt-1.5">
+                  <UserIcon className="w-3 h-3" /> {client.contactName}
+                </div>
+              )}
+              {client.contactEmails.length > 0 && (
+                <div className="text-xs text-ink/60 flex items-center gap-1.5 flex-wrap mt-1">
+                  <Mail className="w-3 h-3 shrink-0" />
+                  {client.contactEmails.map((e) => (
+                    <a
+                      key={e}
+                      href={`mailto:${e}`}
+                      className="hover:text-accent underline-offset-2 hover:underline"
+                    >
+                      {e}
+                    </a>
+                  ))}
+                </div>
               )}
               {client.notes && (
                 <p className="text-sm text-ink/70 mt-2 max-w-2xl">{client.notes}</p>
@@ -185,6 +214,82 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
           style={{ background: "radial-gradient(circle, rgba(99,102,241,0.18), transparent 70%)" }}
         />
       </header>
+
+      {/* Service / integration metadata — collapsed into a single card
+          so the operator can scan the wiring (where the domain lives,
+          whether Tawk is in, what the start date was) in one glance. */}
+      {(client.websites.length > 0 || client.startDate || client.subscriptionDate || client.domainLocation || client.hostingLocation || client.didBuildWebsite !== null || client.tawkInstalled !== null || client.googleProfileAutomation !== null) && (
+        <section className="rounded-2xl border border-white/60 shadow-soft bg-gradient-to-br from-blue-50/60 to-white p-4 space-y-3">
+          <header className="flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-blue-500" />
+            <div className="text-sm font-semibold">Client info</div>
+          </header>
+
+          {/* Multi-website list. Lists every site the client runs;
+              clickable links open in a new tab. */}
+          {client.websites.length > 0 && (
+            <div>
+              <div className="text-[10px] uppercase tracking-wide text-ink/50 font-semibold mb-1.5">
+                Websites · {client.websites.length}
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {client.websites.map((w) => (
+                  <a
+                    key={w}
+                    href={w.startsWith("http") ? w : `https://${w}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white/85 border border-blue-200/70 text-xs text-ink hover:text-accent hover:border-accent/40 transition-colors"
+                  >
+                    <Globe2 className="w-3 h-3 text-blue-600" />
+                    {w.replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/$/, "")}
+                  </a>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-x-4 gap-y-2.5 text-xs">
+            {client.startDate && (
+              <InfoCell icon={<CalendarClock className="w-3 h-3" />} label="Start date">
+                {new Date(client.startDate).toLocaleDateString(undefined, {
+                  year: "numeric", month: "short", day: "numeric"
+                })}
+              </InfoCell>
+            )}
+            {client.subscriptionDate && (
+              <InfoCell icon={<Hash className="w-3 h-3" />} label="Subscription day">
+                {client.subscriptionDate}
+              </InfoCell>
+            )}
+            {client.domainLocation && (
+              <InfoCell icon={<Server className="w-3 h-3" />} label="Domain">
+                {client.domainLocation}
+              </InfoCell>
+            )}
+            {client.hostingLocation && (
+              <InfoCell icon={<KeyRound className="w-3 h-3" />} label="Hosting">
+                {client.hostingLocation}
+              </InfoCell>
+            )}
+            {client.didBuildWebsite !== null && (
+              <InfoCell icon={<MessageSquare className="w-3 h-3" />} label="We built site">
+                {client.didBuildWebsite ? "Yes" : "No"}
+              </InfoCell>
+            )}
+            {client.tawkInstalled !== null && (
+              <InfoCell icon={<MessageSquare className="w-3 h-3" />} label="Tawk chat">
+                {client.tawkInstalled ? "Installed" : "Not installed"}
+              </InfoCell>
+            )}
+            {client.googleProfileAutomation !== null && (
+              <InfoCell icon={<MessageSquare className="w-3 h-3" />} label="GBP automation">
+                {client.googleProfileAutomation ? "On" : "Off"}
+              </InfoCell>
+            )}
+          </div>
+        </section>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <Section
@@ -391,6 +496,23 @@ function ResourceRow({
         )}
       </div>
       <DeleteResourceButton clientId={clientId} resourceId={resource.id} />
+    </div>
+  );
+}
+
+function InfoCell({
+  icon, label, children
+}: {
+  icon: React.ReactNode;
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="min-w-0">
+      <div className="text-[10px] uppercase tracking-wide text-ink/50 font-semibold inline-flex items-center gap-1">
+        {icon} {label}
+      </div>
+      <div className="text-ink/85 truncate mt-0.5">{children}</div>
     </div>
   );
 }

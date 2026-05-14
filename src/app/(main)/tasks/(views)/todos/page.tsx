@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import * as Dialog from "@radix-ui/react-dialog";
 import {
   ListChecks, Sparkles, Plus, Check, Trash2, Loader2, ShieldAlert,
   Edit2, X, Users, Crown
@@ -55,6 +56,10 @@ export default function TodosPage() {
   const [newItemText, setNewItemText] = useState("");
   const [busy, setBusy] = useState(false);
   const newItemRef = useRef<HTMLInputElement>(null);
+  // In-app dialog state — replaces window.prompt + window.confirm.
+  const [newListOpen, setNewListOpen] = useState(false);
+  const [newListTitle, setNewListTitle] = useState("");
+  const [deleteTarget, setDeleteTarget] = useState<TodoList | null>(null);
 
   async function loadLists() {
     try {
@@ -182,30 +187,37 @@ export default function TodosPage() {
     }
   }
 
-  async function addList() {
-    const title = prompt("Name this list:");
-    if (!title?.trim()) return;
+  async function createList() {
+    const title = newListTitle.trim();
+    if (!title) return;
     try {
       const res = await fetch("/api/todo-lists", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title: title.trim() })
+        body: JSON.stringify({ title })
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error ?? `failed (${res.status})`);
       await loadLists();
       setActiveId(data.list.id);
+      setNewListTitle("");
+      setNewListOpen(false);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "couldn't create");
     }
   }
 
-  async function deleteList(list: TodoList) {
+  function requestDeleteList(list: TodoList) {
     if (list.kind !== "custom") {
       toast.error("Today / Long-term / Shared can't be deleted");
       return;
     }
-    if (!confirm(`Delete "${list.title}" and all its items?`)) return;
+    setDeleteTarget(list);
+  }
+
+  async function confirmDeleteList() {
+    const list = deleteTarget;
+    if (!list) return;
     try {
       const res = await fetch(`/api/todo-lists/${list.id}`, { method: "DELETE" });
       if (!res.ok) {
@@ -219,6 +231,8 @@ export default function TodosPage() {
       }
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "couldn't delete");
+    } finally {
+      setDeleteTarget(null);
     }
   }
 
@@ -277,7 +291,7 @@ export default function TodosPage() {
             action={
               <button
                 type="button"
-                onClick={addList}
+                onClick={() => { setNewListTitle(""); setNewListOpen(true); }}
                 className="inline-flex items-center gap-0.5 text-[10px] text-accent hover:text-accent/80 font-medium"
                 title="Add a new list"
               >
@@ -292,7 +306,7 @@ export default function TodosPage() {
                 list={l}
                 active={l.id === activeId}
                 onClick={() => setActiveId(l.id)}
-                onDelete={l.kind === "custom" ? () => deleteList(l) : undefined}
+                onDelete={l.kind === "custom" ? () => requestDeleteList(l) : undefined}
               />
             ))}
           </ListSection>
@@ -399,6 +413,83 @@ export default function TodosPage() {
           )}
         </main>
       </div>
+
+      {/* New-list dialog — replaces window.prompt() */}
+      <Dialog.Root open={newListOpen} onOpenChange={setNewListOpen}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 bg-black/60 z-40" />
+          <Dialog.Content
+            aria-describedby={undefined}
+            className="fixed inset-0 z-50 outline-none pointer-events-none flex items-center justify-center px-4 lg:pl-[264px]"
+          >
+            <div className="pointer-events-auto w-[440px] max-w-[92vw] card p-5 space-y-4">
+              <div className="flex items-start justify-between">
+                <div>
+                  <Dialog.Title className="text-base font-medium">New list</Dialog.Title>
+                  <p className="text-xs text-muted mt-0.5">Pick a name. You can rename it anytime.</p>
+                </div>
+                <Dialog.Close className="btn p-1.5"><X className="w-3.5 h-3.5" /></Dialog.Close>
+              </div>
+              <input
+                autoFocus
+                value={newListTitle}
+                onChange={(e) => setNewListTitle(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") { e.preventDefault(); void createList(); }
+                }}
+                className="input"
+                placeholder="e.g. Q3 marketing ideas"
+              />
+              <div className="flex items-center justify-end gap-2">
+                <Dialog.Close className="btn">Cancel</Dialog.Close>
+                <button
+                  type="button"
+                  onClick={createList}
+                  disabled={!newListTitle.trim()}
+                  className="btn-primary disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Create list
+                </button>
+              </div>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+
+      {/* Delete-list confirm — replaces window.confirm() */}
+      <Dialog.Root open={deleteTarget !== null} onOpenChange={(o) => { if (!o) setDeleteTarget(null); }}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 bg-black/60 z-40" />
+          <Dialog.Content
+            aria-describedby={undefined}
+            className="fixed inset-0 z-50 outline-none pointer-events-none flex items-center justify-center px-4 lg:pl-[264px]"
+          >
+            <div className="pointer-events-auto w-[440px] max-w-[92vw] card p-5 space-y-4">
+              <div className="flex items-start gap-3">
+                <div className="w-9 h-9 rounded-lg bg-rose-100 border border-rose-200 grid place-items-center text-rose-600">
+                  <Trash2 className="w-4 h-4" />
+                </div>
+                <div className="flex-1">
+                  <Dialog.Title className="text-base font-medium">Delete list?</Dialog.Title>
+                  <p className="text-sm text-muted mt-1">
+                    <span className="font-medium text-ink">{deleteTarget?.title}</span> and all of its items will be removed. This can't be undone.
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center justify-end gap-2">
+                <Dialog.Close className="btn">Cancel</Dialog.Close>
+                <button
+                  type="button"
+                  onClick={confirmDeleteList}
+                  className="btn-danger"
+                >
+                  Delete list
+                </button>
+              </div>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
     </div>
   );
 }

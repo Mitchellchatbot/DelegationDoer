@@ -7,8 +7,8 @@ import { Countdown } from "@/components/Countdown";
 import { TaskActions, CommentForm } from "@/components/TaskActions";
 import { TaskTimerButton } from "@/components/TaskTimerButton";
 import { NotifyTeammatesDialog } from "@/components/NotifyTeammatesDialog";
-import { canNotifyOnTask } from "@/lib/access";
-import { getUserById, getAllUsersLight, getDepartments } from "@/lib/server-data";
+import { canNotifyOnTask, canViewTask } from "@/lib/access";
+import { getUserById, getAllUsersLight, getDepartments, getLeaderIds } from "@/lib/server-data";
 import { Megaphone } from "lucide-react";
 import { HandoffButton, HandoffTimeline } from "@/components/HandoffPanel";
 import { TaskThread } from "@/components/TaskThread";
@@ -111,16 +111,20 @@ async function loadTask(id: string): Promise<{ task: Task; log: ActivityLog[]; e
 }
 
 export default async function TaskDetailPage({ params }: { params: { id: string } }) {
-  const [loaded, allUsers, currentUserId, departments] = await Promise.all([
+  const [loaded, allUsers, currentUserId, departments, leaderIds] = await Promise.all([
     loadTask(params.id),
     getAllUsersLight(),
     requireCurrentUserId(),
-    getDepartments()
+    getDepartments(),
+    getLeaderIds()
   ]);
   if (!loaded) return notFound();
   // Fetch the current user's full record (incl. departmentIds) so the
   // access helper has a real shape to evaluate.
   const me = await getUserById(currentUserId);
+  // Leader-owned tasks are invisible to non-leaders. 404 instead of 403 so
+  // we don't leak the existence of the task to the wrong viewer.
+  if (!canViewTask(me, loaded.task, leaderIds)) return notFound();
   const { task, log, extensions } = loaded;
   const totalHoursAdded = extensions.reduce((s, e) => s + e.hoursAdded, 0);
 

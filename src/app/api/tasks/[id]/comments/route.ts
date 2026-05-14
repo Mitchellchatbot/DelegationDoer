@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
-import { requireCurrentUserId } from "@/lib/session";
+import { loadTaskForViewer } from "@/lib/task-access";
 
 export const dynamic = "force-dynamic";
 
@@ -8,7 +8,9 @@ export const dynamic = "force-dynamic";
 // Body: { content: string }.
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   try {
-    const userId = await requireCurrentUserId();
+    const access = await loadTaskForViewer(params.id);
+    if (!access.ok) return access.response;
+    const userId = access.viewerId;
     const { content, imageUrl } = await req.json();
     const text = (content ?? "").trim();
     const image = typeof imageUrl === "string" ? imageUrl : null;

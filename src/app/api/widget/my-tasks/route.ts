@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { requireCurrentUserId } from "@/lib/session";
+import { getUserById, getLeaderIds } from "@/lib/server-data";
 
 // Returns the current user's open tasks and which ones still need to be
 // acknowledged (no row in assignment_acknowledgements yet).
@@ -11,7 +12,7 @@ import { requireCurrentUserId } from "@/lib/session";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-const SELECT_COLS = "id, title, priority, status, due_date, estimated_hours, actual_hours, actual_hours_override, inactive_flag, created_at, description, tags, client_name, website";
+const SELECT_COLS = "id, title, priority, status, due_date, estimated_hours, actual_hours, actual_hours_override, inactive_flag, created_at, description, tags, client_name, website, creator_id, assignee_id";
 
 export async function GET() {
   try {
@@ -46,11 +47,26 @@ export async function GET() {
     // Merge + dedupe by id (an incident task assigned to me would otherwise
     // appear twice).
     const seen = new Set<string>();
-    const merged = [...(mine ?? []), ...(incidents ?? [])].filter((t) => {
+    let merged = [...(mine ?? []), ...(incidents ?? [])].filter((t) => {
       if (seen.has(t.id)) return false;
       seen.add(t.id);
       return true;
     });
+
+    // Leader-privacy filter — non-leaders never see incident tasks
+    // (or anything else) touched by a leader, unless they themselves
+    // are the assignee. Leaders always see their full slice.
+    const viewer = await getUserById(userId);
+    if (viewer?.role !== "leader") {
+      const leaderIds = await getLeaderIds();
+      merged = merged.filter((t) => {
+        if (t.assignee_id === userId) return true;
+        if (t.creator_id === userId) return true;
+        if (t.assignee_id && leaderIds.has(t.assignee_id)) return false;
+        if (t.creator_id && leaderIds.has(t.creator_id)) return false;
+        return true;
+      });
+    }
 
     const acked = new Set((acks ?? []).map((a) => a.task_id));
     const out = merged.map((t) => {

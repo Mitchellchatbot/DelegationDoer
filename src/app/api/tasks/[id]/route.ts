@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
-import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
+import { loadTaskForViewer } from "@/lib/task-access";
 import { notifyCompletion, type CompletionResult } from "@/lib/slack";
 import { onTaskDone } from "@/lib/project-flow";
 import { syncTaskToCalendar } from "@/lib/task-calendar-sync";
@@ -17,7 +17,9 @@ export const dynamic = "force-dynamic";
 // Logs an activity row when status changes.
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
   try {
-    const userId = await requireCurrentUserId();
+    const access = await loadTaskForViewer(params.id);
+    if (!access.ok) return access.response;
+    const userId = access.viewerId;
     const body = await req.json();
     const supabase = getSupabaseAdmin();
 

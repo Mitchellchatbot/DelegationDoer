@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireCurrentUserId } from "@/lib/session";
 import { getUserById, getAllUsersLight } from "@/lib/server-data";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
+import { loadTaskForViewer } from "@/lib/task-access";
 import { notifyTeamFyi } from "@/lib/slack";
 import { canNotifyOnTask } from "@/lib/access";
 
@@ -16,7 +16,9 @@ export const dynamic = "force-dynamic";
 // (assignee, creator, dept head of the task's department, Leader).
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   try {
-    const userId = await requireCurrentUserId();
+    const access = await loadTaskForViewer(params.id);
+    if (!access.ok) return access.response;
+    const userId = access.viewerId;
     const me = await getUserById(userId);
     if (!me) return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
 

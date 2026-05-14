@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
+import { loadTaskForViewer } from "@/lib/task-access";
 
 export const dynamic = "force-dynamic";
 
@@ -8,6 +9,8 @@ export const dynamic = "force-dynamic";
 // handoffs are written by the PATCH /api/tasks/[id] route when the
 // assignee field changes.
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
+  const access = await loadTaskForViewer(params.id);
+  if (!access.ok) return access.response;
   const supabase = getSupabaseAdmin();
   const { data, error } = await supabase
     .from("task_handoffs")

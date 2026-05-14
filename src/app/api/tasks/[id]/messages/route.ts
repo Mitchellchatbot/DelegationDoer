@@ -1,14 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
-import { requireCurrentUserId } from "@/lib/session";
+import { loadTaskForViewer } from "@/lib/task-access";
 
 export const dynamic = "force-dynamic";
 
-// GET /api/tasks/[id]/messages — thread messages, oldest → newest.
-// POST /api/tasks/[id]/messages — append a message. Body: { body, imageUrl? }.
-// Threads are deliberately separate from activity_logs so chat conversations
-// don't get buried under noisy status_change / handoff entries.
+// Legacy thread endpoint. New UI writes to /comments (activity_logs)
+// instead; this remains read-only-style for any older clients still
+// polling it, gated by canViewTask so leader threads aren't exposed.
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
+  const access = await loadTaskForViewer(params.id);
+  if (!access.ok) return access.response;
   const supabase = getSupabaseAdmin();
   const { data, error } = await supabase
     .from("task_messages")
@@ -21,7 +22,9 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   try {
-    const userId = await requireCurrentUserId();
+    const access = await loadTaskForViewer(params.id);
+    if (!access.ok) return access.response;
+    const userId = access.viewerId;
     const body = await req.json();
     const text = typeof body.body === "string" ? body.body.trim() : "";
     const imageUrl = typeof body.imageUrl === "string" ? body.imageUrl.trim() || null : null;

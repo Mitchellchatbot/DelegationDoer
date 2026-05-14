@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { motion, LayoutGroup } from "framer-motion";
-import { ListTodo, Columns3, Layers, ListChecks } from "lucide-react";
+import { ListTodo, Columns3, ListChecks } from "lucide-react";
 import { useCurrentUser } from "@/lib/user-context";
 import { isLeader } from "@/lib/auth";
 import { cn } from "@/lib/utils";
@@ -16,10 +16,9 @@ type Tab = {
 };
 
 const TABS: readonly Tab[] = [
+  { href: "/tasks/todos", label: "Todos", icon: ListChecks, leaderOnly: true },
   { href: "/tasks/mine",  label: "Mine",  icon: ListTodo },
-  { href: "/tasks/board", label: "Board", icon: Columns3 },
-  { href: "/tasks/all",   label: "All",   icon: Layers   },
-  { href: "/tasks/todos", label: "Todos", icon: ListChecks, leaderOnly: true }
+  { href: "/tasks/board", label: "Board", icon: Columns3 }
 ] as const;
 
 // Segmented control with a framer-motion blob that slides between

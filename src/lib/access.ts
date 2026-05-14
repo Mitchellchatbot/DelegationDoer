@@ -73,6 +73,28 @@ export function canViewDepartmentConsole(
   return actor.departmentIds.includes(departmentId);
 }
 
+// Can `actor` see this task at all? Used to gate the detail page and
+// every /api/tasks/[id]/* endpoint. Leader-owned (assigned-to-leader or
+// created-by-leader) tasks are invisible to non-leaders unless they
+// happen to be the assignee themselves.
+export function canViewTask(
+  actor: User | null | undefined,
+  task: Pick<Task, "creatorId" | "assigneeId" | "departmentId"> | null | undefined,
+  leaderIds: Set<string>
+): boolean {
+  if (!actor || !task) return false;
+  if (isLeader(actor)) return true;
+  // The viewer's own work is always visible to themselves, regardless of
+  // whether a leader created it.
+  if (task.assigneeId === actor.id) return true;
+  if (task.creatorId === actor.id) return true;
+  // Anything touched by a leader (assignee or creator) is hidden from
+  // non-leaders.
+  if (task.assigneeId && leaderIds.has(task.assigneeId)) return false;
+  if (task.creatorId && leaderIds.has(task.creatorId)) return false;
+  return true;
+}
+
 // Notify-teammates affordance: anyone with skin in the task's game
 // can broadcast. Keeps the head from being the only one who can rally
 // support for a task they're stuck on.

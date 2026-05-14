@@ -131,6 +131,14 @@ function taskFromRow(row: TaskRow): Task {
 // user only hit Supabase once per request.
 export const getUserById = cache(_getUserById);
 
+// Cached set of leader user ids — used by access checks that need to
+// hide leader-touched tasks from non-leader viewers. Once per request.
+export const getLeaderIds = cache(async function _getLeaderIds(): Promise<Set<string>> {
+  const supabase = getSupabaseAdmin();
+  const { data } = await supabase.from("users").select("id").eq("role", "leader");
+  return new Set((data ?? []).map((u: { id: string }) => u.id));
+});
+
 async function _getUserById(id: string | null | undefined): Promise<User | null> {
   if (!id) return null;
   const supabase = getSupabaseAdmin();

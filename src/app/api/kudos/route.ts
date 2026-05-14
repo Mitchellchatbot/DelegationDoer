@@ -110,8 +110,17 @@ export async function POST(req: NextRequest) {
       }
     } catch (err) {
       slackDm = "failed";
-      slackNote = err instanceof Error ? err.message : String(err);
-      console.warn("[kudos] slack DM failed:", slackNote);
+      const raw = err instanceof Error ? err.message : String(err);
+      // Translate the most common Slack errors into something
+      // actionable so the toast tells the sender what to do.
+      if (/missing_scope|not_allowed_token_type|invalid_auth/.test(raw)) {
+        slackNote = "Your Slack token can't DM yet — disconnect + reconnect Slack in Settings to grant chat:write.";
+      } else if (/users_not_found|user_not_found/.test(raw)) {
+        slackNote = "Recipient not found on Slack.";
+      } else {
+        slackNote = raw;
+      }
+      console.warn("[kudos] slack DM failed:", raw);
     }
 
     return NextResponse.json({ kudos: kudosRow, slackDm, slackNote });

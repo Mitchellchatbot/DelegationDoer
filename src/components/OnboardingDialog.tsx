@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Sparkles, Camera, Cake, ChevronRight, Check, Loader2, Upload, SkipForward,
-  Briefcase, Clock, Globe, Mail
+  Briefcase, Clock, Globe, Mail, Wand2, X, Plus
 } from "lucide-react";
 import { toast } from "sonner";
 import { Avatar } from "./Avatar";
@@ -36,7 +36,7 @@ interface MeShape {
 // Mounted at the (main) layout level so it shows up on whichever page
 // they land on after sign-in. Lives client-side so it can do the
 // file upload without round-tripping the page.
-type Step = "avatar" | "birthday" | "workinfo";
+type Step = "avatar" | "birthday" | "workinfo" | "skills";
 
 export function OnboardingDialog() {
   const [me, setMe] = useState<MeShape | null>(null);
@@ -52,6 +52,11 @@ export function OnboardingDialog() {
   const [workStart, setWorkStart] = useState("09:00");
   const [workEnd, setWorkEnd] = useState("17:00");
   const [workTz, setWorkTz] = useState<string>(() => detectTimezone());
+  // Step 4 — skills. Free-text chips with optional preset suggestions.
+  // Each chip becomes a user_skills row at manual_level=3 ("comfortable")
+  // so it has real weight in the delegation engine on day one.
+  const [skills, setSkills] = useState<string[]>([]);
+  const [skillDraft, setSkillDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -165,12 +170,52 @@ export function OnboardingDialog() {
           throw new Error(d?.error ?? `failed (${res.status})`);
         }
       }
-      finish();
+      // Advance to the Skills step instead of finishing.
+      setStep("skills");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "couldn't save");
     } finally {
       setBusy(false);
     }
+  }
+
+  async function saveSkills() {
+    // Skip path — no chips, just advance.
+    if (skills.length === 0 || !me) {
+      finish();
+      return;
+    }
+    setBusy(true);
+    try {
+      // Sequential, not parallel: /api/skills upserts (user, tag) one at
+      // a time and a parallel storm hits the same unique key. 5 skills
+      // takes ~500ms; tolerable for a one-time wizard.
+      for (const tag of skills) {
+        await fetch("/api/skills", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ userId: me.id, tag, manualLevel: 3 })
+        });
+      }
+      toast.success(`Saved ${skills.length} skill${skills.length === 1 ? "" : "s"}`);
+      finish();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "couldn't save skills");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function addSkill(raw: string) {
+    const tag = raw.trim().toLowerCase();
+    if (!tag) return;
+    if (skills.includes(tag)) return;
+    setSkills((cur) => [...cur, tag]);
+    setSkillDraft("");
+  }
+
+  function removeSkill(tag: string) {
+    setSkills((cur) => cur.filter((t) => t !== tag));
   }
 
   async function finish() {
@@ -185,6 +230,7 @@ export function OnboardingDialog() {
   function goNextOrFinish() {
     if (step === "avatar") setStep("birthday");
     else if (step === "birthday") setStep("workinfo");
+    else if (step === "workinfo") setStep("skills");
     else finish();
   }
 
@@ -250,11 +296,16 @@ export function OnboardingDialog() {
                     <div className="h-px flex-1 bg-slate-300/50" />
                     <StepDot
                       active={step === "birthday"}
-                      done={step === "workinfo"}
+                      done={step === "workinfo" || step === "skills"}
                     />
                     <div className="h-px flex-1 bg-slate-300/50" />
                     <StepDot
                       active={step === "workinfo"}
+                      done={step === "skills"}
+                    />
+                    <div className="h-px flex-1 bg-slate-300/50" />
+                    <StepDot
+                      active={step === "skills"}
                       done={false}
                     />
                   </div>
@@ -295,24 +346,34 @@ export function OnboardingDialog() {
                       setWorkTz={setWorkTz}
                     />
                   )}
+                  {step === "skills" && (
+                    <SkillsStep
+                      skills={skills}
+                      draft={skillDraft}
+                      setDraft={setSkillDraft}
+                      onAdd={addSkill}
+                      onRemove={removeSkill}
+                    />
+                  )}
                 </div>
 
                 <footer className="px-6 py-4 border-t border-slate-100 flex items-center justify-between gap-2 bg-slate-50/50">
                   <button
                     type="button"
-                    onClick={() => (step === "workinfo" ? finish() : goNextOrFinish())}
+                    onClick={() => (step === "skills" ? finish() : goNextOrFinish())}
                     disabled={busy}
                     className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium text-ink/55 hover:text-ink hover:bg-white transition-colors disabled:opacity-60"
                   >
                     <SkipForward className="w-3.5 h-3.5" />
-                    Skip {step === "workinfo" ? "this too" : "for now"}
+                    Skip {step === "skills" ? "this too" : "for now"}
                   </button>
                   <button
                     type="button"
                     onClick={
                       step === "avatar" ? goNextOrFinish :
                       step === "birthday" ? saveBirthday :
-                      saveWorkInfo
+                      step === "workinfo" ? saveWorkInfo :
+                      saveSkills
                     }
                     disabled={busy}
                     className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs font-semibold text-white shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-lift active:scale-95 disabled:opacity-60"
@@ -320,14 +381,14 @@ export function OnboardingDialog() {
                   >
                     {busy ? (
                       <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                    ) : step === "workinfo" ? (
+                    ) : step === "skills" ? (
                       <Check className="w-3.5 h-3.5" />
                     ) : (
                       <ChevronRight className="w-3.5 h-3.5" />
                     )}
                     {busy
                       ? "Saving…"
-                      : step === "workinfo"
+                      : step === "skills"
                         ? "Finish"
                         : "Next"}
                   </button>
@@ -621,6 +682,128 @@ function WorkInfoStep({
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+// Common suggestions across the agency. Picking one adds it to chips;
+// typing your own works the same way. The delegation engine reads
+// these (user_skills.tag) when ranking who should get a task whose
+// tags overlap with the user's skills.
+const SKILL_SUGGESTIONS = [
+  "web design", "frontend", "backend", "wordpress", "seo",
+  "copywriting", "content writing", "video editing", "graphic design",
+  "qa", "client comms", "google ads", "meta ads", "analytics",
+  "email marketing", "project management", "social media"
+];
+
+function SkillsStep({
+  skills, draft, setDraft, onAdd, onRemove
+}: {
+  skills: string[];
+  draft: string;
+  setDraft: (v: string) => void;
+  onAdd: (raw: string) => void;
+  onRemove: (tag: string) => void;
+}) {
+  const lowerSet = new Set(skills.map((s) => s.toLowerCase()));
+  const unused = SKILL_SUGGESTIONS.filter((s) => !lowerSet.has(s));
+
+  return (
+    <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-1">
+      <div className="flex items-center gap-3">
+        <div className="w-10 h-10 rounded-xl bg-violet-50 ring-1 ring-violet-200/60 grid place-items-center text-violet-700 shrink-0">
+          <Wand2 className="w-5 h-5" />
+        </div>
+        <div>
+          <div className="text-sm font-semibold">What are you good at?</div>
+          <div className="text-xs text-ink/55 mt-0.5">
+            Pick the skills you already have. We&apos;ll route the right kinds
+            of tasks your way and grow your skill score as you finish them.
+          </div>
+        </div>
+      </div>
+
+      <div className="rounded-2xl border border-slate-200/70 bg-white p-4 space-y-3">
+        <div>
+          <label className="block text-[11px] uppercase tracking-wide text-ink/55 font-semibold mb-1.5">
+            Your skills · {skills.length}
+          </label>
+          {skills.length === 0 ? (
+            <div className="text-[11px] text-ink/45 italic px-1 py-2">
+              No skills yet — add some below.
+            </div>
+          ) : (
+            <div className="flex flex-wrap gap-1.5">
+              {skills.map((s) => (
+                <span
+                  key={s}
+                  className="inline-flex items-center gap-1 text-[12px] px-2 py-1 rounded-full bg-violet-100 text-violet-700 border border-violet-200/70"
+                >
+                  {s}
+                  <button
+                    type="button"
+                    onClick={() => onRemove(s)}
+                    className="hover:text-rose-600 transition-colors"
+                    title="Remove"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="flex items-center gap-2">
+          <input
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              // Enter or comma commits the chip — comma so people who
+              // paste "seo, frontend, qa" don't end up with one weird tag.
+              if (e.key === "Enter" || e.key === ",") {
+                e.preventDefault();
+                onAdd(draft);
+              }
+              if (e.key === "Backspace" && !draft && skills.length > 0) {
+                // Backspace on empty input pops the last chip — Notion-style.
+                onRemove(skills[skills.length - 1]);
+              }
+            }}
+            placeholder="Type a skill and press Enter — e.g. wordpress"
+            className="flex-1 px-3 py-2 rounded-lg bg-slate-50 border border-slate-200 text-sm outline-none focus:bg-white focus:ring-2 focus:ring-accent/30"
+          />
+          <button
+            type="button"
+            onClick={() => onAdd(draft)}
+            disabled={!draft.trim()}
+            className="inline-flex items-center gap-1 px-3 py-2 rounded-lg text-xs font-semibold bg-accent/10 text-accent hover:bg-accent/15 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <Plus className="w-3.5 h-3.5" /> Add
+          </button>
+        </div>
+      </div>
+
+      {unused.length > 0 && (
+        <div className="rounded-2xl border border-slate-200/70 bg-slate-50/60 p-4">
+          <div className="text-[10px] uppercase tracking-wide text-ink/55 font-semibold mb-2">
+            Quick picks
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {unused.map((s) => (
+              <button
+                key={s}
+                type="button"
+                onClick={() => onAdd(s)}
+                className="text-[11px] px-2.5 py-1 rounded-full bg-white border border-slate-200 text-ink/75 hover:border-accent/40 hover:text-accent transition-colors"
+              >
+                + {s}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

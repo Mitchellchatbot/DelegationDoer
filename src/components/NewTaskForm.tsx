@@ -1,9 +1,10 @@
 "use client";
 
-import { departments, users, tasks, TAG_PRESETS, distinctClients, distinctWebsites } from "@/lib/mock-data";
+import { TAG_PRESETS } from "@/lib/mock-data";
 import { userCapacity, etaDays, deadlineFromEstimate } from "@/lib/capacity";
 import { assignableTargets, ROLE_LABELS } from "@/lib/auth";
 import { useCurrentUser } from "@/lib/user-context";
+import { useTeam } from "@/lib/team-context";
 import { rankCandidates, type RankedCandidate } from "@/lib/skill-rank";
 import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
@@ -31,9 +32,19 @@ interface Props {
 
 export function NewTaskForm({ onCreated, onCancel, hideCancel }: Props) {
   const currentUser = useCurrentUser();
+  // Live workspace data — replaces every former mock-data import.
+  const team = useTeam();
+  const { users, departments, tasks } = team;
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
-  const [departmentId, setDepartmentId] = useState<string>(departments[0]?.id ?? "");
+  const [departmentId, setDepartmentId] = useState<string>("");
+  // Once the live departments load, default the dept picker to the
+  // first one if the user hasn't selected anything yet.
+  useEffect(() => {
+    if (!departmentId && departments.length > 0) {
+      setDepartmentId(departments[0].id);
+    }
+  }, [departmentId, departments]);
   const [priority, setPriority] = useState("medium");
   const [estimate, setEstimate] = useState(2);
   const [tags, setTags] = useState<string[]>([]);
@@ -74,10 +85,27 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel }: Props) {
       .catch(() => { /* ignore — form still works without */ });
   }, []);
 
-  const clientList = useMemo(() => distinctClients(), []);
-  const websiteList = useMemo(() => distinctWebsites(), []);
+  // Derive autocomplete pools from live tasks rather than the mock
+  // distinctClients/distinctWebsites helpers.
+  const clientList = useMemo(
+    () => Array.from(new Set(
+      tasks.map((t) => t.clientName).filter((s): s is string => !!s && s.trim().length > 0)
+    )).sort(),
+    [tasks]
+  );
+  const websiteList = useMemo(
+    () => Array.from(new Set(
+      tasks.map((t) => t.website).filter((s): s is string => !!s && s.trim().length > 0)
+    )).sort(),
+    [tasks]
+  );
 
-  const targets = useMemo(() => assignableTargets(currentUser), [currentUser]);
+  // assignableTargets used to default to the mock users array; pass
+  // the live pool explicitly.
+  const targets = useMemo(
+    () => assignableTargets(currentUser, users),
+    [currentUser, users]
+  );
   const targetIds = useMemo(() => new Set(targets.map((u) => u.id)), [targets]);
 
   // Build skill rank: combine the manual+auto skill matrix with the
@@ -208,29 +236,11 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel }: Props) {
         toast.success("Task created.");
       }
 
-      // Mirror into the in-memory mock array so the rest of the app sees it
-      // immediately. Supabase has the canonical row.
-      const t = data.task;
-      tasks.push({
-        id: t.id,
-        title: t.title,
-        description: t.description ?? "",
-        status: t.status,
-        priority: t.priority,
-        estimatedHours: Number(t.estimated_hours),
-        actualHours: Number(t.actual_hours ?? 0),
-        tags: t.tags ?? [],
-        departmentId: t.department_id,
-        assigneeId: t.assignee_id,
-        creatorId: t.creator_id,
-        projectId: t.project_id,
-        dueDate: t.due_date,
-        inactiveFlag: !!t.inactive_flag,
-        lastActivityAt: t.last_activity_at,
-        createdAt: t.created_at,
-        blocksTaskIds: t.blocks_task_ids ?? []
-      });
-      onCreated(t.id);
+      // Refresh the in-memory team cache so the new task shows up
+      // immediately on every surface (board, my-tasks, etc.) without
+      // waiting for the 60s background poll. Supabase is canonical.
+      void team.refresh();
+      onCreated(data.task.id);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "network error";
       setSubmitError(msg);

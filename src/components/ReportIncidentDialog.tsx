@@ -1,28 +1,27 @@
 "use client";
 
 import * as Dialog from "@radix-ui/react-dialog";
-import { incidents, incidentRouting, userById, tasks, currentUser } from "@/lib/mock-data";
-import { useMemo, useState } from "react";
+import { incidentRouting } from "@/lib/mock-data";
+import { useState } from "react";
 import { AlertTriangle, X } from "lucide-react";
-import { relativeTime } from "@/lib/utils";
-import type { IncidentLog, Task } from "@/lib/types";
+import { useTeam } from "@/lib/team-context";
 
 type IssueType = "site down" | "malware" | "form broken" | "other";
 
 export function ReportIncidentDialog({
   open, onOpenChange
 }: { open: boolean; onOpenChange: (b: boolean) => void }) {
+  const team = useTeam();
   const [issueType, setIssueType] = useState<IssueType>("site down");
   const [url, setUrl] = useState("");
   const [desc, setDesc] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const recentSame = useMemo(
-    () => incidents.filter((i) => i.issueType === issueType && i.resolvedAt).slice(0, 3),
-    [issueType]
-  );
-  const routedTo = userById(incidentRouting[issueType]);
+  // (Recent-same-incident peek removed when this view stopped reading
+  // from mock-data — the team cache doesn't carry incident history.
+  // Add a live /api/incidents fetch if we want this back.)
+  const routedTo = team.userById(incidentRouting[issueType]);
 
   async function submit() {
     if (!desc.trim() || submitting) return;
@@ -40,39 +39,8 @@ export function ReportIncidentDialog({
         return;
       }
 
-      // Mirror to client mock-data so /incidents and /board show it instantly
-      // for the rest of this session (until those pages are also Supabase-backed).
-      const inc = data.incident, t = data.task;
-      incidents.unshift({
-        id: inc.id,
-        issueType: inc.issue_type,
-        affectedUrl: inc.affected_url ?? "",
-        description: inc.description,
-        assignedToId: inc.assigned_to_id,
-        resolutionNotes: null,
-        resolvedAt: null,
-        createdAt: inc.created_at
-      });
-      tasks.unshift({
-        id: t.id,
-        title: t.title,
-        description: t.description ?? "",
-        status: t.status,
-        priority: t.priority,
-        estimatedHours: Number(t.estimated_hours),
-        actualHours: Number(t.actual_hours ?? 0),
-        tags: t.tags ?? [],
-        departmentId: t.department_id,
-        assigneeId: t.assignee_id,
-        creatorId: t.creator_id,
-        projectId: t.project_id,
-        dueDate: t.due_date,
-        inactiveFlag: !!t.inactive_flag,
-        lastActivityAt: t.last_activity_at,
-        createdAt: t.created_at,
-        blocksTaskIds: t.blocks_task_ids ?? []
-      });
-
+      // Refresh the team cache so the new task lands on every board.
+      void team.refresh();
       setUrl(""); setDesc(""); setIssueType("site down");
       onOpenChange(false);
     } catch (err) {
@@ -129,20 +97,8 @@ export function ReportIncidentDialog({
             <div className="text-sm">{routedTo?.name ?? "Unassigned"} <span className="text-muted">· {routedTo?.email}</span></div>
           </div>
 
-          {recentSame.length > 0 && (
-            <div className="mt-3">
-              <div className="text-xs text-muted mb-1">Last 3 resolutions of "{issueType}"</div>
-              <ul className="space-y-1.5">
-                {recentSame.map((i) => (
-                  <li key={i.id} className="text-xs p-2 rounded-lg bg-surface2 border border-border">
-                    <span className="text-ink">{i.affectedUrl}</span>
-                    <span className="text-muted"> · {relativeTime(i.createdAt)}</span>
-                    <div className="text-muted mt-0.5">{i.resolutionNotes}</div>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
+          {/* Recent-same-incident list removed during the live-data
+              migration — re-add when /api/incidents history lands. */}
 
           <div className="flex items-center justify-between gap-2 mt-5">
             <span className="text-xs text-urgent">{error ? `⚠ ${error}` : ""}</span>

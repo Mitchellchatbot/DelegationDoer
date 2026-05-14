@@ -68,7 +68,7 @@ export default function RecommendationsPage() {
       ]);
       setRecs(recsRes.recommendations ?? []);
       setAuthors(recsRes.userById ?? {});
-      setEomUserId(eomRes?.eom?.id ?? eomRes?.eom?.user_id ?? null);
+      setEomUserId(eomRes?.eom?.userId ?? null);
       setEomMonth(eomRes?.month ?? null);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "couldn't load");

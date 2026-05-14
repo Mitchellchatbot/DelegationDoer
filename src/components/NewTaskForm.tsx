@@ -85,26 +85,41 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel }: Props) {
       .catch(() => { /* ignore — form still works without */ });
   }, []);
 
-  // Derive autocomplete pools from live tasks rather than the mock
-  // distinctClients/distinctWebsites helpers.
-  const clientList = useMemo(
-    () => Array.from(new Set(
-      tasks.map((t) => t.clientName).filter((s): s is string => !!s && s.trim().length > 0)
-    )).sort(),
-    [tasks]
-  );
+  // Canonical clients list lives in its own Supabase table. We fetch
+  // once on mount and the dropdown reads from there. Websites still
+  // come from live tasks (so newly-typed-in sites surface) — the
+  // clients table seeds the website per client, with task usage as
+  // fallback for clients added on the fly.
+  interface ClientRow {
+    id: string;
+    name: string;
+    website: string | null;
+    priorityRank: number | null;
+    contactName: string | null;
+  }
+  const [clientRoster, setClientRoster] = useState<ClientRow[]>([]);
+  useEffect(() => {
+    fetch("/api/clients", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : { clients: [] }))
+      .then((d) => setClientRoster(d.clients ?? []))
+      .catch(() => { /* dropdown just falls back to task-derived names */ });
+  }, []);
+
   const websiteList = useMemo(
-    () => Array.from(new Set(
-      tasks.map((t) => t.website).filter((s): s is string => !!s && s.trim().length > 0)
-    )).sort(),
-    [tasks]
+    () => Array.from(new Set([
+      ...clientRoster.map((c) => c.website).filter((s): s is string => !!s),
+      ...tasks.map((t) => t.website).filter((s): s is string => !!s && s.trim().length > 0)
+    ])).sort(),
+    [tasks, clientRoster]
   );
-  // Map each client to the most-recent website they were paired with.
-  // Drives the auto-fill when you pick a client from the dropdown so
-  // you don't have to retype the URL every time. We walk tasks newest
-  // → oldest so reruns of "Acme Insurance" use the latest URL on file.
+  // Map each client name to the canonical website on file. The clients
+  // table wins; falls back to the most-recent task pairing for clients
+  // that don't have a website seeded yet.
   const clientToWebsite = useMemo(() => {
     const map = new Map<string, string>();
+    for (const c of clientRoster) {
+      if (c.website) map.set(c.name, c.website);
+    }
     const sorted = [...tasks].sort(
       (a, b) => +new Date(b.lastActivityAt) - +new Date(a.lastActivityAt)
     );
@@ -113,13 +128,23 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel }: Props) {
       if (!map.has(t.clientName)) map.set(t.clientName, t.website);
     }
     return map;
-  }, [tasks]);
+  }, [tasks, clientRoster]);
   const [clientDropdownOpen, setClientDropdownOpen] = useState(false);
   const clientMatches = useMemo(() => {
     const q = clientName.trim().toLowerCase();
-    if (!q) return clientList.slice(0, 8);
-    return clientList.filter((c) => c.toLowerCase().includes(q)).slice(0, 8);
-  }, [clientList, clientName]);
+    // Canonical roster first (preserves the priority order from the
+    // /api/clients response), then any client_names seen on tasks that
+    // aren't yet in the roster (so freshly typed-in companies still
+    // show up).
+    const rosterNames = clientRoster.map((c) => c.name);
+    const rosterSet = new Set(rosterNames.map((n) => n.toLowerCase()));
+    const extras = Array.from(new Set(
+      tasks.map((t) => t.clientName).filter((s): s is string => !!s && s.trim().length > 0)
+    )).filter((n) => !rosterSet.has(n.toLowerCase())).sort();
+    const all = [...rosterNames, ...extras];
+    if (!q) return all.slice(0, 10);
+    return all.filter((c) => c.toLowerCase().includes(q)).slice(0, 10);
+  }, [clientRoster, tasks, clientName]);
   function pickClient(name: string) {
     setClientName(name);
     setClientDropdownOpen(false);

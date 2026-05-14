@@ -4,6 +4,47 @@ import { requireCurrentUserId } from "@/lib/session";
 
 export const dynamic = "force-dynamic";
 
+// GET /api/clients — the canonical client roster. Used by NewTaskForm's
+// dropdown and any other surface that needs the master list. Ordered
+// by display_order so the Leader-tuned ranking is the default sort;
+// callers that want raw rank can read priority_rank.
+export async function GET() {
+  try {
+    await requireCurrentUserId();
+    const { data, error } = await getSupabaseAdmin()
+      .from("clients")
+      .select(
+        "id, name, website, contact_name, contact_emails, priority, priority_rank, display_order, status, start_date, subscription_date, did_build_website, tawk_installed, google_profile_automation, domain_location, hosting_location, notes"
+      )
+      .order("display_order", { ascending: true })
+      .order("name", { ascending: true });
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    const clients = (data ?? []).map((c) => ({
+      id: c.id as string,
+      name: c.name as string,
+      website: (c.website as string | null) ?? null,
+      contactName: (c.contact_name as string | null) ?? null,
+      contactEmails: (c.contact_emails as string[] | null) ?? [],
+      priority: (c.priority as string) ?? "medium",
+      priorityRank: (c.priority_rank as number | null) ?? null,
+      displayOrder: Number(c.display_order ?? 0),
+      status: (c.status as string) ?? "active",
+      startDate: (c.start_date as string | null) ?? null,
+      subscriptionDate: (c.subscription_date as string | null) ?? null,
+      didBuildWebsite: (c.did_build_website as boolean | null) ?? null,
+      tawkInstalled: (c.tawk_installed as boolean | null) ?? null,
+      googleProfileAutomation: (c.google_profile_automation as boolean | null) ?? null,
+      domainLocation: (c.domain_location as string | null) ?? null,
+      hostingLocation: (c.hosting_location as string | null) ?? null,
+      notes: (c.notes as string | null) ?? null
+    }));
+    return NextResponse.json({ clients });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "unknown error";
+    return NextResponse.json({ error: msg }, { status: 500 });
+  }
+}
+
 // POST /api/clients — create a new client folder.
 // Body: { name, website?, priority? ('low'|'medium'|'high'), notes? }
 export async function POST(req: NextRequest) {

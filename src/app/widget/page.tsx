@@ -31,6 +31,19 @@ interface WidgetKudos {
   from: { name: string; avatarUrl: string | null } | null;
 }
 
+interface WidgetNotification {
+  id: string;
+  taskId: string;
+  taskTitle: string;
+  taskPriority: "low" | "medium" | "high" | "critical" | string;
+  taskStatus: string;
+  taskDueDate: string | null;
+  kind: "mention" | "notified";
+  note: string | null;
+  from: { name: string; avatarUrl: string | null } | null;
+  createdAt: string;
+}
+
 interface EomState {
   // Whether the *current user* is the Employee of the Month right now.
   // Drives the crown overlay on the bubble + the celebration banner.
@@ -133,6 +146,7 @@ export default function WidgetPage() {
   const [state, setState] = useState<WidgetState>("bubble");
   const [tasks, setTasks] = useState<WidgetTask[]>([]);
   const [kudos, setKudos] = useState<WidgetKudos[]>([]);
+  const [notifications, setNotifications] = useState<WidgetNotification[]>([]);
   // Tracks whether the widget's API polls are returning 401. When true
   // we render a sign-in prompt instead of the normal task/kudos UI.
   const [signedOut, setSignedOut] = useState(false);
@@ -159,6 +173,7 @@ export default function WidgetPage() {
   useEffect(() => { void fetchMe(); }, [fetchMe]);
   const seenIdsRef = useRef<Set<string>>(new Set());
   const seenKudosRef = useRef<Set<string>>(new Set());
+  const seenNotifIdsRef = useRef<Set<string>>(new Set());
   const seenEomMonthRef = useRef<string | null>(null);
   const lastFetchedRef = useRef<number>(0);
 
@@ -206,6 +221,7 @@ export default function WidgetPage() {
       const taskData = await taskRes.json();
       const next: WidgetTask[] = taskData.tasks ?? [];
       const unackedNow = next.filter((t) => t.needsAck);
+      const nextNotifs: WidgetNotification[] = taskData.notifications ?? [];
 
       const kudosData = kudosRes.ok ? await kudosRes.json() : { kudos: [] };
       const nextKudos: WidgetKudos[] = kudosData.kudos ?? [];
@@ -230,16 +246,19 @@ export default function WidgetPage() {
       }
 
       // Fresh task → harsh alarm. Fresh kudos → celebratory chime.
-      // Both can fire independently in the same tick.
+      // Fresh mention/notify → same harsh alarm so the user looks.
       const fresh = unackedNow.filter((t) => !seenIdsRef.current.has(t.id));
-      if (fresh.length > 0) playAlertSound();
+      const freshNotifs = nextNotifs.filter((n) => !seenNotifIdsRef.current.has(n.id));
+      if (fresh.length > 0 || freshNotifs.length > 0) playAlertSound();
       const freshKudos = nextKudos.filter((k) => !seenKudosRef.current.has(k.id));
       if (freshKudos.length > 0) playKudosChime();
       seenIdsRef.current = new Set(unackedNow.map((t) => t.id));
       seenKudosRef.current = new Set(nextKudos.map((k) => k.id));
+      seenNotifIdsRef.current = new Set(nextNotifs.map((n) => n.id));
 
       setTasks(next);
       setKudos(nextKudos);
+      setNotifications(nextNotifs);
       if (bdayRes.ok) {
         const bd = await bdayRes.json();
         setBirthdays({
@@ -250,10 +269,13 @@ export default function WidgetPage() {
       lastFetchedRef.current = Date.now();
 
       // Auto state transitions based on whether there's something to
-      // surface (tasks need ack OR there's an unread kudos).
+      // surface (tasks need ack OR there's an unread kudos OR there's
+      // an open mention / notify-teammates ping).
       setState((prev) => {
         if (prev === "panel") return "panel"; // user is already looking
-        return unackedNow.length > 0 || nextKudos.length > 0 ? "alert" : "bubble";
+        return unackedNow.length > 0 || nextKudos.length > 0 || nextNotifs.length > 0
+          ? "alert"
+          : "bubble";
       });
     } catch { /* ignore network blips */ }
   }, []);
@@ -288,6 +310,20 @@ export default function WidgetPage() {
       if (prev === "panel") return "panel";
       const remainingKudos = kudos.filter((k) => k.id !== kudosId);
       return unacked.length > 0 || remainingKudos.length > 0 ? "alert" : "bubble";
+    });
+  }
+
+  async function dismissNotification(notifId: string) {
+    // Optimistic — drop from local state.
+    setNotifications((cur) => cur.filter((n) => n.id !== notifId));
+    seenNotifIdsRef.current.delete(notifId);
+    try {
+      await fetch(`/api/widget/notifications/${notifId}/seen`, { method: "POST" });
+    } catch { /* surfaces on next poll if it actually failed */ }
+    setState((prev) => {
+      if (prev === "panel") return "panel";
+      const remaining = notifications.filter((n) => n.id !== notifId);
+      return unacked.length > 0 || kudos.length > 0 || remaining.length > 0 ? "alert" : "bubble";
     });
   }
 
@@ -326,20 +362,24 @@ export default function WidgetPage() {
 
   if (state === "panel") return (
     <ClockProvider>
-      <Panel tasks={tasks} unacked={unacked} kudos={kudos} eom={eom} birthdays={birthdays} onAck={acknowledge} onAckKudos={acknowledgeKudos} onCollapse={collapseToBubble} onUpdated={fetchTasks} widgetIconUrl={widgetIconUrl} onIconChanged={fetchMe} />
+      <Panel tasks={tasks} unacked={unacked} kudos={kudos} notifications={notifications} eom={eom} birthdays={birthdays} onAck={acknowledge} onAckKudos={acknowledgeKudos} onDismissNotif={dismissNotification} onCollapse={collapseToBubble} onUpdated={fetchTasks} widgetIconUrl={widgetIconUrl} onIconChanged={fetchMe} />
     </ClockProvider>
   );
   if (state === "alert") {
-    // Prefer task alert when both fire. If only kudos, render the
-    // kudos banner instead of the task one.
+    // Priority order: task ack > mention/notify ping > kudos. A new
+    // task is the loudest signal; mentions are real-time pings; kudos
+    // is celebratory and can wait.
     if (unacked.length > 0) {
       return <Alert task={unacked[0]} unackedCount={unacked.length} onAck={acknowledge} onExpand={expandToPanel} crowned={eom.isMe} iconUrl={widgetIconUrl} />;
+    }
+    if (notifications.length > 0) {
+      return <NotifAlert notif={notifications[0]} count={notifications.length} onDismiss={dismissNotification} onExpand={expandToPanel} crowned={eom.isMe} iconUrl={widgetIconUrl} />;
     }
     if (kudos.length > 0) {
       return <KudosAlert kudos={kudos[0]} count={kudos.length} onAck={acknowledgeKudos} onExpand={expandToPanel} crowned={eom.isMe} iconUrl={widgetIconUrl} />;
     }
   }
-  return <Bubble onExpand={expandToPanel} unackedCount={unacked.length + kudos.length} crowned={eom.isMe} iconUrl={widgetIconUrl} />;
+  return <Bubble onExpand={expandToPanel} unackedCount={unacked.length + kudos.length + notifications.length} crowned={eom.isMe} iconUrl={widgetIconUrl} />;
 }
 
 /* ============================ ICON ============================ */
@@ -696,6 +736,83 @@ function KudosAlert({
             background: "rgb(253, 232, 247)",
             borderRight: "1px solid #E879F9",
             borderTop: "1px solid #E879F9"
+          }}
+        />
+      </div>
+
+      <button
+        onClick={onExpand}
+        // @ts-ignore
+        style={{ WebkitAppRegion: "no-drag", padding: 0, border: "none", background: "transparent" } as any}
+        className="shrink-0 wg-bubble-btn anim-scale-in"
+        aria-label="Open"
+      >
+        <BubbleIcon unackedCount={count} crowned={crowned} iconUrl={iconUrl} />
+      </button>
+    </div>
+  );
+}
+
+/* ============================ NOTIF ALERT (mention / notify-teammates) ============================ */
+
+function NotifAlert({
+  notif, count, onDismiss, onExpand, crowned = false, iconUrl
+}: {
+  notif: WidgetNotification;
+  count: number;
+  onDismiss: (id: string) => void;
+  onExpand: () => void;
+  crowned?: boolean;
+  iconUrl?: string | null;
+}) {
+  const headline = notif.kind === "mention"
+    ? `${notif.from?.name ?? "Someone"} mentioned you`
+    : `${notif.from?.name ?? "Someone"} pinged you on a task`;
+  return (
+    <div
+      // @ts-ignore — Electron-only
+      style={{ width: "100vw", height: "100vh", display: "flex", alignItems: "center", justifyContent: "flex-end", padding: 20, gap: 8, background: "transparent", WebkitAppRegion: "drag" } as any}
+    >
+      <div
+        onClick={onExpand}
+        // @ts-ignore
+        style={{ WebkitAppRegion: "no-drag" } as any}
+        className="relative flex-1 cursor-pointer anim-pop-bubble"
+      >
+        <div className="bg-gradient-to-br from-violet-50 to-blue-50 rounded-2xl border border-violet-300 shadow-[0_8px_24px_rgba(80,40,150,0.25)] px-3 py-2.5 pr-4">
+          <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-violet-700 font-semibold">
+            <Bell className="w-3 h-3" />
+            {headline}
+            {count > 1 && <span className="ml-auto text-violet-700/70">+{count - 1} more</span>}
+          </div>
+          <div className="text-[13px] text-slate-900 font-medium leading-snug mt-0.5 line-clamp-2">
+            {notif.taskTitle}
+          </div>
+          {notif.note && (
+            <div className="text-[11px] text-slate-600 mt-0.5 line-clamp-2 italic">
+              "{notif.note}"
+            </div>
+          )}
+          <div className="mt-1.5 flex items-center justify-end gap-2">
+            <button
+              onClick={(e) => { e.stopPropagation(); onDismiss(notif.id); }}
+              // @ts-ignore
+              style={{ WebkitAppRegion: "no-drag" } as any}
+              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-violet-500 hover:bg-violet-600 text-white text-[11px] font-medium shadow-sm"
+            >
+              <Check className="w-3 h-3" /> Got it
+            </button>
+          </div>
+        </div>
+
+        <div
+          className="absolute"
+          style={{
+            right: -7, top: "50%", transform: "translateY(-50%) rotate(45deg)",
+            width: 14, height: 14,
+            background: "rgb(245, 243, 255)",
+            borderRight: "1px solid #C4B5FD",
+            borderTop: "1px solid #C4B5FD"
           }}
         />
       </div>
@@ -1389,12 +1506,13 @@ function TaskTimerButton({ taskId, compact = false }: { taskId: string; compact?
 /* ============================ PANEL ============================ */
 
 function Panel({
-  tasks, unacked, kudos, eom, birthdays, onAck, onAckKudos, onCollapse, onUpdated,
+  tasks, unacked, kudos, notifications, eom, birthdays, onAck, onAckKudos, onDismissNotif, onCollapse, onUpdated,
   widgetIconUrl, onIconChanged
 }: {
   tasks: WidgetTask[];
   unacked: WidgetTask[];
   kudos: WidgetKudos[];
+  notifications: WidgetNotification[];
   eom: EomState;
   birthdays: {
     hasBirthday: boolean;
@@ -1402,6 +1520,7 @@ function Panel({
   };
   onAck: (id: string) => void;
   onAckKudos: (id: string) => void;
+  onDismissNotif: (id: string) => void;
   onCollapse: () => void;
   onUpdated: () => void;
   widgetIconUrl: string | null;
@@ -1496,6 +1615,42 @@ function Panel({
             <BirthdayBanner celebrants={birthdays.celebrantsToday} />
           )}
           {!birthdays.hasBirthday && <BirthdayPrompt onSaved={onUpdated} />}
+          {notifications.length > 0 && (
+            <div className="px-3 pt-3">
+              <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-violet-600 mb-2 inline-flex items-center gap-1.5">
+                <Bell className="w-3 h-3" /> Mentions · {notifications.length}
+              </div>
+              <div className="space-y-2">
+                {notifications.map((n, i) => (
+                  <div
+                    key={n.id}
+                    role="button"
+                    onClick={() => setSelectedId(n.taskId)}
+                    style={{ animationDelay: `${i * 35}ms` }}
+                    className="wg-card anim-fade-in-up rounded-2xl bg-gradient-to-br from-violet-50 to-blue-50/60 border border-violet-200/80 p-3 cursor-pointer hover:bg-violet-100/40 transition-colors shadow-sm"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="text-[11px] font-semibold text-violet-700">
+                          {n.from?.name ?? "Someone"} {n.kind === "mention" ? "mentioned you" : "pinged you"}
+                        </div>
+                        <div className="text-[13px] text-slate-900 leading-snug mt-0.5">{n.taskTitle}</div>
+                        {n.note && (
+                          <div className="text-[11px] text-slate-600 mt-1 line-clamp-2 italic">"{n.note}"</div>
+                        )}
+                      </div>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); onDismissNotif(n.id); }}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-white/85 hover:bg-white text-violet-700 text-[11px] font-medium border border-violet-300/70 transition-all active:scale-95 shrink-0"
+                      >
+                        <Check className="w-3 h-3" /> Got it
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           {kudos.length > 0 && (
             <div className="px-3 pt-3">
               <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-fuchsia-600 mb-2 inline-flex items-center gap-1.5">

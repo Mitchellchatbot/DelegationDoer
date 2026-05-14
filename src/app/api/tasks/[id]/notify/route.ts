@@ -83,9 +83,23 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       user_id: userId,
       action: "comment",
       detail: note
-        ? `Notified ${namedList} — “${note}”`
+        ? `Notified ${namedList} — "${note}"`
         : `Notified ${namedList}`
     });
+
+    // Widget notifications — write one row per recipient so the bubble
+    // alerts them even when they're not the assignee.
+    const notifRows = recipientUsers.map((u) => ({
+      id: `n_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}_${u.id.slice(-4)}`,
+      task_id: params.id,
+      user_id: u.id,
+      from_user_id: userId,
+      kind: "notified" as const,
+      note: note || null
+    }));
+    if (notifRows.length > 0) {
+      await supabase.from("task_notifications").insert(notifRows);
+    }
 
     return NextResponse.json({ ok: true, sent: fyi.sent, failed: fyi.failed });
   } catch (err) {

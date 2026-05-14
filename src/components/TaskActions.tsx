@@ -4,7 +4,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Check, ChevronDown, X, Send, Pencil, CalendarPlus } from "lucide-react";
+import { Check, ChevronDown, X, Pencil, CalendarPlus } from "lucide-react";
 import { toast } from "sonner";
 import type { Priority, Task, TaskStatus } from "@/lib/types";
 
@@ -317,53 +317,3 @@ function ExtendButton({ task }: { task: Task }) {
   );
 }
 
-/* ---------- Comment form ---------- */
-
-export function CommentForm({ taskId }: { taskId: string }) {
-  const [content, setContent] = useState("");
-  const [posting, setPosting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const router = useRouter();
-
-  async function post() {
-    if (!content.trim() || posting) return;
-    setPosting(true);
-    setError(null);
-    try {
-      const res = await fetch(`/api/tasks/${taskId}/comments`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content })
-      });
-      const data = await res.json();
-      if (!res.ok) { setError(data?.error ?? `Failed (${res.status})`); return; }
-      setContent("");
-      router.refresh();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "network error");
-    } finally {
-      setPosting(false);
-    }
-  }
-
-  return (
-    <div className="mt-4 pt-3 border-t border-border">
-      <textarea
-        className="input min-h-[72px]"
-        placeholder="Leave a comment…"
-        value={content}
-        onChange={(e) => setContent(e.target.value)}
-        onKeyDown={(e) => {
-          if ((e.metaKey || e.ctrlKey) && e.key === "Enter") post();
-        }}
-      />
-      <div className="flex items-center justify-between mt-2">
-        {error ? <span className="text-xs text-urgent">⚠ {error}</span>
-               : <span className="text-[11px] text-muted">⌘↵ to post</span>}
-        <button className="btn-primary disabled:opacity-50" disabled={!content.trim() || posting} onClick={post}>
-          <Send className="w-3.5 h-3.5" /> {posting ? "Posting…" : "Comment"}
-        </button>
-      </div>
-    </div>
-  );
-}

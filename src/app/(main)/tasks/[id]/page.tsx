@@ -3,28 +3,24 @@ import { notFound } from "next/navigation";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { PriorityBadge, StatusPill, Tag, StalledBadge } from "@/components/Badges";
 import { PersonAvatar } from "@/components/PersonAvatar";
-import { Countdown } from "@/components/Countdown";
-import { TaskActions, CommentForm } from "@/components/TaskActions";
+import { TaskActions } from "@/components/TaskActions";
 import { TaskTimerButton } from "@/components/TaskTimerButton";
 import { NotifyTeammatesDialog } from "@/components/NotifyTeammatesDialog";
-import { canNotifyOnTask, canViewTask } from "@/lib/access";
+import { canNotifyOnTask, canViewTask, canManageTask } from "@/lib/access";
 import { getUserById, getAllUsersLight, getDepartments, getLeaderIds } from "@/lib/server-data";
-import { Megaphone } from "lucide-react";
+import { Megaphone, Clock, History } from "lucide-react";
 import { HandoffButton, HandoffTimeline } from "@/components/HandoffPanel";
-import { TaskThread } from "@/components/TaskThread";
+import { TaskConversation } from "@/components/TaskConversation";
+import { DueDateInline } from "@/components/DueDateInline";
 import { TaskFields } from "@/components/TaskFields";
 import { requireCurrentUserId } from "@/lib/session";
 import { formatDate, relativeTime } from "@/lib/utils";
-import { Clock, Calendar, MessageCircle, History } from "lucide-react";
 import { BackPill } from "@/components/BackPill";
-import type { Task, ActivityLog } from "@/lib/types";
+import type { Task } from "@/lib/types";
 
 // Always read fresh — comments / status changes need to surface immediately.
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
-
-// Server component. Tasks are sourced from Supabase only — mock-data was
-// removed during the live-data migration.
 
 interface Extension {
   id: string;
@@ -36,7 +32,7 @@ interface Extension {
   createdAt: string;
 }
 
-async function loadTask(id: string): Promise<{ task: Task; log: ActivityLog[]; extensions: Extension[] } | null> {
+async function loadTask(id: string): Promise<{ task: Task; extensions: Extension[] } | null> {
   const supabase = getSupabaseAdmin();
   const { data: t, error } = await supabase
     .from("tasks")
@@ -53,8 +49,6 @@ async function loadTask(id: string): Promise<{ task: Task; log: ActivityLog[]; e
     status: t.status,
     priority: t.priority,
     estimatedHours: Number(t.estimated_hours),
-    // Override wins over the time_entries-derived denorm. Matches the
-    // override-precedence rule in src/lib/server-data.ts.
     actualHours:
       t.actual_hours_override !== null && t.actual_hours_override !== undefined
         ? Number(t.actual_hours_override)
@@ -84,20 +78,11 @@ async function loadTask(id: string): Promise<{ task: Task; log: ActivityLog[]; e
     custom: (t.custom as Record<string, unknown> | null) ?? {}
   };
 
-  const [{ data: rawLog }, { data: rawExt }] = await Promise.all([
-    supabase.from("activity_logs").select("*").eq("task_id", id).order("created_at", { ascending: false }),
-    supabase.from("task_extensions").select("*").eq("task_id", id).order("created_at", { ascending: false })
-  ]);
-
-  const log: ActivityLog[] = (rawLog ?? []).map((a) => ({
-    id: a.id,
-    taskId: a.task_id,
-    userId: a.user_id,
-    action: a.action,
-    detail: a.detail ?? "",
-    imageUrl: a.image_url ?? null,
-    createdAt: a.created_at
-  }));
+  const { data: rawExt } = await supabase
+    .from("task_extensions")
+    .select("*")
+    .eq("task_id", id)
+    .order("created_at", { ascending: false });
   const extensions: Extension[] = (rawExt ?? []).map((e) => ({
     id: e.id,
     userId: e.user_id,
@@ -107,7 +92,7 @@ async function loadTask(id: string): Promise<{ task: Task; log: ActivityLog[]; e
     reason: e.reason,
     createdAt: e.created_at
   }));
-  return { task, log, extensions };
+  return { task, extensions };
 }
 
 export default async function TaskDetailPage({ params }: { params: { id: string } }) {
@@ -119,13 +104,9 @@ export default async function TaskDetailPage({ params }: { params: { id: string 
     getLeaderIds()
   ]);
   if (!loaded) return notFound();
-  // Fetch the current user's full record (incl. departmentIds) so the
-  // access helper has a real shape to evaluate.
   const me = await getUserById(currentUserId);
-  // Leader-owned tasks are invisible to non-leaders. 404 instead of 403 so
-  // we don't leak the existence of the task to the wrong viewer.
   if (!canViewTask(me, loaded.task, leaderIds)) return notFound();
-  const { task, log, extensions } = loaded;
+  const { task, extensions } = loaded;
   const totalHoursAdded = extensions.reduce((s, e) => s + e.hoursAdded, 0);
 
   const userById = (id: string | null) =>
@@ -133,8 +114,8 @@ export default async function TaskDetailPage({ params }: { params: { id: string 
   const assignee = userById(task.assigneeId);
   const creator = userById(task.creatorId);
   const dept = task.departmentId ? departments.find((d) => d.id === task.departmentId) ?? null : null;
+  const canEditDue = canManageTask(me, task);
 
-  // One-shot project lookup for the sidebar link.
   let project: { id: string; name: string } | null = null;
   if (task.projectId) {
     const supabase = getSupabaseAdmin();
@@ -189,58 +170,29 @@ export default async function TaskDetailPage({ params }: { params: { id: string 
 
       <div className="grid grid-cols-3 gap-4">
         <div className="col-span-2 space-y-4">
-          <section className="card p-4">
-            <div className="text-sm font-medium mb-2">Description</div>
-            <p className="text-sm text-ink/90 whitespace-pre-wrap">{task.description}</p>
-            <div className="mt-3 flex items-center gap-1.5 flex-wrap">
-              {task.tags.map((t) => <Tag key={t}>{t}</Tag>)}
-            </div>
-          </section>
+          {task.description && (
+            <section className="card p-4">
+              <div className="text-sm font-medium mb-2">Description</div>
+              <p className="text-sm text-ink/90 whitespace-pre-wrap">{task.description}</p>
+              {task.tags.length > 0 && (
+                <div className="mt-3 flex items-center gap-1.5 flex-wrap">
+                  {task.tags.map((t) => <Tag key={t}>{t}</Tag>)}
+                </div>
+              )}
+            </section>
+          )}
 
           <section className="card p-4">
-            <div className="text-sm font-medium mb-3">Activity log</div>
-            <ul className="space-y-3">
-              {log.map((a) => {
-                const u = userById(a.userId);
-                return (
-                  <li key={a.id} className="flex items-start gap-3 text-sm">
-                    {u && <PersonAvatar userId={u.id} name={u.name} imageUrl={u.avatarUrl} size={22} />}
-                    <div className="flex-1 min-w-0">
-                      <div className="text-ink">
-                        <span className="font-medium">{u?.name ?? "—"}</span>{" "}
-                        <span className="text-muted">{a.action.replace("_", " ")}</span>
-                      </div>
-                      {a.detail && (
-                        <div className="text-muted text-xs mt-0.5 whitespace-pre-wrap">{a.detail}</div>
-                      )}
-                      {a.imageUrl && (
-                        <a href={a.imageUrl} target="_blank" rel="noreferrer" className="block mt-2">
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img
-                            src={a.imageUrl}
-                            alt="attachment"
-                            className="rounded-lg border border-border max-h-48 hover:opacity-90 transition-opacity"
-                          />
-                        </a>
-                      )}
-                    </div>
-                    <div className="text-xs text-muted shrink-0">{relativeTime(a.createdAt)}</div>
-                  </li>
-                );
-              })}
-              {log.length === 0 && <div className="text-sm text-muted">No activity yet.</div>}
-            </ul>
-            <CommentForm taskId={task.id} />
+            <div className="text-sm font-medium mb-3">Conversation</div>
+            <TaskConversation
+              taskId={task.id}
+              currentUserId={currentUserId}
+              users={allUsers}
+            />
           </section>
 
-          <section className="card p-4">
-            <div className="text-sm font-medium mb-3 flex items-center gap-2">
-              <MessageCircle className="w-4 h-4 text-accent" />
-              Thread
-            </div>
-            <TaskThread taskId={task.id} users={allUsers} currentUserId={currentUserId} />
-          </section>
-
+          {/* Handoff timeline only shows when there's actually been a
+              handoff — keeps the page compact for fresh tasks. */}
           <section className="card p-4">
             <div className="text-sm font-medium mb-3 flex items-center gap-2">
               <History className="w-4 h-4 text-accent" />
@@ -294,12 +246,22 @@ export default async function TaskDetailPage({ params }: { params: { id: string 
             ) : <span className="text-muted">Unassigned</span>}
           </Field>
           <Field label="Department">{dept?.name ?? "—"}</Field>
-          <Field label="Project">{project ? <Link href={`/projects/${project.id}`} className="text-accent hover:underline">{project.name}</Link> : "—"}</Field>
-          <Field label="Client">{task.clientName || <span className="text-muted">internal</span>}</Field>
-          <Field label="Website">{task.website
-            ? <a href={task.website.startsWith("http") ? task.website : `https://${task.website}`} target="_blank" rel="noreferrer" className="text-accent hover:underline">{task.website}</a>
-            : "—"}</Field>
-          <Field label="Estimate"><span className="inline-flex items-center gap-1"><Clock className="w-3 h-3" />{task.estimatedHours}h</span></Field>
+          {project && (
+            <Field label="Project">
+              <Link href={`/projects/${project.id}`} className="text-accent hover:underline">{project.name}</Link>
+            </Field>
+          )}
+          {task.clientName && <Field label="Client">{task.clientName}</Field>}
+          {task.website && (
+            <Field label="Website">
+              <a href={task.website.startsWith("http") ? task.website : `https://${task.website}`} target="_blank" rel="noreferrer" className="text-accent hover:underline">
+                {task.website}
+              </a>
+            </Field>
+          )}
+          <Field label="Estimate">
+            <span className="inline-flex items-center gap-1"><Clock className="w-3 h-3" />{task.estimatedHours}h</span>
+          </Field>
           <Field label="Actual">
             <span className="inline-flex items-center gap-1">
               {Number(task.actualHours ?? 0).toFixed(1)}h
@@ -312,34 +274,16 @@ export default async function TaskDetailPage({ params }: { params: { id: string 
             <TaskTimerButton taskId={task.id} />
           </Field>
           <Field label="Due">
-            <div className="space-y-0.5">
-              <div className="inline-flex items-center gap-1">
-                <Calendar className="w-3 h-3 text-muted" />
-                <Countdown iso={task.dueDate} />
-              </div>
-              {task.dueDate && (
-                <div className="text-[11px] text-muted">
-                  {new Date(task.dueDate).toLocaleString(undefined, {
-                    weekday: "short",
-                    month: "short",
-                    day: "numeric",
-                    hour: "numeric",
-                    minute: "2-digit",
-                    timeZoneName: "short"
-                  })}
-                </div>
-              )}
-              {extensions.length > 0 && (
-                <div className="text-[11px] text-warn">extended +{totalHoursAdded}h ({extensions.length})</div>
-              )}
-            </div>
+            <DueDateInline taskId={task.id} initialDueDate={task.dueDate} canEdit={canEditDue} />
+            {extensions.length > 0 && (
+              <div className="text-[11px] text-warn mt-1">extended +{totalHoursAdded}h ({extensions.length})</div>
+            )}
           </Field>
           <Field label="Last activity">{relativeTime(task.lastActivityAt)}</Field>
 
-          {/* Project links + custom fields. Renders the Notion-style block
-              of inline-editable rows: client email, folder, staging URL,
-              etc., plus whatever the team has defined under Settings →
-              Custom fields. */}
+          {/* Project links + custom fields — collapsed into the Notion-style
+              inline-editable block so the sidebar stays compact when nothing's
+              filled in. */}
           <div className="pt-3 border-t border-border/60">
             <TaskFields task={task} />
           </div>

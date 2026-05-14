@@ -1193,28 +1193,58 @@ function ClockProvider({ children }: { children: React.ReactNode }) {
   );
 }
 
+// localStorage cache so the widget knows on first render whether to
+// show the clock section. Without this, salaried users see the
+// section flash for one fetch round-trip and then disappear, which
+// looks broken.
+const CLOCK_ENABLED_CACHE_KEY = "wg.clockEnabled.v1";
+function readCachedClockEnabled(): boolean | null {
+  if (typeof window === "undefined") return null;
+  const v = window.localStorage.getItem(CLOCK_ENABLED_CACHE_KEY);
+  if (v === "true") return true;
+  if (v === "false") return false;
+  return null;
+}
+function writeCachedClockEnabled(v: boolean) {
+  if (typeof window === "undefined") return;
+  try { window.localStorage.setItem(CLOCK_ENABLED_CACHE_KEY, String(v)); }
+  catch { /* private mode / quota */ }
+}
+
 function ClockSection() {
-  // Leader can turn the clock off per user (salaried roles etc.). When
-  // disabled, this whole block disappears from the widget and the
-  // workday-remaining math is irrelevant. We poll once on mount and
-  // skip the section if clock_enabled is false.
-  const [clockEnabled, setClockEnabled] = useState<boolean | null>(null);
+  // Leader can turn the clock off per user (salaried roles etc.).
+  // We hide this whole block when disabled. To avoid the "renders
+  // briefly, then disappears" flash, we read the cached value
+  // synchronously before paint; the fetch only reconciles if the
+  // server's answer differs.
+  const [clockEnabled, setClockEnabled] = useState<boolean | null>(
+    () => readCachedClockEnabled()
+  );
   useEffect(() => {
     let cancelled = false;
     fetch("/api/users/me", { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
         if (cancelled) return;
-        const enabled = d?.user?.clockEnabled;
-        setClockEnabled(enabled === false ? false : true);
+        const enabled = d?.user?.clockEnabled === false ? false : true;
+        setClockEnabled(enabled);
+        writeCachedClockEnabled(enabled);
       })
-      .catch(() => setClockEnabled(true));
+      .catch(() => {
+        // Network failure — if we have a cached value, trust it.
+        // Otherwise default to "enabled" so the clock-using majority
+        // doesn't lose access on a flaky connection.
+        if (cancelled) return;
+        setClockEnabled((cur) => (cur === null ? true : cur));
+      });
     return () => { cancelled = true; };
   }, []);
 
   const { clock, toggleShift, tick } = useClock();
   void tick;
-  if (clockEnabled === false) return null;
+  // Hide while we genuinely don't know (first ever launch, no cache)
+  // AND when the cached/fetched value says disabled.
+  if (clockEnabled !== true) return null;
   const open = clock.open;
   const liveElapsed = open ? Date.now() - new Date(open.startedAt).getTime() : 0;
   // Workday remaining ticks down live while on shift. We anchor it to the

@@ -13,7 +13,7 @@ import { useCurrentUser } from "@/lib/user-context";
 import { cn } from "@/lib/utils";
 import type { Task, TaskStatus, User } from "@/lib/types";
 import {
-  Clock, Globe2, Building2, Users as UsersIcon, FolderKanban, User as UserIcon,
+  Clock, Globe2, Building2, Users as UsersIcon, FolderKanban,
   Layers, Briefcase, Layout
 } from "lucide-react";
 import { toast } from "sonner";
@@ -33,7 +33,6 @@ import { toast } from "sonner";
 // Drag behavior depends on groupBy: dragging changes the field that the
 // columns represent (status, client_name, or assignee_id).
 
-type BoardView = "all" | "byDept" | "mine";
 type GroupBy = "status" | "client" | "person";
 
 interface Column {
@@ -69,12 +68,14 @@ export default function BoardPage() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [, setLoading] = useState(true);
 
-  // View / filter state — `?dept=DEPT_ID` in the URL pre-filters the board
-  // to that department on first paint. Used by the "View tasks" deep links
-  // on the Leader Console's Departments tab.
-  const initialDept = searchParams.get("dept") ?? "all";
-  const [view, setView] = useState<BoardView>(initialDept !== "all" ? "byDept" : "all");
-  const [filterDept, setFilterDept] = useState(initialDept);
+  // View / filter state. `selectedDepts` is the set of department ids
+  // currently visible; an empty set is the "All departments" view.
+  // `?dept=DEPT_ID` in the URL pre-filters to that single dept (kept
+  // for the Leader Console's "View tasks" deep link).
+  const initialDept = searchParams.get("dept");
+  const [selectedDepts, setSelectedDepts] = useState<Set<string>>(
+    () => new Set(initialDept ? [initialDept] : [])
+  );
   const [filterUser, setFilterUser] = useState("all");
   const [filterClient, setFilterClient] = useState("all");
   const [filterWebsite, setFilterWebsite] = useState("all");
@@ -105,18 +106,16 @@ export default function BoardPage() {
     return () => { cancelled = true; };
   }, []);
 
-  function selectView(next: BoardView) {
-    setView(next);
-    if (next === "all") {
-      setFilterDept("all");
-      setFilterUser("all");
-    } else if (next === "byDept") {
-      setFilterDept(currentUser.departmentIds[0] ?? departments[0]?.id ?? "all");
-      setFilterUser("all");
-    } else if (next === "mine") {
-      setFilterDept("all");
-      setFilterUser(currentUser.id);
-    }
+  function toggleDept(deptId: string) {
+    setSelectedDepts((cur) => {
+      const next = new Set(cur);
+      if (next.has(deptId)) next.delete(deptId);
+      else next.add(deptId);
+      return next;
+    });
+  }
+  function selectAllDepts() {
+    setSelectedDepts(new Set());
   }
 
   const clientOptions = useMemo(
@@ -129,11 +128,11 @@ export default function BoardPage() {
   );
 
   const visible = useMemo(() => tasks.filter((t) =>
-    (filterDept === "all" || t.departmentId === filterDept) &&
+    (selectedDepts.size === 0 || (t.departmentId !== null && selectedDepts.has(t.departmentId))) &&
     (filterUser === "all" || t.assigneeId === filterUser) &&
     (filterClient === "all" || (filterClient === "__internal" ? !t.clientName : t.clientName === filterClient)) &&
     (filterWebsite === "all" || (filterWebsite === "__internal" ? !t.website : t.website === filterWebsite))
-  ), [tasks, filterDept, filterUser, filterClient, filterWebsite]);
+  ), [tasks, selectedDepts, filterUser, filterClient, filterWebsite]);
 
   // Build columns from the current groupBy + visible tasks.
   const columns: Column[] = useMemo(() => {
@@ -272,26 +271,59 @@ export default function BoardPage() {
     }
   }
 
+  const allDeptsSelected = selectedDepts.size === 0;
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <h1 className="text-lg font-medium">Board <span className="text-muted text-sm">· {visible.length}</span></h1>
 
-        <div className="flex items-center gap-2 flex-wrap">
-          {/* View axis */}
-          <div className="inline-flex items-center rounded-xl border border-border bg-surface p-0.5">
-            <ViewBtn active={view === "all"}    onClick={() => selectView("all")}    icon={<UsersIcon className="w-3.5 h-3.5" />} label="All team" />
-            <ViewBtn active={view === "byDept"} onClick={() => selectView("byDept")} icon={<FolderKanban className="w-3.5 h-3.5" />} label="By department" />
-            <ViewBtn active={view === "mine"}   onClick={() => selectView("mine")}   icon={<UserIcon className="w-3.5 h-3.5" />} label="My tasks" />
-          </div>
-
-          {/* Group-by axis */}
-          <div className="inline-flex items-center rounded-xl border border-border bg-surface p-0.5">
-            <ViewBtn active={groupBy === "status"} onClick={() => setGroupBy("status")} icon={<Layout className="w-3.5 h-3.5" />}    label="By status" />
-            <ViewBtn active={groupBy === "client"} onClick={() => setGroupBy("client")} icon={<Briefcase className="w-3.5 h-3.5" />} label="By client" />
-            <ViewBtn active={groupBy === "person"} onClick={() => setGroupBy("person")} icon={<UsersIcon className="w-3.5 h-3.5" />} label="By person" />
-          </div>
+        {/* Group-by axis (kept) */}
+        <div className="inline-flex items-center rounded-xl border border-border bg-surface p-0.5">
+          <ViewBtn active={groupBy === "status"} onClick={() => setGroupBy("status")} icon={<Layout className="w-3.5 h-3.5" />}    label="By status" />
+          <ViewBtn active={groupBy === "client"} onClick={() => setGroupBy("client")} icon={<Briefcase className="w-3.5 h-3.5" />} label="By client" />
+          <ViewBtn active={groupBy === "person"} onClick={() => setGroupBy("person")} icon={<UsersIcon className="w-3.5 h-3.5" />} label="By person" />
         </div>
+      </div>
+
+      {/* Department picker — multi-select chip row. "All" is sticky on
+          the left and clears the per-dept selection in one click. */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <button
+          type="button"
+          onClick={selectAllDepts}
+          className={cn(
+            "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border transition-colors",
+            allDeptsSelected
+              ? "bg-accent text-white border-accent shadow-sm"
+              : "bg-white border-border text-muted hover:text-ink hover:border-accent/40"
+          )}
+        >
+          <UsersIcon className="w-3.5 h-3.5" />
+          All departments
+        </button>
+        <span className="text-[10px] uppercase tracking-wide text-ink/40 px-1">
+          or pick a few
+        </span>
+        {departments.map((d) => {
+          const on = selectedDepts.has(d.id);
+          return (
+            <button
+              key={d.id}
+              type="button"
+              onClick={() => toggleDept(d.id)}
+              className={cn(
+                "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border transition-colors",
+                on
+                  ? "bg-blue-600 text-white border-blue-600 shadow-sm"
+                  : "bg-white border-border text-muted hover:text-ink hover:border-accent/40"
+              )}
+            >
+              <FolderKanban className="w-3.5 h-3.5" />
+              {d.name}
+            </button>
+          );
+        })}
       </div>
 
       {/* Compact filter bar: only the two most-used controls (department
@@ -322,9 +354,6 @@ export default function BoardPage() {
 
       {moreFiltersOpen && (
         <div className="card p-3 flex items-center gap-2 flex-wrap">
-          <Select label="Dept" value={filterDept} onChange={setFilterDept} options={[
-            ["all", "All departments"], ...departments.map((d) => [d.id, d.name] as [string, string])
-          ]} />
           <Select label="Assignee" value={filterUser} onChange={setFilterUser} options={[
             ["all", "Anyone"], ...users.map((u) => [u.id, u.name] as [string, string])
           ]} />

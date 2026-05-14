@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { loadTaskForViewer } from "@/lib/task-access";
 import { getUserById, getLeaderIds } from "@/lib/server-data";
-import { notifyTeamFyi } from "@/lib/slack";
+import { notifyTeamFyi, notifyTeamFyiAsUser } from "@/lib/slack";
 
 export const dynamic = "force-dynamic";
 
@@ -65,12 +65,15 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
     // Fan-out for mentions: one notification row per user (drives the
     // widget alert + the alarm sound) + a Slack DM (drives the
-    // out-of-app ping). Failures are best-effort.
+    // out-of-app ping). DM is sent FROM the mentioner's Slack account
+    // when they've connected one, so the recipient sees it as a real
+    // DM from the person who mentioned them — not the workspace bot.
     if (mentionedUserIds.length > 0) {
-      const [me, taskRow, { data: mentioned }] = await Promise.all([
+      const [me, taskRow, { data: mentioned }, { data: senderRow }] = await Promise.all([
         getUserById(userId),
         supabase.from("tasks").select("title").eq("id", params.id).maybeSingle(),
-        supabase.from("users").select("id, email, name").in("id", mentionedUserIds)
+        supabase.from("users").select("id, email, name").in("id", mentionedUserIds),
+        supabase.from("users").select("slack_user_token").eq("id", userId).maybeSingle()
       ]);
       const rows = (mentioned ?? []).map((u) => ({
         id: `n_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}_${(u.id as string).slice(-4)}`,
@@ -83,20 +86,45 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       if (rows.length > 0) {
         await supabase.from("task_notifications").insert(rows);
       }
-      // Slack fan-out. notifyTeamFyi will silently no-op when bot token
-      // is missing, so dev environments don't blow up.
-      const emails = (mentioned ?? [])
-        .map((u) => u.email as string | null)
-        .filter((e): e is string => !!e);
-      if (emails.length > 0 && me) {
+      const recipientsLite = (mentioned ?? []).map((u) => ({
+        email: (u.email as string | null) ?? null,
+        name: (u.name as string) ?? ""
+      }));
+      const senderToken = (senderRow?.slack_user_token as string | null) ?? null;
+      if (recipientsLite.length > 0 && me) {
         try {
-          await notifyTeamFyi({
-            recipientEmails: emails,
-            headline: `${me.name} mentioned you on a task`,
-            body: text ? `> ${text.slice(0, 300)}` : "Heads up — they referenced you in a comment.",
-            taskId: params.id,
-            taskTitle: (taskRow.data?.title as string) ?? "Task"
-          });
+          const headline = `${me.name} mentioned you on a task`;
+          const body = text
+            ? `> ${text.slice(0, 300)}`
+            : "Heads up — they referenced you in a comment.";
+          const taskTitle = (taskRow.data?.title as string) ?? "Task";
+          if (senderToken) {
+            // DM as the sender so the recipient sees it from a real person.
+            await notifyTeamFyiAsUser({
+              senderUserToken: senderToken,
+              senderName: me.name,
+              recipients: recipientsLite,
+              headline,
+              body,
+              taskId: params.id,
+              taskTitle
+            });
+          } else {
+            // No connected Slack — fall back to the bot DM so the user
+            // is at least notified somewhere.
+            const emails = recipientsLite
+              .map((r) => r.email)
+              .filter((e): e is string => !!e);
+            if (emails.length > 0) {
+              await notifyTeamFyi({
+                recipientEmails: emails,
+                headline,
+                body,
+                taskId: params.id,
+                taskTitle
+              });
+            }
+          }
         } catch { /* best effort */ }
       }
     }

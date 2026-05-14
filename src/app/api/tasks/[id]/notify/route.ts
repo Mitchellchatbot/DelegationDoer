@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getUserById, getAllUsersLight } from "@/lib/server-data";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { loadTaskForViewer } from "@/lib/task-access";
-import { notifyTeamFyi } from "@/lib/slack";
+import { notifyTeamFyi, notifyTeamFyiAsUser } from "@/lib/slack";
 import { canNotifyOnTask } from "@/lib/access";
 
 export const dynamic = "force-dynamic";
@@ -62,18 +62,42 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     if (recipientUsers.length === 0) {
       return NextResponse.json({ error: "no valid recipients" }, { status: 400 });
     }
-    const emails = recipientUsers
-      .map((u) => u.email)
-      .filter((e): e is string => !!e);
-
     const headline = `${me.name} looped you in on a task`;
-    const fyi = await notifyTeamFyi({
-      recipientEmails: emails,
-      headline,
-      body: note || `Heads up — could you take a look?`,
-      taskId: params.id,
-      taskTitle: taskRow.title as string
-    });
+    const messageBody = note || `Heads up — could you take a look?`;
+    const taskTitle = taskRow.title as string;
+
+    // DM as the sender when they've connected Slack — recipients see
+    // the ping come from the actual person, not the workspace bot.
+    // Falls back to the bot when there's no user token on file.
+    const { data: senderRow } = await supabase
+      .from("users")
+      .select("slack_user_token")
+      .eq("id", userId)
+      .maybeSingle();
+    const senderToken = (senderRow?.slack_user_token as string | null) ?? null;
+    let fyi: { sent: number; failed: number; skipped?: number } = { sent: 0, failed: 0 };
+    if (senderToken) {
+      fyi = await notifyTeamFyiAsUser({
+        senderUserToken: senderToken,
+        senderName: me.name,
+        recipients: recipientUsers.map((u) => ({ email: u.email ?? null, name: u.name })),
+        headline,
+        body: messageBody,
+        taskId: params.id,
+        taskTitle
+      });
+    } else {
+      const emails = recipientUsers
+        .map((u) => u.email)
+        .filter((e): e is string => !!e);
+      fyi = await notifyTeamFyi({
+        recipientEmails: emails,
+        headline,
+        body: messageBody,
+        taskId: params.id,
+        taskTitle
+      });
+    }
 
     // Activity row so the timeline shows who got notified.
     const namedList = recipientUsers.map((u) => u.name).join(", ");

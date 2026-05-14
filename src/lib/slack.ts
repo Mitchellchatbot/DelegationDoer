@@ -597,6 +597,63 @@ export async function notifyCompletion(args: {
   return { creatorDm, channelPost };
 }
 
+// Mention / notify-teammates fan-out, but DM'd FROM the sender's
+// own Slack account (xoxp- user token) instead of the workspace bot.
+// Recipients see the message as a direct DM from a real person, which
+// is what the team actually wants for "Henry pinged you on a task."
+//
+// Falls back to bot send (notifyTeamFyi) when:
+//   - the sender hasn't connected Slack yet
+//   - the sender's user token is missing the required scope
+//
+// Returns sent/failed/skipped tallies so callers can shape a toast.
+export async function notifyTeamFyiAsUser(args: {
+  senderUserToken: string;
+  senderName: string;
+  recipients: { email: string | null; name: string }[];
+  headline: string;
+  body: string;
+  taskId: string;
+  taskTitle: string;
+}): Promise<{ sent: number; failed: number; skipped: number }> {
+  if (args.recipients.length === 0) return { sent: 0, failed: 0, skipped: 0 };
+  const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
+  const taskUrl = `${baseUrl}/tasks/${args.taskId}`;
+  const blocks: unknown[] = [
+    { type: "section", text: { type: "mrkdwn", text: `*${args.headline}*\n${args.body}` } },
+    { type: "section", text: { type: "mrkdwn", text: `*<${taskUrl}|${args.taskTitle}>*` } },
+    {
+      type: "actions",
+      elements: [{
+        type: "button",
+        text: { type: "plain_text", text: "Open in DelegationDoer", emoji: true },
+        url: taskUrl
+      }]
+    }
+  ];
+  let sent = 0, failed = 0, skipped = 0;
+  for (const r of args.recipients) {
+    try {
+      const recipientSlackId = await findSlackUser({
+        email: r.email,
+        name: r.name
+      });
+      if (!recipientSlackId) { skipped++; continue; }
+      const channel = await openDmAsUser(args.senderUserToken, recipientSlackId);
+      await postMessageAsUser({
+        userToken: args.senderUserToken,
+        channel,
+        text: args.headline,
+        blocks
+      });
+      sent++;
+    } catch {
+      failed++;
+    }
+  }
+  return { sent, failed, skipped };
+}
+
 // FYI fan-out used when a request is auto-routed to a department head and
 // we want the rest of the team to know it's in flight (e.g. the SEO
 // report-request flow). Best-effort per recipient — failures don't fail

@@ -319,9 +319,18 @@ export function workersOf(deptId: string): User[] {
 }
 // Reporting line: a user's direct manager. Workers report to the head(s) of
 // their first department; heads report to the Leader; Leader reports to no one.
-export function managerOf(user: User): User | null {
+// Pure: feed in the live users list and get back this user's manager.
+// Old callers can still call managerOf(user) and get the mock fallback
+// (workspace was demo-seeded), but live callers should pass team.users.
+export function managerOf(user: User, allUsers: User[] = users): User | null {
   if (user.role === "leader") return null;
-  if (user.role === "department_head") return users.find((u) => u.role === "leader") ?? null;
+  if (user.role === "department_head") {
+    return allUsers.find((u) => u.role === "leader") ?? null;
+  }
   const dep = user.departmentIds[0];
-  return dep ? headsOf(dep)[0] ?? null : null;
+  return dep
+    ? allUsers.find((u) =>
+        u.role === "department_head" && u.departmentIds.includes(dep)
+      ) ?? null
+    : null;
 }

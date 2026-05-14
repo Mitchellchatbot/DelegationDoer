@@ -11,7 +11,7 @@ import { Avatar } from "@/components/Avatar";
 import { PersonAvatar } from "@/components/PersonAvatar";
 import { Countdown } from "@/components/Countdown";
 import { PriorityBadge } from "@/components/Badges";
-import { userById } from "@/lib/mock-data";
+import { useTeam } from "@/lib/team-context";
 import { cn } from "@/lib/utils";
 
 interface RequestRow {
@@ -183,6 +183,7 @@ export default function SeoReportsPage() {
 function Section({ title, rows, empty, dim }: {
   title: string; rows: RequestRow[]; empty?: string; dim?: boolean;
 }) {
+  const { userById } = useTeam();
   return (
     <section>
       <h2 className="text-[15px] font-semibold text-ink mb-3">{title}</h2>

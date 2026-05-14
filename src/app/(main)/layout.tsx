@@ -7,6 +7,7 @@ import { getSupabaseServer } from "@/lib/supabase-server";
 import { getUserById } from "@/lib/server-data";
 import { UserProvider } from "@/lib/user-context";
 import { PresenceProvider } from "@/lib/presence-context";
+import { TeamProvider } from "@/lib/team-context";
 import { ClockProvider } from "@/components/ClockContext";
 import { OnboardingDialog } from "@/components/OnboardingDialog";
 import { primaryDepartment } from "@/lib/departments";
@@ -34,6 +35,7 @@ export default async function MainLayout({ children }: { children: React.ReactNo
   return (
     <UserProvider user={user}>
       <PresenceProvider>
+      <TeamProvider>
       <ClockProvider>
       {/* Floating-panels layout: sidebar, topbar, and main are each their
           own rounded card with a 12px gutter between them. The page bg
@@ -65,6 +67,7 @@ export default async function MainLayout({ children }: { children: React.ReactNo
       <Toaster position="bottom-right" richColors closeButton />
       <OnboardingDialog />
       </ClockProvider>
+      </TeamProvider>
       </PresenceProvider>
     </UserProvider>
   );

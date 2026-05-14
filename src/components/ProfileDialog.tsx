@@ -11,7 +11,8 @@ import { toast } from "sonner";
 import { PersonAvatar } from "./PersonAvatar";
 import { CapacityBar } from "./CapacityBar";
 import { SendKudosDialog } from "./SendKudosDialog";
-import { users, tasks, departments, managerOf } from "@/lib/mock-data";
+import { managerOf } from "@/lib/mock-data";
+import { useTeam } from "@/lib/team-context";
 import { userCapacity } from "@/lib/capacity";
 import { ROLE_LABELS } from "@/lib/auth";
 import { useCurrentUser } from "@/lib/user-context";
@@ -110,9 +111,23 @@ function ProfileBody({ userId }: { userId: string }) {
     return () => { cancelled = true; };
   }, [userId, profileBump]);
 
-  const user = useMemo(() => users.find((u) => u.id === userId) ?? null, [userId]);
+  // Pull the live team — no more mock-data import. user is found in
+  // the live users list; if it's still loading we show a skeleton
+  // rather than the misleading "User not found" we used to throw.
+  const team = useTeam();
+  const user = useMemo(
+    () => team.users.find((u) => u.id === userId) ?? null,
+    [userId, team.users]
+  );
 
   if (!user) {
+    if (!team.loaded) {
+      return (
+        <div className="rounded-3xl border border-slate-200/70 bg-white p-8 text-center text-sm text-ink/55">
+          Loading profile…
+        </div>
+      );
+    }
     return (
       <div className="rounded-3xl border border-slate-200/70 bg-white p-8 text-center">
         <div className="text-base font-medium">User not found</div>
@@ -126,10 +141,10 @@ function ProfileBody({ userId }: { userId: string }) {
 
   const avatarUrl = live?.avatarUrl ?? user.avatarUrl ?? null;
   const userDepts = user.departmentIds
-    .map((id) => departments.find((d) => d.id === id))
+    .map((id) => team.deptById(id))
     .filter(Boolean) as { id: string; name: string }[];
-  const cap = userCapacity(user, tasks);
-  const myTasks = tasks.filter((t) => t.assigneeId === user.id);
+  const cap = userCapacity(user, team.tasks);
+  const myTasks = team.tasks.filter((t) => t.assigneeId === user.id);
 
   // Live skills from /api/skills, polled when this dialog mounts and
   // re-fetched after every edit so the read-only tiles + edit form
@@ -154,11 +169,16 @@ function ProfileBody({ userId }: { userId: string }) {
     if (earned.length > 0) return earned;
     return list.map((s) => s.tag);
   }, [skills]);
-  const manager = managerOf(user);
+  // managerOf is a pure function over the org structure — feed it
+  // the live users list so the answer reflects current org state.
+  const manager = managerOf(user, team.users);
   const directReports = user.role === "leader"
-    ? users.filter((u) => u.role === "department_head")
+    ? team.users.filter((u) => u.role === "department_head")
     : user.role === "department_head"
-      ? users.filter((u) => u.role === "worker" && u.departmentIds.some((d) => user.departmentIds.includes(d)))
+      ? team.users.filter((u) =>
+          u.role === "worker" &&
+          u.departmentIds.some((d) => user.departmentIds.includes(d))
+        )
       : [];
 
   return (

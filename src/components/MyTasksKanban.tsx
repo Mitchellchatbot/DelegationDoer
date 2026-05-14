@@ -8,7 +8,7 @@ import { Clock } from "lucide-react";
 import { PriorityBadge, StalledBadge, Tag } from "./Badges";
 import { Countdown } from "./Countdown";
 import { PersonAvatar } from "./PersonAvatar";
-import { userById } from "@/lib/mock-data";
+import { useTeam } from "@/lib/team-context";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import type { Task, TaskStatus } from "@/lib/types";
@@ -274,6 +274,7 @@ function CardInner({
   onOpen: () => void;
 }) {
   const tint = t.inactiveFlag ? STALLED_TINT : TINT[t.priority as Priority];
+  const { userById } = useTeam();
   const assignee = t.assigneeId ? userById(t.assigneeId) : null;
   return (
     <div

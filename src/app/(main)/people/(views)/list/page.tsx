@@ -1,6 +1,3 @@
-import Link from "next/link";
-import { users, departments, tasks, skillProfiles, headsOf, workersOf } from "@/lib/mock-data";
-import { Avatar } from "@/components/Avatar";
 import { PersonAvatar } from "@/components/PersonAvatar";
 import { CapacityBar } from "@/components/CapacityBar";
 import { userCapacity } from "@/lib/capacity";
@@ -9,13 +6,12 @@ import { Crown, Users as UsersIcon, ListChecks, CheckCircle2, Flame } from "luci
 import { PageHero } from "@/components/PageHero";
 import { TeamCarousel } from "@/components/TeamCarousel";
 import { ProfileDialog } from "@/components/ProfileDialog";
-import type { User } from "@/lib/types";
+import { getAllUsers, getAllTasks, getDepartments } from "@/lib/server-data";
+import type { User, Task } from "@/lib/types";
 
-// Personal stats per user — active task count, currently-top task, lifetime
-// completion count. Built once at module level since the team page reads
-// from in-memory mock-data; if/when this page ports to Supabase this lifts
-// into the server component.
-function statsFor(userId: string) {
+export const dynamic = "force-dynamic";
+
+function statsFor(userId: string, tasks: Task[]) {
   const open = tasks.filter((t) => t.assigneeId === userId && t.status !== "done");
   const done = tasks.filter((t) => t.assigneeId === userId && t.status === "done");
   const urgent = open.filter((t) => t.priority === "critical" || t.status === "urgent").length;
@@ -27,8 +23,18 @@ function statsFor(userId: string) {
   return { openCount: open.length, doneCount: done.length, urgent, top };
 }
 
-export default function TeamPage() {
+export default async function TeamPage() {
+  // Pull live workspace data — no more mock-data.
+  const [users, departments, tasks] = await Promise.all([
+    getAllUsers(),
+    getDepartments(),
+    getAllTasks()
+  ]);
   const ceo = users.find((u) => u.role === "leader");
+  const headsOf = (deptId: string) =>
+    users.filter((u) => u.role === "department_head" && u.departmentIds.includes(deptId));
+  const workersOf = (deptId: string) =>
+    users.filter((u) => u.role === "worker" && u.departmentIds.includes(deptId));
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
@@ -40,7 +46,7 @@ export default function TeamPage() {
         iconTone="emerald"
       />
 
-      <TeamCarousel users={users} departments={departments} />
+      <TeamCarousel users={users as User[]} departments={departments} />
 
       {ceo && (
         <ProfileDialog
@@ -101,8 +107,8 @@ export default function TeamPage() {
               <div className="card p-4 text-sm text-muted">No members yet.</div>
             ) : (
               <div className="grid grid-cols-3 gap-3">
-                {heads.map((u) => <PersonCard key={u.id} user={u} accent />)}
-                {workers.map((u) => <PersonCard key={u.id} user={u} />)}
+                {heads.map((u) => <PersonCard key={u.id} user={u} tasks={tasks} accent />)}
+                {workers.map((u) => <PersonCard key={u.id} user={u} tasks={tasks} />)}
               </div>
             )}
           </section>
@@ -112,10 +118,13 @@ export default function TeamPage() {
   );
 }
 
-function PersonCard({ user, accent }: { user: User; accent?: boolean }) {
+function PersonCard({ user, tasks, accent }: { user: User; tasks: Task[]; accent?: boolean }) {
   const cap = userCapacity(user, tasks);
-  const skills = skillProfiles.filter((s) => s.userId === user.id);
-  const stats = statsFor(user.id);
+  // Live /api/skills is fetched per profile dialog; the inline chip
+  // row here uses the User.skills text array we already have so the
+  // card stays SSR-only.
+  const skills = (user.skills ?? []).map((s, i) => ({ id: `${user.id}-${i}`, skillName: s, experienceLevel: 0 }));
+  const stats = statsFor(user.id, tasks);
   // Gold wash for heads, brand-blue wash for workers.
   const headBg = "bg-gradient-to-br from-amber-100/80 via-white/65 to-amber-50/50 border-amber-200/70";
   const workerBg = "bg-gradient-to-br from-blue-100/80 via-white/65 to-blue-50/50 border-blue-200/60";
@@ -180,7 +189,7 @@ function PersonCard({ user, accent }: { user: User; accent?: boolean }) {
               key={s.id}
               className="text-[10px] px-2 py-0.5 rounded-full bg-white/75 border border-white/80 text-ink/70"
             >
-              {s.skillName} · L{s.experienceLevel}
+              {s.skillName}{s.experienceLevel ? ` · L${s.experienceLevel}` : ""}
             </span>
           ))}
         </div>

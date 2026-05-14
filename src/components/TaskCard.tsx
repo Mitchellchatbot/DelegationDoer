@@ -1,9 +1,11 @@
+"use client";
+
 import Link from "next/link";
 import { PriorityBadge, StalledBadge, Tag } from "./Badges";
 import { PersonAvatar } from "./PersonAvatar";
 import { Countdown } from "./Countdown";
 import type { Task } from "@/lib/types";
-import { userById } from "@/lib/mock-data";
+import { useTeam } from "@/lib/team-context";
 import { cn } from "@/lib/utils";
 import { Clock } from "lucide-react";
 
@@ -44,6 +46,7 @@ const STALLED_TINT = {
 };
 
 export function TaskCard({ task, dim }: { task: Task; dim?: boolean }) {
+  const { userById } = useTeam();
   const assignee = userById(task.assigneeId);
   const tint = task.inactiveFlag ? STALLED_TINT : TINT[task.priority as Priority];
 

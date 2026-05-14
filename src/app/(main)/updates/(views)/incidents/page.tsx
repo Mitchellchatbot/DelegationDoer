@@ -1,5 +1,5 @@
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
-import { userById } from "@/lib/mock-data";
+import { getAllUsersLight } from "@/lib/server-data";
 import { IncidentsList } from "@/components/IncidentsList";
 import type { IncidentLog } from "@/lib/types";
 
@@ -24,11 +24,13 @@ export default async function IncidentsPage() {
     createdAt: i.created_at
   }));
 
-  // Resolve assignee names server-side from mock-data so the client component
-  // doesn't need access to the users array.
+  // Resolve assignee names from the live users table so the client
+  // component doesn't need access to the workspace roster.
+  const users = await getAllUsersLight();
+  const nameById = new Map(users.map((u) => [u.id, u.name]));
   const enriched = list.map((i) => ({
     ...i,
-    assigneeName: userById(i.assignedToId)?.name ?? null
+    assigneeName: i.assignedToId ? (nameById.get(i.assignedToId) ?? null) : null
   }));
 
   return <IncidentsList incidents={enriched} />;

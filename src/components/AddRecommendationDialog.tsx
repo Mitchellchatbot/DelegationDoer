@@ -92,7 +92,12 @@ export function AddRecommendationDialog({
     const ctrl = new AbortController();
     const t = setTimeout(async () => {
       try {
-        const res = await fetch(`${k.api}&q=${encodeURIComponent(query)}`.replace("?&", "?"), {
+        // Some api strings already carry a ?kind=... query (TMDB),
+        // others are bare paths (RAWG, YouTube). Pick the right
+        // joiner instead of relying on string-replace.
+        const apiPath = k.api!;
+        const join = apiPath.includes("?") ? "&" : "?";
+        const res = await fetch(`${apiPath}${join}q=${encodeURIComponent(query)}`, {
           signal: ctrl.signal
         });
         const data = await res.json();

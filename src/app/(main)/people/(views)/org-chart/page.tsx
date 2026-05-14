@@ -29,7 +29,9 @@ export default async function OrgChartPage() {
     getDepartments()
   ]);
 
-  const ceo = users.find((u) => u.role === "leader") ?? null;
+  // Every leader sits at the top of the chart — co-leads / right-hand
+  // setups render side-by-side rather than picking one as "the" leader.
+  const leaders = users.filter((u) => u.role === "leader");
   const openTasks = tasks.filter((t) => t.status !== "done").length;
 
   // Avatar peek — show up to 6, ordered: Leader first, then heads, then
@@ -115,7 +117,7 @@ export default async function OrgChartPage() {
       </header>
 
       <OrgChart
-        ceo={ceo}
+        ceo={leaders}
         users={users}
         departments={departments}
         tasks={tasks}

@@ -25,7 +25,12 @@ interface Props {
   users: User[];
   departments: Department[];
   tasks: Task[];
-  ceo?: User | null;       // optional root node (omit for dept-head view)
+  // Optional root node(s). Pass `null` to skip the top tier
+  // (department-head view). Pass a single User for backwards
+  // compatibility with old callers. Pass an array to render every
+  // leader side-by-side at the top, each with their own connectors
+  // down to the departments below.
+  ceo?: User | User[] | null;
 }
 
 const PRIORITY_RANK: Record<string, number> = {
@@ -57,8 +62,14 @@ function openTasksFor(userId: string, all: Task[]): Task[] {
 }
 
 export function OrgChart({ users, departments, tasks, ceo }: Props) {
+  // Normalize the legacy single-leader prop into an array. `null` /
+  // omitted → no leader tier (dept-head view). Single User → one
+  // leader at the top. Array → render every leader side-by-side.
+  const leaders: User[] = ceo
+    ? Array.isArray(ceo) ? ceo : [ceo]
+    : [];
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const ceoRef = useRef<HTMLDivElement | null>(null);
+  const ceoRefs = useRef<Map<string, HTMLDivElement | null>>(new Map());
   const deptHeaderRefs = useRef<Map<string, HTMLDivElement | null>>(new Map());
   const headRefs = useRef<Map<string, HTMLDivElement | null>>(new Map());
   const workerRefs = useRef<Map<string, HTMLDivElement | null>>(new Map());
@@ -75,8 +86,11 @@ export function OrgChart({ users, departments, tasks, ceo }: Props) {
 
       const next: { d: string; key: string }[] = [];
 
-      const ceoEl = ceoRef.current;
-      if (ceoEl) {
+      // For each leader, draw a curve down to every department header.
+      // Multiple leaders all converge on the same dept rows — co-leads
+      // model.
+      for (const [leaderId, ceoEl] of ceoRefs.current) {
+        if (!ceoEl) continue;
         const c = ceoEl.getBoundingClientRect();
         const fromX = c.left + c.width / 2 - rootRect.left;
         const fromY = c.bottom - rootRect.top;
@@ -86,7 +100,7 @@ export function OrgChart({ users, departments, tasks, ceo }: Props) {
           const toX = d.left + d.width / 2 - rootRect.left;
           const toY = d.top - rootRect.top;
           next.push({
-            key: `ceo-${deptId}`,
+            key: `ceo-${leaderId}-${deptId}`,
             d: cubicPath(fromX, fromY, toX, toY)
           });
         }
@@ -155,15 +169,22 @@ export function OrgChart({ users, departments, tasks, ceo }: Props) {
         </svg>
 
         <div className="relative z-10 flex flex-col items-center min-w-fit gap-8">
-          {ceo && (
-            <div ref={ceoRef}>
-              <PersonNode
-                user={ceo}
-                tone="leader"
-                tasks={openTasksFor(ceo.id, tasks)}
-                allUserTasks={tasks.filter((t) => t.assigneeId === ceo.id)}
-                departments={departments}
-              />
+          {leaders.length > 0 && (
+            <div className="flex items-start justify-center gap-10 flex-wrap">
+              {leaders.map((l) => (
+                <div
+                  key={l.id}
+                  ref={(el) => { ceoRefs.current.set(l.id, el); }}
+                >
+                  <PersonNode
+                    user={l}
+                    tone="leader"
+                    tasks={openTasksFor(l.id, tasks)}
+                    allUserTasks={tasks.filter((t) => t.assigneeId === l.id)}
+                    departments={departments}
+                  />
+                </div>
+              ))}
             </div>
           )}
 

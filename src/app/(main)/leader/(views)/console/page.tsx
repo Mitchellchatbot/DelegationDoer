@@ -720,7 +720,9 @@ function DepartmentsTab({
 /* ---------------- Org chart ---------------- */
 
 function OrgChartTab({ people, departments }: { people: User[]; departments: Department[] }) {
-  const ceo = people.find((u) => u.role === "leader") ?? null;
+  // Every leader sits at the top — co-leads / right-hand setups render
+  // side-by-side rather than us picking one.
+  const leaders = people.filter((u) => u.role === "leader");
 
   // Org-wide aggregates. "Completed this week" counts tasks whose status is
   // `done` AND whose lastActivityAt — the timestamp the task changed state —
@@ -768,7 +770,7 @@ function OrgChartTab({ people, departments }: { people: User[]; departments: Dep
       <OnShiftList />
 
       <OrgChart
-        ceo={ceo}
+        ceo={leaders}
         users={people}
         departments={departments}
         tasks={tasks}

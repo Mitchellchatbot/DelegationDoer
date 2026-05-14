@@ -1,7 +1,7 @@
 "use client";
 
-import { departments, users, distinctClients, distinctWebsites, userById } from "@/lib/mock-data";
 import { useEffect, useMemo, useState } from "react";
+import { useTeam } from "@/lib/team-context";
 import { createPortal } from "react-dom";
 import { useSearchParams, useRouter } from "next/navigation";
 import { DragDropContext, Droppable, Draggable, type DropResult } from "@hello-pangea/dnd";
@@ -63,6 +63,7 @@ const SORTS: Record<string, (a: Task, b: Task) => number> = {
 
 export default function BoardPage() {
   const currentUser = useCurrentUser();
+  const { users, departments, userById } = useTeam();
   const searchParams = useSearchParams();
   const router = useRouter();
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -118,8 +119,14 @@ export default function BoardPage() {
     }
   }
 
-  const clientOptions = useMemo(() => distinctClients(), []);
-  const websiteOptions = useMemo(() => distinctWebsites(), []);
+  const clientOptions = useMemo(
+    () => Array.from(new Set(tasks.map((t) => t.clientName).filter(Boolean) as string[])).sort(),
+    [tasks]
+  );
+  const websiteOptions = useMemo(
+    () => Array.from(new Set(tasks.map((t) => t.website).filter(Boolean) as string[])).sort(),
+    [tasks]
+  );
 
   const visible = useMemo(() => tasks.filter((t) =>
     (filterDept === "all" || t.departmentId === filterDept) &&

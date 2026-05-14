@@ -1,7 +1,5 @@
 import Link from "next/link";
-import { projects as mockProjects, departments as mockDepts, milestones, tasks as mockTasks } from "@/lib/mock-data";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
-import { formatDate } from "@/lib/utils";
 import { CheckCircle2, FolderKanban, Lock, PlayCircle } from "lucide-react";
 import { NewProjectButton } from "@/components/NewProjectButton";
 import { PageHero } from "@/components/PageHero";
@@ -15,20 +13,16 @@ const PALETTE = [
   { ring: "ring-indigo-300/40", from: "from-indigo-50",  iconBg: "bg-indigo-500" }
 ];
 
-// Unified shape for both Supabase-backed and mock-seeded projects so
-// the render block stays the same.
 interface ProjectRow {
   id: string;
   name: string;
   description: string;
   departmentId: string | null;
   departmentName: string | null;
-  // Stage-flow specifics (only set for Supabase projects).
   stageCount: number;
   stagesDone: number;
   activeStageName: string | null;
   openTaskCount: number;
-  source: "live" | "mock";
 }
 
 async function loadAllProjects(): Promise<ProjectRow[]> {
@@ -67,7 +61,7 @@ async function loadAllProjects(): Promise<ProjectRow[]> {
     openByProject.set(pid, (openByProject.get(pid) ?? 0) + 1);
   }
 
-  const live: ProjectRow[] = (rawProjects ?? []).map((p) => {
+  return (rawProjects ?? []).map((p) => {
     const stages = (stagesByProject.get(p.id as string) ?? []).sort((a, b) => a.position - b.position);
     const active = stages.find((s) => s.status === "active");
     const done = stages.filter((s) => s.status === "done").length;
@@ -80,41 +74,9 @@ async function loadAllProjects(): Promise<ProjectRow[]> {
       stageCount: stages.length,
       stagesDone: done,
       activeStageName: active ? active.name : null,
-      openTaskCount: openByProject.get(p.id as string) ?? 0,
-      source: "live"
+      openTaskCount: openByProject.get(p.id as string) ?? 0
     };
   });
-
-  // Mock fallback: only show mock-data demos that aren't already in
-  // Supabase (we'd rather show the live version if both exist).
-  const liveIds = new Set(live.map((p) => p.id));
-  const mock: ProjectRow[] = mockProjects
-    .filter((p) => !liveIds.has(p.id))
-    .map((p) => {
-      const dept = mockDepts.find((d) => d.id === p.departmentId);
-      const open = mockTasks.filter((t) => t.projectId === p.id && t.status !== "done").length;
-      return {
-        id: p.id,
-        name: p.name,
-        description: p.description,
-        departmentId: p.departmentId,
-        departmentName: dept?.name ?? null,
-        stageCount: 0,
-        stagesDone: 0,
-        activeStageName: null,
-        openTaskCount: open,
-        source: "mock"
-      };
-    });
-
-  // Live first (most recently relevant), mock after.
-  return [...live, ...mock];
-}
-
-function nextMilestoneLabelFor(projectId: string): string | null {
-  const next = milestones.find((m) => m.projectId === projectId && m.status !== "done");
-  if (!next) return null;
-  return `${next.name} · ${formatDate(next.dueDate)}`;
 }
 
 export default async function ProjectsListPage() {
@@ -181,22 +143,15 @@ export default async function ProjectsListPage() {
                       <PlayCircle className="w-3 h-3 text-blue-600" />
                       {p.activeStageName}
                     </div>
-                  ) : p.source === "live" && p.stageCount > 0 && p.stagesDone === p.stageCount ? (
+                  ) : p.stageCount > 0 && p.stagesDone === p.stageCount ? (
                     <div className="inline-flex items-center gap-1 text-emerald-700 text-[11px]">
                       <CheckCircle2 className="w-3 h-3" />
                       Shipped
                     </div>
-                  ) : p.source === "live" ? (
+                  ) : (
                     <div className="inline-flex items-center gap-1 text-ink/45 text-[11px]">
                       <Lock className="w-3 h-3" />
                       No active stage
-                    </div>
-                  ) : (
-                    <div className="text-ink/60 truncate">
-                      {(() => {
-                        const label = nextMilestoneLabelFor(p.id);
-                        return label ? <>Next: <span className="text-ink font-medium">{label}</span></> : null;
-                      })()}
                     </div>
                   )}
                 </div>

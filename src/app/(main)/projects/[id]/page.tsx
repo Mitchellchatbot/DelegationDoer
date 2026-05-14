@@ -1,21 +1,11 @@
-import Link from "next/link";
 import { notFound } from "next/navigation";
-import { projects as mockProjects, milestones, raciEntries, users as mockUsers, tasks as mockTasks, departments as mockDepts } from "@/lib/mock-data";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { getAllUsersLight } from "@/lib/server-data";
-import { TaskCard } from "@/components/TaskCard";
-import { RACITable } from "@/components/RACITable";
 import { ProjectStages, type StageDTO } from "@/components/ProjectStages";
-import { formatDate } from "@/lib/utils";
-import { CheckCircle2, Circle, Clock } from "lucide-react";
 import { BackPill } from "@/components/BackPill";
-import type { MilestoneStatus } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
-// Resolve a project from Supabase first; fall back to the mock-data
-// set so the seeded demo projects keep working until they're migrated
-// over.
 async function loadProject(id: string) {
   const supabase = getSupabaseAdmin();
   const { data: real } = await supabase
@@ -23,31 +13,19 @@ async function loadProject(id: string) {
     .select("id, name, description, department_id")
     .eq("id", id)
     .maybeSingle();
-  if (real) {
-    const { data: dept } = real.department_id
-      ? await supabase.from("departments").select("id, name").eq("id", real.department_id).maybeSingle()
-      : { data: null };
-    return {
-      kind: "supabase" as const,
-      project: {
-        id: real.id as string,
-        name: real.name as string,
-        description: (real.description as string | null) ?? "",
-        departmentId: (real.department_id as string | null) ?? null
-      },
-      department: dept ? { id: dept.id as string, name: dept.name as string } : null
-    };
-  }
-  const mock = mockProjects.find((p) => p.id === id);
-  if (mock) {
-    const dept = mockDepts.find((d) => d.id === mock.departmentId);
-    return {
-      kind: "mock" as const,
-      project: mock,
-      department: dept ? { id: dept.id, name: dept.name } : null
-    };
-  }
-  return null;
+  if (!real) return null;
+  const { data: dept } = real.department_id
+    ? await supabase.from("departments").select("id, name").eq("id", real.department_id).maybeSingle()
+    : { data: null };
+  return {
+    project: {
+      id: real.id as string,
+      name: real.name as string,
+      description: (real.description as string | null) ?? "",
+      departmentId: (real.department_id as string | null) ?? null
+    },
+    department: dept ? { id: dept.id as string, name: dept.name as string } : null
+  };
 }
 
 async function loadStages(projectId: string): Promise<StageDTO[]> {
@@ -107,9 +85,9 @@ async function loadStages(projectId: string): Promise<StageDTO[]> {
 export default async function ProjectDetailPage({ params }: { params: { id: string } }) {
   const resolved = await loadProject(params.id);
   if (!resolved) return notFound();
-  const { project, department, kind } = resolved;
+  const { project, department } = resolved;
 
-  const stages = kind === "supabase" ? await loadStages(project.id) : [];
+  const stages = await loadStages(project.id);
 
   // Pull just the avatar/name pairs we need for the embedded task list.
   const livePeople = await getAllUsersLight();
@@ -117,13 +95,6 @@ export default async function ProjectDetailPage({ params }: { params: { id: stri
   for (const u of livePeople) {
     assigneesById[u.id] = { id: u.id, name: u.name, avatarUrl: u.avatarUrl ?? null };
   }
-
-  // Legacy bits — show milestones / RACI only on mock projects that
-  // don't have the new stage flow.
-  const showLegacy = kind === "mock";
-  const mils = showLegacy ? milestones.filter((m) => m.projectId === project.id) : [];
-  const raci = showLegacy ? raciEntries.filter((r) => r.projectId === project.id) : [];
-  const legacyTasks = showLegacy ? mockTasks.filter((t) => t.projectId === project.id) : [];
 
   return (
     <div className="space-y-5 max-w-6xl">
@@ -141,56 +112,11 @@ export default async function ProjectDetailPage({ params }: { params: { id: stri
           initialStages={stages}
           assigneesById={assigneesById}
         />
-      ) : showLegacy ? (
-        <>
-          <section className="card p-4">
-            <div className="text-sm font-medium mb-3">Milestones</div>
-            <ol className="relative border-l border-border pl-5 space-y-4">
-              {mils.map((m) => (
-                <li key={m.id} className="relative">
-                  <span className="absolute -left-[26px] top-0.5">
-                    <MilestoneIcon status={m.status} />
-                  </span>
-                  <div className="flex items-center gap-2">
-                    <div className="text-sm font-medium">{m.name}</div>
-                    <span className="text-xs text-muted">· due {formatDate(m.dueDate)}</span>
-                    <span className={"badge ml-2 " + (m.status === "done" ? "text-ok border-ok/30 bg-ok/10" : m.status === "delayed" ? "badge-critical" : "badge-medium")}>
-                      {m.status.replace("_", " ")}
-                    </span>
-                  </div>
-                  <ul className="text-xs text-muted mt-1 list-disc ml-4">
-                    {m.deliverables.map((d) => <li key={d}>{d}</li>)}
-                  </ul>
-                </li>
-              ))}
-            </ol>
-          </section>
-
-          <section className="card p-4">
-            <div className="flex items-center justify-between mb-3">
-              <div className="text-sm font-medium">RACI matrix</div>
-            </div>
-            <RACITable raci={raci} users={mockUsers} />
-          </section>
-
-          <section>
-            <div className="text-sm font-medium mb-3">Tasks <span className="text-muted">· {legacyTasks.length}</span></div>
-            <div className="grid grid-cols-3 gap-3">
-              {legacyTasks.map((t) => <TaskCard key={t.id} task={t} />)}
-            </div>
-          </section>
-        </>
       ) : (
         <div className="card p-6 text-sm text-muted">
-          This project has no stages yet. (Was it created before the stages feature?)
+          This project has no stages yet.
         </div>
       )}
     </div>
   );
-}
-
-function MilestoneIcon({ status }: { status: MilestoneStatus }) {
-  if (status === "done") return <CheckCircle2 className="w-4 h-4 text-ok" />;
-  if (status === "in_progress") return <Clock className="w-4 h-4 text-accent" />;
-  return <Circle className="w-4 h-4 text-muted" />;
 }

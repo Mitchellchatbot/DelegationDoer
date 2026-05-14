@@ -1,11 +1,11 @@
 "use client";
 
-import { tasks as allTasks, departments, users, distinctClients, distinctWebsites } from "@/lib/mock-data";
 import { TaskCard } from "@/components/TaskCard";
 import { PageHero } from "@/components/PageHero";
 import { useMemo, useState } from "react";
 import { ListTodo } from "lucide-react";
 import type { Task } from "@/lib/types";
+import { useTeam } from "@/lib/team-context";
 
 const PRIORITY_RANK: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
 
@@ -20,6 +20,7 @@ const SORTS: Record<string, (a: Task, b: Task) => number> = {
 };
 
 export default function TasksListPage() {
+  const { users, departments, tasks: allTasks } = useTeam();
   const [status, setStatus] = useState<string>("all");
   const [dept, setDept] = useState<string>("all");
   const [assignee, setAssignee] = useState<string>("all");
@@ -27,8 +28,14 @@ export default function TasksListPage() {
   const [website, setWebsite] = useState<string>("all");
   const [sort, setSort] = useState<string>("recent");
 
-  const clientOptions = useMemo(() => distinctClients(), []);
-  const websiteOptions = useMemo(() => distinctWebsites(), []);
+  const clientOptions = useMemo(
+    () => Array.from(new Set(allTasks.map((t) => t.clientName).filter(Boolean) as string[])).sort(),
+    [allTasks]
+  );
+  const websiteOptions = useMemo(
+    () => Array.from(new Set(allTasks.map((t) => t.website).filter(Boolean) as string[])).sort(),
+    [allTasks]
+  );
 
   const filtered = useMemo(() => {
     let list = [...allTasks];
@@ -39,7 +46,7 @@ export default function TasksListPage() {
     if (website !== "all") list = list.filter((t) => website === "__internal" ? !t.website : t.website === website);
     list.sort(SORTS[sort] ?? SORTS.recent);
     return list;
-  }, [status, dept, assignee, client, website, sort]);
+  }, [allTasks, status, dept, assignee, client, website, sort]);
 
   return (
     <div className="space-y-5 max-w-7xl mx-auto">

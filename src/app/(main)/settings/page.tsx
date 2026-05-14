@@ -1,7 +1,6 @@
-import { departments, users } from "@/lib/mock-data";
 import { ROLE_LABELS } from "@/lib/auth";
 import { requireCurrentUserId } from "@/lib/session";
-import { getUserById } from "@/lib/server-data";
+import { getUserById, getAllUsers, getDepartments } from "@/lib/server-data";
 import { ProfileAvatarSection } from "@/components/ProfileAvatarSection";
 import { DesktopAppSection } from "@/components/DesktopAppSection";
 import { MissiveIntegrationSection } from "@/components/MissiveIntegrationSection";
@@ -20,7 +19,11 @@ import { Settings as SettingsIcon } from "lucide-react";
 export const dynamic = "force-dynamic";
 
 export default async function SettingsPage() {
-  const userId = await requireCurrentUserId();
+  const [userId, departments, users] = await Promise.all([
+    requireCurrentUserId(),
+    getDepartments(),
+    getAllUsers()
+  ]);
   const me = await getUserById(userId);
 
   return (

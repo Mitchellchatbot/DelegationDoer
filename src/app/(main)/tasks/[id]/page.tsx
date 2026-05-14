@@ -1,21 +1,18 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { tasks as mockTasks, userById, deptById, projectById, activity as mockActivity } from "@/lib/mock-data";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { PriorityBadge, StatusPill, Tag, StalledBadge } from "@/components/Badges";
-import { Avatar } from "@/components/Avatar";
 import { PersonAvatar } from "@/components/PersonAvatar";
 import { Countdown } from "@/components/Countdown";
 import { TaskActions, CommentForm } from "@/components/TaskActions";
 import { TaskTimerButton } from "@/components/TaskTimerButton";
 import { NotifyTeammatesDialog } from "@/components/NotifyTeammatesDialog";
 import { canNotifyOnTask } from "@/lib/access";
-import { getUserById } from "@/lib/server-data";
+import { getUserById, getAllUsersLight, getDepartments } from "@/lib/server-data";
 import { Megaphone } from "lucide-react";
 import { HandoffButton, HandoffTimeline } from "@/components/HandoffPanel";
 import { TaskThread } from "@/components/TaskThread";
 import { TaskFields } from "@/components/TaskFields";
-import { getAllUsersLight } from "@/lib/server-data";
 import { requireCurrentUserId } from "@/lib/session";
 import { formatDate, relativeTime } from "@/lib/utils";
 import { Clock, Calendar, MessageCircle, History } from "lucide-react";
@@ -26,9 +23,8 @@ import type { Task, ActivityLog } from "@/lib/types";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-// Server component. Tasks are sourced from Supabase first (so newly-created
-// rows from the New Task form show up); falls back to in-memory mock-data
-// for the seeded set in case Supabase isn't reachable.
+// Server component. Tasks are sourced from Supabase only — mock-data was
+// removed during the live-data migration.
 
 interface Extension {
   id: string;
@@ -41,95 +37,85 @@ interface Extension {
 }
 
 async function loadTask(id: string): Promise<{ task: Task; log: ActivityLog[]; extensions: Extension[] } | null> {
-  // Try Supabase first.
-  try {
-    const supabase = getSupabaseAdmin();
-    const { data: t, error } = await supabase
-      .from("tasks")
-      .select("*")
-      .eq("id", id)
-      .maybeSingle();
+  const supabase = getSupabaseAdmin();
+  const { data: t, error } = await supabase
+    .from("tasks")
+    .select("*")
+    .eq("id", id)
+    .maybeSingle();
 
-    if (!error && t) {
-      const task: Task = {
-        id: t.id,
-        title: t.title,
-        description: t.description ?? "",
-        status: t.status,
-        priority: t.priority,
-        estimatedHours: Number(t.estimated_hours),
-        // Override wins over the time_entries-derived denorm. Matches the
-        // override-precedence rule in src/lib/server-data.ts.
-        actualHours:
-          t.actual_hours_override !== null && t.actual_hours_override !== undefined
-            ? Number(t.actual_hours_override)
-            : Number(t.actual_hours ?? 0),
-        actualHoursOverride:
-          t.actual_hours_override !== null && t.actual_hours_override !== undefined
-            ? Number(t.actual_hours_override)
-            : null,
-        tags: t.tags ?? [],
-        departmentId: t.department_id,
-        assigneeId: t.assignee_id,
-        creatorId: t.creator_id,
-        projectId: t.project_id,
-        dueDate: t.due_date,
-        inactiveFlag: !!t.inactive_flag,
-        lastActivityAt: t.last_activity_at,
-        createdAt: t.created_at,
-        blocksTaskIds: t.blocks_task_ids ?? [],
-        clientName: t.client_name ?? null,
-        website: t.website ?? null,
-        clientEmail: t.client_email ?? null,
-        clientFolderUrl: t.client_folder_url ?? null,
-        stagingServer: t.staging_server ?? null,
-        markupLink: t.markup_link ?? null,
-        hostingAccess: t.hosting_access ?? null,
-        missiveThreadUrl: t.missive_thread_url ?? null,
-        custom: (t.custom as Record<string, unknown> | null) ?? {}
-      };
+  if (error || !t) return null;
 
-      const [{ data: rawLog }, { data: rawExt }] = await Promise.all([
-        supabase.from("activity_logs").select("*").eq("task_id", id).order("created_at", { ascending: false }),
-        supabase.from("task_extensions").select("*").eq("task_id", id).order("created_at", { ascending: false })
-      ]);
+  const task: Task = {
+    id: t.id,
+    title: t.title,
+    description: t.description ?? "",
+    status: t.status,
+    priority: t.priority,
+    estimatedHours: Number(t.estimated_hours),
+    // Override wins over the time_entries-derived denorm. Matches the
+    // override-precedence rule in src/lib/server-data.ts.
+    actualHours:
+      t.actual_hours_override !== null && t.actual_hours_override !== undefined
+        ? Number(t.actual_hours_override)
+        : Number(t.actual_hours ?? 0),
+    actualHoursOverride:
+      t.actual_hours_override !== null && t.actual_hours_override !== undefined
+        ? Number(t.actual_hours_override)
+        : null,
+    tags: t.tags ?? [],
+    departmentId: t.department_id,
+    assigneeId: t.assignee_id,
+    creatorId: t.creator_id,
+    projectId: t.project_id,
+    dueDate: t.due_date,
+    inactiveFlag: !!t.inactive_flag,
+    lastActivityAt: t.last_activity_at,
+    createdAt: t.created_at,
+    blocksTaskIds: t.blocks_task_ids ?? [],
+    clientName: t.client_name ?? null,
+    website: t.website ?? null,
+    clientEmail: t.client_email ?? null,
+    clientFolderUrl: t.client_folder_url ?? null,
+    stagingServer: t.staging_server ?? null,
+    markupLink: t.markup_link ?? null,
+    hostingAccess: t.hosting_access ?? null,
+    missiveThreadUrl: t.missive_thread_url ?? null,
+    custom: (t.custom as Record<string, unknown> | null) ?? {}
+  };
 
-      const log: ActivityLog[] = (rawLog ?? []).map((a) => ({
-        id: a.id,
-        taskId: a.task_id,
-        userId: a.user_id,
-        action: a.action,
-        detail: a.detail ?? "",
-        imageUrl: a.image_url ?? null,
-        createdAt: a.created_at
-      }));
-      const extensions: Extension[] = (rawExt ?? []).map((e) => ({
-        id: e.id,
-        userId: e.user_id,
-        previousDueDate: e.previous_due_date,
-        newDueDate: e.new_due_date,
-        hoursAdded: Number(e.hours_added),
-        reason: e.reason,
-        createdAt: e.created_at
-      }));
-      return { task, log, extensions };
-    }
-  } catch { /* fall through to mock */ }
+  const [{ data: rawLog }, { data: rawExt }] = await Promise.all([
+    supabase.from("activity_logs").select("*").eq("task_id", id).order("created_at", { ascending: false }),
+    supabase.from("task_extensions").select("*").eq("task_id", id).order("created_at", { ascending: false })
+  ]);
 
-  // Fallback for the seeded data when Supabase isn't reachable.
-  const m = mockTasks.find((t) => t.id === id);
-  if (!m) return null;
-  const log = mockActivity
-    .filter((a) => a.taskId === id)
-    .sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt));
-  return { task: m, log, extensions: [] };
+  const log: ActivityLog[] = (rawLog ?? []).map((a) => ({
+    id: a.id,
+    taskId: a.task_id,
+    userId: a.user_id,
+    action: a.action,
+    detail: a.detail ?? "",
+    imageUrl: a.image_url ?? null,
+    createdAt: a.created_at
+  }));
+  const extensions: Extension[] = (rawExt ?? []).map((e) => ({
+    id: e.id,
+    userId: e.user_id,
+    previousDueDate: e.previous_due_date,
+    newDueDate: e.new_due_date,
+    hoursAdded: Number(e.hours_added),
+    reason: e.reason,
+    createdAt: e.created_at
+  }));
+  return { task, log, extensions };
 }
 
 export default async function TaskDetailPage({ params }: { params: { id: string } }) {
-  const [loaded, allUsers, currentUserId] = await Promise.all([
+  const [loaded, allUsers, currentUserId, departments] = await Promise.all([
     loadTask(params.id),
     getAllUsersLight(),
-    requireCurrentUserId()
+    requireCurrentUserId(),
+    getDepartments()
   ]);
   if (!loaded) return notFound();
   // Fetch the current user's full record (incl. departmentIds) so the
@@ -138,15 +124,23 @@ export default async function TaskDetailPage({ params }: { params: { id: string 
   const { task, log, extensions } = loaded;
   const totalHoursAdded = extensions.reduce((s, e) => s + e.hoursAdded, 0);
 
-  // Prefer the live users list for the assignee/creator labels so renames
-  // surface immediately; fall back to the mock-data lookup if a user has
-  // been deleted (orphan reference).
-  const userFromAll = (id: string | null) =>
-    id ? allUsers.find((u) => u.id === id) ?? userById(id) ?? null : null;
-  const assignee = userFromAll(task.assigneeId);
-  const creator = userFromAll(task.creatorId);
-  const dept = deptById(task.departmentId);
-  const project = projectById(task.projectId);
+  const userById = (id: string | null) =>
+    id ? allUsers.find((u) => u.id === id) ?? null : null;
+  const assignee = userById(task.assigneeId);
+  const creator = userById(task.creatorId);
+  const dept = task.departmentId ? departments.find((d) => d.id === task.departmentId) ?? null : null;
+
+  // One-shot project lookup for the sidebar link.
+  let project: { id: string; name: string } | null = null;
+  if (task.projectId) {
+    const supabase = getSupabaseAdmin();
+    const { data } = await supabase
+      .from("projects")
+      .select("id, name")
+      .eq("id", task.projectId)
+      .maybeSingle();
+    if (data) project = { id: data.id, name: data.name };
+  }
 
   return (
     <div className="space-y-5 max-w-5xl">

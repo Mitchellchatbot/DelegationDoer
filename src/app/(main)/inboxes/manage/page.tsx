@@ -6,7 +6,6 @@ import { getUserById, getAllUsersLight } from "@/lib/server-data";
 import { listAccounts, listTeamMembers, type MissiveAccount } from "@/lib/missive-client";
 import { canManageAssignments, getAllAssignments, syncMissiveOwnership, type InboxAssignment } from "@/lib/inbox-access";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
-import { users as mockUsers } from "@/lib/mock-data";
 import { InboxAssignmentCards } from "@/components/InboxAssignmentCards";
 import { AutoIntakeToggleSection } from "@/components/AutoIntakeToggleSection";
 import { ConnectInboxDialog } from "@/components/ConnectInboxDialog";
@@ -43,10 +42,8 @@ export default async function ManageInboxesPage() {
   let autoIntakeSettings: AutoIntakeRow[] = [];
   let fetchError: string | null = null;
   // Live people from Supabase — used by SpacesManager so newly invited
-  // teammates appear without a deploy. Falls back to mock if the
-  // service is unreachable.
-  let livePeople = await getAllUsersLight().catch(() => [] as typeof mockUsers);
-  if (livePeople.length === 0) livePeople = mockUsers;
+  // teammates appear without a deploy.
+  const livePeople = await getAllUsersLight().catch(() => []);
   try {
     // Fetch missive accounts + team members in parallel; then mirror their
     // ownership relationships into our assignments table before reading it.
@@ -152,7 +149,7 @@ export default async function ManageInboxesPage() {
               after OAuth). Next 14 hydration breaks without this. */}
           <Suspense fallback={<div className="card p-6 text-sm text-muted">Loading inboxes…</div>}>
             <InboxAssignmentCards
-              users={mockUsers}
+              users={livePeople}
               inboxes={inboxes.map((a) => ({
                 id: a.id,
                 email: a.email,

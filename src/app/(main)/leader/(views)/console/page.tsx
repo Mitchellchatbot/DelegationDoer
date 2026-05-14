@@ -2,10 +2,6 @@
 
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import {
-  users as initialUsers, departments as initialDepartments,
-  tasks, headsOf, workersOf
-} from "@/lib/mock-data";
 import type { Task } from "@/lib/types";
 import { Avatar } from "@/components/Avatar";
 import { PersonAvatar } from "@/components/PersonAvatar";
@@ -38,24 +34,20 @@ type Tab = typeof TABS[number];
 export default function LeaderConsolePage() {
   const currentUser = useCurrentUser();
   const [tab, setTab] = useState<Tab>("People");
-  // Seed with mock so the layout renders instantly while the live
-  // fetch resolves. The merge below replaces with the Supabase rows
-  // once they arrive so newly-invited users appear here.
-  const [people, setPeople] = useState<User[]>(initialUsers);
-  const [depts, setDepts] = useState<Department[]>(initialDepartments);
+  const [people, setPeople] = useState<User[]>([]);
+  const [depts, setDepts] = useState<Department[]>([]);
+  const [tasks, setTasks] = useState<Task[]>([]);
 
   useEffect(() => {
     let cancelled = false;
     Promise.all([
       fetch("/api/users", { cache: "no-store" }).then((r) => (r.ok ? r.json() : null)),
-      fetch("/api/departments", { cache: "no-store" }).then((r) => (r.ok ? r.json() : null))
+      fetch("/api/departments", { cache: "no-store" }).then((r) => (r.ok ? r.json() : null)),
+      fetch("/api/tasks", { cache: "no-store" }).then((r) => (r.ok ? r.json() : null))
     ])
-      .then(([uRes, dRes]) => {
+      .then(([uRes, dRes, tRes]) => {
         if (cancelled) return;
         if (Array.isArray(uRes?.users)) {
-          // Normalize: /api/users returns presence + departmentIds but
-          // not throughput / skills / dailyCapacity (the page doesn't
-          // read those in PeopleTab anyway — we keep minimal fields).
           const live: User[] = uRes.users.map((u: any) => ({
             id: u.id,
             name: u.name,
@@ -63,7 +55,7 @@ export default function LeaderConsolePage() {
             role: u.role,
             departmentIds: u.departmentIds ?? [],
             skills: [],
-            dailyCapacity: 8,
+            dailyCapacity: u.dailyCapacity ?? 8,
             throughput: {},
             avatarUrl: u.avatarUrl ?? undefined
           }));
@@ -74,13 +66,14 @@ export default function LeaderConsolePage() {
             dRes.departments.map((d: any) => ({
               id: d.id,
               name: d.name,
-              description: "",
-              taskTypes: []
+              description: d.description ?? "",
+              taskTypes: d.taskTypes ?? []
             }))
           );
         }
+        if (Array.isArray(tRes?.tasks)) setTasks(tRes.tasks as Task[]);
       })
-      .catch(() => { /* leave mock seed */ });
+      .catch(() => { /* leave empty — surfaces as zero state */ });
     return () => { cancelled = true; };
   }, []);
 
@@ -145,10 +138,10 @@ export default function LeaderConsolePage() {
           transition={{ duration: 0.18, ease: [0.2, 0.8, 0.2, 1] }}
         >
           {tab === "People" && <PeopleTab people={people} setPeople={setPeople} departments={depts} />}
-          {tab === "Departments" && <DepartmentsTab departments={depts} setDepartments={setDepts} people={people} />}
-          {tab === "Org chart" && <OrgChartTab people={people} departments={depts} />}
+          {tab === "Departments" && <DepartmentsTab departments={depts} setDepartments={setDepts} people={people} tasks={tasks} />}
+          {tab === "Org chart" && <OrgChartTab people={people} departments={depts} tasks={tasks} />}
           {tab === "Performance" && <PerformanceReview canCrown={currentUser.role === "leader"} />}
-          {tab === "All tasks" && <AllTasksTab people={people} departments={depts} />}
+          {tab === "All tasks" && <AllTasksTab people={people} departments={depts} tasks={tasks} />}
         </motion.div>
       </AnimatePresence>
     </div>
@@ -612,8 +605,8 @@ function RolePicker({ role, onChange }: { role: Role; onChange: (r: Role) => voi
 /* ---------------- Departments ---------------- */
 
 function DepartmentsTab({
-  departments, setDepartments, people
-}: { departments: Department[]; setDepartments: (d: Department[]) => void; people: User[] }) {
+  departments, setDepartments, people, tasks
+}: { departments: Department[]; setDepartments: (d: Department[]) => void; people: User[]; tasks: Task[] }) {
   const [draftName, setDraftName] = useState("");
   const [draftDesc, setDraftDesc] = useState("");
 
@@ -719,7 +712,7 @@ function DepartmentsTab({
 
 /* ---------------- Org chart ---------------- */
 
-function OrgChartTab({ people, departments }: { people: User[]; departments: Department[] }) {
+function OrgChartTab({ people, departments, tasks }: { people: User[]; departments: Department[]; tasks: Task[] }) {
   // Every leader sits at the top — co-leads / right-hand setups render
   // side-by-side rather than us picking one.
   const leaders = people.filter((u) => u.role === "leader");
@@ -807,7 +800,7 @@ function OrgStat({
 
 /* ---------------- All tasks ---------------- */
 
-function AllTasksTab({ people, departments }: { people: User[]; departments: Department[] }) {
+function AllTasksTab({ people, departments, tasks }: { people: User[]; departments: Department[]; tasks: Task[] }) {
   const grouped = useMemo(() => {
     return departments.map((d) => {
       const members = people.filter((u) => u.departmentIds.includes(d.id));
@@ -826,7 +819,7 @@ function AllTasksTab({ people, departments }: { people: User[]; departments: Dep
       });
       return { dept: d, rows };
     });
-  }, [people, departments]);
+  }, [people, departments, tasks]);
 
   return (
     <div className="space-y-5">

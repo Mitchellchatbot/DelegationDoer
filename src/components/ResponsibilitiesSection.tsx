@@ -1,11 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Plus, Trash2, Pencil, X, Check, ArrowDown, ArrowUp, Crown, Building2 } from "lucide-react";
 import { toast } from "sonner";
 import { PersonAvatar } from "./PersonAvatar";
-import { departments } from "@/lib/mock-data";
+import { useTeam } from "@/lib/team-context";
 import { cn } from "@/lib/utils";
 
 interface Rule {
@@ -31,6 +31,7 @@ interface UserLite {
 //   - The email auto-intake pipeline (Phase 3)
 // Rules cascade by priority desc; the first keyword match wins.
 export function ResponsibilitiesSection({ canManage }: { canManage: boolean }) {
+  const { departments } = useTeam();
   const [rules, setRules] = useState<Rule[]>([]);
   const [users, setUsers] = useState<UserLite[]>([]);
   const [loading, setLoading] = useState(true);
@@ -97,6 +98,7 @@ export function ResponsibilitiesSection({ canManage }: { canManage: boolean }) {
                 <RuleRow
                   rule={r}
                   users={users}
+                  departments={departments}
                   canManage={canManage}
                   onChanged={load}
                 />
@@ -110,6 +112,7 @@ export function ResponsibilitiesSection({ canManage }: { canManage: boolean }) {
         <RuleEditor
           mode="create"
           users={users}
+          departments={departments}
           onClose={() => setAdding(false)}
           onSaved={() => { setAdding(false); load(); }}
         />
@@ -121,10 +124,11 @@ export function ResponsibilitiesSection({ canManage }: { canManage: boolean }) {
 /* ============================ ROW ============================ */
 
 function RuleRow({
-  rule, users, canManage, onChanged
+  rule, users, departments, canManage, onChanged
 }: {
   rule: Rule;
   users: UserLite[];
+  departments: { id: string; name: string }[];
   canManage: boolean;
   onChanged: () => void;
 }) {
@@ -161,6 +165,7 @@ function RuleRow({
         mode="edit"
         existing={rule}
         users={users}
+        departments={departments}
         onClose={() => setEditing(false)}
         onSaved={() => { setEditing(false); onChanged(); }}
       />
@@ -250,11 +255,12 @@ function RuleRow({
 /* ============================ EDITOR ============================ */
 
 function RuleEditor({
-  mode, existing, users, onClose, onSaved
+  mode, existing, users, departments, onClose, onSaved
 }: {
   mode: "create" | "edit";
   existing?: Rule;
   users: UserLite[];
+  departments: { id: string; name: string }[];
   onClose: () => void;
   onSaved: () => void;
 }) {

@@ -3,9 +3,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import {
-  users as mockUsers, departments as mockDepartments, tasks as mockTasks
-} from "@/lib/mock-data";
 import { OrgChart } from "@/components/OrgChart";
 import { useCurrentUser } from "@/lib/user-context";
 import { PageHero } from "@/components/PageHero";
@@ -23,9 +20,9 @@ export default function TeamOverviewPage() {
   const currentUser = useCurrentUser();
   const router = useRouter();
 
-  const [users, setUsers] = useState<User[]>(mockUsers);
-  const [departments, setDepartments] = useState<Department[]>(mockDepartments);
-  const [tasks, setTasks] = useState<Task[]>(mockTasks);
+  const [users, setUsers] = useState<User[]>([]);
+  const [departments, setDepartments] = useState<Department[]>([]);
+  const [tasks, setTasks] = useState<Task[]>([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -58,7 +55,7 @@ export default function TeamOverviewPage() {
           setTasks(tRes.tasks);
         }
       })
-      .catch(() => { /* leave mock seed */ });
+      .catch(() => { /* keep empty arrays — surface as zero state */ });
     return () => { cancelled = true; };
   }, []);
 

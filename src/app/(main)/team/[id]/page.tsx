@@ -1,7 +1,5 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { users, tasks, skillProfiles, departments, managerOf } from "@/lib/mock-data";
-import { Avatar } from "@/components/Avatar";
 import { PersonAvatar } from "@/components/PersonAvatar";
 import { CapacityBar } from "@/components/CapacityBar";
 import { ProfileDialog } from "@/components/ProfileDialog";
@@ -10,16 +8,31 @@ import { userCapacity } from "@/lib/capacity";
 import { ROLE_LABELS } from "@/lib/auth";
 import { Crown } from "lucide-react";
 import { BackPill } from "@/components/BackPill";
+import { getAllUsers, getAllTasks, getDepartments } from "@/lib/server-data";
+import { managerOf } from "@/lib/mock-data";
 
-export default function ProfilePage({ params }: { params: { id: string } }) {
+export const dynamic = "force-dynamic";
+
+export default async function ProfilePage({ params }: { params: { id: string } }) {
+  const [users, tasks, departments] = await Promise.all([
+    getAllUsers(),
+    getAllTasks(),
+    getDepartments()
+  ]);
   const user = users.find((u) => u.id === params.id);
   if (!user) return notFound();
-  const userDepts = user.departmentIds.map((id) => departments.find((d) => d.id === id)).filter(Boolean) as { id: string; name: string }[];
+  const userDepts = user.departmentIds
+    .map((id) => departments.find((d) => d.id === id))
+    .filter(Boolean) as { id: string; name: string }[];
   const cap = userCapacity(user, tasks);
   const myTasks = tasks.filter((t) => t.assigneeId === user.id);
-  const skills = skillProfiles.filter((s) => s.userId === user.id);
-  const taskTypeHistory = Array.from(new Set(skills.flatMap((s) => s.taskTypes)));
-  const manager = managerOf(user);
+  // Inline skill chips fall back to the user.skills text array — the
+  // skill_profiles table is rendered live inside ProfileDialog.
+  const skills = (user.skills ?? []).map((s, i) => ({ id: `${user.id}-${i}`, skillName: s, experienceLevel: 0 }));
+  const taskTypeHistory = Array.from(
+    new Set(tasks.filter((t) => t.assigneeId === user.id).flatMap((t) => t.tags))
+  );
+  const manager = managerOf(user, users);
   const directReports = user.role === "leader"
     ? users.filter((u) => u.role === "department_head")
     : user.role === "department_head"
@@ -75,9 +88,10 @@ export default function ProfilePage({ params }: { params: { id: string } }) {
             {skills.map((s) => (
               <li key={s.id} className="flex items-center justify-between text-sm">
                 <span>{s.skillName}</span>
-                <span className="text-muted text-xs">Level {s.experienceLevel}/5</span>
+                {s.experienceLevel > 0 && <span className="text-muted text-xs">Level {s.experienceLevel}/5</span>}
               </li>
             ))}
+            {skills.length === 0 && <li className="text-xs text-muted">No skills listed.</li>}
           </ul>
         </section>
         <section className="card p-4">

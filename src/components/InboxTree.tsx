@@ -49,14 +49,24 @@ export function InboxTree({ accounts, canManage }: Props) {
   const [spaces, setSpaces] = useState<Space[]>([]);
   useEffect(() => {
     let cancelled = false;
-    fetch("/api/inbox-spaces", { cache: "no-store" })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => {
+    async function load() {
+      try {
+        const res = await fetch("/api/inbox-spaces", { cache: "no-store" });
+        if (!res.ok) return;
+        const d = await res.json();
         if (cancelled || !d?.spaces) return;
         setSpaces(d.spaces);
-      })
-      .catch(() => { /* spaces table absent / network issue — ignore */ });
-    return () => { cancelled = true; };
+      } catch { /* spaces table absent / network issue — ignore */ }
+    }
+    load();
+    // SpacesManager dispatches this when it creates / edits / deletes
+    // a space, so the sidebar reflects the change without a reload.
+    function onChanged() { load(); }
+    window.addEventListener("inbox-spaces:changed", onChanged);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("inbox-spaces:changed", onChanged);
+    };
   }, []);
 
   const accountById = new Map(accounts.map((a) => [a.id, a]));

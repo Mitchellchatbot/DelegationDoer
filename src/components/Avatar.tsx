@@ -14,6 +14,9 @@ interface AvatarProps {
   emoji?: string | null;
   // True → render a tiny crown above the avatar (Employee of the Month).
   crowned?: boolean;
+  // Suppress the crown / dot / emoji overlays in tight contexts where
+  // the overflow would visually unbalance things (chip rows etc.).
+  noCrown?: boolean;
 }
 
 const DOT_CLASS: Record<Exclude<Presence, null | undefined>, string> = {
@@ -23,7 +26,8 @@ const DOT_CLASS: Record<Exclude<Presence, null | undefined>, string> = {
   away: "bg-slate-400"
 };
 
-export function Avatar({ name, imageUrl, size = 24, className, presence, emoji, crowned }: AvatarProps) {
+export function Avatar({ name, imageUrl, size = 24, className, presence, emoji, crowned, noCrown }: AvatarProps) {
+  if (noCrown) crowned = false;
   const s = `${size}px`;
   const fontSize = Math.max(10, size * 0.42);
   const dotSize = Math.max(8, Math.round(size * 0.32));

@@ -12,13 +12,15 @@ import { usePresence, useEomUserId } from "@/lib/presence-context";
 // isn't in the cache (deleted, external email, etc.), we fall through
 // to the props-only data — same behavior as plain <Avatar>.
 export function PersonAvatar({
-  userId, name, imageUrl, size, className
+  userId, name, imageUrl, size, className, noCrown
 }: {
   userId: string | null | undefined;
   name: string;
   imageUrl?: string | null;
   size?: number;
   className?: string;
+  // Suppress crown/dot overlays in tight chip contexts.
+  noCrown?: boolean;
 }) {
   const live = usePresence(userId);
   const eomUserId = useEomUserId();
@@ -32,6 +34,7 @@ export function PersonAvatar({
       presence={live?.presence ?? null}
       emoji={live?.statusEmoji ?? null}
       crowned={crowned}
+      noCrown={noCrown}
     />
   );
 }

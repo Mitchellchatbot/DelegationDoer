@@ -62,6 +62,12 @@ export function SpacesManager({
   }
   useEffect(() => { load(); }, []);
 
+  function pingChanged() {
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("inbox-spaces:changed"));
+    }
+  }
+
   async function createSpace() {
     const name = newName.trim();
     if (!name) return;
@@ -78,6 +84,7 @@ export function SpacesManager({
       setNewColor("blue");
       setCreating(false);
       toast.success(`"${name}" created`);
+      pingChanged();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "couldn't create");
     }
@@ -96,6 +103,7 @@ export function SpacesManager({
         const d = await res.json().catch(() => null);
         throw new Error(d?.error ?? `failed (${res.status})`);
       }
+      pingChanged();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "couldn't save");
       setSpaces(prev);
@@ -111,6 +119,7 @@ export function SpacesManager({
     try {
       const res = await fetch(`/api/inbox-spaces/${s.id}`, { method: "DELETE" });
       if (!res.ok) throw new Error(`failed (${res.status})`);
+      pingChanged();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "couldn't delete");
       setSpaces(prev);
@@ -372,7 +381,7 @@ function SpaceCard({
             if (!u) return null;
             return (
               <Chip key={uid} onClick={() => onToggleMember(uid)} tone={space.color}>
-                <PersonAvatar userId={u.id} name={u.name} imageUrl={u.avatarUrl ?? undefined} size={14} />
+                <PersonAvatar userId={u.id} name={u.name} imageUrl={u.avatarUrl ?? undefined} size={16} noCrown />
                 {u.name}
                 <X className="w-2.5 h-2.5 opacity-60" />
               </Chip>
@@ -393,7 +402,7 @@ function SpaceCard({
                   onClick={() => { onToggleMember(u.id); }}
                   className="text-left px-2 py-1.5 rounded text-[12px] hover:bg-white transition-colors flex items-center gap-1.5"
                 >
-                  <PersonAvatar userId={u.id} name={u.name} imageUrl={u.avatarUrl ?? undefined} size={16} />
+                  <PersonAvatar userId={u.id} name={u.name} imageUrl={u.avatarUrl ?? undefined} size={16} noCrown />
                   <span className="truncate">{u.name}</span>
                 </button>
               ))}

@@ -62,14 +62,24 @@ export async function getAssignmentsForUser(userId: string): Promise<InboxAssign
 
 // Returns the set of missive_account_ids the actor can read. `null` means
 // "all accounts" (Leader scope) — caller should not filter further.
+//
+// Three sources of visibility get unioned:
+//   1. Direct inbox_assignments for the user (and for department heads,
+//      every member of their department).
+//   2. Membership in any inbox_space — grants visibility to every
+//      account in that space.
+//   3. Leader role short-circuits to "all".
 export async function visibleAccountIdsFor(
   actor: User
 ): Promise<Set<string> | null> {
   if (actor.role === "leader") return null;
 
+  const supabase = getSupabaseAdmin();
+  const visible = new Set<string>();
+
   if (actor.role === "department_head") {
     // Pull everyone in the actor's department(s), then their assignments.
-    const { data: deptMembers } = await getSupabaseAdmin()
+    const { data: deptMembers } = await supabase
       .from("department_members")
       .select("user_id")
       .in("department_id", actor.departmentIds);
@@ -78,16 +88,45 @@ export async function visibleAccountIdsFor(
       ...(deptMembers ?? []).map((m: { user_id: string }) => m.user_id)
     ]);
 
-    const { data: rows } = await getSupabaseAdmin()
+    const { data: rows } = await supabase
       .from("inbox_assignments")
       .select("missive_account_id")
       .in("user_id", Array.from(memberIds));
-    return new Set((rows ?? []).map((r: { missive_account_id: string }) => r.missive_account_id));
+    for (const r of (rows ?? []) as { missive_account_id: string }[]) {
+      visible.add(r.missive_account_id);
+    }
+  } else {
+    // Worker: only own direct assignments.
+    const own = await getAssignmentsForUser(actor.id);
+    for (const a of own) visible.add(a.missiveAccountId);
   }
 
-  // Worker: only own assignments.
-  const own = await getAssignmentsForUser(actor.id);
-  return new Set(own.map((a) => a.missiveAccountId));
+  // Space-granted visibility: every account in any space the actor
+  // belongs to. Best-effort — schema may not exist yet on older
+  // deploys, so swallow the error and fall back to direct-assignment
+  // results.
+  try {
+    const { data: spaceMemberships } = await supabase
+      .from("inbox_space_members")
+      .select("space_id")
+      .eq("user_id", actor.id);
+    const spaceIds = (spaceMemberships ?? []).map(
+      (r: { space_id: string }) => r.space_id
+    );
+    if (spaceIds.length > 0) {
+      const { data: accts } = await supabase
+        .from("inbox_space_accounts")
+        .select("account_id")
+        .in("space_id", spaceIds);
+      for (const r of (accts ?? []) as { account_id: string }[]) {
+        visible.add(r.account_id);
+      }
+    }
+  } catch {
+    /* space tables absent on older deploys — ignore */
+  }
+
+  return visible;
 }
 
 export function canManageAssignments(actor: User): boolean {

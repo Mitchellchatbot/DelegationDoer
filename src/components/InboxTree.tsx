@@ -3,14 +3,17 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { motion } from "framer-motion";
+import { useEffect, useState } from "react";
 import { Inbox, Mail, Settings as SettingsIcon, Layers, Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ConnectInboxDialog } from "./ConnectInboxDialog";
 
 // Left-rail tree for the inbox surface. Sections collapse into:
 //   • Smart — All inboxes (combined view, "/inboxes/all")
-//   • Inboxes — one entry per Missive account the user can see
-//   • Manage — link to /inboxes/manage when the actor is a Leader
+//   • Spaces — Missive-style team groupings; each space lists the
+//     accounts that belong to it
+//   • Inboxes — every other account the user can see directly
+//   • Admin — link to /inboxes/manage when the actor is a Leader
 //
 // Active state slides between rows via framer-motion's `layoutId`, so the
 // person reading the inbox always sees which section they're in.
@@ -21,13 +24,55 @@ export interface InboxNode {
   email: string | null;
 }
 
+interface Space {
+  id: string;
+  name: string;
+  color: string;
+  accountIds: string[];
+}
+
 interface Props {
   accounts: InboxNode[];
   canManage: boolean;
 }
 
+const SPACE_COLOR_DOT: Record<string, string> = {
+  blue: "bg-blue-500",      indigo: "bg-indigo-500",
+  violet: "bg-violet-500",  fuchsia: "bg-fuchsia-500",
+  pink: "bg-pink-500",      amber: "bg-amber-500",
+  emerald: "bg-emerald-500", teal: "bg-teal-500",
+  rose: "bg-rose-500",      sky: "bg-sky-500"
+};
+
 export function InboxTree({ accounts, canManage }: Props) {
   const path = usePathname();
+  const [spaces, setSpaces] = useState<Space[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/inbox-spaces", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (cancelled || !d?.spaces) return;
+        setSpaces(d.spaces);
+      })
+      .catch(() => { /* spaces table absent / network issue — ignore */ });
+    return () => { cancelled = true; };
+  }, []);
+
+  const accountById = new Map(accounts.map((a) => [a.id, a]));
+  // Accounts NOT in any space the user can see — show them under
+  // a fallback "Other" section so nothing gets hidden.
+  const inSpace = new Set<string>();
+  for (const s of spaces) for (const aid of s.accountIds) inSpace.add(aid);
+  const orphanAccounts = accounts.filter((a) => !inSpace.has(a.id));
+  // Spaces this user actually has any accounts of (don't show empty
+  // spaces full of inboxes they can't see).
+  const visibleSpaces = spaces
+    .map((s) => ({
+      ...s,
+      accountIds: s.accountIds.filter((aid) => accountById.has(aid))
+    }))
+    .filter((s) => s.accountIds.length > 0);
 
   // Stable hue per account so the same inbox always shows the same dot.
   function hueIndex(seed: string): number {
@@ -49,10 +94,39 @@ export function InboxTree({ accounts, canManage }: Props) {
           />
         </Section>
 
+        {/* Team spaces — each one groups a chunk of accounts under
+            a leader-defined label (Tech Hub, Marketing, etc.). */}
+        {visibleSpaces.map((sp) => (
+          <Section key={sp.id} label={sp.name}>
+            {sp.accountIds.map((aid) => {
+              const a = accountById.get(aid)!;
+              const href = `/inboxes/${encodeURIComponent(a.id)}`;
+              return (
+                <Row
+                  key={a.id}
+                  href={href}
+                  active={path.startsWith(href)}
+                  icon={
+                    <span
+                      className={cn(
+                        "w-2 h-2 rounded-full shrink-0",
+                        SPACE_COLOR_DOT[sp.color] ?? DOT_TONES[hueIndex(a.id)]
+                      )}
+                    />
+                  }
+                  label={a.label || a.email || a.id}
+                  subtitle={a.email && a.email !== a.label ? a.email : null}
+                  tone="blue"
+                />
+              );
+            })}
+          </Section>
+        ))}
+
         <Section
-          label="Inboxes"
+          label={visibleSpaces.length > 0 ? "Other" : "Inboxes"}
           emptyHint={
-            accounts.length === 0
+            orphanAccounts.length === 0 && visibleSpaces.length === 0
               ? canManage
                 ? "Hit + below to link your first one."
                 : "Nothing here yet"
@@ -75,7 +149,7 @@ export function InboxTree({ accounts, canManage }: Props) {
             ) : null
           }
         >
-          {accounts.map((a) => {
+          {orphanAccounts.map((a) => {
             const href = `/inboxes/${encodeURIComponent(a.id)}`;
             return (
               <Row

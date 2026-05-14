@@ -2,7 +2,7 @@ import { Suspense } from "react";
 import { redirect } from "next/navigation";
 import { ShieldAlert, ExternalLink, Layers } from "lucide-react";
 import { requireCurrentUserId } from "@/lib/session";
-import { getUserById } from "@/lib/server-data";
+import { getUserById, getAllUsersLight } from "@/lib/server-data";
 import { listAccounts, listTeamMembers, type MissiveAccount } from "@/lib/missive-client";
 import { canManageAssignments, getAllAssignments, syncMissiveOwnership, type InboxAssignment } from "@/lib/inbox-access";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
@@ -10,6 +10,7 @@ import { users as mockUsers } from "@/lib/mock-data";
 import { InboxAssignmentCards } from "@/components/InboxAssignmentCards";
 import { AutoIntakeToggleSection } from "@/components/AutoIntakeToggleSection";
 import { ConnectInboxDialog } from "@/components/ConnectInboxDialog";
+import { SpacesManager } from "@/components/SpacesManager";
 import { Plug } from "lucide-react";
 
 interface AutoIntakeRow {
@@ -41,6 +42,11 @@ export default async function ManageInboxesPage() {
   let assignments: InboxAssignment[] = [];
   let autoIntakeSettings: AutoIntakeRow[] = [];
   let fetchError: string | null = null;
+  // Live people from Supabase — used by SpacesManager so newly invited
+  // teammates appear without a deploy. Falls back to mock if the
+  // service is unreachable.
+  let livePeople = await getAllUsersLight().catch(() => [] as typeof mockUsers);
+  if (livePeople.length === 0) livePeople = mockUsers;
   try {
     // Fetch missive accounts + team members in parallel; then mirror their
     // ownership relationships into our assignments table before reading it.
@@ -158,6 +164,19 @@ export default async function ManageInboxesPage() {
           <AutoIntakeToggleSection
             inboxes={inboxes}
             initialSettings={autoIntakeSettings}
+          />
+          <SpacesManager
+            inboxes={inboxes.map((a) => ({
+              id: a.id,
+              email: a.email,
+              label: a.display_name || a.email
+            }))}
+            people={livePeople.map((p) => ({
+              id: p.id,
+              name: p.name,
+              email: p.email,
+              avatarUrl: p.avatarUrl ?? null
+            }))}
           />
         </>
       )}

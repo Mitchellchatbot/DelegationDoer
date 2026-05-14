@@ -259,6 +259,7 @@ function PeopleTab({
 
   return (
     <div className="space-y-3">
+      <InviteLinkCard />
       <div className="flex items-center justify-between gap-3">
         <div className="text-sm text-muted">
           Click any role pill to change it. Toggle department chips to set membership / leadership.
@@ -496,6 +497,69 @@ function PersonTaskList({ userId, tasks: liveTasks }: { userId: string; tasks: T
         </div>
       )}
     </div>
+  );
+}
+
+// Shareable signup link. Anyone with this URL can create a worker
+// account; the leader then promotes them in the table below. Cuts
+// the "mint a magic link for every employee" overhead — copy once,
+// paste in Slack, done.
+function InviteLinkCard() {
+  const [url, setUrl] = useState<string>("");
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    setUrl(`${window.location.origin}/signup`);
+  }, []);
+  async function copy() {
+    if (!url) return;
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1800);
+    } catch {
+      toast.error("Clipboard unavailable — select + copy manually");
+    }
+  }
+  return (
+    <section
+      className="rounded-2xl border border-white/60 p-4 shadow-soft relative overflow-hidden"
+      style={{ background: "linear-gradient(120deg, #DBEAFE 0%, #EEF2FF 50%, #FCE7F3 100%)" }}
+    >
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div className="flex items-start gap-3 min-w-0">
+          <div className="w-10 h-10 rounded-xl bg-white/80 border border-white grid place-items-center text-accent shrink-0 shadow-sm">
+            <UserPlus className="w-5 h-5" />
+          </div>
+          <div className="min-w-0">
+            <div className="text-sm font-semibold">Share signup link</div>
+            <p className="text-[12px] text-ink/65 mt-0.5 max-w-prose">
+              Send this link in Slack. Everyone who opens it can create
+              their own account (they land as a <strong>worker</strong>);
+              promote them in the table below once they&apos;ve signed up.
+            </p>
+          </div>
+        </div>
+      </div>
+      <div className="mt-3 flex items-center gap-2 rounded-xl bg-white/85 border border-white/70 px-3 py-2 shadow-sm">
+        <code className="text-[12px] font-mono truncate flex-1 min-w-0 text-ink/85">
+          {url || "loading…"}
+        </code>
+        <button
+          type="button"
+          onClick={copy}
+          disabled={!url}
+          className={
+            "inline-flex items-center gap-1 px-3 py-1 rounded-full text-[11px] font-semibold transition-all " +
+            (copied
+              ? "bg-emerald-500 text-white"
+              : "bg-accent text-white hover:-translate-y-0.5")
+          }
+        >
+          {copied ? "Copied ✓" : "Copy link"}
+        </button>
+      </div>
+    </section>
   );
 }
 

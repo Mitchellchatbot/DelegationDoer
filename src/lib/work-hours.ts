@@ -96,3 +96,71 @@ export function detectTimezone(): string {
     return "UTC";
   }
 }
+
+// Three-letter day key used by user.weeklySchedule.
+export type DayKey = "mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun";
+
+// Map JS Date.getDay() (0=Sun..6=Sat) to our schedule key.
+const DAY_BY_WEEKDAY: DayKey[] = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+
+// Return which DayKey it is right now in the user's working timezone.
+// Falls back to UTC. Computing day-of-week in tz is needed because a
+// user in Karachi at 1am Saturday is still on "Saturday" — server's
+// UTC clock would say Friday and call them on for work.
+export function dayKeyInTz(date: Date, tz: string | null | undefined): DayKey {
+  const zone = tz ?? "UTC";
+  try {
+    const weekday = new Intl.DateTimeFormat("en-US", {
+      timeZone: zone,
+      weekday: "short"
+    }).format(date);
+    // "Mon", "Tue", … → lower-case our 3-letter key.
+    const k = weekday.slice(0, 3).toLowerCase() as DayKey;
+    if (DAY_BY_WEEKDAY.includes(k)) return k;
+  } catch {
+    /* fall through to local */
+  }
+  return DAY_BY_WEEKDAY[date.getDay()];
+}
+
+// Hours scheduled for a given day. Reads weeklySchedule first; if the
+// schedule is empty (default state), falls back to dailyCapacity for
+// Mon–Fri and 0 for weekends — mirroring the "Same every weekday" mode.
+// Returns 0 for off days so callers can reason about "this person isn't
+// working today" without a special case.
+export function hoursForDay(args: {
+  dayKey: DayKey;
+  dailyCapacity: number;
+  weeklySchedule?: Partial<Record<DayKey, { start: string; end: string } | null>>;
+}): number {
+  const sched = args.weeklySchedule ?? {};
+  const hasCustom = Object.keys(sched).length > 0;
+  if (hasCustom) {
+    const block = sched[args.dayKey];
+    if (!block) return 0;
+    return hoursBetween(block.start, block.end);
+  }
+  // Default: weekdays use dailyCapacity, weekends off.
+  if (args.dayKey === "sat" || args.dayKey === "sun") return 0;
+  return Math.max(0, args.dailyCapacity || 0);
+}
+
+// HH:MM end - HH:MM start. Treats end < start (overnight) as zero
+// rather than negative — the editor doesn't allow it and we don't
+// want a stray entry to skew capacity.
+function hoursBetween(start: string, end: string): number {
+  const a = hmToMinutes(start);
+  const b = hmToMinutes(end);
+  if (a == null || b == null) return 0;
+  if (b <= a) return 0;
+  return (b - a) / 60;
+}
+
+function hmToMinutes(s: string): number | null {
+  const m = /^([0-2]?\d):([0-5]\d)$/.exec(s.trim());
+  if (!m) return null;
+  const h = Number(m[1]);
+  const mm = Number(m[2]);
+  if (h > 23) return null;
+  return h * 60 + mm;
+}

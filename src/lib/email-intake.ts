@@ -136,7 +136,10 @@ export async function runEmailIntake(input: IntakeInput): Promise<IntakeOutcome>
   // 4) Insert task.
   const assignee = allUsers.find((u) => u.id === assigneeId) ?? null;
   const estimateHours = 2;
-  const dueDate = deadlineFromEstimate(estimateHours, assignee?.dailyCapacity ?? 8);
+  const dueDate = deadlineFromEstimate(
+    estimateHours,
+    assignee ?? { dailyCapacity: 8, weeklySchedule: {}, workTimezone: null }
+  );
   const taskId = `t_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
   const now = new Date().toISOString();
 

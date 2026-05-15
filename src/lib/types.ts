@@ -22,6 +22,18 @@ export interface User {
   // shows for `role`. Used for a builder who needs full access while
   // appearing as a regular worker. Default false.
   isAdmin?: boolean;
+  // The user's stated timezone (IANA). Used by capacity + clock to
+  // decide which day-of-week "today" is for them. Falls back to UTC
+  // when missing.
+  workTimezone?: string | null;
+  // Optional per-day schedule. Keyed by mon|tue|wed|thu|fri|sat|sun.
+  // `null` (or missing key) = day off. When the whole object is empty
+  // or undefined, callers fall back to dailyCapacity for every weekday
+  // and treat weekends as off.
+  weeklySchedule?: Partial<Record<
+    "mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun",
+    { start: string; end: string } | null
+  >>;
 }
 
 export interface Department {

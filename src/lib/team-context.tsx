@@ -54,7 +54,9 @@ export function TeamProvider({ children }: { children: React.ReactNode }) {
               dailyCapacity: (u.dailyCapacity as number) ?? 8,
               throughput: (u.throughput as Record<string, number>) ?? {},
               avatarUrl: (u.avatarUrl as string | null) ?? undefined,
-              isAdmin: u.isAdmin === true
+              isAdmin: u.isAdmin === true,
+              workTimezone: (u.workTimezone as string | null) ?? null,
+              weeklySchedule: (u.weeklySchedule as User["weeklySchedule"]) ?? {}
             }))
           : [],
         departments: Array.isArray(dRes?.departments)

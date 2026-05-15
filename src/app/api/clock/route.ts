@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { requireCurrentUserId } from "@/lib/session";
 import { closeOpenSegment, openSegment } from "@/lib/time-tracking";
+import { dayKeyInTz, hoursForDay } from "@/lib/work-hours";
 
 export const dynamic = "force-dynamic";
 
@@ -21,11 +22,21 @@ export async function GET() {
       .maybeSingle(),
     supabase
       .from("users")
-      .select("daily_capacity")
+      .select("daily_capacity, work_timezone, weekly_schedule")
       .eq("id", userId)
       .maybeSingle()
   ]);
-  const dailyCapacity = Number(me?.daily_capacity ?? 8);
+  // Schedule-aware "today" budget: 0 on off days, short on short days.
+  // Falls back to the flat daily_capacity column on weekdays when no
+  // per-day schedule has been set.
+  const flatDaily = Number(me?.daily_capacity ?? 8);
+  const dayKey = dayKeyInTz(new Date(), (me?.work_timezone as string | null) ?? null);
+  const dailyCapacity = hoursForDay({
+    dayKey,
+    dailyCapacity: flatDaily,
+    weeklySchedule:
+      (me?.weekly_schedule as Record<string, { start: string; end: string } | null> | null) ?? {}
+  });
 
   const startOfDay = new Date();
   startOfDay.setHours(0, 0, 0, 0);

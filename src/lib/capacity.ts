@@ -1,4 +1,5 @@
 import type { Task, User } from "./types";
+import { dayKeyInTz, hoursForDay } from "./work-hours";
 
 export interface CapacityInfo {
   user: User;
@@ -34,6 +35,26 @@ export interface CapacityInfo {
 // userCapacity — `hoursOnShiftToday` is optional so legacy callers keep
 // working. Pass it (from `getHoursOnShiftToday(userId)` server-side or
 // `/api/clock` client-side) to get the workday-remaining numbers populated.
+// Effective hours-per-day for the load math. When the user has a
+// weekly_schedule set, this returns the hours configured for *today*
+// in their timezone (off days → 0, short days → fewer hours). When
+// the schedule is empty, falls back to user.dailyCapacity on
+// weekdays and 0 on weekends, mirroring the "Same every weekday"
+// default in the editor.
+//
+// Floors the result at 1 so a Sunday-off user doesn't divide-by-zero
+// when generating pct numbers. For "is this person working today?"
+// callers should branch on the raw hours via hoursForDay() instead.
+function effectiveCapacityForToday(user: User, now: Date = new Date()): number {
+  const dayKey = dayKeyInTz(now, user.workTimezone ?? null);
+  const raw = hoursForDay({
+    dayKey,
+    dailyCapacity: user.dailyCapacity,
+    weeklySchedule: user.weeklySchedule
+  });
+  return Math.max(1, raw);
+}
+
 export function userCapacity(
   user: User,
   openTasks: Task[],
@@ -42,7 +63,10 @@ export function userCapacity(
   const mine = openTasks.filter(
     (t) => t.assigneeId === user.id && t.status !== "done" && t.status !== "waiting_on_client"
   );
-  const dailyCapacity = Math.max(1, user.dailyCapacity);
+  // Today's hours, schedule-aware. The pct/load bars now shrink when
+  // a teammate is on a short day, so a 3h Wednesday with 3h of work
+  // reads as 100% even though the flat dailyCapacity column is 8h.
+  const dailyCapacity = effectiveCapacityForToday(user);
   const rawUsedHours = mine.reduce(
     (s, t) => s + Math.max(0, t.estimatedHours - t.actualHours),
     0
@@ -66,34 +90,77 @@ export function userCapacity(
 }
 
 export function etaDays(estimateHours: number, capInfo: CapacityInfo): number {
-  // Prefer the workday-remaining number when it's been populated; falls
-  // back to commitment-based "available" otherwise. This is what lets ETAs
-  // shorten as the day goes on once time is logged.
+  // Walk the user's actual schedule forward day-by-day instead of
+  // assuming every future day is dailyCapacity. Off days don't burn
+  // estimate; short days only burn what they hold.
   const remainingToday =
     capInfo.hoursOnShiftToday > 0 ? capInfo.workdayRemaining : capInfo.available;
   if (estimateHours <= remainingToday) return 1;
-  const after = estimateHours - remainingToday;
-  const fullDays = Math.ceil(after / Math.max(1, capInfo.user.dailyCapacity));
-  return 1 + fullDays + 1;
+
+  const user = capInfo.user;
+  let remaining = estimateHours - remainingToday;
+  let days = 1;
+  const cursor = new Date();
+  // Cap at ~12 weeks so a misconfigured 0-hours schedule can't infinite-loop.
+  for (let i = 0; i < 84 && remaining > 0; i++) {
+    cursor.setDate(cursor.getDate() + 1);
+    const dayKey = dayKeyInTz(cursor, user.workTimezone ?? null);
+    const hours = hoursForDay({
+      dayKey,
+      dailyCapacity: user.dailyCapacity,
+      weeklySchedule: user.weeklySchedule
+    });
+    days += 1;
+    if (hours <= 0) continue; // off day — doesn't reduce remaining
+    remaining -= hours;
+  }
+  // +1 buffer day so the user has slack.
+  return days + 1;
 }
 
-// Compute an absolute deadline ISO string from a work-hours estimate plus the
-// assignee's daily capacity. Two regimes:
-//   - estimate ≤ daily capacity: tight, proportional to the estimate.
-//     2 × estimate + 1h buffer, minimum 2h.
-//   - estimate > daily capacity: spread over multiple days.
-//     (estimate / capacity) days × 24h elapsed + 4h buffer.
+// Compute an absolute deadline ISO string by walking the assignee's
+// schedule day-by-day. Reserves the estimated hours across actual
+// working days (skipping days the user is off, using each day's real
+// hours), then adds a 4h buffer.
+//
+// For estimate ≤ today's hours we stay in the original "double the
+// estimate + 1h buffer, minimum 2h" model — it's a small task; same-day
+// turnaround should track the work, not the schedule.
 export function deadlineFromEstimate(
   estimateHours: number,
-  dailyCapacity: number = 8,
+  user: Pick<User, "dailyCapacity" | "weeklySchedule" | "workTimezone">,
   fromMs: number = Date.now()
 ): string {
-  const cap = Math.max(1, dailyCapacity);
-  let elapsedHours: number;
-  if (estimateHours <= cap) {
-    elapsedHours = Math.max(2, estimateHours * 2 + 1);
-  } else {
-    elapsedHours = (estimateHours / cap) * 24 + 4;
+  const cursor = new Date(fromMs);
+  const todayKey = dayKeyInTz(cursor, user.workTimezone ?? null);
+  const todayHours = hoursForDay({
+    dayKey: todayKey,
+    dailyCapacity: user.dailyCapacity,
+    weeklySchedule: user.weeklySchedule
+  });
+
+  if (estimateHours <= Math.max(1, todayHours)) {
+    const elapsedHours = Math.max(2, estimateHours * 2 + 1);
+    return new Date(fromMs + elapsedHours * 3_600_000).toISOString();
   }
+
+  // Multi-day: subtract today's remaining first (assume the task
+  // begins immediately), then walk forward.
+  let remaining = estimateHours - Math.max(0, todayHours);
+  let elapsedDays = 0;
+  for (let i = 0; i < 84 && remaining > 0; i++) {
+    cursor.setDate(cursor.getDate() + 1);
+    elapsedDays += 1;
+    const dayKey = dayKeyInTz(cursor, user.workTimezone ?? null);
+    const hours = hoursForDay({
+      dayKey,
+      dailyCapacity: user.dailyCapacity,
+      weeklySchedule: user.weeklySchedule
+    });
+    if (hours <= 0) continue;
+    remaining -= hours;
+  }
+  // 4h buffer added to the elapsed days for slack.
+  const elapsedHours = (elapsedDays + 1) * 24 + 4;
   return new Date(fromMs + elapsedHours * 3_600_000).toISOString();
 }

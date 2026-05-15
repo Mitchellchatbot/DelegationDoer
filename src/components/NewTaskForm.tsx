@@ -209,7 +209,7 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel }: Props) {
   const computedDueDate = useMemo(() => {
     const u = users.find((x) => x.id === (assigneeId || topPick?.userId));
     if (!u) return null;
-    return deadlineFromEstimate(estimate, u.dailyCapacity);
+    return deadlineFromEstimate(estimate, u);
   }, [assigneeId, topPick?.userId, estimate]);
 
   async function askAI() {

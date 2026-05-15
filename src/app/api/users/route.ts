@@ -28,6 +28,7 @@ export async function GET() {
   let lastError: string | null = null;
 
   const tries = [
+    "id, name, email, role, avatar_url, presence, presence_updated_at, status_emoji, clock_enabled, is_admin, daily_capacity, work_timezone, weekly_schedule",
     "id, name, email, role, avatar_url, presence, presence_updated_at, status_emoji, clock_enabled, is_admin",
     "id, name, email, role, avatar_url, presence, presence_updated_at, status_emoji, clock_enabled",
     "id, name, email, role, avatar_url, presence, presence_updated_at, status_emoji",
@@ -83,6 +84,11 @@ export async function GET() {
       // partial-migration fallback) keep the existing behavior.
       clockEnabled: (u as unknown as { clock_enabled?: boolean }).clock_enabled ?? true,
       isAdmin: (u as unknown as { is_admin?: boolean }).is_admin === true,
+      dailyCapacity: Number((u as unknown as { daily_capacity?: number }).daily_capacity ?? 8),
+      workTimezone:
+        (u as unknown as { work_timezone?: string | null }).work_timezone ?? null,
+      weeklySchedule:
+        (u as unknown as { weekly_schedule?: Record<string, unknown> }).weekly_schedule ?? {},
       departmentIds: departmentsByUser.get(u.id) ?? []
     }))
   });

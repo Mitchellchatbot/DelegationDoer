@@ -17,7 +17,7 @@ export async function GET() {
     {
       const { data, error } = await supabase
         .from("users")
-        .select("id, name, email, avatar_url, role, is_admin, widget_icon_url, slack_user_id, slack_team_id, slack_connected_at, birthday, onboarded_at, slack_last_sync_at, slack_last_sync_ok, slack_last_sync_msg, google_user_id, google_email, google_connected_at, clock_enabled, personal_email, phone, job_title, location, bio, pronouns, work_hours_start, work_hours_end, work_timezone")
+        .select("id, name, email, avatar_url, role, is_admin, widget_icon_url, slack_user_id, slack_team_id, slack_connected_at, birthday, onboarded_at, slack_last_sync_at, slack_last_sync_ok, slack_last_sync_msg, google_user_id, google_email, google_connected_at, clock_enabled, personal_email, phone, job_title, location, bio, pronouns, work_hours_start, work_hours_end, work_timezone, weekly_schedule")
         .eq("id", userId)
         .maybeSingle();
       if (!error && data) row = data;
@@ -61,7 +61,8 @@ export async function GET() {
         pronouns: (row.pronouns as string | null) ?? null,
         workHoursStart: (row.work_hours_start as string | null) ?? null,
         workHoursEnd: (row.work_hours_end as string | null) ?? null,
-        workTimezone: (row.work_timezone as string | null) ?? null
+        workTimezone: (row.work_timezone as string | null) ?? null,
+        weeklySchedule: (row.weekly_schedule as Record<string, unknown> | null) ?? {}
       }
     });
   } catch (err) {
@@ -109,6 +110,42 @@ export async function PATCH(req: NextRequest) {
     takeString("workHoursStart", "work_hours_start", 5);
     takeString("workHoursEnd",   "work_hours_end",   5);
     takeString("workTimezone",   "work_timezone",    60);
+
+    // Per-day schedule. Accepts a small object keyed by mon/tue/.../sun;
+    // each day is either null (day off) or { start, end } in HH:MM.
+    // Validates structure so a malformed payload can't poison the row.
+    if (body.weeklySchedule !== undefined) {
+      const raw = body.weeklySchedule;
+      if (raw === null) {
+        update.weekly_schedule = {};
+      } else if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+        const cleaned: Record<string, { start: string; end: string } | null> = {};
+        const days = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] as const;
+        const hhmm = /^[0-2]\d:[0-5]\d$/;
+        for (const d of days) {
+          const v = (raw as Record<string, unknown>)[d];
+          if (v === null || v === undefined) {
+            cleaned[d] = null;
+            continue;
+          }
+          if (v && typeof v === "object" && !Array.isArray(v)) {
+            const start = (v as { start?: unknown }).start;
+            const end = (v as { end?: unknown }).end;
+            if (
+              typeof start === "string" && hhmm.test(start) &&
+              typeof end === "string" && hhmm.test(end)
+            ) {
+              cleaned[d] = { start, end };
+            } else {
+              cleaned[d] = null;
+            }
+          } else {
+            cleaned[d] = null;
+          }
+        }
+        update.weekly_schedule = cleaned;
+      }
+    }
 
     if (Object.keys(update).length === 0) {
       return NextResponse.json({ error: "no editable fields supplied" }, { status: 400 });

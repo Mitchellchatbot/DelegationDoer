@@ -1,7 +1,7 @@
-import { ROLE_LABELS } from "@/lib/auth";
 import { requireCurrentUserId } from "@/lib/session";
-import { getUserById, getAllUsers, getDepartments } from "@/lib/server-data";
+import { getUserById, getDepartments } from "@/lib/server-data";
 import { ProfileAvatarSection } from "@/components/ProfileAvatarSection";
+import { WorkScheduleSection } from "@/components/WorkScheduleSection";
 import { DesktopAppSection } from "@/components/DesktopAppSection";
 import { MissiveIntegrationSection } from "@/components/MissiveIntegrationSection";
 import { MyInboxesSection } from "@/components/MyInboxesSection";
@@ -21,12 +21,12 @@ import { Settings as SettingsIcon } from "lucide-react";
 export const dynamic = "force-dynamic";
 
 export default async function SettingsPage() {
-  const [userId, departments, users] = await Promise.all([
+  const [userId, departments] = await Promise.all([
     requireCurrentUserId(),
-    getDepartments(),
-    getAllUsers()
+    getDepartments()
   ]);
   const me = await getUserById(userId);
+  const canManageOrg = me?.role === "leader" || !!me?.isAdmin;
 
   return (
     <div className="space-y-5 max-w-4xl">
@@ -39,6 +39,8 @@ export default async function SettingsPage() {
       />
 
       {me && <ProfileAvatarSection user={me} />}
+
+      <WorkScheduleSection />
 
       <SkillsSection canManage={me?.role === "leader" || me?.role === "department_head" || !!me?.isAdmin} />
 
@@ -54,9 +56,11 @@ export default async function SettingsPage() {
 
       <GoogleConnectSection />
 
-      <WorkspaceChannelsSection canEdit={me?.role === "leader" || !!me?.isAdmin} />
+      {/* Org-wide Slack plumbing — only visible to leaders/admins so
+          channel IDs aren't surfaced to every worker. */}
+      {canManageOrg && <WorkspaceChannelsSection canEdit />}
 
-      <DepartmentSlackSection canEdit={me?.role === "leader" || !!me?.isAdmin} />
+      {canManageOrg && <DepartmentSlackSection canEdit />}
 
       <DesktopAppSection />
 
@@ -112,32 +116,6 @@ export default async function SettingsPage() {
         </div>
       </section>
 
-      <section className="rounded-2xl border border-slate-200/70 bg-white shadow-soft p-5">
-        <div className="text-sm font-semibold mb-3 inline-flex items-center gap-2">
-          <span className="w-2 h-2 rounded-full bg-indigo-500" />
-          Users <span className="text-muted text-xs font-normal">({users.length})</span>
-        </div>
-        <div className="overflow-hidden rounded-xl border border-white/60 bg-white/70 backdrop-blur-sm">
-          <table className="text-sm w-full">
-            <thead className="bg-indigo-50/60">
-              <tr className="text-xs text-ink/60">
-                <th className="text-left py-2 px-3 font-medium">Name</th>
-                <th className="text-left py-2 px-3 font-medium">Role</th>
-                <th className="text-left py-2 px-3 font-medium">Capacity</th>
-              </tr>
-            </thead>
-            <tbody>
-              {users.map((u) => (
-                <tr key={u.id} className="border-t border-white/60 hover:bg-indigo-50/40 transition-colors">
-                  <td className="py-2 px-3">{u.name}</td>
-                  <td className="py-2 px-3 text-ink/70">{ROLE_LABELS[u.role]}</td>
-                  <td className="py-2 px-3 text-ink/70">{u.dailyCapacity}h/day</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
     </div>
   );
 }

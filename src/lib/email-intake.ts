@@ -27,6 +27,7 @@ import { matchRoutingRule, rowToRule, type RoutingRule } from "@/lib/routing-mat
 import { rankCandidates } from "@/lib/skill-rank";
 import { userCapacity, deadlineFromEstimate } from "@/lib/capacity";
 import { notifyAssignment } from "@/lib/slack";
+import { loadClientMatcher } from "@/lib/client-thread-match";
 import type { User } from "@/lib/types";
 
 export type RoutedVia = `rule:${string}` | "ranker" | "ai-fallback" | "manual" | "unrouted";
@@ -146,6 +147,18 @@ export async function runEmailIntake(input: IntakeInput): Promise<IntakeOutcome>
   const departmentId =
     matchedRule?.departmentId ?? classified.departmentHint ?? assignee?.departmentIds[0] ?? null;
 
+  // Match the inbound email to a client by domain / contact-email so
+  // the resulting task lands in the right client folder. Best-effort
+  // — a miss just leaves client_name null (matches old behavior).
+  let clientName: string | null = null;
+  if (input.fromEmail) {
+    try {
+      const matcher = await loadClientMatcher();
+      const hit = matcher.match(input.fromEmail);
+      if (hit) clientName = hit.name;
+    } catch { /* matcher errored — fall back to null */ }
+  }
+
   const insertRow = {
     id: taskId,
     title: classified.title,
@@ -169,7 +182,7 @@ export async function runEmailIntake(input: IntakeInput): Promise<IntakeOutcome>
     last_activity_at: now,
     created_at: now,
     blocks_task_ids: [],
-    client_name: null,
+    client_name: clientName,
     website: null,
     client_email: input.fromEmail,
     client_folder_url: null,

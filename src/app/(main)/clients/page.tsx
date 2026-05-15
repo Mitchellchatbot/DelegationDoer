@@ -7,6 +7,7 @@ import { canManageAssignments } from "@/lib/inbox-access";
 import { getClients, getOpenTaskCountsByClient } from "@/lib/clients-data";
 import { NewClientDialog } from "@/components/NewClientDialog";
 import { ClientPriorityList } from "@/components/ClientPriorityList";
+import { RescanClientMailButton } from "@/components/RescanClientMailButton";
 
 export const dynamic = "force-dynamic";
 
@@ -39,7 +40,12 @@ export default async function ClientsPage() {
         }
         icon={<Briefcase />}
         iconTone="amber"
-        trailing={<NewClientDialog />}
+        trailing={
+          <div className="flex items-center gap-2 flex-wrap">
+            {canEdit && <RescanClientMailButton />}
+            <NewClientDialog />
+          </div>
+        }
       />
 
       {canEdit && clients.length > 1 && (

@@ -56,6 +56,11 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel }: Props) {
   const [clientName, setClientName] = useState("");
   const [website, setWebsite] = useState("");
   const [internal, setInternal] = useState(false);
+  // Manual deadline override (datetime-local string, e.g. "2026-05-20T17:00").
+  // Empty = use the auto-computed deadline below. The submit body picks
+  // whichever is set; if neither, the API gets null and the task has no
+  // due date.
+  const [dueDateOverride, setDueDateOverride] = useState<string>("");
 
   // Notion-style project link fields. Hidden behind a disclosure so they
   // don't bloat the default form — most tasks won't fill them in.
@@ -260,7 +265,11 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel }: Props) {
           estimatedHours: estimate,
           tags,
           assigneeId,
-          dueDate: computedDueDate,
+          // Manual override wins; otherwise fall back to the
+          // capacity-derived auto deadline.
+          dueDate: dueDateOverride
+            ? new Date(dueDateOverride).toISOString()
+            : computedDueDate,
           clientName: internal ? null : (clientName.trim() || null),
           website: internal ? null : (website.trim() || null),
           clientEmail: clientEmail.trim() || null,
@@ -363,6 +372,32 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel }: Props) {
           <div>
             <label className="label">Estimate (hours)</label>
             <input type="number" className="input" value={estimate} onChange={(e) => setEstimate(Number(e.target.value))} />
+          </div>
+          <div className="col-span-2">
+            <div className="flex items-center justify-between">
+              <label className="label">Deadline</label>
+              {dueDateOverride ? (
+                <button
+                  type="button"
+                  onClick={() => setDueDateOverride("")}
+                  className="text-[11px] text-muted hover:text-accent transition-colors"
+                  title="Clear override — use the auto-suggested deadline below"
+                >
+                  Use suggested
+                </button>
+              ) : (
+                <span className="text-[11px] text-muted">
+                  leave blank to auto-set from estimate
+                </span>
+              )}
+            </div>
+            <input
+              type="datetime-local"
+              className="input"
+              value={dueDateOverride}
+              onChange={(e) => setDueDateOverride(e.target.value)}
+              placeholder=""
+            />
           </div>
           <div>
             <label className="label">Tags</label>
@@ -670,7 +705,9 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel }: Props) {
               <span className="text-muted">Realistic ETA:</span> {eta} working day{eta === 1 ? "" : "s"} (includes 1 buffer day)
             </div>
             <div>
-              <span className="text-muted">Deadline auto-set to:</span>{" "}
+              <span className="text-muted">
+                {dueDateOverride ? "Suggested deadline:" : "Deadline auto-set to:"}
+              </span>{" "}
               <span className="text-ink font-medium">
                 {new Date(computedDueDate).toLocaleString(undefined, {
                   weekday: "short",
@@ -681,6 +718,11 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel }: Props) {
                   timeZoneName: "short"
                 })}
               </span>
+              {dueDateOverride && (
+                <span className="text-[11px] text-muted ml-2">
+                  (you set a custom deadline above — that one wins)
+                </span>
+              )}
             </div>
           </div>
         )}

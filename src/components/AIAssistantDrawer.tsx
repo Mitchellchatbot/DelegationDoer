@@ -274,12 +274,12 @@ function Composer({
     }
   }
 
-  const { supported, listening, toggle } = useDictation({
+  const { supported, listening, transcribing, toggle } = useDictation({
     onTranscript: (next) => setValue(next),
     baselineValue: value
   });
 
-  const canSend = value.trim().length > 0 && !loading;
+  const canSend = value.trim().length > 0 && !loading && !transcribing;
   return (
     <div className="p-3 border-t border-slate-200/60 bg-white/60">
       <div className="flex items-end gap-2 rounded-2xl border border-slate-200/70 bg-white pl-3 pr-1.5 py-1.5 shadow-sm focus-within:border-accent/50 focus-within:ring-2 focus-within:ring-accent/20 transition-all">
@@ -293,32 +293,38 @@ function Composer({
           placeholder={
             loading
               ? "Claude is thinking…"
-              : listening
-                ? "Listening… speak now"
-                : "Ask anything…"
+              : transcribing
+                ? "Transcribing…"
+                : listening
+                  ? "Recording… click the mic again to stop"
+                  : "Ask anything…"
           }
           className="flex-1 min-w-0 resize-none bg-transparent text-[13px] leading-snug outline-none placeholder:text-ink/40 py-1.5"
         />
         <button
           type="button"
           onClick={toggle}
-          disabled={loading}
+          disabled={loading || transcribing}
           aria-label={listening ? "Stop dictation" : "Start dictation"}
           title={
             supported
-              ? listening ? "Stop dictation" : "Dictate with your mic"
-              : "Voice input isn't supported in this browser — try Chrome or Safari"
+              ? listening ? "Stop and transcribe" : "Dictate with your mic"
+              : "Voice input isn't supported in this browser"
           }
           className={cn(
             "w-8 h-8 rounded-full grid place-items-center shrink-0 transition-all border",
             listening
               ? "bg-red-50 text-red-600 border-red-200 shadow-[0_0_0_3px_rgba(239,68,68,0.18)] animate-pulse"
               : "bg-white text-ink/60 border-slate-200 hover:text-accent hover:border-accent/40",
-            loading && "opacity-40 cursor-not-allowed",
+            (loading || transcribing) && "opacity-40 cursor-not-allowed",
             !supported && !listening && "opacity-70"
           )}
         >
-          {listening ? <MicOff className="w-3.5 h-3.5" /> : <Mic className="w-3.5 h-3.5" />}
+          {transcribing
+            ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            : listening
+              ? <MicOff className="w-3.5 h-3.5" />
+              : <Mic className="w-3.5 h-3.5" />}
         </button>
         <button
           type="button"
@@ -341,7 +347,11 @@ function Composer({
         {supported && (
           <span className="text-ink/45">
             {" · "}
-            {listening ? "🎙 listening" : "Mic to dictate"}
+            {transcribing
+              ? "transcribing…"
+              : listening
+                ? "🎙 recording — click mic to stop"
+                : "Mic to dictate"}
           </span>
         )}
       </div>
@@ -349,12 +359,15 @@ function Composer({
   );
 }
 
-// Browser Web Speech API. Chrome/Edge/Safari support it via
-// webkitSpeechRecognition; Firefox does not (we hide the mic button
-// there). The recognizer streams interim results — we keep a snapshot
-// of the textarea value at start time and append the running transcript
-// to it so the user can keep typing while dictating (rare but
-// supported).
+// Click-to-start / click-to-stop dictation backed by OpenAI
+// gpt-4o-mini-transcribe. We record the mic with MediaRecorder, then
+// POST the audio blob to /api/transcribe on stop and splice the
+// returned text onto whatever the user had already typed.
+//
+// The OpenAI endpoint is request/response (not streaming), so there's
+// a 1–2s "transcribing…" window between the user clicking stop and
+// the text appearing. The Composer surfaces that state on the mic
+// button so it's visible.
 function useDictation({
   onTranscript, baselineValue
 }: {
@@ -362,83 +375,103 @@ function useDictation({
   baselineValue: string;
 }) {
   const [listening, setListening] = useState(false);
+  const [transcribing, setTranscribing] = useState(false);
   const [supported, setSupported] = useState(false);
-  const recogRef = useRef<SpeechRecognitionLike | null>(null);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
   const baselineRef = useRef<string>("");
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const w = window as unknown as {
-      SpeechRecognition?: SpeechRecognitionCtor;
-      webkitSpeechRecognition?: SpeechRecognitionCtor;
-    };
-    const Ctor = w.SpeechRecognition ?? w.webkitSpeechRecognition;
-    if (!Ctor) return;
-    setSupported(true);
-    const r = new Ctor();
-    r.continuous = true;
-    r.interimResults = true;
-    r.lang = "en-US";
-    r.onresult = (event: SpeechRecognitionEventLike) => {
-      let transcript = "";
-      for (let i = 0; i < event.results.length; i++) {
-        transcript += event.results[i][0].transcript;
-      }
-      const base = baselineRef.current;
-      const joined = base
-        ? base + (base.endsWith(" ") ? "" : " ") + transcript
-        : transcript;
-      onTranscript(joined);
-    };
-    r.onend = () => setListening(false);
-    r.onerror = () => setListening(false);
-    recogRef.current = r;
+    const ok =
+      !!navigator.mediaDevices?.getUserMedia && typeof MediaRecorder !== "undefined";
+    setSupported(ok);
     return () => {
-      try { r.stop(); } catch { /* already stopped */ }
-      recogRef.current = null;
+      try { recorderRef.current?.stop(); } catch { /* */ }
+      streamRef.current?.getTracks().forEach((t) => t.stop());
     };
-    // onTranscript is captured intentionally only on mount — re-creating
-    // the recognizer on every keystroke would cancel the in-progress
-    // dictation session.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  function toggle() {
-    const r = recogRef.current;
-    if (!r) return;
-    if (listening) {
-      try { r.stop(); } catch { /* */ }
-      setListening(false);
-    } else {
-      baselineRef.current = baselineValue;
-      try {
-        r.start();
-        setListening(true);
-      } catch {
-        // start() throws if already running — recover by stopping.
-        try { r.stop(); } catch { /* */ }
-        setListening(false);
-      }
+  async function start() {
+    baselineRef.current = baselineValue;
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch {
+      // user denied mic permission — nothing else to do
+      return;
+    }
+    streamRef.current = stream;
+    // Chrome/Firefox produce webm/opus, Safari produces mp4/aac. Both
+    // are accepted by the OpenAI transcription endpoint.
+    const preferred = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+      ? "audio/webm;codecs=opus"
+      : MediaRecorder.isTypeSupported("audio/webm")
+        ? "audio/webm"
+        : MediaRecorder.isTypeSupported("audio/mp4")
+          ? "audio/mp4"
+          : "";
+    const rec = preferred
+      ? new MediaRecorder(stream, { mimeType: preferred })
+      : new MediaRecorder(stream);
+    chunksRef.current = [];
+    rec.ondataavailable = (e) => {
+      if (e.data && e.data.size > 0) chunksRef.current.push(e.data);
+    };
+    rec.onstop = () => {
+      stream.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+      const type = rec.mimeType || "audio/webm";
+      const blob = new Blob(chunksRef.current, { type });
+      chunksRef.current = [];
+      void transcribe(blob, type);
+    };
+    recorderRef.current = rec;
+    rec.start();
+    setListening(true);
+  }
+
+  async function transcribe(blob: Blob, mime: string) {
+    if (blob.size === 0) return;
+    setTranscribing(true);
+    try {
+      const ext = mime.includes("mp4") || mime.includes("m4a") ? "m4a"
+        : mime.includes("ogg") ? "ogg"
+        : mime.includes("wav") ? "wav"
+        : "webm";
+      const fd = new FormData();
+      fd.append("file", blob, `dictation.${ext}`);
+      const res = await fetch("/api/transcribe", { method: "POST", body: fd });
+      const data = await res.json().catch(() => ({}));
+      const text = typeof data.text === "string" ? data.text.trim() : "";
+      if (!text) return;
+      const base = baselineRef.current;
+      const joined = base
+        ? base + (base.endsWith(" ") || base.endsWith("\n") ? "" : " ") + text
+        : text;
+      onTranscript(joined);
+    } finally {
+      setTranscribing(false);
     }
   }
 
-  return { supported, listening, toggle };
-}
+  function stop() {
+    const rec = recorderRef.current;
+    if (!rec) return;
+    try { rec.stop(); } catch { /* */ }
+    recorderRef.current = null;
+    setListening(false);
+  }
 
-interface SpeechRecognitionEventLike {
-  results: ArrayLike<ArrayLike<{ transcript: string }>>;
+  function toggle() {
+    if (transcribing) return;
+    if (listening) stop();
+    else void start();
+  }
+
+  return { supported, listening, transcribing, toggle };
 }
-interface SpeechRecognitionLike {
-  continuous: boolean;
-  interimResults: boolean;
-  lang: string;
-  onresult: ((e: SpeechRecognitionEventLike) => void) | null;
-  onend: (() => void) | null;
-  onerror: (() => void) | null;
-  start: () => void;
-  stop: () => void;
-}
-type SpeechRecognitionCtor = new () => SpeechRecognitionLike;
 
 // Markdown renderer styled to match the app's design language.
 // All elements get tight spacing + the brand color palette so the

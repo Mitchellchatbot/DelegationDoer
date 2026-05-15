@@ -12,15 +12,24 @@ import { cn } from "@/lib/utils";
 // Gmail-style modal. State is local; submit hits /api/inboxes/compose.
 // Form fields: to (chip-style), cc (chip-style), subject, body.
 
+// `accounts` covers the All-Inboxes case where multiple connected
+// mailboxes are eligible; the dialog renders a "from" picker. The
+// single-inbox call site keeps passing accountId + accountEmail and
+// gets the original flow.
 export function ComposeButton({
-  accountId, accountEmail
+  accountId, accountEmail, accounts
 }: {
-  accountId: string;
-  accountEmail: string;
+  accountId?: string;
+  accountEmail?: string;
+  accounts?: { id: string; email: string; display_name?: string | null }[];
 }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  // When `accounts` is supplied, this picks which mailbox to send FROM.
+  // Defaults to the first; the picker only renders if there's >1 option.
+  const initialFromId = accountId ?? accounts?.[0]?.id ?? "";
+  const [fromAccountId, setFromAccountId] = useState<string>(initialFromId);
   const [to, setTo] = useState("");
   const [cc, setCc] = useState("");
   const [subject, setSubject] = useState("");
@@ -30,6 +39,11 @@ export function ComposeButton({
   // <input type="datetime-local"> value: "YYYY-MM-DDTHH:mm" (no seconds,
   // no zone). We convert to ISO at submit time.
   const [sendAtLocal, setSendAtLocal] = useState("");
+
+  const fromOptions = accounts ?? (accountId ? [{ id: accountId, email: accountEmail ?? "", display_name: null }] : []);
+  const fromMeta = fromOptions.find((a) => a.id === fromAccountId) ?? fromOptions[0];
+  const effectiveAccountId = fromMeta?.id ?? "";
+  const effectiveFromLabel = fromMeta?.display_name || fromMeta?.email || "";
 
   function reset() {
     setTo("");
@@ -79,7 +93,7 @@ export function ComposeButton({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          accountId,
+          accountId: effectiveAccountId,
           to: toList,
           cc: ccList,
           subject: subject.trim(),
@@ -150,9 +164,26 @@ export function ComposeButton({
                   <div className="flex items-center gap-2">
                     <PenSquare className="w-4 h-4 text-accent" />
                     <Dialog.Title className="text-sm font-semibold">New message</Dialog.Title>
-                    <span className="text-[11px] text-ink/55 truncate max-w-[260px]">
-                      from {accountEmail}
-                    </span>
+                    {fromOptions.length > 1 ? (
+                      <label className="inline-flex items-center gap-1.5 text-[11px] text-ink/55">
+                        from
+                        <select
+                          value={fromAccountId}
+                          onChange={(e) => setFromAccountId(e.target.value)}
+                          className="text-[11px] bg-white/70 border border-slate-200 rounded-md px-1.5 py-0.5 outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent/40 max-w-[260px]"
+                        >
+                          {fromOptions.map((a) => (
+                            <option key={a.id} value={a.id}>
+                              {a.display_name ? `${a.display_name} <${a.email}>` : a.email}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    ) : (
+                      <span className="text-[11px] text-ink/55 truncate max-w-[260px]">
+                        from {effectiveFromLabel}
+                      </span>
+                    )}
                   </div>
                   <Dialog.Close asChild>
                     <button

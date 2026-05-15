@@ -6,6 +6,7 @@ import { listAccounts, listThreads, type MissiveThread } from "@/lib/missive-cli
 import { visibleAccountIdsFor } from "@/lib/inbox-access";
 import { ThreadFilters } from "@/components/ThreadFilters";
 import { ThreadList } from "@/components/ThreadList";
+import { ComposeButton } from "@/components/ComposeButton";
 import { readStateForThreads, isThreadUnread } from "@/lib/thread-read-state";
 
 export const dynamic = "force-dynamic";
@@ -104,6 +105,11 @@ export default async function AllInboxesPage({
             </p>
           </div>
         </div>
+        {inboxCount > 0 && (
+          <div className="relative mt-3 flex items-center justify-end">
+            <ComposeButton accounts={inboxes} />
+          </div>
+        )}
         <div
           aria-hidden
           className="absolute -top-10 right-12 w-32 h-32 rounded-full pointer-events-none"

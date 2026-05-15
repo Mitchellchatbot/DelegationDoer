@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUserId } from "@/lib/session";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
+import { broadcastNewRecommendation } from "@/lib/slack";
 
 export const dynamic = "force-dynamic";
 
@@ -125,6 +126,28 @@ export async function POST(req: NextRequest) {
     };
     const { error } = await supabase.from("eom_recommendations").insert(row);
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+    // Fire-and-forget Slack broadcast — env-gated, never blocks.
+    void (async () => {
+      const [{ data: author }, { data: ws }] = await Promise.all([
+        supabase.from("users").select("name, email").eq("id", userId).maybeSingle(),
+        supabase.from("workspace_settings").select("scaled_team_channel_id").maybeSingle()
+      ]);
+      const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? "";
+      await broadcastNewRecommendation({
+        channel: (ws?.scaled_team_channel_id as string | null) ?? null,
+        authorName: author?.name ?? "Someone",
+        authorEmail: author?.email ?? null,
+        kind: row.kind,
+        title: row.title,
+        subtitle: row.subtitle,
+        body: row.body,
+        imageUrl: row.image_url,
+        externalUrl: row.external_url,
+        recsUrl: `${baseUrl}/updates/recommendations`
+      });
+    })().catch(() => { /* swallow */ });
+
     return NextResponse.json({ recommendation: row });
   } catch (err) {
     return NextResponse.json(

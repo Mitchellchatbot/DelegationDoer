@@ -2,7 +2,7 @@
 
 import * as Dialog from "@radix-ui/react-dialog";
 import { motion, AnimatePresence } from "framer-motion";
-import { Sparkles, Send, X, ArrowUp, Loader2, RefreshCw } from "lucide-react";
+import { Sparkles, Send, X, ArrowUp, Loader2, RefreshCw, Mic, MicOff } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -274,6 +274,11 @@ function Composer({
     }
   }
 
+  const { supported, listening, toggle } = useDictation({
+    onTranscript: (next) => setValue(next),
+    baselineValue: value
+  });
+
   const canSend = value.trim().length > 0 && !loading;
   return (
     <div className="p-3 border-t border-slate-200/60 bg-white/60">
@@ -285,9 +290,36 @@ function Composer({
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={onKeyDown}
           disabled={loading}
-          placeholder={loading ? "Claude is thinking…" : "Ask anything…"}
+          placeholder={
+            loading
+              ? "Claude is thinking…"
+              : listening
+                ? "Listening… speak now"
+                : "Ask anything…"
+          }
           className="flex-1 min-w-0 resize-none bg-transparent text-[13px] leading-snug outline-none placeholder:text-ink/40 py-1.5"
         />
+        <button
+          type="button"
+          onClick={toggle}
+          disabled={loading}
+          aria-label={listening ? "Stop dictation" : "Start dictation"}
+          title={
+            supported
+              ? listening ? "Stop dictation" : "Dictate with your mic"
+              : "Voice input isn't supported in this browser — try Chrome or Safari"
+          }
+          className={cn(
+            "w-8 h-8 rounded-full grid place-items-center shrink-0 transition-all border",
+            listening
+              ? "bg-red-50 text-red-600 border-red-200 shadow-[0_0_0_3px_rgba(239,68,68,0.18)] animate-pulse"
+              : "bg-white text-ink/60 border-slate-200 hover:text-accent hover:border-accent/40",
+            loading && "opacity-40 cursor-not-allowed",
+            !supported && !listening && "opacity-70"
+          )}
+        >
+          {listening ? <MicOff className="w-3.5 h-3.5" /> : <Mic className="w-3.5 h-3.5" />}
+        </button>
         <button
           type="button"
           onClick={onSubmit}
@@ -306,10 +338,107 @@ function Composer({
       </div>
       <div className="text-[10px] text-ink/40 px-2 pt-1.5">
         Enter to send · Shift+Enter for a new line
+        {supported && (
+          <span className="text-ink/45">
+            {" · "}
+            {listening ? "🎙 listening" : "Mic to dictate"}
+          </span>
+        )}
       </div>
     </div>
   );
 }
+
+// Browser Web Speech API. Chrome/Edge/Safari support it via
+// webkitSpeechRecognition; Firefox does not (we hide the mic button
+// there). The recognizer streams interim results — we keep a snapshot
+// of the textarea value at start time and append the running transcript
+// to it so the user can keep typing while dictating (rare but
+// supported).
+function useDictation({
+  onTranscript, baselineValue
+}: {
+  onTranscript: (next: string) => void;
+  baselineValue: string;
+}) {
+  const [listening, setListening] = useState(false);
+  const [supported, setSupported] = useState(false);
+  const recogRef = useRef<SpeechRecognitionLike | null>(null);
+  const baselineRef = useRef<string>("");
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const w = window as unknown as {
+      SpeechRecognition?: SpeechRecognitionCtor;
+      webkitSpeechRecognition?: SpeechRecognitionCtor;
+    };
+    const Ctor = w.SpeechRecognition ?? w.webkitSpeechRecognition;
+    if (!Ctor) return;
+    setSupported(true);
+    const r = new Ctor();
+    r.continuous = true;
+    r.interimResults = true;
+    r.lang = "en-US";
+    r.onresult = (event: SpeechRecognitionEventLike) => {
+      let transcript = "";
+      for (let i = 0; i < event.results.length; i++) {
+        transcript += event.results[i][0].transcript;
+      }
+      const base = baselineRef.current;
+      const joined = base
+        ? base + (base.endsWith(" ") ? "" : " ") + transcript
+        : transcript;
+      onTranscript(joined);
+    };
+    r.onend = () => setListening(false);
+    r.onerror = () => setListening(false);
+    recogRef.current = r;
+    return () => {
+      try { r.stop(); } catch { /* already stopped */ }
+      recogRef.current = null;
+    };
+    // onTranscript is captured intentionally only on mount — re-creating
+    // the recognizer on every keystroke would cancel the in-progress
+    // dictation session.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function toggle() {
+    const r = recogRef.current;
+    if (!r) return;
+    if (listening) {
+      try { r.stop(); } catch { /* */ }
+      setListening(false);
+    } else {
+      baselineRef.current = baselineValue;
+      try {
+        r.start();
+        setListening(true);
+      } catch {
+        // start() throws if already running — recover by stopping.
+        try { r.stop(); } catch { /* */ }
+        setListening(false);
+      }
+    }
+  }
+
+  return { supported, listening, toggle };
+}
+
+interface SpeechRecognitionEventLike {
+  results: ArrayLike<ArrayLike<{ transcript: string }>>;
+}
+interface SpeechRecognitionLike {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  onresult: ((e: SpeechRecognitionEventLike) => void) | null;
+  onend: (() => void) | null;
+  onerror: (() => void) | null;
+  start: () => void;
+  stop: () => void;
+}
+type SpeechRecognitionCtor = new () => SpeechRecognitionLike;
 
 // Markdown renderer styled to match the app's design language.
 // All elements get tight spacing + the brand color palette so the

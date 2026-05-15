@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { requireCurrentUserId } from "@/lib/session";
+import { broadcastNewMoment } from "@/lib/slack";
 
 export const dynamic = "force-dynamic";
 
@@ -61,6 +62,25 @@ export async function POST(req: NextRequest) {
       id, user_id: userId, image_url: imageUrl, caption
     });
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+    // Fire-and-forget Slack broadcast so a missing token never blocks
+    // the create. Env-gated on SLACK_MOMENTS_CHANNEL / SLACK_COMPANY_CHANNEL.
+    void (async () => {
+      const [{ data: author }, { data: ws }] = await Promise.all([
+        supabase.from("users").select("name, email").eq("id", userId).maybeSingle(),
+        supabase.from("workspace_settings").select("scaled_team_channel_id").maybeSingle()
+      ]);
+      const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? "";
+      await broadcastNewMoment({
+        channel: (ws?.scaled_team_channel_id as string | null) ?? null,
+        authorName: author?.name ?? "Someone",
+        authorEmail: author?.email ?? null,
+        imageUrl,
+        caption,
+        momentsUrl: `${baseUrl}/moments`
+      });
+    })().catch(() => { /* swallow — broadcast is best-effort */ });
+
     return NextResponse.json({ ok: true, id });
   } catch (err) {
     return NextResponse.json(

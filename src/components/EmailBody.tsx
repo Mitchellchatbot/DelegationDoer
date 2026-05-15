@@ -120,7 +120,14 @@ export function EmailBody({ html }: { html: string }) {
   return (
     <iframe
       ref={ref}
-      sandbox="allow-popups allow-popups-to-escape-sandbox"
+      // allow-same-origin is required so the parent can read
+      // contentDocument to measure the email's natural height. Without
+      // it the iframe is treated as opaque-origin and measure() can
+      // never see past the 200px initial fallback, which is what was
+      // making every email look cut off. allow-scripts is deliberately
+      // omitted, so the email's HTML still can't run JS — adding
+      // same-origin without scripts doesn't widen the attack surface.
+      sandbox="allow-popups allow-popups-to-escape-sandbox allow-same-origin"
       title="email-body"
       // Never scroll inside — let the iframe expand to the email's
       // natural height. The thread page handles overall overflow.

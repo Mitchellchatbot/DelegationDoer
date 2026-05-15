@@ -597,6 +597,137 @@ export async function notifyCompletion(args: {
   return { creatorDm, channelPost };
 }
 
+// Best-effort broadcast for new Moments photos.
+// Caller passes the channel id (typically workspace_settings.scaled_team_channel_id).
+// Failures are swallowed — a missing slack post must never block the
+// underlying create from succeeding.
+export async function broadcastNewMoment(args: {
+  channel: string | null;
+  authorName: string;
+  authorEmail?: string | null;
+  imageUrl: string;
+  caption: string | null;
+  momentsUrl: string;
+}): Promise<NotifyResult> {
+  if (!process.env.SLACK_BOT_TOKEN) return { ok: false, error: "SLACK_BOT_TOKEN missing" };
+  const channel = args.channel;
+  if (!channel) return { ok: false, error: "no scaled-team channel configured" };
+
+  // @-mention the author when we can resolve their Slack id so it
+  // shows up properly in their feed too.
+  let mention = `*${args.authorName}*`;
+  if (args.authorEmail) {
+    try {
+      const uid = await lookupUserByEmail(args.authorEmail);
+      mention = `<@${uid}>`;
+    } catch { /* leave plain text */ }
+  }
+
+  const blocks: unknown[] = [
+    {
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: `📸 ${mention} just posted a new Moment${args.caption ? `\n> ${args.caption.slice(0, 280)}` : ""}`
+      }
+    },
+    { type: "image", image_url: args.imageUrl, alt_text: args.caption ?? "moment" },
+    {
+      type: "actions",
+      elements: [{
+        type: "button",
+        text: { type: "plain_text", text: "View in DelegationDoer", emoji: true },
+        url: args.momentsUrl
+      }]
+    }
+  ];
+
+  try {
+    await slackCall<{ ok: true; ts: string }>("chat.postMessage", {
+      channel,
+      text: `📸 ${args.authorName} just posted a new Moment`,
+      blocks,
+      unfurl_links: false,
+      unfurl_media: false
+    });
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+// Best-effort broadcast for new Recommendations (movie, album, tv, etc).
+// Caller passes the channel id (typically workspace_settings.scaled_team_channel_id).
+export async function broadcastNewRecommendation(args: {
+  channel: string | null;
+  authorName: string;
+  authorEmail?: string | null;
+  kind: string;
+  title: string;
+  subtitle?: string | null;
+  body?: string | null;
+  imageUrl?: string | null;
+  externalUrl?: string | null;
+  recsUrl: string;
+}): Promise<NotifyResult> {
+  if (!process.env.SLACK_BOT_TOKEN) return { ok: false, error: "SLACK_BOT_TOKEN missing" };
+  const channel = args.channel;
+  if (!channel) return { ok: false, error: "no scaled-team channel configured" };
+
+  let mention = `*${args.authorName}*`;
+  if (args.authorEmail) {
+    try {
+      const uid = await lookupUserByEmail(args.authorEmail);
+      mention = `<@${uid}>`;
+    } catch { /* leave plain text */ }
+  }
+
+  const emoji =
+    args.kind === "movie" ? "🎬"
+    : args.kind === "tv" ? "📺"
+    : args.kind === "album" ? "🎵"
+    : args.kind === "art" ? "🎨"
+    : args.kind === "game" ? "🎮"
+    : args.kind === "video" ? "📹"
+    : "⭐";
+
+  const titleLine = args.externalUrl
+    ? `<${args.externalUrl}|${args.title}>`
+    : args.title;
+
+  const blocks: unknown[] = [
+    {
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: `${emoji} ${mention} just recommended *${titleLine}*${args.subtitle ? `\n_${args.subtitle}_` : ""}${args.body ? `\n${args.body.slice(0, 400)}` : ""}`
+      },
+      ...(args.imageUrl ? { accessory: { type: "image", image_url: args.imageUrl, alt_text: args.title } } : {})
+    },
+    {
+      type: "actions",
+      elements: [{
+        type: "button",
+        text: { type: "plain_text", text: "See in DelegationDoer", emoji: true },
+        url: args.recsUrl
+      }]
+    }
+  ];
+
+  try {
+    await slackCall<{ ok: true; ts: string }>("chat.postMessage", {
+      channel,
+      text: `${emoji} ${args.authorName} just recommended ${args.title}`,
+      blocks,
+      unfurl_links: false,
+      unfurl_media: false
+    });
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 // Mention / notify-teammates fan-out, but DM'd FROM the sender's
 // own Slack account (xoxp- user token) instead of the workspace bot.
 // Recipients see the message as a direct DM from a real person, which

@@ -32,25 +32,48 @@ export async function classifyEmailThread(args: {
     `- ${d.name} (id: "${d.id}"): ${d.description}; covers ${d.taskTypes.join(", ")}`
   ).join("\n");
 
-  const systemPrompt = `You convert inbound emails into structured task drafts at a digital agency.
+  const systemPrompt = `You convert inbound emails into ACTIONABLE task drafts at a digital agency. The assignee should be able to read the description and know exactly what to do without opening the original email.
 
 Departments:
 ${deptList || "(none configured)"}
 
 Return STRICT JSON in exactly this shape — no preamble, no code fences:
 {
-  "title": "<short, action-y task title; <70 chars>",
-  "description": "<2-4 sentence summary of what the requester needs>",
+  "title": "<short, action-y task title; starts with a verb; <70 chars>",
+  "description": "<Markdown-formatted description, see rubric below>",
   "priority": "<low | medium | high | critical>",
   "tags": ["<short topic/skill keywords>"],
   "departmentHint": "<one of the dept ids above, or null if unclear>"
 }
 
+Title rubric:
+- Starts with a verb: "Fix", "Build", "Send", "Review", "Update", "Reply to".
+- NOT "Email from X about Y" — that's a description of the email, not the task.
+
+Description rubric (this is the part that matters most):
+Write Markdown with EXACTLY these sections, in order. Skip sections that have no real content; never invent content.
+
+**Do:** <one-sentence imperative of the concrete deliverable. e.g. "Send Colin the updated branding mockup PDF and confirm the new hero image is approved.">
+
+**Context:**
+- <3-6 bullets covering the relevant background, constraints, deadlines mentioned, prior decisions, anything weird>
+- <pull specific names, dates, URLs, file references straight from the email>
+- <if the email asks multiple questions, list each one>
+
+**Requested by:** <name + email of sender>
+**Mentioned deadline:** <if the email explicitly states one, quote it; "no deadline mentioned" otherwise>
+
+Rules:
+- NEVER paste the raw email body. Summarize.
+- NEVER write "Client wrote: …" or "The email says …". Just describe the work.
+- Quote short phrases (≤8 words) when wording matters; don't quote whole sentences.
+- If there are links or files mentioned, list them under Context as a "Links:" bullet.
+
 Priority rubric:
-- "critical" = explicit emergency (site down, broken billing, legal threat)
-- "high" = same-day need or paying client blocked
-- "medium" = normal client work
-- "low" = FYI / nice-to-have
+- "critical" = explicit emergency (site down, broken billing, legal threat).
+- "high" = same-day need or paying client blocked.
+- "medium" = normal client work.
+- "low" = FYI / nice-to-have.
 
 Tags are 1-4 short lowercase words (e.g. "wordpress", "billing", "design"). They feed our auto-delegation engine.`;
 
@@ -59,7 +82,7 @@ Tags are 1-4 short lowercase words (e.g. "wordpress", "billing", "design"). They
     const client = await getAnthropic();
     const result = await client.messages.create({
       model: MODELS.classify,
-      max_tokens: 500,
+      max_tokens: 1200,
       system: systemPrompt,
       messages: [{
         role: "user",
@@ -111,8 +134,11 @@ Tags are 1-4 short lowercase words (e.g. "wordpress", "billing", "design"). They
         : subject.slice(0, 120) || "Email task",
     description:
       typeof parsed.description === "string"
-        ? parsed.description.trim().slice(0, 1200)
-        : `From: ${fromEmail ?? "unknown"}\n\n${bodyText.slice(0, 800)}`,
+        ? parsed.description.trim().slice(0, 4000)
+        : // AI errored — produce a clearly-marked placeholder instead of
+          // dumping the raw email body, so the assignee knows they need
+          // to read the original thread (linked under the description).
+          `**Do:** Read the linked email thread and turn it into a task.\n\n_Couldn't auto-summarize this one — open the thread for the full email._\n\n**Requested by:** ${fromEmail ?? "unknown"}`,
     priority,
     tags,
     departmentHint

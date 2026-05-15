@@ -22,22 +22,54 @@ interface SkillRow { userId: string; tag: string; combinedScore: number; }
 // The form is identical in both surfaces; only what happens after create
 // differs, which the host wires via the `onCreated` callback.
 
+// Pre-populated field values, used by hosts that already have a
+// draft (e.g. the Create-task-from-thread review dialog). Every
+// field is optional; whatever's missing falls back to the form's
+// own defaults.
+export interface NewTaskInitialValues {
+  title?: string;
+  description?: string;
+  priority?: string;
+  estimatedHours?: number;
+  tags?: string[];
+  departmentId?: string;
+  assigneeId?: string;
+  clientName?: string;
+  website?: string;
+  clientEmail?: string;
+  missiveThreadUrl?: string;
+  // ISO datetime — overrides the auto-computed deadline.
+  dueDate?: string | null;
+}
+
 interface Props {
   onCreated: (taskId: string) => void;
   onCancel: () => void;
   // When rendered inside a popdown the host already has a dismiss control,
   // so we hide the inline "Cancel" button. Defaults to showing it.
   hideCancel?: boolean;
+  // Pre-fill the form (used by Create-task-from-thread).
+  initialValues?: NewTaskInitialValues;
 }
 
-export function NewTaskForm({ onCreated, onCancel, hideCancel }: Props) {
+// Helper for datetime-local input: convert ISO → "YYYY-MM-DDTHH:mm"
+// in local time. Empty string for null/undefined.
+function isoToLocalInput(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const pad = (n: number) => n.toString().padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+export function NewTaskForm({ onCreated, onCancel, hideCancel, initialValues }: Props) {
   const currentUser = useCurrentUser();
   // Live workspace data — replaces every former mock-data import.
   const team = useTeam();
   const { users, departments, tasks } = team;
-  const [title, setTitle] = useState("");
-  const [description, setDescription] = useState("");
-  const [departmentId, setDepartmentId] = useState<string>("");
+  const [title, setTitle] = useState(initialValues?.title ?? "");
+  const [description, setDescription] = useState(initialValues?.description ?? "");
+  const [departmentId, setDepartmentId] = useState<string>(initialValues?.departmentId ?? "");
   // Once the live departments load, default the dept picker to the
   // first one if the user hasn't selected anything yet.
   useEffect(() => {
@@ -45,32 +77,34 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel }: Props) {
       setDepartmentId(departments[0].id);
     }
   }, [departmentId, departments]);
-  const [priority, setPriority] = useState("medium");
-  const [estimate, setEstimate] = useState(2);
-  const [tags, setTags] = useState<string[]>([]);
-  const [assigneeId, setAssigneeId] = useState<string>("");
+  const [priority, setPriority] = useState(initialValues?.priority ?? "medium");
+  const [estimate, setEstimate] = useState(initialValues?.estimatedHours ?? 2);
+  const [tags, setTags] = useState<string[]>(initialValues?.tags ?? []);
+  const [assigneeId, setAssigneeId] = useState<string>(initialValues?.assigneeId ?? "");
   const [aiReason, setAiReason] = useState<string | null>(null);
   const [aiThinking, setAiThinking] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
-  const [clientName, setClientName] = useState("");
-  const [website, setWebsite] = useState("");
+  const [clientName, setClientName] = useState(initialValues?.clientName ?? "");
+  const [website, setWebsite] = useState(initialValues?.website ?? "");
   const [internal, setInternal] = useState(false);
   // Manual deadline override (datetime-local string, e.g. "2026-05-20T17:00").
   // Empty = use the auto-computed deadline below. The submit body picks
   // whichever is set; if neither, the API gets null and the task has no
   // due date.
-  const [dueDateOverride, setDueDateOverride] = useState<string>("");
+  const [dueDateOverride, setDueDateOverride] = useState<string>(
+    isoToLocalInput(initialValues?.dueDate ?? null)
+  );
 
   // Notion-style project link fields. Hidden behind a disclosure so they
   // don't bloat the default form — most tasks won't fill them in.
   const [projectLinksOpen, setProjectLinksOpen] = useState(false);
-  const [clientEmail, setClientEmail] = useState("");
+  const [clientEmail, setClientEmail] = useState(initialValues?.clientEmail ?? "");
   const [clientFolderUrl, setClientFolderUrl] = useState("");
   const [stagingServer, setStagingServer] = useState("");
   const [markupLink, setMarkupLink] = useState("");
   const [hostingAccess, setHostingAccess] = useState("");
-  const [missiveThreadUrl, setMissiveThreadUrl] = useState("");
+  const [missiveThreadUrl, setMissiveThreadUrl] = useState(initialValues?.missiveThreadUrl ?? "");
 
   // Custom fields. Definitions are fetched once on mount. Values live in
   // a single Record so submit can shove the whole thing onto body.custom.

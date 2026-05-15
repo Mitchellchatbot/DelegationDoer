@@ -1,7 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUserId } from "@/lib/session";
-import { getUserById } from "@/lib/server-data";
-import { canManageAssignments } from "@/lib/inbox-access";
 
 export const dynamic = "force-dynamic";
 
@@ -13,14 +11,12 @@ export const dynamic = "force-dynamic";
 // On consent → Missive callback → Missive redirects back to
 // /inboxes/manage?oauth=microsoft_ok&connectedAccount=<id>.
 //
-// Leader-only (same gate as the rest of /inboxes/manage) — connecting a
-// shared inbox is a workspace-wide action.
+// Any signed-in user can connect their own inbox now — matches the
+// password path which dropped the leader-only gate. Auto-assignment
+// of the resulting account to the connector is handled on the Missive
+// side via the `user_id` it stamps onto the row.
 export async function GET(req: NextRequest) {
-  const userId = await requireCurrentUserId();
-  const me = await getUserById(userId);
-  if (!me || !canManageAssignments(me)) {
-    return NextResponse.json({ error: "forbidden" }, { status: 403 });
-  }
+  await requireCurrentUserId();
 
   const missiveBase = process.env.MISSIVE_API_URL?.replace(/\/$/, "");
   const missiveToken = process.env.MISSIVE_API_TOKEN;

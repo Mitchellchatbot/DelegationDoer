@@ -13,30 +13,9 @@ import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { visibleAccountIdsFor } from "@/lib/inbox-access";
 import { listAccounts, listThreads } from "@/lib/missive-client";
+import { buildClientSignals, threadMatchesClient } from "@/lib/client-thread-match";
 
 export const dynamic = "force-dynamic";
-
-// Strip protocol/www/path off a website string and return the bare
-// hostname, lowercased — e.g. "https://www.rwu.com/about" → "rwu.com".
-// Used to match inbound emails to clients by sender domain.
-function extractDomain(website: string | null | undefined): string | null {
-  if (!website) return null;
-  const cleaned = website
-    .trim()
-    .replace(/^https?:\/\//i, "")
-    .replace(/^www\./i, "")
-    .split("/")[0]
-    .split(":")[0]
-    .toLowerCase();
-  return cleaned || null;
-}
-
-// Pull the lower-cased email address out of a "Name <addr>" string,
-// or fall back to the raw value when it doesn't include angle brackets.
-function parseEmail(addr: string): string {
-  const m = addr.match(/<([^>]+)>/);
-  return (m ? m[1] : addr).trim().toLowerCase();
-}
 
 const PRIORITY_TONES = {
   high:   "bg-blue-100 text-blue-700 border-blue-200/60",
@@ -50,15 +29,17 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
 
   const userId = await requireCurrentUserId();
   const me = await getUserById(userId);
-  // Match inbound email against every domain the client runs under —
-  // not just the primary website — so the Villa cohort's threads
-  // surface here regardless of which sister site they came in on.
-  const domains = Array.from(new Set(
-    [client.website, ...client.websites]
-      .map(extractDomain)
-      .filter((d): d is string => !!d)
-  ));
-  const domain = domains[0] ?? null;
+  // Build the match signals once. Catches emails to/from:
+  //   - any of client.contactEmails (exact addresses), and
+  //   - any @<domain> for client.website + client.websites.
+  // So a client like Hopeful Estates with no website but a known
+  // contact at cmackey@villarecoverynetwork.com still surfaces threads.
+  const signals = buildClientSignals({
+    website: client.website,
+    websites: client.websites,
+    contactEmails: client.contactEmails
+  });
+  const canMatchByEmail = signals.emailSet.size > 0 || signals.domainSet.size > 0;
 
   const supabase = getSupabaseAdmin();
   const [resources, openTasksRes, doneTasksRes, visibleIds] = await Promise.all([
@@ -84,11 +65,10 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
     me ? visibleAccountIdsFor(me) : Promise.resolve(new Set<string>())
   ]);
 
-  // Email history — match by sender/recipient domain so anything from
-  // or to *@client-domain surfaces here regardless of which inbox it
-  // landed in. Scoped to the user's visible inboxes via account_emails
-  // so workers don't see threads from inboxes they couldn't otherwise
-  // reach.
+  // Email history — pulls every recent thread from Missive once, then
+  // applies the per-client signals. Scoped to the user's visible
+  // inboxes via account_emails so workers don't see threads from
+  // inboxes they couldn't otherwise reach.
   let clientThreads: {
     id: string;
     subject: string;
@@ -97,10 +77,12 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
     participants: string[];
     status: string;
   }[] = [];
-  if (domain) {
+  if (canMatchByEmail) {
     try {
       const [allThreads, accounts] = await Promise.all([
-        listThreads({ folder: "INBOX", limit: 400 }),
+        // Bumped from 400 → 1000 so older client threads still surface
+        // on the page without needing pagination.
+        listThreads({ folder: "INBOX", limit: 1000 }),
         listAccounts()
       ]);
       const accountIdByEmail = new Map(
@@ -122,11 +104,7 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
             visibleAccountEmail.email.toLowerCase()
           )!;
 
-          const matches = (t.participants ?? []).some((p) => {
-            const addr = parseEmail(p);
-            return domains.some((d) => addr.endsWith(`@${d}`));
-          });
-          if (!matches) return null;
+          if (!threadMatchesClient(t.participants, signals)) return null;
 
           return {
             id: t.id,
@@ -142,7 +120,7 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
           (a, b) =>
             new Date(b.lastAt).getTime() - new Date(a.lastAt).getTime()
         )
-        .slice(0, 20);
+        .slice(0, 50);
     } catch {
       // missive clone down / unreachable — surface a softer empty state.
       clientThreads = [];
@@ -370,9 +348,9 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
         icon={<Mail className="w-4 h-4" />}
         tone="blue"
         empty={
-          domain
-            ? `No threads matching @${domain} in any inbox you can see.`
-            : "Add a website to this client to surface their email history here."
+          canMatchByEmail
+            ? "No threads from this client in any inbox you can see yet."
+            : "Add a website or a contact email to this client to surface their email history here."
         }
         items={clientThreads}
         renderItem={(t) => (

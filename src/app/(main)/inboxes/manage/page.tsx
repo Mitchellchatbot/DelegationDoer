@@ -40,6 +40,7 @@ export default async function ManageInboxesPage() {
   let inboxes: MissiveAccount[] = [];
   let assignments: InboxAssignment[] = [];
   let autoIntakeSettings: AutoIntakeRow[] = [];
+  let spaces: { id: string; name: string; color: string; accountIds: string[] }[] = [];
   let fetchError: string | null = null;
   // Live people from Supabase — used by SpacesManager so newly invited
   // teammates appear without a deploy.
@@ -59,10 +60,34 @@ export default async function ManageInboxesPage() {
     assignments = await getAllAssignments();
 
     // Auto-intake settings — degrade silently if migration hasn't shipped.
-    const { data: settings } = await getSupabaseAdmin()
-      .from("missive_account_settings")
-      .select("account_id, auto_intake_enabled, last_polled_at");
+    const supabase = getSupabaseAdmin();
+    const [{ data: settings }, { data: spaceRows }, { data: spaceAccountRows }] = await Promise.all([
+      supabase
+        .from("missive_account_settings")
+        .select("account_id, auto_intake_enabled, last_polled_at"),
+      supabase
+        .from("inbox_spaces")
+        .select("id, name, color, created_at")
+        .order("created_at", { ascending: true }),
+      supabase
+        .from("inbox_space_accounts")
+        .select("space_id, account_id")
+    ]);
     autoIntakeSettings = (settings ?? []) as AutoIntakeRow[];
+    // Stitch (spaces + their accounts) into the shape InboxAssignmentCards
+    // wants so the client doesn't have to re-fetch on render.
+    const accountIdsBySpace = new Map<string, string[]>();
+    for (const r of (spaceAccountRows ?? []) as { space_id: string; account_id: string }[]) {
+      const arr = accountIdsBySpace.get(r.space_id) ?? [];
+      arr.push(r.account_id);
+      accountIdsBySpace.set(r.space_id, arr);
+    }
+    spaces = (spaceRows ?? []).map((s) => ({
+      id: s.id as string,
+      name: s.name as string,
+      color: (s.color as string) ?? "blue",
+      accountIds: accountIdsBySpace.get(s.id as string) ?? []
+    }));
   } catch (err) {
     fetchError = err instanceof Error ? err.message : "unknown error";
   }
@@ -155,6 +180,7 @@ export default async function ManageInboxesPage() {
                 email: a.email,
                 display_name: a.display_name
               }))}
+              spaces={spaces}
               initialAssignments={assignments}
             />
           </Suspense>

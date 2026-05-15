@@ -1,24 +1,24 @@
 "use client";
 
-// Card-game UI for managing inbox membership. One tab per inbox; the
-// active tab shows a "hand" of currently assigned people on top and a
-// "deck" of everyone else underneath. Drag from deck → hand to assign;
-// hand → deck to remove. Drops are zone-based (rect intersect on
-// dragEnd), so the target doesn't need pixel-perfect aim.
+// Card-game UI for managing inbox membership. Tabs are *team spaces*
+// (Tech Hub, Marketing, etc.) plus a "Stray" tab for any inbox that
+// hasn't been pulled into a space yet. Inside a tab, each inbox in
+// that space stacks its own hand/deck pair so you can deal people in
+// or out per inbox.
 //
 // State is local + optimistic; writes hit /api/inbox-assignments and
-// reconcile from the server response. Same endpoints the old free-form
-// graph used, so nothing on the server changes.
+// reconcile from the server response.
 
 import * as Tabs from "@radix-ui/react-tabs";
 import { motion, AnimatePresence, useAnimation, type PanInfo } from "framer-motion";
 import { forwardRef, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Mail, UserPlus, Users as UsersIcon, Inbox as InboxIcon } from "lucide-react";
+import { UserPlus, Inbox as InboxIcon, Mail } from "lucide-react";
 import { toast } from "sonner";
 import { PersonAvatar } from "./PersonAvatar";
 import { InviteToInboxDialog } from "./InviteToInboxDialog";
 import { ROLE_LABELS } from "@/lib/auth";
+import { cn } from "@/lib/utils";
 import type { User } from "@/lib/types";
 import type { InboxAssignment } from "@/lib/inbox-access";
 
@@ -28,26 +28,109 @@ interface InboxLite {
   display_name: string | null;
 }
 
+interface SpaceLite {
+  id: string;
+  name: string;
+  color: string;
+  accountIds: string[];
+}
+
 interface Props {
   inboxes: InboxLite[];
   users: User[];
+  spaces: SpaceLite[];
   initialAssignments: InboxAssignment[];
 }
 
+// Tailwind classes per Space color so the tab dot + active accent
+// match the cards rendered by SpacesManager below.
+const SPACE_DOT: Record<string, string> = {
+  blue: "bg-blue-500",      indigo: "bg-indigo-500",
+  violet: "bg-violet-500",  fuchsia: "bg-fuchsia-500",
+  pink: "bg-pink-500",      amber: "bg-amber-500",
+  emerald: "bg-emerald-500", teal: "bg-teal-500",
+  rose: "bg-rose-500",      sky: "bg-sky-500"
+};
+
 type Zone = "hand" | "deck";
 
-export function InboxAssignmentCards({ inboxes, users, initialAssignments }: Props) {
+export function InboxAssignmentCards({ inboxes, users, spaces, initialAssignments }: Props) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [assignments, setAssignments] = useState<InboxAssignment[]>(initialAssignments);
+
+  // Group inboxes by space. An inbox can technically be in multiple
+  // spaces; for the tab grouping we let it appear once per space (so
+  // both spaces show it). Inboxes with no space land in "Stray".
+  const inboxesById = useMemo(() => {
+    const m = new Map<string, InboxLite>();
+    for (const i of inboxes) m.set(i.id, i);
+    return m;
+  }, [inboxes]);
+
+  const inSomeSpace = useMemo(() => {
+    const s = new Set<string>();
+    for (const sp of spaces) for (const id of sp.accountIds) s.add(id);
+    return s;
+  }, [spaces]);
+
+  const strayInboxes = useMemo(
+    () => inboxes.filter((i) => !inSomeSpace.has(i.id)),
+    [inboxes, inSomeSpace]
+  );
+
+  // Tab bucket: a space + the inboxes it owns. The Stray bucket has a
+  // fake id "__stray" so it slots into the Tabs.Root value space.
+  interface TabBucket {
+    id: string;
+    name: string;
+    color: string;
+    isStray: boolean;
+    boxes: InboxLite[];
+  }
+  const buckets: TabBucket[] = useMemo(() => {
+    const out: TabBucket[] = [];
+    for (const sp of spaces) {
+      const boxes = sp.accountIds
+        .map((id) => inboxesById.get(id))
+        .filter((b): b is InboxLite => !!b);
+      if (boxes.length > 0) {
+        out.push({ id: sp.id, name: sp.name, color: sp.color, isStray: false, boxes });
+      }
+    }
+    if (strayInboxes.length > 0) {
+      out.push({
+        id: "__stray",
+        name: "Stray",
+        color: "slate",
+        isStray: true,
+        boxes: strayInboxes
+      });
+    }
+    return out;
+  }, [spaces, inboxesById, strayInboxes]);
+
   const [activeId, setActiveId] = useState<string>(() => {
     // Deep-link from the Microsoft OAuth callback: if the URL points us
-    // at a freshly-connected account, open its tab on first render
-    // instead of defaulting to the first inbox.
+    // at a freshly-connected account, open whichever space tab contains
+    // it (or Stray if it's not in any space yet).
     const connected = searchParams?.get("connectedAccount");
-    if (connected && inboxes.some((i) => i.id === connected)) return connected;
-    return inboxes[0]?.id ?? "";
+    if (connected) {
+      for (const b of buckets) {
+        if (b.boxes.some((box) => box.id === connected)) return b.id;
+      }
+    }
+    return buckets[0]?.id ?? "";
   });
+
+  // If buckets change (space membership edited via the manager below)
+  // and the active bucket disappears, fall back to the first one.
+  useEffect(() => {
+    if (buckets.length === 0) return;
+    if (!buckets.some((b) => b.id === activeId)) {
+      setActiveId(buckets[0].id);
+    }
+  }, [buckets, activeId]);
 
   // Clear the OAuth query params after the deep-link has been honored so
   // a refresh doesn't keep snapping back to that tab — and toast the
@@ -152,50 +235,72 @@ export function InboxAssignmentCards({ inboxes, users, initialAssignments }: Pro
     }
   }
 
+  if (buckets.length === 0) {
+    return (
+      <div className="card p-6 text-sm text-muted">
+        No inboxes yet. Connect one above to get started.
+      </div>
+    );
+  }
+
   return (
     <Tabs.Root value={activeId} onValueChange={setActiveId} className="card p-0 overflow-hidden">
-      {/* ----- TAB STRIP ----- */}
+      {/* ----- TAB STRIP: one per team space, plus a Stray fallback ----- */}
       <Tabs.List
         className="flex items-end gap-1 px-3 pt-3 border-b border-slate-200/60 bg-gradient-to-b from-slate-50/80 to-white overflow-x-auto"
-        aria-label="Inboxes"
+        aria-label="Team spaces"
       >
-        {inboxes.map((inb) => {
-          const count = memberIdsByInbox.get(inb.id)?.size ?? 0;
+        {buckets.map((b) => {
+          // Member count = unique people across every inbox in the bucket.
+          const memberCount = new Set(
+            b.boxes.flatMap((inb) => Array.from(memberIdsByInbox.get(inb.id) ?? []))
+          ).size;
+          const dot = b.isStray ? "bg-slate-400" : (SPACE_DOT[b.color] ?? "bg-blue-500");
           return (
             <Tabs.Trigger
-              key={inb.id}
-              value={inb.id}
+              key={b.id}
+              value={b.id}
               className={
                 "group relative shrink-0 inline-flex items-center gap-2 px-3.5 py-2 rounded-t-xl border border-b-0 text-[12px] font-medium transition-all " +
                 "data-[state=active]:bg-white data-[state=active]:border-slate-200 data-[state=active]:text-ink data-[state=active]:shadow-[0_-2px_0_0_#2563EB_inset] " +
                 "data-[state=inactive]:bg-transparent data-[state=inactive]:border-transparent data-[state=inactive]:text-ink/55 hover:data-[state=inactive]:text-ink"
               }
             >
-              <Mail className="w-3.5 h-3.5 shrink-0" />
-              <span className="truncate max-w-[180px]">
-                {inb.display_name || inb.email}
-              </span>
+              <span className={cn("w-2 h-2 rounded-full shrink-0", dot)} />
+              <span className="truncate max-w-[180px]">{b.name}</span>
               <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-slate-100 text-slate-600 text-[10px] tabular-nums group-data-[state=active]:bg-blue-100 group-data-[state=active]:text-blue-700">
-                {count}
+                {b.boxes.length}
               </span>
+              {memberCount > 0 && (
+                <span className="hidden sm:inline text-[10px] text-ink/45 tabular-nums">
+                  · {memberCount}
+                </span>
+              )}
             </Tabs.Trigger>
           );
         })}
       </Tabs.List>
 
-      {/* ----- TAB CONTENT ----- */}
-      {inboxes.map((inb) => (
-        <Tabs.Content key={inb.id} value={inb.id} className="focus:outline-none">
-          <InboxTabPanel
-            inbox={inb}
-            users={users}
-            assignments={assignments.filter((a) => a.missiveAccountId === inb.id)}
-            allAssignmentsForInbox={assignments.filter((a) => a.missiveAccountId === inb.id)}
-            memberIds={memberIdsByInbox.get(inb.id) ?? new Set()}
-            userById={userById}
-            onAssign={(uid) => addAssignment(uid, inb.id)}
-            onRemove={(uid) => removeAssignment(uid, inb.id)}
-          />
+      {/* ----- TAB CONTENT: stack each inbox's hand/deck in this bucket ----- */}
+      {buckets.map((b) => (
+        <Tabs.Content key={b.id} value={b.id} className="focus:outline-none">
+          {/* No outer padding — each InboxTabPanel pads itself. Divider
+              between stacked panels so adjacent inboxes don't blur. */}
+          <div className="divide-y divide-slate-200/60">
+            {b.boxes.map((inb) => (
+              <InboxTabPanel
+                key={inb.id}
+                inbox={inb}
+                users={users}
+                assignments={assignments.filter((a) => a.missiveAccountId === inb.id)}
+                allAssignmentsForInbox={assignments.filter((a) => a.missiveAccountId === inb.id)}
+                memberIds={memberIdsByInbox.get(inb.id) ?? new Set()}
+                userById={userById}
+                onAssign={(uid) => addAssignment(uid, inb.id)}
+                onRemove={(uid) => removeAssignment(uid, inb.id)}
+              />
+            ))}
+          </div>
         </Tabs.Content>
       ))}
     </Tabs.Root>

@@ -10,7 +10,7 @@ export const dynamic = "force-dynamic";
 export default async function SeoGuardLayout({ children }: { children: React.ReactNode }) {
   const userId = await requireCurrentUserId();
   const me = await getUserById(userId);
-  const isLeader = me?.role === "leader";
+  const isLeader = me?.role === "leader" || me?.isAdmin === true;
   const inSeo = (me?.departmentIds ?? []).includes("dep_seo");
   if (!isLeader && !inSeo) redirect("/updates/eod");
   return <>{children}</>;

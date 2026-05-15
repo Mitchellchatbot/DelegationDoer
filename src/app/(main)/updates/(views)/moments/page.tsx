@@ -83,7 +83,7 @@ export default async function MomentsPage() {
       <MomentsGrid
         initialMoments={initialMoments}
         currentUserId={userId}
-        isLeader={me.role === "leader"}
+        isLeader={me.role === "leader" || !!me.isAdmin}
       />
     </div>
   );

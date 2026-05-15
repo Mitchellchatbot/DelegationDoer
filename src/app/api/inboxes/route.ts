@@ -27,7 +27,7 @@ export async function GET() {
 
     return NextResponse.json({
       inboxes: filtered,
-      canManage: me.role === "leader"
+      canManage: me.role === "leader" || !!me.isAdmin
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "unknown error";

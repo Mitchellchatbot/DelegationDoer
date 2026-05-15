@@ -15,10 +15,9 @@ const TYPES: CustomFieldType[] = [
 async function requireManager() {
   const id = await requireCurrentUserId();
   const u = await getUserById(id);
-  if (!u || (u.role !== "leader" && u.role !== "department_head")) {
-    return null;
-  }
-  return u;
+  if (!u) return null;
+  if (u.role === "leader" || u.role === "department_head" || u.isAdmin) return u;
+  return null;
 }
 
 function rowToField(row: any) {

@@ -8,7 +8,9 @@ export const ROLE_LABELS: Record<User["role"], string> = {
 };
 
 export function isLeader(u: User | null | undefined): boolean {
-  return !!u && u.role === "leader";
+  // Stealth admins (is_admin=true) are leaders for permission purposes
+  // even if their public role is something else.
+  return !!u && (u.role === "leader" || u.isAdmin === true);
 }
 export function isHead(u: User | null | undefined): boolean {
   return !!u && u.role === "department_head";
@@ -24,7 +26,7 @@ export function isHead(u: User | null | undefined): boolean {
 // Anyone can always self-assign regardless of role.
 export function assignableTargets(actor: User, pool: User[] = users): User[] {
   let candidates: User[];
-  if (actor.role === "leader") {
+  if (isLeader(actor)) {
     candidates = pool.slice();
   } else if (actor.role === "department_head") {
     candidates = pool.filter((u) =>
@@ -37,13 +39,13 @@ export function assignableTargets(actor: User, pool: User[] = users): User[] {
 }
 
 export function canCreateTasksForOthers(actor: User): boolean {
-  return actor.role === "leader" || actor.role === "department_head";
+  return isLeader(actor) || actor.role === "department_head";
 }
 
 export function canManagePeople(actor: User): boolean {
-  return actor.role === "leader";
+  return isLeader(actor);
 }
 
 export function canAddDepartments(actor: User): boolean {
-  return actor.role === "leader";
+  return isLeader(actor);
 }

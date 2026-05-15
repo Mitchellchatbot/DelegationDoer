@@ -18,7 +18,7 @@ export async function POST(
     const userId = await requireCurrentUserId();
     const me = await getUserById(userId);
     if (!me) return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
-    if (me.role !== "leader" && me.role !== "department_head") {
+    if (!me.isAdmin && me.role !== "leader" && me.role !== "department_head") {
       return NextResponse.json({ error: "forbidden" }, { status: 403 });
     }
 

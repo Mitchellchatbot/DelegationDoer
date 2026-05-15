@@ -8,7 +8,7 @@ export const dynamic = "force-dynamic";
 async function requireCeo() {
   const id = await requireCurrentUserId();
   const u = await getUserById(id);
-  if (!u || u.role !== "leader") return null;
+  if (!u || !(u.role === "leader" || u.isAdmin)) return null;
   return u;
 }
 

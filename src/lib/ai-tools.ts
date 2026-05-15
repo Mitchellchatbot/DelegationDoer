@@ -300,10 +300,11 @@ async function searchTasks(input: Record<string, unknown>, ctx: ToolContext) {
   // Access filter (mirrors /api/tasks GET):
   //   leader sees everything; everyone else sees tasks that aren't
   //   created/assigned by a leader, plus their own assignments.
-  const leaderIds = ctx.actor.role === "leader" ? new Set<string>() : await leaderIdSet();
+  const actorIsLeader = ctx.actor.role === "leader" || ctx.actor.isAdmin === true;
+  const leaderIds = actorIsLeader ? new Set<string>() : await leaderIdSet();
 
   const filtered = tasks.filter((t) => {
-    if (ctx.actor.role !== "leader") {
+    if (!actorIsLeader) {
       if (t.assigneeId === ctx.actor.id || t.creatorId === ctx.actor.id) {
         // own work — always visible
       } else if (t.assigneeId && leaderIds.has(t.assigneeId)) return false;
@@ -355,7 +356,7 @@ async function getTask(input: Record<string, unknown>, ctx: ToolContext) {
     .maybeSingle();
   if (!row) return { error: "not found" };
   // Access gate for non-leaders.
-  if (ctx.actor.role !== "leader") {
+  if (ctx.actor.role !== "leader" && !ctx.actor.isAdmin) {
     const leaderIds = await leaderIdSet();
     if (
       row.assignee_id !== ctx.actor.id &&

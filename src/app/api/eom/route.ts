@@ -59,7 +59,7 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   const adminId = await requireCurrentUserId();
   const me = await getUserById(adminId);
-  if (!me || me.role !== "leader") {
+  if (!me || !(me.role === "leader" || me.isAdmin)) {
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
   const body = await req.json();
@@ -88,7 +88,7 @@ export async function POST(req: NextRequest) {
 export async function DELETE() {
   const adminId = await requireCurrentUserId();
   const me = await getUserById(adminId);
-  if (!me || me.role !== "leader") {
+  if (!me || !(me.role === "leader" || me.isAdmin)) {
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
   const supabase = getSupabaseAdmin();

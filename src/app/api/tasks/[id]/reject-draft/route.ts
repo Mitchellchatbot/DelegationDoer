@@ -27,7 +27,7 @@ export async function POST(
   if (!draft) return NextResponse.json({ error: "not found" }, { status: 404 });
   if (!draft.is_draft) return NextResponse.json({ error: "not a draft" }, { status: 409 });
 
-  const isLeader = me.role === "leader";
+  const isLeader = me.role === "leader" || me.isAdmin === true;
   const isHeadOfDept =
     me.role === "department_head" &&
     draft.department_id != null &&

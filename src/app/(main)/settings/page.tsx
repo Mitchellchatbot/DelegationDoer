@@ -39,11 +39,11 @@ export default async function SettingsPage() {
 
       {me && <ProfileAvatarSection user={me} />}
 
-      <SkillsSection canManage={me?.role === "leader" || me?.role === "department_head"} />
+      <SkillsSection canManage={me?.role === "leader" || me?.role === "department_head" || !!me?.isAdmin} />
 
-      <ResponsibilitiesSection canManage={me?.role === "leader"} />
+      <ResponsibilitiesSection canManage={me?.role === "leader" || !!me?.isAdmin} />
 
-      <CustomFieldsSection canManage={me?.role === "leader" || me?.role === "department_head"} />
+      <CustomFieldsSection canManage={me?.role === "leader" || me?.role === "department_head" || !!me?.isAdmin} />
 
       <MissiveIntegrationSection />
 
@@ -51,9 +51,9 @@ export default async function SettingsPage() {
 
       <GoogleConnectSection />
 
-      <WorkspaceChannelsSection canEdit={me?.role === "leader"} />
+      <WorkspaceChannelsSection canEdit={me?.role === "leader" || !!me?.isAdmin} />
 
-      <DepartmentSlackSection canEdit={me?.role === "leader"} />
+      <DepartmentSlackSection canEdit={me?.role === "leader" || !!me?.isAdmin} />
 
       <DesktopAppSection />
 

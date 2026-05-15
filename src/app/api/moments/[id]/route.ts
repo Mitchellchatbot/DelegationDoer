@@ -20,7 +20,7 @@ export async function DELETE(
     .eq("id", params.id)
     .maybeSingle();
   if (!row) return NextResponse.json({ error: "not found" }, { status: 404 });
-  if (row.user_id !== userId && me.role !== "leader") {
+  if (row.user_id !== userId && me.role !== "leader" && !me.isAdmin) {
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
   const { error } = await supabase.from("moments").delete().eq("id", params.id);

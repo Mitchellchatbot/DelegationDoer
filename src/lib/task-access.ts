@@ -47,5 +47,5 @@ export async function loadTaskForViewer(
     return { ok: false, response: NextResponse.json({ error: "not found" }, { status: 404 }) };
   }
 
-  return { ok: true, taskId, viewerId, isLeader: viewer?.role === "leader" };
+  return { ok: true, taskId, viewerId, isLeader: viewer?.role === "leader" || viewer?.isAdmin === true };
 }

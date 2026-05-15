@@ -33,7 +33,7 @@ export async function PUT(req: NextRequest) {
   try {
     const userId = await requireCurrentUserId();
     const me = await getUserById(userId);
-    if (me?.role !== "leader") {
+    if (!(me?.role === "leader" || me?.isAdmin)) {
       return NextResponse.json({ error: "leader only" }, { status: 403 });
     }
     const body = await req.json();

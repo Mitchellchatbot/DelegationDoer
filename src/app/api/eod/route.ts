@@ -19,7 +19,7 @@ export async function GET(req: Request) {
     const supabase = getSupabaseAdmin();
 
     let allowedDeptIds: string[] | null = null;
-    if (me.role === "leader") {
+    if (me.role === "leader" || me.isAdmin) {
       const { data } = await supabase.from("departments").select("id");
       allowedDeptIds = (data ?? []).map((r) => r.id as string);
     } else if (me.role === "department_head") {
@@ -47,7 +47,7 @@ export async function GET(req: Request) {
       if (s) summaries.push(s);
     }
 
-    return NextResponse.json({ summaries, canSend: me.role === "leader" || me.role === "department_head" });
+    return NextResponse.json({ summaries, canSend: me.role === "leader" || me.role === "department_head" || !!me.isAdmin });
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "unknown error" },

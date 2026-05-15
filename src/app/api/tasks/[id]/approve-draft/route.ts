@@ -37,7 +37,7 @@ export async function POST(
 
   // Permission check. Leaders pass; dept heads pass only for drafts in a
   // department they head.
-  const isLeader = me.role === "leader";
+  const isLeader = me.role === "leader" || me.isAdmin === true;
   const isHeadOfDept =
     me.role === "department_head" &&
     draft.department_id != null &&

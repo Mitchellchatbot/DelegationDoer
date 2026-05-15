@@ -22,7 +22,7 @@ export default async function LeaderRootRedirect({
   }
   const suffix = qs.toString() ? `?${qs.toString()}` : "";
 
-  if (me?.role === "leader") redirect(`/leader/console${suffix}`);
+  if (me?.role === "leader" || me?.isAdmin) redirect(`/leader/console${suffix}`);
   if (me?.role === "department_head") redirect(`/leader/team${suffix}`);
   redirect("/tasks/mine");
 }

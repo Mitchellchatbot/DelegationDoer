@@ -51,7 +51,7 @@ export default function ProjectsUpdatesPage() {
 
   useEffect(() => { load(); }, []);
 
-  if (me.role !== "leader") {
+  if (me.role !== "leader" && !me.isAdmin) {
     return (
       <div className="card p-6 max-w-lg mx-auto mt-12 text-center">
         <ShieldAlert className="w-8 h-8 text-warn mx-auto mb-2" />

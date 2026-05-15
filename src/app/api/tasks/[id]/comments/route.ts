@@ -35,7 +35,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     mentionedUserIds = Array.from(new Set(mentionedUserIds)).filter((id) => id !== userId);
     if (mentionedUserIds.length > 0) {
       const viewer = await getUserById(userId);
-      if (viewer?.role !== "leader") {
+      if (!(viewer?.role === "leader" || viewer?.isAdmin)) {
         const leaderIds = await getLeaderIds();
         mentionedUserIds = mentionedUserIds.filter((id) => !leaderIds.has(id));
       }

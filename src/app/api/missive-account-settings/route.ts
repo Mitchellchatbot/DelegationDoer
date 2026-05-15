@@ -12,7 +12,7 @@ export const dynamic = "force-dynamic";
 async function requireCeo() {
   const id = await requireCurrentUserId();
   const u = await getUserById(id);
-  return u && u.role === "leader" ? u : null;
+  return u && (u.role === "leader" || u.isAdmin) ? u : null;
 }
 
 // GET — list every settings row. Migration may not have run yet, so we

@@ -72,7 +72,7 @@ export async function getAssignmentsForUser(userId: string): Promise<InboxAssign
 export async function visibleAccountIdsFor(
   actor: User
 ): Promise<Set<string> | null> {
-  if (actor.role === "leader") return null;
+  if (actor.role === "leader" || actor.isAdmin) return null;
 
   const supabase = getSupabaseAdmin();
   const visible = new Set<string>();
@@ -130,7 +130,7 @@ export async function visibleAccountIdsFor(
 }
 
 export function canManageAssignments(actor: User): boolean {
-  return actor.role === "leader";
+  return actor.role === "leader" || actor.isAdmin === true;
 }
 
 // Idempotently mirror Missive's "this user owns this email account"

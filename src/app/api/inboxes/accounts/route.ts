@@ -25,7 +25,7 @@ export async function POST(req: NextRequest) {
     const userId = await requireCurrentUserId();
     const me = await getUserById(userId);
     if (!me) return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
-    if (me.role !== "leader") {
+    if (!(me.role === "leader" || me.isAdmin)) {
       return NextResponse.json({ error: "Leader only" }, { status: 403 });
     }
 

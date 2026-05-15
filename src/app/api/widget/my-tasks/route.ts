@@ -100,7 +100,7 @@ export async function GET() {
     // (or anything else) touched by a leader, unless they themselves
     // are the assignee. Leaders always see their full slice.
     const viewer = await getUserById(userId);
-    if (viewer?.role !== "leader") {
+    if (!(viewer?.role === "leader" || viewer?.isAdmin)) {
       const leaderIds = await getLeaderIds();
       merged = merged.filter((t) => {
         if (t.assignee_id === userId) return true;
@@ -141,7 +141,7 @@ export async function GET() {
 
     // Filter notifications down to ones the viewer is allowed to see.
     let visibleNotifs = (rawNotifs ?? []).filter((n) => notifTasksById.has(n.task_id as string));
-    if (viewer?.role !== "leader") {
+    if (!(viewer?.role === "leader" || viewer?.isAdmin)) {
       const leaderIds = await getLeaderIds();
       visibleNotifs = visibleNotifs.filter((n) => {
         const t = notifTasksById.get(n.task_id as string)!;

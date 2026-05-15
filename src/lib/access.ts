@@ -12,8 +12,19 @@
 
 import type { Task, User } from "@/lib/types";
 
-export function isLeader(u: Pick<User, "role"> | null | undefined): boolean {
-  return !!u && u.role === "leader";
+// Stealth admin: a user whose public role is anything (typically
+// worker) but who has been flagged in the DB as having leader-level
+// authority. Surfaced here so every permission gate in the app can
+// treat them as a leader without the UI having to know.
+export function isAdmin(u: Pick<User, "isAdmin"> | null | undefined): boolean {
+  return !!u && u.isAdmin === true;
+}
+
+// "Leader for permission purposes." Returns true for both real
+// leaders and stealth admins. UI code that wants to render the role
+// label / crown should check `u.role === "leader"` directly instead.
+export function isLeader(u: Pick<User, "role" | "isAdmin"> | null | undefined): boolean {
+  return !!u && (u.role === "leader" || u.isAdmin === true);
 }
 
 export function isDepartmentHead(u: Pick<User, "role"> | null | undefined): boolean {

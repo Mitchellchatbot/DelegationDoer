@@ -78,7 +78,7 @@ export default function LeaderConsolePage() {
   }, []);
 
   // Gate the page itself.
-  if (currentUser.role !== "leader") {
+  if (currentUser.role !== "leader" && !currentUser.isAdmin) {
     return (
       <div className="card p-6 max-w-lg mx-auto mt-12 text-center">
         <ShieldAlert className="w-8 h-8 text-warn mx-auto mb-2" />
@@ -140,7 +140,7 @@ export default function LeaderConsolePage() {
           {tab === "People" && <PeopleTab people={people} setPeople={setPeople} departments={depts} />}
           {tab === "Departments" && <DepartmentsTab departments={depts} setDepartments={setDepts} people={people} tasks={tasks} />}
           {tab === "Org chart" && <OrgChartTab people={people} departments={depts} tasks={tasks} />}
-          {tab === "Performance" && <PerformanceReview canCrown={currentUser.role === "leader"} />}
+          {tab === "Performance" && <PerformanceReview canCrown={currentUser.role === "leader" || !!currentUser.isAdmin} />}
           {tab === "All tasks" && <AllTasksTab people={people} departments={depts} tasks={tasks} />}
         </motion.div>
       </AnimatePresence>
@@ -625,7 +625,7 @@ function DepartmentsTab({
       {/* Mirror of the same section in Settings — keeps the EOD channel
           mapping reachable from wherever the Leader is editing the org
           structure. Leader-only edit. */}
-      <DepartmentSlackSection canEdit={currentUser?.role === "leader"} />
+      <DepartmentSlackSection canEdit={currentUser?.role === "leader" || !!currentUser?.isAdmin} />
 
       <div className="grid grid-cols-2 gap-3">
         {departments.map((d) => {

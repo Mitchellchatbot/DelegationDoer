@@ -53,7 +53,8 @@ export function TeamProvider({ children }: { children: React.ReactNode }) {
               skills: (u.skills as string[]) ?? [],
               dailyCapacity: (u.dailyCapacity as number) ?? 8,
               throughput: (u.throughput as Record<string, number>) ?? {},
-              avatarUrl: (u.avatarUrl as string | null) ?? undefined
+              avatarUrl: (u.avatarUrl as string | null) ?? undefined,
+              isAdmin: u.isAdmin === true
             }))
           : [],
         departments: Array.isArray(dRes?.departments)

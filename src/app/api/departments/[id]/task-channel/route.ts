@@ -13,7 +13,7 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
   try {
     const userId = await requireCurrentUserId();
     const me = await getUserById(userId);
-    if (!me || me.role !== "leader") {
+    if (!me || !(me.role === "leader" || me.isAdmin)) {
       return NextResponse.json({ error: "forbidden" }, { status: 403 });
     }
     const body = await req.json();

@@ -81,14 +81,14 @@ export async function POST(req: NextRequest) {
 
     // Verify the actor is the current EoM (or leader).
     const [{ data: meRow }, { data: eomRow }] = await Promise.all([
-      supabase.from("users").select("role").eq("id", userId).maybeSingle(),
+      supabase.from("users").select("role, is_admin").eq("id", userId).maybeSingle(),
       supabase
         .from("employee_of_month")
         .select("user_id")
         .eq("month", month)
         .maybeSingle()
     ]);
-    const isLeader = meRow?.role === "leader";
+    const isLeader = meRow?.role === "leader" || meRow?.is_admin === true;
     const isCurrentEom = eomRow?.user_id === userId;
     if (!isLeader && !isCurrentEom) {
       return NextResponse.json(
@@ -145,10 +145,10 @@ export async function DELETE(req: NextRequest) {
     const supabase = getSupabaseAdmin();
     const [{ data: rec }, { data: meRow }] = await Promise.all([
       supabase.from("eom_recommendations").select("user_id").eq("id", id).maybeSingle(),
-      supabase.from("users").select("role").eq("id", userId).maybeSingle()
+      supabase.from("users").select("role, is_admin").eq("id", userId).maybeSingle()
     ]);
     if (!rec) return NextResponse.json({ error: "not found" }, { status: 404 });
-    if (rec.user_id !== userId && meRow?.role !== "leader") {
+    if (rec.user_id !== userId && meRow?.role !== "leader" && meRow?.is_admin !== true) {
       return NextResponse.json({ error: "forbidden" }, { status: 403 });
     }
     const { error } = await supabase.from("eom_recommendations").delete().eq("id", id);

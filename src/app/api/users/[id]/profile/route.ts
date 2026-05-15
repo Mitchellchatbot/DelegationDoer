@@ -25,14 +25,14 @@ export async function GET(
         .maybeSingle(),
       supabase
         .from("users")
-        .select("role")
+        .select("role, is_admin")
         .eq("id", viewerId)
         .maybeSingle()
     ]);
     if (!target) return NextResponse.json({ error: "not found" }, { status: 404 });
 
     const isSelf = viewerId === params.id;
-    const viewerIsLeader = viewer?.role === "leader";
+    const viewerIsLeader = viewer?.role === "leader" || viewer?.is_admin === true;
     const canSeePrivate = isSelf || viewerIsLeader;
 
     return NextResponse.json({

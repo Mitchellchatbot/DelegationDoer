@@ -62,7 +62,7 @@ export default function TeamOverviewPage() {
   // Role gates. Leader is nudged to /leader (which has the full
   // version + management tabs); workers don't get team scope, so
   // they're bounced home.
-  if (currentUser.role === "leader") {
+  if (currentUser.role === "leader" || currentUser.isAdmin) {
     if (typeof window !== "undefined") router.replace("/leader");
     return null;
   }

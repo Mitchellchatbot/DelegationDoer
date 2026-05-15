@@ -33,18 +33,39 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "email required" }, { status: 400 });
     }
 
+    const imapPort = typeof body.imapPort === "number" ? body.imapPort : undefined;
+    const smtpPort = typeof body.smtpPort === "number" ? body.smtpPort : undefined;
+    // Derive TLS flags from the well-known port. Callers can override
+    // by sending body.imapSecure / body.smtpSecure explicitly.
+    //   IMAP 993 = implicit TLS, 143 = STARTTLS → secure=false.
+    //   SMTP 465 = implicit TLS, 587 = STARTTLS → secure=false.
+    const imapSecure = typeof body.imapSecure === "boolean"
+      ? body.imapSecure
+      : imapPort === 993;
+    const smtpSecure = typeof body.smtpSecure === "boolean"
+      ? body.smtpSecure
+      : smtpPort === 465;
+
     const account = await createAccount({
       email,
       display_name: typeof body.displayName === "string" ? body.displayName.trim() : undefined,
       provider: typeof body.provider === "string" ? body.provider : undefined,
       imap_host: typeof body.imapHost === "string" ? body.imapHost : undefined,
-      imap_port: typeof body.imapPort === "number" ? body.imapPort : undefined,
+      imap_port: imapPort,
+      imap_secure: imapSecure,
       imap_user: typeof body.imapUser === "string" ? body.imapUser : undefined,
-      imap_password: typeof body.imapPassword === "string" ? body.imapPassword : undefined,
+      // Clone wants `imap_pass`, not `imap_password`. We accept either
+      // from the body so a stray older client doesn't 400 silently.
+      imap_pass:
+        typeof body.imapPassword === "string" ? body.imapPassword :
+        typeof body.imapPass === "string" ? body.imapPass : undefined,
       smtp_host: typeof body.smtpHost === "string" ? body.smtpHost : undefined,
-      smtp_port: typeof body.smtpPort === "number" ? body.smtpPort : undefined,
+      smtp_port: smtpPort,
+      smtp_secure: smtpSecure,
       smtp_user: typeof body.smtpUser === "string" ? body.smtpUser : undefined,
-      smtp_password: typeof body.smtpPassword === "string" ? body.smtpPassword : undefined
+      smtp_pass:
+        typeof body.smtpPassword === "string" ? body.smtpPassword :
+        typeof body.smtpPass === "string" ? body.smtpPass : undefined
     });
 
     // Auto-link the new account to the creator so the inbox is

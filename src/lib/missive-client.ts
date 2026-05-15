@@ -197,32 +197,59 @@ export async function getThread(threadId: string): Promise<MissiveThreadDetail> 
 // the clone's `POST /api/accounts` endpoint as best we know it. The clone
 // is the source of truth for which fields are required — anything missing
 // will surface as a clone-side error here, which we propagate to the UI.
+// Clone validator requires snake_case `imap_pass` / `smtp_pass`
+// (NOT `_password`). Wire payload below matches what the clone parses;
+// our DD route maps camelCase user input into this shape.
 export interface CreateAccountArgs {
   email: string;
   display_name?: string;
-  provider?: string;     // "gmail" | "outlook" | "imap" — clone-specific.
+  provider?: string;     // informational only — clone doesn't validate.
   imap_host?: string;
   imap_port?: number;
+  imap_secure?: boolean; // 993 = true (implicit TLS).
   imap_user?: string;
-  imap_password?: string;
+  imap_pass?: string;
   smtp_host?: string;
   smtp_port?: number;
+  smtp_secure?: boolean; // 465 = true (implicit TLS); 587 = false (STARTTLS).
   smtp_user?: string;
-  smtp_password?: string;
+  smtp_pass?: string;
 }
 
 export async function createAccount(args: CreateAccountArgs): Promise<MissiveAccount> {
-  const data = await missiveFetch<{ account: MissiveAccount }>(
+  // Drop the `provider` field — the clone ignores it. Keeping the
+  // wire payload to exactly the validator fields makes "missing
+  // fields" debugging easier next time.
+  const { provider: _provider, ...wire } = args;
+  void _provider;
+  // Clone returns just `{ id }` on success, not the full account row.
+  // Fetch the full row right after so callers get a real MissiveAccount.
+  const created = await missiveFetch<{ id: string }>(
     "/api/accounts",
     {
       method: "POST",
-      body: JSON.stringify(args)
+      body: JSON.stringify(wire)
     }
   );
+  const list = await missiveFetch<{ accounts: MissiveAccount[] }>("/api/accounts");
+  const row = list.accounts.find((a) => a.id === created.id);
+  if (!row) {
+    // Fall back to a synthetic account so the caller still has
+    // something usable (auto-assignment etc.).
+    return {
+      id: created.id,
+      email: args.email,
+      display_name: args.display_name ?? args.email,
+      workspace_id: "",
+      user_id: null,
+      last_synced_at: null,
+      provider: args.provider ?? null
+    };
+  }
   return {
-    ...data.account,
-    last_synced_at: data.account.last_synced_at
-      ? toIsoString(data.account.last_synced_at)
+    ...row,
+    last_synced_at: row.last_synced_at
+      ? toIsoString(row.last_synced_at)
       : null
   };
 }

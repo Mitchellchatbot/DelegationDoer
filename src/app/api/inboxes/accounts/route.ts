@@ -2,15 +2,16 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { createAccount } from "@/lib/missive-client";
+import { getSupabaseAdmin } from "@/lib/supabase-admin";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-// POST /api/inboxes/accounts — Leader-only. Proxies to the Missive clone's
-// account-creation endpoint. The clone owns the SMTP/IMAP wiring; we
-// just take the form payload and forward it. Errors from the clone bubble
-// up verbatim so the UI can show the underlying reason (bad credentials,
-// unsupported provider, missing migration on the clone, etc.).
+// POST /api/inboxes/accounts — any signed-in user can connect their own
+// inbox. The created account is auto-assigned to the creator via
+// inbox_assignments so they can see it without a separate provisioning
+// step. Leaders + admins still bypass any per-user gating downstream
+// because visibleAccountIdsFor returns null for them.
 //
 // Body shape — every field is optional except `email`:
 //   {
@@ -25,9 +26,6 @@ export async function POST(req: NextRequest) {
     const userId = await requireCurrentUserId();
     const me = await getUserById(userId);
     if (!me) return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
-    if (!(me.role === "leader" || me.isAdmin)) {
-      return NextResponse.json({ error: "Leader only" }, { status: 403 });
-    }
 
     const body = await req.json();
     const email = typeof body.email === "string" ? body.email.trim() : "";
@@ -48,6 +46,33 @@ export async function POST(req: NextRequest) {
       smtp_user: typeof body.smtpUser === "string" ? body.smtpUser : undefined,
       smtp_password: typeof body.smtpPassword === "string" ? body.smtpPassword : undefined
     });
+
+    // Auto-link the new account to the creator so the inbox is
+    // immediately visible on their /inboxes page. Leaders/admins
+    // already see everything, but the row is harmless and makes the
+    // ownership explicit if they ever lose admin.
+    if (account?.id) {
+      const supabase = getSupabaseAdmin();
+      try {
+        await supabase
+          .from("inbox_assignments")
+          .upsert(
+            {
+              id: `ia_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
+              user_id: userId,
+              missive_account_id: account.id,
+              inbox_email: account.email ?? email,
+              inbox_label: (account.display_name as string | undefined) ?? null,
+              assigned_by: userId
+            },
+            { onConflict: "user_id,missive_account_id", ignoreDuplicates: true }
+          );
+      } catch (err) {
+        // Don't fail the response — the account exists in Missive.
+        // Worst case the user has to ask a leader to assign it.
+        console.warn("[inboxes/accounts] auto-assignment failed:", err);
+      }
+    }
 
     return NextResponse.json({ ok: true, account });
   } catch (err) {

@@ -4,6 +4,7 @@ import { getUserById, getAllUsers, getDepartments } from "@/lib/server-data";
 import { ProfileAvatarSection } from "@/components/ProfileAvatarSection";
 import { DesktopAppSection } from "@/components/DesktopAppSection";
 import { MissiveIntegrationSection } from "@/components/MissiveIntegrationSection";
+import { MyInboxesSection } from "@/components/MyInboxesSection";
 import { DepartmentSlackSection } from "@/components/DepartmentSlackSection";
 import { WorkspaceChannelsSection } from "@/components/WorkspaceChannelsSection";
 import { SlackConnectSection } from "@/components/SlackConnectSection";
@@ -46,6 +47,8 @@ export default async function SettingsPage() {
       <CustomFieldsSection canManage={me?.role === "leader" || me?.role === "department_head" || !!me?.isAdmin} />
 
       <MissiveIntegrationSection />
+
+      <MyInboxesSection />
 
       <SlackConnectSection />
 

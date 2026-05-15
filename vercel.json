@@ -15,6 +15,14 @@
     {
       "path": "/api/cron/eod-recap",
       "schedule": "0 0 * * *"
+    },
+    {
+      "path": "/api/cron/birthday-sync",
+      "schedule": "0 7 * * *"
+    },
+    {
+      "path": "/api/cron/scheduled-emails",
+      "schedule": "* * * * *"
     }
   ]
 }

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUserId } from "@/lib/session";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
+import { syncBirthdaysForAllOwners } from "@/lib/birthday-calendar-sync";
 
 export const dynamic = "force-dynamic";
 
@@ -38,6 +39,15 @@ export async function PUT(req: NextRequest) {
       .update({ birthday: value })
       .eq("id", userId);
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+    // Fan out to every connected colleague's Google Calendar. Fire-
+    // and-forget so a slow Google API doesn't block the save. Failures
+    // get logged inside the sync helper; the nightly cron is the
+    // safety net if any individual mirror call drops on the floor.
+    void syncBirthdaysForAllOwners().catch((err) =>
+      console.warn("[birthday] fan-out sync failed:", err)
+    );
+
     return NextResponse.json({ ok: true, birthday: value });
   } catch (err) {
     return NextResponse.json(

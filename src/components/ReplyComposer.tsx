@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
-import { Reply, Send, Loader2, X } from "lucide-react";
+import { Reply, Send, Loader2, X, CalendarClock } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
@@ -30,6 +30,11 @@ export function ReplyComposer({
   const [to, setTo] = useState(defaultTo ?? "");
   const [subject, setSubject] = useState(prefixRe(defaultSubject ?? ""));
   const [bodyText, setBodyText] = useState("");
+  // Send-later state. `scheduleAt` is a datetime-local string ("");
+  // when non-empty the Send button becomes "Schedule" and the POST
+  // goes to the /schedule endpoint instead of /reply.
+  const [scheduleOpen, setScheduleOpen] = useState(false);
+  const [scheduleAt, setScheduleAt] = useState("");
 
   async function send() {
     const toList = to.split(/[,\n]/).map((s) => s.trim()).filter(Boolean);
@@ -41,12 +46,32 @@ export function ReplyComposer({
       toast.error("Write something before sending");
       return;
     }
+    const scheduling = scheduleOpen && scheduleAt.trim().length > 0;
+    let scheduledForISO: string | null = null;
+    if (scheduling) {
+      const at = new Date(scheduleAt);
+      if (Number.isNaN(at.getTime())) {
+        toast.error("Pick a valid send time");
+        return;
+      }
+      if (at.getTime() <= Date.now()) {
+        toast.error("Send time has to be in the future");
+        return;
+      }
+      scheduledForISO = at.toISOString();
+    }
     setBusy(true);
     try {
-      const res = await fetch(`/api/inboxes/threads/${encodeURIComponent(threadId)}/reply`, {
+      const url = scheduling
+        ? `/api/inboxes/threads/${encodeURIComponent(threadId)}/reply/schedule`
+        : `/api/inboxes/threads/${encodeURIComponent(threadId)}/reply`;
+      const body = scheduling
+        ? { accountId, to: toList, subject: subject.trim() || undefined, bodyText, scheduledForISO }
+        : { accountId, to: toList, subject: subject.trim() || undefined, bodyText };
+      const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ accountId, to: toList, subject: subject.trim() || undefined, bodyText })
+        body: JSON.stringify(body)
       });
       // Read as text first so HTML error pages (auth redirect, Next 500,
       // Railway 502 during deploy) don't crash JSON.parse — surface them
@@ -66,8 +91,17 @@ export function ReplyComposer({
         toast.error(hint);
         return;
       }
-      toast.success("Reply sent ✉️");
+      if (scheduling && scheduledForISO) {
+        const when = new Date(scheduledForISO).toLocaleString(undefined, {
+          weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit"
+        });
+        toast.success(`Scheduled for ${when} ⏳`);
+      } else {
+        toast.success("Reply sent ✉️");
+      }
       setBodyText("");
+      setScheduleOpen(false);
+      setScheduleAt("");
       setOpen(false);
       router.refresh();
     } catch (err) {
@@ -164,27 +198,59 @@ export function ReplyComposer({
               />
             </div>
 
-            <footer className="px-4 py-2.5 border-t border-slate-100 flex items-center justify-end gap-2 bg-slate-50/60">
-              <button
-                type="button"
-                onClick={() => { setOpen(false); setBodyText(""); }}
-                className="px-3 py-1.5 rounded-full text-xs font-medium text-ink/70 hover:text-ink hover:bg-white transition-colors"
-              >
-                Discard
-              </button>
-              <button
-                type="button"
-                onClick={send}
-                disabled={busy}
-                className={cn(
-                  "inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs font-semibold text-white shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-lift active:scale-95",
-                  busy && "opacity-60 cursor-not-allowed hover:translate-y-0"
+            <footer className="px-4 py-2.5 border-t border-slate-100 flex items-center justify-between gap-2 bg-slate-50/60 flex-wrap">
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setScheduleOpen((v) => !v)}
+                  className={cn(
+                    "inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-full text-[11px] font-medium border transition-colors",
+                    scheduleOpen
+                      ? "bg-white border-accent/40 text-accent"
+                      : "bg-white/60 border-slate-200/70 text-ink/65 hover:text-ink hover:border-accent/40"
+                  )}
+                  title="Hold this reply until a specific time"
+                >
+                  <CalendarClock className="w-3.5 h-3.5" />
+                  {scheduleOpen ? "Pick a time" : "Send later"}
+                </button>
+                {scheduleOpen && (
+                  <input
+                    type="datetime-local"
+                    value={scheduleAt}
+                    onChange={(e) => setScheduleAt(e.target.value)}
+                    className="px-2 py-1.5 rounded-lg bg-white border border-slate-200/70 text-[12px] outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent/40"
+                  />
                 )}
-                style={{ background: "linear-gradient(135deg, #2563EB 0%, #1e63ff 100%)" }}
-              >
-                {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
-                {busy ? "Sending…" : "Send"}
-              </button>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => { setOpen(false); setBodyText(""); setScheduleOpen(false); setScheduleAt(""); }}
+                  className="px-3 py-1.5 rounded-full text-xs font-medium text-ink/70 hover:text-ink hover:bg-white transition-colors"
+                >
+                  Discard
+                </button>
+                <button
+                  type="button"
+                  onClick={send}
+                  disabled={busy}
+                  className={cn(
+                    "inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs font-semibold text-white shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-lift active:scale-95",
+                    busy && "opacity-60 cursor-not-allowed hover:translate-y-0"
+                  )}
+                  style={{ background: "linear-gradient(135deg, #2563EB 0%, #1e63ff 100%)" }}
+                >
+                  {busy
+                    ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    : scheduleOpen && scheduleAt
+                      ? <CalendarClock className="w-3.5 h-3.5" />
+                      : <Send className="w-3.5 h-3.5" />}
+                  {busy
+                    ? scheduleOpen && scheduleAt ? "Scheduling…" : "Sending…"
+                    : scheduleOpen && scheduleAt ? "Schedule send" : "Send"}
+                </button>
+              </div>
             </footer>
           </motion.div>
         )}

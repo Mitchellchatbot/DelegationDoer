@@ -280,3 +280,89 @@ function normalizeEvent(e: RawEvent): CalendarEvent {
     hangoutLink: e.hangoutLink ?? null
   };
 }
+
+// Create an all-day recurring event. Used for birthday mirroring:
+// once a year on MM-DD, forever. `monthDay` is "MM-DD"; we pick a
+// historical "anchor year" (1970) so the event has a fixed start
+// date Google will accept, then the YEARLY RRULE handles the rest.
+export async function createAllDayYearlyEvent(args: {
+  userId: string;
+  summary: string;
+  description?: string;
+  monthDay: string;       // "MM-DD"
+}): Promise<{ id: string }> {
+  const token = await getValidAccessToken(args.userId);
+  const [m, d] = args.monthDay.split("-");
+  const startDate = `1970-${m}-${d}`;
+  // For all-day events Google expects the end.date to be the day
+  // AFTER the start (exclusive). One-day duration → next day.
+  const endDate = nextDayString(1970, Number(m), Number(d));
+  const body = {
+    summary: args.summary,
+    description: args.description ?? "",
+    start: { date: startDate },
+    end: { date: endDate },
+    recurrence: ["RRULE:FREQ=YEARLY"],
+    transparency: "transparent"  // doesn't block availability
+  };
+  const res = await fetch(`${CALENDAR_BASE}/calendars/primary/events`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(body)
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(
+      `google calendar yearly-event create failed: ${data.error?.message || res.status}`
+    );
+  }
+  return { id: data.id as string };
+}
+
+// Update an existing all-day yearly event's date (used when a user
+// changes their birthday).
+export async function patchAllDayYearlyEvent(args: {
+  userId: string;
+  eventId: string;
+  monthDay: string;
+  summary?: string;
+}): Promise<void> {
+  const token = await getValidAccessToken(args.userId);
+  const [m, d] = args.monthDay.split("-");
+  const startDate = `1970-${m}-${d}`;
+  const endDate = nextDayString(1970, Number(m), Number(d));
+  const body: Record<string, unknown> = {
+    start: { date: startDate },
+    end: { date: endDate },
+    recurrence: ["RRULE:FREQ=YEARLY"]
+  };
+  if (args.summary) body.summary = args.summary;
+  const res = await fetch(
+    `${CALENDAR_BASE}/calendars/primary/events/${encodeURIComponent(args.eventId)}`,
+    {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(body)
+    }
+  );
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(
+      `google calendar yearly-event patch failed: ${data.error?.message || res.status}`
+    );
+  }
+}
+
+// "YYYY-MM-DD" → the next calendar day, handling month/year rollover.
+function nextDayString(year: number, month: number, day: number): string {
+  const d = new Date(Date.UTC(year, month - 1, day));
+  d.setUTCDate(d.getUTCDate() + 1);
+  const pad = (n: number) => n.toString().padStart(2, "0");
+  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
+}

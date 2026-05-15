@@ -195,6 +195,30 @@ export const AI_TOOLS = [
       properties: { limit: { type: "number" } },
       required: []
     }
+  },
+  {
+    name: "create_task",
+    description:
+      "Create a new task and assign it. Use this when the user says something like 'make a task for X to do Y' or 'add a task'. " +
+      "Required: title + assigneeId (resolve names to ids with find_user_by_name first). " +
+      "Optional: description (Markdown is fine), priority (low/medium/high/critical, default medium), departmentId, estimatedHours (default 2), dueDateISO, tags, clientName. " +
+      "Returns { taskId, url }. " +
+      "Permissions: leaders/admins can assign to anyone; department heads can assign to anyone in their departments; workers can only create tasks for themselves. Trying to assign outside scope returns an error.",
+    input_schema: {
+      type: "object",
+      properties: {
+        title: { type: "string" },
+        description: { type: "string" },
+        assigneeId: { type: "string" },
+        priority: { type: "string", enum: ["low", "medium", "high", "critical"] },
+        departmentId: { type: "string" },
+        estimatedHours: { type: "number" },
+        dueDateISO: { type: "string", description: "ISO datetime; omit for auto-computed" },
+        tags: { type: "array", items: { type: "string" } },
+        clientName: { type: "string" }
+      },
+      required: ["title", "assigneeId"]
+    }
   }
 ] as const;
 
@@ -226,6 +250,7 @@ export async function runTool(
       case "list_recent_incidents": return listRecentIncidents(input);
       case "list_recent_eod_notes": return listRecentEodNotes(input);
       case "list_recommendations": return listRecommendations(input);
+      case "create_task": return createTask(input, ctx);
       default:
         return { error: `unknown tool: ${name}` };
     }
@@ -757,4 +782,124 @@ function clampNumber(v: unknown, min: number, max: number, def: number): number 
   const n = typeof v === "number" ? v : Number(v);
   if (!Number.isFinite(n)) return def;
   return Math.max(min, Math.min(max, Math.round(n)));
+}
+
+// ----- create_task tool -----
+//
+// Agentic affordance: the AI can actually file a task now. Mirrors the
+// permission model of POST /api/tasks (leaders/admins → anyone; dept
+// heads → their own departments; workers → self only). Reuses the
+// same deadline-from-estimate helper so auto-due-dates match what the
+// New Task form would produce.
+
+async function createTask(
+  input: Record<string, unknown>,
+  ctx: ToolContext
+): Promise<unknown> {
+  const title = typeof input.title === "string" ? input.title.trim() : "";
+  const assigneeId = typeof input.assigneeId === "string" ? input.assigneeId.trim() : "";
+  if (!title) return { error: "title required" };
+  if (!assigneeId) return { error: "assigneeId required (use find_user_by_name first if you only have a name)" };
+
+  const supabase = getSupabaseAdmin();
+
+  // Permission gate. Pull the assignee + actor's scope; same model
+  // as canCreateTasksForOthers + assignableTargets() use.
+  const [assignee, allUsers] = await Promise.all([
+    getUserById(assigneeId),
+    getAllUsersLight()
+  ]);
+  if (!assignee) return { error: "assigneeId not found" };
+
+  const actor = ctx.actor;
+  const actorIsLeader = actor.role === "leader" || actor.isAdmin === true;
+  if (!actorIsLeader) {
+    if (actor.role === "department_head") {
+      const overlap = (assignee.departmentIds ?? []).some((d) =>
+        (actor.departmentIds ?? []).includes(d)
+      );
+      const self = assignee.id === actor.id;
+      if (!overlap && !self) {
+        return { error: `Department heads can only assign within their own departments. ${assignee.name} isn't in any of yours.` };
+      }
+    } else {
+      if (assignee.id !== actor.id) {
+        return { error: "Workers can only create tasks for themselves." };
+      }
+    }
+  }
+  // Silence unused warnings — we may want to do a cross-user
+  // departmentIds lookup later via allUsers.
+  void allUsers;
+
+  // Coerce/validate the rest.
+  const description = typeof input.description === "string" ? input.description : "";
+  const priority = (() => {
+    const p = typeof input.priority === "string" ? input.priority : "medium";
+    return ["low", "medium", "high", "critical"].includes(p) ? p : "medium";
+  })();
+  const estimatedHours =
+    typeof input.estimatedHours === "number" && input.estimatedHours > 0
+      ? input.estimatedHours
+      : 2;
+  const tags = Array.isArray(input.tags)
+    ? input.tags.filter((t: unknown): t is string => typeof t === "string")
+    : [];
+  const clientName = typeof input.clientName === "string" ? input.clientName.trim() || null : null;
+  const departmentId =
+    typeof input.departmentId === "string" && input.departmentId
+      ? input.departmentId
+      : assignee.departmentIds[0] ?? null;
+
+  // Due date — caller-provided wins; otherwise compute from estimate
+  // + assignee's schedule. Same helper the form uses.
+  const { deadlineFromEstimate } = await import("@/lib/capacity");
+  const dueDate =
+    typeof input.dueDateISO === "string" && input.dueDateISO
+      ? new Date(input.dueDateISO).toISOString()
+      : deadlineFromEstimate(estimatedHours, assignee);
+
+  const id = `t_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+  const now = new Date().toISOString();
+  const { error } = await supabase
+    .from("tasks")
+    .insert({
+      id,
+      title,
+      description: description.trim() || null,
+      status: "pending",
+      priority,
+      estimated_hours: estimatedHours,
+      actual_hours: 0,
+      tags,
+      department_id: departmentId,
+      assignee_id: assignee.id,
+      creator_id: actor.id,
+      project_id: null,
+      due_date: dueDate,
+      inactive_flag: false,
+      last_activity_at: now,
+      created_at: now,
+      blocks_task_ids: [],
+      client_name: clientName,
+      website: null,
+      custom: {}
+    });
+  if (error) return { error: error.message };
+
+  await supabase.from("activity_logs").insert({
+    id: `a_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
+    task_id: id,
+    user_id: actor.id,
+    action: "created",
+    detail: `Created by Ask AI → assigned to ${assignee.name}`
+  });
+
+  const baseUrl = (process.env.NEXT_PUBLIC_APP_URL ?? "").replace(/\/$/, "");
+  return {
+    taskId: id,
+    url: baseUrl ? `${baseUrl}/tasks/${id}` : `/tasks/${id}`,
+    assignedTo: assignee.name,
+    dueDate
+  };
 }

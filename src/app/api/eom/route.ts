@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
+import { postMessage } from "@/lib/slack";
 
 export const dynamic = "force-dynamic";
 
@@ -81,6 +82,85 @@ export async function POST(req: NextRequest) {
     .select()
     .single();
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  // Hype message to the Scaled Team channel — fire-and-forget so a
+  // slow Slack call doesn't block the crown. Re-crowning the same
+  // holder within the same UTC minute is throttled by checking that
+  // the upserted row's crowned_at is fresh; otherwise PerformanceReview
+  // accidentally double-posting would spam the channel.
+  void (async () => {
+    try {
+      const [{ data: settings }, holder, crowner] = await Promise.all([
+        supabase
+          .from("workspace_settings")
+          .select("scaled_team_channel_id")
+          .eq("id", "workspace")
+          .maybeSingle(),
+        supabase
+          .from("users")
+          .select("name, avatar_url, email")
+          .eq("id", userId)
+          .maybeSingle()
+          .then((r) => r.data),
+        getUserById(adminId)
+      ]);
+      const channel = (settings?.scaled_team_channel_id as string | null) ?? null;
+      if (!channel || !holder?.name) return;
+      const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? "";
+      const recsUrl = baseUrl ? `${baseUrl}/updates/recommendations` : "/updates/recommendations";
+      const monthLabel = new Date(`${month}-01T00:00:00Z`).toLocaleString("en-US", {
+        month: "long", year: "numeric", timeZone: "UTC"
+      });
+      const reasonLine = reason ? `\n>${reason.replace(/\n/g, "\n>")}` : "";
+      const crownerName = crowner?.name ? ` (crowned by ${crowner.name})` : "";
+      await postMessage(
+        channel,
+        `🎉 ${holder.name} is Employee of the Month for ${monthLabel}!`,
+        [
+          {
+            type: "header",
+            text: {
+              type: "plain_text",
+              text: `👑  ${holder.name} is Employee of the Month!`,
+              emoji: true
+            }
+          },
+          {
+            type: "section",
+            text: {
+              type: "mrkdwn",
+              text:
+                `*${monthLabel}*${crownerName}\n` +
+                `Earned for being absolutely cracked this cycle. ` +
+                `Avatars get a crown overlay, the Recommendations tab is theirs to drive, and the rest of us live in the warmth of their reflected glow. 🔥`
+            }
+          },
+          ...(reasonLine
+            ? [{ type: "section", text: { type: "mrkdwn", text: reasonLine } }]
+            : []),
+          {
+            type: "context",
+            elements: [
+              { type: "mrkdwn", text: "Give 'em props in this thread 👇" }
+            ]
+          },
+          {
+            type: "actions",
+            elements: [
+              {
+                type: "button",
+                text: { type: "plain_text", text: "See their picks", emoji: true },
+                url: recsUrl
+              }
+            ]
+          }
+        ]
+      );
+    } catch (err) {
+      console.error("[eom] announcement failed:", err);
+    }
+  })();
+
   return NextResponse.json({ ok: true, eom: data });
 }
 

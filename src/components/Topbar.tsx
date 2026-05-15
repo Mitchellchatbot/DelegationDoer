@@ -11,6 +11,7 @@ import Link from "next/link";
 import { PersonAvatar } from "./PersonAvatar";
 import { NewTaskForm } from "./NewTaskForm";
 import { NotificationsBell } from "./NotificationsBell";
+import { EomPill } from "./EomPill";
 import { ROLE_LABELS } from "@/lib/auth";
 import { primaryDepartment } from "@/lib/departments";
 import type { User } from "@/lib/types";
@@ -277,6 +278,7 @@ export function Topbar({ user }: { user: User }) {
           </Dialog.Portal>
         </Dialog.Root>
 
+        <EomPill />
         <NotificationsBell />
         {(() => {
           const dept = user.role !== "leader" ? primaryDepartment(user.departmentIds) : null;

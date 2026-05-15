@@ -681,6 +681,11 @@ function CropDialog({
                   top: 0,
                   width: natW,
                   height: natH,
+                  // Tailwind preflight applies max-width:100% to every <img>;
+                  // we render the image at natural size and shrink via
+                  // transform, so we have to opt out of that clamp.
+                  maxWidth: "none",
+                  maxHeight: "none",
                   transform: `translate(${tx}px, ${ty}px) scale(${displayScale})`,
                   transformOrigin: "0 0",
                   userSelect: "none",

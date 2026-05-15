@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import { motion, LayoutGroup } from "framer-motion";
-import { Sparkles, Search, ShieldAlert, Camera, FolderKanban, Award } from "lucide-react";
+import { Sparkles, Search, ShieldAlert, Camera, FolderKanban, Award, Trophy } from "lucide-react";
 import { useCurrentUser } from "@/lib/user-context";
 import { isLeader } from "@/lib/auth";
 import { cn } from "@/lib/utils";
@@ -21,6 +21,7 @@ const TABS: readonly Tab[] = [
   { href: "/updates/seo",             label: "SEO",         icon: Search,      seoOnly: true      },
   { href: "/updates/projects",        label: "Projects",    icon: FolderKanban, leaderOnly: true  },
   { href: "/updates/recommendations", label: "Picks",       icon: Award                           },
+  { href: "/updates/leaderboard",     label: "Leaderboard", icon: Trophy                          },
   { href: "/updates/incidents",       label: "Incidents",   icon: ShieldAlert                     },
   { href: "/updates/moments",         label: "Moments",     icon: Camera                          }
 ] as const;

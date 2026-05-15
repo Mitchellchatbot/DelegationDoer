@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
-  Camera, ChevronLeft, Plus, Upload, X, Loader2, Trash2
+  Camera, ChevronLeft, Plus, Upload, X, Loader2, Trash2, Crop, Check
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn, initials } from "@/lib/utils";
@@ -348,6 +348,7 @@ function UploadButton({
   const [file, setFile] = useState<File | null>(null);
   const [caption, setCaption] = useState("");
   const [busy, setBusy] = useState(false);
+  const [cropping, setCropping] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const previewUrl = useMemo(() => (file ? URL.createObjectURL(file) : null), [file]);
   useEffect(() => {
@@ -378,6 +379,17 @@ function UploadButton({
         <Camera className="w-4 h-4" />
         Post a moment
       </button>
+
+      {cropping && file && (
+        <CropDialog
+          file={file}
+          onCancel={() => setCropping(false)}
+          onApply={(cropped) => {
+            setFile(cropped);
+            setCropping(false);
+          }}
+        />
+      )}
 
       {open && (
         <div className="moments-modal-overlay" onClick={() => !busy && setOpen(false)}>
@@ -426,6 +438,20 @@ function UploadButton({
                   if (fileRef.current) fileRef.current.value = "";
                 }}
               />
+              {file && (
+                <div className="flex items-center gap-2 -mt-1">
+                  <button
+                    type="button"
+                    onClick={() => setCropping(true)}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-full text-[11px] font-medium bg-white border border-slate-200 text-ink/70 hover:text-accent hover:border-accent/40 transition-colors"
+                  >
+                    <Crop className="w-3 h-3" /> Crop to square
+                  </button>
+                  <span className="text-[10px] text-ink/45">
+                    or leave as-is — bars will fill the frame
+                  </span>
+                </div>
+              )}
               <textarea
                 value={caption}
                 onChange={(e) => setCaption(e.target.value)}
@@ -462,6 +488,247 @@ function UploadButton({
         </div>
       )}
     </>
+  );
+}
+
+// Square pan-and-zoom cropper. Renders a 320px viewport with the image
+// positioned inside; user drags to pan, slider zooms. "Apply" rasterizes
+// the visible region to a 1080×1080 JPEG and returns it as a File.
+function CropDialog({
+  file, onCancel, onApply
+}: {
+  file: File;
+  onCancel: () => void;
+  onApply: (cropped: File) => void;
+}) {
+  const VIEWPORT = 320;
+  const OUTPUT = 1080;
+
+  const [imgUrl, setImgUrl] = useState<string | null>(null);
+  const [natW, setNatW] = useState(0);
+  const [natH, setNatH] = useState(0);
+  const [scale, setScale] = useState(1);       // user multiplier on baseScale
+  const [tx, setTx] = useState(0);              // viewport-pixel offset
+  const [ty, setTy] = useState(0);
+  const [busy, setBusy] = useState(false);
+  const dragRef = useRef<{ x: number; y: number; startTx: number; startTy: number } | null>(null);
+
+  useEffect(() => {
+    const url = URL.createObjectURL(file);
+    setImgUrl(url);
+    const img = new Image();
+    img.onload = () => {
+      setNatW(img.naturalWidth);
+      setNatH(img.naturalHeight);
+      // Initial state: cover the viewport (no bars).
+      const cover = Math.max(VIEWPORT / img.naturalWidth, VIEWPORT / img.naturalHeight);
+      // baseScale is implicit (computed from natW/natH below); user
+      // scale starts at 1.0. We translate so the image is centered.
+      const displayScale = cover * 1;
+      setTx((VIEWPORT - img.naturalWidth * displayScale) / 2);
+      setTy((VIEWPORT - img.naturalHeight * displayScale) / 2);
+    };
+    img.src = url;
+    return () => { URL.revokeObjectURL(url); };
+  }, [file]);
+
+  const baseScale = natW > 0 && natH > 0
+    ? Math.max(VIEWPORT / natW, VIEWPORT / natH)
+    : 1;
+  const displayScale = baseScale * scale;
+
+  // Clamp tx/ty so the image always covers the viewport (no gaps).
+  function clamp(nextTx: number, nextTy: number) {
+    const imgW = natW * displayScale;
+    const imgH = natH * displayScale;
+    const minTx = Math.min(0, VIEWPORT - imgW);
+    const minTy = Math.min(0, VIEWPORT - imgH);
+    const maxTx = Math.max(0, VIEWPORT - imgW);
+    const maxTy = Math.max(0, VIEWPORT - imgH);
+    // If image is smaller than viewport on an axis, center it.
+    const clampedX = imgW <= VIEWPORT
+      ? (VIEWPORT - imgW) / 2
+      : Math.min(maxTx, Math.max(minTx, nextTx));
+    const clampedY = imgH <= VIEWPORT
+      ? (VIEWPORT - imgH) / 2
+      : Math.min(maxTy, Math.max(minTy, nextTy));
+    return { x: clampedX, y: clampedY };
+  }
+
+  function onPointerDown(e: React.PointerEvent<HTMLDivElement>) {
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    dragRef.current = { x: e.clientX, y: e.clientY, startTx: tx, startTy: ty };
+  }
+  function onPointerMove(e: React.PointerEvent<HTMLDivElement>) {
+    const d = dragRef.current;
+    if (!d) return;
+    const next = clamp(d.startTx + (e.clientX - d.x), d.startTy + (e.clientY - d.y));
+    setTx(next.x);
+    setTy(next.y);
+  }
+  function onPointerUp(e: React.PointerEvent<HTMLDivElement>) {
+    (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+    dragRef.current = null;
+  }
+
+  function onScaleChange(nextScale: number) {
+    // Zoom toward the viewport center so the user's framing stays roughly stable.
+    const oldDisplay = baseScale * scale;
+    const newDisplay = baseScale * nextScale;
+    const cx = VIEWPORT / 2;
+    const cy = VIEWPORT / 2;
+    // Image point currently under (cx, cy): ((cx - tx) / oldDisplay, ...)
+    const ix = (cx - tx) / oldDisplay;
+    const iy = (cy - ty) / oldDisplay;
+    const newTx = cx - ix * newDisplay;
+    const newTy = cy - iy * newDisplay;
+    const clamped = clamp(newTx, newTy);
+    setScale(nextScale);
+    setTx(clamped.x);
+    setTy(clamped.y);
+  }
+
+  async function apply() {
+    if (!imgUrl) return;
+    setBusy(true);
+    try {
+      // Map the viewport to source-image coords:
+      //   viewport pixel (vx, vy) → image pixel ((vx - tx)/S, (vy - ty)/S)
+      const sx = -tx / displayScale;
+      const sy = -ty / displayScale;
+      const sSize = VIEWPORT / displayScale;
+      const canvas = document.createElement("canvas");
+      canvas.width = OUTPUT;
+      canvas.height = OUTPUT;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) throw new Error("canvas not available");
+      const img = new Image();
+      img.src = imgUrl;
+      await new Promise<void>((resolve, reject) => {
+        if (img.complete) return resolve();
+        img.onload = () => resolve();
+        img.onerror = () => reject(new Error("image load failed"));
+      });
+      ctx.fillStyle = "#0f172a";
+      ctx.fillRect(0, 0, OUTPUT, OUTPUT);
+      ctx.drawImage(img, sx, sy, sSize, sSize, 0, 0, OUTPUT, OUTPUT);
+      const blob: Blob | null = await new Promise((resolve) => {
+        canvas.toBlob((b) => resolve(b), "image/jpeg", 0.9);
+      });
+      if (!blob) throw new Error("export failed");
+      const cropped = new File([blob], file.name.replace(/\.[^.]+$/, "") + "-cropped.jpg", {
+        type: "image/jpeg"
+      });
+      onApply(cropped);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "crop failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div
+      className="moments-modal-overlay"
+      style={{ zIndex: 100 }}
+      onClick={() => !busy && onCancel()}
+    >
+      <div
+        className="moments-modal"
+        style={{ width: 380 }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <header className="moments-modal-header">
+          <div className="flex items-center gap-2">
+            <Crop className="w-4 h-4 text-accent" />
+            <span className="text-sm font-semibold text-ink">Crop to square</span>
+          </div>
+          <button
+            type="button"
+            onClick={onCancel}
+            className="p-1 rounded-lg text-ink/60 hover:text-ink hover:bg-slate-100"
+            aria-label="Close"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </header>
+        <div className="moments-modal-body" style={{ alignItems: "center" }}>
+          <div
+            onPointerDown={onPointerDown}
+            onPointerMove={onPointerMove}
+            onPointerUp={onPointerUp}
+            onPointerCancel={onPointerUp}
+            style={{
+              width: VIEWPORT,
+              height: VIEWPORT,
+              borderRadius: 12,
+              overflow: "hidden",
+              position: "relative",
+              background: "#0f172a",
+              cursor: dragRef.current ? "grabbing" : "grab",
+              touchAction: "none"
+            }}
+          >
+            {imgUrl && (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={imgUrl}
+                alt=""
+                draggable={false}
+                style={{
+                  position: "absolute",
+                  left: 0,
+                  top: 0,
+                  width: natW,
+                  height: natH,
+                  transform: `translate(${tx}px, ${ty}px) scale(${displayScale})`,
+                  transformOrigin: "0 0",
+                  userSelect: "none",
+                  pointerEvents: "none"
+                }}
+              />
+            )}
+          </div>
+          <label className="flex items-center gap-2 w-full">
+            <span className="text-[11px] text-ink/55 w-10">Zoom</span>
+            <input
+              type="range"
+              min={1}
+              max={4}
+              step={0.01}
+              value={scale}
+              onChange={(e) => onScaleChange(parseFloat(e.target.value))}
+              className="flex-1 accent-accent"
+            />
+          </label>
+          <div className="text-[10px] text-ink/45 text-center w-full">
+            Drag to position · slide to zoom
+          </div>
+        </div>
+        <footer className="moments-modal-footer">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="px-3 py-1.5 rounded-full text-xs font-medium text-ink/70 hover:text-ink hover:bg-slate-100"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={apply}
+            disabled={busy || natW === 0}
+            className={cn(
+              "inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs font-semibold text-white shadow-sm transition-all hover:-translate-y-0.5 active:scale-95",
+              (busy || natW === 0) && "opacity-60 cursor-not-allowed hover:translate-y-0"
+            )}
+            style={{ background: "linear-gradient(135deg, #2563EB 0%, #1e63ff 100%)" }}
+          >
+            {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+            {busy ? "Cropping…" : "Apply crop"}
+          </button>
+        </footer>
+      </div>
+    </div>
   );
 }
 
@@ -575,7 +842,10 @@ const stageCss = `
   inset: 0;
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  /* Show the whole photo with letterbox bars instead of cropping the
+     edges off. The cell background paints the bars. */
+  object-fit: contain;
+  background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
   transform: scale3d(1.4, 1.4, 1);
   transition: transform 1s var(--ease-inout);
   pointer-events: none;
@@ -903,7 +1173,9 @@ const stageCss = `
 .moments-drop-preview {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  /* Match the grid: show the whole image with bars rather than crop. */
+  object-fit: contain;
+  background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
 }
 .moments-caption-input {
   width: 100%;

@@ -4,9 +4,9 @@ import { useEffect, useRef, useState } from "react";
 
 // Render an email's HTML body inside a sandboxed iframe so the email's
 // inline <style> + font-family rules can't cascade into the rest of
-// the app. Auto-resizes to its content so there's no internal scroll
-// for normal-length emails. Past MAX_HEIGHT_PX the iframe gets its own
-// scroll instead of pushing the thread view off-screen.
+// the app. The iframe grows to the full height of its content — no
+// internal scroll, no cap. The thread page scrolls the whole list of
+// email cards instead.
 //
 // Sizing pattern: srcdoc 'load' alone is unreliable for late-loading
 // images + remote CSS, so we POLL the iframe document height every
@@ -15,7 +15,6 @@ import { useEffect, useRef, useState } from "react";
 // 200px even though the email is 1500px" race.
 
 const INITIAL_HEIGHT_PX = 200;
-const MAX_HEIGHT_PX = 720;
 const POLL_INTERVAL_MS = 150;
 const POLL_DURATION_MS = 3000;
 
@@ -118,21 +117,17 @@ export function EmailBody({ html }: { html: string }) {
     };
   }, [html]);
 
-  const clampedHeight = Math.min(height, MAX_HEIGHT_PX);
-  const overflowed = height > MAX_HEIGHT_PX;
-
   return (
     <iframe
       ref={ref}
       sandbox="allow-popups allow-popups-to-escape-sandbox"
       title="email-body"
-      // scrolling="no" deprecated but the only universally-honored knob
-      // for hiding the inner scrollbar on short emails. When the email
-      // exceeds MAX_HEIGHT_PX we let it scroll so layout stays sane.
-      scrolling={overflowed ? "yes" : "no"}
+      // Never scroll inside — let the iframe expand to the email's
+      // natural height. The thread page handles overall overflow.
+      scrolling="no"
       style={{
         width: "100%",
-        height: clampedHeight,
+        height,
         border: "none",
         background: "transparent",
         display: "block"

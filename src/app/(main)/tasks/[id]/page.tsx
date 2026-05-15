@@ -13,6 +13,7 @@ import { HandoffButton, HandoffTimeline } from "@/components/HandoffPanel";
 import { TaskConversation } from "@/components/TaskConversation";
 import { DueDateInline } from "@/components/DueDateInline";
 import { TaskFields } from "@/components/TaskFields";
+import { MarkdownBody } from "@/components/MarkdownBody";
 import { requireCurrentUserId } from "@/lib/session";
 import { formatDate, relativeTime } from "@/lib/utils";
 import { BackPill } from "@/components/BackPill";
@@ -173,7 +174,13 @@ export default async function TaskDetailPage({ params }: { params: { id: string 
           {task.description && (
             <section className="card p-4">
               <div className="text-sm font-medium mb-2">Description</div>
-              <p className="text-sm text-ink/90 whitespace-pre-wrap">{task.description}</p>
+              {/* Markdown-rendered. The email-intake classifier emits
+                  **Do:** / **Context:** / **Requested by:** sections,
+                  and humans writing tasks can use bold / lists / links
+                  the same way without seeing raw `**` syntax. */}
+              <div className="text-sm text-ink/90">
+                <MarkdownBody content={task.description} />
+              </div>
               {task.tags.length > 0 && (
                 <div className="mt-3 flex items-center gap-1.5 flex-wrap">
                   {task.tags.map((t) => <Tag key={t}>{t}</Tag>)}

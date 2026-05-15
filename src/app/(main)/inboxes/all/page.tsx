@@ -129,6 +129,9 @@ export default async function AllInboxesPage({
         <ThreadList
           threads={decoratedThreads}
           linkAccountId={inboxes[0]?.id ?? "all"}
+          accountIdByEmail={Object.fromEntries(
+            inboxes.map((a) => [a.email.toLowerCase(), a.id])
+          )}
           missiveAppUrl={missiveAppUrl || undefined}
         />
       )}

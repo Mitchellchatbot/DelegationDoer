@@ -8,6 +8,7 @@ import { Avatar } from "@/components/Avatar";
 import { CreateTaskFromThreadButton } from "@/components/CreateTaskFromThreadButton";
 import { ReplyComposer } from "@/components/ReplyComposer";
 import { ThreadAutoMarkRead } from "@/components/ThreadAutoMarkRead";
+import { EmailBody } from "@/components/EmailBody";
 
 export const dynamic = "force-dynamic";
 
@@ -203,13 +204,13 @@ export default async function ThreadDetailPage({
                     </div>
                   </header>
 
-                  {/* Body */}
+                  {/* Body — rendered inside a sandboxed iframe so the
+                      email's <style> and font-family declarations can't
+                      cascade into the rest of the app. Plain-text
+                      fallback gets the regular prose treatment. */}
                   <div className="p-5">
                     {m.body_html ? (
-                      <div
-                        className="email-body text-sm leading-relaxed prose prose-sm max-w-none"
-                        dangerouslySetInnerHTML={{ __html: m.body_html }}
-                      />
+                      <EmailBody html={m.body_html} />
                     ) : (
                       <pre className="text-sm whitespace-pre-wrap font-sans leading-relaxed">
                         {m.body_text || "(empty)"}

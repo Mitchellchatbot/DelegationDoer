@@ -83,10 +83,8 @@ export default function BoardPage() {
 
   // Column-axis state. Default to "person" — the Leader asked to see the
   // board organized by who's doing what, not by status, on first load.
+  // The chip row above scopes which people show up as columns.
   const [groupBy, setGroupBy] = useState<GroupBy>("person");
-  // Only used when groupBy === "person": which department's people to show
-  // as columns. "all" = everyone the actor can see.
-  const [personDept, setPersonDept] = useState("all");
   const [moreFiltersOpen, setMoreFiltersOpen] = useState(false);
 
   useEffect(() => {
@@ -150,10 +148,16 @@ export default function BoardPage() {
       return cols;
     }
 
-    // person mode
+    // person mode — only show people in the departments the chip row
+    // narrowed to. Empty set means "all departments" so everyone shows.
+    // Past behavior was to render every user even when filtering tasks
+    // to a single dept, which left a wall of empty columns for people
+    // unrelated to the slice the user picked.
     let people = users;
-    if (personDept !== "all") {
-      people = people.filter((u) => u.departmentIds.includes(personDept));
+    if (selectedDepts.size > 0) {
+      people = people.filter((u) =>
+        u.departmentIds.some((d) => selectedDepts.has(d))
+      );
     }
     const cols: Column[] = people.map((u) => ({
       id: u.id,
@@ -163,7 +167,7 @@ export default function BoardPage() {
     }));
     cols.push({ id: "__unassigned", label: "Unassigned", tone: "border-slate-300/40" });
     return cols;
-  }, [groupBy, visible, personDept]);
+  }, [groupBy, visible, users, selectedDepts]);
 
   // Group visible tasks by the column they belong to.
   const grouped: Record<string, Task[]> = useMemo(() => {
@@ -326,16 +330,11 @@ export default function BoardPage() {
         })}
       </div>
 
-      {/* Compact filter bar: only the two most-used controls (department
-          scope when grouped by person, sort) sit inline. The rest live
-          behind a "More filters" toggle so the board doesn't open with
-          five selects fighting for attention. */}
+      {/* Compact filter bar: sort sits inline; everything else lives
+          behind "More filters" so the board doesn't open with five
+          selects fighting for attention. Department scoping is now
+          driven by the chip row above. */}
       <div className="card p-3 flex items-center gap-2 flex-wrap">
-        {groupBy === "person" && (
-          <Select label="Team" value={personDept} onChange={setPersonDept} options={[
-            ["all", "Everyone"], ...departments.map((d) => [d.id, d.name] as [string, string])
-          ]} />
-        )}
         <Select label="Sort" value={sort} onChange={setSort} options={[
           ["priority", "Priority"],
           ["recent", "Recent activity"],

@@ -59,7 +59,10 @@ returns table (
   sop_id text,
   title text,
   source_filename text,
-  position int,
+  -- "position" is a SQL-standard reserved keyword (the POSITION(substr
+  -- IN str) function), so RETURNS TABLE rejects it as a column name
+  -- even though CREATE TABLE accepts it. Rename here to chunk_position.
+  chunk_position int,
   content text,
   image_url text,
   file_url text,

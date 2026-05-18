@@ -957,7 +957,7 @@ async function searchSops(input: Record<string, unknown>) {
     sop_id: string;
     title: string;
     source_filename: string;
-    position: number;
+    chunk_position: number;
     content: string;
     image_url: string | null;
     file_url: string;
@@ -966,7 +966,7 @@ async function searchSops(input: Record<string, unknown>) {
     sopId: r.sop_id,
     title: r.title,
     sourceFilename: r.source_filename,
-    chunkPosition: r.position,
+    chunkPosition: r.chunk_position,
     content: r.content,
     imageUrl: r.image_url,
     fileUrl: r.file_url,

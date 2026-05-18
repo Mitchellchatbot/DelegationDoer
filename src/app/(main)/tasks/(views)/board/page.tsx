@@ -84,7 +84,13 @@ export default function BoardPage() {
   // Column-axis state. Default to "person" — the Leader asked to see the
   // board organized by who's doing what, not by status, on first load.
   // The chip row above scopes which people show up as columns.
-  const [groupBy, setGroupBy] = useState<GroupBy>("person");
+  // `?groupBy=client|person|status` overrides the default so the
+  // /clients page can deep-link straight into the by-client board.
+  const initialGroupBy = ((): GroupBy => {
+    const g = searchParams.get("groupBy");
+    return g === "client" || g === "status" || g === "person" ? g : "person";
+  })();
+  const [groupBy, setGroupBy] = useState<GroupBy>(initialGroupBy);
   const [moreFiltersOpen, setMoreFiltersOpen] = useState(false);
 
   useEffect(() => {

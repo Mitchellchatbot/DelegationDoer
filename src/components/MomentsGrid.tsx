@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
-  Camera, ChevronLeft, Plus, Upload, X, Loader2, Trash2, Crop, Check
+  Camera, ChevronLeft, Plus, Upload, X, Loader2, Trash2, Crop, Check,
+  RotateCcw, RotateCw
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn, initials } from "@/lib/utils";
@@ -445,7 +446,7 @@ function UploadButton({
                     onClick={() => setCropping(true)}
                     className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-full text-[11px] font-medium bg-white border border-slate-200 text-ink/70 hover:text-accent hover:border-accent/40 transition-colors"
                   >
-                    <Crop className="w-3 h-3" /> Crop to square
+                    <Crop className="w-3 h-3" /> Crop & rotate
                   </button>
                   <span className="text-[10px] text-ink/45">
                     or leave as-is — bars will fill the frame
@@ -491,9 +492,17 @@ function UploadButton({
   );
 }
 
-// Square pan-and-zoom cropper. Renders a 320px viewport with the image
-// positioned inside; user drags to pan, slider zooms. "Apply" rasterizes
-// the visible region to a 1080×1080 JPEG and returns it as a File.
+// Square pan-and-zoom cropper with 90° rotation. Renders a 320px
+// viewport with the image positioned inside; user drags to pan,
+// slider zooms, Left/Right rotate by quarter-turns. "Apply"
+// rasterizes the visible region to a 1080×1080 JPEG and returns it
+// as a File.
+//
+// Rotation is implemented by pre-rendering the original image into
+// an offscreen canvas at the chosen angle and using the resulting
+// blob as the "working" image — that way pan/zoom math stays simple
+// (always operating on a naturally-oriented bitmap) and the export
+// path doesn't need any rotation logic of its own.
 function CropDialog({
   file, onCancel, onApply
 }: {
@@ -507,30 +516,92 @@ function CropDialog({
   const [imgUrl, setImgUrl] = useState<string | null>(null);
   const [natW, setNatW] = useState(0);
   const [natH, setNatH] = useState(0);
+  const [rotation, setRotation] = useState(0); // 0 | 90 | 180 | 270
   const [scale, setScale] = useState(1);       // user multiplier on baseScale
   const [tx, setTx] = useState(0);              // viewport-pixel offset
   const [ty, setTy] = useState(0);
   const [busy, setBusy] = useState(false);
   const dragRef = useRef<{ x: number; y: number; startTx: number; startTy: number } | null>(null);
+  // The unmodified original — every rotation is computed from this so
+  // we don't accumulate jpeg-recompression artifacts across turns.
+  const originalRef = useRef<HTMLImageElement | null>(null);
+  const originalUrlRef = useRef<string | null>(null);
+  // Tracks the most recently generated blob URL so we can revoke the
+  // previous one when rotation changes (and on unmount).
+  const generatedUrlRef = useRef<string | null>(null);
+
+  function recenter(w: number, h: number) {
+    const cover = Math.max(VIEWPORT / w, VIEWPORT / h);
+    setTx((VIEWPORT - w * cover) / 2);
+    setTy((VIEWPORT - h * cover) / 2);
+    setScale(1);
+  }
 
   useEffect(() => {
     const url = URL.createObjectURL(file);
+    originalUrlRef.current = url;
     setImgUrl(url);
     const img = new Image();
     img.onload = () => {
+      originalRef.current = img;
       setNatW(img.naturalWidth);
       setNatH(img.naturalHeight);
-      // Initial state: cover the viewport (no bars).
-      const cover = Math.max(VIEWPORT / img.naturalWidth, VIEWPORT / img.naturalHeight);
-      // baseScale is implicit (computed from natW/natH below); user
-      // scale starts at 1.0. We translate so the image is centered.
-      const displayScale = cover * 1;
-      setTx((VIEWPORT - img.naturalWidth * displayScale) / 2);
-      setTy((VIEWPORT - img.naturalHeight * displayScale) / 2);
+      recenter(img.naturalWidth, img.naturalHeight);
     };
     img.src = url;
-    return () => { URL.revokeObjectURL(url); };
+    return () => {
+      URL.revokeObjectURL(url);
+      if (generatedUrlRef.current) {
+        URL.revokeObjectURL(generatedUrlRef.current);
+        generatedUrlRef.current = null;
+      }
+    };
   }, [file]);
+
+  async function rotateBy(delta: 90 | -90) {
+    const img = originalRef.current;
+    if (!img || busy) return;
+    const next = (((rotation + delta) % 360) + 360) % 360;
+    setRotation(next);
+    if (next === 0) {
+      // Back to the original orientation — drop the working blob and
+      // point at the source URL directly.
+      if (generatedUrlRef.current) {
+        URL.revokeObjectURL(generatedUrlRef.current);
+        generatedUrlRef.current = null;
+      }
+      const url = originalUrlRef.current!;
+      setImgUrl(url);
+      setNatW(img.naturalWidth);
+      setNatH(img.naturalHeight);
+      recenter(img.naturalWidth, img.naturalHeight);
+      return;
+    }
+    const oW = img.naturalWidth;
+    const oH = img.naturalHeight;
+    const isQuarter = next % 180 !== 0;
+    const w = isQuarter ? oH : oW;
+    const h = isQuarter ? oW : oH;
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.translate(w / 2, h / 2);
+    ctx.rotate((next * Math.PI) / 180);
+    ctx.drawImage(img, -oW / 2, -oH / 2);
+    const blob = await new Promise<Blob | null>((resolve) => {
+      canvas.toBlob((b) => resolve(b), "image/jpeg", 0.95);
+    });
+    if (!blob) return;
+    const url = URL.createObjectURL(blob);
+    if (generatedUrlRef.current) URL.revokeObjectURL(generatedUrlRef.current);
+    generatedUrlRef.current = url;
+    setImgUrl(url);
+    setNatW(w);
+    setNatH(h);
+    recenter(w, h);
+  }
 
   const baseScale = natW > 0 && natH > 0
     ? Math.max(VIEWPORT / natW, VIEWPORT / natH)
@@ -641,7 +712,7 @@ function CropDialog({
         <header className="moments-modal-header">
           <div className="flex items-center gap-2">
             <Crop className="w-4 h-4 text-accent" />
-            <span className="text-sm font-semibold text-ink">Crop to square</span>
+            <span className="text-sm font-semibold text-ink">Crop & rotate</span>
           </div>
           <button
             type="button"
@@ -694,6 +765,29 @@ function CropDialog({
               />
             )}
           </div>
+          <div className="flex items-center gap-2 w-full">
+            <span className="text-[11px] text-ink/55 w-10">Rotate</span>
+            <div className="flex items-center gap-1.5 flex-1">
+              <button
+                type="button"
+                onClick={() => rotateBy(-90)}
+                disabled={busy || natW === 0}
+                aria-label="Rotate 90° counter-clockwise"
+                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-full text-[11px] font-medium bg-white border border-slate-200 text-ink/70 hover:text-accent hover:border-accent/40 transition-colors disabled:opacity-50"
+              >
+                <RotateCcw className="w-3 h-3" /> Left
+              </button>
+              <button
+                type="button"
+                onClick={() => rotateBy(90)}
+                disabled={busy || natW === 0}
+                aria-label="Rotate 90° clockwise"
+                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-full text-[11px] font-medium bg-white border border-slate-200 text-ink/70 hover:text-accent hover:border-accent/40 transition-colors disabled:opacity-50"
+              >
+                <RotateCw className="w-3 h-3" /> Right
+              </button>
+            </div>
+          </div>
           <label className="flex items-center gap-2 w-full">
             <span className="text-[11px] text-ink/55 w-10">Zoom</span>
             <input
@@ -707,7 +801,7 @@ function CropDialog({
             />
           </label>
           <div className="text-[10px] text-ink/45 text-center w-full">
-            Drag to position · slide to zoom
+            Drag to position · slide to zoom · Left/Right to rotate
           </div>
         </div>
         <footer className="moments-modal-footer">

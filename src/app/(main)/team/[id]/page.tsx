@@ -10,14 +10,24 @@ import { Crown } from "lucide-react";
 import { BackPill } from "@/components/BackPill";
 import { getAllUsers, getAllTasks, getDepartments } from "@/lib/server-data";
 import { managerOf } from "@/lib/mock-data";
+import { getSupabaseAdmin } from "@/lib/supabase-admin";
 
 export const dynamic = "force-dynamic";
 
 export default async function ProfilePage({ params }: { params: { id: string } }) {
-  const [users, tasks, departments] = await Promise.all([
+  const supabase = getSupabaseAdmin();
+  const [users, tasks, departments, skillsRes] = await Promise.all([
     getAllUsers(),
     getAllTasks(),
-    getDepartments()
+    getDepartments(),
+    // Skills + task types come from the same skill_profiles table that
+    // ProfileDialog edits — the page was previously reading the legacy
+    // user.skills text array, which is almost always empty in prod, so
+    // the cards looked broken even when the user had skills configured.
+    supabase
+      .from("skill_profiles")
+      .select("id, skill_name, experience_level, task_types")
+      .eq("user_id", params.id)
   ]);
   const user = users.find((u) => u.id === params.id);
   if (!user) return notFound();
@@ -26,12 +36,48 @@ export default async function ProfilePage({ params }: { params: { id: string } }
     .filter(Boolean) as { id: string; name: string }[];
   const cap = userCapacity(user, tasks);
   const myTasks = tasks.filter((t) => t.assigneeId === user.id);
-  // Inline skill chips fall back to the user.skills text array — the
-  // skill_profiles table is rendered live inside ProfileDialog.
-  const skills = (user.skills ?? []).map((s, i) => ({ id: `${user.id}-${i}`, skillName: s, experienceLevel: 0 }));
-  const taskTypeHistory = Array.from(
-    new Set(tasks.filter((t) => t.assigneeId === user.id).flatMap((t) => t.tags))
+
+  const skillRows = (skillsRes.data ?? []) as Array<{
+    id: string; skill_name: string; experience_level: number; task_types: string[] | null;
+  }>;
+  const skills = skillRows.map((s) => ({
+    id: s.id,
+    skillName: s.skill_name,
+    experienceLevel: s.experience_level
+  }));
+  // Task types handled = union of the task_types arrays declared on
+  // every skill_profile row, fallback to tags on the user's actual
+  // assigned tasks if nothing's declared on the skill side. Declared
+  // wins because it's an intentional statement of "I do this kind of
+  // work" — assigned tags are sometimes just inherited from the project.
+  const declaredTypes = Array.from(new Set(skillRows.flatMap((s) => s.task_types ?? [])));
+  const inferredTypes = Array.from(
+    new Set(myTasks.flatMap((t) => t.tags))
   );
+  const taskTypeHistory = declaredTypes.length > 0 ? declaredTypes : inferredTypes;
+
+  // Throughput = a few simple metrics computed from the user's tasks.
+  // No reliance on the (often unwritten) users.throughput JSON column.
+  // "This month" uses lastActivityAt as a "completed at" proxy — when
+  // a task moves to done its last_activity_at updates, so it's a good
+  // signal for completion timing without a dedicated completed_at col.
+  const now = new Date();
+  const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString();
+  const doneTasks = myTasks.filter((t) => t.status === "done");
+  const doneThisMonth = doneTasks.filter((t) => t.lastActivityAt >= monthStart);
+  const totalEstimated = doneTasks.reduce((sum, t) => sum + (t.estimatedHours ?? 0), 0);
+  const totalActual = doneTasks.reduce((sum, t) => sum + (t.actualHours ?? 0), 0);
+  const accuracy = totalEstimated > 0 ? totalActual / totalEstimated : null;
+  const openTasks = myTasks.length - doneTasks.length;
+  const throughput: { label: string; value: string }[] = [
+    { label: "Completed this month", value: String(doneThisMonth.length) },
+    { label: "Completed all-time", value: String(doneTasks.length) },
+    { label: "Currently open", value: String(openTasks) },
+    {
+      label: "Estimate accuracy",
+      value: accuracy != null ? `${accuracy.toFixed(2)}×` : "—"
+    }
+  ];
   const manager = managerOf(user, users);
   const directReports = user.role === "leader"
     ? users.filter((u) => u.role === "department_head")
@@ -88,19 +134,23 @@ export default async function ProfilePage({ params }: { params: { id: string } }
             {skills.map((s) => (
               <li key={s.id} className="flex items-center justify-between text-sm">
                 <span>{s.skillName}</span>
-                {s.experienceLevel > 0 && <span className="text-muted text-xs">Level {s.experienceLevel}/5</span>}
+                {s.experienceLevel > 0 && (
+                  <span className="text-muted text-xs">Level {s.experienceLevel}/5</span>
+                )}
               </li>
             ))}
-            {skills.length === 0 && <li className="text-xs text-muted">No skills listed.</li>}
+            {skills.length === 0 && (
+              <li className="text-xs text-muted">No skills listed. Use Edit profile to add some.</li>
+            )}
           </ul>
         </section>
         <section className="card p-4">
           <div className="text-sm font-medium mb-3">Throughput</div>
           <ul className="space-y-1.5 text-sm">
-            {Object.entries(user.throughput || {}).map(([k, v]) => (
-              <li key={k} className="flex items-center justify-between">
-                <span className="text-muted">{k.replace(/_/g, " ")}</span>
-                <span>{v}</span>
+            {throughput.map((row) => (
+              <li key={row.label} className="flex items-center justify-between">
+                <span className="text-muted">{row.label}</span>
+                <span className="tabular-nums">{row.value}</span>
               </li>
             ))}
           </ul>
@@ -109,6 +159,9 @@ export default async function ProfilePage({ params }: { params: { id: string } }
           <div className="text-sm font-medium mb-3">Task types handled</div>
           <div className="flex flex-wrap gap-1.5">
             {taskTypeHistory.map((t) => <span key={t} className="badge badge-tag">{t}</span>)}
+            {taskTypeHistory.length === 0 && (
+              <div className="text-xs text-muted">Nothing tracked yet.</div>
+            )}
           </div>
         </section>
       </div>

@@ -62,16 +62,23 @@ export async function GET() {
   // colleague address we haven't catalogued yet.
   const emailToClient = new Map<string, string>();
   const domainToClient = new Map<string, string>();
+  const clientsWithoutSignal: string[] = []; // names of clients with no email AND no domain
   for (const c of clients) {
+    let hasSignal = false;
     for (const e of c.contact_emails ?? []) {
       if (typeof e === "string" && e.includes("@")) {
         emailToClient.set(e.toLowerCase(), c.id);
+        hasSignal = true;
       }
     }
     if (c.domain_location) {
       const d = extractDomain(c.domain_location);
-      if (d) domainToClient.set(d.toLowerCase(), c.id);
+      if (d) {
+        domainToClient.set(d.toLowerCase(), c.id);
+        hasSignal = true;
+      }
     }
+    if (!hasSignal) clientsWithoutSignal.push(c.name);
   }
 
   const since = Date.now() - LOOKBACK_DAYS * 24 * 60 * 60 * 1000;
@@ -89,21 +96,34 @@ export async function GET() {
   }
   const msgs = (msgsRaw ?? []) as MissiveMessage[];
 
-  // Bucket messages by client.
+  // Bucket messages by client + remember which senders we couldn't
+  // place so the response can surface them — that's how leaders find
+  // out which clients are missing contact_emails / domain_location.
   const byClient = new Map<string, MissiveMessage[]>();
+  const unmatchedDomainCounts = new Map<string, number>();
+  let parseableSenders = 0;
   for (const m of msgs) {
     const sender = extractEmailAddress(m.from_addr ?? "");
     if (!sender) continue;
+    parseableSenders++;
     let clientId = emailToClient.get(sender.toLowerCase());
     if (!clientId) {
       const dom = sender.split("@")[1]?.toLowerCase();
       if (dom) clientId = domainToClient.get(dom);
     }
-    if (!clientId) continue;
+    if (!clientId) {
+      const dom = sender.split("@")[1]?.toLowerCase();
+      if (dom) unmatchedDomainCounts.set(dom, (unmatchedDomainCounts.get(dom) ?? 0) + 1);
+      continue;
+    }
     const list = byClient.get(clientId) ?? [];
     if (list.length < MAX_MESSAGES_PER_CLIENT) list.push(m);
     byClient.set(clientId, list);
   }
+  const topUnmatchedDomains = Array.from(unmatchedDomainCounts.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 10)
+    .map(([domain, count]) => ({ domain, count }));
 
   const results: Array<{ clientId: string; label: HealthLabel; sample: number; score: number; summary: string }> = [];
   const errors: Array<{ clientId: string; error: string }> = [];
@@ -156,9 +176,24 @@ export async function GET() {
 
   return NextResponse.json({
     ok: true,
-    scanned: clients.length,
-    matched: byClient.size,
-    updated: results.length,
+    diagnostics: {
+      // Always-useful numbers. If matched is 0 the next two lines say why.
+      clientsScanned: clients.length,
+      clientsWithSignal: clients.length - clientsWithoutSignal.length,
+      clientsMissingEmailAndDomain: clientsWithoutSignal.length,
+      messagesFetched: msgs.length,
+      parseableSenders,
+      clientsMatched: byClient.size,
+      clientsUpdated: results.length,
+      // If the cron found mail but couldn't bucket it, this list tells
+      // you which sender domains are showing up that aren't tied to
+      // any client yet. Add them to the client's contact_emails or
+      // set domain_location to start matching.
+      topUnmatchedDomains,
+      // Truncated sample of clients with no matchable signal yet — the
+      // ones the cron literally can't reach until contact info is filled.
+      sampleClientsMissingContact: clientsWithoutSignal.slice(0, 10)
+    },
     errors,
     results: results.map((r) => ({ clientId: r.clientId, label: r.label, sample: r.sample }))
   });

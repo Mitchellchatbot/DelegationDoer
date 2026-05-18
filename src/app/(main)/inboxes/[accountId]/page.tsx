@@ -53,7 +53,9 @@ export default async function InboxThreadsPage({
       // Scope server-side to this connected account. Without
       // mailbox_id, listThreads returns every thread in the
       // workspace, leaking other inboxes.
-      listThreads({ folder: "INBOX", limit: 200, mailboxId: params.accountId })
+      // Bump from 200 → 1000 so single-mailbox view shows real history
+      // instead of clipping at a day or two on busy inboxes.
+      listThreads({ folder: "INBOX", limit: 1000, mailboxId: params.accountId })
     ]);
     const account = allAccounts.find((a) => a.id === params.accountId);
     if (!account) notFound();

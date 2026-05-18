@@ -38,7 +38,10 @@ export default async function AllInboxesPage({
     // set client-side so we never round-trip Missive on a filter change.
     const [allAccounts, fetched, visibleIds] = await Promise.all([
       listAccounts(),
-      listThreads({ folder: "INBOX", limit: 200 }),
+      // 1000 instead of 200 — the page filters client-side so we want
+      // a big enough working set that "All inboxes" actually shows
+      // weeks of history, not just the last day or two of a busy team.
+      listThreads({ folder: "INBOX", limit: 1000 }),
       visibleAccountIdsFor(me)
     ]);
 

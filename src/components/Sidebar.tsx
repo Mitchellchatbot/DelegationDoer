@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 import {
   ListTodo, Users,
   Sparkles, Settings, AlertTriangle, Crown, Mail, Briefcase,
-  FolderKanban, CalendarDays, BookOpen
+  FolderKanban, CalendarDays, BookOpen, LayoutDashboard
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { ReportIncidentDialog } from "./ReportIncidentDialog";
@@ -30,7 +30,12 @@ interface NavItem { href: string; label: string; icon: typeof ListTodo; tone: To
 // Projects is software-team-only (+ leader); it gets spliced in
 // conditionally below rather than living in the base list.
 const BASE_NAV: NavItem[] = [
+  // People stays at index 0 — every downstream layout calc treats it
+  // as the anchor. Dashboard slots in at index 1 so the worker's 2x2
+  // overview lives one click from anywhere without disturbing the
+  // existing splice math for the Projects / Manage insertions.
   { href: "/people",    label: "People",    icon: Users,           tone: "indigo"   },
+  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, tone: "blue"     },
   { href: "/tasks",     label: "Tasks",     icon: ListTodo,        tone: "indigo"   },
   { href: "/schedule",  label: "Schedule",  icon: CalendarDays,    tone: "sky"      },
   { href: "/inboxes",   label: "Inboxes",   icon: Mail,            tone: "fuchsia"  },

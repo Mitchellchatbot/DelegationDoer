@@ -59,13 +59,17 @@ export function Avatar({ name, imageUrl, size = 24, className, presence, emoji, 
   );
 
   // No overlays — keep the markup simple for the most common case.
+  // shrink-0 keeps the avatar from getting squished horizontally inside
+  // flex containers when neighbouring text wants more space; without it,
+  // crowded chips (topbar user pill, dense lists) render the photo as a
+  // thin vertical sliver.
   if (!presence && !emoji && !crowned) {
-    return <span className={cn("inline-block", className)}>{inner}</span>;
+    return <span className={cn("inline-block shrink-0", className)}>{inner}</span>;
   }
 
   return (
     <span
-      className={cn("relative inline-block leading-none", className)}
+      className={cn("relative inline-block shrink-0 leading-none", className)}
       title={`${name}${presence ? ` · ${presence}` : ""}${crowned ? " · Employee of the Month" : ""}`}
     >
       {inner}

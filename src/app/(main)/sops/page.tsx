@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   BookOpen, Upload, FileText, FileImage, Trash2, Loader2, AlertTriangle, X
 } from "lucide-react";
@@ -203,7 +204,16 @@ function UploadDialog({
   const [file, setFile] = useState<File | null>(null);
   const [title, setTitle] = useState("");
   const [busy, setBusy] = useState(false);
+  const [mounted, setMounted] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  // Portal target = document.body. Without portaling, the modal is
+  // rendered inside <main className="relative z-10"> from the app
+  // layout, which sets up a stacking context that traps the modal's
+  // z-50 below the topbar's z-30 (because the topbar is a sibling
+  // of main, not a descendant). Portaling to body lets the modal
+  // overlay the topbar with the dark blur as intended.
+  useEffect(() => { setMounted(true); }, []);
 
   async function submit() {
     if (!file || busy) return;
@@ -224,9 +234,11 @@ function UploadDialog({
     }
   }
 
-  return (
+  if (!mounted) return null;
+
+  return createPortal(
     <div
-      className="fixed inset-0 z-50 grid place-items-center bg-slate-950/40 backdrop-blur-sm"
+      className="fixed inset-0 z-[100] grid place-items-center bg-slate-950/40 backdrop-blur-sm"
       onClick={() => !busy && onClose()}
     >
       <div
@@ -311,7 +323,8 @@ function UploadDialog({
           </button>
         </footer>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 

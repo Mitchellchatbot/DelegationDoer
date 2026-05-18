@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   BookOpen, Upload, FileText, FileImage, Trash2, Loader2, AlertTriangle, X,
-  Sparkles, ArrowRight
+  Sparkles, ArrowRight, CheckCircle2, Clock
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -243,13 +243,25 @@ function EmptyState({ canEdit, onUpload }: { canEdit: boolean; onUpload: () => v
   );
 }
 
+// One file in the upload queue carries its own status so the dialog
+// can show per-file progress during a batch run. Sequential processing
+// (rather than Promise.all) is intentional: ingestion is OpenAI-heavy
+// and parallel uploads would hammer rate limits without much speedup.
+type QueueStatus = "queued" | "uploading" | "done" | "error";
+interface QueueItem {
+  file: File;
+  status: QueueStatus;
+  error?: string;
+  chunkCount?: number;
+}
+
 function UploadDialog({
   onClose, onUploaded
 }: {
   onClose: () => void;
   onUploaded: () => void;
 }) {
-  const [file, setFile] = useState<File | null>(null);
+  const [queue, setQueue] = useState<QueueItem[]>([]);
   const [title, setTitle] = useState("");
   const [busy, setBusy] = useState(false);
   const [mounted, setMounted] = useState(false);
@@ -263,26 +275,76 @@ function UploadDialog({
   // overlay the topbar with the dark blur as intended.
   useEffect(() => { setMounted(true); }, []);
 
+  function addFiles(picked: FileList | null) {
+    if (!picked || picked.length === 0) return;
+    const items: QueueItem[] = Array.from(picked).map((file) => ({ file, status: "queued" }));
+    setQueue((prev) => [...prev, ...items]);
+    // Auto-fill the title only when there's a single file in the queue
+    // — multi-file uploads use each filename as the title server-side.
+    if (queue.length === 0 && items.length === 1 && !title) {
+      setTitle(items[0].file.name.replace(/\.[^.]+$/, ""));
+    }
+    if (fileRef.current) fileRef.current.value = "";
+  }
+
+  function removeAt(index: number) {
+    setQueue((prev) => prev.filter((_, i) => i !== index));
+  }
+
   async function submit() {
-    if (!file || busy) return;
+    if (queue.length === 0 || busy) return;
     setBusy(true);
-    try {
-      const fd = new FormData();
-      fd.append("file", file);
-      if (title.trim()) fd.append("title", title.trim());
-      const res = await fetch("/api/sops", { method: "POST", body: fd });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data?.error ?? `upload failed (${res.status})`);
-      toast.success(`Indexed "${data.sop?.title ?? file.name}" (${data.sop?.chunkCount ?? 0} chunks).`);
+    const total = queue.length;
+    const singleFile = total === 1;
+    let success = 0;
+    let failed = 0;
+
+    for (let i = 0; i < total; i++) {
+      // Mark this row as uploading before kicking off the network call.
+      setQueue((prev) => prev.map((q, idx) => idx === i ? { ...q, status: "uploading" } : q));
+      const item = queue[i];
+      try {
+        const fd = new FormData();
+        fd.append("file", item.file);
+        // Honor the title field only on single-file uploads — for
+        // batches the per-file filename becomes the title server-side.
+        if (singleFile && title.trim()) fd.append("title", title.trim());
+        const res = await fetch("/api/sops", { method: "POST", body: fd });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data?.error ?? `upload failed (${res.status})`);
+        setQueue((prev) => prev.map((q, idx) =>
+          idx === i ? { ...q, status: "done", chunkCount: data.sop?.chunkCount ?? 0 } : q
+        ));
+        success++;
+      } catch (err) {
+        setQueue((prev) => prev.map((q, idx) =>
+          idx === i
+            ? { ...q, status: "error", error: err instanceof Error ? err.message : "failed" }
+            : q
+        ));
+        failed++;
+      }
+    }
+
+    setBusy(false);
+    if (success > 0 && failed === 0) {
+      toast.success(total === 1
+        ? `Indexed "${queue[0].file.name}".`
+        : `Indexed ${success} SOPs.`);
       onUploaded();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "upload failed");
-    } finally {
-      setBusy(false);
+    } else if (success > 0 && failed > 0) {
+      toast.warning(`Indexed ${success} of ${total} — ${failed} failed. See the dialog for details.`);
+      // Don't auto-close so the user can see which ones failed and
+      // optionally remove + retry. They can close manually.
+    } else {
+      toast.error(`All ${failed} upload${failed === 1 ? "" : "s"} failed.`);
     }
   }
 
   if (!mounted) return null;
+
+  const hasFiles = queue.length > 0;
+  const allDone = hasFiles && queue.every((q) => q.status === "done");
 
   return createPortal(
     <div
@@ -290,13 +352,18 @@ function UploadDialog({
       onClick={() => !busy && onClose()}
     >
       <div
-        className="w-[460px] max-w-[95vw] rounded-3xl border border-slate-200/70 bg-white shadow-[0_30px_80px_-20px_rgba(15,23,42,0.45)] overflow-hidden"
+        className="w-[520px] max-w-[95vw] max-h-[90vh] flex flex-col rounded-3xl border border-slate-200/70 bg-white shadow-[0_30px_80px_-20px_rgba(15,23,42,0.45)] overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
-        <header className="flex items-center justify-between px-5 h-14 border-b border-slate-200/60">
+        <header className="flex items-center justify-between px-5 h-14 border-b border-slate-200/60 shrink-0">
           <div className="flex items-center gap-2">
             <Upload className="w-4 h-4 text-accent" />
-            <span className="text-sm font-semibold text-ink">Upload SOP</span>
+            <span className="text-sm font-semibold text-ink">Upload SOPs</span>
+            {hasFiles && (
+              <span className="text-[11px] text-ink/55 tabular-nums">
+                {queue.length} file{queue.length === 1 ? "" : "s"}
+              </span>
+            )}
           </div>
           <button
             type="button"
@@ -307,73 +374,117 @@ function UploadDialog({
             <X className="w-4 h-4" />
           </button>
         </header>
-        <div className="p-5 space-y-3">
+        <div className="p-5 space-y-3 overflow-y-auto">
           <label className="block">
-            <span className="text-[11px] uppercase tracking-wide text-ink/55 font-semibold">File</span>
+            <span className="text-[11px] uppercase tracking-wide text-ink/55 font-semibold">
+              {hasFiles ? "Add more files" : "Files"}
+            </span>
             <input
               ref={fileRef}
               type="file"
               accept=".pdf,.docx,image/png,image/jpeg,image/webp"
-              onChange={(e) => {
-                const f = e.target.files?.[0];
-                if (f) {
-                  setFile(f);
-                  if (!title) setTitle(f.name.replace(/\.[^.]+$/, ""));
-                }
-              }}
+              multiple
+              onChange={(e) => addFiles(e.target.files)}
               disabled={busy}
               className="mt-1 block w-full text-[13px] file:mr-3 file:px-3 file:py-1.5 file:rounded-full file:border-0 file:bg-accent/10 file:text-accent file:font-medium hover:file:bg-accent/15"
             />
             <span className="text-[11px] text-ink/45 mt-1 block">
-              PDF, Word, PNG, JPG, or WEBP. Max 25 MB.
+              PDF, Word, PNG, JPG, or WEBP. Max 25 MB each. Pick multiple at once with Cmd/Ctrl + click.
             </span>
           </label>
-          <label className="block">
-            <span className="text-[11px] uppercase tracking-wide text-ink/55 font-semibold">Title</span>
-            <input
-              type="text"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              placeholder="How to onboard a new client"
-              disabled={busy}
-              maxLength={200}
-              className="mt-1 block w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-[13px] outline-none focus:border-accent/50 focus:ring-2 focus:ring-accent/20"
-            />
-          </label>
+
+          {hasFiles && (
+            <ul className="rounded-xl border border-slate-200 divide-y divide-slate-100 bg-white max-h-[280px] overflow-y-auto">
+              {queue.map((q, i) => (
+                <li key={i} className="flex items-center gap-2.5 px-3 py-2 text-[12px]">
+                  <StatusGlyph status={q.status} />
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-ink font-medium">{q.file.name}</div>
+                    <div className="text-[10px] text-ink/55 tabular-nums">
+                      {formatBytes(q.file.size)}
+                      {q.status === "done" && q.chunkCount != null && ` · ${q.chunkCount} chunks`}
+                      {q.status === "error" && q.error && ` · ${q.error}`}
+                    </div>
+                  </div>
+                  {!busy && q.status !== "done" && (
+                    <button
+                      type="button"
+                      onClick={() => removeAt(i)}
+                      className="p-1 rounded text-ink/35 hover:text-rose-600 hover:bg-rose-50 transition-colors"
+                      title="Remove from queue"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+
+          {queue.length === 1 && !busy && !allDone && (
+            <label className="block">
+              <span className="text-[11px] uppercase tracking-wide text-ink/55 font-semibold">Title</span>
+              <input
+                type="text"
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                placeholder="How to onboard a new client"
+                disabled={busy}
+                maxLength={200}
+                className="mt-1 block w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-[13px] outline-none focus:border-accent/50 focus:ring-2 focus:ring-accent/20"
+              />
+            </label>
+          )}
+          {queue.length > 1 && !allDone && (
+            <div className="text-[11px] text-ink/55">
+              Titles use each filename for batch uploads. Edit them later from the SOP list.
+            </div>
+          )}
           {busy && (
             <div className="text-[12px] text-ink/60 inline-flex items-center gap-1.5">
               <Loader2 className="w-3.5 h-3.5 animate-spin" />
-              Parsing + embedding… can take a minute for big PDFs.
+              Parsing + embedding sequentially — a minute or so per file.
             </div>
           )}
         </div>
-        <footer className="flex items-center justify-end gap-2 px-5 h-14 border-t border-slate-200/60 bg-slate-50/60">
+        <footer className="flex items-center justify-end gap-2 px-5 h-14 border-t border-slate-200/60 bg-slate-50/60 shrink-0">
           <button
             type="button"
             onClick={onClose}
             disabled={busy}
             className="px-3 py-1.5 rounded-full text-xs font-medium text-ink/70 hover:text-ink hover:bg-slate-100 disabled:opacity-40"
           >
-            Cancel
+            {allDone ? "Close" : "Cancel"}
           </button>
           <button
             type="button"
             onClick={submit}
-            disabled={!file || busy}
+            disabled={!hasFiles || busy || allDone}
             className={cn(
               "inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs font-semibold text-white shadow-sm transition-all hover:-translate-y-0.5 active:scale-95",
-              (!file || busy) && "opacity-60 cursor-not-allowed hover:translate-y-0"
+              (!hasFiles || busy || allDone) && "opacity-60 cursor-not-allowed hover:translate-y-0"
             )}
             style={{ background: "linear-gradient(135deg, #2563EB 0%, #1e63ff 100%)" }}
           >
             {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
-            {busy ? "Indexing…" : "Upload"}
+            {busy
+              ? "Indexing…"
+              : allDone
+                ? "Done"
+                : queue.length > 1 ? `Upload ${queue.length} files` : "Upload"}
           </button>
         </footer>
       </div>
     </div>,
     document.body
   );
+}
+
+function StatusGlyph({ status }: { status: QueueStatus }) {
+  if (status === "uploading") return <Loader2 className="w-3.5 h-3.5 text-accent animate-spin shrink-0" />;
+  if (status === "done") return <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />;
+  if (status === "error") return <AlertTriangle className="w-3.5 h-3.5 text-rose-600 shrink-0" />;
+  return <Clock className="w-3.5 h-3.5 text-ink/35 shrink-0" />;
 }
 
 function KindIcon({ mime }: { mime: string }) {

@@ -41,7 +41,11 @@ export function Avatar({ name, imageUrl, size = 24, className, presence, emoji, 
       src={imageUrl}
       alt={name}
       title={name}
-      className="inline-block rounded-full object-cover border border-border"
+      // object-top anchors the source's top edge to the avatar's top so
+      // heads stay fully in-frame for portrait-style uploads — without
+      // this, square crops centered the photo and clipped the chin on
+      // anything taller than a tight headshot.
+      className="inline-block rounded-full object-cover object-top border border-border"
       style={{ width: s, height: s }}
     />
   ) : (

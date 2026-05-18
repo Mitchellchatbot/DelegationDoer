@@ -7,7 +7,7 @@ import { Countdown } from "./Countdown";
 import type { Task } from "@/lib/types";
 import { useTeam } from "@/lib/team-context";
 import { cn } from "@/lib/utils";
-import { Clock } from "lucide-react";
+import { Clock, CheckCircle2 } from "lucide-react";
 
 // Visual language matches ThreadCard / ClientCard but with a priority-tinted
 // gradient on the card itself — a flat white wash blurred against a white
@@ -88,8 +88,21 @@ export function TaskCard({ task, dim }: { task: Task; dim?: boolean }) {
           )}
         </div>
         <div className="flex items-center gap-1 shrink-0">
-          <Clock className="w-3 h-3" />
-          <Countdown iso={task.dueDate} />
+          {task.status === "done" ? (
+            // Once a task is done the deadline is meaningless — a ticking
+            // "overdue 3d" on something that shipped a week ago reads as
+            // unfinished work. Show a static "Done" indicator instead so
+            // the card stops nagging.
+            <>
+              <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+              <span className="text-emerald-700/80">Done</span>
+            </>
+          ) : (
+            <>
+              <Clock className="w-3 h-3" />
+              <Countdown iso={task.dueDate} />
+            </>
+          )}
         </div>
       </div>
     </Link>

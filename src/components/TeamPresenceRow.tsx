@@ -5,10 +5,11 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "framer-motion";
-import { Smile, X } from "lucide-react";
+import { Smile, X, Hash } from "lucide-react";
 import { toast } from "sonner";
 import { Avatar } from "./Avatar";
 import { useCurrentUser } from "@/lib/user-context";
+import { useSlackCustomEmojis } from "@/lib/slack-emoji-cache";
 
 // Top-of-/team row of every employee as a bubble: avatar with presence
 // dot, status emoji floating top-right, name underneath. The current
@@ -305,6 +306,10 @@ function MeBubble({
                 );
               })}
             </div>
+            <SlackCustomEmojiPalette
+              activeValue={user.statusEmoji}
+              onPick={(shortcode, ev) => pick(shortcode, ev.currentTarget)}
+            />
             <Popover.Arrow className="fill-white" />
           </Popover.Content>
         </Popover.Portal>
@@ -353,5 +358,61 @@ function MeBubble({
         document.body
       )}
     </>
+  );
+}
+
+// Renders the workspace's custom Slack emojis as a clickable palette
+// below the preset unicode grid. Hidden entirely when the workspace
+// has no custom emojis (or the Slack token doesn't have emojis:read)
+// so the picker doesn't show an empty section. Clicking a tile sets
+// the user's status_emoji to ":name:" — DD's avatar overlay resolves
+// that back to the image URL on render, and the syncToSlack call
+// hands the same shortcode to Slack, which already knows the image.
+function SlackCustomEmojiPalette({
+  activeValue, onPick
+}: {
+  activeValue: string | null;
+  onPick: (shortcode: string, ev: React.MouseEvent<HTMLButtonElement>) => void;
+}) {
+  const map = useSlackCustomEmojis();
+  const entries = Object.entries(map);
+  if (entries.length === 0) return null;
+  // Sort alphabetically + cap rendered count at 64 to keep the
+  // popover sane for workspaces with hundreds of emojis. A search
+  // box would be the next step if anyone asks.
+  entries.sort((a, b) => a[0].localeCompare(b[0]));
+  const visible = entries.slice(0, 64);
+
+  return (
+    <div className="mt-3 pt-3 border-t border-slate-100">
+      <div className="text-[11px] font-semibold text-ink/70 inline-flex items-center gap-1.5 mb-1.5">
+        <Hash className="w-3 h-3 text-accent" />
+        Slack custom emojis
+        <span className="text-[10px] text-muted font-normal">
+          {entries.length > visible.length ? `${visible.length} of ${entries.length}` : `${entries.length}`}
+        </span>
+      </div>
+      <div className="grid grid-cols-8 gap-1 max-h-[180px] overflow-y-auto">
+        {visible.map(([name, url]) => {
+          const value = `:${name}:`;
+          const active = activeValue === value;
+          return (
+            <button
+              key={name}
+              type="button"
+              title={value}
+              onClick={(ev) => onPick(value, ev)}
+              className={
+                "w-8 h-8 grid place-items-center rounded-lg overflow-hidden transition-all " +
+                (active ? "bg-accent/10 ring-1 ring-accent/40" : "hover:bg-slate-100")
+              }
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={url} alt={name} className="w-5 h-5 object-cover" draggable={false} />
+            </button>
+          );
+        })}
+      </div>
+    </div>
   );
 }

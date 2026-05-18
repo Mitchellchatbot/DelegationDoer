@@ -8,9 +8,12 @@ export const dynamic = "force-dynamic";
 // PATCH /api/users/me/emoji — set the current user's status emoji.
 // Body: { emoji: string | null }. Pass null to clear.
 //
-// Cheap validation: trim + length cap at 8 chars (DB also enforces). We
-// don't whitelist the actual content because emoji codepoints + ZWJ
-// sequences are too varied to enumerate.
+// Cheap validation: trim + length cap. The cap is 64 chars so that
+// custom Slack shortcodes like ":custom_long_name_emoji:" fit while
+// keeping it tight enough that no one tries to stash a paragraph in
+// here. Unicode emoji + ZWJ sequences are nowhere near 64.
+const MAX_LEN = 64;
+
 export async function PATCH(req: NextRequest) {
   try {
     const userId = await requireCurrentUserId();
@@ -22,7 +25,7 @@ export async function PATCH(req: NextRequest) {
         return NextResponse.json({ error: "emoji must be string or null" }, { status: 400 });
       }
       const trimmed = raw.trim();
-      if (trimmed.length > 8) {
+      if (trimmed.length > MAX_LEN) {
         return NextResponse.json({ error: "emoji too long" }, { status: 400 });
       }
       emoji = trimmed || null;

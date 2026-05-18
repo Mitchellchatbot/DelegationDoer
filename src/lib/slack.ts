@@ -188,6 +188,26 @@ export async function lookupUserByEmail(email: string): Promise<string> {
   return data.user.id;
 }
 
+// Custom emojis the workspace has uploaded. Returns a {name → url} map
+// for non-alias entries (Slack's emoji.list mixes uploaded images with
+// "alias:other_name" pointers; we only want the source images, the
+// caller can fan out aliases if needed).
+//
+// Requires emojis:read scope on the bot token.
+export async function listCustomEmojis(): Promise<Record<string, string>> {
+  const data = await slackGet<{ ok: true; emoji: Record<string, string> }>(
+    "emoji.list",
+    {}
+  );
+  const out: Record<string, string> = {};
+  for (const [name, value] of Object.entries(data.emoji ?? {})) {
+    if (typeof value === "string" && !value.startsWith("alias:")) {
+      out[name] = value;
+    }
+  }
+  return out;
+}
+
 // Cache for users.list — it returns the entire workspace roster which
 // is heavy. 5-minute TTL is plenty for kudos lookups; if a user
 // just joined Slack and we miss them, the next minute's call refreshes.

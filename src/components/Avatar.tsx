@@ -110,11 +110,26 @@ export function Avatar({ name, imageUrl, size = 24, className, presence, emoji, 
       )}
       {emoji && (
         <span
-          className="absolute -top-1 -right-1 rounded-full bg-white border border-slate-200 shadow-sm grid place-items-center leading-none"
+          className="absolute -top-1 -right-1 rounded-full bg-white border border-slate-200 shadow-sm grid place-items-center leading-none overflow-hidden"
           style={{ width: emojiSize, height: emojiSize, fontSize: emojiFont }}
           aria-label="Status emoji"
         >
-          {emoji}
+          {/^https?:\/\//.test(emoji) ? (
+            // Slack custom emojis come in as image URLs (resolved upstream
+            // from a :shortcode: by PersonAvatar). Render as a tiny image
+            // that fills the bubble; the rounded parent clips it to a
+            // circle. eslint-disable to bypass next/image for what is
+            // already a small remote thumbnail.
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={emoji}
+              alt="Status emoji"
+              className="w-full h-full object-cover"
+              draggable={false}
+            />
+          ) : (
+            emoji
+          )}
         </span>
       )}
       {presence && (

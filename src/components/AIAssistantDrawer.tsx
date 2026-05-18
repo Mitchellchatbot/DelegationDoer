@@ -6,6 +6,7 @@ import { Sparkles, Send, X, ArrowUp, Loader2, RefreshCw, Mic, MicOff } from "luc
 import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
 interface Message { role: "user" | "assistant"; content: string }
@@ -422,8 +423,24 @@ function useDictation({
     let stream: MediaStream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    } catch {
-      // user denied mic permission — nothing else to do
+    } catch (err) {
+      // Permission denied, extension intercept, no mic device, etc.
+      // Surface the reason so users know why nothing happened. The
+      // common cases: NotAllowedError (denied by user or by system
+      // permission), NotFoundError (no mic), NotReadableError (mic
+      // in use by another app or browser extension).
+      const name = err instanceof Error ? err.name : "";
+      const msg =
+        name === "NotAllowedError"
+          ? "Microphone permission was denied. Allow it in the browser address bar (lock icon) and try again."
+          : name === "NotFoundError"
+            ? "No microphone detected on this device."
+            : name === "NotReadableError"
+              ? "Mic is busy — another app or browser extension (Scribe / Loom / etc.) might be using it. Close those and retry."
+              : `Couldn't access mic: ${err instanceof Error ? err.message : "unknown"}`;
+      // eslint-disable-next-line no-console
+      console.warn("[mic] getUserMedia failed:", err);
+      toast.error(msg);
       return;
     }
     streamRef.current = stream;
@@ -457,7 +474,10 @@ function useDictation({
   }
 
   async function transcribe(blob: Blob, mime: string) {
-    if (blob.size === 0) return;
+    if (blob.size === 0) {
+      toast.error("Mic captured no audio — try again and speak after the red pulse appears.");
+      return;
+    }
     setTranscribing(true);
     try {
       const ext = mime.includes("mp4") || mime.includes("m4a") ? "m4a"
@@ -468,13 +488,29 @@ function useDictation({
       fd.append("file", blob, `dictation.${ext}`);
       const res = await fetch("/api/transcribe", { method: "POST", body: fd });
       const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        // Server-side failure — most often OPENAI_API_KEY missing/wrong
+        // or rate-limit. The route returns { error } in either case.
+        const detail = typeof data?.error === "string" ? data.error : `HTTP ${res.status}`;
+        // eslint-disable-next-line no-console
+        console.warn("[mic] /api/transcribe failed:", detail);
+        toast.error(`Transcription failed: ${detail}`);
+        return;
+      }
       const text = typeof data.text === "string" ? data.text.trim() : "";
-      if (!text) return;
+      if (!text) {
+        toast.error("Transcription came back empty — try a longer recording or speak more clearly.");
+        return;
+      }
       const base = baselineRef.current;
       const joined = base
         ? base + (base.endsWith(" ") || base.endsWith("\n") ? "" : " ") + text
         : text;
       onTranscript(joined);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn("[mic] /api/transcribe threw:", err);
+      toast.error(`Transcription network error: ${err instanceof Error ? err.message : "unknown"}`);
     } finally {
       setTranscribing(false);
     }

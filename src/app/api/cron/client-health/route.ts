@@ -1,5 +1,4 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { classifyBatch, scoreToLabel, type HealthLabel } from "@/lib/client-health";
 
@@ -28,7 +27,6 @@ interface MissiveMessage {
   body_text: string | null;
   from_addr: string | null;
   sent_at: number;
-  direction: string;
 }
 
 interface ClientRow {
@@ -47,13 +45,6 @@ export async function GET() {
   }
 
   const supabase = getSupabaseAdmin();
-  // Separate client targeting the missive schema (same project, same
-  // service-role key, just a different default schema for queries).
-  const missive = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL,
-    process.env.SUPABASE_SERVICE_ROLE_KEY,
-    { db: { schema: "missive" }, auth: { persistSession: false } }
-  );
 
   const { data: clientsRaw, error: clientsErr } = await supabase
     .from("clients")
@@ -84,16 +75,15 @@ export async function GET() {
   }
 
   const since = Date.now() - LOOKBACK_DAYS * 24 * 60 * 60 * 1000;
-  // Pull recent inbound messages. Cap the global query at 5000 to bound
-  // memory on workspaces with very busy inboxes; we'll still cap per-
-  // client below.
-  const { data: msgsRaw, error: msgsErr } = await missive
-    .from("messages")
-    .select("id, subject, body_text, from_addr, sent_at, direction")
-    .gte("sent_at", since)
-    .eq("direction", "in")
-    .order("sent_at", { ascending: false })
-    .limit(5000);
+  // Pull recent inbound messages via the SECURITY DEFINER RPC. PostgREST
+  // doesn't expose the missive schema directly (and shouldn't — every
+  // user would get read access to raw mail bodies), so the cron calls
+  // public.recent_inbound_missive_messages instead. Cap the global
+  // query at 5000 to bound memory; we'll still cap per-client below.
+  const { data: msgsRaw, error: msgsErr } = await supabase.rpc(
+    "recent_inbound_missive_messages",
+    { since_ms: since, msg_limit: 5000 }
+  );
   if (msgsErr) {
     return NextResponse.json({ ok: false, error: `missive fetch: ${msgsErr.message}` }, { status: 500 });
   }

@@ -492,11 +492,11 @@ function UploadButton({
   );
 }
 
-// Square pan-and-zoom cropper with 90° rotation. Renders a 320px
-// viewport with the image positioned inside; user drags to pan,
-// slider zooms, Left/Right rotate by quarter-turns. "Apply"
-// rasterizes the visible region to a 1080×1080 JPEG and returns it
-// as a File.
+// 4:3 landscape pan-and-zoom cropper with 90° rotation. Renders a
+// 320×240 viewport with the image positioned inside; user drags to
+// pan, slider zooms, Left/Right rotate by quarter-turns. "Apply"
+// rasterizes the visible region to a 1440×1080 JPEG (matching a
+// standard phone-camera landscape frame) and returns it as a File.
 //
 // Rotation is implemented by pre-rendering the original image into
 // an offscreen canvas at the chosen angle and using the resulting
@@ -510,8 +510,10 @@ function CropDialog({
   onCancel: () => void;
   onApply: (cropped: File) => void;
 }) {
-  const VIEWPORT = 320;
-  const OUTPUT = 1080;
+  const VIEWPORT_W = 320;
+  const VIEWPORT_H = 240;
+  const OUTPUT_W = 1440;
+  const OUTPUT_H = 1080;
 
   const [imgUrl, setImgUrl] = useState<string | null>(null);
   const [natW, setNatW] = useState(0);
@@ -531,9 +533,9 @@ function CropDialog({
   const generatedUrlRef = useRef<string | null>(null);
 
   function recenter(w: number, h: number) {
-    const cover = Math.max(VIEWPORT / w, VIEWPORT / h);
-    setTx((VIEWPORT - w * cover) / 2);
-    setTy((VIEWPORT - h * cover) / 2);
+    const cover = Math.max(VIEWPORT_W / w, VIEWPORT_H / h);
+    setTx((VIEWPORT_W - w * cover) / 2);
+    setTy((VIEWPORT_H - h * cover) / 2);
     setScale(1);
   }
 
@@ -604,7 +606,7 @@ function CropDialog({
   }
 
   const baseScale = natW > 0 && natH > 0
-    ? Math.max(VIEWPORT / natW, VIEWPORT / natH)
+    ? Math.max(VIEWPORT_W / natW, VIEWPORT_H / natH)
     : 1;
   const displayScale = baseScale * scale;
 
@@ -612,16 +614,16 @@ function CropDialog({
   function clamp(nextTx: number, nextTy: number) {
     const imgW = natW * displayScale;
     const imgH = natH * displayScale;
-    const minTx = Math.min(0, VIEWPORT - imgW);
-    const minTy = Math.min(0, VIEWPORT - imgH);
-    const maxTx = Math.max(0, VIEWPORT - imgW);
-    const maxTy = Math.max(0, VIEWPORT - imgH);
+    const minTx = Math.min(0, VIEWPORT_W - imgW);
+    const minTy = Math.min(0, VIEWPORT_H - imgH);
+    const maxTx = Math.max(0, VIEWPORT_W - imgW);
+    const maxTy = Math.max(0, VIEWPORT_H - imgH);
     // If image is smaller than viewport on an axis, center it.
-    const clampedX = imgW <= VIEWPORT
-      ? (VIEWPORT - imgW) / 2
+    const clampedX = imgW <= VIEWPORT_W
+      ? (VIEWPORT_W - imgW) / 2
       : Math.min(maxTx, Math.max(minTx, nextTx));
-    const clampedY = imgH <= VIEWPORT
-      ? (VIEWPORT - imgH) / 2
+    const clampedY = imgH <= VIEWPORT_H
+      ? (VIEWPORT_H - imgH) / 2
       : Math.min(maxTy, Math.max(minTy, nextTy));
     return { x: clampedX, y: clampedY };
   }
@@ -646,8 +648,8 @@ function CropDialog({
     // Zoom toward the viewport center so the user's framing stays roughly stable.
     const oldDisplay = baseScale * scale;
     const newDisplay = baseScale * nextScale;
-    const cx = VIEWPORT / 2;
-    const cy = VIEWPORT / 2;
+    const cx = VIEWPORT_W / 2;
+    const cy = VIEWPORT_H / 2;
     // Image point currently under (cx, cy): ((cx - tx) / oldDisplay, ...)
     const ix = (cx - tx) / oldDisplay;
     const iy = (cy - ty) / oldDisplay;
@@ -667,10 +669,11 @@ function CropDialog({
       //   viewport pixel (vx, vy) → image pixel ((vx - tx)/S, (vy - ty)/S)
       const sx = -tx / displayScale;
       const sy = -ty / displayScale;
-      const sSize = VIEWPORT / displayScale;
+      const sW = VIEWPORT_W / displayScale;
+      const sH = VIEWPORT_H / displayScale;
       const canvas = document.createElement("canvas");
-      canvas.width = OUTPUT;
-      canvas.height = OUTPUT;
+      canvas.width = OUTPUT_W;
+      canvas.height = OUTPUT_H;
       const ctx = canvas.getContext("2d");
       if (!ctx) throw new Error("canvas not available");
       const img = new Image();
@@ -681,8 +684,8 @@ function CropDialog({
         img.onerror = () => reject(new Error("image load failed"));
       });
       ctx.fillStyle = "#0f172a";
-      ctx.fillRect(0, 0, OUTPUT, OUTPUT);
-      ctx.drawImage(img, sx, sy, sSize, sSize, 0, 0, OUTPUT, OUTPUT);
+      ctx.fillRect(0, 0, OUTPUT_W, OUTPUT_H);
+      ctx.drawImage(img, sx, sy, sW, sH, 0, 0, OUTPUT_W, OUTPUT_H);
       const blob: Blob | null = await new Promise((resolve) => {
         canvas.toBlob((b) => resolve(b), "image/jpeg", 0.9);
       });
@@ -730,8 +733,8 @@ function CropDialog({
             onPointerUp={onPointerUp}
             onPointerCancel={onPointerUp}
             style={{
-              width: VIEWPORT,
-              height: VIEWPORT,
+              width: VIEWPORT_W,
+              height: VIEWPORT_H,
               borderRadius: 12,
               overflow: "hidden",
               position: "relative",

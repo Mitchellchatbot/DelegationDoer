@@ -2,10 +2,10 @@ import { redirect } from "next/navigation";
 import { Mail, Inbox } from "lucide-react";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
-import { listAccounts, listThreads, type MissiveThread } from "@/lib/missive-client";
+import { listAccounts, listThreadsPaged, type MissiveThread } from "@/lib/missive-client";
 import { visibleAccountIdsFor } from "@/lib/inbox-access";
 import { ThreadFilters } from "@/components/ThreadFilters";
-import { ThreadList } from "@/components/ThreadList";
+import { InboxThreadsClient } from "@/components/InboxThreadsClient";
 import { ComposeButton } from "@/components/ComposeButton";
 import { readStateForThreads, isThreadUnread } from "@/lib/thread-read-state";
 
@@ -32,40 +32,36 @@ export default async function AllInboxesPage({
 
   let inboxes: { id: string; email: string; display_name: string | null }[] = [];
   let threads: MissiveThread[] = [];
+  let hasMore = false;
   let fetchError: string | null = null;
   try {
-    // Always fetch every thread — flipping filter pills filters this
-    // set client-side so we never round-trip Missive on a filter change.
-    const [allAccounts, fetched, visibleIds] = await Promise.all([
+    // SSR only the first page (50 threads). The client component
+    // streams in more on scroll via /api/inboxes/threads, which lets
+    // us go arbitrarily deep without bloating the initial payload.
+    const [allAccounts, firstPage, visibleIds] = await Promise.all([
       listAccounts(),
-      // 1000 instead of 200 — the page filters client-side so we want
-      // a big enough working set that "All inboxes" actually shows
-      // weeks of history, not just the last day or two of a busy team.
-      listThreads({ folder: "INBOX", limit: 1000 }),
+      listThreadsPaged({ folder: "INBOX", limit: 50 }),
       visibleAccountIdsFor(me)
     ]);
 
     inboxes = visibleIds === null
       ? allAccounts
       : allAccounts.filter((a) => visibleIds.has(a.id));
-    // Critical: also filter the threads themselves. listThreads is
-    // workspace-scoped on the Missive side, so without this every
-    // user with access to the page would see every thread regardless
-    // of which inboxes they're actually in. Threads expose the
-    // emails of every connected account they touch via
-    // account_emails — match against the inboxes this user can see.
+    // Apply the same per-user visibility filter the paginated API
+    // route applies, so SSR matches what infinite scroll later loads.
     if (visibleIds === null) {
-      threads = fetched;
+      threads = firstPage.threads;
     } else {
       const visibleEmails = new Set(
         inboxes.map((a) => a.email.toLowerCase())
       );
-      threads = fetched.filter((t) =>
+      threads = firstPage.threads.filter((t) =>
         (t.account_emails ?? []).some((ae) =>
           visibleEmails.has(ae.email.toLowerCase())
         )
       );
     }
+    hasMore = firstPage.hasMore;
   } catch (err) {
     fetchError = err instanceof Error ? err.message : "unknown error";
   }
@@ -78,7 +74,6 @@ export default async function AllInboxesPage({
     thread: t,
     unread: isThreadUnread(t.last_message_at, readByThread.get(t.id))
   }));
-  const unreadCount = decoratedThreads.filter((d) => d.unread).length;
 
   return (
     <div className="space-y-5">
@@ -128,15 +123,10 @@ export default async function AllInboxesPage({
         </div>
       )}
 
-      {!fetchError && unreadCount > 0 && (
-        <div className="text-xs text-ink/60 px-1">
-          <span className="font-semibold text-accent">{unreadCount}</span> unread of {threads.length}
-        </div>
-      )}
-
       {!fetchError && (
-        <ThreadList
-          threads={decoratedThreads}
+        <InboxThreadsClient
+          initialThreads={decoratedThreads}
+          initialHasMore={hasMore}
           linkAccountId={inboxes[0]?.id ?? "all"}
           accountIdByEmail={Object.fromEntries(
             inboxes.map((a) => [a.email.toLowerCase(), a.id])

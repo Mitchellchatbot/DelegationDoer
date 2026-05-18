@@ -2,11 +2,11 @@ import { notFound, redirect } from "next/navigation";
 import { Mail, PenSquare } from "lucide-react";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
-import { listAccounts, listThreads, type MissiveThread } from "@/lib/missive-client";
+import { listAccounts, listThreadsPaged, type MissiveThread } from "@/lib/missive-client";
 import { visibleAccountIdsFor } from "@/lib/inbox-access";
 import { readStateForThreads, isThreadUnread } from "@/lib/thread-read-state";
 import { ThreadFilters } from "@/components/ThreadFilters";
-import { ThreadList } from "@/components/ThreadList";
+import { InboxThreadsClient } from "@/components/InboxThreadsClient";
 import { ComposeButton } from "@/components/ComposeButton";
 
 export const dynamic = "force-dynamic";
@@ -41,27 +41,25 @@ export default async function InboxThreadsPage({
   }
 
   let threads: MissiveThread[] = [];
+  let hasMore = false;
   let inboxLabel = "Inbox";
   let inboxEmail = "";
   let fetchError: string | null = null;
   try {
-    // Fetch every thread once (no status/q filter) — flipping the
-    // filter pills filters this set client-side, so we never wait on
-    // Missive again after the first load.
-    const [allAccounts, fetched] = await Promise.all([
+    // SSR the first 50 — the client component handles infinite scroll
+    // + search via /api/inboxes/threads from there. mailboxId is
+    // critical: without it, listThreadsPaged returns the whole
+    // workspace, leaking other inboxes into this view.
+    const [allAccounts, firstPage] = await Promise.all([
       listAccounts(),
-      // Scope server-side to this connected account. Without
-      // mailbox_id, listThreads returns every thread in the
-      // workspace, leaking other inboxes.
-      // Bump from 200 → 1000 so single-mailbox view shows real history
-      // instead of clipping at a day or two on busy inboxes.
-      listThreads({ folder: "INBOX", limit: 1000, mailboxId: params.accountId })
+      listThreadsPaged({ folder: "INBOX", limit: 50, mailboxId: params.accountId })
     ]);
     const account = allAccounts.find((a) => a.id === params.accountId);
     if (!account) notFound();
     inboxLabel = account.display_name || account.email;
     inboxEmail = account.email;
-    threads = fetched;
+    threads = firstPage.threads;
+    hasMore = firstPage.hasMore;
   } catch (err) {
     fetchError = err instanceof Error ? err.message : "unknown error";
   }
@@ -120,9 +118,11 @@ export default async function InboxThreadsPage({
       )}
 
       {!fetchError && (
-        <ThreadList
-          threads={decoratedThreads}
+        <InboxThreadsClient
+          initialThreads={decoratedThreads}
+          initialHasMore={hasMore}
           linkAccountId={params.accountId}
+          mailboxId={params.accountId}
           missiveAppUrl={missiveAppUrl || undefined}
         />
       )}

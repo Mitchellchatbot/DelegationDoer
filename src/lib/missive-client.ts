@@ -116,11 +116,23 @@ export interface ListThreadsOpts {
   folder?: "INBOX" | "SENT";
   status?: "open" | "pending" | "closed";
   q?: string;
+  // Capped at 200 server-side. Default page size on the backend is 50.
   limit?: number;
+  // Number of rows to skip before the page starts — supports infinite
+  // scroll. Backend orders by last_message_at DESC so offset:50 means
+  // "the next 50 older threads."
+  offset?: number;
   // Server-side scope to one connected account (by id). Required for
   // any per-inbox view — listThreads otherwise returns every thread
   // in the workspace.
   mailboxId?: string;
+}
+
+export interface ListThreadsResult {
+  threads: MissiveThread[];
+  limit: number;
+  offset: number;
+  hasMore: boolean;
 }
 
 // Missive stores list-y fields as TEXT (joined with "; " for thread
@@ -172,16 +184,35 @@ function normalizeMessage<T extends { to_addrs: unknown; cc_addrs: unknown; sent
   };
 }
 
+// Legacy signature kept for existing call sites that only want the
+// threads array. New code should prefer listThreadsPaged() which
+// surfaces the pagination cursor and the hasMore flag.
 export async function listThreads(opts: ListThreadsOpts = {}): Promise<MissiveThread[]> {
+  const { threads } = await listThreadsPaged(opts);
+  return threads;
+}
+
+export async function listThreadsPaged(opts: ListThreadsOpts = {}): Promise<ListThreadsResult> {
   const params = new URLSearchParams();
   if (opts.folder) params.set("folder", opts.folder);
   if (opts.status) params.set("status", opts.status);
   if (opts.q) params.set("q", opts.q);
   if (opts.limit) params.set("limit", String(opts.limit));
+  if (opts.offset) params.set("offset", String(opts.offset));
   if (opts.mailboxId) params.set("mailbox_id", opts.mailboxId);
   const qs = params.toString() ? `?${params}` : "";
-  const data = await missiveFetch<{ threads: MissiveThread[] }>(`/api/threads${qs}`);
-  return (data.threads ?? []).map(normalizeThread);
+  const data = await missiveFetch<{
+    threads: MissiveThread[];
+    limit?: number;
+    offset?: number;
+    hasMore?: boolean;
+  }>(`/api/threads${qs}`);
+  return {
+    threads: (data.threads ?? []).map(normalizeThread),
+    limit: data.limit ?? opts.limit ?? 50,
+    offset: data.offset ?? opts.offset ?? 0,
+    hasMore: data.hasMore ?? false
+  };
 }
 
 export async function getThread(threadId: string): Promise<MissiveThreadDetail> {

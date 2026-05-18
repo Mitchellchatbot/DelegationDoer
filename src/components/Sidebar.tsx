@@ -189,27 +189,53 @@ export function Sidebar({ user }: { user: User }) {
                 key={item.href}
                 href={item.href}
                 className={cn(
-                  "flex items-center gap-3 px-3 py-2.5 rounded-xl text-[15px] transition-all duration-150 active:scale-[0.98] relative",
+                  // active:scale-[0.96] gives a tactile press feedback on
+                  // every click — happens even when re-clicking the
+                  // already-active tab, so the row always responds.
+                  "flex items-center gap-3 px-3 py-2.5 rounded-xl text-[15px] transition-all duration-150 active:scale-[0.96] relative",
+                  // No activeBg here — the sliding pill (below) paints
+                  // the active background instead, so the color visibly
+                  // glides between tabs on click. activeFg still applies
+                  // for text + icon tint.
                   active
-                    ? cn(tone.activeBg, tone.activeFg, "font-semibold")
+                    ? cn(tone.activeFg, "font-semibold")
                     : "text-ink/70 hover:text-ink hover:bg-slate-100/70"
                 )}
               >
-                <Icon className={cn("w-[18px] h-[18px] shrink-0", active ? tone.activeFg : tone.idle)} />
-                {item.label}
+                {/* Shared active-pill underlay — slides smoothly between
+                    tabs on click because every active instance shares
+                    the same layoutId. Replaces the static activeBg fill
+                    so the color actually animates between tabs. */}
+                {active && (
+                  <motion.span
+                    layoutId="sidebar-active-pill"
+                    aria-hidden
+                    className={cn("absolute inset-0 rounded-xl", tone.activeBg)}
+                    transition={{ type: "spring", stiffness: 380, damping: 24 }}
+                  />
+                )}
+                <Icon className={cn("w-[18px] h-[18px] shrink-0 relative", active ? tone.activeFg : tone.idle)} />
+                <span className="relative">{item.label}</span>
                 {seoBadge !== null && (
                   <span
-                    className="ml-auto inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full text-[10px] font-bold tabular-nums bg-rose-500 text-white shadow-sm ring-2 ring-white"
+                    className="ml-auto inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full text-[10px] font-bold tabular-nums bg-rose-500 text-white shadow-sm ring-2 ring-white relative"
                     title={`${seoBadge} open SEO ${seoBadge === 1 ? "request" : "requests"}`}
                   >
                     {seoBadge}
                   </span>
                 )}
+                {/* Active-indicator dot. Bumped to 2x2 and a bouncier
+                    spring so the slide between tabs reads as a real
+                    motion rather than a snap. layoutId is shared
+                    across every nav item, so Framer Motion animates
+                    the same DOM dot from its old position to its new
+                    one on every tab change. */}
                 {active && seoBadge === null && (
                   <motion.span
                     layoutId="sidebar-active-dot"
-                    className={cn("absolute right-3 w-1.5 h-1.5 rounded-full", tone.activeFg.replace("text-", "bg-"))}
-                    transition={{ type: "spring", stiffness: 500, damping: 30 }}
+                    aria-hidden
+                    className={cn("absolute right-3 w-2 h-2 rounded-full shadow-sm", tone.activeFg.replace("text-", "bg-"))}
+                    transition={{ type: "spring", stiffness: 380, damping: 22 }}
                   />
                 )}
               </Link>

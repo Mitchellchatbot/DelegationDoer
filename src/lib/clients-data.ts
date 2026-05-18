@@ -39,6 +39,18 @@ export interface Client {
   googleProfileAutomation: boolean | null;
   domainLocation: string | null;
   hostingLocation: string | null;
+  // Account health — computed nightly from inbound email sentiment;
+  // leaders can override via PATCH /api/clients/[id]/health. Effective
+  // value at display time is healthOverrideLabel ?? healthLabel.
+  healthLabel: "thriving" | "steady" | "shaky" | "at_risk" | null;
+  healthScore: number | null;
+  healthSampleSize: number | null;
+  healthSummary: string | null;
+  healthComputedAt: string | null;
+  healthOverrideLabel: "thriving" | "steady" | "shaky" | "at_risk" | null;
+  healthOverrideNote: string | null;
+  healthOverrideBy: string | null;
+  healthOverrideAt: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -73,6 +85,15 @@ interface ClientRow {
   google_profile_automation: boolean | null;
   domain_location: string | null;
   hosting_location: string | null;
+  health_label: "thriving" | "steady" | "shaky" | "at_risk" | null;
+  health_score: number | string | null;
+  health_sample_size: number | null;
+  health_summary: string | null;
+  health_computed_at: string | null;
+  health_override_label: "thriving" | "steady" | "shaky" | "at_risk" | null;
+  health_override_note: string | null;
+  health_override_by: string | null;
+  health_override_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -108,6 +129,15 @@ function rowToClient(r: ClientRow): Client {
     googleProfileAutomation: r.google_profile_automation ?? null,
     domainLocation: r.domain_location ?? null,
     hostingLocation: r.hosting_location ?? null,
+    healthLabel: r.health_label ?? null,
+    healthScore: r.health_score == null ? null : Number(r.health_score),
+    healthSampleSize: r.health_sample_size ?? null,
+    healthSummary: r.health_summary ?? null,
+    healthComputedAt: r.health_computed_at ?? null,
+    healthOverrideLabel: r.health_override_label ?? null,
+    healthOverrideNote: r.health_override_note ?? null,
+    healthOverrideBy: r.health_override_by ?? null,
+    healthOverrideAt: r.health_override_at ?? null,
     createdAt: r.created_at,
     updatedAt: r.updated_at
   };

@@ -8,6 +8,7 @@ import {
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { getClient, getResourcesForClient, type ClientResource } from "@/lib/clients-data";
 import { BackPill } from "@/components/BackPill";
+import { ClientHealthCard } from "@/components/ClientHealthCard";
 import { AddResourceForm, DeleteResourceButton } from "@/components/AddResourceForm";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
@@ -192,6 +193,19 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
           style={{ background: "radial-gradient(circle, rgba(99,102,241,0.18), transparent 70%)" }}
         />
       </header>
+
+      <ClientHealthCard
+        clientId={client.id}
+        healthLabel={client.healthLabel}
+        healthScore={client.healthScore}
+        healthSampleSize={client.healthSampleSize}
+        healthSummary={client.healthSummary}
+        healthComputedAt={client.healthComputedAt}
+        healthOverrideLabel={client.healthOverrideLabel}
+        healthOverrideNote={client.healthOverrideNote}
+        healthOverrideAt={client.healthOverrideAt}
+        canEdit={!!(me && (me.role === "leader" || me.isAdmin))}
+      />
 
       {/* Service / integration metadata — collapsed into a single card
           so the operator can scan the wiring (where the domain lives,

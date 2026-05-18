@@ -17,6 +17,7 @@ import { NewTaskForm } from "./NewTaskForm";
 import { ROLE_LABELS } from "@/lib/auth";
 import { primaryDepartment } from "@/lib/departments";
 import type { User } from "@/lib/types";
+import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 
 interface SearchResults {
@@ -242,7 +243,7 @@ export function Topbar({ user }: { user: User }) {
       <div className="flex items-center gap-2 justify-self-end">
         <Dialog.Root open={newTaskOpen} onOpenChange={setNewTaskOpen}>
           <Dialog.Trigger asChild>
-            <button className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full text-[14px] font-medium text-white bg-accent hover:bg-accent/90 shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-lift">
+            <button className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full text-[14px] font-medium text-white bg-accent hover:bg-accent/90 shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-lift whitespace-nowrap shrink-0">
               <Plus className="w-4 h-4" /> New task
             </button>
           </Dialog.Trigger>
@@ -305,11 +306,22 @@ export function Topbar({ user }: { user: User }) {
         {(() => {
           const dept = user.role !== "leader" ? primaryDepartment(user.departmentIds) : null;
           return (
-            <div className="flex items-center gap-2.5 pl-1 pr-3 py-1 rounded-full border border-slate-200 bg-slate-50">
-              <div className={dept ? `rounded-full ring-2 ${dept.ring}` : ""}>
+            <div
+              // shrink-0 keeps the pill from being crushed by flex when
+              // the row gets crowded. Right padding collapses to match
+              // the left when the text block is hidden so the pill looks
+              // like a clean circle around just the avatar at <lg widths.
+              className="flex items-center gap-2.5 p-1 lg:pr-3 rounded-full border border-slate-200 bg-slate-50 shrink-0"
+              title={`${user.name} · ${ROLE_LABELS[user.role]}${dept ? ` · ${dept.label}` : ""}`}
+            >
+              <div className={cn("shrink-0", dept ? `rounded-full ring-2 ${dept.ring}` : "")}>
                 <PersonAvatar userId={user.id} name={user.name} imageUrl={user.avatarUrl} size={28} />
               </div>
-              <div className="text-[12px] leading-tight">
+              {/* Name + role + dept hide on narrow viewports — at small
+                  widths the topbar is cramped and the New task button
+                  loses room. Tooltip on the pill keeps the info one
+                  hover away. */}
+              <div className="hidden lg:block text-[12px] leading-tight">
                 <div className="text-ink font-semibold">{user.name}</div>
                 <div className="flex items-center gap-1.5 mt-0.5">
                   <span className="text-muted">{ROLE_LABELS[user.role]}</span>

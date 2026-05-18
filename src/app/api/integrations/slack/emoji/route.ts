@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUserId } from "@/lib/session";
 import { listCustomEmojis } from "@/lib/slack";
 
@@ -9,14 +9,18 @@ export const dynamic = "force-dynamic";
 // picker (to render the palette) and by PersonAvatar (to resolve
 // ":shortcode:" status values into image URLs for display).
 //
-// Cached in module scope for an hour — emoji.list is small (~few KB)
-// but Slack rate-limits it under tier 2, and the data rarely changes.
+// Cached in module scope for 5 minutes — emoji.list is small (~few
+// KB) but Slack rate-limits it under tier 2, so we don't want to hit
+// it every request. 5 min is short enough that a freshly-uploaded
+// emoji shows up almost immediately, and the `?refresh=1` query
+// param lets the picker's manual refresh button force a fresh pull
+// when the user knows they just uploaded one.
 
 interface CacheEntry {
   emojis: { name: string; url: string }[];
   fetchedAt: number;
 }
-const CACHE_TTL_MS = 60 * 60 * 1000;
+const CACHE_TTL_MS = 5 * 60 * 1000;
 let cache: CacheEntry | null = null;
 let pending: Promise<CacheEntry> | null = null;
 
@@ -37,13 +41,18 @@ async function fetchAndCache(): Promise<CacheEntry> {
   }
 }
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
     await requireCurrentUserId();
     if (!process.env.SLACK_BOT_TOKEN) {
       return NextResponse.json({ emojis: [], note: "SLACK_BOT_TOKEN not configured" });
     }
-    if (cache && Date.now() - cache.fetchedAt < CACHE_TTL_MS) {
+    // ?refresh=1 lets the picker's manual refresh button (or any
+    // caller who knows the cache is stale) bypass the cache and
+    // pull a fresh copy from Slack. Repopulates the shared cache as
+    // a side effect, so the next caller also sees the fresh data.
+    const wantsFresh = req.nextUrl.searchParams.get("refresh") === "1";
+    if (!wantsFresh && cache && Date.now() - cache.fetchedAt < CACHE_TTL_MS) {
       return NextResponse.json({ emojis: cache.emojis });
     }
     const fresh = await fetchAndCache();

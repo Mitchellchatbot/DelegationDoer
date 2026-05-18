@@ -10,11 +10,11 @@
 // individual components — every avatar in the app benefits from a
 // single fetch.
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 interface EmojiMap { [name: string]: string }
 
-const REFRESH_MS = 10 * 60 * 1000;
+const REFRESH_MS = 5 * 60 * 1000;
 let cache: EmojiMap | null = null;
 let pending: Promise<EmojiMap> | null = null;
 let fetchedAt = 0;
@@ -22,11 +22,17 @@ let fetchedAt = 0;
 // mounted avatars re-render when the map first arrives.
 const subscribers = new Set<(m: EmojiMap) => void>();
 
-async function fetchOnce(): Promise<EmojiMap> {
+async function fetchOnce(force = false): Promise<EmojiMap> {
   if (pending) return pending;
   pending = (async () => {
     try {
-      const res = await fetch("/api/integrations/slack/emoji", { cache: "no-store" });
+      // ?refresh=1 tells the server to bypass its own 5-min cache
+      // and pull straight from Slack. Used when the user explicitly
+      // hits the refresh button after uploading a new emoji.
+      const url = force
+        ? "/api/integrations/slack/emoji?refresh=1"
+        : "/api/integrations/slack/emoji";
+      const res = await fetch(url, { cache: "no-store" });
       const data = await res.json();
       const next: EmojiMap = {};
       for (const e of (data?.emojis ?? []) as Array<{ name: string; url: string }>) {
@@ -51,8 +57,19 @@ async function fetchOnce(): Promise<EmojiMap> {
   return pending;
 }
 
-export function useSlackCustomEmojis(): EmojiMap {
+export interface SlackEmojiCache {
+  map: EmojiMap;
+  // Force-refresh the cache. Bypasses both the client module-scope
+  // TTL and the server's 5-min cache. Returns when the refresh
+  // completes so callers can show feedback.
+  refresh: () => Promise<void>;
+  // True while a refresh request is in flight.
+  refreshing: boolean;
+}
+
+export function useSlackCustomEmojis(): SlackEmojiCache {
   const [map, setMap] = useState<EmojiMap>(() => cache ?? {});
+  const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => {
     subscribers.add(setMap);
@@ -65,7 +82,16 @@ export function useSlackCustomEmojis(): EmojiMap {
     };
   }, []);
 
-  return map;
+  const refresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await fetchOnce(true);
+    } finally {
+      setRefreshing(false);
+    }
+  }, []);
+
+  return { map, refresh, refreshing };
 }
 
 // Pure helper for non-React callers (or for components that already

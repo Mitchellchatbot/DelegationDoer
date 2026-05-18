@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "framer-motion";
-import { Smile, X, Hash } from "lucide-react";
+import { Smile, X, Hash, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { Avatar } from "./Avatar";
 import { useCurrentUser } from "@/lib/user-context";
@@ -374,45 +374,70 @@ function SlackCustomEmojiPalette({
   activeValue: string | null;
   onPick: (shortcode: string, ev: React.MouseEvent<HTMLButtonElement>) => void;
 }) {
-  const map = useSlackCustomEmojis();
+  const { map, refresh, refreshing } = useSlackCustomEmojis();
   const entries = Object.entries(map);
-  if (entries.length === 0) return null;
   // Sort alphabetically + cap rendered count at 64 to keep the
   // popover sane for workspaces with hundreds of emojis. A search
   // box would be the next step if anyone asks.
   entries.sort((a, b) => a[0].localeCompare(b[0]));
   const visible = entries.slice(0, 64);
 
+  // We render the section even when empty so users have a refresh
+  // button to hit after uploading a new emoji to Slack — otherwise
+  // the section disappears entirely and there's no way to trigger
+  // a refresh from the UI.
   return (
     <div className="mt-3 pt-3 border-t border-slate-100">
-      <div className="text-[11px] font-semibold text-ink/70 inline-flex items-center gap-1.5 mb-1.5">
-        <Hash className="w-3 h-3 text-accent" />
-        Slack custom emojis
-        <span className="text-[10px] text-muted font-normal">
-          {entries.length > visible.length ? `${visible.length} of ${entries.length}` : `${entries.length}`}
-        </span>
+      <div className="flex items-center justify-between mb-1.5">
+        <div className="text-[11px] font-semibold text-ink/70 inline-flex items-center gap-1.5">
+          <Hash className="w-3 h-3 text-accent" />
+          Slack custom emojis
+          <span className="text-[10px] text-muted font-normal">
+            {entries.length === 0
+              ? "none yet"
+              : entries.length > visible.length
+                ? `${visible.length} of ${entries.length}`
+                : `${entries.length}`}
+          </span>
+        </div>
+        <button
+          type="button"
+          onClick={() => { void refresh(); }}
+          disabled={refreshing}
+          title="Pull the latest emoji list from Slack (use after uploading a new one)"
+          className="inline-flex items-center gap-1 text-[10px] text-ink/55 hover:text-accent disabled:opacity-50"
+        >
+          <RefreshCw className={"w-3 h-3 " + (refreshing ? "animate-spin" : "")} />
+          {refreshing ? "Syncing" : "Refresh"}
+        </button>
       </div>
-      <div className="grid grid-cols-8 gap-1 max-h-[180px] overflow-y-auto">
-        {visible.map(([name, url]) => {
-          const value = `:${name}:`;
-          const active = activeValue === value;
-          return (
-            <button
-              key={name}
-              type="button"
-              title={value}
-              onClick={(ev) => onPick(value, ev)}
-              className={
-                "w-8 h-8 grid place-items-center rounded-lg overflow-hidden transition-all " +
-                (active ? "bg-accent/10 ring-1 ring-accent/40" : "hover:bg-slate-100")
-              }
-            >
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={url} alt={name} className="w-5 h-5 object-cover" draggable={false} />
-            </button>
-          );
-        })}
-      </div>
+      {entries.length === 0 ? (
+        <div className="text-[11px] text-muted italic px-1">
+          Upload a custom emoji in Slack, then hit Refresh.
+        </div>
+      ) : (
+        <div className="grid grid-cols-8 gap-1 max-h-[180px] overflow-y-auto">
+          {visible.map(([name, url]) => {
+            const value = `:${name}:`;
+            const active = activeValue === value;
+            return (
+              <button
+                key={name}
+                type="button"
+                title={value}
+                onClick={(ev) => onPick(value, ev)}
+                className={
+                  "w-8 h-8 grid place-items-center rounded-lg overflow-hidden transition-all " +
+                  (active ? "bg-accent/10 ring-1 ring-accent/40" : "hover:bg-slate-100")
+                }
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={url} alt={name} className="w-5 h-5 object-cover" draggable={false} />
+              </button>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

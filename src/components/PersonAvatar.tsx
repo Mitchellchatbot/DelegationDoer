@@ -30,7 +30,7 @@ export function PersonAvatar({
   // image URLs from the workspace's emoji.list. Plain unicode strings
   // pass through unchanged. Avatar already renders URL strings as
   // <img>, so handing it the resolved value is enough.
-  const customEmojis = useSlackCustomEmojis();
+  const { map: customEmojis } = useSlackCustomEmojis();
   const resolvedEmoji = resolveEmoji(live?.statusEmoji ?? null, customEmojis);
   return (
     <Avatar

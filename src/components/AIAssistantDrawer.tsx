@@ -23,8 +23,15 @@ const SUGGESTED = [
 // bold / code blocks render properly instead of showing raw `##`
 // and `**`).
 export function AIAssistantDrawer({
-  open, onOpenChange
-}: { open: boolean; onOpenChange: (b: boolean) => void }) {
+  open, onOpenChange, starter
+}: {
+  open: boolean;
+  onOpenChange: (b: boolean) => void;
+  // Optional text to pre-fill the composer with when the drawer is
+  // opened on a fresh conversation. Used by the /sops "Ask AI" card
+  // to seed "How do I…" so the user just keeps typing.
+  starter?: string;
+}) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -38,7 +45,24 @@ export function AIAssistantDrawer({
   }, [messages, loading]);
 
   useEffect(() => {
-    if (open) setTimeout(() => inputRef.current?.focus(), 150);
+    if (open) {
+      // Pre-fill the input only on a fresh open (no in-flight draft,
+      // no existing conversation) — never stomp text the user has
+      // already typed or a thread that's already going.
+      if (starter && !input && messages.length === 0) {
+        setInput(starter);
+      }
+      setTimeout(() => {
+        const ta = inputRef.current;
+        if (!ta) return;
+        ta.focus();
+        // Put the cursor at the end so the user can start typing
+        // immediately after the starter phrase.
+        const end = ta.value.length;
+        ta.setSelectionRange(end, end);
+      }, 150);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   async function send(text?: string) {
@@ -523,6 +547,22 @@ function MarkdownBody({ content }: { content: string }) {
           a: ({ node, ...props }) => (
             <a {...props} target="_blank" rel="noopener noreferrer"
               className="text-accent underline-offset-2 hover:underline font-medium" />
+          ),
+          // SOP answers embed screenshots/diagrams via ![alt](url) so
+          // users see the actual picture, not just a description. Cap
+          // the rendered width to the drawer's content area, lazy-load,
+          // and dim the border so the image reads as a citation, not
+          // a hero.
+          // eslint-disable-next-line @typescript-eslint/no-unused-vars
+          img: ({ node, alt, src, ...props }) => (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              {...props}
+              src={src}
+              alt={alt ?? ""}
+              loading="lazy"
+              className="block my-2 max-w-full h-auto rounded-lg border border-slate-200/70 shadow-sm"
+            />
           ),
           // eslint-disable-next-line @typescript-eslint/no-unused-vars
           code: ({ node, inline, ...props }: any) => inline ? (

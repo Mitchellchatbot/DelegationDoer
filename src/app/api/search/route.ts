@@ -16,7 +16,7 @@ export const dynamic = "force-dynamic";
 export async function GET(req: NextRequest) {
   const q = (req.nextUrl.searchParams.get("q") ?? "").trim();
   if (!q) {
-    return NextResponse.json({ tasks: [], users: [], projects: [] });
+    return NextResponse.json({ tasks: [], users: [], projects: [], sops: [] });
   }
 
   await requireCurrentUserId(); // gate behind auth; middleware already does this
@@ -24,11 +24,16 @@ export async function GET(req: NextRequest) {
   const lower = q.toLowerCase();
   const supabase = getSupabaseAdmin();
 
-  const [tasks, users, depts, projectsRes] = await Promise.all([
+  // SOP lookup is a substring match on title + filename. Vector search
+  // would be more accurate but fires on every keystroke here — for the
+  // dropdown we want cheap and instant. The "Ask AI" flow on /sops is
+  // where semantic search lives.
+  const [tasks, users, depts, projectsRes, sopsRes] = await Promise.all([
     getAllTasks(),
     getAllUsersLight(),
     getDepartments(),
-    supabase.from("projects").select("id,name,description,department_id")
+    supabase.from("projects").select("id,name,description,department_id"),
+    supabase.from("sops").select("id,title,source_filename,mime_type,file_url")
   ]);
 
   const userById = new Map(users.map((u) => [u.id, u]));
@@ -76,9 +81,24 @@ export async function GET(req: NextRequest) {
         : null
     }));
 
+  const sopRows = sopsRes?.data ?? [];
+  const sopMatches = sopRows
+    .filter((s) =>
+      `${s.title ?? ""} ${s.source_filename ?? ""}`.toLowerCase().includes(lower)
+    )
+    .slice(0, 5)
+    .map((s) => ({
+      id: s.id as string,
+      title: s.title as string,
+      sourceFilename: s.source_filename as string,
+      mimeType: s.mime_type as string,
+      fileUrl: s.file_url as string
+    }));
+
   return NextResponse.json({
     tasks: taskMatches,
     users: userMatches,
-    projects: projectMatches
+    projects: projectMatches,
+    sops: sopMatches
   });
 }

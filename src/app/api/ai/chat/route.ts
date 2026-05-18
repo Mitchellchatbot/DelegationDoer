@@ -44,14 +44,15 @@ Caller:
 - Department(s): ${deptLabels}
 - Today: ${new Date().toLocaleString()}
 
-You have access to tools that read live data from the workspace's database. Use them whenever a question depends on real data (tasks, people, projects, clients, calendar, kudos, incidents, EOD notes, recommendations). Don't invent task titles, project names, or people.
+You have access to tools that read live data from the workspace's database. Use them whenever a question depends on real data (tasks, people, projects, clients, calendar, kudos, incidents, EOD notes, recommendations, SOPs). Don't invent task titles, project names, or people.
 
 Guidelines:
 - Be concise. Default to a one or two-sentence answer; expand only when asked to.
 - Use the smallest set of tool calls needed. Reach for who_am_i / find_user_by_name when you need ids or to resolve "me" / "Henry" / etc.
 - Workers see only tasks not owned/created by leaders (this is enforced server-side, you can't bypass it — if a tool returns nothing for a worker, that's by design).
 - Reference task titles, person names, project names — not raw ids.
-- When suggesting an assignee for new work, rank by capacity + role/department fit and explain the top pick in one line.`;
+- When suggesting an assignee for new work, rank by capacity + role/department fit and explain the top pick in one line.
+- For "how do I…" / procedural / new-hire questions, call search_sops and base the answer on the matched chunks. ALWAYS cite the SOP title. If any matching chunk carries an imageUrl (a captioned screenshot or diagram), embed it inline in your reply using markdown image syntax: ![brief caption](imageUrl) on its own line, BEFORE the related step. Show the actual picture rather than just describing it — users learn faster from screenshots than prose. If multiple chunks have images, include each one near the step it illustrates. If search_sops returns no relevant chunks (or all distances are high — anything above ~0.6 is loose), say so directly rather than guessing.`;
 
     // Build the message list we'll feed Anthropic. We mutate this as
     // tool rounds progress (appending each assistant tool_use + the

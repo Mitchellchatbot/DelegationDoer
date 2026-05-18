@@ -3,12 +3,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
-  BookOpen, Upload, FileText, FileImage, Trash2, Loader2, AlertTriangle, X
+  BookOpen, Upload, FileText, FileImage, Trash2, Loader2, AlertTriangle, X,
+  Sparkles, ArrowRight
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { useCurrentUser } from "@/lib/user-context";
 import { PersonAvatar } from "@/components/PersonAvatar";
+import { AIAssistantDrawer } from "@/components/AIAssistantDrawer";
 
 interface Sop {
   id: string;
@@ -37,6 +39,7 @@ export default function SopsPage() {
   const [sops, setSops] = useState<Sop[] | null>(null);
   const [authors, setAuthors] = useState<Record<string, AuthorRef>>({});
   const [uploadOpen, setUploadOpen] = useState(false);
+  const [aiOpen, setAiOpen] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -92,6 +95,8 @@ export default function SopsPage() {
           </button>
         )}
       </header>
+
+      <AskAiHero onOpen={() => setAiOpen(true)} disabled={(sops?.length ?? 0) === 0} />
 
       {sops === null ? (
         <div className="text-xs text-muted">Loading…</div>
@@ -165,7 +170,50 @@ export default function SopsPage() {
           onUploaded={() => { setUploadOpen(false); refresh(); }}
         />
       )}
+
+      <AIAssistantDrawer
+        open={aiOpen}
+        onOpenChange={setAiOpen}
+        starter="How do I "
+      />
     </div>
+  );
+}
+
+// Big call-to-action card that opens the Ask AI drawer pre-seeded
+// with "How do I " so the user can keep typing without scaffolding
+// the question themselves. Sits between the page header and the SOP
+// list to make it the obvious next thing to do after landing here.
+function AskAiHero({ onOpen, disabled }: { onOpen: () => void; disabled: boolean }) {
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      disabled={disabled}
+      className={cn(
+        "group w-full text-left rounded-2xl border border-white/60 p-5 transition-all flex items-center gap-4",
+        "bg-gradient-to-br from-blue-50/80 via-white to-fuchsia-50/60",
+        "shadow-soft hover:shadow-lift hover:-translate-y-0.5",
+        disabled && "opacity-60 cursor-not-allowed hover:translate-y-0 hover:shadow-soft"
+      )}
+      title={disabled ? "Upload your first SOP to enable search" : "Open Ask AI with an SOP-flavored prompt"}
+    >
+      <div className="w-12 h-12 rounded-2xl bg-white ring-1 ring-blue-200/60 grid place-items-center text-accent shrink-0 shadow-sm">
+        <Sparkles className="w-5 h-5" />
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="text-[15px] font-semibold text-ink">Ask AI about an SOP</div>
+        <div className="text-[12px] text-ink/60 mt-0.5">
+          {disabled
+            ? "Once you upload your first SOP, the chatbot can answer questions from it — text, screenshots, and diagrams included."
+            : "Search every uploaded procedure in plain English. Screenshots and diagrams come back with the answer."}
+        </div>
+      </div>
+      <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[12px] font-semibold text-accent bg-white border border-accent/30 group-hover:bg-accent group-hover:text-white transition-colors shrink-0">
+        Ask AI
+        <ArrowRight className="w-3.5 h-3.5" />
+      </div>
+    </button>
   );
 }
 

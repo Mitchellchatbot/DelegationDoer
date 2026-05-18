@@ -3,7 +3,7 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import {
   Search, Plus, LogOut, X, ListTodo, Users as UsersIcon, FolderKanban,
-  Loader2
+  Loader2, BookOpen
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
@@ -21,8 +21,9 @@ interface SearchResults {
   tasks: { id: string; title: string; status: string; priority: string; assigneeName: string | null }[];
   users: { id: string; name: string; email: string | null; avatarUrl: string | null }[];
   projects: { id: string; name: string; departmentName: string | null }[];
+  sops: { id: string; title: string; sourceFilename: string; mimeType: string; fileUrl: string }[];
 }
-const EMPTY_RESULTS: SearchResults = { tasks: [], users: [], projects: [] };
+const EMPTY_RESULTS: SearchResults = { tasks: [], users: [], projects: [], sops: [] };
 
 export function Topbar({ user }: { user: User }) {
   const [newTaskOpen, setNewTaskOpen] = useState(false);
@@ -90,7 +91,7 @@ export function Topbar({ user }: { user: User }) {
   }, []);
 
   const totalResults =
-    results.tasks.length + results.users.length + results.projects.length;
+    results.tasks.length + results.users.length + results.projects.length + results.sops.length;
   const showDropdown = searchOpen && query.trim().length > 0;
 
   async function logout() {
@@ -197,6 +198,27 @@ export function Topbar({ user }: { user: User }) {
                       <div className="text-[10px] text-ink/55 truncate mt-0.5">{p.departmentName}</div>
                     )}
                   </Link>
+                ))}
+              </SearchSection>
+            )}
+
+            {results.sops.length > 0 && (
+              <SearchSection icon={<BookOpen className="w-3.5 h-3.5 text-teal-500" />} label="SOPs" count={results.sops.length}>
+                {results.sops.map((s) => (
+                  // SOP rows take you to the underlying file (PDF/image
+                  // hosted on Supabase Storage). There's no detail view
+                  // in v1; if we add one later, swap this to /sops/[id].
+                  <a
+                    key={s.id}
+                    href={s.fileUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    onClick={() => setSearchOpen(false)}
+                    className="block px-3 py-2 hover:bg-slate-50 transition-colors"
+                  >
+                    <div className="text-[13px] font-medium text-ink truncate">{s.title}</div>
+                    <div className="text-[10px] text-ink/55 truncate mt-0.5">{s.sourceFilename}</div>
+                  </a>
                 ))}
               </SearchSection>
             )}

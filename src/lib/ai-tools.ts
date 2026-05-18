@@ -2,6 +2,7 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { getAllTasks, getAllUsersLight, getUserById, getDepartments } from "@/lib/server-data";
 import { userCapacity } from "@/lib/capacity";
 import { listUserEvents } from "@/lib/google-calendar";
+import { embedQuery } from "@/lib/sop-ingest";
 import type { Task, User } from "@/lib/types";
 
 // AI tool definitions + dispatchers. The Ask AI route hands these
@@ -197,6 +198,24 @@ export const AI_TOOLS = [
     }
   },
   {
+    name: "search_sops",
+    description:
+      "Semantic search across the company's uploaded SOPs (Standard Operating Procedures). " +
+      "Use this whenever the user is asking how to do something procedural — onboarding steps, " +
+      "where to find a tool, how to handle a recurring scenario, etc. Returns the top matching " +
+      "chunks, each with the SOP's title, the chunk text, and (when the chunk came from a " +
+      "captioned image) an image URL you can cite back to the user. If results don't look " +
+      "relevant to the question, say so honestly instead of stretching a poor match into an answer.",
+    input_schema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "The user's how-do-I question, rephrased as a search query." },
+        limit: { type: "number", description: "How many chunks to return (default 5, max 10)." }
+      },
+      required: ["query"]
+    }
+  },
+  {
     name: "create_task",
     description:
       "Create a new task and assign it. Use this when the user says something like 'make a task for X to do Y' or 'add a task'. " +
@@ -250,6 +269,7 @@ export async function runTool(
       case "list_recent_incidents": return listRecentIncidents(input);
       case "list_recent_eod_notes": return listRecentEodNotes(input);
       case "list_recommendations": return listRecommendations(input);
+      case "search_sops": return searchSops(input);
       case "create_task": return createTask(input, ctx);
       default:
         return { error: `unknown tool: ${name}` };
@@ -903,3 +923,59 @@ async function createTask(
     dueDate
   };
 }
+
+// Vector-search the SOP library. Embeds the user's question, calls the
+// search_sop_chunks pgvector RPC, and returns the top chunks ready for
+// the model to cite. Distance is included so the model can decide when
+// matches are too weak to trust.
+async function searchSops(input: Record<string, unknown>) {
+  const query = typeof input.query === "string" ? input.query.trim() : "";
+  if (!query) return { error: "query required" };
+  const limit = Math.min(10, Math.max(1, Number(input.limit) || 5));
+
+  let embedding: number[];
+  try {
+    embedding = await embedQuery(query);
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : "embed failed" };
+  }
+
+  const supabase = getSupabaseAdmin();
+  const { data, error } = await supabase.rpc("search_sop_chunks", {
+    query_embedding: `[${embedding.join(",")}]`,
+    match_limit: limit
+  });
+  if (error) {
+    if (/function .* does not exist/i.test(error.message) || /relation .* does not exist/i.test(error.message)) {
+      return { results: [], note: "SOP search not yet provisioned — no migration run." };
+    }
+    return { error: error.message };
+  }
+
+  const results = ((data ?? []) as Array<{
+    chunk_id: string;
+    sop_id: string;
+    title: string;
+    source_filename: string;
+    position: number;
+    content: string;
+    image_url: string | null;
+    file_url: string;
+    distance: number;
+  }>).map((r) => ({
+    sopId: r.sop_id,
+    title: r.title,
+    sourceFilename: r.source_filename,
+    chunkPosition: r.position,
+    content: r.content,
+    imageUrl: r.image_url,
+    fileUrl: r.file_url,
+    // 0 = identical, 2 = opposite. Anything past ~0.5 is "loose match
+    // territory" with text-embedding-3-small; >0.8 is usually noise.
+    distance: Number(r.distance.toFixed(4))
+  }));
+
+  return { results };
+}
+
+

@@ -1,0 +1,243 @@
+// SOP ingestion pipeline:
+//   bytes + mime  →  extracted text  →  chunks  →  OpenAI embeddings
+//
+// Three input shapes are supported in v1:
+//   * application/pdf → pdf-parse for text. If the text is sparse
+//     (<500 chars) we flag the SOP with a warning so the uploader
+//     knows the result will be thin; image-heavy PDFs should be
+//     exported as PNG/JPG pages instead until we add page-rasterizing.
+//   * Word docs (.docx) → mammoth.
+//   * image/png|jpeg|webp → straight to gpt-4o-mini vision, which
+//     produces a detailed caption that's then used as the chunk text
+//     (and the chunk carries the source image URL so chatbot answers
+//     can surface the original picture).
+//
+// Chunking is intentionally simple: split on paragraphs, then pack
+// into ~CHUNK_TARGET_TOKENS pieces by char/4 ≈ token estimate. This
+// is good enough for retrieval quality at the scale we're at;
+// upgrade to tiktoken when it actually matters.
+
+const CHUNK_TARGET_TOKENS = 500;
+const CHUNK_TARGET_CHARS = CHUNK_TARGET_TOKENS * 4;
+const SPARSE_TEXT_THRESHOLD = 500; // chars
+
+export interface SopChunk {
+  content: string;
+  embedding: number[];
+  tokenCount: number;
+  imageUrl: string | null;
+}
+
+export interface IngestResult {
+  chunks: SopChunk[];
+  warnings: string;
+}
+
+// --------------------------- entry point ---------------------------
+
+export async function ingestSopFile(args: {
+  bytes: Buffer;
+  mimeType: string;
+  filename: string;
+  fileUrl: string;
+}): Promise<IngestResult> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) throw new Error("OPENAI_API_KEY not configured");
+
+  const { bytes, mimeType, filename, fileUrl } = args;
+  const warnings: string[] = [];
+
+  // 1. Extract text (or caption) according to type.
+  let text = "";
+  let imageUrl: string | null = null;
+  if (mimeType === "application/pdf") {
+    text = await extractPdfText(bytes);
+    if (text.trim().length < SPARSE_TEXT_THRESHOLD) {
+      warnings.push(
+        "PDF text extraction was sparse — looks like an image-heavy doc. " +
+        "Consider exporting each page as a PNG/JPG and re-uploading; the chatbot " +
+        "will index the visual content properly that way."
+      );
+    }
+  } else if (
+    mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
+    filename.toLowerCase().endsWith(".docx")
+  ) {
+    text = await extractDocxText(bytes);
+  } else if (mimeType.startsWith("image/")) {
+    text = await captionImage({ bytes, mimeType, apiKey });
+    imageUrl = fileUrl;
+  } else {
+    throw new Error(`unsupported mime type: ${mimeType}`);
+  }
+
+  text = text.trim();
+  if (!text) {
+    return { chunks: [], warnings: warnings.concat("No text could be extracted.").join(" ") };
+  }
+
+  // 2. Chunk the text.
+  const rawChunks = chunkText(text, CHUNK_TARGET_CHARS);
+
+  // 3. Embed each chunk in parallel (cheap enough that we don't
+  //    need to throttle — text-embedding-3-small is ~$0.02/M tokens).
+  const embeddings = await embedBatch({
+    texts: rawChunks,
+    apiKey
+  });
+
+  const chunks: SopChunk[] = rawChunks.map((content, i) => ({
+    content,
+    embedding: embeddings[i],
+    tokenCount: Math.ceil(content.length / 4),
+    imageUrl: imageUrl // every chunk from a single image references that image
+  }));
+
+  return { chunks, warnings: warnings.join(" ") };
+}
+
+// --------------------------- extractors ----------------------------
+
+async function extractPdfText(bytes: Buffer): Promise<string> {
+  // pdf-parse pulls in test fixtures eagerly when require()'d normally,
+  // so import the lib file directly to skip its index wrapper. No
+  // types are published for this inner path; we cast manually.
+  // @ts-expect-error pdf-parse ships no types for the inner module path
+  const mod = await import("pdf-parse/lib/pdf-parse.js");
+  const pdfParse = mod.default as (buf: Buffer) => Promise<{ text?: string }>;
+  const result = await pdfParse(bytes);
+  return typeof result?.text === "string" ? result.text : "";
+}
+
+async function extractDocxText(bytes: Buffer): Promise<string> {
+  const mammoth = await import("mammoth");
+  const result = await mammoth.extractRawText({ buffer: bytes });
+  return result.value || "";
+}
+
+async function captionImage(args: {
+  bytes: Buffer;
+  mimeType: string;
+  apiKey: string;
+}): Promise<string> {
+  const dataUrl = `data:${args.mimeType};base64,${args.bytes.toString("base64")}`;
+  const res = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${args.apiKey}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      model: "gpt-4o-mini",
+      messages: [
+        {
+          role: "system",
+          content:
+            "You are indexing internal SOP (Standard Operating Procedure) images so they can be retrieved by a chatbot. Describe the image with the detail a new hire would need to follow it: every visible UI element, button label, menu, step number, callout, arrow, and any text. If it's a diagram, describe the flow. If it's a screenshot, describe what tool / app / page it's from. Output a single dense paragraph, no headings."
+        },
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "Describe this SOP image in detail." },
+            { type: "image_url", image_url: { url: dataUrl } }
+          ]
+        }
+      ],
+      max_tokens: 800,
+      temperature: 0
+    })
+  });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    throw new Error(`vision captioning failed (${res.status}): ${detail.slice(0, 300)}`);
+  }
+  const data: { choices?: Array<{ message?: { content?: string } }> } = await res.json();
+  const text = data.choices?.[0]?.message?.content ?? "";
+  return text.trim();
+}
+
+// ---------------------------- chunking -----------------------------
+
+// Pack paragraphs greedily into chunks of roughly CHUNK_TARGET_CHARS.
+// If a single paragraph is larger than the target, split it on
+// sentence boundaries so a 10K-word section doesn't end up as one
+// monolithic chunk (which would dilute retrieval relevance).
+function chunkText(text: string, targetChars: number): string[] {
+  const paragraphs = text
+    .replace(/\r\n/g, "\n")
+    .split(/\n{2,}/)
+    .map((p) => p.trim())
+    .filter(Boolean);
+
+  const chunks: string[] = [];
+  let current = "";
+  for (const paragraph of paragraphs) {
+    if (paragraph.length > targetChars) {
+      if (current) { chunks.push(current); current = ""; }
+      for (const piece of splitOnSentences(paragraph, targetChars)) chunks.push(piece);
+      continue;
+    }
+    if (!current) {
+      current = paragraph;
+    } else if (current.length + paragraph.length + 2 <= targetChars) {
+      current += "\n\n" + paragraph;
+    } else {
+      chunks.push(current);
+      current = paragraph;
+    }
+  }
+  if (current) chunks.push(current);
+  return chunks;
+}
+
+function splitOnSentences(paragraph: string, targetChars: number): string[] {
+  const sentences = paragraph.split(/(?<=[.!?])\s+/);
+  const out: string[] = [];
+  let current = "";
+  for (const s of sentences) {
+    if (!current) {
+      current = s;
+    } else if (current.length + s.length + 1 <= targetChars) {
+      current += " " + s;
+    } else {
+      out.push(current);
+      current = s;
+    }
+  }
+  if (current) out.push(current);
+  return out;
+}
+
+// ---------------------------- embeddings ---------------------------
+
+async function embedBatch(args: {
+  texts: string[];
+  apiKey: string;
+}): Promise<number[][]> {
+  if (args.texts.length === 0) return [];
+  const res = await fetch("https://api.openai.com/v1/embeddings", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${args.apiKey}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      model: "text-embedding-3-small",
+      input: args.texts
+    })
+  });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    throw new Error(`openai embeddings failed (${res.status}): ${detail.slice(0, 300)}`);
+  }
+  const data: { data: Array<{ embedding: number[] }> } = await res.json();
+  return data.data.map((row) => row.embedding);
+}
+
+// Used by the search_sops tool to embed a single query.
+export async function embedQuery(query: string): Promise<number[]> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) throw new Error("OPENAI_API_KEY not configured");
+  const results = await embedBatch({ texts: [query], apiKey });
+  return results[0];
+}

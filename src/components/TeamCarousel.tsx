@@ -5,7 +5,8 @@ import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "framer-motion";
-import { ChevronLeft, ChevronRight, Crown, Smile, X, Plus, Sparkles } from "lucide-react";
+import { ChevronLeft, ChevronRight, Crown, Smile, X, Plus, Sparkles, Hash } from "lucide-react";
+import { useSlackCustomEmojis } from "@/lib/slack-emoji-cache";
 import { toast } from "sonner";
 import { ROLE_LABELS } from "@/lib/auth";
 import { initials, cn } from "@/lib/utils";
@@ -623,10 +624,67 @@ function EmojiPickerTrigger({
               );
             })}
           </div>
+          <SlackCustomEmojiPalette
+            activeValue={currentEmoji}
+            onPick={(shortcode, ev) => {
+              setOpen(false);
+              onPick(shortcode, ev.currentTarget);
+            }}
+          />
           <Popover.Arrow className="fill-white" />
         </Popover.Content>
       </Popover.Portal>
     </Popover.Root>
+  );
+}
+
+// Twin of the palette in TeamPresenceRow — kept inline here rather than
+// extracted because the two pickers have slightly different click /
+// dismiss semantics (this one needs setOpen(false) before the flying-
+// emoji animation can read source rect from currentTarget).
+function SlackCustomEmojiPalette({
+  activeValue, onPick
+}: {
+  activeValue: string | null;
+  onPick: (shortcode: string, ev: React.MouseEvent<HTMLButtonElement>) => void;
+}) {
+  const map = useSlackCustomEmojis();
+  const entries = Object.entries(map);
+  if (entries.length === 0) return null;
+  entries.sort((a, b) => a[0].localeCompare(b[0]));
+  const visible = entries.slice(0, 64);
+
+  return (
+    <div className="mt-3 pt-3 border-t border-slate-100">
+      <div className="text-[11px] font-semibold text-ink/70 inline-flex items-center gap-1.5 mb-1.5">
+        <Hash className="w-3 h-3 text-accent" />
+        Slack custom emojis
+        <span className="text-[10px] text-muted font-normal">
+          {entries.length > visible.length ? `${visible.length} of ${entries.length}` : `${entries.length}`}
+        </span>
+      </div>
+      <div className="grid grid-cols-8 gap-1 max-h-[180px] overflow-y-auto">
+        {visible.map(([name, url]) => {
+          const value = `:${name}:`;
+          const active = activeValue === value;
+          return (
+            <button
+              key={name}
+              type="button"
+              title={value}
+              onClick={(ev) => onPick(value, ev)}
+              className={cn(
+                "w-8 h-8 grid place-items-center rounded-lg overflow-hidden transition-all",
+                active ? "bg-accent/10 ring-1 ring-accent/40" : "hover:bg-slate-100"
+              )}
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={url} alt={name} className="w-5 h-5 object-cover" draggable={false} />
+            </button>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 

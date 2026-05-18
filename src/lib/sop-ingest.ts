@@ -99,14 +99,18 @@ export async function ingestSopFile(args: {
 // --------------------------- extractors ----------------------------
 
 async function extractPdfText(bytes: Buffer): Promise<string> {
-  // pdf-parse pulls in test fixtures eagerly when require()'d normally,
-  // so import the lib file directly to skip its index wrapper. No
-  // types are published for this inner path; we cast manually.
-  // @ts-expect-error pdf-parse ships no types for the inner module path
-  const mod = await import("pdf-parse/lib/pdf-parse.js");
-  const pdfParse = mod.default as (buf: Buffer) => Promise<{ text?: string }>;
-  const result = await pdfParse(bytes);
-  return typeof result?.text === "string" ? result.text : "";
+  // pdf-parse v2 exposes a class-based API (the v1 single-function
+  // form is gone). Next.js's serverComponentsExternalPackages keeps
+  // pdf-parse + its pdfjs-dist dependency out of the webpack bundle
+  // so they load via Node's normal resolver at runtime.
+  const { PDFParse } = await import("pdf-parse");
+  const parser = new PDFParse({ data: new Uint8Array(bytes) });
+  try {
+    const result = await parser.getText();
+    return typeof result?.text === "string" ? result.text : "";
+  } finally {
+    await parser.destroy().catch(() => {});
+  }
 }
 
 async function extractDocxText(bytes: Buffer): Promise<string> {

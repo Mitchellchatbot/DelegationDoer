@@ -82,19 +82,30 @@ export async function GET() {
   }
 
   const since = Date.now() - LOOKBACK_DAYS * 24 * 60 * 60 * 1000;
-  // Pull recent inbound messages via the SECURITY DEFINER RPC. PostgREST
-  // doesn't expose the missive schema directly (and shouldn't — every
-  // user would get read access to raw mail bodies), so the cron calls
-  // public.recent_inbound_missive_messages instead. Cap the global
-  // query at 5000 to bound memory; we'll still cap per-client below.
-  const { data: msgsRaw, error: msgsErr } = await supabase.rpc(
-    "recent_inbound_missive_messages",
-    { since_ms: since, msg_limit: 5000 }
-  );
-  if (msgsErr) {
-    return NextResponse.json({ ok: false, error: `missive fetch: ${msgsErr.message}` }, { status: 500 });
+  // Pull recent inbound messages via the SECURITY DEFINER RPC.
+  // Supabase's PostgREST caps row responses at 1000 regardless of
+  // the function's LIMIT, so we page through in 1000-row chunks
+  // until the well runs dry. Memory cap: hard-stop at 50k messages
+  // (a busy 14-day window for a midsize org) so a runaway dataset
+  // can't OOM the cron container.
+  const PAGE_SIZE = 1000;
+  const HARD_CAP = 50_000;
+  const msgs: MissiveMessage[] = [];
+  while (msgs.length < HARD_CAP) {
+    const { data: page, error: msgsErr } = await supabase.rpc(
+      "recent_inbound_missive_messages",
+      { since_ms: since, msg_limit: PAGE_SIZE, offset_rows: msgs.length }
+    );
+    if (msgsErr) {
+      return NextResponse.json({ ok: false, error: `missive fetch: ${msgsErr.message}` }, { status: 500 });
+    }
+    const rows = (page ?? []) as MissiveMessage[];
+    msgs.push(...rows);
+    // Short page = we've reached the end. PostgREST always returns
+    // up to PAGE_SIZE for a successful query, so anything less means
+    // there's nothing left to paginate.
+    if (rows.length < PAGE_SIZE) break;
   }
-  const msgs = (msgsRaw ?? []) as MissiveMessage[];
 
   // Bucket messages by client + remember which senders we couldn't
   // place so the response can surface them — that's how leaders find

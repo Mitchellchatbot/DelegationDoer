@@ -57,7 +57,8 @@ export default function LeaderConsolePage() {
             skills: [],
             dailyCapacity: u.dailyCapacity ?? 8,
             throughput: {},
-            avatarUrl: u.avatarUrl ?? undefined
+            avatarUrl: u.avatarUrl ?? undefined,
+            managerId: u.managerId ?? null
           }));
           setPeople(live);
         }
@@ -192,7 +193,7 @@ function PeopleTab({
   // about state we couldn't actually persist.
   async function persistUser(
     id: string,
-    patch: { role?: Role; departmentIds?: string[]; clockEnabled?: boolean },
+    patch: { role?: Role; departmentIds?: string[]; clockEnabled?: boolean; managerId?: string | null },
     prev: User[]
   ) {
     try {
@@ -235,6 +236,44 @@ function PeopleTab({
       setClockEnabled(prev);
     }
   }
+
+  function setManager(id: string, managerId: string | null) {
+    const prev = people;
+    setPeople(prev.map((u) => u.id === id ? { ...u, managerId } : u));
+    void persistUser(id, { managerId }, prev);
+  }
+
+  // Build the set of ids the user shouldn't be allowed to pick as a
+  // manager — themselves + every descendant in the current managerId
+  // forest — to keep the picker from creating a cycle. Recomputed once
+  // per render via useMemo so the rows can each call it cheaply.
+  const descendantsByUser = useMemo(() => {
+    const children = new Map<string, string[]>();
+    for (const u of people) {
+      if (!u.managerId) continue;
+      const arr = children.get(u.managerId) ?? [];
+      arr.push(u.id);
+      children.set(u.managerId, arr);
+    }
+    const cache = new Map<string, Set<string>>();
+    function descend(id: string, seen: Set<string>): Set<string> {
+      const hit = cache.get(id);
+      if (hit) return hit;
+      const out = new Set<string>();
+      const stack = [...(children.get(id) ?? [])];
+      while (stack.length > 0) {
+        const c = stack.pop()!;
+        if (seen.has(c) || out.has(c)) continue;
+        out.add(c);
+        for (const g of children.get(c) ?? []) stack.push(g);
+      }
+      cache.set(id, out);
+      return out;
+    }
+    const result = new Map<string, Set<string>>();
+    for (const u of people) result.set(u.id, descend(u.id, new Set([u.id])));
+    return result;
+  }, [people]);
 
   function toggleDept(id: string, deptId: string) {
     const prev = people;
@@ -286,15 +325,6 @@ function PeopleTab({
           </thead>
           <tbody>
             {people.map((u) => {
-              const reportsTo = u.role === "leader"
-                ? "—"
-                : u.role === "department_head"
-                  ? "Leader"
-                  : (() => {
-                      const dep = u.departmentIds[0];
-                      const head = dep ? people.find((x) => x.role === "department_head" && x.departmentIds.includes(dep)) : null;
-                      return head?.name ?? "—";
-                    })();
               const isExpanded = expandedId === u.id;
               return (
                 <Fragment key={u.id}>
@@ -352,7 +382,14 @@ function PeopleTab({
                       })}
                     </div>
                   </td>
-                  <td className="px-4 py-3 text-muted">{reportsTo}</td>
+                  <td className="px-4 py-3">
+                    <ManagerPicker
+                      user={u}
+                      people={people}
+                      excluded={descendantsByUser.get(u.id) ?? new Set()}
+                      onChange={(mid) => setManager(u.id, mid)}
+                    />
+                  </td>
                   <td className="px-4 py-3 text-center">
                     <ClockSwitch
                       enabled={clockEnabled[u.id] ?? true}
@@ -598,6 +635,68 @@ function RolePicker({ role, onChange }: { role: Role; onChange: (r: Role) => voi
       <option value="leader">Leader</option>
       <option value="department_head">Department Head</option>
       <option value="worker">Worker</option>
+    </select>
+  );
+}
+
+// "Reports to" dropdown. The Leader is pinned to "—" (nobody to report
+// to). Heads default to "Leader" when unset but can be re-pointed at
+// another head if the org runs a co-leads / pod structure. Workers can
+// pick the dept head or any other same-dept member as a team lead.
+// `excluded` is the set of ids that would create a cycle (self +
+// descendants) — passed in pre-computed.
+function ManagerPicker({
+  user, people, excluded, onChange
+}: {
+  user: User;
+  people: User[];
+  excluded: Set<string>;
+  onChange: (managerId: string | null) => void;
+}) {
+  if (user.role === "leader") {
+    return <span className="text-muted">—</span>;
+  }
+  // Candidate pool: anyone in a shared dept (preferring dept heads first,
+  // then workers), minus the user themself and their downstream tree.
+  // Falls back to all non-leader users when the person hasn't been
+  // assigned a department yet — at least the picker is usable then.
+  const sameDept = (other: User) =>
+    other.departmentIds.some((d) => user.departmentIds.includes(d));
+  const pool = people.filter((p) =>
+    p.id !== user.id &&
+    !excluded.has(p.id) &&
+    (user.departmentIds.length === 0 || sameDept(p) || p.role === "leader")
+  );
+  const sorted = [...pool].sort((a, b) => {
+    const rankA = a.role === "leader" ? 0 : a.role === "department_head" ? 1 : 2;
+    const rankB = b.role === "leader" ? 0 : b.role === "department_head" ? 1 : 2;
+    return rankA - rankB || a.name.localeCompare(b.name);
+  });
+  // Auto-fallback label for the empty-string option matches what the
+  // OrgChart renderer does: workers without an explicit manager nest
+  // under the dept head; a head without one reports to the Leader.
+  const fallback = (() => {
+    if (user.role === "department_head") {
+      const leader = people.find((p) => p.role === "leader");
+      return leader ? `Auto: ${leader.name}` : "Auto: Leader";
+    }
+    const dep = user.departmentIds[0];
+    const head = dep ? people.find((x) => x.role === "department_head" && x.departmentIds.includes(dep)) : null;
+    return head ? `Auto: ${head.name}` : "Auto: dept head";
+  })();
+  return (
+    <select
+      value={user.managerId ?? ""}
+      onChange={(e) => onChange(e.target.value || null)}
+      className="text-xs border border-border rounded-md px-1.5 py-1 bg-white hover:border-accent/40 cursor-pointer max-w-[180px]"
+    >
+      <option value="">{fallback}</option>
+      {sorted.map((p) => (
+        <option key={p.id} value={p.id}>
+          {p.name}
+          {p.role === "department_head" ? " · head" : p.role === "leader" ? " · leader" : ""}
+        </option>
+      ))}
     </select>
   );
 }

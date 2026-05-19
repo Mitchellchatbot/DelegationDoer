@@ -28,6 +28,7 @@ export async function GET() {
   let lastError: string | null = null;
 
   const tries = [
+    "id, name, email, role, avatar_url, presence, presence_updated_at, status_emoji, clock_enabled, is_admin, daily_capacity, work_timezone, weekly_schedule, manager_user_id",
     "id, name, email, role, avatar_url, presence, presence_updated_at, status_emoji, clock_enabled, is_admin, daily_capacity, work_timezone, weekly_schedule",
     "id, name, email, role, avatar_url, presence, presence_updated_at, status_emoji, clock_enabled, is_admin",
     "id, name, email, role, avatar_url, presence, presence_updated_at, status_emoji, clock_enabled",
@@ -89,6 +90,10 @@ export async function GET() {
         (u as unknown as { work_timezone?: string | null }).work_timezone ?? null,
       weeklySchedule:
         (u as unknown as { weekly_schedule?: Record<string, unknown> }).weekly_schedule ?? {},
+      // null when the column hasn't migrated yet (older fallback select)
+      // or the user has no explicit manager.
+      managerId:
+        (u as unknown as { manager_user_id?: string | null }).manager_user_id ?? null,
       departmentIds: departmentsByUser.get(u.id) ?? []
     }))
   });

@@ -71,8 +71,17 @@ export function OrgChart({ users, departments, tasks, ceo }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const ceoRefs = useRef<Map<string, HTMLDivElement | null>>(new Map());
   const deptHeaderRefs = useRef<Map<string, HTMLDivElement | null>>(new Map());
-  const headRefs = useRef<Map<string, HTMLDivElement | null>>(new Map());
-  const workerRefs = useRef<Map<string, HTMLDivElement | null>>(new Map());
+  // Every person node (head + worker) keyed by `${deptId}:${userId}` so
+  // a user who's in multiple departments still resolves to the correct
+  // column. Replaces the old separate head/worker maps now that workers
+  // can be parents of other workers in the recursive subtree.
+  const nodeRefs = useRef<Map<string, HTMLDivElement | null>>(new Map());
+
+  // Parent → children edges within each department, built once per
+  // (users, managerId) change. The dept head is the fallback parent for
+  // any worker without an explicit manager. Computed up front so the
+  // measure-pass loop is just element lookups, no graph re-derivation.
+  const subtreeByDept = buildSubtrees(users, departments);
 
   const [edges, setEdges] = useState<{ d: string; key: string }[]>([]);
   const [size, setSize] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
@@ -106,21 +115,28 @@ export function OrgChart({ users, departments, tasks, ceo }: Props) {
         }
       }
 
-      for (const [headId, headEl] of headRefs.current) {
-        if (!headEl) continue;
-        const h = headEl.getBoundingClientRect();
-        const fromX = h.left + h.width / 2 - rootRect.left;
-        const fromY = h.bottom - rootRect.top;
-        const deptIdAttr = headEl.getAttribute("data-dept") ?? "";
-        for (const [key, wEl] of workerRefs.current) {
-          if (!wEl || !key.startsWith(`${deptIdAttr}:`)) continue;
-          const w = wEl.getBoundingClientRect();
-          const toX = w.left + w.width / 2 - rootRect.left;
-          const toY = w.top - rootRect.top;
-          next.push({
-            key: `${headId}-${key}`,
-            d: cubicPath(fromX, fromY, toX, toY)
-          });
+      // Within each dept: draw a line from every parent's node down to
+      // each of its direct reports. Falls back to head → worker for
+      // anyone without an explicit managerId, which mirrors the legacy
+      // flat layout when nobody's set up team leads.
+      for (const tree of subtreeByDept) {
+        for (const [parentId, childIds] of tree.parentToChildren) {
+          const pEl = nodeRefs.current.get(`${tree.deptId}:${parentId}`);
+          if (!pEl) continue;
+          const p = pEl.getBoundingClientRect();
+          const fromX = p.left + p.width / 2 - rootRect.left;
+          const fromY = p.bottom - rootRect.top;
+          for (const childId of childIds) {
+            const cEl = nodeRefs.current.get(`${tree.deptId}:${childId}`);
+            if (!cEl) continue;
+            const c = cEl.getBoundingClientRect();
+            const toX = c.left + c.width / 2 - rootRect.left;
+            const toY = c.top - rootRect.top;
+            next.push({
+              key: `${tree.deptId}:${parentId}-${childId}`,
+              d: cubicPath(fromX, fromY, toX, toY)
+            });
+          }
         }
       }
 
@@ -135,7 +151,7 @@ export function OrgChart({ users, departments, tasks, ceo }: Props) {
       ro.disconnect();
       window.removeEventListener("resize", measure);
     };
-  }, [users, departments, tasks, ceo]);
+  }, [users, departments, tasks, ceo, subtreeByDept]);
 
   return (
     <section
@@ -237,48 +253,68 @@ export function OrgChart({ users, departments, tasks, ceo }: Props) {
                     </div>
                   </div>
 
-                  <div className="flex flex-col items-center gap-4 w-full">
-                    {heads.length === 0 ? (
-                      <div className="badge badge-tag self-center text-[10px] opacity-70">
-                        No head
-                      </div>
-                    ) : (
-                      heads.map((h) => (
-                        <div
-                          key={h.id}
-                          ref={(el) => { headRefs.current.set(h.id, el); }}
-                          data-dept={d.id}
-                        >
-                          <PersonNode
-                            user={h}
-                            tone="head"
-                            tasks={openTasksFor(h.id, tasks)}
-                            allUserTasks={tasks.filter((t) => t.assigneeId === h.id)}
-                            departments={departments}
-                          />
+                  {(() => {
+                    const tree = subtreeByDept.find((t) => t.deptId === d.id);
+                    const orphanIds = tree?.orphanIds ?? [];
+                    if (heads.length === 0 && workers.length === 0) {
+                      return (
+                        <div className="badge badge-tag self-center text-[10px] opacity-70">
+                          No members
                         </div>
-                      ))
-                    )}
-                  </div>
+                      );
+                    }
+                    return (
+                      <>
+                        <div className="flex flex-col items-center gap-4 w-full">
+                          {heads.length === 0 ? (
+                            <div className="badge badge-tag self-center text-[10px] opacity-70">
+                              No head
+                            </div>
+                          ) : (
+                            heads.map((h) => (
+                              <Subtree
+                                key={h.id}
+                                deptId={d.id}
+                                user={h}
+                                tone="head"
+                                childrenByParent={tree?.parentToChildren ?? new Map()}
+                                userById={tree?.userById ?? new Map()}
+                                tasks={tasks}
+                                departments={departments}
+                                nodeRefs={nodeRefs}
+                              />
+                            ))
+                          )}
+                        </div>
 
-                  {workers.length > 0 && (
-                    <div className="grid grid-cols-2 gap-x-3 gap-y-4 w-full place-items-center">
-                      {workers.map((w) => (
-                        <div
-                          key={w.id}
-                          ref={(el) => { workerRefs.current.set(`${d.id}:${w.id}`, el); }}
-                        >
-                          <PersonNode
-                            user={w}
-                            tone="worker"
-                            tasks={openTasksFor(w.id, tasks)}
-                            allUserTasks={tasks.filter((t) => t.assigneeId === w.id)}
-                            departments={departments}
-                          />
-                        </div>
-                      ))}
-                    </div>
-                  )}
+                        {/* Orphan row: workers whose explicit managerId
+                            points outside the dept and there's no dept
+                            head to fall back on. Rare, but render them
+                            flat so they're not silently dropped. */}
+                        {orphanIds.length > 0 && (
+                          <div className="grid grid-cols-2 gap-x-3 gap-y-4 w-full place-items-center">
+                            {orphanIds.map((wid) => {
+                              const w = tree?.userById.get(wid);
+                              if (!w) return null;
+                              return (
+                                <Subtree
+                                  key={wid}
+                                  deptId={d.id}
+                                  user={w}
+                                  tone="worker"
+                                  childrenByParent={tree?.parentToChildren ?? new Map()}
+                                  userById={tree?.userById ?? new Map()}
+                                  tasks={tasks}
+                                  departments={departments}
+                                  nodeRefs={nodeRefs}
+                                />
+                              );
+                            })}
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
                 </div>
               );
             })}
@@ -286,6 +322,114 @@ export function OrgChart({ users, departments, tasks, ceo }: Props) {
         </div>
       </div>
     </section>
+  );
+}
+
+// ----- Subtree model -----
+
+interface DeptSubtree {
+  deptId: string;
+  // All non-leader members of this dept (heads + workers), keyed by id.
+  userById: Map<string, User>;
+  // Direct reports of each parent (head or worker) inside this dept.
+  parentToChildren: Map<string, string[]>;
+  // Heads of this dept — natural roots of the tree.
+  rootIds: string[];
+  // Workers whose explicit managerId points outside the dept and there's
+  // no head to fall back on. Rendered flat at the bottom of the column.
+  orphanIds: string[];
+}
+
+function buildSubtrees(users: User[], departments: Department[]): DeptSubtree[] {
+  return departments.map((d) => {
+    const heads = users.filter(
+      (u) => u.role === "department_head" && u.departmentIds.includes(d.id)
+    );
+    const workers = users.filter(
+      (u) => u.role === "worker" && u.departmentIds.includes(d.id)
+    );
+    const userById = new Map<string, User>();
+    for (const u of [...heads, ...workers]) userById.set(u.id, u);
+
+    const parentToChildren = new Map<string, string[]>();
+    const headId = heads[0]?.id ?? null;
+    const orphanIds: string[] = [];
+
+    for (const w of workers) {
+      // Use the explicit managerId only when it points to another member
+      // of THIS dept (head or worker). Cross-dept managerIds are ignored
+      // here — that user shows up as a child in their own dept's column,
+      // which is what we want for cross-dept dotted-line relationships.
+      const explicit = w.managerId && userById.has(w.managerId) && w.managerId !== w.id
+        ? w.managerId
+        : null;
+      const parent = explicit ?? headId;
+      if (parent) {
+        const arr = parentToChildren.get(parent) ?? [];
+        arr.push(w.id);
+        parentToChildren.set(parent, arr);
+      } else {
+        orphanIds.push(w.id);
+      }
+    }
+
+    return {
+      deptId: d.id,
+      userById,
+      parentToChildren,
+      rootIds: heads.map((h) => h.id),
+      orphanIds
+    };
+  });
+}
+
+// Recursive department subtree. Renders a person node + a horizontal
+// row of recursive subtrees for each of their direct reports. Depth is
+// implicit in the JSX nesting — the SVG edges connect parent→child
+// using the post-mount `nodeRefs` map so the visual layout matches.
+function Subtree({
+  deptId, user, tone, childrenByParent, userById, tasks, departments, nodeRefs
+}: {
+  deptId: string;
+  user: User;
+  tone: "head" | "worker";
+  childrenByParent: Map<string, string[]>;
+  userById: Map<string, User>;
+  tasks: Task[];
+  departments: Department[];
+  nodeRefs: React.MutableRefObject<Map<string, HTMLDivElement | null>>;
+}) {
+  const kidIds = childrenByParent.get(user.id) ?? [];
+  const kids = kidIds.map((k) => userById.get(k)).filter((u): u is User => !!u);
+  return (
+    <div className="flex flex-col items-center gap-4">
+      <div ref={(el) => { nodeRefs.current.set(`${deptId}:${user.id}`, el); }}>
+        <PersonNode
+          user={user}
+          tone={tone}
+          tasks={openTasksFor(user.id, tasks)}
+          allUserTasks={tasks.filter((t) => t.assigneeId === user.id)}
+          departments={departments}
+        />
+      </div>
+      {kids.length > 0 && (
+        <div className="flex items-start justify-center gap-4 flex-wrap">
+          {kids.map((kid) => (
+            <Subtree
+              key={kid.id}
+              deptId={deptId}
+              user={kid}
+              tone="worker"
+              childrenByParent={childrenByParent}
+              userById={userById}
+              tasks={tasks}
+              departments={departments}
+              nodeRefs={nodeRefs}
+            />
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 

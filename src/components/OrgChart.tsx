@@ -214,8 +214,13 @@ export function OrgChart({ users, departments, tasks, ceo }: Props) {
               old `1fr` grid forced equal columns, which caused wide
               trees (SEO under Sam) to wrap their kids onto new rows
               and look stacked. min-width keeps empty depts visible.
-              The outer overflow-x-auto handles total chart width. */}
-          <div className="flex items-start justify-center gap-6 min-w-fit">
+              The outer overflow-x-auto handles total chart width.
+              justify-start (not center) so when the chart is wider
+              than the viewport the leftmost department stays visible
+              — browsers can't scrollLeft past 0, so center-justifying
+              an overflowing flex row clips the left edge off-screen
+              with no way to reach it. */}
+          <div className="flex items-start justify-start gap-6 min-w-fit px-1">
             {departments.map((d) => {
               const heads = users.filter(
                 (u) => u.role === "department_head" && u.departmentIds.includes(d.id)

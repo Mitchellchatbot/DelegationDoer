@@ -22,7 +22,11 @@ export function isHead(u: User | null | undefined): boolean {
 //             a head when things are on fire, or assign across teams).
 //   Department head -> anyone whose home is one of their departments
 //                      (workers and other heads), plus themselves.
-//   Worker -> only themselves.
+//   Worker -> themselves + their direct reports (any user whose managerId
+//             points to the actor). This lets team-leads inside a dept
+//             (e.g. Bismah → Gul + Komal in the SEO sub-tree) push work
+//             down without being promoted to dept_head. Workers with no
+//             reports just see themselves.
 // Anyone can always self-assign regardless of role.
 export function assignableTargets(actor: User, pool: User[] = users): User[] {
   let candidates: User[];
@@ -33,7 +37,7 @@ export function assignableTargets(actor: User, pool: User[] = users): User[] {
       u.id === actor.id || u.departmentIds.some((d) => actor.departmentIds.includes(d))
     );
   } else {
-    candidates = [actor];
+    candidates = pool.filter((u) => u.id === actor.id || u.managerId === actor.id);
   }
   return candidates.some((u) => u.id === actor.id) ? candidates : [actor, ...candidates];
 }

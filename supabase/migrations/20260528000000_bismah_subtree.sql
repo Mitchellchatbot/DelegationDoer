@@ -18,7 +18,7 @@ begin
   limit 1;
 
   if bismah_id is null then
-    raise notice 'No user matching %bismah% — abort.';
+    raise notice 'No user matching the name pattern for Bismah - abort.';
     return;
   end if;
 

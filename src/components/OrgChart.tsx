@@ -204,12 +204,12 @@ export function OrgChart({ users, departments, tasks, ceo }: Props) {
             </div>
           )}
 
-          <div
-            className="grid gap-6 items-start"
-            style={{
-              gridTemplateColumns: `repeat(${Math.max(departments.length, 1)}, minmax(160px, 1fr))`
-            }}
-          >
+          {/* Each dept column sizes to its own subtree's width. The
+              old `1fr` grid forced equal columns, which caused wide
+              trees (SEO under Sam) to wrap their kids onto new rows
+              and look stacked. min-width keeps empty depts visible.
+              The outer overflow-x-auto handles total chart width. */}
+          <div className="flex items-start justify-center gap-6 min-w-fit">
             {departments.map((d) => {
               const heads = users.filter(
                 (u) => u.role === "department_head" && u.departmentIds.includes(d.id)
@@ -229,7 +229,7 @@ export function OrgChart({ users, departments, tasks, ceo }: Props) {
               ).length;
 
               return (
-                <div key={d.id} className="flex flex-col items-center gap-5">
+                <div key={d.id} className="flex flex-col items-center gap-5 min-w-[160px] shrink-0">
                   <div
                     ref={(el) => { deptHeaderRefs.current.set(d.id, el); }}
                     className="inline-flex flex-col items-center gap-1 px-4 py-2 rounded-2xl border border-white/70 bg-white/60 backdrop-blur-xl shadow-[inset_0_1px_0_0_rgba(255,255,255,0.7),0_8px_24px_-12px_rgba(15,23,42,0.18)]"

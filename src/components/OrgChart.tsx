@@ -2,7 +2,7 @@
 
 import * as Popover from "@radix-ui/react-popover";
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Crown } from "lucide-react";
 import { Countdown } from "./Countdown";
 import { usePresence } from "@/lib/presence-context";
@@ -79,9 +79,14 @@ export function OrgChart({ users, departments, tasks, ceo }: Props) {
 
   // Parent → children edges within each department, built once per
   // (users, managerId) change. The dept head is the fallback parent for
-  // any worker without an explicit manager. Computed up front so the
-  // measure-pass loop is just element lookups, no graph re-derivation.
-  const subtreeByDept = buildSubtrees(users, departments);
+  // any worker without an explicit manager. Memoized so its reference
+  // is stable across re-renders — feeding an unstable reference into
+  // the measure effect's deps below caused setEdges → re-render →
+  // new subtreeByDept ref → effect re-fires → setEdges loop.
+  const subtreeByDept = useMemo(
+    () => buildSubtrees(users, departments),
+    [users, departments]
+  );
 
   const [edges, setEdges] = useState<{ d: string; key: string }[]>([]);
   const [size, setSize] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
@@ -157,7 +162,7 @@ export function OrgChart({ users, departments, tasks, ceo }: Props) {
       ro.disconnect();
       window.removeEventListener("resize", measure);
     };
-  }, [users, departments, tasks, ceo, subtreeByDept]);
+  }, [users, departments, tasks, ceo]);
 
   return (
     <section

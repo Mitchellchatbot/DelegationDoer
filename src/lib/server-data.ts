@@ -21,6 +21,7 @@ interface UserRow {
   is_admin?: boolean;
   work_timezone?: string | null;
   weekly_schedule?: Record<string, unknown> | null;
+  manager_user_id?: string | null;
 }
 interface DepartmentRow {
   id: string;
@@ -79,7 +80,8 @@ function userFromRow(row: UserRow, departmentIds: string[]): User {
     avatarUrl: row.avatar_url ?? undefined,
     isAdmin: row.is_admin === true,
     workTimezone: row.work_timezone ?? null,
-    weeklySchedule: (row.weekly_schedule as User["weeklySchedule"]) ?? {}
+    weeklySchedule: (row.weekly_schedule as User["weeklySchedule"]) ?? {},
+    managerId: row.manager_user_id ?? null
   };
 }
 
@@ -150,7 +152,7 @@ async function _getUserById(id: string | null | undefined): Promise<User | null>
   const supabase = getSupabaseAdmin();
   const { data: row } = await supabase
     .from("users")
-    .select("id,name,email,role,daily_capacity,throughput,skills,avatar_url,is_admin,work_timezone,weekly_schedule")
+    .select("id,name,email,role,daily_capacity,throughput,skills,avatar_url,is_admin,work_timezone,weekly_schedule,manager_user_id")
     .eq("id", id)
     .maybeSingle();
   if (!row) return null;
@@ -200,7 +202,7 @@ export async function getAllTasks(opts?: { includeDrafts?: boolean }): Promise<T
 export async function getAllUsersLight(): Promise<User[]> {
   const { data } = await getSupabaseAdmin()
     .from("users")
-    .select("id,name,email,role,daily_capacity,throughput,skills,avatar_url,is_admin,work_timezone,weekly_schedule")
+    .select("id,name,email,role,daily_capacity,throughput,skills,avatar_url,is_admin,work_timezone,weekly_schedule,manager_user_id")
     .order("name");
   return (data ?? []).map((r) =>
     userFromRow(r as UserRow, [])
@@ -217,7 +219,7 @@ export async function getAllUsers(): Promise<User[]> {
   const [usersRes, membersRes] = await Promise.all([
     supabase
       .from("users")
-      .select("id,name,email,role,daily_capacity,throughput,skills,avatar_url,is_admin,work_timezone,weekly_schedule")
+      .select("id,name,email,role,daily_capacity,throughput,skills,avatar_url,is_admin,work_timezone,weekly_schedule,manager_user_id")
       .order("name"),
     supabase
       .from("department_members")

@@ -34,6 +34,11 @@ export interface User {
     "mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun",
     { start: string; end: string } | null
   >>;
+  // Optional explicit reporting line. When set, the OrgChart nests this
+  // user under `managerId` (used for team-lead trees inside a dept).
+  // When null/undefined, the renderer falls back to the dept head, which
+  // preserves the original flat layout.
+  managerId?: string | null;
 }
 
 export interface Department {

@@ -12,6 +12,7 @@ import { toast } from "sonner";
 import { PageHero } from "@/components/PageHero";
 import { PersonAvatar } from "@/components/PersonAvatar";
 import { ClientUpdatesSection } from "@/components/ClientUpdatesSection";
+import { ClientCheckInSection } from "@/components/ClientCheckInSection";
 import { useCurrentUser } from "@/lib/user-context";
 
 interface PersonSummary {
@@ -134,7 +135,12 @@ export default function EodPage() {
         iconTone="fuchsia"
       />
 
-      {isWebsiteTeam && <ClientUpdatesSection today={today} />}
+      {isWebsiteTeam && (
+        <>
+          <ClientCheckInSection today={today} />
+          <ClientUpdatesSection today={today} />
+        </>
+      )}
 
       {loading ? (
         <div className="card p-8 text-center text-sm text-muted">

@@ -162,6 +162,12 @@ export default function WidgetPage() {
   // shared brand logo when null. Fetched once on auth + whenever the
   // settings view saves.
   const [widgetIconUrl, setWidgetIconUrl] = useState<string | null>(null);
+  // Mandatory end-of-day client check-in reminder (Website team / leader
+  // / admin). Polled alongside tasks; when due=true we surface a toast
+  // every poll (15s) and the bubble gets a violet pulse ring so it's
+  // visually unmistakable even when collapsed.
+  const [eodReminderDue, setEodReminderDue] = useState(false);
+  const eodReminderToastShownRef = useRef(false);
   const fetchMe = useCallback(async () => {
     try {
       const r = await fetch("/api/users/me", { cache: "no-store" });
@@ -203,11 +209,12 @@ export default function WidgetPage() {
     try {
       // Run both polls in parallel — they're independent reads on the
       // same Supabase connection.
-      const [taskRes, kudosRes, eomRes, bdayRes] = await Promise.all([
+      const [taskRes, kudosRes, eomRes, bdayRes, eodRes] = await Promise.all([
         fetch("/api/widget/my-tasks", { cache: "no-store" }),
         fetch("/api/widget/kudos", { cache: "no-store" }),
         fetch("/api/eom", { cache: "no-store" }),
-        fetch("/api/widget/birthdays", { cache: "no-store" })
+        fetch("/api/widget/birthdays", { cache: "no-store" }),
+        fetch("/api/widget/eod-reminder", { cache: "no-store" })
       ]);
       // 401 → no session in this Electron renderer. Show the sign-in
       // prompt and stop trying to render normal UI on stale/empty data.
@@ -266,6 +273,31 @@ export default function WidgetPage() {
           celebrantsToday: bd.celebrantsToday ?? []
         });
       }
+      let eodDue = false;
+      if (eodRes.ok) {
+        const er = await eodRes.json();
+        const due = !!er.due;
+        eodDue = due;
+        setEodReminderDue(due);
+        // First-edge toast so it surfaces even if the user has the
+        // bubble collapsed. Resets when due flips back to false (so a
+        // next-day re-fire works).
+        if (due && !eodReminderToastShownRef.current) {
+          eodReminderToastShownRef.current = true;
+          playAlertSound();
+          toast.error("File your end-of-day client check-ins before clocking out", {
+            duration: 8000,
+            action: {
+              label: "Open",
+              onClick: () => {
+                (window as any).widgetAPI?.openMainWindow?.("/updates/eod");
+              }
+            }
+          });
+        } else if (!due) {
+          eodReminderToastShownRef.current = false;
+        }
+      }
       lastFetchedRef.current = Date.now();
 
       // Auto state transitions based on whether there's something to
@@ -273,7 +305,7 @@ export default function WidgetPage() {
       // an open mention / notify-teammates ping).
       setState((prev) => {
         if (prev === "panel") return "panel"; // user is already looking
-        return unackedNow.length > 0 || nextKudos.length > 0 || nextNotifs.length > 0
+        return unackedNow.length > 0 || nextKudos.length > 0 || nextNotifs.length > 0 || eodDue
           ? "alert"
           : "bubble";
       });
@@ -378,8 +410,33 @@ export default function WidgetPage() {
     if (kudos.length > 0) {
       return <KudosAlert kudos={kudos[0]} count={kudos.length} onAck={acknowledgeKudos} onExpand={expandToPanel} crowned={eom.isMe} iconUrl={widgetIconUrl} />;
     }
+    if (eodReminderDue) {
+      return <EodReminderAlert onExpand={expandToPanel} crowned={eom.isMe} iconUrl={widgetIconUrl} />;
+    }
   }
-  return <Bubble onExpand={expandToPanel} unackedCount={unacked.length + kudos.length + notifications.length} crowned={eom.isMe} iconUrl={widgetIconUrl} />;
+  return <Bubble onExpand={expandToPanel} unackedCount={unacked.length + kudos.length + notifications.length + (eodReminderDue ? 1 : 0)} crowned={eom.isMe} iconUrl={widgetIconUrl} />;
+}
+
+// Banner that appears when the worker's scheduled day has ended and
+// they haven't filed any EOD client check-ins. Clicking it expands
+// the widget panel so they can hop straight to the EOD form.
+function EodReminderAlert({
+  onExpand, crowned, iconUrl
+}: { onExpand: () => void; crowned: boolean; iconUrl: string | null }) {
+  return (
+    <button
+      type="button"
+      onClick={onExpand}
+      className="group flex items-center gap-2 px-3 py-2 rounded-2xl bg-gradient-to-br from-violet-600 to-fuchsia-600 text-white shadow-[0_12px_24px_-10px_rgba(124,58,237,0.55)] hover:-translate-y-0.5 transition-transform"
+      title="File your end-of-day client check-ins"
+    >
+      <BubbleIcon unackedCount={1} crowned={crowned} iconUrl={iconUrl} />
+      <div className="text-left">
+        <div className="text-[10px] uppercase tracking-wide font-bold opacity-85">End of day</div>
+        <div className="text-xs font-semibold leading-tight">File client check-ins</div>
+      </div>
+    </button>
+  );
 }
 
 /* ============================ ICON ============================ */

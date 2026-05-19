@@ -7,8 +7,11 @@
 -- for that worker, preserving every existing render.
 -- ON DELETE SET NULL = removing a manager doesn't orphan their reports;
 -- they just float back up to the dept head until reassigned.
+-- users.id is `text` in this project's schema (see 20260505000000_init.sql),
+-- so the FK column must match. A uuid here trips a 42804 incompatible-types
+-- error at constraint creation.
 alter table users
-  add column if not exists manager_user_id uuid
+  add column if not exists manager_user_id text
     references users(id) on delete set null;
 
 -- Belt-and-suspenders: a user can't be their own manager. UI + API both

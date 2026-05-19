@@ -31,3 +31,9 @@ create index if not exists eod_client_checkins_user_date_idx
 -- Powers the weekly counter + the widget's "have I filed today?" check.
 create index if not exists eod_client_checkins_sent_at_idx
   on eod_client_checkins(user_id, sent_at desc);
+
+-- Subject line — added once the UI was reframed as an email composer.
+-- Optional so existing rows continue to load; UI requires it when
+-- composing new entries.
+alter table eod_client_checkins
+  add column if not exists subject text;

@@ -22,6 +22,7 @@ interface CheckinRow {
   note_date: string;
   client_id: string | null;
   client_name: string;
+  subject: string | null;
   message: string;
   slack_ts: string | null;
   slack_channel: string | null;
@@ -41,9 +42,13 @@ export async function POST(req: NextRequest) {
         : new Date().toISOString().slice(0, 10);
     const clientId = typeof body.clientId === "string" && body.clientId ? body.clientId : null;
     const clientName = typeof body.clientName === "string" ? body.clientName.trim() : "";
+    const subject = typeof body.subject === "string" ? body.subject.trim().slice(0, 300) : "";
     const message = typeof body.message === "string" ? body.message.trim() : "";
     if (!clientName) {
       return NextResponse.json({ error: "clientName required" }, { status: 400 });
+    }
+    if (!subject) {
+      return NextResponse.json({ error: "subject required" }, { status: 400 });
     }
     if (!message) {
       return NextResponse.json({ error: "message required" }, { status: 400 });
@@ -66,6 +71,7 @@ export async function POST(req: NextRequest) {
       note_date: dateStr,
       client_id: clientId,
       client_name: clientName.slice(0, 200),
+      subject,
       message: message.slice(0, 4000)
     });
     if (insertErr) {
@@ -77,13 +83,13 @@ export async function POST(req: NextRequest) {
     let slackError: string | null = null;
     if (channel && process.env.SLACK_BOT_TOKEN) {
       try {
-        const text = `📊 *${authorName}* — EOD check-in for *${clientName}*`;
+        const text = `✉️ *${authorName}* → *${clientName}* — ${subject}`;
         const blocks = [
           {
             type: "section",
             text: {
               type: "mrkdwn",
-              text: `📊 *${authorName}* — EOD check-in for *${clientName}*\n>${message
+              text: `✉️ *${authorName}* → *${clientName}*\n*Subject:* ${subject}\n>${message
                 .slice(0, 2900)
                 .replace(/\n/g, "\n>")}`
             }
@@ -111,6 +117,7 @@ export async function POST(req: NextRequest) {
         id,
         clientId,
         clientName,
+        subject,
         message,
         slackTs,
         slackChannel,
@@ -145,7 +152,7 @@ export async function GET(req: NextRequest) {
     const [todayRes, weekRes] = await Promise.all([
       supabase
         .from("eod_client_checkins")
-        .select("id, user_id, note_date, client_id, client_name, message, slack_ts, slack_channel, sent_at, created_at")
+        .select("id, user_id, note_date, client_id, client_name, subject, message, slack_ts, slack_channel, sent_at, created_at")
         .eq("user_id", targetUserId)
         .eq("note_date", dateStr)
         .order("created_at", { ascending: true }),
@@ -164,6 +171,7 @@ export async function GET(req: NextRequest) {
         id: r.id,
         clientId: r.client_id,
         clientName: r.client_name,
+        subject: r.subject,
         message: r.message,
         slackTs: r.slack_ts,
         slackChannel: r.slack_channel,

@@ -120,7 +120,9 @@ export default function EodPage() {
   // surface is visible in their account for oversight. Other depts
   // don't see this; their EOD is just notes + completer aggregation.
   const isWebsiteTeam =
-    me.role === "leader" || (me.departmentIds ?? []).includes("dep_web");
+    me.role === "leader"
+    || me.isAdmin === true
+    || (me.departmentIds ?? []).includes("dep_web");
 
   return (
     <div className="space-y-6 max-w-6xl mx-auto">

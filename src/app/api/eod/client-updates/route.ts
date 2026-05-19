@@ -1,0 +1,186 @@
+import { NextRequest, NextResponse } from "next/server";
+import { requireCurrentUserId } from "@/lib/session";
+import { getSupabaseAdmin } from "@/lib/supabase-admin";
+import { postMessage } from "@/lib/slack";
+
+export const dynamic = "force-dynamic";
+
+// POST /api/eod/client-updates
+//   body: { date?: 'YYYY-MM-DD', clientId: string|null, clientName: string, message: string }
+//   Creates one client-update row + best-effort posts it to Slack
+//   (the workspace's scaled_team_channel_id). Returns the inserted row
+//   with the Slack receipt fields populated when delivery succeeded.
+//
+// GET /api/eod/client-updates?date=YYYY-MM-DD&userId=...
+//   Returns the caller's updates for that date by default; pass
+//   userId to read someone else's (no auth gate at v1 — anyone in
+//   the workspace can see anyone's; tighten later if needed).
+//   Also returns weekCount for the past 7 days (used by the
+//   /dashboard counter).
+
+interface UpdateRow {
+  id: string;
+  user_id: string;
+  note_date: string;
+  client_id: string | null;
+  client_name: string;
+  message: string;
+  slack_ts: string | null;
+  slack_channel: string | null;
+  sent_at: string | null;
+  created_at: string;
+}
+
+export async function POST(req: NextRequest) {
+  try {
+    const userId = await requireCurrentUserId();
+    const supabase = getSupabaseAdmin();
+
+    const body = await req.json().catch(() => ({}));
+    const dateStr =
+      typeof body.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(body.date)
+        ? body.date
+        : new Date().toISOString().slice(0, 10);
+    const clientId = typeof body.clientId === "string" && body.clientId ? body.clientId : null;
+    const clientName = typeof body.clientName === "string" ? body.clientName.trim() : "";
+    const message = typeof body.message === "string" ? body.message.trim() : "";
+    if (!clientName) {
+      return NextResponse.json({ error: "clientName required" }, { status: 400 });
+    }
+    if (!message) {
+      return NextResponse.json({ error: "message required" }, { status: 400 });
+    }
+    if (message.length > 4000) {
+      return NextResponse.json({ error: "message too long (max 4000 chars)" }, { status: 400 });
+    }
+
+    // Look up the author + Slack channel in parallel.
+    const [{ data: author }, { data: ws }] = await Promise.all([
+      supabase.from("users").select("name").eq("id", userId).maybeSingle(),
+      supabase.from("workspace_settings").select("scaled_team_channel_id").eq("id", "workspace").maybeSingle()
+    ]);
+    const authorName = (author?.name as string | undefined) ?? "Someone";
+    const channel = (ws?.scaled_team_channel_id as string | null) ?? null;
+
+    // Insert first so the row is durable even if Slack rejects.
+    const id = `cu_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+    const { error: insertErr } = await supabase.from("eod_client_updates").insert({
+      id,
+      user_id: userId,
+      note_date: dateStr,
+      client_id: clientId,
+      client_name: clientName.slice(0, 200),
+      message: message.slice(0, 4000)
+    });
+    if (insertErr) {
+      return NextResponse.json({ error: insertErr.message }, { status: 500 });
+    }
+
+    // Best-effort Slack post.
+    let slackTs: string | null = null;
+    let slackChannel: string | null = null;
+    let slackError: string | null = null;
+    if (channel && process.env.SLACK_BOT_TOKEN) {
+      try {
+        const text = `📋 *${authorName}* — Client update for *${clientName}*`;
+        const blocks = [
+          {
+            type: "section",
+            text: {
+              type: "mrkdwn",
+              text: `📋 *${authorName}* — Client update for *${clientName}*\n>${message
+                .slice(0, 2900)
+                .replace(/\n/g, "\n>")}`
+            }
+          }
+        ];
+        const res = await postMessage(channel, text, blocks);
+        slackTs = res.ts;
+        slackChannel = channel;
+        await supabase
+          .from("eod_client_updates")
+          .update({ slack_ts: slackTs, slack_channel: slackChannel, sent_at: new Date().toISOString() })
+          .eq("id", id);
+      } catch (err) {
+        slackError = err instanceof Error ? err.message : "slack post failed";
+      }
+    } else if (!channel) {
+      slackError = "no scaled-team channel configured";
+    } else {
+      slackError = "SLACK_BOT_TOKEN missing";
+    }
+
+    return NextResponse.json({
+      ok: true,
+      update: {
+        id,
+        clientId,
+        clientName,
+        message,
+        slackTs,
+        slackChannel,
+        sentAt: slackTs ? new Date().toISOString() : null
+      },
+      slackError
+    });
+  } catch (err) {
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : "unknown error" },
+      { status: 500 }
+    );
+  }
+}
+
+export async function GET(req: NextRequest) {
+  try {
+    const userId = await requireCurrentUserId();
+    const supabase = getSupabaseAdmin();
+
+    const sp = req.nextUrl.searchParams;
+    const dateStr =
+      sp.get("date") && /^\d{4}-\d{2}-\d{2}$/.test(sp.get("date") as string)
+        ? (sp.get("date") as string)
+        : new Date().toISOString().slice(0, 10);
+    const targetUserId = sp.get("userId") || userId;
+
+    const weekAgo = new Date();
+    weekAgo.setDate(weekAgo.getDate() - 7);
+    const weekAgoIso = weekAgo.toISOString();
+
+    const [todayRes, weekRes] = await Promise.all([
+      supabase
+        .from("eod_client_updates")
+        .select("id, user_id, note_date, client_id, client_name, message, slack_ts, slack_channel, sent_at, created_at")
+        .eq("user_id", targetUserId)
+        .eq("note_date", dateStr)
+        .order("created_at", { ascending: true }),
+      supabase
+        .from("eod_client_updates")
+        .select("id", { count: "exact", head: true })
+        .eq("user_id", targetUserId)
+        .gte("sent_at", weekAgoIso)
+    ]);
+    if (todayRes.error) {
+      return NextResponse.json({ error: todayRes.error.message }, { status: 500 });
+    }
+
+    return NextResponse.json({
+      updates: ((todayRes.data ?? []) as UpdateRow[]).map((r) => ({
+        id: r.id,
+        clientId: r.client_id,
+        clientName: r.client_name,
+        message: r.message,
+        slackTs: r.slack_ts,
+        slackChannel: r.slack_channel,
+        sentAt: r.sent_at,
+        createdAt: r.created_at
+      })),
+      weekCount: weekRes.count ?? 0
+    });
+  } catch (err) {
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : "unknown error" },
+      { status: 500 }
+    );
+  }
+}

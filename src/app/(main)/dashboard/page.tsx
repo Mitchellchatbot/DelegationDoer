@@ -2,7 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import {
   LayoutDashboard, ListTodo, Briefcase, Trophy, Camera, ArrowRight,
-  Clock, CheckCircle2, Crown
+  Clock, CheckCircle2, Crown, Mail, TrendingUp, TrendingDown, Minus
 } from "lucide-react";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById, getAllTasks } from "@/lib/server-data";
@@ -35,7 +35,16 @@ export default async function DashboardPage() {
   const monthKey = currentMonthKey();
   const monthStart = `${monthKey}-01T00:00:00.000Z`;
 
-  const [allTasks, clients, allUsersRes, momentsRes, eomRes] = await Promise.all([
+  // Two windows for the client-updates trend arrow:
+  //   this week = last 7 days
+  //   prev week = the 7 days before that
+  // Counted server-side so the dashboard renders the result without
+  // any client-side fetch flicker.
+  const now = Date.now();
+  const weekAgoIso = new Date(now - 7 * 24 * 60 * 60 * 1000).toISOString();
+  const twoWeeksAgoIso = new Date(now - 14 * 24 * 60 * 60 * 1000).toISOString();
+
+  const [allTasks, clients, allUsersRes, momentsRes, eomRes, thisWkRes, prevWkRes] = await Promise.all([
     getAllTasks(),
     getClients(),
     supabase.from("users").select("id, name, avatar_url, role"),
@@ -48,8 +57,26 @@ export default async function DashboardPage() {
       .from("employee_of_month")
       .select("user_id")
       .eq("month", monthKey)
-      .maybeSingle()
+      .maybeSingle(),
+    supabase
+      .from("eod_client_updates")
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", userId)
+      .gte("sent_at", weekAgoIso),
+    supabase
+      .from("eod_client_updates")
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", userId)
+      .gte("sent_at", twoWeeksAgoIso)
+      .lt("sent_at", weekAgoIso)
   ]);
+
+  // Hide the stat when the column doesn't exist yet (migration not
+  // applied) so the dashboard doesn't crash.
+  const clientUpdatesThisWeek = thisWkRes.error ? null : (thisWkRes.count ?? 0);
+  const clientUpdatesPrevWeek = prevWkRes.error ? null : (prevWkRes.count ?? 0);
+  const showClientUpdatesStat =
+    (me.departmentIds ?? []).includes("dep_web") && clientUpdatesThisWeek !== null;
 
   // My tasks — top 6 open, due-date ascending (no-due-date last),
   // then priority. Mirrors the /tasks/mine sort.
@@ -99,18 +126,26 @@ export default async function DashboardPage() {
   return (
     <div className="space-y-5 max-w-7xl mx-auto">
       <header className="rounded-2xl border border-white/60 shadow-soft p-5 bg-gradient-to-r from-blue-50/80 via-white to-indigo-50/80">
-        <div className="flex items-center gap-3">
-          <div className="w-12 h-12 rounded-xl bg-white/70 grid place-items-center text-accent shrink-0 shadow-sm">
-            <LayoutDashboard className="w-6 h-6" />
-          </div>
-          <div>
-            <div className="text-[12px] uppercase tracking-[0.18em] font-semibold text-accent">
-              Dashboard
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div className="flex items-center gap-3">
+            <div className="w-12 h-12 rounded-xl bg-white/70 grid place-items-center text-accent shrink-0 shadow-sm">
+              <LayoutDashboard className="w-6 h-6" />
             </div>
-            <h1 className="text-[24px] font-bold text-ink leading-tight">
-              Good to see you, {me.name.split(" ")[0]}
-            </h1>
+            <div>
+              <div className="text-[12px] uppercase tracking-[0.18em] font-semibold text-accent">
+                Dashboard
+              </div>
+              <h1 className="text-[24px] font-bold text-ink leading-tight">
+                Good to see you, {me.name.split(" ")[0]}
+              </h1>
+            </div>
           </div>
+          {showClientUpdatesStat && (
+            <ClientUpdatesStat
+              thisWeek={clientUpdatesThisWeek ?? 0}
+              prevWeek={clientUpdatesPrevWeek ?? 0}
+            />
+          )}
         </div>
       </header>
 
@@ -349,4 +384,39 @@ function EmptyRow({ icon, message }: { icon: React.ReactNode; message: string })
 // and the EOM lookup.
 function currentMonthKey(d = new Date()): string {
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+// Header stat for the Website team's mandatory client-update flow.
+// Shows the rolling 7-day count + a delta vs. the prior 7 days, so
+// workers can see at a glance whether they're trending up or down on
+// client touches without leaving the dashboard.
+function ClientUpdatesStat({ thisWeek, prevWeek }: { thisWeek: number; prevWeek: number }) {
+  const delta = thisWeek - prevWeek;
+  const trend = delta > 0 ? "up" : delta < 0 ? "down" : "flat";
+  const tone =
+    trend === "up" ? "text-emerald-700 bg-emerald-50 border-emerald-200/60"
+    : trend === "down" ? "text-rose-700 bg-rose-50 border-rose-200/60"
+    : "text-ink/60 bg-slate-50 border-slate-200/60";
+  const TrendIcon = trend === "up" ? TrendingUp : trend === "down" ? TrendingDown : Minus;
+  return (
+    <Link
+      href="/updates/eod"
+      className="rounded-2xl border border-white/60 bg-white/70 px-3 py-2 inline-flex items-center gap-3 hover:bg-white transition-colors"
+      title="Open today's EOD to log a client update"
+    >
+      <Mail className="w-4 h-4 text-sky-600 shrink-0" />
+      <div className="leading-tight">
+        <div className="text-[10px] uppercase tracking-[0.16em] font-semibold text-ink/55">
+          Client updates · 7d
+        </div>
+        <div className="text-[18px] font-bold text-ink tabular-nums">
+          {thisWeek}
+        </div>
+      </div>
+      <span className={"inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-semibold border tabular-nums " + tone}>
+        <TrendIcon className="w-3 h-3" />
+        {delta > 0 ? `+${delta}` : delta}
+      </span>
+    </Link>
+  );
 }

@@ -11,6 +11,7 @@ import { Send, Loader2, Hash, AlertTriangle, CheckCircle2, Sparkles } from "luci
 import { toast } from "sonner";
 import { PageHero } from "@/components/PageHero";
 import { PersonAvatar } from "@/components/PersonAvatar";
+import { ClientUpdatesSection } from "@/components/ClientUpdatesSection";
 import { useCurrentUser } from "@/lib/user-context";
 
 interface PersonSummary {
@@ -113,6 +114,12 @@ export default function EodPage() {
     }
   }
 
+  // Website team gets a mandatory "Client updates" section at the top
+  // of their EOD — each entry posts to the workspace's Slack channel
+  // on send. Other departments don't see this surface; their EOD is
+  // just the existing notes + completer aggregation below.
+  const isWebsiteTeam = (me.departmentIds ?? []).includes("dep_web");
+
   return (
     <div className="space-y-6 max-w-6xl mx-auto">
       <PageHero
@@ -122,6 +129,8 @@ export default function EodPage() {
         icon={<Sparkles />}
         iconTone="fuchsia"
       />
+
+      {isWebsiteTeam && <ClientUpdatesSection today={today} />}
 
       {loading ? (
         <div className="card p-8 text-center text-sm text-muted">

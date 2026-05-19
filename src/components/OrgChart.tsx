@@ -115,29 +115,35 @@ export function OrgChart({ users, departments, tasks, ceo }: Props) {
         }
       }
 
-      // Within each dept: draw a line from every parent's node down to
-      // each of its direct reports. Falls back to head → worker for
-      // anyone without an explicit managerId, which mirrors the legacy
-      // flat layout when nobody's set up team leads.
-      for (const tree of subtreeByDept) {
-        for (const [parentId, childIds] of tree.parentToChildren) {
-          const pEl = nodeRefs.current.get(`${tree.deptId}:${parentId}`);
-          if (!pEl) continue;
-          const p = pEl.getBoundingClientRect();
-          const fromX = p.left + p.width / 2 - rootRect.left;
-          const fromY = p.bottom - rootRect.top;
-          for (const childId of childIds) {
-            const cEl = nodeRefs.current.get(`${tree.deptId}:${childId}`);
-            if (!cEl) continue;
-            const c = cEl.getBoundingClientRect();
-            const toX = c.left + c.width / 2 - rootRect.left;
-            const toY = c.top - rootRect.top;
-            next.push({
-              key: `${tree.deptId}:${parentId}-${childId}`,
-              d: cubicPath(fromX, fromY, toX, toY)
-            });
-          }
-        }
+      // Each rendered node's ref key is `${deptId}:${fullPath}` where
+      // fullPath is the chain of user-ids from the dept root down to
+      // this node (e.g. "Sam>Farez>Samir>Mustajab"). A node rendered
+      // under two managers (dual-report) has two distinct path-keys,
+      // and so do all its descendants — they form independent subtrees
+      // in the DOM. Edge drawing follows from the keys themselves:
+      // for every rendered node with a parent (path length >= 2), draw
+      // a line from the parent's element to this one.
+      for (const [key, el] of nodeRefs.current) {
+        if (!el) continue;
+        const colonAt = key.indexOf(":");
+        if (colonAt < 0) continue;
+        const deptId = key.slice(0, colonAt);
+        const fullPath = key.slice(colonAt + 1);
+        const segs = fullPath.split(">");
+        if (segs.length < 2) continue;
+        const parentPath = segs.slice(0, -1).join(">");
+        const parentEl = nodeRefs.current.get(`${deptId}:${parentPath}`);
+        if (!parentEl) continue;
+        const p = parentEl.getBoundingClientRect();
+        const c = el.getBoundingClientRect();
+        const fromX = p.left + p.width / 2 - rootRect.left;
+        const fromY = p.bottom - rootRect.top;
+        const toX = c.left + c.width / 2 - rootRect.left;
+        const toY = c.top - rootRect.top;
+        next.push({
+          key: `e:${key}`,
+          d: cubicPath(fromX, fromY, toX, toY)
+        });
       }
 
       setEdges(next);
@@ -276,6 +282,7 @@ export function OrgChart({ users, departments, tasks, ceo }: Props) {
                                 key={h.id}
                                 deptId={d.id}
                                 user={h}
+                                parentPath=""
                                 tone="head"
                                 childrenByParent={tree?.parentToChildren ?? new Map()}
                                 userById={tree?.userById ?? new Map()}
@@ -301,6 +308,7 @@ export function OrgChart({ users, departments, tasks, ceo }: Props) {
                                   key={wid}
                                   deptId={d.id}
                                   user={w}
+                                  parentPath=""
                                   tone="worker"
                                   childrenByParent={tree?.parentToChildren ?? new Map()}
                                   userById={tree?.userById ?? new Map()}
@@ -371,6 +379,21 @@ function buildSubtrees(users: User[], departments: Department[]): DeptSubtree[] 
       } else {
         orphanIds.push(w.id);
       }
+      // Secondary manager — adds the worker under a SECOND parent's
+      // children list. The chart will render this worker's node twice
+      // (once under each manager) so the dual-report is visible. Same
+      // same-dept and not-self guards as the primary.
+      const secondary = w.secondaryManagerId
+        && userById.has(w.secondaryManagerId)
+        && w.secondaryManagerId !== w.id
+        && w.secondaryManagerId !== parent
+        ? w.secondaryManagerId
+        : null;
+      if (secondary) {
+        const arr = parentToChildren.get(secondary) ?? [];
+        arr.push(w.id);
+        parentToChildren.set(secondary, arr);
+      }
     }
 
     return {
@@ -385,25 +408,38 @@ function buildSubtrees(users: User[], departments: Department[]): DeptSubtree[] 
 
 // Recursive department subtree. Renders a person node + a horizontal
 // row of recursive subtrees for each of their direct reports. Depth is
-// implicit in the JSX nesting — the SVG edges connect parent→child
-// using the post-mount `nodeRefs` map so the visual layout matches.
+// implicit in the JSX nesting.
+//
+// `parentPath` is the chain of user-ids from the root of this dept's
+// tree down to (but not including) THIS node. Each render position has
+// a unique path; the ref key is `${deptId}:${parentPath}>${userId}` so
+// a node rendered under two managers (dual-report via secondaryManagerId)
+// gets two independent DOM refs — and so do all of its descendants.
 function Subtree({
-  deptId, user, tone, childrenByParent, userById, tasks, departments, nodeRefs
+  deptId, user, parentPath, tone, childrenByParent, userById, tasks, departments, nodeRefs, depth
 }: {
   deptId: string;
   user: User;
+  parentPath: string;
   tone: "head" | "worker";
   childrenByParent: Map<string, string[]>;
   userById: Map<string, User>;
   tasks: Task[];
   departments: Department[];
   nodeRefs: React.MutableRefObject<Map<string, HTMLDivElement | null>>;
+  depth?: number;
 }) {
+  // Defense against accidental cycles (shouldn't happen with the DB
+  // check constraint, but in case a future schema change loosens that
+  // — never recurse past a sane depth).
+  const d = depth ?? 0;
+  if (d > 12) return null;
+  const myPath = parentPath ? `${parentPath}>${user.id}` : user.id;
   const kidIds = childrenByParent.get(user.id) ?? [];
   const kids = kidIds.map((k) => userById.get(k)).filter((u): u is User => !!u);
   return (
     <div className="flex flex-col items-center gap-4">
-      <div ref={(el) => { nodeRefs.current.set(`${deptId}:${user.id}`, el); }}>
+      <div ref={(el) => { nodeRefs.current.set(`${deptId}:${myPath}`, el); }}>
         <PersonNode
           user={user}
           tone={tone}
@@ -416,15 +452,17 @@ function Subtree({
         <div className="flex items-start justify-center gap-4 flex-wrap">
           {kids.map((kid) => (
             <Subtree
-              key={kid.id}
+              key={`${myPath}>${kid.id}`}
               deptId={deptId}
               user={kid}
+              parentPath={myPath}
               tone="worker"
               childrenByParent={childrenByParent}
               userById={userById}
               tasks={tasks}
               departments={departments}
               nodeRefs={nodeRefs}
+              depth={d + 1}
             />
           ))}
         </div>

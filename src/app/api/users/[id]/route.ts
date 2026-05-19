@@ -108,6 +108,53 @@ export async function PATCH(
       }
     }
 
+    // ---- secondary manager (co-report) ----
+    // Same shape as `managerId` — null clears, string sets after the
+    // existence/self check. Don't bother validating against the primary
+    // here: the DB has a not-equal check constraint, so a redundant
+    // assignment is caught at write time with a clear error.
+    if ("secondaryManagerId" in body) {
+      const raw = body.secondaryManagerId;
+      let secondaryUserId: string | null;
+      if (raw === null || raw === "") {
+        secondaryUserId = null;
+      } else if (typeof raw === "string") {
+        if (raw === params.id) {
+          return NextResponse.json(
+            { error: "secondaryManagerId cannot equal the user's own id" },
+            { status: 400 }
+          );
+        }
+        const { data: exists } = await supabase
+          .from("users")
+          .select("id")
+          .eq("id", raw)
+          .maybeSingle();
+        if (!exists) {
+          return NextResponse.json(
+            { error: "secondaryManagerId references unknown user" },
+            { status: 400 }
+          );
+        }
+        secondaryUserId = raw;
+      } else {
+        return NextResponse.json(
+          { error: "secondaryManagerId must be a string or null" },
+          { status: 400 }
+        );
+      }
+      const { error: sErr } = await supabase
+        .from("users")
+        .update({ secondary_manager_user_id: secondaryUserId })
+        .eq("id", params.id);
+      if (sErr) {
+        return NextResponse.json(
+          { error: `secondary manager update: ${sErr.message}` },
+          { status: 500 }
+        );
+      }
+    }
+
     // ---- department memberships (replace) ----
     if (Array.isArray(body.departmentIds)) {
       const departmentIds: string[] = body.departmentIds.filter(

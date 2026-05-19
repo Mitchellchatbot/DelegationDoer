@@ -39,6 +39,11 @@ export interface User {
   // When null/undefined, the renderer falls back to the dept head, which
   // preserves the original flat layout.
   managerId?: string | null;
+  // Optional SECOND manager — for pods where two team-leads share the
+  // same reports (e.g. SEO's Tabrez + Farez both managing Samir/Saif/
+  // Bismah). The chart renders this user under both managers; the
+  // duplicate node makes the dual-report relationship visible.
+  secondaryManagerId?: string | null;
 }
 
 export interface Department {

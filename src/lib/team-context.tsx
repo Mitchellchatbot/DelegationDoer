@@ -56,7 +56,14 @@ export function TeamProvider({ children }: { children: React.ReactNode }) {
               avatarUrl: (u.avatarUrl as string | null) ?? undefined,
               isAdmin: u.isAdmin === true,
               workTimezone: (u.workTimezone as string | null) ?? null,
-              weeklySchedule: (u.weeklySchedule as User["weeklySchedule"]) ?? {}
+              weeklySchedule: (u.weeklySchedule as User["weeklySchedule"]) ?? {},
+              // Manager-tree fields were getting dropped here, so
+              // assignableTargets()'s `u.managerId === actor.id`
+              // check always saw undefined and team-leads (workers
+              // with direct reports) could only see themselves in
+              // the assignee dropdown.
+              managerId: (u.managerId as string | null) ?? null,
+              secondaryManagerId: (u.secondaryManagerId as string | null) ?? null
             }))
           : [],
         departments: Array.isArray(dRes?.departments)

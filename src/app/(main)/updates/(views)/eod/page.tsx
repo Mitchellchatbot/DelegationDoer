@@ -116,9 +116,11 @@ export default function EodPage() {
 
   // Website team gets a mandatory "Client updates" section at the top
   // of their EOD — each entry posts to the workspace's Slack channel
-  // on send. Other departments don't see this surface; their EOD is
-  // just the existing notes + completer aggregation below.
-  const isWebsiteTeam = (me.departmentIds ?? []).includes("dep_web");
+  // on send. Leaders see it too so they can log touches and so the
+  // surface is visible in their account for oversight. Other depts
+  // don't see this; their EOD is just notes + completer aggregation.
+  const isWebsiteTeam =
+    me.role === "leader" || (me.departmentIds ?? []).includes("dep_web");
 
   return (
     <div className="space-y-6 max-w-6xl mx-auto">

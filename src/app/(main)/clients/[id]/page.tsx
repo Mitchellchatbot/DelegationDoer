@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 import {
   Briefcase, Globe2, Calendar, FileText, Lightbulb, ExternalLink, ListChecks,
   Mail, CheckCircle2, User as UserIcon, Server, KeyRound, MessageSquare,
-  Hash, CalendarClock
+  Hash, CalendarClock, Send
 } from "lucide-react";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { getClient, getResourcesForClient, type ClientResource } from "@/lib/clients-data";
@@ -65,6 +65,33 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
       .then((r) => r.data ?? []),
     me ? visibleAccountIdsFor(me) : Promise.resolve(new Set<string>())
   ]);
+
+  // EOD client updates filed against this client. Joins the author's
+  // name in the same shot so a row can render "Talha — emailed about X".
+  // Wrapped in try/catch so the page still renders if the migration
+  // hasn't been applied yet.
+  type ClientUpdateRow = {
+    id: string;
+    message: string;
+    slack_ts: string | null;
+    sent_at: string | null;
+    created_at: string;
+    note_date: string;
+    user_id: string;
+    users: { name: string | null }[] | { name: string | null } | null;
+  };
+  let clientUpdatesRes: ClientUpdateRow[] = [];
+  try {
+    const { data } = await supabase
+      .from("eod_client_updates")
+      .select("id, message, slack_ts, sent_at, created_at, note_date, user_id, users(name)")
+      .eq("client_id", client.id)
+      .order("created_at", { ascending: false })
+      .limit(30);
+    clientUpdatesRes = (data ?? []) as ClientUpdateRow[];
+  } catch {
+    clientUpdatesRes = [];
+  }
 
   // Email history — pulls every recent thread from Missive once, then
   // applies the per-client signals. Scoped to the user's visible
@@ -320,6 +347,51 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
           )}
         />
       </div>
+
+      <Section
+        title="Client updates"
+        icon={<Send className="w-4 h-4" />}
+        tone="blue"
+        empty="No updates filed for this client yet."
+        items={clientUpdatesRes}
+        renderItem={(u) => {
+          const authorName = Array.isArray(u.users)
+            ? (u.users[0]?.name ?? "Someone")
+            : (u.users?.name ?? "Someone");
+          return (
+          <div
+            key={u.id}
+            className="flex items-start gap-2.5 p-2.5 rounded-xl bg-white/80 border border-white/70"
+          >
+            <Send className="w-3.5 h-3.5 text-sky-600 shrink-0 mt-0.5" />
+            <div className="min-w-0 flex-1">
+              <div className="flex items-baseline gap-1.5 flex-wrap">
+                <div className="text-[12px] font-semibold text-ink">
+                  {authorName}
+                </div>
+                <div className="text-[10px] text-ink/55 tabular-nums">
+                  {new Date(u.created_at).toLocaleDateString(undefined, {
+                    month: "short", day: "numeric"
+                  })}
+                </div>
+                {u.slack_ts ? (
+                  <span className="text-[9px] uppercase tracking-wide px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700 border border-emerald-200/60">
+                    Slack ✓
+                  </span>
+                ) : (
+                  <span className="text-[9px] uppercase tracking-wide px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-200/60">
+                    Saved
+                  </span>
+                )}
+              </div>
+              <div className="text-[13px] text-ink/80 mt-1 whitespace-pre-wrap leading-snug">
+                {u.message}
+              </div>
+            </div>
+          </div>
+          );
+        }}
+      />
 
       <Section
         title="Suggestions & notes"

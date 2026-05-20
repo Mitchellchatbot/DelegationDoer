@@ -11,15 +11,15 @@ export const dynamic = "force-dynamic";
 //   timestamp), then fans out a Slack DM to every leadership user + the
 //   dept head(s) for each department the caller belongs to.
 //
-//   Per the v2 spec (Section 2): "All of them go to mitch, the software
-//   ones go to hasan the website ones to mujtaba and then SEO to sam.
-//   Mitch gets a notif for the form contents of the employee, and then
-//   the department heads actually do the reviewing."
-//
-//   Leadership delivery = role='leader' OR is_admin=true (catches Mitch
-//   plus any stealth admin). Dept-head delivery = role='department_head'
-//   member of the worker's home department(s). The same human only gets
-//   one DM even if they qualify on multiple paths.
+//   Routing model (per Mitchell's "Reports To" directive):
+//     - DM the author's manager_user_id (their direct line manager)
+//     - Also DM secondary_manager_user_id when set (dual-report)
+//     - Always DM every leader (Mitch sees everything)
+//     - Author themselves is excluded — never DM yourself.
+//   So when Mujtaba (dept head) submits his EOD, only his manager
+//   (Mitch) gets it. When a worker submits, their direct lead gets
+//   it AND Mitch. Stealth admins are NOT auto-included anymore —
+//   admin status is orthogonal to who reviews EOD content.
 
 interface UserSlim {
   id: string;
@@ -57,16 +57,21 @@ export async function POST(req: NextRequest) {
     };
     const hasInline = Object.values(inlineFields).some((v) => v !== null);
 
-    // Fetch the worker, their EOD row, and their departments in parallel.
-    const [{ data: meRow }, noteRes, { data: deptMemberships }] = await Promise.all([
-      supabase.from("users").select("id, name, email, role, is_admin").eq("id", userId).maybeSingle(),
+    // Fetch the worker, their EOD row, and their reporting line in
+    // parallel. Reporting line = manager_user_id + secondary_manager_user_id;
+    // those become the primary EOD recipients alongside every leader.
+    const [{ data: meRow }, noteRes] = await Promise.all([
+      supabase
+        .from("users")
+        .select("id, name, email, role, is_admin, manager_user_id, secondary_manager_user_id")
+        .eq("id", userId)
+        .maybeSingle(),
       supabase
         .from("eod_notes")
         .select("id, worked_on, accomplished, plan_tomorrow, blockers, note, submitted_at")
         .eq("user_id", userId)
         .eq("note_date", dateStr)
-        .maybeSingle(),
-      supabase.from("department_members").select("department_id").eq("user_id", userId)
+        .maybeSingle()
     ]);
 
     if (!meRow) return NextResponse.json({ error: "user not found" }, { status: 404 });
@@ -128,33 +133,36 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Fill out at least one EOD field before submitting." }, { status: 400 });
     }
 
-    // Compute the recipient set: every leader + admin, plus dept heads
-    // of the worker's home depts. De-dupe so a person who's both a
-    // leader and a dept head only gets one ping.
-    const deptIds = (deptMemberships ?? []).map((r) => r.department_id as string);
-    const [{ data: leadership }, { data: deptHeads }] = await Promise.all([
-      supabase
-        .from("users")
-        .select("id, name, email, role, is_admin")
-        .or("role.eq.leader,is_admin.eq.true"),
-      deptIds.length > 0
-        ? supabase
-            .from("department_members")
-            .select("user_id, users:users(id, name, email, role, is_admin)")
-            .in("department_id", deptIds)
-        : Promise.resolve({ data: [] })
-    ]);
+    // Build recipient set from the reporting line (primary +
+    // secondary manager) and every leader. Author always excluded.
+    const managerIds: string[] = [];
+    const primaryMgr = (meRow as { manager_user_id?: string | null }).manager_user_id ?? null;
+    const secondaryMgr = (meRow as { secondary_manager_user_id?: string | null }).secondary_manager_user_id ?? null;
+    if (primaryMgr) managerIds.push(primaryMgr);
+    if (secondaryMgr && secondaryMgr !== primaryMgr) managerIds.push(secondaryMgr);
 
     const recipients = new Map<string, UserSlim>();
-    for (const u of (leadership ?? []) as UserSlim[]) {
-      if (u.id !== userId) recipients.set(u.id, u);
+
+    // Direct managers.
+    if (managerIds.length > 0) {
+      const { data: managers } = await supabase
+        .from("users")
+        .select("id, name, email, role, is_admin")
+        .in("id", managerIds);
+      for (const u of (managers ?? []) as UserSlim[]) {
+        if (u.id !== userId) recipients.set(u.id, u);
+      }
     }
-    for (const row of (deptHeads ?? []) as Array<{ user_id: string; users: UserSlim | UserSlim[] | null }>) {
-      const u = Array.isArray(row.users) ? row.users[0] : row.users;
-      if (!u) continue;
-      if (u.role !== "department_head") continue;
-      if (u.id === userId) continue;
-      recipients.set(u.id, u);
+
+    // Every leader — Mitch always sees, even if he's not the worker's
+    // direct manager. Drops admin auto-inclusion (was confusing for
+    // stealth admins who didn't expect to be in the loop).
+    const { data: leaders } = await supabase
+      .from("users")
+      .select("id, name, email, role, is_admin")
+      .eq("role", "leader");
+    for (const u of (leaders ?? []) as UserSlim[]) {
+      if (u.id !== userId) recipients.set(u.id, u);
     }
 
     // Format the Slack message — the worker's name in the header,

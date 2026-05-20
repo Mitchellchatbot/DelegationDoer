@@ -101,24 +101,45 @@ export async function GET() {
       }
     }
 
-    // --- Approvals pending: only meaningful for users who can approve
-    // anything. Leaders/admins always; otherwise name-pattern match
-    // (mitchell/mujtaba/sam/tabrez/farez/bismah). Tolerate the
-    // email_drafts table not existing yet — silently zero.
+    // --- Approvals pending: leaders see everything; dept heads see
+    // only drafts whose AUTHOR sits in a department they head; admins
+    // and workers see nothing in this badge. The visibility filter
+    // mirrors GET /api/email-drafts so the count never drifts from
+    // what they'll actually see on /approvals.
     let approvalsPending = 0;
-    const lower = (me.name ?? "").toLowerCase();
-    const canApprove =
-      me.role === "leader" ||
-      me.isAdmin === true ||
-      ["mitchell", "mujtaba", "sam", "tabrez", "farez", "bismah"].some((p) => lower.includes(p));
+    const isLeader = me.role === "leader";
+    const isDeptHead = me.role === "department_head" && (me.departmentIds ?? []).length > 0;
+    const canApprove = isLeader || isDeptHead;
     if (canApprove) {
       try {
-        const { count } = await supabase
-          .from("email_drafts")
-          .select("id", { count: "exact", head: true })
-          .eq("status", "pending");
-        approvalsPending = count ?? 0;
-      } catch { /* migration not applied yet */ }
+        if (isLeader) {
+          const { count } = await supabase
+            .from("email_drafts")
+            .select("id", { count: "exact", head: true })
+            .eq("status", "pending");
+          approvalsPending = count ?? 0;
+        } else {
+          // Dept head: count pending drafts whose author is in any
+          // of their departments. Two-step query because PostgREST
+          // doesn't expose a clean cross-table count for this shape.
+          const myDepts = me.departmentIds ?? [];
+          const { data: peerRows } = await supabase
+            .from("department_members")
+            .select("user_id")
+            .in("department_id", myDepts);
+          const peerIds = Array.from(new Set(
+            ((peerRows ?? []) as { user_id: string }[]).map((r) => r.user_id)
+          ));
+          if (peerIds.length > 0) {
+            const { count } = await supabase
+              .from("email_drafts")
+              .select("id", { count: "exact", head: true })
+              .eq("status", "pending")
+              .in("author_id", peerIds);
+            approvalsPending = count ?? 0;
+          }
+        }
+      } catch { /* migration not applied yet — silently zero */ }
     }
 
     return NextResponse.json({

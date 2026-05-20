@@ -3,7 +3,7 @@ import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { lookupUserByEmail, openDm, postMessage } from "@/lib/slack";
-import { getApproversForKind, type EmailDraftKind } from "@/lib/email-approvers";
+import { getApproversForDraft, type EmailDraftKind } from "@/lib/email-approvers";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
@@ -123,7 +123,7 @@ export async function POST(req: NextRequest) {
 
     const deliveries: Array<{ userId: string; name: string; delivered: boolean; reason?: string }> = [];
     if (process.env.SLACK_BOT_TOKEN) {
-      const approvers = await getApproversForKind(kind);
+      const approvers = await getApproversForDraft({ author_id: userId, kind });
       const kindLabel =
         kind === "content_plan" ? "Content Plan" :
         kind === "custom" ? "Custom email" :
@@ -212,23 +212,38 @@ export async function GET(req: NextRequest) {
 
     let visible = allRows;
     if (!mineOnly) {
-      const isLeader = me.role === "leader" || me.isAdmin === true;
+      const isLeader = me.role === "leader";
       if (!isLeader) {
-        const lower = (me.name ?? "").toLowerCase();
-        visible = allRows.filter((r) => {
-          if (r.author_id === userId) return true;
-          // Visibility for non-leaders: only pending rows that match
-          // their approver name pattern.
-          if (r.status !== "pending") return false;
-          // client_update → mitchell/mujtaba/sam
-          if (r.kind === "client_update") {
-            return ["mitchell", "mujtaba", "sam"].some((p) => lower.includes(p));
+        // Dept heads see drafts whose author is in any department
+        // they head, regardless of kind. Everyone else (including
+        // stealth admins + workers) sees only their own drafts.
+        const isDeptHead = me.role === "department_head" && (me.departmentIds ?? []).length > 0;
+        if (!isDeptHead) {
+          visible = allRows.filter((r) => r.author_id === userId);
+        } else {
+          // Look up author->depts for every row's author, then keep
+          // rows where the author shares a dept with the caller.
+          const authorIds = Array.from(new Set(allRows.map((r) => r.author_id)));
+          const authorDeptsByUser = new Map<string, Set<string>>();
+          if (authorIds.length > 0) {
+            const { data: memberships } = await supabase
+              .from("department_members")
+              .select("user_id, department_id")
+              .in("user_id", authorIds);
+            for (const m of ((memberships ?? []) as { user_id: string; department_id: string }[])) {
+              const set = authorDeptsByUser.get(m.user_id) ?? new Set<string>();
+              set.add(m.department_id);
+              authorDeptsByUser.set(m.user_id, set);
+            }
           }
-          if (r.kind === "content_plan") {
-            return ["sam", "mitchell", "tabrez", "farez", "bismah", "mujtaba"].some((p) => lower.includes(p));
-          }
-          return false;
-        });
+          const myDepts = new Set(me.departmentIds ?? []);
+          visible = allRows.filter((r) => {
+            if (r.author_id === userId) return true;
+            const authorDepts = authorDeptsByUser.get(r.author_id) ?? new Set<string>();
+            for (const d of myDepts) if (authorDepts.has(d)) return true;
+            return false;
+          });
+        }
       }
     }
 

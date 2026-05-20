@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
-import { canApproveKind, type EmailDraftKind } from "@/lib/email-approvers";
+import { canApproveDraft } from "@/lib/email-approvers";
 import { lookupUserByEmail, openDm, postMessage } from "@/lib/slack";
 
 export const dynamic = "force-dynamic";
@@ -35,10 +35,11 @@ export async function POST(
       .maybeSingle();
     if (fetchErr) return NextResponse.json({ error: fetchErr.message }, { status: 500 });
     if (!row) return NextResponse.json({ error: "not found" }, { status: 404 });
-    if (!canApproveKind(
-      { id: me.id, name: me.name, role: me.role, isAdmin: me.isAdmin },
-      row.kind as EmailDraftKind
-    )) {
+    const allowed = await canApproveDraft(
+      { id: me.id, role: me.role, departmentIds: me.departmentIds },
+      { author_id: row.author_id as string, kind: row.kind }
+    );
+    if (!allowed) {
       return NextResponse.json({ error: "forbidden" }, { status: 403 });
     }
     if (row.status !== "pending") {

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
-import { canApproveKind, type EmailDraftKind } from "@/lib/email-approvers";
+import { canApproveDraft } from "@/lib/email-approvers";
 
 export const dynamic = "force-dynamic";
 
@@ -38,9 +38,9 @@ export async function PATCH(
     }
 
     const isAuthor = row.author_id === userId;
-    const isApprover = canApproveKind(
-      { id: me.id, name: me.name, role: me.role, isAdmin: me.isAdmin },
-      row.kind as EmailDraftKind
+    const isApprover = await canApproveDraft(
+      { id: me.id, role: me.role, departmentIds: me.departmentIds },
+      { author_id: row.author_id as string, kind: row.kind }
     );
     if (!isAuthor && !isApprover) {
       return NextResponse.json({ error: "forbidden" }, { status: 403 });

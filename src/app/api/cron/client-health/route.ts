@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { classifyBatch, scoreToLabel, type HealthLabel } from "@/lib/client-health";
+import { postMessage } from "@/lib/slack";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -34,7 +35,26 @@ interface ClientRow {
   name: string;
   contact_emails: string[] | null;
   domain_location: string | null;
+  health_label: HealthLabel | null;
 }
+
+// Severity ranking — used to detect downgrades. Higher number = worse.
+// We ping Slack on any transition that moves the label *up* this scale
+// (thriving→steady is a small step, thriving→at_risk is a cliff).
+const SEVERITY: Record<HealthLabel, number> = {
+  thriving: 0,
+  steady: 1,
+  shaky: 2,
+  at_risk: 3
+};
+
+// Human-readable emoji for the Slack ping.
+const LABEL_EMOJI: Record<HealthLabel, string> = {
+  thriving: "🟢",
+  steady: "🔵",
+  shaky: "🟡",
+  at_risk: "🔴"
+};
 
 export async function GET() {
   if (!process.env.OPENAI_API_KEY) {
@@ -48,7 +68,7 @@ export async function GET() {
 
   const { data: clientsRaw, error: clientsErr } = await supabase
     .from("clients")
-    .select("id, name, contact_emails, domain_location");
+    .select("id, name, contact_emails, domain_location, health_label");
   if (clientsErr) {
     return NextResponse.json({ ok: false, error: `clients fetch: ${clientsErr.message}` }, { status: 500 });
   }
@@ -136,6 +156,20 @@ export async function GET() {
     .slice(0, 10)
     .map(([domain, count]) => ({ domain, count }));
 
+  // Prior label per client — used to decide whether to ping Slack
+  // about a downgrade after the new label is written.
+  const priorLabelById = new Map<string, HealthLabel | null>();
+  const clientNameById = new Map<string, string>();
+  for (const c of clients) {
+    priorLabelById.set(c.id, c.health_label ?? null);
+    clientNameById.set(c.id, c.name);
+  }
+
+  // One workspace-channel ping per run, batched at the end with a list
+  // of every client that worsened. Avoids the team getting spammed if
+  // 10 clients drop in one cron pass.
+  const downgrades: Array<{ name: string; from: HealthLabel | null; to: HealthLabel }> = [];
+
   const results: Array<{ clientId: string; label: HealthLabel; sample: number; score: number; summary: string }> = [];
   const errors: Array<{ clientId: string; error: string }> = [];
   const now = new Date().toISOString();
@@ -179,9 +213,65 @@ export async function GET() {
         errors.push({ clientId, error: updateErr.message });
         continue;
       }
+      // Track downgrades (worse severity than prior). null prior counts
+      // as "no signal yet" — only ping when we're moving *from* a known
+      // label, so a first-time scoring of a brand-new client doesn't
+      // spam Slack with "Acme dropped from null to thriving".
+      const prior = priorLabelById.get(clientId) ?? null;
+      if (prior && SEVERITY[label] > SEVERITY[prior]) {
+        downgrades.push({ name: clientNameById.get(clientId) ?? clientId, from: prior, to: label });
+      }
       results.push({ clientId, label, sample: scores.length, score: avg, summary });
     } catch (err) {
       errors.push({ clientId, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
+  // Slack ping for downgrades — single batched message so a bad cron
+  // run doesn't fan out 10 separate notifications. Posts to the
+  // workspace's configured scaled-team channel; silently no-ops if
+  // either the channel or the bot token isn't configured.
+  let slackPing: { delivered: boolean; reason?: string } = { delivered: false };
+  if (downgrades.length > 0) {
+    try {
+      const { data: ws } = await supabase
+        .from("workspace_settings")
+        .select("scaled_team_channel_id")
+        .eq("id", "workspace")
+        .maybeSingle();
+      const channel = (ws?.scaled_team_channel_id as string | null) ?? null;
+      if (!channel) {
+        slackPing = { delivered: false, reason: "no scaled-team channel configured" };
+      } else if (!process.env.SLACK_BOT_TOKEN) {
+        slackPing = { delivered: false, reason: "SLACK_BOT_TOKEN missing" };
+      } else {
+        const lines = downgrades.map((d) =>
+          `${LABEL_EMOJI[d.to]} *${d.name}* — ${d.from} → *${d.to}*`
+        );
+        const headline =
+          downgrades.length === 1
+            ? `Client health drop detected`
+            : `${downgrades.length} client health drops detected`;
+        const text = `${headline}\n${lines.join("\n")}`;
+        const blocks = [
+          { type: "header", text: { type: "plain_text", text: `🚨 ${headline}` } },
+          {
+            type: "section",
+            text: { type: "mrkdwn", text: lines.join("\n") }
+          },
+          {
+            type: "context",
+            elements: [{
+              type: "mrkdwn",
+              text: `Auto-detected from inbound email sentiment · ${new Date(now).toLocaleString("en-US", { timeZone: "UTC" })} UTC`
+            }]
+          }
+        ];
+        await postMessage(channel, text, blocks);
+        slackPing = { delivered: true };
+      }
+    } catch (err) {
+      slackPing = { delivered: false, reason: err instanceof Error ? err.message : "slack post failed" };
     }
   }
 
@@ -203,7 +293,9 @@ export async function GET() {
       topUnmatchedDomains,
       // Truncated sample of clients with no matchable signal yet — the
       // ones the cron literally can't reach until contact info is filled.
-      sampleClientsMissingContact: clientsWithoutSignal.slice(0, 10)
+      sampleClientsMissingContact: clientsWithoutSignal.slice(0, 10),
+      downgrades,
+      slackPing
     },
     errors,
     results: results.map((r) => ({ clientId: r.clientId, label: r.label, sample: r.sample }))

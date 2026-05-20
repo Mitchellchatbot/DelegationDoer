@@ -11,7 +11,16 @@ export interface EodPersonSummary {
   avatarUrl: string | null;
   completedTasks: { id: string; title: string; priority: string }[];
   hoursLogged: number;
+  // Legacy free-form notes column — kept for back-compat with any UI
+  // surface still reading it. New writes go to the structured fields
+  // below.
   note: string | null;
+  // Structured EOD fields (spec v2 Section 2). All optional at the
+  // type level; the UI marks the first three as required on submit.
+  workedOn: string | null;
+  accomplished: string | null;
+  planTomorrow: string | null;
+  blockers: string | null;
 }
 
 export interface EodDepartmentSummary {
@@ -91,7 +100,7 @@ export async function buildEodForDepartment(
       .lt("started_at", endIso),
     supabase
       .from("eod_notes")
-      .select("user_id, note")
+      .select("user_id, note, worked_on, accomplished, plan_tomorrow, blockers")
       .in("user_id", memberIds)
       .eq("note_date", isoDate)
   ]);
@@ -99,7 +108,14 @@ export async function buildEodForDepartment(
   const users = (usersRes.data ?? []) as { id: string; name: string; avatar_url: string | null }[];
   const tasks = (tasksRes.data ?? []) as { id: string; title: string; priority: string; assignee_id: string; status: string; last_activity_at: string }[];
   const entries = (entriesRes.data ?? []) as { user_id: string; started_at: string; ended_at: string | null }[];
-  const notes = (notesRes.data ?? []) as { user_id: string; note: string }[];
+  const notes = (notesRes.data ?? []) as Array<{
+    user_id: string;
+    note: string | null;
+    worked_on: string | null;
+    accomplished: string | null;
+    plan_tomorrow: string | null;
+    blockers: string | null;
+  }>;
 
   // 3) Roll up per user.
   const tasksByUser = new Map<string, typeof tasks>();
@@ -118,8 +134,8 @@ export async function buildEodForDepartment(
     hoursByUser.set(e.user_id, (hoursByUser.get(e.user_id) ?? 0) + (f - s) / 3_600_000);
   }
 
-  const noteByUser = new Map<string, string>();
-  for (const n of notes) noteByUser.set(n.user_id, n.note ?? "");
+  const noteByUser = new Map<string, typeof notes[number]>();
+  for (const n of notes) noteByUser.set(n.user_id, n);
 
   const people: EodPersonSummary[] = users
     .map((u) => {
@@ -129,14 +145,21 @@ export async function buildEodForDepartment(
         priority: t.priority
       }));
       const hours = +(hoursByUser.get(u.id) ?? 0).toFixed(2);
-      const note = noteByUser.get(u.id) ?? null;
+      const row = noteByUser.get(u.id) ?? null;
+      const note = row?.note && row.note.trim() ? row.note : null;
+      const blank = (v: string | null | undefined) =>
+        v && v.trim() ? v : null;
       return {
         userId: u.id,
         name: u.name,
         avatarUrl: u.avatar_url ?? null,
         completedTasks: completed,
         hoursLogged: hours,
-        note: note && note.trim() ? note : null
+        note,
+        workedOn: blank(row?.worked_on),
+        accomplished: blank(row?.accomplished),
+        planTomorrow: blank(row?.plan_tomorrow),
+        blockers: blank(row?.blockers)
       };
     })
     // Sort: most completed first, then most hours, then name.
@@ -226,10 +249,13 @@ export function formatEodForSlack(s: EodDepartmentSummary): { text: string; bloc
     return { text, blocks };
   }
 
-  // Only include people who actually had activity OR wrote a note.
-  // Otherwise the digest gets noisy with "nothing to report" lines.
+  // Only include people who actually had activity OR wrote any
+  // section of their EOD. Otherwise the digest gets noisy with
+  // "nothing to report" lines.
+  const hasAnyNote = (p: EodPersonSummary) =>
+    !!(p.note || p.workedOn || p.accomplished || p.planTomorrow || p.blockers);
   const active = s.people.filter(
-    (p) => p.completedTasks.length > 0 || p.hoursLogged > 0 || p.note
+    (p) => p.completedTasks.length > 0 || p.hoursLogged > 0 || hasAnyNote(p)
   );
   if (active.length === 0) {
     blocks.push({
@@ -252,13 +278,16 @@ export function formatEodForSlack(s: EodDepartmentSummary): { text: string; bloc
         lines.push(`  …and ${p.completedTasks.length - top.length} more`);
       }
     }
-    if (p.note) {
-      // Quote the user's own note so it stands apart visually.
-      const quoted = p.note
-        .split("\n")
-        .map((line) => `> ${line}`)
-        .join("\n");
-      lines.push(`_Notes:_\n${quoted}`);
+    const quote = (s: string) =>
+      s.split("\n").map((line) => `> ${line}`).join("\n");
+    // Prefer the structured fields when present; fall back to the
+    // legacy free-form note for users still on the old textarea.
+    if (p.workedOn) lines.push(`*Worked on:*\n${quote(p.workedOn)}`);
+    if (p.accomplished) lines.push(`*Accomplished:*\n${quote(p.accomplished)}`);
+    if (p.planTomorrow) lines.push(`*Plan for tomorrow:*\n${quote(p.planTomorrow)}`);
+    if (p.blockers) lines.push(`*Blockers / questions:*\n${quote(p.blockers)}`);
+    if (!p.workedOn && !p.accomplished && !p.planTomorrow && !p.blockers && p.note) {
+      lines.push(`_Notes:_\n${quote(p.note)}`);
     }
     blocks.push({
       type: "section",

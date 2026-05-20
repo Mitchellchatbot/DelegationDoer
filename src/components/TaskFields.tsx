@@ -8,11 +8,23 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import type { CustomField, Task } from "@/lib/types";
+import { useCurrentUser } from "@/lib/user-context";
 
 // Inline-editable Notion-style field surface. Used in the task detail
 // sidebar. Each field renders as a "label · value · pencil" row that
 // flips to a tiny input on click. Submits via PATCH /api/tasks/[id]
 // and refreshes the route so the server-rendered fields stay accurate.
+
+// Per-field department visibility. A field shows if the user's
+// department intersects `visibleTo`, OR if they're a leader / admin
+// (those always see everything). Reference: v2 spec Section 6.
+//   - Website team (dep_web): operational/markup/hosting links
+//   - SEO team (dep_seo): comms-oriented links
+//   - Software team (dep_software): all technical links
+//   - Marketing (dep_mkt): treat like SEO (comms-facing)
+// "all" is a sentinel — every dept can see it.
+type DeptId = "dep_seo" | "dep_web" | "dep_software" | "dep_mkt";
+type Visibility = "all" | DeptId[];
 
 const BUILTIN_FIELDS: {
   key: keyof Task;
@@ -20,18 +32,31 @@ const BUILTIN_FIELDS: {
   label: string;
   icon: React.ComponentType<{ className?: string }>;
   type: "text" | "email" | "url";
+  visibleTo: Visibility;
 }[] = [
-  { key: "clientEmail",       body: "clientEmail",       label: "Client email",   icon: Mail,         type: "email" },
-  { key: "clientFolderUrl",   body: "clientFolderUrl",   label: "Client folder",  icon: FolderOpen,   type: "url" },
-  { key: "stagingServer",     body: "stagingServer",     label: "Staging server", icon: Server,       type: "text" },
-  { key: "markupLink",        body: "markupLink",        label: "Markup link",    icon: LinkIcon,     type: "url" },
-  { key: "hostingAccess",     body: "hostingAccess",     label: "Hosting/access", icon: KeyRound,     type: "text" },
-  { key: "missiveThreadUrl",  body: "missiveThreadUrl",  label: "Missive thread", icon: MessageSquare, type: "url" }
+  { key: "clientEmail",       body: "clientEmail",       label: "Client email",   icon: Mail,          type: "email", visibleTo: ["dep_seo", "dep_mkt", "dep_web"] },
+  { key: "clientFolderUrl",   body: "clientFolderUrl",   label: "Client folder",  icon: FolderOpen,    type: "url",   visibleTo: "all" },
+  { key: "stagingServer",     body: "stagingServer",     label: "Staging server", icon: Server,        type: "text",  visibleTo: ["dep_web", "dep_software"] },
+  { key: "markupLink",        body: "markupLink",        label: "Markup link",    icon: LinkIcon,      type: "url",   visibleTo: ["dep_web", "dep_software"] },
+  { key: "hostingAccess",     body: "hostingAccess",     label: "Hosting/access", icon: KeyRound,      type: "text",  visibleTo: ["dep_web", "dep_software"] },
+  { key: "missiveThreadUrl",  body: "missiveThreadUrl",  label: "Missive thread", icon: MessageSquare, type: "url",   visibleTo: "all" }
 ];
 
 export function TaskFields({ task }: { task: Task }) {
   const router = useRouter();
   const [fields, setFields] = useState<CustomField[] | null>(null);
+  const me = useCurrentUser();
+
+  // Leaders + stealth admins see every link. Everyone else sees only
+  // the link types their department needs (so workers don't drown in
+  // dev-tooling links and ops links don't get hidden from SEO).
+  const seesAllLinks = me.role === "leader" || me.isAdmin === true;
+  const myDepts = new Set(me.departmentIds ?? []);
+  const visibleFields = BUILTIN_FIELDS.filter((f) => {
+    if (seesAllLinks) return true;
+    if (f.visibleTo === "all") return true;
+    return f.visibleTo.some((d) => myDepts.has(d));
+  });
 
   // Lazy-load custom field definitions. Server-rendered detail page
   // doesn't pre-fetch them so we keep this component dropable into
@@ -67,7 +92,7 @@ export function TaskFields({ task }: { task: Task }) {
   return (
     <div className="space-y-3">
       <SectionLabel>Project links</SectionLabel>
-      {BUILTIN_FIELDS.map((f) => {
+      {visibleFields.map((f) => {
         const Icon = f.icon;
         const value = (task[f.key] as string | null | undefined) ?? null;
         return (

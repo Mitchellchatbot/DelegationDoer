@@ -22,6 +22,10 @@ interface PersonSummary {
   completedTasks: { id: string; title: string; priority: string }[];
   hoursLogged: number;
   note: string | null;
+  workedOn: string | null;
+  accomplished: string | null;
+  planTomorrow: string | null;
+  blockers: string | null;
 }
 
 interface DepartmentSummary {
@@ -60,7 +64,11 @@ export default function EodPage() {
 
   useEffect(() => { load(); }, [load]);
 
-  async function saveNote(deptId: string, value: string) {
+  // Structured EOD field keys + their on-disk + UI labels. Centralized
+  // here so the save/optimistic-update logic stays simple.
+  type EodFieldKey = "workedOn" | "accomplished" | "planTomorrow" | "blockers";
+
+  async function saveField(deptId: string, key: EodFieldKey, value: string) {
     // Optimistic — paint the textarea immediately.
     setSummaries((cur) =>
       cur.map((d) =>
@@ -69,7 +77,7 @@ export default function EodPage() {
           : {
               ...d,
               people: d.people.map((p) =>
-                p.userId === me.id ? { ...p, note: value || null } : p
+                p.userId === me.id ? { ...p, [key]: value || null } : p
               )
             }
       )
@@ -78,11 +86,11 @@ export default function EodPage() {
       const res = await fetch("/api/eod/notes", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ date: today, note: value })
+        body: JSON.stringify({ date: today, [key]: value })
       });
       if (!res.ok) throw new Error(`status ${res.status}`);
     } catch (err) {
-      toast.error(`Couldn't save note: ${err instanceof Error ? err.message : "unknown"}`);
+      toast.error(`Couldn't save EOD field: ${err instanceof Error ? err.message : "unknown"}`);
     }
   }
 
@@ -159,7 +167,7 @@ export default function EodPage() {
             meId={me.id}
             canSend={canSend}
             sending={!!sending[d.departmentId]}
-            onSaveNote={(v) => saveNote(d.departmentId, v)}
+            onSaveField={(key, v) => saveField(d.departmentId, key, v)}
             onSend={() => send(d.departmentId, d.departmentName)}
           />
         ))
@@ -168,21 +176,27 @@ export default function EodPage() {
   );
 }
 
+type EodFieldKey = "workedOn" | "accomplished" | "planTomorrow" | "blockers";
+
+function hasAnyEod(p: PersonSummary): boolean {
+  return !!(p.note || p.workedOn || p.accomplished || p.planTomorrow || p.blockers);
+}
+
 function DepartmentPanel({
-  summary, meId, canSend, sending, onSaveNote, onSend
+  summary, meId, canSend, sending, onSaveField, onSend
 }: {
   summary: DepartmentSummary;
   meId: string;
   canSend: boolean;
   sending: boolean;
-  onSaveNote: (value: string) => void;
+  onSaveField: (key: EodFieldKey, value: string) => void;
   onSend: () => void;
 }) {
   // Show every member (so a worker can write their note even if they
   // had a quiet day). Active members on top, then everyone else.
   const sorted = [...summary.people].sort((a, b) => {
-    const aActive = a.completedTasks.length > 0 || a.hoursLogged > 0 || !!a.note;
-    const bActive = b.completedTasks.length > 0 || b.hoursLogged > 0 || !!b.note;
+    const aActive = a.completedTasks.length > 0 || a.hoursLogged > 0 || hasAnyEod(a);
+    const bActive = b.completedTasks.length > 0 || b.hoursLogged > 0 || hasAnyEod(b);
     if (aActive !== bActive) return aActive ? -1 : 1;
     if (b.completedTasks.length !== a.completedTasks.length)
       return b.completedTasks.length - a.completedTasks.length;
@@ -240,7 +254,7 @@ function DepartmentPanel({
               key={p.userId}
               person={p}
               isMe={p.userId === meId}
-              onSaveNote={onSaveNote}
+              onSaveField={onSaveField}
             />
           ))
         )}
@@ -249,23 +263,47 @@ function DepartmentPanel({
   );
 }
 
+// Field definitions per the v2 spec (Section 2 base fields). Order +
+// labels are surfaced here so the spec stays the source of truth.
+const EOD_FIELDS: ReadonlyArray<{
+  key: EodFieldKey;
+  label: string;
+  placeholder: string;
+  required: boolean;
+}> = [
+  {
+    key: "workedOn",
+    label: "What did you work on today?",
+    placeholder: "Tasks, deep-work blocks, meetings, anything that ate your time.",
+    required: true
+  },
+  {
+    key: "accomplished",
+    label: "What did you accomplish?",
+    placeholder: "Shipped, closed, fixed, agreed-upon — the outcomes, not the activity.",
+    required: true
+  },
+  {
+    key: "planTomorrow",
+    label: "Plan for tomorrow",
+    placeholder: "Top 1–3 things you'll push on tomorrow.",
+    required: true
+  },
+  {
+    key: "blockers",
+    label: "Any questions or blockers?",
+    placeholder: "Stuck on something? Need a decision? Drop it here so leads see it tonight.",
+    required: false
+  }
+];
+
 function PersonRow({
-  person, isMe, onSaveNote
+  person, isMe, onSaveField
 }: {
   person: PersonSummary;
   isMe: boolean;
-  onSaveNote: (value: string) => void;
+  onSaveField: (key: EodFieldKey, value: string) => void;
 }) {
-  const [draft, setDraft] = useState(person.note ?? "");
-  // Resync the textarea if the server-side note changes (e.g. another
-  // tab updated it). Skip if we're the editor and have a non-empty
-  // unsaved draft we don't want to clobber.
-  useEffect(() => {
-    if (!isMe) return;
-    setDraft(person.note ?? "");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [person.note]);
-
   const tone = (p: string) =>
     p === "critical"
       ? "bg-rose-500"
@@ -303,32 +341,82 @@ function PersonRow({
           </ul>
         )}
 
-        <div className="mt-2">
-          <label className="block text-[10px] uppercase tracking-wide text-ink/45 mb-1">
-            Notes {isMe ? "(yours — autosaves on blur)" : ""}
-          </label>
-          {isMe ? (
-            <textarea
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onBlur={() => {
-                if ((draft ?? "") !== (person.note ?? "")) onSaveNote(draft);
-              }}
-              placeholder="What did you work on today? Any blockers? Anything to brag about?"
-              rows={2}
-              className="w-full text-xs bg-white border border-slate-200/70 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent/40 resize-y transition-all"
+        {/* Structured EOD fields. Editor renders for `isMe`; everyone
+            else sees a read-only stack of whatever the user already
+            filled out (or a single "Nothing filed yet" placeholder). */}
+        <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2">
+          {EOD_FIELDS.map((f) => (
+            <EodFieldCell
+              key={f.key}
+              field={f}
+              value={person[f.key]}
+              isMe={isMe}
+              onSave={(v) => onSaveField(f.key, v)}
             />
-          ) : person.note ? (
-            <div className="text-[13px] bg-slate-50/70 border border-slate-200/60 rounded-lg px-3 py-2 whitespace-pre-wrap">
-              {person.note}
-            </div>
-          ) : (
-            <div className="text-[11px] text-muted italic">
-              No notes yet.
-            </div>
-          )}
+          ))}
         </div>
+
+        {/* Legacy free-form note — only render when it's the only
+            content the user has (older rows pre-dating the structured
+            split). New writes go to the structured fields above. */}
+        {!isMe && person.note && !hasAnyEod({ ...person, note: null }) && (
+          <div className="mt-2 text-[13px] bg-slate-50/70 border border-slate-200/60 rounded-lg px-3 py-2 whitespace-pre-wrap">
+            {person.note}
+          </div>
+        )}
       </div>
+    </div>
+  );
+}
+
+function EodFieldCell({
+  field, value, isMe, onSave
+}: {
+  field: { key: EodFieldKey; label: string; placeholder: string; required: boolean };
+  value: string | null;
+  isMe: boolean;
+  onSave: (value: string) => void;
+}) {
+  const [draft, setDraft] = useState(value ?? "");
+  useEffect(() => {
+    if (!isMe) return;
+    setDraft(value ?? "");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value]);
+
+  if (!isMe) {
+    return (
+      <div className="rounded-lg border border-slate-200/60 bg-slate-50/60 px-3 py-2 min-w-0">
+        <div className="text-[10px] uppercase tracking-wide text-ink/45 font-semibold flex items-center gap-1">
+          {field.label}
+          {field.required && <span className="text-rose-400">*</span>}
+        </div>
+        {value ? (
+          <div className="text-[12px] text-ink/80 whitespace-pre-wrap mt-1 leading-snug">{value}</div>
+        ) : (
+          <div className="text-[11px] text-muted italic mt-1">—</div>
+        )}
+      </div>
+    );
+  }
+
+  const missing = field.required && !draft.trim();
+  return (
+    <div className={"rounded-lg border bg-white px-3 py-2 min-w-0 transition-colors " + (missing ? "border-amber-300/70" : "border-slate-200/70")}>
+      <label className="text-[10px] uppercase tracking-wide font-semibold flex items-center gap-1 text-ink/55">
+        {field.label}
+        {field.required && <span className="text-rose-400">*</span>}
+      </label>
+      <textarea
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={() => {
+          if ((draft ?? "") !== (value ?? "")) onSave(draft);
+        }}
+        placeholder={field.placeholder}
+        rows={2}
+        className="mt-1 w-full text-xs bg-transparent border-none px-0 py-0 outline-none focus:ring-0 resize-y placeholder:text-ink/35"
+      />
     </div>
   );
 }

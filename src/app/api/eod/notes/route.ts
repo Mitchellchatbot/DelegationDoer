@@ -4,14 +4,28 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 
 export const dynamic = "force-dynamic";
 
-// PUT /api/eod/notes — upsert the caller's note for a given date.
-// Body: { date: "YYYY-MM-DD" (optional, defaults to today), note: string }.
-// Only the caller can write their own note — no userId in the body.
+// PUT /api/eod/notes — upsert the caller's EOD entry for a given date.
+// Body shape (all optional; whatever's present gets written):
+//   {
+//     date:          "YYYY-MM-DD",      // defaults to today
+//     note:          string,             // legacy free-form catch-all
+//     workedOn:      string,
+//     accomplished:  string,
+//     planTomorrow:  string,
+//     blockers:      string
+//   }
+// Only the caller can write their own row — no userId in the body.
+
+const STRING_OR_EMPTY = (v: unknown): string | null => {
+  if (typeof v !== "string") return null;
+  const t = v.trim();
+  return t.length > 0 ? t : null;
+};
+
 export async function PUT(req: NextRequest) {
   try {
     const userId = await requireCurrentUserId();
     const body = await req.json();
-    const note = typeof body.note === "string" ? body.note : "";
     const dateStr =
       typeof body.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(body.date)
         ? body.date
@@ -20,18 +34,26 @@ export async function PUT(req: NextRequest) {
     const supabase = getSupabaseAdmin();
     const id = `eod_${userId}_${dateStr}`;
     const now = new Date().toISOString();
+
+    // Build a partial row from whichever fields were supplied. Anything
+    // not present in the body is left untouched on the existing row
+    // (upsert with onConflict merges on the PK; columns not in the
+    // payload stay as-is on update).
+    const row: Record<string, unknown> = {
+      id,
+      user_id: userId,
+      note_date: dateStr,
+      updated_at: now
+    };
+    if (typeof body.note === "string") row.note = body.note;
+    if ("workedOn" in body) row.worked_on = STRING_OR_EMPTY(body.workedOn);
+    if ("accomplished" in body) row.accomplished = STRING_OR_EMPTY(body.accomplished);
+    if ("planTomorrow" in body) row.plan_tomorrow = STRING_OR_EMPTY(body.planTomorrow);
+    if ("blockers" in body) row.blockers = STRING_OR_EMPTY(body.blockers);
+
     const { error } = await supabase
       .from("eod_notes")
-      .upsert(
-        {
-          id,
-          user_id: userId,
-          note_date: dateStr,
-          note,
-          updated_at: now
-        },
-        { onConflict: "user_id,note_date" }
-      );
+      .upsert(row, { onConflict: "user_id,note_date" });
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
     return NextResponse.json({ ok: true, date: dateStr });
   } catch (err) {

@@ -271,8 +271,22 @@ export function EodTypeform({
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error ?? `status ${res.status}`);
       setSubmitted(true);
-      const delivered = (data.recipients ?? []).filter((r: { delivered: boolean }) => r.delivered).length;
-      toast.success(`EOD submitted — ${delivered} leader${delivered === 1 ? "" : "s"} notified`);
+      // Detailed recipient + delivery breakdown so it's obvious who
+      // actually got the DM (vs. a silent Slack lookup failure).
+      const recipients = (data.recipients ?? []) as Array<{ name: string; delivered: boolean; reason?: string }>;
+      const delivered = recipients.filter((r) => r.delivered);
+      const failed = recipients.filter((r) => !r.delivered);
+      if (recipients.length === 0) {
+        toast.message("EOD saved — no leadership recipients configured yet.");
+      } else if (delivered.length > 0) {
+        toast.success(`EOD DM'd to: ${delivered.map((r) => r.name).join(", ")}`);
+      }
+      if (failed.length > 0) {
+        toast.warning(
+          `Couldn't DM ${failed.length}: ${failed.map((r) => `${r.name} (${r.reason ?? "unknown"})`).join("; ")}`,
+          { duration: 8000 }
+        );
+      }
       onComplete();
     } catch (err) {
       toast.error(`Submit failed: ${err instanceof Error ? err.message : "unknown"}`);

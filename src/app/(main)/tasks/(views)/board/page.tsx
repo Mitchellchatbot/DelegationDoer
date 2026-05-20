@@ -172,6 +172,10 @@ export default function BoardPage() {
       user: u
     }));
     cols.push({ id: "__unassigned", label: "Unassigned", tone: "border-slate-300/40" });
+    // Dedicated bucket for finished work — pulls done tasks out of each
+    // person's column so the live worklist is just open items. Drag into
+    // here to mark done; drag out onto a person to reopen + reassign.
+    cols.push({ id: "__completed", label: "Completed", tone: "border-emerald-300/50" });
     return cols;
   }, [groupBy, visible, users, selectedDepts]);
 
@@ -184,7 +188,11 @@ export default function BoardPage() {
       let key: string | null = null;
       if (groupBy === "status") key = t.status;
       else if (groupBy === "client") key = t.clientName ?? "__internal";
-      else if (groupBy === "person") key = t.assigneeId ?? "__unassigned";
+      else if (groupBy === "person") {
+        // Done tasks go to the shared Completed bucket regardless of
+        // assignee — keeps each person's column focused on open work.
+        key = t.status === "done" ? "__completed" : (t.assigneeId ?? "__unassigned");
+      }
       if (key && map[key] !== undefined) map[key].push(t);
     });
 
@@ -237,24 +245,63 @@ export default function BoardPage() {
     }
 
     if (groupBy === "person") {
+      // Drag into Completed → mark task done (keep assignee).
+      if (dest === "__completed") {
+        if (before.status === "done") return;
+        setTasks((cur) => cur.map((t) => t.id === id ? { ...t, status: "done" as TaskStatus, lastActivityAt: new Date().toISOString() } : t));
+        try {
+          const res = await fetch(`/api/tasks/${id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ status: "done" })
+          });
+          if (!res.ok) {
+            const d = await res.json().catch(() => null);
+            throw new Error(d?.error ?? `failed (${res.status})`);
+          }
+          toast.success(`Marked done · ${before.title}`);
+        } catch (err) {
+          toast.error(`Couldn't mark done: ${err instanceof Error ? err.message : "network error"}`);
+          setTasks((cur) => cur.map((t) => t.id === id ? { ...t, status: before.status } : t));
+        }
+        return;
+      }
+      // Drag out of Completed onto a person → reopen + reassign in one go.
+      const reopening = before.status === "done";
       const nextAssignee = dest === "__unassigned" ? null : dest;
-      if (before.assigneeId === nextAssignee) return;
-      setTasks((cur) => cur.map((t) => t.id === id ? { ...t, assigneeId: nextAssignee, lastActivityAt: new Date().toISOString() } : t));
+      if (!reopening && before.assigneeId === nextAssignee) return;
+      const nextStatus: TaskStatus = reopening ? "in_progress" : before.status;
+      setTasks((cur) => cur.map((t) => t.id === id ? {
+        ...t,
+        assigneeId: nextAssignee,
+        status: nextStatus,
+        lastActivityAt: new Date().toISOString()
+      } : t));
       try {
+        const body: Record<string, unknown> = { assigneeId: nextAssignee };
+        if (reopening) body.status = nextStatus;
         const res = await fetch(`/api/tasks/${id}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ assigneeId: nextAssignee })
+          body: JSON.stringify(body)
         });
         if (!res.ok) {
           const d = await res.json().catch(() => null);
           throw new Error(d?.error ?? `failed (${res.status})`);
         }
         const target = nextAssignee ? userById(nextAssignee) : null;
-        toast.success(target ? `Reassigned to ${target.name}` : "Unassigned");
+        if (reopening) {
+          toast.success(target ? `Reopened & assigned to ${target.name}` : "Reopened (unassigned)");
+        } else {
+          toast.success(target ? `Reassigned to ${target.name}` : "Unassigned");
+        }
       } catch (err) {
-        toast.error(`Reassign failed: ${err instanceof Error ? err.message : "network error"}`);
-        setTasks((cur) => cur.map((t) => t.id === id ? { ...t, assigneeId: before.assigneeId } : t));
+        toast.error(`Move failed: ${err instanceof Error ? err.message : "network error"}`);
+        setTasks((cur) => cur.map((t) => t.id === id ? {
+          ...t,
+          assigneeId: before.assigneeId,
+          status: before.status
+        } : t));
       }
       return;
     }

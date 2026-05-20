@@ -21,6 +21,11 @@ export interface EodPersonSummary {
   accomplished: string | null;
   planTomorrow: string | null;
   blockers: string | null;
+  // Lifecycle — set when the worker hits "Submit EOD" (DMs leaders +
+  // dept heads at that moment) and again when a dept head ticks off.
+  submittedAt: string | null;
+  reviewedAt: string | null;
+  reviewedBy: { id: string; name: string | null } | null;
 }
 
 export interface EodDepartmentSummary {
@@ -100,7 +105,7 @@ export async function buildEodForDepartment(
       .lt("started_at", endIso),
     supabase
       .from("eod_notes")
-      .select("user_id, note, worked_on, accomplished, plan_tomorrow, blockers")
+      .select("user_id, note, worked_on, accomplished, plan_tomorrow, blockers, submitted_at, reviewed_at, reviewed_by")
       .in("user_id", memberIds)
       .eq("note_date", isoDate)
   ]);
@@ -115,7 +120,26 @@ export async function buildEodForDepartment(
     accomplished: string | null;
     plan_tomorrow: string | null;
     blockers: string | null;
+    submitted_at: string | null;
+    reviewed_at: string | null;
+    reviewed_by: string | null;
   }>;
+
+  // Resolve reviewer names — single round-trip for the small set of
+  // distinct reviewer user_ids we saw in today's notes.
+  const reviewerIds = Array.from(new Set(
+    notes.map((n) => n.reviewed_by).filter((v): v is string => !!v)
+  ));
+  const reviewerNameById = new Map<string, string | null>();
+  if (reviewerIds.length > 0) {
+    const { data: rs } = await supabase
+      .from("users")
+      .select("id, name")
+      .in("id", reviewerIds);
+    for (const r of (rs ?? []) as { id: string; name: string | null }[]) {
+      reviewerNameById.set(r.id, r.name);
+    }
+  }
 
   // 3) Roll up per user.
   const tasksByUser = new Map<string, typeof tasks>();
@@ -159,7 +183,12 @@ export async function buildEodForDepartment(
         workedOn: blank(row?.worked_on),
         accomplished: blank(row?.accomplished),
         planTomorrow: blank(row?.plan_tomorrow),
-        blockers: blank(row?.blockers)
+        blockers: blank(row?.blockers),
+        submittedAt: row?.submitted_at ?? null,
+        reviewedAt: row?.reviewed_at ?? null,
+        reviewedBy: row?.reviewed_by
+          ? { id: row.reviewed_by, name: reviewerNameById.get(row.reviewed_by) ?? null }
+          : null
       };
     })
     // Sort: most completed first, then most hours, then name.

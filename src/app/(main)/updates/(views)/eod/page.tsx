@@ -26,6 +26,9 @@ interface PersonSummary {
   accomplished: string | null;
   planTomorrow: string | null;
   blockers: string | null;
+  submittedAt: string | null;
+  reviewedAt: string | null;
+  reviewedBy: { id: string; name: string | null } | null;
 }
 
 interface DepartmentSummary {
@@ -91,6 +94,76 @@ export default function EodPage() {
       if (!res.ok) throw new Error(`status ${res.status}`);
     } catch (err) {
       toast.error(`Couldn't save EOD field: ${err instanceof Error ? err.message : "unknown"}`);
+    }
+  }
+
+  // Submit the caller's own EOD for today — flips submitted_at server-
+  // side, which triggers Slack DMs to leaders + the worker's dept
+  // heads. Optimistic UI: paint submittedAt locally so the row
+  // immediately flips into the submitted state without a refetch.
+  const [submitting, setSubmitting] = useState(false);
+  async function submitMyEod() {
+    setSubmitting(true);
+    try {
+      const res = await fetch("/api/eod/submit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ date: today })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error ?? `status ${res.status}`);
+      setSummaries((cur) =>
+        cur.map((d) => ({
+          ...d,
+          people: d.people.map((p) =>
+            p.userId === me.id ? { ...p, submittedAt: data.submittedAt } : p
+          )
+        }))
+      );
+      const delivered = (data.recipients ?? []).filter((r: { delivered: boolean }) => r.delivered).length;
+      if (delivered > 0) {
+        toast.success(`EOD submitted — ${delivered} leader${delivered === 1 ? "" : "s"} notified`);
+      } else {
+        toast.success("EOD submitted (no Slack recipients ready yet)");
+      }
+    } catch (err) {
+      toast.error(`Submit failed: ${err instanceof Error ? err.message : "unknown"}`);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  // Toggle review state on someone else's EOD row. Only callable on a
+  // submitted row (the button is hidden otherwise).
+  async function toggleReview(userId: string, currentlyReviewed: boolean) {
+    setSummaries((cur) =>
+      cur.map((d) => ({
+        ...d,
+        people: d.people.map((p) =>
+          p.userId === userId
+            ? {
+                ...p,
+                reviewedAt: currentlyReviewed ? null : new Date().toISOString(),
+                reviewedBy: currentlyReviewed ? null : { id: me.id, name: me.name }
+              }
+            : p
+        )
+      }))
+    );
+    try {
+      const res = await fetch("/api/eod/review", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId, date: today, undo: currentlyReviewed })
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => null);
+        throw new Error(d?.error ?? `status ${res.status}`);
+      }
+    } catch (err) {
+      toast.error(`Review toggle failed: ${err instanceof Error ? err.message : "unknown"}`);
+      // Re-fetch on failure so UI converges with server truth.
+      void load();
     }
   }
 
@@ -166,8 +239,16 @@ export default function EodPage() {
             summary={d}
             meId={me.id}
             canSend={canSend}
+            canReview={
+              me.role === "leader" ||
+              me.isAdmin === true ||
+              (me.role === "department_head" && (me.departmentIds ?? []).includes(d.departmentId))
+            }
             sending={!!sending[d.departmentId]}
+            submitting={submitting}
             onSaveField={(key, v) => saveField(d.departmentId, key, v)}
+            onSubmit={submitMyEod}
+            onToggleReview={toggleReview}
             onSend={() => send(d.departmentId, d.departmentName)}
           />
         ))
@@ -183,13 +264,17 @@ function hasAnyEod(p: PersonSummary): boolean {
 }
 
 function DepartmentPanel({
-  summary, meId, canSend, sending, onSaveField, onSend
+  summary, meId, canSend, canReview, sending, submitting, onSaveField, onSubmit, onToggleReview, onSend
 }: {
   summary: DepartmentSummary;
   meId: string;
   canSend: boolean;
+  canReview: boolean;
   sending: boolean;
+  submitting: boolean;
   onSaveField: (key: EodFieldKey, value: string) => void;
+  onSubmit: () => void;
+  onToggleReview: (userId: string, currentlyReviewed: boolean) => void;
   onSend: () => void;
 }) {
   // Show every member (so a worker can write their note even if they
@@ -254,7 +339,11 @@ function DepartmentPanel({
               key={p.userId}
               person={p}
               isMe={p.userId === meId}
+              canReview={canReview}
+              submitting={submitting}
               onSaveField={onSaveField}
+              onSubmit={onSubmit}
+              onToggleReview={onToggleReview}
             />
           ))
         )}
@@ -298,11 +387,15 @@ const EOD_FIELDS: ReadonlyArray<{
 ];
 
 function PersonRow({
-  person, isMe, onSaveField
+  person, isMe, canReview, submitting, onSaveField, onSubmit, onToggleReview
 }: {
   person: PersonSummary;
   isMe: boolean;
+  canReview: boolean;
+  submitting: boolean;
   onSaveField: (key: EodFieldKey, value: string) => void;
+  onSubmit: () => void;
+  onToggleReview: (userId: string, currentlyReviewed: boolean) => void;
 }) {
   const tone = (p: string) =>
     p === "critical"
@@ -326,6 +419,77 @@ function PersonRow({
           <div className="text-sm font-medium">{person.name}</div>
           <div className="text-xs text-muted">
             {person.completedTasks.length} done · {person.hoursLogged.toFixed(1)}h logged
+          </div>
+          {/* Submission state pill — visible to everyone so leadership
+              can see at a glance who's filed today and who hasn't. */}
+          {person.submittedAt ? (
+            <span
+              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200/60 text-[10px] font-medium"
+              title={`Submitted ${new Date(person.submittedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`}
+            >
+              <CheckCircle2 className="w-3 h-3" /> Submitted
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200/60 text-[10px] font-medium">
+              Not submitted
+            </span>
+          )}
+          {person.reviewedAt && (
+            <span
+              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-violet-50 text-violet-700 border border-violet-200/60 text-[10px] font-medium"
+              title={`Reviewed by ${person.reviewedBy?.name ?? "someone"} at ${new Date(person.reviewedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`}
+            >
+              ✓ Reviewed by {person.reviewedBy?.name ?? "—"}
+            </span>
+          )}
+          <div className="ml-auto flex items-center gap-2">
+            {isMe && (
+              <button
+                type="button"
+                onClick={onSubmit}
+                disabled={submitting || !!person.submittedAt}
+                className={
+                  "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold transition-all hover:-translate-y-0.5 active:scale-95 " +
+                  (person.submittedAt
+                    ? "bg-emerald-100 text-emerald-700 border border-emerald-200/70 cursor-default hover:translate-y-0"
+                    : submitting
+                    ? "opacity-60 cursor-not-allowed text-white"
+                    : "text-white shadow-sm")
+                }
+                style={
+                  person.submittedAt
+                    ? undefined
+                    : { background: "linear-gradient(135deg, #2563EB 0%, #1e63ff 100%)" }
+                }
+                title={
+                  person.submittedAt
+                    ? `Submitted at ${new Date(person.submittedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`
+                    : "Send your EOD to leadership + your dept head"
+                }
+              >
+                {submitting
+                  ? <Loader2 className="w-3 h-3 animate-spin" />
+                  : person.submittedAt
+                  ? <><CheckCircle2 className="w-3 h-3" /> Submitted</>
+                  : <><Send className="w-3 h-3" /> Submit EOD</>
+                }
+              </button>
+            )}
+            {!isMe && canReview && person.submittedAt && (
+              <button
+                type="button"
+                onClick={() => onToggleReview(person.userId, !!person.reviewedAt)}
+                className={
+                  "inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold transition-colors " +
+                  (person.reviewedAt
+                    ? "bg-violet-100 text-violet-700 border border-violet-200/70 hover:bg-violet-200/70"
+                    : "bg-white text-ink/70 border border-slate-200 hover:bg-slate-50 hover:border-violet-300")
+                }
+                title={person.reviewedAt ? "Click to un-mark reviewed" : "Mark this EOD as reviewed"}
+              >
+                {person.reviewedAt ? "✓ Reviewed" : "Mark reviewed"}
+              </button>
+            )}
           </div>
         </div>
 

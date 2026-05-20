@@ -8,6 +8,7 @@ import {
 import { toast } from "sonner";
 import { PageHero } from "@/components/PageHero";
 import { PersonAvatar } from "@/components/PersonAvatar";
+import { useCurrentUser } from "@/lib/user-context";
 import { cn } from "@/lib/utils";
 
 interface Submission {
@@ -35,10 +36,54 @@ interface PersonOption {
 // see their team, workers see themselves. Defaults to the last 30
 // days; dropdown lets you scope to one person or change the window.
 export default function EodHistoryPage() {
+  const me = useCurrentUser();
   const [submissions, setSubmissions] = useState<Submission[]>([]);
   const [loading, setLoading] = useState(true);
   const [days, setDays] = useState(30);
   const [personFilter, setPersonFilter] = useState<string>(""); // "" = everyone
+
+  // Same review-permission rule as /updates/eod's live panel: leaders
+  // + admins can tick anyone off, dept heads can tick off their own
+  // people. Workers see history but can't mark reviews.
+  const canReview =
+    me.role === "leader" ||
+    me.isAdmin === true ||
+    me.role === "department_head";
+
+  async function toggleReview(s: Submission) {
+    const wasReviewed = !!s.reviewedAt;
+    // Optimistic flip — paint immediately.
+    setSubmissions((cur) =>
+      cur.map((row) =>
+        row.id === s.id
+          ? {
+              ...row,
+              reviewedAt: wasReviewed ? null : new Date().toISOString(),
+              reviewedBy: wasReviewed ? null : { id: me.id, name: me.name }
+            }
+          : row
+      )
+    );
+    try {
+      const res = await fetch("/api/eod/review", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId: s.userId,
+          date: s.date,
+          undo: wasReviewed
+        })
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => null);
+        throw new Error(d?.error ?? `status ${res.status}`);
+      }
+    } catch (err) {
+      // Re-fetch on failure so the UI converges with server truth.
+      toast.error(`Review toggle failed: ${err instanceof Error ? err.message : "unknown"}`);
+      void load();
+    }
+  }
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -152,7 +197,14 @@ export default function EodHistoryPage() {
                 </span>
               </header>
               <div className="space-y-2">
-                {items.map((s) => <SubmissionCard key={s.id} s={s} />)}
+                {items.map((s) => (
+                  <SubmissionCard
+                    key={s.id}
+                    s={s}
+                    canReview={canReview}
+                    onToggleReview={() => void toggleReview(s)}
+                  />
+                ))}
               </div>
             </section>
           ))}
@@ -162,7 +214,18 @@ export default function EodHistoryPage() {
   );
 }
 
-function SubmissionCard({ s }: { s: Submission }) {
+function SubmissionCard({
+  s, canReview, onToggleReview
+}: {
+  s: Submission;
+  canReview: boolean;
+  onToggleReview: () => void;
+}) {
+  // Reviewed-state pill is clickable for approvers — same toggle on
+  // both directions (mark reviewed → tap to un-mark, and back). The
+  // server-side endpoint enforces dept-head-or-leader gating, so if a
+  // non-approver somehow clicks (shouldn't, button is hidden), the
+  // 403 surfaces via toast and the optimistic update reverts.
   return (
     <article className="card p-4 space-y-2">
       <header className="flex items-center gap-2.5 flex-wrap">
@@ -175,13 +238,36 @@ function SubmissionCard({ s }: { s: Submission }) {
         </div>
         <div className="ml-auto flex items-center gap-1.5">
           {s.reviewedAt ? (
-            <span
-              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-violet-50 text-violet-700 border border-violet-200/60 text-[10px] font-medium"
-              title={`Reviewed by ${s.reviewedBy?.name ?? "—"} at ${new Date(s.reviewedAt).toLocaleTimeString()}`}
+            canReview ? (
+              <button
+                type="button"
+                onClick={onToggleReview}
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-violet-50 text-violet-700 border border-violet-200/60 text-[10px] font-medium hover:bg-violet-100 hover:border-violet-300 transition-colors"
+                title={`Reviewed by ${s.reviewedBy?.name ?? "—"} at ${new Date(s.reviewedAt).toLocaleTimeString()} — click to un-mark`}
+              >
+                <CheckCircle2 className="w-3 h-3" />
+                Reviewed by {s.reviewedBy?.name ?? "—"}
+              </button>
+            ) : (
+              <span
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-violet-50 text-violet-700 border border-violet-200/60 text-[10px] font-medium"
+                title={`Reviewed by ${s.reviewedBy?.name ?? "—"} at ${new Date(s.reviewedAt).toLocaleTimeString()}`}
+              >
+                <CheckCircle2 className="w-3 h-3" />
+                Reviewed by {s.reviewedBy?.name ?? "—"}
+              </span>
+            )
+          ) : canReview ? (
+            <button
+              type="button"
+              onClick={onToggleReview}
+              className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-semibold text-white shadow-sm transition-all hover:-translate-y-0.5 active:scale-95"
+              style={{ background: "linear-gradient(135deg, #10b981 0%, #059669 100%)" }}
+              title="Mark this EOD as reviewed"
             >
               <CheckCircle2 className="w-3 h-3" />
-              Reviewed by {s.reviewedBy?.name ?? "—"}
-            </span>
+              Mark reviewed
+            </button>
           ) : (
             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200/60 text-[10px] font-medium">
               Not reviewed yet

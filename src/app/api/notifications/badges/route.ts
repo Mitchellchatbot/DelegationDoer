@@ -2,6 +2,9 @@ import { NextResponse } from "next/server";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
+import { visibleAccountIdsFor } from "@/lib/inbox-access";
+import { listAccounts, listThreadsPaged } from "@/lib/missive-client";
+import { readStateForThreads, isThreadUnread } from "@/lib/thread-read-state";
 
 export const dynamic = "force-dynamic";
 
@@ -142,15 +145,43 @@ export async function GET() {
       } catch { /* migration not applied yet — silently zero */ }
     }
 
+    // --- Inboxes unread: count threads with no read row OR a
+    // read_through_at older than the thread's last_message_at, across
+    // every account the caller can see. Best-effort — if missiveclone
+    // is slow or down, we silently return 0 rather than 500ing the
+    // sidebar. Caps at 200 threads to keep the poll cheap.
+    let inboxesUnread = 0;
+    try {
+      const visibleIds = await visibleAccountIdsFor(me);
+      const accounts = await listAccounts();
+      const visibleAccounts = visibleIds === null
+        ? accounts
+        : accounts.filter((a) => visibleIds.has(a.id));
+      if (visibleAccounts.length > 0) {
+        const visibleEmails = new Set(visibleAccounts.map((a) => a.email.toLowerCase()));
+        const page = await listThreadsPaged({ folder: "INBOX", limit: 200, offset: 0 });
+        const threadsInView = visibleIds === null
+          ? page.threads
+          : page.threads.filter((t) =>
+              (t.account_emails ?? []).some((ae) => visibleEmails.has(ae.email.toLowerCase()))
+            );
+        const readBy = await readStateForThreads(userId, threadsInView.map((t) => t.id));
+        inboxesUnread = threadsInView.filter((t) =>
+          isThreadUnread(t.last_message_at, readBy.get(t.id))
+        ).length;
+      }
+    } catch { /* missive down or pool exhausted — degrade to zero */ }
+
     return NextResponse.json({
       clients: clientsAtRisk,
       peopleEodPending,
       approvalsPending,
+      inboxesUnread,
       canApprove
     });
   } catch (err) {
     return NextResponse.json(
-      { clients: 0, peopleEodPending: 0, approvalsPending: 0, canApprove: false, error: err instanceof Error ? err.message : "unknown" },
+      { clients: 0, peopleEodPending: 0, approvalsPending: 0, inboxesUnread: 0, canApprove: false, error: err instanceof Error ? err.message : "unknown" },
       { status: 200 } // never 500 the sidebar
     );
   }

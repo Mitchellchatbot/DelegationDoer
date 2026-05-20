@@ -82,6 +82,7 @@ export function Sidebar({ user }: { user: User }) {
   const [peopleEodPending, setPeopleEodPending] = useState<number | null>(null);
   const [approvalsPending, setApprovalsPending] = useState<number | null>(null);
   const [canApprove, setCanApprove] = useState(false);
+  const [inboxesUnread, setInboxesUnread] = useState<number | null>(null);
   useEffect(() => {
     let cancelled = false;
     async function fetchCounts() {
@@ -108,6 +109,7 @@ export function Sidebar({ user }: { user: User }) {
             setClientsAtRisk(data.clients ?? 0);
             setPeopleEodPending(data.peopleEodPending ?? 0);
             setApprovalsPending(data.approvalsPending ?? 0);
+            setInboxesUnread(data.inboxesUnread ?? 0);
             setCanApprove(!!data.canApprove);
           }
         }
@@ -237,6 +239,13 @@ export function Sidebar({ user }: { user: User }) {
                   count: approvalsPending!,
                   tone: "rose",
                   title: `${approvalsPending} email${approvalsPending === 1 ? "" : "s"} awaiting your approval`
+                };
+              }
+              if (item.href === "/inboxes" && (inboxesUnread ?? 0) > 0) {
+                return {
+                  count: inboxesUnread!,
+                  tone: "rose",
+                  title: `${inboxesUnread} unread thread${inboxesUnread === 1 ? "" : "s"} across your inboxes`
                 };
               }
               return null;

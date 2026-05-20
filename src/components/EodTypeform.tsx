@@ -201,10 +201,19 @@ export function EodTypeform({
   async function submitEod() {
     setSubmitting(true);
     try {
+      // Send the answers in the body so we don't depend on autosave
+      // having landed (and even if it errored on a missing column,
+      // the submit endpoint upserts directly).
       const res = await fetch("/api/eod/submit", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ date: today })
+        body: JSON.stringify({
+          date: today,
+          workedOn: answers.workedOn ?? "",
+          accomplished: answers.accomplished ?? "",
+          planTomorrow: answers.planTomorrow ?? "",
+          blockers: answers.blockers ?? ""
+        })
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error ?? `status ${res.status}`);

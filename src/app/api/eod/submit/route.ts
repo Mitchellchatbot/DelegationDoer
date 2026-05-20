@@ -40,8 +40,25 @@ export async function POST(req: NextRequest) {
         ? body.date
         : new Date().toISOString().slice(0, 10);
 
+    // Fields can be passed in-line so the typeform doesn't depend on
+    // autosave landing first — if the user clicks Submit before the
+    // PUT /api/eod/notes round-trip finishes (or it errored on a
+    // missing column), we still capture their answers from the body.
+    const STRING_OR_EMPTY = (v: unknown): string | null => {
+      if (typeof v !== "string") return null;
+      const t = v.trim();
+      return t.length > 0 ? t : null;
+    };
+    const inlineFields = {
+      worked_on:     STRING_OR_EMPTY(body.workedOn),
+      accomplished:  STRING_OR_EMPTY(body.accomplished),
+      plan_tomorrow: STRING_OR_EMPTY(body.planTomorrow),
+      blockers:      STRING_OR_EMPTY(body.blockers)
+    };
+    const hasInline = Object.values(inlineFields).some((v) => v !== null);
+
     // Fetch the worker, their EOD row, and their departments in parallel.
-    const [{ data: meRow }, { data: noteRow }, { data: deptMemberships }] = await Promise.all([
+    const [{ data: meRow }, noteRes, { data: deptMemberships }] = await Promise.all([
       supabase.from("users").select("id, name, email, role, is_admin").eq("id", userId).maybeSingle(),
       supabase
         .from("eod_notes")
@@ -53,22 +70,62 @@ export async function POST(req: NextRequest) {
     ]);
 
     if (!meRow) return NextResponse.json({ error: "user not found" }, { status: 404 });
+    if (noteRes.error) {
+      // Surface the actual DB error — most commonly the structured
+      // columns don't exist yet (migration 20260601 not applied).
+      return NextResponse.json({
+        error: `EOD lookup failed: ${noteRes.error.message}. Apply the 20260601 migration if you haven't yet.`
+      }, { status: 500 });
+    }
+
+    const now = new Date().toISOString();
+    let noteRow = noteRes.data;
+
+    // No row yet OR inline payload differs from DB — upsert before
+    // checking hasAny so the submit captures the user's latest state.
+    if (!noteRow || hasInline) {
+      const id = noteRow?.id ?? `eod_${userId}_${dateStr}`;
+      const upsertRow: Record<string, unknown> = {
+        id,
+        user_id: userId,
+        note_date: dateStr,
+        updated_at: now,
+        submitted_at: now
+      };
+      // Only overwrite columns the caller actually sent so a partial
+      // body doesn't blow away other autosaved fields.
+      for (const k of ["worked_on", "accomplished", "plan_tomorrow", "blockers"] as const) {
+        if (inlineFields[k] !== null) upsertRow[k] = inlineFields[k];
+      }
+      const { data: upserted, error: upsertErr } = await supabase
+        .from("eod_notes")
+        .upsert(upsertRow, { onConflict: "user_id,note_date" })
+        .select("id, worked_on, accomplished, plan_tomorrow, blockers, note, submitted_at")
+        .maybeSingle();
+      if (upsertErr) {
+        return NextResponse.json({
+          error: `Couldn't save EOD: ${upsertErr.message}. Apply the 20260601 migration if you haven't yet.`
+        }, { status: 500 });
+      }
+      noteRow = upserted ?? null;
+    } else {
+      // Existing row but no inline payload — just flip submitted_at.
+      const { error: updateErr } = await supabase
+        .from("eod_notes")
+        .update({ submitted_at: now })
+        .eq("id", noteRow.id);
+      if (updateErr) {
+        return NextResponse.json({ error: updateErr.message }, { status: 500 });
+      }
+    }
+
     if (!noteRow) {
-      return NextResponse.json({ error: "Fill out at least one EOD field before submitting." }, { status: 400 });
+      return NextResponse.json({ error: "EOD row missing after upsert (unexpected)" }, { status: 500 });
     }
 
     const hasAny = !!(noteRow.worked_on || noteRow.accomplished || noteRow.plan_tomorrow || noteRow.blockers || noteRow.note);
     if (!hasAny) {
       return NextResponse.json({ error: "Fill out at least one EOD field before submitting." }, { status: 400 });
-    }
-
-    const now = new Date().toISOString();
-    const { error: updateErr } = await supabase
-      .from("eod_notes")
-      .update({ submitted_at: now })
-      .eq("id", noteRow.id);
-    if (updateErr) {
-      return NextResponse.json({ error: updateErr.message }, { status: 500 });
     }
 
     // Compute the recipient set: every leader + admin, plus dept heads

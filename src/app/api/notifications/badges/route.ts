@@ -101,13 +101,35 @@ export async function GET() {
       }
     }
 
+    // --- Approvals pending: only meaningful for users who can approve
+    // anything. Leaders/admins always; otherwise name-pattern match
+    // (mitchell/mujtaba/sam/tabrez/farez/bismah). Tolerate the
+    // email_drafts table not existing yet — silently zero.
+    let approvalsPending = 0;
+    const lower = (me.name ?? "").toLowerCase();
+    const canApprove =
+      me.role === "leader" ||
+      me.isAdmin === true ||
+      ["mitchell", "mujtaba", "sam", "tabrez", "farez", "bismah"].some((p) => lower.includes(p));
+    if (canApprove) {
+      try {
+        const { count } = await supabase
+          .from("email_drafts")
+          .select("id", { count: "exact", head: true })
+          .eq("status", "pending");
+        approvalsPending = count ?? 0;
+      } catch { /* migration not applied yet */ }
+    }
+
     return NextResponse.json({
       clients: clientsAtRisk,
-      peopleEodPending
+      peopleEodPending,
+      approvalsPending,
+      canApprove
     });
   } catch (err) {
     return NextResponse.json(
-      { clients: 0, peopleEodPending: 0, error: err instanceof Error ? err.message : "unknown" },
+      { clients: 0, peopleEodPending: 0, approvalsPending: 0, canApprove: false, error: err instanceof Error ? err.message : "unknown" },
       { status: 200 } // never 500 the sidebar
     );
   }

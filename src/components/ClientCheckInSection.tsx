@@ -28,11 +28,12 @@ interface SentCheckin {
   sentAt: string | null;
   createdAt: string;
 }
-interface ClientOption { id: string; name: string }
+interface ClientOption { id: string; name: string; contactEmails: string[] }
 
 interface DraftRow {
   localId: string;
   clientId: string;
+  to: string;       // free-text To input — comma-separated emails
   subject: string;
   message: string;
   sending: boolean;
@@ -54,8 +55,8 @@ export function ClientCheckInSection({ today }: { today: string }) {
           fetch(`/api/eod/client-checkins?date=${today}`, { cache: "no-store" }).then((r) => r.ok ? r.json() : null)
         ]);
         if (cancelled) return;
-        const list = ((cRes?.clients ?? []) as Array<{ id: string; name: string }>)
-          .map((c) => ({ id: c.id, name: c.name }))
+        const list = ((cRes?.clients ?? []) as Array<{ id: string; name: string; contactEmails?: string[] }>)
+          .map((c) => ({ id: c.id, name: c.name, contactEmails: c.contactEmails ?? [] }))
           .sort((a, b) => a.name.localeCompare(b.name));
         setClients(list);
         setSent((uRes?.checkins ?? []) as SentCheckin[]);
@@ -76,6 +77,7 @@ export function ClientCheckInSection({ today }: { today: string }) {
     return {
       localId: `d_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`,
       clientId: "",
+      to: "",
       subject: "",
       message: "",
       sending: false,
@@ -98,6 +100,17 @@ export function ClientCheckInSection({ today }: { today: string }) {
       patchDraft(localId, { error: "Pick a recipient first." });
       return;
     }
+    const client = clients.find((c) => c.id === draft.clientId);
+    // To-recipients: explicit input wins; else fall back to client's
+    // stored contact emails. If neither, surface the missing-recipient
+    // error so the approver doesn't have to bounce it back.
+    const toRaw = draft.to.trim()
+      ? draft.to.split(/[,;\s]+/).map((s) => s.trim()).filter(Boolean)
+      : (client?.contactEmails ?? []);
+    if (toRaw.length === 0) {
+      patchDraft(localId, { error: "Add at least one recipient email." });
+      return;
+    }
     if (!draft.subject.trim()) {
       patchDraft(localId, { error: "Subject is required." });
       return;
@@ -106,46 +119,52 @@ export function ClientCheckInSection({ today }: { today: string }) {
       patchDraft(localId, { error: "Write the email body before sending." });
       return;
     }
-    const client = clients.find((c) => c.id === draft.clientId);
     patchDraft(localId, { sending: true, error: null });
     try {
-      const res = await fetch("/api/eod/client-checkins", {
+      // Submit to the approval queue. The actual outbound send fires
+      // only after Mitch / Mujtaba / Sam clicks Approve & Send.
+      const res = await fetch("/api/email-drafts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          date: today,
           clientId: draft.clientId,
           clientName: client?.name ?? "Client",
+          to: toRaw,
           subject: draft.subject.trim(),
-          message: draft.message.trim()
+          bodyText: draft.message.trim(),
+          kind: "client_update"
         })
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.error ?? `failed (${res.status})`);
+      // Mirror to the sent list for visual confirmation; the row is in
+      // the email_drafts table but we don't refetch here — the user
+      // can open /approvals to see queue status.
       setSent((prev) => [...prev, {
-        id: data.checkin.id,
-        clientId: data.checkin.clientId,
-        clientName: data.checkin.clientName,
-        subject: data.checkin.subject,
-        message: data.checkin.message,
-        slackTs: data.checkin.slackTs,
-        slackChannel: data.checkin.slackChannel,
-        sentAt: data.checkin.sentAt,
+        id: data.id,
+        clientId: draft.clientId,
+        clientName: client?.name ?? "Client",
+        subject: draft.subject.trim(),
+        message: draft.message.trim(),
+        slackTs: null,
+        slackChannel: null,
+        sentAt: null,
         createdAt: new Date().toISOString()
       }]);
       removeDraft(localId);
-      if (data.slackError) {
-        toast.warning(`Email logged — Slack post failed: ${data.slackError}`);
-      } else {
-        toast.success(`Email logged: ${client?.name ?? "Client"}`);
-      }
+      const slackDelivered = (data.slackDeliveries ?? []).filter((s: { delivered: boolean }) => s.delivered).length;
+      toast.success(
+        slackDelivered > 0
+          ? `Submitted for approval — ${slackDelivered} approver${slackDelivered === 1 ? "" : "s"} pinged`
+          : "Submitted for approval"
+      );
     } catch (err) {
       patchDraft(localId, {
         sending: false,
         error: err instanceof Error ? err.message : "send failed"
       });
     }
-  }, [drafts, clients, today]);
+  }, [drafts, clients]);
 
   const totalToday = sent.length;
   const showNag = loaded && totalToday === 0;
@@ -180,7 +199,7 @@ export function ClientCheckInSection({ today }: { today: string }) {
       {showNag && (
         <div className="text-[11px] text-amber-800/85 bg-amber-50 border border-amber-200/60 rounded-lg px-2 py-1 inline-flex items-start gap-1.5">
           <AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" />
-          Mandatory at end of workday — log every client email you sent today. Your desktop widget will ping when your schedule ends.
+          Compose your client email — it routes to Mitch / Mujtaba / Sam for approval before sending. Required at end of workday.
         </div>
       )}
 
@@ -254,10 +273,15 @@ function DraftEditor({
   onRemove: () => void;
   onSend: () => void;
 }) {
-  const clientName = useMemo(
-    () => clients.find((c) => c.id === draft.clientId)?.name ?? "",
+  const selectedClient = useMemo(
+    () => clients.find((c) => c.id === draft.clientId),
     [clients, draft.clientId]
   );
+  const clientName = selectedClient?.name ?? "";
+  // Suggested To = the client's stored contact emails (if any).
+  // Filling this in saves the worker a keystroke and ensures
+  // approvers see the right recipient when they review.
+  const suggestedTo = (selectedClient?.contactEmails ?? []).join(", ");
 
   return (
     <div className="rounded-lg bg-white border border-violet-200/60 shadow-sm overflow-hidden">
@@ -275,10 +299,10 @@ function DraftEditor({
         </button>
       </div>
 
-      {/* To: row */}
+      {/* Client picker */}
       <div className="flex items-center gap-2 px-2.5 py-1.5 border-b border-slate-200/50">
         <label className="text-[10px] uppercase tracking-wide font-semibold text-ink/55 w-14 shrink-0">
-          To
+          Client
         </label>
         <select
           value={draft.clientId}
@@ -291,6 +315,22 @@ function DraftEditor({
             <option key={c.id} value={c.id}>{c.name}</option>
           ))}
         </select>
+      </div>
+
+      {/* To row — comma-separated emails. Suggested from the client's
+          stored contact_emails so the worker doesn't have to retype. */}
+      <div className="flex items-center gap-2 px-2.5 py-1.5 border-b border-slate-200/50">
+        <label className="text-[10px] uppercase tracking-wide font-semibold text-ink/55 w-14 shrink-0">
+          To
+        </label>
+        <input
+          type="text"
+          value={draft.to}
+          onChange={(e) => onPatch({ to: e.target.value, error: null })}
+          disabled={draft.sending}
+          placeholder={suggestedTo || "client@example.com"}
+          className="flex-1 text-[12px] bg-transparent border-none px-0 py-0.5 outline-none focus:ring-0 placeholder:text-ink/35"
+        />
       </div>
 
       {/* Subject row */}
@@ -343,7 +383,7 @@ function DraftEditor({
           style={{ background: "linear-gradient(135deg, #7c3aed 0%, #6d28d9 100%)" }}
         >
           {draft.sending ? <Loader2 className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
-          {draft.sending ? "Sending…" : "Send email"}
+          {draft.sending ? "Submitting…" : "Send for approval"}
         </button>
       </div>
     </div>

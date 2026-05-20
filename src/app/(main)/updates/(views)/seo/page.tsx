@@ -13,6 +13,7 @@ import { Countdown } from "@/components/Countdown";
 import { PriorityBadge } from "@/components/Badges";
 import { useTeam } from "@/lib/team-context";
 import { cn } from "@/lib/utils";
+import { ContentPlanComposer } from "@/components/ContentPlanComposer";
 
 interface RequestRow {
   id: string;
@@ -100,6 +101,8 @@ export default function SeoReportsPage() {
           />
         }
       />
+
+      <ContentPlanComposer />
 
       {error && (
         <div className="rounded-2xl border border-urgent/30 bg-urgent/5 p-4 text-sm text-urgent">

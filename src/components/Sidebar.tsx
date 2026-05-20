@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 import {
   ListTodo, Users,
   Sparkles, Settings, AlertTriangle, Crown, Mail, Briefcase,
-  FolderKanban, CalendarDays, BookOpen, LayoutDashboard
+  FolderKanban, CalendarDays, BookOpen, LayoutDashboard, ClipboardCheck
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { ReportIncidentDialog } from "./ReportIncidentDialog";
@@ -80,6 +80,8 @@ export function Sidebar({ user }: { user: User }) {
   // so a single round-trip refreshes everything.
   const [clientsAtRisk, setClientsAtRisk] = useState<number | null>(null);
   const [peopleEodPending, setPeopleEodPending] = useState<number | null>(null);
+  const [approvalsPending, setApprovalsPending] = useState<number | null>(null);
+  const [canApprove, setCanApprove] = useState(false);
   useEffect(() => {
     let cancelled = false;
     async function fetchCounts() {
@@ -105,6 +107,8 @@ export function Sidebar({ user }: { user: User }) {
           if (!cancelled) {
             setClientsAtRisk(data.clients ?? 0);
             setPeopleEodPending(data.peopleEodPending ?? 0);
+            setApprovalsPending(data.approvalsPending ?? 0);
+            setCanApprove(!!data.canApprove);
           }
         }
       } catch { /* ignore */ }
@@ -149,9 +153,23 @@ export function Sidebar({ user }: { user: User }) {
     icon: FolderKanban,
     tone: "indigo"
   };
-  const restWithProjects = canSeeProjects
+  const APPROVALS_ITEM: NavItem = {
+    href: "/approvals",
+    label: "Approvals",
+    icon: ClipboardCheck,
+    tone: "emerald"
+  };
+  let restWithExtras = canSeeProjects
     ? [...rest.slice(0, 3), PROJECTS_ITEM, ...rest.slice(3)]
     : rest;
+  // Tuck Approvals right after Inboxes for approvers — close to where
+  // they'd be triaging client comms anyway.
+  if (canApprove) {
+    const inboxIdx = restWithExtras.findIndex((i) => i.href === "/inboxes");
+    const insertAt = inboxIdx >= 0 ? inboxIdx + 1 : restWithExtras.length;
+    restWithExtras = [...restWithExtras.slice(0, insertAt), APPROVALS_ITEM, ...restWithExtras.slice(insertAt)];
+  }
+  const restWithProjects = restWithExtras;
   const NAV: NavItem[] = isLeader(user)
     ? [people, ...CEO_NAV, ...restWithProjects]
     : isHead(user)
@@ -212,6 +230,13 @@ export function Sidebar({ user }: { user: User }) {
                   count: peopleEodPending!,
                   tone: "amber",
                   title: `${peopleEodPending} EOD ${peopleEodPending === 1 ? "form" : "forms"} not yet submitted today`
+                };
+              }
+              if (item.href === "/approvals" && (approvalsPending ?? 0) > 0) {
+                return {
+                  count: approvalsPending!,
+                  tone: "rose",
+                  title: `${approvalsPending} email${approvalsPending === 1 ? "" : "s"} awaiting your approval`
                 };
               }
               return null;

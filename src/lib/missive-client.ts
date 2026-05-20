@@ -303,6 +303,15 @@ export interface ReplyArgs {
   inReplyTo?: string;      // Message-id to thread on.
 }
 
+// Disconnect a mailbox from the missiveclone backend. Removes the
+// stored OAuth tokens + cascades to messages/threads/sync state. The
+// caller still has to clean up DD's own inbox_assignments row.
+export async function deleteAccount(accountId: string): Promise<void> {
+  await missiveFetch<{ ok: true }>(`/api/accounts/${encodeURIComponent(accountId)}`, {
+    method: "DELETE"
+  });
+}
+
 export async function sendReply(args: ReplyArgs): Promise<{ messageId: string }> {
   // The clone's reply endpoint is multipart/form-data: a `payload` JSON
   // string + optional `files[]`. Plain JSON makes req.body.payload

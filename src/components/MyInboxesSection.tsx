@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Mail, Plus, Loader2, ExternalLink, CheckCircle2 } from "lucide-react";
+import { Mail, Plus, Loader2, ExternalLink, CheckCircle2, Unplug } from "lucide-react";
 import { toast } from "sonner";
 import { ConnectInboxDialog } from "./ConnectInboxDialog";
 
@@ -17,6 +17,7 @@ interface InboxRow {
 // a leader has shared with them via spaces/department assignments).
 export function MyInboxesSection() {
   const [inboxes, setInboxes] = useState<InboxRow[] | null>(null);
+  const [disconnecting, setDisconnecting] = useState<Record<string, boolean>>({});
 
   async function load() {
     try {
@@ -33,6 +34,26 @@ export function MyInboxesSection() {
     void load();
   }, []);
 
+  async function disconnect(b: InboxRow) {
+    if (!window.confirm(
+      `Disconnect ${b.display_name || b.email}? You'll need to re-link it via Microsoft sign-in to read or reply again.`
+    )) return;
+    setDisconnecting((s) => ({ ...s, [b.id]: true }));
+    try {
+      const res = await fetch(`/api/inboxes/accounts/${encodeURIComponent(b.id)}`, {
+        method: "DELETE"
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error ?? `failed (${res.status})`);
+      toast.success(`Disconnected ${b.display_name || b.email}`);
+      setInboxes((cur) => (cur ?? []).filter((x) => x.id !== b.id));
+    } catch (err) {
+      toast.error(`Couldn't disconnect: ${err instanceof Error ? err.message : "unknown"}`);
+    } finally {
+      setDisconnecting((s) => ({ ...s, [b.id]: false }));
+    }
+  }
+
   return (
     <section className="rounded-2xl border border-white/60 shadow-soft bg-gradient-to-br from-blue-50/60 to-white p-5">
       <div className="flex items-start justify-between gap-3 mb-3 flex-wrap">
@@ -43,9 +64,9 @@ export function MyInboxesSection() {
           <div>
             <div className="text-sm font-semibold">Your connected inboxes</div>
             <div className="text-xs text-muted mt-0.5">
-              Plug in any email you want to read inside DelegationDoer.
-              IMAP/SMTP credentials route through our Missive backend; only
-              you (and leaders) can see the inbox you connect.
+              Sign in with your Microsoft 365 / Outlook account and we'll
+              keep your mailbox in sync. Only you (and leaders) see what
+              you connect.
             </div>
           </div>
         </div>
@@ -94,6 +115,18 @@ export function MyInboxesSection() {
               >
                 Open <ExternalLink className="w-3 h-3" />
               </a>
+              <button
+                type="button"
+                onClick={() => disconnect(b)}
+                disabled={!!disconnecting[b.id]}
+                className="inline-flex items-center gap-1 text-[11px] text-ink/55 hover:text-rose-600 px-1.5 py-0.5 rounded-md hover:bg-rose-50 disabled:opacity-40 transition-colors"
+                title="Disconnect this inbox"
+              >
+                {disconnecting[b.id]
+                  ? <Loader2 className="w-3 h-3 animate-spin" />
+                  : <Unplug className="w-3 h-3" />}
+                {disconnecting[b.id] ? "Disconnecting…" : "Disconnect"}
+              </button>
             </li>
           ))}
         </ul>

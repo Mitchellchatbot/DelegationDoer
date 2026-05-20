@@ -148,38 +148,54 @@ export function ClientUpdatesSection({ today }: { today: string }) {
   const showNag = loaded && totalToday === 0;
 
   return (
-    <section className="mt-3 rounded-xl border border-sky-200/60 bg-sky-50/40 p-3 space-y-2">
-      <header className="flex items-center justify-between gap-2 flex-wrap">
-        <div className="text-[12px] font-semibold text-ink inline-flex items-center gap-1.5">
-          <Mail className="w-3.5 h-3.5 text-sky-600" />
-          Client updates
-          <span
-            className={cn(
-              "ml-1 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-bold tabular-nums",
-              totalToday > 0
-                ? "bg-emerald-100 text-emerald-700 border border-emerald-200/60"
-                : "bg-amber-100 text-amber-700 border border-amber-200/60"
-            )}
-            title={totalToday === 0 ? "Mandatory — log at least one client update today" : `${totalToday} sent today`}
-          >
-            {totalToday}
-          </span>
+    <section className="relative overflow-hidden rounded-3xl border border-sky-200/50 bg-gradient-to-br from-sky-50/70 via-white to-blue-50/40 shadow-soft">
+      <div
+        aria-hidden
+        className="absolute -top-16 -right-12 w-56 h-56 rounded-full pointer-events-none opacity-50"
+        style={{ background: "radial-gradient(circle, rgba(14,165,233,0.18), transparent 70%)" }}
+      />
+      <header className="relative flex items-start justify-between gap-3 flex-wrap px-5 pt-5 pb-3">
+        <div className="flex items-center gap-3 min-w-0">
+          <div className="w-10 h-10 rounded-2xl bg-sky-500 text-white grid place-items-center shadow-[0_8px_18px_-6px_rgba(14,165,233,0.55)] shrink-0">
+            <Mail className="w-4 h-4" />
+          </div>
+          <div className="min-w-0">
+            <div className="flex items-baseline gap-2 flex-wrap">
+              <h3 className="text-[15px] font-semibold text-ink">Client updates</h3>
+              <span
+                className={cn(
+                  "inline-flex items-center justify-center min-w-[20px] h-[20px] px-1.5 rounded-full text-[11px] font-bold tabular-nums",
+                  totalToday > 0
+                    ? "bg-emerald-100 text-emerald-700 border border-emerald-200/60"
+                    : "bg-white text-ink/55 border border-slate-200"
+                )}
+                title={totalToday === 0 ? "Post a quick touch update to the team Slack" : `${totalToday} sent today`}
+              >
+                {totalToday}
+              </span>
+            </div>
+            <p className="text-[12px] text-ink/60 mt-0.5 max-w-md">
+              Quick touch logs that post straight to the team Slack — no approval gate.
+            </p>
+          </div>
         </div>
         <button
           type="button"
           onClick={() => setDrafts((cur) => [...cur, newDraft()])}
-          className="inline-flex items-center gap-1 text-[11px] font-medium text-sky-700 hover:text-sky-900 px-2 py-1 rounded-md hover:bg-sky-100/70"
+          className="inline-flex items-center gap-1 text-[12px] font-semibold text-sky-700 hover:text-sky-900 px-3 py-1.5 rounded-full border border-sky-200/70 bg-white/80 hover:bg-sky-50/80 hover:border-sky-300 transition-all shadow-sm"
         >
-          <Plus className="w-3 h-3" /> Add another
+          <Plus className="w-3.5 h-3.5" /> Add another
         </button>
       </header>
 
       {showNag && (
-        <div className="text-[11px] text-amber-800/85 bg-amber-50 border border-amber-200/60 rounded-lg px-2 py-1 inline-flex items-start gap-1.5">
-          <AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" />
-          Log at least one client update before clocking out — it posts to Slack so the team sees the touch.
+        <div className="relative mx-5 mb-2 text-[12px] text-amber-900/85 bg-gradient-to-r from-amber-50 to-amber-50/40 border border-amber-200/70 rounded-2xl px-3 py-2 inline-flex items-start gap-2">
+          <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0 text-amber-600" />
+          <span>Drop in at least one before clocking out — keeps the team in the loop.</span>
         </div>
       )}
+
+      <div className="relative px-5 pb-5 space-y-2">
 
       {/* Already-sent updates pinned at the top — read-only confirmations. */}
       {sent.length > 0 && (
@@ -220,11 +236,12 @@ export function ClientUpdatesSection({ today }: { today: string }) {
         <button
           type="button"
           onClick={() => setDrafts((cur) => [...cur, newDraft()])}
-          className="w-full text-[12px] text-sky-700 hover:text-sky-900 py-2 rounded-lg border border-dashed border-sky-200 hover:border-sky-400/60 hover:bg-sky-50/40 transition-colors inline-flex items-center justify-center gap-1"
+          className="w-full text-[12px] font-medium text-sky-700 hover:text-sky-900 py-2.5 rounded-xl border border-dashed border-sky-200 hover:border-sky-400/60 hover:bg-sky-50/40 transition-colors inline-flex items-center justify-center gap-1.5"
         >
           <Plus className="w-3.5 h-3.5" /> Add another client update
         </button>
       )}
+      </div>
     </section>
   );
 }
@@ -244,45 +261,55 @@ function DraftEditor({
   );
 
   return (
-    <div className="rounded-lg bg-white border border-sky-200/60 p-2.5 space-y-2">
-      <div className="flex items-center gap-2">
+    <div className="rounded-2xl bg-white border border-sky-200/50 shadow-[0_8px_20px_-12px_rgba(14,165,233,0.20)] overflow-hidden transition-shadow hover:shadow-[0_12px_28px_-12px_rgba(14,165,233,0.32)]">
+      <div className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-sky-50/80 to-blue-50/40 border-b border-sky-200/40">
+        <Mail className="w-3.5 h-3.5 text-sky-600 shrink-0" />
+        <span className="text-[10px] uppercase tracking-wider font-bold text-sky-700/85">
+          New touch
+        </span>
+        <button
+          type="button"
+          onClick={onRemove}
+          disabled={draft.sending}
+          className="ml-auto p-1 rounded-md text-ink/40 hover:text-rose-600 hover:bg-rose-50 disabled:opacity-40 transition-colors"
+          title="Remove this draft"
+        >
+          <X className="w-3.5 h-3.5" />
+        </button>
+      </div>
+
+      <div className="flex items-center gap-3 px-4 py-1.5 border-b border-slate-100">
+        <label className="text-[10px] uppercase tracking-wider font-bold text-ink/45 w-16 shrink-0">Client</label>
         <select
           value={draft.clientId}
           onChange={(e) => onPatch({ clientId: e.target.value, error: null })}
           disabled={draft.sending}
-          className="flex-1 text-[12px] rounded-md border border-slate-200 bg-white px-2 py-1 outline-none focus:border-accent/50 focus:ring-2 focus:ring-accent/20"
+          className="flex-1 text-[13px] bg-transparent border-none px-0 py-1 outline-none focus:ring-0 disabled:opacity-70"
         >
           <option value="">Pick a client…</option>
           {clients.map((c) => (
             <option key={c.id} value={c.id}>{c.name}</option>
           ))}
         </select>
-        <button
-          type="button"
-          onClick={onRemove}
-          disabled={draft.sending}
-          className="p-1 rounded text-ink/40 hover:text-rose-600 hover:bg-rose-50 disabled:opacity-40"
-          title="Remove this draft"
-        >
-          <X className="w-3.5 h-3.5" />
-        </button>
       </div>
+
       <textarea
         value={draft.message}
         onChange={(e) => onPatch({ message: e.target.value, error: null })}
         disabled={draft.sending}
         placeholder={
           clientName
-            ? `Email or update for ${clientName} — exactly what you'd write to the client, or a summary of what you sent.`
+            ? `What touched base on with ${clientName}? Quick summary for the team.`
             : "Pick a client first, then write your update."
         }
         rows={3}
         maxLength={4000}
-        className="w-full text-[12px] rounded-md border border-slate-200 bg-white px-2 py-1.5 outline-none focus:border-accent/50 focus:ring-2 focus:ring-accent/20 resize-y"
+        className="block w-full text-[13px] leading-relaxed bg-white border-none px-4 py-3 outline-none focus:ring-0 resize-y placeholder:text-ink/35 disabled:opacity-70"
       />
-      <div className="flex items-center justify-between gap-2">
+
+      <div className="flex items-center justify-between gap-2 px-4 py-2.5 bg-slate-50/40 border-t border-slate-200/50">
         {draft.error ? (
-          <span className="text-[11px] text-rose-700">{draft.error}</span>
+          <span className="text-[11px] text-rose-700 font-medium">{draft.error}</span>
         ) : (
           <span className="text-[10px] text-ink/45 tabular-nums">
             {draft.message.length} / 4000
@@ -293,12 +320,12 @@ function DraftEditor({
           onClick={onSend}
           disabled={draft.sending || !draft.clientId || !draft.message.trim()}
           className={cn(
-            "inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-semibold text-white shadow-sm transition-all hover:-translate-y-0.5 active:scale-95",
-            (draft.sending || !draft.clientId || !draft.message.trim()) && "opacity-50 cursor-not-allowed hover:translate-y-0"
+            "inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full text-[12px] font-semibold text-white shadow-[0_4px_10px_-2px_rgba(14,165,233,0.45)] transition-all hover:-translate-y-0.5 active:scale-95",
+            (draft.sending || !draft.clientId || !draft.message.trim()) && "opacity-50 cursor-not-allowed hover:translate-y-0 shadow-none"
           )}
-          style={{ background: "linear-gradient(135deg, #2563EB 0%, #1e63ff 100%)" }}
+          style={{ background: "linear-gradient(135deg, #0EA5E9 0%, #0284c7 100%)" }}
         >
-          {draft.sending ? <Loader2 className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
+          {draft.sending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
           {draft.sending ? "Sending…" : "Send to Slack"}
         </button>
       </div>

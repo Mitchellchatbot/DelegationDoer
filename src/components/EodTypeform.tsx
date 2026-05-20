@@ -288,6 +288,10 @@ export function EodTypeform({
         );
       }
       onComplete();
+      // Auto-dismiss the overlay so the worker isn't stuck on the
+      // success screen — short pause so they read "EOD submitted"
+      // before it fades. They can also still hit Close manually.
+      setTimeout(() => onClose(), 1600);
     } catch (err) {
       toast.error(`Submit failed: ${err instanceof Error ? err.message : "unknown"}`);
     } finally {

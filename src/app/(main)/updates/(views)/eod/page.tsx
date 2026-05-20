@@ -13,6 +13,7 @@ import { PageHero } from "@/components/PageHero";
 import { PersonAvatar } from "@/components/PersonAvatar";
 import { ClientUpdatesSection } from "@/components/ClientUpdatesSection";
 import { ClientCheckInSection } from "@/components/ClientCheckInSection";
+import { EodTypeform } from "@/components/EodTypeform";
 import { useCurrentUser } from "@/lib/user-context";
 
 interface PersonSummary {
@@ -75,6 +76,68 @@ export default function EodPage() {
   }, [viewDate]);
 
   useEffect(() => { load(); }, [load]);
+
+  // ---------- Typeform-mode trigger ----------
+  // Auto-opens the typeform-style EOD flow when the worker is within
+  // 60 minutes of their scheduled workday end (and they haven't
+  // already submitted today). Also exposes a manual "Simulate shift
+  // end" button so it can be tested anytime — useful for QA + for
+  // leaders who want to file their EOD early.
+  const [typeformOpen, setTypeformOpen] = useState(false);
+
+  // Has *the caller* already submitted today? Pull from their own row
+  // in summaries (it appears in whichever dept they belong to).
+  const mySubmittedToday = useMemo(() => {
+    for (const d of summaries) {
+      const me_ = d.people.find((p) => p.userId === me.id);
+      if (me_) return !!me_.submittedAt;
+    }
+    return false;
+  }, [summaries, me.id]);
+
+  // Get *today's* answers for the caller so the typeform can prefill.
+  const myPrior = useMemo(() => {
+    for (const d of summaries) {
+      const me_ = d.people.find((p) => p.userId === me.id);
+      if (me_) return {
+        workedOn: me_.workedOn,
+        accomplished: me_.accomplished,
+        planTomorrow: me_.planTomorrow,
+        blockers: me_.blockers
+      };
+    }
+    return { workedOn: null, accomplished: null, planTomorrow: null, blockers: null };
+  }, [summaries, me.id]);
+
+  // Auto-open: only on today's date, only if not submitted, only when
+  // the wall clock crosses into the 60-min-before-shift-end window.
+  // Polled every minute (cheap).
+  useEffect(() => {
+    if (!isToday || mySubmittedToday) return;
+    function check() {
+      const tz = me.workTimezone || "UTC";
+      const fmt = new Intl.DateTimeFormat("en-US", {
+        timeZone: tz, weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false
+      });
+      const parts = Object.fromEntries(fmt.formatToParts(new Date()).map((p) => [p.type, p.value]));
+      const dayKey = (parts.weekday ?? "Mon").toLowerCase().slice(0, 3);
+      const sched = (me.weeklySchedule ?? {})[dayKey as "mon"|"tue"|"wed"|"thu"|"fri"|"sat"|"sun"];
+      if (!sched?.end) return;
+      const [eh, em] = sched.end.split(":").map(Number);
+      if (Number.isNaN(eh) || Number.isNaN(em)) return;
+      const nowMin = parseInt(parts.hour ?? "0", 10) * 60 + parseInt(parts.minute ?? "0", 10);
+      const endMin = eh * 60 + em;
+      // Trigger window: within 60 min before end, up to 4 hours past.
+      // Bounding the upper end means a stale browser left open
+      // overnight doesn't auto-open the typeform at 6am.
+      if (nowMin >= endMin - 60 && nowMin <= endMin + 240) {
+        setTypeformOpen((open) => open || true);
+      }
+    }
+    check();
+    const id = setInterval(check, 60_000);
+    return () => clearInterval(id);
+  }, [isToday, mySubmittedToday, me.workTimezone, me.weeklySchedule]);
 
   // Structured EOD field keys + their on-disk + UI labels. Centralized
   // here so the save/optimistic-update logic stays simple.
@@ -253,7 +316,27 @@ export default function EodPage() {
             </span>
           </>
         )}
+        {isToday && (
+          <button
+            type="button"
+            onClick={() => setTypeformOpen(true)}
+            className="ml-auto inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-semibold text-white shadow-sm hover:-translate-y-0.5 active:scale-95 transition-all"
+            style={{ background: "linear-gradient(135deg, #ec4899 0%, #7c3aed 100%)" }}
+            title="Force-open the end-of-day typeform flow (normally auto-opens within 60 min of your scheduled shift end)"
+          >
+            <Sparkles className="w-3 h-3" /> Simulate shift end
+          </button>
+        )}
       </div>
+
+      <EodTypeform
+        open={typeformOpen}
+        today={todayIso}
+        isWebsiteTeam={isWebsiteTeam}
+        prior={myPrior}
+        onClose={() => setTypeformOpen(false)}
+        onComplete={() => { void load(); }}
+      />
 
       {isWebsiteTeam && (
         <>

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Crown, Users, BarChart3 } from "lucide-react";
+import { Crown, Users, BarChart3, MessageSquare } from "lucide-react";
 import { useCurrentUser } from "@/lib/user-context";
 import { cn } from "@/lib/utils";
 
@@ -13,10 +13,11 @@ export function ManageTabs() {
   const me = useCurrentUser();
 
   const tabs: Tab[] =
-    me.role === "leader"
+    me.role === "leader" || me.isAdmin === true
       ? [
-          { href: "/leader/console",   label: "Console",   icon: Crown },
-          { href: "/leader/analytics", label: "Analytics", icon: BarChart3 }
+          { href: "/leader/console",     label: "Console",     icon: Crown },
+          { href: "/leader/analytics",   label: "Analytics",   icon: BarChart3 },
+          { href: "/leader/slack-links", label: "Slack links", icon: MessageSquare }
         ]
       : me.role === "department_head"
         ? [

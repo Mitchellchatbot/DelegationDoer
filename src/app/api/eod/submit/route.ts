@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUserId } from "@/lib/session";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
-import { lookupUserByEmail, openDm, postMessage } from "@/lib/slack";
+import { openDm, postMessage } from "@/lib/slack";
+import { resolveSlackId } from "@/lib/slack-resolve";
 
 export const dynamic = "force-dynamic";
 
@@ -25,6 +26,8 @@ interface UserSlim {
   id: string;
   name: string | null;
   email: string | null;
+  slack_email: string | null;
+  slack_user_id: string | null;
   role: "leader" | "department_head" | "worker";
   is_admin: boolean | null;
 }
@@ -147,7 +150,7 @@ export async function POST(req: NextRequest) {
     if (managerIds.length > 0) {
       const { data: managers } = await supabase
         .from("users")
-        .select("id, name, email, role, is_admin")
+        .select("id, name, email, slack_email, slack_user_id, role, is_admin")
         .in("id", managerIds);
       for (const u of (managers ?? []) as UserSlim[]) {
         if (u.id !== userId) recipients.set(u.id, u);
@@ -159,7 +162,7 @@ export async function POST(req: NextRequest) {
     // stealth admins who didn't expect to be in the loop).
     const { data: leaders } = await supabase
       .from("users")
-      .select("id, name, email, role, is_admin")
+      .select("id, name, email, slack_email, slack_user_id, role, is_admin")
       .eq("role", "leader");
     for (const u of (leaders ?? []) as UserSlim[]) {
       if (u.id !== userId) recipients.set(u.id, u);
@@ -208,12 +211,13 @@ export async function POST(req: NextRequest) {
     const deliveries: Array<{ userId: string; name: string | null; delivered: boolean; reason?: string }> = [];
     if (process.env.SLACK_BOT_TOKEN) {
       for (const u of recipients.values()) {
-        if (!u.email) {
-          deliveries.push({ userId: u.id, name: u.name, delivered: false, reason: "no email on user record" });
-          continue;
-        }
         try {
-          const slackUserId = await lookupUserByEmail(u.email);
+          const slackUserId = await resolveSlackId({
+            id: u.id,
+            email: u.email,
+            slack_email: u.slack_email,
+            slack_user_id: u.slack_user_id
+          });
           const dmChannel = await openDm(slackUserId);
           await postMessage(dmChannel, text, blocks);
           deliveries.push({ userId: u.id, name: u.name, delivered: true });

@@ -24,6 +24,8 @@ export interface ApproverUser {
   id: string;
   name: string;
   email: string | null;
+  slack_email?: string | null;
+  slack_user_id?: string | null;
 }
 
 interface DraftRef {
@@ -42,7 +44,7 @@ export async function getApproversForDraft(draft: DraftRef): Promise<ApproverUse
 
   const [authorMembershipRes, leadersRes] = await Promise.all([
     supabase.from("department_members").select("department_id").eq("user_id", draft.author_id),
-    supabase.from("users").select("id, name, email").eq("role", "leader")
+    supabase.from("users").select("id, name, email, slack_email, slack_user_id").eq("role", "leader")
   ]);
 
   const authorDeptIds = Array.from(new Set(
@@ -62,18 +64,44 @@ export async function getApproversForDraft(draft: DraftRef): Promise<ApproverUse
     if (headIds.length > 0) {
       const { data: heads } = await supabase
         .from("users")
-        .select("id, name, email, role")
+        .select("id, name, email, slack_email, slack_user_id, role")
         .in("id", headIds)
         .eq("role", "department_head");
-      deptHeads = ((heads ?? []) as Array<{ id: string; name: string | null; email: string | null }>)
+      deptHeads = ((heads ?? []) as Array<{
+        id: string;
+        name: string | null;
+        email: string | null;
+        slack_email: string | null;
+        slack_user_id: string | null;
+      }>)
         .filter((u) => !!u.name)
-        .map((u) => ({ id: u.id, name: u.name as string, email: u.email }));
+        .map((u) => ({
+          id: u.id,
+          name: u.name as string,
+          email: u.email,
+          slack_email: u.slack_email,
+          slack_user_id: u.slack_user_id
+        }));
     }
   }
 
   const merged = new Map<string, ApproverUser>();
-  for (const u of (leadersRes.data ?? []) as Array<{ id: string; name: string | null; email: string | null }>) {
-    if (u.name) merged.set(u.id, { id: u.id, name: u.name, email: u.email });
+  for (const u of (leadersRes.data ?? []) as Array<{
+    id: string;
+    name: string | null;
+    email: string | null;
+    slack_email: string | null;
+    slack_user_id: string | null;
+  }>) {
+    if (u.name) {
+      merged.set(u.id, {
+        id: u.id,
+        name: u.name,
+        email: u.email,
+        slack_email: u.slack_email,
+        slack_user_id: u.slack_user_id
+      });
+    }
   }
   for (const u of deptHeads) merged.set(u.id, u);
   return Array.from(merged.values());

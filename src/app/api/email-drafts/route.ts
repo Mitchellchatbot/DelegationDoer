@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
-import { lookupUserByEmail, openDm, postMessage } from "@/lib/slack";
+import { openDm, postMessage } from "@/lib/slack";
+import { resolveSlackId } from "@/lib/slack-resolve";
 import { getApproversForDraft, type EmailDraftKind } from "@/lib/email-approvers";
 
 export const dynamic = "force-dynamic";
@@ -149,12 +150,13 @@ export async function POST(req: NextRequest) {
 
       for (const u of approvers) {
         if (u.id === userId) continue; // don't ping the author
-        if (!u.email) {
-          deliveries.push({ userId: u.id, name: u.name, delivered: false, reason: "no email" });
-          continue;
-        }
         try {
-          const slackId = await lookupUserByEmail(u.email);
+          const slackId = await resolveSlackId({
+            id: u.id,
+            email: u.email,
+            slack_email: u.slack_email,
+            slack_user_id: u.slack_user_id
+          });
           const dm = await openDm(slackId);
           await postMessage(dm, text, blocks);
           deliveries.push({ userId: u.id, name: u.name, delivered: true });

@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { motion } from "framer-motion";
 import { useEffect, useState } from "react";
-import { Inbox, Mail, Settings as SettingsIcon, Layers, Plus } from "lucide-react";
+import { Inbox, Mail, Settings as SettingsIcon, Layers, Plus, ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ConnectInboxDialog } from "./ConnectInboxDialog";
 
@@ -105,36 +105,56 @@ export function InboxTree({ accounts, canManage }: Props) {
         </Section>
 
         {/* Team spaces — each one groups a chunk of accounts under
-            a leader-defined label (Tech Hub, Marketing, etc.). */}
-        {visibleSpaces.map((sp) => (
-          <Section key={sp.id} label={sp.name}>
-            {sp.accountIds.map((aid) => {
-              const a = accountById.get(aid)!;
-              const href = `/inboxes/${encodeURIComponent(a.id)}`;
-              return (
-                <Row
-                  key={a.id}
-                  href={href}
-                  active={path.startsWith(href)}
-                  icon={
-                    <span
-                      className={cn(
-                        "w-2 h-2 rounded-full shrink-0",
-                        SPACE_COLOR_DOT[sp.color] ?? DOT_TONES[hueIndex(a.id)]
-                      )}
-                    />
-                  }
-                  label={a.label || a.email || a.id}
-                  subtitle={a.email && a.email !== a.label ? a.email : null}
-                  tone="blue"
-                />
-              );
-            })}
-          </Section>
-        ))}
+            a leader-defined label (Tech Hub, Marketing, etc.).
+            Collapsible so long lists don't blow out the left rail. */}
+        {visibleSpaces.map((sp) => {
+          // Auto-expand a space when one of its inboxes is the
+          // active route, so navigating to that inbox doesn't leave
+          // the user staring at a collapsed section.
+          const hasActive = sp.accountIds.some((aid) =>
+            path.startsWith(`/inboxes/${encodeURIComponent(aid)}`)
+          );
+          return (
+            <Section
+              key={sp.id}
+              label={sp.name}
+              storageKey={`inbox-tree:space:${sp.id}`}
+              forceOpen={hasActive}
+              collapsible
+              count={sp.accountIds.length}
+            >
+              {sp.accountIds.map((aid) => {
+                const a = accountById.get(aid)!;
+                const href = `/inboxes/${encodeURIComponent(a.id)}`;
+                return (
+                  <Row
+                    key={a.id}
+                    href={href}
+                    active={path.startsWith(href)}
+                    icon={
+                      <span
+                        className={cn(
+                          "w-2 h-2 rounded-full shrink-0",
+                          SPACE_COLOR_DOT[sp.color] ?? DOT_TONES[hueIndex(a.id)]
+                        )}
+                      />
+                    }
+                    label={a.label || a.email || a.id}
+                    subtitle={a.email && a.email !== a.label ? a.email : null}
+                    tone="blue"
+                  />
+                );
+              })}
+            </Section>
+          );
+        })}
 
         <Section
           label={visibleSpaces.length > 0 ? "Other" : "Inboxes"}
+          storageKey="inbox-tree:other"
+          collapsible={orphanAccounts.length > 0}
+          forceOpen={orphanAccounts.some((a) => path.startsWith(`/inboxes/${encodeURIComponent(a.id)}`))}
+          count={orphanAccounts.length}
           emptyHint={
             orphanAccounts.length === 0 && visibleSpaces.length === 0
               ? canManage
@@ -216,24 +236,87 @@ const DOT_TONES = [
 ];
 
 function Section({
-  label, children, emptyHint, action
+  label, children, emptyHint, action, collapsible, forceOpen, storageKey, count
 }: {
   label: string;
   children: React.ReactNode;
   emptyHint?: string;
   action?: React.ReactNode;
+  // When true, the header becomes a button that toggles the body.
+  // Sections that have nothing meaningful to collapse (Smart, Admin)
+  // omit this and render statically.
+  collapsible?: boolean;
+  // Force the section open regardless of stored state — used when one
+  // of its rows is the active route, so users don't have to expand a
+  // collapsed section to see where they are.
+  forceOpen?: boolean;
+  // localStorage key. Open/closed state persists per-section so the
+  // user's preference survives navigation + reloads.
+  storageKey?: string;
+  // Optional count shown next to the label.
+  count?: number;
 }) {
+  // Default to open. Read persisted state on mount only — server-side
+  // render uses the default, then the effect aligns to localStorage.
+  const [open, setOpen] = useState(true);
+  useEffect(() => {
+    if (!collapsible || !storageKey) return;
+    try {
+      const stored = window.localStorage.getItem(storageKey);
+      if (stored === "0") setOpen(false);
+      else if (stored === "1") setOpen(true);
+    } catch { /* localStorage blocked — keep default */ }
+  }, [collapsible, storageKey]);
+
+  function toggle() {
+    setOpen((cur) => {
+      const next = !cur;
+      if (storageKey) {
+        try { window.localStorage.setItem(storageKey, next ? "1" : "0"); } catch { /* ignore */ }
+      }
+      return next;
+    });
+  }
+
+  const effectiveOpen = forceOpen || open;
+  const HeaderEl = collapsible ? "button" : "div";
+
   return (
     <div>
       <div className="flex items-center justify-between px-2 mb-1">
-        <div className="text-[10px] uppercase tracking-[0.18em] font-semibold text-ink/45">
-          {label}
-        </div>
+        <HeaderEl
+          type={collapsible ? "button" : undefined}
+          onClick={collapsible ? toggle : undefined}
+          className={cn(
+            "flex items-center gap-1 text-[10px] uppercase tracking-[0.18em] font-semibold text-ink/45",
+            collapsible && "hover:text-ink/70 transition-colors"
+          )}
+          title={collapsible ? (effectiveOpen ? "Collapse" : "Expand") : undefined}
+        >
+          {collapsible && (
+            <ChevronDown
+              className={cn(
+                "w-3 h-3 transition-transform shrink-0",
+                !effectiveOpen && "-rotate-90"
+              )}
+            />
+          )}
+          <span>{label}</span>
+          {typeof count === "number" && count > 0 && (
+            <span className="ml-1 text-[9px] font-medium text-ink/35 tabular-nums">
+              {count}
+            </span>
+          )}
+        </HeaderEl>
         {action}
       </div>
-      <nav className="space-y-0.5">{children}</nav>
-      {emptyHint && (
-        <div className="px-2 text-[11px] text-ink/45 italic">{emptyHint}</div>
+      {effectiveOpen && (
+        <>
+          <nav className="space-y-0.5">{children}</nav>
+          {emptyHint && (
+            <div className="px-2 text-[11px] text-ink/45 italic">{emptyHint}</div>
+          )}
+        </>
       )}
     </div>
   );

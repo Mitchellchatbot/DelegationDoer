@@ -2,7 +2,7 @@
 
 import * as Dialog from "@radix-ui/react-dialog";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Check, ChevronDown, X, Pencil, CalendarPlus } from "lucide-react";
 import { toast } from "sonner";
@@ -96,9 +96,27 @@ function EditButton({ task }: { task: Task }) {
   const [estimate, setEstimate] = useState<number>(task.estimatedHours);
   const [clientName, setClientName] = useState(task.clientName ?? "");
   const [website, setWebsite] = useState(task.website ?? "");
+  const [departmentId, setDepartmentId] = useState<string>(task.departmentId ?? "");
+  const [departments, setDepartments] = useState<{ id: string; name: string }[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const router = useRouter();
+
+  // Lazy-fetch departments on dialog open so we don't pay the cost
+  // for every task card render.
+  useEffect(() => {
+    if (!open || departments.length > 0) return;
+    let cancelled = false;
+    fetch("/api/departments", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (cancelled || !d) return;
+        setDepartments(((d.departments ?? []) as Array<{ id: string; name: string }>)
+          .map((x) => ({ id: x.id, name: x.name })));
+      })
+      .catch(() => { /* leave list empty — Department field shows "—" */ });
+    return () => { cancelled = true; };
+  }, [open, departments.length]);
 
   async function save() {
     if (saving) return;
@@ -112,7 +130,8 @@ function EditButton({ task }: { task: Task }) {
           title, description, priority,
           estimatedHours: Number(estimate),
           clientName: clientName.trim() || null,
-          website: website.trim() || null
+          website: website.trim() || null,
+          departmentId: departmentId || null
         })
       });
       const data = await res.json();
@@ -164,6 +183,19 @@ function EditButton({ task }: { task: Task }) {
               <div>
                 <label className="label">Estimate (hrs)</label>
                 <input type="number" min={0.5} step={0.5} className="input" value={estimate} onChange={(e) => setEstimate(Number(e.target.value))} />
+              </div>
+              <div>
+                <label className="label">Department</label>
+                <select
+                  className="input"
+                  value={departmentId}
+                  onChange={(e) => setDepartmentId(e.target.value)}
+                >
+                  <option value="">— No department —</option>
+                  {departments.map((d) => (
+                    <option key={d.id} value={d.id}>{d.name}</option>
+                  ))}
+                </select>
               </div>
               <div>
                 <label className="label">Client</label>

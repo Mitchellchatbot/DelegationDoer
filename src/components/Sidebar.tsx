@@ -75,8 +75,12 @@ export function Sidebar({ user }: { user: User }) {
   const canSeeProjectUpdates = isLeader(user);
   const [openSeoCount, setOpenSeoCount] = useState<number | null>(null);
   const [unseenProjects, setUnseenProjects] = useState<number | null>(null);
+  // Generic nav badges — at-risk client count (Clients) + EOD-pending
+  // count after 5pm (People). Lives behind /api/notifications/badges
+  // so a single round-trip refreshes everything.
+  const [clientsAtRisk, setClientsAtRisk] = useState<number | null>(null);
+  const [peopleEodPending, setPeopleEodPending] = useState<number | null>(null);
   useEffect(() => {
-    if (!canSeeSeo && !canSeeProjectUpdates) return;
     let cancelled = false;
     async function fetchCounts() {
       try {
@@ -92,6 +96,15 @@ export function Sidebar({ user }: { user: User }) {
           if (res.ok) {
             const data = await res.json();
             if (!cancelled) setUnseenProjects(data.unseenCount ?? 0);
+          }
+        }
+        // Generic badges — same poll cadence; cheap single round-trip.
+        const badgeRes = await fetch("/api/notifications/badges", { cache: "no-store" });
+        if (badgeRes.ok) {
+          const data = await badgeRes.json();
+          if (!cancelled) {
+            setClientsAtRisk(data.clients ?? 0);
+            setPeopleEodPending(data.peopleEodPending ?? 0);
           }
         }
       } catch { /* ignore */ }
@@ -180,10 +193,29 @@ export function Sidebar({ user }: { user: User }) {
             const updatesTotal =
               (canSeeSeo ? (openSeoCount ?? 0) : 0) +
               (canSeeProjectUpdates ? (unseenProjects ?? 0) : 0);
-            const seoBadge =
-              item.href === "/updates" && updatesTotal > 0
-                ? updatesTotal
-                : null;
+            // Pick the right count for this nav item. Single red pill
+            // per row — count + tone derived from the badge source so
+            // health drops feel different from "you have unread."
+            const badge: { count: number; tone: "rose" | "amber"; title: string } | null = (() => {
+              if (item.href === "/updates" && updatesTotal > 0) {
+                return { count: updatesTotal, tone: "rose", title: `${updatesTotal} open SEO ${updatesTotal === 1 ? "request" : "requests"}` };
+              }
+              if (item.href === "/clients" && (clientsAtRisk ?? 0) > 0) {
+                return {
+                  count: clientsAtRisk!,
+                  tone: "rose",
+                  title: `${clientsAtRisk} ${clientsAtRisk === 1 ? "client is" : "clients are"} at-risk or shaky`
+                };
+              }
+              if (item.href === "/people" && (peopleEodPending ?? 0) > 0) {
+                return {
+                  count: peopleEodPending!,
+                  tone: "amber",
+                  title: `${peopleEodPending} EOD ${peopleEodPending === 1 ? "form" : "forms"} not yet submitted today`
+                };
+              }
+              return null;
+            })();
             return (
               <Link
                 key={item.href}
@@ -216,12 +248,15 @@ export function Sidebar({ user }: { user: User }) {
                 )}
                 <Icon className={cn("w-[18px] h-[18px] shrink-0 relative", active ? tone.activeFg : tone.idle)} />
                 <span className="relative">{item.label}</span>
-                {seoBadge !== null && (
+                {badge && (
                   <span
-                    className="ml-auto inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full text-[10px] font-bold tabular-nums bg-rose-500 text-white shadow-sm ring-2 ring-white relative"
-                    title={`${seoBadge} open SEO ${seoBadge === 1 ? "request" : "requests"}`}
+                    className={cn(
+                      "ml-auto inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full text-[10px] font-bold tabular-nums text-white shadow-sm ring-2 ring-white relative",
+                      badge.tone === "rose" ? "bg-rose-500" : "bg-amber-500"
+                    )}
+                    title={badge.title}
                   >
-                    {seoBadge}
+                    {badge.count}
                   </span>
                 )}
                 {/* Active-indicator dot. Bumped to 2x2 and a bouncier
@@ -230,7 +265,7 @@ export function Sidebar({ user }: { user: User }) {
                     across every nav item, so Framer Motion animates
                     the same DOM dot from its old position to its new
                     one on every tab change. */}
-                {active && seoBadge === null && (
+                {active && !badge && (
                   <motion.span
                     layoutId="sidebar-active-dot"
                     aria-hidden

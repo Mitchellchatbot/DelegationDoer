@@ -14,7 +14,7 @@ import { cn } from "@/lib/utils";
 import type { Task, TaskStatus, User } from "@/lib/types";
 import {
   Clock, Globe2, Building2, Users as UsersIcon, FolderKanban,
-  Layers, Briefcase, Layout
+  Layers, Briefcase, Layout, CheckCircle2
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -434,6 +434,10 @@ export default function BoardPage() {
                                 className={cn(
                                   "card p-3 anim-fade-in-up transition-shadow hover:shadow-lift",
                                   t.inactiveFlag && "border-stalled/50",
+                                  // Done tasks get a soft green tint + emerald
+                                  // border so they read as "finished" at a
+                                  // glance instead of blending with open work.
+                                  t.status === "done" && "bg-emerald-50/70 border-emerald-200/70",
                                   s.isDragging && "ring-1 ring-accent/40 shadow-lift"
                                 )}
                               >
@@ -461,7 +465,18 @@ export default function BoardPage() {
                                       ? <PersonAvatar userId={t.assigneeId} name={userById(t.assigneeId)?.name ?? ""} size={18} />
                                       : <span>—</span>}
                                   </div>
-                                  <span className="inline-flex items-center gap-1"><Clock className="w-3 h-3" /><Countdown iso={t.dueDate} /></span>
+                                  {t.status === "done" ? (
+                                    // Done tasks stop the countdown — a
+                                    // ticking "overdue 3d" on something
+                                    // already shipped reads as unfinished
+                                    // work. Static green "Done" pill instead.
+                                    <span className="inline-flex items-center gap-1 text-emerald-700/85">
+                                      <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                                      Done
+                                    </span>
+                                  ) : (
+                                    <span className="inline-flex items-center gap-1"><Clock className="w-3 h-3" /><Countdown iso={t.dueDate} /></span>
+                                  )}
                                 </div>
                               </div>
                             );

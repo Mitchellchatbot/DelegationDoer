@@ -7,7 +7,8 @@
 // department's configured channel.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Send, Loader2, Hash, AlertTriangle, CheckCircle2, Sparkles } from "lucide-react";
+import { Send, Loader2, Hash, AlertTriangle, CheckCircle2, Sparkles, History } from "lucide-react";
+import Link from "next/link";
 import { toast } from "sonner";
 import { PageHero } from "@/components/PageHero";
 import { PersonAvatar } from "@/components/PersonAvatar";
@@ -324,11 +325,18 @@ export default function EodPage() {
             </span>
           </>
         )}
+        <Link
+          href="/updates/eod/history"
+          className="ml-auto inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-medium text-ink/70 bg-white border border-slate-200 hover:text-ink hover:border-accent/40 transition-colors"
+          title="Browse the team's past EOD submissions"
+        >
+          <History className="w-3 h-3" /> View history
+        </Link>
         {isToday && (
           <button
             type="button"
             onClick={() => setTypeformOpen(true)}
-            className="ml-auto inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-semibold text-white shadow-sm hover:-translate-y-0.5 active:scale-95 transition-all"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-semibold text-white shadow-sm hover:-translate-y-0.5 active:scale-95 transition-all"
             style={{ background: "linear-gradient(135deg, #ec4899 0%, #7c3aed 100%)" }}
             title="Force-open the end-of-day typeform flow (normally auto-opens within 60 min of your scheduled shift end)"
           >

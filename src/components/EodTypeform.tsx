@@ -20,7 +20,7 @@ import { cn } from "@/lib/utils";
 // worker's weeklySchedule end_time, or manually via a "Simulate shift
 // end" button for testing.
 
-interface ClientOption { id: string; name: string }
+interface ClientOption { id: string; name: string; contactEmails: string[] }
 
 interface PriorState {
   workedOn: string | null;
@@ -32,9 +32,12 @@ interface PriorState {
 interface EmailDraft {
   localId: string;
   clientId: string;
+  to: string;          // free-text comma-separated To input
   subject: string;
   body: string;
-  status: "drafting" | "sending" | "sent" | "error";
+  // 'drafting' = editable, 'skipped' = user opted out for this client,
+  // 'sending'  = in-flight, 'sent' = queued for approval, 'error' = retry.
+  status: "drafting" | "skipped" | "sending" | "sent" | "error";
   error?: string;
 }
 
@@ -80,14 +83,22 @@ const STRUCTURED_STEPS = [
 export function EodTypeform({
   open, today, isWebsiteTeam, prior, onClose, onComplete
 }: Props) {
-  // step indices: 0..3 = the four structured questions, 4 = (web only)
-  // "want to log a client email?" yes/no, 5 = compose-email loop, 6 =
-  // final submitting/success. For non-website teams step 4 is skipped.
+  // step indices for the Website-team flow:
+  //   0..3 — four structured questions (worked-on / accomplished /
+  //          plan / blockers)
+  //   4    — "Which clients did you work on today?" multi-picker
+  //   5    — Per-client compose-or-skip stack (one card per picked
+  //          client; user can edit + Send, or hit Skip on each)
+  //   6    — Review & submit
+  // For non-Website teams, steps 4 + 5 are skipped — total is 0..3
+  // structured + review = 5 steps.
   const totalSteps = 4 + (isWebsiteTeam ? 2 : 0) + 1; // +1 for the final summary screen
   const [stepIdx, setStepIdx] = useState(0);
   const [answers, setAnswers] = useState<PriorState>(prior);
   const [savingField, setSavingField] = useState<string | null>(null);
-  const [wantsEmail, setWantsEmail] = useState(false);
+  // Multi-select of which clients the worker touched today; drives
+  // step 5's per-client card list.
+  const [selectedClientIds, setSelectedClientIds] = useState<string[]>([]);
   const [emails, setEmails] = useState<EmailDraft[]>([]);
   const [clients, setClients] = useState<ClientOption[]>([]);
   const [submitting, setSubmitting] = useState(false);
@@ -100,7 +111,7 @@ export function EodTypeform({
     if (!open) return;
     setStepIdx(0);
     setAnswers(prior);
-    setWantsEmail(false);
+    setSelectedClientIds([]);
     setEmails([]);
     setSubmitted(false);
     setSubmitting(false);
@@ -115,8 +126,8 @@ export function EodTypeform({
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
         if (cancelled || !d) return;
-        const list = ((d.clients ?? []) as Array<{ id: string; name: string }>)
-          .map((c) => ({ id: c.id, name: c.name }))
+        const list = ((d.clients ?? []) as Array<{ id: string; name: string; contactEmails?: string[] }>)
+          .map((c) => ({ id: c.id, name: c.name, contactEmails: c.contactEmails ?? [] }))
           .sort((a, b) => a.name.localeCompare(b.name));
         setClients(list);
       })
@@ -153,14 +164,40 @@ export function EodTypeform({
     setStepIdx((i) => Math.max(0, i - 1));
   }
 
-  function newDraft(): EmailDraft {
+  function newDraft(clientId = ""): EmailDraft {
+    const client = clients.find((c) => c.id === clientId);
     return {
       localId: `d_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`,
-      clientId: "",
-      subject: "",
+      clientId,
+      // Prefill To with the client's stored contact emails so the
+      // worker doesn't have to retype. Easy to edit if they want to
+      // send to a different recipient.
+      to: (client?.contactEmails ?? []).join(", "),
+      subject: client ? `Update for ${client.name}` : "",
       body: "",
       status: "drafting"
     };
+  }
+
+  // Toggle a client in/out of the multi-select for step 4.
+  function toggleClient(clientId: string) {
+    setSelectedClientIds((cur) =>
+      cur.includes(clientId)
+        ? cur.filter((id) => id !== clientId)
+        : [...cur, clientId]
+    );
+  }
+
+  // When advancing from the picker (step 4) into the per-client step,
+  // seed one EmailDraft per selected client. Existing drafts (e.g. if
+  // the user navigated back) are preserved; clients that were
+  // deselected get their drafts removed.
+  function reconcileDraftsForSelection() {
+    setEmails((cur) => {
+      const byClient = new Map<string, EmailDraft>();
+      for (const d of cur) if (d.clientId && !byClient.has(d.clientId)) byClient.set(d.clientId, d);
+      return selectedClientIds.map((cid) => byClient.get(cid) ?? newDraft(cid));
+    });
   }
 
   function patchDraft(localId: string, patch: Partial<EmailDraft>) {
@@ -174,17 +211,27 @@ export function EodTypeform({
     if (!draft.subject.trim()) return patchDraft(localId, { error: "Subject required" });
     if (!draft.body.trim()) return patchDraft(localId, { error: "Body required" });
     const client = clients.find((c) => c.id === draft.clientId);
+    const toRaw = draft.to.trim()
+      ? draft.to.split(/[,;\s]+/).map((s) => s.trim()).filter(Boolean)
+      : (client?.contactEmails ?? []);
+    if (toRaw.length === 0) {
+      return patchDraft(localId, { error: "Add at least one recipient email" });
+    }
     patchDraft(localId, { status: "sending", error: undefined });
     try {
-      const res = await fetch("/api/eod/client-checkins", {
+      // Route through the email-approval queue (kind=client_update).
+      // Mitch / Mujtaba / Sam see it on /approvals and Approve & Send
+      // fires the actual outbound email via missiveclone.
+      const res = await fetch("/api/email-drafts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          date: today,
           clientId: draft.clientId,
           clientName: client?.name ?? "Client",
+          to: toRaw,
           subject: draft.subject.trim(),
-          message: draft.body.trim()
+          bodyText: draft.body.trim(),
+          kind: "client_update"
         })
       });
       const data = await res.json().catch(() => ({}));
@@ -196,6 +243,12 @@ export function EodTypeform({
         error: err instanceof Error ? err.message : "send failed"
       });
     }
+  }
+
+  // "Skip this client" — locks the card without sending. Visually
+  // de-emphasized so the user can still see what they passed on.
+  function skipDraft(localId: string) {
+    patchDraft(localId, { status: "skipped", error: undefined });
   }
 
   async function submitEod() {
@@ -296,28 +349,26 @@ export function EodTypeform({
           )}
 
           {isWebsiteTeam && stepIdx === 4 && (
-            <EmailGate
-              onYes={() => {
-                setWantsEmail(true);
-                if (emails.length === 0) setEmails([newDraft()]);
-                advance();
-              }}
-              onNo={() => {
-                setWantsEmail(false);
+            <ClientPicker
+              clients={clients}
+              selected={selectedClientIds}
+              onToggle={toggleClient}
+              onAdvance={() => {
+                reconcileDraftsForSelection();
                 advance();
               }}
             />
           )}
 
           {isWebsiteTeam && stepIdx === 5 && (
-            <EmailComposer
+            <PerClientComposers
               drafts={emails}
               clients={clients}
-              wantsEmail={wantsEmail}
-              onAddDraft={() => setEmails((cur) => [...cur, newDraft()])}
+              onAddDraft={(clientId) => setEmails((cur) => [...cur, newDraft(clientId)])}
               onRemoveDraft={(id) => setEmails((cur) => cur.filter((d) => d.localId !== id))}
               onPatchDraft={patchDraft}
               onSendDraft={sendDraft}
+              onSkipDraft={skipDraft}
               onAdvance={advance}
             />
           )}
@@ -328,6 +379,7 @@ export function EodTypeform({
               submitted={submitted}
               answers={answers}
               sentEmailCount={emails.filter((e) => e.status === "sent").length}
+              skippedEmailCount={emails.filter((e) => e.status === "skipped").length}
               onSubmit={submitEod}
               onClose={onClose}
             />
@@ -430,71 +482,126 @@ function StructuredQuestion({
   );
 }
 
-function EmailGate({ onYes, onNo }: { onYes: () => void; onNo: () => void }) {
+function ClientPicker({
+  clients, selected, onToggle, onAdvance
+}: {
+  clients: ClientOption[];
+  selected: string[];
+  onToggle: (clientId: string) => void;
+  onAdvance: () => void;
+}) {
   return (
-    <div className="space-y-6 text-center">
-      <Mail className="w-10 h-10 text-violet-500 mx-auto" />
+    <div className="space-y-5">
+      <div className="text-[10px] uppercase tracking-wide font-bold text-violet-500/85">
+        Client touches
+      </div>
       <h1 className="text-3xl font-semibold leading-tight text-ink">
-        Did you email any clients today?
+        What clients did you work on today?
       </h1>
-      <p className="text-sm text-ink/65 max-w-md mx-auto">
-        Log the To / Subject / Body so the team has a record. You can add as many as you like.
+      <p className="text-sm text-ink/65">
+        Pick everyone you touched. We&apos;ll line up a draft email per client on the next step so you can either send (with approval) or skip.
       </p>
-      <div className="flex items-center justify-center gap-3 pt-2">
+
+      <div className="max-h-[55vh] overflow-y-auto pr-1">
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+          {clients.map((c) => {
+            const isSelected = selected.includes(c.id);
+            return (
+              <button
+                key={c.id}
+                type="button"
+                onClick={() => onToggle(c.id)}
+                className={cn(
+                  "flex items-center gap-2 px-3 py-2 rounded-xl text-left text-[13px] border-2 transition-all active:scale-[0.98]",
+                  isSelected
+                    ? "border-violet-500/70 bg-violet-50/80 text-violet-800 shadow-sm"
+                    : "border-slate-200 bg-white hover:border-violet-300 hover:bg-violet-50/30"
+                )}
+              >
+                <span
+                  className={cn(
+                    "w-4 h-4 rounded-md border-2 grid place-items-center shrink-0 transition-colors",
+                    isSelected ? "border-violet-500 bg-violet-500" : "border-slate-300 bg-white"
+                  )}
+                >
+                  {isSelected && <Check className="w-2.5 h-2.5 text-white" />}
+                </span>
+                <span className="truncate">{c.name}</span>
+              </button>
+            );
+          })}
+        </div>
+        {clients.length === 0 && (
+          <div className="text-sm text-ink/55 italic py-6 text-center">
+            No clients loaded yet — try refreshing the page.
+          </div>
+        )}
+      </div>
+
+      <div className="flex items-center justify-between gap-3 pt-2">
+        <div className="text-[11px] text-ink/55">
+          {selected.length === 0
+            ? "Pick zero if you didn't touch any clients — we'll skip the email step."
+            : `${selected.length} selected`}
+        </div>
         <button
           type="button"
-          onClick={onNo}
-          className="inline-flex items-center gap-2 px-6 py-3 rounded-full text-sm font-semibold text-ink/70 bg-white border-2 border-slate-200 hover:border-slate-300 hover:bg-slate-50 transition-all"
-        >
-          No, skip
-        </button>
-        <button
-          type="button"
-          onClick={onYes}
-          className="inline-flex items-center gap-2 px-6 py-3 rounded-full text-sm font-semibold text-white shadow-md transition-all hover:-translate-y-0.5 active:scale-95"
+          onClick={onAdvance}
+          className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full text-sm font-semibold text-white shadow-md transition-all hover:-translate-y-0.5 active:scale-95"
           style={{ background: "linear-gradient(135deg, #7c3aed 0%, #6d28d9 100%)" }}
         >
-          <Mail className="w-4 h-4" /> Yes, log an email
+          {selected.length === 0 ? "Skip email step" : `Draft ${selected.length} email${selected.length === 1 ? "" : "s"}`}
+          <ArrowRight className="w-4 h-4" />
         </button>
       </div>
     </div>
   );
 }
 
-function EmailComposer({
-  drafts, clients, wantsEmail, onAddDraft, onRemoveDraft, onPatchDraft, onSendDraft, onAdvance
+function PerClientComposers({
+  drafts, clients, onAddDraft, onRemoveDraft, onPatchDraft, onSendDraft, onSkipDraft, onAdvance
 }: {
   drafts: EmailDraft[];
   clients: ClientOption[];
-  wantsEmail: boolean;
-  onAddDraft: () => void;
+  onAddDraft: (clientId: string) => void;
   onRemoveDraft: (localId: string) => void;
   onPatchDraft: (localId: string, patch: Partial<EmailDraft>) => void;
   onSendDraft: (localId: string) => void;
+  onSkipDraft: (localId: string) => void;
   onAdvance: () => void;
 }) {
-  if (!wantsEmail) {
-    // User said no — bounce straight to the final step. Render a
-    // soft prompt while the parent advances.
+  if (drafts.length === 0) {
+    // No clients picked — show a soft pass-through.
     return (
-      <div className="text-center text-sm text-ink/55">
-        Skipping email step…
+      <div className="text-center space-y-3 py-10">
+        <Mail className="w-10 h-10 text-violet-300 mx-auto" />
+        <div className="text-sm text-ink/55">No client emails to draft. You can continue.</div>
+        <button
+          type="button"
+          onClick={onAdvance}
+          className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full text-sm font-semibold text-white shadow-md transition-all hover:-translate-y-0.5 active:scale-95"
+          style={{ background: "linear-gradient(135deg, #2563EB 0%, #1e63ff 100%)" }}
+        >
+          Continue <ArrowRight className="w-4 h-4" />
+        </button>
       </div>
     );
   }
 
   const sentCount = drafts.filter((d) => d.status === "sent").length;
+  const skippedCount = drafts.filter((d) => d.status === "skipped").length;
+  const remaining = drafts.filter((d) => d.status === "drafting" || d.status === "error").length;
 
   return (
     <div className="space-y-4">
       <div className="text-[10px] uppercase tracking-wide font-bold text-violet-500/85">
-        Client emails ({sentCount} logged)
+        {sentCount} sent · {skippedCount} skipped · {remaining} remaining
       </div>
       <h1 className="text-3xl font-semibold leading-tight text-ink">
-        Log the email{drafts.length > 1 ? "s" : ""} you sent
+        Draft email updates for these clients
       </h1>
       <p className="text-sm text-ink/65">
-        To, Subject, Body. Each one posts to Slack so the team sees the touch.
+        Each one routes to Mitch / Mujtaba / Sam for approval before it actually sends. Hit Skip if you don&apos;t need to email this client today.
       </p>
 
       <div className="space-y-3 max-h-[55vh] overflow-y-auto pr-1">
@@ -506,25 +613,19 @@ function EmailComposer({
             onPatch={(p) => onPatchDraft(d.localId, p)}
             onRemove={() => onRemoveDraft(d.localId)}
             onSend={() => onSendDraft(d.localId)}
+            onSkip={() => onSkipDraft(d.localId)}
           />
         ))}
-        <button
-          type="button"
-          onClick={onAddDraft}
-          className="w-full text-sm font-medium text-violet-700 hover:text-violet-900 py-2.5 rounded-xl border-2 border-dashed border-violet-200 hover:border-violet-400/60 hover:bg-violet-50/40 transition-colors inline-flex items-center justify-center gap-1.5"
-        >
-          <Plus className="w-4 h-4" /> Compose another
-        </button>
       </div>
 
-      <div className="flex items-center justify-end pt-2">
+      <div className="flex items-center justify-end gap-2 pt-2">
         <button
           type="button"
           onClick={onAdvance}
           className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full text-sm font-semibold text-white shadow-md transition-all hover:-translate-y-0.5 active:scale-95"
           style={{ background: "linear-gradient(135deg, #2563EB 0%, #1e63ff 100%)" }}
         >
-          Done with emails <ArrowRight className="w-4 h-4" />
+          {remaining > 0 ? "Continue (and skip the rest)" : "Continue"} <ArrowRight className="w-4 h-4" />
         </button>
       </div>
     </div>
@@ -532,30 +633,53 @@ function EmailComposer({
 }
 
 function DraftCard({
-  draft, clients, onPatch, onRemove, onSend
+  draft, clients, onPatch, onRemove, onSend, onSkip
 }: {
   draft: EmailDraft;
   clients: ClientOption[];
   onPatch: (p: Partial<EmailDraft>) => void;
   onRemove: () => void;
   onSend: () => void;
+  // Optional — only the per-client compose step passes this; the
+  // legacy ad-hoc composer doesn't have a "skip" affordance.
+  onSkip?: () => void;
 }) {
-  const clientName = clients.find((c) => c.id === draft.clientId)?.name ?? "";
+  const client = clients.find((c) => c.id === draft.clientId);
+  const clientName = client?.name ?? "";
   const isSent = draft.status === "sent";
+  const isSkipped = draft.status === "skipped";
   const isSending = draft.status === "sending";
+  const isLocked = isSent || isSkipped || isSending;
   const canSend = !!draft.clientId && draft.subject.trim() && draft.body.trim();
 
   return (
     <div className={cn(
       "rounded-xl border bg-white shadow-sm overflow-hidden transition-colors",
-      isSent ? "border-emerald-200/70 bg-emerald-50/30" : "border-violet-200/60"
+      isSent && "border-emerald-200/70 bg-emerald-50/30",
+      isSkipped && "border-slate-200/70 bg-slate-50/40 opacity-70",
+      !isSent && !isSkipped && "border-violet-200/60"
     )}>
       <div className="flex items-center gap-2 px-3 py-2 bg-slate-50/70 border-b border-slate-200/60">
-        <Mail className="w-4 h-4 text-violet-600" />
+        <Mail className={cn(
+          "w-4 h-4",
+          isSent ? "text-emerald-600" : isSkipped ? "text-slate-400" : "text-violet-600"
+        )} />
         <span className="text-[10px] uppercase tracking-wide font-semibold text-ink/55">
-          {isSent ? "Email logged" : "New email"}
+          {clientName && <span className="text-ink/85">{clientName}</span>}
+          {clientName && " · "}
+          {isSent ? "Sent for approval" : isSkipped ? "Skipped" : "Draft"}
         </span>
-        {!isSent && (
+        {!isLocked && onSkip && (
+          <button
+            type="button"
+            onClick={onSkip}
+            className="ml-auto inline-flex items-center gap-1 text-[10px] font-semibold text-ink/55 hover:text-ink px-2 py-0.5 rounded-md hover:bg-slate-200/70"
+            title="Skip — don't send an email to this client today"
+          >
+            Skip
+          </button>
+        )}
+        {!isLocked && !onSkip && (
           <button
             type="button"
             onClick={onRemove}
@@ -568,19 +692,33 @@ function DraftCard({
         )}
       </div>
 
+      {!draft.clientId && (
+        <div className="flex items-center gap-2 px-3 py-2 border-b border-slate-200/50">
+          <label className="text-[10px] uppercase tracking-wide font-semibold text-ink/55 w-14">Client</label>
+          <select
+            value={draft.clientId}
+            onChange={(e) => onPatch({ clientId: e.target.value, error: undefined })}
+            disabled={isLocked}
+            className="flex-1 text-[13px] bg-transparent border-none outline-none focus:ring-0 disabled:opacity-70"
+          >
+            <option value="">Pick a client…</option>
+            {clients.map((c) => (
+              <option key={c.id} value={c.id}>{c.name}</option>
+            ))}
+          </select>
+        </div>
+      )}
+
       <div className="flex items-center gap-2 px-3 py-2 border-b border-slate-200/50">
         <label className="text-[10px] uppercase tracking-wide font-semibold text-ink/55 w-14">To</label>
-        <select
-          value={draft.clientId}
-          onChange={(e) => onPatch({ clientId: e.target.value, error: undefined })}
-          disabled={isSent || isSending}
-          className="flex-1 text-[13px] bg-transparent border-none outline-none focus:ring-0 disabled:opacity-70"
-        >
-          <option value="">Pick a client…</option>
-          {clients.map((c) => (
-            <option key={c.id} value={c.id}>{c.name}</option>
-          ))}
-        </select>
+        <input
+          type="text"
+          value={draft.to}
+          onChange={(e) => onPatch({ to: e.target.value, error: undefined })}
+          disabled={isLocked}
+          placeholder={clientName ? `${clientName} contact email…` : "recipient@client.com"}
+          className="flex-1 text-[13px] bg-transparent border-none outline-none focus:ring-0 placeholder:text-ink/35 disabled:opacity-70"
+        />
       </div>
 
       <div className="flex items-center gap-2 px-3 py-2 border-b border-slate-200/50">
@@ -589,8 +727,8 @@ function DraftCard({
           type="text"
           value={draft.subject}
           onChange={(e) => onPatch({ subject: e.target.value, error: undefined })}
-          disabled={isSent || isSending}
-          placeholder={clientName ? `Re: ${clientName}` : "Email subject"}
+          disabled={isLocked}
+          placeholder={clientName ? `Update for ${clientName}` : "Email subject"}
           maxLength={300}
           className="flex-1 text-[13px] bg-transparent border-none outline-none focus:ring-0 placeholder:text-ink/35 disabled:opacity-70"
         />
@@ -599,9 +737,9 @@ function DraftCard({
       <textarea
         value={draft.body}
         onChange={(e) => onPatch({ body: e.target.value, error: undefined })}
-        disabled={isSent || isSending}
+        disabled={isLocked}
         placeholder={clientName
-          ? `Body of the email you sent ${clientName}…`
+          ? `Write the email body for ${clientName}…`
           : "Body of the email"
         }
         rows={5}
@@ -619,7 +757,11 @@ function DraftCard({
         )}
         {isSent ? (
           <span className="inline-flex items-center gap-1.5 px-3 py-1 text-[11px] font-semibold text-emerald-700">
-            <Check className="w-3.5 h-3.5" /> Logged
+            <Check className="w-3.5 h-3.5" /> Sent for approval
+          </span>
+        ) : isSkipped ? (
+          <span className="inline-flex items-center gap-1.5 px-3 py-1 text-[11px] font-semibold text-ink/55">
+            Skipped
           </span>
         ) : (
           <button
@@ -633,7 +775,7 @@ function DraftCard({
             style={{ background: "linear-gradient(135deg, #7c3aed 0%, #6d28d9 100%)" }}
           >
             {isSending ? <Loader2 className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
-            {isSending ? "Sending…" : "Send"}
+            {isSending ? "Sending…" : "Send for approval"}
           </button>
         )}
       </div>
@@ -642,12 +784,13 @@ function DraftCard({
 }
 
 function FinalStep({
-  submitting, submitted, answers, sentEmailCount, onSubmit, onClose
+  submitting, submitted, answers, sentEmailCount, skippedEmailCount, onSubmit, onClose
 }: {
   submitting: boolean;
   submitted: boolean;
   answers: PriorState;
   sentEmailCount: number;
+  skippedEmailCount: number;
   onSubmit: () => void;
   onClose: () => void;
 }) {
@@ -697,10 +840,16 @@ function FinalStep({
         {answers.blockers && (
           <SummaryRow label="Blockers / questions" value={answers.blockers} required={false} />
         )}
-        {sentEmailCount > 0 && (
-          <div className="rounded-lg bg-violet-50/60 border border-violet-200/60 px-3 py-2 text-[13px] inline-flex items-center gap-2">
+        {(sentEmailCount > 0 || skippedEmailCount > 0) && (
+          <div className="rounded-lg bg-violet-50/60 border border-violet-200/60 px-3 py-2 text-[13px] inline-flex items-center gap-2 flex-wrap">
             <Mail className="w-3.5 h-3.5 text-violet-600" />
-            {sentEmailCount} client email{sentEmailCount === 1 ? "" : "s"} logged
+            {sentEmailCount > 0 && (
+              <span>{sentEmailCount} client email{sentEmailCount === 1 ? "" : "s"} queued for approval</span>
+            )}
+            {sentEmailCount > 0 && skippedEmailCount > 0 && <span className="text-ink/45">·</span>}
+            {skippedEmailCount > 0 && (
+              <span className="text-ink/55">{skippedEmailCount} skipped</span>
+            )}
           </div>
         )}
       </div>

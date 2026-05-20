@@ -126,7 +126,20 @@ export interface ListThreadsOpts {
   // any per-inbox view — listThreads otherwise returns every thread
   // in the workspace.
   mailboxId?: string;
+  // Smart-filter bucket. Matches missiveclone's CATEGORY_CLAUSES:
+  //   "codes"        — verification / OTP / sign-in codes
+  //   "newsletters"  — no-reply / marketing senders
+  //   "receipts"     — orders / payment confirmations
+  //   "calendar"     — .ics invites / calendar updates
+  //   "people"       — conversations *not* from automated senders
+  //   "bounces"      — delivery failures
+  category?: "codes" | "newsletters" | "receipts" | "calendar" | "people" | "bounces";
+  // Scope to a team-space (group of mailboxes leaders curate on
+  // /inboxes/manage). Backend joins on threads.team_space_id.
+  teamSpaceId?: string;
 }
+
+export type InboxCategory = NonNullable<ListThreadsOpts["category"]>;
 
 export interface ListThreadsResult {
   threads: MissiveThread[];
@@ -200,6 +213,8 @@ export async function listThreadsPaged(opts: ListThreadsOpts = {}): Promise<List
   if (opts.limit) params.set("limit", String(opts.limit));
   if (opts.offset) params.set("offset", String(opts.offset));
   if (opts.mailboxId) params.set("mailbox_id", opts.mailboxId);
+  if (opts.category) params.set("category", opts.category);
+  if (opts.teamSpaceId) params.set("team_space_id", opts.teamSpaceId);
   const qs = params.toString() ? `?${params}` : "";
   const data = await missiveFetch<{
     threads: MissiveThread[];

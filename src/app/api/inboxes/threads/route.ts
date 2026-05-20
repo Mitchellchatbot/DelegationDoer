@@ -31,10 +31,18 @@ export async function GET(req: NextRequest) {
     const q = sp.get("q")?.trim() || undefined;
     const mailboxId = sp.get("mailboxId") || undefined;
     const folder = (sp.get("folder") as "INBOX" | "SENT") || "INBOX";
+    // Smart-filter bucket. Backend rejects unknown values, so we
+    // narrow to the missiveclone CATEGORY_CLAUSES set.
+    const ALLOWED = new Set(["codes", "newsletters", "receipts", "calendar", "people", "bounces"]);
+    const rawCat = sp.get("category")?.trim();
+    const category = rawCat && ALLOWED.has(rawCat)
+      ? (rawCat as "codes" | "newsletters" | "receipts" | "calendar" | "people" | "bounces")
+      : undefined;
+    const teamSpaceId = sp.get("teamSpaceId") || undefined;
 
     const [accounts, page, visibleIds] = await Promise.all([
       listAccounts(),
-      listThreadsPaged({ folder, limit, offset, q, mailboxId }),
+      listThreadsPaged({ folder, limit, offset, q, mailboxId, category, teamSpaceId }),
       visibleAccountIdsFor(me)
     ]);
 

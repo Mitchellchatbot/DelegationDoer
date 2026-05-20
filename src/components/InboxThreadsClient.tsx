@@ -1,9 +1,23 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Search, Loader2, X } from "lucide-react";
+import {
+  Search, Loader2, X, Users, KeyRound, BellRing, Receipt, Calendar, AlertTriangle, Inbox
+} from "lucide-react";
 import { ThreadList, type ThreadListItem } from "./ThreadList";
 import { cn } from "@/lib/utils";
+
+type Category = "all" | "people" | "codes" | "newsletters" | "receipts" | "calendar" | "bounces";
+
+const CATEGORIES: Array<{ id: Category; label: string; icon: typeof Users; tone: string }> = [
+  { id: "all",         label: "All",          icon: Inbox,          tone: "text-ink/65" },
+  { id: "people",      label: "People",       icon: Users,          tone: "text-emerald-600" },
+  { id: "codes",       label: "Codes",        icon: KeyRound,       tone: "text-rose-600" },
+  { id: "newsletters", label: "Newsletters",  icon: BellRing,       tone: "text-amber-600" },
+  { id: "receipts",    label: "Receipts",     icon: Receipt,        tone: "text-emerald-700" },
+  { id: "calendar",    label: "Calendar",     icon: Calendar,       tone: "text-violet-600" },
+  { id: "bounces",     label: "Bounces",      icon: AlertTriangle,  tone: "text-rose-700" }
+];
 
 interface Props {
   initialThreads: ThreadListItem[];
@@ -37,6 +51,7 @@ export function InboxThreadsClient({
   const [q, setQ] = useState("");
   const [debouncedQ, setDebouncedQ] = useState("");
   const [searchActive, setSearchActive] = useState(false);
+  const [category, setCategory] = useState<Category>("all");
   const sentinelRef = useRef<HTMLDivElement | null>(null);
 
   // Debounce search input — fires once 350ms after the user stops typing.
@@ -50,20 +65,23 @@ export function InboxThreadsClient({
   useEffect(() => {
     let cancelled = false;
     async function run() {
-      if (!debouncedQ) {
+      // Restore SSR'd page only when there's nothing to override —
+      // no search and no category filter applied.
+      if (!debouncedQ && category === "all") {
         setThreads(initialThreads);
         setHasMore(initialHasMore);
         setSearchActive(false);
         return;
       }
       setLoading(true);
-      setSearchActive(true);
+      setSearchActive(!!debouncedQ);
       try {
         const params = new URLSearchParams();
         params.set("limit", String(PAGE_SIZE));
         params.set("offset", "0");
-        params.set("q", debouncedQ);
+        if (debouncedQ) params.set("q", debouncedQ);
         if (mailboxId) params.set("mailboxId", mailboxId);
+        if (category !== "all") params.set("category", category);
         const res = await fetch(`/api/inboxes/threads?${params}`, { cache: "no-store" });
         const data = await res.json();
         if (!cancelled) {
@@ -81,7 +99,7 @@ export function InboxThreadsClient({
     }
     void run();
     return () => { cancelled = true; };
-  }, [debouncedQ, initialThreads, initialHasMore, mailboxId]);
+  }, [debouncedQ, initialThreads, initialHasMore, mailboxId, category]);
 
   const loadMore = useCallback(async () => {
     if (loading || !hasMore) return;
@@ -92,6 +110,7 @@ export function InboxThreadsClient({
       params.set("offset", String(threads.length));
       if (debouncedQ) params.set("q", debouncedQ);
       if (mailboxId) params.set("mailboxId", mailboxId);
+      if (category !== "all") params.set("category", category);
       const res = await fetch(`/api/inboxes/threads?${params}`, { cache: "no-store" });
       const data = await res.json();
       const more: ThreadListItem[] = data.threads ?? [];
@@ -105,7 +124,7 @@ export function InboxThreadsClient({
     } finally {
       setLoading(false);
     }
-  }, [loading, hasMore, threads, debouncedQ, mailboxId]);
+  }, [loading, hasMore, threads, debouncedQ, mailboxId, category]);
 
   // IntersectionObserver on the sentinel below the list. When it
   // scrolls into view, kick off the next page. Setting rootMargin
@@ -130,6 +149,33 @@ export function InboxThreadsClient({
 
   return (
     <div className="space-y-3">
+      {/* Category chips — same buckets missiveclone's left rail uses.
+          "People" hides every automated sender (no-reply, alerts,
+          newsletters) so the noisy inboxes feel like real
+          conversations only. */}
+      <div className="flex items-center gap-1.5 overflow-x-auto pb-1 -mx-1 px-1 no-scrollbar">
+        {CATEGORIES.map((c) => {
+          const Icon = c.icon;
+          const active = category === c.id;
+          return (
+            <button
+              key={c.id}
+              type="button"
+              onClick={() => setCategory(c.id)}
+              className={cn(
+                "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[12px] font-medium border whitespace-nowrap transition-all active:scale-[0.97]",
+                active
+                  ? "bg-accent/10 text-accent border-accent/40 shadow-sm"
+                  : "bg-white text-ink/65 border-slate-200 hover:border-accent/30 hover:text-ink"
+              )}
+            >
+              <Icon className={cn("w-3.5 h-3.5", active ? "text-accent" : c.tone)} />
+              {c.label}
+            </button>
+          );
+        })}
+      </div>
+
       <div className="relative">
         <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-muted z-10" />
         <input

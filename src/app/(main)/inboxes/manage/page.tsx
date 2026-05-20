@@ -1,16 +1,13 @@
-import { Suspense } from "react";
 import { redirect } from "next/navigation";
-import { ShieldAlert, ExternalLink, Layers } from "lucide-react";
+import { ShieldAlert, ExternalLink, Layers, Plug } from "lucide-react";
 import { requireCurrentUserId } from "@/lib/session";
-import { getUserById, getAllUsersLight } from "@/lib/server-data";
-import { listAccounts, listTeamMembers, type MissiveAccount } from "@/lib/missive-client";
-import { canManageAssignments, getAllAssignments, syncMissiveOwnership, type InboxAssignment } from "@/lib/inbox-access";
+import { getUserById } from "@/lib/server-data";
+import { listAccounts, type MissiveAccount } from "@/lib/missive-client";
+import { canManageAssignments } from "@/lib/inbox-access";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
-import { InboxAssignmentCards } from "@/components/InboxAssignmentCards";
 import { AutoIntakeToggleSection } from "@/components/AutoIntakeToggleSection";
 import { ConnectInboxDialog } from "@/components/ConnectInboxDialog";
-import { SpacesManager } from "@/components/SpacesManager";
-import { Plug } from "lucide-react";
+import { ManagedInboxList } from "@/components/ManagedInboxList";
 
 interface AutoIntakeRow {
   account_id: string;
@@ -20,6 +17,10 @@ interface AutoIntakeRow {
 
 export const dynamic = "force-dynamic";
 
+// Lean inbox management page. Used to be a drag-and-drop card UI for
+// per-person assignment — overkill once every worker self-connects
+// via the Microsoft OAuth flow. Now it's just: list of connected
+// inboxes + Connect/Disconnect buttons + auto-intake toggles.
 export default async function ManageInboxesPage() {
   const userId = await requireCurrentUserId();
   const me = await getUserById(userId);
@@ -31,63 +32,23 @@ export default async function ManageInboxesPage() {
         <ShieldAlert className="w-8 h-8 text-warn mx-auto mb-2" />
         <div className="text-base font-medium">Leader only</div>
         <div className="text-sm text-muted mt-1">
-          Only the Leader can reassign inboxes. Reach out if you need to grant or revoke access.
+          Only the Leader can manage inboxes. Workers can connect their own from the Inboxes page.
         </div>
       </div>
     );
   }
 
   let inboxes: MissiveAccount[] = [];
-  let assignments: InboxAssignment[] = [];
   let autoIntakeSettings: AutoIntakeRow[] = [];
-  let spaces: { id: string; name: string; color: string; accountIds: string[] }[] = [];
   let fetchError: string | null = null;
-  // Live people from Supabase — used by SpacesManager so newly invited
-  // teammates appear without a deploy.
-  const livePeople = await getAllUsersLight().catch(() => []);
-  try {
-    // Fetch missive accounts + team members in parallel; then mirror their
-    // ownership relationships into our assignments table before reading it.
-    const [fetchedInboxes, teamMembers] = await Promise.all([
-      listAccounts(),
-      listTeamMembers().catch(() => [])
-    ]);
-    inboxes = fetchedInboxes;
-    if (teamMembers.length > 0) {
-      await syncMissiveOwnership(fetchedInboxes, teamMembers);
-    }
-    // Read assignments AFTER the sync so the page reflects the merged state.
-    assignments = await getAllAssignments();
 
-    // Auto-intake settings — degrade silently if migration hasn't shipped.
+  try {
+    inboxes = await listAccounts();
     const supabase = getSupabaseAdmin();
-    const [{ data: settings }, { data: spaceRows }, { data: spaceAccountRows }] = await Promise.all([
-      supabase
-        .from("missive_account_settings")
-        .select("account_id, auto_intake_enabled, last_polled_at"),
-      supabase
-        .from("inbox_spaces")
-        .select("id, name, color, created_at")
-        .order("created_at", { ascending: true }),
-      supabase
-        .from("inbox_space_accounts")
-        .select("space_id, account_id")
-    ]);
+    const { data: settings } = await supabase
+      .from("missive_account_settings")
+      .select("account_id, auto_intake_enabled, last_polled_at");
     autoIntakeSettings = (settings ?? []) as AutoIntakeRow[];
-    // Stitch (spaces + their accounts) into the shape InboxAssignmentCards
-    // wants so the client doesn't have to re-fetch on render.
-    const accountIdsBySpace = new Map<string, string[]>();
-    for (const r of (spaceAccountRows ?? []) as { space_id: string; account_id: string }[]) {
-      const arr = accountIdsBySpace.get(r.space_id) ?? [];
-      arr.push(r.account_id);
-      accountIdsBySpace.set(r.space_id, arr);
-    }
-    spaces = (spaceRows ?? []).map((s) => ({
-      id: s.id as string,
-      name: s.name as string,
-      color: (s.color as string) ?? "blue",
-      accountIds: accountIdsBySpace.get(s.id as string) ?? []
-    }));
   } catch (err) {
     fetchError = err instanceof Error ? err.message : "unknown error";
   }
@@ -104,10 +65,9 @@ export default async function ManageInboxesPage() {
           <div className="flex items-center gap-3">
             <span className="text-3xl">🔗</span>
             <div>
-              <h1 className="text-xl font-semibold">Manage inbox assignments</h1>
+              <h1 className="text-xl font-semibold">Connected inboxes</h1>
               <p className="text-sm text-ink/60 mt-0.5 max-w-2xl">
-                Drag from a person to an inbox to grant access. Click a string to remove it.
-                Department heads inherit access to anything assigned to their team.
+                Mailboxes linked to DelegationDoer. Each worker can self-connect their own from the Inboxes page; this view is the master list for leaders to audit + remove.
               </p>
             </div>
           </div>
@@ -144,13 +104,11 @@ export default async function ManageInboxesPage() {
 
       {fetchError && (
         <div className="card p-4 border-urgent/30 bg-urgent/5 text-sm">
-          <div className="font-medium text-urgent mb-1">Couldn't load inboxes from Missive</div>
-          <div className="text-muted">
-            {fetchError}
-          </div>
+          <div className="font-medium text-urgent mb-1">Couldn&apos;t load inboxes from Missive</div>
+          <div className="text-muted">{fetchError}</div>
           <div className="text-xs text-muted mt-2">
-            Most often: <code>MISSIVE_API_TOKEN</code> expired (default JWT lifetime is 30 days). Grab a
-            fresh token from the Missive UI's localStorage and update Railway's env vars.
+            Most often: <code>MISSIVE_API_TOKEN</code> expired or the missiveclone backend is down. Hit{" "}
+            <code>/api/status</code> on the clone to diagnose.
           </div>
         </div>
       )}
@@ -162,44 +120,23 @@ export default async function ManageInboxesPage() {
           </div>
           <div className="text-base font-medium">No inboxes connected yet</div>
           <div className="text-sm text-muted mt-1 max-w-md mx-auto">
-            Hit "Connect inbox" above to link a mailbox over IMAP/SMTP.
+            Hit &ldquo;Connect inbox&rdquo; above to sign in with Microsoft.
           </div>
         </div>
       ) : null}
 
       {!fetchError && inboxes.length > 0 && (
         <>
-          {/* Suspense boundary required because InboxAssignmentCards calls
-              useSearchParams() (for the ?connectedAccount=... deep-link
-              after OAuth). Next 14 hydration breaks without this. */}
-          <Suspense fallback={<div className="card p-6 text-sm text-muted">Loading inboxes…</div>}>
-            <InboxAssignmentCards
-              users={livePeople}
-              inboxes={inboxes.map((a) => ({
-                id: a.id,
-                email: a.email,
-                display_name: a.display_name
-              }))}
-              spaces={spaces}
-              initialAssignments={assignments}
-            />
-          </Suspense>
-          <AutoIntakeToggleSection
-            inboxes={inboxes}
-            initialSettings={autoIntakeSettings}
-          />
-          <SpacesManager
+          <ManagedInboxList
             inboxes={inboxes.map((a) => ({
               id: a.id,
               email: a.email,
-              label: a.display_name || a.email
+              display_name: a.display_name ?? null
             }))}
-            people={livePeople.map((p) => ({
-              id: p.id,
-              name: p.name,
-              email: p.email,
-              avatarUrl: p.avatarUrl ?? null
-            }))}
+          />
+          <AutoIntakeToggleSection
+            inboxes={inboxes}
+            initialSettings={autoIntakeSettings}
           />
         </>
       )}

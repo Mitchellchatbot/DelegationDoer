@@ -12,8 +12,6 @@ import Link from "next/link";
 import { toast } from "sonner";
 import { PageHero } from "@/components/PageHero";
 import { PersonAvatar } from "@/components/PersonAvatar";
-import { ClientUpdatesSection } from "@/components/ClientUpdatesSection";
-import { ClientCheckInSection } from "@/components/ClientCheckInSection";
 import { EodTypeform } from "@/components/EodTypeform";
 import { useCurrentUser } from "@/lib/user-context";
 
@@ -353,13 +351,6 @@ export default function EodPage() {
         onClose={() => setTypeformOpen(false)}
         onComplete={() => { void load(); }}
       />
-
-      {isWebsiteTeam && (
-        <>
-          <ClientCheckInSection today={today} />
-          <ClientUpdatesSection today={today} />
-        </>
-      )}
 
       {loading ? (
         <div className="card p-8 text-center text-sm text-muted">

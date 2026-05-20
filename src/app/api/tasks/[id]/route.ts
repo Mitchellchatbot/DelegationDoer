@@ -81,6 +81,14 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     if (body.assigneeId === null) update.assignee_id = null;
     else if (typeof body.assigneeId === "string") update.assignee_id = body.assigneeId;
 
+    // Department reassignment — used when a task was filed under the
+    // wrong department (e.g. picked Marketing when they meant Software).
+    // null clears it; a string moves the task into that department.
+    if (body.departmentId === null) update.department_id = null;
+    else if (typeof body.departmentId === "string" && body.departmentId.length > 0) {
+      update.department_id = body.departmentId;
+    }
+
     // If we have custom-field updates, fetch the existing JSONB so we can
     // merge with the partial set the client sent. (PostgREST's `update`
     // can't do a `||` jsonb concat in a single statement without a raw

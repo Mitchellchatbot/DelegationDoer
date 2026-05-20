@@ -17,6 +17,7 @@ import { MarkdownBody } from "@/components/MarkdownBody";
 import { requireCurrentUserId } from "@/lib/session";
 import { formatDate, relativeTime } from "@/lib/utils";
 import { BackPill } from "@/components/BackPill";
+import { DepartmentEditor } from "@/components/DepartmentEditor";
 import type { Task } from "@/lib/types";
 
 // Always read fresh — comments / status changes need to surface immediately.
@@ -252,7 +253,14 @@ export default async function TaskDetailPage({ params }: { params: { id: string 
               <div className="flex items-center gap-2"><PersonAvatar userId={assignee.id} name={assignee.name} imageUrl={assignee.avatarUrl} size={22} /> {assignee.name}</div>
             ) : <span className="text-muted">Unassigned</span>}
           </Field>
-          <Field label="Department">{dept?.name ?? "—"}</Field>
+          <Field label="Department">
+            <DepartmentEditor
+              taskId={task.id}
+              currentId={task.departmentId}
+              departments={departments.map((d) => ({ id: d.id, name: d.name }))}
+              canEdit={canEditDue}
+            />
+          </Field>
           {project && (
             <Field label="Project">
               <Link href={`/projects/${project.id}`} className="text-accent hover:underline">{project.name}</Link>

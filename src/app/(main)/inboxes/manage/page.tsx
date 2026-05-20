@@ -1,13 +1,14 @@
 import { redirect } from "next/navigation";
 import { ShieldAlert, ExternalLink, Layers, Plug } from "lucide-react";
 import { requireCurrentUserId } from "@/lib/session";
-import { getUserById } from "@/lib/server-data";
+import { getUserById, getAllUsersLight } from "@/lib/server-data";
 import { listAccounts, type MissiveAccount } from "@/lib/missive-client";
 import { canManageAssignments } from "@/lib/inbox-access";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { AutoIntakeToggleSection } from "@/components/AutoIntakeToggleSection";
 import { ConnectInboxDialog } from "@/components/ConnectInboxDialog";
 import { ManagedInboxList } from "@/components/ManagedInboxList";
+import { SpacesManager } from "@/components/SpacesManager";
 
 interface AutoIntakeRow {
   account_id: string;
@@ -41,6 +42,10 @@ export default async function ManageInboxesPage() {
   let inboxes: MissiveAccount[] = [];
   let autoIntakeSettings: AutoIntakeRow[] = [];
   let fetchError: string | null = null;
+  // Live people roster for the SpacesManager's member picker — pulled
+  // fresh from Supabase so newly invited teammates appear without a
+  // redeploy.
+  const livePeople = await getAllUsersLight().catch(() => []);
 
   try {
     inboxes = await listAccounts();
@@ -137,6 +142,19 @@ export default async function ManageInboxesPage() {
           <AutoIntakeToggleSection
             inboxes={inboxes}
             initialSettings={autoIntakeSettings}
+          />
+          <SpacesManager
+            inboxes={inboxes.map((a) => ({
+              id: a.id,
+              email: a.email,
+              label: a.display_name || a.email
+            }))}
+            people={livePeople.map((p) => ({
+              id: p.id,
+              name: p.name,
+              email: p.email,
+              avatarUrl: p.avatarUrl ?? null
+            }))}
           />
         </>
       )}

@@ -48,12 +48,21 @@ export default function EodPage() {
   const [summaries, setSummaries] = useState<DepartmentSummary[]>([]);
   const [sending, setSending] = useState<Record<string, boolean>>({});
 
-  const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  // Today's date in YYYY-MM-DD (used as the upper bound on the picker
+  // — viewing future dates makes no sense, and is when newly-submitted
+  // rows would otherwise land if the clock drifts).
+  const todayIso = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  // Currently-viewed date. Defaults to today; the picker can rewind
+  // to any past day. The page is read-only when not viewing today —
+  // we don't let people back-date EOD submissions.
+  const [viewDate, setViewDate] = useState<string>(todayIso);
+  const today = viewDate; // alias preserved so save/submit/review callsites stay readable
+  const isToday = viewDate === todayIso;
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch(`/api/eod?date=${today}`, { cache: "no-store" });
+      const res = await fetch(`/api/eod?date=${viewDate}`, { cache: "no-store" });
       if (!res.ok) throw new Error(`status ${res.status}`);
       const data = await res.json();
       setSummaries((data.summaries ?? []) as DepartmentSummary[]);
@@ -63,7 +72,7 @@ export default function EodPage() {
     } finally {
       setLoading(false);
     }
-  }, [today]);
+  }, [viewDate]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -216,6 +225,36 @@ export default function EodPage() {
         iconTone="fuchsia"
       />
 
+      {/* Date picker — defaults to today; rewind to view any past day's
+          submissions (read-only when not viewing today, since we don't
+          allow back-dating EODs). */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <label className="text-[11px] uppercase tracking-wide font-semibold text-ink/55">
+          Viewing
+        </label>
+        <input
+          type="date"
+          value={viewDate}
+          max={todayIso}
+          onChange={(e) => setViewDate(e.target.value || todayIso)}
+          className="text-xs rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 outline-none focus:border-accent/50 focus:ring-2 focus:ring-accent/20"
+        />
+        {!isToday && (
+          <>
+            <button
+              type="button"
+              onClick={() => setViewDate(todayIso)}
+              className="text-[11px] font-medium text-accent hover:underline"
+            >
+              Jump to today
+            </button>
+            <span className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200/60 rounded-full px-2 py-0.5">
+              Read-only — viewing a past date
+            </span>
+          </>
+        )}
+      </div>
+
       {isWebsiteTeam && (
         <>
           <ClientCheckInSection today={today} />
@@ -238,12 +277,13 @@ export default function EodPage() {
             key={d.departmentId}
             summary={d}
             meId={me.id}
-            canSend={canSend}
+            canSend={canSend && isToday}
             canReview={
               me.role === "leader" ||
               me.isAdmin === true ||
               (me.role === "department_head" && (me.departmentIds ?? []).includes(d.departmentId))
             }
+            readOnly={!isToday}
             sending={!!sending[d.departmentId]}
             submitting={submitting}
             onSaveField={(key, v) => saveField(d.departmentId, key, v)}
@@ -264,12 +304,16 @@ function hasAnyEod(p: PersonSummary): boolean {
 }
 
 function DepartmentPanel({
-  summary, meId, canSend, canReview, sending, submitting, onSaveField, onSubmit, onToggleReview, onSend
+  summary, meId, canSend, canReview, readOnly, sending, submitting, onSaveField, onSubmit, onToggleReview, onSend
 }: {
   summary: DepartmentSummary;
   meId: string;
   canSend: boolean;
   canReview: boolean;
+  // True when the page is showing a date other than today — we hide
+  // edit affordances + the Submit button so historical rows can't be
+  // back-dated or mutated.
+  readOnly: boolean;
   sending: boolean;
   submitting: boolean;
   onSaveField: (key: EodFieldKey, value: string) => void;
@@ -340,6 +384,7 @@ function DepartmentPanel({
               person={p}
               isMe={p.userId === meId}
               canReview={canReview}
+              readOnly={readOnly}
               submitting={submitting}
               onSaveField={onSaveField}
               onSubmit={onSubmit}
@@ -387,11 +432,12 @@ const EOD_FIELDS: ReadonlyArray<{
 ];
 
 function PersonRow({
-  person, isMe, canReview, submitting, onSaveField, onSubmit, onToggleReview
+  person, isMe, canReview, readOnly, submitting, onSaveField, onSubmit, onToggleReview
 }: {
   person: PersonSummary;
   isMe: boolean;
   canReview: boolean;
+  readOnly: boolean;
   submitting: boolean;
   onSaveField: (key: EodFieldKey, value: string) => void;
   onSubmit: () => void;
@@ -443,7 +489,7 @@ function PersonRow({
             </span>
           )}
           <div className="ml-auto flex items-center gap-2">
-            {isMe && (
+            {isMe && !readOnly && (
               <button
                 type="button"
                 onClick={onSubmit}
@@ -505,16 +551,16 @@ function PersonRow({
           </ul>
         )}
 
-        {/* Structured EOD fields. Editor renders for `isMe`; everyone
-            else sees a read-only stack of whatever the user already
-            filled out (or a single "Nothing filed yet" placeholder). */}
+        {/* Structured EOD fields. Editor renders for `isMe` on today;
+            everyone else (and the same user when looking at a past
+            date) sees a read-only stack of whatever they filed. */}
         <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2">
           {EOD_FIELDS.map((f) => (
             <EodFieldCell
               key={f.key}
               field={f}
               value={person[f.key]}
-              isMe={isMe}
+              isMe={isMe && !readOnly}
               onSave={(v) => onSaveField(f.key, v)}
             />
           ))}

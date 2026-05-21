@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 import {
   ListTodo, Users,
   Sparkles, Settings, AlertTriangle, Crown, Mail, Briefcase,
-  FolderKanban, CalendarDays, BookOpen, LayoutDashboard, ClipboardCheck
+  FolderKanban, CalendarDays, BookOpen, LayoutDashboard, ClipboardCheck, Send
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { ReportIncidentDialog } from "./ReportIncidentDialog";
@@ -90,11 +90,20 @@ export function Sidebar({ user }: { user: User }) {
       return Number.isFinite(n as number) ? (n as number) : null;
     } catch { return null; }
   }
-  const [clientsAtRisk, setClientsAtRisk] = useState<number | null>(() => readCached("badge:clientsAtRisk"));
-  const [peopleEodPending, setPeopleEodPending] = useState<number | null>(() => readCached("badge:peopleEod"));
-  const [approvalsPending, setApprovalsPending] = useState<number | null>(() => readCached("badge:approvals"));
+  const [clientsAtRisk, setClientsAtRisk] = useState<number | null>(null);
+  const [peopleEodPending, setPeopleEodPending] = useState<number | null>(null);
+  const [approvalsPending, setApprovalsPending] = useState<number | null>(null);
   const [canApprove, setCanApprove] = useState(false);
-  const [inboxesUnread, setInboxesUnread] = useState<number | null>(() => readCached("badge:inboxesUnread"));
+  const [inboxesUnread, setInboxesUnread] = useState<number | null>(null);
+  // Pull the cached counts into state after mount — initializing them
+  // synchronously from localStorage caused an SSR/CSR hydration mismatch
+  // (server rendered no badge, client rendered the cached count).
+  useEffect(() => {
+    setClientsAtRisk((v) => v ?? readCached("badge:clientsAtRisk"));
+    setPeopleEodPending((v) => v ?? readCached("badge:peopleEod"));
+    setApprovalsPending((v) => v ?? readCached("badge:approvals"));
+    setInboxesUnread((v) => v ?? readCached("badge:inboxesUnread"));
+  }, []);
   useEffect(() => {
     let cancelled = false;
     async function fetchCounts() {
@@ -219,15 +228,28 @@ export function Sidebar({ user }: { user: User }) {
     icon: ClipboardCheck,
     tone: "emerald"
   };
+  const OUTBOUND_EMAILS_ITEM: NavItem = {
+    href: "/emails",
+    label: "Outbound emails",
+    icon: Send,
+    tone: "sky"
+  };
   let restWithExtras = canSeeProjects
     ? [...rest.slice(0, 3), PROJECTS_ITEM, ...rest.slice(3)]
     : rest;
-  // Tuck Approvals right after Inboxes for approvers — close to where
-  // they'd be triaging client comms anyway.
+  // Tuck Approvals + Outbound emails right after Inboxes for approvers
+  // — close to where they'd be triaging client comms anyway. Outbound
+  // sits one row below Approvals so the two surfaces are visually
+  // grouped.
   if (canApprove) {
     const inboxIdx = restWithExtras.findIndex((i) => i.href === "/inboxes");
     const insertAt = inboxIdx >= 0 ? inboxIdx + 1 : restWithExtras.length;
-    restWithExtras = [...restWithExtras.slice(0, insertAt), APPROVALS_ITEM, ...restWithExtras.slice(insertAt)];
+    restWithExtras = [
+      ...restWithExtras.slice(0, insertAt),
+      APPROVALS_ITEM,
+      OUTBOUND_EMAILS_ITEM,
+      ...restWithExtras.slice(insertAt)
+    ];
   }
   const restWithProjects = restWithExtras;
   const NAV: NavItem[] = isLeader(user)

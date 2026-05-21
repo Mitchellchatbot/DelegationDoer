@@ -146,13 +146,10 @@ export function ClientPriorityList({ initial, openCounts, canEdit }: Props) {
                                 · {c.websites.length} sites
                               </span>
                             )}
-                            {/* Health pill: override label wins over the
-                                cron-computed one. Hidden entirely if
-                                neither is set so brand-new clients
-                                don't show a blank/grey pill. */}
+                            {/* Health is manual-only — show only what a
+                                leader has explicitly set, hidden otherwise. */}
                             <ClientHealthPill
-                              label={c.healthOverrideLabel ?? c.healthLabel}
-                              overridden={!!c.healthOverrideLabel}
+                              label={c.healthOverrideLabel}
                             />
                           </div>
                           <div className="text-[11px] text-ink/60 truncate inline-flex items-center gap-2 mt-0.5">

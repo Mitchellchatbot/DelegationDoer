@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Sparkles, Loader2, ArrowRight, Send, RefreshCw } from "lucide-react";
+import { Sparkles, Loader2, ArrowRight, Send, RefreshCw, Calendar } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
@@ -10,12 +10,26 @@ import { cn } from "@/lib/utils";
 // email (subject + body), worker reviews/edits, hits Submit to send it
 // to the approval queue (kind='content_plan'). Approvers per spec:
 // Sam, Mitchell, Tabrez, Farez, Bismah, Mujtaba (any one approves).
+//
+// Two modes:
+//   - No props: full self-contained composer (used on /updates/seo).
+//   - { lockedClient } prop set: client is pre-picked and the dropdown
+//     becomes a static label. Used as a per-client section on
+//     /clients/[id].
 
 interface ClientOption { id: string; name: string; contactEmails: string[] }
 
-export function ContentPlanComposer() {
-  const [clients, setClients] = useState<ClientOption[]>([]);
-  const [clientId, setClientId] = useState("");
+interface LockedClient {
+  id: string;
+  name: string;
+  contactEmails: string[];
+}
+
+export function ContentPlanComposer({ lockedClient }: { lockedClient?: LockedClient } = {}) {
+  const [clients, setClients] = useState<ClientOption[]>(
+    lockedClient ? [{ id: lockedClient.id, name: lockedClient.name, contactEmails: lockedClient.contactEmails }] : []
+  );
+  const [clientId, setClientId] = useState(lockedClient?.id ?? "");
   const [topics, setTopics] = useState("");
   const [targetAudience, setTargetAudience] = useState("");
   const [angle, setAngle] = useState("");
@@ -24,9 +38,12 @@ export function ContentPlanComposer() {
   const [draftSubject, setDraftSubject] = useState("");
   const [draftBody, setDraftBody] = useState("");
   const [draftTo, setDraftTo] = useState("");
+  // Default send date: next Monday at 9am — typical monthly-plan timing.
+  const [scheduledFor, setScheduledFor] = useState(defaultScheduledFor);
   const [step, setStep] = useState<"compose" | "preview">("compose");
 
   useEffect(() => {
+    if (lockedClient) return; // no need to fetch the full roster
     let cancelled = false;
     fetch("/api/clients", { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : null))
@@ -39,7 +56,7 @@ export function ContentPlanComposer() {
       })
       .catch(() => { /* silent */ });
     return () => { cancelled = true; };
-  }, []);
+  }, [lockedClient]);
 
   const selectedClient = clients.find((c) => c.id === clientId);
 
@@ -91,7 +108,8 @@ export function ContentPlanComposer() {
           to: toArr,
           subject: draftSubject.trim(),
           bodyText: draftBody.trim(),
-          kind: "content_plan"
+          kind: "content_plan",
+          scheduledFor: scheduledFor ? new Date(scheduledFor).toISOString() : null
         })
       });
       const data = await res.json();
@@ -110,7 +128,9 @@ export function ContentPlanComposer() {
       setDraftSubject("");
       setDraftBody("");
       setDraftTo("");
-      setClientId("");
+      setScheduledFor(defaultScheduledFor());
+      // Keep clientId pinned when the composer is locked to a client.
+      if (!lockedClient) setClientId("");
     } catch (err) {
       toast.error(`Submit failed: ${err instanceof Error ? err.message : "unknown"}`);
     } finally {
@@ -135,17 +155,23 @@ export function ContentPlanComposer() {
       {step === "compose" ? (
         <div className="p-4 space-y-3">
           <Field label="Client">
-            <select
-              value={clientId}
-              onChange={(e) => setClientId(e.target.value)}
-              disabled={generating}
-              className="flex-1 text-[13px] bg-transparent border-none outline-none focus:ring-0"
-            >
-              <option value="">Pick a client…</option>
-              {clients.map((c) => (
-                <option key={c.id} value={c.id}>{c.name}</option>
-              ))}
-            </select>
+            {lockedClient ? (
+              <span className="flex-1 text-[13px] font-medium text-ink truncate">
+                {lockedClient.name}
+              </span>
+            ) : (
+              <select
+                value={clientId}
+                onChange={(e) => setClientId(e.target.value)}
+                disabled={generating}
+                className="flex-1 text-[13px] bg-transparent border-none outline-none focus:ring-0"
+              >
+                <option value="">Pick a client…</option>
+                {clients.map((c) => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
+            )}
           </Field>
 
           <Field label="Audience">
@@ -229,6 +255,19 @@ export function ContentPlanComposer() {
             />
           </Field>
 
+          <Field label="Send on">
+            <Calendar className="w-3 h-3 text-ink/45" />
+            <input
+              type="datetime-local"
+              value={scheduledFor}
+              onChange={(e) => setScheduledFor(e.target.value)}
+              className="flex-1 text-[13px] bg-transparent border-none outline-none focus:ring-0"
+            />
+            <span className="text-[10px] text-ink/45 shrink-0">
+              {scheduledFor ? "queued until this date" : "sends immediately on approval"}
+            </span>
+          </Field>
+
           <textarea
             value={draftBody}
             onChange={(e) => setDraftBody(e.target.value)}
@@ -282,4 +321,18 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       {children}
     </div>
   );
+}
+
+// Next Monday 9am, formatted for <input type="datetime-local">. Most
+// monthly content plans go out on Monday mornings — defaulting to it
+// saves a click but leaves the user free to override.
+function defaultScheduledFor(): string {
+  const d = new Date();
+  d.setSeconds(0, 0);
+  d.setHours(9, 0, 0, 0);
+  const dow = d.getDay();
+  const daysUntilMon = ((1 - dow) + 7) % 7 || 7;
+  d.setDate(d.getDate() + daysUntilMon);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }

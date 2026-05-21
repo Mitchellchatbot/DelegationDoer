@@ -113,7 +113,10 @@ export async function getApproversForDraft(draft: DraftRef): Promise<ApproverUse
     slack_email: string | null;
     slack_user_id: string | null;
   }>) {
-    if (u.name && isSuperApproverName(u.name)) {
+    if (!u.name) continue;
+    const isSuper = isSuperApproverName(u.name);
+    const isContentPlan = draft.kind === "content_plan" && isContentPlanApproverName(u.name);
+    if (isSuper || isContentPlan) {
       merged.set(u.id, {
         id: u.id,
         name: u.name,
@@ -132,10 +135,22 @@ export async function getApproversForDraft(draft: DraftRef): Promise<ApproverUse
 // lowercased name so re-orgs don't require a code change.
 const SUPER_APPROVER_NAME_PATTERNS = ["mitchell", "mujtaba", "sam"];
 
+// Extra approvers that activate only when the draft is a content_plan.
+// Spec: Sam, Mitchell, Tabrez, Farez, Bishmah, Mujtaba can approve. The
+// first three already match SUPER_APPROVER_NAME_PATTERNS — the rest are
+// additive when the draft kind is content_plan.
+const CONTENT_PLAN_NAME_PATTERNS = ["tabrez", "farez", "bishmah", "bismah"];
+
 function isSuperApproverName(name: string | null | undefined): boolean {
   if (!name) return false;
   const lower = name.toLowerCase();
   return SUPER_APPROVER_NAME_PATTERNS.some((p) => lower.includes(p));
+}
+
+function isContentPlanApproverName(name: string | null | undefined): boolean {
+  if (!name) return false;
+  const lower = name.toLowerCase();
+  return CONTENT_PLAN_NAME_PATTERNS.some((p) => lower.includes(p));
 }
 
 // Sync permission check used by approve/reject endpoints. Re-uses
@@ -147,6 +162,7 @@ export async function canApproveDraft(
 ): Promise<boolean> {
   if (caller.role === "leader") return true;
   if (isSuperApproverName(caller.name)) return true;
+  if (draft.kind === "content_plan" && isContentPlanApproverName(caller.name)) return true;
   if (caller.role !== "department_head") return false;
   const callerDepts = new Set(caller.departmentIds ?? []);
   if (callerDepts.size === 0) return false;
@@ -169,6 +185,9 @@ export async function canApproveDraft(
 export function canApproveAnyDraft(caller: { name?: string | null; role: string; departmentIds?: string[] }): boolean {
   if (caller.role === "leader") return true;
   if (isSuperApproverName(caller.name)) return true;
+  // Content-plan-only approvers (Tabrez/Farez/Bishmah) still need the
+  // sidebar entry, even though they can't approve other kinds.
+  if (isContentPlanApproverName(caller.name)) return true;
   if (caller.role === "department_head" && (caller.departmentIds ?? []).length > 0) return true;
   return false;
 }

@@ -9,6 +9,11 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { getClient, getResourcesForClient, type ClientResource } from "@/lib/clients-data";
 import { BackPill } from "@/components/BackPill";
 import { ClientHealthCard } from "@/components/ClientHealthCard";
+import { DeleteClientButton } from "@/components/DeleteClientButton";
+import { ContentPlanComposer } from "@/components/ContentPlanComposer";
+import { ClientEmailLog } from "@/components/ClientEmailLog";
+import { listEmailDrafts } from "@/lib/email-drafts-data";
+import { isLeader } from "@/lib/auth";
 import { AddResourceForm, DeleteResourceButton } from "@/components/AddResourceForm";
 import { ClientKnowledgeBase, type CompletedTaskRow } from "@/components/ClientKnowledgeBase";
 import { requireCurrentUserId } from "@/lib/session";
@@ -164,6 +169,26 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
   const documents   = resources.filter((r) => r.kind === "document");
   const suggestions = resources.filter((r) => r.kind === "suggestion");
 
+  // Outbound email log for this client — drafts + sent + everything in
+  // between. Wrapped in try/catch so the page still renders if the
+  // scheduled_for migration hasn't been applied yet.
+  let clientEmailDrafts: Awaited<ReturnType<typeof listEmailDrafts>> = [];
+  try {
+    clientEmailDrafts = await listEmailDrafts({ clientId: client.id, limit: 30 });
+  } catch {
+    clientEmailDrafts = [];
+  }
+
+  // Who can compose a Content Plan? SEO dept members + leaders/admins.
+  // Heads of any dept can also use it — they're the ones most likely
+  // to author plans on behalf of a worker.
+  const canComposeContentPlan = !!me && (
+    isLeader(me) ||
+    !!me.isAdmin ||
+    (me.departmentIds ?? []).includes("dep_seo") ||
+    me.role === "department_head"
+  );
+
   return (
     <div className="space-y-5 max-w-5xl mx-auto">
       <BackPill href="/clients" label="Clients" />
@@ -218,6 +243,11 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
               )}
             </div>
           </div>
+          {me && (me.role === "leader" || me.isAdmin) && (
+            <div className="shrink-0">
+              <DeleteClientButton clientId={client.id} clientName={client.name} />
+            </div>
+          )}
         </div>
         <div
           aria-hidden
@@ -314,6 +344,27 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
           </div>
         </section>
       )}
+
+      {canComposeContentPlan && (
+        <ContentPlanComposer
+          lockedClient={{
+            id: client.id,
+            name: client.name,
+            contactEmails: client.contactEmails
+          }}
+        />
+      )}
+
+      <section className="rounded-2xl border border-white/60 shadow-soft bg-gradient-to-br from-slate-50/60 to-white p-4 space-y-3">
+        <header className="flex items-center gap-2">
+          <Send className="w-4 h-4 text-blue-600" />
+          <div className="text-sm font-semibold">Client emails</div>
+          <span className="text-[10px] text-ink/50 ml-1">
+            Outbound drafts + sent — content plans, EOD updates, custom.
+          </span>
+        </header>
+        <ClientEmailLog rows={clientEmailDrafts} />
+      </section>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <Section

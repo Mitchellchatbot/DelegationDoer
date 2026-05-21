@@ -23,10 +23,6 @@
     {
       "path": "/api/cron/scheduled-emails",
       "schedule": "* * * * *"
-    },
-    {
-      "path": "/api/cron/client-health",
-      "schedule": "0 6 * * *"
     }
   ]
 }

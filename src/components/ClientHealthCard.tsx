@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Activity, Loader2, AlertTriangle } from "lucide-react";
+import { Activity, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { HEALTH_META, type HealthLabel } from "@/lib/client-health";
@@ -10,6 +10,9 @@ import { ClientHealthPill } from "./ClientHealthPill";
 
 interface Props {
   clientId: string;
+  // Kept in the prop type so callers don't have to change shape, but
+  // the auto-computed reading is no longer surfaced — health is purely
+  // manual now.
   healthLabel: HealthLabel | null;
   healthScore: number | null;
   healthSampleSize: number | null;
@@ -21,19 +24,14 @@ interface Props {
   canEdit: boolean;
 }
 
-// Account-health surface on /clients/[id]. Renders the effective
-// label (override > computed) as a hero pill, exposes the cron's
-// summary + sample count so a leader can sanity-check the read, and
-// lets leaders override or clear with a short note explaining why
-// (which gets stored alongside the override).
+// Account-health surface on /clients/[id]. The auto/cron scoring was
+// removed — health is now whatever a leader manually sets (or nothing).
 export function ClientHealthCard(props: Props) {
   const router = useRouter();
-  const computed = props.healthLabel;
-  const override = props.healthOverrideLabel;
-  const effective = override ?? computed;
+  const current = props.healthOverrideLabel;
 
   const [busy, setBusy] = useState(false);
-  const [draftLabel, setDraftLabel] = useState<HealthLabel | "">(override ?? "");
+  const [draftLabel, setDraftLabel] = useState<HealthLabel | "">(current ?? "");
   const [draftNote, setDraftNote] = useState<string>(props.healthOverrideNote ?? "");
 
   async function save() {
@@ -50,7 +48,7 @@ export function ClientHealthCard(props: Props) {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.error ?? `failed (${res.status})`);
-      toast.success(draftLabel ? "Override saved." : "Override cleared — computed value now shows.");
+      toast.success(draftLabel ? "Health updated." : "Health cleared.");
       router.refresh();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "save failed");
@@ -64,44 +62,22 @@ export function ClientHealthCard(props: Props) {
       <header className="flex items-center gap-2">
         <Activity className="w-4 h-4 text-accent" />
         <div className="text-sm font-semibold">Client health</div>
-        {override && (
-          <span className="text-[10px] text-amber-700 bg-amber-100 border border-amber-200/60 px-1.5 py-0.5 rounded-full inline-flex items-center gap-1">
-            <AlertTriangle className="w-3 h-3" /> Manually overridden
-          </span>
-        )}
       </header>
 
       <div className="flex items-start gap-3 flex-wrap">
-        {effective ? (
-          <ClientHealthPill label={effective} overridden={!!override} size="md" />
+        {current ? (
+          <ClientHealthPill label={current} size="md" />
         ) : (
           <span className="text-[12px] text-muted italic">
-            No reading yet — needs at least one inbound email from this client for the daily cron to score.
-          </span>
-        )}
-        {computed && override && computed !== override && (
-          <span className="text-[11px] text-ink/55 inline-flex items-center gap-1">
-            Computed reading was <ClientHealthPill label={computed} size="sm" />
-          </span>
-        )}
-        {props.healthSampleSize != null && computed && (
-          <span className="text-[11px] text-muted">
-            Based on {props.healthSampleSize} recent inbound email{props.healthSampleSize === 1 ? "" : "s"}
-            {props.healthComputedAt && <> · {timeAgo(props.healthComputedAt)}</>}
+            No reading set — use the controls below to mark this client's health.
           </span>
         )}
       </div>
 
-      {props.healthSummary && (
-        <div className="text-[12px] text-ink/70 leading-snug rounded-lg bg-white/60 border border-white p-2.5">
-          {props.healthSummary}
-        </div>
-      )}
-
-      {override && props.healthOverrideNote && (
-        <div className="text-[12px] text-amber-900/85 leading-snug rounded-lg bg-amber-50/70 border border-amber-200/60 p-2.5">
-          <div className="font-semibold text-[11px] uppercase tracking-wide text-amber-700 mb-0.5">
-            Why this is overridden
+      {current && props.healthOverrideNote && (
+        <div className="text-[12px] text-ink/75 leading-snug rounded-lg bg-white/70 border border-slate-200/60 p-2.5">
+          <div className="font-semibold text-[11px] uppercase tracking-wide text-ink/55 mb-0.5">
+            Note
           </div>
           {props.healthOverrideNote}
         </div>
@@ -110,7 +86,7 @@ export function ClientHealthCard(props: Props) {
       {props.canEdit && (
         <div className="border-t border-slate-100 pt-3 space-y-2">
           <div className="text-[11px] uppercase tracking-wide text-ink/55 font-semibold">
-            Override
+            Set health
           </div>
           <div className="flex items-center gap-1.5 flex-wrap">
             {(["thriving", "steady", "shaky", "at_risk"] as const).map((opt) => (
@@ -142,7 +118,7 @@ export function ClientHealthCard(props: Props) {
           <textarea
             value={draftNote}
             onChange={(e) => setDraftNote(e.target.value)}
-            placeholder="Optional note — what changed offline? Phone call, in-person meeting, gut feeling…"
+            placeholder="Optional note — what's going on with this account?"
             disabled={busy || !draftLabel}
             maxLength={500}
             rows={2}
@@ -152,31 +128,21 @@ export function ClientHealthCard(props: Props) {
             <button
               type="button"
               onClick={save}
-              disabled={busy || (!draftLabel && !override)}
+              disabled={busy || (!draftLabel && !current)}
               className={cn(
                 "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-semibold text-white shadow-sm transition-all hover:-translate-y-0.5 active:scale-95",
-                (busy || (!draftLabel && !override)) && "opacity-60 cursor-not-allowed hover:translate-y-0"
+                (busy || (!draftLabel && !current)) && "opacity-60 cursor-not-allowed hover:translate-y-0"
               )}
               style={{ background: "linear-gradient(135deg, #2563EB 0%, #1e63ff 100%)" }}
             >
               {busy && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
               {draftLabel
-                ? (override === draftLabel && draftNote === (props.healthOverrideNote ?? "") ? "Saved" : "Save override")
-                : "Clear override"}
+                ? (current === draftLabel && draftNote === (props.healthOverrideNote ?? "") ? "Saved" : "Save")
+                : "Clear"}
             </button>
           </div>
         </div>
       )}
     </section>
   );
-}
-
-function timeAgo(iso: string): string {
-  const ms = Date.now() - new Date(iso).getTime();
-  const m = Math.round(ms / 60000);
-  if (m < 60) return `${m}m ago`;
-  const h = Math.round(m / 60);
-  if (h < 24) return `${h}h ago`;
-  const d = Math.round(h / 24);
-  return `${d}d ago`;
 }

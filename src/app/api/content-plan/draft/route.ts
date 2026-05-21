@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUserId } from "@/lib/session";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
+import { getAnthropic, MODELS } from "@/lib/anthropic-client";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -26,41 +27,57 @@ export const maxDuration = 60;
 //   call POST /api/email-drafts so we don't duplicate that fan-out.
 
 const BELLA_TEMPLATE_GUIDANCE = `
-You are drafting a monthly content-plan email for an SEO agency client.
-Tone: direct, confident, no fluff. Explain the WHY upfront. Use bullets
-for clusters. End with a soft confirmation ask.
+You draft monthly content-plan emails for an SEO agency. The body MUST
+follow the template below LITERALLY, filling in the bracketed slots
+from the inputs. Do not paraphrase the boilerplate sentences.
 
-Structure (match exactly):
-1. Greeting — "Hi Team,"
-2. Intro paragraph: "I wanted to share the content plan for this month
-   and briefly explain the strategy behind it."
-3. Strategy paragraph: identify the target audience, the angle, why it
-   matters (search intent, untapped segment, conversion alignment),
-   and how it supports the client's core conversion goals.
-4. "We've structured the content across [X] clusters, covering [Y]
-   blogs in total:"
-5. For EACH cluster, a bullet with:
-   • Cluster name (bold-style with leading "*")
-   • A 2-3 sentence description of what's covered, who it targets, and
-     what searcher questions it answers
-6. Closing paragraph: "All content is internally linked back to your
-   core service pages and homepage to strengthen rankings on your main
-   keywords. Every piece is written specifically for [target audience],
-   with search intent mapped to where they are in the decision-making
-   journey, from initial research through to active job search."
-7. Soft ask: "Let me know if this direction looks good and we'll move
-   forward."
-8. Sign-off: "Best,\\n[SEO team member name]"
+ABSOLUTE RULES:
+- NEVER use em dashes ("—") or en dashes ("–") anywhere in the body
+  or the subject. Use commas, periods, parentheses, or a colon instead.
+- Tone: direct, confident, no fluff. No marketing-speak. No emojis.
+  No exclamation points.
+- Plain text only. No markdown headers, no bold/italic, no asterisks
+  around cluster names. Use "•" (U+2022) for cluster bullets.
+- Replace "active job search" in the closing paragraph with whatever
+  natural end-state of the decision-making journey fits the audience
+  (e.g. "active treatment search", "active vendor selection",
+  "an admissions inquiry"). Keep the rest of that sentence verbatim.
 
-Return ONLY the email body as plain text. No markdown, no preamble,
-no "Here is your email" wrapper. Use blank lines between paragraphs
-and a leading "• " for cluster bullets.
+EXACT TEMPLATE — fill in [bracketed] slots only, leave the rest as-is:
+
+Hi Team,
+
+I wanted to share the content plan for this month and briefly explain the strategy behind it.
+
+This month, we're focusing on [target audience] as a [new target | continued focus], building a dedicated cluster of content around [specific angle]. This is [why it matters in one clause: search intent, untapped segment, or conversion alignment], and the content directly supports your core conversion goals.
+
+We've structured the content across [X] clusters, covering [Y] blogs in total:
+
+• [Cluster 1 name]
+[2-3 sentence description: what's covered, who it targets, what searcher questions it answers.]
+
+• [Cluster 2 name]
+[Same format.]
+
+• [Cluster 3 name]
+[Same format.]
+
+[Continue for every cluster.]
+
+All content is internally linked back to your core service pages and homepage to strengthen rankings on your main keywords. Every piece is written specifically for [target audience], with search intent mapped to where they are in the decision-making journey, from initial research through to [end-state of the journey for this audience].
+
+Let me know if this direction looks good and we'll move forward.
+
+Best,
+[SEO team member name]
+
+CLUSTER RULES:
+- 3 to 5 clusters total. Group the input topics thematically.
+- Cluster names: 3 to 6 words, descriptive, no jargon.
+- Inside each cluster description: state who it targets and what
+  searcher questions it answers. Do not bullet the individual blogs.
+- The "[Y] blogs in total" count must equal the count of input topics.
 `.trim();
-
-interface OpenAIChatResp {
-  choices: Array<{ message: { content: string } }>;
-  error?: { message?: string };
-}
 
 async function draftEmailBody(args: {
   clientName: string;
@@ -69,66 +86,62 @@ async function draftEmailBody(args: {
   angle: string | null;
   authorName: string;
 }): Promise<{ subject: string; body: string }> {
-  const key = process.env.OPENAI_API_KEY;
-  if (!key) throw new Error("OPENAI_API_KEY not configured");
-
-  // Compose a tight system + user prompt. We pin the model to a JSON
-  // response so subject + body come back separately — easier to slot
-  // into the email_drafts row without parsing prose.
-  const messages = [
-    { role: "system", content: BELLA_TEMPLATE_GUIDANCE },
-    {
-      role: "user",
-      content: [
-        `Client: ${args.clientName}`,
-        args.targetAudience ? `Target audience: ${args.targetAudience}` : "",
-        args.angle ? `Angle / positioning: ${args.angle}` : "",
-        `SEO team member name (sign-off): ${args.authorName}`,
-        "",
-        "Topics / cluster strategy (raw bullets — flesh out into clusters):",
-        args.topics
-      ].filter(Boolean).join("\n")
-    },
-    {
-      role: "user",
-      content: `Respond as JSON with exactly two keys:
+  // Anthropic key comes from Supabase Vault via getAnthropicKey, with
+  // ANTHROPIC_API_KEY env as an escape hatch — see src/lib/anthropic-key.ts.
+  const userPrompt = [
+    `Client: ${args.clientName}`,
+    args.targetAudience ? `Target audience: ${args.targetAudience}` : "",
+    args.angle ? `Angle / positioning: ${args.angle}` : "",
+    `SEO team member name (sign-off): ${args.authorName}`,
+    "",
+    "Topics / cluster strategy (raw bullets — flesh out into clusters):",
+    args.topics,
+    "",
+    `Respond as STRICT JSON — no preamble, no code fences — with exactly two keys:
 {
   "subject": "Subject line for this email (≤ 80 chars, no quotes, mention the client by name only if natural)",
   "body": "Full email body matching the structure above. Plain text."
 }`
-    }
-  ];
+  ].filter(Boolean).join("\n");
 
-  const res = await fetch("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${key}`
-    },
-    body: JSON.stringify({
-      model: "gpt-4o-mini",
-      response_format: { type: "json_object" },
-      temperature: 0.55,
-      messages
-    })
+  const client = await getAnthropic();
+  const result = await client.messages.create({
+    model: MODELS.chat,
+    max_tokens: 1800,
+    temperature: 0.55,
+    system: BELLA_TEMPLATE_GUIDANCE,
+    messages: [{ role: "user", content: userPrompt }]
   });
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`openai ${res.status}: ${text.slice(0, 300)}`);
-  }
-  const data = (await res.json()) as OpenAIChatResp;
-  if (data.error) throw new Error(data.error.message ?? "openai error");
-  const content = data.choices?.[0]?.message?.content ?? "";
-  let parsed: { subject?: string; body?: string };
+
+  const block = result.content.find((b) => b.type === "text");
+  const raw = block && block.type === "text" ? block.text.trim() : "";
+
+  let parsed: { subject?: string; body?: string } = {};
   try {
-    parsed = JSON.parse(content);
+    parsed = JSON.parse(raw);
   } catch {
-    throw new Error("model returned non-JSON response");
+    // Some completions wrap the JSON in prose — extract the first
+    // {...} block as a fallback before giving up.
+    const match = raw.match(/\{[\s\S]*\}/);
+    if (match) {
+      try { parsed = JSON.parse(match[0]); } catch { /* swallow */ }
+    }
   }
   if (!parsed.subject || !parsed.body) {
     throw new Error("model JSON missing subject or body");
   }
-  return { subject: parsed.subject.slice(0, 300), body: parsed.body };
+  // Belt-and-suspenders dash scrub. The system prompt forbids them
+  // but the model occasionally slips, and the user explicitly asked
+  // for none. " — " → ", " (most natural); a bare "—" or "–" → ",".
+  const scrub = (s: string) => s
+    .replace(/\s+—\s+/g, ", ")
+    .replace(/\s+–\s+/g, ", ")
+    .replace(/—/g, ",")
+    .replace(/–/g, ",");
+  return {
+    subject: scrub(parsed.subject).slice(0, 300),
+    body: scrub(parsed.body)
+  };
 }
 
 export async function POST(req: NextRequest) {

@@ -52,6 +52,7 @@ interface DraftRow {
   missive_message_id: string | null;
   sent_at: string | null;
   send_error: string | null;
+  scheduled_for: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -94,20 +95,43 @@ export async function POST(req: NextRequest) {
     const clientId = typeof body.clientId === "string" && body.clientId ? body.clientId : null;
     const bodyHtml = typeof body.bodyHtml === "string" ? body.bodyHtml : null;
 
-    const { error: insertErr } = await supabase.from("email_drafts").insert({
-      id,
-      author_id: userId,
-      account_id: accountId,
-      client_id: clientId,
-      client_name: clientName.slice(0, 200),
-      to_emails: to,
-      cc_emails: cc,
-      bcc_emails: bcc,
-      subject: subject.slice(0, 300),
-      body_text: bodyText.slice(0, 20_000),
-      body_html: bodyHtml,
-      kind
-    });
+    // Optional future-dated send. When set, the approve route stops at
+    // status='approved' and the scheduled-emails cron picks up the
+    // outbound dispatch once scheduled_for is past.
+    let scheduledFor: string | null = null;
+    if (typeof body.scheduledFor === "string" && body.scheduledFor.trim()) {
+      const d = new Date(body.scheduledFor);
+      if (isNaN(d.getTime())) {
+        return NextResponse.json({ error: "scheduledFor must be a valid ISO timestamp" }, { status: 400 });
+      }
+      scheduledFor = d.toISOString();
+    }
+
+    const buildInsert = (includeScheduledFor: boolean) => {
+      const row: Record<string, unknown> = {
+        id,
+        author_id: userId,
+        account_id: accountId,
+        client_id: clientId,
+        client_name: clientName.slice(0, 200),
+        to_emails: to,
+        cc_emails: cc,
+        bcc_emails: bcc,
+        subject: subject.slice(0, 300),
+        body_text: bodyText.slice(0, 20_000),
+        body_html: bodyHtml,
+        kind
+      };
+      if (includeScheduledFor) row.scheduled_for = scheduledFor;
+      return row;
+    };
+    let { error: insertErr } = await supabase.from("email_drafts").insert(buildInsert(true));
+    // If the migration adding scheduled_for hasn't been applied yet,
+    // retry without it so drafts can still be created. Send-on-date
+    // will just be ignored until the migration runs.
+    if (insertErr && /scheduled_for/.test(insertErr.message)) {
+      ({ error: insertErr } = await supabase.from("email_drafts").insert(buildInsert(false)));
+    }
     if (insertErr) {
       return NextResponse.json({ error: insertErr.message }, { status: 500 });
     }
@@ -189,16 +213,18 @@ export async function GET(req: NextRequest) {
     const statusParam = sp.get("status");
     const kindParam = sp.get("kind");
     const mineOnly = sp.get("mine") === "1";
+    const clientIdParam = sp.get("clientId");
     const limit = Math.min(100, Math.max(1, parseInt(sp.get("limit") ?? "50", 10) || 50));
 
     let q = supabase
       .from("email_drafts")
-      .select("id, author_id, account_id, client_id, client_name, to_emails, cc_emails, bcc_emails, subject, body_text, body_html, kind, status, approver_id, approved_at, rejected_at, rejection_note, missive_thread_id, missive_message_id, sent_at, send_error, created_at, updated_at")
+      .select("id, author_id, account_id, client_id, client_name, to_emails, cc_emails, bcc_emails, subject, body_text, body_html, kind, status, approver_id, approved_at, rejected_at, rejection_note, missive_thread_id, missive_message_id, sent_at, send_error, scheduled_for, created_at, updated_at")
       .order("created_at", { ascending: false })
       .limit(limit);
 
     if (statusParam) q = q.eq("status", statusParam);
     if (kindParam) q = q.eq("kind", kindParam);
+    if (clientIdParam) q = q.eq("client_id", clientIdParam);
     if (mineOnly) {
       q = q.eq("author_id", userId);
     } else {
@@ -218,13 +244,20 @@ export async function GET(req: NextRequest) {
       // Super-approvers (Mujtaba, Sam) see every draft, same as Mitch.
       const lower = (me.name ?? "").toLowerCase();
       const isSuperApprover = ["mitchell", "mujtaba", "sam"].some((p) => lower.includes(p));
+      // Content-plan-only approvers (Tabrez, Farez, Bishmah) see every
+      // pending/approved content_plan draft — kind-scoped, not author-scoped.
+      const isContentPlanApprover = ["tabrez", "farez", "bishmah", "bismah"].some((p) => lower.includes(p));
       if (!isLeader && !isSuperApprover) {
         // Dept heads see drafts whose author is in any department
         // they head, regardless of kind. Everyone else (including
-        // stealth admins + workers) sees only their own drafts.
+        // stealth admins + workers) sees only their own drafts —
+        // unless they're a content-plan-only approver, in which case
+        // they also see every content_plan draft.
         const isDeptHead = me.role === "department_head" && (me.departmentIds ?? []).length > 0;
         if (!isDeptHead) {
-          visible = allRows.filter((r) => r.author_id === userId);
+          visible = allRows.filter((r) =>
+            r.author_id === userId || (isContentPlanApprover && r.kind === "content_plan")
+          );
         } else {
           // Look up author->depts for every row's author, then keep
           // rows where the author shares a dept with the caller.
@@ -244,6 +277,7 @@ export async function GET(req: NextRequest) {
           const myDepts = new Set(me.departmentIds ?? []);
           visible = allRows.filter((r) => {
             if (r.author_id === userId) return true;
+            if (isContentPlanApprover && r.kind === "content_plan") return true;
             const authorDepts = authorDeptsByUser.get(r.author_id) ?? new Set<string>();
             for (const d of myDepts) if (authorDepts.has(d)) return true;
             return false;
@@ -293,6 +327,7 @@ export async function GET(req: NextRequest) {
         missiveMessageId: r.missive_message_id,
         sentAt: r.sent_at,
         sendError: r.send_error,
+        scheduledFor: r.scheduled_for,
         createdAt: r.created_at,
         updatedAt: r.updated_at
       }))

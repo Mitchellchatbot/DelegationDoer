@@ -98,11 +98,12 @@ export function useSlackCustomEmojis(): SlackEmojiCache {
 // have the map from useSlackCustomEmojis).
 export function resolveEmoji(value: string | null | undefined, map: EmojiMap): string | null {
   if (!value) return null;
-  // ":foo:" → look up "foo" in the map; otherwise pass through.
+  // ":foo:" → look up "foo" in the map. If the workspace doesn't have
+  // a matching custom emoji, return null so the avatar bubble hides
+  // entirely rather than rendering the raw ":shortcode:" as text.
   const m = /^:([a-z0-9_+-]+):$/i.exec(value);
   if (m) {
-    const url = map[m[1]];
-    return url ?? value; // fall back to raw shortcode if not found
+    return map[m[1]] ?? null;
   }
   return value;
 }

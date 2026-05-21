@@ -103,6 +103,19 @@ export async function POST(
       .eq("status", "pending"); // only flip if still pending
     if (lockErr) return NextResponse.json({ error: lockErr.message }, { status: 500 });
 
+    // Future-dated send: stop here. The scheduled-emails cron will pick
+    // up this row (status='approved' + scheduled_for in the past) and
+    // dispatch via composeNewThread when due.
+    const scheduledFor = row.scheduled_for as string | null;
+    if (scheduledFor && new Date(scheduledFor).getTime() > Date.now()) {
+      return NextResponse.json({
+        ok: true,
+        status: "approved",
+        scheduledFor,
+        note: "queued for scheduled send"
+      });
+    }
+
     // Fire the actual outbound send. On failure, flip status='failed'
     // + record send_error so the queue can show why and the approver
     // can retry by re-clicking (we re-allow approve on 'failed' below).

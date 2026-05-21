@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
 import { publish, type InboxEvent } from "@/lib/inbox-event-bus";
+import { isDuplicateMessage } from "@/lib/missive-socket";
 
 export const dynamic = "force-dynamic";
 
@@ -43,6 +44,15 @@ export async function POST(req: NextRequest) {
   }
   if (!payload.event || !payload.account_id || !payload.thread_id) {
     return NextResponse.json({ error: "missing fields" }, { status: 400 });
+  }
+  // Dedup against the socket bridge. When both paths deliver the same
+  // message_id within 30s, suppress the second one so the bus doesn't
+  // republish (which would cause every SSE subscriber to do a
+  // redundant refetch). Either path winning is fine; whichever lands
+  // first wins. We still ACK 200 — from missiveclone's perspective the
+  // webhook succeeded.
+  if (isDuplicateMessage(payload.message_id)) {
+    return NextResponse.json({ ok: true, deduped: true });
   }
   publish({
     event: payload.event,

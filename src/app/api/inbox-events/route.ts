@@ -3,6 +3,7 @@ import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { visibleAccountIdsFor } from "@/lib/inbox-access";
 import { subscribe, type InboxEvent } from "@/lib/inbox-event-bus";
+import { startMissiveSocketBridge } from "@/lib/missive-socket";
 
 export const dynamic = "force-dynamic";
 // Node runtime — the in-process event bus is a singleton owned by this
@@ -26,6 +27,12 @@ export const runtime = "nodejs";
 const KEEPALIVE_INTERVAL_MS = 25_000;
 
 export async function GET(req: NextRequest) {
+  // Lazy-init the missiveclone socket bridge on the first SSE
+  // subscription. Idempotent — repeated calls are no-ops, and the
+  // singleton lives in globalThis so dev-mode hot reloads don't
+  // multiply connections.
+  startMissiveSocketBridge();
+
   let userId: string;
   try {
     userId = await requireCurrentUserId();

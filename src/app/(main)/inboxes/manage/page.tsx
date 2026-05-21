@@ -7,7 +7,6 @@ import { canManageAssignments } from "@/lib/inbox-access";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { AutoIntakeToggleSection } from "@/components/AutoIntakeToggleSection";
 import { ConnectInboxDialog } from "@/components/ConnectInboxDialog";
-import { ManagedInboxList } from "@/components/ManagedInboxList";
 import { SpacesManager } from "@/components/SpacesManager";
 
 interface AutoIntakeRow {
@@ -132,13 +131,6 @@ export default async function ManageInboxesPage() {
 
       {!fetchError && inboxes.length > 0 && (
         <>
-          <ManagedInboxList
-            inboxes={inboxes.map((a) => ({
-              id: a.id,
-              email: a.email,
-              display_name: a.display_name ?? null
-            }))}
-          />
           <AutoIntakeToggleSection
             inboxes={inboxes}
             initialSettings={autoIntakeSettings}

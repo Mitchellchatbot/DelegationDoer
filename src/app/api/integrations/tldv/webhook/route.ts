@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { runTldvIntake } from "@/lib/tldv-intake";
-import type { TldvWebhookPayload } from "@/lib/tldv-client";
+import { normalizeTldvTranscript, type TldvWebhookPayload } from "@/lib/tldv-client";
 
 export const dynamic = "force-dynamic";
 // tl;dv expects a fast ack; classify + N task inserts is the slow part.
@@ -9,20 +9,11 @@ export const maxDuration = 60;
 
 // POST /api/integrations/tldv/webhook
 //
-// Receives tl;dv's TranscriptReady webhook. Schema (per docs):
-//   {
-//     id: "webhook-456",                  // webhook payload id
-//     event: "TranscriptReady",
-//     data: {                             // GetTranscriptByMeetingIdResponse
-//       id: "meeting-123",
-//       meetingId: "meeting-123",
-//       data: {
-//         transcript: "full text...",
-//         segments: [{ startTime, endTime, text }]
-//       }
-//     },
-//     executedAt: "..."
-//   }
+// Receives tl;dv's TranscriptReady webhook. Real payloads put segments
+// directly at `data.data` as an ARRAY (with speaker attribution per
+// segment) — the docs example used a wrapped { transcript, segments }
+// object which test events still use. normalizeTldvTranscript() handles
+// both shapes.
 //
 // Auth: TLDV_WEBHOOK_SECRET, sent as `x-tldv-webhook-secret` header.
 // (tl;dv's webhook config screen lets you paste arbitrary headers — we
@@ -57,12 +48,11 @@ export async function POST(req: NextRequest) {
   }
 
   const meeting = payload.data;
-  const transcript = meeting?.data?.transcript ?? "";
-  const segments = meeting?.data?.segments ?? [];
   const meetingId = meeting?.meetingId || meeting?.id;
   if (!meetingId) {
     return NextResponse.json({ error: "missing meetingId" }, { status: 400 });
   }
+  const { transcript, segments } = normalizeTldvTranscript(meeting?.data);
 
   // 3) Hand off to the shared pipeline.
   try {

@@ -12,25 +12,60 @@
 
 const TLDV_BASE_URL = "https://pasta.tldv.io";
 
-// Per docs, a segment has only startTime/endTime/text.
+// One transcript line. Real tl;dv payloads include `speaker` — the
+// docs at one point claimed segments were just text+timestamps, but
+// production webhooks attach speaker attribution which the classifier
+// uses to keep "Sarah asked Tom to do X" intact.
 export interface TldvTranscriptSegment {
   startTime: number; // seconds from meeting start
   endTime: number;
   text: string;
+  speaker?: string;
 }
 
-// Matches the `data.data` object in the webhook AND the body of the
-// GET /v1alpha1/meetings/{id}/transcript response.
-export interface TldvTranscript {
+// Wrapped shape that test events + the docs example use.
+export interface TldvTranscriptWrapped {
   transcript: string;
   segments: TldvTranscriptSegment[];
 }
 
 // The `data` envelope in the webhook (GetTranscriptByMeetingIdResponse).
+// `data.data` is polymorphic in the wild:
+//   - real tl;dv webhooks send an ARRAY of segments directly
+//   - tl;dv dashboard test events + our smoke tests use the wrapped object
+// Always pipe `data.data` through `normalizeTldvTranscript` before use.
 export interface TldvMeetingTranscriptResponse {
-  id: string;          // meeting id (duplicated as `meetingId`)
+  id: string;
   meetingId: string;
-  data: TldvTranscript;
+  data: TldvTranscriptSegment[] | TldvTranscriptWrapped;
+}
+
+// Reconcile both shapes into { transcript, segments }. Builds a
+// speaker-prefixed transcript string when only segments are present so
+// the classifier always has something readable to work with.
+export function normalizeTldvTranscript(
+  rawData: unknown
+): { transcript: string; segments: TldvTranscriptSegment[] } {
+  if (Array.isArray(rawData)) {
+    const segments = rawData as TldvTranscriptSegment[];
+    return { segments, transcript: joinWithSpeakers(segments) };
+  }
+  if (rawData && typeof rawData === "object") {
+    const obj = rawData as Partial<TldvTranscriptWrapped>;
+    const segments = obj.segments ?? [];
+    const transcript =
+      (obj.transcript && obj.transcript.length > 0)
+        ? obj.transcript
+        : joinWithSpeakers(segments);
+    return { segments, transcript };
+  }
+  return { segments: [], transcript: "" };
+}
+
+function joinWithSpeakers(segments: TldvTranscriptSegment[]): string {
+  return segments
+    .map((s) => (s.speaker ? `${s.speaker}: ${s.text}` : s.text))
+    .join("\n");
 }
 
 // The full webhook body. Validate against this shape in the route.

@@ -39,10 +39,11 @@ export async function classifyMeetingTranscript(args: {
   ).join("\n");
 
   // Prefer the segment-joined text when present — it's the cleanest
-  // form. Fall back to the flat `transcript` string if segments are
-  // empty for some reason.
+  // form. Include speaker attribution when available so the classifier
+  // can tell "Sarah asked Tom to do X" apart from "Tom will do X".
+  // Fall back to the flat `transcript` string if segments are empty.
   const fullText = segments.length > 0
-    ? segments.map((s) => s.text).join(" ")
+    ? segments.map((s) => (s.speaker ? `${s.speaker}: ${s.text}` : s.text)).join("\n")
     : transcript;
 
   const systemPrompt = `You convert meeting transcripts into ACTIONABLE task drafts at a digital agency. The team uses these tasks to delegate work that came out of the meeting. The person assigned should be able to read a task and know exactly what to do without watching the recording.

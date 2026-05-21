@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
-import { getTranscript } from "@/lib/tldv-client";
+import { getTranscript, normalizeTldvTranscript } from "@/lib/tldv-client";
 import { runTldvIntake } from "@/lib/tldv-intake";
 
 export const dynamic = "force-dynamic";
@@ -43,11 +43,16 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // tl;dv's GET response uses the same polymorphic `data.data` shape
+    // as the webhook (array of segments in real meetings, wrapped object
+    // in mocks). Normalize before handing to the intake pipeline.
+    const { transcript, segments } = normalizeTldvTranscript(transcriptResponse.data);
+
     const outcome = await runTldvIntake({
       meetingId,
       webhookId: null,
-      transcript: transcriptResponse.data.transcript,
-      segments: transcriptResponse.data.segments,
+      transcript,
+      segments,
       rawPayload: transcriptResponse,
       source: "manual"
     });

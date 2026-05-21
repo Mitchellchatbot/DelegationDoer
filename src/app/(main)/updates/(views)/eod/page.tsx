@@ -109,14 +109,18 @@ export default function EodPage() {
   }, [summaries, me.id]);
 
   // Auto-open: only on today's date, only if not submitted, only when
-  // the wall clock crosses into the 60-min-before-shift-end window.
-  // Polled every minute (cheap).
+  // the wall clock crosses into the 15-min-before-shift-end window.
+  // Polled every minute (cheap). Fires AT MOST ONCE per local day —
+  // once the user has dismissed (or it auto-opened and they walked
+  // away), we don't re-trigger that day. They can still use the
+  // "Simulate shift end" button to force-open.
   useEffect(() => {
     if (!isToday || mySubmittedToday) return;
     function check() {
       const tz = me.workTimezone || "UTC";
       const fmt = new Intl.DateTimeFormat("en-US", {
-        timeZone: tz, weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false
+        timeZone: tz, weekday: "short", year: "numeric", month: "2-digit", day: "2-digit",
+        hour: "2-digit", minute: "2-digit", hour12: false
       });
       const parts = Object.fromEntries(fmt.formatToParts(new Date()).map((p) => [p.type, p.value]));
       const dayKey = (parts.weekday ?? "Mon").toLowerCase().slice(0, 3);
@@ -126,12 +130,22 @@ export default function EodPage() {
       if (Number.isNaN(eh) || Number.isNaN(em)) return;
       const nowMin = parseInt(parts.hour ?? "0", 10) * 60 + parseInt(parts.minute ?? "0", 10);
       const endMin = eh * 60 + em;
-      // Trigger window: within 60 min before end, up to 4 hours past.
-      // Bounding the upper end means a stale browser left open
-      // overnight doesn't auto-open the typeform at 6am.
-      if (nowMin >= endMin - 60 && nowMin <= endMin + 240) {
-        setTypeformOpen((open) => open || true);
-      }
+      // Window: 15 min before shift end → 2 hours past. Narrow enough
+      // that a stale tab won't reopen at 6am tomorrow; wide enough
+      // that late workers still catch it.
+      const inWindow = nowMin >= endMin - 15 && nowMin <= endMin + 120;
+      if (!inWindow) return;
+      // Once-per-day flag keyed by the worker's local calendar date.
+      // Dismissing the typeform doesn't unset it — they can still
+      // reopen with the Simulate button.
+      const localDate = `${parts.year}-${parts.month}-${parts.day}`;
+      const flagKey = `eod-auto-opened:${me.id}:${localDate}`;
+      try {
+        if (window.localStorage.getItem(flagKey) === "1") return;
+        window.localStorage.setItem(flagKey, "1");
+      } catch { /* localStorage blocked — just open this once and let
+                   the natural mySubmittedToday flip handle quieting */ }
+      setTypeformOpen(true);
     }
     check();
     const id = setInterval(check, 60_000);

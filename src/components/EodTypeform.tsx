@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   Sparkles, ArrowRight, ArrowLeft, Check, Loader2, X, Mail, Plus, Send, Clipboard
 } from "lucide-react";
@@ -318,34 +319,31 @@ export function EodTypeform({
 
   if (!open) return null;
 
-  return (
+  // Portal to document.body so the overlay escapes the main panel's
+  // z-10 stacking context — without this, the Topbar (z-30 inside the
+  // parent flex column) sits *above* the typeform and the search bar
+  // stays interactable behind the form.
+  if (typeof document === "undefined") return null;
+
+  return createPortal(
     <div
       className="fixed inset-0 z-[100] bg-gradient-to-br from-slate-50 via-white to-blue-50/40 overflow-hidden anim-fade-in"
       role="dialog"
       aria-modal="true"
     >
-      {/* Top bar with progress + close. Keeps the worker oriented and
-          gives them an escape hatch if they need to bail. */}
-      <div className="absolute top-0 inset-x-0 z-10 px-6 py-3 flex items-center gap-3 backdrop-blur-md bg-white/60 border-b border-slate-200/60">
-        <Sparkles className="w-4 h-4 text-fuchsia-500" />
-        <div className="text-xs uppercase tracking-wide font-semibold text-ink/65">End of day</div>
-        <div className="flex-1 h-1 rounded-full bg-slate-200/70 overflow-hidden">
-          <div
-            className="h-full bg-gradient-to-r from-fuchsia-400 to-blue-500 transition-all duration-500"
-            style={{ width: `${progress}%` }}
-          />
-        </div>
-        <button
-          type="button"
-          onClick={onClose}
-          className="p-1.5 rounded-lg text-ink/55 hover:text-ink hover:bg-slate-100/70 transition-colors"
-          title="Close (you can finish later)"
-        >
-          <X className="w-4 h-4" />
-        </button>
-      </div>
+      {/* Bare close button in the top-right — the progress bar moved
+          to the bottom so the user always sees how far they are
+          without it competing with the question header. */}
+      <button
+        type="button"
+        onClick={onClose}
+        className="absolute top-4 right-4 z-10 p-2 rounded-full bg-white/80 border border-slate-200/70 text-ink/55 hover:text-ink hover:bg-white shadow-sm transition-colors"
+        title="Close (you can finish later)"
+      >
+        <X className="w-4 h-4" />
+      </button>
 
-      <div className="absolute inset-0 pt-20 pb-24 px-6 flex items-center justify-center">
+      <div className="absolute inset-0 pt-10 pb-28 px-6 flex items-center justify-center">
         <div
           key={stepIdx}
           className={cn(
@@ -405,23 +403,35 @@ export function EodTypeform({
         </div>
       </div>
 
-      {/* Footer nav: Back arrow, step counter, Next/Submit affordance.
-          Sticky to the bottom so users always know where they are. */}
-      <div className="absolute bottom-0 inset-x-0 z-10 px-6 py-4 flex items-center justify-between bg-gradient-to-t from-white via-white/95 to-transparent">
-        <button
-          type="button"
-          onClick={regress}
-          disabled={stepIdx === 0}
-          className="inline-flex items-center gap-1.5 text-sm font-medium text-ink/65 disabled:opacity-40 hover:text-ink transition-colors"
-        >
-          <ArrowLeft className="w-4 h-4" /> Back
-        </button>
-        <div className="text-[11px] uppercase tracking-wide text-ink/45 font-semibold">
-          Step {stepIdx + 1} of {totalSteps}
+      {/* Bottom dock: progress + step counter centered, Back arrow
+          left, optional spacer right. Sticky to the bottom so it's
+          always in view regardless of scroll on the question card. */}
+      <div className="absolute bottom-0 inset-x-0 z-10 px-6 py-4 bg-gradient-to-t from-white via-white/95 to-transparent">
+        <div className="max-w-2xl mx-auto flex items-center gap-3">
+          <button
+            type="button"
+            onClick={regress}
+            disabled={stepIdx === 0}
+            className="inline-flex items-center gap-1.5 text-sm font-medium text-ink/65 disabled:opacity-40 hover:text-ink transition-colors shrink-0"
+          >
+            <ArrowLeft className="w-4 h-4" /> Back
+          </button>
+          <div className="flex-1 flex items-center gap-3">
+            <div className="flex-1 h-1.5 rounded-full bg-slate-200/70 overflow-hidden">
+              <div
+                className="h-full bg-gradient-to-r from-fuchsia-400 to-blue-500 transition-all duration-500"
+                style={{ width: `${progress}%` }}
+              />
+            </div>
+            <div className="text-[11px] uppercase tracking-wide text-ink/55 font-semibold tabular-nums shrink-0">
+              {stepIdx + 1} / {totalSteps}
+            </div>
+          </div>
+          <Sparkles className="w-4 h-4 text-fuchsia-400/70 shrink-0" />
         </div>
-        <div className="w-[68px]" />
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 

@@ -24,6 +24,8 @@ function LoginForm() {
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [resetSent, setResetSent] = useState(false);
+  const [sendingReset, setSendingReset] = useState(false);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -41,6 +43,33 @@ function LoginForm() {
     } catch (err) {
       setError(err instanceof Error ? err.message : "unknown error");
       setSubmitting(false);
+    }
+  }
+
+  async function sendReset() {
+    setError(null);
+    setResetSent(false);
+    if (!email) {
+      setError("Enter your email above first.");
+      return;
+    }
+    setSendingReset(true);
+    try {
+      const supabase = getSupabaseBrowser();
+      const origin =
+        process.env.NEXT_PUBLIC_APP_URL || (typeof window !== "undefined" ? window.location.origin : "");
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: `${origin}/api/auth/callback?next=/settings`,
+      });
+      if (error) {
+        setError(error.message);
+      } else {
+        setResetSent(true);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+    } finally {
+      setSendingReset(false);
     }
   }
 
@@ -87,9 +116,25 @@ function LoginForm() {
         </label>
       </div>
 
+      <div className="text-right -mt-1">
+        <button
+          type="button"
+          onClick={sendReset}
+          disabled={sendingReset}
+          className="text-xs text-accent hover:underline disabled:opacity-50"
+        >
+          {sendingReset ? "Sending…" : "Forgot password?"}
+        </button>
+      </div>
+
       {error && (
         <div className="text-xs text-urgent bg-urgent/10 border border-urgent/30 rounded-lg px-3 py-2">
           {error}
+        </div>
+      )}
+      {resetSent && (
+        <div className="text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
+          Check your email for a reset link.
         </div>
       )}
 

@@ -11,8 +11,10 @@ export const dynamic = "force-dynamic";
 //     they head.
 //   - Workers get an empty list (nothing to approve).
 //
-// The dept head's /leader/team page polls this to render the
-// "Drafts awaiting your approval" section.
+// Excludes drafts spawned by the tl;dv intake pipeline — those live on
+// /updates/approvals where they're grouped by meeting (so the dept head
+// can act on a meeting's outputs as a batch instead of being bombarded
+// with one row per action item).
 export async function GET() {
   const userId = await requireCurrentUserId();
   const me = await getUserById(userId);
@@ -23,6 +25,18 @@ export async function GET() {
   }
 
   const supabase = getSupabaseAdmin();
+
+  // Build the exclude-list of task ids that belong to tl;dv meetings.
+  // Cheap (intake-log is small + index'd) and keeps the filter expressible
+  // in the supabase-js fluent API without resorting to raw SQL.
+  const { data: tldvLogs } = await supabase
+    .from("tldv_intake_log")
+    .select("task_ids");
+  const tldvTaskIds = new Set<string>();
+  for (const row of (tldvLogs ?? []) as Array<{ task_ids: string[] | null }>) {
+    for (const id of row.task_ids ?? []) tldvTaskIds.add(id);
+  }
+
   let q = supabase
     .from("tasks")
     .select(
@@ -43,9 +57,13 @@ export async function GET() {
   const { data, error } = await q;
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
+  // Drop any TLDV-meeting drafts so they don't double-render on the
+  // /leader/team draft surface.
+  const allDrafts = (data ?? []) as Array<{ id: string; assignee_id: string | null }> & typeof data;
+  const drafts = allDrafts.filter((d) => !tldvTaskIds.has(d.id));
+
   // Build a small lookup so the UI can show the proposed assignee's name
   // + avatar without a second round-trip.
-  const drafts = (data ?? []) as Array<{ assignee_id: string | null }> & typeof data;
   const assigneeIds = Array.from(
     new Set(drafts.map((d) => d.assignee_id).filter((x): x is string => !!x))
   );

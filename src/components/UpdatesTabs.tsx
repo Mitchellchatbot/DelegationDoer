@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import { motion, LayoutGroup } from "framer-motion";
-import { Sparkles, Search, ShieldAlert, Camera, FolderKanban, Award, Trophy } from "lucide-react";
+import { Sparkles, Search, ShieldAlert, Camera, FolderKanban, Award, Trophy, Video } from "lucide-react";
 import { useCurrentUser } from "@/lib/user-context";
 import { isLeader } from "@/lib/auth";
 import { cn } from "@/lib/utils";
@@ -15,9 +15,12 @@ type Tab = {
   icon: typeof Sparkles;
   seoOnly?: boolean;
   leaderOnly?: boolean;
+  // Hidden from workers — they don't approve drafts.
+  approverOnly?: boolean;
 };
 const TABS: readonly Tab[] = [
   { href: "/updates/eod",             label: "EOD",         icon: Sparkles                        },
+  { href: "/updates/approvals",       label: "Approvals",   icon: Video,        approverOnly: true},
   { href: "/updates/seo",             label: "SEO",         icon: Search,      seoOnly: true      },
   { href: "/updates/projects",        label: "Projects",    icon: FolderKanban, leaderOnly: true  },
   { href: "/updates/recommendations", label: "Picks",       icon: Award                           },
@@ -34,9 +37,13 @@ export function UpdatesTabs() {
   // them.
   const canSeeSeo = (me.departmentIds ?? []).includes("dep_seo") || isLeader(me);
   const canSeeProjects = isLeader(me);
+  // Approvals tab is for anyone who can act on a draft: leaders + dept
+  // heads. Workers can't approve, so we hide the tab.
+  const canSeeApprovals = me.role !== "worker";
   const tabs = TABS.filter((t) => {
     if (t.seoOnly && !canSeeSeo) return false;
     if (t.leaderOnly && !canSeeProjects) return false;
+    if (t.approverOnly && !canSeeApprovals) return false;
     return true;
   });
 
@@ -45,8 +52,9 @@ export function UpdatesTabs() {
   // hammering the API.
   const [openSeoCount, setOpenSeoCount] = useState<number | null>(null);
   const [unseenProjects, setUnseenProjects] = useState<number | null>(null);
+  const [pendingMeetingCount, setPendingMeetingCount] = useState<number | null>(null);
   useEffect(() => {
-    if (!canSeeSeo && !canSeeProjects) return;
+    if (!canSeeSeo && !canSeeProjects && !canSeeApprovals) return;
     let cancelled = false;
     async function fetchCounts() {
       try {
@@ -64,6 +72,13 @@ export function UpdatesTabs() {
             if (!cancelled) setUnseenProjects(data.unseenCount ?? 0);
           }
         }
+        if (canSeeApprovals) {
+          const res = await fetch("/api/integrations/tldv/meetings/summary", { cache: "no-store" });
+          if (res.ok) {
+            const data = await res.json();
+            if (!cancelled) setPendingMeetingCount(data.pendingMeetingCount ?? 0);
+          }
+        }
       } catch { /* ignore */ }
     }
     fetchCounts();
@@ -77,7 +92,7 @@ export function UpdatesTabs() {
       clearInterval(t);
       document.removeEventListener("visibilitychange", onVis);
     };
-  }, [canSeeSeo, canSeeProjects]);
+  }, [canSeeSeo, canSeeProjects, canSeeApprovals]);
 
   return (
     <LayoutGroup id="updates-tabs">
@@ -92,6 +107,9 @@ export function UpdatesTabs() {
           } else if (href === "/updates/projects" && (unseenProjects ?? 0) > 0) {
             badge = unseenProjects;
             badgeTitle = `${unseenProjects} new project ${unseenProjects === 1 ? "update" : "updates"}`;
+          } else if (href === "/updates/approvals" && (pendingMeetingCount ?? 0) > 0) {
+            badge = pendingMeetingCount;
+            badgeTitle = `${pendingMeetingCount} tl;dv meeting${pendingMeetingCount === 1 ? "" : "s"} awaiting approval`;
           }
           return (
             <Link

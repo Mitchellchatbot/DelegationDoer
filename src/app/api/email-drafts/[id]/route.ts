@@ -39,7 +39,7 @@ export async function PATCH(
 
     const isAuthor = row.author_id === userId;
     const isApprover = await canApproveDraft(
-      { id: me.id, role: me.role, departmentIds: me.departmentIds },
+      { id: me.id, name: me.name, role: me.role, departmentIds: me.departmentIds },
       { author_id: row.author_id as string, kind: row.kind }
     );
     if (!isAuthor && !isApprover) {

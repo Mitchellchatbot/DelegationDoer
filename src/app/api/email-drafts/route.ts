@@ -215,7 +215,10 @@ export async function GET(req: NextRequest) {
     let visible = allRows;
     if (!mineOnly) {
       const isLeader = me.role === "leader";
-      if (!isLeader) {
+      // Super-approvers (Mujtaba, Sam) see every draft, same as Mitch.
+      const lower = (me.name ?? "").toLowerCase();
+      const isSuperApprover = ["mitchell", "mujtaba", "sam"].some((p) => lower.includes(p));
+      if (!isLeader && !isSuperApprover) {
         // Dept heads see drafts whose author is in any department
         // they head, regardless of kind. Everyone else (including
         // stealth admins + workers) sees only their own drafts.

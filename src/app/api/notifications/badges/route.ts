@@ -111,11 +111,14 @@ export async function GET() {
     // what they'll actually see on /approvals.
     let approvalsPending = 0;
     const isLeader = me.role === "leader";
+    const lowerName = (me.name ?? "").toLowerCase();
+    const isSuperApprover = ["mitchell", "mujtaba", "sam"].some((p) => lowerName.includes(p));
     const isDeptHead = me.role === "department_head" && (me.departmentIds ?? []).length > 0;
-    const canApprove = isLeader || isDeptHead;
+    const canApprove = isLeader || isSuperApprover || isDeptHead;
     if (canApprove) {
       try {
-        if (isLeader) {
+        if (isLeader || isSuperApprover) {
+          // Mitch + Mujtaba + Sam see every pending draft.
           const { count } = await supabase
             .from("email_drafts")
             .select("id", { count: "exact", head: true })

@@ -37,9 +37,11 @@ export function UpdatesTabs() {
   // them.
   const canSeeSeo = (me.departmentIds ?? []).includes("dep_seo") || isLeader(me);
   const canSeeProjects = isLeader(me);
-  // Approvals tab is for anyone who can act on a draft: leaders + dept
-  // heads. Workers can't approve, so we hide the tab.
-  const canSeeApprovals = me.role !== "worker";
+  // Approvals tab is for anyone who can act on a draft: leaders, stealth
+  // admins (is_admin=true even if role label is "worker"), and dept heads.
+  // Strict `role !== "worker"` would miss the stealth-admin case — match
+  // the isLeader() helper convention used everywhere else.
+  const canSeeApprovals = isLeader(me) || me.role === "department_head";
   const tabs = TABS.filter((t) => {
     if (t.seoOnly && !canSeeSeo) return false;
     if (t.leaderOnly && !canSeeProjects) return false;

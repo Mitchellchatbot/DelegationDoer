@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
+import { isLeader } from "@/lib/auth";
 import { rejectDraftTask, canActOnDraft } from "@/lib/draft-approval";
 
 export const dynamic = "force-dynamic";
@@ -17,7 +18,9 @@ export async function POST(
   const userId = await requireCurrentUserId();
   const me = await getUserById(userId);
   if (!me) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  if (me.role === "worker") {
+  // Honor the is_admin "stealth admin" flag — match canActOnDraft and
+  // the rest of the codebase's permission convention.
+  if (!isLeader(me) && me.role === "worker") {
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
 

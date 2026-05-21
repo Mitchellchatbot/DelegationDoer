@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
+import { isLeader } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -17,7 +18,10 @@ export async function GET() {
     const userId = await requireCurrentUserId();
     const me = await getUserById(userId);
     if (!me) return NextResponse.json({ pendingMeetingCount: 0 });
-    if (me.role === "worker") {
+    // Honor the is_admin "stealth admin" flag — workers with is_admin=true
+    // are effectively leaders.
+    const actorIsLeader = isLeader(me);
+    if (!actorIsLeader && me.role === "worker") {
       return NextResponse.json({ pendingMeetingCount: 0 });
     }
 
@@ -41,7 +45,7 @@ export async function GET() {
       .select("id, department_id")
       .in("id", allTaskIds)
       .eq("is_draft", true);
-    if (me.role === "department_head") {
+    if (!actorIsLeader && me.role === "department_head") {
       const deptIds = me.departmentIds ?? [];
       if (deptIds.length === 0) {
         return NextResponse.json({ pendingMeetingCount: 0 });

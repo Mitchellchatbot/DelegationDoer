@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
+import { isLeader } from "@/lib/auth";
 import {
   approveDraftTask,
   canActOnDraft,
@@ -27,7 +28,9 @@ export async function POST(
   const userId = await requireCurrentUserId();
   const me = await getUserById(userId);
   if (!me) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  if (me.role === "worker") {
+  // Stealth admins (is_admin=true) are leaders for permission purposes
+  // even if their role label is "worker" — gate on that, not just role.
+  if (!isLeader(me) && me.role === "worker") {
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
 

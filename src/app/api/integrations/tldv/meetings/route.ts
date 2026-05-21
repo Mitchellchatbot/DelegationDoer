@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
+import { isLeader } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -10,7 +11,8 @@ export const dynamic = "force-dynamic";
 // as one batch (the whole point of this surface — see /updates/approvals).
 //
 // Role-scoping mirrors /api/tasks/drafts:
-//   - Leaders see every meeting with pending drafts.
+//   - Leaders + stealth admins (is_admin=true) see every meeting with
+//     pending drafts.
 //   - Department heads see meetings where ≥1 of the pending drafts is in
 //     a dept they head (their slice only, for v1 — cross-dept context
 //     would let them see other dept heads' rows too, but that's a
@@ -48,7 +50,10 @@ export async function GET() {
   const me = await getUserById(userId);
   if (!me) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
 
-  if (me.role === "worker") {
+  // Stealth admins (role="worker" but is_admin=true) are leaders for
+  // permission purposes — they see every meeting.
+  const actorIsLeader = isLeader(me);
+  if (!actorIsLeader && me.role === "worker") {
     return NextResponse.json({ meetings: [], proposedAssignees: {} });
   }
 
@@ -79,7 +84,7 @@ export async function GET() {
     )
     .in("id", allTaskIds)
     .eq("is_draft", true);
-  if (me.role === "department_head") {
+  if (!actorIsLeader && me.role === "department_head") {
     const deptIds = me.departmentIds ?? [];
     if (deptIds.length === 0) {
       return NextResponse.json({ meetings: [], proposedAssignees: {} });

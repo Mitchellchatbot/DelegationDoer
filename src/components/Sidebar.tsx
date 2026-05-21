@@ -78,11 +78,23 @@ export function Sidebar({ user }: { user: User }) {
   // Generic nav badges — at-risk client count (Clients) + EOD-pending
   // count after 5pm (People). Lives behind /api/notifications/badges
   // so a single round-trip refreshes everything.
-  const [clientsAtRisk, setClientsAtRisk] = useState<number | null>(null);
-  const [peopleEodPending, setPeopleEodPending] = useState<number | null>(null);
-  const [approvalsPending, setApprovalsPending] = useState<number | null>(null);
+  // Hydrate badge counts from localStorage on first paint so the
+  // sidebar doesn't flash null → count when the API lands. The fetch
+  // below still overwrites on success; this just removes the visible
+  // pop-in between page navigations.
+  function readCached(key: string): number | null {
+    if (typeof window === "undefined") return null;
+    try {
+      const raw = window.localStorage.getItem(key);
+      const n = raw != null ? Number(raw) : null;
+      return Number.isFinite(n as number) ? (n as number) : null;
+    } catch { return null; }
+  }
+  const [clientsAtRisk, setClientsAtRisk] = useState<number | null>(() => readCached("badge:clientsAtRisk"));
+  const [peopleEodPending, setPeopleEodPending] = useState<number | null>(() => readCached("badge:peopleEod"));
+  const [approvalsPending, setApprovalsPending] = useState<number | null>(() => readCached("badge:approvals"));
   const [canApprove, setCanApprove] = useState(false);
-  const [inboxesUnread, setInboxesUnread] = useState<number | null>(null);
+  const [inboxesUnread, setInboxesUnread] = useState<number | null>(() => readCached("badge:inboxesUnread"));
   useEffect(() => {
     let cancelled = false;
     async function fetchCounts() {
@@ -106,11 +118,23 @@ export function Sidebar({ user }: { user: User }) {
         if (badgeRes.ok) {
           const data = await badgeRes.json();
           if (!cancelled) {
-            setClientsAtRisk(data.clients ?? 0);
-            setPeopleEodPending(data.peopleEodPending ?? 0);
-            setApprovalsPending(data.approvalsPending ?? 0);
-            setInboxesUnread(data.inboxesUnread ?? 0);
+            const c = data.clients ?? 0;
+            const e = data.peopleEodPending ?? 0;
+            const a = data.approvalsPending ?? 0;
+            const i = data.inboxesUnread ?? 0;
+            setClientsAtRisk(c);
+            setPeopleEodPending(e);
+            setApprovalsPending(a);
+            setInboxesUnread(i);
             setCanApprove(!!data.canApprove);
+            try {
+              // Cache for the next first-paint. Persisted per-tab is
+              // fine; localStorage stays consistent across reloads.
+              window.localStorage.setItem("badge:clientsAtRisk", String(c));
+              window.localStorage.setItem("badge:peopleEod", String(e));
+              window.localStorage.setItem("badge:approvals", String(a));
+              window.localStorage.setItem("badge:inboxesUnread", String(i));
+            } catch { /* localStorage blocked */ }
           }
         }
       } catch { /* ignore */ }

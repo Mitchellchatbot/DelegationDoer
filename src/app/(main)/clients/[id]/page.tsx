@@ -2,7 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import {
   Briefcase, Globe2, Calendar, FileText, Lightbulb, ExternalLink, ListChecks,
-  Mail, CheckCircle2, User as UserIcon, Server, KeyRound, MessageSquare,
+  Mail, User as UserIcon, Server, KeyRound, MessageSquare,
   Hash, CalendarClock, Send
 } from "lucide-react";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
@@ -10,6 +10,7 @@ import { getClient, getResourcesForClient, type ClientResource } from "@/lib/cli
 import { BackPill } from "@/components/BackPill";
 import { ClientHealthCard } from "@/components/ClientHealthCard";
 import { AddResourceForm, DeleteResourceButton } from "@/components/AddResourceForm";
+import { ClientKnowledgeBase, type CompletedTaskRow } from "@/components/ClientKnowledgeBase";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { visibleAccountIdsFor } from "@/lib/inbox-access";
@@ -54,14 +55,18 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
       .order("due_date", { ascending: true })
       .limit(20)
       .then((r) => r.data ?? []),
-    // Closed/done tasks for the "history" view.
+    // Completed-tasks knowledge base. Selects description + tags so
+    // the page renders the actual record of what was done (not just
+    // titles) and the list_client_completed_tasks AI tool has the
+    // same content to summarize from. Bumped 20 → 100 so a year of
+    // history is visible without paginating.
     supabase
       .from("tasks")
-      .select("id, title, status, priority, last_activity_at")
+      .select("id, title, description, status, priority, last_activity_at, tags")
       .eq("client_name", client.name)
       .eq("status", "done")
       .order("last_activity_at", { ascending: false })
-      .limit(20)
+      .limit(100)
       .then((r) => r.data ?? []),
     me ? visibleAccountIdsFor(me) : Promise.resolve(new Set<string>())
   ]);
@@ -465,28 +470,7 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
         )}
       />
 
-      <Section
-        title="Completed tasks"
-        icon={<CheckCircle2 className="w-4 h-4" />}
-        tone="indigo"
-        empty="No completed tasks yet."
-        items={doneTasksRes as { id: string; title: string; status: string; priority: string; last_activity_at: string }[]}
-        renderItem={(t) => (
-          <Link
-            key={t.id}
-            href={`/tasks/${t.id}`}
-            className="group flex items-center gap-2 p-2.5 rounded-xl bg-white/80 border border-white/70 hover:border-emerald-200 hover:bg-emerald-50/40 transition-colors"
-          >
-            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-            <div className="text-sm flex-1 truncate group-hover:text-accent">{t.title}</div>
-            <div className="text-[10px] text-ink/55 shrink-0 tabular-nums">
-              {new Date(t.last_activity_at).toLocaleDateString(undefined, {
-                month: "short", day: "numeric"
-              })}
-            </div>
-          </Link>
-        )}
-      />
+      <ClientKnowledgeBase tasks={doneTasksRes as CompletedTaskRow[]} />
     </div>
   );
 }

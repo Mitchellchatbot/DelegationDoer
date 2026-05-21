@@ -116,6 +116,21 @@ export const AI_TOOLS = [
     }
   },
   {
+    name: "list_client_completed_tasks",
+    description:
+      "Build a historical knowledge base of work this agency has shipped for a client. Returns completed tasks newest first, each with title + description (the actual record of what was done) + tags + who completed it. Use this when the user asks 'what have we done for X?', 'what work has been completed for X in the last year?', or 'summarize our history with X'. Resolve a client by `clientName` (fuzzy match against clients.name) or `clientId` (exact id). Optional: `sinceDays` (omit or pass 0 for the default 365-day window), `limit` (default 50, max 200).",
+    input_schema: {
+      type: "object",
+      properties: {
+        clientName: { type: "string" },
+        clientId: { type: "string" },
+        sinceDays: { type: "number" },
+        limit: { type: "number" }
+      },
+      required: []
+    }
+  },
+  {
     name: "list_projects",
     description:
       "List projects. Optional departmentId filter. Each result has id, name, description, departmentId, stage count, and the active stage's name.",
@@ -261,6 +276,7 @@ export async function runTool(
       case "list_departments": return listDepartments();
       case "list_clients": return listClients(input);
       case "get_client": return getClient(input, ctx);
+      case "list_client_completed_tasks": return listClientCompletedTasks(input);
       case "list_projects": return listProjects(input);
       case "get_project": return getProject(input);
       case "get_capacity": return getCapacity(input, ctx);
@@ -583,6 +599,102 @@ async function getClient(input: Record<string, unknown>, _ctx: ToolContext) {
     notes: client.notes,
     openTasks: openTasks ?? [],
     recentlyCompletedTasks: doneTasks ?? []
+  };
+}
+
+// Knowledge-base lookup over a client's completed tasks. Same source as
+// the page-rendered "Knowledge base · completed work" section, but
+// pre-filtered by date and shaped for AI consumption (descriptions are
+// included, completedBy is joined in). Caller is expected to resolve
+// the client by name or id; ambiguous names return an error so the AI
+// can disambiguate with the user instead of guessing.
+async function listClientCompletedTasks(input: Record<string, unknown>) {
+  const supabase = getSupabaseAdmin();
+  let clientName: string | null = typeof input.clientName === "string" ? input.clientName : null;
+  let clientId: string | null = typeof input.clientId === "string" ? input.clientId : null;
+
+  // Resolve clientId → name (tasks table joins by client_name, not id).
+  if (!clientName && clientId) {
+    const { data: c } = await supabase
+      .from("clients").select("name").eq("id", clientId).maybeSingle();
+    if (!c) return { error: "client not found" };
+    clientName = c.name as string;
+  }
+
+  // Resolve a fuzzy name → exact name. ilike on clients.name so common
+  // variants resolve. Multiple matches surface as candidates so the AI
+  // can disambiguate with the user rather than guess.
+  if (clientName) {
+    const { data: matches } = await supabase
+      .from("clients").select("id, name").ilike("name", `%${clientName}%`).limit(5);
+    const rows = (matches ?? []) as { id: string; name: string }[];
+    if (rows.length === 0) return { error: `no client matches "${clientName}"` };
+    if (rows.length > 1) {
+      const exact = rows.find((r) => r.name.toLowerCase() === clientName!.toLowerCase());
+      if (exact) {
+        clientName = exact.name;
+        clientId = exact.id;
+      } else {
+        return {
+          error: `ambiguous client "${clientName}"`,
+          candidates: rows.map((r) => ({ id: r.id, name: r.name }))
+        };
+      }
+    } else {
+      clientName = rows[0].name;
+      clientId = rows[0].id;
+    }
+  }
+
+  if (!clientName) return { error: "clientName or clientId required" };
+
+  const rawLimit = typeof input.limit === "number" ? input.limit : 50;
+  const limit = Math.max(1, Math.min(200, Math.floor(rawLimit)));
+  // sinceDays = 0 or omitted → default 365-day window. Pass a number
+  // > 0 to override; pass a very large value (e.g. 36500) when the
+  // user explicitly wants the whole history.
+  const rawSince = typeof input.sinceDays === "number" ? input.sinceDays : 365;
+  const sinceDays = rawSince > 0 ? Math.floor(rawSince) : 365;
+  const cutoff = new Date(Date.now() - sinceDays * 24 * 60 * 60 * 1000).toISOString();
+
+  const { data: tasks } = await supabase
+    .from("tasks")
+    .select("id, title, description, priority, last_activity_at, tags, assignee_id")
+    .eq("client_name", clientName)
+    .eq("status", "done")
+    .gte("last_activity_at", cutoff)
+    .order("last_activity_at", { ascending: false })
+    .limit(limit);
+  const rows = (tasks ?? []) as Array<{
+    id: string; title: string; description: string | null;
+    priority: string | null; last_activity_at: string;
+    tags: string[] | null; assignee_id: string | null;
+  }>;
+
+  // Join assignee names once so the AI can attribute work without
+  // a second round-trip per task.
+  const assigneeIds = Array.from(new Set(rows.map((r) => r.assignee_id).filter((id): id is string => !!id)));
+  let nameById = new Map<string, string>();
+  if (assigneeIds.length > 0) {
+    const { data: users } = await supabase
+      .from("users").select("id, name").in("id", assigneeIds);
+    nameById = new Map(((users ?? []) as { id: string; name: string }[]).map((u) => [u.id, u.name]));
+  }
+
+  return {
+    clientId,
+    clientName,
+    sinceDays,
+    count: rows.length,
+    tasks: rows.map((r) => ({
+      id: r.id,
+      title: r.title,
+      description: r.description,
+      priority: r.priority,
+      completedAt: r.last_activity_at,
+      completedBy: r.assignee_id ? (nameById.get(r.assignee_id) ?? null) : null,
+      tags: r.tags ?? []
+    }))
   };
 }
 

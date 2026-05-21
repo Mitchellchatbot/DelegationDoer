@@ -60,6 +60,57 @@ export function InboxThreadsClient({
     return () => clearTimeout(t);
   }, [q]);
 
+  // Live push from missiveclone → DD → SSE: any new message in an
+  // account the user can see triggers a refresh of page 0 (the slice
+  // currently on screen). Skipped while the user is mid-search or
+  // mid-category-filter so a surprise list mutation doesn't break their
+  // flow. EventSource auto-reconnects on most browsers; the manual
+  // onerror handler covers proxy/network hiccups with capped backoff.
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof EventSource === "undefined") return;
+    let es: EventSource | null = null;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let attempt = 0;
+    let stopped = false;
+
+    async function refreshPageZero() {
+      if (debouncedQ || category !== "all") return;
+      try {
+        const params = new URLSearchParams();
+        params.set("limit", String(PAGE_SIZE));
+        params.set("offset", "0");
+        if (mailboxId) params.set("mailboxId", mailboxId);
+        const res = await fetch(`/api/inboxes/threads?${params}`, { cache: "no-store" });
+        if (!res.ok) return;
+        const data = await res.json();
+        setThreads(data.threads ?? []);
+        setHasMore(!!data.hasMore);
+      } catch { /* network blip — next event tries again */ }
+    }
+
+    function open() {
+      if (stopped) return;
+      try {
+        es = new EventSource("/api/inbox-events");
+        es.addEventListener("inbox", () => { void refreshPageZero(); });
+        es.onopen = () => { attempt = 0; };
+        es.onerror = () => {
+          es?.close();
+          es = null;
+          attempt += 1;
+          const delay = Math.min(60_000, 1000 * 2 ** Math.min(attempt, 6));
+          retryTimer = setTimeout(open, delay);
+        };
+      } catch { /* SSE unavailable — fall back to existing behavior */ }
+    }
+    open();
+    return () => {
+      stopped = true;
+      es?.close();
+      if (retryTimer) clearTimeout(retryTimer);
+    };
+  }, [debouncedQ, category, mailboxId]);
+
   // Whenever the debounced query changes, replace the list. Empty
   // query → restore the SSR'd initial page so no extra fetch happens.
   useEffect(() => {

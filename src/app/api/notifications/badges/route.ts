@@ -5,8 +5,52 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { visibleAccountIdsFor } from "@/lib/inbox-access";
 import { listAccounts, listThreadsPaged } from "@/lib/missive-client";
 import { readStateForThreads, isThreadUnread } from "@/lib/thread-read-state";
+import { onCacheBust } from "@/lib/inbox-event-bus";
 
 export const dynamic = "force-dynamic";
+
+// Per-user 60s response cache. Without this every signed-in user was
+// hammering the missiveclone pool on every 30s sidebar poll — a major
+// contributor to the "timeout exceeded when trying to connect" 500s.
+// The webhook receiver (/api/missive-webhook) busts each user's entry
+// the instant something changes in an account they can see, so users
+// see sub-second freshness on real activity and zero traffic while
+// idle. In-process Map; safe for the single-instance Railway deploy.
+interface BadgePayload {
+  clients: number;
+  peopleEodPending: number;
+  approvalsPending: number;
+  inboxesUnread: number;
+  canApprove: boolean;
+}
+
+interface BadgeCacheEntry {
+  expiresAt: number;
+  // Account ids the user was scoped to when the entry was cached. A
+  // webhook for any account in this set drops the entry. null = leader
+  // who sees everything — drop on any event.
+  visibleAccountIds: Set<string> | null;
+  body: BadgePayload;
+}
+
+const BADGE_CACHE_TTL_MS = 60_000;
+const badgeCache = new Map<string, BadgeCacheEntry>();
+
+// Module-scoped singleton registration. Without the guard, every
+// dev-mode hot reload would stack another listener on the bus.
+const globalKey = "__ddBadgeCacheBusterRegistered" as const;
+type GlobalWithKey = typeof globalThis & { [globalKey]?: boolean };
+const g = globalThis as GlobalWithKey;
+if (!g[globalKey]) {
+  g[globalKey] = true;
+  onCacheBust((accountId) => {
+    for (const [userId, entry] of badgeCache) {
+      if (entry.visibleAccountIds === null || entry.visibleAccountIds.has(accountId)) {
+        badgeCache.delete(userId);
+      }
+    }
+  });
+}
 
 // GET /api/notifications/badges
 //   Returns the badge counts that the sidebar's nav items show as
@@ -43,6 +87,11 @@ function todayInTz(tz: string): string {
 export async function GET() {
   try {
     const userId = await requireCurrentUserId();
+    const cached = badgeCache.get(userId);
+    if (cached && cached.expiresAt > Date.now()) {
+      return NextResponse.json(cached.body);
+    }
+
     const me = await getUserById(userId);
     if (!me) return NextResponse.json({ clients: 0, peopleEodPending: 0 });
     const supabase = getSupabaseAdmin();
@@ -154,12 +203,15 @@ export async function GET() {
     // is slow or down, we silently return 0 rather than 500ing the
     // sidebar. Caps at 200 threads to keep the poll cheap.
     let inboxesUnread = 0;
+    // visibleIds is captured outside the try so the cache entry can
+    // know which webhook account_ids should bust it for this user.
+    let visibleIds: Set<string> | null = null;
     try {
-      const visibleIds = await visibleAccountIdsFor(me);
+      visibleIds = await visibleAccountIdsFor(me);
       const accounts = await listAccounts();
       const visibleAccounts = visibleIds === null
         ? accounts
-        : accounts.filter((a) => visibleIds.has(a.id));
+        : accounts.filter((a) => visibleIds!.has(a.id));
       if (visibleAccounts.length > 0) {
         const visibleEmails = new Set(visibleAccounts.map((a) => a.email.toLowerCase()));
         const page = await listThreadsPaged({ folder: "INBOX", limit: 200, offset: 0 });
@@ -175,13 +227,19 @@ export async function GET() {
       }
     } catch { /* missive down or pool exhausted — degrade to zero */ }
 
-    return NextResponse.json({
+    const body: BadgePayload = {
       clients: clientsAtRisk,
       peopleEodPending,
       approvalsPending,
       inboxesUnread,
       canApprove
+    };
+    badgeCache.set(userId, {
+      expiresAt: Date.now() + BADGE_CACHE_TTL_MS,
+      visibleAccountIds: visibleIds,
+      body
     });
+    return NextResponse.json(body);
   } catch (err) {
     return NextResponse.json(
       { clients: 0, peopleEodPending: 0, approvalsPending: 0, inboxesUnread: 0, canApprove: false, error: err instanceof Error ? err.message : "unknown" },

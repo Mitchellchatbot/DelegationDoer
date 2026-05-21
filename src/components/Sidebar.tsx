@@ -140,15 +140,49 @@ export function Sidebar({ user }: { user: User }) {
       } catch { /* ignore */ }
     }
     fetchCounts();
+    // Drop the poll cadence from 30s → 5m. The SSE subscription below
+    // pushes a fresh refresh the instant something changes in any
+    // inbox the user can see (missiveclone fires a webhook on inbound
+    // mail, DD verifies + republishes over /api/inbox-events); the
+    // interval is just a safety net for dropped streams.
     const t = setInterval(() => {
       if (document.visibilityState === "visible") fetchCounts();
-    }, 30_000);
+    }, 5 * 60_000);
     const onVis = () => { if (document.visibilityState === "visible") fetchCounts(); };
     document.addEventListener("visibilitychange", onVis);
+
+    // Live push: refresh badges on any inbox event the server decided
+    // this user is allowed to see. Server-side per-user cache for
+    // /api/notifications/badges is already busted by the webhook
+    // receiver, so the refetch reads fresh data.
+    let es: EventSource | null = null;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let retryAttempt = 0;
+    function openStream() {
+      if (typeof EventSource === "undefined") return;
+      try {
+        es = new EventSource("/api/inbox-events");
+        es.addEventListener("inbox", () => { if (!cancelled) fetchCounts(); });
+        es.onopen = () => { retryAttempt = 0; };
+        es.onerror = () => {
+          es?.close();
+          es = null;
+          // Reconnect with capped exponential backoff so a flapping
+          // network doesn't hammer the SSE endpoint.
+          retryAttempt += 1;
+          const delay = Math.min(60_000, 1000 * 2 ** Math.min(retryAttempt, 6));
+          retryTimer = setTimeout(() => { if (!cancelled) openStream(); }, delay);
+        };
+      } catch { /* EventSource unsupported / blocked — polling backstop covers it */ }
+    }
+    openStream();
+
     return () => {
       cancelled = true;
       clearInterval(t);
       document.removeEventListener("visibilitychange", onVis);
+      if (retryTimer) clearTimeout(retryTimer);
+      es?.close();
     };
   }, [canSeeSeo, canSeeProjectUpdates]);
 

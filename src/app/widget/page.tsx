@@ -168,6 +168,10 @@ export default function WidgetPage() {
   // visually unmistakable even when collapsed.
   const [eodReminderDue, setEodReminderDue] = useState(false);
   const eodReminderToastShownRef = useRef(false);
+  // On-shift state for the bubble's online dot. Polled alongside the
+  // other 15s fetches in fetchTasks below so the bubble shows the
+  // green dot in sync with the panel's ClockSection.
+  const [onShift, setOnShift] = useState(false);
   const fetchMe = useCallback(async () => {
     try {
       const r = await fetch("/api/users/me", { cache: "no-store" });
@@ -209,13 +213,18 @@ export default function WidgetPage() {
     try {
       // Run both polls in parallel — they're independent reads on the
       // same Supabase connection.
-      const [taskRes, kudosRes, eomRes, bdayRes, eodRes] = await Promise.all([
+      const [taskRes, kudosRes, eomRes, bdayRes, eodRes, clockRes] = await Promise.all([
         fetch("/api/widget/my-tasks", { cache: "no-store" }),
         fetch("/api/widget/kudos", { cache: "no-store" }),
         fetch("/api/eom", { cache: "no-store" }),
         fetch("/api/widget/birthdays", { cache: "no-store" }),
-        fetch("/api/widget/eod-reminder", { cache: "no-store" })
+        fetch("/api/widget/eod-reminder", { cache: "no-store" }),
+        fetch("/api/clock", { cache: "no-store" })
       ]);
+      if (clockRes.ok) {
+        const c = await clockRes.json().catch(() => null);
+        setOnShift(!!c?.open);
+      }
       // 401 → no session in this Electron renderer. Show the sign-in
       // prompt and stop trying to render normal UI on stale/empty data.
       if (taskRes.status === 401 || kudosRes.status === 401) {
@@ -389,7 +398,7 @@ export default function WidgetPage() {
   // task alerts or kudos banners when we have no session at all.
   if (signedOut) {
     if (state === "panel") return <SignInPanel onCollapse={collapseToBubble} />;
-    return <Bubble onExpand={expandToPanel} unackedCount={0} iconUrl={widgetIconUrl} />;
+    return <Bubble onExpand={expandToPanel} unackedCount={0} iconUrl={widgetIconUrl} online={onShift} />;
   }
 
   if (state === "panel") return (
@@ -402,27 +411,27 @@ export default function WidgetPage() {
     // task is the loudest signal; mentions are real-time pings; kudos
     // is celebratory and can wait.
     if (unacked.length > 0) {
-      return <Alert task={unacked[0]} unackedCount={unacked.length} onAck={acknowledge} onExpand={expandToPanel} crowned={eom.isMe} iconUrl={widgetIconUrl} />;
+      return <Alert task={unacked[0]} unackedCount={unacked.length} onAck={acknowledge} onExpand={expandToPanel} crowned={eom.isMe} iconUrl={widgetIconUrl} online={onShift} />;
     }
     if (notifications.length > 0) {
-      return <NotifAlert notif={notifications[0]} count={notifications.length} onDismiss={dismissNotification} onExpand={expandToPanel} crowned={eom.isMe} iconUrl={widgetIconUrl} />;
+      return <NotifAlert notif={notifications[0]} count={notifications.length} onDismiss={dismissNotification} onExpand={expandToPanel} crowned={eom.isMe} iconUrl={widgetIconUrl} online={onShift} />;
     }
     if (kudos.length > 0) {
-      return <KudosAlert kudos={kudos[0]} count={kudos.length} onAck={acknowledgeKudos} onExpand={expandToPanel} crowned={eom.isMe} iconUrl={widgetIconUrl} />;
+      return <KudosAlert kudos={kudos[0]} count={kudos.length} onAck={acknowledgeKudos} onExpand={expandToPanel} crowned={eom.isMe} iconUrl={widgetIconUrl} online={onShift} />;
     }
     if (eodReminderDue) {
-      return <EodReminderAlert onExpand={expandToPanel} crowned={eom.isMe} iconUrl={widgetIconUrl} />;
+      return <EodReminderAlert onExpand={expandToPanel} crowned={eom.isMe} iconUrl={widgetIconUrl} online={onShift} />;
     }
   }
-  return <Bubble onExpand={expandToPanel} unackedCount={unacked.length + kudos.length + notifications.length + (eodReminderDue ? 1 : 0)} crowned={eom.isMe} iconUrl={widgetIconUrl} />;
+  return <Bubble onExpand={expandToPanel} unackedCount={unacked.length + kudos.length + notifications.length + (eodReminderDue ? 1 : 0)} crowned={eom.isMe} iconUrl={widgetIconUrl} online={onShift} />;
 }
 
 // Banner that appears when the worker's scheduled day has ended and
 // they haven't filed any EOD client check-ins. Clicking it expands
 // the widget panel so they can hop straight to the EOD form.
 function EodReminderAlert({
-  onExpand, crowned, iconUrl
-}: { onExpand: () => void; crowned: boolean; iconUrl: string | null }) {
+  onExpand, crowned, iconUrl, online
+}: { onExpand: () => void; crowned: boolean; iconUrl: string | null; online?: boolean }) {
   return (
     <button
       type="button"
@@ -430,7 +439,7 @@ function EodReminderAlert({
       className="group flex items-center gap-2 px-3 py-2 rounded-2xl bg-gradient-to-br from-violet-600 to-fuchsia-600 text-white shadow-[0_12px_24px_-10px_rgba(124,58,237,0.55)] hover:-translate-y-0.5 transition-transform"
       title="File your end-of-day client check-ins"
     >
-      <BubbleIcon unackedCount={1} crowned={crowned} iconUrl={iconUrl} />
+      <BubbleIcon unackedCount={1} crowned={crowned} iconUrl={iconUrl} online={online} />
       <div className="text-left">
         <div className="text-[10px] uppercase tracking-wide font-bold opacity-85">End of day</div>
         <div className="text-xs font-semibold leading-tight">File client check-ins</div>
@@ -445,7 +454,17 @@ function EodReminderAlert({
 // the icon's circular alpha mask rather than the rectangular button box —
 // otherwise the bubble reads as a squircle even though the icon is round.
 
-function BubbleIcon({ unackedCount, crowned = false, iconUrl }: { unackedCount: number; crowned?: boolean; iconUrl?: string | null }) {
+function BubbleIcon({
+  unackedCount, crowned = false, iconUrl, online = false
+}: {
+  unackedCount: number;
+  crowned?: boolean;
+  iconUrl?: string | null;
+  // Drives the green pulsing "I'm on shift" dot in the bottom-right
+  // corner. Passed down from WidgetPage so the dot stays in sync
+  // with the same clock state ClockSection reads — no second fetch.
+  online?: boolean;
+}) {
   return (
     <div style={{ position: "relative", width: 64, height: 64 }}>
       {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -466,40 +485,58 @@ function BubbleIcon({ unackedCount, crowned = false, iconUrl }: { unackedCount: 
             : "drop-shadow(0 4px 10px rgba(0,0,0,0.35))"
         }}
       />
-      {/* Employee of the Month crown floats above the bubble. SVG with a
-          gold gradient + jewels, gently rotated for character. */}
+      {/* Online indicator — green pulsing dot, bottom-right. Replaces
+          the old clock-icon affordance. Only renders when the user is
+          actively clocked in. */}
+      {online && (
+        <span
+          aria-label="Online (clocked in)"
+          title="On shift"
+          className="anim-pulse-dot"
+          style={{
+            position: "absolute",
+            bottom: 2,
+            right: 2,
+            width: 14,
+            height: 14,
+            borderRadius: "50%",
+            background: "#10b981",
+            border: "2px solid white",
+            boxShadow: "0 0 8px rgba(16,185,129,0.55)",
+            pointerEvents: "none"
+          }}
+        />
+      )}
+      {/* Employee of the Month — small crowned dot at the bottom-left
+          corner. Same scale as the online dot so the bubble stays
+          uncluttered. */}
       {crowned && (
         <span
           aria-label="Employee of the Month"
+          title="Employee of the Month"
           style={{
             position: "absolute",
-            top: -16,
-            left: "50%",
-            transform: "translateX(-50%) rotate(-8deg)",
-            width: 32,
-            height: 32,
+            bottom: 2,
+            left: 2,
+            width: 18,
+            height: 18,
+            borderRadius: "50%",
+            background: "linear-gradient(135deg, #FCD34D 0%, #F59E0B 70%, #D97706 100%)",
+            border: "2px solid white",
+            boxShadow: "0 2px 6px rgba(180,120,0,0.55)",
             pointerEvents: "none",
-            filter: "drop-shadow(0 3px 6px rgba(180,120,0,0.55))"
+            display: "grid",
+            placeItems: "center"
           }}
         >
-          <svg viewBox="0 0 24 24" width={32} height={32}>
-            <defs>
-              <linearGradient id="bubbleCrown" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor="#FCD34D" />
-                <stop offset="60%" stopColor="#F59E0B" />
-                <stop offset="100%" stopColor="#D97706" />
-              </linearGradient>
-            </defs>
+          <svg viewBox="0 0 24 24" width={11} height={11}>
             <path
               d="M3 7l4 4 5-7 5 7 4-4-1.6 11H4.6L3 7z"
-              fill="url(#bubbleCrown)"
+              fill="#FFFBEB"
               stroke="#92400E"
-              strokeWidth="1"
+              strokeWidth="1.2"
               strokeLinejoin="round"
             />
-            <circle cx="3" cy="7" r="1.4" fill="#FFFBEB" stroke="#92400E" strokeWidth="0.8" />
-            <circle cx="12" cy="4" r="1.4" fill="#FFFBEB" stroke="#92400E" strokeWidth="0.8" />
-            <circle cx="21" cy="7" r="1.4" fill="#FFFBEB" stroke="#92400E" strokeWidth="0.8" />
           </svg>
         </span>
       )}
@@ -524,7 +561,7 @@ function BubbleIcon({ unackedCount, crowned = false, iconUrl }: { unackedCount: 
 
 const DRAG_THRESHOLD = 4;
 
-function Bubble({ onExpand, unackedCount, crowned = false, iconUrl }: { onExpand: () => void; unackedCount: number; crowned?: boolean; iconUrl?: string | null }) {
+function Bubble({ onExpand, unackedCount, crowned = false, iconUrl, online = false }: { onExpand: () => void; unackedCount: number; crowned?: boolean; iconUrl?: string | null; online?: boolean }) {
   const startRef = useRef<{ x: number; y: number; dragging: boolean } | null>(null);
   function api() { return (window as any).widgetAPI; }
 
@@ -572,7 +609,7 @@ function Bubble({ onExpand, unackedCount, crowned = false, iconUrl }: { onExpand
           cursor: "grab"
         }}
       >
-        <BubbleIcon unackedCount={unackedCount} crowned={crowned} iconUrl={iconUrl} />
+        <BubbleIcon unackedCount={unackedCount} crowned={crowned} iconUrl={iconUrl} online={online} />
       </button>
     </div>
   );
@@ -581,7 +618,7 @@ function Bubble({ onExpand, unackedCount, crowned = false, iconUrl }: { onExpand
 /* ============================ ALERT (speech bubble) ============================ */
 
 function Alert({
-  task, unackedCount, onAck, onExpand, crowned = false, iconUrl
+  task, unackedCount, onAck, onExpand, crowned = false, iconUrl, online = false
 }: {
   task: WidgetTask | undefined;
   unackedCount: number;
@@ -589,6 +626,7 @@ function Alert({
   onExpand: () => void;
   crowned?: boolean;
   iconUrl?: string | null;
+  online?: boolean;
 }) {
   if (!task) return null;
   return (
@@ -651,7 +689,7 @@ function Alert({
         className="shrink-0 wg-bubble-btn anim-scale-in"
         aria-label="Open"
       >
-        <BubbleIcon unackedCount={unackedCount} crowned={crowned} iconUrl={iconUrl} />
+        <BubbleIcon unackedCount={unackedCount} crowned={crowned} iconUrl={iconUrl} online={online} />
       </button>
 
     </div>
@@ -743,7 +781,7 @@ function SignInPanel({ onCollapse }: { onCollapse: () => void }) {
 // the bubble icon. Fires when there's a new kudos and no task alerts.
 
 function KudosAlert({
-  kudos: k, count, onAck, onExpand, crowned = false, iconUrl
+  kudos: k, count, onAck, onExpand, crowned = false, iconUrl, online = false
 }: {
   kudos: WidgetKudos;
   count: number;
@@ -751,6 +789,7 @@ function KudosAlert({
   onExpand: () => void;
   crowned?: boolean;
   iconUrl?: string | null;
+  online?: boolean;
 }) {
   return (
     <div
@@ -804,7 +843,7 @@ function KudosAlert({
         className="shrink-0 wg-bubble-btn anim-scale-in"
         aria-label="Open"
       >
-        <BubbleIcon unackedCount={count} crowned={crowned} iconUrl={iconUrl} />
+        <BubbleIcon unackedCount={count} crowned={crowned} iconUrl={iconUrl} online={online} />
       </button>
     </div>
   );
@@ -813,7 +852,7 @@ function KudosAlert({
 /* ============================ NOTIF ALERT (mention / notify-teammates) ============================ */
 
 function NotifAlert({
-  notif, count, onDismiss, onExpand, crowned = false, iconUrl
+  notif, count, onDismiss, onExpand, crowned = false, iconUrl, online = false
 }: {
   notif: WidgetNotification;
   count: number;
@@ -821,6 +860,7 @@ function NotifAlert({
   onExpand: () => void;
   crowned?: boolean;
   iconUrl?: string | null;
+  online?: boolean;
 }) {
   const headline = notif.kind === "mention"
     ? `${notif.from?.name ?? "Someone"} mentioned you`
@@ -881,7 +921,7 @@ function NotifAlert({
         className="shrink-0 wg-bubble-btn anim-scale-in"
         aria-label="Open"
       >
-        <BubbleIcon unackedCount={count} crowned={crowned} iconUrl={iconUrl} />
+        <BubbleIcon unackedCount={count} crowned={crowned} iconUrl={iconUrl} online={online} />
       </button>
     </div>
   );

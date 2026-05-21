@@ -17,6 +17,7 @@ import {
   Layers, Briefcase, Layout, CheckCircle2
 } from "lucide-react";
 import { toast } from "sonner";
+import { ClockGate } from "@/components/ClockGate";
 
 // Two independent axes:
 //
@@ -380,6 +381,7 @@ export default function BoardPage() {
   const allDeptsSelected = selectedDepts.size === 0;
 
   return (
+    <ClockGate fallbackSubtitle="The board unlocks once you've clocked in. Tap below to start your shift.">
     <div className="space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <h1 className="text-lg font-medium">Board <span className="text-muted text-sm">· {visible.length}</span></h1>
@@ -604,6 +606,7 @@ export default function BoardPage() {
         </div>
       </DragDropContext>
     </div>
+    </ClockGate>
   );
 }
 

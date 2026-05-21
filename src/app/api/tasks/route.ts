@@ -63,6 +63,34 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   try {
     const userId = await requireCurrentUserId();
+
+    // Clock-in gate. Workers + dept_heads can't create tasks until
+    // they've started a shift (mirrors the UI ClockGate on /tasks/mine
+    // and /tasks/board). Leaders + stealth admins always exempt — they
+    // need to be able to seed work even when off the clock.
+    const supabase = getSupabaseAdmin();
+    const { data: caller } = await supabase
+      .from("users")
+      .select("role, is_admin")
+      .eq("id", userId)
+      .maybeSingle();
+    const exempt = caller?.role === "leader" || caller?.is_admin === true;
+    if (!exempt) {
+      const { data: openSegment } = await supabase
+        .from("time_entries")
+        .select("id")
+        .eq("user_id", userId)
+        .is("ended_at", null)
+        .limit(1)
+        .maybeSingle();
+      if (!openSegment) {
+        return NextResponse.json(
+          { error: "Clock in before creating tasks. Open the topbar clock or your widget to start a shift." },
+          { status: 403 }
+        );
+      }
+    }
+
     const body = await req.json();
 
     const title = (body.title ?? "").trim();
@@ -112,7 +140,6 @@ export async function POST(req: NextRequest) {
         : {}
     };
 
-    const supabase = getSupabaseAdmin();
     const { data, error } = await supabase
       .from("tasks")
       .insert(row)

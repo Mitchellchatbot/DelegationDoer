@@ -16,6 +16,7 @@ import { NewTaskForm } from "./NewTaskForm";
 // notifications still arrive via Slack DM.
 import { ROLE_LABELS } from "@/lib/auth";
 import { primaryDepartment } from "@/lib/departments";
+import { useNeedsClockIn } from "./ClockGate";
 import type { User } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
@@ -242,11 +243,7 @@ export function Topbar({ user }: { user: User }) {
       {/* Controls — right-aligned */}
       <div className="flex items-center gap-2 justify-self-end">
         <Dialog.Root open={newTaskOpen} onOpenChange={setNewTaskOpen}>
-          <Dialog.Trigger asChild>
-            <button className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full text-[14px] font-medium text-white bg-accent hover:bg-accent/90 shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-lift whitespace-nowrap shrink-0">
-              <Plus className="w-4 h-4" /> New task
-            </button>
-          </Dialog.Trigger>
+          <NewTaskTrigger />
           <Dialog.Portal>
             <Dialog.Overlay className="fixed inset-0 bg-black/30 backdrop-blur-sm z-40 anim-fade-in" />
             {/* Dialog.Content fills the viewport but is pointer-transparent
@@ -344,6 +341,33 @@ export function Topbar({ user }: { user: User }) {
         </button>
       </div>
     </header>
+  );
+}
+
+// Topbar's "New task" trigger — disabled with a tooltip when the
+// caller hasn't clocked in yet. Server-side enforcement still kicks
+// in via POST /api/tasks, but the visual disable keeps the UX clean
+// for the common path.
+function NewTaskTrigger() {
+  const needsClockIn = useNeedsClockIn();
+  if (needsClockIn) {
+    return (
+      <button
+        type="button"
+        disabled
+        title="Clock in first to add a new task."
+        className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full text-[14px] font-medium text-ink/50 bg-slate-200/70 cursor-not-allowed whitespace-nowrap shrink-0"
+      >
+        <Plus className="w-4 h-4" /> New task
+      </button>
+    );
+  }
+  return (
+    <Dialog.Trigger asChild>
+      <button className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full text-[14px] font-medium text-white bg-accent hover:bg-accent/90 shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-lift whitespace-nowrap shrink-0">
+        <Plus className="w-4 h-4" /> New task
+      </button>
+    </Dialog.Trigger>
   );
 }
 

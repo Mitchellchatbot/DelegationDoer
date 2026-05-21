@@ -3,6 +3,7 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { MyTasksKanban } from "@/components/MyTasksKanban";
+import { ClockGate } from "@/components/ClockGate";
 import { Target, ListChecks, AlertTriangle, Clock, Hourglass } from "lucide-react";
 import { PageHero } from "@/components/PageHero";
 import type { Task } from "@/lib/types";
@@ -86,6 +87,7 @@ export default async function MyTasksPage() {
   const blocked = mine.filter((t) => t.status === "waiting_on_client").length;
 
   return (
+    <ClockGate fallbackSubtitle="Your task list unlocks once you've clocked in. Tap below to start your shift.">
     <div className="space-y-5">
       <PageHero
         eyebrow={`Hey ${me.name.split(" ")[0]}`}
@@ -117,6 +119,7 @@ export default async function MyTasksPage() {
         <MyTasksKanban initialTasks={allMine} />
       )}
     </div>
+    </ClockGate>
   );
 }
 

@@ -6,7 +6,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Crown } from "lucide-react";
 import { Countdown } from "./Countdown";
 import { usePresence } from "@/lib/presence-context";
-import { useSlackCustomEmojis, resolveEmoji } from "@/lib/slack-emoji-cache";
 import { cn, initials } from "@/lib/utils";
 import { ROLE_LABELS } from "@/lib/auth";
 import { userCapacity } from "@/lib/capacity";
@@ -517,10 +516,9 @@ function PersonNode({
   departments: Department[];
 }) {
   const live = usePresence(user.id);
-  const { map: customEmojis } = useSlackCustomEmojis();
   const avatarUrl = user.avatarUrl ?? live?.avatarUrl ?? null;
   const presence = live?.presence ?? null;
-  const emoji = resolveEmoji(live?.statusEmoji ?? null, customEmojis);
+  const emoji = live?.statusEmoji ?? null;
 
   const size = tone === "leader" ? 96 : tone === "head" ? 84 : 72;
   const ringClass = ROLE_RING[user.role];

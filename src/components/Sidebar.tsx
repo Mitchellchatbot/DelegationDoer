@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 import {
   ListTodo, Users,
   Sparkles, Settings, AlertTriangle, Crown, Mail, Briefcase,
-  FolderKanban, CalendarDays, BookOpen, LayoutDashboard
+  FolderKanban, CalendarDays, BookOpen, LayoutDashboard, ClipboardCheck
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { ReportIncidentDialog } from "./ReportIncidentDialog";
@@ -66,17 +66,37 @@ export function Sidebar({ user }: { user: User }) {
   const [incidentOpen, setIncidentOpen] = useState(false);
   const [aiOpen, setAiOpen] = useState(false);
 
-  // Aggregate "things waiting in /updates" badge. Folds in the open
-  // SEO request count (SEO team + leader) and the unseen-project-
-  // activity count (leader only) into one red pill next to the
-  // Updates nav item, so anything new in /updates lights up the
-  // sidebar no matter which sub-tab triggered it.
+  // Sidebar badges break into two flavours:
+  //   1. Two role-gated counts (SEO requests, unseen project activity)
+  //      that fold into one Updates pill — these have their own per-
+  //      sidebar endpoints.
+  //   2. The generic notifications/badges feed (clients-at-risk,
+  //      EOD-pending after 5pm, pending approvals, inbox unread). One
+  //      cheap round-trip refreshes them all. The DD missive-webhook
+  //      busts that endpoint's cache so we don't need to poll hard.
   const canSeeSeo = isLeader(user) || (user.departmentIds ?? []).includes("dep_seo");
   const canSeeProjectUpdates = isLeader(user);
   const [openSeoCount, setOpenSeoCount] = useState<number | null>(null);
   const [unseenProjects, setUnseenProjects] = useState<number | null>(null);
+
+  // Hydrate the generic badge counts from localStorage on first paint so
+  // the sidebar doesn't flash null→count when the API lands. Each fetch
+  // overwrites the cache so the next page navigation also starts hot.
+  function readCached(key: string): number | null {
+    if (typeof window === "undefined") return null;
+    try {
+      const raw = window.localStorage.getItem(key);
+      const n = raw != null ? Number(raw) : null;
+      return Number.isFinite(n as number) ? (n as number) : null;
+    } catch { return null; }
+  }
+  const [clientsAtRisk, setClientsAtRisk]       = useState<number | null>(() => readCached("badge:clientsAtRisk"));
+  const [peopleEodPending, setPeopleEodPending] = useState<number | null>(() => readCached("badge:peopleEod"));
+  const [approvalsPending, setApprovalsPending] = useState<number | null>(() => readCached("badge:approvals"));
+  const [inboxesUnread, setInboxesUnread]       = useState<number | null>(() => readCached("badge:inboxesUnread"));
+  const [canApprove, setCanApprove] = useState(false);
+
   useEffect(() => {
-    if (!canSeeSeo && !canSeeProjectUpdates) return;
     let cancelled = false;
     async function fetchCounts() {
       try {
@@ -94,18 +114,70 @@ export function Sidebar({ user }: { user: User }) {
             if (!cancelled) setUnseenProjects(data.unseenCount ?? 0);
           }
         }
+        const badgeRes = await fetch("/api/notifications/badges", { cache: "no-store" });
+        if (badgeRes.ok) {
+          const data = await badgeRes.json();
+          if (!cancelled) {
+            const c = data.clients ?? 0;
+            const e = data.peopleEodPending ?? 0;
+            const a = data.approvalsPending ?? 0;
+            const i = data.inboxesUnread ?? 0;
+            setClientsAtRisk(c);
+            setPeopleEodPending(e);
+            setApprovalsPending(a);
+            setInboxesUnread(i);
+            setCanApprove(!!data.canApprove);
+            try {
+              window.localStorage.setItem("badge:clientsAtRisk", String(c));
+              window.localStorage.setItem("badge:peopleEod", String(e));
+              window.localStorage.setItem("badge:approvals", String(a));
+              window.localStorage.setItem("badge:inboxesUnread", String(i));
+            } catch { /* localStorage blocked */ }
+          }
+        }
       } catch { /* ignore */ }
     }
     fetchCounts();
+    // Drop the poll cadence from 30s → 5m. The SSE subscription below
+    // pushes a fresh refresh the instant something changes; the
+    // interval is just a safety net for dropped streams.
     const t = setInterval(() => {
       if (document.visibilityState === "visible") fetchCounts();
-    }, 30_000);
+    }, 5 * 60_000);
     const onVis = () => { if (document.visibilityState === "visible") fetchCounts(); };
     document.addEventListener("visibilitychange", onVis);
+
+    // Live push: any inbox event triggers a fresh badge fetch. The
+    // server-side cache for this user was already busted by the
+    // webhook receiver, so the refetch reads fresh data.
+    let es: EventSource | null = null;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let retryAttempt = 0;
+    function openStream() {
+      try {
+        es = new EventSource("/api/inbox-events");
+        es.addEventListener("message", () => { if (!cancelled) fetchCounts(); });
+        es.addEventListener("inbox", () => { if (!cancelled) fetchCounts(); });
+        es.onerror = () => {
+          es?.close();
+          es = null;
+          // Reconnect with capped exponential backoff so a flapping
+          // network doesn't hammer the SSE endpoint.
+          retryAttempt += 1;
+          const delay = Math.min(60_000, 1000 * 2 ** Math.min(retryAttempt, 6));
+          retryTimer = setTimeout(() => { if (!cancelled) openStream(); }, delay);
+        };
+        es.onopen = () => { retryAttempt = 0; };
+      } catch { /* EventSource unsupported / blocked */ }
+    }
+    openStream();
+
     return () => {
       cancelled = true;
       clearInterval(t);
       document.removeEventListener("visibilitychange", onVis);
+      if (retryTimer) clearTimeout(retryTimer);
+      es?.close();
     };
   }, [canSeeSeo, canSeeProjectUpdates]);
 
@@ -136,9 +208,27 @@ export function Sidebar({ user }: { user: User }) {
     icon: FolderKanban,
     tone: "indigo"
   };
-  const restWithProjects = canSeeProjects
+  let restWithExtras = canSeeProjects
     ? [...rest.slice(0, 3), PROJECTS_ITEM, ...rest.slice(3)]
     : rest;
+  // Approvals slots right after Inboxes for users who can approve drafts,
+  // close to where they'd triage client comms anyway.
+  const APPROVALS_ITEM: NavItem = {
+    href: "/approvals",
+    label: "Approvals",
+    icon: ClipboardCheck,
+    tone: "emerald"
+  };
+  if (canApprove) {
+    const inboxIdx = restWithExtras.findIndex((i) => i.href === "/inboxes");
+    const insertAt = inboxIdx >= 0 ? inboxIdx + 1 : restWithExtras.length;
+    restWithExtras = [
+      ...restWithExtras.slice(0, insertAt),
+      APPROVALS_ITEM,
+      ...restWithExtras.slice(insertAt)
+    ];
+  }
+  const restWithProjects = restWithExtras;
   const NAV: NavItem[] = isLeader(user)
     ? [people, ...CEO_NAV, ...restWithProjects]
     : isHead(user)
@@ -180,10 +270,42 @@ export function Sidebar({ user }: { user: User }) {
             const updatesTotal =
               (canSeeSeo ? (openSeoCount ?? 0) : 0) +
               (canSeeProjectUpdates ? (unseenProjects ?? 0) : 0);
-            const seoBadge =
-              item.href === "/updates" && updatesTotal > 0
-                ? updatesTotal
-                : null;
+            // One red (or amber) pill per row. Source depends on which
+            // nav item this is — empty when nothing's pending.
+            const badge: { count: number; tone: "rose" | "amber"; title: string } | null = (() => {
+              if (item.href === "/updates" && updatesTotal > 0) {
+                return { count: updatesTotal, tone: "rose", title: `${updatesTotal} open SEO ${updatesTotal === 1 ? "request" : "requests"}` };
+              }
+              if (item.href === "/clients" && (clientsAtRisk ?? 0) > 0) {
+                return {
+                  count: clientsAtRisk!,
+                  tone: "rose",
+                  title: `${clientsAtRisk} ${clientsAtRisk === 1 ? "client is" : "clients are"} at-risk or shaky`
+                };
+              }
+              if (item.href === "/people" && (peopleEodPending ?? 0) > 0) {
+                return {
+                  count: peopleEodPending!,
+                  tone: "amber",
+                  title: `${peopleEodPending} EOD ${peopleEodPending === 1 ? "form" : "forms"} not yet submitted today`
+                };
+              }
+              if (item.href === "/approvals" && (approvalsPending ?? 0) > 0) {
+                return {
+                  count: approvalsPending!,
+                  tone: "rose",
+                  title: `${approvalsPending} email${approvalsPending === 1 ? "" : "s"} awaiting your approval`
+                };
+              }
+              if (item.href === "/inboxes" && (inboxesUnread ?? 0) > 0) {
+                return {
+                  count: inboxesUnread!,
+                  tone: "rose",
+                  title: `${inboxesUnread} unread thread${inboxesUnread === 1 ? "" : "s"} across your inboxes`
+                };
+              }
+              return null;
+            })();
             return (
               <Link
                 key={item.href}
@@ -216,12 +338,15 @@ export function Sidebar({ user }: { user: User }) {
                 )}
                 <Icon className={cn("w-[18px] h-[18px] shrink-0 relative", active ? tone.activeFg : tone.idle)} />
                 <span className="relative">{item.label}</span>
-                {seoBadge !== null && (
+                {badge && (
                   <span
-                    className="ml-auto inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full text-[10px] font-bold tabular-nums bg-rose-500 text-white shadow-sm ring-2 ring-white relative"
-                    title={`${seoBadge} open SEO ${seoBadge === 1 ? "request" : "requests"}`}
+                    className={cn(
+                      "ml-auto inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full text-[10px] font-bold tabular-nums text-white shadow-sm ring-2 ring-white relative",
+                      badge.tone === "rose" ? "bg-rose-500" : "bg-amber-500"
+                    )}
+                    title={badge.title}
                   >
-                    {seoBadge}
+                    {badge.count}
                   </span>
                 )}
                 {/* Active-indicator dot. Bumped to 2x2 and a bouncier
@@ -230,7 +355,7 @@ export function Sidebar({ user }: { user: User }) {
                     across every nav item, so Framer Motion animates
                     the same DOM dot from its old position to its new
                     one on every tab change. */}
-                {active && seoBadge === null && (
+                {active && !badge && (
                   <motion.span
                     layoutId="sidebar-active-dot"
                     aria-hidden

@@ -1196,6 +1196,31 @@ function useClock(): ClockApi {
   return v;
 }
 
+// Tiny green pulsing dot rendered in the panel header next to the
+// "DelegationDoer" brand text. Visible only when the user is clocked
+// in. Lives in its own component so subscribing to clock state doesn't
+// force the entire Panel to re-render on every tick.
+function OnShiftDot() {
+  const { clock } = useClock();
+  if (!clock.open) return null;
+  return (
+    <span
+      aria-label="Online (clocked in)"
+      title="On shift"
+      className="anim-pulse-dot"
+      style={{
+        width: 8,
+        height: 8,
+        borderRadius: "50%",
+        background: "#10b981",
+        boxShadow: "0 0 6px rgba(16,185,129,0.55)",
+        display: "inline-block",
+        marginLeft: 2
+      }}
+    />
+  );
+}
+
 function ClockProvider({ children }: { children: React.ReactNode }) {
   const cached = typeof window !== "undefined" ? readCachedClock() : null;
   const [clock, setClock] = useState<ClockState>(() => ({
@@ -1577,6 +1602,11 @@ function Panel({
               <img src={widgetIconUrl || "/widget-icon.png"} alt="" className="w-full h-full object-cover" draggable={false} />
             </div>
             <span className="font-semibold text-ink">DelegationDoer</span>
+            {/* On-shift indicator. Pulses green only when the current
+                user is clocked in; nothing when off-shift. Sits next
+                to the brand text so the "I'm online" signal lives in
+                a place where the widget already directs your eye. */}
+            <OnShiftDot />
           </div>
           <div className="flex items-center gap-0.5" style={{ WebkitAppRegion: "no-drag" } as any}>
             <button

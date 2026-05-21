@@ -1,0 +1,56 @@
+import { NextRequest, NextResponse } from "next/server";
+import crypto from "crypto";
+import { publish, type InboxEvent } from "@/lib/inbox-event-bus";
+
+export const dynamic = "force-dynamic";
+
+// POST /api/missive-webhook
+//   Fired by missiveclone after every successful inbound ingestMessage.
+//   Body shape (set by missiveclone/backend/src/email/imap.js):
+//     { event, ts, workspace_id, account_id, thread_id, message_id }
+//   Signed with HMAC-SHA256(body, MISSIVE_WEBHOOK_SECRET) and sent as
+//   the X-Missive-Signature header. We verify, then publish to the
+//   in-process bus so subscribers (badge cache, SSE stream) react in
+//   real time.
+
+const SECRET = process.env.MISSIVE_WEBHOOK_SECRET || "";
+
+// Constant-time signature comparison. timingSafeEqual throws on length
+// mismatch, so we normalize to a fixed-size hex buffer first.
+function verify(rawBody: string, sig: string | null): boolean {
+  if (!SECRET || !sig) return false;
+  const expected = crypto.createHmac("sha256", SECRET).update(rawBody).digest("hex");
+  if (expected.length !== sig.length) return false;
+  try {
+    return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(sig));
+  } catch {
+    return false;
+  }
+}
+
+export async function POST(req: NextRequest) {
+  const rawBody = await req.text();
+  const sig = req.headers.get("x-missive-signature");
+  if (!verify(rawBody, sig)) {
+    // Don't reveal whether the secret is unset vs the sig is wrong — same 401.
+    return NextResponse.json({ error: "invalid signature" }, { status: 401 });
+  }
+  let payload: Partial<InboxEvent>;
+  try {
+    payload = JSON.parse(rawBody);
+  } catch {
+    return NextResponse.json({ error: "invalid json" }, { status: 400 });
+  }
+  if (!payload.event || !payload.account_id || !payload.thread_id) {
+    return NextResponse.json({ error: "missing fields" }, { status: 400 });
+  }
+  publish({
+    event: payload.event,
+    workspace_id: payload.workspace_id,
+    account_id: payload.account_id,
+    thread_id: payload.thread_id,
+    message_id: payload.message_id,
+    ts: payload.ts ?? Date.now()
+  });
+  return NextResponse.json({ ok: true });
+}

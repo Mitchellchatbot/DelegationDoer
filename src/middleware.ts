@@ -19,6 +19,12 @@ const PUBLIC_PREFIXES = [
   // Cron routes carry their own CRON_SECRET check inside the handler.
   // Don't gate on a Supabase session — Vercel cron has no cookies.
   "/api/cron",
+  // tl;dv webhook carries its own shared-secret check inside the handler
+  // (x-tldv-webhook-secret header). tl;dv has no Supabase cookie, so
+  // gating on a session here would 401 every TranscriptReady event.
+  // Note: /api/integrations/tldv/run-once stays session-gated — it's a
+  // manual replay tool, not an inbound webhook.
+  "/api/integrations/tldv/webhook",
   // The widget renderer must be reachable inside Electron without a
   // session — when the cookie jar is empty (fresh launch) we want the
   // widget to render its own "Sign in" state rather than redirect to

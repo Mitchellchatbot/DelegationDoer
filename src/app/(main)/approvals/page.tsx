@@ -158,13 +158,44 @@ function DraftCard({
   const [editBody, setEditBody] = useState(draft.bodyText);
   const [editTo, setEditTo] = useState(draft.to.join(", "));
   const [editCc, setEditCc] = useState(draft.cc.join(", "));
+  // Send-from picker — lazy-loaded on first expand. Defaults to
+  // whatever the server says the author's primary mailbox is, but
+  // the approver can override (e.g. send via their own inbox).
+  const [sendFromOptions, setSendFromOptions] = useState<Array<{ id: string; email: string; displayName: string | null; source: string }>>([]);
+  const [sendFromId, setSendFromId] = useState<string>("");
+  const [sendFromLoaded, setSendFromLoaded] = useState(false);
+
+  // Load send-from options the first time the card is expanded for a
+  // pending draft. Cached for the lifetime of the row.
+  useEffect(() => {
+    if (sendFromLoaded || !expanded || draft.status !== "pending") return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/email-drafts/${draft.id}/send-from-options`, { cache: "no-store" });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (cancelled) return;
+        const opts = (data.options ?? []) as typeof sendFromOptions;
+        setSendFromOptions(opts);
+        setSendFromId(data.defaultAccountId ?? opts[0]?.id ?? "");
+      } finally {
+        if (!cancelled) setSendFromLoaded(true);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [expanded, draft.id, draft.status, sendFromLoaded]);
 
   const kindMeta = KIND_LABELS[draft.kind];
 
   async function approve() {
     setBusy("approve");
     try {
-      const res = await fetch(`/api/email-drafts/${draft.id}/approve`, { method: "POST" });
+      const res = await fetch(`/api/email-drafts/${draft.id}/approve`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(sendFromId ? { accountId: sendFromId } : {})
+      });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error ?? `status ${res.status}`);
       if (data.status === "sent") {
@@ -423,36 +454,66 @@ function DraftCard({
           )}
 
           {(isPending || isFailed) && !editing && !showRejectBox && (
-            <div className="flex items-center justify-end gap-2 pt-1">
-              <button
-                type="button"
-                onClick={() => setEditing(true)}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium text-ink/70 bg-white border border-slate-200 hover:border-accent/40 hover:text-accent transition-colors"
-              >
-                <Edit2 className="w-3 h-3" /> Edit
-              </button>
-              {isPending && (
+            <div className="space-y-2 pt-1">
+              {/* Send-from picker — shows which mailbox will actually
+                  send the email. Approvers can pick author's mailbox
+                  or their own as a rescue path. Hidden when only one
+                  option exists (no decision to make). */}
+              {sendFromOptions.length > 0 && (
+                <div className="flex items-center gap-2 text-[11px] text-ink/60 px-1">
+                  <Send className="w-3 h-3 text-ink/40" />
+                  <span>Send from:</span>
+                  {sendFromOptions.length === 1 ? (
+                    <span className="font-medium text-ink/80">
+                      {sendFromOptions[0].displayName || sendFromOptions[0].email}
+                      <span className="ml-1 text-ink/40">({sendFromOptions[0].source})</span>
+                    </span>
+                  ) : (
+                    <select
+                      value={sendFromId}
+                      onChange={(e) => setSendFromId(e.target.value)}
+                      className="text-[11px] bg-white border border-slate-200 rounded-md px-2 py-0.5 outline-none focus:border-accent/50"
+                    >
+                      {sendFromOptions.map((o) => (
+                        <option key={o.id} value={o.id}>
+                          {o.displayName || o.email} · {o.source === "author" ? "author" : "you"}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+              )}
+              <div className="flex items-center justify-end gap-2">
                 <button
                   type="button"
-                  onClick={() => setShowRejectBox(true)}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium text-rose-700 bg-white border border-rose-200/70 hover:bg-rose-50 transition-colors"
+                  onClick={() => setEditing(true)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium text-ink/70 bg-white border border-slate-200 hover:border-accent/40 hover:text-accent transition-colors"
                 >
-                  <XCircle className="w-3 h-3" /> Reject…
+                  <Edit2 className="w-3 h-3" /> Edit
                 </button>
-              )}
-              <button
-                type="button"
-                onClick={approve}
-                disabled={busy === "approve"}
-                className={cn(
-                  "inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs font-semibold text-white shadow-sm transition-all hover:-translate-y-0.5 active:scale-95",
-                  busy === "approve" && "opacity-60 cursor-not-allowed hover:translate-y-0"
+                {isPending && (
+                  <button
+                    type="button"
+                    onClick={() => setShowRejectBox(true)}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium text-rose-700 bg-white border border-rose-200/70 hover:bg-rose-50 transition-colors"
+                  >
+                    <XCircle className="w-3 h-3" /> Reject…
+                  </button>
                 )}
-                style={{ background: "linear-gradient(135deg, #10b981 0%, #059669 100%)" }}
-              >
-                {busy === "approve" ? <Loader2 className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
-                {isFailed ? "Retry send" : "Approve & Send"}
-              </button>
+                <button
+                  type="button"
+                  onClick={approve}
+                  disabled={busy === "approve"}
+                  className={cn(
+                    "inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs font-semibold text-white shadow-sm transition-all hover:-translate-y-0.5 active:scale-95",
+                    busy === "approve" && "opacity-60 cursor-not-allowed hover:translate-y-0"
+                  )}
+                  style={{ background: "linear-gradient(135deg, #10b981 0%, #059669 100%)" }}
+                >
+                  {busy === "approve" ? <Loader2 className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
+                  {isFailed ? "Retry send" : "Approve & Send"}
+                </button>
+              </div>
             </div>
           )}
         </div>

@@ -18,7 +18,7 @@ export const maxDuration = 30;
 // leader / admin (always).
 
 export async function POST(
-  _req: Request,
+  req: Request,
   { params }: { params: { id: string } }
 ) {
   try {
@@ -52,24 +52,45 @@ export async function POST(
       return NextResponse.json({ error: "draft was rejected" }, { status: 400 });
     }
 
-    // Pick the sending mailbox: row.account_id wins; else the author's
-    // first connected inbox via inbox_assignments. If they have none,
-    // surface a 422 so the approver can tell the worker to connect a
-    // mailbox before retrying.
-    let accountId = row.account_id as string | null;
+    // Sending-mailbox resolution chain:
+    //   1. body.accountId — approver picked one explicitly on the UI
+    //   2. row.account_id — already pinned at draft create time
+    //   3. author's first connected inbox via inbox_assignments
+    //   4. approver's first connected inbox (rescue path so a leader
+    //      can still proof-and-send when the worker hasn't OAuth'd yet)
+    //
+    // Whichever wins is persisted back onto the row so a later retry
+    // doesn't re-resolve.
+    const body = await req.json().catch(() => ({} as { accountId?: string }));
+    let accountId: string | null =
+      (typeof body.accountId === "string" && body.accountId) ? body.accountId :
+      (row.account_id as string | null);
+
     if (!accountId) {
-      const { data: assignment } = await supabase
+      const { data: authorAssignment } = await supabase
         .from("inbox_assignments")
         .select("missive_account_id")
         .eq("user_id", row.author_id)
         .order("created_at", { ascending: true })
         .limit(1)
         .maybeSingle();
-      accountId = (assignment?.missive_account_id as string | null) ?? null;
+      accountId = (authorAssignment?.missive_account_id as string | null) ?? null;
+    }
+    if (!accountId) {
+      // Last-resort fallback: approver's own mailbox. Surfaces in the
+      // outbound From: header so the client knows who sent it.
+      const { data: approverAssignment } = await supabase
+        .from("inbox_assignments")
+        .select("missive_account_id")
+        .eq("user_id", userId)
+        .order("created_at", { ascending: true })
+        .limit(1)
+        .maybeSingle();
+      accountId = (approverAssignment?.missive_account_id as string | null) ?? null;
     }
     if (!accountId) {
       return NextResponse.json({
-        error: "author has no connected mailbox; ask them to sign in via Connect inbox"
+        error: "no connected mailbox to send from — neither the author nor you have one linked. Sign in via Connect inbox first."
       }, { status: 422 });
     }
 

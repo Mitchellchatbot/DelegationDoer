@@ -72,10 +72,21 @@ export default function BoardPage() {
   // currently visible; an empty set is the "All departments" view.
   // `?dept=DEPT_ID` in the URL pre-filters to that single dept (kept
   // for the Leader Console's "View tasks" deep link).
+  //
+  // Default behavior for workers on first load: pre-filter to their
+  // primary department so a website teammate lands on the Website
+  // board, an SEO teammate on SEO, etc. Leaders + admins still see
+  // "All departments" by default. The `?dept=all` escape hatch
+  // forces the empty-set view if someone explicitly wants everyone.
   const initialDept = searchParams.get("dept");
-  const [selectedDepts, setSelectedDepts] = useState<Set<string>>(
-    () => new Set(initialDept ? [initialDept] : [])
-  );
+  const isLeaderOrAdmin = currentUser.role === "leader" || currentUser.isAdmin === true;
+  const primaryUserDept = currentUser.departmentIds?.[0] ?? null;
+  const [selectedDepts, setSelectedDepts] = useState<Set<string>>(() => {
+    if (initialDept === "all") return new Set();
+    if (initialDept) return new Set([initialDept]);
+    if (!isLeaderOrAdmin && primaryUserDept) return new Set([primaryUserDept]);
+    return new Set();
+  });
   const [filterUser, setFilterUser] = useState("all");
   const [filterClient, setFilterClient] = useState("all");
   const [filterWebsite, setFilterWebsite] = useState("all");
@@ -92,6 +103,44 @@ export default function BoardPage() {
   })();
   const [groupBy, setGroupBy] = useState<GroupBy>(initialGroupBy);
   const [moreFiltersOpen, setMoreFiltersOpen] = useState(false);
+
+  // Restore filter state on back-navigation from a task detail. Saved
+  // to sessionStorage on every change; rehydrated on mount when there
+  // are no explicit URL overrides. Means: click a card → /tasks/[id]
+  // → browser Back → land on the same board view you left.
+  const STORAGE_KEY = "board:state:v1";
+  useEffect(() => {
+    // Only restore if the URL didn't explicitly set state.
+    if (initialDept || searchParams.get("groupBy")) return;
+    try {
+      const raw = window.sessionStorage.getItem(STORAGE_KEY);
+      if (!raw) return;
+      const s = JSON.parse(raw) as {
+        deptIds?: string[];
+        groupBy?: GroupBy;
+        filterUser?: string;
+        filterClient?: string;
+        filterWebsite?: string;
+        sort?: string;
+      };
+      if (Array.isArray(s.deptIds)) setSelectedDepts(new Set(s.deptIds));
+      if (s.groupBy === "client" || s.groupBy === "status" || s.groupBy === "person") setGroupBy(s.groupBy);
+      if (typeof s.filterUser === "string") setFilterUser(s.filterUser);
+      if (typeof s.filterClient === "string") setFilterClient(s.filterClient);
+      if (typeof s.filterWebsite === "string") setFilterWebsite(s.filterWebsite);
+      if (typeof s.sort === "string") setSort(s.sort);
+    } catch { /* ignore */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  // Persist state on every change.
+  useEffect(() => {
+    try {
+      window.sessionStorage.setItem(STORAGE_KEY, JSON.stringify({
+        deptIds: Array.from(selectedDepts),
+        groupBy, filterUser, filterClient, filterWebsite, sort
+      }));
+    } catch { /* ignore quota etc */ }
+  }, [selectedDepts, groupBy, filterUser, filterClient, filterWebsite, sort]);
 
   useEffect(() => {
     let cancelled = false;

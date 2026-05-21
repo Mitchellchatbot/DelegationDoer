@@ -518,7 +518,10 @@ function PersonNode({
   const live = usePresence(user.id);
   const avatarUrl = user.avatarUrl ?? live?.avatarUrl ?? null;
   const presence = live?.presence ?? null;
-  const emoji = live?.statusEmoji ?? null;
+  const rawEmoji = live?.statusEmoji ?? null;
+  // Hide unresolved Slack shortcodes like `:spiderman:` — only show
+  // actual glyphs/URLs.
+  const emoji = rawEmoji && /^:[^:\s]+:$/.test(rawEmoji) ? null : rawEmoji;
 
   const size = tone === "leader" ? 96 : tone === "head" ? 84 : 72;
   const ringClass = ROLE_RING[user.role];

@@ -37,7 +37,7 @@ export async function POST(
     if (fetchErr) return NextResponse.json({ error: fetchErr.message }, { status: 500 });
     if (!row) return NextResponse.json({ error: "not found" }, { status: 404 });
     const allowed = await canApproveDraft(
-      { id: me.id, name: me.name, role: me.role, departmentIds: me.departmentIds },
+      { id: me.id, name: me.name, role: me.role, isAdmin: me.isAdmin, departmentIds: me.departmentIds },
       { author_id: row.author_id as string, kind: row.kind }
     );
     if (!allowed) {

@@ -42,7 +42,7 @@ export async function GET(
 
     const isAuthor = draft.author_id === userId;
     const isApprover = await canApproveDraft(
-      { id: me.id, name: me.name, role: me.role, departmentIds: me.departmentIds },
+      { id: me.id, name: me.name, role: me.role, isAdmin: me.isAdmin, departmentIds: me.departmentIds },
       { author_id: draft.author_id as string, kind: draft.kind }
     );
     if (!isAuthor && !isApprover) {

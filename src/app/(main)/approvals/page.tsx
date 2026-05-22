@@ -86,7 +86,7 @@ type Filter = "pending" | "needs_revision" | "all";
 
 export default function ApprovalsPage() {
   const me = useCurrentUser();
-  const viewerIsApprover = isApprover({ name: me.name, role: me.role });
+  const viewerIsApprover = isApprover({ name: me.name, role: me.role, isAdmin: me.isAdmin });
   const [drafts, setDrafts] = useState<Draft[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<Filter>("pending");

@@ -163,7 +163,7 @@ export async function GET() {
     // v3 approver set (leader + Sam/Mujtaba/Farez) sees every pending
     // draft. Everyone else gets 0 — the sidebar still shows their own
     // drafts via the /emails page but doesn't badge them here.
-    const canApprove = isApprover({ name: me.name, role: me.role });
+    const canApprove = isApprover({ name: me.name, role: me.role, isAdmin: me.isAdmin });
     if (canApprove) {
       try {
         const { count } = await supabase

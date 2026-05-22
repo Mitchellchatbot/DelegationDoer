@@ -29,6 +29,7 @@ export default async function OutboundEmailsPage() {
   const isApprover = canApproveAnyDraft({
     name: me.name,
     role: me.role,
+    isAdmin: me.isAdmin,
     departmentIds: me.departmentIds
   });
 

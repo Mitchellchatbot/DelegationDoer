@@ -21,6 +21,8 @@ interface Submission {
   accomplished: string | null;
   planTomorrow: string | null;
   blockers: string | null;
+  leadsMessaged: string | null;
+  linkedinComments: string | null;
   note: string | null;
   submittedAt: string;
   reviewedAt: string | null;
@@ -277,15 +279,27 @@ function SubmissionCard({
       </header>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
-        <SectionCell label="Worked on" value={s.workedOn} />
-        <SectionCell label="Accomplished" value={s.accomplished} />
-        <SectionCell label="Plan for tomorrow" value={s.planTomorrow} />
-        <SectionCell label="Blockers / questions" value={s.blockers} />
+        {s.name === "Talha Ali" ? (
+          <>
+            <SectionCell label="What was accomplished today" value={s.workedOn} />
+            <SectionCell label="Leads messaged" value={s.leadsMessaged} />
+            <SectionCell label="LinkedIn comments posted" value={s.linkedinComments} />
+            <SectionCell label="Game plan for tomorrow" value={s.planTomorrow} />
+            <SectionCell label="Anything I can help with" value={s.blockers} />
+          </>
+        ) : (
+          <>
+            <SectionCell label="Worked on" value={s.workedOn} />
+            <SectionCell label="Accomplished" value={s.accomplished} />
+            <SectionCell label="Plan for tomorrow" value={s.planTomorrow} />
+            <SectionCell label="Blockers / questions" value={s.blockers} />
+          </>
+        )}
       </div>
 
       {/* Legacy free-form note — only if there's nothing in the
           structured fields. */}
-      {s.note && !s.workedOn && !s.accomplished && !s.planTomorrow && !s.blockers && (
+      {s.note && !s.workedOn && !s.accomplished && !s.planTomorrow && !s.blockers && !s.leadsMessaged && !s.linkedinComments && (
         <div className="text-[13px] bg-slate-50/70 border border-slate-200/60 rounded-lg px-3 py-2 whitespace-pre-wrap">
           {s.note}
         </div>

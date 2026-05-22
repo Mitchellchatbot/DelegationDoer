@@ -27,6 +27,8 @@ interface EodRow {
   accomplished: string | null;
   plan_tomorrow: string | null;
   blockers: string | null;
+  leads_messaged: string | null;
+  linkedin_comments: string | null;
   note: string | null;
   submitted_at: string;
   reviewed_at: string | null;
@@ -84,7 +86,7 @@ export async function GET(req: NextRequest) {
 
     let q = supabase
       .from("eod_notes")
-      .select("id, user_id, note_date, worked_on, accomplished, plan_tomorrow, blockers, note, submitted_at, reviewed_at, reviewed_by")
+      .select("id, user_id, note_date, worked_on, accomplished, plan_tomorrow, blockers, leads_messaged, linkedin_comments, note, submitted_at, reviewed_at, reviewed_by")
       .not("submitted_at", "is", null)
       .gte("note_date", sinceIso)
       .order("submitted_at", { ascending: false })
@@ -126,6 +128,8 @@ export async function GET(req: NextRequest) {
         accomplished: r.accomplished,
         planTomorrow: r.plan_tomorrow,
         blockers: r.blockers,
+        leadsMessaged: r.leads_messaged,
+        linkedinComments: r.linkedin_comments,
         note: r.note && r.note.trim() ? r.note : null,
         submittedAt: r.submitted_at,
         reviewedAt: r.reviewed_at,

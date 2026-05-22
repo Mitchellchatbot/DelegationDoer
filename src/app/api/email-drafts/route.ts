@@ -252,7 +252,7 @@ export async function GET(req: NextRequest) {
     if (!mineOnly) {
       // v3 approvers (leader + Sam/Mujtaba/Farez) see every draft.
       // Everyone else sees only their own.
-      if (!isApprover({ name: me.name, role: me.role })) {
+      if (!isApprover({ name: me.name, role: me.role, isAdmin: me.isAdmin })) {
         visible = allRows.filter((r) => r.author_id === userId);
       }
     }

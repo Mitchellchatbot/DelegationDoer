@@ -7,12 +7,14 @@ export const dynamic = "force-dynamic";
 // PUT /api/eod/notes — upsert the caller's EOD entry for a given date.
 // Body shape (all optional; whatever's present gets written):
 //   {
-//     date:          "YYYY-MM-DD",      // defaults to today
-//     note:          string,             // legacy free-form catch-all
-//     workedOn:      string,
-//     accomplished:  string,
-//     planTomorrow:  string,
-//     blockers:      string
+//     date:              "YYYY-MM-DD",      // defaults to today
+//     note:              string,             // legacy free-form catch-all
+//     workedOn:          string,
+//     accomplished:      string,
+//     planTomorrow:      string,
+//     blockers:          string,
+//     leadsMessaged:     string,             // marketing-style flow only
+//     linkedinComments:  string              // marketing-style flow only
 //   }
 // Only the caller can write their own row — no userId in the body.
 
@@ -50,6 +52,8 @@ export async function PUT(req: NextRequest) {
     if ("accomplished" in body) row.accomplished = STRING_OR_EMPTY(body.accomplished);
     if ("planTomorrow" in body) row.plan_tomorrow = STRING_OR_EMPTY(body.planTomorrow);
     if ("blockers" in body) row.blockers = STRING_OR_EMPTY(body.blockers);
+    if ("leadsMessaged" in body) row.leads_messaged = STRING_OR_EMPTY(body.leadsMessaged);
+    if ("linkedinComments" in body) row.linkedin_comments = STRING_OR_EMPTY(body.linkedinComments);
 
     const { error } = await supabase
       .from("eod_notes")

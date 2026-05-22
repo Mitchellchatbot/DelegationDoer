@@ -1,12 +1,17 @@
 // Email-draft approver routing.
 //
-// Spec v3 (current): the approvers list is restricted to
-//   1. any user with role='leader' (Mitch, Shaheer, ...), AND
-//   2. three super-approvers by name: Sam, Mujtaba, Farez.
+// Spec v3 (current): the approvers list is:
+//   1. any user with role='leader' (Mitch, ...), OR
+//   2. any stealth admin (is_admin=true — Shaheer, Mecheal), OR
+//   3. three super-approvers by name: Sam, Mujtaba, Farez.
 //
-// Those four can:
+// Those people can:
 //   - see every queued draft regardless of author
 //   - approve / reject / leave feedback / request revision
+//
+// Stealth admins are included because is_admin grants every other
+// leader-equivalent permission across the app (see [[stealth_admin_flag]]
+// migration + lib/access.ts:isLeader); the approval gate matches.
 //
 // Dept-head and content-plan-specific approvers were removed in v3 —
 // keeping the API surface intact (callers still pass `kind`) but no
@@ -50,16 +55,20 @@ function isSuperApproverName(name: string | null | undefined): boolean {
 // Single source of truth for "is this person an approver?" — used by
 // canApproveDraft / canApproveAnyDraft and by the GET listing and
 // notifications-badges routes (which previously duplicated the name
-// list inline). Pass just role + name — no DB calls.
-export function isApprover(caller: { name?: string | null; role: string }): boolean {
+// list inline). Pass role + name + isAdmin — no DB calls.
+//
+// Stealth admins (isAdmin=true) count as leader-equivalent everywhere
+// else in the app (lib/access.ts:isLeader), so they count here too.
+export function isApprover(caller: { name?: string | null; role: string; isAdmin?: boolean }): boolean {
   if (caller.role === "leader") return true;
+  if (caller.isAdmin === true) return true;
   if (isSuperApproverName(caller.name)) return true;
   return false;
 }
 
 // Fetch every user who's allowed to approve a given draft. Returns
-// the four-person approver set (role='leader' ∪ super-approvers).
-// Async because we hit the users table for role + Slack metadata.
+// the approver set (role='leader' ∪ stealth admins ∪ super-approvers).
+// Async because we hit the users table for role + is_admin + Slack metadata.
 export async function getApproversForDraft(_draft: DraftRef): Promise<ApproverUser[]> {
   const supabase = getSupabaseAdmin();
 
@@ -68,7 +77,7 @@ export async function getApproversForDraft(_draft: DraftRef): Promise<ApproverUs
   // two targeted queries.
   const { data } = await supabase
     .from("users")
-    .select("id, name, email, slack_email, slack_user_id, role");
+    .select("id, name, email, slack_email, slack_user_id, role, is_admin");
   const rows = (data ?? []) as Array<{
     id: string;
     name: string | null;
@@ -76,12 +85,13 @@ export async function getApproversForDraft(_draft: DraftRef): Promise<ApproverUs
     slack_email: string | null;
     slack_user_id: string | null;
     role: string;
+    is_admin: boolean | null;
   }>;
 
   const merged = new Map<string, ApproverUser>();
   for (const u of rows) {
     if (!u.name) continue;
-    if (isApprover({ name: u.name, role: u.role })) {
+    if (isApprover({ name: u.name, role: u.role, isAdmin: u.is_admin === true })) {
       merged.set(u.id, {
         id: u.id,
         name: u.name,
@@ -99,7 +109,7 @@ export async function getApproversForDraft(_draft: DraftRef): Promise<ApproverUs
 // signature compat but no longer factors in — the approver set is
 // kind-agnostic in v3.
 export async function canApproveDraft(
-  caller: { id: string; name?: string | null; role: string; departmentIds?: string[] },
+  caller: { id: string; name?: string | null; role: string; isAdmin?: boolean; departmentIds?: string[] },
   _draft: DraftRef
 ): Promise<boolean> {
   return isApprover(caller);
@@ -108,6 +118,6 @@ export async function canApproveDraft(
 // "Are you an approver in general?" — used by the sidebar to decide
 // whether to render the Approvals nav item at all, and by the GET
 // listing to widen visibility beyond just the caller's own drafts.
-export function canApproveAnyDraft(caller: { name?: string | null; role: string; departmentIds?: string[] }): boolean {
+export function canApproveAnyDraft(caller: { name?: string | null; role: string; isAdmin?: boolean; departmentIds?: string[] }): boolean {
   return isApprover(caller);
 }

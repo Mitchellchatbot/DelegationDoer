@@ -44,7 +44,7 @@ export async function PATCH(
 
     const isAuthor = row.author_id === userId;
     const isApprover = await canApproveDraft(
-      { id: me.id, name: me.name, role: me.role, departmentIds: me.departmentIds },
+      { id: me.id, name: me.name, role: me.role, isAdmin: me.isAdmin, departmentIds: me.departmentIds },
       { author_id: row.author_id as string, kind: row.kind }
     );
     if (!isAuthor && !isApprover) {
@@ -72,6 +72,12 @@ export async function PATCH(
     }
     if (Array.isArray(body.bcc)) {
       update.bcc_emails = body.bcc.filter(looksLikeEmail).map((s: string) => s.trim());
+    }
+    // accountId — the chosen sending mailbox (a missiveclone account
+    // id). Empty string clears it, falling back to whatever the
+    // approve route resolves on send.
+    if (typeof body.accountId === "string") {
+      update.account_id = body.accountId.trim() || null;
     }
     if (Object.keys(update).length === 0) {
       return NextResponse.json({ error: "nothing to update" }, { status: 400 });

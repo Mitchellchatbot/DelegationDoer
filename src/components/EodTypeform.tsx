@@ -28,6 +28,10 @@ interface PriorState {
   accomplished: string | null;
   planTomorrow: string | null;
   blockers: string | null;
+  // Marketing-style flow extras (Talha Ali). Stay null for everyone
+  // else — the standard 4-question flow ignores them entirely.
+  leadsMessaged: string | null;
+  linkedinComments: string | null;
 }
 
 interface EmailDraft {
@@ -46,6 +50,11 @@ interface Props {
   open: boolean;
   today: string;
   isWebsiteTeam: boolean;
+  // Talha's EOD asks five marketing-flavoured questions instead of the
+  // generic four (accomplished today / leads messaged / LinkedIn comments
+  // posted / plan for tomorrow / anything I can help with). When true,
+  // the website-email branch is also suppressed since it doesn't apply.
+  isMarketingTalha: boolean;
   prior: PriorState;
   onClose: () => void;
   onComplete: () => void;
@@ -54,46 +63,100 @@ interface Props {
 // Step definitions for the four base questions. Driving them off a
 // constant lets the typeform engine stay generic — adding/removing a
 // step is a one-line change.
-const STRUCTURED_STEPS = [
+type StructuredStep = {
+  key: keyof PriorState;
+  title: string;
+  subtitle: string;
+  required: boolean;
+};
+
+const DEFAULT_STRUCTURED_STEPS: StructuredStep[] = [
   {
-    key: "workedOn" as const,
+    key: "workedOn",
     title: "What did you work on today?",
     subtitle: "Tasks, deep-work, meetings — the activity, not the outcomes.",
     required: true
   },
   {
-    key: "accomplished" as const,
+    key: "accomplished",
     title: "What did you accomplish?",
     subtitle: "What's shipped, closed, fixed, or decided. Outcomes only.",
     required: true
   },
   {
-    key: "planTomorrow" as const,
+    key: "planTomorrow",
     title: "Plan for tomorrow",
     subtitle: "Top 1–3 things you'll push on tomorrow morning.",
     required: true
   },
   {
-    key: "blockers" as const,
+    key: "blockers",
     title: "Any questions or blockers?",
     subtitle: "Stuck? Need a decision? Drop it here so leads see it tonight.",
     required: false
   }
 ];
 
+// Talha runs the marketing dept and his EOD is shaped around outbound
+// LinkedIn activity — we ask for accomplishments + the two numbers that
+// drive the funnel (leads messaged, comments posted) before the
+// plan/help wrap-up. Underlying storage: accomplished → workedOn (the
+// "what got done" recap), then leads_messaged + linkedin_comments
+// (new columns), plan_tomorrow, blockers ("anything I can help with").
+const TALHA_STRUCTURED_STEPS: StructuredStep[] = [
+  {
+    key: "workedOn",
+    title: "What was accomplished today?",
+    subtitle: "The wins — shipped, closed, decided, learned.",
+    required: true
+  },
+  {
+    key: "leadsMessaged",
+    title: "How many leads did you message?",
+    subtitle: "Outbound DMs / cold emails sent today. A number is fine; add context if useful.",
+    required: true
+  },
+  {
+    key: "linkedinComments",
+    title: "How many comments did you post on LinkedIn?",
+    subtitle: "Engagement comments on prospects' posts. Number + a quick note on the best ones.",
+    required: true
+  },
+  {
+    key: "planTomorrow",
+    title: "Game plan for tomorrow",
+    subtitle: "Top 1–3 things you'll push on tomorrow morning.",
+    required: true
+  },
+  {
+    key: "blockers",
+    title: "Anything I can help with?",
+    subtitle: "Questions, blockers, or anything you'd like leadership to weigh in on tonight.",
+    required: false
+  }
+];
+
 export function EodTypeform({
-  open, today, isWebsiteTeam, prior, onClose, onComplete
+  open, today, isWebsiteTeam, isMarketingTalha, prior, onClose, onComplete
 }: Props) {
+  // Talha's flow swaps the standard 4 questions for a marketing-flavoured
+  // 5-step set and skips the website-email branch entirely (he's not
+  // doing client-update emails). Everyone else gets the default 4 +
+  // optional website-email branch.
+  const structuredSteps = isMarketingTalha
+    ? TALHA_STRUCTURED_STEPS
+    : DEFAULT_STRUCTURED_STEPS;
+  const baseStepCount = structuredSteps.length;
+  // Website branch is suppressed for Talha — his EOD doesn't surface
+  // the client-email composer.
+  const showWebsiteBranch = isWebsiteTeam && !isMarketingTalha;
   // step indices for the Website-team flow:
-  //   0..3 — four structured questions (worked-on / accomplished /
-  //          plan / blockers)
-  //   4    — "Which clients did you work on today?" multi-picker
-  //   5    — Per-client compose-or-skip stack (one card per picked
-  //          client; user can edit + Send, or hit Skip on each)
-  //   6    — Review & submit
-  // For non-Website teams, steps 4 + 5 are skipped — total is 0..3
-  // structured + review = 5 steps.
-  const totalSteps = 4 + (isWebsiteTeam ? 2 : 0) + 1; // +1 for the final summary screen
+  //   0..n-1 — structured questions (4 default, 5 for Talha)
+  //   n      — "Which clients did you work on today?" multi-picker
+  //   n+1    — Per-client compose-or-skip stack (one card per picked
+  //            client; user can edit + Send, or hit Skip on each)
+  //   last   — Review & submit
+  const totalSteps = baseStepCount + (showWebsiteBranch ? 2 : 0) + 1; // +1 for the final summary screen
   const [stepIdx, setStepIdx] = useState(0);
   const [answers, setAnswers] = useState<PriorState>(prior);
   const [savingField, setSavingField] = useState<string | null>(null);
@@ -266,7 +329,9 @@ export function EodTypeform({
           workedOn: answers.workedOn ?? "",
           accomplished: answers.accomplished ?? "",
           planTomorrow: answers.planTomorrow ?? "",
-          blockers: answers.blockers ?? ""
+          blockers: answers.blockers ?? "",
+          leadsMessaged: answers.leadsMessaged ?? "",
+          linkedinComments: answers.linkedinComments ?? ""
         })
       });
       const data = await res.json();
@@ -351,20 +416,20 @@ export function EodTypeform({
             direction === "forward" ? "anim-fade-in-up" : "anim-fade-in"
           )}
         >
-          {stepIdx < 4 && (
+          {stepIdx < baseStepCount && (
             <StructuredQuestion
-              field={STRUCTURED_STEPS[stepIdx]}
-              value={answers[STRUCTURED_STEPS[stepIdx].key] ?? ""}
-              saving={savingField === STRUCTURED_STEPS[stepIdx].key}
-              onChange={(v) => setAnswers((cur) => ({ ...cur, [STRUCTURED_STEPS[stepIdx].key]: v }))}
+              field={structuredSteps[stepIdx]}
+              value={answers[structuredSteps[stepIdx].key] ?? ""}
+              saving={savingField === structuredSteps[stepIdx].key}
+              onChange={(v) => setAnswers((cur) => ({ ...cur, [structuredSteps[stepIdx].key]: v }))}
               onAdvance={() => {
-                void saveField(STRUCTURED_STEPS[stepIdx].key, answers[STRUCTURED_STEPS[stepIdx].key] ?? "");
+                void saveField(structuredSteps[stepIdx].key, answers[structuredSteps[stepIdx].key] ?? "");
                 advance();
               }}
             />
           )}
 
-          {isWebsiteTeam && stepIdx === 4 && (
+          {showWebsiteBranch && stepIdx === baseStepCount && (
             <ClientPicker
               clients={clients}
               selected={selectedClientIds}
@@ -376,7 +441,7 @@ export function EodTypeform({
             />
           )}
 
-          {isWebsiteTeam && stepIdx === 5 && (
+          {showWebsiteBranch && stepIdx === baseStepCount + 1 && (
             <PerClientComposers
               drafts={emails}
               clients={clients}
@@ -394,6 +459,7 @@ export function EodTypeform({
               submitting={submitting}
               submitted={submitted}
               answers={answers}
+              isMarketingTalha={isMarketingTalha}
               sentEmailCount={emails.filter((e) => e.status === "sent").length}
               skippedEmailCount={emails.filter((e) => e.status === "skipped").length}
               onSubmit={submitEod}
@@ -812,11 +878,12 @@ function DraftCard({
 }
 
 function FinalStep({
-  submitting, submitted, answers, sentEmailCount, skippedEmailCount, onSubmit, onClose
+  submitting, submitted, answers, isMarketingTalha, sentEmailCount, skippedEmailCount, onSubmit, onClose
 }: {
   submitting: boolean;
   submitted: boolean;
   answers: PriorState;
+  isMarketingTalha: boolean;
   sentEmailCount: number;
   skippedEmailCount: number;
   onSubmit: () => void;
@@ -846,8 +913,12 @@ function FinalStep({
     );
   }
 
-  const requiredFilled =
-    !!answers.workedOn && !!answers.accomplished && !!answers.planTomorrow;
+  const requiredFilled = isMarketingTalha
+    ? !!answers.workedOn
+        && !!answers.leadsMessaged
+        && !!answers.linkedinComments
+        && !!answers.planTomorrow
+    : !!answers.workedOn && !!answers.accomplished && !!answers.planTomorrow;
 
   return (
     <div className="space-y-5">
@@ -862,11 +933,25 @@ function FinalStep({
       </p>
 
       <div className="space-y-2.5">
-        <SummaryRow label="Worked on" value={answers.workedOn} required />
-        <SummaryRow label="Accomplished" value={answers.accomplished} required />
-        <SummaryRow label="Plan for tomorrow" value={answers.planTomorrow} required />
-        {answers.blockers && (
-          <SummaryRow label="Blockers / questions" value={answers.blockers} required={false} />
+        {isMarketingTalha ? (
+          <>
+            <SummaryRow label="What was accomplished today" value={answers.workedOn} required />
+            <SummaryRow label="Leads messaged" value={answers.leadsMessaged} required />
+            <SummaryRow label="LinkedIn comments posted" value={answers.linkedinComments} required />
+            <SummaryRow label="Game plan for tomorrow" value={answers.planTomorrow} required />
+            {answers.blockers && (
+              <SummaryRow label="Anything I can help with" value={answers.blockers} required={false} />
+            )}
+          </>
+        ) : (
+          <>
+            <SummaryRow label="Worked on" value={answers.workedOn} required />
+            <SummaryRow label="Accomplished" value={answers.accomplished} required />
+            <SummaryRow label="Plan for tomorrow" value={answers.planTomorrow} required />
+            {answers.blockers && (
+              <SummaryRow label="Blockers / questions" value={answers.blockers} required={false} />
+            )}
+          </>
         )}
         {(sentEmailCount > 0 || skippedEmailCount > 0) && (
           <div className="rounded-lg bg-violet-50/60 border border-violet-200/60 px-3 py-2 text-[13px] inline-flex items-center gap-2 flex-wrap">

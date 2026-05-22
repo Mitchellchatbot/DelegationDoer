@@ -10,6 +10,13 @@
 // the client's name.
 
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
+import {
+  getLatestTouchpointsByClient,
+  rowToTouchpointFields,
+  type TouchpointFields,
+  type TouchpointLabel,
+  type TouchpointOverrideRow
+} from "@/lib/client-touchpoint";
 
 export type ResourceKind = "meeting" | "document" | "suggestion";
 export type ClientPriority = "low" | "medium" | "high";
@@ -51,6 +58,19 @@ export interface Client {
   healthOverrideNote: string | null;
   healthOverrideBy: string | null;
   healthOverrideAt: string | null;
+  // Touchpoint health — separate concept from sentiment-based health.
+  // Driven by last outbound email date (auto), with optional manual
+  // override. See lib/client-touchpoint.ts for the band logic.
+  touchpointOverrideLabel: TouchpointLabel | null;
+  touchpointOverrideNote: string | null;
+  touchpointOverrideBy: string | null;
+  touchpointOverrideAt: string | null;
+  touchpointSummary: string | null;
+  touchpointSummaryAt: string | null;
+  touchpointSummaryBy: string | null;
+  // Auto-derived from email_drafts on read; not stored on the row.
+  lastOutboundEmailAt: string | null;
+  lastOutboundSubject: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -94,6 +114,13 @@ interface ClientRow {
   health_override_note: string | null;
   health_override_by: string | null;
   health_override_at: string | null;
+  touchpoint_override_label: TouchpointLabel | null;
+  touchpoint_override_note: string | null;
+  touchpoint_override_by: string | null;
+  touchpoint_override_at: string | null;
+  touchpoint_summary: string | null;
+  touchpoint_summary_at: string | null;
+  touchpoint_summary_by: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -109,7 +136,11 @@ interface ResourceRow {
   created_at: string;
 }
 
-function rowToClient(r: ClientRow): Client {
+function rowToClient(r: ClientRow, touchpoint?: {
+  lastOutboundEmailAt: string | null;
+  lastOutboundSubject: string | null;
+}): Client {
+  const tp: TouchpointFields = rowToTouchpointFields(r as TouchpointOverrideRow);
   return {
     id: r.id,
     name: r.name,
@@ -138,6 +169,9 @@ function rowToClient(r: ClientRow): Client {
     healthOverrideNote: r.health_override_note ?? null,
     healthOverrideBy: r.health_override_by ?? null,
     healthOverrideAt: r.health_override_at ?? null,
+    ...tp,
+    lastOutboundEmailAt: touchpoint?.lastOutboundEmailAt ?? null,
+    lastOutboundSubject: touchpoint?.lastOutboundSubject ?? null,
     createdAt: r.created_at,
     updatedAt: r.updated_at
   };
@@ -161,7 +195,10 @@ export async function getClients(): Promise<Client[]> {
     .select("*")
     .order("display_order", { ascending: true })
     .order("name", { ascending: true });
-  return (data ?? []).map((r) => rowToClient(r as ClientRow));
+  const rows = (data ?? []) as ClientRow[];
+  // One round-trip for every client's most-recent outbound send.
+  const touchpoints = await getLatestTouchpointsByClient(rows.map((r) => r.id));
+  return rows.map((r) => rowToClient(r, touchpoints.get(r.id)));
 }
 
 export async function getClient(id: string): Promise<Client | null> {
@@ -170,7 +207,9 @@ export async function getClient(id: string): Promise<Client | null> {
     .select("*")
     .eq("id", id)
     .maybeSingle();
-  return data ? rowToClient(data as ClientRow) : null;
+  if (!data) return null;
+  const touchpoints = await getLatestTouchpointsByClient([id]);
+  return rowToClient(data as ClientRow, touchpoints.get(id));
 }
 
 export async function getResourcesForClient(clientId: string): Promise<ClientResource[]> {

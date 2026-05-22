@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { ArrowUpDown, Briefcase, LayoutGrid, FileSpreadsheet } from "lucide-react";
+import { ArrowUpDown, Briefcase, LayoutGrid, FileSpreadsheet, Activity } from "lucide-react";
 import { PageHero } from "@/components/PageHero";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
@@ -48,6 +48,13 @@ export default async function ClientsPage() {
                 client with their open work as cards. Mirrors the old
                 Notion "Website Client History" board so the team has
                 a familiar scan view inside DD. */}
+            <Link
+              href="/client-health"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-white border border-slate-200 text-ink/75 hover:text-accent hover:border-accent/40 transition-colors"
+            >
+              <Activity className="w-3.5 h-3.5" />
+              Health dashboard
+            </Link>
             <Link
               href="/tasks/board?groupBy=client"
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-white border border-slate-200 text-ink/75 hover:text-accent hover:border-accent/40 transition-colors"

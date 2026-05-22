@@ -25,6 +25,9 @@ const PUBLIC_PREFIXES = [
   // Note: /api/integrations/tldv/run-once stays session-gated — it's a
   // manual replay tool, not an inbound webhook.
   "/api/integrations/tldv/webhook",
+  // Zapier relay endpoint — same shared-secret pattern as the direct
+  // tl;dv webhook (x-zapier-webhook-secret header), no Supabase cookie.
+  "/api/integrations/tldv/zapier",
   // The widget renderer must be reachable inside Electron without a
   // session — when the cookie jar is empty (fresh launch) we want the
   // widget to render its own "Sign in" state rather than redirect to

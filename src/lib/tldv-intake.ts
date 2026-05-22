@@ -47,7 +47,9 @@ export interface TldvIntakeInput {
   transcript: string;
   segments: TldvTranscriptSegment[];
   rawPayload?: unknown;       // stored on tldv_intake_log for replay
-  source?: "webhook" | "manual";
+  // "webhook" = direct from tl;dv. "zapier" = relayed via Zapier (same
+  // dedupe semantics as webhook). "manual" = /run-once, bypasses dedupe.
+  source?: "webhook" | "manual" | "zapier";
 }
 
 export interface PerItemOutcome {

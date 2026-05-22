@@ -69,15 +69,36 @@ export async function POST(req: NextRequest) {
   //       text is the actual payload. We use it directly and synthesize
   //       a stable meetingId from a content hash so dedupe still works.
   //
+  // Body format: JSON or form-encoded. Zapier users who paste raw JSON
+  // into the Data field hit "bad json" the moment a transcript contains
+  // unescaped quotes or newlines — accepting form-encoded sidesteps
+  // that entirely (just set Payload Type to "form" in Zapier).
+  //
   // Field names are forgiving — Zapier's flat-field output uses snake_case
   // some of the time. transcript / transcriptText / transcript_text all
   // accepted.
-  let body: Record<string, unknown>;
-  try {
-    body = (await req.json()) as Record<string, unknown>;
-  } catch {
-    warn("rejected: body is not valid JSON");
-    return NextResponse.json({ error: "bad json" }, { status: 400 });
+  let body: Record<string, unknown> = {};
+  const contentType = (req.headers.get("content-type") ?? "").toLowerCase();
+  if (contentType.includes("application/x-www-form-urlencoded") || contentType.includes("multipart/form-data")) {
+    try {
+      const form = await req.formData();
+      for (const [k, v] of form.entries()) {
+        body[k] = typeof v === "string" ? v : String(v);
+      }
+    } catch {
+      warn("rejected: body is not valid form-encoded data");
+      return NextResponse.json({ error: "bad form data" }, { status: 400 });
+    }
+  } else {
+    try {
+      body = (await req.json()) as Record<string, unknown>;
+    } catch {
+      warn("rejected: body is not valid JSON (tip: in Zapier, use the key/value editor instead of pasting raw JSON, or switch Payload Type to 'form')");
+      return NextResponse.json(
+        { error: "bad json — use Zapier's structured Data editor, or switch Payload Type to 'form'" },
+        { status: 400 }
+      );
+    }
   }
 
   const rawMeetingId =

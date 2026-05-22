@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import { DragDropContext, Droppable, Draggable, type DropResult } from "@hello-pangea/dnd";
-import { Clock } from "lucide-react";
+import { CheckCircle2, Clock } from "lucide-react";
 import { PriorityBadge, StalledBadge, Tag } from "./Badges";
 import { Countdown } from "./Countdown";
 import { PersonAvatar } from "./PersonAvatar";
@@ -323,10 +323,20 @@ function CardInner({
             <span className="text-muted">Unassigned</span>
           )}
         </div>
-        <span className="inline-flex items-center gap-1 shrink-0">
-          <Clock className="w-3 h-3" />
-          <Countdown iso={t.dueDate} />
-        </span>
+        {t.status === "done" ? (
+          // Once a task is done the deadline is meaningless — a ticking
+          // "overdue 3d" on something already shipped reads as unfinished
+          // work. Show a static "Done" pill instead.
+          <span className="inline-flex items-center gap-1 shrink-0 text-emerald-700/85">
+            <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+            Done
+          </span>
+        ) : (
+          <span className="inline-flex items-center gap-1 shrink-0">
+            <Clock className="w-3 h-3" />
+            <Countdown iso={t.dueDate} />
+          </span>
+        )}
       </div>
       {/* Tiny "Open" link in the corner for navigation. Decoupled from
           the drag-handle div so it doesn't fight pointer events. */}

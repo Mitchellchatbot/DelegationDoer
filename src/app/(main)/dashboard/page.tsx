@@ -10,6 +10,9 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { getClients, type Client } from "@/lib/clients-data";
 import { PersonAvatar } from "@/components/PersonAvatar";
 import { ClientHealthPill } from "@/components/ClientHealthPill";
+import { TouchpointPill } from "@/components/TouchpointPill";
+import { ClientFollowUpWidget } from "@/components/ClientFollowUpWidget";
+import { effectiveTouchpoint } from "@/lib/client-touchpoint";
 import { PriorityBadge } from "@/components/Badges";
 import { Countdown } from "@/components/Countdown";
 import { cn } from "@/lib/utils";
@@ -149,6 +152,20 @@ export default async function DashboardPage() {
         </div>
       </header>
 
+      {clients.length > 0 && (
+        <ClientFollowUpWidget
+          clients={clients.map((c) => ({
+            id: c.id,
+            name: c.name,
+            lastOutboundEmailAt: c.lastOutboundEmailAt,
+            touchpointOverrideLabel: c.touchpointOverrideLabel,
+            touchpointSummary: c.touchpointSummary,
+            contactName: c.contactName
+          }))}
+          limit={5}
+        />
+      )}
+
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <MyTasksCard tasks={myTasks} />
         <TopClientsCard clients={topClients} />
@@ -252,6 +269,19 @@ function TopClientsCard({ clients }: { clients: Client[] }) {
                 <div className="flex items-center gap-2.5 min-w-0 flex-1">
                   <span className="text-[10px] font-bold tabular-nums text-ink/45 w-5 shrink-0">{i + 1}.</span>
                   <span className="text-[13px] font-medium text-ink truncate">{c.name}</span>
+                  {(() => {
+                    const { label, isOverride } = effectiveTouchpoint(
+                      c.touchpointOverrideLabel, c.lastOutboundEmailAt
+                    );
+                    return (
+                      <TouchpointPill
+                        label={label}
+                        lastSentAt={c.lastOutboundEmailAt}
+                        isOverride={isOverride}
+                        showAge
+                      />
+                    );
+                  })()}
                   <ClientHealthPill
                     label={c.healthOverrideLabel ?? c.healthLabel}
                     overridden={!!c.healthOverrideLabel}

@@ -9,6 +9,7 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { getClient, getResourcesForClient, type ClientResource } from "@/lib/clients-data";
 import { BackPill } from "@/components/BackPill";
 import { ClientHealthCard } from "@/components/ClientHealthCard";
+import { ClientTouchpointCard } from "@/components/ClientTouchpointCard";
 import { DeleteClientButton } from "@/components/DeleteClientButton";
 import { ContentPlanComposer } from "@/components/ContentPlanComposer";
 import { ClientEmailLog } from "@/components/ClientEmailLog";
@@ -255,6 +256,18 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
           style={{ background: "radial-gradient(circle, rgba(99,102,241,0.18), transparent 70%)" }}
         />
       </header>
+
+      <ClientTouchpointCard
+        clientId={client.id}
+        lastOutboundEmailAt={client.lastOutboundEmailAt}
+        lastOutboundSubject={client.lastOutboundSubject}
+        touchpointOverrideLabel={client.touchpointOverrideLabel}
+        touchpointOverrideNote={client.touchpointOverrideNote}
+        touchpointOverrideAt={client.touchpointOverrideAt}
+        touchpointSummary={client.touchpointSummary}
+        touchpointSummaryAt={client.touchpointSummaryAt}
+        canEdit={!!(me && (me.role === "leader" || me.isAdmin))}
+      />
 
       <ClientHealthCard
         clientId={client.id}

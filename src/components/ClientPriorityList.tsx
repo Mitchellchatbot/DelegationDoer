@@ -1,15 +1,23 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   DragDropContext, Droppable, Draggable, type DropResult
 } from "@hello-pangea/dnd";
-import { Briefcase, Globe2, GripVertical, Folder, User as UserIcon, Mail } from "lucide-react";
+import {
+  Briefcase, Globe2, GripVertical, Folder, User as UserIcon, Mail,
+  Filter, ArrowDownAZ, ArrowUpDown, Clock
+} from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import type { Client } from "@/lib/clients-data";
 import { ClientHealthPill } from "./ClientHealthPill";
+import { TouchpointPill } from "./TouchpointPill";
+import {
+  computeTouchpointLabel, daysSince, effectiveTouchpoint,
+  TOUCHPOINT_META, type TouchpointLabel
+} from "@/lib/client-touchpoint";
 
 // Drag-to-reorder client priority list. Top = most urgent. Leader-only edit.
 //
@@ -33,6 +41,9 @@ const PRIORITY_TONES = {
   low:    "bg-slate-100 text-slate-600 border-slate-200/60"
 } as const;
 
+type SortMode = "priority" | "stalest" | "freshest" | "name";
+type HealthFilter = "all" | TouchpointLabel;
+
 interface Props {
   initial: Client[];
   openCounts: Record<string, number>;
@@ -41,6 +52,55 @@ interface Props {
 
 export function ClientPriorityList({ initial, openCounts, canEdit }: Props) {
   const [clients, setClients] = useState(initial);
+  const [sortMode, setSortMode] = useState<SortMode>("priority");
+  const [healthFilter, setHealthFilter] = useState<HealthFilter>("all");
+
+  // Tally counts for the filter chips so we can show "Red · 3".
+  const tallies = useMemo(() => {
+    const t: Record<TouchpointLabel, number> = { green: 0, yellow: 0, red: 0 };
+    for (const c of clients) {
+      const { label } = effectiveTouchpoint(c.touchpointOverrideLabel, c.lastOutboundEmailAt);
+      t[label] += 1;
+    }
+    return t;
+  }, [clients]);
+
+  // Filtered + sorted view used for rendering. Drag-reorder still
+  // mutates the canonical `clients` array (which controls priority);
+  // it's only enabled when sortMode === 'priority' and no filter is
+  // active, since drag-position is meaningless under sort/filter.
+  const visible = useMemo(() => {
+    let arr = clients.slice();
+    if (healthFilter !== "all") {
+      arr = arr.filter((c) => {
+        const { label } = effectiveTouchpoint(c.touchpointOverrideLabel, c.lastOutboundEmailAt);
+        return label === healthFilter;
+      });
+    }
+    switch (sortMode) {
+      case "stalest":
+        arr.sort((a, b) => {
+          const ad = a.lastOutboundEmailAt ? new Date(a.lastOutboundEmailAt).getTime() : 0;
+          const bd = b.lastOutboundEmailAt ? new Date(b.lastOutboundEmailAt).getTime() : 0;
+          return ad - bd; // oldest first = stalest first
+        });
+        break;
+      case "freshest":
+        arr.sort((a, b) => {
+          const ad = a.lastOutboundEmailAt ? new Date(a.lastOutboundEmailAt).getTime() : 0;
+          const bd = b.lastOutboundEmailAt ? new Date(b.lastOutboundEmailAt).getTime() : 0;
+          return bd - ad;
+        });
+        break;
+      case "name":
+        arr.sort((a, b) => a.name.localeCompare(b.name));
+        break;
+      // 'priority' = leave in `clients` order (display_order)
+    }
+    return arr;
+  }, [clients, sortMode, healthFilter]);
+
+  const dragEnabled = canEdit && sortMode === "priority" && healthFilter === "all";
 
   async function onDragEnd(result: DropResult) {
     if (!result.destination) return;
@@ -84,19 +144,87 @@ export function ClientPriorityList({ initial, openCounts, canEdit }: Props) {
   }
 
   return (
-    <DragDropContext onDragEnd={onDragEnd}>
-      <Droppable droppableId="clients" isDropDisabled={!canEdit}>
-        {(prov) => (
-          <ol
-            ref={prov.innerRef}
-            {...prov.droppableProps}
-            className="space-y-2.5"
-          >
-            {clients.map((c, i) => {
-              const tone = PALETTE[i % PALETTE.length];
-              const openCount = openCounts[c.name] ?? 0;
-              return (
-                <Draggable key={c.id} draggableId={c.id} index={i} isDragDisabled={!canEdit}>
+    <div className="space-y-3">
+      {/* Sort + health filter toolbar */}
+      <div className="flex items-center gap-3 flex-wrap px-1">
+        <div className="inline-flex items-center gap-1.5 text-[11px] text-ink/60 font-medium">
+          <Filter className="w-3 h-3" /> Health:
+        </div>
+        <FilterChip
+          active={healthFilter === "all"}
+          onClick={() => setHealthFilter("all")}
+          label="All"
+          count={clients.length}
+        />
+        {(["red", "yellow", "green"] as const).map((tone) => (
+          <FilterChip
+            key={tone}
+            active={healthFilter === tone}
+            onClick={() => setHealthFilter(tone)}
+            label={TOUCHPOINT_META[tone].label}
+            count={tallies[tone]}
+            dotClass={TOUCHPOINT_META[tone].dot}
+          />
+        ))}
+
+        <div className="w-px h-4 bg-slate-200 mx-1" />
+
+        <div className="inline-flex items-center gap-1.5 text-[11px] text-ink/60 font-medium">
+          <ArrowUpDown className="w-3 h-3" /> Sort:
+        </div>
+        <SortChip
+          active={sortMode === "priority"}
+          onClick={() => setSortMode("priority")}
+          icon={<ArrowUpDown className="w-3 h-3" />}
+          label="Priority"
+        />
+        <SortChip
+          active={sortMode === "stalest"}
+          onClick={() => setSortMode("stalest")}
+          icon={<Clock className="w-3 h-3" />}
+          label="Stalest first"
+        />
+        <SortChip
+          active={sortMode === "freshest"}
+          onClick={() => setSortMode("freshest")}
+          icon={<Clock className="w-3 h-3" />}
+          label="Freshest first"
+        />
+        <SortChip
+          active={sortMode === "name"}
+          onClick={() => setSortMode("name")}
+          icon={<ArrowDownAZ className="w-3 h-3" />}
+          label="Name"
+        />
+      </div>
+
+      {visible.length === 0 && (
+        <div className="card p-6 text-center text-sm text-muted">
+          No clients match the current filter.
+        </div>
+      )}
+
+      <DragDropContext onDragEnd={onDragEnd}>
+        <Droppable droppableId="clients" isDropDisabled={!dragEnabled}>
+          {(prov) => (
+            <ol
+              ref={prov.innerRef}
+              {...prov.droppableProps}
+              className="space-y-2.5"
+            >
+              {visible.map((c, i) => {
+                const tone = PALETTE[i % PALETTE.length];
+                const openCount = openCounts[c.name] ?? 0;
+                const { label: tpLabel, isOverride: tpOverride } = effectiveTouchpoint(
+                  c.touchpointOverrideLabel, c.lastOutboundEmailAt
+                );
+                return (
+                  <Draggable
+                    key={c.id}
+                    draggableId={c.id}
+                    index={i}
+                    isDragDisabled={!dragEnabled}
+                  >
                   {(p, snap) => (
                     <li
                       ref={p.innerRef}
@@ -114,11 +242,11 @@ export function ClientPriorityList({ initial, openCounts, canEdit }: Props) {
                       >
                         {/* Rank badge */}
                         <div className="shrink-0 w-9 h-9 rounded-xl bg-white/80 border border-white/80 grid place-items-center text-sm font-semibold text-ink/70 shadow-sm tabular-nums">
-                          {i + 1}
+                          {sortMode === "priority" ? (i + 1) : "·"}
                         </div>
 
-                        {/* Drag handle (only for Leader) */}
-                        {canEdit && (
+                        {/* Drag handle (only for Leader & default sort) */}
+                        {dragEnabled && (
                           <span
                             {...p.dragHandleProps}
                             aria-label="Drag to reorder"
@@ -146,11 +274,14 @@ export function ClientPriorityList({ initial, openCounts, canEdit }: Props) {
                                 · {c.websites.length} sites
                               </span>
                             )}
-                            {/* Health is manual-only — show only what a
-                                leader has explicitly set, hidden otherwise. */}
-                            <ClientHealthPill
-                              label={c.healthOverrideLabel}
+                            <TouchpointPill
+                              label={tpLabel}
+                              lastSentAt={c.lastOutboundEmailAt}
+                              isOverride={tpOverride}
+                              showAge
                             />
+                            {/* Sentiment health, shown only when leader has set one */}
+                            <ClientHealthPill label={c.healthOverrideLabel} />
                           </div>
                           <div className="text-[11px] text-ink/60 truncate inline-flex items-center gap-2 mt-0.5">
                             {c.contactName && (
@@ -166,7 +297,11 @@ export function ClientPriorityList({ initial, openCounts, canEdit }: Props) {
                             )}
                             <span>· {openCount} open task{openCount === 1 ? "" : "s"}</span>
                           </div>
-                          {c.contactEmails.length > 0 && (
+                          {c.touchpointSummary ? (
+                            <div className="text-[11px] text-ink/65 truncate mt-0.5 italic">
+                              &ldquo;{c.touchpointSummary}&rdquo;
+                            </div>
+                          ) : c.contactEmails.length > 0 && (
                             <div className="text-[10px] text-ink/50 truncate inline-flex items-center gap-1 mt-0.5">
                               <Mail className="w-2.5 h-2.5" />
                               {c.contactEmails.slice(0, 2).join(", ")}
@@ -189,13 +324,71 @@ export function ClientPriorityList({ initial, openCounts, canEdit }: Props) {
                       </div>
                     </li>
                   )}
-                </Draggable>
-              );
-            })}
-            {prov.placeholder}
-          </ol>
-        )}
-      </Droppable>
-    </DragDropContext>
+                  </Draggable>
+                );
+              })}
+              {prov.placeholder}
+            </ol>
+          )}
+        </Droppable>
+      </DragDropContext>
+    </div>
   );
 }
+
+function FilterChip({
+  active, onClick, label, count, dotClass
+}: {
+  active: boolean;
+  onClick: () => void;
+  label: string;
+  count: number;
+  dotClass?: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "inline-flex items-center gap-1 px-2.5 py-1 rounded-full border text-[11px] font-medium transition-colors",
+        active
+          ? "bg-ink text-white border-ink"
+          : "bg-white text-ink/70 border-slate-200 hover:border-ink/40"
+      )}
+    >
+      {dotClass && <span className={cn("w-1.5 h-1.5 rounded-full", dotClass)} />}
+      {label}
+      <span className={cn("tabular-nums opacity-70", !active && "text-ink/50")}>
+        · {count}
+      </span>
+    </button>
+  );
+}
+
+function SortChip({
+  active, onClick, icon, label
+}: {
+  active: boolean;
+  onClick: () => void;
+  icon: React.ReactNode;
+  label: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "inline-flex items-center gap-1 px-2.5 py-1 rounded-full border text-[11px] font-medium transition-colors",
+        active
+          ? "bg-accent/10 text-accent border-accent/30"
+          : "bg-white text-ink/70 border-slate-200 hover:border-ink/40"
+      )}
+    >
+      {icon} {label}
+    </button>
+  );
+}
+
+// Exported for use elsewhere (e.g. dashboard widget) — re-export
+// keeps the import surface minimal.
+export { daysSince };

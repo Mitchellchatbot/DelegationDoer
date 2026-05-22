@@ -8,14 +8,18 @@ import { canApproveDraft } from "@/lib/email-approvers";
 export const dynamic = "force-dynamic";
 
 // GET /api/email-drafts/[id]/send-from-options
-//   Returns the list of mailbox choices the approver can pick from
-//   on the Approve & Send action, in priority order:
-//     1. Mailboxes the AUTHOR has connected (flagged 'author')
-//     2. Mailboxes the APPROVER has connected (flagged 'approver')
-//   So a leader rescuing a draft from a worker who never OAuth'd has
-//   their own mailbox available as a fallback.
+//   Returns the full list of mailbox choices the author / approver
+//   can pick from when sending. Sorted by relevance so the UI's
+//   default ends up being the "most likely correct" sender:
+//     1. Mailbox already pinned on the draft (row.account_id)
+//     2. Mailboxes the AUTHOR has connected (flagged 'author')
+//     3. Mailboxes the APPROVER has connected (flagged 'approver')
+//     4. Every other workspace mailbox (flagged 'workspace') —
+//        Sean, SEO, Mecheal, etc. This is the path that lets us
+//        send even when neither user has OAuth'd a personal inbox.
 //
-//   Only callable by people who can approve this draft.
+//   Only callable by the draft's author OR an approver — same gate
+//   as the rest of the edit/approve surface.
 
 export async function GET(
   _req: Request,
@@ -34,11 +38,14 @@ export async function GET(
       .maybeSingle();
     if (!row) return NextResponse.json({ error: "not found" }, { status: 404 });
 
-    const allowed = await canApproveDraft(
+    const isAuthor = row.author_id === userId;
+    const isApprover = await canApproveDraft(
       { id: me.id, name: me.name, role: me.role, isAdmin: me.isAdmin, departmentIds: me.departmentIds },
       { author_id: row.author_id as string, kind: row.kind }
     );
-    if (!allowed) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+    if (!isAuthor && !isApprover) {
+      return NextResponse.json({ error: "forbidden" }, { status: 403 });
+    }
 
     const [{ data: authorRows }, { data: approverRows }, allAccounts] = await Promise.all([
       supabase
@@ -52,48 +59,50 @@ export async function GET(
       listAccounts().catch(() => [])
     ]);
 
-    const accountsById = new Map(allAccounts.map((a) => [a.id, a]));
+    const authorIds = new Set(
+      ((authorRows ?? []) as { missive_account_id: string }[]).map((r) => r.missive_account_id)
+    );
+    const approverIds = new Set(
+      ((approverRows ?? []) as { missive_account_id: string }[]).map((r) => r.missive_account_id)
+    );
 
-    function decorate(ids: string[], source: "author" | "approver") {
-      return ids
-        .map((id) => {
-          const a = accountsById.get(id);
-          if (!a) return null;
-          return {
-            id: a.id,
-            email: a.email,
-            displayName: a.display_name ?? null,
-            source
-          };
-        })
-        .filter(Boolean) as Array<{ id: string; email: string; displayName: string | null; source: string }>;
+    // Sort: author-assigned first, then approver-assigned, then the
+    // rest of the workspace. Within each tier alphabetize by display
+    // name (falling back to email) so the dropdown order is stable.
+    type Option = { id: string; email: string; displayName: string | null; source: "author" | "approver" | "workspace" };
+    const buckets: Record<Option["source"], Option[]> = {
+      author: [],
+      approver: [],
+      workspace: []
+    };
+    for (const a of allAccounts) {
+      const opt: Option = {
+        id: a.id,
+        email: a.email,
+        displayName: a.display_name ?? null,
+        source: authorIds.has(a.id) ? "author"
+              : approverIds.has(a.id) ? "approver"
+              : "workspace"
+      };
+      buckets[opt.source].push(opt);
     }
+    const byName = (a: Option, b: Option) =>
+      (a.displayName ?? a.email).localeCompare(b.displayName ?? b.email);
+    const out = [
+      ...buckets.author.sort(byName),
+      ...buckets.approver.sort(byName),
+      ...buckets.workspace.sort(byName)
+    ];
 
-    const seen = new Set<string>();
-    const out: Array<{ id: string; email: string; displayName: string | null; source: string }> = [];
-    for (const opt of decorate(
-      ((authorRows ?? []) as { missive_account_id: string }[]).map((r) => r.missive_account_id),
-      "author"
-    )) {
-      if (!seen.has(opt.id)) {
-        seen.add(opt.id);
-        out.push(opt);
-      }
-    }
-    for (const opt of decorate(
-      ((approverRows ?? []) as { missive_account_id: string }[]).map((r) => r.missive_account_id),
-      "approver"
-    )) {
-      if (!seen.has(opt.id)) {
-        seen.add(opt.id);
-        out.push(opt);
-      }
-    }
+    // Pick the default — sticky to whatever was already pinned on
+    // the draft, otherwise the first option in the sorted list
+    // (which will be the author's primary mailbox if any).
+    const pinned = row.account_id as string | null;
+    const defaultAccountId =
+      pinned && out.some((o) => o.id === pinned) ? pinned :
+      (out[0]?.id ?? null);
 
-    return NextResponse.json({
-      defaultAccountId: row.account_id as string | null,
-      options: out
-    });
+    return NextResponse.json({ defaultAccountId, options: out });
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "unknown error" },

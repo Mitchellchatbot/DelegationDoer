@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import { DragDropContext, Droppable, Draggable, type DropResult } from "@hello-pangea/dnd";
-import { CheckCircle2, Clock } from "lucide-react";
+import { CheckCircle2, Clock, Hourglass } from "lucide-react";
 import { PriorityBadge, StalledBadge, Tag } from "./Badges";
 import { Countdown } from "./Countdown";
 import { PersonAvatar } from "./PersonAvatar";
@@ -330,6 +330,14 @@ function CardInner({
           <span className="inline-flex items-center gap-1 shrink-0 text-emerald-700/85">
             <CheckCircle2 className="w-3 h-3 text-emerald-600" />
             Done
+          </span>
+        ) : t.status === "waiting_on_client" ? (
+          // Waiting on the client isn't the assignee's fault — a red
+          // "overdue 6d" badge points the finger at the wrong person.
+          // Surface the blocked state instead.
+          <span className="inline-flex items-center gap-1 shrink-0 text-amber-700/90">
+            <Hourglass className="w-3 h-3 text-amber-600" />
+            Waiting
           </span>
         ) : (
           <span className="inline-flex items-center gap-1 shrink-0">

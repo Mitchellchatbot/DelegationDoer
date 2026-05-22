@@ -4,6 +4,7 @@ import { getUserById } from "@/lib/server-data";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { canApproveDraft } from "@/lib/email-approvers";
 import { composeNewThread } from "@/lib/missive-client";
+import { recordDraftEvent } from "@/lib/draft-events";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
@@ -103,6 +104,12 @@ export async function POST(
       .eq("status", "pending"); // only flip if still pending
     if (lockErr) return NextResponse.json({ error: lockErr.message }, { status: 500 });
 
+    await recordDraftEvent({
+      draftId: params.id,
+      actorId: userId,
+      type: "approved"
+    });
+
     // Future-dated send: stop here. The scheduled-emails cron will pick
     // up this row (status='approved' + scheduled_for in the past) and
     // dispatch via composeNewThread when due.
@@ -140,6 +147,15 @@ export async function POST(
           send_error: null
         })
         .eq("id", params.id);
+      await recordDraftEvent({
+        draftId: params.id,
+        actorId: userId,
+        type: "sent",
+        metadata: {
+          missive_thread_id: result.threadId ?? null,
+          missive_message_id: result.messageId ?? null
+        }
+      });
       return NextResponse.json({
         ok: true,
         status: "sent",
@@ -153,6 +169,12 @@ export async function POST(
         .from("email_drafts")
         .update({ status: "failed", send_error: msg })
         .eq("id", params.id);
+      await recordDraftEvent({
+        draftId: params.id,
+        actorId: userId,
+        type: "send_failed",
+        body: msg
+      });
       return NextResponse.json({ ok: false, status: "failed", error: msg }, { status: 502 });
     }
   } catch (err) {

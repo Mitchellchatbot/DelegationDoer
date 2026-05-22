@@ -4,6 +4,7 @@ import { getUserById } from "@/lib/server-data";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { canApproveDraft } from "@/lib/email-approvers";
 import { lookupUserByEmail, openDm, postMessage } from "@/lib/slack";
+import { recordDraftEvent } from "@/lib/draft-events";
 
 export const dynamic = "force-dynamic";
 
@@ -57,6 +58,13 @@ export async function POST(
       })
       .eq("id", params.id);
     if (updErr) return NextResponse.json({ error: updErr.message }, { status: 500 });
+
+    await recordDraftEvent({
+      draftId: params.id,
+      actorId: userId,
+      type: "rejected",
+      body: note.slice(0, 4000)
+    });
 
     // DM the author so they actually see the rejection. Best-effort —
     // no point failing the reject if Slack is down.

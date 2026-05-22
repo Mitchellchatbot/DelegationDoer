@@ -3,6 +3,7 @@ import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { canApproveDraft } from "@/lib/email-approvers";
+import { recordDraftEvent } from "@/lib/draft-events";
 
 export const dynamic = "force-dynamic";
 
@@ -33,7 +34,11 @@ export async function PATCH(
       .maybeSingle();
     if (fetchErr) return NextResponse.json({ error: fetchErr.message }, { status: 500 });
     if (!row) return NextResponse.json({ error: "not found" }, { status: 404 });
-    if (row.status !== "pending") {
+    // Both 'pending' and 'needs_revision' are editable — the latter
+    // is the whole point of the revision flow (author tweaks and
+    // resubmits). Everything else (approved/sent/rejected/failed) is
+    // immutable.
+    if (row.status !== "pending" && row.status !== "needs_revision") {
       return NextResponse.json({ error: `draft is ${row.status}, can't edit` }, { status: 400 });
     }
 
@@ -77,6 +82,14 @@ export async function PATCH(
       .update(update)
       .eq("id", params.id);
     if (updErr) return NextResponse.json({ error: updErr.message }, { status: 500 });
+
+    await recordDraftEvent({
+      draftId: params.id,
+      actorId: userId,
+      type: "edited",
+      metadata: { fields: Object.keys(update) }
+    });
+
     return NextResponse.json({ ok: true });
   } catch (err) {
     return NextResponse.json(

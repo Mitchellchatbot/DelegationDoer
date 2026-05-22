@@ -3,22 +3,33 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ClipboardCheck, Mail, Send, CheckCircle2, XCircle, Loader2,
-  AlertTriangle, Edit2, ChevronDown, ChevronUp, RefreshCw, Clock
+  AlertTriangle, Edit2, ChevronDown, ChevronUp, RefreshCw, Clock,
+  MessageSquare, RotateCcw, History
 } from "lucide-react";
 import { toast } from "sonner";
 import { PageHero } from "@/components/PageHero";
 import { PersonAvatar } from "@/components/PersonAvatar";
 import { useCurrentUser } from "@/lib/user-context";
+import { isApprover } from "@/lib/email-approvers";
 import { cn } from "@/lib/utils";
 
-// Email approval queue. Anyone who's a designated approver per
-// /lib/email-approvers.ts (Mitchell / Mujtaba / Sam / etc.) sees
-// every pending draft of any kind they can sign off on. The author
-// also sees their own drafts (so they can chase status).
+// Email approval queue. Approvers (leader + Sam / Mujtaba / Farez per
+// /lib/email-approvers.ts) see every queued draft. Authors also see
+// their own drafts here so they can chase status and resubmit after
+// a revision request.
 //
-// Each row: Approve & Send / Edit / Reject with Note. Once an action
-// fires we optimistically flip the local state and refetch in the
-// background so the queue stays consistent across tabs.
+// Collaborative actions per row:
+//   - Approve & Send (terminal — fires the outbound)
+//   - Leave Feedback (comment, no status change)
+//   - Request Revision (sets needs_revision — author edits & resubmits)
+//   - Reject with Note (terminal — closes the draft)
+//   - Edit (mutate before approve)
+//   - Resubmit (author-only, when needs_revision)
+//
+// Each card also expands a timeline of every action (who/when/what)
+// fetched from /api/email-drafts/[id]/events.
+
+type DraftStatus = "pending" | "needs_revision" | "approved" | "rejected" | "sent" | "failed";
 
 interface Draft {
   id: string;
@@ -34,7 +45,7 @@ interface Draft {
   bodyText: string;
   bodyHtml: string | null;
   kind: "client_update" | "content_plan" | "custom";
-  status: "pending" | "approved" | "rejected" | "sent" | "failed";
+  status: DraftStatus;
   approverId: string | null;
   approverName: string | null;
   approvedAt: string | null;
@@ -42,6 +53,26 @@ interface Draft {
   rejectionNote: string | null;
   sentAt: string | null;
   sendError: string | null;
+  revisionCount: number;
+  createdAt: string;
+}
+
+interface TimelineEvent {
+  id: string;
+  actorId: string | null;
+  actorName: string | null;
+  type:
+    | "submitted"
+    | "comment"
+    | "revision_requested"
+    | "resubmitted"
+    | "edited"
+    | "approved"
+    | "rejected"
+    | "sent"
+    | "send_failed";
+  body: string | null;
+  metadata: Record<string, unknown>;
   createdAt: string;
 }
 
@@ -51,16 +82,20 @@ const KIND_LABELS: Record<Draft["kind"], { label: string; tone: string }> = {
   custom:        { label: "Custom",        tone: "bg-slate-100 text-slate-700 border-slate-200/70" }
 };
 
+type Filter = "pending" | "needs_revision" | "all";
+
 export default function ApprovalsPage() {
   const me = useCurrentUser();
+  const viewerIsApprover = isApprover({ name: me.name, role: me.role });
   const [drafts, setDrafts] = useState<Draft[]>([]);
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState<"pending" | "all">("pending");
+  const [filter, setFilter] = useState<Filter>("pending");
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const status = filter === "pending" ? "&status=pending" : "";
+      // 'all' returns the full visible set; status filters narrow.
+      const status = filter !== "all" ? `&status=${filter}` : "";
       const res = await fetch(`/api/email-drafts?limit=100${status}`, { cache: "no-store" });
       if (!res.ok) throw new Error(`status ${res.status}`);
       const data = await res.json();
@@ -75,20 +110,21 @@ export default function ApprovalsPage() {
   useEffect(() => { void load(); }, [load]);
 
   const pendingCount = drafts.filter((d) => d.status === "pending").length;
+  const revisionCount = drafts.filter((d) => d.status === "needs_revision").length;
 
   return (
     <div className="space-y-5 max-w-5xl">
       <PageHero
         eyebrow="Approvals"
         headline={["Send the ", { accent: "right emails" }]}
-        subtitle="Outbound client emails route through here before they hit the wire. Approve & Send when they're ready, or send back with a note."
+        subtitle="Outbound client emails route through here before they hit the wire. Approve & Send, leave feedback, or send back for revisions."
         icon={<ClipboardCheck />}
         iconTone="indigo"
       />
 
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div className="inline-flex items-center rounded-xl border border-slate-200/70 bg-white p-0.5">
-          {(["pending", "all"] as const).map((opt) => (
+          {(["pending", "needs_revision", "all"] as const).map((opt) => (
             <button
               key={opt}
               type="button"
@@ -98,7 +134,9 @@ export default function ApprovalsPage() {
                 filter === opt ? "bg-accent/10 text-accent" : "text-ink/60 hover:text-ink"
               )}
             >
-              {opt === "pending" ? `Pending (${pendingCount})` : "All"}
+              {opt === "pending" ? `Pending (${pendingCount})`
+                : opt === "needs_revision" ? `Needs revision (${revisionCount})`
+                : "All"}
             </button>
           ))}
         </div>
@@ -121,7 +159,9 @@ export default function ApprovalsPage() {
           <ClipboardCheck className="w-8 h-8 text-emerald-500 mx-auto mb-2" />
           <div className="text-base font-medium text-ink">All caught up</div>
           <div className="mt-1">
-            {filter === "pending" ? "No emails waiting on your approval." : "No drafts to show."}
+            {filter === "pending" ? "No emails waiting on your approval."
+              : filter === "needs_revision" ? "No drafts currently in revision."
+              : "No drafts to show."}
           </div>
         </div>
       ) : (
@@ -131,7 +171,7 @@ export default function ApprovalsPage() {
               key={d.id}
               draft={d}
               meId={me.id}
-              meName={me.name}
+              viewerIsApprover={viewerIsApprover}
               onChanged={load}
             />
           ))}
@@ -142,33 +182,69 @@ export default function ApprovalsPage() {
 }
 
 function DraftCard({
-  draft, meId, meName, onChanged
+  draft, meId, viewerIsApprover, onChanged
 }: {
   draft: Draft;
   meId: string;
-  meName: string;
+  viewerIsApprover: boolean;
   onChanged: () => void;
 }) {
-  const [expanded, setExpanded] = useState(draft.status === "pending");
+  const isPending = draft.status === "pending";
+  const isNeedsRevision = draft.status === "needs_revision";
+  const isFailed = draft.status === "failed";
+  const isSent = draft.status === "sent";
+  const isRejected = draft.status === "rejected";
+  const isApproved = draft.status === "approved";
+  const isAuthor = draft.authorId === meId;
+
+  const [expanded, setExpanded] = useState(isPending || isNeedsRevision);
   const [editing, setEditing] = useState(false);
-  const [busy, setBusy] = useState<"approve" | "reject" | "save" | null>(null);
+  const [busy, setBusy] = useState<"approve" | "reject" | "save" | "feedback" | "revision" | "resubmit" | null>(null);
   const [rejectNote, setRejectNote] = useState("");
   const [showRejectBox, setShowRejectBox] = useState(false);
+  const [feedbackNote, setFeedbackNote] = useState("");
+  const [showFeedbackBox, setShowFeedbackBox] = useState(false);
+  const [revisionNote, setRevisionNote] = useState("");
+  const [showRevisionBox, setShowRevisionBox] = useState(false);
+  const [resubmitNote, setResubmitNote] = useState("");
+  const [showResubmitBox, setShowResubmitBox] = useState(false);
   const [editSubject, setEditSubject] = useState(draft.subject);
   const [editBody, setEditBody] = useState(draft.bodyText);
   const [editTo, setEditTo] = useState(draft.to.join(", "));
   const [editCc, setEditCc] = useState(draft.cc.join(", "));
-  // Send-from picker — lazy-loaded on first expand. Defaults to
-  // whatever the server says the author's primary mailbox is, but
-  // the approver can override (e.g. send via their own inbox).
+
+  // Timeline state — fetched lazily on first expand and refreshed
+  // after every action so the card always reflects the latest.
+  const [events, setEvents] = useState<TimelineEvent[] | null>(null);
+  const [loadingEvents, setLoadingEvents] = useState(false);
+
+  const loadEvents = useCallback(async () => {
+    setLoadingEvents(true);
+    try {
+      const res = await fetch(`/api/email-drafts/${draft.id}/events`, { cache: "no-store" });
+      if (!res.ok) throw new Error(`status ${res.status}`);
+      const data = await res.json();
+      setEvents(data.events ?? []);
+    } catch (err) {
+      toast.error(`Couldn't load timeline: ${err instanceof Error ? err.message : "unknown"}`);
+    } finally {
+      setLoadingEvents(false);
+    }
+  }, [draft.id]);
+
+  useEffect(() => {
+    if (expanded && events === null && !loadingEvents) void loadEvents();
+  }, [expanded, events, loadingEvents, loadEvents]);
+
+  // Send-from picker — lazy-loaded on first expand for a pending or
+  // failed draft. Defaults to whatever the server says the author's
+  // primary mailbox is.
   const [sendFromOptions, setSendFromOptions] = useState<Array<{ id: string; email: string; displayName: string | null; source: string }>>([]);
   const [sendFromId, setSendFromId] = useState<string>("");
   const [sendFromLoaded, setSendFromLoaded] = useState(false);
 
-  // Load send-from options the first time the card is expanded for a
-  // pending draft. Cached for the lifetime of the row.
   useEffect(() => {
-    if (sendFromLoaded || !expanded || draft.status !== "pending") return;
+    if (sendFromLoaded || !expanded || (!isPending && !isFailed)) return;
     let cancelled = false;
     (async () => {
       try {
@@ -184,7 +260,7 @@ function DraftCard({
       }
     })();
     return () => { cancelled = true; };
-  }, [expanded, draft.id, draft.status, sendFromLoaded]);
+  }, [expanded, draft.id, isPending, isFailed, sendFromLoaded]);
 
   const kindMeta = KIND_LABELS[draft.kind];
 
@@ -205,6 +281,7 @@ function DraftCard({
       } else if (data.status === "failed") {
         toast.error(`Send failed: ${data.error ?? "unknown"}`);
       }
+      setEvents(null); // force timeline refresh
       onChanged();
     } catch (err) {
       toast.error(`Couldn't approve: ${err instanceof Error ? err.message : "unknown"}`);
@@ -230,9 +307,83 @@ function DraftCard({
       toast.success(`Rejected — ${draft.authorName} notified${data.slackDelivered ? " via Slack" : ""}`);
       setShowRejectBox(false);
       setRejectNote("");
+      setEvents(null);
       onChanged();
     } catch (err) {
       toast.error(`Couldn't reject: ${err instanceof Error ? err.message : "unknown"}`);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function submitFeedback() {
+    if (!feedbackNote.trim()) {
+      toast.error("Add a comment");
+      return;
+    }
+    setBusy("feedback");
+    try {
+      const res = await fetch(`/api/email-drafts/${draft.id}/feedback`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ body: feedbackNote.trim() })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error ?? `status ${res.status}`);
+      toast.success("Feedback posted");
+      setShowFeedbackBox(false);
+      setFeedbackNote("");
+      await loadEvents();
+    } catch (err) {
+      toast.error(`Couldn't post feedback: ${err instanceof Error ? err.message : "unknown"}`);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function requestRevision() {
+    if (!revisionNote.trim()) {
+      toast.error("Tell the author what to revise");
+      return;
+    }
+    setBusy("revision");
+    try {
+      const res = await fetch(`/api/email-drafts/${draft.id}/request-revision`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ note: revisionNote.trim() })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error ?? `status ${res.status}`);
+      toast.success(`Revision requested — ${draft.authorName} notified`);
+      setShowRevisionBox(false);
+      setRevisionNote("");
+      setEvents(null);
+      onChanged();
+    } catch (err) {
+      toast.error(`Couldn't request revision: ${err instanceof Error ? err.message : "unknown"}`);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function resubmit() {
+    setBusy("resubmit");
+    try {
+      const res = await fetch(`/api/email-drafts/${draft.id}/resubmit`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(resubmitNote.trim() ? { note: resubmitNote.trim() } : {})
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error ?? `status ${res.status}`);
+      toast.success(`Resubmitted for approval — v${(data.revisionCount ?? 0) + 1}`);
+      setShowResubmitBox(false);
+      setResubmitNote("");
+      setEvents(null);
+      onChanged();
+    } catch (err) {
+      toast.error(`Couldn't resubmit: ${err instanceof Error ? err.message : "unknown"}`);
     } finally {
       setBusy(null);
     }
@@ -257,6 +408,7 @@ function DraftCard({
       if (!res.ok) throw new Error(data?.error ?? `status ${res.status}`);
       toast.success("Draft updated");
       setEditing(false);
+      setEvents(null);
       onChanged();
     } catch (err) {
       toast.error(`Couldn't save: ${err instanceof Error ? err.message : "unknown"}`);
@@ -265,17 +417,13 @@ function DraftCard({
     }
   }
 
-  const isPending = draft.status === "pending";
-  const isFailed = draft.status === "failed";
-  const isSent = draft.status === "sent";
-  const isRejected = draft.status === "rejected";
-
   return (
     <section className={cn(
       "card p-4 space-y-3 transition-colors",
       isSent && "bg-emerald-50/40 border-emerald-200/60",
       isRejected && "bg-rose-50/40 border-rose-200/60",
-      isFailed && "bg-amber-50/40 border-amber-200/60"
+      isFailed && "bg-amber-50/40 border-amber-200/60",
+      isNeedsRevision && "bg-orange-50/40 border-orange-200/60"
     )}>
       <header className="flex items-start justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-2.5 min-w-0">
@@ -289,9 +437,19 @@ function DraftCard({
               )}>
                 {kindMeta.label}
               </span>
+              {draft.revisionCount > 0 && (
+                <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-200/70">
+                  <RotateCcw className="w-3 h-3" /> v{draft.revisionCount + 1}
+                </span>
+              )}
               {isSent && (
                 <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700 border border-emerald-200/70">
                   <CheckCircle2 className="w-3 h-3" /> Sent
+                </span>
+              )}
+              {isApproved && (
+                <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700 border border-blue-200/70">
+                  <CheckCircle2 className="w-3 h-3" /> Approved
                 </span>
               )}
               {isRejected && (
@@ -304,11 +462,16 @@ function DraftCard({
                   <AlertTriangle className="w-3 h-3" /> Send failed
                 </span>
               )}
+              {isNeedsRevision && (
+                <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full bg-orange-100 text-orange-700 border border-orange-200/70">
+                  <RotateCcw className="w-3 h-3" /> Needs revision
+                </span>
+              )}
             </div>
             <div className="text-[11px] text-ink/55 mt-0.5">
               <span className="font-medium text-ink/70">{draft.clientName}</span>
               <span className="mx-1">·</span>
-              <Clock className="w-3 h-3 inline-block -mt-0.5" /> {new Date(draft.createdAt).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
+              <Clock className="w-3 h-3 inline-block -mt-0.5" /> {formatRelative(draft.createdAt)}
             </div>
           </div>
         </div>
@@ -416,50 +579,79 @@ function DraftCard({
             </div>
           )}
 
+          {/* Timeline — always rendered when expanded so the user can see
+              the full collaborative history (comments, edits, revisions). */}
+          <TimelineSection
+            events={events}
+            loading={loadingEvents}
+            onRefresh={loadEvents}
+          />
+
+          {/* Inline note boxes for the various actions. Only one shown
+              at a time to keep the surface tight. */}
+          {showFeedbackBox && (
+            <InlineNoteBox
+              tone="indigo"
+              label="Leave feedback"
+              placeholder="Drop a comment for the author or other approvers…"
+              value={feedbackNote}
+              onChange={setFeedbackNote}
+              onCancel={() => { setShowFeedbackBox(false); setFeedbackNote(""); }}
+              onSubmit={submitFeedback}
+              submitLabel="Post comment"
+              busy={busy === "feedback"}
+              icon={<MessageSquare className="w-3 h-3" />}
+            />
+          )}
+          {showRevisionBox && isPending && (
+            <InlineNoteBox
+              tone="orange"
+              label="Request revision"
+              placeholder="Describe what the author should change before this can be approved…"
+              value={revisionNote}
+              onChange={setRevisionNote}
+              onCancel={() => { setShowRevisionBox(false); setRevisionNote(""); }}
+              onSubmit={requestRevision}
+              submitLabel="Send revision request"
+              busy={busy === "revision"}
+              icon={<RotateCcw className="w-3 h-3" />}
+            />
+          )}
           {showRejectBox && isPending && (
-            <div className="rounded-xl border-2 border-rose-300/50 bg-rose-50/30 p-3 space-y-2">
-              <div className="text-[11px] uppercase tracking-wide font-semibold text-rose-700">
-                Reject with note
-              </div>
-              <textarea
-                value={rejectNote}
-                onChange={(e) => setRejectNote(e.target.value)}
-                placeholder="Tell the author what to change before resubmitting…"
-                rows={3}
-                className="w-full text-[13px] bg-white border border-slate-200/70 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-rose-200/40 focus:border-rose-400/50 resize-y"
-              />
-              <div className="flex items-center justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={() => { setShowRejectBox(false); setRejectNote(""); }}
-                  className="text-[12px] text-ink/65 hover:text-ink px-2 py-1"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={reject}
-                  disabled={busy === "reject" || !rejectNote.trim()}
-                  className={cn(
-                    "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold text-white shadow-sm transition-all hover:-translate-y-0.5 active:scale-95",
-                    (busy === "reject" || !rejectNote.trim()) && "opacity-50 cursor-not-allowed hover:translate-y-0"
-                  )}
-                  style={{ background: "linear-gradient(135deg, #dc2626 0%, #b91c1c 100%)" }}
-                >
-                  {busy === "reject" ? <Loader2 className="w-3 h-3 animate-spin" /> : <XCircle className="w-3 h-3" />}
-                  Send rejection
-                </button>
-              </div>
-            </div>
+            <InlineNoteBox
+              tone="rose"
+              label="Reject with note"
+              placeholder="Tell the author why this can't be sent (this closes the draft permanently)…"
+              value={rejectNote}
+              onChange={setRejectNote}
+              onCancel={() => { setShowRejectBox(false); setRejectNote(""); }}
+              onSubmit={reject}
+              submitLabel="Send rejection"
+              busy={busy === "reject"}
+              icon={<XCircle className="w-3 h-3" />}
+            />
+          )}
+          {showResubmitBox && isNeedsRevision && isAuthor && (
+            <InlineNoteBox
+              tone="blue"
+              label="Resubmit for approval"
+              placeholder="(Optional) Note to approvers — what changed in this revision."
+              value={resubmitNote}
+              onChange={setResubmitNote}
+              onCancel={() => { setShowResubmitBox(false); setResubmitNote(""); }}
+              onSubmit={resubmit}
+              submitLabel="Resubmit"
+              busy={busy === "resubmit"}
+              icon={<Send className="w-3 h-3" />}
+              optional
+            />
           )}
 
-          {(isPending || isFailed) && !editing && !showRejectBox && (
+          {/* Action bar. Switches by status + viewer role. */}
+          {!editing && !showRejectBox && !showFeedbackBox && !showRevisionBox && !showResubmitBox && (isPending || isFailed || isNeedsRevision) && (
             <div className="space-y-2 pt-1">
-              {/* Send-from picker — shows which mailbox will actually
-                  send the email. Approvers can pick author's mailbox
-                  or their own as a rescue path. Hidden when only one
-                  option exists (no decision to make). */}
-              {sendFromOptions.length > 0 && (
+              {/* Send-from picker — only relevant when sending is the next action. */}
+              {sendFromOptions.length > 0 && (isPending || isFailed) && (
                 <div className="flex items-center gap-2 text-[11px] text-ink/60 px-1">
                   <Send className="w-3 h-3 text-ink/40" />
                   <span>Send from:</span>
@@ -483,7 +675,16 @@ function DraftCard({
                   )}
                 </div>
               )}
-              <div className="flex items-center justify-end gap-2">
+              <div className="flex items-center justify-end gap-2 flex-wrap">
+                {viewerIsApprover && (
+                  <button
+                    type="button"
+                    onClick={() => setShowFeedbackBox(true)}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium text-ink/70 bg-white border border-slate-200 hover:border-indigo-400/40 hover:text-indigo-700 transition-colors"
+                  >
+                    <MessageSquare className="w-3 h-3" /> Leave feedback
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => setEditing(true)}
@@ -492,33 +693,183 @@ function DraftCard({
                   <Edit2 className="w-3 h-3" /> Edit
                 </button>
                 {isPending && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => setShowRevisionBox(true)}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium text-orange-700 bg-white border border-orange-200/70 hover:bg-orange-50 transition-colors"
+                    >
+                      <RotateCcw className="w-3 h-3" /> Request revision
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowRejectBox(true)}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium text-rose-700 bg-white border border-rose-200/70 hover:bg-rose-50 transition-colors"
+                    >
+                      <XCircle className="w-3 h-3" /> Reject…
+                    </button>
+                  </>
+                )}
+                {(isPending || isFailed) && (
                   <button
                     type="button"
-                    onClick={() => setShowRejectBox(true)}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium text-rose-700 bg-white border border-rose-200/70 hover:bg-rose-50 transition-colors"
+                    onClick={approve}
+                    disabled={busy === "approve"}
+                    className={cn(
+                      "inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs font-semibold text-white shadow-sm transition-all hover:-translate-y-0.5 active:scale-95",
+                      busy === "approve" && "opacity-60 cursor-not-allowed hover:translate-y-0"
+                    )}
+                    style={{ background: "linear-gradient(135deg, #10b981 0%, #059669 100%)" }}
                   >
-                    <XCircle className="w-3 h-3" /> Reject…
+                    {busy === "approve" ? <Loader2 className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
+                    {isFailed ? "Retry send" : "Approve & Send"}
                   </button>
                 )}
-                <button
-                  type="button"
-                  onClick={approve}
-                  disabled={busy === "approve"}
-                  className={cn(
-                    "inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs font-semibold text-white shadow-sm transition-all hover:-translate-y-0.5 active:scale-95",
-                    busy === "approve" && "opacity-60 cursor-not-allowed hover:translate-y-0"
-                  )}
-                  style={{ background: "linear-gradient(135deg, #10b981 0%, #059669 100%)" }}
-                >
-                  {busy === "approve" ? <Loader2 className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
-                  {isFailed ? "Retry send" : "Approve & Send"}
-                </button>
+                {isNeedsRevision && isAuthor && (
+                  <button
+                    type="button"
+                    onClick={() => setShowResubmitBox(true)}
+                    className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs font-semibold text-white shadow-sm transition-all hover:-translate-y-0.5 active:scale-95"
+                    style={{ background: "linear-gradient(135deg, #2563EB 0%, #1e63ff 100%)" }}
+                  >
+                    <Send className="w-3 h-3" /> Resubmit for approval
+                  </button>
+                )}
               </div>
+            </div>
+          )}
+
+          {/* Approver-only "Add comment" on terminal states so the
+              leader can leave a retrospective note. Authors don't get
+              this surface — their only path is edit + resubmit. */}
+          {viewerIsApprover && !editing && !showFeedbackBox && (isSent || isRejected || isApproved) && (
+            <div className="flex items-center justify-end pt-1">
+              <button
+                type="button"
+                onClick={() => setShowFeedbackBox(true)}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium text-ink/65 bg-white border border-slate-200 hover:border-indigo-400/40 hover:text-indigo-700 transition-colors"
+              >
+                <MessageSquare className="w-3 h-3" /> Add comment
+              </button>
             </div>
           )}
         </div>
       )}
     </section>
+  );
+}
+
+function TimelineSection({
+  events, loading, onRefresh
+}: {
+  events: TimelineEvent[] | null;
+  loading: boolean;
+  onRefresh: () => Promise<void>;
+}) {
+  return (
+    <div className="rounded-xl border border-slate-200/70 bg-slate-50/40 p-3">
+      <div className="flex items-center justify-between mb-2">
+        <div className="text-[11px] uppercase tracking-wide font-semibold text-ink/55 inline-flex items-center gap-1.5">
+          <History className="w-3.5 h-3.5" /> Approval timeline
+        </div>
+        <button
+          type="button"
+          onClick={() => void onRefresh()}
+          className="text-[11px] text-ink/45 hover:text-ink/75 inline-flex items-center gap-1"
+        >
+          <RefreshCw className="w-3 h-3" /> Refresh
+        </button>
+      </div>
+      {loading && events === null ? (
+        <div className="text-[12px] text-muted">
+          <Loader2 className="w-3 h-3 animate-spin inline mr-1" /> Loading…
+        </div>
+      ) : events && events.length > 0 ? (
+        <ol className="space-y-2.5">
+          {events.map((e) => (
+            <li key={e.id} className="flex gap-2.5 text-[12px]">
+              <span className="shrink-0 mt-0.5">{eventIcon(e.type)}</span>
+              <div className="min-w-0 flex-1">
+                <div className="text-ink/85">
+                  <span className="font-semibold">{e.actorName ?? "—"}</span>
+                  <span className="text-ink/55"> {eventVerb(e.type)}</span>
+                  <span className="text-ink/45 ml-1.5 text-[11px]">
+                    {formatRelative(e.createdAt)}
+                  </span>
+                </div>
+                {e.body && (
+                  <div className="mt-1 text-[12px] text-ink/75 whitespace-pre-wrap bg-white border border-slate-200/70 rounded-md px-2.5 py-1.5">
+                    {e.body}
+                  </div>
+                )}
+              </div>
+            </li>
+          ))}
+        </ol>
+      ) : (
+        <div className="text-[12px] text-muted">No timeline events yet.</div>
+      )}
+    </div>
+  );
+}
+
+function InlineNoteBox({
+  tone, label, placeholder, value, onChange, onCancel, onSubmit, submitLabel, busy, icon, optional
+}: {
+  tone: "rose" | "orange" | "indigo" | "blue";
+  label: string;
+  placeholder: string;
+  value: string;
+  onChange: (v: string) => void;
+  onCancel: () => void;
+  onSubmit: () => void;
+  submitLabel: string;
+  busy: boolean;
+  icon: React.ReactNode;
+  optional?: boolean;
+}) {
+  const toneMap: Record<string, { border: string; bg: string; labelText: string; ring: string; btnBg: string; }> = {
+    rose:   { border: "border-rose-300/50",   bg: "bg-rose-50/30",   labelText: "text-rose-700",   ring: "focus:ring-rose-200/40 focus:border-rose-400/50",   btnBg: "linear-gradient(135deg, #dc2626 0%, #b91c1c 100%)" },
+    orange: { border: "border-orange-300/50", bg: "bg-orange-50/30", labelText: "text-orange-700", ring: "focus:ring-orange-200/40 focus:border-orange-400/50", btnBg: "linear-gradient(135deg, #ea580c 0%, #c2410c 100%)" },
+    indigo: { border: "border-indigo-300/50", bg: "bg-indigo-50/30", labelText: "text-indigo-700", ring: "focus:ring-indigo-200/40 focus:border-indigo-400/50", btnBg: "linear-gradient(135deg, #4f46e5 0%, #4338ca 100%)" },
+    blue:   { border: "border-blue-300/50",   bg: "bg-blue-50/30",   labelText: "text-blue-700",   ring: "focus:ring-blue-200/40 focus:border-blue-400/50",   btnBg: "linear-gradient(135deg, #2563EB 0%, #1e63ff 100%)" }
+  };
+  const t = toneMap[tone];
+  return (
+    <div className={cn("rounded-xl border-2 p-3 space-y-2", t.border, t.bg)}>
+      <div className={cn("text-[11px] uppercase tracking-wide font-semibold", t.labelText)}>
+        {label}
+      </div>
+      <textarea
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        rows={3}
+        className={cn("w-full text-[13px] bg-white border border-slate-200/70 rounded-lg px-3 py-2 outline-none focus:ring-2 resize-y", t.ring)}
+      />
+      <div className="flex items-center justify-end gap-2">
+        <button
+          type="button"
+          onClick={onCancel}
+          className="text-[12px] text-ink/65 hover:text-ink px-2 py-1"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          onClick={onSubmit}
+          disabled={busy || (!optional && !value.trim())}
+          className={cn(
+            "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold text-white shadow-sm transition-all hover:-translate-y-0.5 active:scale-95",
+            (busy || (!optional && !value.trim())) && "opacity-50 cursor-not-allowed hover:translate-y-0"
+          )}
+          style={{ background: t.btnBg }}
+        >
+          {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : icon}
+          {submitLabel}
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -538,4 +889,46 @@ function ReadOnlyRow({ label, children }: { label: string; children: React.React
       <span className="text-ink/85 min-w-0 truncate">{children}</span>
     </div>
   );
+}
+
+// ---- Timeline helpers ------------------------------------------------
+
+function eventIcon(t: TimelineEvent["type"]): React.ReactNode {
+  switch (t) {
+    case "submitted":          return <Mail className="w-3.5 h-3.5 text-slate-500" />;
+    case "comment":            return <MessageSquare className="w-3.5 h-3.5 text-indigo-500" />;
+    case "revision_requested": return <RotateCcw className="w-3.5 h-3.5 text-orange-500" />;
+    case "resubmitted":        return <Send className="w-3.5 h-3.5 text-blue-500" />;
+    case "edited":             return <Edit2 className="w-3.5 h-3.5 text-slate-500" />;
+    case "approved":           return <CheckCircle2 className="w-3.5 h-3.5 text-blue-600" />;
+    case "rejected":           return <XCircle className="w-3.5 h-3.5 text-rose-500" />;
+    case "sent":               return <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />;
+    case "send_failed":        return <AlertTriangle className="w-3.5 h-3.5 text-amber-500" />;
+  }
+}
+
+function eventVerb(t: TimelineEvent["type"]): string {
+  switch (t) {
+    case "submitted":          return "submitted the draft for approval";
+    case "comment":            return "left feedback";
+    case "revision_requested": return "requested revisions";
+    case "resubmitted":        return "resubmitted for approval";
+    case "edited":             return "edited the draft";
+    case "approved":           return "approved the draft";
+    case "rejected":           return "rejected the draft";
+    case "sent":               return "sent the email";
+    case "send_failed":        return "tried to send but it failed";
+  }
+}
+
+function formatRelative(iso: string): string {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  const diff = Date.now() - d.getTime();
+  const min = 60_000, hr = 60 * min, day = 24 * hr;
+  if (diff < min) return "just now";
+  if (diff < hr) return `${Math.floor(diff / min)}m ago`;
+  if (diff < day) return `${Math.floor(diff / hr)}h ago`;
+  if (diff < 7 * day) return `${Math.floor(diff / day)}d ago`;
+  return d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 }

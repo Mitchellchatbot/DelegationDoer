@@ -4,7 +4,8 @@ import { getUserById } from "@/lib/server-data";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { openDm, postMessage } from "@/lib/slack";
 import { resolveSlackId } from "@/lib/slack-resolve";
-import { getApproversForDraft, type EmailDraftKind } from "@/lib/email-approvers";
+import { getApproversForDraft, isApprover, type EmailDraftKind } from "@/lib/email-approvers";
+import { recordDraftEvent } from "@/lib/draft-events";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
@@ -43,7 +44,7 @@ interface DraftRow {
   body_text: string;
   body_html: string | null;
   kind: EmailDraftKind;
-  status: "pending" | "approved" | "rejected" | "sent" | "failed";
+  status: "pending" | "needs_revision" | "approved" | "rejected" | "sent" | "failed";
   approver_id: string | null;
   approved_at: string | null;
   rejected_at: string | null;
@@ -53,6 +54,7 @@ interface DraftRow {
   sent_at: string | null;
   send_error: string | null;
   scheduled_for: string | null;
+  revision_count: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -136,6 +138,14 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: insertErr.message }, { status: 500 });
     }
 
+    // Open the timeline with a "submitted" event so the approvals UI
+    // has a baseline entry before any comments arrive.
+    await recordDraftEvent({
+      draftId: id,
+      actorId: userId,
+      type: "submitted"
+    });
+
     // Fire Slack DMs to approvers — best-effort, per-recipient failures
     // shouldn't fail the request. Author + the recipient address up
     // top so approvers can triage at a glance.
@@ -218,7 +228,7 @@ export async function GET(req: NextRequest) {
 
     let q = supabase
       .from("email_drafts")
-      .select("id, author_id, account_id, client_id, client_name, to_emails, cc_emails, bcc_emails, subject, body_text, body_html, kind, status, approver_id, approved_at, rejected_at, rejection_note, missive_thread_id, missive_message_id, sent_at, send_error, scheduled_for, created_at, updated_at")
+      .select("id, author_id, account_id, client_id, client_name, to_emails, cc_emails, bcc_emails, subject, body_text, body_html, kind, status, approver_id, approved_at, rejected_at, rejection_note, missive_thread_id, missive_message_id, sent_at, send_error, scheduled_for, revision_count, created_at, updated_at")
       .order("created_at", { ascending: false })
       .limit(limit);
 
@@ -240,49 +250,10 @@ export async function GET(req: NextRequest) {
 
     let visible = allRows;
     if (!mineOnly) {
-      const isLeader = me.role === "leader";
-      // Super-approvers (Mujtaba, Sam) see every draft, same as Mitch.
-      const lower = (me.name ?? "").toLowerCase();
-      const isSuperApprover = ["mitchell", "mujtaba", "sam"].some((p) => lower.includes(p));
-      // Content-plan-only approvers (Tabrez, Farez, Bishmah) see every
-      // pending/approved content_plan draft — kind-scoped, not author-scoped.
-      const isContentPlanApprover = ["tabrez", "farez", "bishmah", "bismah"].some((p) => lower.includes(p));
-      if (!isLeader && !isSuperApprover) {
-        // Dept heads see drafts whose author is in any department
-        // they head, regardless of kind. Everyone else (including
-        // stealth admins + workers) sees only their own drafts —
-        // unless they're a content-plan-only approver, in which case
-        // they also see every content_plan draft.
-        const isDeptHead = me.role === "department_head" && (me.departmentIds ?? []).length > 0;
-        if (!isDeptHead) {
-          visible = allRows.filter((r) =>
-            r.author_id === userId || (isContentPlanApprover && r.kind === "content_plan")
-          );
-        } else {
-          // Look up author->depts for every row's author, then keep
-          // rows where the author shares a dept with the caller.
-          const authorIds = Array.from(new Set(allRows.map((r) => r.author_id)));
-          const authorDeptsByUser = new Map<string, Set<string>>();
-          if (authorIds.length > 0) {
-            const { data: memberships } = await supabase
-              .from("department_members")
-              .select("user_id, department_id")
-              .in("user_id", authorIds);
-            for (const m of ((memberships ?? []) as { user_id: string; department_id: string }[])) {
-              const set = authorDeptsByUser.get(m.user_id) ?? new Set<string>();
-              set.add(m.department_id);
-              authorDeptsByUser.set(m.user_id, set);
-            }
-          }
-          const myDepts = new Set(me.departmentIds ?? []);
-          visible = allRows.filter((r) => {
-            if (r.author_id === userId) return true;
-            if (isContentPlanApprover && r.kind === "content_plan") return true;
-            const authorDepts = authorDeptsByUser.get(r.author_id) ?? new Set<string>();
-            for (const d of myDepts) if (authorDepts.has(d)) return true;
-            return false;
-          });
-        }
+      // v3 approvers (leader + Sam/Mujtaba/Farez) see every draft.
+      // Everyone else sees only their own.
+      if (!isApprover({ name: me.name, role: me.role })) {
+        visible = allRows.filter((r) => r.author_id === userId);
       }
     }
 
@@ -328,6 +299,7 @@ export async function GET(req: NextRequest) {
         sentAt: r.sent_at,
         sendError: r.send_error,
         scheduledFor: r.scheduled_for,
+        revisionCount: Number(r.revision_count ?? 0),
         createdAt: r.created_at,
         updatedAt: r.updated_at
       }))

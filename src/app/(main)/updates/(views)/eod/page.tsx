@@ -13,6 +13,7 @@ import { toast } from "sonner";
 import { PageHero } from "@/components/PageHero";
 import { PersonAvatar } from "@/components/PersonAvatar";
 import { EodTypeform } from "@/components/EodTypeform";
+import { UpdateFeedback, type ReactionSummary, type ReplyEntry } from "@/components/UpdateFeedback";
 import { useCurrentUser } from "@/lib/user-context";
 
 interface PersonSummary {
@@ -50,6 +51,11 @@ export default function EodPage() {
   const [canSend, setCanSend] = useState(false);
   const [summaries, setSummaries] = useState<DepartmentSummary[]>([]);
   const [sending, setSending] = useState<Record<string, boolean>>({});
+  // Feedback (reactions + replies) keyed by EOD-note id. EOD note ids
+  // are deterministic — `eod_${userId}_${noteDate}` — so the rows can
+  // be looked up without an extra round-trip to fetch them.
+  const [reactionsById, setReactionsById] = useState<Record<string, ReactionSummary[]>>({});
+  const [repliesById, setRepliesById] = useState<Record<string, ReplyEntry[]>>({});
 
   // Today's date in YYYY-MM-DD (used as the upper bound on the picker
   // — viewing future dates makes no sense, and is when newly-submitted
@@ -68,8 +74,34 @@ export default function EodPage() {
       const res = await fetch(`/api/eod?date=${viewDate}`, { cache: "no-store" });
       if (!res.ok) throw new Error(`status ${res.status}`);
       const data = await res.json();
-      setSummaries((data.summaries ?? []) as DepartmentSummary[]);
+      const sums = (data.summaries ?? []) as DepartmentSummary[];
+      setSummaries(sums);
       setCanSend(!!data.canSend);
+
+      // Bulk-fetch feedback for every submitted EOD on this date.
+      // Unsubmitted rows can't be reacted to, so we don't pre-load them.
+      const submittedNoteIds: string[] = [];
+      for (const d of sums) {
+        for (const p of d.people) {
+          if (p.submittedAt) submittedNoteIds.push(`eod_${p.userId}_${viewDate}`);
+        }
+      }
+      if (submittedNoteIds.length > 0) {
+        try {
+          const fb = await fetch(
+            `/api/updates/feedback?targetType=eod&targetIds=${encodeURIComponent(submittedNoteIds.join(","))}`,
+            { cache: "no-store" }
+          );
+          if (fb.ok) {
+            const fbData = await fb.json();
+            setReactionsById((fbData.reactions ?? {}) as Record<string, ReactionSummary[]>);
+            setRepliesById((fbData.replies ?? {}) as Record<string, ReplyEntry[]>);
+          }
+        } catch { /* non-fatal — feedback is best-effort */ }
+      } else {
+        setReactionsById({});
+        setRepliesById({});
+      }
     } catch (err) {
       toast.error(`Couldn't load EOD: ${err instanceof Error ? err.message : "unknown"}`);
     } finally {
@@ -406,6 +438,9 @@ export default function EodPage() {
             key={d.departmentId}
             summary={d}
             meId={me.id}
+            viewDate={viewDate}
+            reactionsById={reactionsById}
+            repliesById={repliesById}
             canSend={canSend && isToday}
             canReview={
               me.role === "leader" ||
@@ -455,10 +490,13 @@ function isMarketingPerson(p: { name: string }): boolean {
 }
 
 function DepartmentPanel({
-  summary, meId, canSend, canReview, readOnly, sending, submitting, onSaveField, onSubmit, onToggleReview, onSend
+  summary, meId, viewDate, reactionsById, repliesById, canSend, canReview, readOnly, sending, submitting, onSaveField, onSubmit, onToggleReview, onSend
 }: {
   summary: DepartmentSummary;
   meId: string;
+  viewDate: string;
+  reactionsById: Record<string, ReactionSummary[]>;
+  repliesById: Record<string, ReplyEntry[]>;
   canSend: boolean;
   canReview: boolean;
   // True when the page is showing a date other than today — we hide
@@ -529,19 +567,25 @@ function DepartmentPanel({
             No members in this department yet.
           </div>
         ) : (
-          sorted.map((p) => (
-            <PersonRow
-              key={p.userId}
-              person={p}
-              isMe={p.userId === meId}
-              canReview={canReview}
-              readOnly={readOnly}
-              submitting={submitting}
-              onSaveField={onSaveField}
-              onSubmit={onSubmit}
-              onToggleReview={onToggleReview}
-            />
-          ))
+          sorted.map((p) => {
+            const noteId = `eod_${p.userId}_${viewDate}`;
+            return (
+              <PersonRow
+                key={p.userId}
+                person={p}
+                isMe={p.userId === meId}
+                canReview={canReview}
+                readOnly={readOnly}
+                submitting={submitting}
+                noteId={noteId}
+                initialReactions={reactionsById[noteId] ?? []}
+                initialReplies={repliesById[noteId] ?? []}
+                onSaveField={onSaveField}
+                onSubmit={onSubmit}
+                onToggleReview={onToggleReview}
+              />
+            );
+          })
         )}
       </div>
     </section>
@@ -622,13 +666,16 @@ const MARKETING_EOD_FIELDS: ReadonlyArray<EodFieldDef> = [
 ];
 
 function PersonRow({
-  person, isMe, canReview, readOnly, submitting, onSaveField, onSubmit, onToggleReview
+  person, isMe, canReview, readOnly, submitting, noteId, initialReactions, initialReplies, onSaveField, onSubmit, onToggleReview
 }: {
   person: PersonSummary;
   isMe: boolean;
   canReview: boolean;
   readOnly: boolean;
   submitting: boolean;
+  noteId: string;
+  initialReactions: ReactionSummary[];
+  initialReplies: ReplyEntry[];
   onSaveField: (key: EodFieldKey, value: string) => void;
   onSubmit: () => void;
   onToggleReview: (userId: string, currentlyReviewed: boolean) => void;
@@ -765,6 +812,21 @@ function PersonRow({
           <div className="mt-2 text-[13px] bg-slate-50/70 border border-slate-200/60 rounded-lg px-3 py-2 whitespace-pre-wrap">
             {person.note}
           </div>
+        )}
+
+        {/* Recognition surface — reactions + replies + quick kudos
+            presets. Only shown once the worker has actually submitted
+            their EOD; otherwise teammates would be cheering an empty
+            draft. Author can see + reply but can't recognize themselves
+            (UpdateFeedback hides the kudos buttons when isSelf=true). */}
+        {person.submittedAt && (
+          <UpdateFeedback
+            targetType="eod"
+            targetId={noteId}
+            isSelf={isMe}
+            initialReactions={initialReactions}
+            initialReplies={initialReplies}
+          />
         )}
       </div>
     </div>

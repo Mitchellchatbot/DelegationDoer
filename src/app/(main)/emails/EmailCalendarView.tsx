@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { ChevronLeft, ChevronRight, Mail, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -246,30 +247,215 @@ function EmailPill({
     : null;
   const isMuted = row.displayStatus === "sent";
 
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const [hoverOpen, setHoverOpen] = useState(false);
+  const openTimer = useRef<number | null>(null);
+  const closeTimer = useRef<number | null>(null);
+
+  const clearTimers = () => {
+    if (openTimer.current !== null) {
+      window.clearTimeout(openTimer.current);
+      openTimer.current = null;
+    }
+    if (closeTimer.current !== null) {
+      window.clearTimeout(closeTimer.current);
+      closeTimer.current = null;
+    }
+  };
+  const scheduleOpen = () => {
+    clearTimers();
+    openTimer.current = window.setTimeout(() => setHoverOpen(true), 220);
+  };
+  const scheduleClose = () => {
+    clearTimers();
+    closeTimer.current = window.setTimeout(() => setHoverOpen(false), 120);
+  };
+  const cancelClose = () => {
+    if (closeTimer.current !== null) {
+      window.clearTimeout(closeTimer.current);
+      closeTimer.current = null;
+    }
+  };
+
+  useEffect(() => () => clearTimers(), []);
+
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      title={`${row.clientName}${row.subject ? " — " + row.subject : ""}\nby ${row.authorName} · ${statusLabel(row.displayStatus)}`}
-      className={cn(
-        "w-full text-left rounded px-1.5 py-0.5 text-[10px] font-medium border truncate transition flex items-center gap-1",
-        tone.bg, tone.text, tone.border,
-        "hover:brightness-95",
-        isMuted && !expanded && "opacity-70",
-        expanded && "py-1 text-[11px]"
+    <>
+      <button
+        ref={triggerRef}
+        type="button"
+        onClick={() => {
+          setHoverOpen(false);
+          clearTimers();
+          onClick();
+        }}
+        onMouseEnter={scheduleOpen}
+        onMouseLeave={scheduleClose}
+        onFocus={() => {
+          clearTimers();
+          setHoverOpen(true);
+        }}
+        onBlur={() => setHoverOpen(false)}
+        className={cn(
+          "w-full text-left rounded px-1.5 py-0.5 text-[10px] font-medium border truncate transition flex items-center gap-1",
+          tone.bg, tone.text, tone.border,
+          "hover:brightness-95",
+          isMuted && !expanded && "opacity-70",
+          expanded && "py-1 text-[11px]"
+        )}
+      >
+        {timeStr && (
+          <span className="opacity-70 shrink-0 tabular-nums">{timeStr}</span>
+        )}
+        <span className="truncate flex-1">
+          <span className="font-semibold">{row.clientName}</span>
+          {row.subject && <span className="opacity-80"> · {row.subject}</span>}
+        </span>
+        {expanded && (
+          <span className="opacity-60 shrink-0 text-[10px]">by {row.authorName}</span>
+        )}
+      </button>
+      {hoverOpen && (
+        <EmailHoverCard
+          row={row}
+          triggerRef={triggerRef}
+          onEnter={cancelClose}
+          onLeave={scheduleClose}
+        />
       )}
+    </>
+  );
+}
+
+function EmailHoverCard({
+  row, triggerRef, onEnter, onLeave
+}: {
+  row: EmailDraftListItem;
+  triggerRef: React.RefObject<HTMLButtonElement>;
+  onEnter: () => void;
+  onLeave: () => void;
+}) {
+  const cardRef = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const [mounted, setMounted] = useState(false);
+  const WIDTH = 340;
+  const GAP = 6;
+  const MARGIN = 8;
+
+  useEffect(() => setMounted(true), []);
+
+  useLayoutEffect(() => {
+    if (!triggerRef.current) return;
+    const place = () => {
+      const trig = triggerRef.current?.getBoundingClientRect();
+      if (!trig) return;
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      const h = cardRef.current?.offsetHeight ?? 260;
+
+      // Prefer right side of pill; flip to left if it would clip.
+      let left = trig.right + GAP;
+      if (left + WIDTH + MARGIN > vw) {
+        const flipped = trig.left - GAP - WIDTH;
+        left = flipped >= MARGIN
+          ? flipped
+          : Math.max(MARGIN, Math.min(vw - WIDTH - MARGIN, trig.left));
+      }
+
+      // Align top-of-card with top-of-pill, then nudge up if clipped.
+      let top = trig.top;
+      if (top + h + MARGIN > vh) top = Math.max(MARGIN, vh - h - MARGIN);
+
+      setPos({ top, left });
+    };
+    place();
+    // Re-measure once after content paints so we use the real height.
+    const raf = requestAnimationFrame(place);
+    window.addEventListener("scroll", place, true);
+    window.addEventListener("resize", place);
+    return () => {
+      cancelAnimationFrame(raf);
+      window.removeEventListener("scroll", place, true);
+      window.removeEventListener("resize", place);
+    };
+  }, [triggerRef]);
+
+  if (!mounted) return null;
+
+  const tone = statusTone(row.displayStatus);
+  const kindTone = kindBadgeTone(row.kind);
+  const dateIso = row.scheduledFor ?? row.sentAt;
+  const dateLabel = row.scheduledFor ? "Scheduled" : row.sentAt ? "Sent" : null;
+  const body = row.bodyText?.trim() || "(empty body)";
+  const showFade = body.length > 280;
+
+  return createPortal(
+    <div
+      ref={cardRef}
+      role="tooltip"
+      onMouseEnter={onEnter}
+      onMouseLeave={onLeave}
+      style={{
+        position: "fixed",
+        top: pos?.top ?? -9999,
+        left: pos?.left ?? -9999,
+        width: WIDTH,
+        zIndex: 60,
+        opacity: pos ? 1 : 0,
+        transition: "opacity 120ms ease-out"
+      }}
+      className="rounded-xl border border-slate-200/80 bg-white shadow-[0_8px_28px_-4px_rgba(15,23,42,0.18)] p-3 pointer-events-auto"
     >
-      {timeStr && (
-        <span className="opacity-70 shrink-0 tabular-nums">{timeStr}</span>
-      )}
-      <span className="truncate flex-1">
-        <span className="font-semibold">{row.clientName}</span>
-        {row.subject && <span className="opacity-80"> · {row.subject}</span>}
-      </span>
-      {expanded && (
-        <span className="opacity-60 shrink-0 text-[10px]">by {row.authorName}</span>
-      )}
-    </button>
+      <div className="flex items-center gap-1.5 mb-1.5 flex-wrap">
+        <span className={cn(
+          "text-[10px] px-1.5 py-0.5 rounded-full border font-medium",
+          kindTone.bg, kindTone.text, kindTone.border
+        )}>
+          {kindLabel(row.kind)}
+        </span>
+        <span className={cn(
+          "text-[10px] px-1.5 py-0.5 rounded-full border font-medium",
+          tone.bg, tone.text, tone.border
+        )}>
+          {statusLabel(row.displayStatus)}
+        </span>
+      </div>
+
+      <div className="text-[13px] font-semibold text-ink leading-snug break-words">
+        {row.subject || "(no subject)"}
+      </div>
+      <div className="text-[11px] text-ink/65 mt-0.5 truncate">
+        <span className="font-medium text-ink/80">{row.clientName}</span>
+        <span className="opacity-70"> · by {row.authorName}</span>
+      </div>
+
+      <div className="mt-2 grid grid-cols-[58px_1fr] gap-x-2 gap-y-1 text-[11px]">
+        <div className="text-ink/50">To</div>
+        <div className="text-ink/85 truncate" title={row.to.join(", ")}>
+          {row.to.join(", ") || "—"}
+        </div>
+        {dateIso && dateLabel && (
+          <>
+            <div className="text-ink/50">{dateLabel}</div>
+            <div className="text-ink/85 tabular-nums">{formatDateTime(dateIso)}</div>
+          </>
+        )}
+      </div>
+
+      <div className="mt-2 relative">
+        <div className="text-[11.5px] leading-relaxed text-ink/80 whitespace-pre-wrap max-h-[180px] overflow-hidden">
+          {body}
+        </div>
+        {showFade && (
+          <div className="pointer-events-none absolute bottom-0 left-0 right-0 h-10 bg-gradient-to-t from-white to-transparent" />
+        )}
+      </div>
+
+      <div className="mt-2 pt-2 border-t border-slate-100 text-[10px] text-ink/50 text-right">
+        Click to open full draft
+      </div>
+    </div>,
+    document.body
   );
 }
 

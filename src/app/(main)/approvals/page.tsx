@@ -236,15 +236,17 @@ function DraftCard({
     if (expanded && events === null && !loadingEvents) void loadEvents();
   }, [expanded, events, loadingEvents, loadEvents]);
 
-  // Send-from picker — lazy-loaded on first expand for a pending or
-  // failed draft. Defaults to whatever the server says the author's
-  // primary mailbox is.
+  // Send-from picker — lazy-loaded on first expand for any draft
+  // that's still actionable (pending / failed / needs_revision). The
+  // dropdown surfaces in the edit form so the author can pick the
+  // sending mailbox up front, and in the approve action bar so the
+  // approver can override before send.
   const [sendFromOptions, setSendFromOptions] = useState<Array<{ id: string; email: string; displayName: string | null; source: string }>>([]);
   const [sendFromId, setSendFromId] = useState<string>("");
   const [sendFromLoaded, setSendFromLoaded] = useState(false);
 
   useEffect(() => {
-    if (sendFromLoaded || !expanded || (!isPending && !isFailed)) return;
+    if (sendFromLoaded || !expanded || (!isPending && !isFailed && !isNeedsRevision)) return;
     let cancelled = false;
     (async () => {
       try {
@@ -260,7 +262,7 @@ function DraftCard({
       }
     })();
     return () => { cancelled = true; };
-  }, [expanded, draft.id, isPending, isFailed, sendFromLoaded]);
+  }, [expanded, draft.id, isPending, isFailed, isNeedsRevision, sendFromLoaded]);
 
   const kindMeta = KIND_LABELS[draft.kind];
 
@@ -401,7 +403,10 @@ function DraftCard({
           subject: editSubject,
           bodyText: editBody,
           to: toArr,
-          cc: ccArr
+          cc: ccArr,
+          // Pin the chosen sender on the draft so the approve route
+          // doesn't have to re-resolve. Empty string clears it.
+          ...(sendFromId ? { accountId: sendFromId } : {})
         })
       });
       const data = await res.json();
@@ -489,6 +494,26 @@ function DraftCard({
         <div className="space-y-2">
           {editing ? (
             <div className="space-y-2 rounded-xl border-2 border-accent/30 bg-white p-3">
+              {/* Sender mailbox. Surfaces every workspace inbox
+                  (Sean / SEO / Mecheal / …) plus whichever ones the
+                  author or approver have personally connected. */}
+              {sendFromOptions.length > 0 && (
+                <Field label="From">
+                  <select
+                    value={sendFromId}
+                    onChange={(e) => setSendFromId(e.target.value)}
+                    className="w-full text-[13px] bg-transparent border-none outline-none focus:ring-0"
+                  >
+                    {sendFromOptions.map((o) => (
+                      <option key={o.id} value={o.id}>
+                        {o.displayName || o.email}
+                        {o.displayName ? ` <${o.email}>` : ""}
+                        {o.source !== "workspace" ? ` · ${o.source}` : ""}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+              )}
               <Field label="To">
                 <input
                   type="text"
@@ -542,6 +567,21 @@ function DraftCard({
             </div>
           ) : (
             <div className="rounded-xl border border-slate-200/70 bg-white p-3 space-y-2">
+              {(() => {
+                // Lookup the resolved sender for the read-only view.
+                // sendFromOptions is loaded lazily on first expand, so
+                // the row only renders once we have the name/email.
+                const pinned = sendFromId
+                  ? sendFromOptions.find((o) => o.id === sendFromId)
+                  : null;
+                if (!pinned) return null;
+                return (
+                  <ReadOnlyRow label="From">
+                    {pinned.displayName || pinned.email}
+                    {pinned.displayName ? ` <${pinned.email}>` : ""}
+                  </ReadOnlyRow>
+                );
+              })()}
               <ReadOnlyRow label="To">{draft.to.join(", ")}</ReadOnlyRow>
               {draft.cc.length > 0 && <ReadOnlyRow label="Cc">{draft.cc.join(", ")}</ReadOnlyRow>}
               <ReadOnlyRow label="Subject"><span className="font-semibold">{draft.subject}</span></ReadOnlyRow>

@@ -21,6 +21,9 @@ export interface EodPersonSummary {
   accomplished: string | null;
   planTomorrow: string | null;
   blockers: string | null;
+  // Marketing-style flow extras (Talha Ali). Null for everyone else.
+  leadsMessaged: string | null;
+  linkedinComments: string | null;
   // Lifecycle — set when the worker hits "Submit EOD" (DMs leaders +
   // dept heads at that moment) and again when a dept head ticks off.
   submittedAt: string | null;
@@ -105,7 +108,7 @@ export async function buildEodForDepartment(
       .lt("started_at", endIso),
     supabase
       .from("eod_notes")
-      .select("user_id, note, worked_on, accomplished, plan_tomorrow, blockers, submitted_at, reviewed_at, reviewed_by")
+      .select("user_id, note, worked_on, accomplished, plan_tomorrow, blockers, leads_messaged, linkedin_comments, submitted_at, reviewed_at, reviewed_by")
       .in("user_id", memberIds)
       .eq("note_date", isoDate)
   ]);
@@ -120,6 +123,8 @@ export async function buildEodForDepartment(
     accomplished: string | null;
     plan_tomorrow: string | null;
     blockers: string | null;
+    leads_messaged: string | null;
+    linkedin_comments: string | null;
     submitted_at: string | null;
     reviewed_at: string | null;
     reviewed_by: string | null;
@@ -184,6 +189,8 @@ export async function buildEodForDepartment(
         accomplished: blank(row?.accomplished),
         planTomorrow: blank(row?.plan_tomorrow),
         blockers: blank(row?.blockers),
+        leadsMessaged: blank(row?.leads_messaged),
+        linkedinComments: blank(row?.linkedin_comments),
         submittedAt: row?.submitted_at ?? null,
         reviewedAt: row?.reviewed_at ?? null,
         reviewedBy: row?.reviewed_by
@@ -282,7 +289,7 @@ export function formatEodForSlack(s: EodDepartmentSummary): { text: string; bloc
   // section of their EOD. Otherwise the digest gets noisy with
   // "nothing to report" lines.
   const hasAnyNote = (p: EodPersonSummary) =>
-    !!(p.note || p.workedOn || p.accomplished || p.planTomorrow || p.blockers);
+    !!(p.note || p.workedOn || p.accomplished || p.planTomorrow || p.blockers || p.leadsMessaged || p.linkedinComments);
   const active = s.people.filter(
     (p) => p.completedTasks.length > 0 || p.hoursLogged > 0 || hasAnyNote(p)
   );
@@ -313,9 +320,11 @@ export function formatEodForSlack(s: EodDepartmentSummary): { text: string; bloc
     // legacy free-form note for users still on the old textarea.
     if (p.workedOn) lines.push(`*Worked on:*\n${quote(p.workedOn)}`);
     if (p.accomplished) lines.push(`*Accomplished:*\n${quote(p.accomplished)}`);
+    if (p.leadsMessaged) lines.push(`*Leads messaged:*\n${quote(p.leadsMessaged)}`);
+    if (p.linkedinComments) lines.push(`*LinkedIn comments:*\n${quote(p.linkedinComments)}`);
     if (p.planTomorrow) lines.push(`*Plan for tomorrow:*\n${quote(p.planTomorrow)}`);
     if (p.blockers) lines.push(`*Blockers / questions:*\n${quote(p.blockers)}`);
-    if (!p.workedOn && !p.accomplished && !p.planTomorrow && !p.blockers && p.note) {
+    if (!p.workedOn && !p.accomplished && !p.planTomorrow && !p.blockers && !p.leadsMessaged && !p.linkedinComments && p.note) {
       lines.push(`_Notes:_\n${quote(p.note)}`);
     }
     blocks.push({

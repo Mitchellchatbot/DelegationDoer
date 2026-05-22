@@ -26,6 +26,9 @@ interface PersonSummary {
   accomplished: string | null;
   planTomorrow: string | null;
   blockers: string | null;
+  // Marketing-style flow extras (Talha Ali). Null for everyone else.
+  leadsMessaged: string | null;
+  linkedinComments: string | null;
   submittedAt: string | null;
   reviewedAt: string | null;
   reviewedBy: { id: string; name: string | null } | null;
@@ -102,10 +105,19 @@ export default function EodPage() {
         workedOn: me_.workedOn,
         accomplished: me_.accomplished,
         planTomorrow: me_.planTomorrow,
-        blockers: me_.blockers
+        blockers: me_.blockers,
+        leadsMessaged: me_.leadsMessaged,
+        linkedinComments: me_.linkedinComments
       };
     }
-    return { workedOn: null, accomplished: null, planTomorrow: null, blockers: null };
+    return {
+      workedOn: null,
+      accomplished: null,
+      planTomorrow: null,
+      blockers: null,
+      leadsMessaged: null,
+      linkedinComments: null
+    };
   }, [summaries, me.id]);
 
   // Auto-open: only on today's date, only if not submitted, only when
@@ -154,7 +166,13 @@ export default function EodPage() {
 
   // Structured EOD field keys + their on-disk + UI labels. Centralized
   // here so the save/optimistic-update logic stays simple.
-  type EodFieldKey = "workedOn" | "accomplished" | "planTomorrow" | "blockers";
+  type EodFieldKey =
+  | "workedOn"
+  | "accomplished"
+  | "planTomorrow"
+  | "blockers"
+  | "leadsMessaged"
+  | "linkedinComments";
 
   async function saveField(deptId: string, key: EodFieldKey, value: string) {
     // Optimistic — paint the textarea immediately.
@@ -299,6 +317,12 @@ export default function EodPage() {
     || me.isAdmin === true
     || (me.departmentIds ?? []).includes("dep_web");
 
+  // Talha runs marketing and his EOD asks five marketing-shaped
+  // questions instead of the generic four. Matched by name (the seed
+  // migration anchors his role the same way). If he ever gets renamed,
+  // flip this to a stable user id.
+  const isMarketingTalha = me.name === "Talha Ali";
+
   return (
     <div className="space-y-6 max-w-6xl mx-auto">
       <PageHero
@@ -361,6 +385,7 @@ export default function EodPage() {
         open={typeformOpen}
         today={todayIso}
         isWebsiteTeam={isWebsiteTeam}
+        isMarketingTalha={isMarketingTalha}
         prior={myPrior}
         onClose={() => setTypeformOpen(false)}
         onComplete={() => { void load(); }}
@@ -401,10 +426,32 @@ export default function EodPage() {
   );
 }
 
-type EodFieldKey = "workedOn" | "accomplished" | "planTomorrow" | "blockers";
+type EodFieldKey =
+  | "workedOn"
+  | "accomplished"
+  | "planTomorrow"
+  | "blockers"
+  | "leadsMessaged"
+  | "linkedinComments";
 
 function hasAnyEod(p: PersonSummary): boolean {
-  return !!(p.note || p.workedOn || p.accomplished || p.planTomorrow || p.blockers);
+  return !!(
+    p.note
+    || p.workedOn
+    || p.accomplished
+    || p.planTomorrow
+    || p.blockers
+    || p.leadsMessaged
+    || p.linkedinComments
+  );
+}
+
+// Talha's EOD is shaped around marketing/LinkedIn activity, so his row
+// shows a different field set than the generic team-mates'. Matched by
+// name (mirrors the seed migration that anchors his department-head
+// role); flip to a stable user id if he ever gets renamed.
+function isMarketingPerson(p: { name: string }): boolean {
+  return p.name === "Talha Ali";
 }
 
 function DepartmentPanel({
@@ -503,12 +550,14 @@ function DepartmentPanel({
 
 // Field definitions per the v2 spec (Section 2 base fields). Order +
 // labels are surfaced here so the spec stays the source of truth.
-const EOD_FIELDS: ReadonlyArray<{
+type EodFieldDef = {
   key: EodFieldKey;
   label: string;
   placeholder: string;
   required: boolean;
-}> = [
+};
+
+const DEFAULT_EOD_FIELDS: ReadonlyArray<EodFieldDef> = [
   {
     key: "workedOn",
     label: "What did you work on today?",
@@ -531,6 +580,43 @@ const EOD_FIELDS: ReadonlyArray<{
     key: "blockers",
     label: "Any questions or blockers?",
     placeholder: "Stuck on something? Need a decision? Drop it here so leads see it tonight.",
+    required: false
+  }
+];
+
+// Talha's variant — five marketing-shaped prompts, persisted to the
+// same underlying columns (worked_on / leads_messaged / linkedin_comments
+// / plan_tomorrow / blockers). The "accomplished" column is unused here
+// so it doesn't appear on the row.
+const MARKETING_EOD_FIELDS: ReadonlyArray<EodFieldDef> = [
+  {
+    key: "workedOn",
+    label: "What was accomplished today?",
+    placeholder: "The wins — shipped, closed, decided, learned.",
+    required: true
+  },
+  {
+    key: "leadsMessaged",
+    label: "How many leads did you message?",
+    placeholder: "Outbound DMs / cold emails sent today.",
+    required: true
+  },
+  {
+    key: "linkedinComments",
+    label: "How many comments did you post on LinkedIn?",
+    placeholder: "Engagement comments on prospects' posts.",
+    required: true
+  },
+  {
+    key: "planTomorrow",
+    label: "Game plan for tomorrow",
+    placeholder: "Top 1–3 things you'll push on tomorrow.",
+    required: true
+  },
+  {
+    key: "blockers",
+    label: "Anything I can help with?",
+    placeholder: "Questions, blockers, or anything for leadership to weigh in on tonight.",
     required: false
   }
 ];
@@ -657,9 +743,11 @@ function PersonRow({
 
         {/* Structured EOD fields. Editor renders for `isMe` on today;
             everyone else (and the same user when looking at a past
-            date) sees a read-only stack of whatever they filed. */}
+            date) sees a read-only stack of whatever they filed. Talha
+            sees a marketing-shaped 5-field set; everyone else sees the
+            generic 4-field set. */}
         <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2">
-          {EOD_FIELDS.map((f) => (
+          {(isMarketingPerson(person) ? MARKETING_EOD_FIELDS : DEFAULT_EOD_FIELDS).map((f) => (
             <EodFieldCell
               key={f.key}
               field={f}
@@ -686,7 +774,7 @@ function PersonRow({
 function EodFieldCell({
   field, value, isMe, onSave
 }: {
-  field: { key: EodFieldKey; label: string; placeholder: string; required: boolean };
+  field: EodFieldDef;
   value: string | null;
   isMe: boolean;
   onSave: (value: string) => void;

@@ -20,7 +20,7 @@ interface Props {
 type StatusFilter = "all" | EmailDraftDisplayStatus;
 type KindFilter = "all" | "content_plan" | "client_update" | "custom";
 
-const STATUS_ORDER: EmailDraftDisplayStatus[] = ["pending", "approved", "sent", "rejected", "failed"];
+const STATUS_ORDER: EmailDraftDisplayStatus[] = ["pending", "needs_revision", "approved", "sent", "rejected", "failed"];
 
 export function OutboundEmailsClient({ rows, countByStatus }: Props) {
   const [status, setStatus] = useState<StatusFilter>("all");

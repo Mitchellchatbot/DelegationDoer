@@ -6,6 +6,7 @@ import { visibleAccountIdsFor } from "@/lib/inbox-access";
 import { listAccounts, listThreadsPaged } from "@/lib/missive-client";
 import { readStateForThreads, isThreadUnread } from "@/lib/thread-read-state";
 import { onCacheBust } from "@/lib/inbox-event-bus";
+import { isApprover } from "@/lib/email-approvers";
 
 export const dynamic = "force-dynamic";
 
@@ -159,41 +160,17 @@ export async function GET() {
     // mirrors GET /api/email-drafts so the count never drifts from
     // what they'll actually see on /approvals.
     let approvalsPending = 0;
-    const isLeader = me.role === "leader";
-    const lowerName = (me.name ?? "").toLowerCase();
-    const isSuperApprover = ["mitchell", "mujtaba", "sam"].some((p) => lowerName.includes(p));
-    const isDeptHead = me.role === "department_head" && (me.departmentIds ?? []).length > 0;
-    const canApprove = isLeader || isSuperApprover || isDeptHead;
+    // v3 approver set (leader + Sam/Mujtaba/Farez) sees every pending
+    // draft. Everyone else gets 0 — the sidebar still shows their own
+    // drafts via the /emails page but doesn't badge them here.
+    const canApprove = isApprover({ name: me.name, role: me.role });
     if (canApprove) {
       try {
-        if (isLeader || isSuperApprover) {
-          // Mitch + Mujtaba + Sam see every pending draft.
-          const { count } = await supabase
-            .from("email_drafts")
-            .select("id", { count: "exact", head: true })
-            .eq("status", "pending");
-          approvalsPending = count ?? 0;
-        } else {
-          // Dept head: count pending drafts whose author is in any
-          // of their departments. Two-step query because PostgREST
-          // doesn't expose a clean cross-table count for this shape.
-          const myDepts = me.departmentIds ?? [];
-          const { data: peerRows } = await supabase
-            .from("department_members")
-            .select("user_id")
-            .in("department_id", myDepts);
-          const peerIds = Array.from(new Set(
-            ((peerRows ?? []) as { user_id: string }[]).map((r) => r.user_id)
-          ));
-          if (peerIds.length > 0) {
-            const { count } = await supabase
-              .from("email_drafts")
-              .select("id", { count: "exact", head: true })
-              .eq("status", "pending")
-              .in("author_id", peerIds);
-            approvalsPending = count ?? 0;
-          }
-        }
+        const { count } = await supabase
+          .from("email_drafts")
+          .select("id", { count: "exact", head: true })
+          .eq("status", "pending");
+        approvalsPending = count ?? 0;
       } catch { /* migration not applied yet — silently zero */ }
     }
 

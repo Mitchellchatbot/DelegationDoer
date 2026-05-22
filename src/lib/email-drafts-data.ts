@@ -1,7 +1,13 @@
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import type { EmailDraftKind } from "@/lib/email-approvers";
 
-export type EmailDraftStatus = "pending" | "approved" | "rejected" | "sent" | "failed";
+export type EmailDraftStatus =
+  | "pending"
+  | "needs_revision"
+  | "approved"
+  | "rejected"
+  | "sent"
+  | "failed";
 
 // Derived virtual status surfaced in the global "Scheduled out" view.
 // Real DB status is what's stored; "replied" is computed from the
@@ -28,6 +34,7 @@ export interface EmailDraftListItem {
   sentAt: string | null;
   scheduledFor: string | null;
   missiveThreadId: string | null;
+  revisionCount: number;
   createdAt: string;
 }
 
@@ -46,7 +53,7 @@ export async function listEmailDrafts(filters: ListFilters = {}): Promise<EmailD
   const supabase = getSupabaseAdmin();
   const limit = Math.min(500, Math.max(1, filters.limit ?? 100));
 
-  const buildQuery = (includeScheduledFor: boolean) => {
+  const buildQuery = (includeScheduledFor: boolean, includeRevisionCount: boolean) => {
     const cols = [
       "id", "author_id", "client_id", "client_name",
       "to_emails", "cc_emails", "subject", "body_text",
@@ -54,6 +61,7 @@ export async function listEmailDrafts(filters: ListFilters = {}): Promise<EmailD
       "sent_at", "missive_thread_id", "created_at"
     ];
     if (includeScheduledFor) cols.push("scheduled_for");
+    if (includeRevisionCount) cols.push("revision_count");
     let q = supabase
       .from("email_drafts")
       .select(cols.join(", "))
@@ -65,12 +73,16 @@ export async function listEmailDrafts(filters: ListFilters = {}): Promise<EmailD
     return q;
   };
 
-  // Try with scheduled_for first; if the migration hasn't been applied
-  // yet the column won't exist and Postgres returns 42703. Retry once
-  // without it so the page still renders during the transition.
-  let result = await buildQuery(true);
+  // Try with all newer columns; if a migration hasn't been applied
+  // yet the column won't exist and Postgres returns 42703. Retry with
+  // progressively fewer optional columns so the page still renders
+  // during transitions.
+  let result = await buildQuery(true, true);
+  if (result.error && /revision_count/.test(result.error.message)) {
+    result = await buildQuery(true, false);
+  }
   if (result.error && /scheduled_for/.test(result.error.message)) {
-    result = await buildQuery(false);
+    result = await buildQuery(false, false);
   }
   const { data, error } = result;
   if (error) throw new Error(error.message);
@@ -93,6 +105,7 @@ export async function listEmailDrafts(filters: ListFilters = {}): Promise<EmailD
     sent_at: string | null;
     // Optional — absent on rows fetched via the migration fallback.
     scheduled_for?: string | null;
+    revision_count?: number | null;
     missive_thread_id: string | null;
     created_at: string;
   }>;
@@ -144,6 +157,7 @@ export async function listEmailDrafts(filters: ListFilters = {}): Promise<EmailD
       sentAt: r.sent_at,
       scheduledFor: r.scheduled_for ?? null,
       missiveThreadId: r.missive_thread_id,
+      revisionCount: r.revision_count ?? 0,
       createdAt: r.created_at
     };
   });
@@ -151,23 +165,25 @@ export async function listEmailDrafts(filters: ListFilters = {}): Promise<EmailD
 
 export function statusLabel(s: EmailDraftDisplayStatus): string {
   switch (s) {
-    case "pending":  return "In approval";
-    case "approved": return "Approved";
-    case "rejected": return "Rejected";
-    case "sent":     return "Sent";
-    case "failed":   return "Failed";
-    case "replied":  return "Replied";
+    case "pending":        return "In approval";
+    case "needs_revision": return "Needs revision";
+    case "approved":       return "Approved";
+    case "rejected":       return "Rejected";
+    case "sent":           return "Sent";
+    case "failed":         return "Failed";
+    case "replied":        return "Replied";
   }
 }
 
 export function statusTone(s: EmailDraftDisplayStatus): { bg: string; text: string; border: string } {
   switch (s) {
-    case "pending":  return { bg: "bg-amber-100",    text: "text-amber-700",   border: "border-amber-200/60" };
-    case "approved": return { bg: "bg-blue-100",     text: "text-blue-700",    border: "border-blue-200/60" };
-    case "rejected": return { bg: "bg-rose-100",     text: "text-rose-700",    border: "border-rose-200/60" };
-    case "sent":     return { bg: "bg-emerald-100",  text: "text-emerald-700", border: "border-emerald-200/60" };
-    case "failed":   return { bg: "bg-rose-100",     text: "text-rose-700",    border: "border-rose-200/60" };
-    case "replied":  return { bg: "bg-indigo-100",   text: "text-indigo-700",  border: "border-indigo-200/60" };
+    case "pending":        return { bg: "bg-amber-100",    text: "text-amber-700",   border: "border-amber-200/60" };
+    case "needs_revision": return { bg: "bg-orange-100",   text: "text-orange-700",  border: "border-orange-200/60" };
+    case "approved":       return { bg: "bg-blue-100",     text: "text-blue-700",    border: "border-blue-200/60" };
+    case "rejected":       return { bg: "bg-rose-100",     text: "text-rose-700",    border: "border-rose-200/60" };
+    case "sent":           return { bg: "bg-emerald-100",  text: "text-emerald-700", border: "border-emerald-200/60" };
+    case "failed":         return { bg: "bg-rose-100",     text: "text-rose-700",    border: "border-rose-200/60" };
+    case "replied":        return { bg: "bg-indigo-100",   text: "text-indigo-700",  border: "border-indigo-200/60" };
   }
 }
 

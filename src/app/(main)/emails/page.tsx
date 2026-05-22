@@ -40,7 +40,7 @@ export default async function OutboundEmailsPage() {
   // Quick counts to colour the filter chips. Computed server-side so
   // the chips don't flicker between SSR and client hydration.
   const countByStatus: Record<EmailDraftDisplayStatus, number> = {
-    pending: 0, approved: 0, rejected: 0, sent: 0, failed: 0, replied: 0
+    pending: 0, needs_revision: 0, approved: 0, rejected: 0, sent: 0, failed: 0, replied: 0
   };
   for (const r of visible) countByStatus[r.displayStatus]++;
 

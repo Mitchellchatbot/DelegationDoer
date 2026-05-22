@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ClipboardCheck, Mail, Send, CheckCircle2, XCircle, Loader2,
   AlertTriangle, Edit2, ChevronDown, ChevronUp, RefreshCw, Clock,
-  MessageSquare, RotateCcw, History
+  MessageSquare, RotateCcw, History, GripVertical, CalendarClock
 } from "lucide-react";
 import { toast } from "sonner";
 import { PageHero } from "@/components/PageHero";
@@ -12,6 +12,11 @@ import { PersonAvatar } from "@/components/PersonAvatar";
 import { useCurrentUser } from "@/lib/user-context";
 import { isApprover } from "@/lib/email-approvers";
 import { cn } from "@/lib/utils";
+import {
+  ApprovalsScheduleCalendar,
+  DRAG_DRAFT_MIME,
+  type CalendarDraft
+} from "./ApprovalsScheduleCalendar";
 
 // Email approval queue. Approvers (leader + Sam / Mujtaba / Farez per
 // /lib/email-approvers.ts) see every queued draft. Authors also see
@@ -53,6 +58,7 @@ interface Draft {
   rejectionNote: string | null;
   sentAt: string | null;
   sendError: string | null;
+  scheduledFor: string | null;
   revisionCount: number;
   createdAt: string;
 }
@@ -94,9 +100,10 @@ export default function ApprovalsPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      // 'all' returns the full visible set; status filters narrow.
-      const status = filter !== "all" ? `&status=${filter}` : "";
-      const res = await fetch(`/api/email-drafts?limit=100${status}`, { cache: "no-store" });
+      // Always fetch the full visible set — the chip filter narrows the
+      // card list client-side, and the right-side calendar needs the
+      // whole schedule regardless of the active chip.
+      const res = await fetch(`/api/email-drafts?limit=200`, { cache: "no-store" });
       if (!res.ok) throw new Error(`status ${res.status}`);
       const data = await res.json();
       setDrafts(data.drafts ?? []);
@@ -105,15 +112,53 @@ export default function ApprovalsPage() {
     } finally {
       setLoading(false);
     }
-  }, [filter]);
+  }, []);
 
   useEffect(() => { void load(); }, [load]);
 
   const pendingCount = drafts.filter((d) => d.status === "pending").length;
   const revisionCount = drafts.filter((d) => d.status === "needs_revision").length;
 
+  const visibleCards = useMemo(() => {
+    if (filter === "all") return drafts;
+    return drafts.filter((d) => d.status === filter);
+  }, [drafts, filter]);
+
+  // Calendar-only projection of the drafts. Stays the full set —
+  // chip filter shouldn't hide the team's send schedule.
+  const calendarDrafts: CalendarDraft[] = useMemo(() =>
+    drafts.map((d) => ({
+      id: d.id,
+      authorName: d.authorName,
+      clientName: d.clientName,
+      subject: d.subject,
+      kind: d.kind,
+      status: d.status,
+      scheduledFor: d.scheduledFor,
+      sentAt: d.sentAt,
+      createdAt: d.createdAt
+    })),
+    [drafts]
+  );
+
+  async function handleSchedule(draftId: string, isoTimestamp: string) {
+    try {
+      const res = await fetch(`/api/email-drafts/${draftId}/schedule`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ scheduledFor: isoTimestamp })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error ?? `status ${res.status}`);
+      toast.success(`Scheduled for ${new Date(isoTimestamp).toLocaleString()}`);
+      void load();
+    } catch (err) {
+      toast.error(`Couldn't schedule: ${err instanceof Error ? err.message : "unknown"}`);
+    }
+  }
+
   return (
-    <div className="space-y-5 max-w-5xl">
+    <div className="space-y-5 max-w-6xl">
       <PageHero
         eyebrow="Approvals"
         headline={["Send the ", { accent: "right emails" }]}
@@ -122,61 +167,81 @@ export default function ApprovalsPage() {
         iconTone="indigo"
       />
 
-      <div className="flex items-center justify-between gap-3 flex-wrap">
-        <div className="inline-flex items-center rounded-xl border border-slate-200/70 bg-white p-0.5">
-          {(["pending", "needs_revision", "all"] as const).map((opt) => (
+      <div className="lg:grid lg:gap-5 lg:grid-cols-[minmax(0,1fr)_380px] space-y-5 lg:space-y-0">
+        <div className="space-y-5 min-w-0">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div className="inline-flex items-center rounded-xl border border-slate-200/70 bg-white p-0.5">
+              {(["pending", "needs_revision", "all"] as const).map((opt) => (
+                <button
+                  key={opt}
+                  type="button"
+                  onClick={() => setFilter(opt)}
+                  className={cn(
+                    "px-3 py-1.5 rounded-lg text-xs font-medium transition-colors",
+                    filter === opt ? "bg-accent/10 text-accent" : "text-ink/60 hover:text-ink"
+                  )}
+                >
+                  {opt === "pending" ? `Pending (${pendingCount})`
+                    : opt === "needs_revision" ? `Needs revision (${revisionCount})`
+                    : "All"}
+                </button>
+              ))}
+            </div>
             <button
-              key={opt}
               type="button"
-              onClick={() => setFilter(opt)}
-              className={cn(
-                "px-3 py-1.5 rounded-lg text-xs font-medium transition-colors",
-                filter === opt ? "bg-accent/10 text-accent" : "text-ink/60 hover:text-ink"
-              )}
+              onClick={() => void load()}
+              className="inline-flex items-center gap-1.5 text-[11px] font-medium text-ink/55 hover:text-ink"
+              title="Refresh"
             >
-              {opt === "pending" ? `Pending (${pendingCount})`
-                : opt === "needs_revision" ? `Needs revision (${revisionCount})`
-                : "All"}
+              <RefreshCw className="w-3 h-3" /> Refresh
             </button>
-          ))}
-        </div>
-        <button
-          type="button"
-          onClick={() => void load()}
-          className="inline-flex items-center gap-1.5 text-[11px] font-medium text-ink/55 hover:text-ink"
-          title="Refresh"
-        >
-          <RefreshCw className="w-3 h-3" /> Refresh
-        </button>
-      </div>
-
-      {loading && drafts.length === 0 ? (
-        <div className="card p-8 text-center text-sm text-muted">
-          <Loader2 className="w-5 h-5 animate-spin mx-auto mb-2" /> Loading approvals…
-        </div>
-      ) : drafts.length === 0 ? (
-        <div className="card p-10 text-center text-sm text-muted">
-          <ClipboardCheck className="w-8 h-8 text-emerald-500 mx-auto mb-2" />
-          <div className="text-base font-medium text-ink">All caught up</div>
-          <div className="mt-1">
-            {filter === "pending" ? "No emails waiting on your approval."
-              : filter === "needs_revision" ? "No drafts currently in revision."
-              : "No drafts to show."}
           </div>
+
+          {loading && drafts.length === 0 ? (
+            <div className="card p-8 text-center text-sm text-muted">
+              <Loader2 className="w-5 h-5 animate-spin mx-auto mb-2" /> Loading approvals…
+            </div>
+          ) : visibleCards.length === 0 ? (
+            <div className="card p-10 text-center text-sm text-muted">
+              <ClipboardCheck className="w-8 h-8 text-emerald-500 mx-auto mb-2" />
+              <div className="text-base font-medium text-ink">All caught up</div>
+              <div className="mt-1">
+                {filter === "pending" ? "No emails waiting on your approval."
+                  : filter === "needs_revision" ? "No drafts currently in revision."
+                  : "No drafts to show."}
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {visibleCards.map((d) => (
+                <DraftCard
+                  key={d.id}
+                  draft={d}
+                  meId={me.id}
+                  viewerIsApprover={viewerIsApprover}
+                  onChanged={load}
+                />
+              ))}
+            </div>
+          )}
         </div>
-      ) : (
-        <div className="space-y-3">
-          {drafts.map((d) => (
-            <DraftCard
-              key={d.id}
-              draft={d}
-              meId={me.id}
-              viewerIsApprover={viewerIsApprover}
-              onChanged={load}
-            />
-          ))}
-        </div>
-      )}
+
+        <aside className="hidden lg:block">
+          <div className="sticky top-4 space-y-2">
+            <div className="flex items-center justify-between">
+              <div className="text-[11px] font-semibold uppercase tracking-wide text-ink/55 inline-flex items-center gap-1.5">
+                <CalendarClock className="w-3.5 h-3.5" /> Send schedule
+              </div>
+            </div>
+            <div className="card p-3">
+              <ApprovalsScheduleCalendar
+                drafts={calendarDrafts}
+                onSchedule={handleSchedule}
+              />
+            </div>
+          </div>
+        </aside>
+      </div>
     </div>
   );
 }
@@ -422,16 +487,35 @@ function DraftCard({
     }
   }
 
+  const isDraggable = isPending || isNeedsRevision;
+
   return (
-    <section className={cn(
-      "card p-4 space-y-3 transition-colors",
-      isSent && "bg-emerald-50/40 border-emerald-200/60",
-      isRejected && "bg-rose-50/40 border-rose-200/60",
-      isFailed && "bg-amber-50/40 border-amber-200/60",
-      isNeedsRevision && "bg-orange-50/40 border-orange-200/60"
-    )}>
+    <section
+      draggable={isDraggable}
+      onDragStart={(e) => {
+        if (!isDraggable) return;
+        e.dataTransfer.setData(DRAG_DRAFT_MIME, draft.id);
+        e.dataTransfer.effectAllowed = "move";
+      }}
+      className={cn(
+        "card p-4 space-y-3 transition-colors",
+        isSent && "bg-emerald-50/40 border-emerald-200/60",
+        isRejected && "bg-rose-50/40 border-rose-200/60",
+        isFailed && "bg-amber-50/40 border-amber-200/60",
+        isNeedsRevision && "bg-orange-50/40 border-orange-200/60",
+        isDraggable && "cursor-grab active:cursor-grabbing"
+      )}
+    >
       <header className="flex items-start justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-2.5 min-w-0">
+          {isDraggable && (
+            <span
+              className="text-ink/35 hover:text-ink/60 transition-colors -ml-1 shrink-0"
+              title="Drag onto a date in the calendar to schedule"
+            >
+              <GripVertical className="w-4 h-4" />
+            </span>
+          )}
           <PersonAvatar userId={draft.authorId} name={draft.authorName} size={32} />
           <div className="min-w-0">
             <div className="text-sm font-semibold flex items-center gap-2 flex-wrap">
@@ -445,6 +529,13 @@ function DraftCard({
               {draft.revisionCount > 0 && (
                 <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-200/70">
                   <RotateCcw className="w-3 h-3" /> v{draft.revisionCount + 1}
+                </span>
+              )}
+              {draft.scheduledFor && !isSent && !isRejected && (
+                <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full bg-sky-100 text-sky-700 border border-sky-200/70">
+                  <CalendarClock className="w-3 h-3" /> {new Date(draft.scheduledFor).toLocaleString(undefined, {
+                    month: "short", day: "numeric", hour: "numeric", minute: "2-digit"
+                  })}
                 </span>
               )}
               {isSent && (

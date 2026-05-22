@@ -27,11 +27,23 @@ export function RescanClientMailButton() {
       }
       const updated = Number(data.updated ?? 0);
       const scanned = Number(data.scanned ?? 0);
-      toast.success(
-        updated > 0
-          ? `Filed ${updated} task${updated === 1 ? "" : "s"} under a client (scanned ${scanned}).`
-          : `Nothing new to file — scanned ${scanned} task${scanned === 1 ? "" : "s"}.`
-      );
+      const mailboxes = Number(data.mail_rescan_accounts ?? 0);
+
+      // Two things just happened: missiveclone is re-pulling email from
+      // Outlook for every connected mailbox (background), and we filed
+      // matched tasks under their clients (foreground, done by the
+      // time the response came back). Tell the user both, and point
+      // them at the client folders since that's where the email
+      // history surfaces.
+      const mailMsg = mailboxes > 0
+        ? `Re-pulling email from ${mailboxes} mailbox${mailboxes === 1 ? "" : "es"} (refresh a client folder in ~30 s)`
+        : "";
+      const taskMsg = updated > 0
+        ? `filed ${updated} task${updated === 1 ? "" : "s"} (scanned ${scanned})`
+        : (scanned > 0 ? `no new tasks to file (scanned ${scanned})` : "");
+
+      const combined = [mailMsg, taskMsg].filter(Boolean).join(" · ");
+      toast.success(combined || "Rescan complete.");
       router.refresh();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "network error");

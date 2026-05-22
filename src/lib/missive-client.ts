@@ -327,6 +327,18 @@ export async function deleteAccount(accountId: string): Promise<void> {
   });
 }
 
+// Workspace-wide rescan: clears every Microsoft account's Graph delta
+// cursor and fires off a full re-walk of inbox + sent in the background.
+// Returns immediately with the count of accounts scheduled — the actual
+// sync runs out-of-band. Caller can poll listAccounts() for
+// last_synced_at to know when each finishes.
+export async function rescanAllAccounts(): Promise<{ ok: true; accounts: number }> {
+  return missiveFetch<{ ok: true; accounts: number }>(
+    "/api/accounts/rescan-all",
+    { method: "POST" }
+  );
+}
+
 export async function sendReply(args: ReplyArgs): Promise<{ messageId: string }> {
   // The clone's reply endpoint is multipart/form-data: a `payload` JSON
   // string + optional `files[]`. Plain JSON makes req.body.payload

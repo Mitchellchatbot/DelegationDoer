@@ -8,6 +8,7 @@ import {
 import { toast } from "sonner";
 import { PageHero } from "@/components/PageHero";
 import { PersonAvatar } from "@/components/PersonAvatar";
+import { UpdateFeedback, type ReactionSummary, type ReplyEntry } from "@/components/UpdateFeedback";
 import { useCurrentUser } from "@/lib/user-context";
 import { cn } from "@/lib/utils";
 
@@ -43,6 +44,11 @@ export default function EodHistoryPage() {
   const [loading, setLoading] = useState(true);
   const [days, setDays] = useState(30);
   const [personFilter, setPersonFilter] = useState<string>(""); // "" = everyone
+  // Feedback (reactions + replies) keyed by submission id. Bulk-fetched
+  // alongside the main history load so individual cards render
+  // synchronously with their initial feedback state.
+  const [reactionsById, setReactionsById] = useState<Record<string, ReactionSummary[]>>({});
+  const [repliesById, setRepliesById] = useState<Record<string, ReplyEntry[]>>({});
 
   // Same review-permission rule as /updates/eod's live panel: leaders
   // + admins can tick anyone off, dept heads can tick off their own
@@ -95,7 +101,28 @@ export default function EodHistoryPage() {
       const res = await fetch(`/api/eod/history?${sp.toString()}`, { cache: "no-store" });
       if (!res.ok) throw new Error(`status ${res.status}`);
       const data = await res.json();
-      setSubmissions((data.submissions ?? []) as Submission[]);
+      const subs = (data.submissions ?? []) as Submission[];
+      setSubmissions(subs);
+      // Fan out a second request for the feedback in one round-trip
+      // (avoids N per-card fetches). Failures here are non-fatal — the
+      // page still renders, the feedback rows just show empty.
+      if (subs.length > 0) {
+        try {
+          const ids = subs.map((s) => s.id).join(",");
+          const fb = await fetch(
+            `/api/updates/feedback?targetType=eod&targetIds=${encodeURIComponent(ids)}`,
+            { cache: "no-store" }
+          );
+          if (fb.ok) {
+            const fbData = await fb.json();
+            setReactionsById((fbData.reactions ?? {}) as Record<string, ReactionSummary[]>);
+            setRepliesById((fbData.replies ?? {}) as Record<string, ReplyEntry[]>);
+          }
+        } catch { /* non-fatal — feedback is best-effort */ }
+      } else {
+        setReactionsById({});
+        setRepliesById({});
+      }
     } catch (err) {
       toast.error(`Couldn't load history: ${err instanceof Error ? err.message : "unknown"}`);
     } finally {
@@ -205,6 +232,9 @@ export default function EodHistoryPage() {
                     s={s}
                     canReview={canReview}
                     onToggleReview={() => void toggleReview(s)}
+                    isSelf={s.userId === me.id}
+                    initialReactions={reactionsById[s.id] ?? []}
+                    initialReplies={repliesById[s.id] ?? []}
                   />
                 ))}
               </div>
@@ -217,11 +247,14 @@ export default function EodHistoryPage() {
 }
 
 function SubmissionCard({
-  s, canReview, onToggleReview
+  s, canReview, onToggleReview, isSelf, initialReactions, initialReplies
 }: {
   s: Submission;
   canReview: boolean;
   onToggleReview: () => void;
+  isSelf: boolean;
+  initialReactions: ReactionSummary[];
+  initialReplies: ReplyEntry[];
 }) {
   // Reviewed-state pill is clickable for approvers — same toggle on
   // both directions (mark reviewed → tap to un-mark, and back). The
@@ -304,6 +337,14 @@ function SubmissionCard({
           {s.note}
         </div>
       )}
+
+      <UpdateFeedback
+        targetType="eod"
+        targetId={s.id}
+        isSelf={isSelf}
+        initialReactions={initialReactions}
+        initialReplies={initialReplies}
+      />
     </article>
   );
 }

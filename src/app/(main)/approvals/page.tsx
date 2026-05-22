@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ClipboardCheck, Mail, Send, CheckCircle2, XCircle, Loader2,
   AlertTriangle, Edit2, ChevronDown, ChevronUp, RefreshCw, Clock,
@@ -132,6 +132,8 @@ export default function ApprovalsPage() {
       authorName: d.authorName,
       clientName: d.clientName,
       subject: d.subject,
+      bodyText: d.bodyText,
+      to: d.to,
       kind: d.kind,
       status: d.status,
       scheduledFor: d.scheduledFor,
@@ -488,6 +490,18 @@ function DraftCard({
   }
 
   const isDraggable = isPending || isNeedsRevision;
+  const dragGhostRef = useRef<HTMLDivElement>(null);
+  const [isDragging, setIsDragging] = useState(false);
+
+  // Pill colour for the floating drag ghost. Matches the calendar's
+  // status legend so dropping onto a date feels visually continuous.
+  const ghostDotClass =
+    draft.status === "pending"        ? "bg-amber-400" :
+    draft.status === "needs_revision" ? "bg-orange-400" :
+    draft.status === "approved"       ? "bg-blue-500" :
+    draft.status === "sent"           ? "bg-emerald-500" :
+    draft.status === "rejected"       ? "bg-rose-400" :
+                                        "bg-slate-400";
 
   return (
     <section
@@ -496,16 +510,47 @@ function DraftCard({
         if (!isDraggable) return;
         e.dataTransfer.setData(DRAG_DRAFT_MIME, draft.id);
         e.dataTransfer.effectAllowed = "move";
+        // Replace the default (full-card) drag image with a compact
+        // chip so the calendar dates underneath stay visible while the
+        // user is choosing where to drop.
+        if (dragGhostRef.current) {
+          const rect = dragGhostRef.current.getBoundingClientRect();
+          e.dataTransfer.setDragImage(
+            dragGhostRef.current,
+            Math.min(20, rect.width / 2),
+            rect.height / 2
+          );
+        }
+        setIsDragging(true);
       }}
+      onDragEnd={() => setIsDragging(false)}
       className={cn(
-        "card p-4 space-y-3 transition-colors",
+        "card p-4 space-y-3 transition-all",
         isSent && "bg-emerald-50/40 border-emerald-200/60",
         isRejected && "bg-rose-50/40 border-rose-200/60",
         isFailed && "bg-amber-50/40 border-amber-200/60",
         isNeedsRevision && "bg-orange-50/40 border-orange-200/60",
-        isDraggable && "cursor-grab active:cursor-grabbing"
+        isDraggable && "cursor-grab active:cursor-grabbing",
+        isDragging && "opacity-50"
       )}
     >
+      {isDraggable && (
+        <div
+          ref={dragGhostRef}
+          aria-hidden
+          className="fixed pointer-events-none"
+          style={{ top: -1000, left: -1000 }}
+        >
+          <div className="inline-flex items-center gap-1.5 rounded-full bg-white px-2.5 py-1 shadow-[0_6px_20px_-4px_rgba(15,23,42,0.25)] border border-slate-200 text-[11px] font-medium">
+            <span className={cn("w-1.5 h-1.5 rounded-full shrink-0", ghostDotClass)} />
+            <CalendarClock className="w-3 h-3 text-ink/45 shrink-0" />
+            <span className="text-ink/80 truncate max-w-[180px]">
+              {draft.clientName}
+              {draft.subject && <span className="text-ink/50"> — {draft.subject}</span>}
+            </span>
+          </div>
+        </div>
+      )}
       <header className="flex items-start justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-2.5 min-w-0">
           {isDraggable && (

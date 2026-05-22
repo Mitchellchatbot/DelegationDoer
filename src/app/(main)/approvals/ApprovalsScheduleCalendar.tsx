@@ -1,8 +1,14 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { ChevronLeft, ChevronRight, X, CalendarClock, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import {
+  statusLabel as draftStatusLabel,
+  statusTone as draftStatusTone,
+  kindLabel as draftKindLabel
+} from "@/lib/email-drafts-data";
 
 // The draft shape used by /approvals — pruned to just the fields this
 // calendar needs. Kept here so the calendar isn't coupled to the full
@@ -12,6 +18,8 @@ export interface CalendarDraft {
   authorName: string;
   clientName: string;
   subject: string;
+  bodyText: string;
+  to: string[];
   kind: "client_update" | "content_plan" | "custom";
   status: "pending" | "needs_revision" | "approved" | "rejected" | "sent" | "failed";
   scheduledFor: string | null;
@@ -233,29 +241,9 @@ export function ApprovalsScheduleCalendar({ drafts, onSchedule }: Props) {
               </div>
 
               <div className="flex flex-col gap-0.5 min-h-0">
-                {visible.map((r) => {
-                  const timeIso = r.scheduledFor ?? r.sentAt;
-                  const t = timeIso
-                    ? new Date(timeIso).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
-                    : null;
-                  return (
-                    <div
-                      key={r.id}
-                      title={`${r.clientName} — ${r.subject}\nby ${r.authorName} · ${r.status}`}
-                      className={cn(
-                        "rounded px-1 py-0.5 text-[9px] font-medium border truncate inline-flex items-center gap-1",
-                        statusPill(r.status),
-                        r.status === "sent" && "opacity-70"
-                      )}
-                    >
-                      <span className={cn("w-1.5 h-1.5 rounded-full shrink-0", statusDot(r.status))} />
-                      <span className="truncate">
-                        {t && <span className="opacity-70 mr-0.5">{t}</span>}
-                        {r.clientName}
-                      </span>
-                    </div>
-                  );
-                })}
+                {visible.map((r) => (
+                  <CalendarPill key={r.id} draft={r} />
+                ))}
                 {overflow > 0 && (
                   <div className="text-[9px] text-ink/55 px-0.5">+{overflow} more</div>
                 )}
@@ -401,3 +389,200 @@ function SchedulePickerModal({
 }
 
 export const DRAG_DRAFT_MIME = DRAG_MIME;
+
+function CalendarPill({ draft }: { draft: CalendarDraft }) {
+  const timeIso = draft.scheduledFor ?? draft.sentAt;
+  const t = timeIso
+    ? new Date(timeIso).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
+    : null;
+
+  const triggerRef = useRef<HTMLDivElement>(null);
+  const [hoverOpen, setHoverOpen] = useState(false);
+  const openTimer = useRef<number | null>(null);
+  const closeTimer = useRef<number | null>(null);
+
+  const clearTimers = () => {
+    if (openTimer.current !== null) {
+      window.clearTimeout(openTimer.current);
+      openTimer.current = null;
+    }
+    if (closeTimer.current !== null) {
+      window.clearTimeout(closeTimer.current);
+      closeTimer.current = null;
+    }
+  };
+  const scheduleOpen = () => {
+    clearTimers();
+    openTimer.current = window.setTimeout(() => setHoverOpen(true), 220);
+  };
+  const scheduleClose = () => {
+    clearTimers();
+    closeTimer.current = window.setTimeout(() => setHoverOpen(false), 120);
+  };
+  const cancelClose = () => {
+    if (closeTimer.current !== null) {
+      window.clearTimeout(closeTimer.current);
+      closeTimer.current = null;
+    }
+  };
+
+  useEffect(() => () => clearTimers(), []);
+
+  return (
+    <>
+      <div
+        ref={triggerRef}
+        onMouseEnter={scheduleOpen}
+        onMouseLeave={scheduleClose}
+        className={cn(
+          "rounded px-1 py-0.5 text-[9px] font-medium border truncate inline-flex items-center gap-1",
+          statusPill(draft.status),
+          draft.status === "sent" && "opacity-70"
+        )}
+      >
+        <span className={cn("w-1.5 h-1.5 rounded-full shrink-0", statusDot(draft.status))} />
+        <span className="truncate">
+          {t && <span className="opacity-70 mr-0.5">{t}</span>}
+          {draft.clientName}
+        </span>
+      </div>
+      {hoverOpen && (
+        <DraftHoverCard
+          draft={draft}
+          triggerRef={triggerRef}
+          onEnter={cancelClose}
+          onLeave={scheduleClose}
+        />
+      )}
+    </>
+  );
+}
+
+function DraftHoverCard({
+  draft, triggerRef, onEnter, onLeave
+}: {
+  draft: CalendarDraft;
+  triggerRef: React.RefObject<HTMLDivElement>;
+  onEnter: () => void;
+  onLeave: () => void;
+}) {
+  const cardRef = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const [mounted, setMounted] = useState(false);
+  const WIDTH = 340;
+  const GAP = 6;
+  const MARGIN = 8;
+
+  useEffect(() => setMounted(true), []);
+
+  useLayoutEffect(() => {
+    if (!triggerRef.current) return;
+    const place = () => {
+      const trig = triggerRef.current?.getBoundingClientRect();
+      if (!trig) return;
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      const h = cardRef.current?.offsetHeight ?? 260;
+
+      // Approvals calendar lives in the right aside. Default to the left
+      // of the pill so we cover the calendar (not the page edge), and
+      // flip right if it would clip.
+      let left = trig.left - GAP - WIDTH;
+      if (left < MARGIN) {
+        const flipped = trig.right + GAP;
+        left = flipped + WIDTH + MARGIN <= vw
+          ? flipped
+          : Math.max(MARGIN, Math.min(vw - WIDTH - MARGIN, trig.left));
+      }
+
+      let top = trig.top;
+      if (top + h + MARGIN > vh) top = Math.max(MARGIN, vh - h - MARGIN);
+
+      setPos({ top, left });
+    };
+    place();
+    const raf = requestAnimationFrame(place);
+    window.addEventListener("scroll", place, true);
+    window.addEventListener("resize", place);
+    return () => {
+      cancelAnimationFrame(raf);
+      window.removeEventListener("scroll", place, true);
+      window.removeEventListener("resize", place);
+    };
+  }, [triggerRef]);
+
+  if (!mounted) return null;
+
+  const tone = draftStatusTone(draft.status);
+  const dateIso = draft.scheduledFor ?? draft.sentAt;
+  const dateLabel = draft.scheduledFor ? "Scheduled" : draft.sentAt ? "Sent" : null;
+  const body = draft.bodyText?.trim() || "(empty body)";
+  const showFade = body.length > 280;
+
+  return createPortal(
+    <div
+      ref={cardRef}
+      role="tooltip"
+      onMouseEnter={onEnter}
+      onMouseLeave={onLeave}
+      style={{
+        position: "fixed",
+        top: pos?.top ?? -9999,
+        left: pos?.left ?? -9999,
+        width: WIDTH,
+        zIndex: 60,
+        opacity: pos ? 1 : 0,
+        transition: "opacity 120ms ease-out"
+      }}
+      className="rounded-xl border border-slate-200/80 bg-white shadow-[0_8px_28px_-4px_rgba(15,23,42,0.18)] p-3 pointer-events-auto"
+    >
+      <div className="flex items-center gap-1.5 mb-1.5 flex-wrap">
+        <span className="text-[10px] px-1.5 py-0.5 rounded-full border font-medium bg-slate-100 text-slate-700 border-slate-200/70">
+          {draftKindLabel(draft.kind)}
+        </span>
+        <span className={cn(
+          "text-[10px] px-1.5 py-0.5 rounded-full border font-medium",
+          tone.bg, tone.text, tone.border
+        )}>
+          {draftStatusLabel(draft.status)}
+        </span>
+      </div>
+
+      <div className="text-[13px] font-semibold text-ink leading-snug break-words">
+        {draft.subject || "(no subject)"}
+      </div>
+      <div className="text-[11px] text-ink/65 mt-0.5 truncate">
+        <span className="font-medium text-ink/80">{draft.clientName}</span>
+        <span className="opacity-70"> · by {draft.authorName}</span>
+      </div>
+
+      <div className="mt-2 grid grid-cols-[58px_1fr] gap-x-2 gap-y-1 text-[11px]">
+        <div className="text-ink/50">To</div>
+        <div className="text-ink/85 truncate" title={draft.to.join(", ")}>
+          {draft.to.join(", ") || "—"}
+        </div>
+        {dateIso && dateLabel && (
+          <>
+            <div className="text-ink/50">{dateLabel}</div>
+            <div className="text-ink/85 tabular-nums">
+              {new Date(dateIso).toLocaleString(undefined, {
+                weekday: "short", month: "short", day: "numeric",
+                hour: "numeric", minute: "2-digit"
+              })}
+            </div>
+          </>
+        )}
+      </div>
+
+      <div className="mt-2 relative">
+        <div className="text-[11.5px] leading-relaxed text-ink/80 whitespace-pre-wrap max-h-[180px] overflow-hidden">
+          {body}
+        </div>
+        {showFade && (
+          <div className="pointer-events-none absolute bottom-0 left-0 right-0 h-10 bg-gradient-to-t from-white to-transparent" />
+        )}
+      </div>
+    </div>,
+    document.body
+  );
+}

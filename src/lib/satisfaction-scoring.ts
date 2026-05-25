@@ -63,6 +63,12 @@ interface ClientShape {
 interface CursorShape {
   clientIndex: number;
   threadOffset: number;
+  // Which folder we're paging for the current client. We walk INBOX
+  // first (catches every thread with an inbound reply), then SENT
+  // (catches outbound-only threads where we sent something but never
+  // got a response). A pure-SENT thread never shows up in INBOX, so
+  // omitting this step misses every outbound that didn't get a reply.
+  folder?: "INBOX" | "SENT";
 }
 
 // Start a new scan run. Returns the runId the caller should poll
@@ -84,7 +90,7 @@ export async function startScanRun(opts: {
     scope_from: scopeFrom,
     scope_to: scopeTo,
     status: "running",
-    cursor: { clientIndex: 0, threadOffset: 0 } satisfies CursorShape
+    cursor: { clientIndex: 0, threadOffset: 0, folder: "INBOX" } satisfies CursorShape
   });
   return id;
 }
@@ -132,8 +138,13 @@ export async function processChunk(
 
   let cursor: CursorShape = (runRow.cursor as CursorShape | null) ?? {
     clientIndex: 0,
-    threadOffset: 0
+    threadOffset: 0,
+    folder: "INBOX"
   };
+  // Older runs (before the SENT pass was added) stored cursors without
+  // the folder field. Default them to INBOX so they pick up where they
+  // left off; the SENT pass kicks in once the INBOX walk completes.
+  if (!cursor.folder) cursor.folder = "INBOX";
   let totalThreads = runRow.total_threads ?? 0;
   let processedThreads = runRow.processed_threads ?? 0;
   let totalMessages = runRow.total_messages ?? 0;
@@ -157,22 +168,24 @@ export async function processChunk(
         contactEmails: client.contact_emails
       });
       if (signals.emailSet.size === 0 && signals.domainSet.size === 0) {
-        // Client has nothing to match on — move on.
-        cursor = { clientIndex: cursor.clientIndex + 1, threadOffset: 0 };
+        // Client has nothing to match on — skip both folder passes.
+        cursor = { clientIndex: cursor.clientIndex + 1, threadOffset: 0, folder: "INBOX" };
         continue;
       }
 
       // Pull threads in chunks of 100, paginating via offset. We stop
-      // walking a client when we get a page where the *oldest* thread
+      // walking a folder when we get a page where the *oldest* thread
       // is older than scopeFrom — anything past that is out of scope.
+      // When INBOX is exhausted, we switch to SENT for the same client
+      // to catch outbound-only threads.
       const PAGE = 100;
-      let page = await listThreadsPaged({
-        folder: "INBOX",
+      const page = await listThreadsPaged({
+        folder: cursor.folder,
         limit: PAGE,
         offset: cursor.threadOffset
       });
       if (page.threads.length === 0) {
-        cursor = { clientIndex: cursor.clientIndex + 1, threadOffset: 0 };
+        cursor = advanceCursor(cursor);
         continue;
       }
 
@@ -264,17 +277,22 @@ export async function processChunk(
         }
       }
 
-      // Decide whether to advance the offset or move to next client.
-      // If the page hasMore AND the oldest thread is still in scope,
-      // keep paging this client; otherwise move on.
+      // Decide whether to keep paging this folder, switch folder, or
+      // move to the next client. If the page hasMore AND the oldest
+      // thread is still in scope, keep paging; otherwise step the
+      // cursor forward (INBOX → SENT → next client).
       const oldest = page.threads.reduce((min, t) => {
         const ms = new Date(t.last_message_at).getTime();
         return Math.min(min, Number.isNaN(ms) ? min : ms);
       }, Number.POSITIVE_INFINITY);
       const shouldContinue = page.hasMore && oldest >= scopeFromMs;
       cursor = shouldContinue
-        ? { clientIndex: cursor.clientIndex, threadOffset: cursor.threadOffset + PAGE }
-        : { clientIndex: cursor.clientIndex + 1, threadOffset: 0 };
+        ? {
+            clientIndex: cursor.clientIndex,
+            threadOffset: cursor.threadOffset + PAGE,
+            folder: cursor.folder
+          }
+        : advanceCursor(cursor);
     }
   } catch (err) {
     lastError = err instanceof Error ? err.message : String(err);
@@ -319,6 +337,18 @@ export async function processChunk(
     lastError,
     done
   };
+}
+
+// Cursor state machine: INBOX → SENT → next client. Walking both
+// folders is what lets us pick up outbound-only threads (we sent, no
+// reply) that wouldn't otherwise show up in INBOX. A thread that
+// appears in both folders gets visited twice, but the message-level
+// dedupe via the email_satisfaction_scores PK skips the second pass.
+function advanceCursor(c: CursorShape): CursorShape {
+  if (c.folder !== "SENT") {
+    return { clientIndex: c.clientIndex, threadOffset: 0, folder: "SENT" };
+  }
+  return { clientIndex: c.clientIndex + 1, threadOffset: 0, folder: "INBOX" };
 }
 
 // Reads every stored score for a client, computes the median, maps to

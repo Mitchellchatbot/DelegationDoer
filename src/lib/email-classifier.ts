@@ -13,6 +13,7 @@ export interface ClassifiedEmail {
   // Optional dept hint; falls back to the dept-routing endpoint if the
   // matcher + ranker both come up empty.
   departmentHint: string | null;
+  confidence: "low" | "medium" | "high";
 }
 
 interface DepartmentLite { id: string; name: string; description: string; taskTypes: string[]; }
@@ -127,6 +128,13 @@ Tags are 1-4 short lowercase words (e.g. "wordpress", "billing", "design"). They
       ? parsed.departmentHint
       : null;
 
+  const confidence: ClassifiedEmail["confidence"] =
+    departmentHint && tags.length > 0
+      ? "high"
+      : departmentHint || tags.length > 0
+        ? "medium"
+        : "low";
+
   return {
     title:
       typeof parsed.title === "string" && parsed.title.trim()
@@ -141,6 +149,7 @@ Tags are 1-4 short lowercase words (e.g. "wordpress", "billing", "design"). They
           `**Do:** Read the linked email thread and turn it into a task.\n\n_Couldn't auto-summarize this one — open the thread for the full email._\n\n**Requested by:** ${fromEmail ?? "unknown"}`,
     priority,
     tags,
-    departmentHint
+    departmentHint,
+    confidence
   };
 }

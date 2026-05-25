@@ -10,6 +10,7 @@ import { getClient, getResourcesForClient, type ClientResource } from "@/lib/cli
 import { BackPill } from "@/components/BackPill";
 import { ClientHealthCard } from "@/components/ClientHealthCard";
 import { ClientWordPressCard } from "@/components/ClientWordPressCard";
+import { ClientTouchpointCard } from "@/components/ClientTouchpointCard";
 import { DeleteClientButton } from "@/components/DeleteClientButton";
 import { ContentPlanComposer } from "@/components/ContentPlanComposer";
 import { ClientEmailLog } from "@/components/ClientEmailLog";
@@ -50,7 +51,7 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
   const canMatchByEmail = signals.emailSet.size > 0 || signals.domainSet.size > 0;
 
   const supabase = getSupabaseAdmin();
-  const [resources, openTasksRes, doneTasksRes, visibleIds] = await Promise.all([
+  const [resources, openTasksRes, doneTasksRes, visibleIds, recentScoresRes] = await Promise.all([
     getResourcesForClient(client.id),
     // Open tasks for this client — by free-text name match (legacy linkage).
     supabase
@@ -74,7 +75,18 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
       .order("last_activity_at", { ascending: false })
       .limit(100)
       .then((r) => r.data ?? []),
-    me ? visibleAccountIdsFor(me) : Promise.resolve(new Set<string>())
+    me ? visibleAccountIdsFor(me) : Promise.resolve(new Set<string>()),
+    // Latest 8 per-message scores for this client. Surfaced under
+    // "Show per-message scores" so a leader can see *why* the median
+    // landed where it did. Wrapped via .then so a missing table
+    // (migration not yet applied) just renders an empty list.
+    supabase
+      .from("email_satisfaction_scores")
+      .select("satisfaction_score, reason, delivered_at, direction, subject")
+      .eq("client_id", client.id)
+      .order("delivered_at", { ascending: false })
+      .limit(8)
+      .then((r) => (r.error ? [] : (r.data ?? [])))
   ]);
 
   // EOD client updates filed against this client. Joins the author's
@@ -257,6 +269,18 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
         />
       </header>
 
+      <ClientTouchpointCard
+        clientId={client.id}
+        lastOutboundEmailAt={client.lastOutboundEmailAt}
+        lastOutboundSubject={client.lastOutboundSubject}
+        touchpointOverrideLabel={client.touchpointOverrideLabel}
+        touchpointOverrideNote={client.touchpointOverrideNote}
+        touchpointOverrideAt={client.touchpointOverrideAt}
+        touchpointSummary={client.touchpointSummary}
+        touchpointSummaryAt={client.touchpointSummaryAt}
+        canEdit={!!(me && (me.role === "leader" || me.isAdmin))}
+      />
+
       <ClientHealthCard
         clientId={client.id}
         healthLabel={client.healthLabel}
@@ -267,6 +291,13 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
         healthOverrideLabel={client.healthOverrideLabel}
         healthOverrideNote={client.healthOverrideNote}
         healthOverrideAt={client.healthOverrideAt}
+        recentScores={recentScoresRes as Array<{
+          satisfaction_score: number;
+          reason: string | null;
+          delivered_at: string | null;
+          direction: "inbound" | "outbound";
+          subject: string | null;
+        }>}
         canEdit={!!(me && (me.role === "leader" || me.isAdmin))}
       />
 

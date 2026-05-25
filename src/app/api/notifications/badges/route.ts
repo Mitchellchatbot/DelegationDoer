@@ -99,16 +99,58 @@ export async function GET() {
 
     // --- Clients badge: count at-risk + shaky after applying any
     // manual override the leader may have set. The override columns
-    // are nullable; coalesce to the computed label.
+    // are nullable; coalesce to the computed label. Folds in the
+    // touchpoint health bands (red OR yellow) too — a client either
+    // sentiment-shaky OR touchpoint-stale lights the same badge so
+    // operators see ONE "needs attention" number on the sidebar.
     let clientsAtRisk = 0;
     try {
-      const { data } = await supabase
+      const { data: clientRows } = await supabase
         .from("clients")
-        .select("health_label, health_override_label");
-      const rows = (data ?? []) as Array<{ health_label: string | null; health_override_label: string | null }>;
+        .select("id, health_label, health_override_label, touchpoint_override_label");
+
+      // Pull every sent email_drafts row in one shot so we can compute
+      // the touchpoint band per client without N+1ing. Mirrors the
+      // logic in lib/client-touchpoint.ts (kept inline here to avoid
+      // pulling server-only code into the request hot path twice).
+      const ids = ((clientRows ?? []) as Array<{ id: string }>).map((r) => r.id);
+      const lastSentByClient = new Map<string, string>();
+      if (ids.length > 0) {
+        try {
+          const { data: sentRows } = await supabase
+            .from("email_drafts")
+            .select("client_id, sent_at")
+            .eq("status", "sent")
+            .not("sent_at", "is", null)
+            .in("client_id", ids)
+            .order("sent_at", { ascending: false })
+            .limit(2000);
+          for (const r of (sentRows ?? []) as { client_id: string | null; sent_at: string | null }[]) {
+            if (!r.client_id || !r.sent_at) continue;
+            if (!lastSentByClient.has(r.client_id)) lastSentByClient.set(r.client_id, r.sent_at);
+          }
+        } catch { /* email_drafts may not exist yet */ }
+      }
+
+      const now = Date.now();
+      const rows = (clientRows ?? []) as Array<{
+        id: string;
+        health_label: string | null;
+        health_override_label: string | null;
+        touchpoint_override_label: string | null;
+      }>;
       clientsAtRisk = rows.filter((r) => {
+        // Sentiment health channel
         const eff = r.health_override_label ?? r.health_label;
-        return eff === "at_risk" || eff === "shaky";
+        if (eff === "at_risk" || eff === "shaky") return true;
+        // Touchpoint channel: override wins; else compute from sent_at
+        const tpOverride = r.touchpoint_override_label;
+        if (tpOverride === "red" || tpOverride === "yellow") return true;
+        if (tpOverride === "green") return false;
+        const last = lastSentByClient.get(r.id);
+        if (!last) return true; // never emailed → red
+        const days = (now - new Date(last).getTime()) / 86_400_000;
+        return days > 3; // yellow or red
       }).length;
     } catch {
       /* migration may not have applied yet — silently zero */

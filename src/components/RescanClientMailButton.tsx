@@ -27,11 +27,25 @@ export function RescanClientMailButton() {
       }
       const updated = Number(data.updated ?? 0);
       const scanned = Number(data.scanned ?? 0);
-      toast.success(
-        updated > 0
-          ? `Filed ${updated} task${updated === 1 ? "" : "s"} under a client (scanned ${scanned}).`
-          : `Nothing new to file — scanned ${scanned} task${scanned === 1 ? "" : "s"}.`
-      );
+      const mailboxes = Number(data.mail_rescan_accounts ?? 0);
+      const touchpoints = Number(data.touchpoints_updated ?? 0);
+
+      // Three things happened: missiveclone is re-pulling email from
+      // Outlook (background), we filed matched tasks under clients,
+      // and we synced "last outbound email" per client from missive's
+      // SENT folder so the touchpoint dashboard reflects real history.
+      const mailMsg = mailboxes > 0
+        ? `Re-pulling email from ${mailboxes} mailbox${mailboxes === 1 ? "" : "es"}`
+        : "";
+      const tpMsg = touchpoints > 0
+        ? `touchpoints updated on ${touchpoints} client${touchpoints === 1 ? "" : "s"}`
+        : "";
+      const taskMsg = updated > 0
+        ? `filed ${updated} task${updated === 1 ? "" : "s"} (scanned ${scanned})`
+        : (scanned > 0 ? `no new tasks to file (scanned ${scanned})` : "");
+
+      const combined = [mailMsg, tpMsg, taskMsg].filter(Boolean).join(" · ");
+      toast.success(combined || "Rescan complete.");
       router.refresh();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "network error");

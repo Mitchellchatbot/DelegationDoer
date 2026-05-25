@@ -1,0 +1,194 @@
+// Touchpoint health — traffic-light view of how recently we've sent an
+// outbound email to each client. Distinct from the sentiment-based
+// `health_label` in client-health.ts; this one is purely about cadence.
+//
+// Bands (per Task 2 spec):
+//   green  -> last outbound email within the last 3 days
+//   yellow -> 3 < days <= 10
+//   red    -> more than 10 days, or no outbound email on record
+//
+// Data source for "auto" reading is the email_drafts table — every
+// outbound email composed inside DelegationDoer lands there with
+// status='sent' once missiveclone confirms delivery. Email sent
+// straight from Missive without going through DD won't show up here;
+// that's an accepted limitation since the team is moving all outbound
+// through the approval queue anyway.
+
+import { getSupabaseAdmin } from "@/lib/supabase-admin";
+
+export type TouchpointLabel = "green" | "yellow" | "red";
+
+export const TOUCHPOINT_META: Record<TouchpointLabel, {
+  label: string;
+  description: string;
+  // Tailwind tone tokens used by the pill/badge.
+  bg: string; text: string; border: string; dot: string;
+  // Solid background variant for dashboard tiles where contrast matters.
+  solidBg: string; solidText: string;
+}> = {
+  green: {
+    label: "Healthy",
+    description: "Emailed within the last 3 days.",
+    bg: "bg-emerald-50", text: "text-emerald-700", border: "border-emerald-200", dot: "bg-emerald-500",
+    solidBg: "bg-emerald-500", solidText: "text-white"
+  },
+  yellow: {
+    label: "Stale",
+    description: "No outbound email in 3+ days — getting cold.",
+    bg: "bg-amber-50", text: "text-amber-700", border: "border-amber-200", dot: "bg-amber-500",
+    solidBg: "bg-amber-500", solidText: "text-white"
+  },
+  red: {
+    label: "Neglected",
+    description: "No outbound email in 10+ days — needs follow-up.",
+    bg: "bg-rose-50", text: "text-rose-700", border: "border-rose-200", dot: "bg-rose-500",
+    solidBg: "bg-rose-500", solidText: "text-white"
+  }
+};
+
+// Pure function — returns the auto band from a "last sent at" date.
+// Used both by the server query helper (when building per-client
+// payloads) and by the dashboard summarizers.
+export function computeTouchpointLabel(lastSentAt: string | null, now: Date = new Date()): TouchpointLabel {
+  if (!lastSentAt) return "red";
+  const last = new Date(lastSentAt).getTime();
+  if (Number.isNaN(last)) return "red";
+  const days = (now.getTime() - last) / 86_400_000;
+  if (days <= 3) return "green";
+  if (days <= 10) return "yellow";
+  return "red";
+}
+
+export function daysSince(lastSentAt: string | null, now: Date = new Date()): number | null {
+  if (!lastSentAt) return null;
+  const last = new Date(lastSentAt).getTime();
+  if (Number.isNaN(last)) return null;
+  return Math.max(0, Math.floor((now.getTime() - last) / 86_400_000));
+}
+
+// Resolves what the UI should display: leader override wins, otherwise
+// the auto band derived from the last outbound email.
+export function effectiveTouchpoint(
+  override: TouchpointLabel | null,
+  lastSentAt: string | null
+): { label: TouchpointLabel; isOverride: boolean } {
+  if (override) return { label: override, isOverride: true };
+  return { label: computeTouchpointLabel(lastSentAt), isOverride: false };
+}
+
+export interface TouchpointInfo {
+  clientId: string;
+  lastOutboundEmailAt: string | null;
+  lastOutboundSubject: string | null;
+}
+
+// Two-source lookup: pulls the MAX(sent_at) per client from
+// email_drafts (mail composed inside DelegationDoer) AND the synced
+// `last_outbound_email_at_external` column on clients (populated by
+// lib/touchpoint-sync.ts from missiveclone's SENT folder). Returns
+// the *more recent* of the two so the dashboard reflects "last email
+// we sent this client" regardless of which surface it went out from.
+//
+// Only counts email_drafts status='sent' rows — drafts/approved-
+// but-not-yet-sent don't count toward "we touched the client".
+export async function getLatestTouchpointsByClient(
+  clientIds: string[]
+): Promise<Map<string, TouchpointInfo>> {
+  const out = new Map<string, TouchpointInfo>();
+  if (clientIds.length === 0) return out;
+
+  const supabase = getSupabaseAdmin();
+  // Round 1: DelegationDoer-originated sends.
+  const draftsP = supabase
+    .from("email_drafts")
+    .select("client_id, subject, sent_at")
+    .eq("status", "sent")
+    .not("sent_at", "is", null)
+    .in("client_id", clientIds)
+    .order("sent_at", { ascending: false })
+    .limit(2000);
+
+  // Round 2: missiveclone-synced sends. Read the denormalized column
+  // off `clients` so the dashboard query is one extra trip total, not
+  // per-client.
+  const externalP = supabase
+    .from("clients")
+    .select("id, last_outbound_email_at_external, last_outbound_subject_external")
+    .in("id", clientIds);
+
+  const [draftsRes, externalRes] = await Promise.all([draftsP, externalP]);
+
+  if (!draftsRes.error) {
+    for (const row of (draftsRes.data ?? []) as {
+      client_id: string | null; subject: string | null; sent_at: string | null;
+    }[]) {
+      if (!row.client_id || !row.sent_at) continue;
+      const prev = out.get(row.client_id);
+      // email_drafts comes back DESC, so the first hit per client is
+      // already the latest from that source. Skip subsequent rows.
+      if (prev?.lastOutboundEmailAt) continue;
+      out.set(row.client_id, {
+        clientId: row.client_id,
+        lastOutboundEmailAt: row.sent_at,
+        lastOutboundSubject: row.subject ?? null
+      });
+    }
+  }
+
+  if (!externalRes.error) {
+    for (const row of (externalRes.data ?? []) as {
+      id: string;
+      last_outbound_email_at_external: string | null;
+      last_outbound_subject_external: string | null;
+    }[]) {
+      if (!row.last_outbound_email_at_external) continue;
+      const prev = out.get(row.id);
+      const extMs = new Date(row.last_outbound_email_at_external).getTime();
+      const prevMs = prev?.lastOutboundEmailAt
+        ? new Date(prev.lastOutboundEmailAt).getTime()
+        : -Infinity;
+      if (extMs > prevMs) {
+        out.set(row.id, {
+          clientId: row.id,
+          lastOutboundEmailAt: row.last_outbound_email_at_external,
+          lastOutboundSubject: row.last_outbound_subject_external ?? prev?.lastOutboundSubject ?? null
+        });
+      }
+    }
+  }
+
+  return out;
+}
+
+// Snake-case row → camel-case shape for the touchpoint override fields.
+export interface TouchpointOverrideRow {
+  touchpoint_override_label: TouchpointLabel | null;
+  touchpoint_override_note: string | null;
+  touchpoint_override_by: string | null;
+  touchpoint_override_at: string | null;
+  touchpoint_summary: string | null;
+  touchpoint_summary_at: string | null;
+  touchpoint_summary_by: string | null;
+}
+
+export interface TouchpointFields {
+  touchpointOverrideLabel: TouchpointLabel | null;
+  touchpointOverrideNote: string | null;
+  touchpointOverrideBy: string | null;
+  touchpointOverrideAt: string | null;
+  touchpointSummary: string | null;
+  touchpointSummaryAt: string | null;
+  touchpointSummaryBy: string | null;
+}
+
+export function rowToTouchpointFields(r: TouchpointOverrideRow): TouchpointFields {
+  return {
+    touchpointOverrideLabel: r.touchpoint_override_label,
+    touchpointOverrideNote: r.touchpoint_override_note,
+    touchpointOverrideBy: r.touchpoint_override_by,
+    touchpointOverrideAt: r.touchpoint_override_at,
+    touchpointSummary: r.touchpoint_summary,
+    touchpointSummaryAt: r.touchpoint_summary_at,
+    touchpointSummaryBy: r.touchpoint_summary_by
+  };
+}

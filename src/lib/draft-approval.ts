@@ -18,6 +18,14 @@ export interface ApprovePatch {
   description?: string;
   assigneeId?: string;
   priority?: "low" | "medium" | "high" | "critical";
+  // Allow re-routing the draft to a different dept and adjusting the
+  // deadline before promotion. `null` clears the field.
+  departmentId?: string | null;
+  dueDate?: string | null;
+}
+
+export interface RejectOpts {
+  reason?: string;
 }
 
 export interface DraftActionResult {
@@ -88,6 +96,8 @@ export async function approveDraftTask(
   if (patch?.priority && (ALLOWED_PRIORITIES as readonly string[]).includes(patch.priority)) {
     update.priority = patch.priority;
   }
+  if (patch && "departmentId" in patch) update.department_id = patch.departmentId ?? null;
+  if (patch && "dueDate" in patch) update.due_date = patch.dueDate ?? null;
 
   const { data: updatedRaw, error: updateErr } = await supabase
     .from("tasks")
@@ -151,7 +161,8 @@ export async function approveDraftTask(
 
 export async function rejectDraftTask(
   taskId: string,
-  actorId: string
+  actorId: string,
+  opts?: RejectOpts
 ): Promise<DraftActionResult> {
   const me = await getUserById(actorId);
   if (!me) return { ok: false, status: 401, taskId, error: "unauthorized" };
@@ -175,7 +186,30 @@ export async function rejectDraftTask(
     return { ok: false, status: 403, taskId, error: "forbidden" };
   }
 
-  const { error: deleteErr } = await supabase.from("tasks").delete().eq("id", taskId);
-  if (deleteErr) return { ok: false, status: 500, taskId, error: deleteErr.message };
+  // Soft-delete: keep the row so the routing_decisions.task_id back-
+  // pointer (and any other foreign keys) survive for audit. The card
+  // disappears from the dashboard because the queries filter on
+  // is_draft = true.
+  const now = new Date().toISOString();
+  const { error: updateErr } = await supabase
+    .from("tasks")
+    .update({
+      is_draft: false,
+      status: "rejected",
+      assignee_id: null,
+      last_activity_at: now
+    })
+    .eq("id", taskId);
+  if (updateErr) return { ok: false, status: 500, taskId, error: updateErr.message };
+
+  const reasonSuffix = opts?.reason?.trim() ? ` · ${opts.reason.trim()}` : "";
+  await supabase.from("activity_logs").insert({
+    id: `a_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
+    task_id: taskId,
+    user_id: me.id,
+    action: "rejected",
+    detail: `Denied AI-drafted task${reasonSuffix}`
+  });
+
   return { ok: true, status: 200, taskId };
 }

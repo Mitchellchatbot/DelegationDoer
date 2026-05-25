@@ -16,18 +16,20 @@ const STATUS_COPY: Record<TaskStatus, string> = {
   in_progress: "In Progress",
   urgent: "Urgent",
   waiting_on_client: "Waiting on Client",
-  done: "Done"
+  done: "Done",
+  rejected: "Rejected"
 };
 
 export function StatusPill({ status }: { status: TaskStatus }) {
-  const tone = {
+  const tone: Record<TaskStatus, string> = {
     pending: "text-muted border-border bg-surface2",
     in_progress: "text-accent border-accent/30 bg-accent/10",
     urgent: "text-urgent border-urgent/40 bg-urgent/10",
     waiting_on_client: "text-warn border-warn/30 bg-warn/10",
-    done: "text-ok border-ok/30 bg-ok/10"
-  }[status];
-  return <span className={cn("badge", tone)}>{STATUS_COPY[status]}</span>;
+    done: "text-ok border-ok/30 bg-ok/10",
+    rejected: "text-rose-700 border-rose-200 bg-rose-50"
+  };
+  return <span className={cn("badge", tone[status])}>{STATUS_COPY[status]}</span>;
 }
 
 export function Tag({ children }: { children: React.ReactNode }) {

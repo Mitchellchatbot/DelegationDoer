@@ -7,8 +7,7 @@ import { OrgChart } from "@/components/OrgChart";
 import { useCurrentUser } from "@/lib/user-context";
 import { PageHero } from "@/components/PageHero";
 import { Countdown } from "@/components/Countdown";
-import { Users as UsersIcon, ShieldAlert, ListChecks, CheckCircle2, AlertTriangle, Flame, Sparkles } from "lucide-react";
-import { DraftsAwaitingApproval } from "@/components/DraftsAwaitingApproval";
+import { Users as UsersIcon, ShieldAlert, ListChecks, CheckCircle2, AlertTriangle, Flame, Sparkles, ClipboardCheck, ArrowRight } from "lucide-react";
 import type { User, Department, Task } from "@/lib/types";
 
 // Department-head console. Pulls live users/departments/tasks (falls
@@ -23,6 +22,21 @@ export default function TeamOverviewPage() {
   const [users, setUsers] = useState<User[]>([]);
   const [departments, setDepartments] = useState<Department[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
+  // Just the count for the routing-review banner. Cheap fetch; we
+  // intentionally don't render the full draft list here anymore —
+  // /routing-review is the dedicated surface.
+  const [routingPending, setRoutingPending] = useState<number | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/routing-review", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => {
+        if (cancelled || !j) return;
+        setRoutingPending(Array.isArray(j.pending) ? j.pending.length : 0);
+      })
+      .catch(() => { /* leave null — banner just hides */ });
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -157,7 +171,25 @@ export default function TeamOverviewPage() {
         iconTone="emerald"
       />
 
-      <DraftsAwaitingApproval />
+      {routingPending !== null && routingPending > 0 && (
+        <Link
+          href="/routing-review"
+          className="group flex items-center gap-3 rounded-2xl border border-emerald-200/60 bg-gradient-to-r from-emerald-50 via-white to-white px-4 py-3 shadow-soft hover:shadow-lift transition-all"
+        >
+          <div className="w-9 h-9 rounded-xl bg-emerald-100 text-emerald-700 grid place-items-center shrink-0">
+            <ClipboardCheck className="w-4 h-4" />
+          </div>
+          <div className="min-w-0">
+            <div className="text-sm font-semibold text-emerald-900">
+              {routingPending} task{routingPending === 1 ? "" : "s"} awaiting your review
+            </div>
+            <div className="text-[11px] text-ink/55">
+              AI-routed drafts ready for approve / edit / deny.
+            </div>
+          </div>
+          <ArrowRight className="ml-auto w-4 h-4 text-emerald-600 group-hover:translate-x-0.5 transition-transform" />
+        </Link>
+      )}
 
       {/* Stat strip — at-a-glance load on the team. */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">

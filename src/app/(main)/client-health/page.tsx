@@ -1,9 +1,10 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { Activity, Send, ArrowRight } from "lucide-react";
+import { Activity, Send, ArrowRight, Brain } from "lucide-react";
 import { PageHero } from "@/components/PageHero";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
+import { isLeader } from "@/lib/auth";
 import { getClients } from "@/lib/clients-data";
 import { ClientFollowUpWidget } from "@/components/ClientFollowUpWidget";
 import { TouchpointPill } from "@/components/TouchpointPill";
@@ -62,12 +63,23 @@ export default async function ClientHealthPage() {
         icon={<Activity />}
         iconTone="rose"
         trailing={
-          <Link
-            href="/clients"
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-white border border-slate-200 text-ink/75 hover:text-accent hover:border-accent/40 transition-colors"
-          >
-            All clients <ArrowRight className="w-3.5 h-3.5" />
-          </Link>
+          <div className="flex items-center gap-2 flex-wrap">
+            {isLeader(me) && (
+              <Link
+                href="/admin/mail-satisfaction"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-white border border-fuchsia-200 text-fuchsia-700 hover:bg-fuchsia-50 transition-colors"
+              >
+                <Brain className="w-3.5 h-3.5" />
+                Run satisfaction scan
+              </Link>
+            )}
+            <Link
+              href="/clients"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-white border border-slate-200 text-ink/75 hover:text-accent hover:border-accent/40 transition-colors"
+            >
+              All clients <ArrowRight className="w-3.5 h-3.5" />
+            </Link>
+          </div>
         }
       />
 

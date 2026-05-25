@@ -6,27 +6,37 @@
 // Steps:
 //   1. Skip if email_intake_log already has the thread (cron-side dedupe).
 //   2. Classify the email body with Claude Haiku → {title, description,
-//      priority, tags, departmentHint}.
+//      priority, tags, departmentHint, confidence}.
 //   3. Routing:
 //        a. matchRoutingRule(subject + body, rules) — explicit "this kind
 //           of work always goes there" wins.
 //        b. rankCandidates() — same skill+capacity ranker the new-task
-//           popdown uses.
+//           popdown uses. We ALWAYS run this even if a rule fired, so the
+//           ranker top-N is captured in routing_decisions.ranker_top for
+//           the dept-head dashboard's "AI reasoning" panel.
 //        c. Dept-head fallback — pick the head of the classifier's
 //           departmentHint.
 //   4. Insert the task with missive_thread_url populated.
-//   5. Notify the assignee via Slack.
-//   6. Insert into email_intake_log so the cron skips this thread next run.
+//   5. Persist a routing_decisions row (audit trail) and back-link it
+//      from tasks.routing_decision_id. Low-confidence drafts get flagged
+//      with needs_review=true so leaders can sanity-check.
+//   6. Notify the assignee via Slack.
+//   7. Insert into email_intake_log so the cron skips this thread next run.
+//
+// When all routing comes back empty we write a routing_decisions row with
+// task_id=null and needs_review=true into the fallback queue, drop a
+// matching email_intake_log row (so the cron stops re-classifying the
+// dead thread), and DM every leader via notifyRoutingFallback.
 //
 // Returns a structured outcome — { skipped: "already-logged" } if dedupe
-// fired, otherwise the created task id + how it was routed.
+// fired, otherwise the created task id + how it was routed + decisionId.
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { getAllTasks, getDepartments, getAllUsersLight } from "@/lib/server-data";
 import { classifyEmailThread, type ClassifiedEmail } from "@/lib/email-classifier";
 import { matchRoutingRule, rowToRule, type RoutingRule } from "@/lib/routing-match";
-import { rankCandidates } from "@/lib/skill-rank";
+import { rankCandidates, type RankedCandidate } from "@/lib/skill-rank";
 import { userCapacity, deadlineFromEstimate } from "@/lib/capacity";
-import { notifyAssignment } from "@/lib/slack";
+import { notifyAssignment, notifyRoutingFallback } from "@/lib/slack";
 import { loadClientMatcher } from "@/lib/client-thread-match";
 import type { User } from "@/lib/types";
 
@@ -54,6 +64,8 @@ export interface IntakeOutcome {
   routedToUserId?: string | null;
   classified?: ClassifiedEmail;
   reason?: string;
+  decisionId?: string;
+  needsReview?: boolean;
 }
 
 interface SkillMatrixRow {
@@ -107,12 +119,14 @@ export async function runEmailIntake(input: IntakeInput): Promise<IntakeOutcome>
     }
   }
 
-  // 3b) Skill+capacity ranker.
+  // 3b) Skill+capacity ranker — ALWAYS run so the audit row captures the
+  //     ranker's top-N. Only used as the picker when no rule matched.
   const allUsers = await getAllUsersLight();
   const allTasks = await getAllTasks();
+  const rankerTop: RankedCandidate[] = (await rankAll(allUsers, allTasks, supabase, classified)) ?? [];
 
   if (!assigneeId) {
-    const top = await rankAndPick(allUsers, allTasks, supabase, classified);
+    const top = rankerTop[0];
     if (top) {
       assigneeId = top.userId;
       routedVia = "ranker";
@@ -130,8 +144,48 @@ export async function runEmailIntake(input: IntakeInput): Promise<IntakeOutcome>
     }
   }
 
+  const now = new Date().toISOString();
+
+  // -------- No-candidates fallback --------
   if (!assigneeId) {
-    return { skipped: "no-candidates", classified };
+    const decisionId = await writeRoutingDecision(supabase, {
+      taskId: null,
+      accountId: input.accountId,
+      threadId: input.threadId,
+      classified,
+      matchedRuleId: matchedRule?.id ?? null,
+      matchedRuleLabel: matchedRule?.label ?? null,
+      rankerTop,
+      routedVia: "unrouted",
+      routedToUserId: null,
+      reason: "No routing signal produced a candidate assignee",
+      needsReview: true,
+      reviewReason: "no-candidates"
+    });
+    // Drop a dedupe row so the cron doesn't reclassify this dead thread
+    // every five minutes — we'll surface it in the fallback queue instead.
+    await supabase.from("email_intake_log").upsert(
+      {
+        thread_id: input.threadId,
+        account_id: input.accountId,
+        task_id: null,
+        routed_via: "unrouted",
+        routed_to_user_id: null,
+        processed_at: now
+      },
+      { onConflict: "thread_id" }
+    );
+    await pingLeaders(supabase, {
+      subject: input.threadSubject,
+      fromEmail: input.fromEmail,
+      reason: "no-candidates"
+    });
+    return {
+      skipped: "no-candidates",
+      classified,
+      decisionId: decisionId ?? undefined,
+      needsReview: true
+    };
   }
 
   // 4) Insert task.
@@ -142,7 +196,6 @@ export async function runEmailIntake(input: IntakeInput): Promise<IntakeOutcome>
     assignee ?? { dailyCapacity: 8, weeklySchedule: {}, workTimezone: null }
   );
   const taskId = `t_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
-  const now = new Date().toISOString();
 
   const departmentId =
     matchedRule?.departmentId ?? classified.departmentHint ?? assignee?.departmentIds[0] ?? null;
@@ -192,7 +245,7 @@ export async function runEmailIntake(input: IntakeInput): Promise<IntakeOutcome>
     missive_thread_url: input.missiveThreadUrl,
     custom: {},
     // Email-intake tasks land as drafts. The relevant dept head (or the
-    // Leader if no head) approves them on /leader/team before they're
+    // Leader if no head) approves them on /routing-review before they're
     // promoted to active "pending" tasks.
     is_draft: true
   };
@@ -214,7 +267,39 @@ export async function runEmailIntake(input: IntakeInput): Promise<IntakeOutcome>
     detail: `Auto-created from email · ${reason}`
   });
 
-  // 5) Slack DM the assignee — but only for non-draft tasks. Drafts wait
+  // 5) Persist routing audit + back-link from the task.
+  const needsReview = classified.confidence === "low";
+  const decisionId = await writeRoutingDecision(supabase, {
+    taskId,
+    accountId: input.accountId,
+    threadId: input.threadId,
+    classified,
+    matchedRuleId: matchedRule?.id ?? null,
+    matchedRuleLabel: matchedRule?.label ?? null,
+    rankerTop,
+    routedVia,
+    routedToUserId: assigneeId,
+    reason,
+    needsReview,
+    reviewReason: needsReview ? "low-confidence" : null
+  });
+
+  if (decisionId) {
+    await supabase
+      .from("tasks")
+      .update({ routing_decision_id: decisionId })
+      .eq("id", taskId);
+  }
+
+  if (needsReview) {
+    await pingLeaders(supabase, {
+      subject: input.threadSubject,
+      fromEmail: input.fromEmail,
+      reason: "low-confidence"
+    });
+  }
+
+  // 6) Slack DM the assignee — but only for non-draft tasks. Drafts wait
   //    on dept-head approval before pinging the assignee; the approval
   //    endpoint fires the notification once the task goes live.
   if (assignee?.email && !insertRow.is_draft) {
@@ -235,7 +320,7 @@ export async function runEmailIntake(input: IntakeInput): Promise<IntakeOutcome>
     }
   }
 
-  // 6) Log the intake row so the cron dedupes next time.
+  // 7) Log the intake row so the cron dedupes next time.
   await supabase.from("email_intake_log").upsert(
     {
       thread_id: input.threadId,
@@ -253,7 +338,9 @@ export async function runEmailIntake(input: IntakeInput): Promise<IntakeOutcome>
     routedVia: input.source === "manual" ? "manual" : routedVia,
     routedToUserId: assigneeId,
     classified,
-    reason
+    reason,
+    decisionId: decisionId ?? undefined,
+    needsReview
   };
 }
 
@@ -306,12 +393,15 @@ async function departmentHead(
   return head ? { id: head.id, name: head.name } : null;
 }
 
-async function rankAndPick(
+// Runs the ranker and returns the full ranked list (not just the top
+// pick) so callers can store the top-N reasoning blob into
+// routing_decisions.ranker_top alongside the chosen assignee.
+async function rankAll(
   candidates: User[],
   allTasks: ReturnType<typeof getAllTasks> extends Promise<infer T> ? T : never,
   supabase: SbClient,
   classified: ClassifiedEmail
-): Promise<{ userId: string; reason: string } | null> {
+): Promise<RankedCandidate[] | null> {
   const { data: skillRows, error } = await supabase
     .from("user_skills")
     .select("user_id, tag, manual_level, auto_score");
@@ -338,7 +428,7 @@ async function rankAndPick(
 
   // Hand off to the same ranker the new-task popdown uses, so a single
   // tweak there propagates here automatically.
-  const ranked = rankCandidates({
+  return rankCandidates({
     task: {
       title: classified.title,
       description: classified.description,
@@ -349,6 +439,91 @@ async function rankAndPick(
     skillsByUser,
     capacityByUser
   });
-  const top = ranked[0];
-  return top ? { userId: top.userId, reason: top.reason } : null;
+}
+
+// Insert a routing_decisions audit row. Returns the new id, or null if
+// the insert failed (degrades gracefully when the migration hasn't run
+// yet — the rest of the intake pipeline still completes).
+async function writeRoutingDecision(
+  supabase: SbClient,
+  args: {
+    taskId: string | null;
+    accountId: string;
+    threadId: string;
+    classified: ClassifiedEmail;
+    matchedRuleId: string | null;
+    matchedRuleLabel: string | null;
+    rankerTop: RankedCandidate[];
+    routedVia: RoutedVia;
+    routedToUserId: string | null;
+    reason: string;
+    needsReview: boolean;
+    reviewReason: string | null;
+  }
+): Promise<string | null> {
+  const id = `rd_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 9)}`;
+  try {
+    const { error } = await supabase.from("routing_decisions").insert({
+      id,
+      task_id: args.taskId,
+      account_id: args.accountId,
+      thread_id: args.threadId,
+      classifier_output: {
+        title: args.classified.title,
+        description: args.classified.description,
+        priority: args.classified.priority,
+        tags: args.classified.tags,
+        departmentHint: args.classified.departmentHint,
+        confidence: args.classified.confidence
+      },
+      matched_rule_id: args.matchedRuleId,
+      matched_rule_label: args.matchedRuleLabel,
+      // Keep just the top 5 — that's all the dashboard renders, and it
+      // keeps the JSONB blob from ballooning on a 50-person workspace.
+      ranker_top: args.rankerTop.slice(0, 5).map((r) => ({
+        userId: r.userId,
+        score: r.score,
+        reason: r.reason
+      })),
+      routed_via: args.routedVia,
+      routed_to_user_id: args.routedToUserId,
+      reason: args.reason,
+      needs_review: args.needsReview,
+      review_reason: args.reviewReason
+    });
+    if (error) {
+      console.warn("[email-intake] routing_decisions insert failed:", error.message);
+      return null;
+    }
+    return id;
+  } catch (err) {
+    console.warn("[email-intake] routing_decisions insert threw:", err);
+    return null;
+  }
+}
+
+// Fan-out DM to every leader (role='leader') when intake bails out.
+// Best-effort: a Slack outage must not block the intake itself.
+async function pingLeaders(
+  supabase: SbClient,
+  args: { subject: string; fromEmail: string | null; reason: string }
+): Promise<void> {
+  try {
+    const { data: leaders } = await supabase
+      .from("users")
+      .select("email")
+      .eq("role", "leader");
+    const leaderEmails = (leaders ?? [])
+      .map((u: { email: string | null }) => u.email)
+      .filter((e): e is string => typeof e === "string" && e.length > 0);
+    if (leaderEmails.length === 0) return;
+    await notifyRoutingFallback({
+      leaderEmails,
+      subject: args.subject,
+      fromEmail: args.fromEmail,
+      reason: args.reason
+    });
+  } catch (err) {
+    console.warn("[email-intake] pingLeaders failed:", err);
+  }
 }

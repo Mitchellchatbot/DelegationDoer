@@ -805,6 +805,73 @@ export async function notifyTeamFyiAsUser(args: {
   return { sent, failed, skipped };
 }
 
+// Escalation DM when email intake can't route a thread (no candidates
+// or low classifier confidence). Fans out to every leader/CEO so they
+// can pick up the unrouted thread in the routing-review dashboard.
+// Best-effort per recipient — failures don't fail the whole call.
+export async function notifyRoutingFallback(args: {
+  leaderEmails: string[];
+  subject: string;
+  fromEmail: string | null;
+  reason: string;
+}): Promise<{ sent: number; failed: number }> {
+  if (!process.env.SLACK_BOT_TOKEN || args.leaderEmails.length === 0) {
+    return { sent: 0, failed: 0 };
+  }
+  const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
+  const reviewUrl = `${baseUrl}/routing-review`;
+
+  const humanReason =
+    args.reason === "no-candidates"
+      ? "no candidate assignee — every routing signal came back empty"
+      : args.reason === "low-confidence"
+        ? "the AI classifier wasn't confident enough to pick a department"
+        : args.reason;
+
+  const blocks: unknown[] = [
+    {
+      type: "header",
+      text: { type: "plain_text", text: "⚠️ Email needs routing review", emoji: true }
+    },
+    {
+      type: "section",
+      fields: [
+        { type: "mrkdwn", text: `*Subject*\n${args.subject || "(no subject)"}` },
+        { type: "mrkdwn", text: `*From*\n${args.fromEmail ?? "(unknown)"}` },
+        { type: "mrkdwn", text: `*Why*\n${humanReason}` }
+      ]
+    },
+    {
+      type: "actions",
+      elements: [{
+        type: "button",
+        text: { type: "plain_text", text: "Open routing review", emoji: true },
+        url: reviewUrl,
+        style: "primary"
+      }]
+    }
+  ];
+
+  const results = await Promise.allSettled(
+    args.leaderEmails.map(async (email) => {
+      const slackUserId = await lookupUserByEmail(email);
+      const channel = await openDm(slackUserId);
+      await slackCall("chat.postMessage", {
+        channel,
+        text: `Email needs routing review: ${args.subject}`,
+        blocks,
+        unfurl_links: false,
+        unfurl_media: false
+      });
+    })
+  );
+  let sent = 0, failed = 0;
+  for (const r of results) {
+    if (r.status === "fulfilled") sent++; else failed++;
+  }
+  return { sent, failed };
+}
+
 // FYI fan-out used when a request is auto-routed to a department head and
 // we want the rest of the team to know it's in flight (e.g. the SEO
 // report-request flow). Best-effort per recipient — failures don't fail

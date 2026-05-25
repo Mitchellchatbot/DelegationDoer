@@ -82,7 +82,12 @@ export function MyTasksKanban({ initialTasks }: { initialTasks: Task[] }) {
     urgent: [],
     in_progress: [],
     waiting_on_client: [],
-    done: []
+    done: [],
+    // 'rejected' isn't a kanban column — the bucket is here only to
+    // satisfy the exhaustive Record<TaskStatus, …> type. Rejected
+    // drafts never appear in MY tasks anyway (assignee_id is cleared
+    // on reject, so the upstream filter elides them).
+    rejected: []
   };
   for (const t of tasks) {
     if (grouped[t.status]) grouped[t.status].push(t);

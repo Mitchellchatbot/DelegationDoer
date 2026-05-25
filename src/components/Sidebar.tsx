@@ -84,6 +84,11 @@ export function Sidebar({ user }: { user: User }) {
   const [approvalsPending, setApprovalsPending] = useState<number | null>(null);
   const [canApprove, setCanApprove] = useState(false);
   const [inboxesUnread, setInboxesUnread] = useState<number | null>(null);
+  // Routing-review pending count — only fetched for leaders + dept heads
+  // since workers can't see the page anyway. Mirrors the approvalsPending
+  // pattern so the badge feels consistent.
+  const canSeeRoutingReview = isLeader(user) || isHead(user);
+  const [routingReviewPending, setRoutingReviewPending] = useState<number | null>(null);
   // Pull the cached counts into state after mount — initializing them
   // synchronously from localStorage caused an SSR/CSR hydration mismatch
   // (server rendered no badge, client rendered the cached count).
@@ -92,6 +97,7 @@ export function Sidebar({ user }: { user: User }) {
     setPeopleEodPending((v) => v ?? readCached("badge:peopleEod"));
     setApprovalsPending((v) => v ?? readCached("badge:approvals"));
     setInboxesUnread((v) => v ?? readCached("badge:inboxesUnread"));
+    setRoutingReviewPending((v) => v ?? readCached("badge:routingReview"));
   }, []);
   useEffect(() => {
     let cancelled = false;
@@ -109,6 +115,21 @@ export function Sidebar({ user }: { user: User }) {
           if (res.ok) {
             const data = await res.json();
             if (!cancelled) setUnseenProjects(data.unseenCount ?? 0);
+          }
+        }
+        if (canSeeRoutingReview) {
+          // Mirror the approvalsPending pattern: tally the size of the
+          // pending bucket from the routing-review feed. Failures fall
+          // back to the cached count so the sidebar doesn't flicker.
+          const res = await fetch("/api/routing-review", { cache: "no-store" });
+          if (res.ok) {
+            const data = await res.json();
+            const n = Array.isArray(data.pending) ? data.pending.length : 0;
+            if (!cancelled) {
+              setRoutingReviewPending(n);
+              try { window.localStorage.setItem("badge:routingReview", String(n)); }
+              catch { /* localStorage blocked */ }
+            }
           }
         }
         // Generic badges — same poll cadence; cheap single round-trip.
@@ -182,7 +203,7 @@ export function Sidebar({ user }: { user: User }) {
       if (retryTimer) clearTimeout(retryTimer);
       es?.close();
     };
-  }, [canSeeSeo, canSeeProjectUpdates]);
+  }, [canSeeSeo, canSeeProjectUpdates, canSeeRoutingReview]);
 
   // ⌘K / Ctrl+K opens the Ask AI drawer — wires up the hint shown on
   // the button. Suppressed when the user is mid-edit (so it doesn't
@@ -237,6 +258,12 @@ export function Sidebar({ user }: { user: User }) {
         // leaders/heads who have Manage in primary instead.
         ...(isLeaderRole || isHeadRole
           ? [{ href: "/people", label: "People", icon: MoreIcons.People, badge: peopleEodPending ?? 0 }]
+          : []),
+        // Routing review — leaders/heads only. The auto-intake pipeline's
+        // pending bucket. Surfaces here next to People so the leader can
+        // triage routing decisions in the same trip.
+        ...(canSeeRoutingReview
+          ? [{ href: "/routing-review", label: "Routing review", icon: MoreIcons.RoutingReview, badge: routingReviewPending ?? 0 }]
           : []),
         ...(canApprove
           ? [
@@ -307,6 +334,10 @@ export function Sidebar({ user }: { user: User }) {
                   title: `${peopleEodPending} EOD ${peopleEodPending === 1 ? "form" : "forms"} not yet submitted today`
                 };
               }
+              // Approvals / Routing review / Updates / Clients moved
+              // into the More popover — their badges render as row
+              // pills there, plus a single dot on the More trigger
+              // when any nested badge > 0.
               return null;
             })();
             return (

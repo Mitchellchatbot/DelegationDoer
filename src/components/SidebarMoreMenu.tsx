@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import {
   MoreHorizontal, CalendarDays, FolderKanban, Briefcase, BookOpen,
-  Sparkles, Users, ClipboardCheck, Send, Settings, type LucideIcon
+  Sparkles, Users, ClipboardCheck, Send, Settings, Inbox, type LucideIcon
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -152,5 +152,6 @@ export const MoreIcons = {
   People:          Users,
   Approvals:       ClipboardCheck,
   OutboundEmails:  Send,
+  RoutingReview:   Inbox,
   Settings:        Settings
 } as const;

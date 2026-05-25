@@ -82,13 +82,15 @@ export interface TouchpointInfo {
   lastOutboundSubject: string | null;
 }
 
-// Single round-trip: pulls the MAX(sent_at) per client_id from
-// email_drafts, plus the subject of that latest send. Returns a map
-// keyed by client_id so callers can decorate a list of clients
-// without N+1ing the database.
+// Two-source lookup: pulls the MAX(sent_at) per client from
+// email_drafts (mail composed inside DelegationDoer) AND the synced
+// `last_outbound_email_at_external` column on clients (populated by
+// lib/touchpoint-sync.ts from missiveclone's SENT folder). Returns
+// the *more recent* of the two so the dashboard reflects "last email
+// we sent this client" regardless of which surface it went out from.
 //
-// Only counts status='sent' rows — drafts/approved-but-not-yet-sent
-// don't count toward "we touched the client" by design.
+// Only counts email_drafts status='sent' rows — drafts/approved-
+// but-not-yet-sent don't count toward "we touched the client".
 export async function getLatestTouchpointsByClient(
   clientIds: string[]
 ): Promise<Map<string, TouchpointInfo>> {
@@ -96,11 +98,8 @@ export async function getLatestTouchpointsByClient(
   if (clientIds.length === 0) return out;
 
   const supabase = getSupabaseAdmin();
-  // Pull every sent row scoped to the requested clients, sorted newest
-  // first. We then walk once and keep the first row per client_id.
-  // For a workspace with ~hundreds of sent emails this is a cheaper
-  // query than per-client MAX subqueries.
-  const { data, error } = await supabase
+  // Round 1: DelegationDoer-originated sends.
+  const draftsP = supabase
     .from("email_drafts")
     .select("client_id, subject, sent_at")
     .eq("status", "sent")
@@ -109,16 +108,55 @@ export async function getLatestTouchpointsByClient(
     .order("sent_at", { ascending: false })
     .limit(2000);
 
-  if (error) return out;
-  for (const row of (data ?? []) as { client_id: string | null; subject: string | null; sent_at: string | null }[]) {
-    if (!row.client_id || !row.sent_at) continue;
-    if (out.has(row.client_id)) continue; // already have the latest
-    out.set(row.client_id, {
-      clientId: row.client_id,
-      lastOutboundEmailAt: row.sent_at,
-      lastOutboundSubject: row.subject ?? null
-    });
+  // Round 2: missiveclone-synced sends. Read the denormalized column
+  // off `clients` so the dashboard query is one extra trip total, not
+  // per-client.
+  const externalP = supabase
+    .from("clients")
+    .select("id, last_outbound_email_at_external, last_outbound_subject_external")
+    .in("id", clientIds);
+
+  const [draftsRes, externalRes] = await Promise.all([draftsP, externalP]);
+
+  if (!draftsRes.error) {
+    for (const row of (draftsRes.data ?? []) as {
+      client_id: string | null; subject: string | null; sent_at: string | null;
+    }[]) {
+      if (!row.client_id || !row.sent_at) continue;
+      const prev = out.get(row.client_id);
+      // email_drafts comes back DESC, so the first hit per client is
+      // already the latest from that source. Skip subsequent rows.
+      if (prev?.lastOutboundEmailAt) continue;
+      out.set(row.client_id, {
+        clientId: row.client_id,
+        lastOutboundEmailAt: row.sent_at,
+        lastOutboundSubject: row.subject ?? null
+      });
+    }
   }
+
+  if (!externalRes.error) {
+    for (const row of (externalRes.data ?? []) as {
+      id: string;
+      last_outbound_email_at_external: string | null;
+      last_outbound_subject_external: string | null;
+    }[]) {
+      if (!row.last_outbound_email_at_external) continue;
+      const prev = out.get(row.id);
+      const extMs = new Date(row.last_outbound_email_at_external).getTime();
+      const prevMs = prev?.lastOutboundEmailAt
+        ? new Date(prev.lastOutboundEmailAt).getTime()
+        : -Infinity;
+      if (extMs > prevMs) {
+        out.set(row.id, {
+          clientId: row.id,
+          lastOutboundEmailAt: row.last_outbound_email_at_external,
+          lastOutboundSubject: row.last_outbound_subject_external ?? prev?.lastOutboundSubject ?? null
+        });
+      }
+    }
+  }
+
   return out;
 }
 

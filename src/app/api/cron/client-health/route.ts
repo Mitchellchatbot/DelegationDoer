@@ -3,6 +3,7 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { listThreadsPaged, getThread } from "@/lib/missive-client";
 import { loadClientMatcher } from "@/lib/client-thread-match";
 import { scoreAndStore, recomputeClientHealth } from "@/lib/satisfaction-scoring";
+import { syncClientTouchpointsFromMissive } from "@/lib/touchpoint-sync";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -93,11 +94,22 @@ export async function GET(req: NextRequest) {
     await recomputeClientHealth(cid).catch(() => { /* best-effort */ });
   }
 
+  // Refresh per-client last-outbound timestamps from missiveclone's
+  // SENT folder so the touchpoint dashboard picks up emails sent
+  // outside DelegationDoer. Cheap enough to run every night — capped
+  // at 6 months of history internally.
+  let touchpointsUpdated = 0;
+  try {
+    const r = await syncClientTouchpointsFromMissive();
+    touchpointsUpdated = r.clientsUpdated;
+  } catch { /* best-effort */ }
+
   return NextResponse.json({
     ok: true,
     threadsWalked,
     scored,
     errored,
-    clientsTouched: touched.size
+    clientsTouched: touched.size,
+    touchpointsUpdated
   });
 }

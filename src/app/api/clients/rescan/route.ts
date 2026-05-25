@@ -4,6 +4,7 @@ import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { loadClientMatcher } from "@/lib/client-thread-match";
 import { rescanAllAccounts } from "@/lib/missive-client";
+import { syncClientTouchpointsFromMissive } from "@/lib/touchpoint-sync";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -86,6 +87,22 @@ export async function POST() {
       else updated++;
     }
 
+    // Step 3 — refresh per-client "last outbound email at" from
+    // missiveclone's SENT folder. Without this, the touchpoint
+    // dashboard only sees emails composed inside DelegationDoer and
+    // shows every other client as "Never emailed". Best-effort: a
+    // failure here doesn't fail the rescan.
+    let touchpointsUpdated = 0;
+    let touchpointsScanned = 0;
+    let touchpointsError: string | null = null;
+    try {
+      const r = await syncClientTouchpointsFromMissive();
+      touchpointsUpdated = r.clientsUpdated;
+      touchpointsScanned = r.threadsScanned;
+    } catch (e) {
+      touchpointsError = e instanceof Error ? e.message : "touchpoint sync failed";
+    }
+
     return NextResponse.json({
       ok: true,
       scanned: rows?.length ?? 0,
@@ -93,7 +110,10 @@ export async function POST() {
       updated,
       failures: failures.length,
       mail_rescan_accounts: mailRescanAccounts,
-      mail_rescan_error: mailRescanError
+      mail_rescan_error: mailRescanError,
+      touchpoints_updated: touchpointsUpdated,
+      touchpoints_scanned: touchpointsScanned,
+      touchpoints_error: touchpointsError
     });
   } catch (err) {
     return NextResponse.json(

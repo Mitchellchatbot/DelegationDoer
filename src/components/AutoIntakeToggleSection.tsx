@@ -117,7 +117,7 @@ export function AutoIntakeToggleSection({
   const enabledInboxCount = inboxes.filter((a) => settings[a.id]?.auto_intake_enabled).length;
 
   return (
-    <section className="rounded-2xl border border-slate-200/70 bg-white shadow-soft overflow-hidden">
+    <section className="rounded-2xl border border-slate-200/70 bg-white shadow-soft">
       <header className="px-5 py-4 border-b border-slate-100 flex items-center gap-3 bg-gradient-to-r from-blue-50/60 to-indigo-50/40">
         <span className="w-10 h-10 rounded-xl bg-blue-500 text-white grid place-items-center shadow-sm shrink-0">
           <Bot className="w-5 h-5" />

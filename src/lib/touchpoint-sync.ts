@@ -79,13 +79,17 @@ export async function syncClientTouchpointsFromMissive(
       if (ms < scopeFrom) continue;
       anyInWindow = true;
 
-      // A thread can match multiple clients via different participants;
-      // attribute the send to each of them so a CC'd thread doesn't
-      // silently drop off one client's dashboard.
+      // A thread can match multiple clients via different participants
+      // OR a single participant that several clients share (e.g. one
+      // CSM coordinating four Villa-* accounts via the same address).
+      // Use matchAll so every client claiming the address gets the
+      // attribution — otherwise the dashboard only lights up for the
+      // alphabetically-first client.
       const matched = new Set<string>();
       for (const p of t.participants ?? []) {
-        const hit = matcher.match(p);
-        if (hit) matched.add(hit.id);
+        for (const hit of matcher.matchAll(p)) {
+          matched.add(hit.id);
+        }
       }
       for (const clientId of matched) {
         const prev = latestByClient.get(clientId);

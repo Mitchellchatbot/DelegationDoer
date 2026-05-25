@@ -92,7 +92,16 @@ interface ClientRow {
 }
 
 export interface LoadedClientMatcher {
+  // Returns the first client that claims this email/domain. Kept for
+  // legacy callers that only want one attribution (e.g. attributing
+  // an inbound email-task to a single client).
   match(email: string | null | undefined): { id: string; name: string } | null;
+  // Returns *every* client that claims this email/domain. Needed when
+  // multiple clients share a contact (e.g. one CSM coordinating four
+  // Villa-* accounts via the same `cmackey@` address) — otherwise the
+  // touchpoint dashboard only lights up for whichever client happens
+  // to be alphabetically first.
+  matchAll(email: string | null | undefined): Array<{ id: string; name: string }>;
   clientsLoaded: number;
 }
 
@@ -113,32 +122,50 @@ export async function loadClientMatcher(): Promise<LoadedClientMatcher> {
     })
   }));
 
-  // Flat lookup for the common case (single-email match). Domain
-  // match falls back to a linear scan since clients can share none of
-  // their domains and the list is small.
-  const byEmail = new Map<string, { id: string; name: string }>();
+  // Flat lookup for the common case (single-email match). Multi-value:
+  // an email shared across N clients lands all N in the entry list.
+  // Domain matches fall back to a linear scan; with <100 clients this
+  // is fine.
+  const byEmail = new Map<string, Array<{ id: string; name: string }>>();
   for (const c of indexed) {
     for (const e of c.signals.emailSet) {
-      // First writer wins. Conflicts here would mean two clients
-      // claim the same contact email — rare; leader can clean it up.
-      if (!byEmail.has(e)) byEmail.set(e, { id: c.id, name: c.name });
+      const existing = byEmail.get(e);
+      const slim = { id: c.id, name: c.name };
+      if (existing) existing.push(slim);
+      else byEmail.set(e, [slim]);
     }
+  }
+
+  function findAll(email: string | null | undefined): Array<{ id: string; name: string }> {
+    const addr = parseEmail(email ?? "");
+    if (!addr) return [];
+    const out: Array<{ id: string; name: string }> = [];
+    const seen = new Set<string>();
+    const pushUnique = (m: { id: string; name: string }) => {
+      if (seen.has(m.id)) return;
+      seen.add(m.id);
+      out.push(m);
+    };
+
+    const exactHits = byEmail.get(addr);
+    if (exactHits) for (const m of exactHits) pushUnique(m);
+
+    const at = addr.lastIndexOf("@");
+    if (at >= 0) {
+      const domain = addr.slice(at + 1);
+      for (const c of indexed) {
+        if (c.signals.domainSet.has(domain)) pushUnique({ id: c.id, name: c.name });
+      }
+    }
+    return out;
   }
 
   return {
     clientsLoaded: indexed.length,
     match(email) {
-      const addr = parseEmail(email ?? "");
-      if (!addr) return null;
-      const exact = byEmail.get(addr);
-      if (exact) return exact;
-      const at = addr.lastIndexOf("@");
-      if (at < 0) return null;
-      const domain = addr.slice(at + 1);
-      for (const c of indexed) {
-        if (c.signals.domainSet.has(domain)) return { id: c.id, name: c.name };
-      }
-      return null;
-    }
+      const all = findAll(email);
+      return all.length > 0 ? all[0] : null;
+    },
+    matchAll: findAll
   };
 }

@@ -210,14 +210,18 @@ export async function processChunk(
           });
           totalMessages += inScope.length;
 
-          // Skip messages we already have. The PK is message_id.
+          // Skip messages we've already scored for THIS client. The PK
+          // is now composite (message_id, client_id), so a message
+          // scored under another client (shared CSM email) still needs
+          // its own row here.
           const ids = inScope.map((m) => m.id);
           const { data: existing } = ids.length === 0
             ? { data: [] as { message_id: string }[] }
             : await supabase
                 .from("email_satisfaction_scores")
                 .select("message_id")
-                .in("message_id", ids);
+                .in("message_id", ids)
+                .eq("client_id", client.id);
           const have = new Set(
             ((existing ?? []) as { message_id: string }[]).map((r) => r.message_id)
           );
@@ -258,7 +262,7 @@ export async function processChunk(
               });
               const { error: insErr } = await supabase
                 .from("email_satisfaction_scores")
-                .upsert(rows, { onConflict: "message_id" });
+                .upsert(rows, { onConflict: "message_id,client_id" });
               if (insErr) {
                 erroredMessages += rows.length;
                 lastError = insErr.message;
@@ -472,7 +476,7 @@ export async function scoreAndStore(
       });
       const { error } = await supabase
         .from("email_satisfaction_scores")
-        .upsert(rows, { onConflict: "message_id" });
+        .upsert(rows, { onConflict: "message_id,client_id" });
       if (error) errored += rows.length;
       else scored += rows.length;
     } catch {

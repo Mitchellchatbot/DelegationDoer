@@ -68,39 +68,48 @@ export async function GET(req: NextRequest) {
         if (seenThreads.has(t.id)) continue;
         seenThreads.add(t.id);
         threadsWalked += 1;
-        const clientHit =
-          // Try each participant against the client matcher; first hit wins.
-          t.participants
-            .map((p) => matcher.match(p))
-            .find((m): m is { id: string; name: string } => !!m) ?? null;
-        if (!clientHit) continue;
+        // matchAll — a shared contact (one CSM, four Villa-* clients)
+        // must attribute messages to every claiming client, not just
+        // the alphabetically-first.
+        const clientHits = new Map<string, { id: string; name: string }>();
+        for (const p of t.participants) {
+          for (const hit of matcher.matchAll(p)) {
+            clientHits.set(hit.id, hit);
+          }
+        }
+        if (clientHits.size === 0) continue;
 
         const detail = await getThread(t.id).catch(() => null);
         if (!detail) continue;
-        // detail.messages contains BOTH directions regardless of which
-        // folder the thread was listed under — so scoring picks up
+        // detail.messages carries BOTH directions regardless of which
+        // folder the thread was listed under — scoring picks up
         // inbound + outbound from a single getThread() call.
         const inWindow = detail.messages.filter(
           (m) => new Date(m.sent_at).getTime() >= since
         );
         if (inWindow.length === 0) continue;
-
-        // Skip messages we already have scores for.
         const ids = inWindow.map((m) => m.id);
-        const { data: existing } = await supabase
-          .from("email_satisfaction_scores")
-          .select("message_id")
-          .in("message_id", ids);
-        const have = new Set(((existing ?? []) as { message_id: string }[]).map((r) => r.message_id));
-        const todo = inWindow.filter((m) => !have.has(m.id));
-        if (todo.length === 0) continue;
 
-        const r = await scoreAndStore(
-          todo.map((m) => ({ ...m, clientId: clientHit.id }))
-        );
-        scored += r.scored;
-        errored += r.errored;
-        if (r.scored > 0) touched.add(clientHit.id);
+        // One scoring pass per matching client. Composite PK
+        // (message_id, client_id) lets every client claim its own
+        // row for the same message.
+        for (const clientHit of clientHits.values()) {
+          const { data: existing } = await supabase
+            .from("email_satisfaction_scores")
+            .select("message_id")
+            .in("message_id", ids)
+            .eq("client_id", clientHit.id);
+          const have = new Set(((existing ?? []) as { message_id: string }[]).map((r) => r.message_id));
+          const todo = inWindow.filter((m) => !have.has(m.id));
+          if (todo.length === 0) continue;
+
+          const r = await scoreAndStore(
+            todo.map((m) => ({ ...m, clientId: clientHit.id }))
+          );
+          scored += r.scored;
+          errored += r.errored;
+          if (r.scored > 0) touched.add(clientHit.id);
+        }
       }
 
       if (!page.hasMore) break;

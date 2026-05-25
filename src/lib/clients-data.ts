@@ -58,6 +58,14 @@ export interface Client {
   healthOverrideNote: string | null;
   healthOverrideBy: string | null;
   healthOverrideAt: string | null;
+  // SEO team's WordPress panel. wpUrl is the override site to query
+  // (falls back to websites[0] when null). Counts + lastError are
+  // populated by the manual refresh endpoint, and by a silent
+  // background refresh when the cached value is older than 14 days.
+  wpUrl: string | null;
+  wpBlogPostsCount: number | null;
+  wpCountsUpdatedAt: string | null;
+  wpLastError: string | null;
   // Touchpoint health — separate concept from sentiment-based health.
   // Driven by last outbound email date (auto), with optional manual
   // override. See lib/client-touchpoint.ts for the band logic.
@@ -114,6 +122,10 @@ interface ClientRow {
   health_override_note: string | null;
   health_override_by: string | null;
   health_override_at: string | null;
+  wp_url: string | null;
+  wp_blog_posts_count: number | null;
+  wp_counts_updated_at: string | null;
+  wp_last_error: string | null;
   touchpoint_override_label: TouchpointLabel | null;
   touchpoint_override_note: string | null;
   touchpoint_override_by: string | null;
@@ -169,6 +181,10 @@ function rowToClient(r: ClientRow, touchpoint?: {
     healthOverrideNote: r.health_override_note ?? null,
     healthOverrideBy: r.health_override_by ?? null,
     healthOverrideAt: r.health_override_at ?? null,
+    wpUrl: r.wp_url ?? null,
+    wpBlogPostsCount: r.wp_blog_posts_count ?? null,
+    wpCountsUpdatedAt: r.wp_counts_updated_at ?? null,
+    wpLastError: r.wp_last_error ?? null,
     ...tp,
     lastOutboundEmailAt: touchpoint?.lastOutboundEmailAt ?? null,
     lastOutboundSubject: touchpoint?.lastOutboundSubject ?? null,

@@ -6,13 +6,13 @@ import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
 import {
   ListTodo, Users,
-  Sparkles, Settings, AlertTriangle, Crown, Mail, Briefcase,
-  FolderKanban, CalendarDays, BookOpen, LayoutDashboard, ClipboardCheck, Send, Inbox
+  Sparkles, AlertTriangle, Crown, Mail, Home as HomeIcon
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { ReportIncidentDialog } from "./ReportIncidentDialog";
 import { AIAssistantDrawer } from "./AIAssistantDrawer";
 import { RaiseLink } from "./RaiseLink";
+import { SidebarMoreMenu, MoreIcons } from "./SidebarMoreMenu";
 import { isLeader, isHead } from "@/lib/auth";
 import { primaryDepartment } from "@/lib/departments";
 import type { User } from "@/lib/types";
@@ -27,28 +27,17 @@ type Tone = "blue" | "indigo" | "teal" | "emerald" | "amber" | "rose" | "fuchsia
 
 interface NavItem { href: string; label: string; icon: typeof ListTodo; tone: Tone }
 
-// Projects is software-team-only (+ leader); it gets spliced in
-// conditionally below rather than living in the base list.
-const BASE_NAV: NavItem[] = [
-  // People stays at index 0 — every downstream layout calc treats it
-  // as the anchor. Dashboard slots in at index 1 so the worker's 2x2
-  // overview lives one click from anywhere without disturbing the
-  // existing splice math for the Projects / Manage insertions.
-  { href: "/people",    label: "People",    icon: Users,           tone: "indigo"   },
-  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, tone: "blue"     },
-  { href: "/tasks",     label: "Tasks",     icon: ListTodo,        tone: "indigo"   },
-  { href: "/schedule",  label: "Schedule",  icon: CalendarDays,    tone: "sky"      },
-  { href: "/inboxes",   label: "Inboxes",   icon: Mail,            tone: "fuchsia"  },
-  { href: "/clients",   label: "Clients",   icon: Briefcase,       tone: "amber"    },
-  { href: "/sops",      label: "SOPs",      icon: BookOpen,        tone: "teal"     },
-  { href: "/updates",   label: "Updates",   icon: Sparkles,        tone: "fuchsia"  }
-];
-const CEO_NAV: NavItem[] = [
-  { href: "/leader", label: "Manage", icon: Crown, tone: "amber" }
-];
-const HEAD_NAV: NavItem[] = [
-  { href: "/leader", label: "Manage", icon: Users, tone: "emerald" }
-];
+// Slim primary nav: 4 items always visible. Everything else hides
+// inside the More overflow menu below. This is the calm-it-down move
+// — workers' eyes used to land on 10+ rows of nav competing for
+// attention. The grouping logic for who-sees-Manage-vs-People is
+// derived below at render time.
+const HOME_ITEM: NavItem = { href: "/home",    label: "Home",    icon: HomeIcon, tone: "sky"     };
+const TASKS_ITEM: NavItem = { href: "/tasks",  label: "Tasks",   icon: ListTodo, tone: "indigo"  };
+const INBOXES_ITEM: NavItem = { href: "/inboxes", label: "Inboxes", icon: Mail, tone: "fuchsia" };
+const PEOPLE_ITEM: NavItem = { href: "/people", label: "People", icon: Users, tone: "indigo"   };
+const MANAGE_CEO_ITEM: NavItem = { href: "/leader", label: "Manage", icon: Crown, tone: "amber" };
+const MANAGE_HEAD_ITEM: NavItem = { href: "/leader", label: "Manage", icon: Users, tone: "emerald" };
 
 const TONE_STYLES: Record<Tone, { idle: string; activeBg: string; activeFg: string }> = {
   blue:    { idle: "text-blue-500",    activeBg: "bg-blue-50",    activeFg: "text-blue-600"    },
@@ -230,69 +219,75 @@ export function Sidebar({ user }: { user: User }) {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  // People (BASE_NAV[0]) is always the very first item — that's the
-  // default landing tab for everyone. Role-specific items slot in
-  // immediately after.
-  const [people, ...rest] = BASE_NAV;
-  // Projects is restricted to leaders and members of the software dept.
-  // It sits between Board and Inboxes in the regular flow.
+  // Slim primary nav. 4 items always visible:
+  //   1. Home — new landing surface, replaces dashboard + people-as-default
+  //   2. Tasks
+  //   3. Inboxes
+  //   4. Manage (leaders/heads) OR People (workers, who don't get Manage)
+  // Then SidebarMoreMenu below renders the overflow popover.
   const canSeeProjects = (user.departmentIds ?? []).includes("dep_software");
-  const PROJECTS_ITEM: NavItem = {
-    href: "/projects",
-    label: "Projects",
-    icon: FolderKanban,
-    tone: "indigo"
-  };
-  const APPROVALS_ITEM: NavItem = {
-    href: "/approvals",
-    label: "Approvals",
-    icon: ClipboardCheck,
-    tone: "emerald"
-  };
-  const OUTBOUND_EMAILS_ITEM: NavItem = {
-    href: "/emails",
-    label: "Outbound emails",
-    icon: Send,
-    tone: "sky"
-  };
-  const ROUTING_REVIEW_ITEM: NavItem = {
-    href: "/routing-review",
-    label: "Routing review",
-    icon: Inbox,
-    tone: "emerald"
-  };
-  let restWithExtras = canSeeProjects
-    ? [...rest.slice(0, 3), PROJECTS_ITEM, ...rest.slice(3)]
-    : rest;
-  // Tuck Approvals + Outbound emails right after Inboxes for approvers
-  // — close to where they'd be triaging client comms anyway. Outbound
-  // sits one row below Approvals so the two surfaces are visually
-  // grouped.
-  if (canApprove) {
-    const inboxIdx = restWithExtras.findIndex((i) => i.href === "/inboxes");
-    const insertAt = inboxIdx >= 0 ? inboxIdx + 1 : restWithExtras.length;
-    restWithExtras = [
-      ...restWithExtras.slice(0, insertAt),
-      APPROVALS_ITEM,
-      OUTBOUND_EMAILS_ITEM,
-      ...restWithExtras.slice(insertAt)
-    ];
-  }
-  const restWithProjects = restWithExtras;
-  // Routing review sits next to Manage for leaders/heads — it's the
-  // surface they'll act on most often when the auto-intake pipeline
-  // serves up drafts.
-  const NAV: NavItem[] = isLeader(user)
-    ? [people, ...CEO_NAV, ROUTING_REVIEW_ITEM, ...restWithProjects]
-    : isHead(user)
-      ? [
-          people,
-          ...restWithProjects.slice(0, 4),
-          ...HEAD_NAV,
-          ROUTING_REVIEW_ITEM,
-          ...restWithProjects.slice(4)
-        ]
-      : [people, ...restWithProjects];
+  const isLeaderRole = isLeader(user);
+  const isHeadRole = isHead(user);
+
+  const manageOrPeople = isLeaderRole
+    ? MANAGE_CEO_ITEM
+    : isHeadRole
+      ? MANAGE_HEAD_ITEM
+      : PEOPLE_ITEM;
+  const NAV: NavItem[] = [HOME_ITEM, TASKS_ITEM, INBOXES_ITEM, manageOrPeople];
+
+  // Build the More menu groups dynamically so workers don't see
+  // approver-only rows and non-software workers don't see Projects.
+  // Each item carries its current badge count so the row shows a pill
+  // and the More trigger shows a single dot if any nested badge > 0.
+  const updatesTotal =
+    (canSeeSeo ? (openSeoCount ?? 0) : 0) +
+    (canSeeProjectUpdates ? (unseenProjects ?? 0) : 0);
+  const moreGroups = [
+    {
+      label: "My work",
+      items: [
+        { href: "/schedule", label: "Schedule", icon: MoreIcons.Schedule },
+        ...(canSeeProjects ? [{ href: "/projects", label: "Projects", icon: MoreIcons.Projects }] : [])
+      ]
+    },
+    {
+      label: "Team",
+      items: [
+        // People sits in primary for workers; tuck it into More for
+        // leaders/heads who have Manage in primary instead.
+        ...(isLeaderRole || isHeadRole
+          ? [{ href: "/people", label: "People", icon: MoreIcons.People, badge: peopleEodPending ?? 0 }]
+          : []),
+        // Routing review — leaders/heads only. The auto-intake pipeline's
+        // pending bucket. Surfaces here next to People so the leader can
+        // triage routing decisions in the same trip.
+        ...(canSeeRoutingReview
+          ? [{ href: "/routing-review", label: "Routing review", icon: MoreIcons.RoutingReview, badge: routingReviewPending ?? 0 }]
+          : []),
+        ...(canApprove
+          ? [
+              { href: "/approvals", label: "Approvals", icon: MoreIcons.Approvals, badge: approvalsPending ?? 0 },
+              { href: "/emails", label: "Outbound emails", icon: MoreIcons.OutboundEmails }
+            ]
+          : [])
+      ]
+    },
+    {
+      label: "Knowledge",
+      items: [
+        { href: "/clients", label: "Clients", icon: MoreIcons.Clients, badge: clientsAtRisk ?? 0 },
+        { href: "/sops",    label: "SOPs",    icon: MoreIcons.SOPs },
+        { href: "/updates", label: "Updates", icon: MoreIcons.Updates, badge: updatesTotal }
+      ]
+    },
+    {
+      label: "System",
+      items: [
+        { href: "/settings", label: "Settings", icon: MoreIcons.Settings }
+      ]
+    }
+  ].filter((g) => g.items.length > 0);
 
   return (
     <aside className="w-60 shrink-0 sticky top-3 h-[calc(100vh-1.5rem)] rounded-3xl border border-slate-200/70 bg-white/85 backdrop-blur-xl shadow-soft flex flex-col overflow-hidden">
@@ -321,21 +316,15 @@ export function Sidebar({ user }: { user: User }) {
             const Icon = item.icon;
             const active = path === item.href || (item.href !== "/" && path.startsWith(item.href));
             const tone = TONE_STYLES[item.tone];
-            const updatesTotal =
-              (canSeeSeo ? (openSeoCount ?? 0) : 0) +
-              (canSeeProjectUpdates ? (unseenProjects ?? 0) : 0);
-            // Pick the right count for this nav item. Single red pill
-            // per row — count + tone derived from the badge source so
-            // health drops feel different from "you have unread."
+            // Only primary-row badges live here now. Everything else
+            // moved into the SidebarMoreMenu, where the row pill is
+            // rendered by that component.
             const badge: { count: number; tone: "rose" | "amber"; title: string } | null = (() => {
-              if (item.href === "/updates" && updatesTotal > 0) {
-                return { count: updatesTotal, tone: "rose", title: `${updatesTotal} open SEO ${updatesTotal === 1 ? "request" : "requests"}` };
-              }
-              if (item.href === "/clients" && (clientsAtRisk ?? 0) > 0) {
+              if (item.href === "/inboxes" && (inboxesUnread ?? 0) > 0) {
                 return {
-                  count: clientsAtRisk!,
+                  count: inboxesUnread!,
                   tone: "rose",
-                  title: `${clientsAtRisk} ${clientsAtRisk === 1 ? "client is" : "clients are"} at-risk or shaky`
+                  title: `${inboxesUnread} unread thread${inboxesUnread === 1 ? "" : "s"} across your inboxes`
                 };
               }
               if (item.href === "/people" && (peopleEodPending ?? 0) > 0) {
@@ -345,27 +334,10 @@ export function Sidebar({ user }: { user: User }) {
                   title: `${peopleEodPending} EOD ${peopleEodPending === 1 ? "form" : "forms"} not yet submitted today`
                 };
               }
-              if (item.href === "/approvals" && (approvalsPending ?? 0) > 0) {
-                return {
-                  count: approvalsPending!,
-                  tone: "rose",
-                  title: `${approvalsPending} email${approvalsPending === 1 ? "" : "s"} awaiting your approval`
-                };
-              }
-              if (item.href === "/inboxes" && (inboxesUnread ?? 0) > 0) {
-                return {
-                  count: inboxesUnread!,
-                  tone: "rose",
-                  title: `${inboxesUnread} unread thread${inboxesUnread === 1 ? "" : "s"} across your inboxes`
-                };
-              }
-              if (item.href === "/routing-review" && (routingReviewPending ?? 0) > 0) {
-                return {
-                  count: routingReviewPending!,
-                  tone: "rose",
-                  title: `${routingReviewPending} AI-routed task${routingReviewPending === 1 ? "" : "s"} awaiting your review`
-                };
-              }
+              // Approvals / Routing review / Updates / Clients moved
+              // into the More popover — their badges render as row
+              // pills there, plus a single dot on the More trigger
+              // when any nested badge > 0.
               return null;
             })();
             return (
@@ -428,6 +400,12 @@ export function Sidebar({ user }: { user: User }) {
               </Link>
             );
           })}
+
+          {/* Overflow menu — Schedule, Projects, SOPs, Updates, Approvals,
+              Outbound emails, Settings, etc. Groupings + role gating
+              are baked into moreGroups above. Sits visually as a 5th
+              row so the primary nav reads as "5 things". */}
+          <SidebarMoreMenu groups={moreGroups} />
         </nav>
 
         <div className="space-y-2 px-1 mt-3">
@@ -448,10 +426,9 @@ export function Sidebar({ user }: { user: User }) {
         </div>
       </div>
 
-      <div className="p-3 border-t border-slate-100 space-y-2">
-        <Link href="/settings" className="flex items-center gap-2 text-sm text-ink/70 hover:text-ink transition-colors">
-          <Settings className="w-4 h-4" /> Settings
-        </Link>
+      {/* Footer keeps the raise-money easter egg but Settings moved into
+          More → System so it doesn't fight the primary nav for room. */}
+      <div className="p-3 border-t border-slate-100">
         <RaiseLink />
       </div>
 

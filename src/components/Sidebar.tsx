@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 import {
   ListTodo, Users,
   Sparkles, Settings, AlertTriangle, Crown, Mail, Briefcase,
-  FolderKanban, CalendarDays, BookOpen, LayoutDashboard, ClipboardCheck, Send
+  FolderKanban, CalendarDays, BookOpen, LayoutDashboard, ClipboardCheck, Send, Inbox
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { ReportIncidentDialog } from "./ReportIncidentDialog";
@@ -95,6 +95,11 @@ export function Sidebar({ user }: { user: User }) {
   const [approvalsPending, setApprovalsPending] = useState<number | null>(null);
   const [canApprove, setCanApprove] = useState(false);
   const [inboxesUnread, setInboxesUnread] = useState<number | null>(null);
+  // Routing-review pending count — only fetched for leaders + dept heads
+  // since workers can't see the page anyway. Mirrors the approvalsPending
+  // pattern so the badge feels consistent.
+  const canSeeRoutingReview = isLeader(user) || isHead(user);
+  const [routingReviewPending, setRoutingReviewPending] = useState<number | null>(null);
   // Pull the cached counts into state after mount — initializing them
   // synchronously from localStorage caused an SSR/CSR hydration mismatch
   // (server rendered no badge, client rendered the cached count).
@@ -103,6 +108,7 @@ export function Sidebar({ user }: { user: User }) {
     setPeopleEodPending((v) => v ?? readCached("badge:peopleEod"));
     setApprovalsPending((v) => v ?? readCached("badge:approvals"));
     setInboxesUnread((v) => v ?? readCached("badge:inboxesUnread"));
+    setRoutingReviewPending((v) => v ?? readCached("badge:routingReview"));
   }, []);
   useEffect(() => {
     let cancelled = false;
@@ -120,6 +126,21 @@ export function Sidebar({ user }: { user: User }) {
           if (res.ok) {
             const data = await res.json();
             if (!cancelled) setUnseenProjects(data.unseenCount ?? 0);
+          }
+        }
+        if (canSeeRoutingReview) {
+          // Mirror the approvalsPending pattern: tally the size of the
+          // pending bucket from the routing-review feed. Failures fall
+          // back to the cached count so the sidebar doesn't flicker.
+          const res = await fetch("/api/routing-review", { cache: "no-store" });
+          if (res.ok) {
+            const data = await res.json();
+            const n = Array.isArray(data.pending) ? data.pending.length : 0;
+            if (!cancelled) {
+              setRoutingReviewPending(n);
+              try { window.localStorage.setItem("badge:routingReview", String(n)); }
+              catch { /* localStorage blocked */ }
+            }
           }
         }
         // Generic badges — same poll cadence; cheap single round-trip.
@@ -193,7 +214,7 @@ export function Sidebar({ user }: { user: User }) {
       if (retryTimer) clearTimeout(retryTimer);
       es?.close();
     };
-  }, [canSeeSeo, canSeeProjectUpdates]);
+  }, [canSeeSeo, canSeeProjectUpdates, canSeeRoutingReview]);
 
   // ⌘K / Ctrl+K opens the Ask AI drawer — wires up the hint shown on
   // the button. Suppressed when the user is mid-edit (so it doesn't
@@ -234,6 +255,12 @@ export function Sidebar({ user }: { user: User }) {
     icon: Send,
     tone: "sky"
   };
+  const ROUTING_REVIEW_ITEM: NavItem = {
+    href: "/routing-review",
+    label: "Routing review",
+    icon: Inbox,
+    tone: "emerald"
+  };
   let restWithExtras = canSeeProjects
     ? [...rest.slice(0, 3), PROJECTS_ITEM, ...rest.slice(3)]
     : rest;
@@ -252,13 +279,17 @@ export function Sidebar({ user }: { user: User }) {
     ];
   }
   const restWithProjects = restWithExtras;
+  // Routing review sits next to Manage for leaders/heads — it's the
+  // surface they'll act on most often when the auto-intake pipeline
+  // serves up drafts.
   const NAV: NavItem[] = isLeader(user)
-    ? [people, ...CEO_NAV, ...restWithProjects]
+    ? [people, ...CEO_NAV, ROUTING_REVIEW_ITEM, ...restWithProjects]
     : isHead(user)
       ? [
           people,
           ...restWithProjects.slice(0, 4),
           ...HEAD_NAV,
+          ROUTING_REVIEW_ITEM,
           ...restWithProjects.slice(4)
         ]
       : [people, ...restWithProjects];
@@ -326,6 +357,13 @@ export function Sidebar({ user }: { user: User }) {
                   count: inboxesUnread!,
                   tone: "rose",
                   title: `${inboxesUnread} unread thread${inboxesUnread === 1 ? "" : "s"} across your inboxes`
+                };
+              }
+              if (item.href === "/routing-review" && (routingReviewPending ?? 0) > 0) {
+                return {
+                  count: routingReviewPending!,
+                  tone: "rose",
+                  title: `${routingReviewPending} AI-routed task${routingReviewPending === 1 ? "" : "s"} awaiting your review`
                 };
               }
               return null;

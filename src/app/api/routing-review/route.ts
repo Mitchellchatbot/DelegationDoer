@@ -57,7 +57,7 @@ export async function GET() {
   if (draftsErr) {
     return NextResponse.json({ error: draftsErr.message }, { status: 500 });
   }
-  const drafts = (rawDrafts ?? []) as Array<Record<string, unknown>>;
+  const drafts = (rawDrafts ?? []) as unknown as Array<Record<string, unknown>>;
 
   // Hydrate routing decisions for the drafts that have one.
   const decisionIds = drafts
@@ -73,7 +73,7 @@ export async function GET() {
           "review_reason,thread_id,account_id,created_at"
       )
       .in("id", decisionIds);
-    for (const d of (decisions ?? []) as Array<Record<string, unknown>>) {
+    for (const d of (decisions ?? []) as unknown as Array<Record<string, unknown>>) {
       decisionMap.set(d.id as string, d);
     }
   }
@@ -99,7 +99,7 @@ export async function GET() {
       .eq("needs_review", true)
       .is("task_id", null)
       .order("created_at", { ascending: false });
-    needsReview = (nr ?? []) as Array<Record<string, unknown>>;
+    needsReview = (nr ?? []) as unknown as Array<Record<string, unknown>>;
   }
 
   const lookups = await loadLookups();

@@ -10,7 +10,6 @@ import { OrgChart } from "@/components/OrgChart";
 import { OnShiftList } from "@/components/OnShiftList";
 import { PerformanceReview } from "@/components/PerformanceReview";
 import { PageHero } from "@/components/PageHero";
-import { DraftsAwaitingApproval } from "@/components/DraftsAwaitingApproval";
 import { ProfileDialog } from "@/components/ProfileDialog";
 import { SendKudosDialog } from "@/components/SendKudosDialog";
 import { MagicLinkButton } from "@/components/MagicLinkButton";
@@ -99,7 +98,7 @@ export default function LeaderConsolePage() {
         iconTone="amber"
       />
 
-      <DraftsAwaitingApproval />
+      <RoutingReviewBanner />
 
       <div className="flex items-center gap-1 border-b border-slate-200/70">
         {TABS.map((t) => {
@@ -967,5 +966,43 @@ function AllTasksTab({ people, departments, tasks }: { people: User[]; departmen
         </section>
       ))}
     </div>
+  );
+}
+
+// Tiny "N tasks awaiting review" banner that deep-links to the dedicated
+// /routing-review page. Replaces the legacy inline draft list — the
+// full review surface lives there now.
+function RoutingReviewBanner() {
+  const [count, setCount] = useState<number | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/routing-review", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => {
+        if (cancelled || !j) return;
+        setCount(Array.isArray(j.pending) ? j.pending.length : 0);
+      })
+      .catch(() => { /* leave null — banner hides */ });
+    return () => { cancelled = true; };
+  }, []);
+  if (count === null || count === 0) return null;
+  return (
+    <Link
+      href="/routing-review"
+      className="group flex items-center gap-3 rounded-2xl border border-emerald-200/60 bg-gradient-to-r from-emerald-50 via-white to-white px-4 py-3 shadow-soft hover:shadow-lift transition-all"
+    >
+      <div className="w-9 h-9 rounded-xl bg-emerald-100 text-emerald-700 grid place-items-center shrink-0">
+        <Sparkles className="w-4 h-4" />
+      </div>
+      <div className="min-w-0">
+        <div className="text-sm font-semibold text-emerald-900">
+          {count} task{count === 1 ? "" : "s"} awaiting your review
+        </div>
+        <div className="text-[11px] text-ink/55">
+          AI-routed drafts ready for approve / edit / deny.
+        </div>
+      </div>
+      <ArrowRight className="ml-auto w-4 h-4 text-emerald-600 group-hover:translate-x-0.5 transition-transform" />
+    </Link>
   );
 }

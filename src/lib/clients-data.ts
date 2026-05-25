@@ -51,6 +51,13 @@ export interface Client {
   healthOverrideNote: string | null;
   healthOverrideBy: string | null;
   healthOverrideAt: string | null;
+  // SEO team's WordPress panel. wpUrl is the override site to query
+  // (falls back to websites[0] when null). Counts + lastError are
+  // populated by the wp-counts cron and the manual refresh endpoint.
+  wpUrl: string | null;
+  wpBlogPostsCount: number | null;
+  wpCountsUpdatedAt: string | null;
+  wpLastError: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -94,6 +101,10 @@ interface ClientRow {
   health_override_note: string | null;
   health_override_by: string | null;
   health_override_at: string | null;
+  wp_url: string | null;
+  wp_blog_posts_count: number | null;
+  wp_counts_updated_at: string | null;
+  wp_last_error: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -138,6 +149,10 @@ function rowToClient(r: ClientRow): Client {
     healthOverrideNote: r.health_override_note ?? null,
     healthOverrideBy: r.health_override_by ?? null,
     healthOverrideAt: r.health_override_at ?? null,
+    wpUrl: r.wp_url ?? null,
+    wpBlogPostsCount: r.wp_blog_posts_count ?? null,
+    wpCountsUpdatedAt: r.wp_counts_updated_at ?? null,
+    wpLastError: r.wp_last_error ?? null,
     createdAt: r.created_at,
     updatedAt: r.updated_at
   };

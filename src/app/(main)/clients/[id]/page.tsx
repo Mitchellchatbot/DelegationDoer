@@ -9,6 +9,7 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { getClient, getResourcesForClient, type ClientResource } from "@/lib/clients-data";
 import { BackPill } from "@/components/BackPill";
 import { ClientHealthCard } from "@/components/ClientHealthCard";
+import { ClientWordPressCard } from "@/components/ClientWordPressCard";
 import { DeleteClientButton } from "@/components/DeleteClientButton";
 import { ContentPlanComposer } from "@/components/ContentPlanComposer";
 import { ClientEmailLog } from "@/components/ClientEmailLog";
@@ -268,6 +269,20 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
         healthOverrideAt={client.healthOverrideAt}
         canEdit={!!(me && (me.role === "leader" || me.isAdmin))}
       />
+
+      {/* WordPress panel — SEO team + leaders/admins only. Falls back to
+          the first listed website (or the legacy single website column)
+          when no explicit wp_url override is set on the client. */}
+      {me && (me.isAdmin || me.role === "leader" || me.departmentIds.includes("dep_seo")) && (
+        <ClientWordPressCard
+          clientId={client.id}
+          initialWpUrl={client.wpUrl}
+          fallbackUrl={client.websites[0] ?? client.website ?? null}
+          initialBlogPostsCount={client.wpBlogPostsCount}
+          initialUpdatedAt={client.wpCountsUpdatedAt}
+          initialError={client.wpLastError}
+        />
+      )}
 
       {/* Service / integration metadata — collapsed into a single card
           so the operator can scan the wiring (where the domain lives,

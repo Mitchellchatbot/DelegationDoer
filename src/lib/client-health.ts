@@ -1,12 +1,21 @@
-// Helpers shared between the client-health cron and the UI.
+// Sentiment-based client health.
 //
-// Two pieces:
-//   * scoreToLabel — maps a numeric sentiment average (-1..1) into
-//     one of four buckets the UI knows how to color-code.
-//   * classifyBatch — single OpenAI call that scores a batch of
-//     message bodies in one round-trip (cheaper + faster than one
-//     call per message). Falls back to neutral on parse errors so a
-//     single bad reply doesn't poison the whole client's score.
+// Per-message satisfaction scores live in email_satisfaction_scores
+// (one row per Missive message_id). A client's health is the *median*
+// of those scores, mapped to one of four labels.
+//
+// Two scorer paths:
+//   * scoreMessages()  — Claude Haiku, batched. Used by the one-time
+//                        backfill (/api/admin/scan-mail-satisfaction)
+//                        and the daily incremental cron.
+//   * scoreToLabel()   — pure mapping from a percentile score to a
+//                        UI label. Thresholds tuned per spec:
+//                          >=90 thriving | >=75 steady |
+//                          >=60 shaky    | else at_risk
+//
+// Storage shape lives in supabase/migrations/20260608_email_satisfaction_scores.sql.
+
+import { getAnthropic, MODELS } from "@/lib/anthropic-client";
 
 export type HealthLabel = "thriving" | "steady" | "shaky" | "at_risk";
 
@@ -18,110 +27,135 @@ export const HEALTH_META: Record<HealthLabel, {
 }> = {
   thriving: {
     label: "Thriving",
-    description: "Recent emails read as warm and constructive.",
+    description: "Recent emails read as warm and constructive (median ≥ 90).",
     bg: "bg-emerald-50", text: "text-emerald-700", border: "border-emerald-200", dot: "bg-emerald-500"
   },
   steady: {
     label: "Steady",
-    description: "Routine, businesslike tone — nothing concerning.",
+    description: "Routine, businesslike tone — nothing concerning (median ≥ 75).",
     bg: "bg-sky-50", text: "text-sky-700", border: "border-sky-200", dot: "bg-sky-500"
   },
   shaky: {
     label: "Shaky",
-    description: "Mild frustration or repeated follow-ups in recent emails.",
+    description: "Mild frustration or repeated follow-ups in recent emails (median ≥ 60).",
     bg: "bg-amber-50", text: "text-amber-700", border: "border-amber-200", dot: "bg-amber-500"
   },
   at_risk: {
     label: "At risk",
-    description: "Frustration, escalation, or churn-shaped language in recent emails.",
+    description: "Frustration, escalation, or churn-shaped language in recent emails (median < 60).",
     bg: "bg-rose-50", text: "text-rose-700", border: "border-rose-200", dot: "bg-rose-500"
   }
 };
 
-// Threshold bands tuned by hand for gpt-4o-mini's sentiment output —
-// the model tends to compress most "fine" interactions into the
-// 0..+0.4 range, with negative readings only when language is
-// genuinely terse / frustrated. Adjust if leaders complain that
-// everyone's reading "steady" when they're actually upset.
-export function scoreToLabel(avgSentiment: number): HealthLabel {
-  if (avgSentiment >= 0.4) return "thriving";
-  if (avgSentiment >= 0.0) return "steady";
-  if (avgSentiment >= -0.3) return "shaky";
+// Thresholds per product spec. Score is the *median* of every scored
+// message (inbound + outbound) for a client.
+export function scoreToLabel(medianScore: number): HealthLabel {
+  if (medianScore >= 90) return "thriving";
+  if (medianScore >= 75) return "steady";
+  if (medianScore >= 60) return "shaky";
   return "at_risk";
 }
 
-interface MessageSnippet { id: string; subject: string; body: string }
-export interface SentimentResult {
-  scores: Array<{ id: string; sentiment: number; reason: string }>;
+// Median of a non-empty number array. Returns null for empty input so
+// callers can render "no data yet" instead of misleading 0s.
+export function medianScore(scores: number[]): number | null {
+  if (scores.length === 0) return null;
+  const sorted = scores.slice().sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0
+    ? Math.round((sorted[mid - 1] + sorted[mid]) / 2)
+    : sorted[mid];
 }
 
-// Classifies up to ~20 message snippets in a single OpenAI call.
-// gpt-4o-mini is asked to return JSON: { scores: [{ id, sentiment }] }.
-// The JSON-mode response_format guarantees parseable output so we
-// don't have to ad-hoc-regex our way through the reply.
-export async function classifyBatch(messages: MessageSnippet[]): Promise<SentimentResult> {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) throw new Error("OPENAI_API_KEY not configured");
-  if (messages.length === 0) return { scores: [] };
+export interface MessageToScore {
+  // Missive message id — used as PK on insert.
+  id: string;
+  // 'inbound' (from client → us) or 'outbound' (from us → client).
+  direction: "inbound" | "outbound";
+  subject: string;
+  body: string;
+  // Optional context that helps the model judge: previous message in
+  // the thread, sender's display name. Both clipped before sending.
+  context?: string;
+  fromName?: string;
+}
 
-  // Cap each body so a single long email doesn't blow the token budget.
+export interface ScoredMessage {
+  id: string;
+  score: number; // 0-100
+  reason: string;
+}
+
+const SYSTEM_PROMPT = `You score the satisfaction expressed in client/agency email messages on a 0-100 scale.
+
+The scale is BINARY-LEANING by design — prefer the polar values, only use the middle for genuinely neutral content:
+  90-100: clearly positive. Praise ("great work", "perfect", "love it"), expanding scope, enthusiastic sign-offs.
+  70-85:  neutral / transactional / routine logistics. No emotional charge either way.
+  30-55:  dissatisfaction. Pointing out errors, repeated follow-ups asking for the same thing, terse tone, mild frustration.
+  0-25:   hostile or churn-shaped. Escalation language, threats to leave, anger.
+
+INBOUND messages (from the client to the agency): score the *client's* sentiment toward the agency.
+OUTBOUND messages (from the agency to the client): score the *response quality* — was the reply clear, complete, professional, and timely-feeling? Apologies that resolve issues well score high; defensive or dismissive replies score low.
+
+You will be given a JSON array of messages. Output strict JSON in the EXACT shape:
+{"scores":[{"id":"<input id>","score":<0-100 integer>,"reason":"<<=120 char one-sentence justification>"}]}
+
+The reason is for a human auditor — be concrete ("client thanked them for the analytics report", not "positive tone"). Always score every message you receive; do not omit any.`;
+
+// Scores a batch of messages in a single Claude call. Caps at ~25 per
+// batch to keep tokens reasonable; the caller chunks larger inputs.
+export async function scoreMessages(messages: MessageToScore[]): Promise<ScoredMessage[]> {
+  if (messages.length === 0) return [];
+
+  // Trim bodies so a single long email doesn't blow the token budget.
   const trimmed = messages.map((m) => ({
     id: m.id,
-    subject: m.subject.slice(0, 200),
-    body: m.body.slice(0, 1200)
+    direction: m.direction,
+    fromName: (m.fromName ?? "").slice(0, 80),
+    subject: (m.subject ?? "").slice(0, 200),
+    body: (m.body ?? "").slice(0, 1800),
+    context: (m.context ?? "").slice(0, 600)
   }));
 
-  const res = await fetch("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      model: "gpt-4o-mini",
-      response_format: { type: "json_object" },
-      temperature: 0,
-      messages: [
-        {
-          role: "system",
-          content:
-            "You score the sentiment of inbound client emails for an agency's account-health dashboard. " +
-            "For each message, output a number in [-1, 1] where:\n" +
-            "  +1.0 = enthusiastic, complimentary, expanding scope\n" +
-            "  +0.5 = warm, friendly, gratitude\n" +
-            "   0.0 = neutral / transactional / routine\n" +
-            "  -0.5 = frustration, repeated follow-ups, dissatisfaction\n" +
-            "  -1.0 = escalation, churn signals, hostile language\n" +
-            "Output strict JSON: { \"scores\": [{ \"id\": string, \"sentiment\": number, \"reason\": string }, ...] }. " +
-            "`reason` is one short sentence (<=120 chars) explaining the score so a human leader can verify."
-        },
-        {
-          role: "user",
-          content: JSON.stringify({ messages: trimmed })
-        }
-      ]
-    })
+  const client = await getAnthropic();
+  const res = await client.messages.create({
+    model: MODELS.classify,
+    max_tokens: 4096,
+    temperature: 0,
+    system: SYSTEM_PROMPT,
+    messages: [
+      {
+        role: "user",
+        content: JSON.stringify({ messages: trimmed })
+      }
+    ]
   });
-  if (!res.ok) {
-    const detail = await res.text().catch(() => "");
-    throw new Error(`openai chat.completions failed (${res.status}): ${detail.slice(0, 300)}`);
-  }
-  const data: { choices?: Array<{ message?: { content?: string } }> } = await res.json();
-  const raw = data.choices?.[0]?.message?.content ?? "{}";
-  let parsed: SentimentResult;
+
+  // The classify model returns a single text block. Strip any
+  // markdown fencing the model might add despite instructions.
+  const raw = res.content
+    .map((c) => (c.type === "text" ? c.text : ""))
+    .join("")
+    .trim()
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```$/i, "")
+    .trim();
+
+  let parsed: { scores?: Array<{ id?: unknown; score?: unknown; reason?: unknown }> };
   try {
-    parsed = JSON.parse(raw) as SentimentResult;
+    parsed = JSON.parse(raw);
   } catch {
-    return { scores: [] };
+    // On JSON parse failure we skip the batch rather than recurse —
+    // the caller's retry / re-queue logic handles persistent failures.
+    return [];
   }
-  if (!Array.isArray(parsed.scores)) return { scores: [] };
-  return {
-    scores: parsed.scores
-      .filter((s) => typeof s.id === "string" && typeof s.sentiment === "number")
-      .map((s) => ({
-        id: s.id,
-        sentiment: Math.max(-1, Math.min(1, s.sentiment)),
-        reason: typeof s.reason === "string" ? s.reason : ""
-      }))
-  };
+  if (!Array.isArray(parsed.scores)) return [];
+
+  return parsed.scores
+    .filter((s) => typeof s.id === "string" && typeof s.score === "number")
+    .map((s) => ({
+      id: s.id as string,
+      score: Math.max(0, Math.min(100, Math.round(s.score as number))),
+      reason: typeof s.reason === "string" ? s.reason.slice(0, 200) : ""
+    }));
 }

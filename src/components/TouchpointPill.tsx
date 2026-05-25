@@ -30,13 +30,20 @@ export function TouchpointPill({
   if (!label) return null;
   const meta = TOUCHPOINT_META[label];
   const small = size === "sm";
-  const days = showAge ? daysSince(lastSentAt ?? null) : null;
-  const ageText = (() => {
-    if (!showAge) return null;
-    if (days === null) return "never";
-    if (days === 0) return "today";
-    if (days === 1) return "1d";
-    return `${days}d`;
+  const days = daysSince(lastSentAt ?? null);
+
+  // Always lead with the day count when we know one. Falls back to the
+  // status word ("Healthy" / "Stale" / "Neglected") when the caller
+  // didn't pass lastSentAt or when no email is on record. Per spec
+  // change — feedback was that "Neglected" alone was confusing; a
+  // literal "12d since last email" reads at a glance.
+  const showDays = showAge && lastSentAt !== undefined;
+  const dayLabel = (() => {
+    if (!showDays) return null;
+    if (days === null) return "Never emailed";
+    if (days === 0) return "Sent today";
+    if (days === 1) return "1d since last email";
+    return `${days}d since last email`;
   })();
 
   return (
@@ -50,16 +57,23 @@ export function TouchpointPill({
       )}
       title={
         meta.description +
-        (ageText ? ` · Last email ${ageText === "never" ? "never" : `${ageText} ago`}.` : "") +
+        (showDays ? ` · ${dayLabel}.` : "") +
         (isOverride ? " · Manually set by a leader." : "")
       }
     >
-      <span className={cn("rounded-full", small ? "w-1.5 h-1.5" : "w-2 h-2", meta.dot)} />
-      {meta.label}
-      {ageText && (
-        <span className={cn("opacity-70 tabular-nums", small ? "text-[9px]" : "text-[10px]")}>
-          · {ageText}
-        </span>
+      <span className={cn("rounded-full shrink-0", small ? "w-1.5 h-1.5" : "w-2 h-2", meta.dot)} />
+      {dayLabel ? (
+        <>
+          <span>{dayLabel}</span>
+          {/* status word is the secondary token now */}
+          {days !== null && (
+            <span className={cn("opacity-70", small ? "text-[9px]" : "text-[10px]")}>
+              · {meta.label}
+            </span>
+          )}
+        </>
+      ) : (
+        meta.label
       )}
     </span>
   );

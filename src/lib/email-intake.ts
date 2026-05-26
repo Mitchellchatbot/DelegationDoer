@@ -38,6 +38,7 @@ import { rankCandidates, type RankedCandidate } from "@/lib/skill-rank";
 import { userCapacity, deadlineFromEstimate } from "@/lib/capacity";
 import { notifyAssignment, notifyRoutingFallback } from "@/lib/slack";
 import { loadClientMatcher } from "@/lib/client-thread-match";
+import { draftReplyForEmailThread } from "@/lib/email-reply-drafter";
 import type { User } from "@/lib/types";
 
 export type RoutedVia = `rule:${string}` | "ranker" | "ai-fallback" | "manual" | "unrouted";
@@ -299,6 +300,25 @@ export async function runEmailIntake(input: IntakeInput): Promise<IntakeOutcome>
     });
   }
 
+  // 5b) Draft a polite acknowledgement reply with Claude. Lands in the
+  //     /approvals queue (kind='auto_reply'); never sends without a
+  //     human Approve & Send. Fire-and-forget — failure logs and
+  //     moves on; the task still exists, the reply just won't.
+  void autoDraftReply(supabase, {
+    taskId,
+    threadId: input.threadId,
+    accountId: input.accountId,
+    threadSubject: input.threadSubject,
+    threadBody: input.threadBody,
+    fromEmail: input.fromEmail,
+    assignee,
+    clientName,
+    clientId: null
+  }).catch((err) => {
+    // Don't crash intake on a Claude or DB hiccup.
+    console.warn("[auto-intake] reply draft failed", err);
+  });
+
   // 6) Slack DM the assignee — but only for non-draft tasks. Drafts wait
   //    on dept-head approval before pinging the assignee; the approval
   //    endpoint fires the notification once the task goes live.
@@ -347,6 +367,85 @@ export async function runEmailIntake(input: IntakeInput): Promise<IntakeOutcome>
 // ---- helpers ----------------------------------------------------------
 
 type SbClient = ReturnType<typeof getSupabaseAdmin>;
+
+// Best-effort sender name pulled from a "Name <email@x>" or bare email.
+// Used to personalize the AI-drafted reply opener.
+function senderNameFromEmail(fromEmail: string | null): string | null {
+  if (!fromEmail) return null;
+  const m = fromEmail.match(/^\s*"?([^"<]+?)"?\s*<.+>\s*$/);
+  if (m) return m[1].trim() || null;
+  // Bare email — fall back to the local-part, titlecased.
+  const at = fromEmail.indexOf("@");
+  if (at <= 0) return null;
+  const local = fromEmail.slice(0, at).replace(/[._-]+/g, " ").trim();
+  return local
+    ? local.replace(/\b\w/g, (c) => c.toUpperCase())
+    : null;
+}
+
+interface AutoDraftReplyArgs {
+  taskId: string;
+  threadId: string;
+  accountId: string;
+  threadSubject: string;
+  threadBody: string;
+  fromEmail: string | null;
+  assignee: User | null;
+  clientName: string | null;
+  clientId: string | null;
+}
+
+// Draft an acknowledgement reply with Claude and insert it as a
+// pending email_drafts row (kind='auto_reply'). The /approvals queue
+// picks it up like any other draft — a human reviews, edits if
+// needed, and clicks Approve & Send. NEVER sends here.
+//
+// Lives behind a try/catch in the caller so failures are best-effort:
+// the task is already created, an absent reply just means the
+// assignee writes their own.
+async function autoDraftReply(supabase: SbClient, args: AutoDraftReplyArgs): Promise<void> {
+  if (!args.fromEmail) return; // No one to reply to.
+  if (!args.threadBody?.trim()) return; // Nothing to acknowledge.
+  if (!args.assignee) return; // Need an author for the email_drafts row.
+
+  const drafted = await draftReplyForEmailThread({
+    inboundSubject: args.threadSubject,
+    inboundBodyText: args.threadBody,
+    senderName: senderNameFromEmail(args.fromEmail),
+    senderEmail: args.fromEmail,
+    assigneeName: args.assignee.name,
+    clientName: args.clientName
+  });
+  if (!drafted) return;
+
+  // Resolve the sending mailbox. Prefer the inbound account (replies
+  // typically go from the same address). The approve route falls back
+  // to the author's connected inbox if this account_id can't be used
+  // at send-time.
+  const id = `ed_auto_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+  const { error } = await supabase.from("email_drafts").insert({
+    id,
+    author_id: args.assignee.id,
+    account_id: args.accountId,
+    client_id: args.clientId,
+    client_name: (args.clientName ?? args.fromEmail).slice(0, 200),
+    to_emails: [args.fromEmail],
+    cc_emails: [],
+    bcc_emails: [],
+    subject: drafted.subject.slice(0, 300),
+    body_text: drafted.bodyText.slice(0, 20_000),
+    body_html: null,
+    kind: "auto_reply",
+    source_thread_id: args.threadId,
+    // missive_thread_id stays null until the send succeeds and we
+    // know whether the reply landed on the existing thread or
+    // started a new one (the approve-route branch handles both).
+    missive_thread_id: null
+  });
+  if (error) {
+    console.warn("[auto-intake] email_drafts insert failed", error.message);
+  }
+}
 
 async function loadRoutingRules(supabase: SbClient): Promise<RoutingRule[]> {
   const { data, error } = await supabase

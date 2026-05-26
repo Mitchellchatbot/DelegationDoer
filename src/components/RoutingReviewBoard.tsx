@@ -29,6 +29,21 @@ export interface PendingTaskRow {
   last_activity_at: string;
   routing_decision_id: string | null;
   routing_decision: DecisionRow | null;
+  // Auto-drafted acknowledgement reply, when the auto-intake pipeline
+  // queued one. Null when there's no inbound to reply to, when the
+  // drafter failed, or when the migration hasn't been applied.
+  auto_reply: AutoReplyRow | null;
+}
+
+export interface AutoReplyRow {
+  id: string;
+  source_thread_id: string | null;
+  subject: string;
+  body_text: string;
+  status: "pending" | "approved" | "sent" | "rejected" | "failed" | "needs_revision";
+  kind: "auto_reply";
+  to_emails: string[] | null;
+  created_at: string;
 }
 
 export interface DecisionRow {

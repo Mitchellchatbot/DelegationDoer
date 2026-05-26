@@ -135,6 +135,17 @@ function createWidget() {
     }
   });
 
+  // Block navigation to file:// URLs. Without this, dropping a file
+  // anywhere outside the renderer's own dropzones would navigate the
+  // widget to file:///… and the app would disappear. The renderer's
+  // dropzones call e.preventDefault() to handle the drop themselves;
+  // anything else gets swallowed here.
+  widget.webContents.on("will-navigate", (e, url) => {
+    if (url && (url.startsWith("file://") || !url.startsWith(APP_URL))) {
+      e.preventDefault();
+    }
+  });
+
   widget.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
 
   // Only show after the page actually loads successfully — otherwise on cold

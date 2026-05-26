@@ -1,24 +1,30 @@
 "use client";
 
-import { useRef, useState } from "react";
-import { Image as ImageIcon, Music, Paperclip, X, Loader2 } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  Image as ImageIcon,
+  Music,
+  Paperclip,
+  X,
+  Loader2,
+  Video,
+  FileText,
+  FileArchive,
+  File as FileIcon,
+  UploadCloud
+} from "lucide-react";
 import { toast } from "sonner";
 import type { TaskMedia } from "@/lib/types";
 
-// Reusable media uploader. Pick files → POST /api/upload → surface the
-// returned URL + metadata back to the host via onChange. The host owns
-// the value array; this component is controlled. Used on the new-task
-// form, the task edit dialog, the widget create-task view, and the
-// email composers (reply + content plan).
-
-// Mirrors /api/upload's ALLOWED_TYPES. Kept in sync by hand — there's
-// no shared module to import from on the client side without dragging
-// in server-only deps.
-const ACCEPT_ATTR =
-  "image/png,image/jpeg,image/gif,image/webp,image/avif," +
-  "audio/mpeg,audio/mp3,audio/mp4,audio/m4a,audio/x-m4a," +
-  "audio/aac,audio/wav,audio/x-wav,audio/ogg,audio/webm," +
-  "audio/flac,audio/x-flac";
+// Reusable media uploader. Pick / drag / paste files → POST /api/upload
+// → surface the returned URL + metadata back to the host via onChange.
+// Host owns the value array; this component is controlled. Used on the
+// new-task form, the task edit dialog, the widget create-task view, and
+// the email composers (reply, compose, content plan).
+//
+// Server accepts any MIME type — the UI mirrors that with accept="*"
+// and special-cases rendering by category (image / video / audio /
+// document / archive / generic).
 
 export interface MediaPickerProps {
   value: TaskMedia[];
@@ -26,54 +32,120 @@ export interface MediaPickerProps {
   // Optional taskId to scope the upload path (folder name in the
   // ticket-attachments bucket). Defaults to "misc" server-side.
   taskId?: string;
-  // Label tweak for the trigger button. Defaults to "Add media".
+  // Label tweak for the trigger button. Defaults to "Add files".
   label?: string;
   // Small density (used inside narrow widget panels).
   compact?: boolean;
-  // Optional override for the field caption above the chips.
+  // Optional override for the field caption above the dropzone.
   hint?: string;
   disabled?: boolean;
+  // Set to false to suppress the document-level paste listener. Useful
+  // when multiple pickers are mounted (e.g. nested composers) and only
+  // one should swallow Ctrl/Cmd+V. Defaults to true.
+  capturePaste?: boolean;
 }
 
 export function MediaPicker({
-  value, onChange, taskId, label = "Add media", compact, hint, disabled
+  value, onChange, taskId, label = "Add files", compact, hint, disabled, capturePaste = true
 }: MediaPickerProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
+  // Drag events fire many times as the pointer crosses child elements.
+  // Counter avoids the dropzone flickering between active/idle states
+  // while the pointer is still inside the box.
+  const dragDepth = useRef(0);
 
-  async function uploadFiles(files: FileList | File[]) {
+  const uploadFiles = useCallback(async (files: FileList | File[]) => {
     if (disabled) return;
+    const list = Array.from(files);
+    if (list.length === 0) return;
     setBusy(true);
-    const next: TaskMedia[] = [...value];
+    const added: TaskMedia[] = [];
     try {
-      for (const file of Array.from(files)) {
+      for (const file of list) {
         const fd = new FormData();
         fd.append("file", file);
         if (taskId) fd.append("taskId", taskId);
         const res = await fetch("/api/upload", { method: "POST", body: fd });
         const data = await res.json().catch(() => ({} as { error?: string; url?: string; key?: string }));
         if (!res.ok || !data.url) {
-          toast.error(`Upload failed: ${data.error ?? `status ${res.status}`}`);
+          toast.error(`Upload failed (${file.name}): ${data.error ?? `status ${res.status}`}`);
           continue;
         }
-        next.push({
+        added.push({
           url: data.url,
-          name: file.name,
-          contentType: file.type,
+          name: file.name || "file",
+          contentType: file.type || "application/octet-stream",
           size: file.size
         });
       }
-      onChange(next);
+      if (added.length > 0) onChange([...value, ...added]);
     } finally {
       setBusy(false);
       if (inputRef.current) inputRef.current.value = "";
     }
-  }
+  }, [disabled, onChange, taskId, value]);
+
+  // Document-level paste handler. Fires whenever the user pastes
+  // anywhere on the page (Ctrl/Cmd+V). We only intercept if the
+  // clipboard actually contains a file — text pastes into <input> /
+  // <textarea> still work normally. Mounted while the picker is in
+  // the DOM so the affordance is "wherever this composer is open."
+  useEffect(() => {
+    if (!capturePaste || disabled) return;
+    const handler = (e: ClipboardEvent) => {
+      const items = e.clipboardData?.items;
+      if (!items || items.length === 0) return;
+      const files: File[] = [];
+      for (const it of Array.from(items)) {
+        if (it.kind === "file") {
+          const f = it.getAsFile();
+          if (f) files.push(f);
+        }
+      }
+      if (files.length === 0) return;
+      // Files present → intercept the paste so the screenshot doesn't
+      // also try to land in whatever text field has focus.
+      e.preventDefault();
+      void uploadFiles(files);
+    };
+    window.addEventListener("paste", handler);
+    return () => window.removeEventListener("paste", handler);
+  }, [capturePaste, disabled, uploadFiles]);
 
   function remove(idx: number) {
     const next = value.slice();
     next.splice(idx, 1);
     onChange(next);
+  }
+
+  function onDragEnter(e: React.DragEvent) {
+    if (disabled) return;
+    if (!e.dataTransfer?.types?.includes("Files")) return;
+    e.preventDefault();
+    dragDepth.current += 1;
+    setDragOver(true);
+  }
+  function onDragOver(e: React.DragEvent) {
+    if (disabled) return;
+    if (!e.dataTransfer?.types?.includes("Files")) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+  }
+  function onDragLeave(e: React.DragEvent) {
+    if (disabled) return;
+    e.preventDefault();
+    dragDepth.current = Math.max(0, dragDepth.current - 1);
+    if (dragDepth.current === 0) setDragOver(false);
+  }
+  function onDrop(e: React.DragEvent) {
+    if (disabled) return;
+    e.preventDefault();
+    dragDepth.current = 0;
+    setDragOver(false);
+    const files = e.dataTransfer?.files;
+    if (files && files.length > 0) void uploadFiles(files);
   }
 
   return (
@@ -90,26 +162,47 @@ export function MediaPicker({
           ))}
         </div>
       )}
-      <div>
-        <button
-          type="button"
-          onClick={() => inputRef.current?.click()}
-          disabled={busy || disabled}
-          className={
-            (compact
-              ? "inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px]"
-              : "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs"
-            ) +
-            " border border-dashed border-slate-300 text-slate-600 hover:border-slate-400 hover:text-ink transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+      <div
+        onDragEnter={onDragEnter}
+        onDragOver={onDragOver}
+        onDragLeave={onDragLeave}
+        onDrop={onDrop}
+        onClick={() => inputRef.current?.click()}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            inputRef.current?.click();
           }
-        >
-          {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Paperclip className="w-3.5 h-3.5" />}
-          {busy ? "Uploading…" : label}
-        </button>
+        }}
+        className={
+          "flex items-center justify-center gap-2 rounded-lg border-2 border-dashed transition-colors cursor-pointer " +
+          (compact ? "px-3 py-2 text-[11px]" : "px-4 py-3 text-xs") + " " +
+          (dragOver
+            ? "border-accent bg-accent/5 text-accent"
+            : "border-slate-300 text-slate-600 hover:border-slate-400 hover:text-ink hover:bg-slate-50/60") +
+          (disabled ? " opacity-50 cursor-not-allowed" : "")
+        }
+      >
+        {busy ? (
+          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+        ) : dragOver ? (
+          <UploadCloud className="w-3.5 h-3.5" />
+        ) : (
+          <Paperclip className="w-3.5 h-3.5" />
+        )}
+        <span>
+          {busy
+            ? "Uploading…"
+            : dragOver
+              ? "Drop to upload"
+              : <span><span className="font-medium">{label}</span><span className="text-ink/50"> · drop or paste here</span></span>}
+        </span>
         <input
           ref={inputRef}
           type="file"
-          accept={ACCEPT_ATTR}
+          accept="*"
           multiple
           className="hidden"
           onChange={(e) => {
@@ -122,6 +215,53 @@ export function MediaPicker({
   );
 }
 
+// Bucket a MIME type into the categories the UI cares about. Falls back
+// by file extension because clipboard / drag sources sometimes ship an
+// empty content-type.
+type Category = "image" | "video" | "audio" | "pdf" | "archive" | "doc" | "spreadsheet" | "slides" | "text" | "other";
+
+function categorize(media: TaskMedia): Category {
+  const ct = (media.contentType ?? "").toLowerCase();
+  if (ct.startsWith("image/")) return "image";
+  if (ct.startsWith("video/")) return "video";
+  if (ct.startsWith("audio/")) return "audio";
+  if (ct === "application/pdf") return "pdf";
+  if (ct.includes("zip") || ct.includes("compressed") || ct.includes("tar") || ct.includes("gzip")) return "archive";
+  if (ct.includes("word") || ct.includes("officedocument.wordprocessing")) return "doc";
+  if (ct.includes("excel") || ct.includes("spreadsheetml") || ct === "text/csv") return "spreadsheet";
+  if (ct.includes("powerpoint") || ct.includes("presentationml")) return "slides";
+  if (ct.startsWith("text/") || ct === "application/json" || ct === "application/xml") return "text";
+
+  const name = (media.name ?? media.url).toLowerCase();
+  const ext = name.includes(".") ? name.slice(name.lastIndexOf(".") + 1) : "";
+  if (["png", "jpg", "jpeg", "gif", "webp", "avif", "svg", "heic", "heif"].includes(ext)) return "image";
+  if (["mp4", "mov", "webm", "mkv", "avi", "m4v", "ogv"].includes(ext)) return "video";
+  if (["mp3", "wav", "m4a", "aac", "flac", "ogg"].includes(ext)) return "audio";
+  if (ext === "pdf") return "pdf";
+  if (["zip", "7z", "tar", "gz", "rar"].includes(ext)) return "archive";
+  if (["doc", "docx"].includes(ext)) return "doc";
+  if (["xls", "xlsx", "csv"].includes(ext)) return "spreadsheet";
+  if (["ppt", "pptx"].includes(ext)) return "slides";
+  if (["txt", "md", "json", "xml", "yaml", "yml", "log"].includes(ext)) return "text";
+  return "other";
+}
+
+function iconFor(cat: Category) {
+  switch (cat) {
+    case "video": return Video;
+    case "audio": return Music;
+    case "image": return ImageIcon;
+    case "pdf":
+    case "doc":
+    case "spreadsheet":
+    case "slides":
+    case "text":
+      return FileText;
+    case "archive": return FileArchive;
+    default: return FileIcon;
+  }
+}
+
 function MediaChip({
   media, onRemove, compact
 }: {
@@ -129,10 +269,9 @@ function MediaChip({
   onRemove: () => void;
   compact?: boolean;
 }) {
-  const isImage = media.contentType?.startsWith("image/");
-  const isAudio = media.contentType?.startsWith("audio/");
+  const cat = categorize(media);
   const labelText = media.name ?? media.url.split("/").pop() ?? "file";
-  if (isImage) {
+  if (cat === "image") {
     return (
       <div className="relative">
         {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -152,6 +291,28 @@ function MediaChip({
       </div>
     );
   }
+  if (cat === "video") {
+    return (
+      <div className="relative">
+        <video
+          src={media.url}
+          className={(compact ? "h-14 w-14" : "h-16 w-16") + " object-cover rounded-lg border border-slate-200 bg-slate-900"}
+          muted
+          playsInline
+          preload="metadata"
+        />
+        <button
+          type="button"
+          onClick={onRemove}
+          aria-label="Remove"
+          className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-black/70 text-white grid place-items-center hover:bg-black"
+        >
+          <X className="w-3 h-3" />
+        </button>
+      </div>
+    );
+  }
+  const Icon = iconFor(cat);
   return (
     <div
       className={
@@ -159,7 +320,7 @@ function MediaChip({
         " inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white"
       }
     >
-      {isAudio ? <Music className="w-3.5 h-3.5 text-slate-500" /> : <ImageIcon className="w-3.5 h-3.5 text-slate-500" />}
+      <Icon className="w-3.5 h-3.5 text-slate-500" />
       <span className="max-w-[160px] truncate" title={labelText}>{labelText}</span>
       <button
         type="button"
@@ -185,10 +346,9 @@ export function MediaGallery({ items }: { items: TaskMedia[] }) {
 }
 
 function MediaTile({ media }: { media: TaskMedia }) {
-  const isImage = media.contentType?.startsWith("image/");
-  const isAudio = media.contentType?.startsWith("audio/");
+  const cat = categorize(media);
   const labelText = media.name ?? media.url.split("/").pop() ?? "file";
-  if (isImage) {
+  if (cat === "image") {
     return (
       <a href={media.url} target="_blank" rel="noreferrer" className="block group">
         {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -201,7 +361,20 @@ function MediaTile({ media }: { media: TaskMedia }) {
       </a>
     );
   }
-  if (isAudio) {
+  if (cat === "video") {
+    return (
+      <div className="space-y-1">
+        <video
+          src={media.url}
+          controls
+          preload="metadata"
+          className="w-full aspect-square object-cover rounded-lg border border-slate-200 bg-slate-900"
+        />
+        <div className="text-[10px] text-ink/55 truncate" title={labelText}>{labelText}</div>
+      </div>
+    );
+  }
+  if (cat === "audio") {
     return (
       <div className="p-2 rounded-lg border border-slate-200 bg-white">
         <div className="text-[11px] text-ink/70 mb-1 inline-flex items-center gap-1 truncate">
@@ -212,6 +385,7 @@ function MediaTile({ media }: { media: TaskMedia }) {
       </div>
     );
   }
+  const Icon = iconFor(cat);
   return (
     <a
       href={media.url}
@@ -219,7 +393,7 @@ function MediaTile({ media }: { media: TaskMedia }) {
       rel="noreferrer"
       className="p-2 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 transition-colors inline-flex items-center gap-1.5 text-xs"
     >
-      <Paperclip className="w-3.5 h-3.5 text-slate-500" />
+      <Icon className="w-3.5 h-3.5 text-slate-500 shrink-0" />
       <span className="truncate" title={labelText}>{labelText}</span>
     </a>
   );

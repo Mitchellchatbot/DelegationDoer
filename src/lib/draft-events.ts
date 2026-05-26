@@ -87,8 +87,8 @@ export async function notifyAuthor(args: {
     });
     const dm = await openDm(slackId);
     const link = args.baseUrl
-      ? `<${args.baseUrl}/approvals|Open approvals queue>`
-      : "the /approvals page";
+      ? `<${args.baseUrl}/emails?status=pending|Open approvals queue>`
+      : "the Outbound emails page";
     const blocks = [
       { type: "header", text: { type: "plain_text", text: args.headline } },
       {
@@ -128,8 +128,8 @@ export async function notifyApprovers(args: {
     kind: args.draft.kind
   });
   const link = args.baseUrl
-    ? `<${args.baseUrl}/approvals|Open approvals queue>`
-    : "the /approvals page";
+    ? `<${args.baseUrl}/emails?status=pending|Open approvals queue>`
+    : "the Outbound emails page";
   const deliveries: Array<{ userId: string; name: string; delivered: boolean; reason?: string }> = [];
   for (const u of approvers) {
     if (exclude.has(u.id)) continue;

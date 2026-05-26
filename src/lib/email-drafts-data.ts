@@ -18,12 +18,15 @@ export interface EmailDraftListItem {
   id: string;
   authorId: string;
   authorName: string;
+  accountId: string | null;
   clientId: string | null;
   clientName: string;
   to: string[];
   cc: string[];
+  bcc: string[];
   subject: string;
   bodyText: string;
+  bodyHtml: string | null;
   kind: EmailDraftKind;
   status: EmailDraftStatus;
   displayStatus: EmailDraftDisplayStatus;
@@ -31,7 +34,9 @@ export interface EmailDraftListItem {
   approverName: string | null;
   approvedAt: string | null;
   rejectedAt: string | null;
+  rejectionNote: string | null;
   sentAt: string | null;
+  sendError: string | null;
   scheduledFor: string | null;
   missiveThreadId: string | null;
   revisionCount: number;
@@ -55,10 +60,10 @@ export async function listEmailDrafts(filters: ListFilters = {}): Promise<EmailD
 
   const buildQuery = (includeScheduledFor: boolean, includeRevisionCount: boolean) => {
     const cols = [
-      "id", "author_id", "client_id", "client_name",
-      "to_emails", "cc_emails", "subject", "body_text",
-      "kind", "status", "approver_id", "approved_at", "rejected_at",
-      "sent_at", "missive_thread_id", "created_at"
+      "id", "author_id", "account_id", "client_id", "client_name",
+      "to_emails", "cc_emails", "bcc_emails", "subject", "body_text", "body_html",
+      "kind", "status", "approver_id", "approved_at", "rejected_at", "rejection_note",
+      "sent_at", "send_error", "missive_thread_id", "created_at"
     ];
     if (includeScheduledFor) cols.push("scheduled_for");
     if (includeRevisionCount) cols.push("revision_count");
@@ -91,18 +96,23 @@ export async function listEmailDrafts(filters: ListFilters = {}): Promise<EmailD
   const rows = (data ?? []) as unknown as Array<{
     id: string;
     author_id: string;
+    account_id: string | null;
     client_id: string | null;
     client_name: string;
     to_emails: string[] | null;
     cc_emails: string[] | null;
+    bcc_emails: string[] | null;
     subject: string;
     body_text: string;
+    body_html: string | null;
     kind: EmailDraftKind;
     status: EmailDraftStatus;
     approver_id: string | null;
     approved_at: string | null;
     rejected_at: string | null;
+    rejection_note: string | null;
     sent_at: string | null;
+    send_error: string | null;
     // Optional — absent on rows fetched via the migration fallback.
     scheduled_for?: string | null;
     revision_count?: number | null;
@@ -141,12 +151,15 @@ export async function listEmailDrafts(filters: ListFilters = {}): Promise<EmailD
       id: r.id,
       authorId: r.author_id,
       authorName: namesById.get(r.author_id) ?? "—",
+      accountId: r.account_id,
       clientId: r.client_id,
       clientName: r.client_name,
       to: r.to_emails ?? [],
       cc: r.cc_emails ?? [],
+      bcc: r.bcc_emails ?? [],
       subject: r.subject,
       bodyText: r.body_text,
+      bodyHtml: r.body_html,
       kind: r.kind,
       status,
       displayStatus,
@@ -154,7 +167,9 @@ export async function listEmailDrafts(filters: ListFilters = {}): Promise<EmailD
       approverName: r.approver_id ? namesById.get(r.approver_id) ?? null : null,
       approvedAt: r.approved_at,
       rejectedAt: r.rejected_at,
+      rejectionNote: r.rejection_note,
       sentAt: r.sent_at,
+      sendError: r.send_error,
       scheduledFor: r.scheduled_for ?? null,
       missiveThreadId: r.missive_thread_id,
       revisionCount: r.revision_count ?? 0,

@@ -86,7 +86,7 @@ function NeedsYouStrip({ counts }: { counts: NeedsYouCounts }) {
       <NeedsYouPill
         count={counts.approvalsPending}
         label="Awaiting your approval"
-        href="/approvals"
+        href="/emails?status=pending"
         icon={<ClipboardCheck className="w-4 h-4" />}
         tone="rose"
       />

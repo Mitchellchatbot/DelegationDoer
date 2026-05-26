@@ -277,8 +277,11 @@ export function Sidebar({ user }: { user: User }) {
           : []),
         ...(canApprove
           ? [
-              { href: "/approvals", label: "Approvals", icon: MoreIcons.Approvals, badge: approvalsPending ?? 0 },
-              { href: "/emails", label: "Outbound emails", icon: MoreIcons.OutboundEmails }
+              // /approvals merged into /emails — the unified Outbound
+              // emails page surfaces the approval queue inline on
+              // actionable rows. Badge keeps the same pending-count
+              // signal.
+              { href: "/emails", label: "Outbound emails", icon: MoreIcons.OutboundEmails, badge: approvalsPending ?? 0 }
             ]
           : [])
       ]

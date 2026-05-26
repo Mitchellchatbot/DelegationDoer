@@ -10,22 +10,18 @@ import { OutboundEmailsClient } from "./OutboundEmailsClient";
 
 export const dynamic = "force-dynamic";
 
-// /emails — global "Client emails scheduled out" view. Lists every
-// outbound client email (content plans, EOD client updates, custom)
-// across all clients, with filter chips for status + kind. Gated to
-// anyone who can approve drafts (leaders, super-approvers, dept-heads
-// of an author's dept, and the content-plan-specific approver set).
-// Workers can see their own drafts here too, but the gating below
-// keeps the page hidden from people with no approval surface — they
-// get the per-client log on /clients/[id] instead.
+// /emails — unified outbound view. Lists every drafted, queued, and
+// sent client email (content plans, EOD updates, custom) across all
+// clients, AND surfaces the approval workflow inline on actionable
+// rows (pending / needs revision / failed). Approvers see everything
+// they can approve; everyone else still sees their own drafts —
+// gating below keeps the page hidden from people with no surface,
+// who get the per-client log on /clients/[id] instead.
 export default async function OutboundEmailsPage() {
   const userId = await requireCurrentUserId();
   const me = await getUserById(userId);
   if (!me) redirect("/login");
 
-  // Visibility: same rule as /approvals. Approvers see everything they
-  // can approve; everyone else, even with no approval surface, can
-  // still see THEIR own drafts.
   const isApprover = canApproveAnyDraft({
     name: me.name,
     role: me.role,
@@ -38,8 +34,6 @@ export default async function OutboundEmailsPage() {
     ? rows
     : rows.filter((r) => r.authorId === userId);
 
-  // Quick counts to colour the filter chips. Computed server-side so
-  // the chips don't flicker between SSR and client hydration.
   const countByStatus: Record<EmailDraftDisplayStatus, number> = {
     pending: 0, needs_revision: 0, approved: 0, rejected: 0, sent: 0, failed: 0, replied: 0
   };
@@ -50,7 +44,7 @@ export default async function OutboundEmailsPage() {
       <PageHero
         eyebrow="Outbound emails"
         headline={["Client emails ", { accent: "scheduled out" }]}
-        subtitle="Every drafted, queued, and sent outbound — content plans, EOD updates, custom. Click a row to see the body and approver."
+        subtitle="Every drafted, queued, and sent outbound — content plans, EOD updates, custom. Expand a pending row to approve, request revisions, or send back for edits."
         icon={<Send />}
         iconTone="sky"
         trailing={

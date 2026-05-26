@@ -175,7 +175,7 @@ export async function POST(req: NextRequest) {
         kind === "content_plan" ? "Content Plan" :
         kind === "custom" ? "Custom email" :
         "Client email";
-      const link = baseUrl ? `<${baseUrl}/approvals|Open approvals queue>` : "the /approvals page";
+      const link = baseUrl ? `<${baseUrl}/emails?status=pending|Open approvals queue>` : "the Outbound emails page";
       const text = `📨 ${authorName} sent a ${kindLabel} draft for *${clientName}* — needs your approval.`;
       const blocks = [
         {

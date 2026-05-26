@@ -8,6 +8,7 @@ import {
   ListTodo, Users,
   Sparkles, Crown, Mail, Home as HomeIcon, Sunrise, Moon, Briefcase
 } from "lucide-react";
+// Sparkles is reused for both Ask AI and Updates — same icon, different context.
 import { useEffect, useState } from "react";
 import { AIAssistantDrawer } from "./AIAssistantDrawer";
 import { RaiseLink } from "./RaiseLink";
@@ -37,6 +38,7 @@ const EOD_ITEM: NavItem = { href: "/eod", label: "Wrap day", icon: Moon, tone: "
 const TASKS_ITEM: NavItem = { href: "/tasks",  label: "Tasks",   icon: ListTodo, tone: "indigo"  };
 const INBOXES_ITEM: NavItem = { href: "/inboxes", label: "Inboxes", icon: Mail, tone: "fuchsia" };
 const CLIENTS_ITEM: NavItem = { href: "/clients", label: "Clients", icon: Briefcase, tone: "amber" };
+const UPDATES_ITEM: NavItem = { href: "/updates", label: "Updates", icon: Sparkles, tone: "fuchsia" };
 const PEOPLE_ITEM: NavItem = { href: "/people", label: "People", icon: Users, tone: "indigo"   };
 const MANAGE_CEO_ITEM: NavItem = { href: "/leader", label: "Manage", icon: Crown, tone: "amber" };
 const MANAGE_HEAD_ITEM: NavItem = { href: "/leader", label: "Manage", icon: Users, tone: "emerald" };
@@ -241,8 +243,8 @@ export function Sidebar({ user }: { user: User }) {
   // to each other, right after Home, so they read as a pair.
   const submitsDailies = !isLeaderRole;
   const NAV: NavItem[] = submitsDailies
-    ? [HOME_ITEM, SOD_ITEM, EOD_ITEM, TASKS_ITEM, INBOXES_ITEM, CLIENTS_ITEM, manageOrPeople]
-    : [HOME_ITEM, TASKS_ITEM, INBOXES_ITEM, CLIENTS_ITEM, manageOrPeople];
+    ? [HOME_ITEM, SOD_ITEM, EOD_ITEM, TASKS_ITEM, INBOXES_ITEM, CLIENTS_ITEM, UPDATES_ITEM, manageOrPeople]
+    : [HOME_ITEM, TASKS_ITEM, INBOXES_ITEM, CLIENTS_ITEM, UPDATES_ITEM, manageOrPeople];
 
   // Build the More menu groups dynamically so workers don't see
   // approver-only rows and non-software workers don't see Projects.
@@ -282,12 +284,12 @@ export function Sidebar({ user }: { user: User }) {
       ]
     },
     {
-      // Clients moved into the primary nav, so it no longer appears
-      // here — duplicating would just confuse "where do I click?".
+      // Clients + Updates moved into the primary nav, so they no
+      // longer appear here — duplicating would just confuse "where
+      // do I click?". SOPs stays.
       label: "Knowledge",
       items: [
-        { href: "/sops",    label: "SOPs",    icon: MoreIcons.SOPs },
-        { href: "/updates", label: "Updates", icon: MoreIcons.Updates, badge: updatesTotal }
+        { href: "/sops",    label: "SOPs",    icon: MoreIcons.SOPs }
       ]
     },
     {
@@ -350,10 +352,17 @@ export function Sidebar({ user }: { user: User }) {
                   title: `${clientsAtRisk} ${clientsAtRisk === 1 ? "client is" : "clients are"} at-risk or shaky`
                 };
               }
-              // Approvals / Routing review / Updates moved into the
-              // More popover — their badges render as row pills there,
-              // plus a single dot on the More trigger when any nested
-              // badge > 0.
+              if (item.href === "/updates" && updatesTotal > 0) {
+                return {
+                  count: updatesTotal,
+                  tone: "rose",
+                  title: `${updatesTotal} new update${updatesTotal === 1 ? "" : "s"} waiting`
+                };
+              }
+              // Approvals / Routing review moved into the More popover
+              // — their badges render as row pills there, plus a
+              // single dot on the More trigger when any nested badge
+              // > 0.
               return null;
             })();
             return (

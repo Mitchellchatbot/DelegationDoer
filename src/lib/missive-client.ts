@@ -316,6 +316,15 @@ export interface ReplyArgs {
   cc?: string[];
   subject?: string;        // Defaults to "Re: <original subject>" on the clone side.
   inReplyTo?: string;      // Message-id to thread on.
+  // Optional file attachments to forward as `files[]` multipart fields.
+  // The clone limits to 10 files / 25 MB each.
+  attachments?: MissiveAttachment[];
+}
+
+export interface MissiveAttachment {
+  filename: string;
+  contentType: string;
+  content: Buffer;
 }
 
 // Disconnect a mailbox from the missiveclone backend. Removes the
@@ -358,6 +367,16 @@ export async function sendReply(args: ReplyArgs): Promise<{ messageId: string }>
   };
   const form = new FormData();
   form.append("payload", JSON.stringify(payload));
+  for (const att of args.attachments ?? []) {
+    // Convert Buffer → Uint8Array so TS picks the ArrayBuffer-backed
+    // BlobPart overload (Buffer has a SharedArrayBuffer-compatible
+    // backing type that the lib types reject).
+    form.append(
+      "files",
+      new Blob([new Uint8Array(att.content)], { type: att.contentType }),
+      att.filename
+    );
+  }
   const data = await missiveFetch<{ message_id: string }>(
     `/api/threads/${encodeURIComponent(args.threadId)}/reply`,
     { method: "POST", body: form }
@@ -379,6 +398,11 @@ export interface ComposeArgs {
   // the future, the clone stores the message in scheduled_messages with
   // status='pending' instead of sending immediately.
   sendAtMs?: number;
+  // Optional file attachments. Note: the clone currently REJECTS
+  // attachments on scheduled sends (returns 400). Callers should only
+  // pass attachments alongside immediate (sendAtMs absent) sends, or
+  // accept that scheduled+attachment combinations will fail.
+  attachments?: MissiveAttachment[];
 }
 
 export async function composeNewThread(args: ComposeArgs): Promise<{
@@ -400,6 +424,18 @@ export async function composeNewThread(args: ComposeArgs): Promise<{
   if (args.sendAtMs) payload.send_at = args.sendAtMs;
   const form = new FormData();
   form.append("payload", JSON.stringify(payload));
+  // Skip attachments on scheduled sends — the clone explicitly rejects
+  // that combination (see compose.js, "attachments with scheduled send
+  // not supported in MVP").
+  if (!args.sendAtMs) {
+    for (const att of args.attachments ?? []) {
+      form.append(
+        "files",
+        new Blob([new Uint8Array(att.content)], { type: att.contentType }),
+        att.filename
+      );
+    }
+  }
   // Scheduled sends return { ok: true, scheduled_id } instead of a
   // thread/message id — handle both shapes.
   const data = await missiveFetch<{

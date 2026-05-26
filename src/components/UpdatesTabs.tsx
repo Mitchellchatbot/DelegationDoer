@@ -18,8 +18,10 @@ type Tab = {
   // Hidden from workers — they don't approve drafts.
   approverOnly?: boolean;
 };
+// SOD and EOD moved out of /updates — they're top-level primary nav
+// items now (sidebar /sod and /eod). The Updates tab bar stays for
+// the team-feed surfaces (approvals, picks, moments, etc.).
 const TABS: readonly Tab[] = [
-  { href: "/updates/eod",             label: "EOD",         icon: Sparkles                        },
   { href: "/updates/approvals",       label: "Approvals",   icon: Video,        approverOnly: true},
   { href: "/updates/seo",             label: "SEO",         icon: Search,      seoOnly: true      },
   { href: "/updates/projects",        label: "Projects",    icon: FolderKanban, leaderOnly: true  },

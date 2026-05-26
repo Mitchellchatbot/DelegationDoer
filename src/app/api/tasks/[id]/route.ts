@@ -5,6 +5,7 @@ import { loadTaskForViewer } from "@/lib/task-access";
 import { notifyCompletion, type CompletionResult } from "@/lib/slack";
 import { onTaskDone } from "@/lib/project-flow";
 import { syncTaskToCalendar } from "@/lib/task-calendar-sync";
+import { sanitizeMediaUrls } from "@/lib/media";
 
 const ALLOWED_FIELDS = ["title", "description", "priority", "status", "estimated_hours", "due_date", "tags", "client_name", "website"] as const;
 const STATUSES = ["pending", "in_progress", "urgent", "waiting_on_client", "done"] as const;
@@ -77,6 +78,17 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       customMerge = body.custom as Record<string, unknown>;
     }
 
+    // Media attachments. Two modes:
+    //   - mediaUrls: REPLACES the array (used by the edit dialog where
+    //     the user can both add and remove chips).
+    //   - addMediaUrls: APPENDS to the array (used by the widget's
+    //     status-update flow that just attaches an image alongside a
+    //     comment — we want to keep prior media intact).
+    let mediaUpdate: Array<{ url: string; name?: string; contentType?: string; size?: number }> | null = null;
+    let mediaAppend: Array<{ url: string; name?: string; contentType?: string; size?: number }> | null = null;
+    if (Array.isArray(body.mediaUrls)) mediaUpdate = sanitizeMediaUrls(body.mediaUrls);
+    if (Array.isArray(body.addMediaUrls)) mediaAppend = sanitizeMediaUrls(body.addMediaUrls);
+
     // Reassignment — used by the board's "group by person" drag mode.
     if (body.assigneeId === null) update.assignee_id = null;
     else if (typeof body.assigneeId === "string") update.assignee_id = body.assigneeId;
@@ -106,6 +118,20 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
         if (merged[k] === null) delete merged[k];
       }
       update.custom = merged;
+    }
+
+    if (mediaUpdate) {
+      update.media_urls = mediaUpdate;
+    } else if (mediaAppend && mediaAppend.length > 0) {
+      const { data: existingMedia } = await supabase
+        .from("tasks")
+        .select("media_urls")
+        .eq("id", params.id)
+        .maybeSingle();
+      const prior = Array.isArray(existingMedia?.media_urls)
+        ? (existingMedia!.media_urls as typeof mediaAppend)
+        : [];
+      update.media_urls = [...prior, ...mediaAppend].slice(-50);
     }
 
     const { data, error } = await supabase

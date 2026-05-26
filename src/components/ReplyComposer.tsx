@@ -6,6 +6,8 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Reply, Send, Loader2, X, CalendarClock } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { MediaPicker } from "@/components/MediaPicker";
+import type { TaskMedia } from "@/lib/types";
 
 // Inline reply panel that sits at the bottom of a thread detail. Folded
 // into a "Reply" pill by default; expands into a Gmail-style composer
@@ -35,6 +37,10 @@ export function ReplyComposer({
   // goes to the /schedule endpoint instead of /reply.
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [scheduleAt, setScheduleAt] = useState("");
+  // Reusing TaskMedia shape — same wire format as task attachments. The
+  // server pulls each URL via /api/upload and forwards as multipart
+  // files[] to the missive clone.
+  const [attachments, setAttachments] = useState<TaskMedia[]>([]);
 
   async function send() {
     const toList = to.split(/[,\n]/).map((s) => s.trim()).filter(Boolean);
@@ -60,6 +66,10 @@ export function ReplyComposer({
       }
       scheduledForISO = at.toISOString();
     }
+    if (scheduling && attachments.length > 0) {
+      toast.error("Attachments aren't supported on scheduled sends — remove them or send now.");
+      return;
+    }
     setBusy(true);
     try {
       const url = scheduling
@@ -67,7 +77,7 @@ export function ReplyComposer({
         : `/api/inboxes/threads/${encodeURIComponent(threadId)}/reply`;
       const body = scheduling
         ? { accountId, to: toList, subject: subject.trim() || undefined, bodyText, scheduledForISO }
-        : { accountId, to: toList, subject: subject.trim() || undefined, bodyText };
+        : { accountId, to: toList, subject: subject.trim() || undefined, bodyText, attachmentUrls: attachments };
       const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -100,6 +110,7 @@ export function ReplyComposer({
         toast.success("Reply sent ✉️");
       }
       setBodyText("");
+      setAttachments([]);
       setScheduleOpen(false);
       setScheduleAt("");
       setOpen(false);
@@ -196,6 +207,14 @@ export function ReplyComposer({
                 rows={7}
                 className="w-full text-sm bg-white/60 border border-slate-200/70 rounded-xl px-3 py-2.5 outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent/40 resize-none transition-all"
               />
+
+              <MediaPicker
+                value={attachments}
+                onChange={setAttachments}
+                label="Attach files"
+                compact
+                hint={scheduleOpen ? "Attachments are not supported on scheduled sends." : undefined}
+              />
             </div>
 
             <footer className="px-4 py-2.5 border-t border-slate-100 flex items-center justify-between gap-2 bg-slate-50/60 flex-wrap">
@@ -226,7 +245,7 @@ export function ReplyComposer({
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => { setOpen(false); setBodyText(""); setScheduleOpen(false); setScheduleAt(""); }}
+                  onClick={() => { setOpen(false); setBodyText(""); setAttachments([]); setScheduleOpen(false); setScheduleAt(""); }}
                   className="px-3 py-1.5 rounded-full text-xs font-medium text-ink/70 hover:text-ink hover:bg-white transition-colors"
                 >
                   Discard

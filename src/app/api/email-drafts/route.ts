@@ -6,6 +6,7 @@ import { openDm, postMessage } from "@/lib/slack";
 import { resolveSlackId } from "@/lib/slack-resolve";
 import { getApproversForDraft, isApprover, type EmailDraftKind } from "@/lib/email-approvers";
 import { recordDraftEvent } from "@/lib/draft-events";
+import { sanitizeMediaUrls } from "@/lib/media";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
@@ -55,6 +56,7 @@ interface DraftRow {
   send_error: string | null;
   scheduled_for: string | null;
   revision_count: number | null;
+  media_urls: Array<{ url: string; name?: string; contentType?: string; size?: number }> | null;
   created_at: string;
   updated_at: string;
 }
@@ -109,7 +111,9 @@ export async function POST(req: NextRequest) {
       scheduledFor = d.toISOString();
     }
 
-    const buildInsert = (includeScheduledFor: boolean) => {
+    const mediaUrls = sanitizeMediaUrls(body.mediaUrls);
+
+    const buildInsert = (includeScheduledFor: boolean, includeMedia: boolean) => {
       const row: Record<string, unknown> = {
         id,
         author_id: userId,
@@ -125,14 +129,22 @@ export async function POST(req: NextRequest) {
         kind
       };
       if (includeScheduledFor) row.scheduled_for = scheduledFor;
+      if (includeMedia) row.media_urls = mediaUrls;
       return row;
     };
-    let { error: insertErr } = await supabase.from("email_drafts").insert(buildInsert(true));
-    // If the migration adding scheduled_for hasn't been applied yet,
-    // retry without it so drafts can still be created. Send-on-date
-    // will just be ignored until the migration runs.
+    let { error: insertErr } = await supabase.from("email_drafts").insert(buildInsert(true, true));
+    // If the migration adding scheduled_for / media_urls hasn't been
+    // applied yet, retry with each opt-out so drafts can still be
+    // created. The missing field is just silently dropped until the
+    // migration runs.
+    if (insertErr && /media_urls/.test(insertErr.message)) {
+      ({ error: insertErr } = await supabase.from("email_drafts").insert(buildInsert(true, false)));
+    }
     if (insertErr && /scheduled_for/.test(insertErr.message)) {
-      ({ error: insertErr } = await supabase.from("email_drafts").insert(buildInsert(false)));
+      ({ error: insertErr } = await supabase.from("email_drafts").insert(buildInsert(false, true)));
+    }
+    if (insertErr && /scheduled_for|media_urls/.test(insertErr.message)) {
+      ({ error: insertErr } = await supabase.from("email_drafts").insert(buildInsert(false, false)));
     }
     if (insertErr) {
       return NextResponse.json({ error: insertErr.message }, { status: 500 });
@@ -228,7 +240,7 @@ export async function GET(req: NextRequest) {
 
     let q = supabase
       .from("email_drafts")
-      .select("id, author_id, account_id, client_id, client_name, to_emails, cc_emails, bcc_emails, subject, body_text, body_html, kind, status, approver_id, approved_at, rejected_at, rejection_note, missive_thread_id, missive_message_id, sent_at, send_error, scheduled_for, revision_count, created_at, updated_at")
+      .select("id, author_id, account_id, client_id, client_name, to_emails, cc_emails, bcc_emails, subject, body_text, body_html, kind, status, approver_id, approved_at, rejected_at, rejection_note, missive_thread_id, missive_message_id, sent_at, send_error, scheduled_for, revision_count, media_urls, created_at, updated_at")
       .order("created_at", { ascending: false })
       .limit(limit);
 
@@ -300,6 +312,7 @@ export async function GET(req: NextRequest) {
         sendError: r.send_error,
         scheduledFor: r.scheduled_for,
         revisionCount: Number(r.revision_count ?? 0),
+        mediaUrls: Array.isArray(r.media_urls) ? r.media_urls : [],
         createdAt: r.created_at,
         updatedAt: r.updated_at
       }))

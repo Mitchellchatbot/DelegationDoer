@@ -5,6 +5,7 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { canApproveDraft } from "@/lib/email-approvers";
 import { composeNewThread } from "@/lib/missive-client";
 import { recordDraftEvent } from "@/lib/draft-events";
+import { sanitizeMediaUrls, fetchMediaAsAttachments } from "@/lib/media";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
@@ -126,6 +127,10 @@ export async function POST(
     // Fire the actual outbound send. On failure, flip status='failed'
     // + record send_error so the queue can show why and the approver
     // can retry by re-clicking (we re-allow approve on 'failed' below).
+    const mediaItems = sanitizeMediaUrls(row.media_urls);
+    const attachments = mediaItems.length > 0
+      ? await fetchMediaAsAttachments(mediaItems)
+      : undefined;
     try {
       const result = await composeNewThread({
         fromAccountId: accountId,
@@ -134,7 +139,8 @@ export async function POST(
         bcc: (row.bcc_emails as string[]) ?? [],
         subject: row.subject as string,
         bodyText: row.body_text as string,
-        bodyHtml: (row.body_html as string | null) ?? undefined
+        bodyHtml: (row.body_html as string | null) ?? undefined,
+        attachments
       });
       const sentAt = new Date().toISOString();
       await supabase

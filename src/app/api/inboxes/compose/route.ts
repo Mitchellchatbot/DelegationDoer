@@ -3,6 +3,7 @@ import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { visibleAccountIdsFor } from "@/lib/inbox-access";
 import { composeNewThread } from "@/lib/missive-client";
+import { sanitizeMediaUrls, fetchMediaAsAttachments } from "@/lib/media";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -69,6 +70,19 @@ export async function POST(req: NextRequest) {
       sendAtMs = ms;
     }
 
+    // Attachments forwarding. Skipped automatically on scheduled sends
+    // because the missive clone rejects that combination.
+    const attachmentItems = sanitizeMediaUrls(body.attachmentUrls);
+    if (attachmentItems.length > 0 && sendAtMs) {
+      return NextResponse.json(
+        { error: "attachments are not supported on scheduled sends — send immediately or strip the attachments" },
+        { status: 400 }
+      );
+    }
+    const attachments = attachmentItems.length > 0
+      ? await fetchMediaAsAttachments(attachmentItems)
+      : undefined;
+
     const result = await composeNewThread({
       fromAccountId: accountId,
       to,
@@ -77,7 +91,8 @@ export async function POST(req: NextRequest) {
       subject,
       bodyText,
       bodyHtml: typeof body.bodyHtml === "string" ? body.bodyHtml : undefined,
-      sendAtMs
+      sendAtMs,
+      attachments
     });
 
     return NextResponse.json({

@@ -1,5 +1,14 @@
 export type Role = "leader" | "department_head" | "worker";
-export type TaskStatus = "pending" | "in_progress" | "urgent" | "waiting_on_client" | "done";
+export type TaskStatus =
+  | "pending"
+  | "in_progress"
+  | "urgent"
+  | "waiting_on_client"
+  | "done"
+  // Soft-delete state for denied drafts: keeps the row (and its
+  // routing_decisions back-reference) intact for audit instead of
+  // dropping it from the table.
+  | "rejected";
 export type Priority = "low" | "medium" | "high" | "critical";
 export type MilestoneStatus = "pending" | "in_progress" | "done" | "delayed";
 export type RaciRole = "responsible" | "accountable" | "consulted" | "informed";
@@ -91,6 +100,18 @@ export interface Task {
   // select, number for number, boolean for checkbox, string[] for
   // multiselect).
   custom?: Record<string, unknown>;
+  // Files attached to the task — images, audio, etc. Persistent across
+  // edits. New entries can come from the create form, the edit dialog,
+  // or the widget's status-update flow. Each entry is the upload URL plus
+  // best-effort metadata for rendering.
+  mediaUrls?: TaskMedia[];
+}
+
+export interface TaskMedia {
+  url: string;
+  name?: string;
+  contentType?: string;
+  size?: number;
 }
 
 // Org-wide custom field definition. Managed in Settings; rendered on the
@@ -188,5 +209,34 @@ export interface ActivityLog {
   action: string;
   detail: string;
   imageUrl?: string | null;
+  createdAt: string;
+}
+
+// One row per runEmailIntake invocation. Persists the AI classifier
+// output, matched rule (if any), and ranker top candidates so the
+// dept-head review dashboard can show "AI reasoning" without re-running
+// the pipeline. needs_review = true + task_id IS NULL = unrouted thread
+// that landed in the fallback queue.
+export interface RoutingDecision {
+  id: string;
+  taskId: string | null;
+  accountId: string;
+  threadId: string;
+  classifierOutput: {
+    title: string;
+    description: string;
+    priority: Priority;
+    tags: string[];
+    departmentHint: string | null;
+    confidence: "low" | "medium" | "high";
+  } | null;
+  matchedRuleId: string | null;
+  matchedRuleLabel: string | null;
+  rankerTop: Array<{ userId: string; score: number; reason: string }> | null;
+  routedVia: string;
+  routedToUserId: string | null;
+  reason: string | null;
+  needsReview: boolean;
+  reviewReason: string | null;
   createdAt: string;
 }

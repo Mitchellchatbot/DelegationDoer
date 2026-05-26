@@ -302,6 +302,23 @@ export function Topbar({ user }: { user: User }) {
 
         {(() => {
           const dept = user.role !== "leader" ? primaryDepartment(user.departmentIds) : null;
+          // Collapse "Department Head" + dept-chip into one compact
+          // chip so the pill doesn't stack two visual elements (long
+          // role label + dept chip) in a cramped header. Workers see
+          // just the dept name. Heads see "<Dept> Head". Leaders see
+          // a single amber "Leader" chip with no dept (they're org-
+          // wide). Full label still lives in the tooltip.
+          const roleSuffix = user.role === "department_head" ? " Head" : "";
+          const chipLabel = user.role === "leader"
+            ? "Leader"
+            : dept
+              ? `${dept.label}${roleSuffix}`
+              : ROLE_LABELS[user.role];
+          const chipClass = user.role === "leader"
+            ? "bg-amber-100 text-amber-700 border-amber-200/60"
+            : dept
+              ? dept.chip
+              : "bg-slate-100 text-slate-600 border-slate-200/60";
           return (
             <div
               // shrink-0 keeps the pill from being crushed by flex when
@@ -314,20 +331,17 @@ export function Topbar({ user }: { user: User }) {
               <div className={cn("shrink-0", dept ? `rounded-full ring-2 ${dept.ring}` : "")}>
                 <PersonAvatar userId={user.id} name={user.name} imageUrl={user.avatarUrl} size={28} />
               </div>
-              {/* Name + role + dept hide on narrow viewports — at small
-                  widths the topbar is cramped and the New task button
-                  loses room. Tooltip on the pill keeps the info one
-                  hover away. */}
-              <div className="hidden lg:block text-[12px] leading-tight">
-                <div className="text-ink font-semibold">{user.name}</div>
-                <div className="flex items-center gap-1.5 mt-0.5">
-                  <span className="text-muted">{ROLE_LABELS[user.role]}</span>
-                  {dept && (
-                    <span className={`inline-flex items-center px-1.5 py-0 rounded-full border text-[10px] font-medium ${dept.chip}`}>
-                      {dept.label}
-                    </span>
-                  )}
-                </div>
+              {/* Name + chip hide on narrow viewports — at small widths
+                  the topbar is cramped and the New task button loses
+                  room. Tooltip on the pill keeps the info one hover
+                  away. Single-row layout (name | chip) instead of the
+                  earlier stacked "name / role-text + chip" so the pill
+                  stays tight. */}
+              <div className="hidden lg:flex items-center gap-2 text-[12px] leading-tight">
+                <span className="text-ink font-semibold whitespace-nowrap">{user.name}</span>
+                <span className={`inline-flex items-center px-1.5 py-0.5 rounded-full border text-[10px] font-medium whitespace-nowrap ${chipClass}`}>
+                  {chipLabel}
+                </span>
               </div>
             </div>
           );

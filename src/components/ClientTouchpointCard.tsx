@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Send, Loader2, Pencil, CheckCheck } from "lucide-react";
+import { Send, Loader2, Pencil, CheckCheck, MailX } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import {
@@ -23,6 +23,10 @@ interface Props {
   touchpointOverrideAt: string | null;
   touchpointSummary: string | null;
   touchpointSummaryAt: string | null;
+  // When false, this client doesn't participate in the touchpoint
+  // dashboard / follow-up reminders. Card collapses to a single
+  // "Email tracking is off" notice + a toggle to flip it back on.
+  encourageEmails: boolean;
   canEdit: boolean;
 }
 
@@ -89,6 +93,65 @@ export function ClientTouchpointCard(props: Props) {
     } finally {
       setBusy(false);
     }
+  }
+
+  async function toggleEncourage(next: boolean) {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/clients/${encodeURIComponent(props.clientId)}/touchpoint`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ encourageEmails: next })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error ?? `failed (${res.status})`);
+      toast.success(next ? "Email tracking on." : "Email tracking off.");
+      router.refresh();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "save failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // Email tracking is off — collapse the card to a single notice with
+  // a toggle. Skip every other render path so leaders aren't tempted
+  // to set override labels on a client that opted out.
+  if (!props.encourageEmails) {
+    return (
+      <section className="rounded-2xl border border-white/60 shadow-soft bg-gradient-to-br from-slate-50/80 to-white p-4 space-y-3">
+        <header className="flex items-center gap-2">
+          <MailX className="w-4 h-4 text-ink/60" />
+          <div className="text-sm font-semibold">Touchpoint health</div>
+          <span className="ml-2 text-[10px] uppercase tracking-wide font-semibold px-1.5 py-0.5 rounded-full bg-slate-100 text-ink/60">
+            Tracking off
+          </span>
+        </header>
+        <div className="text-[12px] text-ink/65 leading-snug rounded-lg bg-white/70 border border-slate-200/60 p-2.5">
+          Email cadence tracking is disabled for this client. They&apos;re excluded
+          from the touchpoint dashboard, follow-up widget, and sidebar Clients badge.
+          Tasks, satisfaction sentiment, and email history still work normally.
+        </div>
+        {props.canEdit && (
+          <div className="flex items-center justify-end">
+            <button
+              type="button"
+              onClick={() => toggleEncourage(true)}
+              disabled={busy}
+              className={cn(
+                "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-semibold text-white shadow-sm transition-all hover:-translate-y-0.5 active:scale-95",
+                busy && "opacity-60 cursor-not-allowed hover:translate-y-0"
+              )}
+              style={{ background: "linear-gradient(135deg, #2563EB 0%, #1e63ff 100%)" }}
+            >
+              {busy && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+              Encourage emails for this client
+            </button>
+          </div>
+        )}
+      </section>
+    );
   }
 
   return (
@@ -276,6 +339,25 @@ export function ClientTouchpointCard(props: Props) {
               {draftLabel ? "Save override" : "Clear override"}
             </button>
           </div>
+        </div>
+      )}
+
+      {props.canEdit && (
+        <div className="border-t border-slate-100 pt-3 flex items-start gap-2.5">
+          <MailX className="w-3.5 h-3.5 text-ink/55 shrink-0 mt-0.5" />
+          <div className="text-[11px] text-ink/65 leading-snug flex-1">
+            Don&apos;t need email cadence for this client? Turn tracking off and
+            we&apos;ll stop showing &ldquo;Never emailed&rdquo;/&ldquo;Neglected&rdquo; badges
+            and exclude them from follow-up reminders.
+          </div>
+          <button
+            type="button"
+            onClick={() => toggleEncourage(false)}
+            disabled={busy}
+            className="text-[11px] font-medium text-ink/65 hover:text-urgent border border-slate-200 hover:border-rose-200 rounded-full px-2.5 py-1 transition-colors disabled:opacity-50"
+          >
+            Stop encouraging
+          </button>
         </div>
       )}
     </section>

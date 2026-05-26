@@ -57,7 +57,21 @@ export async function GET() {
   if (draftsErr) {
     return NextResponse.json({ error: draftsErr.message }, { status: 500 });
   }
-  const drafts = (rawDrafts ?? []) as unknown as Array<Record<string, unknown>>;
+  let drafts = (rawDrafts ?? []) as unknown as Array<Record<string, unknown>>;
+
+  // Drop tl;dv (meeting-sourced) drafts — those belong to the meeting
+  // approval surface at /updates/approvals, not the email routing review.
+  // Mirrors the same exclusion the legacy /api/tasks/drafts endpoint does.
+  const { data: tldvLogs } = await supabase
+    .from("tldv_intake_log")
+    .select("task_ids");
+  const tldvTaskIds = new Set<string>();
+  for (const row of (tldvLogs ?? []) as Array<{ task_ids: string[] | null }>) {
+    for (const id of row.task_ids ?? []) tldvTaskIds.add(id);
+  }
+  if (tldvTaskIds.size > 0) {
+    drafts = drafts.filter((d) => !tldvTaskIds.has(d.id as string));
+  }
 
   // Hydrate routing decisions for the drafts that have one.
   const decisionIds = drafts

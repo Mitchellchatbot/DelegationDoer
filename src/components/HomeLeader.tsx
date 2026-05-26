@@ -1,9 +1,10 @@
 "use client";
 
 import Link from "next/link";
+import { useEffect, useState } from "react";
 import {
   ClipboardCheck, Mail, FileText, Flame, CheckCircle2, ArrowRight,
-  Users, AlertTriangle, Crown, Activity, Clock
+  Users, AlertTriangle, Crown, Activity, Clock, X
 } from "lucide-react";
 import { PersonAvatar } from "@/components/PersonAvatar";
 import { Countdown } from "@/components/Countdown";
@@ -11,6 +12,12 @@ import { PriorityBadge } from "@/components/Badges";
 import { TOUCHPOINT_META } from "@/lib/client-touchpoint";
 import { cn } from "@/lib/utils";
 import type { HomeTask, HomeTeammate, NeedsYouCounts, ClientHealthRow } from "@/lib/home-data";
+
+// localStorage key for the user's dashboard-hidden deliverable IDs.
+// Pure UI hide — the underlying tasks stay live everywhere else
+// (board, my-tasks, search). Only affects this user's browser; if
+// we ever want a shared hide list, swap this for an API call.
+const HIDDEN_DELIVERABLES_KEY = "home:hidden-deliverables:v1";
 
 // /home rendering for leaders and heads. Three strips:
 //   1. "Needs you" — approvals + inbox + EOD pending counters
@@ -309,13 +316,51 @@ function lastEmailLabel(days: number | null): string {
 }
 
 function DeliverablesCard({ rows }: { rows: DeliverableRow[] }) {
+  // Hydrate the hidden-IDs set from localStorage on mount. Starts empty
+  // on SSR so the initial render matches and React doesn't bail on a
+  // mismatch; the useEffect then trims the list. Result: a moment of
+  // flash where hidden items appear, then disappear — acceptable for
+  // a dashboard nicety.
+  const [hidden, setHidden] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(HIDDEN_DELIVERABLES_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) setHidden(new Set(parsed.filter((s) => typeof s === "string")));
+      }
+    } catch { /* corrupt JSON or storage disabled — ignore, render full list */ }
+  }, []);
+
+  function hide(id: string) {
+    setHidden((prev) => {
+      const next = new Set(prev);
+      next.add(id);
+      try {
+        localStorage.setItem(HIDDEN_DELIVERABLES_KEY, JSON.stringify(Array.from(next)));
+      } catch { /* quota / private mode — state still updates in-memory for this session */ }
+      return next;
+    });
+  }
+
+  // Restore option — exposed via a tiny "show hidden" footer when the
+  // user has dismissed anything. Without this, an accidental hide is
+  // unrecoverable short of clearing site data.
+  function restoreAll() {
+    setHidden(new Set());
+    try { localStorage.removeItem(HIDDEN_DELIVERABLES_KEY); } catch {}
+  }
+
+  const visible = rows.filter((r) => !hidden.has(r.id));
+  const hiddenInRowsCount = rows.filter((r) => hidden.has(r.id)).length;
+
   return (
     <section className="rounded-2xl border border-slate-200/70 bg-white shadow-soft overflow-hidden">
       <header className="flex items-center justify-between px-4 py-3 border-b border-slate-100">
         <div className="text-[13px] font-semibold inline-flex items-center gap-2">
           <Flame className="w-4 h-4 text-rose-500" />
           Due today
-          <span className="text-[11px] text-ink/55 font-normal tabular-nums">· {rows.length}</span>
+          <span className="text-[11px] text-ink/55 font-normal tabular-nums">· {visible.length}</span>
         </div>
         <Link
           href="/tasks/board"
@@ -324,18 +369,18 @@ function DeliverablesCard({ rows }: { rows: DeliverableRow[] }) {
           Board <ArrowRight className="w-3 h-3" />
         </Link>
       </header>
-      {rows.length === 0 ? (
+      {visible.length === 0 ? (
         <div className="px-4 py-8 text-center text-[12px] text-ink/55 inline-flex items-center justify-center gap-1.5 w-full">
           <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-          Nothing due today.
+          {rows.length === 0 ? "Nothing due today." : "All caught up here."}
         </div>
       ) : (
         <ul className="divide-y divide-slate-100">
-          {rows.map((r) => (
-            <li key={r.id}>
+          {visible.map((r) => (
+            <li key={r.id} className="group relative">
               <Link
                 href={`/tasks/${r.id}`}
-                className="flex items-center justify-between gap-3 px-4 py-2.5 hover:bg-slate-50 transition-colors"
+                className="flex items-center justify-between gap-3 px-4 py-2.5 pr-12 hover:bg-slate-50 transition-colors"
               >
                 <div className="min-w-0 flex-1">
                   <div className="text-[13px] font-medium text-ink truncate">{r.title}</div>
@@ -346,9 +391,30 @@ function DeliverablesCard({ rows }: { rows: DeliverableRow[] }) {
                   </div>
                 </div>
               </Link>
+              <button
+                type="button"
+                onClick={(e) => { e.preventDefault(); e.stopPropagation(); hide(r.id); }}
+                title="Hide from this list"
+                aria-label={`Hide "${r.title}" from dashboard`}
+                className="absolute top-1/2 -translate-y-1/2 right-3 w-7 h-7 rounded-full grid place-items-center text-ink/35 hover:text-rose-600 hover:bg-rose-50 transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
             </li>
           ))}
         </ul>
+      )}
+      {hiddenInRowsCount > 0 && (
+        <footer className="px-4 py-2 border-t border-slate-100 bg-slate-50/40 flex items-center justify-between text-[11px]">
+          <span className="text-ink/55">{hiddenInRowsCount} hidden</span>
+          <button
+            type="button"
+            onClick={restoreAll}
+            className="text-accent hover:underline font-medium"
+          >
+            Show all
+          </button>
+        </footer>
       )}
     </section>
   );

@@ -14,6 +14,7 @@ import { cn } from "@/lib/utils";
 import type { Client } from "@/lib/clients-data";
 import { ClientHealthPill } from "./ClientHealthPill";
 import { TouchpointPill } from "./TouchpointPill";
+import { ClientTeamPicker } from "./ClientTeamPicker";
 import {
   computeTouchpointLabel, daysSince, effectiveTouchpoint,
   TOUCHPOINT_META, type TouchpointLabel
@@ -323,8 +324,15 @@ export function ClientPriorityList({ initial, openCounts, canEdit }: Props) {
                           )}
                         </Link>
 
-                        {/* Rank + priority chips */}
+                        {/* Team picker + rank + priority chips. Team
+                            picker comes first so it's the first thing
+                            the eye lands on when scanning ownership. */}
                         <div className="flex items-center gap-1.5 shrink-0">
+                          <ClientTeamPicker
+                            clientId={c.id}
+                            teamId={c.teamId}
+                            canEdit={canEdit}
+                          />
                           {c.priorityRank !== null && (
                             <span className="text-[10px] font-bold tabular-nums px-1.5 py-0.5 rounded-md bg-white/85 text-ink/70 border border-white/80">
                               #{c.priorityRank}

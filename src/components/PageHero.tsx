@@ -45,7 +45,14 @@ export function PageHero({
         className
       )}
     >
-      <div className="flex items-start gap-5">
+      {/* Two rows now (was one). The icon + text block keeps the full
+          width, so a long headline like "Sorted by priority" stays on
+          a single line. The trailing action row (Health dashboard /
+          Cross-client board / Import / Rescan / New) flows below at
+          narrower widths instead of squeezing the headline column to
+          one-word-per-line. At wide enough viewports the row absorbs
+          back onto the top via flex-wrap. */}
+      <div className="flex items-start gap-5 flex-wrap">
         {icon && (
           <div className={cn(
             "w-14 h-14 rounded-2xl grid place-items-center shrink-0 ring-1",
@@ -54,7 +61,7 @@ export function PageHero({
             <span className="[&>svg]:w-6 [&>svg]:h-6">{icon}</span>
           </div>
         )}
-        <div className="flex-1 min-w-0">
+        <div className="flex-1 min-w-[280px]">
           <div className="text-[12px] uppercase tracking-[0.18em] font-semibold text-accent">
             {eyebrow}
           </div>
@@ -71,7 +78,11 @@ export function PageHero({
             </p>
           )}
         </div>
-        {trailing && <div className="shrink-0">{trailing}</div>}
+        {trailing && (
+          <div className="shrink-0 w-full lg:w-auto flex flex-wrap items-center gap-2 lg:justify-end">
+            {trailing}
+          </div>
+        )}
       </div>
     </header>
   );

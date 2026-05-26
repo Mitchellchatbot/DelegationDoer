@@ -344,10 +344,16 @@ export default function EodPage() {
   // on send. Leaders see it too so they can log touches and so the
   // surface is visible in their account for oversight. Other depts
   // don't see this; their EOD is just notes + completer aggregation.
+  // Website + SEO teams share the same EOD shape — both work
+  // client-by-client and need the per-client check-in branch (7
+  // questions including which clients they touched). Leaders + stealth
+  // admins see it for oversight; other depts get the generic 4-q
+  // notes-only variant.
   const isWebsiteTeam =
     me.role === "leader"
     || me.isAdmin === true
-    || (me.departmentIds ?? []).includes("dep_web");
+    || (me.departmentIds ?? []).includes("dep_web")
+    || (me.departmentIds ?? []).includes("dep_seo");
 
   // Talha runs marketing and his EOD asks five marketing-shaped
   // questions instead of the generic four. Matched by name (the seed

@@ -76,6 +76,12 @@ export interface Client {
   touchpointSummary: string | null;
   touchpointSummaryAt: string | null;
   touchpointSummaryBy: string | null;
+  // Per-client opt-out for email cadence tracking. When FALSE, the
+  // touchpoint pill is hidden, the client is excluded from the
+  // Needs-follow-up widget, and it doesn't count toward the sidebar
+  // Clients badge. Defaults TRUE so behavior is unchanged for every
+  // existing client.
+  encourageEmails: boolean;
   // Auto-derived from email_drafts on read; not stored on the row.
   lastOutboundEmailAt: string | null;
   lastOutboundSubject: string | null;
@@ -133,6 +139,7 @@ interface ClientRow {
   touchpoint_summary: string | null;
   touchpoint_summary_at: string | null;
   touchpoint_summary_by: string | null;
+  encourage_emails: boolean | null;
   created_at: string;
   updated_at: string;
 }
@@ -186,6 +193,8 @@ function rowToClient(r: ClientRow, touchpoint?: {
     wpCountsUpdatedAt: r.wp_counts_updated_at ?? null,
     wpLastError: r.wp_last_error ?? null,
     ...tp,
+    // Default TRUE so existing clients keep their current behavior.
+    encourageEmails: r.encourage_emails ?? true,
     lastOutboundEmailAt: touchpoint?.lastOutboundEmailAt ?? null,
     lastOutboundSubject: touchpoint?.lastOutboundSubject ?? null,
     createdAt: r.created_at,

@@ -73,6 +73,20 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       update.touchpoint_summary_by = summary === null ? null : userId;
     }
 
+    if ("encourageEmails" in body) {
+      // Boolean flag — when FALSE the touchpoint pill hides on every
+      // surface, the client drops out of the follow-up widget, and
+      // the sidebar Clients badge excludes it. Defaults TRUE.
+      const raw = body.encourageEmails;
+      if (typeof raw !== "boolean") {
+        return NextResponse.json(
+          { error: "encourageEmails must be boolean" },
+          { status: 400 }
+        );
+      }
+      update.encourage_emails = raw;
+    }
+
     if (Object.keys(update).length === 0) {
       return NextResponse.json({ error: "nothing to update" }, { status: 400 });
     }
@@ -82,7 +96,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       .update(update)
       .eq("id", params.id)
       .select(
-        "id, touchpoint_override_label, touchpoint_override_note, touchpoint_override_by, touchpoint_override_at, touchpoint_summary, touchpoint_summary_at, touchpoint_summary_by"
+        "id, touchpoint_override_label, touchpoint_override_note, touchpoint_override_by, touchpoint_override_at, touchpoint_summary, touchpoint_summary_at, touchpoint_summary_by, encourage_emails"
       )
       .single();
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });

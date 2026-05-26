@@ -55,10 +55,12 @@ export function ClientPriorityList({ initial, openCounts, canEdit }: Props) {
   const [sortMode, setSortMode] = useState<SortMode>("priority");
   const [healthFilter, setHealthFilter] = useState<HealthFilter>("all");
 
-  // Tally counts for the filter chips so we can show "Red · 3".
+  // Tally counts for the filter chips so we can show "Red · 3". Excludes
+  // clients with encourageEmails=false — they don't have a health band.
   const tallies = useMemo(() => {
     const t: Record<TouchpointLabel, number> = { green: 0, yellow: 0, red: 0 };
     for (const c of clients) {
+      if (!c.encourageEmails) continue;
       const { label } = effectiveTouchpoint(c.touchpointOverrideLabel, c.lastOutboundEmailAt);
       t[label] += 1;
     }
@@ -73,6 +75,7 @@ export function ClientPriorityList({ initial, openCounts, canEdit }: Props) {
     let arr = clients.slice();
     if (healthFilter !== "all") {
       arr = arr.filter((c) => {
+        if (!c.encourageEmails) return false;
         const { label } = effectiveTouchpoint(c.touchpointOverrideLabel, c.lastOutboundEmailAt);
         return label === healthFilter;
       });
@@ -274,12 +277,22 @@ export function ClientPriorityList({ initial, openCounts, canEdit }: Props) {
                                 · {c.websites.length} sites
                               </span>
                             )}
-                            <TouchpointPill
-                              label={tpLabel}
-                              lastSentAt={c.lastOutboundEmailAt}
-                              isOverride={tpOverride}
-                              showAge
-                            />
+                            {c.encourageEmails ? (
+                              <TouchpointPill
+                                label={tpLabel}
+                                lastSentAt={c.lastOutboundEmailAt}
+                                isOverride={tpOverride}
+                                showAge
+                              />
+                            ) : (
+                              <span
+                                className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 text-ink/50 text-[10px] font-medium px-1.5 py-0.5"
+                                title="Email cadence tracking is off for this client."
+                              >
+                                <span className="w-1.5 h-1.5 rounded-full bg-slate-400" />
+                                Email-free
+                              </span>
+                            )}
                             {/* Sentiment health, shown only when leader has set one */}
                             <ClientHealthPill label={c.healthOverrideLabel} />
                           </div>

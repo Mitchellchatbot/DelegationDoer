@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { sendReply, composeNewThread } from "@/lib/missive-client";
+import { sanitizeMediaUrls, fetchMediaAsAttachments } from "@/lib/media";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -63,7 +64,7 @@ export async function GET() {
     // against double-dispatch even if claim race ever happens).
     const { data: dueDrafts, error: draftErr } = await supabase
       .from("email_drafts")
-      .select("id, account_id, to_emails, cc_emails, bcc_emails, subject, body_text, body_html")
+      .select("id, account_id, to_emails, cc_emails, bcc_emails, subject, body_text, body_html, media_urls")
       .eq("status", "approved")
       .lte("scheduled_for", nowIso)
       .is("missive_thread_id", null)
@@ -94,6 +95,13 @@ export async function GET() {
           .eq("status", "approved");
         if (claimErr) { failedDrafts++; continue; }
 
+        // The draft was scheduled, but the actual send is happening NOW
+        // (sendAtMs is omitted), so the clone treats this as an immediate
+        // send and accepts attachments.
+        const mediaItems = sanitizeMediaUrls(row.media_urls);
+        const attachments = mediaItems.length > 0
+          ? await fetchMediaAsAttachments(mediaItems)
+          : undefined;
         const result = await composeNewThread({
           fromAccountId: accountId,
           to: (row.to_emails as string[]) ?? [],
@@ -101,7 +109,8 @@ export async function GET() {
           bcc: (row.bcc_emails as string[] | null) ?? [],
           subject: row.subject as string,
           bodyText: row.body_text as string,
-          bodyHtml: (row.body_html as string | null) ?? undefined
+          bodyHtml: (row.body_html as string | null) ?? undefined,
+          attachments
         });
         await supabase
           .from("email_drafts")

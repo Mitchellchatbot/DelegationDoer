@@ -13,6 +13,7 @@ import { HandoffButton, HandoffTimeline } from "@/components/HandoffPanel";
 import { TaskConversation } from "@/components/TaskConversation";
 import { DueDateInline } from "@/components/DueDateInline";
 import { TaskFields } from "@/components/TaskFields";
+import { MediaGallery } from "@/components/MediaPicker";
 import { MarkdownBody } from "@/components/MarkdownBody";
 import { requireCurrentUserId } from "@/lib/session";
 import { formatDate, relativeTime } from "@/lib/utils";
@@ -77,7 +78,8 @@ async function loadTask(id: string): Promise<{ task: Task; extensions: Extension
     markupLink: t.markup_link ?? null,
     hostingAccess: t.hosting_access ?? null,
     missiveThreadUrl: t.missive_thread_url ?? null,
-    custom: (t.custom as Record<string, unknown> | null) ?? {}
+    custom: (t.custom as Record<string, unknown> | null) ?? {},
+    mediaUrls: Array.isArray(t.media_urls) ? (t.media_urls as Task["mediaUrls"]) : []
   };
 
   const { data: rawExt } = await supabase
@@ -187,6 +189,13 @@ export default async function TaskDetailPage({ params }: { params: { id: string 
                   {task.tags.map((t) => <Tag key={t}>{t}</Tag>)}
                 </div>
               )}
+            </section>
+          )}
+
+          {(task.mediaUrls?.length ?? 0) > 0 && (
+            <section className="card p-4">
+              <div className="text-sm font-medium mb-3">Attachments</div>
+              <MediaGallery items={task.mediaUrls ?? []} />
             </section>
           )}
 

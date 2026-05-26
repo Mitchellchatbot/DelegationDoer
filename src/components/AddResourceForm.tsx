@@ -16,7 +16,7 @@ const KIND_META: Record<
 > = {
   meeting:    { label: "Meeting link",  placeholder: "Kickoff with Acme",     bodyLabel: null,          icon: Calendar },
   document:   { label: "Document",      placeholder: "Brand guide",            bodyLabel: null,          icon: FileText },
-  suggestion: { label: "Suggestion",    placeholder: "Pitch new content angle",bodyLabel: "Details",     icon: Lightbulb }
+  suggestion: { label: "Team note",     placeholder: "Note for the team about this client", bodyLabel: "Details", icon: Lightbulb }
 };
 
 export function AddResourceForm({

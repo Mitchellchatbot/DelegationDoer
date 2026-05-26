@@ -36,31 +36,39 @@ interface Props {
 
 export function HomeLeader({ meName, needsYou, team, deliverables, clientHealth, scopeLabel }: Props) {
   const firstName = meName.split(" ")[0];
+  // One-stop dashboard layout. The page-level wrapper handles max-width
+  // and centering (max-w-7xl mx-auto) so this component just runs the
+  // grid. Two-col mid section on lg+ puts Client health and Team today
+  // side-by-side instead of stacked, which roughly halves the scroll
+  // distance on the most common screen sizes. Deliverables stays full
+  // width below because a task title can be long.
   return (
-    <div className="space-y-3 max-w-5xl">
+    <div className="space-y-4">
       <Header firstName={firstName} scopeLabel={scopeLabel} />
       <NeedsYouStrip counts={needsYou} />
-      <ClientHealthCard rows={clientHealth} />
-      <TeamStripCard team={team} />
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <ClientHealthCard rows={clientHealth} />
+        <TeamStripCard team={team} />
+      </div>
       <DeliverablesCard rows={deliverables} />
     </div>
   );
 }
 
 function Header({ firstName, scopeLabel }: { firstName: string; scopeLabel?: string }) {
+  // Slim header — was a tall card on its own row before. Now it's a
+  // single line so the actual dashboard content can sit higher.
   return (
-    <header className="rounded-2xl border border-indigo-200/60 shadow-soft p-4 bg-gradient-to-r from-indigo-50 via-white to-indigo-50/60">
-      <div className="flex items-center gap-3">
-        <div className="w-10 h-10 rounded-xl bg-white/80 grid place-items-center text-indigo-600 shrink-0 shadow-sm">
-          {scopeLabel ? <Users className="w-5 h-5" /> : <Crown className="w-5 h-5" />}
-        </div>
-        <div>
-          <div className="text-[11px] uppercase tracking-[0.18em] font-semibold text-indigo-700">
-            {scopeLabel ? `${scopeLabel} · today` : "Today"}
-          </div>
-          <h1 className="text-[20px] font-bold text-ink leading-tight">
-            Good to see you, {firstName}
-          </h1>
+    <header className="rounded-2xl border border-indigo-200/60 shadow-soft px-4 py-2.5 bg-gradient-to-r from-indigo-50 via-white to-indigo-50/60 flex items-center gap-3">
+      <div className="w-8 h-8 rounded-lg bg-white/80 grid place-items-center text-indigo-600 shrink-0 shadow-sm">
+        {scopeLabel ? <Users className="w-4 h-4" /> : <Crown className="w-4 h-4" />}
+      </div>
+      <div className="min-w-0">
+        <h1 className="text-[16px] font-bold text-ink leading-tight truncate">
+          Good to see you, {firstName}
+        </h1>
+        <div className="text-[10px] uppercase tracking-[0.18em] font-semibold text-indigo-700">
+          {scopeLabel ? `${scopeLabel} · today` : "Today"}
         </div>
       </div>
     </header>
@@ -140,9 +148,18 @@ function NeedsYouPill({
 }
 
 function TeamStripCard({ team }: { team: HomeTeammate[] }) {
+  // Sort: people who need attention bubble up (not clocked in, no EOD,
+  // overdue tasks). Then alphabetical. Makes the dashboard's first
+  // impression "who's stuck" instead of "who's first alphabetically".
+  const sorted = [...team].sort((a, b) => {
+    const score = (t: HomeTeammate) =>
+      (t.clockedIn ? 0 : 2) + (t.eodSubmitted ? 0 : 1) + Math.min(t.overdueCount, 3);
+    const sd = score(b) - score(a);
+    return sd !== 0 ? sd : a.name.localeCompare(b.name);
+  });
   return (
-    <section className="rounded-2xl border border-slate-200/70 bg-white shadow-soft overflow-hidden">
-      <header className="flex items-center justify-between px-4 py-3 border-b border-slate-100">
+    <section className="rounded-2xl border border-slate-200/70 bg-white shadow-soft overflow-hidden flex flex-col">
+      <header className="flex items-center justify-between px-4 py-3 border-b border-slate-100 shrink-0">
         <div className="text-[13px] font-semibold inline-flex items-center gap-2">
           <Users className="w-4 h-4 text-indigo-500" />
           Team today
@@ -155,31 +172,40 @@ function TeamStripCard({ team }: { team: HomeTeammate[] }) {
           People <ArrowRight className="w-3 h-3" />
         </Link>
       </header>
-      {team.length === 0 ? (
+      {sorted.length === 0 ? (
         <div className="px-4 py-8 text-center text-[12px] text-ink/55">No teammates in scope.</div>
       ) : (
-        <ul className="divide-y divide-slate-100">
-          {team.map((t) => (
-            <li key={t.userId} className="flex items-center gap-3 px-4 py-2">
-              <PersonAvatar
-                userId={t.userId}
-                name={t.name}
-                imageUrl={t.avatarUrl ?? undefined}
-                size={28}
-              />
-              <div className="min-w-0 flex-1">
-                <div className="text-[13px] font-medium text-ink truncate">{t.name}</div>
-                <div className="flex items-center gap-2 text-[10px] text-ink/55 mt-0.5">
-                  <StatusDot ok={t.clockedIn} label={t.clockedIn ? "clocked in" : "clocked out"} />
-                  <StatusDot ok={t.eodSubmitted} label={t.eodSubmitted ? "EOD ✓" : "no EOD yet"} />
-                  {t.overdueCount > 0 && (
-                    <span className="inline-flex items-center gap-1 text-rose-700">
-                      <AlertTriangle className="w-2.5 h-2.5" />
-                      {t.overdueCount} overdue
-                    </span>
-                  )}
+        // Two-column grid inside the card so 22 people don't produce a
+        // 22-row scroll. Hard-cap height with overflow so the card
+        // pairs cleanly with Client health beside it.
+        <ul className="grid grid-cols-1 sm:grid-cols-2 gap-x-1 divide-y sm:divide-y-0 divide-slate-100 max-h-[480px] overflow-y-auto">
+          {sorted.map((t) => (
+            <li key={t.userId}>
+              <Link
+                href={`/team/${encodeURIComponent(t.userId)}`}
+                className="flex items-center gap-2.5 px-3 py-2 hover:bg-slate-50 transition-colors"
+                title={`Open ${t.name}'s profile`}
+              >
+                <PersonAvatar
+                  userId={t.userId}
+                  name={t.name}
+                  imageUrl={t.avatarUrl ?? undefined}
+                  size={26}
+                />
+                <div className="min-w-0 flex-1">
+                  <div className="text-[12.5px] font-medium text-ink truncate">{t.name}</div>
+                  <div className="flex items-center gap-1.5 text-[10px] text-ink/55 mt-0.5">
+                    <StatusDot ok={t.clockedIn} label={t.clockedIn ? "in" : "out"} />
+                    <StatusDot ok={t.eodSubmitted} label={t.eodSubmitted ? "EOD ✓" : "no EOD"} />
+                    {t.overdueCount > 0 && (
+                      <span className="inline-flex items-center gap-0.5 text-rose-700">
+                        <AlertTriangle className="w-2.5 h-2.5" />
+                        {t.overdueCount}
+                      </span>
+                    )}
+                  </div>
                 </div>
-              </div>
+              </Link>
             </li>
           ))}
         </ul>
@@ -202,8 +228,8 @@ function ClientHealthCard({ rows }: { rows: ClientHealthRow[] }) {
   const redCount = rows.filter((r) => r.touchpoint === "red").length;
   const yellowCount = rows.filter((r) => r.touchpoint === "yellow").length;
   return (
-    <section className="rounded-2xl border border-slate-200/70 bg-white shadow-soft overflow-hidden">
-      <header className="flex items-center justify-between px-4 py-3 border-b border-slate-100">
+    <section className="rounded-2xl border border-slate-200/70 bg-white shadow-soft overflow-hidden flex flex-col">
+      <header className="flex items-center justify-between px-4 py-3 border-b border-slate-100 shrink-0">
         <div className="text-[13px] font-semibold inline-flex items-center gap-2">
           <Activity className="w-4 h-4 text-emerald-500" />
           Client health
@@ -228,7 +254,9 @@ function ClientHealthCard({ rows }: { rows: ClientHealthRow[] }) {
           No active clients yet.
         </div>
       ) : (
-        <ul className="divide-y divide-slate-100">
+        // Cap height to match the team card's max-h on the right so the
+        // two cards visually align on lg+ layouts. Scroll spills inside.
+        <ul className="divide-y divide-slate-100 max-h-[480px] overflow-y-auto">
           {rows.map((r) => {
             const meta = TOUCHPOINT_META[r.touchpoint];
             return (

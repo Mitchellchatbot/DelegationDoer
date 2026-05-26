@@ -69,7 +69,7 @@ export default async function HomePage() {
     ]);
 
     return (
-      <div className="space-y-3 max-w-5xl">
+      <div className="space-y-4 max-w-7xl mx-auto">
         {dayBookends && <DayBookends status={dayBookends} hourLocal={hourLocal} />}
         <HomeLeader
           meName={me.name}

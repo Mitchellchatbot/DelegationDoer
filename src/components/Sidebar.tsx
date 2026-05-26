@@ -6,10 +6,9 @@ import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
 import {
   ListTodo, Users,
-  Sparkles, AlertTriangle, Crown, Mail, Home as HomeIcon
+  Sparkles, Crown, Mail, Home as HomeIcon, Sunrise, Moon, Briefcase
 } from "lucide-react";
 import { useEffect, useState } from "react";
-import { ReportIncidentDialog } from "./ReportIncidentDialog";
 import { AIAssistantDrawer } from "./AIAssistantDrawer";
 import { RaiseLink } from "./RaiseLink";
 import { SidebarMoreMenu, MoreIcons } from "./SidebarMoreMenu";
@@ -33,8 +32,11 @@ interface NavItem { href: string; label: string; icon: typeof ListTodo; tone: To
 // attention. The grouping logic for who-sees-Manage-vs-People is
 // derived below at render time.
 const HOME_ITEM: NavItem = { href: "/home",    label: "Home",    icon: HomeIcon, tone: "sky"     };
+const SOD_ITEM: NavItem = { href: "/sod", label: "Start day", icon: Sunrise, tone: "sky" };
+const EOD_ITEM: NavItem = { href: "/eod", label: "Wrap day", icon: Moon, tone: "indigo" };
 const TASKS_ITEM: NavItem = { href: "/tasks",  label: "Tasks",   icon: ListTodo, tone: "indigo"  };
 const INBOXES_ITEM: NavItem = { href: "/inboxes", label: "Inboxes", icon: Mail, tone: "fuchsia" };
+const CLIENTS_ITEM: NavItem = { href: "/clients", label: "Clients", icon: Briefcase, tone: "amber" };
 const PEOPLE_ITEM: NavItem = { href: "/people", label: "People", icon: Users, tone: "indigo"   };
 const MANAGE_CEO_ITEM: NavItem = { href: "/leader", label: "Manage", icon: Crown, tone: "amber" };
 const MANAGE_HEAD_ITEM: NavItem = { href: "/leader", label: "Manage", icon: Users, tone: "emerald" };
@@ -52,7 +54,6 @@ const TONE_STYLES: Record<Tone, { idle: string; activeBg: string; activeFg: stri
 
 export function Sidebar({ user }: { user: User }) {
   const path = usePathname();
-  const [incidentOpen, setIncidentOpen] = useState(false);
   const [aiOpen, setAiOpen] = useState(false);
 
   // Aggregate "things waiting in /updates" badge. Folds in the open
@@ -234,7 +235,14 @@ export function Sidebar({ user }: { user: User }) {
     : isHeadRole
       ? MANAGE_HEAD_ITEM
       : PEOPLE_ITEM;
-  const NAV: NavItem[] = [HOME_ITEM, TASKS_ITEM, INBOXES_ITEM, manageOrPeople];
+  // SOD + EOD are first-class daily rituals for anyone who submits
+  // them — workers and heads. Leaders + stealth admins are exempt
+  // (same as ClockGate), so they don't see the rows. Placed adjacent
+  // to each other, right after Home, so they read as a pair.
+  const submitsDailies = !isLeaderRole;
+  const NAV: NavItem[] = submitsDailies
+    ? [HOME_ITEM, SOD_ITEM, EOD_ITEM, TASKS_ITEM, INBOXES_ITEM, CLIENTS_ITEM, manageOrPeople]
+    : [HOME_ITEM, TASKS_ITEM, INBOXES_ITEM, CLIENTS_ITEM, manageOrPeople];
 
   // Build the More menu groups dynamically so workers don't see
   // approver-only rows and non-software workers don't see Projects.
@@ -274,9 +282,10 @@ export function Sidebar({ user }: { user: User }) {
       ]
     },
     {
+      // Clients moved into the primary nav, so it no longer appears
+      // here — duplicating would just confuse "where do I click?".
       label: "Knowledge",
       items: [
-        { href: "/clients", label: "Clients", icon: MoreIcons.Clients, badge: clientsAtRisk ?? 0 },
         { href: "/sops",    label: "SOPs",    icon: MoreIcons.SOPs },
         { href: "/updates", label: "Updates", icon: MoreIcons.Updates, badge: updatesTotal }
       ]
@@ -334,10 +343,17 @@ export function Sidebar({ user }: { user: User }) {
                   title: `${peopleEodPending} EOD ${peopleEodPending === 1 ? "form" : "forms"} not yet submitted today`
                 };
               }
-              // Approvals / Routing review / Updates / Clients moved
-              // into the More popover — their badges render as row
-              // pills there, plus a single dot on the More trigger
-              // when any nested badge > 0.
+              if (item.href === "/clients" && (clientsAtRisk ?? 0) > 0) {
+                return {
+                  count: clientsAtRisk!,
+                  tone: "rose",
+                  title: `${clientsAtRisk} ${clientsAtRisk === 1 ? "client is" : "clients are"} at-risk or shaky`
+                };
+              }
+              // Approvals / Routing review / Updates moved into the
+              // More popover — their badges render as row pills there,
+              // plus a single dot on the More trigger when any nested
+              // badge > 0.
               return null;
             })();
             return (
@@ -408,14 +424,10 @@ export function Sidebar({ user }: { user: User }) {
           <SidebarMoreMenu groups={moreGroups} />
         </nav>
 
+        {/* Report incident moved into /settings — too loud to live next
+            to the primary nav for something used only a few times a
+            month. Ask AI stays here since ⌘K is the universal entry. */}
         <div className="space-y-2 px-1 mt-3">
-          <button
-            onClick={() => setIncidentOpen(true)}
-            className="w-full inline-flex items-center justify-center gap-2 px-3 py-2 rounded-xl text-sm font-medium border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100 transition-colors"
-          >
-            <AlertTriangle className="w-4 h-4" />
-            Report incident
-          </button>
           <button
             onClick={() => setAiOpen(true)}
             className="w-full inline-flex items-center justify-center gap-2 px-3 py-2 rounded-xl text-sm border border-slate-200 bg-white text-ink hover:bg-slate-50 transition-colors"
@@ -432,7 +444,6 @@ export function Sidebar({ user }: { user: User }) {
         <RaiseLink />
       </div>
 
-      <ReportIncidentDialog open={incidentOpen} onOpenChange={setIncidentOpen} />
       <AIAssistantDrawer open={aiOpen} onOpenChange={setAiOpen} />
     </aside>
   );

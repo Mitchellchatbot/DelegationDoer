@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useState } from "react";
 import {
-  Clock, Loader2, ListChecks, ArrowRight, Sun, CheckCircle2, FileText
+  Clock, Loader2, ListChecks, ArrowRight, Sun, CheckCircle2
 } from "lucide-react";
 import { toast } from "sonner";
 import { useClock } from "@/components/ClockContext";
@@ -12,28 +12,24 @@ import { PriorityBadge } from "@/components/Badges";
 import { cn } from "@/lib/utils";
 import type { HomeTask } from "@/lib/home-data";
 
-// /home rendering for workers. Three strips, top to bottom:
+// /home rendering for workers. Two strips, top to bottom:
 //   1. Clock strip — clocked-out CTA OR clocked-in live timer
 //   2. Today's tasks — capped at 8, sort = due then priority
-//   3. EOD nudge — only after 5pm if they haven't submitted
 //
-// Intentionally spare. Workers said "show me my work, hide the rest".
+// SOD/EOD prompts moved into <DayBookends />, rendered by the parent
+// page so they sit above this view. Intentionally spare otherwise.
 
 interface Props {
   meName: string;
   tasks: HomeTask[];
-  // Set by the server when local-time is past 5pm AND no EOD has
-  // been submitted today. Null = unknown (migration not applied).
-  showEodNudge: boolean | null;
 }
 
-export function HomeWorker({ meName, tasks, showEodNudge }: Props) {
+export function HomeWorker({ meName, tasks }: Props) {
   const firstName = meName.split(" ")[0];
   return (
-    <div className="space-y-3 max-w-3xl">
+    <div className="space-y-3">
       <Header firstName={firstName} />
       <ClockStrip />
-      {showEodNudge && <EodNudge />}
       <TasksStrip tasks={tasks} />
     </div>
   );
@@ -139,26 +135,6 @@ function ClockStrip() {
         Clock out
       </button>
     </div>
-  );
-}
-
-function EodNudge() {
-  return (
-    <Link
-      href="/updates/eod"
-      className="rounded-2xl border border-fuchsia-200/60 bg-fuchsia-50/60 p-3 flex items-center gap-3 hover:bg-fuchsia-50 transition-colors"
-    >
-      <div className="w-9 h-9 rounded-xl bg-white grid place-items-center text-fuchsia-600 shrink-0">
-        <FileText className="w-4 h-4" />
-      </div>
-      <div className="flex-1 min-w-0">
-        <div className="text-[13px] font-semibold text-fuchsia-900">It's after 5pm — wrap up with your EOD.</div>
-        <div className="text-[11px] text-fuchsia-800/80">5 quick questions. Takes about 2 minutes.</div>
-      </div>
-      <span className="inline-flex items-center gap-1 text-[12px] font-semibold text-fuchsia-700">
-        Submit EOD <ArrowRight className="w-3.5 h-3.5" />
-      </span>
-    </Link>
   );
 }
 

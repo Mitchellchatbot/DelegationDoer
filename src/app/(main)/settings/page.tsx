@@ -2,6 +2,7 @@ import { requireCurrentUserId } from "@/lib/session";
 import { getUserById, getDepartments } from "@/lib/server-data";
 import { ProfileAvatarSection } from "@/components/ProfileAvatarSection";
 import { ResetPasswordSection } from "@/components/ResetPasswordSection";
+import { ReportIncidentSection } from "@/components/ReportIncidentSection";
 import { WorkScheduleSection } from "@/components/WorkScheduleSection";
 import { DesktopAppSection } from "@/components/DesktopAppSection";
 import { MissiveIntegrationSection } from "@/components/MissiveIntegrationSection";
@@ -42,6 +43,8 @@ export default async function SettingsPage() {
       {me && <ProfileAvatarSection user={me} />}
 
       <ResetPasswordSection />
+
+      <ReportIncidentSection />
 
       <WorkScheduleSection />
 

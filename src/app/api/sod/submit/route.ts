@@ -146,7 +146,7 @@ export async function POST(req: NextRequest) {
     else summaryBits.push("no blockers reported");
 
     const baseUrl = process.env.NEXT_PUBLIC_APP_URL || "";
-    const link = baseUrl ? `${baseUrl}/updates/sod` : null;
+    const link = baseUrl ? `${baseUrl}/sod` : null;
 
     const quoteLines = (s: string) =>
       s.split("\n").map((line) => `> ${line}`).join("\n");

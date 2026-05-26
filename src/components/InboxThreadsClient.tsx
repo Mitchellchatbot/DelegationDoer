@@ -199,45 +199,22 @@ export function InboxThreadsClient({
   const unreadCount = useMemo(() => threads.filter((d) => d.unread).length, [threads]);
 
   return (
-    <div className="space-y-3">
-      {/* Category chips — same buckets missiveclone's left rail uses.
-          "People" hides every automated sender (no-reply, alerts,
-          newsletters) so the noisy inboxes feel like real
-          conversations only. */}
-      <div className="flex items-center gap-1.5 overflow-x-auto pb-1 -mx-1 px-1 no-scrollbar">
-        {CATEGORIES.map((c) => {
-          const Icon = c.icon;
-          const active = category === c.id;
-          return (
-            <button
-              key={c.id}
-              type="button"
-              onClick={() => setCategory(c.id)}
-              className={cn(
-                "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[12px] font-medium border whitespace-nowrap transition-all active:scale-[0.97]",
-                active
-                  ? "bg-accent/10 text-accent border-accent/40 shadow-sm"
-                  : "bg-white text-ink/65 border-slate-200 hover:border-accent/30 hover:text-ink"
-              )}
-            >
-              <Icon className={cn("w-3.5 h-3.5", active ? "text-accent" : c.tone)} />
-              {c.label}
-            </button>
-          );
-        })}
-      </div>
-
+    <div className="space-y-2">
+      {/* Search + status line on top — search is what users reach for
+          first; categories sit just below as a secondary filter row.
+          Tighter rhythm (space-y-2, smaller padding) since this used
+          to take ~180px of vertical chrome before the actual list. */}
       <div className="relative">
-        <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-muted z-10" />
+        <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted z-10" />
         <input
           type="search"
           value={q}
           onChange={(e) => setQ(e.target.value)}
           placeholder="Search subject, sender, body…"
-          className="w-full rounded-2xl border border-slate-200/70 bg-white pl-10 pr-10 py-2.5 text-[13px] outline-none focus:border-accent/50 focus:ring-2 focus:ring-accent/20"
+          className="w-full rounded-xl border border-slate-200/70 bg-white pl-9 pr-9 py-2 text-[13px] outline-none focus:border-accent/50 focus:ring-2 focus:ring-accent/20"
         />
         {(loading || q) && (
-          <div className="absolute right-3.5 top-1/2 -translate-y-1/2 z-10 flex items-center gap-1">
+          <div className="absolute right-3 top-1/2 -translate-y-1/2 z-10 flex items-center gap-1">
             {loading && <Loader2 className="w-3.5 h-3.5 text-muted animate-spin" />}
             {q && !loading && (
               <button
@@ -253,16 +230,41 @@ export function InboxThreadsClient({
         )}
       </div>
 
-      <div className="text-[11px] text-ink/55 px-1 flex items-center gap-2">
-        {searchActive ? (
-          <>
-            <span className="font-medium">{threads.length}</span> result{threads.length === 1 ? "" : "s"} for &ldquo;{debouncedQ}&rdquo;
-          </>
-        ) : (
-          <>
-            <span className="font-semibold text-accent">{unreadCount}</span> unread · loaded {threads.length} thread{threads.length === 1 ? "" : "s"}
-          </>
-        )}
+      {/* Category chips + stat line on a single row. Categories live
+          in a horizontal scroller (still works on narrow widths) and
+          the unread/result count sits at the right edge where the eye
+          lands after scanning the chips. Same buckets missiveclone's
+          left rail uses; "People" hides automated senders. */}
+      <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5 flex-1 min-w-0 no-scrollbar">
+          {CATEGORIES.map((c) => {
+            const Icon = c.icon;
+            const active = category === c.id;
+            return (
+              <button
+                key={c.id}
+                type="button"
+                onClick={() => setCategory(c.id)}
+                className={cn(
+                  "inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-medium border whitespace-nowrap transition-all active:scale-[0.97]",
+                  active
+                    ? "bg-accent/10 text-accent border-accent/40"
+                    : "bg-white text-ink/65 border-slate-200 hover:border-accent/30 hover:text-ink"
+                )}
+              >
+                <Icon className={cn("w-3 h-3", active ? "text-accent" : c.tone)} />
+                {c.label}
+              </button>
+            );
+          })}
+        </div>
+        <div className="text-[11px] text-ink/55 tabular-nums whitespace-nowrap shrink-0">
+          {searchActive ? (
+            <><span className="font-medium">{threads.length}</span> result{threads.length === 1 ? "" : "s"}</>
+          ) : (
+            <><span className="font-semibold text-accent">{unreadCount}</span> unread</>
+          )}
+        </div>
       </div>
 
       <ThreadList

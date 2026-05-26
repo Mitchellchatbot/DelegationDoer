@@ -299,7 +299,7 @@ export default function WidgetPage() {
             action: {
               label: "Open",
               onClick: () => {
-                (window as any).widgetAPI?.openMainWindow?.("/updates/eod");
+                (window as any).widgetAPI?.openMainWindow?.("/eod");
               }
             }
           });

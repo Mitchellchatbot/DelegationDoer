@@ -5,7 +5,6 @@ import { getUserById } from "@/lib/server-data";
 import { listAccounts, listThreadsPaged, type MissiveThread } from "@/lib/missive-client";
 import { visibleAccountIdsFor } from "@/lib/inbox-access";
 import { readStateForThreads, isThreadUnread } from "@/lib/thread-read-state";
-import { ThreadFilters } from "@/components/ThreadFilters";
 import { InboxThreadsClient } from "@/components/InboxThreadsClient";
 import { ComposeButton } from "@/components/ComposeButton";
 
@@ -108,8 +107,6 @@ export default async function InboxThreadsPage({
           style={{ background: "radial-gradient(circle, rgba(99,102,241,0.16), transparent 70%)" }}
         />
       </header>
-
-      <ThreadFilters totalCount={threads.length} />
 
       {fetchError && (
         <div className="card p-4 border-urgent/30 bg-urgent/5 text-sm text-urgent">

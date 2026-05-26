@@ -4,6 +4,7 @@ import { requireCurrentUserId } from "@/lib/session";
 import { getAllTasks, getUserById } from "@/lib/server-data";
 import { notifyAssignment, postMessage } from "@/lib/slack";
 import { syncTaskToCalendar } from "@/lib/task-calendar-sync";
+import { sanitizeMediaUrls } from "@/lib/media";
 
 export const dynamic = "force-dynamic";
 
@@ -137,7 +138,8 @@ export async function POST(req: NextRequest) {
       // defs — that's enforced at edit time on the client.
       custom: body.custom && typeof body.custom === "object" && !Array.isArray(body.custom)
         ? body.custom
-        : {}
+        : {},
+      media_urls: sanitizeMediaUrls(body.mediaUrls)
     };
 
     const { data, error } = await supabase

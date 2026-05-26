@@ -3,6 +3,7 @@ import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { visibleAccountIdsFor } from "@/lib/inbox-access";
 import { sendReply, getThread } from "@/lib/missive-client";
+import { sanitizeMediaUrls, fetchMediaAsAttachments } from "@/lib/media";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -85,6 +86,14 @@ export async function POST(
       );
     }
 
+    // Attachments — caller uploads each file to /api/upload first,
+    // then passes the returned URLs back here. We fetch them server-side
+    // and forward as multipart `files[]` to the missive clone.
+    const attachmentItems = sanitizeMediaUrls(body.attachmentUrls);
+    const attachments = attachmentItems.length > 0
+      ? await fetchMediaAsAttachments(attachmentItems)
+      : undefined;
+
     const result = await sendReply({
       threadId: params.threadId,
       fromAccountId: accountId,
@@ -93,7 +102,8 @@ export async function POST(
       to,
       cc,
       subject,
-      inReplyTo
+      inReplyTo,
+      attachments
     });
 
     return NextResponse.json({ ok: true, messageId: result.messageId });

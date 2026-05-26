@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 import { Sparkles, Loader2, ArrowRight, Send, RefreshCw, Calendar } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { MediaPicker } from "@/components/MediaPicker";
+import type { TaskMedia } from "@/lib/types";
 
 // Content Plan composer for SEO team. Worker picks a client, types raw
 // topic bullets, hits Generate → AI returns a Bella-template-shaped
@@ -40,6 +42,7 @@ export function ContentPlanComposer({ lockedClient }: { lockedClient?: LockedCli
   const [draftTo, setDraftTo] = useState("");
   // Default send date: next Monday at 9am — typical monthly-plan timing.
   const [scheduledFor, setScheduledFor] = useState(defaultScheduledFor);
+  const [attachments, setAttachments] = useState<TaskMedia[]>([]);
   const [step, setStep] = useState<"compose" | "preview">("compose");
 
   useEffect(() => {
@@ -109,7 +112,8 @@ export function ContentPlanComposer({ lockedClient }: { lockedClient?: LockedCli
           subject: draftSubject.trim(),
           bodyText: draftBody.trim(),
           kind: "content_plan",
-          scheduledFor: scheduledFor ? new Date(scheduledFor).toISOString() : null
+          scheduledFor: scheduledFor ? new Date(scheduledFor).toISOString() : null,
+          mediaUrls: attachments
         })
       });
       const data = await res.json();
@@ -128,6 +132,7 @@ export function ContentPlanComposer({ lockedClient }: { lockedClient?: LockedCli
       setDraftSubject("");
       setDraftBody("");
       setDraftTo("");
+      setAttachments([]);
       setScheduledFor(defaultScheduledFor());
       // Keep clientId pinned when the composer is locked to a client.
       if (!lockedClient) setClientId("");
@@ -274,6 +279,19 @@ export function ContentPlanComposer({ lockedClient }: { lockedClient?: LockedCli
             rows={16}
             className="w-full text-[13px] bg-white border border-slate-200/70 rounded-xl px-3 py-2.5 outline-none focus:ring-2 focus:ring-violet-200/40 focus:border-violet-400/50 resize-y leading-relaxed"
           />
+
+          <div>
+            <div className="text-[10px] uppercase tracking-wide font-semibold text-ink/55 mb-1.5">
+              Attachments
+            </div>
+            <MediaPicker
+              value={attachments}
+              onChange={setAttachments}
+              label="Attach files"
+              compact
+              hint={scheduledFor ? "Attachments are dropped on scheduled sends — clear the send date to keep them." : undefined}
+            />
+          </div>
 
           <div className="flex items-center justify-between gap-2 flex-wrap">
             <button

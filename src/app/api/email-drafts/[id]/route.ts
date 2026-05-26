@@ -4,6 +4,7 @@ import { getUserById } from "@/lib/server-data";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { canApproveDraft } from "@/lib/email-approvers";
 import { recordDraftEvent } from "@/lib/draft-events";
+import { sanitizeMediaUrls } from "@/lib/media";
 
 export const dynamic = "force-dynamic";
 
@@ -78,6 +79,11 @@ export async function PATCH(
     // approve route resolves on send.
     if (typeof body.accountId === "string") {
       update.account_id = body.accountId.trim() || null;
+    }
+    // Attachment list — full replace (author/approver can add or
+    // remove). Missing key keeps whatever's already on the row.
+    if (Array.isArray(body.mediaUrls)) {
+      update.media_urls = sanitizeMediaUrls(body.mediaUrls);
     }
     if (Object.keys(update).length === 0) {
       return NextResponse.json({ error: "nothing to update" }, { status: 400 });

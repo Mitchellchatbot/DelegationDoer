@@ -10,8 +10,9 @@ import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Sparkles, Wand2, Crown, ShieldCheck, ChevronDown, ChevronRight, Mail, FolderOpen, Server, Link as LinkIcon, KeyRound, MessageSquare, Zap } from "lucide-react";
 import { PersonAvatar } from "@/components/PersonAvatar";
+import { MediaPicker } from "@/components/MediaPicker";
 import { toast } from "sonner";
-import type { CustomField } from "@/lib/types";
+import type { CustomField, TaskMedia } from "@/lib/types";
 
 interface SkillRow { userId: string; tag: string; combinedScore: number; }
 
@@ -117,6 +118,10 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel, initialValues }: 
       .catch(() => { /* best-effort; ranking just falls back to dept+capacity */ });
   }, []);
   const [customValues, setCustomValues] = useState<Record<string, unknown>>({});
+  // Media attached at create time (images / audio). Stored on the task
+  // itself so it shows up on the detail page; appendable later via the
+  // edit dialog.
+  const [media, setMedia] = useState<TaskMedia[]>([]);
   useEffect(() => {
     fetch("/api/custom-fields", { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : { fields: [] }))
@@ -312,7 +317,8 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel, initialValues }: 
           markupLink: markupLink.trim() || null,
           hostingAccess: hostingAccess.trim() || null,
           missiveThreadUrl: missiveThreadUrl.trim() || null,
-          custom: customValues
+          custom: customValues,
+          mediaUrls: media
         })
       });
       const data = await res.json();
@@ -550,6 +556,15 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel, initialValues }: 
               <ProjectField icon={<MessageSquare className="w-3.5 h-3.5" />} label="Missive thread" value={missiveThreadUrl} onChange={setMissiveThreadUrl} placeholder="https://mail.missiveapp.com/…" type="url" />
             </div>
           )}
+        </div>
+
+        <div className="pt-2 border-t border-border/60">
+          <div className="text-xs font-medium text-muted mb-2">Attachments</div>
+          <MediaPicker
+            value={media}
+            onChange={setMedia}
+            hint="Images or audio clips — visible on the task detail page."
+          />
         </div>
 
         {/* Custom fields — auto-rendered from the org-wide definitions in

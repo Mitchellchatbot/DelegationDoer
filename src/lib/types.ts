@@ -100,6 +100,18 @@ export interface Task {
   // select, number for number, boolean for checkbox, string[] for
   // multiselect).
   custom?: Record<string, unknown>;
+  // Files attached to the task — images, audio, etc. Persistent across
+  // edits. New entries can come from the create form, the edit dialog,
+  // or the widget's status-update flow. Each entry is the upload URL plus
+  // best-effort metadata for rendering.
+  mediaUrls?: TaskMedia[];
+}
+
+export interface TaskMedia {
+  url: string;
+  name?: string;
+  contentType?: string;
+  size?: number;
 }
 
 // Org-wide custom field definition. Managed in Settings; rendered on the

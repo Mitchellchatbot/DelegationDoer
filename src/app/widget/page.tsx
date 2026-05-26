@@ -1934,10 +1934,17 @@ function UpdateView({
         imageUrl = upData.url;
       }
 
+      // Append the freshly uploaded image to the task's persistent
+      // media_urls so the browser detail page shows it alongside any
+      // earlier attachments (the activity-log image_url still fires for
+      // the comment-style display).
+      const addMediaUrls = imageUrl
+        ? [{ url: imageUrl, name: imageFile?.name, contentType: imageFile?.type, size: imageFile?.size }]
+        : undefined;
       const res = await fetch(`/api/tasks/${task.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status, comment: comment.trim() || null, imageUrl })
+        body: JSON.stringify({ status, comment: comment.trim() || null, imageUrl, addMediaUrls })
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error ?? "save failed");
@@ -2113,6 +2120,13 @@ const PRIORITY_OPTIONS: { value: "low" | "medium" | "high" | "critical"; label: 
 // Full-screen create-task view inside the widget. Mirrors UpdateView's
 // layout (title strip, scrollable body, footer). Submits POST /api/tasks
 // then bounces back to the panel so the new task appears in the list.
+interface WidgetMedia {
+  url: string;
+  name?: string;
+  contentType?: string;
+  size?: number;
+}
+
 function CreateTaskView({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -2120,7 +2134,37 @@ function CreateTaskView({ onClose, onCreated }: { onClose: () => void; onCreated
   const [estimateHours, setEstimateHours] = useState<number>(2);
   const [assigneeId, setAssigneeId] = useState<string>("");
   const [users, setUsers] = useState<WidgetUser[]>([]);
+  const [media, setMedia] = useState<WidgetMedia[]>([]);
+  const [uploading, setUploading] = useState(false);
   const [busy, setBusy] = useState(false);
+
+  async function pickMedia(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    setUploading(true);
+    const next = [...media];
+    try {
+      for (const file of Array.from(files)) {
+        const fd = new FormData();
+        fd.append("file", file);
+        const r = await fetch("/api/upload", { method: "POST", body: fd });
+        const d = await r.json().catch(() => ({} as { error?: string; url?: string }));
+        if (!r.ok || !d.url) {
+          toast.error(`Upload failed: ${d.error ?? `status ${r.status}`}`);
+          continue;
+        }
+        next.push({ url: d.url, name: file.name, contentType: file.type, size: file.size });
+      }
+      setMedia(next);
+    } finally {
+      setUploading(false);
+      e.target.value = "";
+    }
+  }
+
+  function removeMedia(idx: number) {
+    setMedia((cur) => cur.filter((_, i) => i !== idx));
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -2149,7 +2193,8 @@ function CreateTaskView({ onClose, onCreated }: { onClose: () => void; onCreated
           description: description.trim() || undefined,
           priority,
           estimatedHours: estimateHours,
-          assigneeId: assigneeId || undefined
+          assigneeId: assigneeId || undefined,
+          mediaUrls: media
         })
       });
       const data = await res.json();
@@ -2253,6 +2298,48 @@ function CreateTaskView({ onClose, onCreated }: { onClose: () => void; onCreated
                 className="w-20 px-2.5 py-1.5 text-[13px] bg-white border border-slate-200/80 rounded-lg outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent/40 tabular-nums"
               />
               <span className="text-[11px] text-slate-500">hours</span>
+            </div>
+          </div>
+
+          <div>
+            <label className="text-[10px] uppercase tracking-wide font-semibold text-slate-500 px-1">Attachments</label>
+            <div className="mt-1 space-y-1.5">
+              {media.length > 0 && (
+                <div className="flex flex-wrap gap-1.5">
+                  {media.map((m, i) => {
+                    const isImage = m.contentType?.startsWith("image/");
+                    return (
+                      <div key={`${m.url}-${i}`} className="relative">
+                        {isImage ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            src={m.url}
+                            alt={m.name ?? ""}
+                            className="h-12 w-12 object-cover rounded-md border border-slate-200"
+                          />
+                        ) : (
+                          <div className="px-2 py-1 text-[10px] rounded-md border border-slate-200 bg-white max-w-[140px] truncate">
+                            {m.name ?? "file"}
+                          </div>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => removeMedia(i)}
+                          className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-black/70 text-white grid place-items-center"
+                          aria-label="Remove"
+                        >
+                          <X className="w-2.5 h-2.5" />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              <label className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-dashed border-slate-300 text-[11px] text-slate-500 hover:border-slate-400 cursor-pointer">
+                <ImageIcon className="w-3.5 h-3.5" />
+                {uploading ? "Uploading…" : "Add image or audio"}
+                <input type="file" accept="image/*,audio/*" multiple className="hidden" onChange={pickMedia} disabled={uploading} />
+              </label>
             </div>
           </div>
 

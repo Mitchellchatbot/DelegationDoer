@@ -7,6 +7,8 @@ import { motion, AnimatePresence } from "framer-motion";
 import { PenSquare, Send, X, Loader2, Clock } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { MediaPicker } from "@/components/MediaPicker";
+import type { TaskMedia } from "@/lib/types";
 
 // "Compose" affordance — pill button on the inbox header that opens a
 // Gmail-style modal. State is local; submit hits /api/inboxes/compose.
@@ -39,6 +41,11 @@ export function ComposeButton({
   // <input type="datetime-local"> value: "YYYY-MM-DDTHH:mm" (no seconds,
   // no zone). We convert to ISO at submit time.
   const [sendAtLocal, setSendAtLocal] = useState("");
+  // Forwarded to /api/inboxes/compose as attachmentUrls; the route
+  // fetches each URL and re-forwards as multipart files[] to the missive
+  // clone. Scheduled sends reject attachments at the backend, so we
+  // block that combo in submit() with a friendly toast.
+  const [attachments, setAttachments] = useState<TaskMedia[]>([]);
 
   const fromOptions = accounts ?? (accountId ? [{ id: accountId, email: accountEmail ?? "", display_name: null }] : []);
   const fromMeta = fromOptions.find((a) => a.id === fromAccountId) ?? fromOptions[0];
@@ -53,6 +60,7 @@ export function ComposeButton({
     setShowCc(false);
     setScheduleOpen(false);
     setSendAtLocal("");
+    setAttachments([]);
   }
 
   async function submit() {
@@ -86,6 +94,10 @@ export function ComposeButton({
       }
       sendAtISO = new Date(ms).toISOString();
     }
+    if (sendAtISO && attachments.length > 0) {
+      toast.error("Attachments aren't supported on scheduled sends — remove them or send now.");
+      return;
+    }
 
     setBusy(true);
     try {
@@ -98,7 +110,7 @@ export function ComposeButton({
           cc: ccList,
           subject: subject.trim(),
           bodyText: bodyText,
-          ...(sendAtISO ? { sendAt: sendAtISO } : {})
+          ...(sendAtISO ? { sendAt: sendAtISO } : { attachmentUrls: attachments })
         })
       });
       const data = await res.json();
@@ -253,6 +265,14 @@ export function ComposeButton({
                     placeholder="Write your message…"
                     rows={9}
                     className="w-full text-sm bg-white/60 border border-slate-200/70 rounded-xl px-3 py-2.5 outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent/40 resize-none transition-all"
+                  />
+
+                  <MediaPicker
+                    value={attachments}
+                    onChange={setAttachments}
+                    label="Attach files"
+                    compact
+                    hint={scheduleOpen ? "Attachments are not supported on scheduled sends." : undefined}
                   />
                 </div>
 

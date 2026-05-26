@@ -1,9 +1,8 @@
 "use client";
 
-import { Sparkles, Mail } from "lucide-react";
+import { Sparkles, Mail, CalendarClock } from "lucide-react";
 import { PriorityBadge } from "./Badges";
 import { PersonAvatar } from "./PersonAvatar";
-import { Countdown } from "./Countdown";
 import { cn } from "@/lib/utils";
 import type { PendingTaskRow, DecisionRow } from "./RoutingReviewBoard";
 
@@ -118,7 +117,16 @@ export function RoutingReviewCard({
         </div>
         <div className="shrink-0">
           {task.due_date ? (
-            <Countdown iso={task.due_date} />
+            <span
+              className="inline-flex items-center gap-1 text-ink/55"
+              title="Suggested deadline — the countdown only starts once you approve"
+            >
+              <CalendarClock className="w-3 h-3" />
+              {new Date(task.due_date).toLocaleString(undefined, {
+                month: "short", day: "numeric",
+                hour: "numeric", minute: "2-digit"
+              })}
+            </span>
           ) : (
             <span className="text-ink/40">no deadline</span>
           )}

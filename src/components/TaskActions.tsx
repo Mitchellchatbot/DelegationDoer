@@ -6,7 +6,8 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Check, ChevronDown, X, Pencil, CalendarPlus } from "lucide-react";
 import { toast } from "sonner";
-import type { Priority, Task, TaskStatus } from "@/lib/types";
+import { MediaPicker } from "@/components/MediaPicker";
+import type { Priority, Task, TaskMedia, TaskStatus } from "@/lib/types";
 
 const STATUS_OPTIONS: { value: TaskStatus; label: string }[] = [
   { value: "pending",            label: "Pending" },
@@ -98,6 +99,7 @@ function EditButton({ task }: { task: Task }) {
   const [website, setWebsite] = useState(task.website ?? "");
   const [departmentId, setDepartmentId] = useState<string>(task.departmentId ?? "");
   const [departments, setDepartments] = useState<{ id: string; name: string }[]>([]);
+  const [media, setMedia] = useState<TaskMedia[]>(task.mediaUrls ?? []);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const router = useRouter();
@@ -131,7 +133,8 @@ function EditButton({ task }: { task: Task }) {
           estimatedHours: Number(estimate),
           clientName: clientName.trim() || null,
           website: website.trim() || null,
-          departmentId: departmentId || null
+          departmentId: departmentId || null,
+          mediaUrls: media
         })
       });
       const data = await res.json();
@@ -205,6 +208,15 @@ function EditButton({ task }: { task: Task }) {
                 <label className="label">Website</label>
                 <input className="input" value={website} onChange={(e) => setWebsite(e.target.value)} placeholder="—" />
               </div>
+            </div>
+            <div>
+              <label className="label">Attachments</label>
+              <MediaPicker
+                value={media}
+                onChange={setMedia}
+                taskId={task.id}
+                hint="Images or audio. Stays attached to the task."
+              />
             </div>
           </div>
           {error && <div className="mt-3 text-sm text-urgent">⚠ {error}</div>}

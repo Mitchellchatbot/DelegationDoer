@@ -10,6 +10,7 @@ import { PresenceProvider } from "@/lib/presence-context";
 import { TeamProvider } from "@/lib/team-context";
 import { ClockProvider } from "@/components/ClockContext";
 import { OnboardingDialog } from "@/components/OnboardingDialog";
+import { SodGate } from "@/components/SodGate";
 import { primaryDepartment } from "@/lib/departments";
 
 export default async function MainLayout({ children }: { children: React.ReactNode }) {
@@ -66,6 +67,7 @@ export default async function MainLayout({ children }: { children: React.ReactNo
       </div>
       <Toaster position="bottom-right" richColors closeButton />
       <OnboardingDialog />
+      <SodGate />
       </ClockProvider>
       </TeamProvider>
       </PresenceProvider>

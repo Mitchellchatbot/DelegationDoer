@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import { motion, LayoutGroup } from "framer-motion";
-import { Sparkles, Search, ShieldAlert, Camera, FolderKanban, Award, Trophy, Video } from "lucide-react";
+import { Sparkles, Search, ShieldAlert, Camera, FolderKanban, Award, Trophy, Video, Sunrise } from "lucide-react";
 import { useCurrentUser } from "@/lib/user-context";
 import { isLeader } from "@/lib/auth";
 import { cn } from "@/lib/utils";
@@ -19,6 +19,7 @@ type Tab = {
   approverOnly?: boolean;
 };
 const TABS: readonly Tab[] = [
+  { href: "/updates/sod",             label: "SOD",         icon: Sunrise                         },
   { href: "/updates/eod",             label: "EOD",         icon: Sparkles                        },
   { href: "/updates/approvals",       label: "Approvals",   icon: Video,        approverOnly: true},
   { href: "/updates/seo",             label: "SEO",         icon: Search,      seoOnly: true      },

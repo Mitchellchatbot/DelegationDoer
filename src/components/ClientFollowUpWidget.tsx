@@ -17,6 +17,9 @@ export interface FollowUpClient {
   touchpointOverrideLabel: TouchpointLabel | null;
   touchpointSummary: string | null;
   contactName: string | null;
+  // Defaults TRUE on the caller side; FALSE excludes from the widget
+  // entirely (the client has opted out of email cadence tracking).
+  encourageEmails?: boolean;
 }
 
 // Compact "Clients needing follow-up" widget. Picks every client
@@ -32,8 +35,11 @@ export function ClientFollowUpWidget({
   limit?: number;
   showHeader?: boolean;
 }) {
-  // Decorate + filter to only needs-attention rows.
+  // Decorate + filter to only needs-attention rows. Clients with
+  // encourageEmails=false are entirely excluded — the whole point of
+  // the toggle is that they don't appear in follow-up surfaces.
   const decorated = clients
+    .filter((c) => c.encourageEmails !== false)
     .map((c) => {
       const { label, isOverride } = effectiveTouchpoint(
         c.touchpointOverrideLabel,

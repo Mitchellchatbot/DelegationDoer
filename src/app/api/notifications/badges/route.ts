@@ -107,7 +107,7 @@ export async function GET() {
     try {
       const { data: clientRows } = await supabase
         .from("clients")
-        .select("id, health_label, health_override_label, touchpoint_override_label");
+        .select("id, health_label, health_override_label, touchpoint_override_label, encourage_emails");
 
       // Pull every sent email_drafts row in one shot so we can compute
       // the touchpoint band per client without N+1ing. Mirrors the
@@ -138,8 +138,12 @@ export async function GET() {
         health_label: string | null;
         health_override_label: string | null;
         touchpoint_override_label: string | null;
+        encourage_emails: boolean | null;
       }>;
       clientsAtRisk = rows.filter((r) => {
+        // Opt-out: clients with email tracking off don't count toward
+        // any "needs attention" badge.
+        if (r.encourage_emails === false) return false;
         // Sentiment health channel
         const eff = r.health_override_label ?? r.health_label;
         if (eff === "at_risk" || eff === "shaky") return true;

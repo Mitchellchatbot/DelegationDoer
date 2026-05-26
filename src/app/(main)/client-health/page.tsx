@@ -25,7 +25,13 @@ export default async function ClientHealthPage() {
   const me = await getUserById(userId);
   if (!me) redirect("/login");
 
-  const clients = await getClients();
+  const allClients = await getClients();
+  // Clients with encourageEmails=false sit out of every tally and band
+  // group — the whole point of the toggle is to remove them from the
+  // dashboard. They still appear in the all-clients tab + per-client
+  // detail page.
+  const clients = allClients.filter((c) => c.encourageEmails !== false);
+  const optedOutCount = allClients.length - clients.length;
 
   // Decorate every client with its effective band so the page renders
   // tallies + groups in O(n).
@@ -83,6 +89,13 @@ export default async function ClientHealthPage() {
         }
       />
 
+      {optedOutCount > 0 && (
+        <div className="text-[11px] text-ink/55 italic px-2">
+          {optedOutCount} client{optedOutCount === 1 ? "" : "s"} excluded from
+          email tracking (Encourage emails turned off on their detail pages).
+        </div>
+      )}
+
       {/* Top tallies */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         {(["green", "yellow", "red"] as const).map((band) => {
@@ -115,7 +128,8 @@ export default async function ClientHealthPage() {
           lastOutboundEmailAt: c.lastOutboundEmailAt,
           touchpointOverrideLabel: c.touchpointOverrideLabel,
           touchpointSummary: c.touchpointSummary,
-          contactName: c.contactName
+          contactName: c.contactName,
+          encourageEmails: c.encourageEmails
         }))}
         limit={8}
       />

@@ -5,14 +5,13 @@ import { usePathname } from "next/navigation";
 import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
 import {
-  ListTodo, Users,
-  Sparkles, Crown, Mail, Home as HomeIcon, Sunrise, Moon, Briefcase
+  ListTodo, Users, Sparkles, Crown, Mail, Home as HomeIcon, Sunrise, Moon, Briefcase,
+  CalendarDays, FolderKanban, ClipboardCheck, Inbox, BookOpen, Settings
 } from "lucide-react";
 // Sparkles is reused for both Ask AI and Updates — same icon, different context.
 import { useEffect, useState } from "react";
 import { AIAssistantDrawer } from "./AIAssistantDrawer";
 import { RaiseLink } from "./RaiseLink";
-import { SidebarMoreMenu, MoreIcons } from "./SidebarMoreMenu";
 import { isLeader, isHead } from "@/lib/auth";
 import { primaryDepartment } from "@/lib/departments";
 import type { User } from "@/lib/types";
@@ -36,12 +35,18 @@ const HOME_ITEM: NavItem = { href: "/home",    label: "Home",    icon: HomeIcon,
 const SOD_ITEM: NavItem = { href: "/sod", label: "Start day", icon: Sunrise, tone: "sky" };
 const EOD_ITEM: NavItem = { href: "/eod", label: "Wrap day", icon: Moon, tone: "indigo" };
 const TASKS_ITEM: NavItem = { href: "/tasks",  label: "Tasks",   icon: ListTodo, tone: "indigo"  };
+const SCHEDULE_ITEM: NavItem = { href: "/schedule", label: "Schedule", icon: CalendarDays, tone: "sky" };
+const PROJECTS_ITEM: NavItem = { href: "/projects", label: "Projects", icon: FolderKanban, tone: "indigo" };
 const INBOXES_ITEM: NavItem = { href: "/inboxes", label: "Inboxes", icon: Mail, tone: "fuchsia" };
+const APPROVALS_ITEM: NavItem = { href: "/approvals", label: "Approvals", icon: ClipboardCheck, tone: "emerald" };
+const ROUTING_REVIEW_ITEM: NavItem = { href: "/routing-review", label: "Routing review", icon: Inbox, tone: "emerald" };
 const CLIENTS_ITEM: NavItem = { href: "/clients", label: "Clients", icon: Briefcase, tone: "amber" };
 const UPDATES_ITEM: NavItem = { href: "/updates", label: "Updates", icon: Sparkles, tone: "fuchsia" };
+const SOPS_ITEM: NavItem = { href: "/sops", label: "SOPs", icon: BookOpen, tone: "teal" };
 const PEOPLE_ITEM: NavItem = { href: "/people", label: "People", icon: Users, tone: "indigo"   };
 const MANAGE_CEO_ITEM: NavItem = { href: "/leader", label: "Manage", icon: Crown, tone: "amber" };
 const MANAGE_HEAD_ITEM: NavItem = { href: "/leader", label: "Manage", icon: Users, tone: "emerald" };
+const SETTINGS_ITEM: NavItem = { href: "/settings", label: "Settings", icon: Settings, tone: "indigo" };
 
 const TONE_STYLES: Record<Tone, { idle: string; activeBg: string; activeFg: string }> = {
   blue:    { idle: "text-blue-500",    activeBg: "bg-blue-50",    activeFg: "text-blue-600"    },
@@ -237,71 +242,41 @@ export function Sidebar({ user }: { user: User }) {
     : isHeadRole
       ? MANAGE_HEAD_ITEM
       : PEOPLE_ITEM;
-  // SOD + EOD are first-class daily rituals for anyone who submits
-  // them — workers and heads. Leaders + stealth admins are exempt
-  // (same as ClockGate), so they don't see the rows. Placed adjacent
-  // to each other, right after Home, so they read as a pair.
+  // Flat sidebar — every nav item the user can see is a primary row.
+  // No More overflow. Role + dept gating still applies per item, so
+  // workers never see Approvals/Routing review and non-software
+  // workers don't see Projects.
+  //
+  // Order is grouped by mental "area" with separators implied by
+  // tone shifts rather than visible dividers:
+  //   1. Home + daily rituals (SOD/EOD for non-leaders)
+  //   2. Work surfaces (Tasks, Schedule, Projects)
+  //   3. Comms (Inboxes, Approvals, Routing review)
+  //   4. Knowledge (Clients, Updates, SOPs)
+  //   5. People/Manage
+  //   6. Settings
   const submitsDailies = !isLeaderRole;
-  const NAV: NavItem[] = submitsDailies
-    ? [HOME_ITEM, SOD_ITEM, EOD_ITEM, TASKS_ITEM, INBOXES_ITEM, CLIENTS_ITEM, UPDATES_ITEM, manageOrPeople]
-    : [HOME_ITEM, TASKS_ITEM, INBOXES_ITEM, CLIENTS_ITEM, UPDATES_ITEM, manageOrPeople];
+  const NAV: NavItem[] = [
+    HOME_ITEM,
+    ...(submitsDailies ? [SOD_ITEM, EOD_ITEM] : []),
+    TASKS_ITEM,
+    SCHEDULE_ITEM,
+    ...(canSeeProjects ? [PROJECTS_ITEM] : []),
+    INBOXES_ITEM,
+    ...(canApprove ? [APPROVALS_ITEM] : []),
+    ...(canSeeRoutingReview ? [ROUTING_REVIEW_ITEM] : []),
+    CLIENTS_ITEM,
+    UPDATES_ITEM,
+    SOPS_ITEM,
+    manageOrPeople,
+    SETTINGS_ITEM
+  ];
 
-  // Build the More menu groups dynamically so workers don't see
-  // approver-only rows and non-software workers don't see Projects.
-  // Each item carries its current badge count so the row shows a pill
-  // and the More trigger shows a single dot if any nested badge > 0.
+  // Total of all "updates" surfaces (SEO requests + unseen project
+  // activity). Used as the badge count on the Updates nav row.
   const updatesTotal =
     (canSeeSeo ? (openSeoCount ?? 0) : 0) +
     (canSeeProjectUpdates ? (unseenProjects ?? 0) : 0);
-  const moreGroups = [
-    {
-      label: "My work",
-      items: [
-        { href: "/schedule", label: "Schedule", icon: MoreIcons.Schedule },
-        ...(canSeeProjects ? [{ href: "/projects", label: "Projects", icon: MoreIcons.Projects }] : [])
-      ]
-    },
-    {
-      label: "Team",
-      items: [
-        // People sits in primary for workers; tuck it into More for
-        // leaders/heads who have Manage in primary instead.
-        ...(isLeaderRole || isHeadRole
-          ? [{ href: "/people", label: "People", icon: MoreIcons.People, badge: peopleEodPending ?? 0 }]
-          : []),
-        // Routing review — leaders/heads only. The auto-intake pipeline's
-        // pending bucket. Surfaces here next to People so the leader can
-        // triage routing decisions in the same trip.
-        ...(canSeeRoutingReview
-          ? [{ href: "/routing-review", label: "Routing review", icon: MoreIcons.RoutingReview, badge: routingReviewPending ?? 0 }]
-          : []),
-        ...(canApprove
-          ? [
-              { href: "/approvals", label: "Approvals", icon: MoreIcons.Approvals, badge: approvalsPending ?? 0 }
-              // /emails (Outbound emails) was a parallel surface for the
-              // same draft-approval queue — duplicate entry-point,
-              // confusing. Approvals covers it. /emails still exists
-              // and redirects here so old bookmarks don't 404.
-            ]
-          : [])
-      ]
-    },
-    {
-      // Clients + Updates moved into the primary nav, so they no
-      // longer appear here — duplicating would just confuse "where
-      // do I click?". SOPs stays.
-      label: "Knowledge",
-      items: [
-        { href: "/sops",    label: "SOPs",    icon: MoreIcons.SOPs }
-      ]
-    },
-    {
-      label: "System",
-      items: [
-        { href: "/settings", label: "Settings", icon: MoreIcons.Settings }
-      ]
-    }
-  ].filter((g) => g.items.length > 0);
 
   return (
     <aside className="w-60 shrink-0 sticky top-3 h-[calc(100vh-1.5rem)] rounded-3xl border border-slate-200/70 bg-white/85 backdrop-blur-xl shadow-soft flex flex-col overflow-hidden">
@@ -330,9 +305,8 @@ export function Sidebar({ user }: { user: User }) {
             const Icon = item.icon;
             const active = path === item.href || (item.href !== "/" && path.startsWith(item.href));
             const tone = TONE_STYLES[item.tone];
-            // Only primary-row badges live here now. Everything else
-            // moved into the SidebarMoreMenu, where the row pill is
-            // rendered by that component.
+            // Per-row badges. Each one fans out a single pill on the
+            // matching nav item.
             const badge: { count: number; tone: "rose" | "amber"; title: string } | null = (() => {
               if (item.href === "/inboxes" && (inboxesUnread ?? 0) > 0) {
                 return {
@@ -362,10 +336,20 @@ export function Sidebar({ user }: { user: User }) {
                   title: `${updatesTotal} new update${updatesTotal === 1 ? "" : "s"} waiting`
                 };
               }
-              // Approvals / Routing review moved into the More popover
-              // — their badges render as row pills there, plus a
-              // single dot on the More trigger when any nested badge
-              // > 0.
+              if (item.href === "/approvals" && (approvalsPending ?? 0) > 0) {
+                return {
+                  count: approvalsPending!,
+                  tone: "rose",
+                  title: `${approvalsPending} email${approvalsPending === 1 ? "" : "s"} awaiting your approval`
+                };
+              }
+              if (item.href === "/routing-review" && (routingReviewPending ?? 0) > 0) {
+                return {
+                  count: routingReviewPending!,
+                  tone: "rose",
+                  title: `${routingReviewPending} AI-routed task${routingReviewPending === 1 ? "" : "s"} awaiting your review`
+                };
+              }
               return null;
             })();
             return (
@@ -429,11 +413,6 @@ export function Sidebar({ user }: { user: User }) {
             );
           })}
 
-          {/* Overflow menu — Schedule, Projects, SOPs, Updates, Approvals,
-              Outbound emails, Settings, etc. Groupings + role gating
-              are baked into moreGroups above. Sits visually as a 5th
-              row so the primary nav reads as "5 things". */}
-          <SidebarMoreMenu groups={moreGroups} />
         </nav>
 
         {/* Report incident moved into /settings — too loud to live next
@@ -450,8 +429,7 @@ export function Sidebar({ user }: { user: User }) {
         </div>
       </div>
 
-      {/* Footer keeps the raise-money easter egg but Settings moved into
-          More → System so it doesn't fight the primary nav for room. */}
+      {/* Footer keeps the raise-money easter egg. */}
       <div className="p-3 border-t border-slate-100">
         <RaiseLink />
       </div>

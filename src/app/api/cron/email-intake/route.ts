@@ -8,24 +8,38 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 // Per-run cap so a misconfigured inbox can't pin the cron at the timeout
-// limit. We just process the freshest THREADS_PER_RUN threads per account
-// — anything older eventually gets picked up by manual run-once.
-const THREADS_PER_RUN = 25;
+// limit. We just process the freshest DEFAULT_THREADS_PER_RUN threads per
+// account — anything older eventually gets picked up by manual run-once.
+// Override per-call with `?limit=N` when draining a backlog.
+const DEFAULT_THREADS_PER_RUN = 25;
 
 // GET /api/cron/email-intake — Vercel cron handler.
 // Auth: Vercel cron sends `Authorization: Bearer <CRON_SECRET>` (also
 // supports our existing `?secret=` query-string convention so the route
 // is debuggable from a browser).
 export async function GET(req: NextRequest) {
+  const url = new URL(req.url);
   const secret = process.env.CRON_SECRET;
   if (secret) {
     const auth = req.headers.get("authorization") ?? "";
-    const querySecret = new URL(req.url).searchParams.get("secret");
+    const querySecret = url.searchParams.get("secret");
     const ok =
       auth === `Bearer ${secret}` ||
       querySecret === secret;
     if (!ok) return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
+
+  // Backlog-drain knobs:
+  //   ?silent=true   — suppress Slack DMs + auto-reply drafts. Tasks
+  //                    still land in routing-review.
+  //   ?limit=N       — per-account thread cap for this run. Defaults to
+  //                    25 (the cron value); useful for catching up
+  //                    after a scheduler outage without flooding.
+  const silent = url.searchParams.get("silent") === "true";
+  const limitParam = parseInt(url.searchParams.get("limit") ?? "", 10);
+  const threadsPerRun = Number.isFinite(limitParam) && limitParam > 0
+    ? Math.min(limitParam, DEFAULT_THREADS_PER_RUN * 4)
+    : DEFAULT_THREADS_PER_RUN;
 
   const supabase = getSupabaseAdmin();
 
@@ -88,7 +102,7 @@ export async function GET(req: NextRequest) {
   const perAccountCount = new Map<string, number>();
 
   for (const t of candidates) {
-    if (outcomes.length >= THREADS_PER_RUN * targetAccounts.length) break;
+    if (outcomes.length >= threadsPerRun * targetAccounts.length) break;
     let detail: Awaited<ReturnType<typeof getThread>>;
     try {
       detail = await getThread(t.id);
@@ -105,7 +119,7 @@ export async function GET(req: NextRequest) {
     if (!accountId || !enabledIds.has(accountId)) continue;
 
     const used = perAccountCount.get(accountId) ?? 0;
-    if (used >= THREADS_PER_RUN) continue;
+    if (used >= threadsPerRun) continue;
     perAccountCount.set(accountId, used + 1);
 
     const fromEmail = inbound ? extractEmail(inbound.from_addr) : null;
@@ -151,7 +165,8 @@ export async function GET(req: NextRequest) {
         threadBody: bodyText,
         fromEmail,
         missiveThreadUrl,
-        source: "cron"
+        source: "cron",
+        silent
       });
       if (outcome.skipped) {
         outcomes.push({

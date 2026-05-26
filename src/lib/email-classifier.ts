@@ -14,6 +14,15 @@ export interface ClassifiedEmail {
   // matcher + ranker both come up empty.
   departmentHint: string | null;
   confidence: "low" | "medium" | "high";
+  // false = noise (promo / digest / receipt / FYI with no action needed).
+  // When false the pipeline drops the thread without creating a task.
+  // Defaults to true on parse errors so an LLM hiccup never silently
+  // drops a real client email.
+  isActionable: boolean;
+  // Short Claude-written reason ("promotional", "shipping receipt",
+  // "calendar invite", "FYI digest", …). Logged for audit so a leader
+  // reviewing a missed email can see why intake skipped it.
+  skipReason: string | null;
 }
 
 interface DepartmentLite { id: string; name: string; description: string; taskTypes: string[]; }
@@ -35,11 +44,27 @@ export async function classifyEmailThread(args: {
 
   const systemPrompt = `You convert inbound emails into ACTIONABLE task drafts at a digital agency. The assignee should be able to read the description and know exactly what to do without opening the original email.
 
+FIRST: decide if this email is even worth turning into a task. Set isActionable=false (and skipReason="<short label>") for:
+  - Promotional / marketing / cold sales pitches (even from a real-looking @company.com sender)
+  - Newsletter / digest / weekly recap mail (Instagram recaps, Slack digests, vendor BI emails, citation reports, "your post got N impressions")
+  - Service advisories with no action required (Microsoft 365 Message Center, plugin update FYIs, backup-completed pings)
+  - Shipping / order / payment receipts ("your order has shipped", "payment confirmation #…")
+  - Bounce / NDR / mail delivery failure replies
+  - Auto-replies and out-of-office responses
+  - Survey / NPS / feedback requests with no follow-up needed
+  - Calendar invites that just confirm an existing meeting
+
+Set isActionable=true ONLY when a human at the agency needs to do something concrete in response — reply to a client, fix a real issue, deliver work, make a decision, sign a contract. If you'd write the task as "review and decide whether to ignore", it should be isActionable=false instead.
+
+When in genuine doubt, prefer isActionable=true — we'd rather create a task a leader rejects than miss real client work.
+
 Departments:
 ${deptList || "(none configured)"}
 
 Return STRICT JSON in exactly this shape — no preamble, no code fences:
 {
+  "isActionable": <true | false>,
+  "skipReason": "<short label like 'promotional' or 'shipping receipt'; null when isActionable=true>",
   "title": "<short, action-y task title; starts with a verb; <70 chars>",
   "description": "<Markdown-formatted description, see rubric below>",
   "priority": "<low | medium | high | critical>",
@@ -135,6 +160,14 @@ Tags are 1-4 short lowercase words (e.g. "wordpress", "billing", "design"). They
         ? "medium"
         : "low";
 
+  // Default to actionable on parse error / missing field — we'd rather
+  // create a task a leader rejects than silently drop real client work.
+  const isActionable = parsed.isActionable === false ? false : true;
+  const skipReason =
+    !isActionable && typeof parsed.skipReason === "string" && parsed.skipReason.trim()
+      ? parsed.skipReason.trim().slice(0, 80)
+      : null;
+
   return {
     title:
       typeof parsed.title === "string" && parsed.title.trim()
@@ -150,6 +183,8 @@ Tags are 1-4 short lowercase words (e.g. "wordpress", "billing", "design"). They
     priority,
     tags,
     departmentHint,
-    confidence
+    confidence,
+    isActionable,
+    skipReason
   };
 }

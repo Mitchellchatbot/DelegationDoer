@@ -50,7 +50,21 @@ const SENDER_PATTERNS: Array<{ re: RegExp; label: string }> = [
     label: "plugin/hosting notifier"
   },
   // Calendar / meeting platforms
-  { re: /@(calendar-server|calendly|google-calendar)\./i, label: "calendar notifier" }
+  { re: /@(calendar-server|calendly|google-calendar)\./i, label: "calendar notifier" },
+  // Social platform digest mailers (Instagram "moments you've missed",
+  // etc.) — real DMs come via the app, not these recap addresses.
+  { re: /@mail\.instagram\.com$/i, label: "instagram digest" },
+  // Slack platform mailers — workspace digests, "feedback on Slack" prompts.
+  // Real human replies come from a workspace.slack.com host, not slack.com.
+  { re: /^(feedback|digest|notifications?)@slack\.com$/i, label: "slack platform mail" },
+  // Microsoft 365 Message Center (o365mc@microsoft.com) — admin service
+  // advisories, never something we need to action as a task.
+  { re: /^o365mc@/i, label: "microsoft 365 advisory" },
+  // WP Remote / managed-WP service notifications.
+  { re: /@wpremote\./i, label: "wp remote notifier" },
+  // Vendor BI / market-intel digest local-parts (Connexity, etc.). The
+  // existing newsletter/digest rule above misses "business_intelligence@".
+  { re: /^(business[_-]?intelligence|market[_-]?intel|industry[_-]?digest)@/i, label: "vendor bi digest" }
 ];
 
 // Subject patterns. These are intentionally more permissive than the
@@ -92,6 +106,10 @@ const SUBJECT_PATTERNS: Array<{ re: RegExp; label: string }> = [
   // Webinar / workshop invites.
   { re: /\b(webinar|workshop)\s+(invitation|reminder|registration)\b/i, label: "webinar invite" },
   { re: /\b(delivery (failed|status notification)|undeliverable|returned mail|mail delivery)\b/i, label: "delivery failure" },
+  // Instagram recap subject ("agencysites_ai, catch up on moments you've missed")
+  { re: /catch\s+up\s+on\s+moments\s+you/i, label: "instagram recap subject" },
+  // Slack-prefixed weekly digest subjects ("[Slack] X updates for the week of …")
+  { re: /^\[slack\]\b/i, label: "slack digest subject" },
   { re: /\b(out\s+of\s+office|auto[-\s]?reply|automatic reply)\b/i, label: "auto-reply" },
   { re: /\bunsubscribe\s+(success|confirmation)\b/i, label: "unsubscribe confirmation" }
 ];

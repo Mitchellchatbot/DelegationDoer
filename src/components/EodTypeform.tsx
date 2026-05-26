@@ -828,18 +828,34 @@ function DraftCard({
         />
       </div>
 
-      <textarea
-        value={draft.body}
-        onChange={(e) => onPatch({ body: e.target.value, error: undefined })}
-        disabled={isLocked}
-        placeholder={clientName
-          ? `Write the email body for ${clientName}…`
-          : "Body of the email"
-        }
-        rows={5}
-        maxLength={4000}
-        className="block w-full text-[13px] bg-white border-none px-3 py-2.5 outline-none focus:ring-0 resize-y placeholder:text-ink/35 disabled:opacity-70"
-      />
+      <div className="relative">
+        <textarea
+          value={draft.body}
+          onChange={(e) => onPatch({ body: e.target.value, error: undefined })}
+          disabled={isLocked}
+          placeholder={clientName
+            ? `Write the email body for ${clientName}…`
+            : "Body of the email"
+          }
+          rows={5}
+          maxLength={4000}
+          className="block w-full text-[13px] bg-white border-none px-3 py-2.5 outline-none focus:ring-0 resize-y placeholder:text-ink/35 disabled:opacity-70"
+        />
+        {/* AI autofill — pulls today's closed tasks + sent emails for
+            this user×client from /api/eod/client-update/draft and
+            stuffs the subject/body. User edits before sending for
+            approval. Hidden when the row is locked (sent/skipped). */}
+        {!isLocked && draft.clientId && (
+          <FillWithAiButton
+            clientId={draft.clientId}
+            onDraft={(d) => onPatch({
+              subject: draft.subject || d.subject,
+              body: d.body,
+              error: undefined
+            })}
+          />
+        )}
+      </div>
 
       <div className="flex items-center justify-between px-3 py-2 border-t border-slate-200/50 bg-slate-50/40">
         {draft.error ? (
@@ -1001,5 +1017,62 @@ function SummaryRow({ label, value, required }: { label: string; value: string |
         <div className="text-amber-700 italic mt-0.5">Not filled in</div>
       )}
     </div>
+  );
+}
+
+// Tiny inline "Fill with AI" button. Floats in the bottom-right corner
+// of the per-client body textarea. POSTs to /api/eod/client-update/draft
+// with the client id; the API pulls today's closed tasks + sent emails
+// for the caller×client and returns a Claude-drafted subject + body.
+// Caller decides what to do with the draft via onDraft.
+function FillWithAiButton({
+  clientId, onDraft
+}: {
+  clientId: string;
+  onDraft: (d: { subject: string; body: string }) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+
+  async function fill() {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const res = await fetch("/api/eod/client-update/draft", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ clientId })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error ?? `failed (${res.status})`);
+      onDraft({ subject: data.subject ?? "", body: data.body ?? "" });
+      const signals = data.signals as { tasksCount?: number; emailsCount?: number } | undefined;
+      const summary = signals
+        ? `${signals.tasksCount ?? 0} task${signals.tasksCount === 1 ? "" : "s"} · ${signals.emailsCount ?? 0} email${signals.emailsCount === 1 ? "" : "s"}`
+        : "from today's activity";
+      toast.success(`Drafted from ${summary}.`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Couldn't draft");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={fill}
+      disabled={busy}
+      title="Draft this message from today's tasks + emails for this client"
+      className={cn(
+        "absolute right-2 bottom-2 inline-flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-semibold border shadow-sm transition-all",
+        "bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white border-transparent hover:-translate-y-0.5 active:scale-95",
+        busy && "opacity-60 cursor-not-allowed hover:translate-y-0"
+      )}
+    >
+      {busy
+        ? <Loader2 className="w-3 h-3 animate-spin" />
+        : <Sparkles className="w-3 h-3" />}
+      {busy ? "Drafting…" : "Fill with AI"}
+    </button>
   );
 }

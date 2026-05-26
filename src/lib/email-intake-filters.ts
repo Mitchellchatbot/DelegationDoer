@@ -18,13 +18,37 @@ const SENDER_PATTERNS: Array<{ re: RegExp; label: string }> = [
   // no-reply / do-not-reply variants
   { re: /^(no-?reply|donotreply|do-not-reply)@/i, label: "no-reply sender" },
   { re: /^(notifications?|automated|mailer-daemon|postmaster)@/i, label: "automated sender" },
-  // WordPress / WP plugin notifications
+  // WordPress / WP security notifications. Real-world Wordfence alerts
+  // are sent FROM the WP install, so the From may be wordfence@<client>
+  // rather than anything @wordfence.com — match the local-part too.
   { re: /^wordpress@/i, label: "wordpress notifier" },
+  { re: /^wordfence@/i, label: "wordfence sender (local-part)" },
   { re: /@wordfence\./i, label: "wordfence alert" },
   // Verification / 2FA senders
   { re: /^(verify|verification|otp|auth|2fa)@/i, label: "verification sender" },
-  // Common transactional providers
-  { re: /^(notification|alerts?)@(google|mail\.google|github|stripe|paypal|venmo)\./i, label: "transactional provider" },
+  // Marketing / newsletter / digest senders — generic local-parts that
+  // are almost always automated outreach.
+  { re: /^(news(letter)?|marketing|digest|updates?)@/i, label: "marketing/newsletter sender" },
+  // Security / monitoring alert senders (Sucuri, generic monitoring
+  // services, etc.) — high signal as automation when the local-part is
+  // one of these and no real human signs the mail.
+  { re: /^(security|alert|alerts|monitoring)@/i, label: "security/monitoring sender" },
+  // Transactional / receipt senders. Catches Amazon order-update,
+  // shipping carriers, billing systems.
+  {
+    re: /^(billing|receipt|invoice|orders?|order-update|shipment-tracking|ship-confirm|auto-confirm)@/i,
+    label: "transactional/receipt sender"
+  },
+  // Specific automation-heavy vendors. Lean conservative: only domains
+  // whose inbound mail is essentially always automated (no humans
+  // emailing us FROM these). Add new ones as we observe leaks.
+  { re: /@(anthropic|claude)\./i, label: "anthropic/claude" },
+  { re: /@(amazon|amazonses)\./i, label: "amazon" },
+  { re: /@vercel\./i, label: "vercel" },
+  {
+    re: /@(imagify|cloudflare|netlify|updraftplus|backupbuddy|sucuri)\./i,
+    label: "plugin/hosting notifier"
+  },
   // Calendar / meeting platforms
   { re: /@(calendar-server|calendly|google-calendar)\./i, label: "calendar notifier" }
 ];
@@ -37,8 +61,36 @@ const SUBJECT_PATTERNS: Array<{ re: RegExp; label: string }> = [
   { re: /\b(verification|verify|confirmation)\s+code\b/i, label: "verification code" },
   { re: /\bone[-\s]?time\s+(code|password|pin|link)\b/i, label: "one-time code" },
   { re: /^your\s+.*\s+code\s+is\b/i, label: "your X code is" },
+  { re: /\b(here'?s\s+your\s+code|your\s+(login|sign[-\s]?in|access)\s+code)\b/i, label: "your code (variants)" },
+  // Login / magic-link emails. Common in Claude.ai, Notion, Slack
+  // sign-in flows — never something we want as a routed task.
+  {
+    re: /\b(secure\s+link\s+to\s+(log|sign)[-\s]in|sign[-\s]in\s+link|log[-\s]in\s+link|magic\s+link)\b/i,
+    label: "login/magic link"
+  },
+  // Wordfence-style alert subjects (Premium uses [Wordfence …]; the free
+  // version uses plain "Security Alert: …" style copy).
   { re: /\[wordfence/i, label: "wordfence alert subject" },
-  { re: /weekly\s+citation\s+update/i, label: "weekly citation update" },
+  {
+    re: /\b(security\s+alert|increased\s+attack\s+rate|locked\s+out|admin\s+login\s+from\s+a\s+new)\b/i,
+    label: "wordfence-style alert"
+  },
+  // Citation / local-SEO tools (Whitespark, BrightLocal, Yext) ping us
+  // any time something moves. Broader than the prior "weekly" anchor.
+  { re: /\bcitation\s+(update|report|alert|monitoring)\b/i, label: "citation update" },
+  // Backup-completion pings from UpdraftPlus, BackupBuddy, etc.
+  { re: /\bbackup\s+(complete|completed|completion|successful|finished)\b/i, label: "backup notification" },
+  // Plugin / theme / software update prompts.
+  { re: /\b(plugin|theme|software)\s+update\s+(available|notification|required)\b/i, label: "plugin/theme update" },
+  // CI/CD deploy failure mail (Vercel, Netlify, GitHub Actions).
+  { re: /\b(build|deployment|deploy)\s+(failed|failure|error)\b/i, label: "build/deploy failure" },
+  // Order receipts / post-purchase nudges (Amazon, Shopify, etc.).
+  {
+    re: /\b(thanks\s+for\s+your\s+(order|purchase)|your\s+order\s+(has\s+)?(shipped|been\s+placed|is\s+on\s+its\s+way)|happy\s+with\s+your\s+purchase|how\s+was\s+your\s+(order|purchase))\b/i,
+    label: "order receipt"
+  },
+  // Webinar / workshop invites.
+  { re: /\b(webinar|workshop)\s+(invitation|reminder|registration)\b/i, label: "webinar invite" },
   { re: /\b(delivery (failed|status notification)|undeliverable|returned mail|mail delivery)\b/i, label: "delivery failure" },
   { re: /\b(out\s+of\s+office|auto[-\s]?reply|automatic reply)\b/i, label: "auto-reply" },
   { re: /\bunsubscribe\s+(success|confirmation)\b/i, label: "unsubscribe confirmation" }

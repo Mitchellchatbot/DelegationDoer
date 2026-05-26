@@ -27,6 +27,10 @@ export interface HomeTeammate {
   clockedIn: boolean;
   eodSubmitted: boolean;
   overdueCount: number;
+  // Users with clock_enabled=false are salaried / on-call roles that
+  // don't punch in. Dashboard hides the shift pill for them — keeps
+  // the row clean instead of perpetually reading "off shift".
+  clockEnabled: boolean;
 }
 
 const PRI_RANK: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
@@ -197,7 +201,7 @@ export async function getTeamStatusToday(
 
   const baseQuery = supabase
     .from("users")
-    .select("id, name, avatar_url, role")
+    .select("id, name, avatar_url, role, clock_enabled")
     .order("name", { ascending: true })
     .limit(limit);
   const usersRes = await (
@@ -207,6 +211,7 @@ export async function getTeamStatusToday(
   );
   const users = (usersRes.data ?? []) as Array<{
     id: string; name: string | null; avatar_url: string | null; role: string;
+    clock_enabled: boolean | null;
   }>;
 
   if (users.length === 0) return [];
@@ -217,8 +222,14 @@ export async function getTeamStatusToday(
   const today = new Date().toISOString().slice(0, 10);
   void todayIso; // kept for readability of the older block; unused now
   const [clockRes, eodRes, overdueRes] = await Promise.all([
+    // Time-clock state lives in `time_entries` (one row per shift
+    // segment; ended_at IS NULL means the user is currently on shift).
+    // Earlier code read from `clock_segments` which doesn't exist —
+    // the query 500'd silently, so the `clockedIn` set ended up empty
+    // for EVERY user, and the dashboard showed "off shift" for everyone
+    // on the team even when half of them were actively punched in.
     supabase
-      .from("clock_segments")
+      .from("time_entries")
       .select("user_id")
       .in("user_id", ids)
       .is("ended_at", null),
@@ -258,7 +269,10 @@ export async function getTeamStatusToday(
       role: u.role,
       clockedIn: clockedIn.has(u.id),
       eodSubmitted: eodToday.has(u.id),
-      overdueCount: overdueByUser.get(u.id) ?? 0
+      overdueCount: overdueByUser.get(u.id) ?? 0,
+      // Default true matches the column default — only the rows that
+      // got explicitly flipped off (heads, salaried) report false.
+      clockEnabled: u.clock_enabled !== false
     }));
 }
 
@@ -347,35 +361,49 @@ export interface ClientHealthRow {
   daysSinceLastEmail: number | null;
 }
 
-export async function getClientHealthOverview(limit = 8): Promise<ClientHealthRow[]> {
+export async function getClientHealthOverview(topN = 10): Promise<ClientHealthRow[]> {
   const supabase = getSupabaseAdmin();
-  // active-only — paused/archived clients shouldn't generate
-  // "you haven't emailed them" noise. Same for clients with
-  // encourage_emails=false (per-client opt-out).
+  // The clients table column was renamed last_outbound_email_at →
+  // last_outbound_email_at_external during the touchpoint-sync rollout.
+  // The old name caused this query to 500 silently, which is why the
+  // home dashboard kept reading "No active clients yet" even though
+  // the team had 20+ live clients on file.
+  //
+  // Selection rule the user wants:
+  //   - Top N clients by display_order (the canonical priority sort
+  //     used everywhere else, lower = higher priority).
+  //   - PLUS any client at risk (red touchpoint), even if outside
+  //     the top-N band. So an important client that's going cold
+  //     never falls off this dashboard just because they're not in
+  //     the priority top 10.
   const { data, error } = await supabase
     .from("clients")
-    .select("id, name, contact_name, status, touchpoint_override_label, last_outbound_email_at, encourage_emails")
-    .order("last_outbound_email_at", { ascending: true, nullsFirst: true });
+    .select(
+      "id, name, contact_name, status, touchpoint_override_label, " +
+      "last_outbound_email_at_external, encourage_emails, display_order"
+    );
   if (error) return [];
 
   const now = new Date();
-  const rows = ((data ?? []) as Array<{
+  // Supabase generic-error types confuse the inference here; cast via
+  // unknown so we can land on the row shape we actually selected.
+  const rows = ((data ?? []) as unknown as Array<{
     id: string;
     name: string;
     contact_name: string | null;
     status: string | null;
     touchpoint_override_label: TouchpointLabel | null;
-    last_outbound_email_at: string | null;
+    last_outbound_email_at_external: string | null;
     encourage_emails: boolean | null;
+    display_order: number | null;
   }>)
     .filter((c) => !c.status || c.status === "active")
     .filter((c) => c.encourage_emails !== false)
-    .map<ClientHealthRow>((c) => {
-      const { label, isOverride } = effectiveTouchpoint(
-        c.touchpoint_override_label, c.last_outbound_email_at
-      );
-      const daysSince = c.last_outbound_email_at
-        ? Math.max(0, Math.floor((now.getTime() - new Date(c.last_outbound_email_at).getTime()) / 86_400_000))
+    .map((c) => {
+      const lastAt = c.last_outbound_email_at_external;
+      const { label, isOverride } = effectiveTouchpoint(c.touchpoint_override_label, lastAt);
+      const daysSince = lastAt
+        ? Math.max(0, Math.floor((now.getTime() - new Date(lastAt).getTime()) / 86_400_000))
         : null;
       return {
         id: c.id,
@@ -383,24 +411,42 @@ export async function getClientHealthOverview(limit = 8): Promise<ClientHealthRo
         contactName: c.contact_name,
         touchpoint: label,
         isOverride,
-        lastOutboundEmailAt: c.last_outbound_email_at,
-        daysSinceLastEmail: daysSince
+        lastOutboundEmailAt: lastAt,
+        daysSinceLastEmail: daysSince,
+        displayOrder: c.display_order ?? Number.MAX_SAFE_INTEGER
       };
     });
 
-  // Prioritise red → yellow → green, then stalest first inside each band.
-  // Cleaner signal than raw stalest sort — keeps reds at top even if a
-  // green has somehow gone older (edge case from manual overrides).
+  // Build the union: top-N by display_order + every red.
+  const byPriority = [...rows].sort((a, b) => a.displayOrder - b.displayOrder);
+  const topByPriority = byPriority.slice(0, topN);
+  const reds = rows.filter((r) => r.touchpoint === "red");
+
+  const seen = new Set<string>();
+  const union: typeof rows = [];
+  for (const r of [...reds, ...topByPriority]) {
+    if (seen.has(r.id)) continue;
+    seen.add(r.id);
+    union.push(r);
+  }
+
+  // Final order: red first (stalest first), then yellow, then green.
+  // Within each band, fall back to display_order so top-priority
+  // clients win the tie inside the green band.
   const tone: Record<TouchpointLabel, number> = { red: 0, yellow: 1, green: 2 };
-  rows.sort((a, b) => {
+  union.sort((a, b) => {
     const t = tone[a.touchpoint] - tone[b.touchpoint];
     if (t !== 0) return t;
-    const ad = a.lastOutboundEmailAt ? new Date(a.lastOutboundEmailAt).getTime() : 0;
-    const bd = b.lastOutboundEmailAt ? new Date(b.lastOutboundEmailAt).getTime() : 0;
-    return ad - bd;
+    if (a.touchpoint === "red") {
+      const ad = a.lastOutboundEmailAt ? new Date(a.lastOutboundEmailAt).getTime() : 0;
+      const bd = b.lastOutboundEmailAt ? new Date(b.lastOutboundEmailAt).getTime() : 0;
+      if (ad !== bd) return ad - bd;
+    }
+    return a.displayOrder - b.displayOrder;
   });
 
-  return rows.slice(0, limit);
+  // Strip the internal displayOrder field before returning.
+  return union.map<ClientHealthRow>(({ displayOrder: _d, ...rest }) => rest);
 }
 
 // "Needs you" counters for the leader strip. Mirrors what the badge

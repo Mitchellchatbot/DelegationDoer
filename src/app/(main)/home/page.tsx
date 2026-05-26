@@ -64,12 +64,14 @@ export default async function HomePage() {
       }),
       // Client health is org-wide for now — even heads benefit from
       // seeing accounts going cold across the agency, not just their
-      // dept's. Easy to scope later if it gets noisy.
-      getClientHealthOverview(8)
+      // dept's. Easy to scope later if it gets noisy. Top 10 by
+      // priority + every at-risk client (red touchpoint) — the helper
+      // unions them so important clients going cold can't slip off.
+      getClientHealthOverview(10)
     ]);
 
     return (
-      <div className="space-y-3 max-w-5xl">
+      <div className="space-y-4 max-w-7xl mx-auto">
         {dayBookends && <DayBookends status={dayBookends} hourLocal={hourLocal} />}
         <HomeLeader
           meName={me.name}

@@ -60,7 +60,7 @@ export default async function ApprovalsPage({ searchParams }: PageProps) {
         : "AI-routed tasks from inbox auto-intake. Confirm the routing before tasks go live.";
 
   return (
-    <div className="space-y-5 max-w-6xl">
+    <div className="space-y-5 max-w-7xl mx-auto">
       <PageHero
         eyebrow="Approvals"
         headline={["What needs ", { accent: "your eye" }]}

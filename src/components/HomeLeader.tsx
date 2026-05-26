@@ -160,7 +160,12 @@ function TeamStripCard({ team }: { team: HomeTeammate[] }) {
   // impression "who's stuck" instead of "who's first alphabetically".
   const sorted = [...team].sort((a, b) => {
     const score = (t: HomeTeammate) =>
-      (t.clockedIn ? 0 : 2) + (t.eodSubmitted ? 0 : 1) + Math.min(t.overdueCount, 3);
+      // clock_enabled=false users never punch in by design — don't
+      // penalize them in the sort for being "off shift", they
+      // wouldn't have a shift either way.
+      ((!t.clockEnabled || t.clockedIn) ? 0 : 2)
+      + (t.eodSubmitted ? 0 : 1)
+      + Math.min(t.overdueCount, 3);
     const sd = score(b) - score(a);
     return sd !== 0 ? sd : a.name.localeCompare(b.name);
   });
@@ -202,14 +207,17 @@ function TeamStripCard({ team }: { team: HomeTeammate[] }) {
                 <div className="min-w-0 flex-1">
                   <div className="text-[12.5px] font-medium text-ink truncate">{t.name}</div>
                   <div className="flex items-center gap-1.5 text-[10px] text-ink/55 mt-0.5">
-                    {/* "On shift" vs "Off shift" — distinct from the green
-                        presence dot on the avatar (which means "app is
-                        open"). A person can be online but not yet
-                        punched in for their shift. */}
-                    <StatusDot
-                      ok={t.clockedIn}
-                      label={t.clockedIn ? "on shift" : "off shift"}
-                    />
+                    {/* Shift pill — only shown for users with the
+                        time-clock feature enabled. Heads/salaried/on-call
+                        roles have clock_enabled=false and don't punch
+                        in, so showing "off shift" for them all day is
+                        misleading. Skip the pill entirely instead. */}
+                    {t.clockEnabled && (
+                      <StatusDot
+                        ok={t.clockedIn}
+                        label={t.clockedIn ? "on shift" : "off shift"}
+                      />
+                    )}
                     <StatusDot
                       ok={t.eodSubmitted}
                       label={t.eodSubmitted ? "EOD done" : "EOD pending"}

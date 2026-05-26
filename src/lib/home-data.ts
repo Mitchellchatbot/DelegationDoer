@@ -27,6 +27,10 @@ export interface HomeTeammate {
   clockedIn: boolean;
   eodSubmitted: boolean;
   overdueCount: number;
+  // Users with clock_enabled=false are salaried / on-call roles that
+  // don't punch in. Dashboard hides the shift pill for them — keeps
+  // the row clean instead of perpetually reading "off shift".
+  clockEnabled: boolean;
 }
 
 const PRI_RANK: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
@@ -197,7 +201,7 @@ export async function getTeamStatusToday(
 
   const baseQuery = supabase
     .from("users")
-    .select("id, name, avatar_url, role")
+    .select("id, name, avatar_url, role, clock_enabled")
     .order("name", { ascending: true })
     .limit(limit);
   const usersRes = await (
@@ -207,6 +211,7 @@ export async function getTeamStatusToday(
   );
   const users = (usersRes.data ?? []) as Array<{
     id: string; name: string | null; avatar_url: string | null; role: string;
+    clock_enabled: boolean | null;
   }>;
 
   if (users.length === 0) return [];
@@ -217,8 +222,14 @@ export async function getTeamStatusToday(
   const today = new Date().toISOString().slice(0, 10);
   void todayIso; // kept for readability of the older block; unused now
   const [clockRes, eodRes, overdueRes] = await Promise.all([
+    // Time-clock state lives in `time_entries` (one row per shift
+    // segment; ended_at IS NULL means the user is currently on shift).
+    // Earlier code read from `clock_segments` which doesn't exist —
+    // the query 500'd silently, so the `clockedIn` set ended up empty
+    // for EVERY user, and the dashboard showed "off shift" for everyone
+    // on the team even when half of them were actively punched in.
     supabase
-      .from("clock_segments")
+      .from("time_entries")
       .select("user_id")
       .in("user_id", ids)
       .is("ended_at", null),
@@ -258,7 +269,10 @@ export async function getTeamStatusToday(
       role: u.role,
       clockedIn: clockedIn.has(u.id),
       eodSubmitted: eodToday.has(u.id),
-      overdueCount: overdueByUser.get(u.id) ?? 0
+      overdueCount: overdueByUser.get(u.id) ?? 0,
+      // Default true matches the column default — only the rows that
+      // got explicitly flipped off (heads, salaried) report false.
+      clockEnabled: u.clock_enabled !== false
     }));
 }
 

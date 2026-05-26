@@ -396,7 +396,15 @@ function DraftCard({
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error ?? `status ${res.status}`);
-      toast.success("Feedback posted");
+      const delivered = data?.delivery?.delivered === true;
+      const reason = data?.delivery?.reason as string | undefined;
+      if (delivered) {
+        toast.success(`Feedback posted — ${draft.authorName} notified via Slack`);
+      } else {
+        toast.warning(
+          `Feedback posted, but couldn't DM ${draft.authorName}${reason ? ` (${reason})` : ""}`
+        );
+      }
       setShowFeedbackBox(false);
       setFeedbackNote("");
       await loadEvents();

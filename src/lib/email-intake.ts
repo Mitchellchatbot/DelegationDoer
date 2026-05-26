@@ -56,10 +56,16 @@ export interface IntakeInput {
   // 'manual' for the run-once button — bypasses the dedupe check so a user
   // can re-convert a thread even if the cron already handled it once.
   source?: "cron" | "manual";
+  // Backlog-drain mode. When true, suppresses every external-facing
+  // side effect: Slack DMs to leaders (pingLeaders) and the auto-reply
+  // email draft (autoDraftReply, which would otherwise flood
+  // /approvals?tab=emails). Tasks still land in routing-review as
+  // drafts; the badge on the routing-review surface still increments.
+  silent?: boolean;
 }
 
 export interface IntakeOutcome {
-  skipped?: "already-logged" | "no-candidates";
+  skipped?: "already-logged" | "no-candidates" | "not-actionable";
   taskId?: string;
   routedVia?: RoutedVia;
   routedToUserId?: string | null;
@@ -99,6 +105,46 @@ export async function runEmailIntake(input: IntakeInput): Promise<IntakeOutcome>
       id: d.id, name: d.name, description: d.description, taskTypes: d.taskTypes
     }))
   });
+
+  // 2b) Classifier-driven skip. When Claude judges the email is promo /
+  //     digest / receipt / FYI with no human action needed, drop the
+  //     thread without creating a task. Manual run-once still respects
+  //     this — if a user clicks "Create task from this thread" we trust
+  //     them and bypass via the explicit override.
+  if (!classified.isActionable && input.source !== "manual") {
+    const skipNow = new Date().toISOString();
+    const decisionId = await writeRoutingDecision(supabase, {
+      taskId: null,
+      accountId: input.accountId,
+      threadId: input.threadId,
+      classified,
+      matchedRuleId: null,
+      matchedRuleLabel: null,
+      rankerTop: [],
+      routedVia: "unrouted",
+      routedToUserId: null,
+      reason: `Classifier skipped: ${classified.skipReason ?? "not actionable"}`,
+      needsReview: false,
+      reviewReason: null
+    });
+    await supabase.from("email_intake_log").upsert(
+      {
+        thread_id: input.threadId,
+        account_id: input.accountId,
+        task_id: null,
+        routed_via: "classifier-skipped",
+        routed_to_user_id: null,
+        processed_at: skipNow
+      },
+      { onConflict: "thread_id" }
+    );
+    return {
+      skipped: "not-actionable",
+      classified,
+      reason: classified.skipReason ?? "not actionable",
+      decisionId: decisionId ?? undefined
+    };
+  }
 
   // 3) Routing — rules first, then skill+capacity ranker, then dept head.
   const rulesResult = await loadRoutingRules(supabase);
@@ -176,11 +222,13 @@ export async function runEmailIntake(input: IntakeInput): Promise<IntakeOutcome>
       },
       { onConflict: "thread_id" }
     );
-    await pingLeaders(supabase, {
-      subject: input.threadSubject,
-      fromEmail: input.fromEmail,
-      reason: "no-candidates"
-    });
+    if (!input.silent) {
+      await pingLeaders(supabase, {
+        subject: input.threadSubject,
+        fromEmail: input.fromEmail,
+        reason: "no-candidates"
+      });
+    }
     return {
       skipped: "no-candidates",
       classified,
@@ -292,7 +340,7 @@ export async function runEmailIntake(input: IntakeInput): Promise<IntakeOutcome>
       .eq("id", taskId);
   }
 
-  if (needsReview) {
+  if (needsReview && !input.silent) {
     await pingLeaders(supabase, {
       subject: input.threadSubject,
       fromEmail: input.fromEmail,
@@ -304,20 +352,25 @@ export async function runEmailIntake(input: IntakeInput): Promise<IntakeOutcome>
   //     /approvals queue (kind='auto_reply'); never sends without a
   //     human Approve & Send. Fire-and-forget — failure logs and
   //     moves on; the task still exists, the reply just won't.
-  void autoDraftReply(supabase, {
-    taskId,
-    threadId: input.threadId,
-    accountId: input.accountId,
-    threadSubject: input.threadSubject,
-    threadBody: input.threadBody,
-    fromEmail: input.fromEmail,
-    assignee,
-    clientName,
-    clientId: null
-  }).catch((err) => {
-    // Don't crash intake on a Claude or DB hiccup.
-    console.warn("[auto-intake] reply draft failed", err);
-  });
+  //     Suppressed in silent (backlog-drain) mode so a one-shot run
+  //     doesn't flood the email-approval queue with dozens of replies
+  //     that nobody asked for.
+  if (!input.silent) {
+    void autoDraftReply(supabase, {
+      taskId,
+      threadId: input.threadId,
+      accountId: input.accountId,
+      threadSubject: input.threadSubject,
+      threadBody: input.threadBody,
+      fromEmail: input.fromEmail,
+      assignee,
+      clientName,
+      clientId: null
+    }).catch((err) => {
+      // Don't crash intake on a Claude or DB hiccup.
+      console.warn("[auto-intake] reply draft failed", err);
+    });
+  }
 
   // 6) Slack DM the assignee — but only for non-draft tasks. Drafts wait
   //    on dept-head approval before pinging the assignee; the approval

@@ -569,12 +569,12 @@ function DraftCard({
                   <RotateCcw className="w-3 h-3" /> v{draft.revisionCount + 1}
                 </span>
               )}
-              {draft.scheduledFor && !isSent && !isRejected && (
-                <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full bg-sky-100 text-sky-700 border border-sky-200/70">
-                  <CalendarClock className="w-3 h-3" /> {new Date(draft.scheduledFor).toLocaleString(undefined, {
-                    month: "short", day: "numeric", hour: "numeric", minute: "2-digit"
-                  })}
-                </span>
+              {!isSent && !isRejected && (
+                <ScheduleEditor
+                  draftId={draft.id}
+                  scheduledFor={draft.scheduledFor}
+                  onChanged={onChanged}
+                />
               )}
               {isSent && (
                 <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700 border border-emerald-200/70">
@@ -1100,4 +1100,89 @@ function formatRelative(iso: string): string {
   if (diff < day) return `${Math.floor(diff / hr)}h ago`;
   if (diff < 7 * day) return `${Math.floor(diff / day)}d ago`;
   return d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
+
+// Inline send-date editor. Renders as either:
+//   - a sky pill showing the current scheduled date (click to change), or
+//   - a "Set send date" outline button when no date is set yet.
+// Either way, clicking opens a native datetime-local picker and any
+// non-empty value POSTs to /api/email-drafts/:id/schedule. Empty value
+// clears the schedule (sends on next approve instead of waiting).
+function ScheduleEditor({
+  draftId, scheduledFor, onChanged
+}: {
+  draftId: string;
+  scheduledFor: string | null;
+  onChanged: () => void;
+}) {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const localValue = scheduledFor
+    ? (() => {
+        // datetime-local wants YYYY-MM-DDTHH:mm — strip the seconds and
+        // the trailing Z/offset that toISOString uses.
+        const d = new Date(scheduledFor);
+        const pad = (n: number) => String(n).padStart(2, "0");
+        return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+      })()
+    : "";
+
+  async function save(rawValue: string) {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const iso = rawValue ? new Date(rawValue).toISOString() : null;
+      const res = await fetch(`/api/email-drafts/${draftId}/schedule`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ scheduledFor: iso })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error ?? `status ${res.status}`);
+      toast.success(iso ? `Scheduled for ${new Date(iso).toLocaleString()}` : "Schedule cleared");
+      onChanged();
+    } catch (err) {
+      toast.error(`Couldn't schedule: ${err instanceof Error ? err.message : "unknown"}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <span className="relative inline-flex">
+      <button
+        type="button"
+        onClick={() => inputRef.current?.showPicker?.() ?? inputRef.current?.click()}
+        disabled={busy}
+        className={cn(
+          "inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full border font-medium transition-colors",
+          scheduledFor
+            ? "bg-sky-100 text-sky-700 border-sky-200/70 hover:bg-sky-200/60"
+            : "bg-white text-ink/55 border-slate-200 hover:text-ink hover:border-accent/40",
+          busy && "opacity-60 cursor-not-allowed"
+        )}
+        title={scheduledFor ? "Click to change send date" : "Click to schedule a send date"}
+      >
+        <CalendarClock className="w-3 h-3" />
+        {scheduledFor
+          ? new Date(scheduledFor).toLocaleString(undefined, {
+              month: "short", day: "numeric", hour: "numeric", minute: "2-digit"
+            })
+          : "Set send date"}
+      </button>
+      <input
+        ref={inputRef}
+        type="datetime-local"
+        value={localValue}
+        onChange={(e) => void save(e.target.value)}
+        // Hidden but reachable via the button's showPicker() call. We
+        // can't visually-hide entirely (display:none kills the picker),
+        // so it sits behind the button with zero opacity + no pointer.
+        className="absolute inset-0 opacity-0 pointer-events-none"
+        tabIndex={-1}
+        aria-hidden
+      />
+    </span>
+  );
 }

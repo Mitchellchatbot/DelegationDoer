@@ -12,7 +12,7 @@ import { ClientHealthCard } from "@/components/ClientHealthCard";
 import { ClientWordPressCard } from "@/components/ClientWordPressCard";
 import { ClientTouchpointCard } from "@/components/ClientTouchpointCard";
 import { DeleteClientButton } from "@/components/DeleteClientButton";
-import { ContentPlanComposer } from "@/components/ContentPlanComposer";
+import { ContentPlanComposerCollapsible } from "@/components/ContentPlanComposerCollapsible";
 import { ClientEmailLog } from "@/components/ClientEmailLog";
 import { listEmailDrafts } from "@/lib/email-drafts-data";
 import { isLeader } from "@/lib/auth";
@@ -156,6 +156,16 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
           )!;
 
           if (!threadMatchesClient(t.participants, signals)) return null;
+
+          // Wordfence security alerts (WordPress plugin) are pure noise
+          // on the client email-history surface — they're sent BY the
+          // plugin TO the client, but they come from wordfence.com, so
+          // they don't say anything about how the client/team relationship
+          // is going. Filter by sender domain + subject prefix.
+          const isWordfence =
+            (t.participants ?? []).some((p) => /@wordfence\.com\b/i.test(p)) ||
+            /^wordfence\b/i.test(t.subject ?? "");
+          if (isWordfence) return null;
 
           return {
             id: t.id,
@@ -393,7 +403,7 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
       )}
 
       {canComposeContentPlan && (
-        <ContentPlanComposer
+        <ContentPlanComposerCollapsible
           lockedClient={{
             id: client.id,
             name: client.name,
@@ -497,10 +507,10 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
       />
 
       <Section
-        title="Suggestions & notes"
+        title="Team notes"
         icon={<Lightbulb className="w-4 h-4" />}
         tone="violet"
-        empty="No suggestions yet."
+        empty="No team notes yet."
         add={<AddResourceForm clientId={client.id} kind="suggestion" />}
         items={suggestions}
         renderItem={(r) => (

@@ -78,13 +78,46 @@ export async function GET() {
     }
   }
 
-  const pending = drafts.map((d) => ({
-    ...d,
-    routing_decision:
-      typeof d.routing_decision_id === "string"
-        ? decisionMap.get(d.routing_decision_id) ?? null
-        : null
-  }));
+  // Auto-reply drafts joined by source_thread_id from the routing
+  // decision. One draft per inbound thread; pending drafts only —
+  // sent/rejected replies aren't actionable on this surface.
+  const threadIds: string[] = [];
+  for (const id of decisionIds) {
+    const dec = decisionMap.get(id);
+    const t = dec?.thread_id;
+    if (typeof t === "string") threadIds.push(t);
+  }
+  const autoReplyByThread = new Map<string, Record<string, unknown>>();
+  if (threadIds.length > 0) {
+    try {
+      const { data: replies } = await supabase
+        .from("email_drafts")
+        .select("id, source_thread_id, subject, body_text, status, kind, to_emails, created_at")
+        .eq("kind", "auto_reply")
+        .in("source_thread_id", threadIds)
+        .in("status", ["pending", "approved"])
+        .order("created_at", { ascending: false });
+      for (const r of (replies ?? []) as unknown as Array<Record<string, unknown>>) {
+        const t = r.source_thread_id;
+        if (typeof t === "string" && !autoReplyByThread.has(t)) {
+          autoReplyByThread.set(t, r);
+        }
+      }
+    } catch {
+      // Missing migration or table — surface no replies, don't crash.
+    }
+  }
+
+  const pending = drafts.map((d) => {
+    const decision = typeof d.routing_decision_id === "string"
+      ? decisionMap.get(d.routing_decision_id) ?? null
+      : null;
+    const threadId = decision?.thread_id;
+    const autoReply = typeof threadId === "string"
+      ? autoReplyByThread.get(threadId) ?? null
+      : null;
+    return { ...d, routing_decision: decision, auto_reply: autoReply };
+  });
 
   // ---- Needs-routing-review queue (leaders only) ----
   let needsReview: Array<Record<string, unknown>> = [];

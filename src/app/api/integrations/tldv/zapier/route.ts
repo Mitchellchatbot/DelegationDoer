@@ -118,10 +118,18 @@ export async function POST(req: NextRequest) {
     typeof body.title === "string" ? body.title.trim() :
     "";
 
+  // Dump the field names we got so we can spot mapping mistakes from
+  // Zapier's side without forcing the user to add a Storage step.
+  log(`body keys=[${Object.keys(body).join(",")}]`);
+
   if (!rawMeetingId && !directTranscript) {
-    warn("rejected: payload missing both meetingId AND transcript");
+    warn(`rejected: payload missing both meetingId AND transcript (received keys: ${Object.keys(body).join(",") || "(none)"})`);
     return NextResponse.json(
-      { error: "either meetingId (to fetch from tl;dv) or transcript (raw text) is required" },
+      {
+        error: "either meetingId (to fetch from tl;dv) or transcript (raw text) is required",
+        receivedKeys: Object.keys(body),
+        hint: "Map Zapier's 'Transcript' field to `transcript` OR the 'Meeting ID' field to `meetingId`."
+      },
       { status: 400 }
     );
   }
@@ -188,8 +196,11 @@ export async function POST(req: NextRequest) {
     const elapsed = Date.now() - startedAt;
     if (outcome.skipped === "already-logged") {
       log(`meetingId=${meetingId}: SKIPPED (already logged) in ${elapsed}ms`);
-    } else if (outcome.items.length === 0 && segments.length > 0) {
-      warn(`meetingId=${meetingId}: classifier extracted 0 items from ${segments.length} segments (verify by inspecting raw_payload in tldv_intake_log)`);
+    } else if (outcome.items.length === 0) {
+      // Loud no matter where the transcript came from (passthrough OR
+      // tl;dv-fetched). Before, this only fired when segments.length>0,
+      // so Zapier passthrough silently swallowed every empty-classify.
+      warn(`meetingId=${meetingId}: classifier extracted 0 action items from transcript=${transcript.length}chars (verify raw_payload in tldv_intake_log)`);
     } else {
       log(`meetingId=${meetingId}: itemsCreated=${outcome.items.length} clientName="${outcome.clientName ?? "-"}" resourceId=${outcome.resourceId ?? "-"} in ${elapsed}ms`);
     }
@@ -201,6 +212,17 @@ export async function POST(req: NextRequest) {
       clientName: outcome.clientName,
       itemsCreated: outcome.items.length,
       resourceId: outcome.resourceId,
+      // Diagnostic block so Zapier's test panel shows what landed.
+      // If itemsCreated=0 the message points the user at the most
+      // likely cause without forcing them to dig through Railway logs.
+      diagnostics: {
+        transcriptChars: transcript.length,
+        segments: segments.length,
+        zapierMappedKeys: Object.keys(body),
+        note: outcome.items.length === 0
+          ? "Classifier found no concrete action items in this transcript. Check Railway logs (`[tldv-zapier]`) for the raw_payload, or inspect tldv_intake_log for this meetingId."
+          : undefined
+      },
       items: outcome.items.map((i) => ({
         taskId: i.taskId,
         title: i.title,

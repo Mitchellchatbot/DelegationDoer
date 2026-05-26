@@ -3,7 +3,7 @@ import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { canApproveDraft } from "@/lib/email-approvers";
-import { composeNewThread } from "@/lib/missive-client";
+import { composeNewThread, sendReply } from "@/lib/missive-client";
 import { recordDraftEvent } from "@/lib/draft-events";
 import { sanitizeMediaUrls, fetchMediaAsAttachments } from "@/lib/media";
 
@@ -127,29 +127,55 @@ export async function POST(
     // Fire the actual outbound send. On failure, flip status='failed'
     // + record send_error so the queue can show why and the approver
     // can retry by re-clicking (we re-allow approve on 'failed' below).
+    //
+    // Two paths:
+    //   - kind='auto_reply' + source_thread_id → reply on the inbound
+    //     thread via sendReply (keeps the conversation threaded with
+    //     the client's original message).
+    //   - everything else → composeNewThread to start a fresh thread.
     const mediaItems = sanitizeMediaUrls(row.media_urls);
     const attachments = mediaItems.length > 0
       ? await fetchMediaAsAttachments(mediaItems)
       : undefined;
+    const isAutoReply = row.kind === "auto_reply" && !!row.source_thread_id;
     try {
-      const result = await composeNewThread({
-        fromAccountId: accountId,
-        to: row.to_emails as string[],
-        cc: (row.cc_emails as string[]) ?? [],
-        bcc: (row.bcc_emails as string[]) ?? [],
-        subject: row.subject as string,
-        bodyText: row.body_text as string,
-        bodyHtml: (row.body_html as string | null) ?? undefined,
-        attachments
-      });
+      let threadId: string | null = null;
+      let messageId: string | null = null;
+      if (isAutoReply) {
+        const result = await sendReply({
+          threadId: row.source_thread_id as string,
+          fromAccountId: accountId,
+          to: row.to_emails as string[],
+          cc: (row.cc_emails as string[]) ?? [],
+          subject: row.subject as string,
+          bodyText: row.body_text as string,
+          bodyHtml: (row.body_html as string | null) ?? undefined,
+          attachments
+        });
+        threadId = row.source_thread_id as string; // reply lands on the same thread
+        messageId = result.messageId ?? null;
+      } else {
+        const result = await composeNewThread({
+          fromAccountId: accountId,
+          to: row.to_emails as string[],
+          cc: (row.cc_emails as string[]) ?? [],
+          bcc: (row.bcc_emails as string[]) ?? [],
+          subject: row.subject as string,
+          bodyText: row.body_text as string,
+          bodyHtml: (row.body_html as string | null) ?? undefined,
+          attachments
+        });
+        threadId = result.threadId ?? null;
+        messageId = result.messageId ?? null;
+      }
       const sentAt = new Date().toISOString();
       await supabase
         .from("email_drafts")
         .update({
           status: "sent",
           sent_at: sentAt,
-          missive_thread_id: result.threadId ?? null,
-          missive_message_id: result.messageId ?? null,
+          missive_thread_id: threadId,
+          missive_message_id: messageId,
           send_error: null
         })
         .eq("id", params.id);
@@ -158,16 +184,17 @@ export async function POST(
         actorId: userId,
         type: "sent",
         metadata: {
-          missive_thread_id: result.threadId ?? null,
-          missive_message_id: result.messageId ?? null
+          missive_thread_id: threadId,
+          missive_message_id: messageId,
+          is_reply: isAutoReply
         }
       });
       return NextResponse.json({
         ok: true,
         status: "sent",
         sentAt,
-        missiveThreadId: result.threadId,
-        missiveMessageId: result.messageId
+        missiveThreadId: threadId,
+        missiveMessageId: messageId
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : "send failed";

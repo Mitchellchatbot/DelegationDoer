@@ -1,6 +1,7 @@
 "use client";
 
-import { Sparkles, Mail, CalendarClock } from "lucide-react";
+import { Sparkles, Mail, CalendarClock, MessageSquare, ArrowUpRight } from "lucide-react";
+import Link from "next/link";
 import { PriorityBadge } from "./Badges";
 import { PersonAvatar } from "./PersonAvatar";
 import { cn } from "@/lib/utils";
@@ -132,6 +133,44 @@ export function RoutingReviewCard({
           )}
         </div>
       </div>
+
+      {/* AI-drafted reply preview. Read-only here — edit + Approve & Send
+          lives in /approvals. Click bubbles up to e.stopPropagation so
+          opening the preview doesn't also open the task dialog. */}
+      {task.auto_reply && (
+        <Link
+          href="/approvals"
+          onClick={(e) => e.stopPropagation()}
+          className="mt-3 ml-6 block rounded-xl border border-sky-200/70 bg-sky-50/50 hover:bg-sky-50 transition-colors p-2.5"
+        >
+          <div className="flex items-center justify-between gap-2 mb-1">
+            <span className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-sky-700">
+              <MessageSquare className="w-3 h-3" />
+              Drafted reply
+              <span className={cn(
+                "ml-1 px-1.5 py-0.5 rounded-full normal-case font-medium",
+                task.auto_reply.status === "pending" && "bg-amber-100 text-amber-700",
+                task.auto_reply.status === "approved" && "bg-blue-100 text-blue-700",
+                task.auto_reply.status === "sent" && "bg-emerald-100 text-emerald-700",
+                task.auto_reply.status === "rejected" && "bg-rose-100 text-rose-700",
+                task.auto_reply.status === "failed" && "bg-rose-100 text-rose-700",
+                task.auto_reply.status === "needs_revision" && "bg-fuchsia-100 text-fuchsia-700"
+              )}>
+                {task.auto_reply.status === "pending" ? "awaiting send" : task.auto_reply.status}
+              </span>
+            </span>
+            <span className="inline-flex items-center gap-0.5 text-[10px] text-sky-700/80 group-hover:text-sky-700">
+              Edit in approvals <ArrowUpRight className="w-3 h-3" />
+            </span>
+          </div>
+          <div className="text-[12px] font-medium text-ink/85 truncate">
+            {task.auto_reply.subject || "(no subject)"}
+          </div>
+          <div className="text-[11px] text-ink/65 line-clamp-2 mt-0.5">
+            {task.auto_reply.body_text.split("\n").find((l) => l.trim()) ?? "(empty)"}
+          </div>
+        </Link>
+      )}
     </div>
   );
 }

@@ -64,10 +64,16 @@ export function SodFlow({ open, simulate = false, onClose, onComplete }: Props) 
   const [today, setToday] = useState<TodayResp | null>(null);
   const [dashboard, setDashboard] = useState<SeoDashboardData | WebDashboardData | null>(null);
   const [topPriority, setTopPriority] = useState("");
-  // Each row tracks where it came from: `existingTaskId` is set when
+  // Each row in `taskItems` is backed by a real task row in the DB —
+  // either freshly created when the user clicks Add, or linked to a
+  // pre-existing task via the picker. `pickedFromExisting` distinguishes
+  // the two so the UI can show the "Existing" badge only on picked rows
+  // (newly-added tasks shouldn't read as if they pre-existed).
+  // `existingTaskId` is set when
   // the user picked from "Pick existing" — those rows shouldn't show
   // the "Add as task" affordance since the task already exists.
-  const [taskItems, setTaskItems] = useState<Array<{ text: string; existingTaskId?: string }>>([]);
+  const [taskItems, setTaskItems] = useState<Array<{ text: string; existingTaskId?: string; pickedFromExisting?: boolean }>>([]);
+  const [creatingTask, setCreatingTask] = useState(false);
   const [newTaskDraft, setNewTaskDraft] = useState("");
   const [blockers, setBlockers] = useState("");
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -146,17 +152,60 @@ export function SodFlow({ open, simulate = false, onClose, onComplete }: Props) 
     setScreen(prev);
   };
 
-  function addTaskLine() {
+  // Adds a new task line. Creates the underlying task in the DB up
+  // front (via /api/sod/create-task — bypasses the clock-in gate,
+  // assigns to self in the user's primary department, status =
+  // in_progress, no due date) and only appends the row on success.
+  // Failures surface via toast and leave the input intact so the user
+  // can retry.
+  async function addTaskLine() {
     const v = newTaskDraft.trim();
-    if (!v) return;
-    setTaskItems((cur) => {
-      const next = [...cur, { text: v }];
-      void save({ tasksPlanned: next.map((t) => t.text).join("\n") });
-      return next;
-    });
-    setNewTaskDraft("");
+    if (!v || creatingTask) return;
+    setCreatingTask(true);
+    try {
+      const r = await fetch("/api/sod/create-task", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: v })
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d?.error ?? `status ${r.status}`);
+      setTaskItems((cur) => {
+        const next = [...cur, { text: v, existingTaskId: d.id as string }];
+        void save({ tasksPlanned: next.map((t) => t.text).join("\n") });
+        return next;
+      });
+      setNewTaskDraft("");
+    } catch (err) {
+      toast.error(`Couldn't add task: ${err instanceof Error ? err.message : "unknown"}`);
+    } finally {
+      setCreatingTask(false);
+    }
   }
-  function removeTaskLine(i: number) {
+  // Removes a task row. For rows that came from "Pick existing" we
+  // only unlink locally — the underlying task lives on. For rows
+  // created via Add (the task didn't exist before this SOD session),
+  // we also DELETE the underlying task so the row going away truly
+  // means the task goes away. Backed by /api/sod/delete-task, which
+  // refuses if the task has any logged time.
+  async function removeTaskLine(i: number) {
+    const target = taskItems[i];
+    if (!target) return;
+    const shouldDeleteTask = !!target.existingTaskId && !target.pickedFromExisting;
+    if (shouldDeleteTask) {
+      try {
+        const r = await fetch("/api/sod/delete-task", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: target.existingTaskId })
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(d?.error ?? `status ${r.status}`);
+      } catch (err) {
+        toast.error(`Couldn't remove task: ${err instanceof Error ? err.message : "unknown"}`);
+        return;
+      }
+    }
     setTaskItems((cur) => {
       const next = cur.filter((_, idx) => idx !== i);
       void save({ tasksPlanned: next.map((t) => t.text).join("\n") });
@@ -164,37 +213,9 @@ export function SodFlow({ open, simulate = false, onClose, onComplete }: Props) 
     });
   }
 
-  async function addAsTask(line: string) {
-    try {
-      // Use the SOD-specific endpoint — bypasses the clock-in gate and
-      // pre-fills status=in_progress + assignee=self + the user's
-      // primary department.
-      const r = await fetch("/api/sod/create-task", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title: line })
-      });
-      const d = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(d?.error ?? `status ${r.status}`);
-      toast.success(`Created task: ${line}`);
-      // Mark this row as linked to the freshly-created task so the
-      // user can't accidentally create it twice — same UX as a row
-      // that came from "Pick existing".
-      setTaskItems((cur) =>
-        cur.map((item) =>
-          item.text === line && !item.existingTaskId
-            ? { ...item, existingTaskId: d.id }
-            : item
-        )
-      );
-    } catch (err) {
-      toast.error(`Couldn't create task: ${err instanceof Error ? err.message : "unknown"}`);
-    }
-  }
-
   async function pickExisting(t: MyTaskOption) {
     setTaskItems((cur) => {
-      const next = [...cur, { text: t.title, existingTaskId: t.id }];
+      const next = [...cur, { text: t.title, existingTaskId: t.id, pickedFromExisting: true }];
       void save({ tasksPlanned: next.map((it) => it.text).join("\n") });
       return next;
     });
@@ -349,21 +370,23 @@ export function SodFlow({ open, simulate = false, onClose, onComplete }: Props) 
                 value={newTaskDraft}
                 onChange={(e) => setNewTaskDraft(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter") { e.preventDefault(); addTaskLine(); }
+                  if (e.key === "Enter") { e.preventDefault(); void addTaskLine(); }
                 }}
+                disabled={creatingTask}
                 placeholder="Type a task and press Enter…"
-                className="flex-1 text-sm border border-slate-200/70 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-accent/20 focus:border-accent/40"
+                className="flex-1 text-sm border border-slate-200/70 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-accent/20 focus:border-accent/40 disabled:opacity-60"
               />
               <button
                 type="button"
-                onClick={addTaskLine}
-                disabled={!newTaskDraft.trim()}
+                onClick={() => void addTaskLine()}
+                disabled={!newTaskDraft.trim() || creatingTask}
                 className={cn(
                   "inline-flex items-center gap-1 text-xs font-medium px-3 py-2 rounded-lg bg-white border border-slate-200/70 hover:border-accent/40 hover:text-accent",
-                  !newTaskDraft.trim() && "opacity-40 cursor-not-allowed"
+                  (!newTaskDraft.trim() || creatingTask) && "opacity-40 cursor-not-allowed"
                 )}
               >
-                <Plus className="w-3 h-3" /> Add
+                {creatingTask ? <Loader2 className="w-3 h-3 animate-spin" /> : <Plus className="w-3 h-3" />}
+                Add
               </button>
               <div className="relative">
                 <button
@@ -373,30 +396,46 @@ export function SodFlow({ open, simulate = false, onClose, onComplete }: Props) 
                 >
                   <ChevronDown className="w-3 h-3" /> Pick existing
                 </button>
-                {pickerOpen && (
-                  <div className="absolute right-0 top-full mt-1 w-72 max-h-72 overflow-y-auto rounded-xl border border-slate-200/70 bg-white shadow-lg z-10 p-1">
-                    {myTasks.length === 0 ? (
-                      <div className="p-3 text-xs text-ink/55">No open tasks assigned to you.</div>
-                    ) : (
-                      myTasks.map((t) => (
-                        <button
-                          key={t.id}
-                          type="button"
-                          onClick={() => void pickExisting(t)}
-                          className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-slate-100 text-xs"
-                        >
-                          <div className="font-medium text-ink truncate">{t.title}</div>
-                          <div className="text-[10px] text-ink/55">
-                            {t.status === "pending" ? "Not started" :
-                             t.status === "in_progress" ? "In progress" :
-                             t.status === "urgent" ? "Urgent" :
-                             "Waiting on client"}
-                          </div>
-                        </button>
-                      ))
-                    )}
-                  </div>
-                )}
+                {pickerOpen && (() => {
+                  // Don't offer tasks that are already in this SOD —
+                  // includes ones picked from existing AND ones the
+                  // user just typed into Add (which created a real task
+                  // we don't want them re-picking from below).
+                  const usedIds = new Set(
+                    taskItems
+                      .map((t) => t.existingTaskId)
+                      .filter((v): v is string => typeof v === "string")
+                  );
+                  const available = myTasks.filter((t) => !usedIds.has(t.id));
+                  return (
+                    <div className="absolute right-0 top-full mt-1 w-72 max-h-72 overflow-y-auto rounded-xl border border-slate-200/70 bg-white shadow-lg z-10 p-1">
+                      {available.length === 0 ? (
+                        <div className="p-3 text-xs text-ink/55">
+                          {myTasks.length === 0
+                            ? "No open tasks assigned to you."
+                            : "All your open tasks are already on this SOD."}
+                        </div>
+                      ) : (
+                        available.map((t) => (
+                          <button
+                            key={t.id}
+                            type="button"
+                            onClick={() => void pickExisting(t)}
+                            className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-slate-100 text-xs"
+                          >
+                            <div className="font-medium text-ink truncate">{t.title}</div>
+                            <div className="text-[10px] text-ink/55">
+                              {t.status === "pending" ? "Not started" :
+                               t.status === "in_progress" ? "In progress" :
+                               t.status === "urgent" ? "Urgent" :
+                               "Waiting on client"}
+                            </div>
+                          </button>
+                        ))
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
             </div>
 
@@ -409,31 +448,25 @@ export function SodFlow({ open, simulate = false, onClose, onComplete }: Props) 
                   className="group flex items-center gap-2 text-sm border border-slate-200/70 rounded-lg px-2.5 py-1.5"
                 >
                   <span className="flex-1 truncate text-ink">{item.text}</span>
-                  {item.existingTaskId ? (
+                  {item.pickedFromExisting && (
                     <span
                       className="text-[10px] uppercase tracking-wide font-semibold text-violet-600 bg-violet-50 border border-violet-200/70 rounded-full px-1.5 py-0.5"
                       title="Linked to an existing task"
                     >
                       Existing
                     </span>
-                  ) : (
+                  )}
+                  {!item.pickedFromExisting && (
                     <button
                       type="button"
-                      onClick={() => void addAsTask(item.text)}
-                      className="opacity-0 group-hover:opacity-100 transition-opacity text-[11px] text-accent hover:underline"
-                      title="Create a real task from this line"
+                      onClick={() => void removeTaskLine(i)}
+                      className="opacity-0 group-hover:opacity-100 transition-opacity text-ink/45 hover:text-rose-600"
+                      aria-label="Delete task"
+                      title="Delete this task"
                     >
-                      Add as task
+                      <X className="w-3.5 h-3.5" />
                     </button>
                   )}
-                  <button
-                    type="button"
-                    onClick={() => removeTaskLine(i)}
-                    className="opacity-0 group-hover:opacity-100 transition-opacity text-ink/45 hover:text-rose-600"
-                    aria-label="Remove"
-                  >
-                    <X className="w-3.5 h-3.5" />
-                  </button>
                 </li>
               ))}
             </ul>

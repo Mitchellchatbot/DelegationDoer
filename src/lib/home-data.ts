@@ -1,4 +1,8 @@
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
+import {
+  effectiveTouchpoint,
+  type TouchpointLabel
+} from "@/lib/client-touchpoint";
 
 // Server-side queries for the /home landing surface. Each function
 // returns plain JSON-shaped data so server components can pass it
@@ -127,6 +131,40 @@ export async function getEodSubmittedTodayForUser(userId: string): Promise<boole
   } catch {
     return null;
   }
+}
+
+// Day Bookends status — feeds the pinned card at the top of /home that
+// shows where the user stands on today's SOD + EOD submissions.
+// Both tables share the same shape: (user_id, note_date YYYY-MM-DD,
+// submitted_at timestamptz). Wrapped in try/catch per table so a
+// missing migration doesn't crash the whole landing surface.
+export interface DayBookendStatus {
+  sod: { submittedAt: string | null; submitted: boolean };
+  eod: { submittedAt: string | null; submitted: boolean };
+}
+
+export async function getDayBookendStatus(userId: string): Promise<DayBookendStatus> {
+  const supabase = getSupabaseAdmin();
+  const today = new Date().toISOString().slice(0, 10);
+
+  async function readOne(table: "sod_notes" | "eod_notes"): Promise<{ submittedAt: string | null; submitted: boolean }> {
+    try {
+      const { data, error } = await supabase
+        .from(table)
+        .select("submitted_at")
+        .eq("user_id", userId)
+        .eq("note_date", today)
+        .maybeSingle();
+      if (error) return { submittedAt: null, submitted: false };
+      const submittedAt = (data?.submitted_at as string | null) ?? null;
+      return { submittedAt, submitted: !!submittedAt };
+    } catch {
+      return { submittedAt: null, submitted: false };
+    }
+  }
+
+  const [sod, eod] = await Promise.all([readOne("sod_notes"), readOne("eod_notes")]);
+  return { sod, eod };
 }
 
 // Team status grid for the leader/head view. Lists every active user
@@ -292,6 +330,74 @@ export async function getTodayDeliverables(
     assigneeId: r.assignee_id,
     assigneeName: r.assignee_id ? namesById.get(r.assignee_id) ?? null : null
   }));
+}
+
+// Client health snapshot for /home leader view. Returns active clients
+// sorted by stalest-first (longest gap since the last outbound email),
+// with their effective touchpoint label (manual override > computed
+// from last_outbound_email_at). Capped at `limit` — the home strip is
+// a "what needs attention" surface, not the full /clients list.
+export interface ClientHealthRow {
+  id: string;
+  name: string;
+  contactName: string | null;
+  touchpoint: TouchpointLabel;
+  isOverride: boolean;
+  lastOutboundEmailAt: string | null;
+  daysSinceLastEmail: number | null;
+}
+
+export async function getClientHealthOverview(limit = 8): Promise<ClientHealthRow[]> {
+  const supabase = getSupabaseAdmin();
+  // active-only — paused/archived clients shouldn't generate
+  // "you haven't emailed them" noise.
+  const { data, error } = await supabase
+    .from("clients")
+    .select("id, name, contact_name, status, touchpoint_override_label, last_outbound_email_at")
+    .order("last_outbound_email_at", { ascending: true, nullsFirst: true });
+  if (error) return [];
+
+  const now = new Date();
+  const rows = ((data ?? []) as Array<{
+    id: string;
+    name: string;
+    contact_name: string | null;
+    status: string | null;
+    touchpoint_override_label: TouchpointLabel | null;
+    last_outbound_email_at: string | null;
+  }>)
+    .filter((c) => !c.status || c.status === "active")
+    .map<ClientHealthRow>((c) => {
+      const { label, isOverride } = effectiveTouchpoint(
+        c.touchpoint_override_label, c.last_outbound_email_at
+      );
+      const daysSince = c.last_outbound_email_at
+        ? Math.max(0, Math.floor((now.getTime() - new Date(c.last_outbound_email_at).getTime()) / 86_400_000))
+        : null;
+      return {
+        id: c.id,
+        name: c.name,
+        contactName: c.contact_name,
+        touchpoint: label,
+        isOverride,
+        lastOutboundEmailAt: c.last_outbound_email_at,
+        daysSinceLastEmail: daysSince
+      };
+    });
+
+  // Prioritise red → yellow → green, then stalest first inside each band.
+  // Cleaner signal than raw stalest sort — keeps reds at top even if a
+  // green has somehow gone older (edge case from manual overrides).
+  const tone: Record<TouchpointLabel, number> = { red: 0, yellow: 1, green: 2 };
+  rows.sort((a, b) => {
+    const t = tone[a.touchpoint] - tone[b.touchpoint];
+    if (t !== 0) return t;
+    const ad = a.lastOutboundEmailAt ? new Date(a.lastOutboundEmailAt).getTime() : 0;
+    const bd = b.lastOutboundEmailAt ? new Date(b.lastOutboundEmailAt).getTime() : 0;
+    return ad - bd;
+  });
+
+  return rows.slice(0, limit);
 }
 
 // "Needs you" counters for the leader strip. Mirrors what the badge

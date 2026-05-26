@@ -3,13 +3,14 @@
 import Link from "next/link";
 import {
   ClipboardCheck, Mail, FileText, Flame, CheckCircle2, ArrowRight,
-  Users, AlertTriangle, Crown
+  Users, AlertTriangle, Crown, Activity, Clock
 } from "lucide-react";
 import { PersonAvatar } from "@/components/PersonAvatar";
 import { Countdown } from "@/components/Countdown";
 import { PriorityBadge } from "@/components/Badges";
+import { TOUCHPOINT_META } from "@/lib/client-touchpoint";
 import { cn } from "@/lib/utils";
-import type { HomeTask, HomeTeammate, NeedsYouCounts } from "@/lib/home-data";
+import type { HomeTask, HomeTeammate, NeedsYouCounts, ClientHealthRow } from "@/lib/home-data";
 
 // /home rendering for leaders and heads. Three strips:
 //   1. "Needs you" — approvals + inbox + EOD pending counters
@@ -29,15 +30,17 @@ interface Props {
   needsYou: NeedsYouCounts;
   team: HomeTeammate[];
   deliverables: DeliverableRow[];
+  clientHealth: ClientHealthRow[];
   scopeLabel?: string;  // "Software" for heads; undefined for leaders
 }
 
-export function HomeLeader({ meName, needsYou, team, deliverables, scopeLabel }: Props) {
+export function HomeLeader({ meName, needsYou, team, deliverables, clientHealth, scopeLabel }: Props) {
   const firstName = meName.split(" ")[0];
   return (
     <div className="space-y-3 max-w-5xl">
       <Header firstName={firstName} scopeLabel={scopeLabel} />
       <NeedsYouStrip counts={needsYou} />
+      <ClientHealthCard rows={clientHealth} />
       <TeamStripCard team={team} />
       <DeliverablesCard rows={deliverables} />
     </div>
@@ -192,6 +195,89 @@ function StatusDot({ ok, label }: { ok: boolean; label: string }) {
       <span className={cn(ok ? "text-emerald-700" : "text-ink/55")}>{label}</span>
     </span>
   );
+}
+
+function ClientHealthCard({ rows }: { rows: ClientHealthRow[] }) {
+  // Tally so the header gives a quick read on overall health.
+  const redCount = rows.filter((r) => r.touchpoint === "red").length;
+  const yellowCount = rows.filter((r) => r.touchpoint === "yellow").length;
+  return (
+    <section className="rounded-2xl border border-slate-200/70 bg-white shadow-soft overflow-hidden">
+      <header className="flex items-center justify-between px-4 py-3 border-b border-slate-100">
+        <div className="text-[13px] font-semibold inline-flex items-center gap-2">
+          <Activity className="w-4 h-4 text-emerald-500" />
+          Client health
+          {(redCount > 0 || yellowCount > 0) && (
+            <span className="text-[11px] text-ink/55 font-normal">
+              {redCount > 0 && <span className="text-rose-600 font-medium">{redCount} neglected</span>}
+              {redCount > 0 && yellowCount > 0 && <span className="text-ink/40"> · </span>}
+              {yellowCount > 0 && <span className="text-amber-600 font-medium">{yellowCount} stale</span>}
+            </span>
+          )}
+        </div>
+        <Link
+          href="/clients"
+          className="text-[11px] font-medium text-accent inline-flex items-center gap-0.5 hover:underline"
+        >
+          All clients <ArrowRight className="w-3 h-3" />
+        </Link>
+      </header>
+      {rows.length === 0 ? (
+        <div className="px-4 py-8 text-center text-[12px] text-ink/55 inline-flex items-center justify-center gap-1.5 w-full">
+          <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+          No active clients yet.
+        </div>
+      ) : (
+        <ul className="divide-y divide-slate-100">
+          {rows.map((r) => {
+            const meta = TOUCHPOINT_META[r.touchpoint];
+            return (
+              <li key={r.id}>
+                <Link
+                  href={`/clients/${encodeURIComponent(r.id)}`}
+                  className="flex items-center justify-between gap-3 px-4 py-2.5 hover:bg-slate-50 transition-colors"
+                >
+                  <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                    <span className={cn("w-2 h-2 rounded-full shrink-0", meta.dot)} />
+                    <span className="text-[13px] font-medium text-ink truncate">{r.name}</span>
+                    {r.contactName && (
+                      <span className="text-[11px] text-ink/55 truncate hidden sm:inline">
+                        · {r.contactName}
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span className="text-[11px] text-ink/55 inline-flex items-center gap-1">
+                      <Clock className="w-3 h-3" />
+                      {lastEmailLabel(r.daysSinceLastEmail)}
+                    </span>
+                    <span
+                      className={cn(
+                        "text-[10px] px-2 py-0.5 rounded-full border font-medium",
+                        meta.bg, meta.text, meta.border
+                      )}
+                      title={meta.description + (r.isOverride ? " · manual override" : "")}
+                    >
+                      {meta.label}
+                    </span>
+                  </div>
+                </Link>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+function lastEmailLabel(days: number | null): string {
+  if (days === null) return "never emailed";
+  if (days === 0) return "today";
+  if (days === 1) return "yesterday";
+  if (days < 7) return `${days}d ago`;
+  if (days < 30) return `${Math.floor(days / 7)}w ago`;
+  return `${Math.floor(days / 30)}mo ago`;
 }
 
 function DeliverablesCard({ rows }: { rows: DeliverableRow[] }) {

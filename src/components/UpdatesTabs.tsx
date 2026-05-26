@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import { motion, LayoutGroup } from "framer-motion";
-import { Sparkles, Search, ShieldAlert, Camera, FolderKanban, Award, Trophy, Video, Sunrise } from "lucide-react";
+import { Sparkles, Search, ShieldAlert, Camera, FolderKanban, Award, Trophy, Video } from "lucide-react";
 import { useCurrentUser } from "@/lib/user-context";
 import { isLeader } from "@/lib/auth";
 import { cn } from "@/lib/utils";
@@ -18,9 +18,10 @@ type Tab = {
   // Hidden from workers — they don't approve drafts.
   approverOnly?: boolean;
 };
+// SOD and EOD moved out of /updates — they're top-level primary nav
+// items now (sidebar /sod and /eod). The Updates tab bar stays for
+// the team-feed surfaces (approvals, picks, moments, etc.).
 const TABS: readonly Tab[] = [
-  { href: "/updates/sod",             label: "SOD",         icon: Sunrise                         },
-  { href: "/updates/eod",             label: "EOD",         icon: Sparkles                        },
   { href: "/updates/approvals",       label: "Approvals",   icon: Video,        approverOnly: true},
   { href: "/updates/seo",             label: "SEO",         icon: Search,      seoOnly: true      },
   { href: "/updates/projects",        label: "Projects",    icon: FolderKanban, leaderOnly: true  },

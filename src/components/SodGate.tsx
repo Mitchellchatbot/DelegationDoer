@@ -10,17 +10,19 @@ import { SodFlow } from "@/components/SodFlow";
 // navigation (per spec: a worker shouldn't be able to skip the SOD
 // indefinitely just by clicking X).
 //
-// Suppressed on /updates/sod itself — that page renders the same flow
-// with its own "Start your day" button, so popping on top would be
-// confusing.
+// Suppressed on /sod itself (and the legacy /updates/sod redirect path)
+// — that page renders the same flow with its own "Start your day"
+// button, so popping on top would be confusing.
 export function SodGate() {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
   const [dismissedAt, setDismissedAt] = useState<number>(0);
 
   useEffect(() => {
-    // Don't auto-pop on the SOD page itself.
-    if (pathname?.startsWith("/updates/sod")) return;
+    // Don't auto-pop on the SOD page itself. Both the canonical /sod
+    // route and the legacy /updates/sod redirect path are guarded so
+    // the modal doesn't briefly flash during the bounce.
+    if (pathname?.startsWith("/sod") || pathname?.startsWith("/updates/sod")) return;
     // A 30-second cooldown after dismissal prevents the modal from
     // popping immediately when the user navigates right after closing
     // it. They'll still see it again on the next navigation past 30s,

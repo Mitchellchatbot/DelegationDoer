@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { listAccounts, listThreads, getThread } from "@/lib/missive-client";
 import { runEmailIntake } from "@/lib/email-intake";
+import { looksAutomated } from "@/lib/email-intake-filters";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -108,6 +109,31 @@ export async function GET(req: NextRequest) {
     perAccountCount.set(accountId, used + 1);
 
     const fromEmail = inbound ? extractEmail(inbound.from_addr) : null;
+
+    // Pre-classifier filter: skip obviously-automated threads (verification
+    // codes, security alert digests, bounce notifications, etc.) before
+    // they cost a Claude call + clutter the routing-review queue. Write a
+    // dedupe row so the cron stops re-evaluating these on every pass.
+    const auto = looksAutomated(fromEmail, t.subject);
+    if (auto.filtered) {
+      await supabase.from("email_intake_log").upsert(
+        {
+          thread_id: t.id,
+          account_id: accountId,
+          task_id: null,
+          routed_via: "auto-filtered",
+          routed_to_user_id: null,
+          processed_at: new Date().toISOString()
+        },
+        { onConflict: "thread_id" }
+      );
+      outcomes.push({
+        threadId: t.id, accountId, result: "skipped",
+        error: `auto-filtered:${auto.reason ?? "unknown"}`
+      });
+      continue;
+    }
+
     const bodyText = detail.messages
       .map((m) => `--- ${m.from_addr} @ ${m.sent_at} ---\n${m.body_text ?? stripHtml(m.body_html ?? "")}`)
       .join("\n\n");

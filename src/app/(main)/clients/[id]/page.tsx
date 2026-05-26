@@ -278,6 +278,7 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
         touchpointOverrideAt={client.touchpointOverrideAt}
         touchpointSummary={client.touchpointSummary}
         touchpointSummaryAt={client.touchpointSummaryAt}
+        encourageEmails={client.encourageEmails}
         canEdit={!!(me && (me.role === "leader" || me.isAdmin))}
       />
 

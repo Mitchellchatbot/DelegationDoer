@@ -350,10 +350,11 @@ export interface ClientHealthRow {
 export async function getClientHealthOverview(limit = 8): Promise<ClientHealthRow[]> {
   const supabase = getSupabaseAdmin();
   // active-only — paused/archived clients shouldn't generate
-  // "you haven't emailed them" noise.
+  // "you haven't emailed them" noise. Same for clients with
+  // encourage_emails=false (per-client opt-out).
   const { data, error } = await supabase
     .from("clients")
-    .select("id, name, contact_name, status, touchpoint_override_label, last_outbound_email_at")
+    .select("id, name, contact_name, status, touchpoint_override_label, last_outbound_email_at, encourage_emails")
     .order("last_outbound_email_at", { ascending: true, nullsFirst: true });
   if (error) return [];
 
@@ -365,8 +366,10 @@ export async function getClientHealthOverview(limit = 8): Promise<ClientHealthRo
     status: string | null;
     touchpoint_override_label: TouchpointLabel | null;
     last_outbound_email_at: string | null;
+    encourage_emails: boolean | null;
   }>)
     .filter((c) => !c.status || c.status === "active")
+    .filter((c) => c.encourage_emails !== false)
     .map<ClientHealthRow>((c) => {
       const { label, isOverride } = effectiveTouchpoint(
         c.touchpoint_override_label, c.last_outbound_email_at

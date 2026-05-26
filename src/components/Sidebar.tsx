@@ -277,8 +277,11 @@ export function Sidebar({ user }: { user: User }) {
           : []),
         ...(canApprove
           ? [
-              { href: "/approvals", label: "Approvals", icon: MoreIcons.Approvals, badge: approvalsPending ?? 0 },
-              { href: "/emails", label: "Outbound emails", icon: MoreIcons.OutboundEmails }
+              { href: "/approvals", label: "Approvals", icon: MoreIcons.Approvals, badge: approvalsPending ?? 0 }
+              // /emails (Outbound emails) was a parallel surface for the
+              // same draft-approval queue — duplicate entry-point,
+              // confusing. Approvals covers it. /emails still exists
+              // and redirects here so old bookmarks don't 404.
             ]
           : [])
       ]

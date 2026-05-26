@@ -162,7 +162,27 @@ export function EmailApprovalsTab() {
     <div className="space-y-5">
       {/* PageHero now lives on the parent /approvals page so it's
           shared across Emails / Meetings / Routing tabs. */}
-      <div className="lg:grid lg:gap-5 lg:grid-cols-[minmax(0,1fr)_380px] space-y-5 lg:space-y-0">
+      {/* Two-column on lg+: calendar pinned to the LEFT (was right), email
+          drafts fill the rest. Flipped the order so the calendar sits in
+          what used to be wasted whitespace on the left of the viewport,
+          and stays in view as the user scrolls a long drafts list. */}
+      <div className="lg:grid lg:gap-5 lg:grid-cols-[340px_minmax(0,1fr)] space-y-5 lg:space-y-0">
+        <aside className="hidden lg:block">
+          <div className="sticky top-4 space-y-2">
+            <div className="flex items-center justify-between">
+              <div className="text-[11px] font-semibold uppercase tracking-wide text-ink/55 inline-flex items-center gap-1.5">
+                <CalendarClock className="w-3.5 h-3.5" /> Send schedule
+              </div>
+            </div>
+            <div className="card p-3">
+              <ApprovalsScheduleCalendar
+                drafts={calendarDrafts}
+                onSchedule={handleSchedule}
+              />
+            </div>
+          </div>
+        </aside>
+
         <div className="space-y-5 min-w-0">
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <div className="inline-flex items-center rounded-xl border border-slate-200/70 bg-white p-0.5">
@@ -220,22 +240,6 @@ export function EmailApprovalsTab() {
             </div>
           )}
         </div>
-
-        <aside className="hidden lg:block">
-          <div className="sticky top-4 space-y-2">
-            <div className="flex items-center justify-between">
-              <div className="text-[11px] font-semibold uppercase tracking-wide text-ink/55 inline-flex items-center gap-1.5">
-                <CalendarClock className="w-3.5 h-3.5" /> Send schedule
-              </div>
-            </div>
-            <div className="card p-3">
-              <ApprovalsScheduleCalendar
-                drafts={calendarDrafts}
-                onSchedule={handleSchedule}
-              />
-            </div>
-          </div>
-        </aside>
       </div>
     </div>
   );

@@ -82,6 +82,10 @@ export interface Client {
   // Clients badge. Defaults TRUE so behavior is unchanged for every
   // existing client.
   encourageEmails: boolean;
+  // Owning team id from the client-teams catalog (Websites + 4 SEO
+  // sub-teams). Null = unassigned. Free-text in the DB; app code
+  // validates against the TEAMS set in @/lib/client-teams.
+  teamId: string | null;
   // Auto-derived from email_drafts on read; not stored on the row.
   lastOutboundEmailAt: string | null;
   lastOutboundSubject: string | null;
@@ -140,6 +144,7 @@ interface ClientRow {
   touchpoint_summary_at: string | null;
   touchpoint_summary_by: string | null;
   encourage_emails: boolean | null;
+  team_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -195,6 +200,7 @@ function rowToClient(r: ClientRow, touchpoint?: {
     ...tp,
     // Default TRUE so existing clients keep their current behavior.
     encourageEmails: r.encourage_emails ?? true,
+    teamId: r.team_id ?? null,
     lastOutboundEmailAt: touchpoint?.lastOutboundEmailAt ?? null,
     lastOutboundSubject: touchpoint?.lastOutboundSubject ?? null,
     createdAt: r.created_at,

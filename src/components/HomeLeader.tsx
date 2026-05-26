@@ -202,12 +202,25 @@ function TeamStripCard({ team }: { team: HomeTeammate[] }) {
                 <div className="min-w-0 flex-1">
                   <div className="text-[12.5px] font-medium text-ink truncate">{t.name}</div>
                   <div className="flex items-center gap-1.5 text-[10px] text-ink/55 mt-0.5">
-                    <StatusDot ok={t.clockedIn} label={t.clockedIn ? "in" : "out"} />
-                    <StatusDot ok={t.eodSubmitted} label={t.eodSubmitted ? "EOD ✓" : "no EOD"} />
+                    {/* "On shift" vs "Off shift" — distinct from the green
+                        presence dot on the avatar (which means "app is
+                        open"). A person can be online but not yet
+                        punched in for their shift. */}
+                    <StatusDot
+                      ok={t.clockedIn}
+                      label={t.clockedIn ? "on shift" : "off shift"}
+                    />
+                    <StatusDot
+                      ok={t.eodSubmitted}
+                      label={t.eodSubmitted ? "EOD done" : "EOD pending"}
+                    />
                     {t.overdueCount > 0 && (
-                      <span className="inline-flex items-center gap-0.5 text-rose-700">
+                      <span
+                        className="inline-flex items-center gap-0.5 text-rose-700"
+                        title={`${t.overdueCount} overdue task${t.overdueCount === 1 ? "" : "s"}`}
+                      >
                         <AlertTriangle className="w-2.5 h-2.5" />
-                        {t.overdueCount}
+                        {t.overdueCount} overdue
                       </span>
                     )}
                   </div>

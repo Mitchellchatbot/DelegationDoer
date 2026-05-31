@@ -1,5 +1,6 @@
 // Shared email-intake pipeline. Called by:
-//   - /api/cron/email-intake (poll loop, runs every ~5 min)
+//   - email-intake-bootstrap (real-time: missive webhook + socket)
+//   - /api/cron/email-intake (poll loop, safety net every ~5 min)
 //   - /api/email-intake/run-once (manual "Create task from this thread"
 //     button on the inbox thread view)
 //
@@ -55,7 +56,8 @@ export interface IntakeInput {
   missiveThreadUrl: string | null;
   // 'manual' for the run-once button — bypasses the dedupe check so a user
   // can re-convert a thread even if the cron already handled it once.
-  source?: "cron" | "manual";
+  // 'event' for real-time webhook/socket delivery.
+  source?: "cron" | "event" | "manual";
   // Backlog-drain mode. When true, suppresses every external-facing
   // side effect: Slack DMs to leaders (pingLeaders) and the auto-reply
   // email draft (autoDraftReply, which would otherwise flood

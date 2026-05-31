@@ -28,6 +28,9 @@ const PUBLIC_PREFIXES = [
   // Zapier relay endpoint — same shared-secret pattern as the direct
   // tl;dv webhook (x-zapier-webhook-secret header), no Supabase cookie.
   "/api/integrations/tldv/zapier",
+  // missiveclone inbound-mail webhook — HMAC verified inside the handler
+  // (x-missive-signature). missiveclone has no Supabase session cookie.
+  "/api/missive-webhook",
   // The widget renderer must be reachable inside Electron without a
   // session — when the cookie jar is empty (fresh launch) we want the
   // widget to render its own "Sign in" state rather than redirect to

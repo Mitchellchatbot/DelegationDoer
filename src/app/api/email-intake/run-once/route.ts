@@ -5,6 +5,7 @@ import { getUserById } from "@/lib/server-data";
 import { getThread } from "@/lib/missive-client";
 import { visibleAccountIdsFor } from "@/lib/inbox-access";
 import { runEmailIntake } from "@/lib/email-intake";
+import { extractEmail, missiveThreadUrl, threadBodyFromMessages } from "@/lib/email-intake-utils";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -42,22 +43,14 @@ export async function POST(req: NextRequest) {
     const detail = await getThread(threadId);
     const inbound = detail.messages.find((m) => m.direction === "inbound") ?? detail.messages[0];
     const fromEmail = inbound ? extractEmail(inbound.from_addr) : null;
-    const bodyText = detail.messages
-      .map((m) => `--- ${m.from_addr} @ ${m.sent_at} ---\n${m.body_text ?? stripHtml(m.body_html ?? "")}`)
-      .join("\n\n");
-
-    const missiveAppUrl = (process.env.MISSIVE_API_URL ?? "").replace(/\/$/, "");
-    const missiveThreadUrl = missiveAppUrl
-      ? `${missiveAppUrl}/?thread=${encodeURIComponent(threadId)}`
-      : null;
 
     const outcome = await runEmailIntake({
       accountId,
       threadId,
       threadSubject: detail.thread.subject,
-      threadBody: bodyText,
+      threadBody: threadBodyFromMessages(detail.messages),
       fromEmail,
-      missiveThreadUrl,
+      missiveThreadUrl: missiveThreadUrl(threadId),
       source: "manual"
     });
 
@@ -92,18 +85,3 @@ export async function POST(req: NextRequest) {
   }
 }
 
-function extractEmail(addr: string): string | null {
-  const m = addr.match(/<([^>]+)>/);
-  if (m) return m[1].toLowerCase();
-  if (addr.includes("@")) return addr.trim().toLowerCase();
-  return null;
-}
-
-function stripHtml(html: string): string {
-  return html.replace(/<style[\s\S]*?<\/style>/gi, "")
-    .replace(/<script[\s\S]*?<\/script>/gi, "")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}

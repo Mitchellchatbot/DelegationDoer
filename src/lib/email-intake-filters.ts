@@ -9,7 +9,8 @@
 // patterns the user can always re-process it via the manual "Create
 // task from this thread" button — which does NOT run these filters.
 //
-// Used by /api/cron/email-intake only.
+// Used by the auto-intake poll and real-time event paths (not manual
+// run-once).
 
 // Sender-address patterns. Match case-insensitively against the
 // extracted email address (already lowercased by callers, but the

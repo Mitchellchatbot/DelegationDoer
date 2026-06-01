@@ -2,11 +2,12 @@ import Link from "next/link";
 import { Archive, Building2, Globe2, CheckCircle2 } from "lucide-react";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById, getArchivedTasks, getAllUsersLight, getLeaderIds } from "@/lib/server-data";
-import { canViewTask, canManageTask } from "@/lib/access";
+import { canViewTask, canManageTask, isLeader } from "@/lib/access";
 import { BackPill } from "@/components/BackPill";
 import { PriorityBadge } from "@/components/Badges";
 import { PersonAvatar } from "@/components/PersonAvatar";
 import { UnarchiveTaskButton } from "@/components/UnarchiveTaskButton";
+import { RunArchiveSweepButton } from "@/components/RunArchiveSweepButton";
 import { ARCHIVE_AFTER_DAYS } from "@/lib/task-archive";
 import { relativeTime, formatDate } from "@/lib/utils";
 
@@ -37,16 +38,25 @@ export default async function ArchivedTasksPage() {
     <div className="space-y-5 max-w-4xl">
       <BackPill href="/tasks/board" label="Back to board" />
 
-      <div>
-        <h1 className="text-xl font-medium flex items-center gap-2">
-          <Archive className="w-5 h-5 text-amber-500" />
-          Archived
-        </h1>
-        <p className="text-sm text-muted mt-1">
-          Completed tasks finished more than {ARCHIVE_AFTER_DAYS} days ago are
-          archived automatically to keep the board clean. They&apos;re kept in
-          full here — nothing is deleted. Unarchive to bring one back.
-        </p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-xl font-medium flex items-center gap-2">
+            <Archive className="w-5 h-5 text-amber-500" />
+            Archived
+          </h1>
+          <p className="text-sm text-muted mt-1">
+            Completed tasks finished more than {ARCHIVE_AFTER_DAYS} days ago are
+            archived automatically to keep the board clean. They&apos;re kept in
+            full here — nothing is deleted. Unarchive to bring one back.
+          </p>
+        </div>
+        {/* Admins can run the age-based sweep on demand instead of waiting for
+            the daily schedule (same rule, just now). */}
+        {isLeader(me) && (
+          <div className="shrink-0">
+            <RunArchiveSweepButton />
+          </div>
+        )}
       </div>
 
       {visible.length === 0 ? (

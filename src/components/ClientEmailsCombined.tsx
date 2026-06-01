@@ -46,6 +46,11 @@ export function ClientEmailsCombined({
   // signal; history is the longer-tail context. Default to whichever
   // has rows — usually history.
   const [tab, setTab] = useState<Tab>(threads.length > 0 ? "history" : "drafts");
+  // Collapse history to the 3 most recent threads by default — the
+  // full list can run to 200 once a client has accumulated history.
+  const [showAll, setShowAll] = useState(false);
+  const HISTORY_PREVIEW = 3;
+  const visibleThreads = showAll ? threads : threads.slice(0, HISTORY_PREVIEW);
 
   return (
     <section className="rounded-2xl border border-white/60 shadow-soft bg-gradient-to-br from-slate-50/60 to-white p-4 space-y-3">
@@ -85,7 +90,7 @@ export function ClientEmailsCombined({
           />
         ) : (
           <div className="grid grid-cols-1 gap-2">
-            {threads.map((t) => (
+            {visibleThreads.map((t) => (
               <Link
                 key={t.id}
                 href={`/inboxes/${t.accountId}/threads/${t.id}`}
@@ -111,6 +116,17 @@ export function ClientEmailsCombined({
                 </span>
               </Link>
             ))}
+            {threads.length > HISTORY_PREVIEW && (
+              <button
+                type="button"
+                onClick={() => setShowAll((v) => !v)}
+                className="text-[11px] text-blue-700 hover:text-blue-800 font-medium self-start mt-1 hover:underline"
+              >
+                {showAll
+                  ? `Show fewer · ${HISTORY_PREVIEW} most recent`
+                  : `Show all ${threads.length} threads`}
+              </button>
+            )}
           </div>
         )
       ) : drafts.length === 0 ? (

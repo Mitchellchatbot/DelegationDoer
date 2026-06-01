@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Hash, Loader2, Save, Globe } from "lucide-react";
+import { Hash, Loader2, Save, Globe, Gauge } from "lucide-react";
 import { toast } from "sonner";
 
 // Leader-only settings card for workspace-wide Slack channels:
@@ -13,6 +13,7 @@ interface WorkspaceSettings {
   scaledTeamChannelId: string | null;
   eodRecapChannelId: string | null;
   lastEodRecapAt: string | null;
+  lowSiteScoreThreshold: number;
 }
 
 export function WorkspaceChannelsSection({ canEdit }: { canEdit: boolean }) {
@@ -20,6 +21,7 @@ export function WorkspaceChannelsSection({ canEdit }: { canEdit: boolean }) {
   const [loading, setLoading] = useState(true);
   const [scaledDraft, setScaledDraft] = useState("");
   const [recapDraft, setRecapDraft] = useState("");
+  const [thresholdDraft, setThresholdDraft] = useState("70");
   const [saving, setSaving] = useState(false);
 
   const load = useCallback(async () => {
@@ -31,6 +33,7 @@ export function WorkspaceChannelsSection({ canEdit }: { canEdit: boolean }) {
       setSettings(data);
       setScaledDraft(data.scaledTeamChannelId ?? "");
       setRecapDraft(data.eodRecapChannelId ?? "");
+      setThresholdDraft(String(data.lowSiteScoreThreshold ?? 70));
     } catch (err) {
       toast.error(`Couldn't load workspace channels: ${err instanceof Error ? err.message : "unknown"}`);
     } finally {
@@ -42,18 +45,21 @@ export function WorkspaceChannelsSection({ canEdit }: { canEdit: boolean }) {
 
   const dirty =
     scaledDraft.trim() !== (settings?.scaledTeamChannelId ?? "") ||
-    recapDraft.trim() !== (settings?.eodRecapChannelId ?? "");
+    recapDraft.trim() !== (settings?.eodRecapChannelId ?? "") ||
+    thresholdDraft.trim() !== String(settings?.lowSiteScoreThreshold ?? 70);
 
   async function save() {
     if (!canEdit || !dirty || saving) return;
     setSaving(true);
     try {
+      const parsedThreshold = Number(thresholdDraft.trim());
       const res = await fetch("/api/workspace/settings", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           scaledTeamChannelId: scaledDraft.trim() || null,
-          eodRecapChannelId: recapDraft.trim() || null
+          eodRecapChannelId: recapDraft.trim() || null,
+          lowSiteScoreThreshold: Number.isFinite(parsedThreshold) ? parsedThreshold : 70
         })
       });
       const data = await res.json();
@@ -61,8 +67,10 @@ export function WorkspaceChannelsSection({ canEdit }: { canEdit: boolean }) {
       setSettings((cur) => ({
         scaledTeamChannelId: data.scaledTeamChannelId ?? null,
         eodRecapChannelId: data.eodRecapChannelId ?? null,
-        lastEodRecapAt: cur?.lastEodRecapAt ?? null
+        lastEodRecapAt: cur?.lastEodRecapAt ?? null,
+        lowSiteScoreThreshold: data.lowSiteScoreThreshold ?? 70
       }));
+      setThresholdDraft(String(data.lowSiteScoreThreshold ?? 70));
       toast.success("Workspace channels saved");
     } catch (err) {
       toast.error(`Couldn't save: ${err instanceof Error ? err.message : "unknown"}`);
@@ -107,6 +115,27 @@ export function WorkspaceChannelsSection({ canEdit }: { canEdit: boolean }) {
             placeholder="leave blank to use Scaled Team"
             canEdit={canEdit}
           />
+          <div className="flex items-center gap-2 pt-1">
+            <div className="text-[10px] uppercase tracking-wide text-ink/55 font-semibold w-[90px] shrink-0">
+              Site score
+            </div>
+            <div className="flex items-center gap-1.5 flex-1 px-2.5 py-1.5 rounded-lg bg-white border border-slate-200/70 focus-within:ring-2 focus-within:ring-accent/30 focus-within:border-accent/40 transition-all">
+              <Gauge className="w-3.5 h-3.5 text-ink/40" />
+              <input
+                type="number"
+                min={0}
+                max={100}
+                value={thresholdDraft}
+                onChange={(e) => setThresholdDraft(e.target.value)}
+                disabled={!canEdit}
+                placeholder="70"
+                className="flex-1 bg-transparent text-sm outline-none font-mono placeholder:text-ink/35 placeholder:font-sans disabled:cursor-not-allowed"
+              />
+            </div>
+          </div>
+          <div className="text-[11px] text-muted pl-[98px] -mt-1">
+            Website alerts below this score auto-create a Website-team task.
+          </div>
           {canEdit && (
             <div className="flex items-center justify-between gap-2 pt-1">
               <div className="text-[11px] text-muted">

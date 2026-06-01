@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
+import { routeChannelAlert } from "@/lib/site-alert-routing";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs"; // crypto needs Node runtime, not Edge
@@ -49,9 +50,23 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "invalid signature" }, { status: 401 });
   }
 
-  let payload: any;
+  // Minimal shape of the bits we read off Slack's payload. Slack sends a
+  // much larger object; we only care about the verification handshake and
+  // inbound channel messages.
+  interface SlackEventEnvelope {
+    type?: string;
+    challenge?: string;
+    event?: {
+      type?: string;
+      subtype?: string;
+      text?: string;
+      channel?: string;
+      ts?: string;
+    };
+  }
+  let payload: SlackEventEnvelope;
   try {
-    payload = JSON.parse(rawBody);
+    payload = JSON.parse(rawBody) as SlackEventEnvelope;
   } catch {
     return NextResponse.json({ error: "invalid json" }, { status: 400 });
   }
@@ -61,14 +76,30 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ challenge: payload.challenge });
   }
 
-  // Step 2 — real event delivery. Ack fast; defer real work until the
-  // classifier + task pipeline lands.
+  // Step 2 — real event delivery. Ack fast (Slack times out at 3s and
+  // retries on non-2xx); the actual routing runs fire-and-forget. This
+  // app runs as a persistent process (see src/instrumentation.ts's
+  // in-process scheduler), so detached work completes after the response.
+  // Duplicate deliveries / retries are idempotent — site-health routing
+  // keys off the Slack message ts (unique in site_health_alerts).
   if (payload.type === "event_callback") {
-    // TODO: enqueue payload.event for async processing:
-    //   - filter by source (DMs + channels you watch)
-    //   - heuristic gate (imperative cues)
-    //   - batched Haiku classification
-    //   - create task if classified as task-for-you
+    const event = payload.event;
+    // Channel messages from the monitoring workflow. Skip edits/deletes
+    // and our own bot echoes, but allow bot_message (n8n posts as a bot).
+    if (
+      event &&
+      event.type === "message" &&
+      (!event.subtype || event.subtype === "bot_message") &&
+      typeof event.text === "string" &&
+      typeof event.channel === "string" &&
+      typeof event.ts === "string"
+    ) {
+      void routeChannelAlert({
+        channelId: event.channel,
+        messageTs: event.ts,
+        text: event.text
+      }).catch((err) => console.error("[slack/events] routeChannelAlert threw:", err));
+    }
     return NextResponse.json({ ok: true });
   }
 

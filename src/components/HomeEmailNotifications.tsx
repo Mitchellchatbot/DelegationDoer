@@ -5,7 +5,21 @@ import Link from "next/link";
 import { Mail, BellRing, BellOff, ArrowRight, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { EmailNotificationsOnboardingModal } from "@/components/EmailNotificationsOnboardingModal";
-import { Countdown } from "@/components/Countdown";
+// Relative time for past timestamps. The dashboard's existing
+// <Countdown> helper formats future timestamps as "due in Xh" / past
+// as "overdue Xh", which read wrong for emails ("overdue 1h 0m" sounds
+// like the email itself is overdue, not that it landed 1h ago).
+function relativeReceived(iso: string): string {
+  const ms = Date.now() - new Date(iso).getTime();
+  if (ms < 60_000) return "Just now";
+  const minutes = Math.floor(ms / 60_000);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days}d ago`;
+  return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
 
 // /home card: live email notifications. Three states, picked by the
 // server-rendered `onboarded` flag from the user row:
@@ -364,7 +378,7 @@ export function HomeEmailNotifications({ onboarded: initialOnboarded }: Props) {
                         <span className="truncate">{senderLabel}</span>
                       </div>
                       <div className="text-[10px] text-ink/55 tabular-nums shrink-0">
-                        <Countdown iso={r.receivedAt} />
+                        {relativeReceived(r.receivedAt)}
                       </div>
                     </div>
                     <div className="text-[12px] text-ink/80 truncate mt-0.5">

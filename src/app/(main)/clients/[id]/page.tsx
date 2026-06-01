@@ -25,7 +25,7 @@ import { ClientContactInfoCard } from "@/components/ClientContactInfoCard";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { visibleAccountIdsFor } from "@/lib/inbox-access";
-import { listAccounts, listThreads } from "@/lib/missive-client";
+import { listAccounts, listLabels, listThreads } from "@/lib/missive-client";
 import { buildClientSignals, threadMatchesClient } from "@/lib/client-thread-match";
 
 export const dynamic = "force-dynamic";
@@ -120,10 +120,11 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
     clientUpdatesRes = [];
   }
 
-  // Email history — pulls every recent thread from Missive once, then
-  // applies the per-client signals. Scoped to the user's visible
-  // inboxes via account_emails so workers don't see threads from
-  // inboxes they couldn't otherwise reach.
+  // Email history. Prefers the per-client missive label (one label per
+  // client, name = client.name) so we get the FULL history attributed
+  // to this client, not just whatever happened to land in the most
+  // recent 1000 INBOX threads. Falls back to in-app participant
+  // matching when no label exists yet (e.g. brand-new client).
   let clientThreads: {
     id: string;
     subject: string;
@@ -134,10 +135,15 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
   }[] = [];
   if (canMatchByEmail) {
     try {
+      const labels = await listLabels();
+      const labelMatch = labels.find(
+        (l) => l.name.trim().toLowerCase() === client.name.trim().toLowerCase()
+      );
+
       const [allThreads, accounts] = await Promise.all([
-        // Bumped from 400 → 1000 so older client threads still surface
-        // on the page without needing pagination.
-        listThreads({ folder: "INBOX", limit: 1000 }),
+        labelMatch
+          ? listThreads({ labelId: labelMatch.id, limit: 200 })
+          : listThreads({ folder: "INBOX", limit: 1000 }),
         listAccounts()
       ]);
       const accountIdByEmail = new Map(
@@ -159,7 +165,11 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
             visibleAccountEmail.email.toLowerCase()
           )!;
 
-          if (!threadMatchesClient(t.participants, signals)) return null;
+          // When we queried by label the server already filtered to
+          // this client; otherwise apply the participant predicate.
+          if (!labelMatch && !threadMatchesClient(t.participants, signals)) {
+            return null;
+          }
 
           // Wordfence security alerts (WordPress plugin) are pure noise
           // on the client email-history surface — they're sent BY the
@@ -185,7 +195,7 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
           (a, b) =>
             new Date(b.lastAt).getTime() - new Date(a.lastAt).getTime()
         )
-        .slice(0, 50);
+        .slice(0, 200);
     } catch {
       // missive clone down / unreachable — surface a softer empty state.
       clientThreads = [];

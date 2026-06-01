@@ -112,6 +112,22 @@ export async function listTeamMembers(): Promise<MissiveTeamMember[]> {
   return data.members ?? [];
 }
 
+export interface MissiveLabel {
+  id: string;
+  name: string;
+  color: string;
+}
+
+// Workspace labels. Used by the client detail page to look up the
+// per-client label (one label per client, name = client.name) so the
+// email history can be queried by label_id instead of post-filtering
+// participants. Cheap call (~100 rows), but cached inside one request
+// at the caller level if needed.
+export async function listLabels(): Promise<MissiveLabel[]> {
+  const data = await missiveFetch<{ labels: MissiveLabel[] }>("/api/labels");
+  return data.labels ?? [];
+}
+
 export interface ListThreadsOpts {
   folder?: "INBOX" | "SENT";
   status?: "open" | "pending" | "closed";
@@ -137,6 +153,11 @@ export interface ListThreadsOpts {
   // Scope to a team-space (group of mailboxes leaders curate on
   // /inboxes/manage). Backend joins on threads.team_space_id.
   teamSpaceId?: string;
+  // Scope to threads carrying a specific label. Used by the client
+  // detail page to pull the full email history attached to that
+  // client (one label per client, backfilled by the labels backfill
+  // job and auto-applied by the webhook on new mail).
+  labelId?: string;
 }
 
 export type InboxCategory = NonNullable<ListThreadsOpts["category"]>;
@@ -215,6 +236,7 @@ export async function listThreadsPaged(opts: ListThreadsOpts = {}): Promise<List
   if (opts.mailboxId) params.set("mailbox_id", opts.mailboxId);
   if (opts.category) params.set("category", opts.category);
   if (opts.teamSpaceId) params.set("team_space_id", opts.teamSpaceId);
+  if (opts.labelId) params.set("label_id", opts.labelId);
   const qs = params.toString() ? `?${params}` : "";
   const data = await missiveFetch<{
     threads: MissiveThread[];

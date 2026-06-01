@@ -928,7 +928,14 @@ export interface ClientSentimentHealthRow {
   computedAt: string | null;
 }
 
-export async function getTopClientsByHealth(topN = 10): Promise<ClientSentimentHealthRow[]> {
+// Returns the N active clients with the LOWEST health_score — i.e. the
+// sites where recent email sentiment is reading worst. This is the
+// "needs attention" cohort that anchors /home for every role.
+//
+// Ordered ascending by score so the most at-risk row is first. Ties
+// broken by sample size desc, so a 60-with-50-samples ranks worse than
+// a 60-with-3-samples (the latter being noisy).
+export async function getWorstClientsByHealth(topN = 10): Promise<ClientSentimentHealthRow[]> {
   const supabase = getSupabaseAdmin();
   const { data, error } = await supabase
     .from("clients")
@@ -937,7 +944,8 @@ export async function getTopClientsByHealth(topN = 10): Promise<ClientSentimentH
       "health_sample_size, health_summary, health_computed_at"
     )
     .not("health_score", "is", null)
-    .order("health_score", { ascending: false })
+    .order("health_score", { ascending: true })
+    .order("health_sample_size", { ascending: false })
     .limit(topN * 3); // overscan; we filter inactive in JS
   if (error) return [];
 

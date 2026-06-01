@@ -10,12 +10,12 @@ import {
   getPostsPerClient,
   getStalledTaskCount,
   getLeaderOpenTasks,
-  getTopClientsByHealth
+  getWorstClientsByHealth
 } from "@/lib/home-data";
 import { HomeWorker } from "@/components/HomeWorker";
 import { HomeLeaderHero } from "@/components/HomeLeaderHero";
 import { HomeSeoBriefs } from "@/components/HomeSeoBriefs";
-import { HomeTopClientsByHealth } from "@/components/HomeTopClientsByHealth";
+import { HomeClientHealthTable } from "@/components/HomeClientHealthTable";
 import { HomeEmailNotifications } from "@/components/HomeEmailNotifications";
 import { HomePulseCard } from "@/components/HomePulseCard";
 import { HomeChartsRow } from "@/components/HomeChartsRow";
@@ -54,6 +54,11 @@ export default async function HomePage() {
     ? await getDayBookendStatus(userId)
     : null;
 
+  // Worst-clients health table is the first thing every role sees on
+  // /home. Fetched here once and rendered in both branches below so the
+  // anchor doesn't shift between roles.
+  const worstByHealth = await getWorstClientsByHealth(10);
+
   if (isLeaderRole || isHead) {
     // Leader/head view. Heads get their dept scope; leaders see all.
     const scopedDepartmentIds = isHead ? (me.departmentIds ?? []) : null;
@@ -74,6 +79,8 @@ export default async function HomePage() {
     return (
       <div className="space-y-4 max-w-7xl mx-auto">
         {dayBookends && <DayBookends status={dayBookends} hourLocal={hourLocal} />}
+        {/* Sites needing attention — the anchor of /home for everyone. */}
+        <HomeClientHealthTable rows={worstByHealth} />
         <HomeLeaderHero
           meName={me.name}
           scopeLabel={scopeLabel}
@@ -98,18 +105,17 @@ export default async function HomePage() {
   // company-wide). Brief edit gate still applies — the PATCH route
   // still rejects non-leaders/heads, so a worker can read but not
   // write.
-  const [tasks, seoBriefs, topByHealth] = await Promise.all([
+  const [tasks, seoBriefs] = await Promise.all([
     getTodayTasksForUser(userId, 8),
-    getSeoBriefsForHome(20),
-    getTopClientsByHealth(10)
+    getSeoBriefsForHome(20)
   ]);
 
   return (
     <div className="space-y-4 max-w-5xl mx-auto">
       {dayBookends && <DayBookends status={dayBookends} hourLocal={hourLocal} />}
+      <HomeClientHealthTable rows={worstByHealth} />
       <HomeWorker meName={me.name} tasks={tasks} briefCount={seoBriefs.length} />
       <HomeEmailNotifications onboarded={me.emailNotificationsOnboarded === true} />
-      <HomeTopClientsByHealth rows={topByHealth} />
       <HomeSeoBriefs rows={seoBriefs} />
     </div>
   );

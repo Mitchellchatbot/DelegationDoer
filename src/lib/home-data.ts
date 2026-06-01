@@ -373,7 +373,35 @@ export interface ClientHealthRow {
 // Each source is queried with a cheap LIMIT; we then merge + sort
 // client-side by timestamp desc, capped at `total`. Best-effort —
 // per-table errors don't break the whole feed.
-export type PulseKind = "seo_report" | "handoff" | "stalled" | "site_alert";
+export type PulseKind =
+  | "seo_report"
+  | "handoff"
+  | "stalled"
+  | "site_alert"
+  | "approval_pending"
+  | "approval_sent"
+  | "task_completed"
+  | "new_task"
+  | "routing_review"
+  | "client_added";
+
+// Grouping the kinds into a few visible "categories" the UI exposes as
+// filter chips. Tasks vs approvals vs alerts vs clients — gives the
+// leader a fast cut without having to scan the whole list. Each kind
+// belongs to exactly one category.
+export type PulseCategory = "task" | "approval" | "alert" | "client";
+export const PULSE_CATEGORY: Record<PulseKind, PulseCategory> = {
+  seo_report:        "task",
+  handoff:           "task",
+  stalled:           "task",
+  new_task:          "task",
+  task_completed:    "task",
+  routing_review:    "approval",
+  approval_pending:  "approval",
+  approval_sent:     "approval",
+  site_alert:        "alert",
+  client_added:      "client"
+};
 export interface PulseEvent {
   id: string;             // unique within the feed
   kind: PulseKind;
@@ -508,6 +536,160 @@ export async function getLeaderPulse(opts: {
         title: `${r.domain ?? r.website ?? "Site"} scored ${r.site_score}`,
         detail: r.task_id ? "Auto-task opened" : "No task created",
         href: r.task_id ? `/tasks/${r.task_id}` : "/clients",
+        at: r.created_at
+      });
+    }
+  } catch { /* skip */ }
+
+  // 5) Approvals waiting on an eye (email drafts in pending /
+  //    needs_revision). Each row deep-links to /approvals.
+  try {
+    const { data } = await supabase
+      .from("email_drafts")
+      .select("id, subject, client_name, kind, status, created_at, author_id")
+      .in("status", ["pending", "needs_revision"])
+      .gte("created_at", sinceIso)
+      .order("created_at", { ascending: false })
+      .limit(8);
+    for (const r of (data ?? []) as Array<{ id: string; subject: string | null; client_name: string | null; kind: string; status: string; created_at: string }>) {
+      events.push({
+        id: `approval:${r.id}`,
+        kind: "approval_pending",
+        title: r.subject || "Draft awaiting approval",
+        detail: `${r.kind.replace(/_/g, " ")}${r.client_name ? ` · ${r.client_name}` : ""}${r.status === "needs_revision" ? " · needs revision" : ""}`,
+        href: "/approvals",
+        at: r.created_at
+      });
+    }
+  } catch { /* skip */ }
+
+  // 6) Drafts sent (positive signal — the queue actually moved).
+  try {
+    const { data } = await supabase
+      .from("email_drafts")
+      .select("id, subject, client_name, sent_at, status")
+      .eq("status", "sent")
+      .not("sent_at", "is", null)
+      .gte("sent_at", sinceIso)
+      .order("sent_at", { ascending: false })
+      .limit(5);
+    for (const r of (data ?? []) as Array<{ id: string; subject: string | null; client_name: string | null; sent_at: string }>) {
+      events.push({
+        id: `sent:${r.id}`,
+        kind: "approval_sent",
+        title: r.subject || "Email sent",
+        detail: r.client_name ? `to ${r.client_name}` : null,
+        href: "/approvals",
+        at: r.sent_at
+      });
+    }
+  } catch { /* skip */ }
+
+  // 7) Routing review pending — AI-routed task awaiting confirmation.
+  try {
+    const { data } = await supabase
+      .from("routing_decisions")
+      .select("id, task_id, routed_via, reason, needs_review, created_at")
+      .eq("needs_review", true)
+      .gte("created_at", sinceIso)
+      .order("created_at", { ascending: false })
+      .limit(6);
+    const rows = (data ?? []) as Array<{ id: string; task_id: string | null; routed_via: string | null; reason: string | null; needs_review: boolean; created_at: string }>;
+    const taskIds = rows.map((r) => r.task_id).filter((id): id is string => !!id);
+    const { data: taskRows } = taskIds.length > 0
+      ? await supabase.from("tasks").select("id, title, client_name").in("id", taskIds)
+      : { data: [] as { id: string; title: string | null; client_name: string | null }[] };
+    const taskById = new Map((taskRows ?? []).map((t) => [t.id, t]));
+    for (const r of rows) {
+      const t = r.task_id ? taskById.get(r.task_id) : null;
+      events.push({
+        id: `routing:${r.id}`,
+        kind: "routing_review",
+        title: t?.title ?? "Routing decision awaiting review",
+        detail: r.reason ?? r.routed_via ?? null,
+        href: "/approvals?tab=routing",
+        at: r.created_at
+      });
+    }
+  } catch { /* skip */ }
+
+  // 8) Recently completed tasks — the "wins" lane. Caps at 5 so
+  //    a busy day doesn't drown the alerts in green.
+  try {
+    const completedSince = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString();
+    const { data } = await supabase
+      .from("tasks")
+      .select("id, title, client_name, completed_at, assignee_id")
+      .eq("status", "done")
+      .not("completed_at", "is", null)
+      .gte("completed_at", completedSince)
+      .order("completed_at", { ascending: false })
+      .limit(5);
+    const rows = (data ?? []) as Array<{ id: string; title: string | null; client_name: string | null; completed_at: string; assignee_id: string | null }>;
+    const userIds = new Set<string>();
+    for (const r of rows) if (r.assignee_id) userIds.add(r.assignee_id);
+    const { data: users } = userIds.size > 0
+      ? await supabase.from("users").select("id, name").in("id", Array.from(userIds))
+      : { data: [] as { id: string; name: string | null }[] };
+    const nameById = new Map((users ?? []).map((u) => [u.id, u.name ?? "Someone"]));
+    for (const r of rows) {
+      events.push({
+        id: `done:${r.id}`,
+        kind: "task_completed",
+        title: r.title || "Task completed",
+        detail: [
+          r.assignee_id ? nameById.get(r.assignee_id) : null,
+          r.client_name
+        ].filter(Boolean).join(" · ") || null,
+        href: `/tasks/${r.id}`,
+        at: r.completed_at
+      });
+    }
+  } catch { /* skip */ }
+
+  // 9) New high-priority tasks — only critical / high inside the last
+  //    48h so the feed doesn't drown in routine work.
+  try {
+    const newSince = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString();
+    const { data } = await supabase
+      .from("tasks")
+      .select("id, title, client_name, priority, created_at")
+      .in("priority", ["critical", "high"])
+      .neq("status", "done")
+      .eq("is_draft", false)
+      .gte("created_at", newSince)
+      .order("created_at", { ascending: false })
+      .limit(5);
+    for (const r of (data ?? []) as Array<{ id: string; title: string | null; client_name: string | null; priority: string; created_at: string }>) {
+      events.push({
+        id: `new:${r.id}`,
+        kind: "new_task",
+        title: r.title || "New task",
+        detail: [r.priority, r.client_name].filter(Boolean).join(" · ") || null,
+        href: `/tasks/${r.id}`,
+        at: r.created_at
+      });
+    }
+  } catch { /* skip */ }
+
+  // 10) Newly added clients (last 7 days). Tells the team a new account
+  //     is live and surfaces its detail page for the first impression.
+  try {
+    const newClientSince = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    const { data } = await supabase
+      .from("clients")
+      .select("id, name, contact_name, created_at, status")
+      .gte("created_at", newClientSince)
+      .or("status.eq.active,status.is.null")
+      .order("created_at", { ascending: false })
+      .limit(5);
+    for (const r of (data ?? []) as Array<{ id: string; name: string; contact_name: string | null; created_at: string }>) {
+      events.push({
+        id: `client:${r.id}`,
+        kind: "client_added",
+        title: r.name,
+        detail: r.contact_name ? `Contact: ${r.contact_name}` : "New client onboarded",
+        href: `/clients/${encodeURIComponent(r.id)}`,
         at: r.created_at
       });
     }

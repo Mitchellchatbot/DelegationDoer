@@ -79,9 +79,11 @@ export default async function HomePage() {
       // unions them so important clients going cold can't slip off.
       getClientHealthOverview(10),
       showSeoBriefs ? getSeoBriefsForHome(20) : Promise.resolve([]),
-      // What's-moving feed — surfaces SEO reports, handoffs, stalled
-      // tasks, site-health alerts. Hides itself when empty.
-      getLeaderPulse({ scopedDepartmentIds, total: 12 })
+      // What's-moving feed — unified notification surface across
+      // tasks, approvals, alerts, and clients. Hides itself when empty.
+      // Higher cap now that the feed has 10 source types — leaves
+      // room for active days without truncating early-week context.
+      getLeaderPulse({ scopedDepartmentIds, total: 40 })
     ]);
 
     return (

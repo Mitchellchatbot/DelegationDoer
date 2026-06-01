@@ -137,9 +137,12 @@ export function bootstrapEmailNotifications(): void {
       }
     };
     setInterval(runOnce, POLL_INTERVAL_MS);
-    // Kick the first run shortly after boot — covers anything that
-    // landed while the process was restarting.
+    // Burst of three quick early polls after boot (15s, 60s, 180s) so
+    // we don't have to wait the full 5min interval to start writing
+    // rows after a deploy or first opt-in.
     setTimeout(runOnce, 15_000);
+    setTimeout(runOnce, 60_000);
+    setTimeout(runOnce, 180_000);
     state.pollScheduled = true;
     console.log("[email-notif-boot] safety-net poll scheduled (5m)");
   } catch (err) {

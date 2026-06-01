@@ -22,10 +22,11 @@
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { getThread, listThreads, type MissiveMessage } from "@/lib/missive-client";
 
-// Headroom for the first run on a freshly opted-in account so we don't
-// drag in old mail. 10 minutes covers both the deploy/Onboarding gap
-// and the cron's own ~1 minute cadence without flooding.
-const FIRST_RUN_FLOOR_MS = 10 * 60 * 1000;
+// Absolute cap on how far back we'll go on first-run for any account
+// (24h). Above this is "ancient", and the user opted in long enough
+// ago that we shouldn't drown them in backlog even if we have nothing
+// else to anchor against.
+const FIRST_RUN_HARD_CAP_MS = 24 * 60 * 60 * 1000;
 
 // How many threads to scan per account per pass. Threads come back
 // newest-first; 30 is enough headroom that a quiet account doesn't
@@ -74,10 +75,12 @@ export async function pollEmailNotifications(): Promise<PollResult> {
   };
 
   // Group opted-in users by account so we only call missiveclone once
-  // per account per pass.
+  // per account per pass. Also track the EARLIEST opt-in time per
+  // account — used as the first-run floor so we catch any messages
+  // that landed between opt-in and the first poll firing.
   const { data: prefRows, error: prefErr } = await supabase
     .from("user_email_notification_prefs")
-    .select("user_id, missive_account_id")
+    .select("user_id, missive_account_id, updated_at")
     .eq("enabled", true);
   if (prefErr) {
     result.errors.push({ accountId: "*", message: `prefs query: ${prefErr.message}` });
@@ -85,10 +88,14 @@ export async function pollEmailNotifications(): Promise<PollResult> {
   }
 
   const usersByAccount = new Map<string, string[]>();
-  for (const r of ((prefRows ?? []) as { user_id: string; missive_account_id: string }[])) {
+  const earliestOptInByAccount = new Map<string, Date>();
+  for (const r of ((prefRows ?? []) as { user_id: string; missive_account_id: string; updated_at: string }[])) {
     const list = usersByAccount.get(r.missive_account_id) ?? [];
     list.push(r.user_id);
     usersByAccount.set(r.missive_account_id, list);
+    const optedAt = new Date(r.updated_at);
+    const cur = earliestOptInByAccount.get(r.missive_account_id);
+    if (!cur || optedAt < cur) earliestOptInByAccount.set(r.missive_account_id, optedAt);
   }
   if (usersByAccount.size === 0) return result;
 
@@ -107,11 +114,27 @@ export async function pollEmailNotifications(): Promise<PollResult> {
     }
   }
 
-  const firstRunFloor = new Date(Date.now() - FIRST_RUN_FLOOR_MS);
+  const hardFloor = new Date(Date.now() - FIRST_RUN_HARD_CAP_MS);
 
   for (const accountId of accountIds) {
     result.accountsScanned += 1;
-    const floor = floorByAccount.get(accountId) ?? firstRunFloor;
+    // Floor priority:
+    //   1. Most recent notification row for this account — only consider
+    //      newer messages, so we don't re-write rows we already have.
+    //   2. Earliest opt-in time among opted-in users — catches anything
+    //      that arrived between opt-in and the first poll.
+    //   3. 24h ago — hard cap so we never drag in really old mail even
+    //      when a user opted in years ago and somehow has no rows.
+    const fromRows = floorByAccount.get(accountId);
+    const fromOptIn = earliestOptInByAccount.get(accountId);
+    let floor: Date;
+    if (fromRows) {
+      floor = fromRows;
+    } else if (fromOptIn && fromOptIn > hardFloor) {
+      floor = fromOptIn;
+    } else {
+      floor = hardFloor;
+    }
     try {
       const threads = await listThreads({
         mailboxId: accountId,
@@ -159,12 +182,24 @@ export async function pollEmailNotifications(): Promise<PollResult> {
           .map((r) => `${r.user_id}::${r.message_id}`)
       );
 
+      // Per-user opt-in floor: skip writing a row for a user whose
+      // opt-in is newer than the message's sent_at, so a fresh user
+      // doesn't see backlog from before they opted in.
+      const perUserOptIn = new Map<string, Date>();
+      for (const r of ((prefRows ?? []) as { user_id: string; missive_account_id: string; updated_at: string }[])) {
+        if (r.missive_account_id !== accountId) continue;
+        perUserOptIn.set(r.user_id, new Date(r.updated_at));
+      }
+
       const rows: Array<Record<string, unknown>> = [];
       for (const { msg, threadSubject } of inboundToWrite) {
         const { name, email } = splitAddress(msg.from_addr);
         const subject = msg.subject ?? threadSubject ?? null;
         const preview = previewFrom(msg);
+        const msgSentAt = new Date(msg.sent_at);
         for (const userId of userIds) {
+          const optedAt = perUserOptIn.get(userId);
+          if (optedAt && msgSentAt < optedAt) continue;
           const key = `${userId}::${msg.id}`;
           if (existing.has(key)) continue;
           rows.push({

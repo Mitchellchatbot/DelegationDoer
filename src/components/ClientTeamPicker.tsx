@@ -174,10 +174,12 @@ export function ClientTeamPicker({
       <RP.Trigger asChild>
         <button
           type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            e.preventDefault();
-          }}
+          // Only stopPropagation — calling preventDefault here ate
+          // Radix's own open-handler in some browsers, so the chip
+          // looked clickable but the popover never appeared. Stopping
+          // propagation alone keeps the parent Link from intercepting.
+          onClick={(e) => e.stopPropagation()}
+          onPointerDown={(e) => e.stopPropagation()}
           disabled={busy}
           className={cn(
             "inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full border font-medium transition-colors",

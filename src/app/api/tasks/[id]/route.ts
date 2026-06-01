@@ -41,6 +41,22 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     if (PRIORITIES.includes(body.priority)) update.priority = body.priority;
     if (STATUSES.includes(body.status)) update.status = body.status;
     if (typeof body.estimatedHours === "number" && body.estimatedHours > 0) update.estimated_hours = body.estimatedHours;
+    // Maintain completed_at as the task crosses the done boundary. This is the
+    // canonical completion date the archive rule keys off ("done > 7d ago").
+    //   → done: stamp it (only on the actual transition, so re-saving an
+    //     already-done task doesn't keep bumping the clock).
+    //   → out of done (reopen): clear it AND un-archive — a reopened task is
+    //     live work again, so it must return to the active board even if the
+    //     cron had already archived it.
+    if (STATUSES.includes(body.status) && body.status !== before.status) {
+      if (body.status === "done") {
+        update.completed_at = new Date().toISOString();
+      } else if (before.status === "done") {
+        update.completed_at = null;
+        update.archived_at = null;
+        update.archived_by = null;
+      }
+    }
     // Manual override for actual hours. Pass a number to pin actuals to that
     // value (off-clock work, backfill); pass null to clear and fall back to
     // the time_entries-derived value.

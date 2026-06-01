@@ -8,8 +8,10 @@ import { TaskTimerButton } from "@/components/TaskTimerButton";
 import { NotifyTeammatesDialog } from "@/components/NotifyTeammatesDialog";
 import { canNotifyOnTask, canViewTask, canManageTask, canDeleteTask } from "@/lib/access";
 import { DeleteTaskButton } from "@/components/DeleteTaskButton";
+import { ArchiveTaskButton } from "@/components/ArchiveTaskButton";
+import { UnarchiveTaskButton } from "@/components/UnarchiveTaskButton";
 import { getUserById, getAllUsersLight, getDepartments, getLeaderIds } from "@/lib/server-data";
-import { Megaphone, Clock, History } from "lucide-react";
+import { Megaphone, Clock, History, Archive } from "lucide-react";
 import { HandoffButton, HandoffTimeline } from "@/components/HandoffPanel";
 import { TaskConversation } from "@/components/TaskConversation";
 import { DueDateInline } from "@/components/DueDateInline";
@@ -83,7 +85,10 @@ async function loadTask(id: string): Promise<{ task: Task; extensions: Extension
     hostingAccess: t.hosting_access ?? null,
     missiveThreadUrl: t.missive_thread_url ?? null,
     custom: (t.custom as Record<string, unknown> | null) ?? {},
-    mediaUrls: Array.isArray(t.media_urls) ? (t.media_urls as Task["mediaUrls"]) : []
+    mediaUrls: Array.isArray(t.media_urls) ? (t.media_urls as Task["mediaUrls"]) : [],
+    completedAt: t.completed_at ?? null,
+    archivedAt: t.archived_at ?? null,
+    archivedBy: t.archived_by ?? null
   };
 
   const { data: rawExt } = await supabase
@@ -145,6 +150,12 @@ export default async function TaskDetailPage({ params }: { params: { id: string 
             <StatusPill status={task.status} />
             <PriorityBadge priority={task.priority} />
             {task.inactiveFlag && <StalledBadge />}
+            {task.archivedAt && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium border border-amber-200 bg-amber-50 text-amber-700">
+                <Archive className="w-3 h-3" />
+                Archived
+              </span>
+            )}
           </div>
           <h1 className="text-xl font-medium">{task.title}</h1>
           <div className="text-xs text-muted mt-1">#{task.id} · created by {creator?.name ?? "—"} · {relativeTime(task.createdAt)}</div>
@@ -173,6 +184,11 @@ export default async function TaskDetailPage({ params }: { params: { id: string 
             />
           )}
           <TaskActions task={task} />
+          {canManageTask(me, task) && (
+            task.archivedAt
+              ? <UnarchiveTaskButton taskId={task.id} />
+              : <ArchiveTaskButton taskId={task.id} taskTitle={task.title} redirectTo="/tasks/board" />
+          )}
           {canDeleteTask(me, task) && (
             <DeleteTaskButton taskId={task.id} taskTitle={task.title} redirectTo="/tasks" />
           )}

@@ -60,6 +60,9 @@ interface TaskRow {
   custom: Record<string, unknown> | null;
   deleted_at: string | null;
   deleted_by: string | null;
+  completed_at: string | null;
+  archived_at: string | null;
+  archived_by: string | null;
 }
 
 async function userDepartmentIds(userId: string): Promise<string[]> {
@@ -137,7 +140,10 @@ function taskFromRow(row: TaskRow): Task {
     missiveThreadUrl: row.missive_thread_url,
     custom: row.custom ?? {},
     deletedAt: row.deleted_at ?? null,
-    deletedBy: row.deleted_by ?? null
+    deletedBy: row.deleted_by ?? null,
+    completedAt: row.completed_at ?? null,
+    archivedAt: row.archived_at ?? null,
+    archivedBy: row.archived_by ?? null
   };
 }
 
@@ -191,9 +197,9 @@ const TICKET_COLS =
   "department_id,assignee_id,creator_id,project_id,due_date,inactive_flag," +
   "last_activity_at,created_at,blocks_task_ids,client_name,website," +
   "client_email,client_folder_url,staging_server,markup_link,hosting_access," +
-  "missive_thread_url,custom,deleted_at,deleted_by";
+  "missive_thread_url,custom,deleted_at,deleted_by,completed_at,archived_at,archived_by";
 
-export async function getAllTasks(opts?: { includeDrafts?: boolean; includeDeleted?: boolean }): Promise<Task[]> {
+export async function getAllTasks(opts?: { includeDrafts?: boolean; includeDeleted?: boolean; includeArchived?: boolean }): Promise<Task[]> {
   let q = getSupabaseAdmin()
     .from("tasks")
     .select(TICKET_COLS);
@@ -202,6 +208,12 @@ export async function getAllTasks(opts?: { includeDrafts?: boolean; includeDelet
   // single chokepoint all task lists funnel through, so excluding them here
   // makes them vanish app-wide (board, mine, search, etc.) in one place.
   if (!opts?.includeDeleted) q = q.is("deleted_at", null);
+  // Archived tasks are likewise hidden from the active lists by default —
+  // same chokepoint, so an archived done task drops off the board, /mine,
+  // and search at once. They stay reachable on the Archived view (which
+  // passes includeArchived) and remain in analytics (which read tasks
+  // directly, not through here) so completion history isn't lost.
+  if (!opts?.includeArchived) q = q.is("archived_at", null);
   const { data } = await q;
   return (data ?? []).map((r) => taskFromRow(r as unknown as TaskRow));
 }
@@ -215,6 +227,21 @@ export async function getDeletedTasks(): Promise<Task[]> {
     .select(TICKET_COLS)
     .not("deleted_at", "is", null)
     .order("deleted_at", { ascending: false });
+  return (data ?? []).map((r) => taskFromRow(r as unknown as TaskRow));
+}
+
+// Archived tasks, most-recently-archived first — for the Archived view.
+// Excludes soft-deleted rows (a deleted task belongs on the Recently-deleted
+// view, not here, even if it was archived first) so a task never shows up in
+// both places. Drafts are excluded — only real, completed work gets archived.
+export async function getArchivedTasks(): Promise<Task[]> {
+  const { data } = await getSupabaseAdmin()
+    .from("tasks")
+    .select(TICKET_COLS)
+    .eq("is_draft", false)
+    .not("archived_at", "is", null)
+    .is("deleted_at", null)
+    .order("archived_at", { ascending: false });
   return (data ?? []).map((r) => taskFromRow(r as unknown as TaskRow));
 }
 

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { requireCurrentUserId } from "@/lib/session";
-import { getAllTasks, getDeletedTasks, getUserById } from "@/lib/server-data";
+import { getAllTasks, getDeletedTasks, getArchivedTasks, getUserById } from "@/lib/server-data";
 import { notifyAssignment, postMessage } from "@/lib/slack";
 import { syncTaskToCalendar } from "@/lib/task-calendar-sync";
 import { sanitizeMediaUrls } from "@/lib/media";
@@ -34,7 +34,12 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ tasks: deleted });
     }
 
-    const tasks = await getAllTasks();
+    // Archived feed: completed work that's been moved off the active board.
+    // Unlike the admin-only `deleted` feed, archived tasks are normal finished
+    // work, so any authenticated user may see them — subject to the SAME
+    // leader-privacy filter applied to the active list below.
+    const archived = req.nextUrl.searchParams.get("archived") === "true";
+    const tasks = archived ? await getArchivedTasks() : await getAllTasks();
 
     if (viewer && (viewer.role === "leader" || viewer.isAdmin)) {
       return NextResponse.json({ tasks });

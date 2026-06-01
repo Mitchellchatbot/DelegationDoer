@@ -15,13 +15,14 @@ export async function GET() {
     await requireCurrentUserId();
     const { data } = await getSupabaseAdmin()
       .from("workspace_settings")
-      .select("scaled_team_channel_id, eod_recap_channel_id, last_eod_recap_at")
+      .select("scaled_team_channel_id, eod_recap_channel_id, last_eod_recap_at, low_site_score_threshold")
       .eq("id", "workspace")
       .maybeSingle();
     return NextResponse.json({
       scaledTeamChannelId: (data?.scaled_team_channel_id as string | null) ?? null,
       eodRecapChannelId: (data?.eod_recap_channel_id as string | null) ?? null,
-      lastEodRecapAt: (data?.last_eod_recap_at as string | null) ?? null
+      lastEodRecapAt: (data?.last_eod_recap_at as string | null) ?? null,
+      lowSiteScoreThreshold: (data?.low_site_score_threshold as number | null) ?? 70
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : "unknown error";
@@ -48,6 +49,14 @@ export async function PUT(req: NextRequest) {
         ? String(body.eodRecapChannelId).trim() || null
         : null;
     }
+    // Site-health alert threshold (0–100). Below this score a Website-team
+    // task is auto-created from the Scaled Team channel alert.
+    if (body.lowSiteScoreThreshold !== undefined && body.lowSiteScoreThreshold !== null) {
+      const n = Math.round(Number(body.lowSiteScoreThreshold));
+      if (Number.isFinite(n)) {
+        update.low_site_score_threshold = Math.max(0, Math.min(100, n));
+      }
+    }
     const { data, error } = await getSupabaseAdmin()
       .from("workspace_settings")
       .upsert({ id: "workspace", ...update }, { onConflict: "id" })
@@ -56,7 +65,8 @@ export async function PUT(req: NextRequest) {
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
     return NextResponse.json({
       scaledTeamChannelId: (data.scaled_team_channel_id as string | null) ?? null,
-      eodRecapChannelId: (data.eod_recap_channel_id as string | null) ?? null
+      eodRecapChannelId: (data.eod_recap_channel_id as string | null) ?? null,
+      lowSiteScoreThreshold: (data.low_site_score_threshold as number | null) ?? 70
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : "unknown error";

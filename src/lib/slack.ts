@@ -388,6 +388,27 @@ export async function postMessage(
   return { ts: data.ts };
 }
 
+// Resolve a public permalink for a posted message (channel + ts). Used to
+// give auto-created tasks a one-click back-link to the originating Slack
+// alert. Best-effort — returns null on any error so callers can fall back
+// to a plain "channel/ts" reference without failing the whole flow.
+export async function getPermalink(
+  channel: string,
+  messageTs: string
+): Promise<string | null> {
+  if (!process.env.SLACK_BOT_TOKEN) return null;
+  try {
+    const data = await slackGet<{ ok: true; permalink: string }>(
+      "chat.getPermalink",
+      { channel, message_ts: messageTs }
+    );
+    return data.permalink ?? null;
+  } catch (err) {
+    console.warn("[slack] getPermalink failed:", err);
+    return null;
+  }
+}
+
 export interface NotifyResult {
   ok: boolean;
   error?: string;

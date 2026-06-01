@@ -134,8 +134,16 @@ Tags are 1-4 short lowercase words (e.g. "wordpress", "billing", "design"). They
       .join("");
     const match = text.match(/\{[\s\S]*\}/);
     if (match) parsed = JSON.parse(match[0]);
-  } catch {
-    /* fall through to defaults */
+  } catch (err) {
+    // Don't swallow this — a bulk "Couldn't auto-summarize" park in
+    // routing-review means the classify call is failing for every email,
+    // and this is the only place the real cause (401 invalid key / 404
+    // bad model / 429 quota / network) is visible. Log it like the rest
+    // of the intake pipeline so it shows up in the Railway deploy logs.
+    console.warn(
+      `[email-classifier] classify failed for "${subject.slice(0, 80)}" — falling back to unsummarized:`,
+      err instanceof Error ? err.message : err
+    );
   }
 
   // Validate + coerce. Anything Claude returns that's not in-shape gets

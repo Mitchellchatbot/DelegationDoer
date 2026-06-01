@@ -70,17 +70,30 @@ const g = globalThis as GlobalWithSocket;
 // Read-only snapshot of the socket's current state. Used by the debug
 // endpoint so the user can verify connectivity without trusting that
 // Railway's log viewer is keeping up.
+let lastConnectError: { at: number; message: string } | null = null;
+let lastDisconnectReason: { at: number; reason: string } | null = null;
+let connectAttempts = 0;
+let successfulConnects = 0;
+
 export function getMissiveSocketStatus(): {
   initialized: boolean;
   connected: boolean;
   socketId: string | null;
   url: string | null;
+  connectAttempts: number;
+  successfulConnects: number;
+  lastConnectError: { at: number; message: string } | null;
+  lastDisconnectReason: { at: number; reason: string } | null;
 } {
   return {
     initialized,
     connected: socket?.connected === true,
     socketId: socket?.id ?? null,
-    url: MISSIVE_API_URL ?? null
+    url: MISSIVE_API_URL ?? null,
+    connectAttempts,
+    successfulConnects,
+    lastConnectError,
+    lastDisconnectReason
   };
 }
 
@@ -113,14 +126,20 @@ export function startMissiveSocketBridge(): void {
   });
 
   socket.on("connect", () => {
+    successfulConnects += 1;
+    lastConnectError = null;
     console.log("[missive-socket] connected as", socket?.id);
   });
   socket.on("disconnect", (reason) => {
+    lastDisconnectReason = { at: Date.now(), reason: String(reason) };
     console.warn("[missive-socket] disconnected:", reason);
   });
   socket.on("connect_error", (err) => {
+    connectAttempts += 1;
+    const message = err && err.message ? err.message : String(err);
+    lastConnectError = { at: Date.now(), message };
     // Logged but not fatal — socket.io auto-reconnects.
-    console.warn("[missive-socket] connect error:", err && err.message);
+    console.warn("[missive-socket] connect error:", message);
   });
 
   // Same event names missiveclone's frontend listens to. Payload

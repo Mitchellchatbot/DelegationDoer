@@ -1,5 +1,4 @@
-// Channel-alert routing — turn automated Slack alerts posted in the
-// Scaled Team channel into actionable tasks.
+// Channel-alert routing — turn automated alerts into actionable tasks.
 //
 // Today this handles ONE alert family: the n8n website-monitoring
 // workflow's "site is slow" health alerts, which look like:
@@ -11,17 +10,25 @@
 // Website-team task, assign it, notify the assignees, and write an
 // audit/idempotency row.
 //
-// ── Modularity ────────────────────────────────────────────────────────
-// The dispatcher (`routeChannelAlert`) walks an ordered list of
-// `ChannelAlertHandler`s and runs the first whose `match()` fires. To add
-// SEO / uptime / security alert routing later, write another handler
-// (parse + act) and register it in HANDLERS — no change to the Slack
-// events route is needed.
+// ── Two ingress paths, one core ───────────────────────────────────────
+// The same handler is reached from either:
+//   1. Slack Events API — `routeChannelAlert()`, called fire-and-forget
+//      from /api/slack/events when a message lands in the Scaled Team
+//      channel. (Requires the Slack app's Event Subscriptions + bot
+//      channel membership — see that route.)
+//   2. n8n direct webhook — `routeSiteHealthAlertWebhook()`, called from
+//      /api/integrations/site-monitor. n8n is already the alert producer,
+//      so this path skips Slack's read-side config entirely and is the
+//      more dependable trigger.
 //
-// Called fire-and-forget from /api/slack/events after signature
-// verification, so it must never throw past its own try/catch; every
-// outcome is returned as data, and duplicates are guarded by the
-// site_health_alerts unique (channel, ts) constraint.
+// ── Modularity ────────────────────────────────────────────────────────
+// The text dispatcher walks an ordered list of `ChannelAlertHandler`s and
+// runs the first whose `match()` fires. To add SEO / uptime / security
+// alert routing later, write another handler (parse + act) and register
+// it in HANDLERS — neither ingress route needs to change.
+//
+// Every outcome is returned as data; duplicates are guarded by the
+// site_health_alerts unique (source, source_event_id) constraint.
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { getAllUsersLight } from "@/lib/server-data";
 import { deadlineFromEstimate } from "@/lib/capacity";
@@ -43,6 +50,17 @@ export interface ChannelMessage {
   // Slack message ts — doubles as the idempotency key.
   messageTs: string;
   text: string;
+}
+
+// Where an alert came from. (kind, eventId) is the idempotency identity —
+// unique in site_health_alerts — so the same alert can't spawn two tasks
+// regardless of Slack redelivery, n8n retries, or "edited" re-posts.
+export interface AlertSource {
+  kind: "slack" | "n8n-webhook";
+  eventId: string;
+  // Human-facing back-reference to the original alert (Slack permalink,
+  // raw message text, or the site URL) — surfaced in the task + audit row.
+  reference?: string | null;
 }
 
 export type AlertOutcome =
@@ -132,7 +150,7 @@ function genId(prefix: string): string {
 // ── Website health handler ───────────────────────────────────────────────
 
 async function handleSiteHealthAlert(
-  msg: ChannelMessage,
+  source: AlertSource,
   config: WorkspaceAlertConfig,
   parsed: ParsedSiteAlert
 ): Promise<AlertOutcome> {
@@ -140,27 +158,27 @@ async function handleSiteHealthAlert(
   const { url, domain, score } = parsed;
   const threshold = config.lowSiteScoreThreshold;
 
-  // 1) Idempotency — one alert (channel + ts) creates at most one task.
-  //    The cheap pre-check short-circuits redeliveries; the unique
+  // 1) Idempotency — one alert (source + event id) creates at most one
+  //    task. The cheap pre-check short-circuits redeliveries; the unique
   //    constraint is the real backstop against a race.
   const { data: existing } = await supabase
     .from("site_health_alerts")
     .select("id, task_id")
-    .eq("slack_channel_id", msg.channelId)
-    .eq("slack_message_ts", msg.messageTs)
+    .eq("source", source.kind)
+    .eq("source_event_id", source.eventId)
     .maybeSingle();
   if (existing) {
     return { handled: true, action: "skipped", reason: "duplicate", score, threshold };
   }
 
-  const permalink = await getPermalink(msg.channelId, msg.messageTs);
   const detectedAt = new Date().toISOString();
+  const reference = source.reference ?? url;
 
   // 2) Threshold gate. At/above threshold → record the alert (so we have a
   //    full log and don't re-evaluate it) but create no task.
   if (score >= threshold) {
     await recordAlert(supabase, {
-      msg, parsed, threshold, permalink, detectedAt,
+      source, parsed, threshold, reference, detectedAt,
       priority: null, taskId: null, skippedReason: "above-threshold"
     });
     return { handled: true, action: "skipped", reason: "above-threshold", score, threshold };
@@ -173,7 +191,7 @@ async function handleSiteHealthAlert(
   if (!primary) {
     // No one to own it — log the alert so it's visible, skip task creation.
     await recordAlert(supabase, {
-      msg, parsed, threshold, permalink, detectedAt,
+      source, parsed, threshold, reference, detectedAt,
       priority: priorityForScore(score), taskId: null, skippedReason: "no-assignee"
     });
     console.warn(
@@ -187,14 +205,13 @@ async function handleSiteHealthAlert(
   const estimateHours = 1;
   const dueDate = deadlineFromEstimate(estimateHours, primary);
   const taskId = genId("t");
-  const alertRef = permalink ?? `Slack ${msg.channelId}/${msg.messageTs}`;
   const description =
     `Automated website health alert: *${domain}* scored ${score} ` +
     `(threshold ${threshold}).\n\n` +
     `• Website: ${url}\n` +
     `• Current site score: ${score}\n` +
     `• Detected: ${detectedAt}\n` +
-    `• Slack alert: ${alertRef}\n\n` +
+    `• Alert: ${reference}\n\n` +
     `Investigate the performance regression and bring the site back above ${threshold}.`;
 
   const { error: insertErr } = await supabase.from("tasks").insert({
@@ -219,12 +236,10 @@ async function handleSiteHealthAlert(
     blocks_task_ids: [],
     website: url,
     custom: {
-      source: "site-health-alert",
+      source: `site-health-alert:${source.kind}`,
       site_score: score,
       threshold,
-      slack_channel_id: msg.channelId,
-      slack_message_ts: msg.messageTs,
-      slack_permalink: permalink
+      alert_reference: reference
     },
     // Live task (not a draft) — the Website team should act immediately,
     // unlike speculative email-intake drafts that await human triage.
@@ -245,7 +260,7 @@ async function handleSiteHealthAlert(
 
   // 5) Audit/idempotency row (also the duplicate guard for redeliveries).
   await recordAlert(supabase, {
-    msg, parsed, threshold, permalink, detectedAt,
+    source, parsed, threshold, reference, detectedAt,
     priority, taskId, skippedReason: null
   });
 
@@ -282,10 +297,10 @@ type SbClient = ReturnType<typeof getSupabaseAdmin>;
 async function recordAlert(
   supabase: SbClient,
   args: {
-    msg: ChannelMessage;
+    source: AlertSource;
     parsed: ParsedSiteAlert;
     threshold: number;
-    permalink: string | null;
+    reference: string | null;
     detectedAt: string;
     priority: Priority | null;
     taskId: string | null;
@@ -294,9 +309,9 @@ async function recordAlert(
 ): Promise<void> {
   const { error } = await supabase.from("site_health_alerts").insert({
     id: genId("sha"),
-    slack_channel_id: args.msg.channelId,
-    slack_message_ts: args.msg.messageTs,
-    slack_permalink: args.permalink,
+    source: args.source.kind,
+    source_event_id: args.source.eventId,
+    reference: args.reference,
     website: args.parsed.url,
     domain: args.parsed.domain,
     site_score: args.parsed.score,
@@ -368,7 +383,7 @@ interface ChannelAlertHandler {
   // or null when this handler doesn't apply.
   match: (text: string) => unknown | null;
   run: (
-    msg: ChannelMessage,
+    source: AlertSource,
     config: WorkspaceAlertConfig,
     parsed: unknown
   ) => Promise<AlertOutcome>;
@@ -380,14 +395,23 @@ const HANDLERS: ChannelAlertHandler[] = [
   {
     name: "site-health",
     match: (text) => parseSiteHealthAlert(text),
-    run: (msg, config, parsed) =>
-      handleSiteHealthAlert(msg, config, parsed as ParsedSiteAlert)
+    run: (source, config, parsed) =>
+      handleSiteHealthAlert(source, config, parsed as ParsedSiteAlert)
   }
 ];
 
-// Entry point used by /api/slack/events. Safe to call fire-and-forget:
-// it swallows its own errors and returns a structured outcome. Only acts
-// on messages in the configured Scaled Team channel.
+function matchHandler(text: string): { handler: ChannelAlertHandler; parsed: unknown } | null {
+  for (const handler of HANDLERS) {
+    const parsed = handler.match(text);
+    if (parsed) return { handler, parsed };
+  }
+  return null;
+}
+
+// ── Ingress 1: Slack Events API ───────────────────────────────────────────
+// Used by /api/slack/events. Safe to call fire-and-forget: it swallows its
+// own errors and returns a structured outcome. Only acts on messages in
+// the configured Scaled Team channel.
 export async function routeChannelAlert(msg: ChannelMessage): Promise<AlertOutcome> {
   try {
     const config = await loadConfig();
@@ -397,13 +421,60 @@ export async function routeChannelAlert(msg: ChannelMessage): Promise<AlertOutco
     if (config.scaledTeamChannelId && msg.channelId !== config.scaledTeamChannelId) {
       return { handled: false, reason: "wrong-channel" };
     }
-    for (const handler of HANDLERS) {
-      const parsed = handler.match(msg.text);
-      if (parsed) return handler.run(msg, config, parsed);
-    }
-    return { handled: false, reason: "no-match" };
+    const matched = matchHandler(msg.text);
+    if (!matched) return { handled: false, reason: "no-match" };
+
+    // Resolve a permalink back to the Slack message for the task/audit.
+    const permalink = await getPermalink(msg.channelId, msg.messageTs);
+    const source: AlertSource = {
+      kind: "slack",
+      eventId: msg.messageTs,
+      reference: permalink ?? `Slack ${msg.channelId}/${msg.messageTs}`
+    };
+    return matched.handler.run(source, config, matched.parsed);
   } catch (err) {
     console.error("[site-alert] routeChannelAlert error:", err);
+    return { handled: false, reason: "error", detail: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+// ── Ingress 2: n8n direct webhook ─────────────────────────────────────────
+// Used by /api/integrations/site-monitor. Accepts either the raw alert
+// text or structured { website, score } fields. `id` is the idempotency
+// key — pass a stable value (e.g. the Slack message ts or n8n execution
+// id); when absent we derive one from domain + score.
+export async function routeSiteHealthAlertWebhook(input: {
+  text?: string | null;
+  website?: string | null;
+  score?: number | null;
+  id?: string | null;
+  reference?: string | null;
+}): Promise<AlertOutcome> {
+  try {
+    const config = await loadConfig();
+
+    // Prefer structured fields; fall back to parsing raw alert text.
+    let parsed: ParsedSiteAlert | null = null;
+    if (
+      typeof input.website === "string" && input.website.trim() &&
+      typeof input.score === "number" && Number.isFinite(input.score)
+    ) {
+      const url = input.website.trim();
+      parsed = { url, domain: domainFromUrl(url), score: Math.round(input.score) };
+    } else if (typeof input.text === "string") {
+      parsed = parseSiteHealthAlert(input.text);
+    }
+    if (!parsed) return { handled: false, reason: "no-match" };
+
+    const eventId = (input.id && input.id.trim()) || `${parsed.domain}:${parsed.score}`;
+    const source: AlertSource = {
+      kind: "n8n-webhook",
+      eventId,
+      reference: input.reference ?? input.text ?? parsed.url
+    };
+    return handleSiteHealthAlert(source, config, parsed);
+  } catch (err) {
+    console.error("[site-alert] routeSiteHealthAlertWebhook error:", err);
     return { handled: false, reason: "error", detail: err instanceof Error ? err.message : String(err) };
   }
 }

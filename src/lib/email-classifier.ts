@@ -133,9 +133,25 @@ Tags are 1-4 short lowercase words (e.g. "wordpress", "billing", "design"). They
       .map((b) => (b.type === "text" ? b.text : ""))
       .join("");
     const match = text.match(/\{[\s\S]*\}/);
-    if (match) parsed = JSON.parse(match[0]);
-  } catch {
-    /* fall through to defaults */
+    if (match) {
+      parsed = JSON.parse(match[0]);
+    } else {
+      // Call succeeded but the model didn't return a JSON object. Distinct
+      // from an API error — log a snippet so we can tell the two apart.
+      console.warn(
+        "[email-classifier] model returned no JSON object; falling back to placeholder. snippet:",
+        text.slice(0, 200)
+      );
+    }
+  } catch (err) {
+    // The API call (auth / model-access / quota / network) or JSON.parse
+    // threw. This is the ONLY reason an email becomes a "couldn't
+    // auto-summarize" parked draft, so surface the real cause in the logs
+    // instead of swallowing it — otherwise the failure is invisible.
+    console.warn(
+      "[email-classifier] classify call failed; falling back to placeholder:",
+      err instanceof Error ? `${err.name}: ${err.message}` : err
+    );
   }
 
   // Validate + coerce. Anything Claude returns that's not in-shape gets

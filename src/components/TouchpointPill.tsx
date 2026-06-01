@@ -16,7 +16,7 @@ export function TouchpointPill({
   label,
   lastSentAt,
   isOverride,
-  showAge = false,
+  showAge = true,
   size = "sm",
   className
 }: {
@@ -32,15 +32,16 @@ export function TouchpointPill({
   const small = size === "sm";
   const days = daysSince(lastSentAt ?? null);
 
-  // Always lead with the day count when we know one. Falls back to the
-  // status word ("Healthy" / "Stale" / "Neglected") when the caller
-  // didn't pass lastSentAt or when no email is on record. Per spec
-  // change — feedback was that "Neglected" alone was confusing; a
-  // literal "12d since last email" reads at a glance.
+  // Always lead with the day count. "Never sent an email" / "Sent today"
+  // / "Xd since last email" reads at a glance — the old status word
+  // ("Neglected" / "Stale") was confusing because people thought it
+  // referred to the relationship overall rather than the email cadence.
+  // Falls back to the status word only when the caller didn't pass
+  // lastSentAt at all (i.e. the surface deliberately doesn't have it).
   const showDays = showAge && lastSentAt !== undefined;
   const dayLabel = (() => {
     if (!showDays) return null;
-    if (days === null) return "Never emailed";
+    if (days === null) return "Never sent an email";
     if (days === 0) return "Sent today";
     if (days === 1) return "1d since last email";
     return `${days}d since last email`;
@@ -62,19 +63,7 @@ export function TouchpointPill({
       }
     >
       <span className={cn("rounded-full shrink-0", small ? "w-1.5 h-1.5" : "w-2 h-2", meta.dot)} />
-      {dayLabel ? (
-        <>
-          <span>{dayLabel}</span>
-          {/* status word is the secondary token now */}
-          {days !== null && (
-            <span className={cn("opacity-70", small ? "text-[9px]" : "text-[10px]")}>
-              · {meta.label}
-            </span>
-          )}
-        </>
-      ) : (
-        meta.label
-      )}
+      <span>{dayLabel ?? meta.label}</span>
     </span>
   );
 }

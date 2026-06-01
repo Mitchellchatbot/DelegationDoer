@@ -179,7 +179,11 @@ export default async function ClientHealthPage() {
                           ? "today"
                           : days === 1 ? "1d ago" : `${days}d ago`}
                     </div>
-                    <TouchpointPill label={label} isOverride={isOverride} />
+                    <TouchpointPill
+                      label={label}
+                      lastSentAt={c.lastOutboundEmailAt}
+                      isOverride={isOverride}
+                    />
                   </Link>
                 </li>
               ))}

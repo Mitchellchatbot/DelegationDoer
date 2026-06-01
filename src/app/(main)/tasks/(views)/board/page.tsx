@@ -15,7 +15,7 @@ import { cn } from "@/lib/utils";
 import type { Task, TaskStatus, User } from "@/lib/types";
 import {
   Clock, Globe2, Building2, Users as UsersIcon, FolderKanban,
-  Layers, Briefcase, Layout, CheckCircle2, CheckSquare, Square, Trash2
+  Layers, Briefcase, Layout, CheckCircle2, CheckSquare, Square, Trash2, Archive
 } from "lucide-react";
 import { toast } from "sonner";
 import { ClockGate } from "@/components/ClockGate";
@@ -442,6 +442,16 @@ export default function BoardPage() {
             <ViewBtn active={groupBy === "client"} onClick={() => setGroupBy("client")} icon={<Briefcase className="w-3.5 h-3.5" />} label="By client" />
             <ViewBtn active={groupBy === "person"} onClick={() => setGroupBy("person")} icon={<UsersIcon className="w-3.5 h-3.5" />} label="By person" />
           </div>
+
+          {/* Archived view — completed work moved off the board. Open to
+              everyone (archived tasks are normal finished work, just decluttered). */}
+          <Link
+            href="/tasks/archived"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium border border-border bg-white text-muted hover:text-ink hover:border-accent/40 transition-colors"
+          >
+            <Archive className="w-3.5 h-3.5" />
+            Archived
+          </Link>
 
           {/* Admin-only: bulk-select toggle + recovery link. */}
           {isLeaderOrAdmin && (

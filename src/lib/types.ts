@@ -110,6 +110,16 @@ export interface Task {
   // `deletedBy` is the user id that performed the deletion.
   deletedAt?: string | null;
   deletedBy?: string | null;
+  // When the task crossed into `done` (stamped on the done transition,
+  // cleared on reopen). The canonical completion date — drives the
+  // "done more than 7 days ago" archive rule and is shown on the card.
+  completedAt?: string | null;
+  // Archive stamps. Non-null `archivedAt` means the task is hidden from the
+  // active board/mine/search lists but still visible on the Archived view and
+  // still counted in historical analytics — it is NOT deleted. `archivedBy`
+  // is the user who archived it manually, or null when the cron auto-archived.
+  archivedAt?: string | null;
+  archivedBy?: string | null;
 }
 
 export interface TaskMedia {

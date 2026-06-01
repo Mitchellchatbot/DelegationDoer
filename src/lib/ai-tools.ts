@@ -3,6 +3,7 @@ import { getAllTasks, getAllUsersLight, getUserById, getDepartments } from "@/li
 import { userCapacity } from "@/lib/capacity";
 import { listUserEvents } from "@/lib/google-calendar";
 import { embedQuery } from "@/lib/sop-ingest";
+import { listLabels, listThreads, getThread } from "@/lib/missive-client";
 import type { Task, User } from "@/lib/types";
 
 // AI tool definitions + dispatchers. The Ask AI route hands these
@@ -125,6 +126,20 @@ export const AI_TOOLS = [
         clientName: { type: "string" },
         clientId: { type: "string" },
         sinceDays: { type: "number" },
+        limit: { type: "number" }
+      },
+      required: []
+    }
+  },
+  {
+    name: "list_client_recent_emails",
+    description:
+      "Latest email threads in/out with a specific client, with the actual message text (truncated) so you can answer 'what's the latest update with X', 'what did X say about Y', 'how are we doing with X'. Resolves the client by `clientName` (fuzzy match) or `clientId`. Returns the top `limit` (default 5, max 20) threads newest-first; each thread has subject, lastAt, direction, participants, a body snippet from the most recent message, and the satisfaction score (0-100) + reason if one has been computed. When the user asks about communication with a client, prefer this tool over guessing.",
+    input_schema: {
+      type: "object",
+      properties: {
+        clientName: { type: "string" },
+        clientId: { type: "string" },
         limit: { type: "number" }
       },
       required: []
@@ -277,6 +292,7 @@ export async function runTool(
       case "list_clients": return listClients(input);
       case "get_client": return getClient(input, ctx);
       case "list_client_completed_tasks": return listClientCompletedTasks(input);
+      case "list_client_recent_emails": return listClientRecentEmails(input);
       case "list_projects": return listProjects(input);
       case "get_project": return getProject(input);
       case "get_capacity": return getCapacity(input, ctx);
@@ -696,6 +712,154 @@ async function listClientCompletedTasks(input: Record<string, unknown>) {
       tags: r.tags ?? []
     }))
   };
+}
+
+// Recent email threads for a client. Resolves the client by name (fuzzy
+// match) or id, then asks missiveclone for the threads carrying the
+// client's per-client label (created by the labels backfill / webhook).
+// For each thread we fetch the full thread once and surface only the
+// LATEST message's body as a snippet — enough for the AI to answer
+// "what's the latest update with X?" without dumping a 30-message log
+// into the context. Satisfaction score + reason are joined per-message
+// when one has been computed by the daily client-health cron.
+async function listClientRecentEmails(input: Record<string, unknown>) {
+  const supabase = getSupabaseAdmin();
+  let clientName: string | null = typeof input.clientName === "string" ? input.clientName : null;
+  let clientId: string | null = typeof input.clientId === "string" ? input.clientId : null;
+  const limit = Math.min(20, Math.max(1, Number(input.limit) || 5));
+
+  // Resolve clientId → name. Threads are labeled by client name, so we
+  // need the canonical name to look up the missive label.
+  if (!clientName && clientId) {
+    const { data: c } = await supabase
+      .from("clients").select("id, name").eq("id", clientId).maybeSingle();
+    if (!c) return { error: "client not found" };
+    clientName = c.name as string;
+    clientId = c.id as string;
+  }
+  if (clientName) {
+    const { data: matches } = await supabase
+      .from("clients").select("id, name").ilike("name", `%${clientName}%`).limit(5);
+    const rows = (matches ?? []) as { id: string; name: string }[];
+    if (rows.length === 0) return { error: `no client matches "${clientName}"` };
+    if (rows.length > 1) {
+      const exact = rows.find((r) => r.name.toLowerCase() === clientName!.toLowerCase());
+      if (exact) {
+        clientName = exact.name;
+        clientId = exact.id;
+      } else {
+        return {
+          error: `ambiguous client "${clientName}"`,
+          candidates: rows.map((r) => ({ id: r.id, name: r.name }))
+        };
+      }
+    } else {
+      clientName = rows[0].name;
+      clientId = rows[0].id;
+    }
+  }
+  if (!clientName || !clientId) return { error: "clientName or clientId required" };
+
+  let labels: Awaited<ReturnType<typeof listLabels>>;
+  try {
+    labels = await listLabels();
+  } catch (err) {
+    return {
+      error: `missiveclone unreachable: ${err instanceof Error ? err.message : String(err)}`
+    };
+  }
+  const label = labels.find(
+    (l) => l.name.trim().toLowerCase() === clientName!.trim().toLowerCase()
+  );
+  if (!label) {
+    return {
+      clientId,
+      clientName,
+      threads: [],
+      note: "No missive label found for this client yet — backfill or send/receive at least one email tagged to this client."
+    };
+  }
+
+  const threads = await listThreads({ labelId: label.id, limit });
+  if (threads.length === 0) {
+    return { clientId, clientName, threads: [] };
+  }
+
+  // Fetch each thread's messages + join satisfaction scores. Sequential
+  // is fine here — limit caps at 20 so this is at most ~20 small calls.
+  const enriched = [];
+  for (const t of threads) {
+    let detail: Awaited<ReturnType<typeof getThread>>;
+    try {
+      detail = await getThread(t.id);
+    } catch {
+      continue;
+    }
+    const msgs = detail.messages ?? [];
+    if (msgs.length === 0) continue;
+    const latest = msgs[msgs.length - 1];
+    const earliestId = msgs[0]?.id;
+    const messageIds = msgs.map((m) => m.id).filter(Boolean);
+
+    type ScoreRow = {
+      satisfaction_score: number;
+      reason: string | null;
+      direction: string;
+      delivered_at: string | null;
+    };
+    let scoreRow: ScoreRow | null = null;
+    if (messageIds.length > 0) {
+      const { data: scores } = await supabase
+        .from("email_satisfaction_scores")
+        .select("satisfaction_score, reason, direction, delivered_at")
+        .eq("client_id", clientId)
+        .in("message_id", messageIds)
+        .order("delivered_at", { ascending: false })
+        .limit(1);
+      const first = (scores as unknown as ScoreRow[] | null)?.[0];
+      scoreRow = first ?? null;
+    }
+
+    enriched.push({
+      threadId: t.id,
+      subject: t.subject || "(no subject)",
+      lastAt: t.last_message_at,
+      status: t.status,
+      participants: t.participants ?? [],
+      messageCount: msgs.length,
+      latestDirection: latest.direction,
+      latestFrom: latest.from_addr,
+      latestSentAt: latest.sent_at,
+      // Strip quoted-reply chains + trim. Most email clients prefix
+      // quoted text with "On <date>, <name> wrote:" — cutting at that
+      // boundary keeps the snippet about the latest reply, not the
+      // entire thread history.
+      latestSnippet: snippetFor(latest.body_text, 800),
+      satisfactionScore: scoreRow ? scoreRow.satisfaction_score : null,
+      satisfactionReason: scoreRow ? scoreRow.reason : null,
+      firstMessageId: earliestId ?? null
+    });
+  }
+
+  return {
+    clientId,
+    clientName,
+    labelId: label.id,
+    threadCount: enriched.length,
+    threads: enriched
+  };
+}
+
+function snippetFor(body: string | null, max: number): string {
+  if (!body) return "";
+  // Cut at the first "On <date>, <name> wrote:" boundary or "----- Original
+  // Message -----" header. Falls back to the full body when no boundary
+  // is found — many automated emails have no quote chain.
+  const cut = body.split(
+    /\n\s*(?:On .{1,80}wrote:|-----\s*Original Message\s*-----|________________________________)/
+  )[0];
+  const clean = cut.replace(/\s+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+  return clean.length > max ? clean.slice(0, max) + "…" : clean;
 }
 
 async function listProjects(input: Record<string, unknown>) {

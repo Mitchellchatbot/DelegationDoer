@@ -71,15 +71,19 @@ export function NewClientDialog() {
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/30 backdrop-blur-sm" onClick={() => setOpen(false)}>
           <div
             onClick={(e) => e.stopPropagation()}
-            className="bg-white rounded-2xl shadow-lift border border-border w-full max-w-md p-5 space-y-4 animate-rise max-h-[90vh] overflow-y-auto"
+            className="bg-white rounded-2xl shadow-lift border border-border w-full max-w-md max-h-[90vh] flex flex-col overflow-hidden animate-rise"
           >
-            <header className="flex items-center justify-between">
+            <header className="flex items-center justify-between px-5 pt-5 pb-3 shrink-0">
               <h2 className="text-base font-semibold">New client</h2>
               <button onClick={() => setOpen(false)} className="text-muted hover:text-ink">
                 <X className="w-4 h-4" />
               </button>
             </header>
 
+            {/* Only the fields scroll — header + footer stay pinned so the
+                "Create client" button is always reachable no matter how
+                many fields are filled in or how short the viewport is. */}
+            <div className="flex-1 overflow-y-auto px-5 pb-1 space-y-4">
             <label className="block">
               <span className="text-xs text-muted">Name</span>
               <input
@@ -163,8 +167,9 @@ export function NewClientDialog() {
                 className="input mt-1 min-h-[80px]"
               />
             </label>
+            </div>
 
-            <div className="flex justify-end gap-2 pt-2">
+            <div className="flex justify-end gap-2 px-5 py-4 border-t border-border shrink-0">
               <button onClick={() => setOpen(false)} className="btn">Cancel</button>
               <button
                 onClick={submit}

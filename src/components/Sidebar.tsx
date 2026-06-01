@@ -6,7 +6,7 @@ import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
 import {
   ListTodo, Users, Sparkles, Crown, Mail, Home as HomeIcon, Sunrise, Moon, Briefcase,
-  CalendarDays, FolderKanban, ClipboardCheck, Inbox, BookOpen, Settings
+  CalendarDays, FolderKanban, ClipboardCheck, BookOpen, Settings
 } from "lucide-react";
 // Sparkles is reused for both Ask AI and Updates — same icon, different context.
 import { useEffect, useState } from "react";
@@ -39,7 +39,6 @@ const SCHEDULE_ITEM: NavItem = { href: "/schedule", label: "Schedule", icon: Cal
 const PROJECTS_ITEM: NavItem = { href: "/projects", label: "Projects", icon: FolderKanban, tone: "indigo" };
 const INBOXES_ITEM: NavItem = { href: "/inboxes", label: "Inboxes", icon: Mail, tone: "fuchsia" };
 const APPROVALS_ITEM: NavItem = { href: "/approvals", label: "Approvals", icon: ClipboardCheck, tone: "emerald" };
-const ROUTING_REVIEW_ITEM: NavItem = { href: "/routing-review", label: "Routing review", icon: Inbox, tone: "emerald" };
 const CLIENTS_ITEM: NavItem = { href: "/clients", label: "Clients", icon: Briefcase, tone: "amber" };
 const UPDATES_ITEM: NavItem = { href: "/updates", label: "Updates", icon: Sparkles, tone: "fuchsia" };
 const SOPS_ITEM: NavItem = { href: "/sops", label: "SOPs", icon: BookOpen, tone: "teal" };
@@ -263,8 +262,12 @@ export function Sidebar({ user }: { user: User }) {
     SCHEDULE_ITEM,
     ...(canSeeProjects ? [PROJECTS_ITEM] : []),
     INBOXES_ITEM,
-    ...(canApprove ? [APPROVALS_ITEM] : []),
-    ...(canSeeRoutingReview ? [ROUTING_REVIEW_ITEM] : []),
+    // Routing review used to be a separate nav row, but it's just
+    // another tab on /approvals (Emails / Meetings / Routing). Show
+    // the Approvals row to anyone who can approve OR who can see
+    // routing review — they'll land on the right default tab and
+    // the badge below sums both queues.
+    ...(canApprove || canSeeRoutingReview ? [APPROVALS_ITEM] : []),
     CLIENTS_ITEM,
     UPDATES_ITEM,
     SOPS_ITEM,
@@ -336,18 +339,22 @@ export function Sidebar({ user }: { user: User }) {
                   title: `${updatesTotal} new update${updatesTotal === 1 ? "" : "s"} waiting`
                 };
               }
-              if (item.href === "/approvals" && (approvalsPending ?? 0) > 0) {
+              if (item.href === "/approvals") {
+                // Single Approvals badge sums emails awaiting approval
+                // + AI-routed tasks awaiting routing review. They live
+                // on the same page (Emails / Routing tabs) so one
+                // number is the right surface in the nav.
+                const a = approvalsPending ?? 0;
+                const r = (canSeeRoutingReview ? (routingReviewPending ?? 0) : 0);
+                const total = a + r;
+                if (total === 0) return null;
+                const parts: string[] = [];
+                if (a > 0) parts.push(`${a} email${a === 1 ? "" : "s"} to approve`);
+                if (r > 0) parts.push(`${r} routing review${r === 1 ? "" : "s"}`);
                 return {
-                  count: approvalsPending!,
+                  count: total,
                   tone: "rose",
-                  title: `${approvalsPending} email${approvalsPending === 1 ? "" : "s"} awaiting your approval`
-                };
-              }
-              if (item.href === "/routing-review" && (routingReviewPending ?? 0) > 0) {
-                return {
-                  count: routingReviewPending!,
-                  tone: "rose",
-                  title: `${routingReviewPending} AI-routed task${routingReviewPending === 1 ? "" : "s"} awaiting your review`
+                  title: parts.join(" · ")
                 };
               }
               return null;

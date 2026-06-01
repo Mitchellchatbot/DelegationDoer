@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
-import { Reply, Send, Loader2, X, CalendarClock } from "lucide-react";
+import { Reply, Send, Loader2, X, CalendarClock, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { MediaPicker } from "@/components/MediaPicker";
@@ -41,6 +41,45 @@ export function ReplyComposer({
   // server pulls each URL via /api/upload and forwards as multipart
   // files[] to the missive clone.
   const [attachments, setAttachments] = useState<TaskMedia[]>([]);
+
+  // AI drafting state. `aiOpen` reveals an inline instruction box;
+  // `aiBusy` blocks repeat clicks while the model is generating.
+  // The model output replaces whatever's already in bodyText — we
+  // confirm with the user if they've started typing.
+  const [aiOpen, setAiOpen] = useState(false);
+  const [aiInstruction, setAiInstruction] = useState("");
+  const [aiTone, setAiTone] = useState<"friendly" | "formal" | "concise">("friendly");
+  const [aiBusy, setAiBusy] = useState(false);
+
+  async function aiDraft() {
+    if (aiBusy) return;
+    if (bodyText.trim().length > 0) {
+      const ok = window.confirm("Replace what you've already written with the AI draft?");
+      if (!ok) return;
+    }
+    setAiBusy(true);
+    try {
+      const res = await fetch(
+        `/api/inboxes/threads/${encodeURIComponent(threadId)}/ai-draft`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ instruction: aiInstruction.trim() || undefined, tone: aiTone })
+        }
+      );
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(data?.error ?? `Draft failed (${res.status})`);
+        return;
+      }
+      setBodyText(data.bodyText ?? "");
+      toast.success("Drafted — edit before sending");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "network error");
+    } finally {
+      setAiBusy(false);
+    }
+  }
 
   async function send() {
     const toList = to.split(/[,\n]/).map((s) => s.trim()).filter(Boolean);
@@ -198,6 +237,85 @@ export function ReplyComposer({
                   className="flex-1 bg-transparent text-sm outline-none placeholder:text-ink/40"
                   placeholder="Re: …"
                 />
+              </div>
+
+              {/* AI compose row — collapsed to a single pill by default.
+                  Clicking expands into an instruction box + tone picker,
+                  so the user can steer the draft without leaving the
+                  composer. Output drops straight into the textarea below. */}
+              <div className="rounded-xl border border-violet-200/60 bg-gradient-to-r from-violet-50/60 to-fuchsia-50/30">
+                {!aiOpen ? (
+                  <button
+                    type="button"
+                    onClick={() => setAiOpen(true)}
+                    className="w-full flex items-center justify-between gap-2 px-3 py-2 text-[12px] font-medium text-violet-700 hover:text-violet-900 transition-colors"
+                  >
+                    <span className="inline-flex items-center gap-1.5">
+                      <Sparkles className="w-3.5 h-3.5" />
+                      Compose with AI
+                    </span>
+                    <span className="text-[10px] text-violet-600/80">
+                      Drafts a reply from the thread context
+                    </span>
+                  </button>
+                ) : (
+                  <div className="p-2.5 space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-violet-800">
+                        <Sparkles className="w-3.5 h-3.5" />
+                        Compose with AI
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setAiOpen(false)}
+                        aria-label="Close AI compose"
+                        className="p-0.5 rounded text-violet-600/70 hover:text-violet-900"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                    <input
+                      type="text"
+                      value={aiInstruction}
+                      onChange={(e) => setAiInstruction(e.target.value)}
+                      placeholder="What should the reply say? (optional — e.g. 'thank them and confirm Friday')"
+                      className="w-full text-[12.5px] bg-white border border-violet-200/70 rounded-lg px-2.5 py-1.5 outline-none focus:ring-2 focus:ring-violet-300/60 focus:border-violet-400/60"
+                      onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void aiDraft(); } }}
+                    />
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="inline-flex rounded-full bg-white/70 border border-violet-200/70 p-0.5">
+                        {(["friendly", "formal", "concise"] as const).map((t) => (
+                          <button
+                            key={t}
+                            type="button"
+                            onClick={() => setAiTone(t)}
+                            className={cn(
+                              "px-2.5 py-0.5 rounded-full text-[11px] font-medium capitalize transition-colors",
+                              aiTone === t ? "bg-violet-600 text-white" : "text-violet-700 hover:text-violet-900"
+                            )}
+                          >
+                            {t}
+                          </button>
+                        ))}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => void aiDraft()}
+                        disabled={aiBusy}
+                        className={cn(
+                          "inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-semibold text-white shadow-sm transition-all",
+                          aiBusy ? "opacity-60 cursor-not-allowed" : "hover:-translate-y-0.5 hover:shadow-lift active:scale-95"
+                        )}
+                        style={{ background: "linear-gradient(135deg, #7c3aed 0%, #c026d3 100%)" }}
+                      >
+                        {aiBusy
+                          ? <Loader2 className="w-3 h-3 animate-spin" />
+                          : <Sparkles className="w-3 h-3" />}
+                        {aiBusy ? "Drafting…" : "Generate"}
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
 
               <textarea

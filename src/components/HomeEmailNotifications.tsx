@@ -77,19 +77,32 @@ export function HomeEmailNotifications({ onboarded: initialOnboarded }: Props) {
   const [rows, setRows] = useState<NotifRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [marking, setMarking] = useState(false);
+  const [polling, setPolling] = useState(false);
   const lastTsRef = useRef<number>(Date.now());
+
+  // Loud client-side logging so the user can watch the email-notif
+  // pipeline run in Chrome devtools instead of relying on Railway's
+  // log viewer. Prefix is consistent so they can filter on it.
+  const log = (...args: unknown[]) => console.log("[email-notif]", ...args);
 
   // Returns true if at least one row newer than the last-seen timestamp
   // came back. The SSE handler uses this to decide whether to fire the
   // chime — that way a user with prefs on only 2 of 10 visible inboxes
   // doesn't get pinged for the other 8 just because SSE saw them.
-  const refresh = useCallback(async (): Promise<boolean> => {
-    if (!onboarded) return false;
+  const refresh = useCallback(async (source: string): Promise<boolean> => {
+    if (!onboarded) {
+      console.log("[email-notif] refresh skipped (not onboarded)", { source });
+      return false;
+    }
     setLoading(true);
+    const startMs = Date.now();
+    console.log("[email-notif] refresh start", { source });
     let foundNew = false;
     try {
       const res = await fetch("/api/email-notifications?limit=10");
       const data = (await res.json()) as ApiResponse;
+      const count = Array.isArray(data?.notifications) ? data.notifications.length : 0;
+      const unseen = typeof data?.unseen === "number" ? data.unseen : 0;
       if (Array.isArray(data?.notifications)) {
         const newest = data.notifications[0]?.receivedAt;
         const newestMs = newest ? new Date(newest).getTime() : 0;
@@ -99,7 +112,17 @@ export function HomeEmailNotifications({ onboarded: initialOnboarded }: Props) {
         }
         setRows(data.notifications);
       }
-    } catch { /* swallow */ }
+      console.log("[email-notif] refresh done", {
+        source,
+        ms: Date.now() - startMs,
+        rowCount: count,
+        unseen,
+        foundNew,
+        newest: data?.notifications?.[0]?.receivedAt ?? null
+      });
+    } catch (err) {
+      console.error("[email-notif] refresh failed", { source, err });
+    }
     finally { setLoading(false); }
     return foundNew;
   }, [onboarded]);
@@ -111,17 +134,29 @@ export function HomeEmailNotifications({ onboarded: initialOnboarded }: Props) {
   // opted into.
   useEffect(() => {
     if (!onboarded) return;
-    refresh();
-    if (typeof EventSource === "undefined") return;
+    console.log("[email-notif] mounting (onboarded=true), opening SSE");
+    void refresh("mount");
+    if (typeof EventSource === "undefined") {
+      console.warn("[email-notif] EventSource unsupported — SSE disabled");
+      return;
+    }
     const es = new EventSource("/api/inbox-events");
-    es.addEventListener("inbox", () => {
+    es.addEventListener("open", () => console.log("[email-notif] SSE open"));
+    es.addEventListener("hello", (ev) =>
+      console.log("[email-notif] SSE hello", (ev as MessageEvent).data));
+    es.addEventListener("inbox", (ev) => {
+      console.log("[email-notif] SSE inbox event", (ev as MessageEvent).data);
       // Refetch and only ping if the user's persisted notifications
       // actually grew. The server-side fan-out is the authoritative
       // filter for "is this an account I care about" — if the SSE
       // event fired but no row was written, the user opted out of
       // that inbox and we stay silent.
-      void refresh().then((hasNew) => {
-        if (!hasNew) return;
+      void refresh("sse").then((hasNew) => {
+        if (!hasNew) {
+          console.log("[email-notif] SSE refresh: no new rows for this user");
+          return;
+        }
+        console.log("[email-notif] firing chime + maybe notification");
         playEmailChime();
         try {
           if (
@@ -134,23 +169,52 @@ export function HomeEmailNotifications({ onboarded: initialOnboarded }: Props) {
               tag: "dd-email" // collapse repeat pings into one banner
             });
           }
-        } catch { /* notification API failure */ }
+        } catch (err) {
+          console.warn("[email-notif] Notification API failure", err);
+        }
       });
     });
-    es.onerror = () => { /* browser auto-reconnects */ };
-    return () => { es.close(); };
+    es.onerror = (err) => {
+      console.warn("[email-notif] SSE error (browser auto-reconnects)", err);
+    };
+    return () => {
+      console.log("[email-notif] unmounting, closing SSE");
+      es.close();
+    };
   }, [onboarded, refresh]);
+  void log;
 
   // Refresh when the tab regains focus so a user who left it open
   // overnight sees today's pings without a hard reload.
   useEffect(() => {
     if (!onboarded) return;
     function onVis() {
-      if (document.visibilityState === "visible") refresh();
+      if (document.visibilityState === "visible") {
+        console.log("[email-notif] tab visible, refreshing");
+        void refresh("visibility");
+      }
     }
     document.addEventListener("visibilitychange", onVis);
     return () => document.removeEventListener("visibilitychange", onVis);
   }, [onboarded, refresh]);
+
+  // Manual "Poll now" button — hits the cron endpoint directly, then
+  // refreshes the local list. Useful for debugging on prod when you
+  // don't want to wait the 5-minute safety-net cadence.
+  async function pollNow() {
+    if (polling) return;
+    setPolling(true);
+    console.log("[email-notif] pollNow → hitting cron endpoint");
+    try {
+      const res = await fetch("/api/cron/email-notifications");
+      const data = await res.json().catch(() => ({}));
+      console.log("[email-notif] pollNow result", { status: res.status, data });
+    } catch (err) {
+      console.error("[email-notif] pollNow request failed", err);
+    }
+    await refresh("pollNow");
+    setPolling(false);
+  }
 
   async function markAllSeen() {
     if (marking) return;
@@ -169,7 +233,7 @@ export function HomeEmailNotifications({ onboarded: initialOnboarded }: Props) {
   function onOnboardingDone() {
     setOnboarded(true);
     // Give the server a beat to settle the user row before reading.
-    setTimeout(refresh, 150);
+    setTimeout(() => { void refresh("onboarding-done"); }, 150);
   }
 
   // ──────────────────────────────────────────────────────────────
@@ -236,6 +300,16 @@ export function HomeEmailNotifications({ onboarded: initialOnboarded }: Props) {
             )}
           </div>
           <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={pollNow}
+              disabled={polling}
+              title="Force a server-side poll right now (debugging)"
+              className="text-[11px] font-medium text-sky-700 hover:text-sky-800 inline-flex items-center gap-1"
+            >
+              {polling ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
+              Poll now
+            </button>
             {unseen > 0 && (
               <button
                 type="button"

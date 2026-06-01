@@ -105,6 +105,11 @@ export interface Task {
   // or the widget's status-update flow. Each entry is the upload URL plus
   // best-effort metadata for rendering.
   mediaUrls?: TaskMedia[];
+  // Soft-delete stamps. Non-null `deletedAt` means the task is hidden from
+  // every normal view but retained for audit and recoverable by admins.
+  // `deletedBy` is the user id that performed the deletion.
+  deletedAt?: string | null;
+  deletedBy?: string | null;
 }
 
 export interface TaskMedia {

@@ -62,6 +62,23 @@ export function canManageTask(
   return false;
 }
 
+// "Can delete" is deliberately STRICTER than canManageTask. Deletion is
+// destructive and outside the normal task lifecycle, so it's restricted to
+// admins/leaders (any task) and department heads (tasks in a department they
+// lead). Note this intentionally does NOT grant the assignee or creator
+// delete rights the way canManageTask does — a worker can't delete tasks
+// just because they own or were assigned one. Soft delete is recoverable by
+// admins, so this gate only governs who can initiate a deletion.
+export function canDeleteTask(
+  actor: User | null | undefined,
+  task: Pick<Task, "departmentId"> | null | undefined
+): boolean {
+  if (!actor || !task) return false;
+  if (isLeader(actor)) return true;
+  if (leadsDepartment(actor, task.departmentId)) return true;
+  return false;
+}
+
 export function canManageProject(
   actor: User | null | undefined,
   project: { departmentId: string | null } | null | undefined

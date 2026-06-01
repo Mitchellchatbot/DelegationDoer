@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { getUserById } from "@/lib/server-data";
 import { loadTaskForViewer } from "@/lib/task-access";
+import { canDeleteTask } from "@/lib/access";
 import { notifyCompletion, type CompletionResult } from "@/lib/slack";
 import { onTaskDone } from "@/lib/project-flow";
 import { syncTaskToCalendar } from "@/lib/task-calendar-sync";
@@ -311,6 +312,87 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     void syncTaskToCalendar(params.id);
 
     return NextResponse.json({ task: data, slack, skillGains });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "unknown error";
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
+}
+
+// DELETE /api/tasks/[id] — soft-delete a single task.
+//   Optional body: { reason?: string }
+//
+// This is a SOFT delete: it stamps deleted_at/deleted_by rather than
+// removing the row, so the task vanishes from every view but stays
+// recoverable by admins and retained for audit. Deleting a task does NOT
+// touch the originating email — email_intake_log keeps pointing at the
+// task (so the intake cron still treats the Missive thread as handled and
+// won't re-create it) and the email itself lives in Missive, untouched.
+//
+// Permissions are stricter than PATCH: only admins/leaders (any task) and
+// department heads (tasks in a department they lead) may delete. Assignees
+// and creators who aren't heads/leaders cannot.
+export async function DELETE(req: NextRequest, { params }: { params: { id: string } }) {
+  try {
+    const access = await loadTaskForViewer(params.id);
+    if (!access.ok) return access.response;
+    const userId = access.viewerId;
+    const supabase = getSupabaseAdmin();
+
+    // Pull the full row both for the manage-level permission check and to
+    // snapshot it into the deletion audit.
+    const { data: before, error: beErr } = await supabase
+      .from("tasks")
+      .select("*")
+      .eq("id", params.id)
+      .maybeSingle();
+    if (beErr) return NextResponse.json({ error: beErr.message }, { status: 500 });
+    if (!before) return NextResponse.json({ error: "task not found" }, { status: 404 });
+
+    const me = await getUserById(userId);
+    if (!canDeleteTask(me, { departmentId: before.department_id ?? null })) {
+      return NextResponse.json({ error: "You don't have permission to delete this task" }, { status: 403 });
+    }
+
+    // Already soft-deleted → idempotent success (don't re-stamp/re-log).
+    if (before.deleted_at) {
+      return NextResponse.json({ ok: true, alreadyDeleted: true });
+    }
+
+    const body = await req.json().catch(() => ({}));
+    const reason = typeof body?.reason === "string" && body.reason.trim() ? body.reason.trim() : null;
+    const now = new Date().toISOString();
+
+    const { error: delErr } = await supabase
+      .from("tasks")
+      .update({ deleted_at: now, deleted_by: userId, last_activity_at: now })
+      .eq("id", params.id);
+    if (delErr) return NextResponse.json({ error: delErr.message }, { status: 500 });
+
+    // Formal, queryable deletion audit (name, id, who, when, reason, full
+    // snapshot). Best-effort — the soft delete already succeeded above.
+    await supabase.from("task_deletions").insert({
+      id: `td_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
+      task_id: params.id,
+      task_title: before.title ?? "(untitled)",
+      deleted_by: userId,
+      reason,
+      task_snapshot: before
+    });
+
+    // Mirror into the per-task activity timeline for in-context history.
+    await supabase.from("activity_logs").insert({
+      id: `a_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
+      task_id: params.id,
+      user_id: userId,
+      action: "deleted",
+      detail: reason ? `Task deleted\n${reason}` : "Task deleted"
+    });
+
+    // Drop any linked Google Calendar event (sync now treats a
+    // soft-deleted task as wanting no event).
+    void syncTaskToCalendar(params.id);
+
+    return NextResponse.json({ ok: true });
   } catch (err) {
     const message = err instanceof Error ? err.message : "unknown error";
     return NextResponse.json({ error: message }, { status: 500 });

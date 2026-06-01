@@ -6,7 +6,8 @@ import { PersonAvatar } from "@/components/PersonAvatar";
 import { TaskActions } from "@/components/TaskActions";
 import { TaskTimerButton } from "@/components/TaskTimerButton";
 import { NotifyTeammatesDialog } from "@/components/NotifyTeammatesDialog";
-import { canNotifyOnTask, canViewTask, canManageTask } from "@/lib/access";
+import { canNotifyOnTask, canViewTask, canManageTask, canDeleteTask } from "@/lib/access";
+import { DeleteTaskButton } from "@/components/DeleteTaskButton";
 import { getUserById, getAllUsersLight, getDepartments, getLeaderIds } from "@/lib/server-data";
 import { Megaphone, Clock, History } from "lucide-react";
 import { HandoffButton, HandoffTimeline } from "@/components/HandoffPanel";
@@ -44,6 +45,9 @@ async function loadTask(id: string): Promise<{ task: Task; extensions: Extension
     .maybeSingle();
 
   if (error || !t) return null;
+  // Soft-deleted tasks are not viewable on the normal detail route — they
+  // live only in the admin "Recently deleted" recovery view until restored.
+  if (t.deleted_at) return null;
 
   const task: Task = {
     id: t.id,
@@ -169,6 +173,9 @@ export default async function TaskDetailPage({ params }: { params: { id: string 
             />
           )}
           <TaskActions task={task} />
+          {canDeleteTask(me, task) && (
+            <DeleteTaskButton taskId={task.id} taskTitle={task.title} redirectTo="/tasks" />
+          )}
         </div>
       </div>
 

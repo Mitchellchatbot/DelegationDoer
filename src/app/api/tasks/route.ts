@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { requireCurrentUserId } from "@/lib/session";
-import { getAllTasks, getUserById } from "@/lib/server-data";
+import { getAllTasks, getDeletedTasks, getUserById } from "@/lib/server-data";
 import { notifyAssignment, postMessage } from "@/lib/slack";
 import { syncTaskToCalendar } from "@/lib/task-calendar-sync";
 import { sanitizeMediaUrls } from "@/lib/media";
@@ -19,10 +19,21 @@ function trimOrNull(v: unknown): string | null {
 // their own tasks plus the tasks of any non-leader — but tasks
 // assigned to (or created by) a leader are filtered out so leader
 // work stays private to the leader cohort.
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
     const viewerId = await requireCurrentUserId();
     const viewer = await getUserById(viewerId);
+
+    // Admin-only recovery feed: soft-deleted tasks for the "Recently
+    // deleted" view. Non-admins get a 403 so deleted work stays private.
+    if (req.nextUrl.searchParams.get("deleted") === "true") {
+      if (!(viewer && (viewer.role === "leader" || viewer.isAdmin))) {
+        return NextResponse.json({ error: "Only admins can view deleted tasks" }, { status: 403 });
+      }
+      const deleted = await getDeletedTasks();
+      return NextResponse.json({ tasks: deleted });
+    }
+
     const tasks = await getAllTasks();
 
     if (viewer && (viewer.role === "leader" || viewer.isAdmin)) {

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { useTeam } from "@/lib/team-context";
 import { createPortal } from "react-dom";
 import { useSearchParams, useRouter } from "next/navigation";
@@ -14,7 +15,7 @@ import { cn } from "@/lib/utils";
 import type { Task, TaskStatus, User } from "@/lib/types";
 import {
   Clock, Globe2, Building2, Users as UsersIcon, FolderKanban,
-  Layers, Briefcase, Layout, CheckCircle2
+  Layers, Briefcase, Layout, CheckCircle2, CheckSquare, Square, Trash2
 } from "lucide-react";
 import { toast } from "sonner";
 import { ClockGate } from "@/components/ClockGate";
@@ -104,6 +105,54 @@ export default function BoardPage() {
   })();
   const [groupBy, setGroupBy] = useState<GroupBy>(initialGroupBy);
   const [moreFiltersOpen, setMoreFiltersOpen] = useState(false);
+
+  // Bulk-select (admins only). When `selecting` is on, clicking a card
+  // toggles its selection instead of navigating, and a bulk action bar
+  // offers a one-shot delete of everything selected.
+  const [selecting, setSelecting] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
+
+  function toggleSelect(id: string) {
+    setSelectedIds((cur) => {
+      const next = new Set(cur);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+  function exitSelecting() {
+    setSelecting(false);
+    setSelectedIds(new Set());
+  }
+
+  async function bulkDelete() {
+    if (bulkBusy || selectedIds.size === 0) return;
+    const ids = Array.from(selectedIds);
+    if (!window.confirm(
+      `Delete ${ids.length} task${ids.length === 1 ? "" : "s"}? They'll be hidden from all views and recoverable from Recently deleted.`
+    )) return;
+    setBulkBusy(true);
+    // Optimistically drop the selected cards.
+    const prior = tasks;
+    setTasks((cur) => cur.filter((t) => !selectedIds.has(t.id)));
+    try {
+      const res = await fetch("/api/tasks/bulk-delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ taskIds: ids })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error ?? `failed (${res.status})`);
+      toast.success(`Deleted ${data.deleted ?? ids.length} task${(data.deleted ?? ids.length) === 1 ? "" : "s"}.`);
+      exitSelecting();
+    } catch (err) {
+      setTasks(prior); // revert
+      toast.error(`Bulk delete failed: ${err instanceof Error ? err.message : "network error"}`);
+    } finally {
+      setBulkBusy(false);
+    }
+  }
 
   // Restore filter state on back-navigation from a task detail. Saved
   // to sessionStorage on every change; rehydrated on mount when there
@@ -386,11 +435,39 @@ export default function BoardPage() {
       <div className="flex items-center justify-between flex-wrap gap-3">
         <h1 className="text-lg font-medium">Board <span className="text-muted text-sm">· {visible.length}</span></h1>
 
-        {/* Group-by axis (kept) */}
-        <div className="inline-flex items-center rounded-xl border border-border bg-surface p-0.5">
-          <ViewBtn active={groupBy === "status"} onClick={() => setGroupBy("status")} icon={<Layout className="w-3.5 h-3.5" />}    label="By status" />
-          <ViewBtn active={groupBy === "client"} onClick={() => setGroupBy("client")} icon={<Briefcase className="w-3.5 h-3.5" />} label="By client" />
-          <ViewBtn active={groupBy === "person"} onClick={() => setGroupBy("person")} icon={<UsersIcon className="w-3.5 h-3.5" />} label="By person" />
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* Group-by axis (kept) */}
+          <div className="inline-flex items-center rounded-xl border border-border bg-surface p-0.5">
+            <ViewBtn active={groupBy === "status"} onClick={() => setGroupBy("status")} icon={<Layout className="w-3.5 h-3.5" />}    label="By status" />
+            <ViewBtn active={groupBy === "client"} onClick={() => setGroupBy("client")} icon={<Briefcase className="w-3.5 h-3.5" />} label="By client" />
+            <ViewBtn active={groupBy === "person"} onClick={() => setGroupBy("person")} icon={<UsersIcon className="w-3.5 h-3.5" />} label="By person" />
+          </div>
+
+          {/* Admin-only: bulk-select toggle + recovery link. */}
+          {isLeaderOrAdmin && (
+            <>
+              <button
+                type="button"
+                onClick={() => (selecting ? exitSelecting() : setSelecting(true))}
+                className={cn(
+                  "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium border transition-colors",
+                  selecting
+                    ? "bg-rose-600 text-white border-rose-600"
+                    : "bg-white border-border text-muted hover:text-ink hover:border-accent/40"
+                )}
+              >
+                <CheckSquare className="w-3.5 h-3.5" />
+                {selecting ? "Cancel select" : "Select"}
+              </button>
+              <Link
+                href="/tasks/deleted"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium border border-border bg-white text-muted hover:text-ink hover:border-accent/40 transition-colors"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                Recently deleted
+              </Link>
+            </>
+          )}
         </div>
       </div>
 
@@ -521,6 +598,7 @@ export default function BoardPage() {
                                 // safe — it only fires on actual clicks.
                                 onClick={() => {
                                   if (s.isDragging) return;
+                                  if (selecting) { toggleSelect(t.id); return; }
                                   router.push(`/tasks/${t.id}`);
                                 }}
                                 style={{
@@ -536,11 +614,19 @@ export default function BoardPage() {
                                   // border so they read as "finished" at a
                                   // glance instead of blending with open work.
                                   t.status === "done" && "bg-emerald-50/70 border-emerald-200/70",
-                                  s.isDragging && "ring-1 ring-accent/40 shadow-lift"
+                                  s.isDragging && "ring-1 ring-accent/40 shadow-lift",
+                                  selecting && selectedIds.has(t.id) && "ring-2 ring-rose-500 border-rose-300"
                                 )}
                               >
                                 <div className="flex items-start justify-between gap-2">
-                                  <div className="text-sm leading-snug">{t.title}</div>
+                                  <div className="flex items-start gap-2 min-w-0">
+                                    {selecting && (
+                                      selectedIds.has(t.id)
+                                        ? <CheckSquare className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                                        : <Square className="w-4 h-4 text-muted shrink-0 mt-0.5" />
+                                    )}
+                                    <div className="text-sm leading-snug">{t.title}</div>
+                                  </div>
                                   <PriorityBadge priority={t.priority} />
                                 </div>
                                 {(t.clientName || t.website) && (
@@ -605,6 +691,31 @@ export default function BoardPage() {
           </div>
         </div>
       </DragDropContext>
+
+      {/* Bulk action bar — floats above the board while selecting. */}
+      {selecting && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 lg:translate-x-[calc(-50%+132px)] z-50 flex items-center gap-3 px-4 py-2.5 rounded-2xl bg-ink text-white shadow-lift">
+          <span className="text-sm tabular-nums">
+            {selectedIds.size} selected
+          </span>
+          <button
+            type="button"
+            onClick={bulkDelete}
+            disabled={bulkBusy || selectedIds.size === 0}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-rose-600 hover:bg-rose-700 transition-colors disabled:opacity-50"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+            {bulkBusy ? "Deleting…" : "Delete selected"}
+          </button>
+          <button
+            type="button"
+            onClick={exitSelecting}
+            className="text-xs text-white/70 hover:text-white transition-colors"
+          >
+            Cancel
+          </button>
+        </div>
+      )}
     </div>
     </ClockGate>
   );

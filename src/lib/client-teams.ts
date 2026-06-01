@@ -8,6 +8,7 @@
 
 export type TeamId =
   | "team_web"
+  | "team_software"
   | "team_seo_sam"
   | "team_seo_bismah"
   | "team_seo_samir"
@@ -16,7 +17,7 @@ export type TeamId =
 export interface TeamMeta {
   id: TeamId;
   label: string;        // shown in dropdown + on the row chip
-  group: "website" | "seo";
+  group: "website" | "software" | "seo";
   // Tailwind chip tone tokens — match the dept tints used elsewhere
   // so a "Websites" client visually pairs with the Website dept.
   chip: string;         // bg + text + border classes
@@ -28,6 +29,11 @@ export const TEAMS: readonly TeamMeta[] = [
     id: "team_web", label: "Websites", group: "website",
     chip: "bg-blue-100 text-blue-700 border-blue-200/70",
     dot: "bg-blue-500"
+  },
+  {
+    id: "team_software", label: "Software", group: "software",
+    chip: "bg-violet-100 text-violet-700 border-violet-200/70",
+    dot: "bg-violet-500"
   },
   {
     id: "team_seo_sam", label: "SEO · Sam", group: "seo",
@@ -50,6 +56,22 @@ export const TEAMS: readonly TeamMeta[] = [
     dot: "bg-emerald-500"
   }
 ] as const;
+
+// Which department a team "belongs to". Used by:
+//   - The picker UI: when surfacing the team's natural members in the
+//     point-person sub-menu, this is the dept those members come from.
+//   - The email-intake router: when the classifier hints a task fits
+//     dept X, we only honor the client's point person for the matching
+//     team. An SEO-typed task never gets routed to the client's
+//     Websites person, even if the client has one set.
+export const TEAM_DEPARTMENT: Record<TeamId, string> = {
+  team_web:        "dep_web",
+  team_software:   "dep_software",
+  team_seo_sam:    "dep_seo",
+  team_seo_bismah: "dep_seo",
+  team_seo_samir:  "dep_seo",
+  team_seo_saif:   "dep_seo"
+};
 
 const TEAM_IDS: Set<string> = new Set(TEAMS.map((t) => t.id));
 

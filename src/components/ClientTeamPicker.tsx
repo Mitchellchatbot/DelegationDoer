@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { Users, Check, Loader2, UserRound } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import { TEAMS, teamMeta, type TeamId } from "@/lib/client-teams";
+import { TEAMS, TEAM_DEPARTMENT, teamMeta, type TeamId } from "@/lib/client-teams";
 import { PersonAvatar } from "@/components/PersonAvatar";
 
 // Inline team-assignment dropdown rendered on each client row in the
@@ -31,17 +31,6 @@ interface Props {
    *  without a full router.refresh(). Passes whichever fields changed. */
   onAssigned?: (patch: { teamId?: string | null; assignedUserId?: string | null }) => void;
 }
-
-// Maps a team to the department whose members are surfaced "first" in
-// the person picker (so the lead/rest-of-team appear at the top).
-// Falls back to the full users list with no preferred department.
-const TEAM_DEPT_HINT: Record<TeamId, string | null> = {
-  team_web: "dep_web",
-  team_seo_sam: "dep_seo",
-  team_seo_bismah: "dep_seo",
-  team_seo_samir: "dep_seo",
-  team_seo_saif: "dep_seo"
-};
 
 export function ClientTeamPicker({
   clientId, teamId, assignedUserId, canEdit, users = [], onAssigned
@@ -79,7 +68,7 @@ export function ClientTeamPicker({
   // to the top — the actual team lead/owners. Alphabetical inside.
   const sortedUsers = useMemo(() => {
     if (users.length === 0) return [];
-    const hintDept = teamId ? TEAM_DEPT_HINT[teamId as TeamId] : null;
+    const hintDept = teamId ? TEAM_DEPARTMENT[teamId as TeamId] : null;
     return [...users].sort((a, b) => {
       const aIn = hintDept ? a.departmentIds.includes(hintDept) : false;
       const bIn = hintDept ? b.departmentIds.includes(hintDept) : false;

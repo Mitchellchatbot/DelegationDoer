@@ -25,6 +25,10 @@
       "schedule": "* * * * *"
     },
     {
+      "path": "/api/cron/email-notifications",
+      "schedule": "* * * * *"
+    },
+    {
       "path": "/api/cron/archive-done",
       "schedule": "0 2 * * *"
     }

@@ -361,6 +361,94 @@ export interface ClientHealthRow {
   daysSinceLastEmail: number | null;
 }
 
+// ────────────────────────────────────────────────────────────────────────
+// Charts row + leader todo helpers
+// ────────────────────────────────────────────────────────────────────────
+
+export interface PostsPerClientRow {
+  clientId: string;
+  clientName: string;
+  postsCount: number;
+}
+
+// Snapshot of wp_blog_posts_count per active client. No history table
+// yet, so this is a bar-chart view of "where have we posted lately"
+// rather than a true time series. Filter to clients with > 0 so the
+// chart isn't dominated by zero-bars.
+export async function getPostsPerClient(): Promise<PostsPerClientRow[]> {
+  const supabase = getSupabaseAdmin();
+  const { data, error } = await supabase
+    .from("clients")
+    .select("id, name, wp_blog_posts_count, status")
+    .or("status.eq.active,status.is.null")
+    .gt("wp_blog_posts_count", 0)
+    .order("wp_blog_posts_count", { ascending: false })
+    .limit(20);
+  if (error) return [];
+  return ((data ?? []) as unknown as Array<{ id: string; name: string; wp_blog_posts_count: number | null }>)
+    .map((r) => ({
+      clientId: r.id,
+      clientName: r.name,
+      postsCount: r.wp_blog_posts_count ?? 0
+    }));
+}
+
+// Quick stat: how many open assigned tasks have gone 7+ days without
+// an activity_log event. Reused by the charts row as a "stalled" tile.
+export async function getStalledTaskCount(): Promise<number> {
+  const supabase = getSupabaseAdmin();
+  const cutoff = new Date(Date.now() - 7 * 86_400_000).toISOString();
+  const { count } = await supabase
+    .from("tasks")
+    .select("id", { count: "exact", head: true })
+    .neq("status", "done")
+    .eq("is_draft", false)
+    .lt("last_activity_at", cutoff)
+    .not("assignee_id", "is", null);
+  return count ?? 0;
+}
+
+// Leader's own open task list for the Apple-style reminder card.
+// Filters drafts + done; sorted by priority then due-date so the most
+// important rows surface first.
+export interface LeaderTodo {
+  id: string;
+  title: string;
+  priority: "low" | "medium" | "high" | "critical";
+  dueDate: string | null;
+  clientName: string | null;
+}
+export async function getLeaderOpenTasks(userId: string, limit = 30): Promise<LeaderTodo[]> {
+  const supabase = getSupabaseAdmin();
+  const { data } = await supabase
+    .from("tasks")
+    .select("id, title, priority, due_date, client_name, status, is_draft")
+    .eq("assignee_id", userId)
+    .neq("status", "done")
+    .eq("is_draft", false)
+    .order("priority", { ascending: false })
+    .order("due_date", { ascending: true, nullsFirst: false })
+    .limit(limit);
+  const RANK: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
+  return ((data ?? []) as unknown as Array<{ id: string; title: string; priority: string; due_date: string | null; client_name: string | null }>)
+    .map((r) => ({
+      id: r.id,
+      title: r.title,
+      priority: (["low", "medium", "high", "critical"] as const).includes(r.priority as "low" | "medium" | "high" | "critical")
+        ? (r.priority as LeaderTodo["priority"])
+        : "medium",
+      dueDate: r.due_date,
+      clientName: r.client_name
+    }))
+    .sort((a, b) => {
+      const r = (RANK[a.priority] ?? 9) - (RANK[b.priority] ?? 9);
+      if (r !== 0) return r;
+      const ad = a.dueDate ? new Date(a.dueDate).getTime() : Infinity;
+      const bd = b.dueDate ? new Date(b.dueDate).getTime() : Infinity;
+      return ad - bd;
+    });
+}
+
 // Leader "pulse" feed — unified, chronologically-sorted list of moves
 // that matter today across the agency. Pulls from four sources and
 // flattens to a common shape so the UI can render them in one card:

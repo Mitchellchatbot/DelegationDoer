@@ -5,18 +5,20 @@ import { isLeader } from "@/lib/auth";
 import { isApprover } from "@/lib/email-approvers";
 import {
   getTodayTasksForUser,
-  getTeamStatusToday,
-  getTodayDeliverables,
   getNeedsYouCounts,
-  getClientHealthOverview,
   getDayBookendStatus,
   getSeoBriefsForHome,
-  getLeaderPulse
+  getLeaderPulse,
+  getPostsPerClient,
+  getStalledTaskCount,
+  getLeaderOpenTasks
 } from "@/lib/home-data";
 import { HomeWorker } from "@/components/HomeWorker";
-import { HomeLeader } from "@/components/HomeLeader";
+import { HomeLeaderHero } from "@/components/HomeLeaderHero";
 import { HomeSeoBriefs } from "@/components/HomeSeoBriefs";
 import { HomePulseCard } from "@/components/HomePulseCard";
+import { HomeChartsRow } from "@/components/HomeChartsRow";
+import { LeaderTodoList } from "@/components/LeaderTodoList";
 import { DayBookends } from "@/components/DayBookends";
 
 export const dynamic = "force-dynamic";
@@ -60,9 +62,13 @@ export default async function HomePage() {
     const showSeoBriefs =
       isLeaderRole || (isHead && (me.departmentIds ?? []).includes("dep_seo"));
 
-    const [team, deliverables, needsYou, clientHealth, seoBriefs, pulse] = await Promise.all([
-      getTeamStatusToday(scopedDepartmentIds ?? undefined, 60),
-      getTodayDeliverables(scopedDepartmentIds ?? undefined, 20),
+    // Restructured leader home — the notification feed (What's moving)
+    // is the centerpiece, charts row + Apple-style reminder list flank
+    // it. Old Client health / Team today / Due today cards are gone:
+    // every signal they carried now lives inside the feed, sorted by
+    // recency. Removing the duplicates cut the page from 5 stacked
+    // cards (lots of scroll) to a feed + two glance tiles + a todo.
+    const [needsYou, seoBriefs, pulse, postsPerClient, stalledCount, leaderTodos] = await Promise.all([
       getNeedsYouCounts({
         canApprove,
         visibleDepartmentIds: scopedDepartmentIds,
@@ -72,33 +78,31 @@ export default async function HomePage() {
         // first paint; the sidebar badge fills it in on hydrate.
         inboxesUnread: 0
       }),
-      // Client health is org-wide for now — even heads benefit from
-      // seeing accounts going cold across the agency, not just their
-      // dept's. Easy to scope later if it gets noisy. Top 10 by
-      // priority + every at-risk client (red touchpoint) — the helper
-      // unions them so important clients going cold can't slip off.
-      getClientHealthOverview(10),
       showSeoBriefs ? getSeoBriefsForHome(20) : Promise.resolve([]),
       // What's-moving feed — unified notification surface across
-      // tasks, approvals, alerts, and clients. Hides itself when empty.
-      // Higher cap now that the feed has 10 source types — leaves
-      // room for active days without truncating early-week context.
-      getLeaderPulse({ scopedDepartmentIds, total: 40 })
+      // tasks, approvals, alerts, and clients. Higher cap (60) since
+      // it's the primary surface now.
+      getLeaderPulse({ scopedDepartmentIds, total: 60 }),
+      getPostsPerClient(),
+      getStalledTaskCount(),
+      getLeaderOpenTasks(userId, 30)
     ]);
 
     return (
       <div className="space-y-4 max-w-7xl mx-auto">
         {dayBookends && <DayBookends status={dayBookends} hourLocal={hourLocal} />}
-        <HomeLeader
+        <HomeLeaderHero
           meName={me.name}
           needsYou={needsYou}
-          team={team}
-          deliverables={deliverables}
-          clientHealth={clientHealth}
           scopeLabel={scopeLabel}
         />
-        {showSeoBriefs && <HomeSeoBriefs rows={seoBriefs} />}
+        {/* Notifications — the focus of the new leader home. */}
         <HomePulseCard events={pulse} />
+        {/* Glance tiles — posts-per-client + stalled stat */}
+        <HomeChartsRow postsPerClient={postsPerClient} stalledCount={stalledCount} />
+        {/* Apple-Reminders-style todo for the leader's own tasks. */}
+        <LeaderTodoList tasks={leaderTodos} />
+        {showSeoBriefs && <HomeSeoBriefs rows={seoBriefs} />}
       </div>
     );
   }

@@ -29,6 +29,7 @@ interface TaskRow {
   due_date: string | null;
   calendar_event_id: string | null;
   calendar_event_user_id: string | null;
+  deleted_at: string | null;
 }
 
 async function loadTask(taskId: string): Promise<TaskRow | null> {
@@ -36,7 +37,7 @@ async function loadTask(taskId: string): Promise<TaskRow | null> {
   const { data } = await supabase
     .from("tasks")
     .select(
-      "id, title, description, status, estimated_hours, assignee_id, due_date, calendar_event_id, calendar_event_user_id"
+      "id, title, description, status, estimated_hours, assignee_id, due_date, calendar_event_id, calendar_event_user_id, deleted_at"
     )
     .eq("id", taskId)
     .maybeSingle();
@@ -92,7 +93,9 @@ export async function syncTaskToCalendar(taskId: string): Promise<void> {
     const wantsEvent =
       !!t.assignee_id &&
       !!t.due_date &&
-      t.status !== "done";
+      t.status !== "done" &&
+      // A soft-deleted task shouldn't keep nagging on someone's calendar.
+      !t.deleted_at;
 
     // Delete existing event if we no longer want one, or if the
     // assignee changed (we'll create a fresh one on the new one).

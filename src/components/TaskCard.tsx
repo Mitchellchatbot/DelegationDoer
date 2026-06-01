@@ -6,6 +6,9 @@ import { PersonAvatar } from "./PersonAvatar";
 import { Countdown } from "./Countdown";
 import type { Task } from "@/lib/types";
 import { useTeam } from "@/lib/team-context";
+import { useCurrentUser } from "@/lib/user-context";
+import { canDeleteTask } from "@/lib/access";
+import { DeleteTaskButton } from "./DeleteTaskButton";
 import { cn } from "@/lib/utils";
 import { Clock, CheckCircle2 } from "lucide-react";
 
@@ -47,8 +50,10 @@ const STALLED_TINT = {
 
 export function TaskCard({ task, dim }: { task: Task; dim?: boolean }) {
   const { userById } = useTeam();
+  const me = useCurrentUser();
   const assignee = userById(task.assigneeId);
   const tint = task.inactiveFlag ? STALLED_TINT : TINT[task.priority as Priority];
+  const canDelete = canDeleteTask(me, task);
 
   return (
     <Link
@@ -60,6 +65,13 @@ export function TaskCard({ task, dim }: { task: Task; dim?: boolean }) {
         dim && "opacity-60"
       )}
     >
+      {canDelete && (
+        // Reveal on hover so the card stays clean at rest. The button
+        // itself stops click propagation so it never triggers navigation.
+        <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity z-10">
+          <DeleteTaskButton taskId={task.id} taskTitle={task.title} variant="icon" />
+        </div>
+      )}
       <div className="flex items-start justify-between gap-2">
         <div className="text-sm font-medium leading-snug group-hover:text-accent transition-colors">
           {task.title}

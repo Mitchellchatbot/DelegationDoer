@@ -58,6 +58,8 @@ interface TaskRow {
   hosting_access: string | null;
   missive_thread_url: string | null;
   custom: Record<string, unknown> | null;
+  deleted_at: string | null;
+  deleted_by: string | null;
 }
 
 async function userDepartmentIds(userId: string): Promise<string[]> {
@@ -133,7 +135,9 @@ function taskFromRow(row: TaskRow): Task {
     markupLink: row.markup_link,
     hostingAccess: row.hosting_access,
     missiveThreadUrl: row.missive_thread_url,
-    custom: row.custom ?? {}
+    custom: row.custom ?? {},
+    deletedAt: row.deleted_at ?? null,
+    deletedBy: row.deleted_by ?? null
   };
 }
 
@@ -187,14 +191,30 @@ const TICKET_COLS =
   "department_id,assignee_id,creator_id,project_id,due_date,inactive_flag," +
   "last_activity_at,created_at,blocks_task_ids,client_name,website," +
   "client_email,client_folder_url,staging_server,markup_link,hosting_access," +
-  "missive_thread_url,custom";
+  "missive_thread_url,custom,deleted_at,deleted_by";
 
-export async function getAllTasks(opts?: { includeDrafts?: boolean }): Promise<Task[]> {
+export async function getAllTasks(opts?: { includeDrafts?: boolean; includeDeleted?: boolean }): Promise<Task[]> {
   let q = getSupabaseAdmin()
     .from("tasks")
     .select(TICKET_COLS);
   if (!opts?.includeDrafts) q = q.eq("is_draft", false);
+  // Soft-deleted tasks are hidden from every normal read path. This is the
+  // single chokepoint all task lists funnel through, so excluding them here
+  // makes them vanish app-wide (board, mine, search, etc.) in one place.
+  if (!opts?.includeDeleted) q = q.is("deleted_at", null);
   const { data } = await q;
+  return (data ?? []).map((r) => taskFromRow(r as unknown as TaskRow));
+}
+
+// Soft-deleted tasks, newest first — for the admin recovery view. Includes
+// drafts (a deleted draft is still recoverable) and only returns rows that
+// have actually been soft-deleted.
+export async function getDeletedTasks(): Promise<Task[]> {
+  const { data } = await getSupabaseAdmin()
+    .from("tasks")
+    .select(TICKET_COLS)
+    .not("deleted_at", "is", null)
+    .order("deleted_at", { ascending: false });
   return (data ?? []).map((r) => taskFromRow(r as unknown as TaskRow));
 }
 

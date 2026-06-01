@@ -72,14 +72,16 @@ export async function POST(req: NextRequest) {
     const [tasksRes, emailsRes] = await Promise.all([
       // Tasks the user closed today for this client. We match on
       // client_name (legacy linkage); the join through client_id
-      // isn't always populated for older tasks.
+      // isn't always populated for older tasks. Filter on completed_at
+      // (the done-transition timestamp) — last_activity_at bumps on any
+      // edit, so it would pull in tasks finished earlier but touched today.
       supabase
         .from("tasks")
         .select("id, title, description, tags")
         .eq("assignee_id", userId)
         .eq("client_name", clientName)
         .eq("status", "done")
-        .gte("last_activity_at", todayIso)
+        .gte("completed_at", todayIso)
         .limit(15),
       // Emails the user authored + sent to this client today.
       supabase

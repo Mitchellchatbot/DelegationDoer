@@ -93,13 +93,19 @@ export async function buildEodForDepartment(
       .from("users")
       .select("id, name, avatar_url")
       .in("id", memberIds),
+    // Tasks COMPLETED today — keyed off completed_at, the stable
+    // done-transition timestamp. last_activity_at is wrong here: it
+    // bumps on any edit (comment, message, timer, extension), so a task
+    // finished weeks ago would reappear in today's EOD the moment
+    // someone touches it. completed_at is stamped on the done transition
+    // and cleared on reopen (see tasks PATCH route + task_archive migration).
     supabase
       .from("tasks")
-      .select("id, title, priority, assignee_id, status, last_activity_at")
+      .select("id, title, priority, assignee_id, status, completed_at")
       .in("assignee_id", memberIds)
       .eq("status", "done")
-      .gte("last_activity_at", startIso)
-      .lt("last_activity_at", endIso),
+      .gte("completed_at", startIso)
+      .lt("completed_at", endIso),
     supabase
       .from("time_entries")
       .select("user_id, started_at, ended_at")
@@ -114,7 +120,7 @@ export async function buildEodForDepartment(
   ]);
 
   const users = (usersRes.data ?? []) as { id: string; name: string; avatar_url: string | null }[];
-  const tasks = (tasksRes.data ?? []) as { id: string; title: string; priority: string; assignee_id: string; status: string; last_activity_at: string }[];
+  const tasks = (tasksRes.data ?? []) as { id: string; title: string; priority: string; assignee_id: string; status: string; completed_at: string }[];
   const entries = (entriesRes.data ?? []) as { user_id: string; started_at: string; ended_at: string | null }[];
   const notes = (notesRes.data ?? []) as Array<{
     user_id: string;

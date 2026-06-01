@@ -35,7 +35,7 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { getAllTasks, getDepartments, getAllUsersLight } from "@/lib/server-data";
 import { classifyEmailThread, type ClassifiedEmail } from "@/lib/email-classifier";
 import { matchRoutingRule, rowToRule, type RoutingRule } from "@/lib/routing-match";
-import { rankCandidates, type RankedCandidate } from "@/lib/skill-rank";
+import { rankCandidates, buildLoadSignals, type RankedCandidate } from "@/lib/skill-rank";
 import { userCapacity, deadlineFromEstimate } from "@/lib/capacity";
 import { notifyAssignment, notifyRoutingFallback } from "@/lib/slack";
 import { loadClientMatcher } from "@/lib/client-thread-match";
@@ -200,6 +200,19 @@ export async function runEmailIntake(input: IntakeInput): Promise<IntakeOutcome>
     };
   }
 
+  // Match the inbound email to a client by domain / contact-email up
+  // front, so the ranker can credit teammates who've handled this
+  // client before (client-familiarity factor) and the task insert can
+  // reuse the same name. Best-effort — a miss just leaves it null.
+  let clientName: string | null = null;
+  if (input.fromEmail) {
+    try {
+      const matcher = await loadClientMatcher();
+      const hit = matcher.match(input.fromEmail);
+      if (hit) clientName = hit.name;
+    } catch { /* matcher errored — fall back to null */ }
+  }
+
   // 3) Routing — rules first, then skill+capacity ranker, then dept head.
   const rulesResult = await loadRoutingRules(supabase);
   const matchedRule = matchRoutingRule(
@@ -224,7 +237,7 @@ export async function runEmailIntake(input: IntakeInput): Promise<IntakeOutcome>
   //     ranker's top-N. Only used as the picker when no rule matched.
   const allUsers = await getAllUsersLight();
   const allTasks = await getAllTasks();
-  const rankerTop: RankedCandidate[] = (await rankAll(allUsers, allTasks, supabase, classified)) ?? [];
+  const rankerTop: RankedCandidate[] = (await rankAll(allUsers, allTasks, supabase, classified, clientName)) ?? [];
 
   if (!assigneeId) {
     const top = rankerTop[0];
@@ -303,18 +316,9 @@ export async function runEmailIntake(input: IntakeInput): Promise<IntakeOutcome>
   const departmentId =
     matchedRule?.departmentId ?? classified.departmentHint ?? assignee?.departmentIds[0] ?? null;
 
-  // Match the inbound email to a client by domain / contact-email so
-  // the resulting task lands in the right client folder. Best-effort
-  // — a miss just leaves client_name null (matches old behavior).
-  let clientName: string | null = null;
-  if (input.fromEmail) {
-    try {
-      const matcher = await loadClientMatcher();
-      const hit = matcher.match(input.fromEmail);
-      if (hit) clientName = hit.name;
-    } catch { /* matcher errored — fall back to null */ }
-  }
-
+  // clientName was resolved up front (before the ranker) so the
+  // client-familiarity factor could use it; reuse it here for the
+  // task's client folder.
   const insertRow = {
     id: taskId,
     title: classified.title,
@@ -606,7 +610,8 @@ async function rankAll(
   candidates: User[],
   allTasks: ReturnType<typeof getAllTasks> extends Promise<infer T> ? T : never,
   supabase: SbClient,
-  classified: ClassifiedEmail
+  classified: ClassifiedEmail,
+  clientName: string | null
 ): Promise<RankedCandidate[] | null> {
   const { data: skillRows, error } = await supabase
     .from("user_skills")
@@ -632,6 +637,9 @@ async function rankAll(
     capacityByUser.set(u.id, userCapacity(u, allTasks).pct);
   }
 
+  // Active-workload + client-familiarity signals from the live task set.
+  const { activeTasksByUser, clientHistoryByUser } = buildLoadSignals(allTasks, clientName);
+
   // Hand off to the same ranker the new-task popdown uses, so a single
   // tweak there propagates here automatically.
   return rankCandidates({
@@ -643,7 +651,9 @@ async function rankAll(
     },
     candidates,
     skillsByUser,
-    capacityByUser
+    capacityByUser,
+    activeTasksByUser,
+    clientHistoryByUser
   });
 }
 
@@ -689,7 +699,15 @@ async function writeRoutingDecision(
       ranker_top: args.rankerTop.slice(0, 5).map((r) => ({
         userId: r.userId,
         score: r.score,
-        reason: r.reason
+        reason: r.reason,
+        // Transparent per-candidate score breakdown for the reasoning
+        // panel. Rounded for storage so the JSONB stays tidy.
+        factors: r.factors.map((f) => ({
+          key: f.key,
+          label: f.label,
+          points: Math.round(f.points * 10) / 10,
+          detail: f.detail
+        }))
       })),
       routed_via: args.routedVia,
       routed_to_user_id: args.routedToUserId,

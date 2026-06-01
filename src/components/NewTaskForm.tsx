@@ -5,7 +5,7 @@ import { userCapacity, etaDays, deadlineFromEstimate } from "@/lib/capacity";
 import { assignableTargets, ROLE_LABELS } from "@/lib/auth";
 import { useCurrentUser } from "@/lib/user-context";
 import { useTeam } from "@/lib/team-context";
-import { rankCandidates, type RankedCandidate } from "@/lib/skill-rank";
+import { rankCandidates, buildLoadSignals, type RankedCandidate } from "@/lib/skill-rank";
 import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Sparkles, Wand2, Crown, ShieldCheck, ChevronDown, ChevronRight, Mail, FolderOpen, Server, Link as LinkIcon, KeyRound, MessageSquare, Zap } from "lucide-react";
@@ -220,13 +220,19 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel, initialValues }: 
     for (const u of targets) {
       capacityByUser.set(u.id, userCapacity(u, tasks).pct);
     }
+    // Active-workload + client-familiarity signals from the live task
+    // set, so the suggestion reflects who's free and who already knows
+    // this client — same factor breakdown the routing-review panel shows.
+    const { activeTasksByUser, clientHistoryByUser } = buildLoadSignals(tasks, clientName);
     return rankCandidates({
       task: { title, description, departmentId, tags },
       candidates: targets,
       skillsByUser,
-      capacityByUser
+      capacityByUser,
+      activeTasksByUser,
+      clientHistoryByUser
     });
-  }, [skillMatrix, targets, title, description, departmentId, tags]);
+  }, [skillMatrix, targets, title, description, departmentId, tags, tasks, clientName]);
 
   const topPick = ranked[0] ?? null;
   const restRanked = ranked.slice(1, 5);
@@ -652,6 +658,22 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel, initialValues }: 
                       {u.role === "department_head" && <Crown className="w-3 h-3 text-amber-500" />}
                     </div>
                     <div className="text-xs text-ink/65 mt-0.5">{topPick.reason}</div>
+                    {topPick.factors.length > 0 && (
+                      <div className="mt-1.5 flex flex-wrap gap-1.5">
+                        {topPick.factors.map((f) => (
+                          <span
+                            key={f.key}
+                            title={f.detail}
+                            className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-md bg-white/70 border border-accent/15 text-ink/70"
+                          >
+                            <span className="font-medium">{f.label}</span>
+                            <span className="tabular-nums text-accent font-semibold">
+                              +{Math.round(f.points)}
+                            </span>
+                          </span>
+                        ))}
+                      </div>
+                    )}
                     {topPick.matchedTags.length > 0 && (
                       <div className="mt-1.5 flex flex-wrap gap-1">
                         {topPick.matchedTags.slice(0, 4).map((tag) => (

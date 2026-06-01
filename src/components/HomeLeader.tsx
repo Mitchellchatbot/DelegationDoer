@@ -306,7 +306,9 @@ function ClientHealthCard({ rows }: { rows: ClientHealthRow[] }) {
           Client health
           {(redCount > 0 || yellowCount > 0) && (
             <span className="text-[11px] text-ink/55 font-normal">
-              {redCount > 0 && <span className="text-rose-600 font-medium">{redCount} neglected</span>}
+              {/* Recolored from rose to slate to match the new "Shaky"
+                  semantic — the leader didn't want a wall of red. */}
+              {redCount > 0 && <span className="text-slate-700 font-medium">{redCount} shaky</span>}
               {redCount > 0 && yellowCount > 0 && <span className="text-ink/40"> · </span>}
               {yellowCount > 0 && <span className="text-amber-600 font-medium">{yellowCount} stale</span>}
             </span>
@@ -359,11 +361,14 @@ function ClientHealthCard({ rows }: { rows: ClientHealthRow[] }) {
                         : `Last outbound email: ${r.daysSinceLastEmail} day${r.daysSinceLastEmail === 1 ? "" : "s"} ago. ${meta.description}`
                     }
                   >
+                    {/* "never" used to be rose, which contributed to the
+                        wall-of-red feel. Now a calm ink tone — the band
+                        already carries the urgency via meta colors. */}
                     <span
                       className={cn(
                         "text-[11px] tabular-nums shrink-0 whitespace-nowrap",
                         r.daysSinceLastEmail === null
-                          ? "text-rose-600/80 font-medium"
+                          ? "text-ink/60 font-medium"
                           : "text-ink/55"
                       )}
                     >

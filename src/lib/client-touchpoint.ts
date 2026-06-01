@@ -38,11 +38,16 @@ export const TOUCHPOINT_META: Record<TouchpointLabel, {
     bg: "bg-amber-50", text: "text-amber-700", border: "border-amber-200", dot: "bg-amber-500",
     solidBg: "bg-amber-500", solidText: "text-white"
   },
+  // Was rose / red — recolored to slate / grey because the leader was
+  // anxious looking at a wall of red dots every morning. "Shaky" reads
+  // as a status that needs a nudge without feeling like an emergency.
+  // The downstream solidBg / solidText tokens stay for callers that
+  // really do want an alarming surface.
   red: {
-    label: "Neglected",
-    description: "No outbound email in 10+ days — needs follow-up.",
-    bg: "bg-rose-50", text: "text-rose-700", border: "border-rose-200", dot: "bg-rose-500",
-    solidBg: "bg-rose-500", solidText: "text-white"
+    label: "Shaky",
+    description: "No outbound email in 10+ days — could use a touch.",
+    bg: "bg-slate-100", text: "text-slate-700", border: "border-slate-300", dot: "bg-slate-400",
+    solidBg: "bg-slate-500", solidText: "text-white"
   }
 };
 

@@ -19,6 +19,7 @@ import { listEmailDrafts } from "@/lib/email-drafts-data";
 import { isLeader } from "@/lib/auth";
 import { AddResourceForm, DeleteResourceButton } from "@/components/AddResourceForm";
 import { ClientKnowledgeBase, type CompletedTaskRow } from "@/components/ClientKnowledgeBase";
+import { ClientEmailsCombined } from "@/components/ClientEmailsCombined";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { visibleAccountIdsFor } from "@/lib/inbox-access";
@@ -435,16 +436,16 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
         />
       )}
 
-      <section className="rounded-2xl border border-white/60 shadow-soft bg-gradient-to-br from-slate-50/60 to-white p-4 space-y-3">
-        <header className="flex items-center gap-2">
-          <Send className="w-4 h-4 text-blue-600" />
-          <div className="text-sm font-semibold">Client emails</div>
-          <span className="text-[10px] text-ink/50 ml-1">
-            Outbound drafts + sent — content plans, EOD updates, custom.
-          </span>
-        </header>
-        <ClientEmailLog rows={clientEmailDrafts} />
-      </section>
+      {/* Email lives in ONE place now — Client emails (outbound drafts)
+          and Email history (Missive threads) are tabs inside the same
+          card. Used to be two sections separated by Meeting links,
+          Documents, Updates, etc., which made the relationship hard
+          to follow at a glance. */}
+      <ClientEmailsCombined
+        threads={clientThreads}
+        drafts={clientEmailDrafts}
+        canMatchByEmail={canMatchByEmail}
+      />
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <Section
@@ -484,66 +485,72 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
         />
       </div>
 
-      <Section
-        title="Client updates"
-        icon={<Send className="w-4 h-4" />}
-        tone="blue"
-        empty="No updates filed for this client yet."
-        items={clientUpdatesRes}
-        renderItem={(u) => {
-          const authorName = Array.isArray(u.users)
-            ? (u.users[0]?.name ?? "Someone")
-            : (u.users?.name ?? "Someone");
-          return (
-          <div
-            key={u.id}
-            className="flex items-start gap-2.5 p-2.5 rounded-xl bg-white/80 border border-white/70"
-          >
-            <Send className="w-3.5 h-3.5 text-sky-600 shrink-0 mt-0.5" />
-            <div className="min-w-0 flex-1">
-              <div className="flex items-baseline gap-1.5 flex-wrap">
-                <div className="text-[12px] font-semibold text-ink">
-                  {authorName}
+      {/* Client updates + Team notes side-by-side. Used to stack
+          full-width and force scrolling — both are short-ish lists
+          so a 50/50 split fits the typical content and trims the
+          vertical sprawl. Mobile falls back to single column. */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <Section
+          title="Client updates"
+          icon={<Send className="w-4 h-4" />}
+          tone="blue"
+          empty="No updates filed for this client yet."
+          items={clientUpdatesRes}
+          renderItem={(u) => {
+            const authorName = Array.isArray(u.users)
+              ? (u.users[0]?.name ?? "Someone")
+              : (u.users?.name ?? "Someone");
+            return (
+              <div
+                key={u.id}
+                className="flex items-start gap-2.5 p-2.5 rounded-xl bg-white/80 border border-white/70"
+              >
+                <Send className="w-3.5 h-3.5 text-sky-600 shrink-0 mt-0.5" />
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-baseline gap-1.5 flex-wrap">
+                    <div className="text-[12px] font-semibold text-ink">
+                      {authorName}
+                    </div>
+                    <div className="text-[10px] text-ink/55 tabular-nums">
+                      {new Date(u.created_at).toLocaleDateString(undefined, {
+                        month: "short", day: "numeric"
+                      })}
+                    </div>
+                    {u.slack_ts ? (
+                      <span className="text-[9px] uppercase tracking-wide px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700 border border-emerald-200/60">
+                        Slack ✓
+                      </span>
+                    ) : (
+                      <span className="text-[9px] uppercase tracking-wide px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-200/60">
+                        Saved
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-[13px] text-ink/80 mt-1 whitespace-pre-wrap leading-snug">
+                    {u.message}
+                  </div>
                 </div>
-                <div className="text-[10px] text-ink/55 tabular-nums">
-                  {new Date(u.created_at).toLocaleDateString(undefined, {
-                    month: "short", day: "numeric"
-                  })}
-                </div>
-                {u.slack_ts ? (
-                  <span className="text-[9px] uppercase tracking-wide px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700 border border-emerald-200/60">
-                    Slack ✓
-                  </span>
-                ) : (
-                  <span className="text-[9px] uppercase tracking-wide px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-200/60">
-                    Saved
-                  </span>
-                )}
               </div>
-              <div className="text-[13px] text-ink/80 mt-1 whitespace-pre-wrap leading-snug">
-                {u.message}
-              </div>
-            </div>
-          </div>
-          );
-        }}
-      />
+            );
+          }}
+        />
 
-      <Section
-        title="Team notes"
-        icon={<Lightbulb className="w-4 h-4" />}
-        tone="violet"
-        empty="No team notes yet."
-        add={<AddResourceForm clientId={client.id} kind="suggestion" />}
-        items={suggestions}
-        renderItem={(r) => (
-          <SuggestionRow
-            key={r.id}
-            clientId={client.id}
-            resource={r}
-          />
-        )}
-      />
+        <Section
+          title="Team notes"
+          icon={<Lightbulb className="w-4 h-4" />}
+          tone="violet"
+          empty="No team notes yet."
+          add={<AddResourceForm clientId={client.id} kind="suggestion" />}
+          items={suggestions}
+          renderItem={(r) => (
+            <SuggestionRow
+              key={r.id}
+              clientId={client.id}
+              resource={r}
+            />
+          )}
+        />
+      </div>
 
       <Section
         title="Open tasks"
@@ -560,42 +567,6 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
             <div className="text-sm flex-1 truncate group-hover:text-accent">{t.title}</div>
             <span className="text-[10px] px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700 border border-indigo-200/60 capitalize">
               {t.status.replace("_", " ")}
-            </span>
-          </Link>
-        )}
-      />
-
-      <Section
-        title="Email history"
-        icon={<Mail className="w-4 h-4" />}
-        tone="blue"
-        empty={
-          canMatchByEmail
-            ? "No threads from this client in any inbox you can see yet."
-            : "Add a website or a contact email to this client to surface their email history here."
-        }
-        items={clientThreads}
-        renderItem={(t) => (
-          <Link
-            key={t.id}
-            href={`/inboxes/${t.accountId}/threads/${t.id}`}
-            className="group flex items-center gap-2 p-2.5 rounded-xl bg-white/80 border border-white/70 hover:border-blue-200 hover:bg-blue-50/40 transition-colors"
-          >
-            <Mail className="w-3.5 h-3.5 text-blue-600 shrink-0" />
-            <div className="min-w-0 flex-1">
-              <div className="text-sm truncate group-hover:text-accent">{t.subject}</div>
-              <div className="text-[10px] text-ink/55 truncate">
-                {t.participants.slice(0, 2).join(", ")}
-                {t.participants.length > 2 ? ` +${t.participants.length - 2}` : ""}
-              </div>
-            </div>
-            <div className="text-[10px] text-ink/55 shrink-0 tabular-nums">
-              {new Date(t.lastAt).toLocaleDateString(undefined, {
-                month: "short", day: "numeric"
-              })}
-            </div>
-            <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 border border-blue-200/60 capitalize shrink-0">
-              {t.status}
             </span>
           </Link>
         )}

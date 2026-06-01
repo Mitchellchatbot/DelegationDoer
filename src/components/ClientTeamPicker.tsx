@@ -102,11 +102,26 @@ export function ClientTeamPicker({
     }
   }
 
+  // Optimistic team change. Fire onAssigned BEFORE the network call so
+  // the chip updates instantly; the API runs in the background. If it
+  // fails, we patch back to the previous value via the error path in
+  // `patch()` (toast surfaces the failure).
   async function pickTeam(next: TeamId | null) {
     const prev = teamMeta(teamId);
+    // Clicking the same team that's already selected = unselect.
+    // The picker treats team selection like a toggle so leaders don't
+    // have to scroll down to "Clear team".
+    if (next && teamId === next) {
+      next = null;
+    }
     const nextMeta = teamMeta(next);
+    onAssigned?.({ teamId: next });
     const data = await patch({ teamId: next });
-    if (!data) return;
+    if (!data) {
+      // Revert on failure.
+      onAssigned?.({ teamId: teamId });
+      return;
+    }
     const msg = (() => {
       if (nextMeta && prev && prev.id !== nextMeta.id) return `Moved from ${prev.label} → ${nextMeta.label}`;
       if (nextMeta) return `Assigned to ${nextMeta.label}`;
@@ -114,7 +129,6 @@ export function ClientTeamPicker({
       return "Team cleared";
     })();
     toast.success(msg);
-    onAssigned?.({ teamId: next });
     router.refresh();
   }
 
@@ -123,8 +137,12 @@ export function ClientTeamPicker({
     const next = has
       ? assignedUserIds.filter((id) => id !== userId)
       : [...assignedUserIds, userId];
+    onAssigned?.({ assignedUserIds: next });
     const data = await patch({ assignedUserIds: next });
-    if (!data) return;
+    if (!data) {
+      onAssigned?.({ assignedUserIds: assignedUserIds });
+      return;
+    }
     const u = users.find((x) => x.id === userId);
     const teamLabel = teamMeta(teamId)?.label ?? "client";
     toast.success(
@@ -132,16 +150,19 @@ export function ClientTeamPicker({
         ? `Removed ${u?.name ?? "person"} from ${teamLabel}`
         : `Added ${u?.name ?? "person"} to ${teamLabel}`
     );
-    onAssigned?.({ assignedUserIds: next });
     router.refresh();
   }
 
   async function clearPeople() {
     if (assignedUserIds.length === 0) return;
-    const data = await patch({ assignedUserIds: [] });
-    if (!data) return;
-    toast.success("Cleared all point people");
+    const prevIds = assignedUserIds;
     onAssigned?.({ assignedUserIds: [] });
+    const data = await patch({ assignedUserIds: [] });
+    if (!data) {
+      onAssigned?.({ assignedUserIds: prevIds });
+      return;
+    }
+    toast.success("Cleared all point people");
     router.refresh();
   }
 
@@ -211,7 +232,15 @@ export function ClientTeamPicker({
           // No max-h on the outer Content so the right pane can size
           // itself; each pane caps its own scrollable list instead.
           onClick={(e) => e.stopPropagation()}
-          className="z-50 flex rounded-xl border border-slate-200 bg-white shadow-lift overflow-hidden"
+          className={cn(
+            "z-50 flex rounded-xl border border-slate-200 bg-white shadow-lift overflow-hidden",
+            // Subtle open/close animation. Radix sets data-state on the
+            // content node; we drive scale + opacity for a 120ms ease-out
+            // pop. Combined with the right pane's own width animation
+            // below, the whole menu reads as a single smooth expand.
+            "data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95",
+            "data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95"
+          )}
         >
           {/* LEFT pane — team list */}
           <div className="w-44 border-r border-slate-100 flex flex-col">
@@ -256,9 +285,15 @@ export function ClientTeamPicker({
 
           {/* RIGHT pane — people for the currently-selected team. Only
               renders once a team is picked (the chip itself is a hint
-              to pick one first). Multi-select via checkboxes. */}
+              to pick one first). Multi-select via checkboxes.
+              Width animation: 0 → 13rem via transition-[width] so the
+              pane SLIDES out instead of popping in when the user picks
+              their first team. */}
           {teamId && sortedUsers.length > 0 && (
-            <div className="w-52 flex flex-col">
+            <div
+              key={teamId}
+              className="w-52 flex flex-col origin-left animate-in slide-in-from-left-2 fade-in-0 duration-150"
+            >
               <div className="px-3 pt-2 pb-1 text-[9px] uppercase tracking-[0.12em] font-semibold text-ink/45 inline-flex items-center gap-1.5">
                 <UserRound className="w-2.5 h-2.5" />
                 Point people

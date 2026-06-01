@@ -73,6 +73,15 @@ export function ClientPriorityList({ initial, openCounts, canEdit }: Props) {
     try { localStorage.setItem(VIEW_MODE_KEY, next); } catch { /* ignore */ }
   }
 
+  // Local-state patch for an icon upload. Called by ClientIconAvatar
+  // after the upload route returns a public URL — keeps the visible
+  // tile in sync without a router.refresh() round-trip.
+  function updateClientIcon(clientId: string, iconUrl: string | null) {
+    setClients((prev) =>
+      prev.map((c) => (c.id === clientId ? { ...c, iconUrl } : c))
+    );
+  }
+
   // Optimistic toggle for the per-client encourage_emails flag. Flips
   // the local state first, fires the API, reverts on failure. Used by
   // the small mail icon on each card so leaders can turn cadence
@@ -342,10 +351,18 @@ export function ClientPriorityList({ initial, openCounts, canEdit }: Props) {
                           </span>
                         )}
 
-                        {/* Icon tile */}
-                        <div className={`w-10 h-10 rounded-xl shadow-sm grid place-items-center text-white shrink-0 ${tone.iconBg}`}>
-                          <Briefcase className="w-5 h-5" />
-                        </div>
+                        {/* Icon tile — renders uploaded photo when set,
+                            falls back to briefcase. Click affords upload
+                            when the viewer can edit. */}
+                        <ClientIconAvatar
+                          iconUrl={c.iconUrl}
+                          clientId={c.id}
+                          clientName={c.name}
+                          canEdit={canEdit}
+                          size={40}
+                          fallbackBg={tone.iconBg}
+                          onUploaded={(url) => updateClientIcon(c.id, url)}
+                        />
 
                         {/* Title + meta */}
                         <Link
@@ -461,30 +478,46 @@ export function ClientPriorityList({ initial, openCounts, canEdit }: Props) {
                 tone.ring, tone.from, "border-white/60"
               )}
             >
-              {/* Top row: rank + icon + priority pill */}
+              {/* Top row: rank + priority pill. Icon used to sit here
+                  but it crowded the row with metadata; it's now next
+                  to the name below where it belongs visually. */}
               <div className="flex items-center gap-2 mb-2">
                 <div className="shrink-0 w-7 h-7 rounded-lg bg-white/85 border border-white/80 grid place-items-center text-[11px] font-semibold text-ink/70 shadow-sm tabular-nums">
                   {sortMode === "priority" ? (i + 1) : "·"}
-                </div>
-                <div className={`w-8 h-8 rounded-lg shadow-sm grid place-items-center text-white shrink-0 ${tone.iconBg}`}>
-                  <Briefcase className="w-4 h-4" />
                 </div>
                 <span className={cn("ml-auto text-[10px] px-2 py-0.5 rounded-full border capitalize", PRIORITY_TONES[c.priority])}>
                   {c.priority}
                 </span>
               </div>
 
-              {/* Body — primary click target */}
+              {/* Body — primary click target. Icon is sibling so its
+                  own upload button doesn't end up nested inside a Link. */}
+              <div className="flex items-start gap-2.5">
+                <ClientIconAvatar
+                  iconUrl={c.iconUrl}
+                  clientId={c.id}
+                  clientName={c.name}
+                  canEdit={canEdit}
+                  size={42}
+                  fallbackBg={tone.iconBg}
+                  onUploaded={(url) => updateClientIcon(c.id, url)}
+                />
+                <Link
+                  href={`/clients/${encodeURIComponent(c.id)}`}
+                  className="min-w-0 flex-1 group rounded-md outline-none focus-visible:ring-2 focus-visible:ring-indigo-400/40"
+                >
+                  <div className="text-sm font-semibold text-ink truncate group-hover:text-accent transition-colors">
+                    {c.name}
+                  </div>
+                  <div className="text-[11px] text-ink/55 truncate mt-0.5">
+                    {c.contactName ?? (c.contactEmails[0] ?? "—")}
+                  </div>
+                </Link>
+              </div>
               <Link
                 href={`/clients/${encodeURIComponent(c.id)}`}
                 className="block group rounded-md outline-none focus-visible:ring-2 focus-visible:ring-indigo-400/40"
               >
-                <div className="text-sm font-semibold text-ink truncate group-hover:text-accent transition-colors">
-                  {c.name}
-                </div>
-                <div className="text-[11px] text-ink/55 truncate mt-0.5">
-                  {c.contactName ?? (c.contactEmails[0] ?? "—")}
-                </div>
                 <div className="mt-2 flex items-center gap-1.5 flex-wrap">
                   {c.encourageEmails ? (
                     <TouchpointPill
@@ -537,6 +570,108 @@ export function ClientPriorityList({ initial, openCounts, canEdit }: Props) {
       </div>
     );
   }
+}
+
+// Client avatar tile. Renders the uploaded icon_url if set, otherwise
+// the generic briefcase on the tone color. Hovering reveals an upload
+// affordance for leaders (canEdit); the underlying <input type="file">
+// is hidden and triggered via ref so the styling stays consistent
+// across browsers. Used in both grid and list rendering.
+function ClientIconAvatar({
+  iconUrl, clientId, clientName, canEdit, size, fallbackBg, onUploaded
+}: {
+  iconUrl: string | null;
+  clientId: string;
+  clientName: string;
+  canEdit: boolean;
+  size: number;
+  fallbackBg: string;
+  onUploaded: (url: string | null) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [localUrl, setLocalUrl] = useState<string | null>(iconUrl);
+  // Sync if a parent re-renders with a new url (e.g. after a different
+  // upload elsewhere on the page).
+  useEffect(() => { setLocalUrl(iconUrl); }, [iconUrl]);
+
+  async function pickAndUpload(file: File) {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch(`/api/clients/${encodeURIComponent(clientId)}/icon`, {
+        method: "PATCH",
+        body: fd
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(data?.error ?? `Upload failed (${res.status})`);
+        return;
+      }
+      setLocalUrl(data.iconUrl);
+      onUploaded(data.iconUrl);
+      toast.success(`Updated ${clientName}'s photo`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "upload failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const dim = { width: size, height: size };
+  return (
+    <label
+      className={cn(
+        "relative shrink-0 rounded-xl shadow-sm grid place-items-center overflow-hidden ring-1 ring-white/70",
+        localUrl ? "bg-white" : `text-white ${fallbackBg}`,
+        canEdit && "cursor-pointer group/icon"
+      )}
+      style={dim}
+      title={canEdit ? `Click to upload a photo for ${clientName}` : clientName}
+      onClick={(e) => {
+        // The label naturally clicks its hidden input; stop the click
+        // from also bubbling into the parent Link.
+        e.stopPropagation();
+      }}
+    >
+      {localUrl ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={localUrl}
+          alt={clientName}
+          style={dim}
+          className="object-cover"
+        />
+      ) : (
+        <Briefcase className="w-1/2 h-1/2" />
+      )}
+      {canEdit && (
+        <>
+          <input
+            type="file"
+            accept="image/*"
+            className="sr-only"
+            disabled={busy}
+            onChange={(e) => {
+              const f = e.currentTarget.files?.[0];
+              e.currentTarget.value = ""; // allow re-selecting the same file
+              if (f) void pickAndUpload(f);
+            }}
+          />
+          <span
+            aria-hidden
+            className={cn(
+              "absolute inset-0 bg-black/50 text-white text-[9px] uppercase tracking-wider font-semibold grid place-items-center transition-opacity",
+              busy ? "opacity-100" : "opacity-0 group-hover/icon:opacity-100"
+            )}
+          >
+            {busy ? "…" : (localUrl ? "Change" : "Add")}
+          </span>
+        </>
+      )}
+    </label>
+  );
 }
 
 // Small mail-on / mail-off icon button. Click flips

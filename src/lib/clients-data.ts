@@ -87,9 +87,13 @@ export interface Client {
   // validates against the TEAMS set in @/lib/client-teams.
   teamId: string | null;
   // Optional point person within the owning team. Null = the team
-  // owns this client collectively. Used to show a name + avatar on
-  // the row and to route notifications.
+  // owns this client collectively. Kept for backward compat; new
+  // code reads assignedUserIds (multi-owner support).
   assignedUserId: string | null;
+  // Multiple point people. Empty array = the team owns it collectively.
+  // Filled by the picker's checkbox multi-select. Source of truth from
+  // commit 20260623300000 onward.
+  assignedUserIds: string[];
   // Optional profile image URL. Set via PATCH /api/clients/[id]/icon
   // which uploads to Supabase Storage and writes the resulting public
   // URL here. Null = fall back to the generic briefcase icon.
@@ -154,6 +158,7 @@ interface ClientRow {
   encourage_emails: boolean | null;
   team_id: string | null;
   assigned_user_id: string | null;
+  assigned_user_ids: string[] | null;
   icon_url: string | null;
   created_at: string;
   updated_at: string;
@@ -212,6 +217,11 @@ function rowToClient(r: ClientRow, touchpoint?: {
     encourageEmails: r.encourage_emails ?? true,
     teamId: r.team_id ?? null,
     assignedUserId: r.assigned_user_id ?? null,
+    assignedUserIds: r.assigned_user_ids && r.assigned_user_ids.length > 0
+      ? r.assigned_user_ids
+      // Fallback: pre-migration rows that only set the singular column
+      // still surface their one person via the array shape.
+      : (r.assigned_user_id ? [r.assigned_user_id] : []),
     iconUrl: r.icon_url ?? null,
     lastOutboundEmailAt: touchpoint?.lastOutboundEmailAt ?? null,
     lastOutboundSubject: touchpoint?.lastOutboundSubject ?? null,

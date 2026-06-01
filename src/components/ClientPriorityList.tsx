@@ -102,10 +102,19 @@ export function ClientPriorityList({
   // every dropdown selection.
   function updateClientAssignment(
     clientId: string,
-    patch: { teamId?: string | null; assignedUserId?: string | null }
+    patch: { teamId?: string | null; assignedUserIds?: string[] }
   ) {
     setClients((prev) =>
-      prev.map((c) => (c.id === clientId ? { ...c, ...patch } : c))
+      prev.map((c) => {
+        if (c.id !== clientId) return c;
+        const next = { ...c, ...patch };
+        // Keep legacy single-field roughly in sync for any sub-component
+        // still reading assignedUserId — first id wins.
+        if (patch.assignedUserIds) {
+          next.assignedUserId = patch.assignedUserIds[0] ?? null;
+        }
+        return next;
+      })
     );
   }
 
@@ -456,7 +465,7 @@ export function ClientPriorityList({
                           <ClientTeamPicker
                             clientId={c.id}
                             teamId={c.teamId}
-                            assignedUserId={c.assignedUserId}
+                            assignedUserIds={c.assignedUserIds}
                             canEdit={canEdit}
                             users={pickableUsers}
                             onAssigned={(patch) => updateClientAssignment(c.id, patch)}
@@ -578,7 +587,7 @@ export function ClientPriorityList({
                 <ClientTeamPicker
                   clientId={c.id}
                   teamId={c.teamId}
-                  assignedUserId={c.assignedUserId}
+                  assignedUserIds={c.assignedUserIds}
                   canEdit={canEdit}
                   users={pickableUsers}
                   onAssigned={(patch) => updateClientAssignment(c.id, patch)}

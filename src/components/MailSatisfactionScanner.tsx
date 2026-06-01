@@ -26,10 +26,18 @@ interface Progress {
 // POST /api/admin/scan-mail-satisfaction with the current runId; the
 // API replies after ~45s of real work with progress. "Auto-run" loops
 // the call until the run completes or the operator pauses.
+const SCOPE_OPTIONS = [
+  { days: 14,  label: "Last 14 days" },
+  { days: 30,  label: "Last 30 days" },
+  { days: 90,  label: "Last 3 months" },
+  { days: 180, label: "Last 6 months" }
+] as const;
+
 export function MailSatisfactionScanner() {
   const [progress, setProgress] = useState<Progress | null>(null);
   const [busy, setBusy] = useState(false);
   const [autoRun, setAutoRun] = useState(false);
+  const [scopeDays, setScopeDays] = useState<number>(14);
   const autoRef = useRef(false);
 
   // Hydrate the latest in-flight run on mount so a reload doesn't
@@ -67,10 +75,20 @@ export function MailSatisfactionScanner() {
     if (busy) return null;
     setBusy(true);
     try {
+      // Fresh run → pass scopeFrom derived from the picker. Resumes
+      // ignore scopeDays (the server has the original scope on the row).
+      const body: Record<string, string> = {};
+      if (runId) {
+        body.runId = runId;
+      } else {
+        const d = new Date();
+        d.setDate(d.getDate() - scopeDays);
+        body.scopeFrom = d.toISOString();
+      }
       const res = await fetch("/api/admin/scan-mail-satisfaction", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(runId ? { runId } : {})
+        body: JSON.stringify(body)
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error ?? `failed (${res.status})`);
@@ -108,12 +126,34 @@ export function MailSatisfactionScanner() {
         </header>
 
         <p className="text-[12px] text-ink/65 leading-relaxed">
-          Scans every client thread in the missiveclone going back 3 months. Each message
+          Scans every client thread in the missiveclone over the chosen window. Each message
           (inbound + outbound) is graded 0-100 by Claude Haiku; per-message rows persist in{" "}
           <code className="text-[11px] bg-slate-100 px-1 rounded">email_satisfaction_scores</code>.
-          One chunk runs for about 45 seconds — click "Run a chunk" until the bar fills,
-          or toggle Auto-run.
+          The median rolls up into the client's health badge (≥90 thriving, ≥75 steady,
+          ≥60 shaky, else at_risk). One chunk runs for about 45 seconds — toggle Auto-run
+          and leave the tab open.
         </p>
+
+        {!progress && (
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-[10px] uppercase tracking-wide font-semibold text-ink/55">Scope</span>
+            {SCOPE_OPTIONS.map((opt) => (
+              <button
+                key={opt.days}
+                type="button"
+                onClick={() => setScopeDays(opt.days)}
+                className={cn(
+                  "px-2.5 py-1 rounded-full text-[11px] border transition-colors",
+                  scopeDays === opt.days
+                    ? "bg-fuchsia-600 text-white border-fuchsia-600 shadow-sm"
+                    : "bg-white text-ink/70 border-slate-200/70 hover:border-fuchsia-300 hover:text-fuchsia-700"
+                )}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        )}
 
         {progress ? (
           <div className="space-y-2">

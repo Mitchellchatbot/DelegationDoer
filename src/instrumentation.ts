@@ -1,10 +1,11 @@
 // Runs once when the Node.js server starts (enabled via
-// experimental.instrumentationHook in next.config.mjs). Boots email-intake
-// listeners so routing works on Railway (and any non-Vercel host) without
-// relying on vercel.json crons.
+// experimental.instrumentationHook in next.config.mjs). Boots the in-process
+// schedulers so jobs that vercel.json drives on Vercel still run on Railway
+// (and any non-Vercel host) without relying on vercel.json crons.
 //
-// Wrapped in try/catch: a bootstrap failure must surface in logs but must
-// never prevent the server from starting.
+// Each bootstrap is wrapped in its own try/catch: a failure must surface in
+// logs but must never prevent the server from starting, and one subsystem
+// failing to load must not stop the others.
 export async function register() {
   if (process.env.NEXT_RUNTIME !== "nodejs") return;
   try {
@@ -12,5 +13,11 @@ export async function register() {
     bootstrapEmailIntake();
   } catch (err) {
     console.error("[instrumentation] email-intake bootstrap failed to load:", err);
+  }
+  try {
+    const { bootstrapTaskArchive } = await import("@/lib/task-archive-bootstrap");
+    bootstrapTaskArchive();
+  } catch (err) {
+    console.error("[instrumentation] task-archive bootstrap failed to load:", err);
   }
 }

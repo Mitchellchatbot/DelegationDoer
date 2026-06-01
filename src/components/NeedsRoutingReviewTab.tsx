@@ -107,7 +107,9 @@ function NeedsRoutingRow({
       ? "No candidate assignee"
       : row.review_reason === "low-confidence"
         ? "Low classifier confidence"
-        : row.review_reason ?? "needs review";
+        : row.review_reason === "classifier-failed"
+          ? "Couldn't auto-summarize"
+          : row.review_reason ?? "needs review";
 
   return (
     <li className="rounded-2xl border border-rose-200/70 bg-rose-50/30 overflow-hidden">

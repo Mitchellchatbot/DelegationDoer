@@ -16,9 +16,16 @@
 // extracted email address (already lowercased by callers, but the
 // matchers tolerate either).
 const SENDER_PATTERNS: Array<{ re: RegExp; label: string }> = [
-  // no-reply / do-not-reply variants
-  { re: /^(no-?reply|donotreply|do-not-reply)@/i, label: "no-reply sender" },
-  { re: /^(notifications?|automated|mailer-daemon|postmaster)@/i, label: "automated sender" },
+  // no-reply / do-not-reply variants. Match the token at the START of the
+  // local-part (no-reply@, noreply.security@, no-reply-account@) AND when
+  // it's a SUFFIX on a compound local-part (notifications-noreply@,
+  // account.noreply@). The compound suffix form leaked LinkedIn/Slack
+  // notifier mail past the old start-anchored rule.
+  { re: /^(no-?reply|donotreply|do-?not-?reply)([._+-]|@)/i, label: "no-reply sender" },
+  { re: /[._+-](no-?reply|donotreply)@/i, label: "no-reply sender (compound)" },
+  // Notification / automation local-parts, including compound forms like
+  // "notifications-noreply@" and "automated-alerts@".
+  { re: /^(notifications?|automated|mailer-daemon|postmaster)([._+-]|@)/i, label: "automated sender" },
   // WordPress / WP security notifications. Real-world Wordfence alerts
   // are sent FROM the WP install, so the From may be wordfence@<client>
   // rather than anything @wordfence.com — match the local-part too.
@@ -55,6 +62,10 @@ const SENDER_PATTERNS: Array<{ re: RegExp; label: string }> = [
   // Social platform digest mailers (Instagram "moments you've missed",
   // etc.) — real DMs come via the app, not these recap addresses.
   { re: /@mail\.instagram\.com$/i, label: "instagram digest" },
+  // LinkedIn notifier mail (impression recaps, "people you may know",
+  // connection invites). Real human conversation stays in-app — every
+  // @linkedin.com email is an automated digest/notification.
+  { re: /@(.*\.)?linkedin\.com$/i, label: "linkedin digest" },
   // Slack platform mailers — workspace digests, "feedback on Slack" prompts.
   // Real human replies come from a workspace.slack.com host, not slack.com.
   { re: /^(feedback|digest|notifications?)@slack\.com$/i, label: "slack platform mail" },
@@ -83,6 +94,9 @@ const SUBJECT_PATTERNS: Array<{ re: RegExp; label: string }> = [
     re: /\b(secure\s+link\s+to\s+(log|sign)[-\s]in|sign[-\s]in\s+link|log[-\s]in\s+link|magic\s+link)\b/i,
     label: "login/magic link"
   },
+  // Plain "Sign in to <Service>" / "Log in to <Service>" subjects — the
+  // body is a one-tap login link, never a task. (Composio, Atlassian, etc.)
+  { re: /^(sign|log)[-\s]?in\s+to\b/i, label: "sign-in email" },
   // Wordfence-style alert subjects (Premium uses [Wordfence …]; the free
   // version uses plain "Security Alert: …" style copy).
   { re: /\[wordfence/i, label: "wordfence alert subject" },
@@ -109,6 +123,12 @@ const SUBJECT_PATTERNS: Array<{ re: RegExp; label: string }> = [
   { re: /\b(delivery (failed|status notification)|undeliverable|returned mail|mail delivery)\b/i, label: "delivery failure" },
   // Instagram recap subject ("agencysites_ai, catch up on moments you've missed")
   { re: /catch\s+up\s+on\s+moments\s+you/i, label: "instagram recap subject" },
+  // Social analytics recaps ("your posts got 1,187 impressions last week",
+  // "you reached 42 new followers"). The number + metric is the tell.
+  { re: /\b[\d,]+\s+(impressions?|profile\s+views?|new\s+followers?|reactions?|connections?)\b/i, label: "social stats digest" },
+  // Community / platform engagement nudges ("Conversations you might want
+  // to join in <workspace>") — Slack/forum prompts, no action needed.
+  { re: /\bconversations?\s+you\s+might\s+want\s+to\s+join\b/i, label: "community nudge" },
   // Slack-prefixed weekly digest subjects ("[Slack] X updates for the week of …")
   { re: /^\[slack\]\b/i, label: "slack digest subject" },
   { re: /\b(out\s+of\s+office|auto[-\s]?reply|automatic reply)\b/i, label: "auto-reply" },

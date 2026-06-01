@@ -3,6 +3,7 @@ import crypto from "crypto";
 import { publish, type InboxEvent } from "@/lib/inbox-event-bus";
 import { isDuplicateMessage } from "@/lib/missive-socket";
 import { fanOutInboxEvent } from "@/lib/email-notifications";
+import { autoLabelByClients } from "@/lib/auto-label-by-client";
 
 export const dynamic = "force-dynamic";
 
@@ -86,5 +87,34 @@ export async function POST(req: NextRequest) {
     .catch((err) => {
       console.error("[missive-webhook] fanOut", err);
     });
+  // Auto-apply per-client labels using the from/to/cc that missiveclone
+  // now includes in the payload. Fire-and-forget — the webhook ACK and
+  // notification fanout don't depend on labeling completing.
+  if (event.event === "message:new") {
+    const labelPayload = payload as Partial<InboxEvent> & {
+      from_addr?: string | null;
+      to_addrs?: string | null;
+      cc_addrs?: string | null;
+    };
+    void autoLabelByClients({
+      workspace_id: event.workspace_id,
+      thread_id: event.thread_id,
+      from_addr: labelPayload.from_addr ?? null,
+      to_addrs: labelPayload.to_addrs ?? null,
+      cc_addrs: labelPayload.cc_addrs ?? null
+    })
+      .then((r) => {
+        if (r.applied > 0) {
+          console.log("[missive-webhook] auto-label", {
+            thread: event.thread_id,
+            matched: r.matched,
+            applied: r.applied
+          });
+        }
+      })
+      .catch((err) => {
+        console.error("[missive-webhook] auto-label", err);
+      });
+  }
   return NextResponse.json({ ok: true });
 }

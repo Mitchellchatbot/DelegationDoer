@@ -128,6 +128,24 @@ export async function listLabels(): Promise<MissiveLabel[]> {
   return data.labels ?? [];
 }
 
+export async function createLabel(name: string, color = "#2563eb"): Promise<string> {
+  const data = await missiveFetch<{ id: string }>("/api/labels", {
+    method: "POST",
+    body: JSON.stringify({ name, color })
+  });
+  return data.id;
+}
+
+// Apply an existing label to a thread. Idempotent — missiveclone's
+// thread_labels primary key (thread_id, label_id) plus the route's
+// ON CONFLICT DO NOTHING make repeat calls safe.
+export async function applyLabel(threadId: string, labelId: string): Promise<void> {
+  await missiveFetch("/api/labels/apply", {
+    method: "POST",
+    body: JSON.stringify({ thread_id: threadId, label_id: labelId })
+  });
+}
+
 export interface ListThreadsOpts {
   folder?: "INBOX" | "SENT";
   status?: "open" | "pending" | "closed";

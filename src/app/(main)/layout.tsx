@@ -11,6 +11,7 @@ import { TeamProvider } from "@/lib/team-context";
 import { ClockProvider } from "@/components/ClockContext";
 import { OnboardingDialog } from "@/components/OnboardingDialog";
 import { SodGate } from "@/components/SodGate";
+import { TooltipRoot } from "@/components/Tooltip";
 import { primaryDepartment } from "@/lib/departments";
 
 export default async function MainLayout({ children }: { children: React.ReactNode }) {
@@ -38,6 +39,7 @@ export default async function MainLayout({ children }: { children: React.ReactNo
       <PresenceProvider>
       <TeamProvider>
       <ClockProvider>
+      <TooltipRoot>
       {/* Floating-panels layout: sidebar, topbar, and main are each their
           own rounded card with a 12px gutter between them. The page bg
           (app-shell gradient) shows through the gaps so each panel feels
@@ -68,6 +70,7 @@ export default async function MainLayout({ children }: { children: React.ReactNo
       <Toaster position="bottom-right" richColors closeButton />
       <OnboardingDialog />
       <SodGate />
+      </TooltipRoot>
       </ClockProvider>
       </TeamProvider>
       </PresenceProvider>

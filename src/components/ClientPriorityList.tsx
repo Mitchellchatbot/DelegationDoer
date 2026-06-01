@@ -15,6 +15,7 @@ import type { Client } from "@/lib/clients-data";
 import { ClientHealthPill } from "./ClientHealthPill";
 import { TouchpointPill } from "./TouchpointPill";
 import { ClientTeamPicker } from "./ClientTeamPicker";
+import { Tooltip } from "./Tooltip";
 import {
   computeTouchpointLabel, daysSince, effectiveTouchpoint,
   TOUCHPOINT_META, type TouchpointLabel
@@ -682,22 +683,25 @@ function EmailToggleButton({
   on, onToggle
 }: { on: boolean; onToggle: () => void | Promise<void> }) {
   return (
-    <button
-      type="button"
-      onClick={(e) => { e.preventDefault(); e.stopPropagation(); void onToggle(); }}
-      title={on
-        ? "Email cadence ON — click to stop tracking touchpoints for this client"
-        : "Email cadence OFF — click to track outbound touchpoints again"}
-      aria-label={on ? "Turn off email cadence tracking" : "Turn on email cadence tracking"}
-      className={cn(
-        "inline-flex items-center justify-center w-7 h-7 rounded-lg border transition-colors",
-        on
-          ? "bg-emerald-50 border-emerald-200 text-emerald-700 hover:bg-emerald-100"
-          : "bg-slate-50 border-slate-200 text-slate-500 hover:bg-slate-100"
-      )}
+    <Tooltip
+      label={on
+        ? "Email cadence ON. Click to stop tracking outbound emails for this client (hides the touchpoint pill everywhere)."
+        : "Email cadence OFF. Click to start tracking outbound touchpoints for this client again."}
     >
-      {on ? <Mail className="w-3.5 h-3.5" /> : <MailX className="w-3.5 h-3.5" />}
-    </button>
+      <button
+        type="button"
+        onClick={(e) => { e.preventDefault(); e.stopPropagation(); void onToggle(); }}
+        aria-label={on ? "Turn off email cadence tracking" : "Turn on email cadence tracking"}
+        className={cn(
+          "inline-flex items-center justify-center w-7 h-7 rounded-lg border transition-colors",
+          on
+            ? "bg-emerald-50 border-emerald-200 text-emerald-700 hover:bg-emerald-100"
+            : "bg-slate-50 border-slate-200 text-slate-500 hover:bg-slate-100"
+        )}
+      >
+        {on ? <Mail className="w-3.5 h-3.5" /> : <MailX className="w-3.5 h-3.5" />}
+      </button>
+    </Tooltip>
   );
 }
 

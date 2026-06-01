@@ -9,6 +9,7 @@ import {
 import { PersonAvatar } from "@/components/PersonAvatar";
 import { Countdown } from "@/components/Countdown";
 import { PriorityBadge } from "@/components/Badges";
+import { Tooltip } from "@/components/Tooltip";
 import { TOUCHPOINT_META } from "@/lib/client-touchpoint";
 import { cn } from "@/lib/utils";
 import type { HomeTask, HomeTeammate, NeedsYouCounts, ClientHealthRow } from "@/lib/home-data";
@@ -104,6 +105,7 @@ function NeedsYouStrip({ counts }: { counts: NeedsYouCounts }) {
         href="/approvals"
         icon={<ClipboardCheck className="w-4 h-4" />}
         tone="rose"
+        tooltip="Outbound emails + AI-routed tasks waiting for your eye. Click to open Approvals."
       />
       <NeedsYouPill
         count={counts.inboxesUnread}
@@ -111,6 +113,7 @@ function NeedsYouStrip({ counts }: { counts: NeedsYouCounts }) {
         href="/inboxes"
         icon={<Mail className="w-4 h-4" />}
         tone="indigo"
+        tooltip="Total unread threads across every inbox you have access to."
       />
       <NeedsYouPill
         count={counts.peopleEodPending}
@@ -118,16 +121,18 @@ function NeedsYouStrip({ counts }: { counts: NeedsYouCounts }) {
         href="/people"
         icon={<FileText className="w-4 h-4" />}
         tone="amber"
+        tooltip="Team members who haven't submitted today's end-of-day note yet (after 5pm local)."
       />
     </div>
   );
 }
 
 function NeedsYouPill({
-  count, label, href, icon, tone
+  count, label, href, icon, tone, tooltip
 }: {
   count: number; label: string; href: string;
   icon: React.ReactNode; tone: "rose" | "indigo" | "amber";
+  tooltip?: string;
 }) {
   const isQuiet = count === 0;
   const toneCls = {
@@ -136,21 +141,23 @@ function NeedsYouPill({
     amber:   "from-amber-50 to-white border-amber-200/60 text-amber-700"
   }[tone];
   return (
-    <Link
-      href={href}
-      className={cn(
-        "rounded-2xl border bg-gradient-to-br p-3 flex items-center gap-3 hover:shadow-soft transition-shadow",
-        isQuiet ? "opacity-60 from-slate-50 to-white border-slate-200/60 text-ink/60" : toneCls
-      )}
-    >
-      <div className="w-8 h-8 rounded-lg bg-white/80 grid place-items-center shrink-0">
-        {icon}
-      </div>
-      <div className="min-w-0">
-        <div className="text-[20px] font-bold tabular-nums leading-tight">{count}</div>
-        <div className="text-[11px] opacity-80 truncate">{label}</div>
-      </div>
-    </Link>
+    <Tooltip label={tooltip}>
+      <Link
+        href={href}
+        className={cn(
+          "w-full rounded-2xl border bg-gradient-to-br p-3 flex items-center gap-3 hover:shadow-soft transition-shadow",
+          isQuiet ? "opacity-60 from-slate-50 to-white border-slate-200/60 text-ink/60" : toneCls
+        )}
+      >
+        <div className="w-8 h-8 rounded-lg bg-white/80 grid place-items-center shrink-0">
+          {icon}
+        </div>
+        <div className="min-w-0">
+          <div className="text-[20px] font-bold tabular-nums leading-tight">{count}</div>
+          <div className="text-[11px] opacity-80 truncate">{label}</div>
+        </div>
+      </Link>
+    </Tooltip>
   );
 }
 
@@ -232,28 +239,41 @@ function TeamStripCard({ team }: { team: HomeTeammate[] }) {
                         in, so showing "off shift" for them all day is
                         misleading. Skip the pill entirely instead. */}
                     {t.clockEnabled && (
-                      <StatusDot
-                        ok={t.clockedIn}
-                        label={t.clockedIn ? "on shift" : "off shift"}
-                      />
+                      <Tooltip
+                        label={t.clockedIn
+                          ? "Currently clocked in on their time card."
+                          : "Hasn't started their shift yet today."}
+                      >
+                        <StatusDot
+                          ok={t.clockedIn}
+                          label={t.clockedIn ? "on shift" : "off shift"}
+                        />
+                      </Tooltip>
                     )}
                     {/* EOD pill: only render once it's actionable (5pm+).
                         Also still render if they HAVE submitted, since
                         that's positive info, not noise. */}
                     {(eodActionable || t.eodSubmitted) && (
-                      <StatusDot
-                        ok={t.eodSubmitted}
-                        label={t.eodSubmitted ? "EOD done" : "EOD pending"}
-                      />
+                      <Tooltip
+                        label={t.eodSubmitted
+                          ? "Submitted today's end-of-day note."
+                          : "Hasn't filed today's EOD note yet."}
+                      >
+                        <StatusDot
+                          ok={t.eodSubmitted}
+                          label={t.eodSubmitted ? "EOD done" : "EOD pending"}
+                        />
+                      </Tooltip>
                     )}
                     {t.overdueCount > 0 && (
-                      <span
-                        className="inline-flex items-center gap-0.5 text-rose-700 whitespace-nowrap"
-                        title={`${t.overdueCount} overdue task${t.overdueCount === 1 ? "" : "s"}`}
+                      <Tooltip
+                        label={`${t.overdueCount} task${t.overdueCount === 1 ? "" : "s"} past their due date.`}
                       >
-                        <AlertTriangle className="w-2.5 h-2.5" />
-                        {t.overdueCount} overdue
-                      </span>
+                        <span className="inline-flex items-center gap-0.5 text-rose-700 whitespace-nowrap">
+                          <AlertTriangle className="w-2.5 h-2.5" />
+                          {t.overdueCount} overdue
+                        </span>
+                      </Tooltip>
                     )}
                   </div>
                 </div>
@@ -335,16 +355,24 @@ function ClientHealthCard({ rows }: { rows: ClientHealthRow[] }) {
                       every row look like an alarm. Days-since is
                       muted-rose for never-emailed, neutral otherwise,
                       so the worst cases still pop visually. */}
-                  <span
-                    className={cn(
-                      "text-[11px] tabular-nums shrink-0 whitespace-nowrap",
+                  <Tooltip
+                    label={
                       r.daysSinceLastEmail === null
-                        ? "text-rose-600/80 font-medium"
-                        : "text-ink/55"
-                    )}
+                        ? `${meta.description} No outbound email on record yet — go say hi.`
+                        : `Last outbound email: ${r.daysSinceLastEmail} day${r.daysSinceLastEmail === 1 ? "" : "s"} ago. ${meta.description}`
+                    }
                   >
-                    {lastEmailLabel(r.daysSinceLastEmail)}
-                  </span>
+                    <span
+                      className={cn(
+                        "text-[11px] tabular-nums shrink-0 whitespace-nowrap",
+                        r.daysSinceLastEmail === null
+                          ? "text-rose-600/80 font-medium"
+                          : "text-ink/55"
+                      )}
+                    >
+                      {lastEmailLabel(r.daysSinceLastEmail)}
+                    </span>
+                  </Tooltip>
                 </Link>
               </li>
             );
@@ -437,7 +465,9 @@ function DeliverablesCard({ rows }: { rows: DeliverableRow[] }) {
                     severity left-to-right without re-reading every
                     task title. Title sits in the middle, countdown
                     pinned to the right rail. */}
-                <PriorityBadge priority={r.priority} />
+                <Tooltip label={`Priority: ${r.priority}`}>
+                  <PriorityBadge priority={r.priority} />
+                </Tooltip>
                 <div className="min-w-0 flex-1">
                   <div className="text-[13px] font-medium text-ink truncate">{r.title}</div>
                   {r.assigneeName && (
@@ -445,20 +475,23 @@ function DeliverablesCard({ rows }: { rows: DeliverableRow[] }) {
                   )}
                 </div>
                 {r.dueDate && (
-                  <span className="text-[11px] text-ink/55 tabular-nums shrink-0 whitespace-nowrap">
-                    <Countdown iso={r.dueDate} />
-                  </span>
+                  <Tooltip label={`Due ${new Date(r.dueDate).toLocaleString()}`}>
+                    <span className="text-[11px] text-ink/55 tabular-nums shrink-0 whitespace-nowrap">
+                      <Countdown iso={r.dueDate} />
+                    </span>
+                  </Tooltip>
                 )}
               </Link>
-              <button
-                type="button"
-                onClick={(e) => { e.preventDefault(); e.stopPropagation(); hide(r.id); }}
-                title="Hide from this list"
-                aria-label={`Hide "${r.title}" from dashboard`}
-                className="absolute top-1/2 -translate-y-1/2 right-3 w-7 h-7 rounded-full grid place-items-center text-ink/35 hover:text-rose-600 hover:bg-rose-50 transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
+              <Tooltip label="Hide this task from the dashboard list (stays in /tasks).">
+                <button
+                  type="button"
+                  onClick={(e) => { e.preventDefault(); e.stopPropagation(); hide(r.id); }}
+                  aria-label={`Hide "${r.title}" from dashboard`}
+                  className="absolute top-1/2 -translate-y-1/2 right-3 w-7 h-7 rounded-full grid place-items-center text-ink/35 hover:text-rose-600 hover:bg-rose-50 transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </Tooltip>
             </li>
           ))}
         </ul>

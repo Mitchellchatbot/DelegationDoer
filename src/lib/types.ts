@@ -53,6 +53,10 @@ export interface User {
   // Bismah). The chart renders this user under both managers; the
   // duplicate node makes the dual-report relationship visible.
   secondaryManagerId?: string | null;
+  // Per-user opt-out for SOD/EOD daily prompts (home bookend card,
+  // widget EOD client-checkin nudge). Default true — flip off in the
+  // DB for executives who don't run that ritual themselves.
+  dailyPromptsEnabled?: boolean;
 }
 
 export interface Department {

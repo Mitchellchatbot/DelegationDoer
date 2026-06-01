@@ -61,6 +61,20 @@ export async function GET() {
       return NextResponse.json({ due: false, reason: "no user" });
     }
 
+    // Per-user opt-out (users.daily_prompts_enabled, default true). The
+    // server-data User shape doesn't carry every column, so check direct
+    // against the row. CEO-types who don't run the EOD-checkin ritual
+    // themselves flip this off so the widget stops nagging.
+    const supabaseAdmin = getSupabaseAdmin();
+    const { data: flag } = await supabaseAdmin
+      .from("users")
+      .select("daily_prompts_enabled")
+      .eq("id", userId)
+      .maybeSingle();
+    if (flag && flag.daily_prompts_enabled === false) {
+      return NextResponse.json({ due: false, reason: "user opted out" });
+    }
+
     const onWebsite = (me.departmentIds ?? []).includes("dep_web");
     const isLeader = me.role === "leader";
     const isAdmin = me.isAdmin === true;
@@ -89,10 +103,9 @@ export async function GET() {
     // Past end-of-workday. Have we filed any check-ins today (worker's
     // local date)? Tolerate the table not existing yet (migration
     // hasn't been applied) — treat as "no check-ins" so the reminder
-    // still nags.
-    const supabase = getSupabaseAdmin();
+    // still nags. supabaseAdmin already resolved at the top.
     try {
-      const { count } = await supabase
+      const { count } = await supabaseAdmin
         .from("eod_client_checkins")
         .select("id", { count: "exact", head: true })
         .eq("user_id", userId)

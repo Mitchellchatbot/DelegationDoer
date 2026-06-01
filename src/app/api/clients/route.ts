@@ -69,6 +69,18 @@ export async function POST(req: NextRequest) {
       .select()
       .single();
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+    // Fire-and-forget Firecrawl icon fetch when a website was provided.
+    // Runs in the background — the create response returns immediately.
+    // If it succeeds, the icon shows up on the next page render; if it
+    // fails, the briefcase fallback keeps rendering.
+    if (data && typeof data.website === "string" && data.website.trim()) {
+      const { autoFetchAndStoreClientIcon } = await import("@/lib/client-icon-auto");
+      autoFetchAndStoreClientIcon(data.id, data.website).catch((e) => {
+        console.warn(`[auto-icon] fire-and-forget for ${data.id} failed:`, e);
+      });
+    }
+
     return NextResponse.json({ client: data });
   } catch (err) {
     const msg = err instanceof Error ? err.message : "unknown error";

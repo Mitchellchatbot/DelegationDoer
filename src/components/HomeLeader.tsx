@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import {
   ClipboardCheck, Mail, FileText, Flame, CheckCircle2, ArrowRight,
-  Users, AlertTriangle, Crown, Activity, Clock, X
+  Users, AlertTriangle, Crown, Activity, X
 } from "lucide-react";
 import { PersonAvatar } from "@/components/PersonAvatar";
 import { Countdown } from "@/components/Countdown";
@@ -155,16 +155,35 @@ function NeedsYouPill({
 }
 
 function TeamStripCard({ team }: { team: HomeTeammate[] }) {
+  // Track the local hour on the client so the "EOD pending" pill only
+  // shows up when it's actually actionable (after 5pm). Before that
+  // it's just visual noise on every row. State starts as -1 to mean
+  // "not yet known"; useEffect resolves it after mount. Renders show
+  // the pill conservatively if the hour hasn't loaded yet, so the
+  // SSR markup and first client render agree.
+  const [hour, setHour] = useState<number>(-1);
+  useEffect(() => {
+    setHour(new Date().getHours());
+    // Re-check every 5 minutes so a long-open tab eventually flips
+    // over the 5pm threshold without a page refresh.
+    const id = setInterval(() => setHour(new Date().getHours()), 5 * 60 * 1000);
+    return () => clearInterval(id);
+  }, []);
+  // EOD becomes actionable at 5pm local. Treat "hour unknown" as
+  // pre-5pm so we don't flash the pill on initial render.
+  const eodActionable = hour >= 17;
+
   // Sort: people who need attention bubble up (not clocked in, no EOD,
   // overdue tasks). Then alphabetical. Makes the dashboard's first
   // impression "who's stuck" instead of "who's first alphabetically".
+  // EOD-missing only counts toward the score once it's actually due.
   const sorted = [...team].sort((a, b) => {
     const score = (t: HomeTeammate) =>
       // clock_enabled=false users never punch in by design — don't
       // penalize them in the sort for being "off shift", they
       // wouldn't have a shift either way.
       ((!t.clockEnabled || t.clockedIn) ? 0 : 2)
-      + (t.eodSubmitted ? 0 : 1)
+      + ((eodActionable && !t.eodSubmitted) ? 1 : 0)
       + Math.min(t.overdueCount, 3);
     const sd = score(b) - score(a);
     return sd !== 0 ? sd : a.name.localeCompare(b.name);
@@ -206,7 +225,7 @@ function TeamStripCard({ team }: { team: HomeTeammate[] }) {
                 />
                 <div className="min-w-0 flex-1">
                   <div className="text-[12.5px] font-medium text-ink truncate">{t.name}</div>
-                  <div className="flex items-center gap-1.5 text-[10px] text-ink/55 mt-0.5">
+                  <div className="flex items-center gap-x-2 gap-y-0.5 text-[10px] text-ink/55 mt-0.5 flex-wrap">
                     {/* Shift pill — only shown for users with the
                         time-clock feature enabled. Heads/salaried/on-call
                         roles have clock_enabled=false and don't punch
@@ -218,13 +237,18 @@ function TeamStripCard({ team }: { team: HomeTeammate[] }) {
                         label={t.clockedIn ? "on shift" : "off shift"}
                       />
                     )}
-                    <StatusDot
-                      ok={t.eodSubmitted}
-                      label={t.eodSubmitted ? "EOD done" : "EOD pending"}
-                    />
+                    {/* EOD pill: only render once it's actionable (5pm+).
+                        Also still render if they HAVE submitted, since
+                        that's positive info, not noise. */}
+                    {(eodActionable || t.eodSubmitted) && (
+                      <StatusDot
+                        ok={t.eodSubmitted}
+                        label={t.eodSubmitted ? "EOD done" : "EOD pending"}
+                      />
+                    )}
                     {t.overdueCount > 0 && (
                       <span
-                        className="inline-flex items-center gap-0.5 text-rose-700"
+                        className="inline-flex items-center gap-0.5 text-rose-700 whitespace-nowrap"
                         title={`${t.overdueCount} overdue task${t.overdueCount === 1 ? "" : "s"}`}
                       >
                         <AlertTriangle className="w-2.5 h-2.5" />
@@ -243,8 +267,10 @@ function TeamStripCard({ team }: { team: HomeTeammate[] }) {
 }
 
 function StatusDot({ ok, label }: { ok: boolean; label: string }) {
+  // whitespace-nowrap keeps "on shift" / "EOD pending" from breaking
+  // across two lines in the cramped 2-col team grid.
   return (
-    <span className="inline-flex items-center gap-1">
+    <span className="inline-flex items-center gap-1 whitespace-nowrap">
       <span className={cn("w-1.5 h-1.5 rounded-full", ok ? "bg-emerald-500" : "bg-slate-300")} />
       <span className={cn(ok ? "text-emerald-700" : "text-ink/55")}>{label}</span>
     </span>
@@ -291,7 +317,8 @@ function ClientHealthCard({ rows }: { rows: ClientHealthRow[] }) {
               <li key={r.id}>
                 <Link
                   href={`/clients/${encodeURIComponent(r.id)}`}
-                  className="flex items-center justify-between gap-3 px-4 py-2.5 hover:bg-slate-50 transition-colors"
+                  className="flex items-center justify-between gap-3 px-4 py-2 hover:bg-slate-50 transition-colors"
+                  title={meta.description + (r.isOverride ? " · manual override" : "")}
                 >
                   <div className="flex items-center gap-2.5 min-w-0 flex-1">
                     <span className={cn("w-2 h-2 rounded-full shrink-0", meta.dot)} />
@@ -302,21 +329,22 @@ function ClientHealthCard({ rows }: { rows: ClientHealthRow[] }) {
                       </span>
                     )}
                   </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    <span className="text-[11px] text-ink/55 inline-flex items-center gap-1">
-                      <Clock className="w-3 h-3" />
-                      {lastEmailLabel(r.daysSinceLastEmail)}
-                    </span>
-                    <span
-                      className={cn(
-                        "text-[10px] px-2 py-0.5 rounded-full border font-medium",
-                        meta.bg, meta.text, meta.border
-                      )}
-                      title={meta.description + (r.isOverride ? " · manual override" : "")}
-                    >
-                      {meta.label}
-                    </span>
-                  </div>
+                  {/* Just the days-since marker — the colored dot
+                      already carries the urgency, the "Neglected /
+                      Stale" pill was visual duplication that made
+                      every row look like an alarm. Days-since is
+                      muted-rose for never-emailed, neutral otherwise,
+                      so the worst cases still pop visually. */}
+                  <span
+                    className={cn(
+                      "text-[11px] tabular-nums shrink-0 whitespace-nowrap",
+                      r.daysSinceLastEmail === null
+                        ? "text-rose-600/80 font-medium"
+                        : "text-ink/55"
+                    )}
+                  >
+                    {lastEmailLabel(r.daysSinceLastEmail)}
+                  </span>
                 </Link>
               </li>
             );
@@ -328,9 +356,11 @@ function ClientHealthCard({ rows }: { rows: ClientHealthRow[] }) {
 }
 
 function lastEmailLabel(days: number | null): string {
-  if (days === null) return "never emailed";
+  // Tighter labels — these are visually competing with client names
+  // in a narrow column. "never" + the red dot says everything.
+  if (days === null) return "never";
   if (days === 0) return "today";
-  if (days === 1) return "yesterday";
+  if (days === 1) return "1d ago";
   if (days < 7) return `${days}d ago`;
   if (days < 30) return `${Math.floor(days / 7)}w ago`;
   return `${Math.floor(days / 30)}mo ago`;
@@ -401,16 +431,24 @@ function DeliverablesCard({ rows }: { rows: DeliverableRow[] }) {
             <li key={r.id} className="group relative">
               <Link
                 href={`/tasks/${r.id}`}
-                className="flex items-center justify-between gap-3 px-4 py-2.5 pr-12 hover:bg-slate-50 transition-colors"
+                className="flex items-center gap-3 px-4 py-2 pr-12 hover:bg-slate-50 transition-colors"
               >
+                {/* Priority pill leads the row so the eye can skim
+                    severity left-to-right without re-reading every
+                    task title. Title sits in the middle, countdown
+                    pinned to the right rail. */}
+                <PriorityBadge priority={r.priority} />
                 <div className="min-w-0 flex-1">
                   <div className="text-[13px] font-medium text-ink truncate">{r.title}</div>
-                  <div className="flex items-center gap-2 text-[11px] text-ink/55 mt-0.5">
-                    {r.assigneeName && <span>{r.assigneeName}</span>}
-                    <PriorityBadge priority={r.priority} />
-                    {r.dueDate && <span>· <Countdown iso={r.dueDate} /></span>}
-                  </div>
+                  {r.assigneeName && (
+                    <div className="text-[11px] text-ink/55 truncate">{r.assigneeName}</div>
+                  )}
                 </div>
+                {r.dueDate && (
+                  <span className="text-[11px] text-ink/55 tabular-nums shrink-0 whitespace-nowrap">
+                    <Countdown iso={r.dueDate} />
+                  </span>
+                )}
               </Link>
               <button
                 type="button"

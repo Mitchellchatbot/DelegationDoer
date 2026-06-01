@@ -826,7 +826,9 @@ export async function notifyRoutingFallback(args: {
       ? "no candidate assignee — every routing signal came back empty"
       : args.reason === "low-confidence"
         ? "the AI classifier wasn't confident enough to pick a department"
-        : args.reason;
+        : args.reason === "classifier-failed"
+          ? "the AI classifier couldn't read the email (API error) — review it manually"
+          : args.reason;
 
   const blocks: unknown[] = [
     {

@@ -23,6 +23,13 @@ export interface ClassifiedEmail {
   // "calendar invite", "FYI digest", …). Logged for audit so a leader
   // reviewing a missed email can see why intake skipped it.
   skipReason: string | null;
+  // false = Claude errored or returned non-JSON, so every other field is
+  // a placeholder default (we couldn't actually read the email). The
+  // intake pipeline treats this as "no signal" and parks the thread in
+  // the leaders' needs-review queue instead of auto-routing a draft built
+  // from a guessed title + "couldn't auto-summarize" body. true = Claude
+  // returned a usable summary we can route on.
+  summarized: boolean;
 }
 
 interface DepartmentLite { id: string; name: string; description: string; taskTypes: string[]; }
@@ -160,6 +167,12 @@ Tags are 1-4 short lowercase words (e.g. "wordpress", "billing", "design"). They
         ? "medium"
         : "low";
 
+  // Did Claude actually read the email? A usable summary means we got a
+  // non-empty description back. When this is false we hit the catch /
+  // no-JSON path and every field below is a guessed placeholder.
+  const summarized =
+    typeof parsed.description === "string" && parsed.description.trim().length > 0;
+
   // Default to actionable on parse error / missing field — we'd rather
   // create a task a leader rejects than silently drop real client work.
   const isActionable = parsed.isActionable === false ? false : true;
@@ -185,6 +198,7 @@ Tags are 1-4 short lowercase words (e.g. "wordpress", "billing", "design"). They
     departmentHint,
     confidence,
     isActionable,
-    skipReason
+    skipReason,
+    summarized
   };
 }

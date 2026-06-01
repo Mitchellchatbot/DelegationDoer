@@ -67,7 +67,7 @@ export interface IntakeInput {
 }
 
 export interface IntakeOutcome {
-  skipped?: "already-logged" | "no-candidates" | "not-actionable";
+  skipped?: "already-logged" | "no-candidates" | "not-actionable" | "classifier-failed";
   taskId?: string;
   routedVia?: RoutedVia;
   routedToUserId?: string | null;
@@ -107,6 +107,58 @@ export async function runEmailIntake(input: IntakeInput): Promise<IntakeOutcome>
       id: d.id, name: d.name, description: d.description, taskTypes: d.taskTypes
     }))
   });
+
+  // 2a) Classifier-failure park. When Claude errored / returned non-JSON
+  //     we have no real read on the email — title is a guess, the body is
+  //     the "couldn't auto-summarize" placeholder, and isActionable is an
+  //     unreliable default(true). Rather than auto-route a low-confidence
+  //     draft built from nothing (which floods routing-review whenever the
+  //     classify API is down), park the thread in the leaders' needs-review
+  //     queue with task_id=null. Manual run-once bypasses — the user chose
+  //     to convert this thread, so honor it even without a summary.
+  if (!classified.summarized && input.source !== "manual") {
+    const now = new Date().toISOString();
+    const decisionId = await writeRoutingDecision(supabase, {
+      taskId: null,
+      accountId: input.accountId,
+      threadId: input.threadId,
+      classified,
+      matchedRuleId: null,
+      matchedRuleLabel: null,
+      rankerTop: [],
+      routedVia: "unrouted",
+      routedToUserId: null,
+      reason: "Classifier could not summarize the email (API error / non-JSON)",
+      needsReview: true,
+      reviewReason: "classifier-failed"
+    });
+    // Drop a dedupe row so the cron stops reclassifying a thread the
+    // classifier keeps failing on — it lives in the needs-review queue now.
+    await supabase.from("email_intake_log").upsert(
+      {
+        thread_id: input.threadId,
+        account_id: input.accountId,
+        task_id: null,
+        routed_via: "classifier-failed",
+        routed_to_user_id: null,
+        processed_at: now
+      },
+      { onConflict: "thread_id" }
+    );
+    if (!input.silent) {
+      await pingLeaders(supabase, {
+        subject: input.threadSubject,
+        fromEmail: input.fromEmail,
+        reason: "classifier-failed"
+      });
+    }
+    return {
+      skipped: "classifier-failed",
+      classified,
+      decisionId: decisionId ?? undefined,
+      needsReview: true
+    };
+  }
 
   // 2b) Classifier-driven skip. When Claude judges the email is promo /
   //     digest / receipt / FYI with no human action needed, drop the

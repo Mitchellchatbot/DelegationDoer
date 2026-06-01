@@ -26,12 +26,16 @@ export async function POST(
     // Mark every still-open task in this stage as done. Avoids the
     // weird state where a Leader closes the stage but some tasks are
     // still pending — they get archived as done so the activity log
-    // is complete.
+    // is complete. Stamp completed_at too (the canonical done-transition
+    // timestamp the EOD report + archive cron key off) so these don't
+    // end up with a null completion time and vanish from "done today".
+    const nowIso = new Date().toISOString();
     await supabase
       .from("tasks")
       .update({
         status: "done",
-        last_activity_at: new Date().toISOString()
+        completed_at: nowIso,
+        last_activity_at: nowIso
       })
       .eq("stage_id", params.stageId)
       .neq("status", "done");

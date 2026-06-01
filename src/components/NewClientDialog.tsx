@@ -68,10 +68,10 @@ export function NewClientDialog() {
       </button>
 
       {open && (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-black/30 backdrop-blur-sm" onClick={() => setOpen(false)}>
+        <div className="fixed inset-0 z-50 flex items-start justify-center pt-20 px-4 lg:pl-[264px] bg-black/30 backdrop-blur-sm" onClick={() => setOpen(false)}>
           <div
             onClick={(e) => e.stopPropagation()}
-            className="bg-white rounded-2xl shadow-lift border border-border w-full max-w-md max-h-[90vh] flex flex-col overflow-hidden animate-rise"
+            className="bg-white rounded-2xl shadow-lift border border-border w-full max-w-md max-h-[calc(100vh-6rem)] flex flex-col overflow-hidden animate-rise"
           >
             <header className="flex items-center justify-between px-5 pt-5 pb-3 shrink-0">
               <h2 className="text-base font-semibold">New client</h2>

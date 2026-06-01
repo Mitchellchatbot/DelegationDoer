@@ -13,6 +13,7 @@
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { listThreadsPaged, type MissiveThread } from "@/lib/missive-client";
 import { loadClientMatcher } from "@/lib/client-thread-match";
+import { isAutomatedOutboundSubject } from "@/lib/client-touchpoint";
 
 export interface SyncResult {
   clientsUpdated: number;
@@ -78,6 +79,13 @@ export async function syncClientTouchpointsFromMissive(
       if (ms < oldest) oldest = ms;
       if (ms < scopeFrom) continue;
       anyInWindow = true;
+
+      // Automated outbound blasts (weekly blog-performance updates, etc.)
+      // don't count as a real touchpoint — skip them so the stored
+      // "last outbound email" reflects genuine client contact. Still
+      // counts toward anyInWindow above so paging keeps going for the
+      // real emails sitting on later pages.
+      if (isAutomatedOutboundSubject(t.subject)) continue;
 
       // A thread can match multiple clients via different participants
       // OR a single participant that several clients share (e.g. one

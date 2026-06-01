@@ -81,6 +81,39 @@ export function effectiveTouchpoint(
   return { label: computeTouchpointLabel(lastSentAt), isOverride: false };
 }
 
+// Automated outbound emails that must NOT count as a client touchpoint.
+// These are bulk/templated updates the team sends on a schedule (e.g.
+// the weekly blog-performance mailers "Your Blog Posts Are Getting More
+// Visibility This Month" / "Your Blog's Getting More Traffic Now"). They
+// go out from a normal team address, so the only reliable tell is the
+// templated subject — mirroring the subject-pattern approach in
+// email-intake-filters.ts (`looksAutomated`). Keep this list focused;
+// it's easy to extend as new templates appear.
+//
+// Applied in two places:
+//   - touchpoint-sync.ts, when walking the SENT folder, so the stored
+//     `last_outbound_email_at_external` reflects the freshest *real*
+//     email rather than an automated blast.
+//   - getLatestTouchpointsByClient below, as a read-time safety net so
+//     already-synced automated values (and any DD-originated drafts)
+//     are ignored immediately, without waiting for the next sync.
+const AUTOMATED_OUTBOUND_SUBJECT_PATTERNS: Array<{ re: RegExp; label: string }> = [
+  // Weekly blog-performance updates. Both observed templates open with
+  // "Your Blog" and tout a growth metric (visibility / traffic / views).
+  {
+    re: /^your\s+blog('?s)?\b.*\b(visibilit(y|ies)|traffic|views?|reach|exposure|impressions?|ranking|getting\s+more|more\s+(visibility|traffic|views?|reach))\b/i,
+    label: "weekly blog performance update"
+  }
+];
+
+// True when a subject looks like one of our automated outbound blasts
+// (so it shouldn't register as a real touchpoint with the client).
+export function isAutomatedOutboundSubject(subject: string | null): boolean {
+  const s = (subject ?? "").trim();
+  if (!s) return false;
+  return AUTOMATED_OUTBOUND_SUBJECT_PATTERNS.some((p) => p.re.test(s));
+}
+
 export interface TouchpointInfo {
   clientId: string;
   lastOutboundEmailAt: string | null;
@@ -128,6 +161,9 @@ export async function getLatestTouchpointsByClient(
       client_id: string | null; subject: string | null; sent_at: string | null;
     }[]) {
       if (!row.client_id || !row.sent_at) continue;
+      // Automated blasts (weekly blog updates, etc.) don't count as a
+      // touchpoint — skip and let an older real email win.
+      if (isAutomatedOutboundSubject(row.subject)) continue;
       const prev = out.get(row.client_id);
       // email_drafts comes back DESC, so the first hit per client is
       // already the latest from that source. Skip subsequent rows.
@@ -147,6 +183,11 @@ export async function getLatestTouchpointsByClient(
       last_outbound_subject_external: string | null;
     }[]) {
       if (!row.last_outbound_email_at_external) continue;
+      // The external column is denormalized to a single subject+date. If
+      // that stored email is an automated blast, ignore it — this lets
+      // the fix take effect immediately, before the next SENT-folder sync
+      // re-stores the freshest *real* email.
+      if (isAutomatedOutboundSubject(row.last_outbound_subject_external)) continue;
       const prev = out.get(row.id);
       const extMs = new Date(row.last_outbound_email_at_external).getTime();
       const prevMs = prev?.lastOutboundEmailAt

@@ -1,6 +1,7 @@
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import {
   effectiveTouchpoint,
+  isAutomatedOutboundSubject,
   type TouchpointLabel
 } from "@/lib/client-touchpoint";
 import type { HealthLabel } from "@/lib/client-health";
@@ -843,7 +844,8 @@ export async function getClientHealthOverview(topN = 10): Promise<ClientHealthRo
     .from("clients")
     .select(
       "id, name, contact_name, status, touchpoint_override_label, " +
-      "last_outbound_email_at_external, encourage_emails, display_order"
+      "last_outbound_email_at_external, last_outbound_subject_external, " +
+      "encourage_emails, display_order"
     );
   if (error) return [];
 
@@ -857,13 +859,20 @@ export async function getClientHealthOverview(topN = 10): Promise<ClientHealthRo
     status: string | null;
     touchpoint_override_label: TouchpointLabel | null;
     last_outbound_email_at_external: string | null;
+    last_outbound_subject_external: string | null;
     encourage_emails: boolean | null;
     display_order: number | null;
   }>)
     .filter((c) => !c.status || c.status === "active")
     .filter((c) => c.encourage_emails !== false)
     .map((c) => {
-      const lastAt = c.last_outbound_email_at_external;
+      // Ignore automated blasts (weekly blog updates, etc.) stored in the
+      // denormalized column — they don't count as a real touchpoint. The
+      // next SENT-folder sync re-stores the freshest genuine email; this
+      // keeps the home dashboard correct in the meantime.
+      const lastAt = isAutomatedOutboundSubject(c.last_outbound_subject_external)
+        ? null
+        : c.last_outbound_email_at_external;
       const { label, isOverride } = effectiveTouchpoint(c.touchpoint_override_label, lastAt);
       const daysSince = lastAt
         ? Math.max(0, Math.floor((now.getTime() - new Date(lastAt).getTime()) / 86_400_000))

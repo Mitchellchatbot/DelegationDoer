@@ -16,6 +16,7 @@ import { HomeWorker } from "@/components/HomeWorker";
 import { HomeLeaderHero } from "@/components/HomeLeaderHero";
 import { HomeSeoBriefs } from "@/components/HomeSeoBriefs";
 import { HomeTopClientsByHealth } from "@/components/HomeTopClientsByHealth";
+import { HomeEmailNotifications } from "@/components/HomeEmailNotifications";
 import { HomePulseCard } from "@/components/HomePulseCard";
 import { HomeChartsRow } from "@/components/HomeChartsRow";
 import { LeaderTodoList } from "@/components/LeaderTodoList";
@@ -73,6 +74,7 @@ export default async function HomePage() {
         />
         {/* Notifications — the focus of the new leader home. */}
         <HomePulseCard events={pulse} />
+        <HomeEmailNotifications onboarded={me.emailNotificationsOnboarded === true} />
         {/* Glance tiles — posts-per-client + stalled stat */}
         <HomeChartsRow postsPerClient={postsPerClient} stalledCount={stalledCount} />
         {/* Apple-Reminders-style todo for the leader's own tasks. */}
@@ -100,6 +102,7 @@ export default async function HomePage() {
     <div className="space-y-4 max-w-5xl mx-auto">
       {dayBookends && <DayBookends status={dayBookends} hourLocal={hourLocal} />}
       <HomeWorker meName={me.name} tasks={tasks} briefCount={seoBriefs.length} />
+      <HomeEmailNotifications onboarded={me.emailNotificationsOnboarded === true} />
       <HomeTopClientsByHealth rows={topByHealth} />
       <HomeSeoBriefs rows={seoBriefs} />
     </div>

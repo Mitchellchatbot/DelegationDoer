@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
 import { publish, type InboxEvent } from "@/lib/inbox-event-bus";
 import { isDuplicateMessage } from "@/lib/missive-socket";
+import { fanOutInboxEvent } from "@/lib/email-notifications";
 
 export const dynamic = "force-dynamic";
 
@@ -54,13 +55,20 @@ export async function POST(req: NextRequest) {
   if (isDuplicateMessage(payload.message_id)) {
     return NextResponse.json({ ok: true, deduped: true });
   }
-  publish({
+  const event: InboxEvent = {
     event: payload.event,
     workspace_id: payload.workspace_id,
     account_id: payload.account_id,
     thread_id: payload.thread_id,
     message_id: payload.message_id,
     ts: payload.ts ?? Date.now()
+  };
+  publish(event);
+  // Fan out into email_notifications for users opted-in to this
+  // account. Fire-and-forget so we ACK the webhook within ~5ms even if
+  // the enrichment fetch is slow; any failure is logged inside.
+  void fanOutInboxEvent(event).catch((err) => {
+    console.error("[missive-webhook] fanOut", err);
   });
   return NextResponse.json({ ok: true });
 }

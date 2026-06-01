@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback, createContext, useContext } from "react";
-import { Check, Clock, Minus, X, AlertTriangle, Plus, Bell, ArrowLeft, Focus, Coffee, Moon, Smile, Sparkles, Play, Square, Crown, Settings as SettingsIcon, LogOut, Camera } from "lucide-react";
+import { Check, Clock, Minus, X, AlertTriangle, Plus, Bell, ArrowLeft, Focus, Coffee, Moon, Smile, Sparkles, Play, Square, Crown, Settings as SettingsIcon, LogOut, Camera, Mail } from "lucide-react";
 import { toast } from "sonner";
 import { AvatarCropper } from "@/components/AvatarCropper";
 import { Countdown } from "@/components/Countdown";
@@ -44,6 +44,16 @@ interface WidgetNotification {
   note: string | null;
   from: { name: string; avatarUrl: string | null } | null;
   createdAt: string;
+}
+
+interface WidgetEmail {
+  id: string;
+  threadId: string;
+  subject: string | null;
+  fromName: string | null;
+  fromEmail: string | null;
+  preview: string | null;
+  receivedAt: string;
 }
 
 interface EomState {
@@ -144,11 +154,39 @@ function playKudosChime() {
   } catch { /* ignore */ }
 }
 
+// Email "ping" — softer than the task alarm, brighter than the kudos
+// chime. Two close-spaced bell tones so it's recognizably an inbox
+// sound at a glance.
+function playEmailChime() {
+  try {
+    const Ctx = (window as any).AudioContext || (window as any).webkitAudioContext;
+    if (!Ctx) return;
+    const ctx = new Ctx();
+    const tone = (freq: number, when: number, duration: number) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(freq, ctx.currentTime + when);
+      gain.gain.setValueAtTime(0.0001, ctx.currentTime + when);
+      gain.gain.exponentialRampToValueAtTime(0.22, ctx.currentTime + when + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + when + duration);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(ctx.currentTime + when);
+      osc.stop(ctx.currentTime + when + duration);
+    };
+    // B5 → E6 — quick inbox-style "ding-ding".
+    tone(987.77, 0,    0.16);
+    tone(1318.5, 0.13, 0.26);
+    setTimeout(() => ctx.close(), 700);
+  } catch { /* ignore */ }
+}
+
 export default function WidgetPage() {
   const [state, setState] = useState<WidgetState>("bubble");
   const [tasks, setTasks] = useState<WidgetTask[]>([]);
   const [kudos, setKudos] = useState<WidgetKudos[]>([]);
   const [notifications, setNotifications] = useState<WidgetNotification[]>([]);
+  const [emails, setEmails] = useState<WidgetEmail[]>([]);
   // Tracks whether the widget's API polls are returning 401. When true
   // we render a sign-in prompt instead of the normal task/kudos UI.
   const [signedOut, setSignedOut] = useState(false);
@@ -186,6 +224,7 @@ export default function WidgetPage() {
   const seenIdsRef = useRef<Set<string>>(new Set());
   const seenKudosRef = useRef<Set<string>>(new Set());
   const seenNotifIdsRef = useRef<Set<string>>(new Set());
+  const seenEmailIdsRef = useRef<Set<string>>(new Set());
   const seenEomMonthRef = useRef<string | null>(null);
   const lastFetchedRef = useRef<number>(0);
 
@@ -215,13 +254,14 @@ export default function WidgetPage() {
     try {
       // Run both polls in parallel — they're independent reads on the
       // same Supabase connection.
-      const [taskRes, kudosRes, eomRes, bdayRes, eodRes, clockRes] = await Promise.all([
+      const [taskRes, kudosRes, eomRes, bdayRes, eodRes, clockRes, emailRes] = await Promise.all([
         fetch("/api/widget/my-tasks", { cache: "no-store" }),
         fetch("/api/widget/kudos", { cache: "no-store" }),
         fetch("/api/eom", { cache: "no-store" }),
         fetch("/api/widget/birthdays", { cache: "no-store" }),
         fetch("/api/widget/eod-reminder", { cache: "no-store" }),
-        fetch("/api/clock", { cache: "no-store" })
+        fetch("/api/clock", { cache: "no-store" }),
+        fetch("/api/email-notifications?limit=5", { cache: "no-store" })
       ]);
       if (clockRes.ok) {
         const c = await clockRes.json().catch(() => null);
@@ -263,20 +303,45 @@ export default function WidgetPage() {
         setEom({ isMe, name, month });
       }
 
+      // Pull unseen email notifications. We treat seen_at=null as the
+      // "still actionable" set — once the user clicks "Got it" the row
+      // gets stamped and disappears from the widget on the next poll.
+      let nextEmails: WidgetEmail[] = [];
+      if (emailRes.ok) {
+        const emailData = await emailRes.json().catch(() => ({}));
+        const all = (emailData?.notifications ?? []) as Array<{
+          id: string; threadId: string; subject: string | null;
+          fromName: string | null; fromEmail: string | null;
+          preview: string | null; receivedAt: string; seenAt: string | null;
+        }>;
+        nextEmails = all
+          .filter((r) => r.seenAt === null)
+          .map((r) => ({
+            id: r.id, threadId: r.threadId, subject: r.subject,
+            fromName: r.fromName, fromEmail: r.fromEmail,
+            preview: r.preview, receivedAt: r.receivedAt
+          }));
+      }
+
       // Fresh task → harsh alarm. Fresh kudos → celebratory chime.
       // Fresh mention/notify → same harsh alarm so the user looks.
+      // Fresh email → softer inbox ding, distinct from the task alarm.
       const fresh = unackedNow.filter((t) => !seenIdsRef.current.has(t.id));
       const freshNotifs = nextNotifs.filter((n) => !seenNotifIdsRef.current.has(n.id));
       if (fresh.length > 0 || freshNotifs.length > 0) playAlertSound();
       const freshKudos = nextKudos.filter((k) => !seenKudosRef.current.has(k.id));
       if (freshKudos.length > 0) playKudosChime();
+      const freshEmails = nextEmails.filter((e) => !seenEmailIdsRef.current.has(e.id));
+      if (freshEmails.length > 0) playEmailChime();
       seenIdsRef.current = new Set(unackedNow.map((t) => t.id));
       seenKudosRef.current = new Set(nextKudos.map((k) => k.id));
       seenNotifIdsRef.current = new Set(nextNotifs.map((n) => n.id));
+      seenEmailIdsRef.current = new Set(nextEmails.map((e) => e.id));
 
       setTasks(next);
       setKudos(nextKudos);
       setNotifications(nextNotifs);
+      setEmails(nextEmails);
       if (bdayRes.ok) {
         const bd = await bdayRes.json();
         setBirthdays({
@@ -316,7 +381,7 @@ export default function WidgetPage() {
       // an open mention / notify-teammates ping).
       setState((prev) => {
         if (prev === "panel") return "panel"; // user is already looking
-        return unackedNow.length > 0 || nextKudos.length > 0 || nextNotifs.length > 0 || eodDue
+        return unackedNow.length > 0 || nextKudos.length > 0 || nextNotifs.length > 0 || nextEmails.length > 0 || eodDue
           ? "alert"
           : "bubble";
       });
@@ -366,7 +431,27 @@ export default function WidgetPage() {
     setState((prev) => {
       if (prev === "panel") return "panel";
       const remaining = notifications.filter((n) => n.id !== notifId);
-      return unacked.length > 0 || kudos.length > 0 || remaining.length > 0 ? "alert" : "bubble";
+      return unacked.length > 0 || kudos.length > 0 || remaining.length > 0 || emails.length > 0 ? "alert" : "bubble";
+    });
+  }
+
+  async function dismissEmail(emailId: string) {
+    // Optimistic — drop from local state, then stamp seen_at on the
+    // server. mark-seen accepts a specific id list so other unseen
+    // emails are unaffected.
+    setEmails((cur) => cur.filter((e) => e.id !== emailId));
+    seenEmailIdsRef.current.delete(emailId);
+    try {
+      await fetch("/api/email-notifications/mark-seen", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: [emailId] })
+      });
+    } catch { /* surfaces on next poll if it actually failed */ }
+    setState((prev) => {
+      if (prev === "panel") return "panel";
+      const remaining = emails.filter((e) => e.id !== emailId);
+      return unacked.length > 0 || kudos.length > 0 || notifications.length > 0 || remaining.length > 0 ? "alert" : "bubble";
     });
   }
 
@@ -418,6 +503,9 @@ export default function WidgetPage() {
     if (notifications.length > 0) {
       return <NotifAlert notif={notifications[0]} count={notifications.length} onDismiss={dismissNotification} onExpand={expandToPanel} crowned={eom.isMe} iconUrl={widgetIconUrl} />;
     }
+    if (emails.length > 0) {
+      return <EmailAlert email={emails[0]} count={emails.length} onDismiss={dismissEmail} onExpand={expandToPanel} crowned={eom.isMe} iconUrl={widgetIconUrl} />;
+    }
     if (kudos.length > 0) {
       return <KudosAlert kudos={kudos[0]} count={kudos.length} onAck={acknowledgeKudos} onExpand={expandToPanel} crowned={eom.isMe} iconUrl={widgetIconUrl} />;
     }
@@ -425,7 +513,7 @@ export default function WidgetPage() {
       return <EodReminderAlert onExpand={expandToPanel} crowned={eom.isMe} iconUrl={widgetIconUrl} />;
     }
   }
-  return <Bubble onExpand={expandToPanel} unackedCount={unacked.length + kudos.length + notifications.length + (eodReminderDue ? 1 : 0)} crowned={eom.isMe} iconUrl={widgetIconUrl} />;
+  return <Bubble onExpand={expandToPanel} unackedCount={unacked.length + kudos.length + notifications.length + emails.length + (eodReminderDue ? 1 : 0)} crowned={eom.isMe} iconUrl={widgetIconUrl} />;
 }
 
 // Banner that appears when the worker's scheduled day has ended and
@@ -887,6 +975,85 @@ function NotifAlert({
             background: "rgb(245, 243, 255)",
             borderRight: "1px solid #C4B5FD",
             borderTop: "1px solid #C4B5FD"
+          }}
+        />
+      </div>
+
+      <button
+        onClick={onExpand}
+        // @ts-ignore
+        style={{ WebkitAppRegion: "no-drag", padding: 0, border: "none", background: "transparent" } as any}
+        className="shrink-0 wg-bubble-btn anim-scale-in"
+        aria-label="Open"
+      >
+        <BubbleIcon unackedCount={count} crowned={crowned} iconUrl={iconUrl} />
+      </button>
+    </div>
+  );
+}
+
+/* ============================ EMAIL ALERT (new inbound email) ============================ */
+
+function EmailAlert({
+  email, count, onDismiss, onExpand, crowned = false, iconUrl,
+}: {
+  email: WidgetEmail;
+  count: number;
+  onDismiss: (id: string) => void;
+  onExpand: () => void;
+  crowned?: boolean;
+  iconUrl?: string | null;
+}) {
+  const sender = email.fromName || email.fromEmail || "New email";
+  const subject = email.subject || "(no subject)";
+  return (
+    <div
+      // @ts-ignore — Electron-only
+      style={{ width: "100vw", height: "100vh", display: "flex", alignItems: "center", justifyContent: "flex-end", padding: 20, gap: 8, background: "transparent", WebkitAppRegion: "drag" } as any}
+    >
+      <div
+        onClick={onExpand}
+        // @ts-ignore
+        style={{ WebkitAppRegion: "no-drag" } as any}
+        className="relative flex-1 cursor-pointer anim-pop-bubble"
+      >
+        <div className="bg-gradient-to-br from-sky-50 to-cyan-50 rounded-2xl border border-sky-300 shadow-[0_8px_24px_rgba(2,132,199,0.25)] px-3 py-2.5 pr-4">
+          <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-sky-700 font-semibold">
+            <Mail className="w-3 h-3" />
+            New email
+            {count > 1 && <span className="ml-auto text-sky-700/70">+{count - 1} more</span>}
+          </div>
+          <div className="text-[12px] text-slate-700 font-medium truncate mt-0.5">
+            {sender}
+          </div>
+          <div className="text-[13px] text-slate-900 font-semibold leading-snug mt-0.5 line-clamp-2">
+            {subject}
+          </div>
+          {email.preview && (
+            <div className="text-[11px] text-slate-600 mt-0.5 line-clamp-2">
+              {email.preview}
+            </div>
+          )}
+          <div className="mt-1.5 flex items-center justify-end gap-2">
+            <button
+              onClick={(e) => { e.stopPropagation(); onDismiss(email.id); }}
+              // @ts-ignore
+              style={{ WebkitAppRegion: "no-drag" } as any}
+              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-sky-600 hover:bg-sky-700 text-white text-[11px] font-medium shadow-sm"
+            >
+              <Check className="w-3 h-3" /> Got it
+            </button>
+          </div>
+        </div>
+
+        <div
+          className="absolute"
+          style={{
+            right: -7, top: "50%", transform: "translateY(-50%) rotate(45deg)",
+            width: 14, height: 14,
+            background: "rgb(240, 249, 255)",
+            borderRight: "1px solid #7DD3FC",
+            borderTop: "1px solid #7DD3FC"
           }}
         />
       </div>

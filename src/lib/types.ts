@@ -57,6 +57,10 @@ export interface User {
   // widget EOD client-checkin nudge). Default true — flip off in the
   // DB for executives who don't run that ritual themselves.
   dailyPromptsEnabled?: boolean;
+  // Flips to true once the user finishes the email-notifications
+  // onboarding modal. Drives whether the /home email card shows the
+  // CTA or the live notification list.
+  emailNotificationsOnboarded?: boolean;
 }
 
 export interface Department {

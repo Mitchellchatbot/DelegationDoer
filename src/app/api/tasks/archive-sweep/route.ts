@@ -33,7 +33,12 @@ export async function POST(_req: NextRequest) {
     }
 
     const result = await runArchiveSweep();
-    return NextResponse.json({ ok: true, archived: result.count, cutoff: result.cutoff });
+    return NextResponse.json({
+      ok: true,
+      archived: result.count,
+      doneCutoff: result.doneCutoff,
+      overdueCutoff: result.overdueCutoff
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : "unknown error";
     return NextResponse.json({ error: message }, { status: 500 });

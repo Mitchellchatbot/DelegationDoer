@@ -4,9 +4,10 @@ import { runArchiveSweep } from "@/lib/task-archive-runner";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-// GET /api/cron/archive-done — auto-archives tasks finished more than
-// ARCHIVE_AFTER_DAYS (7) days ago, so the active "Done" column only ever shows
-// recently-completed work.
+// GET /api/cron/archive-done — auto-archives stale tasks so the active board
+// only shows live work. Two rules (see task-archive-runner): done tasks
+// finished more than ARCHIVE_AFTER_DAYS (7) days ago, and open tasks overdue by
+// more than the configurable workspace threshold (overdue_archive_days).
 //
 // On Vercel this is driven by vercel.json's daily cron. On Railway / any
 // long-lived host the SAME sweep is scheduled in-process by
@@ -41,13 +42,20 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({
         ok: true,
         mode: "dry-run",
-        windowDays: result.windowDays,
-        cutoff: result.cutoff,
+        doneWindowDays: result.doneWindowDays,
+        overdueWindowDays: result.overdueWindowDays,
+        doneCutoff: result.doneCutoff,
+        overdueCutoff: result.overdueCutoff,
         wouldArchive: result.count,
         tasks: result.tasks
       });
     }
-    return NextResponse.json({ ok: true, archived: result.count, cutoff: result.cutoff });
+    return NextResponse.json({
+      ok: true,
+      archived: result.count,
+      doneCutoff: result.doneCutoff,
+      overdueCutoff: result.overdueCutoff
+    });
   } catch (err) {
     return NextResponse.json(
       { ok: false, error: err instanceof Error ? err.message : String(err) },

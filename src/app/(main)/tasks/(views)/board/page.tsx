@@ -11,7 +11,7 @@ import { Avatar } from "@/components/Avatar";
 import { PersonAvatar } from "@/components/PersonAvatar";
 import { Countdown } from "@/components/Countdown";
 import { useCurrentUser } from "@/lib/user-context";
-import { cn } from "@/lib/utils";
+import { cn, formatDate } from "@/lib/utils";
 import type { Task, TaskStatus, User } from "@/lib/types";
 import {
   Clock, Globe2, Building2, Users as UsersIcon, FolderKanban,
@@ -36,6 +36,12 @@ import { ClockGate } from "@/components/ClockGate";
 // columns represent (status, client_name, or assignee_id).
 
 type GroupBy = "status" | "client" | "person";
+
+// Which slice of tasks the board shows. Active = the live board (archived
+// excluded, the default). Archived = only tasks swept off the board. All =
+// both, so you can see everything in one place. Drives which /api/tasks feed
+// we fetch; board counts follow the fetched slice automatically.
+type Scope = "active" | "archived" | "all";
 
 interface Column {
   id: string;        // droppable id; "__internal" / "__unassigned" for null buckets
@@ -105,6 +111,14 @@ export default function BoardPage() {
   })();
   const [groupBy, setGroupBy] = useState<GroupBy>(initialGroupBy);
   const [moreFiltersOpen, setMoreFiltersOpen] = useState(false);
+
+  // Active / Archived / All slice. `?scope=archived|all` deep-links the view;
+  // defaults to the live (active) board.
+  const initialScope = ((): Scope => {
+    const s = searchParams.get("scope");
+    return s === "archived" || s === "all" ? s : "active";
+  })();
+  const [scope, setScope] = useState<Scope>(initialScope);
 
   // Bulk-select (admins only). When `selecting` is on, clicking a card
   // toggles its selection instead of navigating, and a bulk action bar
@@ -194,7 +208,11 @@ export default function BoardPage() {
 
   useEffect(() => {
     let cancelled = false;
-    fetch("/api/tasks", { cache: "no-store" })
+    setLoading(true);
+    // Map the scope to the matching /api/tasks feed (same privacy filter
+    // applies to all three server-side).
+    const qs = scope === "archived" ? "?archived=true" : scope === "all" ? "?all=true" : "";
+    fetch(`/api/tasks${qs}`, { cache: "no-store" })
       .then((r) => r.json())
       .then((data) => {
         if (cancelled) return;
@@ -207,7 +225,7 @@ export default function BoardPage() {
         setLoading(false);
       });
     return () => { cancelled = true; };
-  }, []);
+  }, [scope]);
 
   function toggleDept(deptId: string) {
     setSelectedDepts((cur) => {
@@ -436,6 +454,16 @@ export default function BoardPage() {
         <h1 className="text-lg font-medium">Board <span className="text-muted text-sm">· {visible.length}</span></h1>
 
         <div className="flex items-center gap-2 flex-wrap">
+          {/* Scope axis — which slice of tasks is shown. "Update board counts
+              to exclude archived" falls out for free: Active fetches the
+              archived-excluded feed, so the header count + column counts only
+              cover live work. */}
+          <div className="inline-flex items-center rounded-xl border border-border bg-surface p-0.5">
+            <ViewBtn active={scope === "active"}   onClick={() => setScope("active")}   icon={<Layout className="w-3.5 h-3.5" />}  label="Active" />
+            <ViewBtn active={scope === "archived"} onClick={() => setScope("archived")} icon={<Archive className="w-3.5 h-3.5" />} label="Archived" />
+            <ViewBtn active={scope === "all"}      onClick={() => setScope("all")}      icon={<Layers className="w-3.5 h-3.5" />}  label="All" />
+          </div>
+
           {/* Group-by axis (kept) */}
           <div className="inline-flex items-center rounded-xl border border-border bg-surface p-0.5">
             <ViewBtn active={groupBy === "status"} onClick={() => setGroupBy("status")} icon={<Layout className="w-3.5 h-3.5" />}    label="By status" />
@@ -443,14 +471,15 @@ export default function BoardPage() {
             <ViewBtn active={groupBy === "person"} onClick={() => setGroupBy("person")} icon={<UsersIcon className="w-3.5 h-3.5" />} label="By person" />
           </div>
 
-          {/* Archived view — completed work moved off the board. Open to
-              everyone (archived tasks are normal finished work, just decluttered). */}
+          {/* Dedicated Archived view — the managed list with Unarchive +
+              "Run sweep now". Distinct from the Archived scope tab above, which
+              just shows archived tasks in the board layout. */}
           <Link
             href="/tasks/archived"
             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium border border-border bg-white text-muted hover:text-ink hover:border-accent/40 transition-colors"
           >
             <Archive className="w-3.5 h-3.5" />
-            Archived
+            Archived view
           </Link>
 
           {/* Admin-only: bulk-select toggle + recovery link. */}
@@ -624,6 +653,10 @@ export default function BoardPage() {
                                   // border so they read as "finished" at a
                                   // glance instead of blending with open work.
                                   t.status === "done" && "bg-emerald-50/70 border-emerald-200/70",
+                                  // Archived tasks (visible in the Archived/All
+                                  // scopes) get an amber tint that wins over the
+                                  // done tint so "off the board" reads clearly.
+                                  t.archivedAt && "bg-amber-50/50 border-amber-300/70",
                                   s.isDragging && "ring-1 ring-accent/40 shadow-lift",
                                   selecting && selectedIds.has(t.id) && "ring-2 ring-rose-500 border-rose-300"
                                 )}
@@ -649,9 +682,20 @@ export default function BoardPage() {
                                     )}
                                   </div>
                                 )}
-                                <div className="mt-1.5 flex flex-wrap gap-1">
+                                <div className="mt-1.5 flex flex-wrap gap-1 items-center">
                                   {t.tags.slice(0, 2).map((x) => <Tag key={x}>{x}</Tag>)}
                                   {t.inactiveFlag && <StalledBadge />}
+                                  {/* Archived indicator + archive date — shown
+                                      in the Archived/All scopes. */}
+                                  {t.archivedAt && (
+                                    <span
+                                      title={`Archived ${formatDate(t.archivedAt)}`}
+                                      className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-200/70"
+                                    >
+                                      <Archive className="w-2.5 h-2.5" />
+                                      Archived · {formatDate(t.archivedAt)}
+                                    </span>
+                                  )}
                                 </div>
                                 <div className="mt-2 flex items-center justify-between text-xs text-muted">
                                   <div className="flex items-center gap-1.5">

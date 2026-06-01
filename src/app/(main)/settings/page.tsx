@@ -9,6 +9,7 @@ import { MissiveIntegrationSection } from "@/components/MissiveIntegrationSectio
 import { MyInboxesSection } from "@/components/MyInboxesSection";
 import { DepartmentSlackSection } from "@/components/DepartmentSlackSection";
 import { WorkspaceChannelsSection } from "@/components/WorkspaceChannelsSection";
+import { ArchivingSettingsSection } from "@/components/ArchivingSettingsSection";
 import { SlackConnectSection } from "@/components/SlackConnectSection";
 import { GoogleConnectSection } from "@/components/GoogleConnectSection";
 import { CustomFieldsSection } from "@/components/CustomFieldsSection";
@@ -67,6 +68,11 @@ export default async function SettingsPage() {
       {canManageOrg && <WorkspaceChannelsSection canEdit />}
 
       {canManageOrg && <DepartmentSlackSection canEdit />}
+
+      {/* Auto-archive policy — leader-tunable overdue threshold. Open to
+          everyone read-only so workers understand why tasks leave the board;
+          only leaders/admins can change it. */}
+      <ArchivingSettingsSection canEdit={canManageOrg} />
 
       <DesktopAppSection />
 

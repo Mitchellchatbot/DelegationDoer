@@ -34,12 +34,18 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ tasks: deleted });
     }
 
-    // Archived feed: completed work that's been moved off the active board.
-    // Unlike the admin-only `deleted` feed, archived tasks are normal finished
-    // work, so any authenticated user may see them — subject to the SAME
-    // leader-privacy filter applied to the active list below.
+    // Board scope feeds, both subject to the SAME leader-privacy filter as the
+    // active list below (archived tasks are normal work, just decluttered):
+    //   ?archived=true → only archived tasks (the Archived view / board filter).
+    //   ?all=true      → active + archived together (the board's "All" filter).
+    //   (default)      → active only (archived excluded), the live board.
     const archived = req.nextUrl.searchParams.get("archived") === "true";
-    const tasks = archived ? await getArchivedTasks() : await getAllTasks();
+    const all = req.nextUrl.searchParams.get("all") === "true";
+    const tasks = archived
+      ? await getArchivedTasks()
+      : all
+        ? await getAllTasks({ includeArchived: true })
+        : await getAllTasks();
 
     if (viewer && (viewer.role === "leader" || viewer.isAdmin)) {
       return NextResponse.json({ tasks });

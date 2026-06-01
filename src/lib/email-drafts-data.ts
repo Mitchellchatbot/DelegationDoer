@@ -192,5 +192,6 @@ export function kindLabel(k: EmailDraftKind): string {
     case "content_plan":  return "Content plan";
     case "client_update": return "Client update";
     case "custom":        return "Custom";
+    case "auto_reply":    return "Auto-reply";
   }
 }

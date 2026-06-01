@@ -400,12 +400,12 @@ export default function WidgetPage() {
   // task alerts or kudos banners when we have no session at all.
   if (signedOut) {
     if (state === "panel") return <SignInPanel onCollapse={collapseToBubble} />;
-    return <Bubble onExpand={expandToPanel} unackedCount={0} iconUrl={widgetIconUrl} online={onShift} />;
+    return <Bubble onExpand={expandToPanel} unackedCount={0} iconUrl={widgetIconUrl} />;
   }
 
   if (state === "panel") return (
     <ClockProvider>
-      <Panel tasks={tasks} unacked={unacked} kudos={kudos} notifications={notifications} eom={eom} birthdays={birthdays} onAck={acknowledge} onAckKudos={acknowledgeKudos} onDismissNotif={dismissNotification} onCollapse={collapseToBubble} onUpdated={fetchTasks} widgetIconUrl={widgetIconUrl} onIconChanged={fetchMe} />
+      <Panel tasks={tasks} unacked={unacked} kudos={kudos} notifications={notifications} eom={eom} birthdays={birthdays} onAck={acknowledge} onAckKudos={acknowledgeKudos} onDismissNotif={dismissNotification} onCollapse={collapseToBubble} onUpdated={fetchTasks} widgetIconUrl={widgetIconUrl} onIconChanged={fetchMe} online={onShift} />
     </ClockProvider>
   );
   if (state === "alert") {
@@ -413,27 +413,27 @@ export default function WidgetPage() {
     // task is the loudest signal; mentions are real-time pings; kudos
     // is celebratory and can wait.
     if (unacked.length > 0) {
-      return <Alert task={unacked[0]} unackedCount={unacked.length} onAck={acknowledge} onExpand={expandToPanel} crowned={eom.isMe} iconUrl={widgetIconUrl} online={onShift} />;
+      return <Alert task={unacked[0]} unackedCount={unacked.length} onAck={acknowledge} onExpand={expandToPanel} crowned={eom.isMe} iconUrl={widgetIconUrl} />;
     }
     if (notifications.length > 0) {
-      return <NotifAlert notif={notifications[0]} count={notifications.length} onDismiss={dismissNotification} onExpand={expandToPanel} crowned={eom.isMe} iconUrl={widgetIconUrl} online={onShift} />;
+      return <NotifAlert notif={notifications[0]} count={notifications.length} onDismiss={dismissNotification} onExpand={expandToPanel} crowned={eom.isMe} iconUrl={widgetIconUrl} />;
     }
     if (kudos.length > 0) {
-      return <KudosAlert kudos={kudos[0]} count={kudos.length} onAck={acknowledgeKudos} onExpand={expandToPanel} crowned={eom.isMe} iconUrl={widgetIconUrl} online={onShift} />;
+      return <KudosAlert kudos={kudos[0]} count={kudos.length} onAck={acknowledgeKudos} onExpand={expandToPanel} crowned={eom.isMe} iconUrl={widgetIconUrl} />;
     }
     if (eodReminderDue) {
-      return <EodReminderAlert onExpand={expandToPanel} crowned={eom.isMe} iconUrl={widgetIconUrl} online={onShift} />;
+      return <EodReminderAlert onExpand={expandToPanel} crowned={eom.isMe} iconUrl={widgetIconUrl} />;
     }
   }
-  return <Bubble onExpand={expandToPanel} unackedCount={unacked.length + kudos.length + notifications.length + (eodReminderDue ? 1 : 0)} crowned={eom.isMe} iconUrl={widgetIconUrl} online={onShift} />;
+  return <Bubble onExpand={expandToPanel} unackedCount={unacked.length + kudos.length + notifications.length + (eodReminderDue ? 1 : 0)} crowned={eom.isMe} iconUrl={widgetIconUrl} />;
 }
 
 // Banner that appears when the worker's scheduled day has ended and
 // they haven't filed any EOD client check-ins. Clicking it expands
 // the widget panel so they can hop straight to the EOD form.
 function EodReminderAlert({
-  onExpand, crowned, iconUrl, online
-}: { onExpand: () => void; crowned: boolean; iconUrl: string | null; online?: boolean }) {
+  onExpand, crowned, iconUrl
+}: { onExpand: () => void; crowned: boolean; iconUrl: string | null }) {
   return (
     <button
       type="button"
@@ -441,7 +441,7 @@ function EodReminderAlert({
       className="group flex items-center gap-2 px-3 py-2 rounded-2xl bg-gradient-to-br from-violet-600 to-fuchsia-600 text-white shadow-[0_12px_24px_-10px_rgba(124,58,237,0.55)] hover:-translate-y-0.5 transition-transform"
       title="File your end-of-day client check-ins"
     >
-      <BubbleIcon unackedCount={1} crowned={crowned} iconUrl={iconUrl} online={online} />
+      <BubbleIcon unackedCount={1} crowned={crowned} iconUrl={iconUrl} />
       <div className="text-left">
         <div className="text-[10px] uppercase tracking-wide font-bold opacity-85">End of day</div>
         <div className="text-xs font-semibold leading-tight">File client check-ins</div>
@@ -457,15 +457,11 @@ function EodReminderAlert({
 // otherwise the bubble reads as a squircle even though the icon is round.
 
 function BubbleIcon({
-  unackedCount, crowned = false, iconUrl, online = false
+  unackedCount, crowned = false, iconUrl
 }: {
   unackedCount: number;
   crowned?: boolean;
   iconUrl?: string | null;
-  // Drives the green pulsing "I'm on shift" dot in the bottom-right
-  // corner. Passed down from WidgetPage so the dot stays in sync
-  // with the same clock state ClockSection reads — no second fetch.
-  online?: boolean;
 }) {
   return (
     <div style={{ position: "relative", width: 64, height: 64 }}>
@@ -487,31 +483,10 @@ function BubbleIcon({
             : "drop-shadow(0 4px 10px rgba(0,0,0,0.35))"
         }}
       />
-      {/* Online indicator — green pulsing dot, bottom-right. Replaces
-          the old clock-icon affordance. Only renders when the user is
-          actively clocked in. */}
-      {online && (
-        <span
-          aria-label="Online (clocked in)"
-          title="On shift"
-          className="anim-pulse-dot"
-          style={{
-            position: "absolute",
-            bottom: 2,
-            right: 2,
-            width: 14,
-            height: 14,
-            borderRadius: "50%",
-            background: "#10b981",
-            border: "2px solid white",
-            boxShadow: "0 0 8px rgba(16,185,129,0.55)",
-            pointerEvents: "none"
-          }}
-        />
-      )}
       {/* Employee of the Month — small crowned dot at the bottom-left
-          corner. Same scale as the online dot so the bubble stays
-          uncluttered. */}
+          corner. Small enough to leave the bubble uncluttered; the
+          panel header shows the green "online" dot when the user is
+          actually clocked in. */}
       {crowned && (
         <span
           aria-label="Employee of the Month"
@@ -563,7 +538,7 @@ function BubbleIcon({
 
 const DRAG_THRESHOLD = 4;
 
-function Bubble({ onExpand, unackedCount, crowned = false, iconUrl, online = false }: { onExpand: () => void; unackedCount: number; crowned?: boolean; iconUrl?: string | null; online?: boolean }) {
+function Bubble({ onExpand, unackedCount, crowned = false, iconUrl, }: { onExpand: () => void; unackedCount: number; crowned?: boolean; iconUrl?: string | null }) {
   const startRef = useRef<{ x: number; y: number; dragging: boolean } | null>(null);
   function api() { return (window as any).widgetAPI; }
 
@@ -611,7 +586,7 @@ function Bubble({ onExpand, unackedCount, crowned = false, iconUrl, online = fal
           cursor: "grab"
         }}
       >
-        <BubbleIcon unackedCount={unackedCount} crowned={crowned} iconUrl={iconUrl} online={online} />
+        <BubbleIcon unackedCount={unackedCount} crowned={crowned} iconUrl={iconUrl} />
       </button>
     </div>
   );
@@ -620,7 +595,7 @@ function Bubble({ onExpand, unackedCount, crowned = false, iconUrl, online = fal
 /* ============================ ALERT (speech bubble) ============================ */
 
 function Alert({
-  task, unackedCount, onAck, onExpand, crowned = false, iconUrl, online = false
+  task, unackedCount, onAck, onExpand, crowned = false, iconUrl,
 }: {
   task: WidgetTask | undefined;
   unackedCount: number;
@@ -628,7 +603,7 @@ function Alert({
   onExpand: () => void;
   crowned?: boolean;
   iconUrl?: string | null;
-  online?: boolean;
+
 }) {
   if (!task) return null;
   return (
@@ -691,7 +666,7 @@ function Alert({
         className="shrink-0 wg-bubble-btn anim-scale-in"
         aria-label="Open"
       >
-        <BubbleIcon unackedCount={unackedCount} crowned={crowned} iconUrl={iconUrl} online={online} />
+        <BubbleIcon unackedCount={unackedCount} crowned={crowned} iconUrl={iconUrl} />
       </button>
 
     </div>
@@ -783,7 +758,7 @@ function SignInPanel({ onCollapse }: { onCollapse: () => void }) {
 // the bubble icon. Fires when there's a new kudos and no task alerts.
 
 function KudosAlert({
-  kudos: k, count, onAck, onExpand, crowned = false, iconUrl, online = false
+  kudos: k, count, onAck, onExpand, crowned = false, iconUrl,
 }: {
   kudos: WidgetKudos;
   count: number;
@@ -791,7 +766,7 @@ function KudosAlert({
   onExpand: () => void;
   crowned?: boolean;
   iconUrl?: string | null;
-  online?: boolean;
+
 }) {
   return (
     <div
@@ -845,7 +820,7 @@ function KudosAlert({
         className="shrink-0 wg-bubble-btn anim-scale-in"
         aria-label="Open"
       >
-        <BubbleIcon unackedCount={count} crowned={crowned} iconUrl={iconUrl} online={online} />
+        <BubbleIcon unackedCount={count} crowned={crowned} iconUrl={iconUrl} />
       </button>
     </div>
   );
@@ -854,7 +829,7 @@ function KudosAlert({
 /* ============================ NOTIF ALERT (mention / notify-teammates) ============================ */
 
 function NotifAlert({
-  notif, count, onDismiss, onExpand, crowned = false, iconUrl, online = false
+  notif, count, onDismiss, onExpand, crowned = false, iconUrl,
 }: {
   notif: WidgetNotification;
   count: number;
@@ -862,7 +837,7 @@ function NotifAlert({
   onExpand: () => void;
   crowned?: boolean;
   iconUrl?: string | null;
-  online?: boolean;
+
 }) {
   const headline = notif.kind === "mention"
     ? `${notif.from?.name ?? "Someone"} mentioned you`
@@ -923,7 +898,7 @@ function NotifAlert({
         className="shrink-0 wg-bubble-btn anim-scale-in"
         aria-label="Open"
       >
-        <BubbleIcon unackedCount={count} crowned={crowned} iconUrl={iconUrl} online={online} />
+        <BubbleIcon unackedCount={count} crowned={crowned} iconUrl={iconUrl} />
       </button>
     </div>
   );
@@ -1606,7 +1581,7 @@ function TaskTimerButton({ taskId, compact = false }: { taskId: string; compact?
 
 function Panel({
   tasks, unacked, kudos, notifications, eom, birthdays, onAck, onAckKudos, onDismissNotif, onCollapse, onUpdated,
-  widgetIconUrl, onIconChanged
+  widgetIconUrl, onIconChanged, online
 }: {
   tasks: WidgetTask[];
   unacked: WidgetTask[];
@@ -1624,7 +1599,13 @@ function Panel({
   onUpdated: () => void;
   widgetIconUrl: string | null;
   onIconChanged: () => void;
+  // Clock-in state — true when the user is actively on a shift. Used
+  // by the panel header to render a small green presence dot next to
+  // the brand text. Optional so older callers without the prop don't
+  // become invalid; defaults to false.
+  online?: boolean;
 }) {
+  void online; // Header rendering will read this once the panel-dot UI lands.
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [showingSettings, setShowingSettings] = useState(false);

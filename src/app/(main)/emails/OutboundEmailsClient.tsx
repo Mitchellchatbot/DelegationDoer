@@ -272,11 +272,15 @@ export function Meta({ label, children }: { label: string; children: React.React
   );
 }
 
-export function kindBadgeTone(k: "content_plan" | "client_update" | "custom") {
+export function kindBadgeTone(k: "content_plan" | "client_update" | "custom" | "auto_reply" | string) {
+  // Defensive default — same crash pattern as the approvals page would
+  // hit if a new kind ships in the DB before this lookup is updated.
   switch (k) {
     case "content_plan":  return { bg: "bg-violet-100",  text: "text-violet-700",  border: "border-violet-200/60" };
     case "client_update": return { bg: "bg-blue-100",    text: "text-blue-700",    border: "border-blue-200/60" };
     case "custom":        return { bg: "bg-slate-100",   text: "text-slate-600",   border: "border-slate-200/60" };
+    case "auto_reply":    return { bg: "bg-amber-100",   text: "text-amber-700",   border: "border-amber-200/60" };
+    default:              return { bg: "bg-slate-100",   text: "text-slate-600",   border: "border-slate-200/60" };
   }
 }
 

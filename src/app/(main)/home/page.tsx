@@ -2,10 +2,8 @@ import { redirect } from "next/navigation";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { isLeader } from "@/lib/auth";
-import { isApprover } from "@/lib/email-approvers";
 import {
   getTodayTasksForUser,
-  getNeedsYouCounts,
   getDayBookendStatus,
   getSeoBriefsForHome,
   getLeaderPulse,
@@ -54,34 +52,10 @@ export default async function HomePage() {
       ? scopedDepartmentIds.length === 1 ? primaryDeptLabel(scopedDepartmentIds[0]) : "Your departments"
       : undefined;
 
-    const canApprove = isApprover({ name: me.name, role: me.role, isAdmin: me.isAdmin });
+    const showSeoBriefs = true;
 
-    // SEO briefs only render for leaders/admins (they wrote them) and
-    // for SEO dept heads. SEO workers see the same card in the worker
-    // branch below.
-    const showSeoBriefs =
-      isLeaderRole || (isHead && (me.departmentIds ?? []).includes("dep_seo"));
-
-    // Restructured leader home — the notification feed (What's moving)
-    // is the centerpiece, charts row + Apple-style reminder list flank
-    // it. Old Client health / Team today / Due today cards are gone:
-    // every signal they carried now lives inside the feed, sorted by
-    // recency. Removing the duplicates cut the page from 5 stacked
-    // cards (lots of scroll) to a feed + two glance tiles + a todo.
-    const [needsYou, seoBriefs, pulse, postsPerClient, stalledCount, leaderTodos] = await Promise.all([
-      getNeedsYouCounts({
-        canApprove,
-        visibleDepartmentIds: scopedDepartmentIds,
-        hourLocal,
-        // Inboxes unread is owned by the badges endpoint (needs the
-        // missive integration). The strip can render without it on
-        // first paint; the sidebar badge fills it in on hydrate.
-        inboxesUnread: 0
-      }),
+    const [seoBriefs, pulse, postsPerClient, stalledCount, leaderTodos] = await Promise.all([
       showSeoBriefs ? getSeoBriefsForHome(20) : Promise.resolve([]),
-      // What's-moving feed — unified notification surface across
-      // tasks, approvals, alerts, and clients. Higher cap (60) since
-      // it's the primary surface now.
       getLeaderPulse({ scopedDepartmentIds, total: 60 }),
       getPostsPerClient(),
       getStalledTaskCount(),
@@ -93,7 +67,6 @@ export default async function HomePage() {
         {dayBookends && <DayBookends status={dayBookends} hourLocal={hourLocal} />}
         <HomeLeaderHero
           meName={me.name}
-          needsYou={needsYou}
           scopeLabel={scopeLabel}
         />
         {/* Notifications — the focus of the new leader home. */}
@@ -110,17 +83,21 @@ export default async function HomePage() {
   // Worker view. Today's tasks; the clock provider is client-side
   // (context). Day Bookends now owns the SOD/EOD prompts — HomeWorker
   // no longer renders its own EOD nudge banner.
-  const isSeoWorker = (me.departmentIds ?? []).includes("dep_seo");
+  //
+  // SEO briefs are visible to every worker too (Mitchell wants them
+  // company-wide). Brief edit gate still applies — the PATCH route
+  // still rejects non-leaders/heads, so a worker can read but not
+  // write.
   const [tasks, seoBriefs] = await Promise.all([
     getTodayTasksForUser(userId, 8),
-    isSeoWorker ? getSeoBriefsForHome(20) : Promise.resolve([])
+    getSeoBriefsForHome(20)
   ]);
 
   return (
     <div className="space-y-3 max-w-3xl">
       {dayBookends && <DayBookends status={dayBookends} hourLocal={hourLocal} />}
       <HomeWorker meName={me.name} tasks={tasks} />
-      {isSeoWorker && <HomeSeoBriefs rows={seoBriefs} />}
+      <HomeSeoBriefs rows={seoBriefs} />
     </div>
   );
 }

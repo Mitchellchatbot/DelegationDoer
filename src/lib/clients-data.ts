@@ -86,6 +86,10 @@ export interface Client {
   // sub-teams). Null = unassigned. Free-text in the DB; app code
   // validates against the TEAMS set in @/lib/client-teams.
   teamId: string | null;
+  // Optional point person within the owning team. Null = the team
+  // owns this client collectively. Used to show a name + avatar on
+  // the row and to route notifications.
+  assignedUserId: string | null;
   // Optional profile image URL. Set via PATCH /api/clients/[id]/icon
   // which uploads to Supabase Storage and writes the resulting public
   // URL here. Null = fall back to the generic briefcase icon.
@@ -149,6 +153,7 @@ interface ClientRow {
   touchpoint_summary_by: string | null;
   encourage_emails: boolean | null;
   team_id: string | null;
+  assigned_user_id: string | null;
   icon_url: string | null;
   created_at: string;
   updated_at: string;
@@ -206,6 +211,7 @@ function rowToClient(r: ClientRow, touchpoint?: {
     // Default TRUE so existing clients keep their current behavior.
     encourageEmails: r.encourage_emails ?? true,
     teamId: r.team_id ?? null,
+    assignedUserId: r.assigned_user_id ?? null,
     iconUrl: r.icon_url ?? null,
     lastOutboundEmailAt: touchpoint?.lastOutboundEmailAt ?? null,
     lastOutboundSubject: touchpoint?.lastOutboundSubject ?? null,

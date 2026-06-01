@@ -49,13 +49,27 @@ const PRIORITY_TONES = {
 type SortMode = "priority" | "stalest" | "freshest" | "name";
 type HealthFilter = "all" | TouchpointLabel;
 
+export interface PickableUser {
+  id: string;
+  name: string;
+  avatarUrl: string | null;
+  role: string;
+  departmentIds: string[];
+}
+
 interface Props {
   initial: Client[];
   openCounts: Record<string, number>;
   canEdit: boolean;
+  /** Users that can be picked as the point person on a client.
+   *  Server-side filtered (e.g. leaders excluded). Empty array
+   *  hides the person-picker section in the menu. */
+  pickableUsers?: PickableUser[];
 }
 
-export function ClientPriorityList({ initial, openCounts, canEdit }: Props) {
+export function ClientPriorityList({
+  initial, openCounts, canEdit, pickableUsers = []
+}: Props) {
   const [clients, setClients] = useState(initial);
   const [sortMode, setSortMode] = useState<SortMode>("priority");
   const [healthFilter, setHealthFilter] = useState<HealthFilter>("all");
@@ -80,6 +94,18 @@ export function ClientPriorityList({ initial, openCounts, canEdit }: Props) {
   function updateClientIcon(clientId: string, iconUrl: string | null) {
     setClients((prev) =>
       prev.map((c) => (c.id === clientId ? { ...c, iconUrl } : c))
+    );
+  }
+
+  // Same optimistic-update pattern for team / point-person changes
+  // from ClientTeamPicker. Saves us an extra router.refresh() after
+  // every dropdown selection.
+  function updateClientAssignment(
+    clientId: string,
+    patch: { teamId?: string | null; assignedUserId?: string | null }
+  ) {
+    setClients((prev) =>
+      prev.map((c) => (c.id === clientId ? { ...c, ...patch } : c))
     );
   }
 
@@ -430,7 +456,10 @@ export function ClientPriorityList({ initial, openCounts, canEdit }: Props) {
                           <ClientTeamPicker
                             clientId={c.id}
                             teamId={c.teamId}
+                            assignedUserId={c.assignedUserId}
                             canEdit={canEdit}
+                            users={pickableUsers}
+                            onAssigned={(patch) => updateClientAssignment(c.id, patch)}
                           />
                           {canEdit && (
                             <EmailToggleButton
@@ -549,7 +578,10 @@ export function ClientPriorityList({ initial, openCounts, canEdit }: Props) {
                 <ClientTeamPicker
                   clientId={c.id}
                   teamId={c.teamId}
+                  assignedUserId={c.assignedUserId}
                   canEdit={canEdit}
+                  users={pickableUsers}
+                  onAssigned={(patch) => updateClientAssignment(c.id, patch)}
                 />
                 <div className="flex items-center gap-1.5">
                   {c.priorityRank !== null && (

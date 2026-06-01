@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 import { PersonAvatar } from "@/components/PersonAvatar";
 import { Countdown } from "@/components/Countdown";
+import { PageHero } from "@/components/PageHero";
 import { PriorityBadge } from "@/components/Badges";
 import { Tooltip } from "@/components/Tooltip";
 import { TOUCHPOINT_META } from "@/lib/client-touchpoint";
@@ -64,22 +65,18 @@ export function HomeLeader({ meName, needsYou, team, deliverables, clientHealth,
 }
 
 function Header({ firstName, scopeLabel }: { firstName: string; scopeLabel?: string }) {
-  // Slim header — was a tall card on its own row before. Now it's a
-  // single line so the actual dashboard content can sit higher.
+  // Use the shared PageHero so the dashboard's header matches /clients,
+  // /approvals, /tasks etc — same rounded card, eyebrow, big headline
+  // with an accent word, optional subtitle. Earlier custom slim banner
+  // looked out of place next to the rest of the app.
   return (
-    <header className="rounded-2xl border border-indigo-200/60 shadow-soft px-4 py-2.5 bg-gradient-to-r from-indigo-50 via-white to-indigo-50/60 flex items-center gap-3">
-      <div className="w-8 h-8 rounded-lg bg-white/80 grid place-items-center text-indigo-600 shrink-0 shadow-sm">
-        {scopeLabel ? <Users className="w-4 h-4" /> : <Crown className="w-4 h-4" />}
-      </div>
-      <div className="min-w-0">
-        <h1 className="text-[16px] font-bold text-ink leading-tight truncate">
-          Good to see you, {firstName}
-        </h1>
-        <div className="text-[10px] uppercase tracking-[0.18em] font-semibold text-indigo-700">
-          {scopeLabel ? `${scopeLabel} · today` : "Today"}
-        </div>
-      </div>
-    </header>
+    <PageHero
+      eyebrow={scopeLabel ? `${scopeLabel} · today` : "Today"}
+      headline={["Good to see you, ", { accent: firstName }]}
+      subtitle="Quick read on what's open, who's stuck, and which clients need a nudge."
+      icon={scopeLabel ? <Users /> : <Crown />}
+      iconTone={scopeLabel ? "emerald" : "indigo"}
+    />
   );
 }
 

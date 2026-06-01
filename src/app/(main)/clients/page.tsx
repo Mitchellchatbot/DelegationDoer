@@ -6,6 +6,7 @@ import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { canManageAssignments } from "@/lib/inbox-access";
 import { getClients, getOpenTaskCountsByClient } from "@/lib/clients-data";
+import { getAllUsersLight } from "@/lib/server-data";
 import { NewClientDialog } from "@/components/NewClientDialog";
 import { ClientPriorityList } from "@/components/ClientPriorityList";
 import { RescanClientMailButton } from "@/components/RescanClientMailButton";
@@ -17,15 +18,28 @@ export default async function ClientsPage() {
   const me = await getUserById(userId);
   if (!me) redirect("/login");
 
-  const [clients, openCountsMap] = await Promise.all([
+  const [clients, openCountsMap, allUsers] = await Promise.all([
     getClients(),                  // already sorted by display_order asc
-    getOpenTaskCountsByClient()
+    getOpenTaskCountsByClient(),
+    getAllUsersLight()
   ]);
 
   // Plain object so we can pass it to a client component without serializing
   // a Map.
   const openCounts: Record<string, number> = {};
   openCountsMap.forEach((v, k) => { openCounts[k] = v; });
+
+  // Trim users to the fields the picker actually shows — keeps the
+  // bundle / serialization small.
+  const pickableUsers = allUsers
+    .filter((u) => u.role !== "leader")
+    .map((u) => ({
+      id: u.id,
+      name: u.name,
+      avatarUrl: u.avatarUrl ?? null,
+      role: u.role,
+      departmentIds: u.departmentIds ?? []
+    }));
 
   const canEdit = canManageAssignments(me);
 
@@ -88,6 +102,7 @@ export default async function ClientsPage() {
         initial={clients}
         openCounts={openCounts}
         canEdit={canEdit}
+        pickableUsers={pickableUsers}
       />
     </div>
   );

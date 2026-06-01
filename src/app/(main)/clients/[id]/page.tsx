@@ -262,6 +262,14 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
                   ))}
                 </div>
               )}
+              {client.onboardingDate && (
+                <div className="text-xs text-ink/60 inline-flex items-center gap-1 mt-1">
+                  <CalendarClock className="w-3 h-3 shrink-0" /> Onboarded{" "}
+                  {new Date(client.onboardingDate).toLocaleDateString(undefined, {
+                    year: "numeric", month: "short", day: "numeric"
+                  })}
+                </div>
+              )}
               {client.notes && (
                 <p className="text-sm text-ink/70 mt-2 max-w-2xl">{client.notes}</p>
               )}
@@ -301,6 +309,22 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
           ))
         }
       />
+
+      {/* Business information — the onboarding brief captured at client
+          creation. Surfaced high on the page so the team can reference
+          company overview, services, background, and special
+          instructions at a glance. */}
+      {client.businessInformation && (
+        <section className="rounded-2xl border border-white/60 shadow-soft bg-gradient-to-br from-indigo-50/60 to-white p-4 space-y-2">
+          <header className="flex items-center gap-2">
+            <FileText className="w-4 h-4 text-indigo-600" />
+            <div className="text-sm font-semibold">Business information</div>
+          </header>
+          <p className="text-sm text-ink/80 whitespace-pre-wrap leading-relaxed">
+            {client.businessInformation}
+          </p>
+        </section>
+      )}
 
       <ClientTouchpointCard
         clientId={client.id}

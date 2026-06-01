@@ -38,6 +38,12 @@ export interface Client {
   displayOrder: number;
   contactName: string | null;
   contactEmails: string[];
+  // When the client was onboarded (date-only). Captured at creation
+  // time; surfaced prominently on the client profile.
+  onboardingDate: string | null;
+  // Free-text onboarding brief: company overview, products/services,
+  // background, special instructions — anything the team should know.
+  businessInformation: string | null;
   startDate: string | null;
   subscriptionDate: string | null;
   status: string;
@@ -135,6 +141,8 @@ interface ClientRow {
   display_order: number | string; // pg numeric → string
   contact_name: string | null;
   contact_emails: string[] | null;
+  onboarding_date: string | null;
+  business_information: string | null;
   start_date: string | null;
   subscription_date: string | null;
   status: string | null;
@@ -202,6 +210,8 @@ function rowToClient(r: ClientRow, touchpoint?: {
     displayOrder: Number(r.display_order ?? 0),
     contactName: r.contact_name ?? null,
     contactEmails: r.contact_emails ?? [],
+    onboardingDate: r.onboarding_date ?? null,
+    businessInformation: r.business_information ?? null,
     startDate: r.start_date ?? null,
     subscriptionDate: r.subscription_date ?? null,
     status: r.status ?? "active",

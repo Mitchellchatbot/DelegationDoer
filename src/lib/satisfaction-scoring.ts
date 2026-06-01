@@ -96,9 +96,11 @@ export async function startScanRun(opts: {
 }
 
 export function defaultScopeFrom(): string {
-  // 3 months back per spec.
+  // 14 days back — matches the current spec for the historical scan.
+  // Older windows are available via the scope picker in the admin UI;
+  // a 14-day default keeps the first-run cost predictable.
   const d = new Date();
-  d.setMonth(d.getMonth() - 3);
+  d.setDate(d.getDate() - 14);
   return d.toISOString();
 }
 

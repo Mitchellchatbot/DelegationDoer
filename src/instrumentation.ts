@@ -20,4 +20,10 @@ export async function register() {
   } catch (err) {
     console.error("[instrumentation] task-archive bootstrap failed to load:", err);
   }
+  try {
+    const { bootstrapEmailNotifications } = await import("@/lib/email-notifications-bootstrap");
+    bootstrapEmailNotifications();
+  } catch (err) {
+    console.error("[instrumentation] email-notifications bootstrap failed to load:", err);
+  }
 }

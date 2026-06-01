@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Sparkles, Loader2, Pencil, Save, X } from "lucide-react";
+import { Sparkles, Loader2, Pencil, Save, X, Wand2 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
@@ -27,9 +27,37 @@ export function ClientSeoBriefCard({
   const router = useRouter();
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [enhancing, setEnhancing] = useState(false);
   const [draft, setDraft] = useState<string>(brief ?? "");
 
   if (!brief && !canEdit) return null;
+
+  async function enhance() {
+    if (busy || enhancing) return;
+    const seed = draft.trim();
+    if (!seed) {
+      toast.error("Jot a few notes first — even rough ones.");
+      return;
+    }
+    setEnhancing(true);
+    try {
+      const res = await fetch(`/api/clients/${encodeURIComponent(clientId)}/seo-brief/enhance`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ draft: seed })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || typeof data?.brief !== "string") {
+        throw new Error(data?.error ?? `failed (${res.status})`);
+      }
+      setDraft(data.brief);
+      toast.success("Tightened — review before saving.");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "rewrite failed");
+    } finally {
+      setEnhancing(false);
+    }
+  }
 
   async function save() {
     if (busy) return;
@@ -90,7 +118,7 @@ export function ClientSeoBriefCard({
             }
             maxLength={4000}
             rows={8}
-            disabled={busy}
+            disabled={busy || enhancing}
             className="block w-full rounded-xl border border-emerald-200 bg-white px-3 py-2.5 text-[12.5px] outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-200 leading-relaxed"
           />
           <div className="flex items-center justify-between gap-2 text-[10px] text-ink/55">
@@ -100,8 +128,21 @@ export function ClientSeoBriefCard({
             <div className="inline-flex items-center gap-2">
               <button
                 type="button"
+                onClick={enhance}
+                disabled={busy || enhancing || !draft.trim()}
+                title="Rewrite your notes as a tighter brief"
+                className={cn(
+                  "inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-medium border border-emerald-200 bg-white text-emerald-700 hover:bg-emerald-50 transition-colors",
+                  (busy || enhancing || !draft.trim()) && "opacity-60 cursor-not-allowed"
+                )}
+              >
+                {enhancing ? <Loader2 className="w-3 h-3 animate-spin" /> : <Wand2 className="w-3 h-3" />}
+                {enhancing ? "Rewriting…" : "Write with AI"}
+              </button>
+              <button
+                type="button"
                 onClick={cancel}
-                disabled={busy}
+                disabled={busy || enhancing}
                 className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-medium text-ink/65 hover:text-ink"
               >
                 <X className="w-3 h-3" /> Cancel
@@ -109,10 +150,10 @@ export function ClientSeoBriefCard({
               <button
                 type="button"
                 onClick={save}
-                disabled={busy}
+                disabled={busy || enhancing}
                 className={cn(
                   "inline-flex items-center gap-1 px-3 py-1 rounded-full text-[11px] font-semibold text-white shadow-sm transition-all",
-                  busy && "opacity-60 cursor-not-allowed"
+                  (busy || enhancing) && "opacity-60 cursor-not-allowed"
                 )}
                 style={{ background: "linear-gradient(135deg, #059669 0%, #047857 100%)" }}
               >

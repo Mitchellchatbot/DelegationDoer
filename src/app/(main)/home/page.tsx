@@ -94,9 +94,9 @@ export default async function HomePage() {
   ]);
 
   return (
-    <div className="space-y-3 max-w-3xl">
+    <div className="space-y-4 max-w-5xl mx-auto">
       {dayBookends && <DayBookends status={dayBookends} hourLocal={hourLocal} />}
-      <HomeWorker meName={me.name} tasks={tasks} />
+      <HomeWorker meName={me.name} tasks={tasks} briefCount={seoBriefs.length} />
       <HomeSeoBriefs rows={seoBriefs} />
     </div>
   );

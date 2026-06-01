@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import {
-  Briefcase, Globe2, Calendar, FileText, Lightbulb, ExternalLink, ListChecks,
+  Briefcase, Globe2, Calendar, FileText, Lightbulb, ExternalLink,
   Mail, User as UserIcon, Server, KeyRound, MessageSquare,
   Hash, CalendarClock, Send
 } from "lucide-react";
@@ -20,6 +20,7 @@ import { isLeader } from "@/lib/auth";
 import { AddResourceForm, DeleteResourceButton } from "@/components/AddResourceForm";
 import { ClientKnowledgeBase, type CompletedTaskRow } from "@/components/ClientKnowledgeBase";
 import { ClientEmailsCombined } from "@/components/ClientEmailsCombined";
+import { ClientOpenTasksList } from "@/components/ClientOpenTasksList";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { visibleAccountIdsFor } from "@/lib/inbox-access";
@@ -576,24 +577,8 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
         />
       </div>
 
-      <Section
-        title="Open tasks"
-        icon={<ListChecks className="w-4 h-4" />}
-        tone="purple"
-        empty="No open tasks linked to this client."
-        items={openTasksRes as { id: string; title: string; status: string; priority: string; due_date: string | null }[]}
-        renderItem={(t) => (
-          <Link
-            key={t.id}
-            href={`/tasks/${t.id}`}
-            className="group flex items-center gap-2 p-2.5 rounded-xl bg-white/80 border border-white/70 hover:border-blue-200 hover:bg-blue-50/40 transition-colors"
-          >
-            <div className="text-sm flex-1 truncate group-hover:text-accent">{t.title}</div>
-            <span className="text-[10px] px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700 border border-indigo-200/60 capitalize">
-              {t.status.replace("_", " ")}
-            </span>
-          </Link>
-        )}
+      <ClientOpenTasksList
+        tasks={openTasksRes as { id: string; title: string; status: string; priority: string; due_date: string | null }[]}
       />
 
       <ClientKnowledgeBase tasks={doneTasksRes as CompletedTaskRow[]} />

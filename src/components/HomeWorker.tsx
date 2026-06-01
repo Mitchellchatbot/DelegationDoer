@@ -22,36 +22,88 @@ import type { HomeTask } from "@/lib/home-data";
 interface Props {
   meName: string;
   tasks: HomeTask[];
+  briefCount?: number;
 }
 
-export function HomeWorker({ meName, tasks }: Props) {
+export function HomeWorker({ meName, tasks, briefCount = 0 }: Props) {
   const firstName = meName.split(" ")[0];
+  const dueToday = tasks.filter((t) => {
+    if (!t.dueDate) return false;
+    const d = new Date(t.dueDate);
+    const now = new Date();
+    return d.getFullYear() === now.getFullYear()
+      && d.getMonth() === now.getMonth()
+      && d.getDate() === now.getDate();
+  }).length;
   return (
-    <div className="space-y-3">
-      <Header firstName={firstName} />
+    <div className="space-y-4">
+      <Header
+        firstName={firstName}
+        taskCount={tasks.length}
+        dueToday={dueToday}
+        briefCount={briefCount}
+      />
       <ClockStrip />
       <TasksStrip tasks={tasks} />
     </div>
   );
 }
 
-function Header({ firstName }: { firstName: string }) {
+function Header({
+  firstName, taskCount, dueToday, briefCount
+}: {
+  firstName: string;
+  taskCount: number;
+  dueToday: number;
+  briefCount: number;
+}) {
   return (
-    <header className="rounded-2xl border border-sky-200/60 shadow-soft p-4 bg-gradient-to-r from-sky-50 via-white to-sky-50/60">
-      <div className="flex items-center gap-3">
-        <div className="w-10 h-10 rounded-xl bg-white/80 grid place-items-center text-sky-600 shrink-0 shadow-sm">
-          <Sun className="w-5 h-5" />
+    <header className="rounded-2xl border border-sky-200/60 shadow-soft p-6 bg-gradient-to-r from-sky-50 via-white to-sky-50/60">
+      <div className="flex items-center gap-4">
+        <div className="w-12 h-12 rounded-xl bg-white/80 grid place-items-center text-sky-600 shrink-0 shadow-sm">
+          <Sun className="w-6 h-6" />
         </div>
-        <div>
+        <div className="min-w-0 flex-1">
           <div className="text-[11px] uppercase tracking-[0.18em] font-semibold text-sky-700">
             Today
           </div>
-          <h1 className="text-[20px] font-bold text-ink leading-tight">
+          <h1 className="text-[24px] font-bold text-ink leading-tight">
             Hey {firstName} — here's your day
           </h1>
+          <p className="text-[12.5px] text-ink/60 mt-1 leading-snug">
+            Each client has its own priorities. Check the SEO briefs below before you start a task so the work matches what leadership is focusing on for that site.
+          </p>
         </div>
       </div>
+      <div className="mt-4 grid grid-cols-3 gap-2">
+        <Stat label="On your plate" value={taskCount} />
+        <Stat label="Due today" value={dueToday} highlight={dueToday > 0} />
+        <Stat label="Client briefs" value={briefCount} />
+      </div>
     </header>
+  );
+}
+
+function Stat({
+  label, value, highlight
+}: { label: string; value: number; highlight?: boolean }) {
+  return (
+    <div
+      className={cn(
+        "rounded-xl border bg-white/80 px-3 py-2 text-center shadow-sm",
+        highlight ? "border-amber-200 bg-amber-50/80" : "border-sky-100"
+      )}
+    >
+      <div className={cn(
+        "text-[18px] font-bold leading-none tabular-nums",
+        highlight ? "text-amber-700" : "text-ink"
+      )}>
+        {value}
+      </div>
+      <div className="mt-1 text-[10px] uppercase tracking-wide text-ink/55 font-semibold">
+        {label}
+      </div>
+    </div>
   );
 }
 

@@ -428,8 +428,12 @@ export function ClientPriorityList({
                                 Email-free
                               </span>
                             )}
-                            {/* Sentiment health, shown only when leader has set one */}
-                            <ClientHealthPill label={c.healthOverrideLabel} />
+                            {/* Sentiment health — auto-computed nightly from email
+                                satisfaction scores; leader override wins when set. */}
+                            <ClientHealthPill
+                              label={c.healthOverrideLabel ?? c.healthLabel}
+                              overridden={!!c.healthOverrideLabel}
+                            />
                           </div>
                           <div className="text-[11px] text-ink/60 truncate inline-flex items-center gap-2 mt-0.5">
                             {c.contactName && (
@@ -574,7 +578,10 @@ export function ClientPriorityList({
                       Email-free
                     </span>
                   )}
-                  <ClientHealthPill label={c.healthOverrideLabel} />
+                  <ClientHealthPill
+                    label={c.healthOverrideLabel ?? c.healthLabel}
+                    overridden={!!c.healthOverrideLabel}
+                  />
                   <span className="text-[10px] text-ink/55 tabular-nums">
                     {openCount} open
                   </span>

@@ -1,13 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   DragDropContext, Droppable, Draggable, type DropResult
 } from "@hello-pangea/dnd";
 import {
-  Briefcase, Globe2, GripVertical, Folder, User as UserIcon, Mail,
-  Filter, ArrowDownAZ, ArrowUpDown, Clock
+  Briefcase, Globe2, GripVertical, Folder, User as UserIcon, Mail, MailX,
+  Filter, ArrowDownAZ, ArrowUpDown, Clock, LayoutGrid, List as ListIcon
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -19,6 +19,9 @@ import {
   computeTouchpointLabel, daysSince, effectiveTouchpoint,
   TOUCHPOINT_META, type TouchpointLabel
 } from "@/lib/client-touchpoint";
+
+const VIEW_MODE_KEY = "clients:viewMode:v1";
+type ViewMode = "list" | "grid";
 
 // Drag-to-reorder client priority list. Top = most urgent. Leader-only edit.
 //
@@ -55,6 +58,54 @@ export function ClientPriorityList({ initial, openCounts, canEdit }: Props) {
   const [clients, setClients] = useState(initial);
   const [sortMode, setSortMode] = useState<SortMode>("priority");
   const [healthFilter, setHealthFilter] = useState<HealthFilter>("all");
+  // View mode persists per browser. SSR renders list so initial markup
+  // matches what the server emitted; effect below swaps to grid if the
+  // user picked it last visit.
+  const [viewMode, setViewModeState] = useState<ViewMode>("list");
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem(VIEW_MODE_KEY);
+      if (stored === "grid" || stored === "list") setViewModeState(stored);
+    } catch { /* ignore */ }
+  }, []);
+  function setViewMode(next: ViewMode) {
+    setViewModeState(next);
+    try { localStorage.setItem(VIEW_MODE_KEY, next); } catch { /* ignore */ }
+  }
+
+  // Optimistic toggle for the per-client encourage_emails flag. Flips
+  // the local state first, fires the API, reverts on failure. Used by
+  // the small mail icon on each card so leaders can turn cadence
+  // tracking off without opening the client detail page.
+  async function toggleEncourageEmails(clientId: string, currentValue: boolean) {
+    const before = clients;
+    const next = clients.map((c) =>
+      c.id === clientId ? { ...c, encourageEmails: !currentValue } : c
+    );
+    setClients(next);
+    try {
+      const res = await fetch(
+        `/api/clients/${encodeURIComponent(clientId)}/touchpoint`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ encourageEmails: !currentValue })
+        }
+      );
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        throw new Error(data?.error ?? `status ${res.status}`);
+      }
+      toast.success(
+        !currentValue
+          ? "Email cadence tracking ON for this client."
+          : "Email cadence tracking OFF — touchpoint pill hidden."
+      );
+    } catch (err) {
+      setClients(before);
+      toast.error(`Couldn't update: ${err instanceof Error ? err.message : "unknown"}`);
+    }
+  }
 
   // Tally counts for the filter chips so we can show "Red · 3". Excludes
   // clients with encourageEmails=false — they don't have a health band.
@@ -200,6 +251,33 @@ export function ClientPriorityList({ initial, openCounts, canEdit }: Props) {
           icon={<ArrowDownAZ className="w-3 h-3" />}
           label="Name"
         />
+
+        <div className="ml-auto inline-flex rounded-full bg-white border border-slate-200/70 p-0.5 shadow-sm">
+          <button
+            type="button"
+            onClick={() => setViewMode("list")}
+            className={cn(
+              "inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-medium transition-colors",
+              viewMode === "list" ? "bg-accent/10 text-accent" : "text-ink/55 hover:text-ink"
+            )}
+            title="List view — supports drag-to-reorder"
+          >
+            <ListIcon className="w-3 h-3" />
+            List
+          </button>
+          <button
+            type="button"
+            onClick={() => setViewMode("grid")}
+            className={cn(
+              "inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-medium transition-colors",
+              viewMode === "grid" ? "bg-accent/10 text-accent" : "text-ink/55 hover:text-ink"
+            )}
+            title="Grid view — compact tiles, scan all clients at once"
+          >
+            <LayoutGrid className="w-3 h-3" />
+            Grid
+          </button>
+        </div>
       </div>
 
       {visible.length === 0 && (
@@ -208,6 +286,9 @@ export function ClientPriorityList({ initial, openCounts, canEdit }: Props) {
         </div>
       )}
 
+      {viewMode === "grid" && visible.length > 0 && renderGrid()}
+
+      {viewMode === "list" && (
       <DragDropContext onDragEnd={onDragEnd}>
         <Droppable droppableId="clients" isDropDisabled={!dragEnabled}>
           {(prov) => (
@@ -333,6 +414,12 @@ export function ClientPriorityList({ initial, openCounts, canEdit }: Props) {
                             teamId={c.teamId}
                             canEdit={canEdit}
                           />
+                          {canEdit && (
+                            <EmailToggleButton
+                              on={c.encourageEmails}
+                              onToggle={() => toggleEncourageEmails(c.id, c.encourageEmails)}
+                            />
+                          )}
                           {c.priorityRank !== null && (
                             <span className="text-[10px] font-bold tabular-nums px-1.5 py-0.5 rounded-md bg-white/85 text-ink/70 border border-white/80">
                               #{c.priorityRank}
@@ -353,7 +440,129 @@ export function ClientPriorityList({ initial, openCounts, canEdit }: Props) {
           )}
         </Droppable>
       </DragDropContext>
+      )}
     </div>
+  );
+
+  function renderGrid() {
+    return (
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+        {visible.map((c, i) => {
+          const tone = PALETTE[i % PALETTE.length];
+          const openCount = openCounts[c.name] ?? 0;
+          const { label: tpLabel, isOverride: tpOverride } = effectiveTouchpoint(
+            c.touchpointOverrideLabel, c.lastOutboundEmailAt
+          );
+          return (
+            <div
+              key={c.id}
+              className={cn(
+                "relative rounded-2xl border ring-1 bg-gradient-to-br to-white p-3 shadow-soft hover:shadow-lift transition-shadow",
+                tone.ring, tone.from, "border-white/60"
+              )}
+            >
+              {/* Top row: rank + icon + priority pill */}
+              <div className="flex items-center gap-2 mb-2">
+                <div className="shrink-0 w-7 h-7 rounded-lg bg-white/85 border border-white/80 grid place-items-center text-[11px] font-semibold text-ink/70 shadow-sm tabular-nums">
+                  {sortMode === "priority" ? (i + 1) : "·"}
+                </div>
+                <div className={`w-8 h-8 rounded-lg shadow-sm grid place-items-center text-white shrink-0 ${tone.iconBg}`}>
+                  <Briefcase className="w-4 h-4" />
+                </div>
+                <span className={cn("ml-auto text-[10px] px-2 py-0.5 rounded-full border capitalize", PRIORITY_TONES[c.priority])}>
+                  {c.priority}
+                </span>
+              </div>
+
+              {/* Body — primary click target */}
+              <Link
+                href={`/clients/${encodeURIComponent(c.id)}`}
+                className="block group rounded-md outline-none focus-visible:ring-2 focus-visible:ring-indigo-400/40"
+              >
+                <div className="text-sm font-semibold text-ink truncate group-hover:text-accent transition-colors">
+                  {c.name}
+                </div>
+                <div className="text-[11px] text-ink/55 truncate mt-0.5">
+                  {c.contactName ?? (c.contactEmails[0] ?? "—")}
+                </div>
+                <div className="mt-2 flex items-center gap-1.5 flex-wrap">
+                  {c.encourageEmails ? (
+                    <TouchpointPill
+                      label={tpLabel}
+                      lastSentAt={c.lastOutboundEmailAt}
+                      isOverride={tpOverride}
+                      showAge
+                    />
+                  ) : (
+                    <span
+                      className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 text-ink/50 text-[10px] font-medium px-1.5 py-0.5"
+                      title="Email cadence tracking is off for this client."
+                    >
+                      <span className="w-1.5 h-1.5 rounded-full bg-slate-400" />
+                      Email-free
+                    </span>
+                  )}
+                  <ClientHealthPill label={c.healthOverrideLabel} />
+                  <span className="text-[10px] text-ink/55 tabular-nums">
+                    {openCount} open
+                  </span>
+                </div>
+              </Link>
+
+              {/* Footer: team picker + mail toggle. Sits below the
+                  link so clicks on them don't bubble into navigation. */}
+              <div className="mt-2 pt-2 border-t border-white/60 flex items-center justify-between gap-1.5">
+                <ClientTeamPicker
+                  clientId={c.id}
+                  teamId={c.teamId}
+                  canEdit={canEdit}
+                />
+                <div className="flex items-center gap-1.5">
+                  {c.priorityRank !== null && (
+                    <span className="text-[10px] font-bold tabular-nums px-1.5 py-0.5 rounded-md bg-white/85 text-ink/70 border border-white/80">
+                      #{c.priorityRank}
+                    </span>
+                  )}
+                  {canEdit && (
+                    <EmailToggleButton
+                      on={c.encourageEmails}
+                      onToggle={() => toggleEncourageEmails(c.id, c.encourageEmails)}
+                    />
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+}
+
+// Small mail-on / mail-off icon button. Click flips
+// encourage_emails for the client. We surface this inline on every
+// card so leaders don't have to open the detail page to silence
+// touchpoint nags for non-email clients.
+function EmailToggleButton({
+  on, onToggle
+}: { on: boolean; onToggle: () => void | Promise<void> }) {
+  return (
+    <button
+      type="button"
+      onClick={(e) => { e.preventDefault(); e.stopPropagation(); void onToggle(); }}
+      title={on
+        ? "Email cadence ON — click to stop tracking touchpoints for this client"
+        : "Email cadence OFF — click to track outbound touchpoints again"}
+      aria-label={on ? "Turn off email cadence tracking" : "Turn on email cadence tracking"}
+      className={cn(
+        "inline-flex items-center justify-center w-7 h-7 rounded-lg border transition-colors",
+        on
+          ? "bg-emerald-50 border-emerald-200 text-emerald-700 hover:bg-emerald-100"
+          : "bg-slate-50 border-slate-200 text-slate-500 hover:bg-slate-100"
+      )}
+    >
+      {on ? <Mail className="w-3.5 h-3.5" /> : <MailX className="w-3.5 h-3.5" />}
+    </button>
   );
 }
 

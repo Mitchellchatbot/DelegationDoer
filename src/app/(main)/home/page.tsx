@@ -45,8 +45,14 @@ export default async function HomePage() {
   const hourLocal = new Date().getHours();
 
   // Day Bookends — only for people who actually submit SOD/EOD.
-  // Leaders + stealth admins don't, so we skip the query and the card.
-  const dayBookends = !isLeaderRole ? await getDayBookendStatus(userId) : null;
+  // Leaders + stealth admins don't, and anyone with the per-user
+  // dailyPromptsEnabled flag flipped off (e.g. Mitchell) is also
+  // exempt. Skipping the query *and* the card prevents wasted reads
+  // for the exempt cohort.
+  const dailyPromptsOn = me.dailyPromptsEnabled !== false;
+  const dayBookends = !isLeaderRole && dailyPromptsOn
+    ? await getDayBookendStatus(userId)
+    : null;
 
   if (isLeaderRole || isHead) {
     // Leader/head view. Heads get their dept scope; leaders see all.

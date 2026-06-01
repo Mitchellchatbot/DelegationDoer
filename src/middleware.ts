@@ -28,6 +28,13 @@ const PUBLIC_PREFIXES = [
   // Zapier relay endpoint — same shared-secret pattern as the direct
   // tl;dv webhook (x-zapier-webhook-secret header), no Supabase cookie.
   "/api/integrations/tldv/zapier",
+  // Slack Events API — verifies its own x-slack-signature inside the
+  // handler (and answers Slack's url_verification challenge). Slack POSTs
+  // with no Supabase cookie, so it must not be session-gated.
+  "/api/slack/events",
+  // n8n website-monitor webhook — shared-secret check inside the handler
+  // (x-site-monitor-secret header), no Supabase cookie.
+  "/api/integrations/site-monitor",
   // missiveclone inbound-mail webhook — HMAC verified inside the handler
   // (x-missive-signature). missiveclone has no Supabase session cookie.
   "/api/missive-webhook",

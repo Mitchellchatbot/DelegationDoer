@@ -20,15 +20,17 @@ alter table public.workspace_settings
   add column if not exists low_site_score_threshold integer not null default 70;
 
 -- 2) Audit + idempotency for site-health alerts.
---    The (slack_channel_id, slack_message_ts) pair is Slack's natural
---    message identity, so the unique constraint is what stops the same
---    alert (including Slack's at-least-once event redelivery and n8n's
---    "edited" re-posts) from spawning duplicate tasks.
+--    An alert can arrive two ways — pushed by the Slack Events API, or
+--    POSTed directly by the n8n workflow to /api/integrations/site-monitor.
+--    Either way, (source, source_event_id) is the alert's natural identity,
+--    so the unique constraint is what stops the same alert (Slack's
+--    at-least-once redelivery, n8n retries, or "edited" re-posts) from
+--    spawning duplicate tasks.
 create table if not exists public.site_health_alerts (
   id text primary key,
-  slack_channel_id text not null,
-  slack_message_ts text not null,        -- Slack message id (idempotency key)
-  slack_permalink text,                  -- deep-link back to the alert message
+  source text not null,                  -- 'slack' | 'n8n-webhook'
+  source_event_id text not null,         -- idempotency key (Slack ts / n8n id / domain:score)
+  reference text,                        -- back-link to the alert (Slack permalink / text / URL)
   website text not null,                 -- full URL as posted
   domain text,                           -- normalized host (www-stripped)
   site_score integer not null,
@@ -43,7 +45,7 @@ create table if not exists public.site_health_alerts (
   skipped_reason text,
   detected_at timestamptz not null default now(),  -- alert timestamp
   created_at timestamptz not null default now(),
-  unique (slack_channel_id, slack_message_ts)
+  unique (source, source_event_id)
 );
 
 create index if not exists site_health_alerts_created_at_idx

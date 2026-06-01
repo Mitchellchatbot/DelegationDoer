@@ -9,11 +9,13 @@ import {
   getLeaderPulse,
   getPostsPerClient,
   getStalledTaskCount,
-  getLeaderOpenTasks
+  getLeaderOpenTasks,
+  getTopClientsByHealth
 } from "@/lib/home-data";
 import { HomeWorker } from "@/components/HomeWorker";
 import { HomeLeaderHero } from "@/components/HomeLeaderHero";
 import { HomeSeoBriefs } from "@/components/HomeSeoBriefs";
+import { HomeTopClientsByHealth } from "@/components/HomeTopClientsByHealth";
 import { HomePulseCard } from "@/components/HomePulseCard";
 import { HomeChartsRow } from "@/components/HomeChartsRow";
 import { LeaderTodoList } from "@/components/LeaderTodoList";
@@ -88,15 +90,17 @@ export default async function HomePage() {
   // company-wide). Brief edit gate still applies — the PATCH route
   // still rejects non-leaders/heads, so a worker can read but not
   // write.
-  const [tasks, seoBriefs] = await Promise.all([
+  const [tasks, seoBriefs, topByHealth] = await Promise.all([
     getTodayTasksForUser(userId, 8),
-    getSeoBriefsForHome(20)
+    getSeoBriefsForHome(20),
+    getTopClientsByHealth(10)
   ]);
 
   return (
     <div className="space-y-4 max-w-5xl mx-auto">
       {dayBookends && <DayBookends status={dayBookends} hourLocal={hourLocal} />}
       <HomeWorker meName={me.name} tasks={tasks} briefCount={seoBriefs.length} />
+      <HomeTopClientsByHealth rows={topByHealth} />
       <HomeSeoBriefs rows={seoBriefs} />
     </div>
   );

@@ -3,6 +3,7 @@ import {
   effectiveTouchpoint,
   type TouchpointLabel
 } from "@/lib/client-touchpoint";
+import type { HealthLabel } from "@/lib/client-health";
 
 // Server-side queries for the /home landing surface. Each function
 // returns plain JSON-shaped data so server components can pass it
@@ -909,6 +910,61 @@ export async function getClientHealthOverview(topN = 10): Promise<ClientHealthRo
 
   // Strip the internal displayOrder field before returning.
   return union.map<ClientHealthRow>(({ displayOrder: _d, ...rest }) => rest);
+}
+
+// Sentiment-based health ranking (NOT touchpoint freshness).
+// Returns the top-N active clients by stored `health_score` — the
+// median satisfaction score computed by recomputeClientHealth(). Used
+// on /home so workers can see which accounts read warmest / coldest
+// in recent email traffic, separate from the touchpoint dashboard.
+export interface ClientSentimentHealthRow {
+  id: string;
+  name: string;
+  contactName: string | null;
+  score: number;            // 0-100 median
+  label: HealthLabel;
+  sampleSize: number;
+  summary: string | null;
+  computedAt: string | null;
+}
+
+export async function getTopClientsByHealth(topN = 10): Promise<ClientSentimentHealthRow[]> {
+  const supabase = getSupabaseAdmin();
+  const { data, error } = await supabase
+    .from("clients")
+    .select(
+      "id, name, contact_name, status, health_label, health_score, " +
+      "health_sample_size, health_summary, health_computed_at"
+    )
+    .not("health_score", "is", null)
+    .order("health_score", { ascending: false })
+    .limit(topN * 3); // overscan; we filter inactive in JS
+  if (error) return [];
+
+  const rows = ((data ?? []) as unknown as Array<{
+    id: string;
+    name: string;
+    contact_name: string | null;
+    status: string | null;
+    health_label: HealthLabel | null;
+    health_score: number | null;
+    health_sample_size: number | null;
+    health_summary: string | null;
+    health_computed_at: string | null;
+  }>)
+    .filter((c) => !c.status || c.status === "active")
+    .filter((c) => c.health_score !== null && c.health_label !== null);
+
+  return rows.slice(0, topN).map((c) => ({
+    id: c.id,
+    name: c.name,
+    contactName: c.contact_name,
+    score: c.health_score as number,
+    label: c.health_label as HealthLabel,
+    sampleSize: c.health_sample_size ?? 0,
+    summary: c.health_summary,
+    computedAt: c.health_computed_at
+  }));
 }
 
 // "Needs you" counters for the leader strip. Mirrors what the badge

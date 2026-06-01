@@ -79,12 +79,13 @@ export default async function HomePage() {
     return (
       <div className="space-y-4 max-w-7xl mx-auto">
         {dayBookends && <DayBookends status={dayBookends} hourLocal={hourLocal} />}
-        {/* Sites needing attention — the anchor of /home for everyone. */}
-        <HomeClientHealthTable rows={worstByHealth} />
         <HomeLeaderHero
           meName={me.name}
           scopeLabel={scopeLabel}
         />
+        {/* Sites needing attention — pinned right under the hero so it's
+            the first content every role lands on. */}
+        <HomeClientHealthTable rows={worstByHealth} />
         {/* Notifications — the focus of the new leader home. */}
         <HomePulseCard events={pulse} />
         <HomeEmailNotifications onboarded={me.emailNotificationsOnboarded === true} />
@@ -113,8 +114,8 @@ export default async function HomePage() {
   return (
     <div className="space-y-4 max-w-5xl mx-auto">
       {dayBookends && <DayBookends status={dayBookends} hourLocal={hourLocal} />}
-      <HomeClientHealthTable rows={worstByHealth} />
       <HomeWorker meName={me.name} tasks={tasks} briefCount={seoBriefs.length} />
+      <HomeClientHealthTable rows={worstByHealth} />
       <HomeEmailNotifications onboarded={me.emailNotificationsOnboarded === true} />
       <HomeSeoBriefs rows={seoBriefs} />
     </div>

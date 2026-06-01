@@ -51,10 +51,11 @@ export async function fetchSiteIcon(websiteUrl: string): Promise<SiteIconResult 
       },
       body: JSON.stringify({
         url,
-        // We need the raw HTML to parse <link rel="…icon"> tags. Markdown
-        // throws those away. onlyMainContent is left at the default
-        // because <link> tags live in <head>, outside any "main" region.
-        formats: ["html"]
+        // rawHtml — NOT "html". Firecrawl's "html" format is the
+        // post-processed/cleaned version that strips the <head>, which
+        // is exactly where <link rel="icon"> tags live. rawHtml is the
+        // unmodified document and surfaces them.
+        formats: ["rawHtml"]
       }),
       signal: controller.signal
     });
@@ -79,7 +80,7 @@ export async function fetchSiteIcon(websiteUrl: string): Promise<SiteIconResult 
   }
   if (!isFirecrawlResponse(body) || !body.success || !body.data) return null;
 
-  const html = typeof body.data.html === "string" ? body.data.html : "";
+  const html = typeof body.data.rawHtml === "string" ? body.data.rawHtml : "";
   if (!html) return null;
 
   return pickBestIconFromHtml(html, url);
@@ -180,7 +181,7 @@ function absolutize(maybeUrl: string, baseUrl: string): string | null {
 
 interface FirecrawlResponse {
   success: boolean;
-  data?: { html?: string };
+  data?: { rawHtml?: string };
 }
 function isFirecrawlResponse(v: unknown): v is FirecrawlResponse {
   return typeof v === "object" && v !== null && "success" in v;

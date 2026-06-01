@@ -98,6 +98,14 @@ export interface Client {
   // which uploads to Supabase Storage and writes the resulting public
   // URL here. Null = fall back to the generic briefcase icon.
   iconUrl: string | null;
+  // SEO brief — free-form text from leadership describing what the
+  // SEO team should focus on for this client (target services,
+  // priorities, this-cycle goals). Set via PATCH
+  // /api/clients/[id]/seo-brief. Surfaced on /clients/[id] and on
+  // /home for SEO dept members.
+  seoBrief: string | null;
+  seoBriefAt: string | null;
+  seoBriefBy: string | null;
   // Auto-derived from email_drafts on read; not stored on the row.
   lastOutboundEmailAt: string | null;
   lastOutboundSubject: string | null;
@@ -160,6 +168,9 @@ interface ClientRow {
   assigned_user_id: string | null;
   assigned_user_ids: string[] | null;
   icon_url: string | null;
+  seo_brief: string | null;
+  seo_brief_at: string | null;
+  seo_brief_by: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -223,6 +234,9 @@ function rowToClient(r: ClientRow, touchpoint?: {
       // still surface their one person via the array shape.
       : (r.assigned_user_id ? [r.assigned_user_id] : []),
     iconUrl: r.icon_url ?? null,
+    seoBrief: r.seo_brief ?? null,
+    seoBriefAt: r.seo_brief_at ?? null,
+    seoBriefBy: r.seo_brief_by ?? null,
     lastOutboundEmailAt: touchpoint?.lastOutboundEmailAt ?? null,
     lastOutboundSubject: touchpoint?.lastOutboundSubject ?? null,
     createdAt: r.created_at,

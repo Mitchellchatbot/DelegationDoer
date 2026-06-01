@@ -9,6 +9,7 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { getClient, getResourcesForClient, type ClientResource } from "@/lib/clients-data";
 import { BackPill } from "@/components/BackPill";
 import { ClientHealthCard } from "@/components/ClientHealthCard";
+import { ClientSeoBriefCard } from "@/components/ClientSeoBriefCard";
 import { ClientWordPressCard } from "@/components/ClientWordPressCard";
 import { ClientTouchpointCard } from "@/components/ClientTouchpointCard";
 import { DeleteClientButton } from "@/components/DeleteClientButton";
@@ -278,6 +279,28 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
           style={{ background: "radial-gradient(circle, rgba(99,102,241,0.18), transparent 70%)" }}
         />
       </header>
+
+      {/* SEO brief — leader/admin/SEO-head sets it; everyone viewing
+          the client sees it. Hidden entirely when no brief exists
+          and viewer can't edit, so accounts that don't need SEO
+          attention don't show empty chrome. */}
+      <ClientSeoBriefCard
+        clientId={client.id}
+        brief={client.seoBrief}
+        briefAt={client.seoBriefAt}
+        briefByName={
+          client.seoBriefBy
+            ? (await getUserById(client.seoBriefBy))?.name ?? null
+            : null
+        }
+        canEdit={
+          !!(me && (
+            me.role === "leader"
+            || me.isAdmin
+            || (me.role === "department_head" && (me.departmentIds ?? []).includes("dep_seo"))
+          ))
+        }
+      />
 
       <ClientTouchpointCard
         clientId={client.id}

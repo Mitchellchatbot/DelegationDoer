@@ -9,10 +9,12 @@ import {
   getTodayDeliverables,
   getNeedsYouCounts,
   getClientHealthOverview,
-  getDayBookendStatus
+  getDayBookendStatus,
+  getSeoBriefsForHome
 } from "@/lib/home-data";
 import { HomeWorker } from "@/components/HomeWorker";
 import { HomeLeader } from "@/components/HomeLeader";
+import { HomeSeoBriefs } from "@/components/HomeSeoBriefs";
 import { DayBookends } from "@/components/DayBookends";
 
 export const dynamic = "force-dynamic";
@@ -50,7 +52,13 @@ export default async function HomePage() {
 
     const canApprove = isApprover({ name: me.name, role: me.role, isAdmin: me.isAdmin });
 
-    const [team, deliverables, needsYou, clientHealth] = await Promise.all([
+    // SEO briefs only render for leaders/admins (they wrote them) and
+    // for SEO dept heads. SEO workers see the same card in the worker
+    // branch below.
+    const showSeoBriefs =
+      isLeaderRole || (isHead && (me.departmentIds ?? []).includes("dep_seo"));
+
+    const [team, deliverables, needsYou, clientHealth, seoBriefs] = await Promise.all([
       getTeamStatusToday(scopedDepartmentIds ?? undefined, 60),
       getTodayDeliverables(scopedDepartmentIds ?? undefined, 20),
       getNeedsYouCounts({
@@ -67,7 +75,8 @@ export default async function HomePage() {
       // dept's. Easy to scope later if it gets noisy. Top 10 by
       // priority + every at-risk client (red touchpoint) — the helper
       // unions them so important clients going cold can't slip off.
-      getClientHealthOverview(10)
+      getClientHealthOverview(10),
+      showSeoBriefs ? getSeoBriefsForHome(20) : Promise.resolve([])
     ]);
 
     return (
@@ -81,6 +90,7 @@ export default async function HomePage() {
           clientHealth={clientHealth}
           scopeLabel={scopeLabel}
         />
+        {showSeoBriefs && <HomeSeoBriefs rows={seoBriefs} />}
       </div>
     );
   }
@@ -88,12 +98,17 @@ export default async function HomePage() {
   // Worker view. Today's tasks; the clock provider is client-side
   // (context). Day Bookends now owns the SOD/EOD prompts — HomeWorker
   // no longer renders its own EOD nudge banner.
-  const tasks = await getTodayTasksForUser(userId, 8);
+  const isSeoWorker = (me.departmentIds ?? []).includes("dep_seo");
+  const [tasks, seoBriefs] = await Promise.all([
+    getTodayTasksForUser(userId, 8),
+    isSeoWorker ? getSeoBriefsForHome(20) : Promise.resolve([])
+  ]);
 
   return (
     <div className="space-y-3 max-w-3xl">
       {dayBookends && <DayBookends status={dayBookends} hourLocal={hourLocal} />}
       <HomeWorker meName={me.name} tasks={tasks} />
+      {isSeoWorker && <HomeSeoBriefs rows={seoBriefs} />}
     </div>
   );
 }

@@ -361,6 +361,41 @@ export interface ClientHealthRow {
   daysSinceLastEmail: number | null;
 }
 
+// SEO briefs from leadership, for the /home card shown to dep_seo users.
+// Returns every active client that has a seo_brief set, truncated to
+// ~280 chars so the card stays scannable. Ordered by recently-updated
+// briefs first (those are the ones most likely to be acted on).
+export interface HomeSeoBriefRow {
+  clientId: string;
+  clientName: string;
+  brief: string;
+  updatedAt: string | null;
+}
+
+export async function getSeoBriefsForHome(limit = 20): Promise<HomeSeoBriefRow[]> {
+  const supabase = getSupabaseAdmin();
+  const { data, error } = await supabase
+    .from("clients")
+    .select("id, name, status, seo_brief, seo_brief_at")
+    .not("seo_brief", "is", null)
+    .or("status.eq.active,status.is.null")
+    .order("seo_brief_at", { ascending: false, nullsFirst: false })
+    .limit(limit);
+  if (error) return [];
+  type Row = { id: string; name: string; status: string | null; seo_brief: string | null; seo_brief_at: string | null };
+  return ((data ?? []) as unknown as Row[])
+    .filter((r) => (r.seo_brief ?? "").trim().length > 0)
+    .map<HomeSeoBriefRow>((r) => {
+      const brief = (r.seo_brief ?? "").trim();
+      return {
+        clientId: r.id,
+        clientName: r.name,
+        brief: brief.length > 280 ? brief.slice(0, 280) + "…" : brief,
+        updatedAt: r.seo_brief_at ?? null
+      };
+    });
+}
+
 export async function getClientHealthOverview(topN = 10): Promise<ClientHealthRow[]> {
   const supabase = getSupabaseAdmin();
   // The clients table column was renamed last_outbound_email_at →

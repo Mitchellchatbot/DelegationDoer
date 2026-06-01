@@ -67,6 +67,23 @@ type GlobalWithSocket = typeof globalThis & {
 };
 const g = globalThis as GlobalWithSocket;
 
+// Read-only snapshot of the socket's current state. Used by the debug
+// endpoint so the user can verify connectivity without trusting that
+// Railway's log viewer is keeping up.
+export function getMissiveSocketStatus(): {
+  initialized: boolean;
+  connected: boolean;
+  socketId: string | null;
+  url: string | null;
+} {
+  return {
+    initialized,
+    connected: socket?.connected === true,
+    socketId: socket?.id ?? null,
+    url: MISSIVE_API_URL ?? null
+  };
+}
+
 export function startMissiveSocketBridge(): void {
   if (g[globalKey]?.initialized) {
     socket = g[globalKey]!.socket;

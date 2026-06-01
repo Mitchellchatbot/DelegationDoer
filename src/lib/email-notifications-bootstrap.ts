@@ -23,20 +23,66 @@ import { fanOutInboxEvent } from "@/lib/email-notifications";
 import { pollEmailNotifications } from "@/lib/email-notifications-poller";
 
 const globalKey = "__ddEmailNotifBootstrap" as const;
-type GlobalWithBootstrap = typeof globalThis & { [globalKey]?: boolean };
+const stateKey = "__ddEmailNotifState" as const;
+
+interface BootstrapState {
+  bootedAt: number;
+  busSubscribed: boolean;
+  pollScheduled: boolean;
+  lastLiveFanoutAt: number | null;
+  lastLiveFanoutEvent: string | null;
+  lastLiveFanoutAccountId: string | null;
+  lastLiveFanoutRows: number | null;
+  liveFanoutTotal: number;
+  lastPollAt: number | null;
+  lastPollAccountsScanned: number;
+  lastPollRowsWritten: number;
+  lastPollErrors: number;
+  lastError: string | null;
+}
+
+type GlobalWithBootstrap = typeof globalThis & {
+  [globalKey]?: boolean;
+  [stateKey]?: BootstrapState;
+};
 
 const POLL_INTERVAL_MS = 5 * 60 * 1000;
+
+// Read-only snapshot for the debug endpoint. Returns null when the
+// bootstrap hasn't run yet — that itself is diagnostic (the new code
+// either hasn't deployed or instrumentation.ts didn't fire).
+export function getEmailNotifBootstrapState(): BootstrapState | null {
+  const g = globalThis as GlobalWithBootstrap;
+  return g[stateKey] ?? null;
+}
 
 export function bootstrapEmailNotifications(): void {
   const g = globalThis as GlobalWithBootstrap;
   if (g[globalKey]) return;
   g[globalKey] = true;
+  const state: BootstrapState = {
+    bootedAt: Date.now(),
+    busSubscribed: false,
+    pollScheduled: false,
+    lastLiveFanoutAt: null,
+    lastLiveFanoutEvent: null,
+    lastLiveFanoutAccountId: null,
+    lastLiveFanoutRows: null,
+    liveFanoutTotal: 0,
+    lastPollAt: null,
+    lastPollAccountsScanned: 0,
+    lastPollRowsWritten: 0,
+    lastPollErrors: 0,
+    lastError: null
+  };
+  g[stateKey] = state;
 
   // 1. Make sure the socket bridge is alive (idempotent — email-intake
   //    bootstrap also calls this, but multiple calls are no-ops).
   try {
     startMissiveSocketBridge();
   } catch (err) {
+    state.lastError = err instanceof Error ? err.message : "socket start failed";
     console.error("[email-notif-boot] socket bridge start failed:", err);
   }
 
@@ -47,6 +93,11 @@ export function bootstrapEmailNotifications(): void {
     subscribe((event: InboxEvent) => {
       void fanOutInboxEvent(event)
         .then((rows) => {
+          state.lastLiveFanoutAt = Date.now();
+          state.lastLiveFanoutEvent = event.event;
+          state.lastLiveFanoutAccountId = event.account_id;
+          state.lastLiveFanoutRows = rows;
+          state.liveFanoutTotal += rows;
           if (rows > 0) {
             console.log("[email-notif-boot] live fanout", {
               event: event.event,
@@ -56,11 +107,14 @@ export function bootstrapEmailNotifications(): void {
           }
         })
         .catch((err) => {
+          state.lastError = err instanceof Error ? err.message : "fanout error";
           console.error("[email-notif-boot] fanout error:", err);
         });
     });
+    state.busSubscribed = true;
     console.log("[email-notif-boot] bus subscription registered");
   } catch (err) {
+    state.lastError = err instanceof Error ? err.message : "bus subscribe failed";
     console.error("[email-notif-boot] bus subscription failed:", err);
   }
 
@@ -70,10 +124,15 @@ export function bootstrapEmailNotifications(): void {
     const runOnce = async () => {
       try {
         const r = await pollEmailNotifications();
+        state.lastPollAt = Date.now();
+        state.lastPollAccountsScanned = r.accountsScanned;
+        state.lastPollRowsWritten = r.rowsWritten;
+        state.lastPollErrors = r.errors.length;
         if (r.rowsWritten > 0 || r.errors.length > 0) {
           console.log("[email-notif-boot] poll", r);
         }
       } catch (err) {
+        state.lastError = err instanceof Error ? err.message : "poll fatal";
         console.error("[email-notif-boot] poll fatal:", err);
       }
     };
@@ -81,8 +140,10 @@ export function bootstrapEmailNotifications(): void {
     // Kick the first run shortly after boot — covers anything that
     // landed while the process was restarting.
     setTimeout(runOnce, 15_000);
+    state.pollScheduled = true;
     console.log("[email-notif-boot] safety-net poll scheduled (5m)");
   } catch (err) {
+    state.lastError = err instanceof Error ? err.message : "poll schedule failed";
     console.error("[email-notif-boot] poll schedule failed:", err);
   }
 }

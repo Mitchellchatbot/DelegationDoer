@@ -4,6 +4,8 @@ import { getUserById } from "@/lib/server-data";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { visibleAccountIdsFor } from "@/lib/inbox-access";
 import { listAccounts } from "@/lib/missive-client";
+import { getMissiveSocketStatus } from "@/lib/missive-socket";
+import { getEmailNotifBootstrapState } from "@/lib/email-notifications-bootstrap";
 
 export const dynamic = "force-dynamic";
 
@@ -82,6 +84,13 @@ export async function GET() {
         // 401 and silently drops on the floor.
         secretConfigured: !!process.env.MISSIVE_WEBHOOK_SECRET
       },
+      // Live runtime state of the email-notifications subsystem on this
+      // Node worker. If `bootstrap` is null, the new code hasn't booted
+      // — either deploy isn't done or instrumentation.ts didn't fire.
+      // If `socket.connected` is false, the live path is down (poll is
+      // the only thing writing rows).
+      socket: getMissiveSocketStatus(),
+      bootstrap: getEmailNotifBootstrapState(),
       prefs: (prefsRes.data ?? []) as Array<{
         missive_account_id: string;
         enabled: boolean;

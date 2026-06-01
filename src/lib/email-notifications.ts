@@ -107,21 +107,40 @@ export async function fanOutInboxEvent(event: InboxEvent): Promise<number> {
 
   const receivedAt = enriched.receivedAt ?? new Date(event.ts ?? Date.now()).toISOString();
 
-  const rows = userIds.map((userId) => ({
-    user_id: userId,
-    missive_account_id: event.account_id,
-    thread_id: event.thread_id,
-    message_id: event.message_id ?? null,
-    subject: enriched.subject,
-    from_name: enriched.fromName,
-    from_email: enriched.fromEmail,
-    preview: enriched.preview,
-    received_at: receivedAt
-  }));
+  // Skip users who already have a row for this message — handles the
+  // case where missiveclone retries the webhook after we ACKed slow.
+  // The webhook-level dedup (isDuplicateMessage in missive-socket)
+  // catches near-simultaneous retries; this catches the longer tail.
+  let existingUserIds = new Set<string>();
+  if (event.message_id) {
+    const { data: existing } = await supabase
+      .from("email_notifications")
+      .select("user_id")
+      .eq("message_id", event.message_id)
+      .in("user_id", userIds);
+    existingUserIds = new Set(((existing ?? []) as { user_id: string }[]).map((r) => r.user_id));
+  }
 
-  const { error } = await supabase
-    .from("email_notifications")
-    .upsert(rows, { onConflict: "user_id,message_id", ignoreDuplicates: true });
+  const rows = userIds
+    .filter((uid) => !existingUserIds.has(uid))
+    .map((userId) => ({
+      user_id: userId,
+      missive_account_id: event.account_id,
+      thread_id: event.thread_id,
+      message_id: event.message_id ?? null,
+      subject: enriched.subject,
+      from_name: enriched.fromName,
+      from_email: enriched.fromEmail,
+      preview: enriched.preview,
+      received_at: receivedAt
+    }));
+  if (rows.length === 0) return 0;
+
+  // Plain insert — earlier code used upsert with onConflict on a
+  // partial unique index, which Postgres can't resolve without the
+  // WHERE clause and the Supabase JS client doesn't forward. The
+  // upsert was failing silently and no rows ever landed.
+  const { error } = await supabase.from("email_notifications").insert(rows);
   if (error) {
     console.error("[email-notif] fanOut insert", error);
     return 0;

@@ -7,14 +7,24 @@ export const dynamic = "force-dynamic";
 
 // PATCH /api/clients/[id]
 //   body: {
-//     teamId?: string | null,         // null clears the team
-//     assignedUserId?: string | null  // null clears the point person
+//     teamId?: string | null,
+//     assignedUserId?: string | null,
+//     assignedUserIds?: string[],
+//     // Core profile — leader/head/admin can edit. Sending null/empty
+//     // string clears the field. Omitted keys are left untouched.
+//     name?: string,
+//     website?: string | null,
+//     websites?: string[],
+//     contactName?: string | null,
+//     contactEmails?: string[],
+//     onboardingDate?: string | null, // YYYY-MM-DD
+//     businessInformation?: string | null
 //   }
 //
-// Either field may be omitted to leave the other untouched. Updates
-// validate against the shared TEAMS catalog + the users table. Leader/
-// admin/head can change (any team member would be too loose for an
-// org-wide ownership field).
+// Updates validate against the shared TEAMS catalog + the users table.
+// Leader / admin / head can change everything here. (Any team member
+// would be too loose for an org-wide ownership field, and the contact
+// fields are equally sensitive — they drive who we email and how.)
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
   try {
     const userId = await requireCurrentUserId();
@@ -93,6 +103,112 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       update.assigned_user_ids = unique;
       // Keep the legacy single column in sync — first id, or null.
       update.assigned_user_id = unique[0] ?? null;
+    }
+
+    if ("name" in body) {
+      if (typeof body.name !== "string") {
+        return NextResponse.json({ error: "name must be a string" }, { status: 400 });
+      }
+      const trimmed = body.name.trim();
+      if (trimmed.length === 0) {
+        return NextResponse.json({ error: "name cannot be empty" }, { status: 400 });
+      }
+      update.name = trimmed.slice(0, 200);
+    }
+
+    if ("website" in body) {
+      const raw = body.website;
+      if (raw === null || raw === "" || raw === undefined) {
+        update.website = null;
+      } else if (typeof raw === "string") {
+        update.website = raw.trim().slice(0, 500);
+      } else {
+        return NextResponse.json({ error: "website must be a string or null" }, { status: 400 });
+      }
+    }
+
+    if ("websites" in body) {
+      if (!Array.isArray(body.websites)) {
+        return NextResponse.json({ error: "websites must be an array of strings" }, { status: 400 });
+      }
+      const cleaned = body.websites
+        .filter((v: unknown): v is string => typeof v === "string")
+        .map((v: string) => v.trim().slice(0, 500))
+        .filter((v: string) => v.length > 0);
+      // Dedup preserving first occurrence.
+      const seen = new Set<string>();
+      const unique: string[] = [];
+      for (const w of cleaned) {
+        if (seen.has(w)) continue;
+        seen.add(w);
+        unique.push(w);
+      }
+      update.websites = unique;
+    }
+
+    if ("contactName" in body) {
+      const raw = body.contactName;
+      if (raw === null || raw === "" || raw === undefined) {
+        update.contact_name = null;
+      } else if (typeof raw === "string") {
+        update.contact_name = raw.trim().slice(0, 200);
+      } else {
+        return NextResponse.json({ error: "contactName must be a string or null" }, { status: 400 });
+      }
+    }
+
+    if ("contactEmails" in body) {
+      if (!Array.isArray(body.contactEmails)) {
+        return NextResponse.json({ error: "contactEmails must be an array" }, { status: 400 });
+      }
+      // Allow comma/whitespace-tolerant clients but normalize here so
+      // the column stores clean addresses. Light validation only — we
+      // don't want to block weird-but-valid TLDs.
+      const cleaned: string[] = [];
+      const seen = new Set<string>();
+      for (const raw of body.contactEmails) {
+        if (typeof raw !== "string") continue;
+        const trimmed = raw.trim().toLowerCase();
+        if (trimmed.length === 0) continue;
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
+          return NextResponse.json(
+            { error: `not a valid email: ${raw}` },
+            { status: 400 }
+          );
+        }
+        if (seen.has(trimmed)) continue;
+        seen.add(trimmed);
+        cleaned.push(trimmed);
+      }
+      update.contact_emails = cleaned;
+    }
+
+    if ("onboardingDate" in body) {
+      const raw = body.onboardingDate;
+      if (raw === null || raw === "" || raw === undefined) {
+        update.onboarding_date = null;
+      } else if (typeof raw === "string" && /^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+        update.onboarding_date = raw;
+      } else {
+        return NextResponse.json(
+          { error: "onboardingDate must be YYYY-MM-DD or null" },
+          { status: 400 }
+        );
+      }
+    }
+
+    if ("businessInformation" in body) {
+      const raw = body.businessInformation;
+      if (raw === null || raw === "" || raw === undefined) {
+        update.business_information = null;
+      } else if (typeof raw === "string") {
+        update.business_information = raw.slice(0, 8000);
+      } else {
+        return NextResponse.json(
+          { error: "businessInformation must be a string or null" },
+          { status: 400 }
+        );
+      }
     }
 
     if (Object.keys(update).length === 0) {

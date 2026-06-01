@@ -30,11 +30,14 @@ export async function GET() {
       { data: incidents, error: ie },
       { data: acks,  error: ae }
     ] = await Promise.all([
+      // is_draft=true means the task is a routing draft awaiting
+      // dept-head approval — never surface those in the widget; the
+      // approver sees them on /approvals instead.
       supabase.from("tasks").select(SELECT_COLS)
-        .eq("assignee_id", userId).neq("status", "done")
+        .eq("assignee_id", userId).neq("status", "done").eq("is_draft", false)
         .order("created_at", { ascending: false }),
       supabase.from("tasks").select(SELECT_COLS)
-        .contains("tags", ["incident"]).neq("status", "done")
+        .contains("tags", ["incident"]).neq("status", "done").eq("is_draft", false)
         .order("created_at", { ascending: false }),
       supabase.from("assignment_acknowledgements").select("task_id")
         .eq("user_id", userId)
@@ -64,7 +67,8 @@ export async function GET() {
         supabase
           .from("tasks")
           .select("id, title, priority, status, due_date, assignee_id, creator_id")
-          .in("id", notifTaskIds),
+          .in("id", notifTaskIds)
+          .eq("is_draft", false),
         fromIds.length > 0
           ? supabase.from("users").select("id, name, avatar_url").in("id", fromIds)
           : Promise.resolve({ data: [] as { id: string; name: string; avatar_url: string | null }[] })

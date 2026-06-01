@@ -21,6 +21,7 @@ import { AddResourceForm, DeleteResourceButton } from "@/components/AddResourceF
 import { ClientKnowledgeBase, type CompletedTaskRow } from "@/components/ClientKnowledgeBase";
 import { ClientEmailsCombined } from "@/components/ClientEmailsCombined";
 import { ClientOpenTasksList } from "@/components/ClientOpenTasksList";
+import { ClientContactInfoCard } from "@/components/ClientContactInfoCard";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { visibleAccountIdsFor } from "@/lib/inbox-access";
@@ -312,21 +313,21 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
         }
       />
 
-      {/* Business information — the onboarding brief captured at client
-          creation. Surfaced high on the page so the team can reference
-          company overview, services, background, and special
-          instructions at a glance. */}
-      {client.businessInformation && (
-        <section className="rounded-2xl border border-white/60 shadow-soft bg-gradient-to-br from-indigo-50/60 to-white p-4 space-y-2">
-          <header className="flex items-center gap-2">
-            <FileText className="w-4 h-4 text-indigo-600" />
-            <div className="text-sm font-semibold">Business information</div>
-          </header>
-          <p className="text-sm text-ink/80 whitespace-pre-wrap leading-relaxed">
-            {client.businessInformation}
-          </p>
-        </section>
-      )}
+      {/* Contact + onboarding info — viewable by everyone, editable by
+          leader / head / admin. Replaces the legacy read-only Business
+          info block; the new card covers name + website + contact +
+          onboarding date + business brief in one place. */}
+      <ClientContactInfoCard
+        clientId={client.id}
+        name={client.name}
+        website={client.website}
+        websites={client.websites}
+        contactName={client.contactName}
+        contactEmails={client.contactEmails}
+        onboardingDate={client.onboardingDate}
+        businessInformation={client.businessInformation}
+        canEdit={!!(me && (me.role === "leader" || me.role === "department_head" || me.isAdmin))}
+      />
 
       <ClientTouchpointCard
         clientId={client.id}

@@ -23,6 +23,8 @@ export interface OnboardingInbox {
   enabled: boolean;
 }
 
+type EmptyReason = "missive_error" | "no_accounts" | "no_assignments" | null;
+
 interface Props {
   open: boolean;
   onClose: () => void;
@@ -35,16 +37,27 @@ export function EmailNotificationsOnboardingModal({ open, onClose, onDone }: Pro
   const [saving, setSaving] = useState(false);
   const [inboxes, setInboxes] = useState<OnboardingInbox[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [emptyReason, setEmptyReason] = useState<EmptyReason>(null);
+  const [missiveError, setMissiveError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) return;
     setStep(1);
     setLoading(true);
+    setEmptyReason(null);
+    setMissiveError(null);
     fetch("/api/me/email-notification-prefs")
       .then((r) => r.json())
-      .then((data: { inboxes?: OnboardingInbox[]; onboarded?: boolean }) => {
+      .then((data: {
+        inboxes?: OnboardingInbox[];
+        onboarded?: boolean;
+        emptyReason?: EmptyReason;
+        missiveError?: string | null;
+      }) => {
         const list = data?.inboxes ?? [];
         setInboxes(list);
+        setEmptyReason(data?.emptyReason ?? null);
+        setMissiveError(data?.missiveError ?? null);
         // Default: every visible inbox is checked. First-time users
         // don't have to think; power users with many inboxes can untick.
         setSelected(new Set(list.map((i) => i.accountId)));
@@ -136,9 +149,34 @@ export function EmailNotificationsOnboardingModal({ open, onClose, onDone }: Pro
                 <Loader2 className="w-4 h-4 animate-spin mr-2" /> Loading inboxes…
               </div>
             ) : inboxes.length === 0 ? (
-              <div className="rounded-xl border border-amber-200/60 bg-amber-50/60 p-3 text-[12px] text-amber-800">
-                No inboxes are assigned to you yet. Ask an admin to give you
-                access to a Missive account before turning this on.
+              <div className="rounded-xl border border-amber-200/60 bg-amber-50/60 p-3 text-[12px] text-amber-800 leading-relaxed">
+                {emptyReason === "missive_error" ? (
+                  <>
+                    <strong className="block font-semibold mb-1">Can't reach Missive.</strong>
+                    The notification service can't talk to your Missive
+                    workspace right now. Check that <code className="text-[11px]">MISSIVE_API_URL</code> and{" "}
+                    <code className="text-[11px]">MISSIVE_API_TOKEN</code> are set on the deploy.
+                    {missiveError && (
+                      <span className="block mt-1 text-[11px] text-amber-700/80 font-mono">
+                        {missiveError.slice(0, 200)}
+                      </span>
+                    )}
+                  </>
+                ) : emptyReason === "no_accounts" ? (
+                  <>
+                    <strong className="block font-semibold mb-1">No Missive accounts connected yet.</strong>
+                    Connect at least one inbox in Missive — once it's
+                    syncing, refresh this dialog and your inboxes will
+                    appear here.
+                  </>
+                ) : (
+                  <>
+                    <strong className="block font-semibold mb-1">No inboxes assigned to you yet.</strong>
+                    Ask an admin to give you access to a Missive account on{" "}
+                    <a href="/inboxes/manage" className="underline">/inboxes/manage</a>{" "}
+                    before turning this on.
+                  </>
+                )}
               </div>
             ) : (
               <ul className="rounded-xl border border-slate-200 divide-y divide-slate-100 overflow-hidden max-h-72 overflow-y-auto">

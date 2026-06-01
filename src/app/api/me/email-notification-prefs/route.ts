@@ -31,9 +31,19 @@ export async function GET() {
     if (!me) return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
 
     const supabase = getSupabaseAdmin();
+    // Capture the listAccounts error so the modal can distinguish:
+    //   (a) Missive is unreachable / token misconfigured (reason = "missive_error")
+    //   (b) Missive has zero accounts at all                (reason = "no_accounts")
+    //   (c) accounts exist but none are visible to this user (reason = "no_assignments")
+    // Without this, all three collapsed into "no inboxes assigned" which
+    // misdirected admins to ask themselves for access.
+    let missiveError: string | null = null;
     const [visible, accounts, prefsRes] = await Promise.all([
       visibleAccountIdsFor(me),
-      listAccounts().catch(() => []),
+      listAccounts().catch((err) => {
+        missiveError = err instanceof Error ? err.message : "missive fetch failed";
+        return [];
+      }),
       supabase
         .from("user_email_notification_prefs")
         .select("missive_account_id, enabled")
@@ -57,9 +67,21 @@ export async function GET() {
       enabled: prefMap.get(a.id) ?? false
     }));
 
+    const emptyReason: "missive_error" | "no_accounts" | "no_assignments" | null =
+      inboxes.length > 0
+        ? null
+        : missiveError
+          ? "missive_error"
+          : accounts.length === 0
+            ? "no_accounts"
+            : "no_assignments";
+
     return NextResponse.json({
       onboarded: me.emailNotificationsOnboarded === true,
-      inboxes
+      inboxes,
+      totalConnectedAccounts: accounts.length,
+      missiveError,
+      emptyReason
     });
   } catch (err) {
     return NextResponse.json(

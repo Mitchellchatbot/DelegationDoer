@@ -34,6 +34,14 @@ export async function POST(req: NextRequest) {
   const rawBody = await req.text();
   const sig = req.headers.get("x-missive-signature");
   if (!verify(rawBody, sig)) {
+    // Log the verification failure server-side so it stops being
+    // invisible. We don't leak the secret value, just enough state to
+    // diagnose "is the secret set?" vs "is it set but wrong?".
+    console.error("[missive-webhook] signature verification failed", {
+      secretConfigured: !!SECRET,
+      sigPresent: !!sig,
+      bodyBytes: rawBody.length
+    });
     // Don't reveal whether the secret is unset vs the sig is wrong — same 401.
     return NextResponse.json({ error: "invalid signature" }, { status: 401 });
   }
@@ -67,8 +75,16 @@ export async function POST(req: NextRequest) {
   // Fan out into email_notifications for users opted-in to this
   // account. Fire-and-forget so we ACK the webhook within ~5ms even if
   // the enrichment fetch is slow; any failure is logged inside.
-  void fanOutInboxEvent(event).catch((err) => {
-    console.error("[missive-webhook] fanOut", err);
-  });
+  void fanOutInboxEvent(event)
+    .then((rows) => {
+      console.log("[missive-webhook] fanOut", {
+        event: event.event,
+        account_id: event.account_id,
+        rowsWritten: rows
+      });
+    })
+    .catch((err) => {
+      console.error("[missive-webhook] fanOut", err);
+    });
   return NextResponse.json({ ok: true });
 }

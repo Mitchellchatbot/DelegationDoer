@@ -34,7 +34,7 @@ async function runSweep(trigger: "interval" | "boot-catchup"): Promise<void> {
   sweepRunning = true;
   try {
     const result = await runArchiveSweep();
-    console.log(`[task-archive] sweep (${trigger}) complete — archived=${result.count} cutoff=${result.cutoff}`);
+    console.log(`[task-archive] sweep (${trigger}) complete — archived=${result.count} done≤${result.doneCutoff} overdue≤${result.overdueCutoff}`);
   } catch (err) {
     console.error(`[task-archive] sweep (${trigger}) failed:`, err);
   } finally {

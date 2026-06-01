@@ -15,14 +15,15 @@ export async function GET() {
     await requireCurrentUserId();
     const { data } = await getSupabaseAdmin()
       .from("workspace_settings")
-      .select("scaled_team_channel_id, eod_recap_channel_id, last_eod_recap_at, low_site_score_threshold")
+      .select("scaled_team_channel_id, eod_recap_channel_id, last_eod_recap_at, low_site_score_threshold, overdue_archive_days")
       .eq("id", "workspace")
       .maybeSingle();
     return NextResponse.json({
       scaledTeamChannelId: (data?.scaled_team_channel_id as string | null) ?? null,
       eodRecapChannelId: (data?.eod_recap_channel_id as string | null) ?? null,
       lastEodRecapAt: (data?.last_eod_recap_at as string | null) ?? null,
-      lowSiteScoreThreshold: (data?.low_site_score_threshold as number | null) ?? 70
+      lowSiteScoreThreshold: (data?.low_site_score_threshold as number | null) ?? 70,
+      overdueArchiveDays: (data?.overdue_archive_days as number | null) ?? 10
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : "unknown error";
@@ -57,6 +58,15 @@ export async function PUT(req: NextRequest) {
         update.low_site_score_threshold = Math.max(0, Math.min(100, n));
       }
     }
+    // Overdue auto-archive threshold (days). An open task more than this many
+    // days past its due date auto-archives off the active board. Clamp to a
+    // sane floor of 1 day; cap at a year so a fat-finger can't disable it.
+    if (body.overdueArchiveDays !== undefined && body.overdueArchiveDays !== null) {
+      const n = Math.round(Number(body.overdueArchiveDays));
+      if (Number.isFinite(n)) {
+        update.overdue_archive_days = Math.max(1, Math.min(365, n));
+      }
+    }
     const { data, error } = await getSupabaseAdmin()
       .from("workspace_settings")
       .upsert({ id: "workspace", ...update }, { onConflict: "id" })
@@ -66,7 +76,8 @@ export async function PUT(req: NextRequest) {
     return NextResponse.json({
       scaledTeamChannelId: (data.scaled_team_channel_id as string | null) ?? null,
       eodRecapChannelId: (data.eod_recap_channel_id as string | null) ?? null,
-      lowSiteScoreThreshold: (data.low_site_score_threshold as number | null) ?? 70
+      lowSiteScoreThreshold: (data.low_site_score_threshold as number | null) ?? 70,
+      overdueArchiveDays: (data.overdue_archive_days as number | null) ?? 10
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : "unknown error";

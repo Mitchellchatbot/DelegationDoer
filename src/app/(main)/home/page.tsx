@@ -10,11 +10,13 @@ import {
   getNeedsYouCounts,
   getClientHealthOverview,
   getDayBookendStatus,
-  getSeoBriefsForHome
+  getSeoBriefsForHome,
+  getLeaderPulse
 } from "@/lib/home-data";
 import { HomeWorker } from "@/components/HomeWorker";
 import { HomeLeader } from "@/components/HomeLeader";
 import { HomeSeoBriefs } from "@/components/HomeSeoBriefs";
+import { HomePulseCard } from "@/components/HomePulseCard";
 import { DayBookends } from "@/components/DayBookends";
 
 export const dynamic = "force-dynamic";
@@ -58,7 +60,7 @@ export default async function HomePage() {
     const showSeoBriefs =
       isLeaderRole || (isHead && (me.departmentIds ?? []).includes("dep_seo"));
 
-    const [team, deliverables, needsYou, clientHealth, seoBriefs] = await Promise.all([
+    const [team, deliverables, needsYou, clientHealth, seoBriefs, pulse] = await Promise.all([
       getTeamStatusToday(scopedDepartmentIds ?? undefined, 60),
       getTodayDeliverables(scopedDepartmentIds ?? undefined, 20),
       getNeedsYouCounts({
@@ -76,7 +78,10 @@ export default async function HomePage() {
       // priority + every at-risk client (red touchpoint) — the helper
       // unions them so important clients going cold can't slip off.
       getClientHealthOverview(10),
-      showSeoBriefs ? getSeoBriefsForHome(20) : Promise.resolve([])
+      showSeoBriefs ? getSeoBriefsForHome(20) : Promise.resolve([]),
+      // What's-moving feed — surfaces SEO reports, handoffs, stalled
+      // tasks, site-health alerts. Hides itself when empty.
+      getLeaderPulse({ scopedDepartmentIds, total: 12 })
     ]);
 
     return (
@@ -91,6 +96,7 @@ export default async function HomePage() {
           scopeLabel={scopeLabel}
         />
         {showSeoBriefs && <HomeSeoBriefs rows={seoBriefs} />}
+        <HomePulseCard events={pulse} />
       </div>
     );
   }

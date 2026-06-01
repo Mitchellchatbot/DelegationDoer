@@ -361,6 +361,163 @@ export interface ClientHealthRow {
   daysSinceLastEmail: number | null;
 }
 
+// Leader "pulse" feed — unified, chronologically-sorted list of moves
+// that matter today across the agency. Pulls from four sources and
+// flattens to a common shape so the UI can render them in one card:
+//
+//   • SEO report request opened (task tagged 'seo-report-request')
+//   • Task handed off (task_handoffs)
+//   • Stalled task (status != done, last_activity_at > 7d ago)
+//   • Site health alert (site_health_alerts)
+//
+// Each source is queried with a cheap LIMIT; we then merge + sort
+// client-side by timestamp desc, capped at `total`. Best-effort —
+// per-table errors don't break the whole feed.
+export type PulseKind = "seo_report" | "handoff" | "stalled" | "site_alert";
+export interface PulseEvent {
+  id: string;             // unique within the feed
+  kind: PulseKind;
+  // Render fields — every kind populates these so the UI doesn't need
+  // to branch on kind for layout.
+  title: string;          // primary line
+  detail: string | null;  // secondary line
+  href: string;           // deep-link the row navigates to
+  at: string;             // ISO timestamp used for sort + display
+}
+
+export async function getLeaderPulse(opts: {
+  scopedDepartmentIds?: string[] | null;
+  total?: number;
+} = {}): Promise<PulseEvent[]> {
+  const supabase = getSupabaseAdmin();
+  const total = opts.total ?? 12;
+  const events: PulseEvent[] = [];
+
+  const sinceIso = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString();
+  const stalledCutoffIso = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+
+  // 1) SEO report requests opened (tagged tasks)
+  try {
+    const { data } = await supabase
+      .from("tasks")
+      .select("id, title, client_name, created_at, status")
+      .contains("tags", ["seo-report-request"])
+      .neq("status", "done")
+      .gte("created_at", sinceIso)
+      .order("created_at", { ascending: false })
+      .limit(8);
+    for (const r of (data ?? []) as Array<{ id: string; title: string | null; client_name: string | null; created_at: string }>) {
+      events.push({
+        id: `seo:${r.id}`,
+        kind: "seo_report",
+        title: r.title || "SEO report request",
+        detail: r.client_name ? `for ${r.client_name}` : null,
+        href: `/tasks/${r.id}`,
+        at: r.created_at
+      });
+    }
+  } catch { /* feed source missing — skip */ }
+
+  // 2) Task handoffs (most recent)
+  try {
+    const { data } = await supabase
+      .from("task_handoffs")
+      .select("id, task_id, from_user_id, to_user_id, reason, created_at")
+      .gte("created_at", sinceIso)
+      .order("created_at", { ascending: false })
+      .limit(10);
+    const handoffs = (data ?? []) as Array<{ id: string; task_id: string; from_user_id: string | null; to_user_id: string | null; reason: string | null; created_at: string }>;
+    // Batch lookups so we can show "X → Y on task Title"
+    const userIds = new Set<string>();
+    for (const h of handoffs) {
+      if (h.from_user_id) userIds.add(h.from_user_id);
+      if (h.to_user_id) userIds.add(h.to_user_id);
+    }
+    const taskIds = handoffs.map((h) => h.task_id).filter(Boolean);
+    const [{ data: users }, { data: tasks }] = await Promise.all([
+      userIds.size > 0
+        ? supabase.from("users").select("id, name").in("id", Array.from(userIds))
+        : Promise.resolve({ data: [] as { id: string; name: string | null }[] }),
+      taskIds.length > 0
+        ? supabase.from("tasks").select("id, title, client_name").in("id", taskIds)
+        : Promise.resolve({ data: [] as { id: string; title: string | null; client_name: string | null }[] })
+    ]);
+    const nameById = new Map((users ?? []).map((u) => [u.id, u.name ?? "Someone"]));
+    const taskById = new Map((tasks ?? []).map((t) => [t.id, t]));
+    for (const h of handoffs) {
+      const t = taskById.get(h.task_id);
+      if (!t) continue;
+      const from = h.from_user_id ? nameById.get(h.from_user_id) ?? "Someone" : "Unassigned";
+      const to = h.to_user_id ? nameById.get(h.to_user_id) ?? "Someone" : "Unassigned";
+      events.push({
+        id: `handoff:${h.id}`,
+        kind: "handoff",
+        title: t.title ?? "Task handed off",
+        detail: `${from} → ${to}${t.client_name ? ` · ${t.client_name}` : ""}`,
+        href: `/tasks/${h.task_id}`,
+        at: h.created_at
+      });
+    }
+  } catch { /* skip */ }
+
+  // 3) Stalled tasks — assigned, in-flight, no activity in 7d
+  try {
+    const { data } = await supabase
+      .from("tasks")
+      .select("id, title, client_name, assignee_id, last_activity_at, status")
+      .neq("status", "done")
+      .eq("is_draft", false)
+      .lt("last_activity_at", stalledCutoffIso)
+      .not("assignee_id", "is", null)
+      .order("last_activity_at", { ascending: true })
+      .limit(6);
+    const rows = (data ?? []) as Array<{ id: string; title: string | null; client_name: string | null; assignee_id: string | null; last_activity_at: string }>;
+    const userIds = new Set<string>();
+    for (const r of rows) if (r.assignee_id) userIds.add(r.assignee_id);
+    const { data: users } = userIds.size > 0
+      ? await supabase.from("users").select("id, name").in("id", Array.from(userIds))
+      : { data: [] as { id: string; name: string | null }[] };
+    const nameById = new Map((users ?? []).map((u) => [u.id, u.name ?? "Someone"]));
+    for (const r of rows) {
+      const days = Math.floor(
+        (Date.now() - new Date(r.last_activity_at).getTime()) / 86_400_000
+      );
+      events.push({
+        id: `stalled:${r.id}`,
+        kind: "stalled",
+        title: r.title || "Untitled task",
+        detail: `${r.assignee_id ? nameById.get(r.assignee_id) ?? "Someone" : "Unassigned"} · ${days}d quiet${r.client_name ? ` · ${r.client_name}` : ""}`,
+        href: `/tasks/${r.id}`,
+        at: r.last_activity_at
+      });
+    }
+  } catch { /* skip */ }
+
+  // 4) Site health alerts
+  try {
+    const { data } = await supabase
+      .from("site_health_alerts")
+      .select("id, website, domain, site_score, task_id, created_at")
+      .gte("created_at", sinceIso)
+      .order("created_at", { ascending: false })
+      .limit(6);
+    for (const r of (data ?? []) as Array<{ id: string; website: string | null; domain: string | null; site_score: number; task_id: string | null; created_at: string }>) {
+      events.push({
+        id: `site:${r.id}`,
+        kind: "site_alert",
+        title: `${r.domain ?? r.website ?? "Site"} scored ${r.site_score}`,
+        detail: r.task_id ? "Auto-task opened" : "No task created",
+        href: r.task_id ? `/tasks/${r.task_id}` : "/clients",
+        at: r.created_at
+      });
+    }
+  } catch { /* skip */ }
+
+  // Sort by `at` desc and cap.
+  events.sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
+  return events.slice(0, total);
+}
+
 // SEO briefs from leadership, for the /home card shown to dep_seo users.
 // Returns every active client that has a seo_brief set, truncated to
 // ~280 chars so the card stays scannable. Ordered by recently-updated

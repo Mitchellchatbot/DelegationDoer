@@ -4,6 +4,7 @@ import { userCapacity } from "@/lib/capacity";
 import { listUserEvents } from "@/lib/google-calendar";
 import { embedQuery } from "@/lib/sop-ingest";
 import { listLabels, listThreads, getThread } from "@/lib/missive-client";
+import { rankCandidates, buildLoadSignals } from "@/lib/skill-rank";
 import type { Task, User } from "@/lib/types";
 
 // AI tool definitions + dispatchers. The Ask AI route hands these
@@ -12,8 +13,37 @@ import type { Task, User } from "@/lib/types";
 // actor passed in, so access scoping (workers can't see leader
 // tasks, etc.) is enforced by us, not the model.
 
+// Structured "action card" the assistant can emit alongside its text
+// answer. The chat route bundles every ProposedAction into the response
+// so the drawer can render inline buttons (Create task, Open thread,
+// etc.) under the relevant assistant turn. Tools push onto
+// `ctx.proposals` instead of mutating anything — the user is always
+// the one who commits the action.
+export type ProposedAction =
+  | {
+      kind: "create_task";
+      id: string;
+      title: string;
+      description: string;
+      priority?: "low" | "medium" | "high" | "critical";
+      clientName?: string | null;
+      sourceLabel?: string | null;       // e.g. "From: Allocation Assist email"
+      sourceUrl?: string | null;         // deep-link to the source thread, if any
+      suggestedAssignees: {
+        userId: string;
+        name: string;
+        score: number;
+        topReasons: string[];            // ranker factor labels (top 2)
+        capacityPct: number;
+      }[];
+    };
+
 export interface ToolContext {
   actor: User;
+  // Tools push onto this when they want to surface a structured UI
+  // action under the assistant's reply. Initialized fresh per request
+  // by /api/ai/chat — never persisted, never global.
+  proposals: ProposedAction[];
 }
 
 // Anthropic tool schema. Kept verbose-on-purpose: the description
@@ -143,6 +173,23 @@ export const AI_TOOLS = [
         limit: { type: "number" }
       },
       required: []
+    }
+  },
+  {
+    name: "propose_task",
+    description:
+      "Propose CREATING A TASK in DelegationDoer from something in the conversation — most often an email that needs follow-up. Does NOT create the task itself; instead it stages a button the user clicks to confirm. ALWAYS use this when:\n  • you spot a clear action item in an email a tool returned (\"can you send me a quote\", \"follow up with X by Friday\", \"please update the homepage\")\n  • the user says \"turn this into a task\" / \"make a task\" / \"who should do this?\"\n  • you're summarizing a thread and the obvious next step is human work\nThe tool runs the existing assignee ranker (skill match + capacity + client familiarity + workload) and returns the top 3 picks — surface the top pick in your text reply with one-line reasoning. Required: `title`, `description`. Optional: `clientName` (boosts client-familiarity), `priority` (low/medium/high/critical, default medium), `sourceLabel` (\"From: <subject>\" line to show on the card), `sourceUrl` (deep link to a DD thread page like `/inboxes/<accountId>/threads/<threadId>`).",
+    input_schema: {
+      type: "object",
+      properties: {
+        title: { type: "string" },
+        description: { type: "string" },
+        clientName: { type: "string" },
+        priority: { type: "string", enum: ["low", "medium", "high", "critical"] },
+        sourceLabel: { type: "string" },
+        sourceUrl: { type: "string" }
+      },
+      required: ["title", "description"]
     }
   },
   {
@@ -293,6 +340,7 @@ export async function runTool(
       case "get_client": return getClient(input, ctx);
       case "list_client_completed_tasks": return listClientCompletedTasks(input);
       case "list_client_recent_emails": return listClientRecentEmails(input);
+      case "propose_task": return proposeTask(input, ctx);
       case "list_projects": return listProjects(input);
       case "get_project": return getProject(input);
       case "get_capacity": return getCapacity(input, ctx);
@@ -860,6 +908,117 @@ function snippetFor(body: string | null, max: number): string {
   )[0];
   const clean = cut.replace(/\s+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
   return clean.length > max ? clean.slice(0, max) + "…" : clean;
+}
+
+// Stages a "Create task" card under the assistant's reply. Does NOT
+// insert the task — that only happens when the user clicks the button
+// the drawer renders from ctx.proposals. We run the same ranker the
+// new-task form + email intake use, so the suggestions stay consistent
+// across surfaces and a tweak to the ranker propagates here too.
+async function proposeTask(input: Record<string, unknown>, ctx: ToolContext) {
+  const title = typeof input.title === "string" ? input.title.trim() : "";
+  const description = typeof input.description === "string" ? input.description.trim() : "";
+  if (!title) return { error: "title required" };
+  if (!description) return { error: "description required" };
+
+  const PRIORITIES = new Set(["low", "medium", "high", "critical"]);
+  const rawPriority = typeof input.priority === "string" ? input.priority.toLowerCase() : null;
+  const priority = rawPriority && PRIORITIES.has(rawPriority)
+    ? (rawPriority as "low" | "medium" | "high" | "critical")
+    : undefined;
+  const clientName = typeof input.clientName === "string" && input.clientName.trim()
+    ? input.clientName.trim() : null;
+  const sourceLabel = typeof input.sourceLabel === "string" && input.sourceLabel.trim()
+    ? input.sourceLabel.trim() : null;
+  const sourceUrl = typeof input.sourceUrl === "string" && input.sourceUrl.trim()
+    ? input.sourceUrl.trim() : null;
+
+  // Pull skills + tasks + users in parallel so ranking is one round-trip.
+  const supabase = getSupabaseAdmin();
+  const [users, allTasks, skillRowsRes] = await Promise.all([
+    getAllUsersLight(),
+    getAllTasks(),
+    supabase.from("user_skills").select("user_id, tag, manual_level, auto_score")
+  ]);
+
+  type SkillRow = {
+    user_id: string;
+    tag: string;
+    manual_level: number | string;
+    auto_score: number | string;
+  };
+  const skillsByUser = new Map<
+    string,
+    { userId: string; tag: string; combinedScore: number }[]
+  >();
+  for (const r of (skillRowsRes.data ?? []) as SkillRow[]) {
+    const arr = skillsByUser.get(r.user_id) ?? [];
+    arr.push({
+      userId: r.user_id,
+      tag: r.tag,
+      combinedScore: Number(r.manual_level) * 6 + Number(r.auto_score)
+    });
+    skillsByUser.set(r.user_id, arr);
+  }
+
+  const capacityByUser = new Map<string, number>();
+  for (const u of users) capacityByUser.set(u.id, userCapacity(u, allTasks).pct);
+  const { activeTasksByUser, clientHistoryByUser } = buildLoadSignals(allTasks, clientName);
+
+  // Free-text keyword extraction from title + description → tags. The
+  // ranker also extracts internally, but passing them as `tags` keeps
+  // the contract symmetric with the email-intake call site.
+  const text = `${title} ${description}`.toLowerCase();
+  const tags = Array.from(
+    new Set((text.match(/[a-z0-9]{4,}/g) ?? []).slice(0, 12))
+  );
+
+  const ranked = rankCandidates({
+    task: {
+      title,
+      description,
+      departmentId: null,
+      tags
+    },
+    candidates: users,
+    skillsByUser,
+    capacityByUser,
+    activeTasksByUser,
+    clientHistoryByUser
+  });
+
+  const nameById = new Map(users.map((u) => [u.id, u.name]));
+  const top = ranked.slice(0, 3).map((r) => ({
+    userId: r.userId,
+    name: nameById.get(r.userId) ?? r.userId,
+    score: Math.round(r.score),
+    topReasons: r.factors
+      .filter((f) => Math.abs(f.points) >= 1)
+      .sort((a, b) => Math.abs(b.points) - Math.abs(a.points))
+      .slice(0, 2)
+      .map((f) => f.label),
+    capacityPct: Math.round(r.capacityPct)
+  }));
+
+  // Per-request unique id; only used as a React key on the action card.
+  const proposalId = `prop_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+  ctx.proposals.push({
+    kind: "create_task",
+    id: proposalId,
+    title,
+    description,
+    priority,
+    clientName,
+    sourceLabel,
+    sourceUrl,
+    suggestedAssignees: top
+  });
+
+  return {
+    proposalId,
+    suggestedAssignees: top,
+    note: "Task is staged. The user sees a 'Create task' button under your reply — reference the top suggestion in your text answer."
+  };
 }
 
 async function listProjects(input: Record<string, unknown>) {

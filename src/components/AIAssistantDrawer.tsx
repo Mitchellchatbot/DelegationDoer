@@ -2,14 +2,46 @@
 
 import * as Dialog from "@radix-ui/react-dialog";
 import { motion, AnimatePresence } from "framer-motion";
-import { Sparkles, Send, X, ArrowUp, Loader2, RefreshCw, Mic, MicOff } from "lucide-react";
+import {
+  Sparkles, Send, X, ArrowUp, Loader2, RefreshCw, Mic, MicOff,
+  ClipboardPlus, CheckCircle2, Users, ExternalLink
+} from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
-interface Message { role: "user" | "assistant"; content: string }
+// Mirrors the ProposedAction discriminated union in src/lib/ai-tools.ts.
+// Redeclared here so the drawer (a client component) doesn't pull in
+// the server-only ai-tools module — TypeScript would erase the type
+// import, but the import resolution is brittle, and the shape changes
+// rarely enough that hand-syncing is cheaper than another module.
+type SuggestedAssignee = {
+  userId: string;
+  name: string;
+  score: number;
+  topReasons: string[];
+  capacityPct: number;
+};
+type ProposedAction =
+  | {
+      kind: "create_task";
+      id: string;
+      title: string;
+      description: string;
+      priority?: "low" | "medium" | "high" | "critical";
+      clientName?: string | null;
+      sourceLabel?: string | null;
+      sourceUrl?: string | null;
+      suggestedAssignees: SuggestedAssignee[];
+    };
+
+interface Message {
+  role: "user" | "assistant";
+  content: string;
+  actions?: ProposedAction[];
+}
 
 const SUGGESTED = [
   "What's on my plate today?",
@@ -88,7 +120,12 @@ export function AIAssistantDrawer({
           content: `⚠ Couldn't reach Claude — ${data?.error ?? res.statusText}`
         }]);
       } else {
-        setMessages((m) => [...m, { role: "assistant", content: data.reply ?? "(no reply)" }]);
+        const incoming: Message = {
+          role: "assistant",
+          content: data.reply ?? "(no reply)",
+          actions: Array.isArray(data.actions) ? (data.actions as ProposedAction[]) : undefined
+        };
+        setMessages((m) => [...m, incoming]);
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : "network error";
@@ -255,6 +292,170 @@ function MessageBubble({ message }: { message: Message }) {
           <MarkdownBody content={message.content} />
         )}
       </div>
+      {!isUser && message.actions && message.actions.length > 0 && (
+        <div className="w-full max-w-[90%] space-y-2 mt-1">
+          {message.actions.map((a) =>
+            a.kind === "create_task" ? <CreateTaskCard key={a.id} action={a} /> : null
+          )}
+        </div>
+      )}
+    </motion.div>
+  );
+}
+
+// Inline "Create task" card the assistant emits when it spots an action
+// item. Defaults to the top-ranked assignee but the user can switch
+// to any of the suggested alternates with a click before committing.
+function CreateTaskCard({
+  action
+}: {
+  action: Extract<ProposedAction, { kind: "create_task" }>;
+}) {
+  const fallbackAssignee = action.suggestedAssignees[0]?.userId ?? null;
+  const [picked, setPicked] = useState<string | null>(fallbackAssignee);
+  const [creating, setCreating] = useState(false);
+  const [createdTaskId, setCreatedTaskId] = useState<string | null>(null);
+
+  async function commit() {
+    if (creating || createdTaskId) return;
+    setCreating(true);
+    try {
+      const res = await fetch("/api/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: action.title,
+          description: action.description,
+          priority: action.priority ?? "medium",
+          assigneeId: picked ?? null,
+          clientName: action.clientName ?? null,
+          missiveThreadUrl: action.sourceUrl ?? null
+        })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error ?? `failed (${res.status})`);
+      setCreatedTaskId(data?.task?.id ?? "ok");
+      toast.success("Task created.");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "couldn't create task");
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  const pickedAssignee = action.suggestedAssignees.find((a) => a.userId === picked);
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 4 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.18 }}
+      className={cn(
+        "rounded-2xl border bg-gradient-to-br shadow-sm overflow-hidden",
+        createdTaskId
+          ? "border-emerald-200/70 from-emerald-50/70 to-white"
+          : "border-blue-200/60 from-blue-50/60 via-white to-indigo-50/40"
+      )}
+    >
+      <div className="px-3.5 py-2.5 space-y-2">
+        <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wide font-semibold">
+          {createdTaskId ? (
+            <span className="text-emerald-700 inline-flex items-center gap-1">
+              <CheckCircle2 className="w-3 h-3" /> Task created
+            </span>
+          ) : (
+            <span className="text-blue-700 inline-flex items-center gap-1">
+              <ClipboardPlus className="w-3 h-3" /> Suggested task
+            </span>
+          )}
+          {action.priority && (
+            <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-white/80 border border-slate-200/70 text-ink/65 capitalize">
+              {action.priority}
+            </span>
+          )}
+          {action.clientName && (
+            <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-white/80 border border-indigo-200/70 text-indigo-700">
+              {action.clientName}
+            </span>
+          )}
+        </div>
+
+        <div className="text-[13px] font-semibold text-ink leading-tight">
+          {action.title}
+        </div>
+        <div className="text-[11.5px] text-ink/70 leading-snug whitespace-pre-wrap line-clamp-3">
+          {action.description}
+        </div>
+
+        {action.sourceLabel && (
+          <div className="text-[10px] text-ink/55 inline-flex items-center gap-1">
+            {action.sourceUrl ? (
+              <a
+                href={action.sourceUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 hover:text-accent hover:underline"
+              >
+                <ExternalLink className="w-3 h-3" /> {action.sourceLabel}
+              </a>
+            ) : (
+              <span>{action.sourceLabel}</span>
+            )}
+          </div>
+        )}
+
+        {action.suggestedAssignees.length > 0 && !createdTaskId && (
+          <div className="space-y-1.5">
+            <div className="text-[10px] uppercase tracking-wide font-semibold text-ink/55 inline-flex items-center gap-1">
+              <Users className="w-3 h-3" /> Suggested assignee
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {action.suggestedAssignees.map((a) => (
+                <button
+                  key={a.userId}
+                  type="button"
+                  onClick={() => setPicked(a.userId)}
+                  className={cn(
+                    "inline-flex items-center gap-1.5 px-2 py-1 rounded-full text-[11px] border transition-colors",
+                    picked === a.userId
+                      ? "bg-blue-600 text-white border-blue-600 shadow-sm"
+                      : "bg-white text-ink/80 border-slate-200/70 hover:border-blue-300 hover:text-blue-700"
+                  )}
+                  title={a.topReasons.length ? a.topReasons.join(" · ") : undefined}
+                >
+                  <span className="font-medium">{a.name}</span>
+                  <span className={cn("text-[9px] tabular-nums", picked === a.userId ? "opacity-80" : "opacity-60")}>
+                    {a.score}
+                  </span>
+                </button>
+              ))}
+            </div>
+            {pickedAssignee && pickedAssignee.topReasons.length > 0 && (
+              <div className="text-[10px] text-ink/55 leading-snug">
+                Why: {pickedAssignee.topReasons.join(" · ")} · {pickedAssignee.capacityPct}% capacity
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {!createdTaskId && (
+        <div className="px-3.5 py-2 bg-white/60 border-t border-slate-200/60 flex items-center justify-end">
+          <button
+            type="button"
+            onClick={commit}
+            disabled={creating}
+            className={cn(
+              "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11.5px] font-semibold text-white shadow-sm transition-all",
+              creating ? "opacity-60 cursor-not-allowed" : "hover:-translate-y-0.5 active:scale-95"
+            )}
+            style={{ background: "linear-gradient(135deg, #2563EB 0%, #1e63ff 100%)" }}
+          >
+            {creating ? <Loader2 className="w-3 h-3 animate-spin" /> : <ClipboardPlus className="w-3 h-3" />}
+            Create task
+          </button>
+        </div>
+      )}
     </motion.div>
   );
 }

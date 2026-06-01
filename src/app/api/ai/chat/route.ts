@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getAnthropic, MODELS } from "@/lib/anthropic-client";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById, getDepartments } from "@/lib/server-data";
-import { AI_TOOLS, runTool } from "@/lib/ai-tools";
+import { AI_TOOLS, runTool, type ProposedAction } from "@/lib/ai-tools";
 
 interface ChatMessage { role: "user" | "assistant"; content: string }
 
@@ -52,6 +52,7 @@ Guidelines:
 - Workers see only tasks not owned/created by leaders (this is enforced server-side, you can't bypass it — if a tool returns nothing for a worker, that's by design).
 - Reference task titles, person names, project names — not raw ids.
 - When suggesting an assignee for new work, rank by capacity + role/department fit and explain the top pick in one line.
+- ACTION CARDS: whenever a tool result reveals a clear action item (an email asking for follow-up, a "next step" the user just discussed, an obvious task the user hinted at), call \`propose_task\` to stage a "Create task" button under your reply. The tool returns the top-ranked assignees — your text answer should call out the top pick by name with a one-line rationale. Do NOT fabricate a task when the user is just asking for information; only stage one when there's a real action to commit to.
 - For "how do I…" / procedural / new-hire questions, call search_sops and base the answer on the matched chunks. ALWAYS cite the SOP title. If any matching chunk carries an imageUrl (a captioned screenshot or diagram), embed it inline in your reply using markdown image syntax: ![brief caption](imageUrl) on its own line, BEFORE the related step. Show the actual picture rather than just describing it — users learn faster from screenshots than prose. If multiple chunks have images, include each one near the step it illustrates. If search_sops returns no relevant chunks (or all distances are high — anything above ~0.6 is loose), say so directly rather than guessing.`;
 
     // Build the message list we'll feed Anthropic. We mutate this as
@@ -71,6 +72,10 @@ Guidelines:
     const client = await getAnthropic();
     let finalText = "";
     const tracedToolCalls: { name: string; input: Record<string, unknown> }[] = [];
+    // Tools push onto this when they want the UI to render an inline
+    // action card under the assistant turn (e.g. "Create task" with
+    // ranker-picked assignees). Returned to the client at the end.
+    const proposals: ProposedAction[] = [];
 
     for (let round = 0; round < MAX_ROUNDS; round++) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -114,7 +119,7 @@ Guidelines:
       for (const block of blocks) {
         if (block.type !== "tool_use") continue;
         tracedToolCalls.push({ name: block.name, input: block.input });
-        const output = await runTool(block.name, block.input ?? {}, { actor });
+        const output = await runTool(block.name, block.input ?? {}, { actor, proposals });
         toolResults.push({
           type: "tool_result",
           tool_use_id: block.id,
@@ -134,7 +139,11 @@ Guidelines:
       reply: finalText,
       // Surface what tools were called so the UI can show a small
       // "looked at X, Y, Z" hint if it wants to.
-      toolCalls: tracedToolCalls
+      toolCalls: tracedToolCalls,
+      // Inline action cards staged by tools like propose_task. The
+      // drawer renders these under the assistant message; clicking
+      // "Create task" POSTs to /api/tasks with the pre-filled fields.
+      actions: proposals
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "unknown error";

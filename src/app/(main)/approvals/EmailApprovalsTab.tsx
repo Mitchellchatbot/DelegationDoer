@@ -48,7 +48,7 @@ interface Draft {
   subject: string;
   bodyText: string;
   bodyHtml: string | null;
-  kind: "client_update" | "content_plan" | "custom";
+  kind: "client_update" | "content_plan" | "custom" | "auto_reply";
   status: DraftStatus;
   approverId: string | null;
   approverName: string | null;
@@ -84,8 +84,20 @@ interface TimelineEvent {
 const KIND_LABELS: Record<Draft["kind"], { label: string; tone: string }> = {
   client_update: { label: "Client email",  tone: "bg-blue-100 text-blue-700 border-blue-200/70" },
   content_plan:  { label: "Content plan",  tone: "bg-violet-100 text-violet-700 border-violet-200/70" },
-  custom:        { label: "Custom",        tone: "bg-slate-100 text-slate-700 border-slate-200/70" }
+  custom:        { label: "Custom",        tone: "bg-slate-100 text-slate-700 border-slate-200/70" },
+  auto_reply:    { label: "Auto-reply",    tone: "bg-amber-100 text-amber-700 border-amber-200/70" }
 };
+
+// Safe lookup that never returns undefined — covers the case where a
+// new draft kind ships in the DB before this lookup is updated. The
+// `tone`-access crash that took down /approvals when auto_reply drafts
+// existed came from `KIND_LABELS[draft.kind].tone` on an unknown kind.
+function kindLabel(kind: string): { label: string; tone: string } {
+  return (KIND_LABELS as Record<string, { label: string; tone: string }>)[kind] ?? {
+    label: kind || "Other",
+    tone: "bg-slate-100 text-slate-700 border-slate-200/70"
+  };
+}
 
 type Filter = "pending" | "needs_revision" | "all";
 
@@ -328,7 +340,7 @@ function DraftCard({
     return () => { cancelled = true; };
   }, [expanded, draft.id, isPending, isFailed, isNeedsRevision, sendFromLoaded]);
 
-  const kindMeta = KIND_LABELS[draft.kind];
+  const kindMeta = kindLabel(draft.kind);
 
   async function approve() {
     setBusy("approve");

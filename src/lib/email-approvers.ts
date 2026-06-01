@@ -23,7 +23,7 @@
 
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 
-export type EmailDraftKind = "client_update" | "content_plan" | "custom";
+export type EmailDraftKind = "client_update" | "content_plan" | "custom" | "auto_reply";
 
 export interface ApproverUser {
   id: string;

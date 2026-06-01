@@ -317,12 +317,13 @@ export function RoutingReviewDetailDialog({
                             )}
                             {rankerTop.length > 0 && (
                               <Section title="Top candidates (ranker)">
-                                <ul className="space-y-1.5">
+                                <ul className="space-y-2.5">
                                   {rankerTop.map((c, i) => {
                                     const u = userById.get(c.userId);
+                                    const factors = c.factors ?? [];
                                     return (
                                       <li key={c.userId} className="flex items-start gap-2">
-                                        <span className="text-[10px] font-bold text-ink/40 w-4 shrink-0">
+                                        <span className="text-[10px] font-bold text-ink/40 w-4 shrink-0 mt-0.5">
                                           #{i + 1}
                                         </span>
                                         <div className="flex-1 min-w-0">
@@ -334,9 +335,34 @@ export function RoutingReviewDetailDialog({
                                               score {c.score.toFixed(1)}
                                             </span>
                                           </div>
-                                          <div className="text-ink/55 text-[11px] leading-snug">
-                                            {c.reason}
-                                          </div>
+                                          {/* Transparent score breakdown — one row per
+                                              factor, points right-aligned, summing to the
+                                              total above. Falls back to the reason string
+                                              for legacy decisions with no factors. */}
+                                          {factors.length > 0 ? (
+                                            <ul className="mt-1 space-y-0.5">
+                                              {factors.map((f) => (
+                                                <li
+                                                  key={f.key}
+                                                  className="flex items-baseline gap-2 text-[11px] leading-snug"
+                                                >
+                                                  <span className="text-ink/70 w-[120px] shrink-0">
+                                                    {f.label}
+                                                  </span>
+                                                  <span className="tabular-nums font-semibold text-emerald-700 w-9 shrink-0 text-right">
+                                                    +{f.points % 1 === 0 ? f.points : f.points.toFixed(1)}
+                                                  </span>
+                                                  <span className="text-ink/45 truncate">
+                                                    {f.detail}
+                                                  </span>
+                                                </li>
+                                              ))}
+                                            </ul>
+                                          ) : (
+                                            <div className="text-ink/55 text-[11px] leading-snug">
+                                              {c.reason}
+                                            </div>
+                                          )}
                                         </div>
                                       </li>
                                     );

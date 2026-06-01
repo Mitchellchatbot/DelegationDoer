@@ -5,8 +5,9 @@ import { getThread } from "@/lib/missive-client";
 import { visibleAccountIdsFor } from "@/lib/inbox-access";
 import { classifyEmailThread } from "@/lib/email-classifier";
 import { matchRoutingRule, rowToRule } from "@/lib/routing-match";
-import { rankCandidates } from "@/lib/skill-rank";
+import { rankCandidates, buildLoadSignals } from "@/lib/skill-rank";
 import { userCapacity } from "@/lib/capacity";
+import { loadClientMatcher } from "@/lib/client-thread-match";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 
 export const dynamic = "force-dynamic";
@@ -112,6 +113,17 @@ export async function POST(req: NextRequest) {
       for (const u of allUsers) {
         capacityByUser.set(u.id, userCapacity(u, allTasks).pct);
       }
+      // Resolve the client up front so the ranker can credit teammates
+      // who've handled this account before — same brain as auto-intake.
+      let clientName: string | null = null;
+      if (fromEmail) {
+        try {
+          const matcher = await loadClientMatcher();
+          const hit = matcher.match(fromEmail);
+          if (hit) clientName = hit.name;
+        } catch { /* matcher errored — fall back to null */ }
+      }
+      const { activeTasksByUser, clientHistoryByUser } = buildLoadSignals(allTasks, clientName);
       const ranked = rankCandidates({
         task: {
           title: classified.title,
@@ -121,7 +133,9 @@ export async function POST(req: NextRequest) {
         },
         candidates: allUsers,
         skillsByUser,
-        capacityByUser
+        capacityByUser,
+        activeTasksByUser,
+        clientHistoryByUser
       });
       const top = ranked[0];
       if (top) {

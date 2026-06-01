@@ -61,7 +61,15 @@ export interface DecisionRow {
   } | null;
   matched_rule_id: string | null;
   matched_rule_label: string | null;
-  ranker_top: Array<{ userId: string; score: number; reason: string }> | null;
+  ranker_top: Array<{
+    userId: string;
+    score: number;
+    reason: string;
+    // Transparent additive score breakdown. Older decisions (written
+    // before this was persisted) won't have it — render falls back to
+    // the reason string.
+    factors?: Array<{ key: string; label: string; points: number; detail: string }>;
+  }> | null;
   routed_via: string;
   routed_to_user_id: string | null;
   reason: string | null;

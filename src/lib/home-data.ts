@@ -367,34 +367,6 @@ export interface ClientHealthRow {
 // Charts row + leader todo helpers
 // ────────────────────────────────────────────────────────────────────────
 
-export interface PostsPerClientRow {
-  clientId: string;
-  clientName: string;
-  postsCount: number;
-}
-
-// Snapshot of wp_blog_posts_count per active client. No history table
-// yet, so this is a bar-chart view of "where have we posted lately"
-// rather than a true time series. Filter to clients with > 0 so the
-// chart isn't dominated by zero-bars.
-export async function getPostsPerClient(): Promise<PostsPerClientRow[]> {
-  const supabase = getSupabaseAdmin();
-  const { data, error } = await supabase
-    .from("clients")
-    .select("id, name, wp_blog_posts_count, status")
-    .or("status.eq.active,status.is.null")
-    .gt("wp_blog_posts_count", 0)
-    .order("wp_blog_posts_count", { ascending: false })
-    .limit(20);
-  if (error) return [];
-  return ((data ?? []) as unknown as Array<{ id: string; name: string; wp_blog_posts_count: number | null }>)
-    .map((r) => ({
-      clientId: r.id,
-      clientName: r.name,
-      postsCount: r.wp_blog_posts_count ?? 0
-    }));
-}
-
 // Quick stat: how many open assigned tasks have gone 7+ days without
 // an activity_log event. Reused by the charts row as a "stalled" tile.
 export async function getStalledTaskCount(): Promise<number> {

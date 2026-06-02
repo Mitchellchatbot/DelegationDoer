@@ -7,7 +7,6 @@ import {
   getDayBookendStatus,
   getSeoBriefsForHome,
   getLeaderPulse,
-  getPostsPerClient,
   getStalledTaskCount,
   getLeaderOpenTasks,
   getWorstClientsByHealth
@@ -68,10 +67,9 @@ export default async function HomePage() {
 
     const showSeoBriefs = true;
 
-    const [seoBriefs, pulse, postsPerClient, stalledCount, leaderTodos] = await Promise.all([
+    const [seoBriefs, pulse, stalledCount, leaderTodos] = await Promise.all([
       showSeoBriefs ? getSeoBriefsForHome(20) : Promise.resolve([]),
       getLeaderPulse({ scopedDepartmentIds, total: 60 }),
-      getPostsPerClient(),
       getStalledTaskCount(),
       getLeaderOpenTasks(userId, 30)
     ]);
@@ -89,8 +87,8 @@ export default async function HomePage() {
         {/* Notifications — the focus of the new leader home. */}
         <HomePulseCard events={pulse} />
         <HomeEmailNotifications onboarded={me.emailNotificationsOnboarded === true} />
-        {/* Glance tiles — posts-per-client + stalled stat */}
-        <HomeChartsRow postsPerClient={postsPerClient} stalledCount={stalledCount} />
+        {/* Glance tile — stalled-work stat */}
+        <HomeChartsRow stalledCount={stalledCount} />
         {/* Apple-Reminders-style todo for the leader's own tasks. */}
         <LeaderTodoList tasks={leaderTodos} />
         {showSeoBriefs && <HomeSeoBriefs rows={seoBriefs} />}

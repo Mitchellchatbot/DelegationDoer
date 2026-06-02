@@ -3,10 +3,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
-  Sparkles, ArrowRight, ArrowLeft, Loader2, X, Check, Plus, ChevronDown, Sunrise
+  Sparkles, ArrowRight, ArrowLeft, Loader2, X, Check, Plus, ChevronDown, ChevronRight, Sunrise
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { TAG_PRESETS } from "@/lib/mock-data";
+import { useTeam } from "@/lib/team-context";
+import { useCurrentUser } from "@/lib/user-context";
 import { SodSeoDashboard, type SeoDashboardData } from "./SodSeoDashboard";
 import { SodWebsiteDashboard, type WebDashboardData } from "./SodWebsiteDashboard";
 
@@ -75,7 +78,35 @@ export function SodFlow({ open, simulate = false, onClose, onComplete }: Props) 
   const [taskItems, setTaskItems] = useState<Array<{ text: string; existingTaskId?: string; pickedFromExisting?: boolean }>>([]);
   const [creatingTask, setCreatingTask] = useState(false);
   const [newTaskDraft, setNewTaskDraft] = useState("");
+  // "Advanced details" disclosure for the task being added. Closed by
+  // default so the quick-add path stays a single title field; when open,
+  // these optionally ride along to /api/sod/create-task. priority /
+  // estimate / department are kept sticky across adds (likely shared
+  // within a day's batch); the per-task fields reset after each Add.
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [advPriority, setAdvPriority] = useState("medium");
+  const [advEstimate, setAdvEstimate] = useState(2);
+  const [advDept, setAdvDept] = useState("");
+  const [advTags, setAdvTags] = useState<string[]>([]);
+  const [advDeadline, setAdvDeadline] = useState(""); // datetime-local string
+  const [advClient, setAdvClient] = useState("");
+  const [advWebsite, setAdvWebsite] = useState("");
   const [blockers, setBlockers] = useState("");
+
+  const team = useTeam();
+  const currentUser = useCurrentUser();
+  // Default the department picker to the user's primary department (the
+  // same default the API applies), falling back to the first department
+  // once the live list loads.
+  useEffect(() => {
+    if (advDept || team.departments.length === 0) return;
+    const primary = currentUser.departmentIds?.[0];
+    setAdvDept(
+      primary && team.departments.some((d) => d.id === primary)
+        ? primary
+        : team.departments[0].id
+    );
+  }, [advDept, team.departments, currentUser.departmentIds]);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [myTasks, setMyTasks] = useState<MyTaskOption[]>([]);
   const [direction, setDirection] = useState<"forward" | "back">("forward");
@@ -163,10 +194,23 @@ export function SodFlow({ open, simulate = false, onClose, onComplete }: Props) 
     if (!v || creatingTask) return;
     setCreatingTask(true);
     try {
+      // Quick-add sends title only. When the advanced section is open we
+      // ride along the optional fields the user set; the API still fills
+      // any left at their defaults.
+      const payload: Record<string, unknown> = { title: v };
+      if (advancedOpen) {
+        payload.priority = advPriority;
+        payload.estimatedHours = advEstimate;
+        payload.tags = advTags;
+        if (advDept) payload.departmentId = advDept;
+        if (advDeadline) payload.dueDate = new Date(advDeadline).toISOString();
+        if (advClient.trim()) payload.clientName = advClient.trim();
+        if (advWebsite.trim()) payload.website = advWebsite.trim();
+      }
       const r = await fetch("/api/sod/create-task", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title: v })
+        body: JSON.stringify(payload)
       });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(d?.error ?? `status ${r.status}`);
@@ -176,6 +220,12 @@ export function SodFlow({ open, simulate = false, onClose, onComplete }: Props) 
         return next;
       });
       setNewTaskDraft("");
+      // Reset the per-task advanced fields so the next add starts clean.
+      // Structural fields (priority / estimate / department) stay sticky.
+      setAdvTags([]);
+      setAdvDeadline("");
+      setAdvClient("");
+      setAdvWebsite("");
     } catch (err) {
       toast.error(`Couldn't add task: ${err instanceof Error ? err.message : "unknown"}`);
     } finally {
@@ -437,6 +487,93 @@ export function SodFlow({ open, simulate = false, onClose, onComplete }: Props) 
                   );
                 })()}
               </div>
+            </div>
+
+            {/* Advanced details — optional richer fields for the task
+                being added. Collapsed by default to keep quick-add fast. */}
+            <div>
+              <button
+                type="button"
+                onClick={() => setAdvancedOpen((s) => !s)}
+                className="inline-flex items-center gap-1.5 text-xs font-medium text-ink/55 hover:text-ink transition-colors"
+              >
+                {advancedOpen
+                  ? <ChevronDown className="w-3.5 h-3.5" />
+                  : <ChevronRight className="w-3.5 h-3.5" />}
+                Advanced details
+                <span className="text-ink/40 ml-0.5">— deadline, estimate, priority, department, tags, client</span>
+              </button>
+              {advancedOpen && (
+                <div className="mt-3 grid grid-cols-2 gap-3 rounded-xl border border-slate-200/70 bg-slate-50/40 p-3">
+                  <div>
+                    <label className="label">Priority</label>
+                    <select className="input" value={advPriority} onChange={(e) => setAdvPriority(e.target.value)}>
+                      <option>low</option><option>medium</option><option>high</option><option>critical</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="label">Estimate (hours)</label>
+                    <input
+                      type="number"
+                      min={0}
+                      className="input"
+                      value={advEstimate}
+                      onChange={(e) => setAdvEstimate(Number(e.target.value))}
+                    />
+                  </div>
+                  <div>
+                    <label className="label">Department</label>
+                    <select className="input" value={advDept} onChange={(e) => setAdvDept(e.target.value)}>
+                      {team.departments.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="label">Deadline</label>
+                    <input
+                      type="datetime-local"
+                      className="input"
+                      value={advDeadline}
+                      onChange={(e) => setAdvDeadline(e.target.value)}
+                    />
+                  </div>
+                  <div className="col-span-2">
+                    <label className="label">Tags</label>
+                    <div className="flex flex-wrap gap-1.5">
+                      {TAG_PRESETS.map((t) => {
+                        const on = advTags.includes(t);
+                        return (
+                          <button
+                            key={t}
+                            type="button"
+                            onClick={() => setAdvTags((cur) => on ? cur.filter((x) => x !== t) : [...cur, t])}
+                            className={"badge " + (on ? "badge-medium" : "badge-tag")}
+                          >
+                            #{t}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  <div>
+                    <label className="label">Client</label>
+                    <input
+                      className="input"
+                      value={advClient}
+                      onChange={(e) => setAdvClient(e.target.value)}
+                      placeholder="e.g. Acme Insurance"
+                    />
+                  </div>
+                  <div>
+                    <label className="label">Website</label>
+                    <input
+                      className="input"
+                      value={advWebsite}
+                      onChange={(e) => setAdvWebsite(e.target.value)}
+                      placeholder="e.g. acme-insurance.com"
+                    />
+                  </div>
+                </div>
+              )}
             </div>
 
             <ul className="space-y-1.5">

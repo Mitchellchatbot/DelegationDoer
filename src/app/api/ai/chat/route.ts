@@ -26,23 +26,33 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ reply: "(say something)" });
     }
 
+    // Optional per-client context — sent by the per-client Ask AI entry
+    // point on a client's detail page. Validated defensively: only a
+    // well-formed { id, name } string pair is honored. When present the
+    // assistant defaults its answers + tool calls to this client (the
+    // server-side access scoping inside each tool is unchanged — this
+    // only nudges which clientId the model passes, it can't widen
+    // visibility).
+    const rawClient = body?.clientContext;
+    const clientContext =
+      rawClient && typeof rawClient.id === "string" && typeof rawClient.name === "string"
+        ? { id: rawClient.id, name: rawClient.name }
+        : null;
+
     const departments = await getDepartments();
     const deptLabels = actor.departmentIds
       .map((id) => departments.find((d) => d.id === id)?.name)
       .filter(Boolean)
       .join(", ") || "—";
 
-    // Small system prompt + a directory of tools. The model decides
-    // which to call based on the user's question; everything else
-    // (filtering, access scoping) happens server-side inside each
-    // tool handler.
-    const systemPrompt = `You are an AI assistant inside DelegationDoer, an internal task-management tool for a digital agency (scaledai.org). The departments are SEO, Website, Software, and Marketing.
-
-Caller:
-- Name: ${actor.name}
-- Role: ${actor.role}
-- Department(s): ${deptLabels}
-- Today: ${new Date().toLocaleString()}
+    // System prompt is split into two text blocks. The first (long,
+    // static) carries the role + guidelines and is identical across
+    // every caller/turn, so it's marked cache_control: ephemeral and
+    // hits the prompt cache. The second is the per-call dynamic context
+    // (caller identity, today's date, optional client scoping) and is
+    // left uncached — it changes per user/client so caching it would
+    // never hit anyway.
+    const staticSystemPrompt = `You are an AI assistant inside DelegationDoer, an internal task-management tool for a digital agency (scaledai.org). The departments are SEO, Website, Software, and Marketing.
 
 You have access to tools that read live data from the workspace's database. Use them whenever a question depends on real data (tasks, people, projects, clients, calendar, kudos, incidents, EOD notes, recommendations, SOPs). Don't invent task titles, project names, or people.
 
@@ -55,6 +65,16 @@ Guidelines:
 - When suggesting an assignee for new work, rank by capacity + role/department fit and explain the top pick in one line.
 - ACTION CARDS: whenever a tool result reveals a clear action item (an email asking for follow-up, a "next step" the user just discussed, an obvious task the user hinted at), call \`propose_task\` to stage a "Create task" button under your reply. The tool returns the top-ranked assignees — your text answer should call out the top pick by name with a one-line rationale. Do NOT fabricate a task when the user is just asking for information; only stage one when there's a real action to commit to.
 - For "how do I…" / procedural / new-hire questions, call search_sops and base the answer on the matched chunks. ALWAYS cite the SOP title. If any matching chunk carries an imageUrl (a captioned screenshot or diagram), embed it inline in your reply using markdown image syntax: ![brief caption](imageUrl) on its own line, BEFORE the related step. Show the actual picture rather than just describing it — users learn faster from screenshots than prose. If multiple chunks have images, include each one near the step it illustrates. If search_sops returns no relevant chunks (or all distances are high — anything above ~0.6 is loose), say so directly rather than guessing.`;
+
+    const clientScoping = clientContext
+      ? `\n\nThe user is viewing client ${clientContext.name} (clientId "${clientContext.id}"). Unless they clearly ask about something else, scope every answer to this client — pass clientId: "${clientContext.id}" to client tools (get_client, list_client_completed_tasks, list_client_recent_emails) and frame summaries around this client.`
+      : "";
+
+    const dynamicSystemPrompt = `Caller:
+- Name: ${actor.name}
+- Role: ${actor.role}
+- Department(s): ${deptLabels}
+- Today: ${new Date().toLocaleString()}${clientScoping}`;
 
     // Build the message list we'll feed Anthropic. We mutate this as
     // tool rounds progress (appending each assistant tool_use + the
@@ -86,13 +106,17 @@ Guidelines:
         system: [
           {
             type: "text",
-            text: systemPrompt,
-            // System prompt is stable across turns; caching saves cost.
+            text: staticSystemPrompt,
+            // Static across turns + callers; caching saves cost.
             // cache_control is supported at runtime in SDK 0.32.x but
             // not always in its types — cast through any.
             cache_control: { type: "ephemeral" }
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          } as any
+          } as any,
+          // Per-call dynamic context (caller + optional client scope).
+          // Left uncached — it varies per user/client so it would never
+          // hit the cache anyway.
+          { type: "text", text: dynamicSystemPrompt }
         ],
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         tools: AI_TOOLS as any,

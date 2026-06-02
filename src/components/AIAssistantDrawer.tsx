@@ -50,13 +50,29 @@ const SUGGESTED = [
   "Summarise what shipped this week"
 ];
 
+// Optional client context passed by the per-client entry point on a
+// client's detail page. When present the drawer is branded to the
+// client and the assistant defaults its answers to that client.
+type ClientContext = { id: string; name: string; iconUrl?: string | null };
+
+// Starter chips tailored to the client being viewed, so the user can
+// ask about this client without typing its name into every question.
+function clientStarters(name: string): string[] {
+  return [
+    `How is ${name} doing right now?`,
+    `Summarise recent emails with ${name}`,
+    `What's open for ${name} and who owns it?`,
+    `What did we ship for ${name} lately?`
+  ];
+}
+
 // White-glass right-rail drawer with the same design language as
 // the rest of the app: blue/indigo accents, soft shadows, rounded
 // cards, markdown-rendered assistant turns (so tables / headers /
 // bold / code blocks render properly instead of showing raw `##`
 // and `**`).
 export function AIAssistantDrawer({
-  open, onOpenChange, starter
+  open, onOpenChange, starter, client
 }: {
   open: boolean;
   onOpenChange: (b: boolean) => void;
@@ -64,6 +80,10 @@ export function AIAssistantDrawer({
   // opened on a fresh conversation. Used by the /sops "Ask AI" card
   // to seed "How do I…" so the user just keeps typing.
   starter?: string;
+  // Optional client context — when set, the drawer is branded to this
+  // client and each turn POSTs a clientContext so the assistant scopes
+  // its answers + tool calls to this client (see /api/ai/chat).
+  client?: ClientContext;
 }) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
@@ -111,7 +131,10 @@ export function AIAssistantDrawer({
       const res = await fetch("/api/ai/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: next })
+        body: JSON.stringify({
+          messages: next,
+          clientContext: client ? { id: client.id, name: client.name } : undefined
+        })
       });
       const data = await res.json();
       if (!res.ok) {
@@ -174,15 +197,22 @@ export function AIAssistantDrawer({
                       "linear-gradient(120deg, rgba(219,234,254,0.55) 0%, rgba(238,242,255,0.55) 50%, rgba(252,231,243,0.45) 100%)"
                   }}
                 >
-                  <div className="w-9 h-9 rounded-xl bg-white/70 border border-white/80 grid place-items-center shadow-sm shrink-0">
-                    <Sparkles className="w-4 h-4 text-accent" />
+                  <div className="w-9 h-9 rounded-xl bg-white/70 border border-white/80 grid place-items-center shadow-sm shrink-0 overflow-hidden">
+                    {client?.iconUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={client.iconUrl} alt="" className="w-full h-full object-cover" />
+                    ) : (
+                      <Sparkles className="w-4 h-4 text-accent" />
+                    )}
                   </div>
                   <div className="min-w-0">
-                    <Dialog.Title className="text-sm font-semibold leading-tight">
-                      Ask AI
+                    <Dialog.Title className="text-sm font-semibold leading-tight truncate">
+                      {client ? `Ask AI · ${client.name}` : "Ask AI"}
                     </Dialog.Title>
-                    <div className="text-[10px] text-ink/55 leading-tight">
-                      Live access to tasks, people, calendar, more
+                    <div className="text-[10px] text-ink/55 leading-tight truncate">
+                      {client
+                        ? `Scoped to ${client.name}`
+                        : "Live access to tasks, people, calendar, more"}
                     </div>
                   </div>
                   <div className="ml-auto flex items-center gap-1">
@@ -209,7 +239,13 @@ export function AIAssistantDrawer({
 
                 {/* Conversation */}
                 <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-3">
-                  {messages.length === 0 && <EmptyState onPick={send} />}
+                  {messages.length === 0 && (
+                    <EmptyState
+                      onPick={send}
+                      starters={client ? clientStarters(client.name) : SUGGESTED}
+                      client={client}
+                    />
+                  )}
                   {messages.map((m, i) => (
                     <MessageBubble key={i} message={m} />
                   ))}
@@ -233,22 +269,28 @@ export function AIAssistantDrawer({
   );
 }
 
-function EmptyState({ onPick }: { onPick: (s: string) => void }) {
+function EmptyState({
+  onPick, starters, client
+}: {
+  onPick: (s: string) => void;
+  starters: string[];
+  client?: ClientContext;
+}) {
   return (
     <div className="space-y-4 anim-fade-in">
       <div className="rounded-2xl border border-slate-200/70 bg-gradient-to-br from-blue-50/60 via-white to-fuchsia-50/40 p-4">
         <div className="text-[12px] font-semibold text-ink mb-1 inline-flex items-center gap-1.5">
           <Sparkles className="w-3.5 h-3.5 text-accent" />
-          What can I help you with?
+          {client ? `Ask me about ${client.name}` : "What can I help you with?"}
         </div>
         <div className="text-[12px] text-ink/65 leading-snug">
-          I can read live data from your workspace — tasks, people,
-          projects, clients, calendar, kudos, and more. Pick a starter
-          or ask anything.
+          {client
+            ? `I'll keep this conversation focused on ${client.name} — its emails, tasks, and history. Pick a starter or ask anything about them.`
+            : "I can read live data from your workspace — tasks, people, projects, clients, calendar, kudos, and more. Pick a starter or ask anything."}
         </div>
       </div>
       <div className="space-y-1.5">
-        {SUGGESTED.map((s, idx) => (
+        {starters.map((s, idx) => (
           <motion.button
             key={s}
             initial={{ opacity: 0, y: 6 }}

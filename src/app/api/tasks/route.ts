@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { requireCurrentUserId } from "@/lib/session";
 import { getAllTasks, getDeletedTasks, getArchivedTasks, getUserById } from "@/lib/server-data";
+import { isLeader, canCreateTaskInDepartment } from "@/lib/access";
 import { notifyAssignment, postMessage } from "@/lib/slack";
 import { syncTaskToCalendar } from "@/lib/task-calendar-sync";
 import { sanitizeMediaUrls } from "@/lib/media";
@@ -87,18 +88,18 @@ export async function POST(req: NextRequest) {
   try {
     const userId = await requireCurrentUserId();
 
+    // Resolve the caller once (cached for the rest of this request). We
+    // need their role/is_admin for the clock + privilege gates and their
+    // department memberships for the department-scoping gate below.
+    const supabase = getSupabaseAdmin();
+    const caller = await getUserById(userId);
+    const privileged = isLeader(caller); // leader or stealth admin
+
     // Clock-in gate. Workers + dept_heads can't create tasks until
     // they've started a shift (mirrors the UI ClockGate on /tasks/mine
     // and /tasks/board). Leaders + stealth admins always exempt — they
     // need to be able to seed work even when off the clock.
-    const supabase = getSupabaseAdmin();
-    const { data: caller } = await supabase
-      .from("users")
-      .select("role, is_admin")
-      .eq("id", userId)
-      .maybeSingle();
-    const exempt = caller?.role === "leader" || caller?.is_admin === true;
-    if (!exempt) {
+    if (!privileged) {
       const { data: openSegment } = await supabase
         .from("time_entries")
         .select("id")
@@ -124,6 +125,32 @@ export async function POST(req: NextRequest) {
     const allowedPriorities = ["low", "medium", "high", "critical"] as const;
     const priority = allowedPriorities.includes(body.priority) ? body.priority : "medium";
 
+    // Department scoping. Non-leaders can only create tasks within their
+    // own department; leaders/admins may target any department (or none).
+    // This is enforced here, server-side — the form's locked picker is a
+    // convenience, not the security boundary.
+    let departmentId = typeof body.departmentId === "string" && body.departmentId.length > 0
+      ? body.departmentId
+      : null;
+    if (!privileged) {
+      if (!caller || caller.departmentIds.length === 0) {
+        return NextResponse.json(
+          { error: "You have no department assigned. Ask a leader to add you to a department before creating tasks." },
+          { status: 400 }
+        );
+      }
+      // Default an unspecified department to the caller's own; reject any
+      // explicit department outside the ones they belong to.
+      if (!departmentId) {
+        departmentId = caller.departmentIds[0];
+      } else if (!canCreateTaskInDepartment(caller, departmentId)) {
+        return NextResponse.json(
+          { error: "You can only create tasks within your own department." },
+          { status: 403 }
+        );
+      }
+    }
+
     const id = `t_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
     const now = new Date().toISOString();
 
@@ -136,7 +163,7 @@ export async function POST(req: NextRequest) {
       estimated_hours: Number(body.estimatedHours) > 0 ? Number(body.estimatedHours) : 2,
       actual_hours: 0,
       tags: Array.isArray(body.tags) ? body.tags.filter((t: unknown) => typeof t === "string") : [],
-      department_id: typeof body.departmentId === "string" && body.departmentId.length > 0 ? body.departmentId : null,
+      department_id: departmentId,
       assignee_id: typeof body.assigneeId === "string" && body.assigneeId.length > 0 ? body.assigneeId : null,
       creator_id: userId,
       project_id: typeof body.projectId === "string" && body.projectId.length > 0 ? body.projectId : null,

@@ -2,7 +2,7 @@
 
 import { TAG_PRESETS } from "@/lib/mock-data";
 import { userCapacity, etaDays, deadlineFromEstimate } from "@/lib/capacity";
-import { assignableTargets, ROLE_LABELS } from "@/lib/auth";
+import { assignableTargets, assignableDepartments, canChooseDepartment, isLeader, ROLE_LABELS } from "@/lib/auth";
 import { useCurrentUser } from "@/lib/user-context";
 import { useTeam } from "@/lib/team-context";
 import { rankCandidates, buildLoadSignals, type RankedCandidate } from "@/lib/skill-rank";
@@ -71,13 +71,37 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel, initialValues }: 
   const [title, setTitle] = useState(initialValues?.title ?? "");
   const [description, setDescription] = useState(initialValues?.description ?? "");
   const [departmentId, setDepartmentId] = useState<string>(initialValues?.departmentId ?? "");
-  // Once the live departments load, default the dept picker to the
-  // first one if the user hasn't selected anything yet.
+
+  // Department scoping (mirrors the server-side gate in /api/tasks):
+  //   - Leaders/admins may target any department.
+  //   - Workers + department heads are scoped to their own department(s);
+  //     workers can't change it at all, heads can switch among theirs.
+  const canPickDepartment = canChooseDepartment(currentUser);
+  const selectableDepartments = useMemo(
+    () => assignableDepartments(currentUser, departments),
+    [currentUser, departments]
+  );
+  // Non-leaders with no department can't create any valid task — we block
+  // the form and show a clear message instead of letting them try.
+  const hasNoDepartment = !isLeader(currentUser) && currentUser.departmentIds.length === 0;
+
+  // Auto-select the caller's own department when the form opens, and keep
+  // the selection inside what they're allowed to pick. Leaders, who have
+  // no home department, fall back to the first department in the org.
   useEffect(() => {
-    if (!departmentId && departments.length > 0) {
-      setDepartmentId(departments[0].id);
+    const ownIds = currentUser.departmentIds;
+    if (isLeader(currentUser)) {
+      if (!departmentId && departments.length > 0) setDepartmentId(departments[0].id);
+      return;
     }
-  }, [departmentId, departments]);
+    if (ownIds.length === 0) return; // handled by the hasNoDepartment banner
+    // Clamp into the caller's own departments — covers both the empty
+    // initial state and a pre-filled value (e.g. create-from-thread) that
+    // points at a department they don't belong to.
+    if (!departmentId || !ownIds.includes(departmentId)) {
+      setDepartmentId(ownIds[0]);
+    }
+  }, [departmentId, departments, currentUser]);
   const [priority, setPriority] = useState(initialValues?.priority ?? "medium");
   const [estimate, setEstimate] = useState(initialValues?.estimatedHours ?? 2);
   const [tags, setTags] = useState<string[]>(initialValues?.tags ?? []);
@@ -289,8 +313,16 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel, initialValues }: 
   async function submit() {
     if (submitting) return;
     setSubmitError(null);
+    if (hasNoDepartment) {
+      setSubmitError("You have no department assigned. Ask a leader to add you to a department before creating tasks.");
+      return;
+    }
     if (!title.trim()) {
       setSubmitError("Title is required.");
+      return;
+    }
+    if (!departmentId) {
+      setSubmitError("Pick a department.");
       return;
     }
     if (!assigneeId) {
@@ -376,6 +408,13 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel, initialValues }: 
         <ShieldCheck className="w-3 h-3" /> {delegateBlurb}
       </div>
 
+      {hasNoDepartment && (
+        <div className="rounded-xl border border-urgent/30 bg-urgent/5 px-4 py-3 text-sm text-urgent">
+          You don&apos;t belong to a department yet, so you can&apos;t create tasks.
+          Ask a leader to add you to a department, then try again.
+        </div>
+      )}
+
       <section className="card p-5 space-y-4">
         <div>
           <label className="label">Title</label>
@@ -390,19 +429,35 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel, initialValues }: 
           <div>
             <label className="label">Department</label>
             <div className="flex gap-2">
-              <select className="input flex-1" value={departmentId} onChange={(e) => setDepartmentId(e.target.value)}>
-                {departments.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
-              </select>
-              <button
-                onClick={askAI}
-                disabled={aiThinking}
-                title="Let Claude pick the department"
-                className="btn shrink-0 disabled:opacity-50"
+              <select
+                className="input flex-1 disabled:opacity-70 disabled:cursor-not-allowed"
+                value={departmentId}
+                onChange={(e) => setDepartmentId(e.target.value)}
+                disabled={!canPickDepartment}
+                title={canPickDepartment ? undefined : "Workers create tasks within their own department"}
               >
-                <Wand2 className={"w-3.5 h-3.5 text-accent " + (aiThinking ? "animate-spin" : "")} />
-                <span className="text-xs">{aiThinking ? "…" : "Ask AI"}</span>
-              </button>
+                {selectableDepartments.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+              </select>
+              {/* Ask-AI department classify only helps when the user can
+                  actually change the department. Workers are locked, so
+                  hide it for them. */}
+              {canPickDepartment && (
+                <button
+                  onClick={askAI}
+                  disabled={aiThinking}
+                  title="Let Claude pick the department"
+                  className="btn shrink-0 disabled:opacity-50"
+                >
+                  <Wand2 className={"w-3.5 h-3.5 text-accent " + (aiThinking ? "animate-spin" : "")} />
+                  <span className="text-xs">{aiThinking ? "…" : "Ask AI"}</span>
+                </button>
+              )}
             </div>
+            {!canPickDepartment && (
+              <div className="mt-1.5 text-[11px] text-muted">
+                Locked to your department — only leaders and heads can change it.
+              </div>
+            )}
             {aiReason && (
               <div className="mt-1.5 text-[11px] text-accent flex items-start gap-1">
                 <Sparkles className="w-3 h-3 mt-0.5 shrink-0" /> <span>{aiReason}</span>
@@ -806,7 +861,7 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel, initialValues }: 
         )}
         <button
           onClick={submit}
-          disabled={submitting || !title.trim() || !assigneeId}
+          disabled={submitting || !title.trim() || !assigneeId || hasNoDepartment}
           className="btn-primary disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {submitting ? "Creating…" : "Create task"}

@@ -67,7 +67,7 @@ Guidelines:
 - For "how do I…" / procedural / new-hire questions, call search_sops and base the answer on the matched chunks. ALWAYS cite the SOP title. If any matching chunk carries an imageUrl (a captioned screenshot or diagram), embed it inline in your reply using markdown image syntax: ![brief caption](imageUrl) on its own line, BEFORE the related step. Show the actual picture rather than just describing it — users learn faster from screenshots than prose. If multiple chunks have images, include each one near the step it illustrates. If search_sops returns no relevant chunks (or all distances are high — anything above ~0.6 is loose), say so directly rather than guessing.`;
 
     const clientScoping = clientContext
-      ? `\n\nThe user is viewing client ${clientContext.name} (clientId "${clientContext.id}"). Unless they clearly ask about something else, scope every answer to this client — pass clientId: "${clientContext.id}" to client tools (get_client, list_client_completed_tasks, list_client_recent_emails) and frame summaries around this client.`
+      ? `\n\nThe user is viewing client ${clientContext.name} (clientId "${clientContext.id}"). Unless they clearly ask about something else, scope every answer to this client — pass clientId: "${clientContext.id}" to client tools (get_client, list_client_completed_tasks, list_client_recent_emails, list_client_eod_updates) and frame summaries around this client.`
       : "";
 
     const dynamicSystemPrompt = `Caller:

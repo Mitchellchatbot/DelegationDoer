@@ -179,6 +179,21 @@ export const AI_TOOLS = [
     }
   },
   {
+    name: "list_client_eod_updates",
+    description:
+      "Per-client check-ins workers file in their daily EOD form for a specific client (e.g. \"emailed Acme about the homepage copy\", \"called them re: the invoice\"). These are the touches shown under 'Client updates' on the client's page and posted to the team Slack channel — the human log of recent work + communication on a client, complementary to list_client_completed_tasks (shipped tasks) and list_client_recent_emails (raw email). Use it for 'what's the latest on X?', 'what have we done for X this week?', or 'who touched X recently?'. Resolve the client by `clientName` (fuzzy match against clients.name) or `clientId` (exact id). Optional: `sinceDays` (omit or 0 for the full history), `limit` (default 20, max 100). Returns updates newest-first, each with who filed it, the message, the date, and whether it posted to Slack.",
+    input_schema: {
+      type: "object",
+      properties: {
+        clientName: { type: "string" },
+        clientId: { type: "string" },
+        sinceDays: { type: "number" },
+        limit: { type: "number" }
+      },
+      required: []
+    }
+  },
+  {
     name: "propose_task",
     description:
       "Propose CREATING A TASK in DelegationDoer from something in the conversation — most often an email that needs follow-up. Does NOT create the task itself; instead it stages a button the user clicks to confirm. ALWAYS use this when:\n  • you spot a clear action item in an email a tool returned (\"can you send me a quote\", \"follow up with X by Friday\", \"please update the homepage\")\n  • the user says \"turn this into a task\" / \"make a task\" / \"who should do this?\"\n  • you're summarizing a thread and the obvious next step is human work\nThe tool runs the existing assignee ranker (skill match + capacity + client familiarity + workload) and returns the top 3 picks — surface the top pick in your text reply with one-line reasoning. Required: `title`, `description`. Optional: `clientName` (boosts client-familiarity), `priority` (low/medium/high/critical, default medium), `sourceLabel` (\"From: <subject>\" line to show on the card), `sourceUrl` (deep link to a DD thread page like `/inboxes/<accountId>/threads/<threadId>`).",
@@ -343,6 +358,7 @@ export async function runTool(
       case "get_client": return getClient(input, ctx);
       case "list_client_completed_tasks": return listClientCompletedTasks(input, ctx);
       case "list_client_recent_emails": return listClientRecentEmails(input, ctx);
+      case "list_client_eod_updates": return listClientEodUpdates(input);
       case "propose_task": return proposeTask(input, ctx);
       case "list_projects": return listProjects(input);
       case "get_project": return getProject(input, ctx);
@@ -777,6 +793,99 @@ async function listClientCompletedTasks(input: Record<string, unknown>, ctx: Too
       completedAt: r.last_activity_at,
       completedBy: r.assignee_id ? (nameById.get(r.assignee_id) ?? null) : null,
       tags: r.tags ?? []
+    }))
+  };
+}
+
+// Per-client EOD check-ins — the "Client updates" a worker files in
+// their daily EOD form ("emailed Acme about the new homepage"), which
+// also post to the team Slack channel. Resolves the client by name
+// (fuzzy) or id, then returns the updates newest-first.
+//
+// No department gate: eod_client_updates carries no department_id, and
+// the client detail page shows every update for a client to anyone who
+// can open the page (see clients/[id]/page.tsx). This tool mirrors that
+// surface rather than the stricter task/email scoping.
+async function listClientEodUpdates(input: Record<string, unknown>) {
+  const supabase = getSupabaseAdmin();
+  let clientName: string | null = typeof input.clientName === "string" ? input.clientName : null;
+  let clientId: string | null = typeof input.clientId === "string" ? input.clientId : null;
+
+  // Resolve to a single canonical (id, name) — same disambiguation the
+  // other client tools use: clientId → fetch name; clientName → fuzzy
+  // ilike, settling ties on an exact name match.
+  if (!clientName && clientId) {
+    const { data: c } = await supabase
+      .from("clients").select("id, name").eq("id", clientId).maybeSingle();
+    if (!c) return { error: "client not found" };
+    clientName = c.name as string;
+    clientId = c.id as string;
+  }
+  if (clientName) {
+    const { data: matches } = await supabase
+      .from("clients").select("id, name").ilike("name", `%${clientName}%`).limit(5);
+    const rows = (matches ?? []) as { id: string; name: string }[];
+    if (rows.length === 0) return { error: `no client matches "${clientName}"` };
+    if (rows.length > 1) {
+      const exact = rows.find((r) => r.name.toLowerCase() === clientName!.toLowerCase());
+      if (exact) {
+        clientName = exact.name;
+        clientId = exact.id;
+      } else {
+        return {
+          error: `ambiguous client "${clientName}"`,
+          candidates: rows.map((r) => ({ id: r.id, name: r.name }))
+        };
+      }
+    } else {
+      clientName = rows[0].name;
+      clientId = rows[0].id;
+    }
+  }
+  if (!clientName || !clientId) return { error: "clientName or clientId required" };
+
+  const rawLimit = typeof input.limit === "number" ? input.limit : 20;
+  const limit = Math.max(1, Math.min(100, Math.floor(rawLimit)));
+
+  // Apply the optional date window as a filter BEFORE order/limit so the
+  // supabase-js builder stays a filter builder (gte isn't available after
+  // a transform method like .order()).
+  let filter = supabase
+    .from("eod_client_updates")
+    .select("id, user_id, message, note_date, slack_ts, sent_at, created_at")
+    .eq("client_id", clientId);
+  const rawSince = typeof input.sinceDays === "number" ? input.sinceDays : 0;
+  if (rawSince > 0) {
+    const cutoff = new Date(Date.now() - Math.floor(rawSince) * 86_400_000).toISOString();
+    filter = filter.gte("created_at", cutoff);
+  }
+  const { data, error } = await filter
+    .order("created_at", { ascending: false })
+    .limit(limit);
+  if (error) return { clientId, clientName, count: 0, updates: [] };
+
+  const rows = (data ?? []) as Array<{
+    id: string; user_id: string; message: string; note_date: string;
+    slack_ts: string | null; sent_at: string | null; created_at: string;
+  }>;
+
+  // Join author names once so the AI can attribute each touch.
+  const userIds = Array.from(new Set(rows.map((r) => r.user_id)));
+  const { data: users } = await supabase
+    .from("users").select("id, name").in("id", userIds.length ? userIds : ["_none_"]);
+  const nameById = new Map(((users ?? []) as { id: string; name: string }[]).map((u) => [u.id, u.name]));
+
+  return {
+    clientId,
+    clientName,
+    count: rows.length,
+    updates: rows.map((r) => ({
+      id: r.id,
+      filedBy: nameById.get(r.user_id) ?? null,
+      message: r.message,
+      noteDate: r.note_date,
+      postedToSlack: !!r.slack_ts,
+      createdAt: r.created_at
     }))
   };
 }

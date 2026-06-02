@@ -68,18 +68,18 @@ export function ClientTeamPicker({
     [users, assignedUserIds]
   );
 
-  // Sort people: team's natural-dept members first, then alphabetical.
-  // Currently-assigned people stay where they are inside that order
-  // (no pinning to top — keeps the click target stable as you toggle).
+  // Point people are scoped to the selected team: only show users who
+  // belong to that team's department (Software team → dep_software
+  // members, etc.). A Websites person never appears under Software.
+  // Alphabetical within the filtered set. When no team is picked the
+  // right pane doesn't render, so the empty list here is fine.
   const sortedUsers = useMemo(() => {
     if (users.length === 0) return [];
     const hintDept = teamId ? TEAM_DEPARTMENT[teamId as TeamId] : null;
-    return [...users].sort((a, b) => {
-      const aIn = hintDept ? a.departmentIds.includes(hintDept) : false;
-      const bIn = hintDept ? b.departmentIds.includes(hintDept) : false;
-      if (aIn !== bIn) return aIn ? -1 : 1;
-      return a.name.localeCompare(b.name);
-    });
+    const pool = hintDept
+      ? users.filter((u) => u.departmentIds.includes(hintDept))
+      : users;
+    return [...pool].sort((a, b) => a.name.localeCompare(b.name));
   }, [users, teamId]);
 
   async function patch(body: Record<string, unknown>) {
@@ -115,11 +115,37 @@ export function ClientTeamPicker({
       next = null;
     }
     const nextMeta = teamMeta(next);
-    onAssigned?.({ teamId: next });
-    const data = await patch({ teamId: next });
+
+    // Point people are team-scoped: when moving to a different team, drop
+    // any current owner who isn't a member of the new team's department.
+    // Send the trimmed array in the SAME patch as the team change so the
+    // two stay consistent (and the backend re-validates regardless).
+    // Clearing the team (next === null) leaves owners untouched — there's
+    // a dedicated "Clear all people" action for that.
+    const nextDept = next ? TEAM_DEPARTMENT[next] : null;
+    let keptUserIds = assignedUserIds;
+    let dropped: string[] = [];
+    if (nextDept) {
+      keptUserIds = assignedUserIds.filter((id) => {
+        const u = users.find((x) => x.id === id);
+        return !!u && u.departmentIds.includes(nextDept);
+      });
+      dropped = assignedUserIds.filter((id) => !keptUserIds.includes(id));
+    }
+    const peopleChanged = dropped.length > 0;
+
+    const optimistic: { teamId: string | null; assignedUserIds?: string[] } = { teamId: next };
+    if (peopleChanged) optimistic.assignedUserIds = keptUserIds;
+    onAssigned?.(optimistic);
+
+    const body: Record<string, unknown> = { teamId: next };
+    if (peopleChanged) body.assignedUserIds = keptUserIds;
+    const data = await patch(body);
     if (!data) {
       // Revert on failure.
-      onAssigned?.({ teamId: teamId });
+      const revert: { teamId: string | null; assignedUserIds?: string[] } = { teamId };
+      if (peopleChanged) revert.assignedUserIds = assignedUserIds;
+      onAssigned?.(revert);
       return;
     }
     const msg = (() => {
@@ -128,7 +154,11 @@ export function ClientTeamPicker({
       if (prev) return `Unassigned from ${prev.label}`;
       return "Team cleared";
     })();
-    toast.success(msg);
+    toast.success(
+      peopleChanged
+        ? `${msg} · removed ${dropped.length} owner${dropped.length > 1 ? "s" : ""} not on ${nextMeta?.label ?? "the team"}`
+        : msg
+    );
     router.refresh();
   }
 

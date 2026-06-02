@@ -6,7 +6,7 @@ import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { canManageAssignments } from "@/lib/inbox-access";
 import { getClients, getOpenTaskCountsByClient } from "@/lib/clients-data";
-import { getAllUsersLight } from "@/lib/server-data";
+import { getAllUsers } from "@/lib/server-data";
 import { NewClientDialog } from "@/components/NewClientDialog";
 import { ClientPriorityList } from "@/components/ClientPriorityList";
 import { RescanClientMailButton } from "@/components/RescanClientMailButton";
@@ -21,7 +21,10 @@ export default async function ClientsPage() {
   const [clients, openCountsMap, allUsers] = await Promise.all([
     getClients(),                  // already sorted by display_order asc
     getOpenTaskCountsByClient(),
-    getAllUsersLight()
+    // getAllUsers (not Light) so each user carries departmentIds — the
+    // team-picker filters point people by the selected team's department,
+    // which is impossible with the Light variant's empty membership.
+    getAllUsers()
   ]);
 
   // Plain object so we can pass it to a client component without serializing

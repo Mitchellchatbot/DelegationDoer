@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { requireCurrentUserId } from "@/lib/session";
 import { getAllTasks, getDeletedTasks, getArchivedTasks, getUserById } from "@/lib/server-data";
-import { isLeader, canCreateTaskInDepartment } from "@/lib/access";
+import { isLeader, canCreateTaskInDepartment, canAssignTaskTo } from "@/lib/access";
 import { notifyAssignment, postMessage } from "@/lib/slack";
 import { syncTaskToCalendar } from "@/lib/task-calendar-sync";
 import { sanitizeMediaUrls } from "@/lib/media";
@@ -151,6 +151,23 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // Assignee scoping (server-side mirror of assignableTargets in auth.ts;
+    // the widget/form picker is convenience, not the boundary). Leaders/
+    // admins may assign to anyone, so only non-privileged callers are
+    // checked here: a worker is confined to themselves + direct reports, a
+    // department head to members of the departments they lead.
+    const requestedAssigneeId =
+      typeof body.assigneeId === "string" && body.assigneeId.length > 0 ? body.assigneeId : null;
+    if (requestedAssigneeId && !privileged) {
+      const target = await getUserById(requestedAssigneeId);
+      if (!canAssignTaskTo(caller, target)) {
+        return NextResponse.json(
+          { error: "You can only assign tasks to yourself or people on your team." },
+          { status: 403 }
+        );
+      }
+    }
+
     const id = `t_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
     const now = new Date().toISOString();
 
@@ -164,7 +181,7 @@ export async function POST(req: NextRequest) {
       actual_hours: 0,
       tags: Array.isArray(body.tags) ? body.tags.filter((t: unknown) => typeof t === "string") : [],
       department_id: departmentId,
-      assignee_id: typeof body.assigneeId === "string" && body.assigneeId.length > 0 ? body.assigneeId : null,
+      assignee_id: requestedAssigneeId,
       creator_id: userId,
       project_id: typeof body.projectId === "string" && body.projectId.length > 0 ? body.projectId : null,
       due_date: typeof body.dueDate === "string" ? body.dueDate : null,

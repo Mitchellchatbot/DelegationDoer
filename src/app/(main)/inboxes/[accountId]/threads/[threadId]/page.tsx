@@ -8,7 +8,10 @@ import { Avatar } from "@/components/Avatar";
 import { CreateTaskFromThreadButton } from "@/components/CreateTaskFromThreadButton";
 import { ReplyComposer } from "@/components/ReplyComposer";
 import { ThreadAutoMarkRead } from "@/components/ThreadAutoMarkRead";
+import { ScrollToLatestMessage } from "@/components/ScrollToLatestMessage";
 import { EmailBody } from "@/components/EmailBody";
+
+const LATEST_MESSAGE_ID = "thread-latest-message";
 
 export const dynamic = "force-dynamic";
 
@@ -140,6 +143,7 @@ export default async function ThreadDetailPage({
               return (
                 <article
                   key={m.id}
+                  id={i === messages.length - 1 ? LATEST_MESSAGE_ID : undefined}
                   className={
                     "relative overflow-hidden rounded-2xl border shadow-soft hover:shadow-lift transition-shadow animate-rise " +
                     (outbound
@@ -240,6 +244,11 @@ export default async function ThreadDetailPage({
             accountId={params.accountId}
             readThroughAt={messages.at(-1)?.sent_at ?? null}
           />
+
+          {/* Open scrolled to the newest message instead of the oldest. */}
+          {messages.length > 1 && (
+            <ScrollToLatestMessage targetId={LATEST_MESSAGE_ID} />
+          )}
         </>
       )}
     </div>

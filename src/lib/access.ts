@@ -190,3 +190,24 @@ export function canCreateTaskInDepartment(
   if (!departmentId) return false;
   return actor.departmentIds.includes(departmentId);
 }
+
+// Can `actor` assign a task to `target`? Server-side mirror of
+// assignableTargets() in auth.ts (which drives the New-task form's picker):
+//   - leaders/admins → anyone,
+//   - department heads → anyone whose home is one of their departments (+ self),
+//   - workers → themselves + their direct reports (manager_user_id === actor).
+// Everyone can always assign to themselves. The /api/tasks route enforces
+// this for non-leaders; the widget/form picker is convenience, not the gate.
+export function canAssignTaskTo(
+  actor: Pick<User, "id" | "role" | "isAdmin" | "departmentIds"> | null | undefined,
+  target: Pick<User, "id" | "departmentIds" | "managerId"> | null | undefined
+): boolean {
+  if (!actor || !target) return false;
+  if (target.id === actor.id) return true; // always allowed to self-assign
+  if (isLeader(actor)) return true;
+  if (isDepartmentHead(actor)) {
+    return target.departmentIds.some((d) => actor.departmentIds.includes(d));
+  }
+  // Workers: only their own direct reports.
+  return target.managerId === actor.id;
+}

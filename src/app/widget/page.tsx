@@ -1,13 +1,14 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback, createContext, useContext } from "react";
+import { useEffect, useRef, useState, useCallback, useMemo, createContext, useContext } from "react";
 import { Check, Clock, Minus, X, AlertTriangle, Plus, Bell, ArrowLeft, Focus, Coffee, Moon, Smile, Sparkles, Play, Square, Crown, Settings as SettingsIcon, LogOut, Camera, Mail } from "lucide-react";
 import { toast } from "sonner";
 import { AvatarCropper } from "@/components/AvatarCropper";
 import { Countdown } from "@/components/Countdown";
 import { PersonAvatar } from "@/components/PersonAvatar";
 import { MediaPicker } from "@/components/MediaPicker";
-import type { TaskMedia } from "@/lib/types";
+import { assignableTargets, assignableDepartments, canChooseDepartment, isLeader, isHead } from "@/lib/auth";
+import type { TaskMedia, User, Department } from "@/lib/types";
 
 interface WidgetTask {
   id: string;
@@ -2223,6 +2224,17 @@ interface WidgetUser {
   name: string;
   email: string;
   avatarUrl?: string | null;
+  // Role + memberships drive the department picker and assignee scoping
+  // (workers self-assign only). /api/users carries these for everyone.
+  role: "leader" | "department_head" | "worker";
+  isAdmin?: boolean;
+  departmentIds: string[];
+  managerId?: string | null;
+}
+
+interface WidgetDept {
+  id: string;
+  name: string;
 }
 
 const PRIORITY_OPTIONS: { value: "low" | "medium" | "high" | "critical"; label: string; tone: string }[] = [
@@ -2242,29 +2254,118 @@ function CreateTaskView({ onClose, onCreated }: { onClose: () => void; onCreated
   const [priority, setPriority] = useState<"low" | "medium" | "high" | "critical">("medium");
   const [estimateHours, setEstimateHours] = useState<number>(2);
   const [assigneeId, setAssigneeId] = useState<string>("");
+  const [departmentId, setDepartmentId] = useState<string>("");
   const [users, setUsers] = useState<WidgetUser[]>([]);
+  const [departments, setDepartments] = useState<WidgetDept[]>([]);
+  const [me, setMe] = useState<WidgetUser | null>(null);
   const [media, setMedia] = useState<TaskMedia[]>([]);
   const [busy, setBusy] = useState(false);
 
+  // Pull the roster, departments, and current user together. The widget
+  // has no TeamProvider/UserProvider (unlike the main app's NewTaskForm),
+  // so we hydrate from the same APIs directly. The current user's role +
+  // department memberships come from finding ourselves in the roster
+  // (/api/users carries departmentIds for everyone; /api/users/me only
+  // tells us *which* id is us).
   useEffect(() => {
     let cancelled = false;
-    fetch("/api/users", { cache: "no-store" })
-      .then((r) => (r.ok ? r.json() : { users: [] }))
-      .then((d) => {
+    Promise.all([
+      fetch("/api/users", { cache: "no-store" }).then((r) => (r.ok ? r.json() : { users: [] })),
+      fetch("/api/departments", { cache: "no-store" }).then((r) => (r.ok ? r.json() : { departments: [] })),
+      fetch("/api/users/me", { cache: "no-store" }).then((r) => (r.ok ? r.json() : null))
+    ])
+      .then(([usersData, deptData, meData]) => {
         if (cancelled) return;
-        setUsers(d.users ?? []);
+        const pool: WidgetUser[] = usersData?.users ?? [];
+        setUsers(pool);
+        setDepartments(
+          (deptData?.departments ?? []).map((d: { id: string; name: string }) => ({ id: d.id, name: d.name }))
+        );
+        const myId: string | undefined = meData?.user?.id;
+        const self = pool.find((u) => u.id === myId) ?? null;
+        // Fall back to the /me payload if the roster join didn't surface us
+        // (defensive — /api/users lists everyone, so this is rare).
+        setMe(
+          self ??
+            (meData?.user
+              ? {
+                  id: meData.user.id,
+                  name: meData.user.name,
+                  email: meData.user.email,
+                  avatarUrl: meData.user.avatarUrl ?? null,
+                  role: meData.user.role,
+                  isAdmin: meData.user.isAdmin === true,
+                  departmentIds: [],
+                  managerId: null
+                }
+              : null)
+        );
       })
-      .catch(() => { /* widget still works without the picker */ });
+      .catch(() => { /* widget still works; submit surfaces any real error */ });
     return () => { cancelled = true; };
   }, []);
+
+  // Department scoping mirrors NewTaskForm (and the /api/tasks server gate):
+  //   - leaders/admins may target any department,
+  //   - department heads may switch among the departments they lead,
+  //   - workers are locked to their own department and self-assign only.
+  const canDelegate = me ? (isLeader(me as unknown as User) || isHead(me as unknown as User)) : false;
+  const canPickDept = me ? canChooseDepartment(me as unknown as User) : false;
+  const selectableDepartments = useMemo(
+    () => (me ? assignableDepartments(me as unknown as User, departments as unknown as Department[]) : []),
+    [me, departments]
+  );
+  const hasNoDepartment = !!me && !isLeader(me as unknown as User) && me.departmentIds.length === 0;
+
+  // Auto-pick the caller's home department on open, clamped to what they're
+  // allowed to choose (mirrors NewTaskForm's effect).
+  useEffect(() => {
+    if (!me) return;
+    if (isLeader(me as unknown as User)) {
+      if (!departmentId && departments.length > 0) setDepartmentId(departments[0].id);
+      return;
+    }
+    const ownIds = me.departmentIds;
+    if (ownIds.length === 0) return; // hasNoDepartment banner handles this
+    if (!departmentId || !ownIds.includes(departmentId)) setDepartmentId(ownIds[0]);
+  }, [me, departments, departmentId]);
+
+  // Assignee options: people the caller may delegate to, narrowed to the
+  // selected department — only show assignees from that team.
+  const assigneeOptions = useMemo(() => {
+    if (!me) return [] as WidgetUser[];
+    const targets = assignableTargets(me as unknown as User, users as unknown as User[]) as unknown as WidgetUser[];
+    if (!departmentId) return targets;
+    return targets.filter((u) => u.departmentIds.includes(departmentId));
+  }, [me, users, departmentId]);
+
+  // Keep the selection coherent with role + department:
+  //   - workers are always forced onto themselves (no picker),
+  //   - a delegator's pick is cleared when it leaves the chosen department.
+  useEffect(() => {
+    if (!me) return;
+    if (!canDelegate) {
+      if (assigneeId !== me.id) setAssigneeId(me.id);
+      return;
+    }
+    if (assigneeId && !assigneeOptions.some((u) => u.id === assigneeId)) {
+      setAssigneeId("");
+    }
+  }, [me, canDelegate, assigneeOptions, assigneeId]);
 
   async function submit() {
     if (!title.trim()) {
       toast.error("Title required");
       return;
     }
+    if (hasNoDepartment) {
+      toast.error("You have no department yet — ask a leader to add you to one.");
+      return;
+    }
     setBusy(true);
     try {
+      // Workers always create for themselves; delegators send their pick.
+      const effectiveAssignee = canDelegate ? assigneeId : (me?.id ?? "");
       const res = await fetch("/api/tasks", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -2273,7 +2374,8 @@ function CreateTaskView({ onClose, onCreated }: { onClose: () => void; onCreated
           description: description.trim() || undefined,
           priority,
           estimatedHours: estimateHours,
-          assigneeId: assigneeId || undefined,
+          departmentId: departmentId || undefined,
+          assigneeId: effectiveAssignee || undefined,
           mediaUrls: media
         })
       });
@@ -2282,8 +2384,9 @@ function CreateTaskView({ onClose, onCreated }: { onClose: () => void; onCreated
         toast.error(data.error ?? "couldn't create task");
         return;
       }
-      const target = assigneeId ? users.find((u) => u.id === assigneeId) : null;
-      toast.success(target ? `Assigned to ${target.name} ✨` : "Task created ✨");
+      const mine = !!effectiveAssignee && effectiveAssignee === me?.id;
+      const target = effectiveAssignee ? users.find((u) => u.id === effectiveAssignee) : null;
+      toast.success(mine ? "Task created for you ✨" : target ? `Assigned to ${target.name} ✨` : "Task created ✨");
       onCreated();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "network error");
@@ -2366,6 +2469,30 @@ function CreateTaskView({ onClose, onCreated }: { onClose: () => void; onCreated
             </div>
           </div>
 
+          {me && !hasNoDepartment && (
+            <div>
+              <label className="text-[10px] uppercase tracking-wide font-semibold text-slate-500 px-1">Department</label>
+              {canPickDept ? (
+                <select
+                  value={departmentId}
+                  onChange={(e) => setDepartmentId(e.target.value)}
+                  className="mt-1 w-full px-3 py-2 text-[13px] bg-white border border-slate-200/80 rounded-xl outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent/40 transition-all"
+                >
+                  {selectableDepartments.map((d) => (
+                    <option key={d.id} value={d.id}>{d.name}</option>
+                  ))}
+                </select>
+              ) : (
+                <div className="mt-1 px-3 py-2 text-[13px] bg-slate-50 border border-slate-200/80 rounded-xl text-slate-600">
+                  {departments.find((d) => d.id === departmentId)?.name ?? "Your department"}
+                  <span className="block text-[10px] text-slate-400 mt-0.5">
+                    Locked — only leaders and heads can change it.
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
+
           <div>
             <label className="text-[10px] uppercase tracking-wide font-semibold text-slate-500 px-1">Estimate</label>
             <div className="mt-1 flex items-center gap-2">
@@ -2393,29 +2520,63 @@ function CreateTaskView({ onClose, onCreated }: { onClose: () => void; onCreated
             </div>
           </div>
 
-          <div>
-            <label className="text-[10px] uppercase tracking-wide font-semibold text-slate-500 px-1">Assign to</label>
-            <div className="mt-1 space-y-1 max-h-44 overflow-y-auto pr-1">
-              <AssigneeRow
-                userId=""
-                name="Leave unassigned"
-                email=""
-                selected={assigneeId === ""}
-                onPick={() => setAssigneeId("")}
-              />
-              {users.map((u) => (
-                <AssigneeRow
-                  key={u.id}
-                  userId={u.id}
-                  name={u.name}
-                  email={u.email}
-                  avatarUrl={u.avatarUrl ?? null}
-                  selected={assigneeId === u.id}
-                  onPick={() => setAssigneeId(u.id)}
-                />
-              ))}
+          {hasNoDepartment ? (
+            <div className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2.5 text-[12px] text-rose-700">
+              You don&apos;t belong to a department yet, so you can&apos;t create tasks. Ask a leader to add you to one.
             </div>
-          </div>
+          ) : canDelegate ? (
+            <div>
+              <label className="text-[10px] uppercase tracking-wide font-semibold text-slate-500 px-1">Assign to</label>
+              <div className="mt-1 space-y-1 max-h-44 overflow-y-auto pr-1">
+                <AssigneeRow
+                  userId=""
+                  name="Leave unassigned"
+                  email=""
+                  selected={assigneeId === ""}
+                  onPick={() => setAssigneeId("")}
+                />
+                {assigneeOptions.map((u) => (
+                  <AssigneeRow
+                    key={u.id}
+                    userId={u.id}
+                    name={u.name}
+                    email={u.email}
+                    avatarUrl={u.avatarUrl ?? null}
+                    selected={assigneeId === u.id}
+                    onPick={() => setAssigneeId(u.id)}
+                  />
+                ))}
+                {assigneeOptions.length === 0 && (
+                  <div className="px-2 py-2 text-[11px] text-slate-500">
+                    No one in this department to assign to — pick another department or leave it unassigned.
+                  </div>
+                )}
+              </div>
+            </div>
+          ) : (
+            <div>
+              <label className="text-[10px] uppercase tracking-wide font-semibold text-slate-500 px-1">Assign to</label>
+              <div className="mt-1 flex items-center gap-2 px-3 py-2 rounded-xl border border-accent/30 bg-accent/5">
+                {me?.avatarUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={me.avatarUrl}
+                    alt={me.name}
+                    className="w-6 h-6 rounded-full object-cover ring-1 ring-white shadow-sm"
+                  />
+                ) : (
+                  <div className="w-6 h-6 rounded-full bg-gradient-to-br from-blue-200 to-blue-100 text-blue-700 grid place-items-center text-[10px] font-semibold">
+                    {(me?.name ?? "?").split(" ").map((w) => w[0]).slice(0, 2).join("").toUpperCase() || "?"}
+                  </div>
+                )}
+                <div className="flex-1 min-w-0">
+                  <div className="text-[12px] font-medium truncate">{me?.name ?? "You"}</div>
+                  <div className="text-[10px] text-slate-500">Assigned to you — workers create tasks for themselves.</div>
+                </div>
+                <Check className="w-3.5 h-3.5 text-accent shrink-0" />
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Footer */}
@@ -2428,10 +2589,10 @@ function CreateTaskView({ onClose, onCreated }: { onClose: () => void; onCreated
           </button>
           <button
             onClick={submit}
-            disabled={busy || !title.trim()}
+            disabled={busy || !title.trim() || hasNoDepartment}
             className={
               "inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full text-[11px] font-semibold text-white shadow-sm transition-all hover:-translate-y-0.5 active:scale-95 " +
-              (busy || !title.trim() ? "opacity-50 cursor-not-allowed hover:translate-y-0" : "")
+              (busy || !title.trim() || hasNoDepartment ? "opacity-50 cursor-not-allowed hover:translate-y-0" : "")
             }
             style={{ background: "linear-gradient(135deg, #2563EB 0%, #1e63ff 100%)" }}
           >

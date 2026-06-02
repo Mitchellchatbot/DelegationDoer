@@ -302,9 +302,10 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
       </header>
 
       {/* SEO brief — leader/admin/SEO-head sets it; everyone viewing
-          the client sees it. Hidden entirely when no brief exists
-          and viewer can't edit, so accounts that don't need SEO
-          attention don't show empty chrome. */}
+          the client sees it (read-only for non-editors). Always
+          rendered so workers get the same SEO-brief section leaders
+          do — a muted "no brief set" note when the account has none
+          yet, matching the briefs already shown to them on /home. */}
       <ClientSeoBriefCard
         clientId={client.id}
         brief={client.seoBrief}

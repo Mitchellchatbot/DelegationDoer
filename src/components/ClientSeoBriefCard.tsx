@@ -10,8 +10,9 @@ import { cn } from "@/lib/utils";
 //
 // Edit-only when canEdit (leader / admin / SEO head). Everyone else
 // gets a read view. Empty state for editors prompts them to add one;
-// empty state for readers hides the card entirely so a client without
-// a brief doesn't waste vertical space.
+// readers (incl. workers) get a muted "no brief set" note. The card is
+// always rendered so workers see the same SEO-brief section leaders do
+// — matching the briefs already surfaced to them on /home.
 
 interface Props {
   clientId: string;
@@ -29,8 +30,6 @@ export function ClientSeoBriefCard({
   const [busy, setBusy] = useState(false);
   const [enhancing, setEnhancing] = useState(false);
   const [draft, setDraft] = useState<string>(brief ?? "");
-
-  if (!brief && !canEdit) return null;
 
   async function enhance() {
     if (busy || enhancing) return;
@@ -184,9 +183,13 @@ export function ClientSeoBriefCard({
             </div>
           )}
         </>
-      ) : (
+      ) : canEdit ? (
         <div className="text-[12px] text-ink/55 italic rounded-xl bg-white/70 border border-emerald-200/40 p-3">
           No brief yet — click <strong className="not-italic text-emerald-700">Add</strong> to tell the SEO team what to focus on for this client.
+        </div>
+      ) : (
+        <div className="text-[12px] text-ink/55 italic rounded-xl bg-white/70 border border-emerald-200/40 p-3">
+          No SEO brief set for this client yet.
         </div>
       )}
     </section>

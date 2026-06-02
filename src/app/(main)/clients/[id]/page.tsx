@@ -13,6 +13,7 @@ import { ClientSeoBriefCard } from "@/components/ClientSeoBriefCard";
 import { ClientWordPressCard } from "@/components/ClientWordPressCard";
 import { ClientTouchpointCard } from "@/components/ClientTouchpointCard";
 import { DeleteClientButton } from "@/components/DeleteClientButton";
+import { ClientAskAiButton } from "@/components/ClientAskAiButton";
 import { ContentPlanComposerCollapsible } from "@/components/ContentPlanComposerCollapsible";
 import { ClientEmailLog } from "@/components/ClientEmailLog";
 import { listEmailDrafts } from "@/lib/email-drafts-data";
@@ -288,11 +289,16 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
               )}
             </div>
           </div>
-          {me && (me.role === "leader" || me.isAdmin) && (
-            <div className="shrink-0">
+          <div className="shrink-0 flex items-center gap-2">
+            <ClientAskAiButton
+              clientId={client.id}
+              clientName={client.name}
+              iconUrl={client.iconUrl}
+            />
+            {me && (me.role === "leader" || me.isAdmin) && (
               <DeleteClientButton clientId={client.id} clientName={client.name} />
-            </div>
-          )}
+            )}
+          </div>
         </div>
         <div
           aria-hidden

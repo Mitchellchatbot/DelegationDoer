@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUserId } from "@/lib/session";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
-import { isValidTeamId } from "@/lib/client-teams";
+import { isValidTeamId, TEAM_DEPARTMENT, type TeamId } from "@/lib/client-teams";
 
 export const dynamic = "force-dynamic";
 
@@ -98,6 +98,35 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
             { error: `unknown user id${bad.length > 1 ? "s" : ""}: ${bad.join(", ")}` },
             { status: 400 }
           );
+        }
+
+        // Team scoping: point people must belong to the client's team
+        // department. The effective team is the one in this same patch
+        // (if teamId was sent) or the client's current team otherwise.
+        // No team → no department constraint (legacy / unassigned clients).
+        let effectiveTeam: string | null;
+        if ("team_id" in update) {
+          effectiveTeam = update.team_id as string | null;
+        } else {
+          const { data: client } = await supabase
+            .from("clients").select("team_id").eq("id", params.id).maybeSingle();
+          effectiveTeam = (client?.team_id as string | null) ?? null;
+        }
+        if (effectiveTeam && isValidTeamId(effectiveTeam)) {
+          const dept = TEAM_DEPARTMENT[effectiveTeam as TeamId];
+          const { data: mems } = await supabase
+            .from("department_members")
+            .select("user_id")
+            .eq("department_id", dept)
+            .in("user_id", unique);
+          const inDept = new Set((mems ?? []).map((m: { user_id: string }) => m.user_id));
+          const outsiders = unique.filter((id) => !inDept.has(id));
+          if (outsiders.length > 0) {
+            return NextResponse.json(
+              { error: `user${outsiders.length > 1 ? "s" : ""} not on the selected team: ${outsiders.join(", ")}` },
+              { status: 400 }
+            );
+          }
         }
       }
       update.assigned_user_ids = unique;

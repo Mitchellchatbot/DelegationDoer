@@ -6,7 +6,19 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 export const dynamic = "force-dynamic";
 
 // POST /api/sod/create-task
-//   body: { title: string }
+//   body: {
+//     title: string,                  // required
+//     // Optional "advanced details" — the SOD flow's quick-add path
+//     // sends title only; the expandable section adds these. All fall
+//     // back to the lightweight defaults below when absent.
+//     priority?: "low" | "medium" | "high" | "critical",
+//     estimatedHours?: number,
+//     tags?: string[],
+//     departmentId?: string,          // overrides the user's primary dept
+//     dueDate?: string,               // ISO datetime
+//     clientName?: string,
+//     website?: string
+//   }
 //
 // Lightweight task creator wired specifically for the SOD "Add as task"
 // affordance. Differs from /api/tasks in two ways:
@@ -14,44 +26,73 @@ export const dynamic = "force-dynamic";
 //      and not every team uses the clock system, so blocking task
 //      creation here would defeat the purpose of the flow.
 //   2. Creates the task already set to "in_progress" (since the user is
-//      naming today's work, not parking something for later), assigned
-//      to the caller, and tagged with their primary department. No due
-//      date — the user can set one later from /tasks.
+//      naming today's work, not parking something for later) and
+//      assigned to the caller. Department defaults to the user's primary
+//      one and there's no due date unless the advanced fields set them.
 export async function POST(req: NextRequest) {
   try {
     const userId = await requireCurrentUserId();
     const me = await getUserById(userId);
     if (!me) return NextResponse.json({ error: "no user" }, { status: 401 });
 
-    const body = (await req.json().catch(() => ({}))) as { title?: unknown };
+    const body = (await req.json().catch(() => ({}))) as {
+      title?: unknown;
+      priority?: unknown;
+      estimatedHours?: unknown;
+      tags?: unknown;
+      departmentId?: unknown;
+      dueDate?: unknown;
+      clientName?: unknown;
+      website?: unknown;
+    };
     const title = typeof body.title === "string" ? body.title.trim() : "";
     if (!title) return NextResponse.json({ error: "title is required" }, { status: 400 });
+
+    // Optional advanced fields. Sanitized the same way /api/tasks does,
+    // each falling back to the SOD quick-add default when not supplied.
+    const allowedPriorities = ["low", "medium", "high", "critical"] as const;
+    const priority = allowedPriorities.includes(body.priority as (typeof allowedPriorities)[number])
+      ? (body.priority as (typeof allowedPriorities)[number])
+      : "medium";
+    const estimatedHours = Number(body.estimatedHours) > 0 ? Number(body.estimatedHours) : 2;
+    const tags = Array.isArray(body.tags)
+      ? body.tags.filter((t: unknown): t is string => typeof t === "string")
+      : [];
+    // Caller-chosen department wins; otherwise the user's primary dept.
+    const departmentId =
+      typeof body.departmentId === "string" && body.departmentId.length > 0
+        ? body.departmentId
+        : (me.departmentIds?.[0] ?? null);
+    const dueDate = typeof body.dueDate === "string" && body.dueDate ? body.dueDate : null;
+    const clientName =
+      typeof body.clientName === "string" && body.clientName.trim() ? body.clientName.trim() : null;
+    const website =
+      typeof body.website === "string" && body.website.trim() ? body.website.trim() : null;
 
     const supabase = getSupabaseAdmin();
     const id = `t_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
     const now = new Date().toISOString();
-    const departmentId = me.departmentIds?.[0] ?? null;
 
     const row = {
       id,
       title,
       description: null,
       status: "in_progress" as const,
-      priority: "medium" as const,
-      estimated_hours: 2,
+      priority,
+      estimated_hours: estimatedHours,
       actual_hours: 0,
-      tags: [] as string[],
+      tags,
       department_id: departmentId,
       assignee_id: userId,
       creator_id: userId,
       project_id: null,
-      due_date: null,
+      due_date: dueDate,
       inactive_flag: false,
       last_activity_at: now,
       created_at: now,
       blocks_task_ids: [] as string[],
-      client_name: null,
-      website: null,
+      client_name: clientName,
+      website,
       client_email: null,
       client_folder_url: null,
       staging_server: null,

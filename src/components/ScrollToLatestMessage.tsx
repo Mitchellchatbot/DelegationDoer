@@ -4,15 +4,21 @@ import { useEffect } from "react";
 
 // Thread messages render oldest-first (sent_at ASC), so on a long thread the
 // newest reply sits far below the fold and the page opens scrolled to the
-// oldest message. On mount, bring the newest message into view.
+// oldest message. On mount, bring the newest message into view and keep it
+// pinned while the layout settles.
 //
 // The catch: email bodies (see EmailBody) start at 200px and grow for up to
 // ~3s as images + remote CSS load, which keeps pushing the newest message
-// down. So we re-scroll across that same settle window instead of scrolling
-// once against a not-yet-settled layout — and bail the instant the user
-// scrolls up, so we don't fight someone reading the history.
+// down. The old approach re-scrolled on a blind 150ms timer, so the viewport
+// visibly hopped every tick — the target drifted as iframes above it grew,
+// then got yanked back — which is the "shake" on load. Instead we re-pin from
+// a ResizeObserver: it fires synchronously with the size change, before the
+// browser paints, so the newest message stays put with no intermediate jump,
+// and it only fires when something actually resizes (not on every render).
+// We bail the instant the user scrolls up, so we don't fight someone reading
+// the history, and we stop observing once the layout has settled so a stray
+// late resize can't yank the viewport back.
 const SETTLE_MS = 3000;
-const RESCROLL_INTERVAL_MS = 150;
 
 export function ScrollToLatestMessage({ targetId }: { targetId: string }) {
   useEffect(() => {
@@ -30,13 +36,20 @@ export function ScrollToLatestMessage({ targetId }: { targetId: string }) {
       if (following) el.scrollIntoView({ block: "start" });
     };
 
+    // Initial landing on the newest message.
     scroll();
-    const poll = setInterval(scroll, RESCROLL_INTERVAL_MS);
-    const stop = setTimeout(() => clearInterval(poll), SETTLE_MS);
+
+    // Re-pin only when the layout actually changes (email iframes growing as
+    // images + remote CSS load). Running inside the observer keeps the scroll
+    // in the same frame as the growth, so there's no visible hop.
+    const ro = new ResizeObserver(scroll);
+    ro.observe(document.body);
+
+    const stop = setTimeout(() => ro.disconnect(), SETTLE_MS);
 
     return () => {
       window.removeEventListener("wheel", onWheel);
-      clearInterval(poll);
+      ro.disconnect();
       clearTimeout(stop);
     };
   }, [targetId]);

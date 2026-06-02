@@ -173,3 +173,20 @@ export function canCreateProject(actor: User | null | undefined): boolean {
   if (!actor) return false;
   return isLeader(actor) || isDepartmentHead(actor);
 }
+
+// Can `actor` create a task in `departmentId`? Leaders/admins create in
+// any department (and may leave it unset for cross-team/unassigned work).
+// Everyone else — workers AND department heads — is scoped to the
+// department(s) they belong to. A non-leader with no department can't
+// create anywhere (the caller surfaces a "no department assigned" error).
+// This is the single source of truth the /api/tasks route enforces; the
+// NewTaskForm mirrors it in the UI but is NOT trusted on its own.
+export function canCreateTaskInDepartment(
+  actor: Pick<User, "role" | "isAdmin" | "departmentIds"> | null | undefined,
+  departmentId: string | null | undefined
+): boolean {
+  if (!actor) return false;
+  if (isLeader(actor)) return true;
+  if (!departmentId) return false;
+  return actor.departmentIds.includes(departmentId);
+}

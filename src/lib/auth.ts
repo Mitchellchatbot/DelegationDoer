@@ -1,4 +1,4 @@
-import type { User } from "./types";
+import type { Department, User } from "./types";
 import { users } from "./mock-data";
 
 export const ROLE_LABELS: Record<User["role"], string> = {
@@ -44,6 +44,21 @@ export function assignableTargets(actor: User, pool: User[] = users): User[] {
 
 export function canCreateTasksForOthers(actor: User): boolean {
   return isLeader(actor) || actor.role === "department_head";
+}
+
+// Which departments can `actor` create a task in? Drives the New-task
+// form's Department picker. Leaders/admins get the whole org; everyone
+// else (workers + department heads) is scoped to their own department(s).
+// Mirrors `canCreateTaskInDepartment` in access.ts — keep the two in sync.
+export function assignableDepartments(actor: User, pool: Department[]): Department[] {
+  if (isLeader(actor)) return pool.slice();
+  return pool.filter((d) => actor.departmentIds.includes(d.id));
+}
+
+// Can the actor pick a different department, or are they locked to their
+// own? Leaders/admins + department heads may change it; workers can't.
+export function canChooseDepartment(actor: User): boolean {
+  return isLeader(actor) || isHead(actor);
 }
 
 export function canManagePeople(actor: User): boolean {

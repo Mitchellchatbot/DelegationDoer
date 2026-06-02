@@ -1,9 +1,11 @@
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
-import { getAllTasks, getAllUsersLight, getUserById, getDepartments } from "@/lib/server-data";
+import { getAllTasks, getAllUsersLight, getUserById, getDepartments, getLeaderIds } from "@/lib/server-data";
+import { canViewTaskScopedToDepartment } from "@/lib/access";
 import { userCapacity } from "@/lib/capacity";
 import { listUserEvents } from "@/lib/google-calendar";
 import { embedQuery } from "@/lib/sop-ingest";
-import { listLabels, listThreads, getThread } from "@/lib/missive-client";
+import { listLabels, listThreads, getThread, listAccounts } from "@/lib/missive-client";
+import { visibleAccountIdsFor } from "@/lib/inbox-access";
 import { rankCandidates, buildLoadSignals } from "@/lib/skill-rank";
 import type { Task, User } from "@/lib/types";
 
@@ -66,7 +68,7 @@ export const AI_TOOLS = [
       "`dueBeforeISO` is an ISO timestamp — returns tasks due strictly before that. " +
       "`projectId` and `departmentId` are exact ids. " +
       "`limit` caps results (default 20, max 50). " +
-      "Workers and dept heads don't see tasks owned by leaders here — that filter is server-enforced.",
+      "Visibility is server-enforced and cannot be bypassed: leaders/admins see everything; workers and dept heads see only their own work plus tasks in their own department(s), and never tasks owned by leaders. Counts/aggregations you build from this are therefore already scoped to the caller's team — don't claim org-wide totals for a non-leader.",
     input_schema: {
       type: "object",
       properties: {
@@ -89,7 +91,7 @@ export const AI_TOOLS = [
   {
     name: "get_task",
     description:
-      "Fetch one task by id with the full set of fields: title, description, status, priority, hours, dates, client, project, assignee + creator names, last activity, and the most recent activity log entries.",
+      "Fetch one task by id with the full set of fields: title, description, status, priority, hours, dates, client, project, assignee + creator names, last activity, and the most recent activity log entries. Returns 'access denied' if the caller isn't allowed to see this task (a non-leader can only open their own work or tasks in their own department).",
     input_schema: {
       type: "object",
       properties: { id: { type: "string" } },
@@ -139,7 +141,7 @@ export const AI_TOOLS = [
   {
     name: "get_client",
     description:
-      "Detail for one client: name, website, priority, notes, plus open tasks, completed tasks (recent), and the count of related email threads visible to the caller.",
+      "Detail for one client: name, website, priority, notes, plus open tasks and recent completed tasks. The task lists are scoped server-side to the caller's department(s) (leaders see all), so a non-leader only sees their own team's work on this client — don't present them as the client's complete task list for a non-leader.",
     input_schema: {
       type: "object",
       properties: { id: { type: "string" } },
@@ -149,7 +151,7 @@ export const AI_TOOLS = [
   {
     name: "list_client_completed_tasks",
     description:
-      "Build a historical knowledge base of work this agency has shipped for a client. Returns completed tasks newest first, each with title + description (the actual record of what was done) + tags + who completed it. Use this when the user asks 'what have we done for X?', 'what work has been completed for X in the last year?', or 'summarize our history with X'. Resolve a client by `clientName` (fuzzy match against clients.name) or `clientId` (exact id). Optional: `sinceDays` (omit or pass 0 for the default 365-day window), `limit` (default 50, max 200).",
+      "Build a historical knowledge base of work this agency has shipped for a client. Returns completed tasks newest first, each with title + description (the actual record of what was done) + tags + who completed it. Use this when the user asks 'what have we done for X?', 'what work has been completed for X in the last year?', or 'summarize our history with X'. Resolve a client by `clientName` (fuzzy match against clients.name) or `clientId` (exact id). Optional: `sinceDays` (omit or pass 0 for the default 365-day window), `limit` (default 50, max 200). Results are department-scoped server-side: a non-leader only sees completed work owned by their own team(s), so this is their team's history with the client, not necessarily the agency's full history.",
     input_schema: {
       type: "object",
       properties: {
@@ -164,7 +166,8 @@ export const AI_TOOLS = [
   {
     name: "list_client_recent_emails",
     description:
-      "Latest email threads in/out with a specific client, with the actual message text (truncated) so you can answer 'what's the latest update with X', 'what did X say about Y', 'how are we doing with X'. Resolves the client by `clientName` (fuzzy match) or `clientId`. Returns the top `limit` (default 5, max 20) threads newest-first; each thread has subject, lastAt, direction, participants, a body snippet from the most recent message, and the satisfaction score (0-100) + reason if one has been computed. When the user asks about communication with a client, prefer this tool over guessing.",
+      "Latest email threads in/out with a specific client, with the actual message text (truncated) so you can answer 'what's the latest update with X', 'what did X say about Y', 'how are we doing with X'. Resolves the client by `clientName` (fuzzy match) or `clientId`. Returns the top `limit` (default 5, max 20) threads newest-first; each thread has subject, lastAt, direction, participants, a body snippet from the most recent message, and the satisfaction score (0-100) + reason if one has been computed. When the user asks about communication with a client, prefer this tool over guessing. " +
+      "Results are scoped server-side to the inboxes the caller is allowed to see — exactly the inboxes they'd see in the UI. If the result has `accessDenied: true`, the client's email lives only in inboxes outside the caller's permissions: tell them you can't access those emails, do NOT speculate about the contents.",
     input_schema: {
       type: "object",
       properties: {
@@ -333,16 +336,16 @@ export async function runTool(
       case "who_am_i": return whoAmI(ctx);
       case "search_tasks": return searchTasks(input, ctx);
       case "get_task": return getTask(input, ctx);
-      case "list_people": return listPeople(input, ctx);
+      case "list_people": return listPeople(input);
       case "find_user_by_name": return findUserByName(input, ctx);
       case "list_departments": return listDepartments();
       case "list_clients": return listClients(input);
       case "get_client": return getClient(input, ctx);
-      case "list_client_completed_tasks": return listClientCompletedTasks(input);
-      case "list_client_recent_emails": return listClientRecentEmails(input);
+      case "list_client_completed_tasks": return listClientCompletedTasks(input, ctx);
+      case "list_client_recent_emails": return listClientRecentEmails(input, ctx);
       case "propose_task": return proposeTask(input, ctx);
       case "list_projects": return listProjects(input);
-      case "get_project": return getProject(input);
+      case "get_project": return getProject(input, ctx);
       case "get_capacity": return getCapacity(input, ctx);
       case "get_my_calendar": return getMyCalendar(input, ctx);
       case "list_recent_kudos": return listRecentKudos(input);
@@ -369,16 +372,6 @@ function whoAmI(ctx: ToolContext) {
     role: ctx.actor.role,
     departmentIds: ctx.actor.departmentIds
   };
-}
-
-// Cache of leader ids so worker filtering doesn't fan out to a query
-// per task call within one turn.
-async function leaderIdSet(): Promise<Set<string>> {
-  const { data } = await getSupabaseAdmin()
-    .from("users")
-    .select("id")
-    .eq("role", "leader");
-  return new Set((data ?? []).map((u: { id: string }) => u.id as string));
 }
 
 function norm(s: string): string {
@@ -422,19 +415,14 @@ async function searchTasks(input: Record<string, unknown>, ctx: ToolContext) {
     ? new Date(input.dueBeforeISO).getTime()
     : null;
 
-  // Access filter (mirrors /api/tasks GET):
-  //   leader sees everything; everyone else sees tasks that aren't
-  //   created/assigned by a leader, plus their own assignments.
-  const actorIsLeader = ctx.actor.role === "leader" || ctx.actor.isAdmin === true;
-  const leaderIds = actorIsLeader ? new Set<string>() : await leaderIdSet();
+  // Access filter: leader-privacy + DEPARTMENT SCOPING. Leaders/admins
+  // see everything; everyone else is limited to their own work plus
+  // tasks in their own department(s). Same gate as get_task and the
+  // client task tools so cross-team work can't leak through any path.
+  const leaderIds = await getLeaderIds();
 
   const filtered = tasks.filter((t) => {
-    if (!actorIsLeader) {
-      if (t.assigneeId === ctx.actor.id || t.creatorId === ctx.actor.id) {
-        // own work — always visible
-      } else if (t.assigneeId && leaderIds.has(t.assigneeId)) return false;
-      else if (t.creatorId && leaderIds.has(t.creatorId)) return false;
-    }
+    if (!canViewTaskScopedToDepartment(ctx.actor, t, leaderIds)) return false;
     if (!includeDone && t.status === "done") return false;
     if (status && t.status !== status) return false;
     if (assigneeId && t.assigneeId !== assigneeId) return false;
@@ -480,18 +468,20 @@ async function getTask(input: Record<string, unknown>, ctx: ToolContext) {
     .eq("id", id)
     .maybeSingle();
   if (!row) return { error: "not found" };
-  // Access gate for non-leaders.
-  if (ctx.actor.role !== "leader" && !ctx.actor.isAdmin) {
-    const leaderIds = await leaderIdSet();
-    if (
-      row.assignee_id !== ctx.actor.id &&
-      row.creator_id !== ctx.actor.id &&
-      ((row.assignee_id && leaderIds.has(row.assignee_id as string)) ||
-       (row.creator_id && leaderIds.has(row.creator_id as string)))
-    ) {
-      return { error: "access denied" };
-    }
-  }
+  // Access gate: leader-privacy + department scoping (same helper as
+  // search_tasks). Non-leaders can't open a task outside their
+  // department(s) unless it's their own assigned/created work.
+  const leaderIds = await getLeaderIds();
+  const visible = canViewTaskScopedToDepartment(
+    ctx.actor,
+    {
+      assigneeId: (row.assignee_id as string | null) ?? null,
+      creatorId: (row.creator_id as string) ?? "",
+      departmentId: (row.department_id as string | null) ?? null
+    },
+    leaderIds
+  );
+  if (!visible) return { error: "access denied" };
   const [{ data: assignee }, { data: creator }, { data: log }] = await Promise.all([
     row.assignee_id
       ? supabase.from("users").select("id, name, email").eq("id", row.assignee_id).maybeSingle()
@@ -523,7 +513,7 @@ async function getTask(input: Record<string, unknown>, ctx: ToolContext) {
   };
 }
 
-async function listPeople(input: Record<string, unknown>, _ctx: ToolContext) {
+async function listPeople(input: Record<string, unknown>) {
   const role = typeof input.role === "string" ? input.role : null;
   const departmentId = typeof input.departmentId === "string" ? input.departmentId : null;
   const limit = clampNumber(input.limit, 1, 100, 50);
@@ -632,37 +622,55 @@ async function listClients(input: Record<string, unknown>) {
     }));
 }
 
-async function getClient(input: Record<string, unknown>, _ctx: ToolContext) {
+async function getClient(input: Record<string, unknown>, ctx: ToolContext) {
   const id = String(input.id ?? "");
   if (!id) return { error: "id required" };
   const supabase = getSupabaseAdmin();
   const { data: client } = await supabase
     .from("clients").select("*").eq("id", id).maybeSingle();
   if (!client) return { error: "not found" };
-  const [{ data: openTasks }, { data: doneTasks }] = await Promise.all([
+  // Pull the ownership/department columns too so the department scoping
+  // gate (canViewTaskScopedToDepartment) can run — a worker shouldn't see
+  // another team's tasks just because they share a client.
+  const [{ data: openTasks }, { data: doneTasks }, leaderIds] = await Promise.all([
     supabase
       .from("tasks")
-      .select("id, title, status, priority, due_date")
+      .select("id, title, status, priority, due_date, assignee_id, creator_id, department_id")
       .eq("client_name", client.name)
       .neq("status", "done")
       .order("due_date", { ascending: true })
       .limit(15),
     supabase
       .from("tasks")
-      .select("id, title, last_activity_at")
+      .select("id, title, last_activity_at, assignee_id, creator_id, department_id")
       .eq("client_name", client.name)
       .eq("status", "done")
       .order("last_activity_at", { ascending: false })
-      .limit(10)
+      .limit(10),
+    getLeaderIds()
   ]);
+  const canSee = (r: { assignee_id: unknown; creator_id: unknown; department_id: unknown }) =>
+    canViewTaskScopedToDepartment(
+      ctx.actor,
+      {
+        assigneeId: (r.assignee_id as string | null) ?? null,
+        creatorId: (r.creator_id as string) ?? "",
+        departmentId: (r.department_id as string | null) ?? null
+      },
+      leaderIds
+    );
   return {
     id: client.id,
     name: client.name,
     website: client.website,
     priority: client.priority,
     notes: client.notes,
-    openTasks: openTasks ?? [],
-    recentlyCompletedTasks: doneTasks ?? []
+    openTasks: (openTasks ?? [])
+      .filter(canSee)
+      .map((t) => ({ id: t.id, title: t.title, status: t.status, priority: t.priority, due_date: t.due_date })),
+    recentlyCompletedTasks: (doneTasks ?? [])
+      .filter(canSee)
+      .map((t) => ({ id: t.id, title: t.title, last_activity_at: t.last_activity_at }))
   };
 }
 
@@ -672,7 +680,7 @@ async function getClient(input: Record<string, unknown>, _ctx: ToolContext) {
 // included, completedBy is joined in). Caller is expected to resolve
 // the client by name or id; ambiguous names return an error so the AI
 // can disambiguate with the user instead of guessing.
-async function listClientCompletedTasks(input: Record<string, unknown>) {
+async function listClientCompletedTasks(input: Record<string, unknown>, ctx: ToolContext) {
   const supabase = getSupabaseAdmin();
   let clientName: string | null = typeof input.clientName === "string" ? input.clientName : null;
   let clientId: string | null = typeof input.clientId === "string" ? input.clientId : null;
@@ -723,17 +731,28 @@ async function listClientCompletedTasks(input: Record<string, unknown>) {
 
   const { data: tasks } = await supabase
     .from("tasks")
-    .select("id, title, description, priority, last_activity_at, tags, assignee_id")
+    .select("id, title, description, priority, last_activity_at, tags, assignee_id, creator_id, department_id")
     .eq("client_name", clientName)
     .eq("status", "done")
     .gte("last_activity_at", cutoff)
     .order("last_activity_at", { ascending: false })
     .limit(limit);
-  const rows = (tasks ?? []) as Array<{
+  // Department scoping: a worker asking for a client's completed-work
+  // history only sees work owned by their own team(s). Same gate as
+  // search_tasks / get_task.
+  const leaderIds = await getLeaderIds();
+  const rows = ((tasks ?? []) as Array<{
     id: string; title: string; description: string | null;
     priority: string | null; last_activity_at: string;
     tags: string[] | null; assignee_id: string | null;
-  }>;
+    creator_id: string | null; department_id: string | null;
+  }>).filter((r) =>
+    canViewTaskScopedToDepartment(
+      ctx.actor,
+      { assigneeId: r.assignee_id, creatorId: r.creator_id ?? "", departmentId: r.department_id },
+      leaderIds
+    )
+  );
 
   // Join assignee names once so the AI can attribute work without
   // a second round-trip per task.
@@ -770,7 +789,16 @@ async function listClientCompletedTasks(input: Record<string, unknown>) {
 // "what's the latest update with X?" without dumping a 30-message log
 // into the context. Satisfaction score + reason are joined per-message
 // when one has been computed by the daily client-health cron.
-async function listClientRecentEmails(input: Record<string, unknown>) {
+//
+// INBOX SCOPING: email is the one place Ask AI reaches into shared
+// inboxes, so it must obey the same per-user visibility the inbox pages
+// do. We resolve the caller's accessible accounts via visibleAccountIdsFor
+// (leader → all, dept head → their dept's inboxes, worker → own inboxes)
+// and keep only threads that touch one of those accounts — mirroring
+// /api/inboxes/threads. A worker asking about a client whose mail lives
+// in an inbox they can't see gets an access-denied note, never the
+// bodies. This is enforced here server-side, not via the prompt.
+async function listClientRecentEmails(input: Record<string, unknown>, ctx: ToolContext) {
   const supabase = getSupabaseAdmin();
   let clientName: string | null = typeof input.clientName === "string" ? input.clientName : null;
   let clientId: string | null = typeof input.clientId === "string" ? input.clientId : null;
@@ -808,9 +836,19 @@ async function listClientRecentEmails(input: Record<string, unknown>) {
   }
   if (!clientName || !clientId) return { error: "clientName or clientId required" };
 
+  // Resolve which inboxes the caller is allowed to read, and map those
+  // account ids → emails so we can match against each thread's
+  // account_emails fan-out (same join the inbox pages use). `null` =
+  // leader/admin → no inbox restriction.
   let labels: Awaited<ReturnType<typeof listLabels>>;
+  let accounts: Awaited<ReturnType<typeof listAccounts>>;
+  let visibleIds: Set<string> | null;
   try {
-    labels = await listLabels();
+    [labels, accounts, visibleIds] = await Promise.all([
+      listLabels(),
+      listAccounts(),
+      visibleAccountIdsFor(ctx.actor)
+    ]);
   } catch (err) {
     return {
       error: `missiveclone unreachable: ${err instanceof Error ? err.message : String(err)}`
@@ -828,10 +866,45 @@ async function listClientRecentEmails(input: Record<string, unknown>) {
     };
   }
 
-  const threads = await listThreads({ labelId: label.id, limit });
-  if (threads.length === 0) {
+  // Set of email addresses for the inboxes the caller may read. null →
+  // leader, no filtering. An empty set means the caller has no inbox
+  // access at all (e.g. a worker with no assignments) → they see nothing.
+  const visibleEmails = visibleIds === null
+    ? null
+    : new Set(
+        accounts
+          .filter((a) => visibleIds!.has(a.id))
+          .map((a) => a.email.toLowerCase())
+      );
+
+  // Over-fetch a little so the post-visibility slice can still fill the
+  // requested limit when some threads are out of scope, then filter.
+  const fetchLimit = visibleEmails === null ? limit : Math.min(100, limit * 5);
+  const allThreads = await listThreads({ labelId: label.id, limit: fetchLimit });
+  if (allThreads.length === 0) {
     return { clientId, clientName, threads: [] };
   }
+
+  const accessibleThreads = visibleEmails === null
+    ? allThreads
+    : allThreads.filter((t) =>
+        (t.account_emails ?? []).some((ae) => visibleEmails.has(ae.email.toLowerCase()))
+      );
+
+  // The client HAS email, but none of it lives in an inbox the caller can
+  // see → access denied (e.g. a Website-team worker asking about a client
+  // whose mail sits in an SEO/owner inbox). Never leak that threads exist.
+  if (accessibleThreads.length === 0) {
+    return {
+      clientId,
+      clientName,
+      threads: [],
+      accessDenied: true,
+      note: "You don't have access to any inbox containing this client's email. Tell the user you can't see emails for this client with their current inbox permissions."
+    };
+  }
+
+  const threads = accessibleThreads.slice(0, limit);
 
   // Fetch each thread's messages + join satisfaction scores. Sequential
   // is fine here — limit caps at 20 so this is at most ~20 small calls.
@@ -1052,11 +1125,11 @@ async function listProjects(input: Record<string, unknown>) {
     });
 }
 
-async function getProject(input: Record<string, unknown>) {
+async function getProject(input: Record<string, unknown>, ctx: ToolContext) {
   const id = String(input.id ?? "");
   if (!id) return { error: "id required" };
   const supabase = getSupabaseAdmin();
-  const [{ data: project }, { data: stages }, { data: tasks }] = await Promise.all([
+  const [{ data: project }, { data: stages }, { data: tasks }, leaderIds] = await Promise.all([
     supabase.from("projects").select("*").eq("id", id).maybeSingle(),
     supabase
       .from("project_stages")
@@ -1065,12 +1138,28 @@ async function getProject(input: Record<string, unknown>) {
       .order("position"),
     supabase
       .from("tasks")
-      .select("id, title, status, priority, due_date, stage_id, assignee_id")
-      .eq("project_id", id)
+      .select("id, title, status, priority, due_date, stage_id, assignee_id, creator_id, department_id")
+      .eq("project_id", id),
+    getLeaderIds()
   ]);
   if (!project) return { error: "not found" };
+  // Department scoping. A task with no department_id inherits the
+  // project's department, so the project's own team still sees its tasks
+  // while members of other teams don't (same gate as search_tasks).
+  const projectDeptId = (project.department_id as string | null) ?? null;
+  const visibleTasks = (tasks ?? []).filter((t) =>
+    canViewTaskScopedToDepartment(
+      ctx.actor,
+      {
+        assigneeId: (t.assignee_id as string | null) ?? null,
+        creatorId: (t.creator_id as string) ?? "",
+        departmentId: (t.department_id as string | null) ?? projectDeptId
+      },
+      leaderIds
+    )
+  );
   const tasksByStage = new Map<string, unknown[]>();
-  for (const t of tasks ?? []) {
+  for (const t of visibleTasks) {
     const sid = (t.stage_id as string) ?? "unstaged";
     const arr = tasksByStage.get(sid) ?? [];
     arr.push(t);

@@ -123,6 +123,39 @@ export function canViewTask(
   return true;
 }
 
+// Stricter task visibility used by Ask AI. Layers DEPARTMENT SCOPING on
+// top of canViewTask's leader-privacy rules: a non-leader only sees tasks
+// belonging to one of their own departments — except their own
+// assigned/created work, which is always visible to them. Leaders/admins
+// see everything.
+//
+// A task with no department is treated as outside every department, so a
+// non-leader only sees it if it's their own work. This is intentionally
+// stricter than the rest of the app: /api/tasks GET and global search do
+// NOT department-scope task lists (they apply leader-privacy only). The
+// AI assistant uses this gate so department-scoped questions ("what's
+// overdue for my team?", per-client task counts) can't surface another
+// team's work. Pass the same leaderIds set canViewTask expects.
+export function canViewTaskScopedToDepartment(
+  actor: User | null | undefined,
+  task: Pick<Task, "creatorId" | "assigneeId" | "departmentId"> | null | undefined,
+  leaderIds: Set<string>
+): boolean {
+  if (!actor || !task) return false;
+  if (isLeader(actor)) return true;
+  // The viewer's own work is always visible to themselves, regardless of
+  // department or who created it (mirrors canViewTask).
+  if (task.assigneeId === actor.id) return true;
+  if (task.creatorId === actor.id) return true;
+  // Leader-owned work (assignee or creator) stays private to leaders.
+  if (task.assigneeId && leaderIds.has(task.assigneeId)) return false;
+  if (task.creatorId && leaderIds.has(task.creatorId)) return false;
+  // Department scoping: the task must live in one of the actor's
+  // departments. No department → outside every team → hidden.
+  if (!task.departmentId) return false;
+  return actor.departmentIds.includes(task.departmentId);
+}
+
 // Notify-teammates affordance: anyone with skin in the task's game
 // can broadcast. Keeps the head from being the only one who can rally
 // support for a task they're stuck on.

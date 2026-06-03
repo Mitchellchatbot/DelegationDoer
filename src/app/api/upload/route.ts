@@ -13,7 +13,11 @@ export const dynamic = "force-dynamic";
 // (only signed-in employees can hit /api/upload) so we don't enforce a
 // MIME allowlist. Size is the real safety mechanism.
 
-const MAX_BYTES = 100 * 1024 * 1024; // 100 MB — leaves headroom for short video clips
+// 150 MB — matches Graph's attachment upload-session ceiling so a file that
+// uploads here can also be sent as an email attachment end-to-end (the
+// missiveclone compose/reply multer caps and graph.js upload sessions are
+// aligned to the same 150 MB). Also leaves headroom for short video clips.
+const MAX_BYTES = 150 * 1024 * 1024;
 
 export async function POST(req: NextRequest) {
   try {

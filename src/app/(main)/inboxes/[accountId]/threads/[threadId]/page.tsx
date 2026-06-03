@@ -235,12 +235,17 @@ export default async function ThreadDetailPage({
                     )}
                   </div>
 
-                  {/* Attachments — chip per non-inline file (inline images
-                      carry a content_id and already render in the body).
-                      Each links to the proxy that streams bytes from the
-                      clone with the service token + an access check. */}
+                  {/* Attachments — one chip per real file. An attachment is
+                      treated as inline (and skipped) ONLY when its content_id
+                      is actually referenced as cid:... in the body HTML it
+                      renders in. A content_id alone isn't enough: received
+                      file attachments (esp. images) frequently carry one
+                      without being embedded. Each chip links to the proxy
+                      that streams bytes from the clone with an access check. */}
                   {(() => {
-                    const atts = (m.attachments ?? []).filter((a) => !a.content_id);
+                    const atts = (m.attachments ?? []).filter(
+                      (a) => !(a.content_id && m.body_html?.includes(`cid:${a.content_id}`))
+                    );
                     if (atts.length === 0) return null;
                     return (
                       <div className="px-5 pb-5 -mt-1 flex flex-wrap gap-2">

@@ -20,7 +20,13 @@ export const dynamic = "force-dynamic";
 //
 // eligible is true when:
 //   - the user is within their shift window (or simulate=1), AND
-//   - they have NOT already submitted SOD for today's shift date.
+//   - they have NOT already submitted SOD for today's shift date, AND
+//   - they are NOT exempt from the daily ritual (users.daily_prompts_enabled).
+//
+// The exemption (same per-user flag the /home bookend + EOD nudge honour)
+// suppresses the *mandatory* welcome/priority modal so opted-out users —
+// leaders who don't run the ritual — get the app directly. simulate=1
+// still forces the flow so they can file voluntarily / test if they want.
 export async function GET(req: NextRequest) {
   try {
     const userId = await requireCurrentUserId();
@@ -57,7 +63,12 @@ export async function GET(req: NextRequest) {
       /* table missing — treat as not submitted so modal still shows */
     }
 
-    const eligible = !alreadySubmitted && (simulate || withinShift);
+    // Per-user opt-out (users.daily_prompts_enabled, default true). When
+    // off, the mandatory modal is suppressed — but an explicit simulate=1
+    // still opens the flow so exempt users aren't locked out of filing.
+    const promptsEnabled = me.dailyPromptsEnabled !== false;
+    const eligible = !alreadySubmitted && (simulate || (withinShift && promptsEnabled));
+    const reason = !promptsEnabled ? "daily prompts disabled (SOD exempt)" : signal.reason;
 
     return NextResponse.json({
       eligible,
@@ -68,7 +79,7 @@ export async function GET(req: NextRequest) {
       departmentKey,
       motivationalLine: pickMotivationalLine(`${userId}:${shiftDate}`),
       userName: me.name,
-      reason: signal.reason
+      reason
     });
   } catch (err) {
     return NextResponse.json(

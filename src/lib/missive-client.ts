@@ -147,7 +147,11 @@ export async function applyLabel(threadId: string, labelId: string): Promise<voi
 }
 
 export interface ListThreadsOpts {
-  folder?: "INBOX" | "SENT";
+  // Provider folder/label the thread list is scoped to. INBOX + SENT are
+  // backed by message folder/direction; SPAM matches the provider's
+  // junk/spam folder (see the missiveclone threads route). These are the
+  // only Gmail-style mailbox views the UI exposes.
+  folder?: "INBOX" | "SENT" | "SPAM";
   status?: "open" | "pending" | "closed";
   q?: string;
   // Capped at 200 server-side. Default page size on the backend is 50.

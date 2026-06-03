@@ -2,12 +2,25 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Search, Loader2, X, Users, KeyRound, BellRing, Receipt, Calendar, AlertTriangle, Inbox
+  Search, Loader2, X, Users, KeyRound, BellRing, Receipt, Calendar, AlertTriangle,
+  Inbox, Send, ShieldAlert
 } from "lucide-react";
 import { ThreadList, type ThreadListItem } from "./ThreadList";
 import { cn } from "@/lib/utils";
 
 type Category = "all" | "people" | "codes" | "newsletters" | "receipts" | "calendar" | "bounces";
+
+// Gmail-style mailbox views. INBOX is the default and renders the SSR'd
+// first page unchanged; SENT/SPAM switch the server-side `folder` scope on
+// every /api/inboxes/threads fetch (which keeps the same per-user
+// visibility filter, so no inbox the user can't already see is exposed).
+type Folder = "INBOX" | "SENT" | "SPAM";
+
+const MAILBOXES: Array<{ id: Folder; label: string; icon: typeof Inbox }> = [
+  { id: "INBOX", label: "Inbox", icon: Inbox },
+  { id: "SENT",  label: "Sent",  icon: Send },
+  { id: "SPAM",  label: "Spam",  icon: ShieldAlert }
+];
 
 const CATEGORIES: Array<{ id: Category; label: string; icon: typeof Users; tone: string }> = [
   { id: "all",         label: "All",          icon: Inbox,          tone: "text-ink/65" },
@@ -52,7 +65,12 @@ export function InboxThreadsClient({
   const [debouncedQ, setDebouncedQ] = useState("");
   const [searchActive, setSearchActive] = useState(false);
   const [category, setCategory] = useState<Category>("all");
+  const [folder, setFolder] = useState<Folder>("INBOX");
   const sentinelRef = useRef<HTMLDivElement | null>(null);
+
+  // Inbox view shows the SSR'd first page; Sent/Spam are always fetched
+  // client-side from /api/inboxes/threads with the folder scope applied.
+  const isDefaultView = folder === "INBOX" && category === "all" && !debouncedQ;
 
   // Debounce search input — fires once 350ms after the user stops typing.
   useEffect(() => {
@@ -74,7 +92,10 @@ export function InboxThreadsClient({
     let stopped = false;
 
     async function refreshPageZero() {
-      if (debouncedQ || category !== "all") return;
+      // The inbox SSE event signals new *inbound* mail, so it only maps to
+      // the Inbox view. Skip while searching, category-filtering, or on the
+      // Sent/Spam views so a push can't mutate a list the user is reading.
+      if (debouncedQ || category !== "all" || folder !== "INBOX") return;
       try {
         const params = new URLSearchParams();
         params.set("limit", String(PAGE_SIZE));
@@ -109,16 +130,16 @@ export function InboxThreadsClient({
       es?.close();
       if (retryTimer) clearTimeout(retryTimer);
     };
-  }, [debouncedQ, category, mailboxId]);
+  }, [debouncedQ, category, mailboxId, folder]);
 
   // Whenever the debounced query changes, replace the list. Empty
   // query → restore the SSR'd initial page so no extra fetch happens.
   useEffect(() => {
     let cancelled = false;
     async function run() {
-      // Restore SSR'd page only when there's nothing to override —
-      // no search and no category filter applied.
-      if (!debouncedQ && category === "all") {
+      // Restore SSR'd page only on the default Inbox view — no search, no
+      // category filter, INBOX folder. Any other combination is fetched.
+      if (isDefaultView) {
         setThreads(initialThreads);
         setHasMore(initialHasMore);
         setSearchActive(false);
@@ -133,6 +154,7 @@ export function InboxThreadsClient({
         if (debouncedQ) params.set("q", debouncedQ);
         if (mailboxId) params.set("mailboxId", mailboxId);
         if (category !== "all") params.set("category", category);
+        if (folder !== "INBOX") params.set("folder", folder);
         const res = await fetch(`/api/inboxes/threads?${params}`, { cache: "no-store" });
         const data = await res.json();
         if (!cancelled) {
@@ -150,7 +172,7 @@ export function InboxThreadsClient({
     }
     void run();
     return () => { cancelled = true; };
-  }, [debouncedQ, initialThreads, initialHasMore, mailboxId, category]);
+  }, [debouncedQ, initialThreads, initialHasMore, mailboxId, category, folder, isDefaultView]);
 
   const loadMore = useCallback(async () => {
     if (loading || !hasMore) return;
@@ -162,6 +184,7 @@ export function InboxThreadsClient({
       if (debouncedQ) params.set("q", debouncedQ);
       if (mailboxId) params.set("mailboxId", mailboxId);
       if (category !== "all") params.set("category", category);
+      if (folder !== "INBOX") params.set("folder", folder);
       const res = await fetch(`/api/inboxes/threads?${params}`, { cache: "no-store" });
       const data = await res.json();
       const more: ThreadListItem[] = data.threads ?? [];
@@ -175,7 +198,7 @@ export function InboxThreadsClient({
     } finally {
       setLoading(false);
     }
-  }, [loading, hasMore, threads, debouncedQ, mailboxId, category]);
+  }, [loading, hasMore, threads, debouncedQ, mailboxId, category, folder]);
 
   // IntersectionObserver on the sentinel below the list. When it
   // scrolls into view, kick off the next page. Setting rootMargin
@@ -198,12 +221,50 @@ export function InboxThreadsClient({
 
   const unreadCount = useMemo(() => threads.filter((d) => d.unread).length, [threads]);
 
+  // Empty-state copy. Search wins (it's the most specific intent), then
+  // the mailbox view; Inbox keeps ThreadList's default ("No threads yet").
+  const emptyMessage = searchActive
+    ? "No threads match that search."
+    : folder === "SENT"
+      ? "No sent messages in this view yet."
+      : folder === "SPAM"
+        ? "No spam — your junk folder is clean."
+        : undefined;
+
   return (
     <div className="space-y-2">
-      {/* Search + status line on top — search is what users reach for
-          first; categories sit just below as a secondary filter row.
-          Tighter rhythm (space-y-2, smaller padding) since this used
-          to take ~180px of vertical chrome before the actual list. */}
+      {/* Mailbox views — Gmail-style Inbox / Sent / Spam switcher. This is
+          the primary navigation for the list below; search + category
+          chips compose *within* the selected mailbox. Switching keeps the
+          current search/category so the user stays in context. */}
+      <div className="flex items-center gap-1 p-0.5 rounded-xl bg-slate-100/70 border border-slate-200/70 w-fit">
+        {MAILBOXES.map((m) => {
+          const Icon = m.icon;
+          const active = folder === m.id;
+          return (
+            <button
+              key={m.id}
+              type="button"
+              onClick={() => setFolder(m.id)}
+              aria-pressed={active}
+              className={cn(
+                "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-medium transition-all active:scale-[0.97]",
+                active
+                  ? "bg-white text-accent shadow-soft ring-1 ring-accent/20"
+                  : "text-ink/60 hover:text-ink"
+              )}
+            >
+              <Icon className="w-3.5 h-3.5" />
+              {m.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Search + status line — search is what users reach for first;
+          categories sit just below as a secondary filter row. Tighter
+          rhythm (space-y-2, smaller padding) since this used to take
+          ~180px of vertical chrome before the actual list. */}
       <div className="relative">
         <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted z-10" />
         <input
@@ -272,7 +333,7 @@ export function InboxThreadsClient({
         linkAccountId={linkAccountId}
         accountIdByEmail={accountIdByEmail}
         missiveAppUrl={missiveAppUrl}
-        emptyMessage={searchActive ? "No threads match that search." : undefined}
+        emptyMessage={emptyMessage}
       />
 
       {/* Sentinel + load-more indicator. Stays mounted as long as

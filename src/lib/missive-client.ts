@@ -41,6 +41,23 @@ export interface MissiveThread {
   account_emails?: { email: string; name: string | null }[];
 }
 
+// Per-message attachment metadata as returned by the clone's
+// GET /api/threads/:id (each message carries an `attachments` array). The
+// bytes are NOT inlined — download them through the DD proxy at
+// /api/inboxes/attachments/[id], which streams from the clone's
+// GET /api/attachments/:id using the service token.
+export interface MissiveMessageAttachment {
+  id: string;
+  message_id: string;
+  filename: string;
+  content_type: string;
+  size_bytes: number;
+  // Set for inline images embedded in the HTML body (cid:...); null for
+  // ordinary file attachments. The UI only chips the latter so inline
+  // images aren't duplicated below the body they already render in.
+  content_id: string | null;
+}
+
 export interface MissiveMessage {
   id: string;
   thread_id: string;
@@ -57,6 +74,8 @@ export interface MissiveMessage {
   body_html: string | null;
   sent_at: string;
   has_attachments: boolean;
+  // Only populated by getThread; the thread-list endpoints omit it.
+  attachments?: MissiveMessageAttachment[];
 }
 
 export interface MissiveThreadDetail {
@@ -147,7 +166,11 @@ export async function applyLabel(threadId: string, labelId: string): Promise<voi
 }
 
 export interface ListThreadsOpts {
-  folder?: "INBOX" | "SENT";
+  // Provider folder/label the thread list is scoped to. INBOX + SENT are
+  // backed by message folder/direction; SPAM matches the provider's
+  // junk/spam folder (see the missiveclone threads route). These are the
+  // only Gmail-style mailbox views the UI exposes.
+  folder?: "INBOX" | "SENT" | "SPAM";
   status?: "open" | "pending" | "closed";
   q?: string;
   // Capped at 200 server-side. Default page size on the backend is 50.
@@ -277,6 +300,18 @@ export async function getThread(threadId: string): Promise<MissiveThreadDetail> 
     thread: normalizeThread(data.thread),
     messages: (data.messages ?? []).map(normalizeMessage)
   };
+}
+
+// Stream an attachment's raw bytes from the clone. Returns the upstream
+// Response untouched (binary body + Content-Type/Content-Disposition) so a
+// proxy route can pipe it straight to the browser. Unlike missiveFetch this
+// does NOT parse JSON. Caller is responsible for access control before
+// invoking — this carries the service token, which is workspace-wide.
+export async function fetchAttachment(attachmentId: string): Promise<Response> {
+  return fetch(`${baseUrl()}/api/attachments/${encodeURIComponent(attachmentId)}`, {
+    headers: { Authorization: `Bearer ${token()}` },
+    cache: "no-store"
+  });
 }
 
 // Create a new inbox connection on the Missive clone. Body shape mirrors

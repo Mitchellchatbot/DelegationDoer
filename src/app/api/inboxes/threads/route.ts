@@ -18,7 +18,7 @@ export const dynamic = "force-dynamic";
 //   q           — full-text query (subject / sender / body via missive
 //                 tsvector + ILIKE operators on the missive side)
 //   mailboxId   — scope to one connected account
-//   folder      — "INBOX" | "SENT", default INBOX
+//   folder      — "INBOX" | "SENT" | "SPAM", default INBOX
 export async function GET(req: NextRequest) {
   try {
     const userId = await requireCurrentUserId();
@@ -30,7 +30,11 @@ export async function GET(req: NextRequest) {
     const offset = Math.max(0, Number(sp.get("offset")) || 0);
     const q = sp.get("q")?.trim() || undefined;
     const mailboxId = sp.get("mailboxId") || undefined;
-    const folder = (sp.get("folder") as "INBOX" | "SENT") || "INBOX";
+    // Whitelist the mailbox view; anything unknown falls back to INBOX so
+    // a bad param can never widen the query past the provider folders.
+    const rawFolder = sp.get("folder");
+    const folder: "INBOX" | "SENT" | "SPAM" =
+      rawFolder === "SENT" || rawFolder === "SPAM" ? rawFolder : "INBOX";
     // Smart-filter bucket. Backend rejects unknown values, so we
     // narrow to the missiveclone CATEGORY_CLAUSES set.
     const ALLOWED = new Set(["codes", "newsletters", "receipts", "calendar", "people", "bounces"]);

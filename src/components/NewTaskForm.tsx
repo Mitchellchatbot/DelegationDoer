@@ -8,7 +8,7 @@ import { useTeam } from "@/lib/team-context";
 import { rankCandidates, buildLoadSignals, type RankedCandidate } from "@/lib/skill-rank";
 import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Sparkles, Wand2, Crown, ShieldCheck, ChevronDown, ChevronRight, Mail, FolderOpen, Server, Link as LinkIcon, KeyRound, MessageSquare, Zap } from "lucide-react";
+import { Sparkles, Wand2, Crown, ShieldCheck, ChevronDown, ChevronRight, Mail, FolderOpen, Server, Link as LinkIcon, KeyRound, MessageSquare, Zap, ScanText, AlertTriangle } from "lucide-react";
 import { PersonAvatar } from "@/components/PersonAvatar";
 import { MediaPicker } from "@/components/MediaPicker";
 import { toast } from "sonner";
@@ -146,6 +146,22 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel, initialValues }: 
   // itself so it shows up on the detail page; appendable later via the
   // edit dialog.
   const [media, setMedia] = useState<TaskMedia[]>([]);
+  // "Analyze attachment with AI" — reads an attached screenshot/image with
+  // Claude vision and pre-fills the form. Loading/error/notice states drive
+  // the button + a small banner; it only POPULATES fields, never submits.
+  const [analyzing, setAnalyzing] = useState(false);
+  const [analyzeError, setAnalyzeError] = useState<string | null>(null);
+  const [analyzeNotice, setAnalyzeNotice] = useState<string | null>(null);
+  // The first image attachment, if any — what "Analyze" reads. We bucket by
+  // content-type with a filename-extension fallback (matches MediaPicker's
+  // own categorize()), since clipboard/drag sources sometimes ship no type.
+  const firstImage = useMemo(
+    () => media.find((m) =>
+      (m.contentType ?? "").toLowerCase().startsWith("image/") ||
+      /\.(png|jpe?g|gif|webp)$/i.test(m.name ?? m.url)
+    ) ?? null,
+    [media]
+  );
   useEffect(() => {
     fetch("/api/custom-fields", { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : { fields: [] }))
@@ -307,6 +323,76 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel, initialValues }: 
       setAiReason(`⚠ ${msg}`);
     } finally {
       setAiThinking(false);
+    }
+  }
+
+  async function analyzeAttachment() {
+    if (analyzing) return;
+    if (!firstImage) {
+      setAnalyzeError("Attach an image first, then analyze it.");
+      return;
+    }
+    setAnalyzing(true);
+    setAnalyzeError(null);
+    setAnalyzeNotice(null);
+    try {
+      const res = await fetch("/api/tasks/analyze-attachment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ imageUrl: firstImage.url, contentType: firstImage.contentType })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setAnalyzeError(data?.error ?? `Failed (${res.status})`);
+        return;
+      }
+      const f = (data.fields ?? {}) as {
+        title?: string | null;
+        description?: string | null;
+        department?: string | null;
+        priority?: string | null;
+        estimatedHours?: number | null;
+        tags?: string[] | null;
+        clientName?: string | null;
+        website?: string | null;
+      };
+
+      // Apply only what the AI returned, and never clobber text the user
+      // already typed — title/description/client/website fill empty fields
+      // only. Lower-risk fields (priority/estimate/department/tags) apply
+      // whenever present. Track what landed so we can tell the user.
+      const filled: string[] = [];
+      if (f.title && !title.trim()) { setTitle(f.title); filled.push("title"); }
+      if (f.description && !description.trim()) { setDescription(f.description); filled.push("description"); }
+      // Department is already permission-clamped server-side. Only apply it
+      // when the user can actually change the department (workers are locked
+      // and the form clamps them to their own dept regardless).
+      if (f.department && canPickDepartment) { setDepartmentId(f.department); filled.push("department"); }
+      if (f.priority) { setPriority(f.priority); filled.push("priority"); }
+      if (typeof f.estimatedHours === "number") { setEstimate(f.estimatedHours); filled.push("estimate"); }
+      if (Array.isArray(f.tags) && f.tags.length > 0) {
+        setTags((cur) => Array.from(new Set([...cur, ...f.tags!])));
+        filled.push("tags");
+      }
+      if (!internal && f.clientName && !clientName.trim()) { setClientName(f.clientName); filled.push("client"); }
+      if (!internal && f.website && !website.trim()) { setWebsite(f.website); filled.push("website"); }
+
+      const notesSuffix = data.notes ? ` ${data.notes}` : "";
+      if (data.needsReview) {
+        setAnalyzeNotice(
+          (filled.length > 0
+            ? `Filled ${filled.join(", ")} from the image — please review before creating.`
+            : "AI couldn't confidently read this image — fill the form in manually.") + notesSuffix
+        );
+      } else if (filled.length > 0) {
+        setAnalyzeNotice(`Filled ${filled.join(", ")} from the image — review, then create.${notesSuffix}`);
+      } else {
+        setAnalyzeNotice(`Nothing new to fill — the form already has those fields.${notesSuffix}`);
+      }
+    } catch (err) {
+      setAnalyzeError(err instanceof Error ? err.message : "network error");
+    } finally {
+      setAnalyzing(false);
     }
   }
 
@@ -620,12 +706,38 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel, initialValues }: 
         </div>
 
         <div className="pt-2 border-t border-border/60">
-          <div className="text-xs font-medium text-muted mb-2">Attachments</div>
+          <div className="flex items-center justify-between mb-2">
+            <div className="text-xs font-medium text-muted">Attachments</div>
+            <button
+              type="button"
+              onClick={analyzeAttachment}
+              disabled={analyzing || !firstImage}
+              title={firstImage
+                ? "Read the attached image with AI and fill the form"
+                : "Attach an image first to analyze it"}
+              className="btn shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <ScanText className={"w-3.5 h-3.5 text-accent " + (analyzing ? "animate-pulse" : "")} />
+              <span className="text-xs">{analyzing ? "Analyzing…" : "Analyze attachment with AI"}</span>
+            </button>
+          </div>
           <MediaPicker
             value={media}
             onChange={setMedia}
-            hint="Images or audio clips — visible on the task detail page."
+            hint="Images or audio clips — visible on the task detail page. Attach a screenshot and let AI fill the form."
           />
+          {analyzeError && (
+            <div className="mt-2 flex items-start gap-1.5 text-[11px] text-urgent">
+              <AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" />
+              <span>{analyzeError}</span>
+            </div>
+          )}
+          {analyzeNotice && (
+            <div className="mt-2 flex items-start gap-1.5 text-[11px] text-accent">
+              <Sparkles className="w-3 h-3 mt-0.5 shrink-0" />
+              <span>{analyzeNotice}</span>
+            </div>
+          )}
         </div>
 
         {/* Custom fields — auto-rendered from the org-wide definitions in

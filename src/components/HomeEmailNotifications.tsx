@@ -154,46 +154,70 @@ export function HomeEmailNotifications({ onboarded: initialOnboarded }: Props) {
       console.warn("[email-notif] EventSource unsupported — SSE disabled");
       return;
     }
-    const es = new EventSource("/api/inbox-events");
-    es.addEventListener("open", () => console.log("[email-notif] SSE open"));
-    es.addEventListener("hello", (ev) =>
-      console.log("[email-notif] SSE hello", (ev as MessageEvent).data));
-    es.addEventListener("inbox", (ev) => {
-      console.log("[email-notif] SSE inbox event", (ev as MessageEvent).data);
-      // Refetch and only ping if the user's persisted notifications
-      // actually grew. The server-side fan-out is the authoritative
-      // filter for "is this an account I care about" — if the SSE
-      // event fired but no row was written, the user opted out of
-      // that inbox and we stay silent.
-      void refresh("sse").then((hasNew) => {
-        if (!hasNew) {
-          console.log("[email-notif] SSE refresh: no new rows for this user");
-          return;
-        }
-        console.log("[email-notif] firing chime + maybe notification");
-        playEmailChime();
-        try {
-          if (
-            typeof Notification !== "undefined" &&
-            Notification.permission === "granted" &&
-            document.visibilityState !== "visible"
-          ) {
-            new Notification("New email", {
-              body: "Open DelegationDoer to read it.",
-              tag: "dd-email" // collapse repeat pings into one banner
-            });
+
+    let es: EventSource | null = null;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let attempt = 0;
+    let stopped = false;
+
+    function open() {
+      if (stopped) return;
+      es = new EventSource("/api/inbox-events");
+      es.addEventListener("open", () => console.log("[email-notif] SSE open"));
+      es.addEventListener("hello", (ev) =>
+        console.log("[email-notif] SSE hello", (ev as MessageEvent).data));
+      es.onopen = () => { attempt = 0; };
+      es.addEventListener("inbox", (ev) => {
+        console.log("[email-notif] SSE inbox event", (ev as MessageEvent).data);
+        // Refetch and only ping if the user's persisted notifications
+        // actually grew. The server-side fan-out is the authoritative
+        // filter for "is this an account I care about" — if the SSE
+        // event fired but no row was written, the user opted out of
+        // that inbox and we stay silent.
+        void refresh("sse").then((hasNew) => {
+          if (!hasNew) {
+            console.log("[email-notif] SSE refresh: no new rows for this user");
+            return;
           }
-        } catch (err) {
-          console.warn("[email-notif] Notification API failure", err);
-        }
+          console.log("[email-notif] firing chime + maybe notification");
+          playEmailChime();
+          try {
+            if (
+              typeof Notification !== "undefined" &&
+              Notification.permission === "granted" &&
+              document.visibilityState !== "visible"
+            ) {
+              new Notification("New email", {
+                body: "Open DelegationDoer to read it.",
+                tag: "dd-email" // collapse repeat pings into one banner
+              });
+            }
+          } catch (err) {
+            console.warn("[email-notif] Notification API failure", err);
+          }
+        });
       });
-    });
-    es.onerror = (err) => {
-      console.warn("[email-notif] SSE error (browser auto-reconnects)", err);
-    };
+      // Reconnect with capped exponential backoff instead of the browser's
+      // default ~3s auto-reconnect. A flapping stream (or auth 401s) must
+      // not hammer /api/inbox-events — every reconnect re-runs the auth
+      // check, and an unbacked-off loop can pin Supabase's auth rate limit.
+      // Matches the Sidebar + InboxThreadsClient reconnect pattern.
+      es.onerror = () => {
+        console.warn("[email-notif] SSE error — reconnecting with backoff");
+        es?.close();
+        es = null;
+        attempt += 1;
+        const delay = Math.min(60_000, 1000 * 2 ** Math.min(attempt, 6));
+        retryTimer = setTimeout(open, delay);
+      };
+    }
+    open();
+
     return () => {
       console.log("[email-notif] unmounting, closing SSE");
-      es.close();
+      stopped = true;
+      es?.close();
+      if (retryTimer) clearTimeout(retryTimer);
     };
   }, [onboarded, refresh]);
   void log;

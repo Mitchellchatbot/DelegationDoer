@@ -57,3 +57,13 @@ export async function getAnthropicKey(): Promise<string> {
     throw err;
   }
 }
+
+// Drop the cached key so the next getAnthropicKey() re-reads it from env /
+// Vault. Use this when a cached key turns out to be invalid (e.g. the
+// process booted before ANTHROPIC_API_KEY was set, or Vault handed back a
+// stale value) — otherwise the bad key sticks for the whole process
+// lifetime and every Claude call keeps 401-ing until a manual redeploy.
+export function resetAnthropicKeyCache(): void {
+  cached = null;
+  pending = null;
+}

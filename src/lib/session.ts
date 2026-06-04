@@ -19,10 +19,39 @@ export const CURRENT_USER_ID = "u_1";
 // a route handler) share one DB roundtrip instead of paying it per call.
 export const getCurrentUserId = cache(_getCurrentUserId);
 
+// Read the {sub, email} claims out of a Supabase access-token JWT without
+// a network call. Safe here because the token was already cryptographically
+// validated by the middleware (see below) on this same request — we're only
+// reading identity, not re-establishing trust on an unverified token.
+function decodeAccessTokenClaims(
+  accessToken: string
+): { sub?: string; email?: string } | null {
+  const payload = accessToken.split(".")[1];
+  if (!payload) return null;
+  try {
+    return JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+  } catch {
+    return null;
+  }
+}
+
 async function _getCurrentUserId(): Promise<string | null> {
   const supabase = getSupabaseServer();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return null;
+  // Read the session from the cookie LOCALLY — no GoTrue round-trip. The
+  // middleware (src/middleware.ts) already calls supabase.auth.getUser()
+  // on every request, which is the security boundary: it validates the JWT
+  // against the auth server and 401s/redirects anyone without a live
+  // session. By the time a handler runs the cookie has just been verified
+  // and refreshed, so re-calling getUser() here only added a second GoTrue
+  // request per authed call across ~190 handlers — enough volume to trip
+  // Supabase's auth rate limit (AuthApiError: over_request_rate_limit).
+  const { data: { session } } = await supabase.auth.getSession();
+  const claims = session?.access_token
+    ? decodeAccessTokenClaims(session.access_token)
+    : null;
+  const authUserId = claims?.sub;
+  if (!authUserId) return null;
+  const authEmail = claims?.email ?? null;
 
   const admin = getSupabaseAdmin();
 
@@ -30,21 +59,21 @@ async function _getCurrentUserId(): Promise<string | null> {
   const linked = await admin
     .from("users")
     .select("id")
-    .eq("auth_user_id", user.id)
+    .eq("auth_user_id", authUserId)
     .maybeSingle();
   if (linked.data?.id) return linked.data.id;
 
   // Fallback: trigger didn't run (auth user pre-dated the trigger, or the
   // auth-link migration hasn't been applied yet). Try to link by email.
   // This is self-healing — first authed visit fixes the link permanently.
-  if (!user.email) return null;
+  if (!authEmail) return null;
   const byEmail = await admin
     .from("users")
     .select("id, auth_user_id")
-    .ilike("email", user.email)
+    .ilike("email", authEmail)
     .maybeSingle();
   if (!byEmail.data) return null;
-  if (byEmail.data.auth_user_id && byEmail.data.auth_user_id !== user.id) {
+  if (byEmail.data.auth_user_id && byEmail.data.auth_user_id !== authUserId) {
     // Email matches a row already claimed by a different auth identity.
     // Don't silently steal it — refuse to authorize.
     return null;
@@ -52,7 +81,7 @@ async function _getCurrentUserId(): Promise<string | null> {
   if (!byEmail.data.auth_user_id) {
     await admin
       .from("users")
-      .update({ auth_user_id: user.id })
+      .update({ auth_user_id: authUserId })
       .eq("id", byEmail.data.id);
   }
   return byEmail.data.id;

@@ -1,4 +1,15 @@
-import { getAnthropic, MODELS } from "./anthropic-client";
+import { getAnthropic, resetAnthropic, MODELS } from "./anthropic-client";
+
+// The Anthropic SDK throws errors carrying the HTTP status; a 401 means the
+// API key we sent is invalid/revoked (vs. 429 rate-limit, 404 bad model,
+// network, etc.). We special-case 401 to self-heal a stale cached key.
+function isAnthropicAuthError(err: unknown): boolean {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    (err as { status?: number }).status === 401
+  );
+}
 
 // What the email-intake pipeline gets back from Claude after reading a
 // thread. Drives the task title/description/priority + which routing
@@ -110,25 +121,49 @@ Priority rubric:
 
 Tags are 1-4 short lowercase words (e.g. "wordpress", "billing", "design"). They feed our auto-delegation engine.`;
 
+  // Build the request once so the auth-retry below can reissue the exact
+  // same call.
+  const createParams = {
+    model: MODELS.classify,
+    max_tokens: 1200,
+    system: systemPrompt,
+    messages: [{
+      role: "user" as const,
+      content: [
+        fromEmail ? `From: ${fromEmail}` : "",
+        `Subject: ${subject}`,
+        "",
+        // Truncate to a generous but bounded slice so a 200-msg
+        // thread doesn't blow the context window.
+        bodyText.slice(0, 6000)
+      ].filter(Boolean).join("\n")
+    }]
+  };
+
   let parsed: Partial<ClassifiedEmail> = {};
   try {
-    const client = await getAnthropic();
-    const result = await client.messages.create({
-      model: MODELS.classify,
-      max_tokens: 1200,
-      system: systemPrompt,
-      messages: [{
-        role: "user",
-        content: [
-          fromEmail ? `From: ${fromEmail}` : "",
-          `Subject: ${subject}`,
-          "",
-          // Truncate to a generous but bounded slice so a 200-msg
-          // thread doesn't blow the context window.
-          bodyText.slice(0, 6000)
-        ].filter(Boolean).join("\n")
-      }]
-    });
+    let result;
+    try {
+      result = await (await getAnthropic()).messages.create(createParams);
+    } catch (err) {
+      // A cached-but-invalid API key poisons EVERY classify call for the
+      // life of the server process (the key is cached in module memory at
+      // first use). If the process booted before ANTHROPIC_API_KEY was set,
+      // or Vault returned a stale value, it keeps 401-ing forever — exactly
+      // the routing-review "Couldn't auto-summarize" flood. Drop the cached
+      // key + client so the next read picks up the corrected value and retry
+      // once. Anything that isn't a 401 (rate limit, bad model, network)
+      // rethrows to the outer catch unchanged.
+      if (isAnthropicAuthError(err)) {
+        console.warn(
+          "[email-classifier] 401 from Anthropic — resetting cached key and retrying once"
+        );
+        resetAnthropic();
+        result = await (await getAnthropic()).messages.create(createParams);
+      } else {
+        throw err;
+      }
+    }
     const text = result.content
       .map((b) => (b.type === "text" ? b.text : ""))
       .join("");

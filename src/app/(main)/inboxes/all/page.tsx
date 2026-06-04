@@ -34,33 +34,50 @@ export default async function AllInboxesPage({
   let hasMore = false;
   let fetchError: string | null = null;
   try {
-    // SSR only the first page (50 threads). The client component
-    // streams in more on scroll via /api/inboxes/threads, which lets
-    // us go arbitrarily deep without bloating the initial payload.
-    const [allAccounts, firstPage, visibleIds] = await Promise.all([
+    // Resolve which inboxes the actor can see BEFORE fetching threads, so
+    // we can scope the query server-side instead of pulling the whole
+    // workspace and filtering in JS (which broke offset/hasMore and left
+    // the combined view stuck on "Loading more…" forever).
+    const [allAccounts, visibleIds] = await Promise.all([
       listAccounts(),
-      listThreadsPaged({ folder: "INBOX", limit: 50 }),
       visibleAccountIdsFor(me)
     ]);
 
     inboxes = visibleIds === null
       ? allAccounts
       : allAccounts.filter((a) => visibleIds.has(a.id));
-    // Apply the same per-user visibility filter the paginated API
-    // route applies, so SSR matches what infinite scroll later loads.
-    if (visibleIds === null) {
-      threads = firstPage.threads;
+
+    if (visibleIds !== null && inboxes.length === 0) {
+      // Non-leader with no inboxes assigned — nothing to show, and an
+      // empty mailbox_ids must NOT fall through to a whole-workspace fetch.
+      threads = [];
+      hasMore = false;
     } else {
-      const visibleEmails = new Set(
-        inboxes.map((a) => a.email.toLowerCase())
-      );
-      threads = firstPage.threads.filter((t) =>
-        (t.account_emails ?? []).some((ae) =>
-          visibleEmails.has(ae.email.toLowerCase())
-        )
-      );
+      // SSR only the first page (50 threads). The client component streams
+      // in more on scroll via /api/inboxes/threads with the same scope.
+      // Leaders (visibleIds === null) get the whole workspace; everyone
+      // else is scoped to exactly their visible inbox ids.
+      const firstPage = await listThreadsPaged({
+        folder: "INBOX",
+        limit: 50,
+        mailboxIds: visibleIds === null ? undefined : inboxes.map((a) => a.id)
+      });
+      // Defensive backstop (no-op against an up-to-date backend that honors
+      // mailbox_ids): only matters if a stale backend ignores the scope, so
+      // a non-leader can never be served inboxes they can't see. Mirrors the
+      // /api/inboxes/threads guard so SSR and infinite-scroll agree.
+      if (visibleIds === null) {
+        threads = firstPage.threads;
+      } else {
+        const visibleEmails = new Set(inboxes.map((a) => a.email.toLowerCase()));
+        threads = firstPage.threads.filter((t) =>
+          (t.account_emails ?? []).some((ae) =>
+            visibleEmails.has(ae.email.toLowerCase())
+          )
+        );
+      }
+      hasMore = firstPage.hasMore;
     }
-    hasMore = firstPage.hasMore;
   } catch (err) {
     fetchError = err instanceof Error ? err.message : "unknown error";
   }

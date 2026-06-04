@@ -235,16 +235,19 @@ export async function GET() {
       const visibleAccounts = visibleIds === null
         ? accounts
         : accounts.filter((a) => visibleIds!.has(a.id));
-      if (visibleAccounts.length > 0) {
-        const visibleEmails = new Set(visibleAccounts.map((a) => a.email.toLowerCase()));
-        const page = await listThreadsPaged({ folder: "INBOX", limit: 200, offset: 0 });
-        const threadsInView = visibleIds === null
-          ? page.threads
-          : page.threads.filter((t) =>
-              (t.account_emails ?? []).some((ae) => visibleEmails.has(ae.email.toLowerCase()))
-            );
-        const readBy = await readStateForThreads(userId, threadsInView.map((t) => t.id));
-        inboxesUnread = threadsInView.filter((t) =>
+      // Scope the fetch to the visible inboxes server-side. Fetching the
+      // whole workspace and filtering here meant the 200-cap was spent on
+      // workspace-wide recent threads, so a non-leader whose inboxes weren't
+      // among the most recent 200 could see their unread badge read 0.
+      if (visibleIds === null || visibleAccounts.length > 0) {
+        const page = await listThreadsPaged({
+          folder: "INBOX",
+          limit: 200,
+          offset: 0,
+          mailboxIds: visibleIds === null ? undefined : visibleAccounts.map((a) => a.id)
+        });
+        const readBy = await readStateForThreads(userId, page.threads.map((t) => t.id));
+        inboxesUnread = page.threads.filter((t) =>
           isThreadUnread(t.last_message_at, readBy.get(t.id))
         ).length;
       }

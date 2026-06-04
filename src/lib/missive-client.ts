@@ -183,6 +183,13 @@ export interface ListThreadsOpts {
   // any per-inbox view — listThreads otherwise returns every thread
   // in the workspace.
   mailboxId?: string;
+  // Server-side scope to a SET of connected accounts (by id). Used by the
+  // combined "all inboxes" view so pagination stays exact: the backend
+  // returns only threads in these inboxes, so offset/hasMore are accurate
+  // (vs. fetching the whole workspace and filtering client-side, which
+  // made the cursor drift and the list never finish loading). Ignored
+  // when `mailboxId` is also set.
+  mailboxIds?: string[];
   // Smart-filter bucket. Matches missiveclone's CATEGORY_CLAUSES:
   //   "codes"        — verification / OTP / sign-in codes
   //   "newsletters"  — no-reply / marketing senders
@@ -275,6 +282,9 @@ export async function listThreadsPaged(opts: ListThreadsOpts = {}): Promise<List
   if (opts.limit) params.set("limit", String(opts.limit));
   if (opts.offset) params.set("offset", String(opts.offset));
   if (opts.mailboxId) params.set("mailbox_id", opts.mailboxId);
+  else if (opts.mailboxIds && opts.mailboxIds.length > 0) {
+    params.set("mailbox_ids", opts.mailboxIds.join(","));
+  }
   if (opts.category) params.set("category", opts.category);
   if (opts.teamSpaceId) params.set("team_space_id", opts.teamSpaceId);
   if (opts.labelId) params.set("label_id", opts.labelId);

@@ -44,25 +44,60 @@ export async function GET(req: NextRequest) {
       : undefined;
     const teamSpaceId = sp.get("teamSpaceId") || undefined;
 
-    const [accounts, page, visibleIds] = await Promise.all([
+    // Resolve visibility BEFORE the thread fetch so we can scope the query
+    // server-side. The combined view used to fetch the whole workspace and
+    // filter by account_emails here — but with offset/hasMore taken from the
+    // raw (pre-filter) page, the cursor drifted and the list never finished
+    // loading. Scoping by mailbox id(s) makes pagination exact instead.
+    const [accounts, visibleIds] = await Promise.all([
       listAccounts(),
-      listThreadsPaged({ folder, limit, offset, q, mailboxId, category, teamSpaceId }),
       visibleAccountIdsFor(me)
     ]);
-
     const visibleAccounts = visibleIds === null
       ? accounts
       : accounts.filter((a) => visibleIds.has(a.id));
-    const visibleEmails = new Set(visibleAccounts.map((a) => a.email.toLowerCase()));
 
-    const filtered = visibleIds === null
+    // Determine the effective mailbox scope.
+    //  - explicit mailboxId (single-inbox view): allow only if visible.
+    //  - no mailboxId, non-leader: scope to all visible inbox ids.
+    //  - no mailboxId, leader (visibleIds === null): whole workspace.
+    let scope: { mailboxId?: string; mailboxIds?: string[] };
+    if (mailboxId) {
+      if (visibleIds !== null && !visibleIds.has(mailboxId)) {
+        // Requested an inbox the caller can't see — return empty, don't leak.
+        return NextResponse.json({ threads: [], limit, offset, hasMore: false });
+      }
+      scope = { mailboxId };
+    } else if (visibleIds !== null) {
+      if (visibleAccounts.length === 0) {
+        return NextResponse.json({ threads: [], limit, offset, hasMore: false });
+      }
+      scope = { mailboxIds: visibleAccounts.map((a) => a.id) };
+    } else {
+      scope = {};
+    }
+
+    const page = await listThreadsPaged({
+      folder, limit, offset, q, category, teamSpaceId, ...scope
+    });
+
+    // The backend now restricts to the in-scope inboxes, so this filter is
+    // a no-op for an up-to-date backend (any thread it returns via
+    // account_id ∈ mailbox_ids necessarily carries that account's email in
+    // account_emails) — which keeps the offset/hasMore cursor exact. It's
+    // kept purely as a defensive backstop so a stale backend that ignores
+    // mailbox_ids can't leak inboxes the caller may not see.
+    const visibleEmails = visibleIds === null
+      ? null
+      : new Set(visibleAccounts.map((a) => a.email.toLowerCase()));
+    const inScope = visibleEmails === null
       ? page.threads
       : page.threads.filter((t) =>
           (t.account_emails ?? []).some((ae) => visibleEmails.has(ae.email.toLowerCase()))
         );
 
-    const readByThread = await readStateForThreads(userId, filtered.map((t) => t.id));
-    const decorated = filtered.map((t) => ({
+    const readByThread = await readStateForThreads(userId, inScope.map((t) => t.id));
+    const decorated = inScope.map((t) => ({
       thread: t,
       unread: isThreadUnread(t.last_message_at, readByThread.get(t.id))
     }));

@@ -37,5 +37,17 @@ export function isThreadUnread(
 ): boolean {
   if (!readRow) return true;
   if (!readRow.read_through_at) return false;
-  return lastMessageAt > readRow.read_through_at;
+  // Compare by parsed instant, never lexicographically. last_message_at is
+  // produced by Date#toISOString() (e.g. "…789Z"), while read_through_at
+  // round-trips through a Postgres timestamptz column and comes back with a
+  // numeric offset ("…789+00:00"). For the *same* instant a string `>` then
+  // sees "Z" (90) > "+" (43) and reports every read thread as unread — which
+  // left opened mail permanently highlighted. Parsing both to epoch millis
+  // makes identical instants compare equal.
+  const last = Date.parse(lastMessageAt);
+  const readThrough = Date.parse(readRow.read_through_at);
+  // Unparseable input → fall back to "unread", matching the degrade-safe
+  // posture in readStateForThreads (better a stray dot than hidden mail).
+  if (Number.isNaN(last) || Number.isNaN(readThrough)) return true;
+  return last > readThrough;
 }

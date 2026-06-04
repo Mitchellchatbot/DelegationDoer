@@ -34,12 +34,14 @@ export interface ClassifiedEmail {
   // "calendar invite", "FYI digest", …). Logged for audit so a leader
   // reviewing a missed email can see why intake skipped it.
   skipReason: string | null;
-  // false = Claude errored or returned non-JSON, so every other field is
-  // a placeholder default (we couldn't actually read the email). The
-  // intake pipeline treats this as "no signal" and parks the thread in
-  // the leaders' needs-review queue instead of auto-routing a draft built
-  // from a guessed title + "couldn't auto-summarize" body. true = Claude
-  // returned a usable summary we can route on.
+  // false = Claude errored / returned non-JSON / claimed actionable but gave
+  // no description, so the routable fields are placeholder defaults (we
+  // couldn't actually read the email). The intake pipeline treats this as
+  // "no signal" and parks the thread in the leaders' needs-review queue
+  // instead of auto-routing a draft built from a guessed title +
+  // "couldn't auto-summarize" body. true = Claude classified it — either a
+  // real summary to route, OR an explicit isActionable=false skip (promo /
+  // digest / receipt), which the pipeline drops silently rather than parks.
   summarized: boolean;
 }
 
@@ -141,6 +143,11 @@ Tags are 1-4 short lowercase words (e.g. "wordpress", "billing", "design"). They
   };
 
   let parsed: Partial<ClassifiedEmail> = {};
+  // True once we've parsed a usable JSON object out of Claude's reply — i.e.
+  // Claude actually classified the email (whether it judged it actionable or
+  // not). Stays false on a thrown error / non-JSON / unparseable reply, which
+  // is the ONLY thing that should count as a classifier failure downstream.
+  let parsedOk = false;
   try {
     let result;
     try {
@@ -168,7 +175,10 @@ Tags are 1-4 short lowercase words (e.g. "wordpress", "billing", "design"). They
       .map((b) => (b.type === "text" ? b.text : ""))
       .join("");
     const match = text.match(/\{[\s\S]*\}/);
-    if (match) parsed = JSON.parse(match[0]);
+    if (match) {
+      parsed = JSON.parse(match[0]);
+      parsedOk = true;
+    }
   } catch (err) {
     // Don't swallow this — a bulk "Couldn't auto-summarize" park in
     // routing-review means the classify call is failing for every email,
@@ -210,15 +220,24 @@ Tags are 1-4 short lowercase words (e.g. "wordpress", "billing", "design"). They
         ? "medium"
         : "low";
 
-  // Did Claude actually read the email? A usable summary means we got a
-  // non-empty description back. When this is false we hit the catch /
-  // no-JSON path and every field below is a guessed placeholder.
-  const summarized =
-    typeof parsed.description === "string" && parsed.description.trim().length > 0;
-
   // Default to actionable on parse error / missing field — we'd rather
   // create a task a leader rejects than silently drop real client work.
   const isActionable = parsed.isActionable === false ? false : true;
+
+  // Did Claude actually classify the email? "Summarized" means we got a
+  // usable structured reply back — NOT that the description is populated.
+  // A correctly-skipped non-actionable email (promo / digest / receipt)
+  // legitimately comes back with isActionable=false and description=null;
+  // that's a SUCCESS and must fall through to the not-actionable skip in
+  // the intake pipeline, NOT the "Couldn't auto-summarize" failure park.
+  // So: summarized when we parsed JSON AND it's either an explicit skip or
+  // carries a real description. Only a thrown error / non-JSON reply
+  // (parsedOk=false) — or valid JSON that claims actionable yet gives us no
+  // description to route on — counts as a classifier failure.
+  const summarized =
+    parsedOk &&
+    (parsed.isActionable === false ||
+      (typeof parsed.description === "string" && parsed.description.trim().length > 0));
   const skipReason =
     !isActionable && typeof parsed.skipReason === "string" && parsed.skipReason.trim()
       ? parsed.skipReason.trim().slice(0, 80)

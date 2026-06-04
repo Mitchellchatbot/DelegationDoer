@@ -4,6 +4,7 @@ import { canViewTaskScopedToDepartment } from "@/lib/access";
 import { userCapacity } from "@/lib/capacity";
 import { listUserEvents } from "@/lib/google-calendar";
 import { embedQuery } from "@/lib/sop-ingest";
+import { coerceMeetingBrief } from "@/lib/meeting-brief";
 import { listLabels, listThreads, getThread, listAccounts } from "@/lib/missive-client";
 import { visibleAccountIdsFor } from "@/lib/inbox-access";
 import { rankCandidates, buildLoadSignals } from "@/lib/skill-rank";
@@ -194,6 +195,23 @@ export const AI_TOOLS = [
     }
   },
   {
+    name: "list_client_meetings",
+    description:
+      "Meeting intelligence for a client: processed tl;dv meeting recordings, each with the meeting date, participants, a one-paragraph summary, the generated TEAM BRIEF (key decisions, action items, client requests, risks/blockers, next steps), a link to the recording, and the tasks the meeting spawned. " +
+      "This is the record of what was actually said and agreed with the client in meetings — use it to answer 'what did we decide with X in the last meeting?', 'what did X ask for?', 'any blockers from the call?', AND as source material when DRAFTING AN EMAIL to the client, writing a status brief, or proposing follow-up tasks. Resolve the client by `clientName` (fuzzy match against clients.name) or `clientId` (exact id). Optional: `sinceDays` (omit or 0 for the full history), `limit` (default 10, max 50). Returns meetings newest-first. " +
+      "When no meetings come back, say there are no processed meetings for this client rather than guessing at what was discussed.",
+    input_schema: {
+      type: "object",
+      properties: {
+        clientName: { type: "string" },
+        clientId: { type: "string" },
+        sinceDays: { type: "number" },
+        limit: { type: "number" }
+      },
+      required: []
+    }
+  },
+  {
     name: "propose_task",
     description:
       "Propose CREATING A TASK in DelegationDoer from something in the conversation — most often an email that needs follow-up. Does NOT create the task itself; instead it stages a button the user clicks to confirm. ALWAYS use this when:\n  • you spot a clear action item in an email a tool returned (\"can you send me a quote\", \"follow up with X by Friday\", \"please update the homepage\")\n  • the user says \"turn this into a task\" / \"make a task\" / \"who should do this?\"\n  • you're summarizing a thread and the obvious next step is human work\nThe tool runs the existing assignee ranker (skill match + capacity + client familiarity + workload) and returns the top 3 picks — surface the top pick in your text reply with one-line reasoning. Required: `title`, `description`. Optional: `clientName` (boosts client-familiarity), `priority` (low/medium/high/critical, default medium), `sourceLabel` (\"From: <subject>\" line to show on the card), `sourceUrl` (deep link to a DD thread page like `/inboxes/<accountId>/threads/<threadId>`).",
@@ -359,6 +377,7 @@ export async function runTool(
       case "list_client_completed_tasks": return listClientCompletedTasks(input, ctx);
       case "list_client_recent_emails": return listClientRecentEmails(input, ctx);
       case "list_client_eod_updates": return listClientEodUpdates(input);
+      case "list_client_meetings": return listClientMeetings(input);
       case "propose_task": return proposeTask(input, ctx);
       case "list_projects": return listProjects(input);
       case "get_project": return getProject(input, ctx);
@@ -886,6 +905,118 @@ async function listClientEodUpdates(input: Record<string, unknown>) {
       noteDate: r.note_date,
       postedToSlack: !!r.slack_ts,
       createdAt: r.created_at
+    }))
+  };
+}
+
+// Processed meetings (tl;dv) for a client — the structured records in
+// client_meetings the intake pipeline writes (lib/tldv-intake.ts). Returns
+// the summary + generated team brief + participants + recording link +
+// the tasks each meeting spawned, so the assistant can answer questions,
+// draft client emails, or propose follow-ups grounded in what was said.
+//
+// No department gate: client_meetings carries no department_id and the
+// client detail page shows every meeting to anyone who can open it. This
+// tool mirrors that surface (same posture as listClientEodUpdates), not
+// the stricter task/email scoping.
+async function listClientMeetings(input: Record<string, unknown>) {
+  const supabase = getSupabaseAdmin();
+  let clientName: string | null = typeof input.clientName === "string" ? input.clientName : null;
+  let clientId: string | null = typeof input.clientId === "string" ? input.clientId : null;
+
+  // Resolve to a single canonical (id, name) — same disambiguation the
+  // other client tools use.
+  if (!clientName && clientId) {
+    const { data: c } = await supabase
+      .from("clients").select("id, name").eq("id", clientId).maybeSingle();
+    if (!c) return { error: "client not found" };
+    clientName = c.name as string;
+    clientId = c.id as string;
+  }
+  if (clientName) {
+    const { data: matches } = await supabase
+      .from("clients").select("id, name").ilike("name", `%${clientName}%`).limit(5);
+    const rows = (matches ?? []) as { id: string; name: string }[];
+    if (rows.length === 0) return { error: `no client matches "${clientName}"` };
+    if (rows.length > 1) {
+      const exact = rows.find((r) => r.name.toLowerCase() === clientName!.toLowerCase());
+      if (exact) {
+        clientName = exact.name;
+        clientId = exact.id;
+      } else {
+        return {
+          error: `ambiguous client "${clientName}"`,
+          candidates: rows.map((r) => ({ id: r.id, name: r.name }))
+        };
+      }
+    } else {
+      clientName = rows[0].name;
+      clientId = rows[0].id;
+    }
+  }
+  if (!clientName || !clientId) return { error: "clientName or clientId required" };
+
+  const rawLimit = typeof input.limit === "number" ? input.limit : 10;
+  const limit = Math.max(1, Math.min(50, Math.floor(rawLimit)));
+
+  let filter = supabase
+    .from("client_meetings")
+    .select("id, meeting_id, title, source, source_url, meeting_date, participants, summary, brief, task_ids")
+    .eq("client_id", clientId);
+  const rawSince = typeof input.sinceDays === "number" ? input.sinceDays : 0;
+  if (rawSince > 0) {
+    const cutoff = new Date(Date.now() - Math.floor(rawSince) * 86_400_000).toISOString();
+    filter = filter.gte("meeting_date", cutoff);
+  }
+  const { data, error } = await filter
+    .order("meeting_date", { ascending: false })
+    .limit(limit);
+  // A missing table (migration not applied) shouldn't read as "no
+  // meetings" — surface it so the model doesn't assert there were none.
+  if (error) {
+    if (/relation .* does not exist/i.test(error.message)) {
+      return { clientId, clientName, count: 0, meetings: [], note: "Meeting storage not yet provisioned — no migration run." };
+    }
+    return { error: error.message };
+  }
+
+  const rows = (data ?? []) as Array<{
+    id: string; meeting_id: string; title: string; source: string;
+    source_url: string | null; meeting_date: string; participants: string[] | null;
+    summary: string | null; brief: unknown; task_ids: string[] | null;
+  }>;
+
+  // Join the spawned tasks' titles + status once so the model can speak
+  // to follow-up work without a second round-trip.
+  const allTaskIds = Array.from(new Set(rows.flatMap((r) => r.task_ids ?? [])));
+  const taskById = new Map<string, { title: string; status: string }>();
+  if (allTaskIds.length > 0) {
+    const { data: tasks } = await supabase
+      .from("tasks").select("id, title, status").in("id", allTaskIds);
+    for (const t of (tasks ?? []) as { id: string; title: string; status: string }[]) {
+      taskById.set(t.id, { title: t.title, status: t.status });
+    }
+  }
+
+  return {
+    clientId,
+    clientName,
+    count: rows.length,
+    meetings: rows.map((r) => ({
+      id: r.id,
+      title: r.title,
+      source: r.source,
+      meetingDate: r.meeting_date,
+      recordingUrl: r.source_url,
+      participants: r.participants ?? [],
+      summary: r.summary,
+      brief: coerceMeetingBrief(r.brief),
+      tasks: (r.task_ids ?? [])
+        .map((id) => {
+          const t = taskById.get(id);
+          return t ? { id, title: t.title, status: t.status } : null;
+        })
+        .filter((t): t is { id: string; title: string; status: string } => t !== null)
     }))
   };
 }

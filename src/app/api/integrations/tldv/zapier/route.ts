@@ -190,7 +190,10 @@ export async function POST(req: NextRequest) {
       transcript,
       segments,
       rawPayload,
-      source: "zapier"
+      source: "zapier",
+      // Zapier's tl;dv trigger surfaces the meeting name as a flat field;
+      // pass it through as the stored meeting title when present.
+      meetingTitle: meetingName || null
     });
 
     const elapsed = Date.now() - startedAt;

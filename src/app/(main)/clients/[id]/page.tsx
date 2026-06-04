@@ -6,7 +6,7 @@ import {
   Hash, CalendarClock, Send
 } from "lucide-react";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
-import { getClient, getResourcesForClient, type ClientResource } from "@/lib/clients-data";
+import { getClient, getResourcesForClient, getMeetingsForClient, type ClientResource } from "@/lib/clients-data";
 import { BackPill } from "@/components/BackPill";
 import { ClientHealthCard } from "@/components/ClientHealthCard";
 import { ClientSeoBriefCard } from "@/components/ClientSeoBriefCard";
@@ -20,6 +20,7 @@ import { listEmailDrafts } from "@/lib/email-drafts-data";
 import { isLeader } from "@/lib/auth";
 import { AddResourceForm, DeleteResourceButton } from "@/components/AddResourceForm";
 import { ClientKnowledgeBase, type CompletedTaskRow } from "@/components/ClientKnowledgeBase";
+import { ClientMeetingsSection, type ClientMeetingView } from "@/components/ClientMeetingsSection";
 import { ClientEmailsCombined } from "@/components/ClientEmailsCombined";
 import { ClientOpenTasksList } from "@/components/ClientOpenTasksList";
 import { ClientContactInfoCard } from "@/components/ClientContactInfoCard";
@@ -56,8 +57,9 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
   const canMatchByEmail = signals.emailSet.size > 0 || signals.domainSet.size > 0;
 
   const supabase = getSupabaseAdmin();
-  const [resources, openTasksRes, doneTasksRes, visibleIds, recentScoresRes] = await Promise.all([
+  const [resources, meetingsRaw, openTasksRes, doneTasksRes, visibleIds, recentScoresRes] = await Promise.all([
     getResourcesForClient(client.id),
+    getMeetingsForClient(client.id),
     // Open tasks for this client — by free-text name match (legacy linkage).
     supabase
       .from("tasks")
@@ -206,6 +208,39 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
   const meetings    = resources.filter((r) => r.kind === "meeting");
   const documents   = resources.filter((r) => r.kind === "document");
   const suggestions = resources.filter((r) => r.kind === "suggestion");
+
+  // Resolve the tasks each processed meeting spawned so the Meetings &
+  // briefs timeline can deep-link to them by title. One batched query
+  // over every meeting's task_ids; a deleted/missing task simply drops
+  // out of the lookup.
+  const meetingTaskIds = Array.from(new Set(meetingsRaw.flatMap((m) => m.taskIds)));
+  const taskTitleById = new Map<string, { title: string; status: string }>();
+  if (meetingTaskIds.length > 0) {
+    const { data: meetingTasks } = await supabase
+      .from("tasks")
+      .select("id, title, status")
+      .in("id", meetingTaskIds);
+    for (const t of (meetingTasks ?? []) as { id: string; title: string; status: string }[]) {
+      taskTitleById.set(t.id, { title: t.title, status: t.status });
+    }
+  }
+  const meetingViews: ClientMeetingView[] = meetingsRaw.map((m) => ({
+    id: m.id,
+    title: m.title,
+    source: m.source,
+    sourceUrl: m.sourceUrl,
+    meetingDate: m.meetingDate,
+    participants: m.participants,
+    summary: m.summary,
+    brief: m.brief,
+    transcript: m.transcript,
+    linkedTasks: m.taskIds
+      .map((id) => {
+        const t = taskTitleById.get(id);
+        return t ? { id, title: t.title, status: t.status } : null;
+      })
+      .filter((t): t is { id: string; title: string; status: string } => t !== null)
+  }));
 
   // Outbound email log for this client — drafts + sent + everything in
   // between. Wrapped in try/catch so the page still renders if the
@@ -598,6 +633,8 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
       <ClientOpenTasksList
         tasks={openTasksRes as { id: string; title: string; status: string; priority: string; due_date: string | null }[]}
       />
+
+      <ClientMeetingsSection meetings={meetingViews} />
 
       <ClientKnowledgeBase tasks={doneTasksRes as CompletedTaskRow[]} />
     </div>

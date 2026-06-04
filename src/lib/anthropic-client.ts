@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { getAnthropicKey } from "./anthropic-key";
+import { getAnthropicKey, resetAnthropicKeyCache } from "./anthropic-key";
 
 let client: Anthropic | null = null;
 let pending: Promise<Anthropic> | null = null;
@@ -18,6 +18,18 @@ export async function getAnthropic(): Promise<Anthropic> {
     pending = null;
     throw err;
   }
+}
+
+// Drop the cached client AND its cached API key so the next getAnthropic()
+// rebuilds from a freshly-read key. Call this after an auth (401) failure —
+// the client caches the key it was built with, so resetting the key cache
+// alone isn't enough; the stale client has to go too. Because both caches
+// are module-global, one caller resetting after a 401 heals every Claude
+// surface (chat, classify, drafts, scoring) on its next call.
+export function resetAnthropic(): void {
+  client = null;
+  pending = null;
+  resetAnthropicKeyCache();
 }
 
 // Model IDs in one place so they're easy to bump.

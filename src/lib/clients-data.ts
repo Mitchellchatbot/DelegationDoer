@@ -17,6 +17,7 @@ import {
   type TouchpointLabel,
   type TouchpointOverrideRow
 } from "@/lib/client-touchpoint";
+import { coerceMeetingBrief, type MeetingBrief } from "@/lib/meeting-brief";
 
 export type ResourceKind = "meeting" | "document" | "suggestion";
 export type ClientPriority = "low" | "medium" | "high";
@@ -127,6 +128,26 @@ export interface ClientResource {
   url: string | null;
   body: string | null;
   createdBy: string | null;
+  createdAt: string;
+}
+
+// A processed meeting (tl;dv) attached to a client — see the
+// client_meetings table + lib/tldv-intake.ts. Powers the "Meetings &
+// briefs" timeline on the client page and the list_client_meetings AI
+// tool.
+export interface ClientMeeting {
+  id: string;
+  clientId: string;
+  meetingId: string;
+  source: string;
+  sourceUrl: string | null;
+  title: string;
+  meetingDate: string;
+  participants: string[];
+  summary: string | null;
+  brief: MeetingBrief;
+  transcript: string | null;
+  taskIds: string[];
   createdAt: string;
 }
 
@@ -296,6 +317,58 @@ export async function getResourcesForClient(clientId: string): Promise<ClientRes
     .eq("client_id", clientId)
     .order("created_at", { ascending: false });
   return (data ?? []).map((r) => rowToResource(r as ResourceRow));
+}
+
+interface MeetingRow {
+  id: string;
+  client_id: string;
+  meeting_id: string;
+  source: string;
+  source_url: string | null;
+  title: string;
+  meeting_date: string;
+  participants: string[] | null;
+  summary: string | null;
+  brief: unknown;
+  transcript: string | null;
+  task_ids: string[] | null;
+  created_at: string;
+}
+
+function rowToMeeting(r: MeetingRow): ClientMeeting {
+  return {
+    id: r.id,
+    clientId: r.client_id,
+    meetingId: r.meeting_id,
+    source: r.source,
+    sourceUrl: r.source_url,
+    title: r.title,
+    meetingDate: r.meeting_date,
+    participants: r.participants ?? [],
+    summary: r.summary,
+    brief: coerceMeetingBrief(r.brief),
+    transcript: r.transcript,
+    taskIds: r.task_ids ?? [],
+    createdAt: r.created_at
+  };
+}
+
+// Meetings attached to a client, newest meeting first. Wrapped so a
+// missing table (migration not yet applied) yields an empty list rather
+// than throwing — same defensive posture the client page takes for other
+// recently-added tables.
+export async function getMeetingsForClient(clientId: string): Promise<ClientMeeting[]> {
+  try {
+    const { data, error } = await getSupabaseAdmin()
+      .from("client_meetings")
+      .select("*")
+      .eq("client_id", clientId)
+      .order("meeting_date", { ascending: false });
+    if (error) return [];
+    return (data ?? []).map((r) => rowToMeeting(r as MeetingRow));
+  } catch {
+    return [];
+  }
 }
 
 // Per-client task count, used on the list page so cards show "N open" without

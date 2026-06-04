@@ -12,12 +12,30 @@ export interface MeetingActionItem {
   departmentHint: string | null;
 }
 
-// Top-level classifier result. `summary` is the one-paragraph meeting
-// summary we stamp on each spawned task so the assignee has context
-// without having to read the full transcript. `actionItems` is the
-// fan-out list — one task per item.
+// Top-level classifier result.
+//   `summary`      — one-paragraph meeting summary, stamped on each spawned
+//                    task so the assignee has context without watching the
+//                    recording.
+//   `actionItems`  — the fan-out list; one draft task per item.
+// The remaining fields make up the **team brief** — the human-readable
+// digest stored on the client's meeting record and surfaced to Ask AI.
+// They're extracted alongside the action items in the same call so we
+// pay for one classify, not two.
+//   `participants` — attendee names the model could identify (best-effort;
+//                    the intake pipeline prefers transcript speaker labels
+//                    when present and falls back to this).
+//   `keyDecisions` — concrete decisions the meeting landed on.
+//   `clientRequests` — things the client explicitly asked for.
+//   `risks`        — risks / blockers / concerns raised.
+//   `nextSteps`    — agreed next steps (broader than action items: may be
+//                    "we'll reconvene Friday" with no single owner).
 export interface ClassifiedMeeting {
   summary: string;
+  participants: string[];
+  keyDecisions: string[];
+  clientRequests: string[];
+  risks: string[];
+  nextSteps: string[];
   actionItems: MeetingActionItem[];
 }
 
@@ -54,6 +72,11 @@ ${deptList || "(none configured)"}
 Return STRICT JSON in exactly this shape — no preamble, no code fences:
 {
   "summary": "<2-4 sentence summary of what the meeting was about + key decisions>",
+  "participants": ["<attendee name>", "..."],
+  "keyDecisions": ["<a concrete decision the meeting landed on>", "..."],
+  "clientRequests": ["<something the client explicitly asked for>", "..."],
+  "risks": ["<a risk, blocker, or concern raised>", "..."],
+  "nextSteps": ["<an agreed next step>", "..."],
   "actionItems": [
     {
       "title": "<short, action-y task title; starts with a verb; <70 chars>",
@@ -100,7 +123,17 @@ Priority rubric:
 - "medium" = normal client work.
 - "low" = FYI / nice-to-have.
 
-Tags are 1-4 short lowercase words (e.g. "wordpress", "billing", "design"). They feed our auto-delegation engine.`;
+Tags are 1-4 short lowercase words (e.g. "wordpress", "billing", "design"). They feed our auto-delegation engine.
+
+TEAM BRIEF RULES (participants, keyDecisions, clientRequests, risks, nextSteps):
+- These are short, scannable bullets for a teammate who wasn't in the meeting — one sentence each, no Markdown, no leading dashes (the UI adds those).
+- Pull ONLY from what was actually said. Never invent a decision, request, risk, or next step to fill a section. An empty array is the correct answer when nothing of that kind came up.
+- "participants" = the human attendees you can identify from speaker labels or self-introductions. Omit our own bots/recorders. Empty array if you genuinely can't tell.
+- "keyDecisions" ≠ "actionItems": a decision is what was agreed ("we'll move the launch to next Tuesday"); an action item is the work that follows ("update the launch banner"). It's fine for the same topic to appear in both.
+- "clientRequests" capture asks in the client's own voice ("they want the hero image swapped"); skip internal asks between teammates.
+- "risks" are blockers, dependencies, or concerns ("staging access still pending from the client", "tight timeline before their event").
+- "nextSteps" can be broader than owned action items (e.g. "reconvene after the client sends assets") — keep them crisp.
+- Cap each of these arrays at 8 items; keep the most material ones.`;
 
   let parsed: Partial<ClassifiedMeeting> = {};
   try {
@@ -160,5 +193,33 @@ Tags are 1-4 short lowercase words (e.g. "wordpress", "billing", "design"). They
     ? parsed.summary.trim().slice(0, 1000)
     : "";
 
-  return { summary, actionItems };
+  return {
+    summary,
+    participants: cleanStringList(parsed.participants, 64),
+    keyDecisions: cleanStringList(parsed.keyDecisions, 280),
+    clientRequests: cleanStringList(parsed.clientRequests, 280),
+    risks: cleanStringList(parsed.risks, 280),
+    nextSteps: cleanStringList(parsed.nextSteps, 280),
+    actionItems
+  };
+}
+
+// Coerce an unknown JSON value into a trimmed, de-duped string[] capped
+// at 8 entries, each no longer than `maxLen`. Used for the team-brief
+// arrays so a malformed model response can never crash the pipeline.
+function cleanStringList(value: unknown, maxLen: number): string[] {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of value) {
+    if (typeof raw !== "string") continue;
+    const s = raw.trim().replace(/^[-*•]\s*/, "").slice(0, maxLen);
+    if (!s) continue;
+    const key = s.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(s);
+    if (out.length >= 8) break;
+  }
+  return out;
 }

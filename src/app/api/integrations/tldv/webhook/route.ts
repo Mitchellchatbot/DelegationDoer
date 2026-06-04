@@ -98,7 +98,11 @@ export async function POST(req: NextRequest) {
       transcript,
       segments,
       rawPayload: payload,
-      source: "webhook"
+      source: "webhook",
+      // tl;dv stamps the event time on the webhook envelope; use it as the
+      // meeting date so the Knowledge Base timeline reflects when the
+      // meeting happened, not when we processed it.
+      occurredAt: payload.executedAt ?? null
     });
 
     const elapsed = Date.now() - startedAt;

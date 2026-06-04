@@ -33,6 +33,7 @@ import {
   type ClassifiedMeeting
 } from "@/lib/meeting-classifier";
 import { matchRoutingRule, rowToRule, type RoutingRule } from "@/lib/routing-match";
+import { buildMeetingBrief, briefHasContent } from "@/lib/meeting-brief";
 import { rankCandidates } from "@/lib/skill-rank";
 import { userCapacity, deadlineFromEstimate } from "@/lib/capacity";
 import { extractDomain, parseEmail } from "@/lib/client-thread-match";
@@ -50,6 +51,13 @@ export interface TldvIntakeInput {
   // "webhook" = direct from tl;dv. "zapier" = relayed via Zapier (same
   // dedupe semantics as webhook). "manual" = /run-once, bypasses dedupe.
   source?: "webhook" | "manual" | "zapier";
+  // ISO timestamp of when the meeting actually happened (tl;dv's webhook
+  // `executedAt`). Optional — falls back to the processed-at time when the
+  // payload doesn't carry it. Stored as client_meetings.meeting_date.
+  occurredAt?: string | null;
+  // Human title for the meeting (e.g. Zapier's meeting name). Optional —
+  // falls back to "Meeting · <date>".
+  meetingTitle?: string | null;
 }
 
 export interface PerItemOutcome {
@@ -67,7 +75,7 @@ export interface TldvIntakeOutcome {
   clientName?: string | null;
   classified?: ClassifiedMeeting;
   items: PerItemOutcome[];
-  resourceId?: string | null;  // client_resources row, if one was created
+  resourceId?: string | null;  // client_meetings record, if one was created
 }
 
 interface SkillMatrixRow {
@@ -220,24 +228,74 @@ export async function runTldvIntake(input: TldvIntakeInput): Promise<TldvIntakeO
     });
   }
 
-  // 5) Insert a meeting resource on the matched client.
+  // 5) Store the structured meeting record on the matched client. This is
+  //    the source of truth behind the Knowledge Base "Meetings & briefs"
+  //    timeline and the list_client_meetings Ask-AI tool: full transcript,
+  //    one-paragraph summary, generated team brief, participants, meeting
+  //    date, recording link, and the tasks the meeting spawned. Only
+  //    written when a client matched (unmatched meetings still create
+  //    tasks, they just have nowhere client-scoped to live).
   let resourceId: string | null = null;
-  if (matchedClient && (classified.summary || items.length > 0)) {
-    const datePart = now.slice(0, 10); // YYYY-MM-DD
-    const bullets = items.length > 0
-      ? "\n\n**Action items spawned:**\n" + items.map((i) => `- ${i.title}`).join("\n")
-      : "";
-    resourceId = `r_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
-    await supabase.from("client_resources").insert({
-      id: resourceId,
-      client_id: matchedClient.id,
-      kind: "meeting",
-      title: `Meeting transcript · ${datePart}`,
-      url: tldvViewerUrl,
-      body: (classified.summary ?? "") + bullets,
-      created_by: null,
-      created_at: now
-    });
+  const brief = buildMeetingBrief(classified);
+  const worthStoring = !!classified.summary || briefHasContent(brief) || items.length > 0;
+  if (matchedClient && worthStoring) {
+    // Prefer the transcript's own speaker labels for participants; fall
+    // back to the classifier's best-effort attendee list.
+    const speakers = Array.from(
+      new Set(
+        input.segments
+          .map((s) => (s.speaker ?? "").trim())
+          .filter((s) => s.length > 0)
+      )
+    );
+    const participants = speakers.length > 0 ? speakers : classified.participants;
+
+    // Speaker-prefixed transcript for storage when segments carry
+    // attribution; otherwise the flat transcript string.
+    const transcriptText =
+      input.segments.length > 0
+        ? input.segments
+            .map((s) => (s.speaker ? `${s.speaker}: ${s.text}` : s.text))
+            .join("\n")
+        : input.transcript;
+
+    const meetingDate =
+      input.occurredAt && !Number.isNaN(Date.parse(input.occurredAt))
+        ? new Date(input.occurredAt).toISOString()
+        : now;
+    const datePart = meetingDate.slice(0, 10); // YYYY-MM-DD
+    const sourceLabel = input.source === "zapier"
+      ? "zapier"
+      : input.source === "manual"
+        ? "manual"
+        : "tldv";
+
+    resourceId = `cm_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+    const { data: meetingRow } = await supabase
+      .from("client_meetings")
+      .upsert(
+        {
+          id: resourceId,
+          client_id: matchedClient.id,
+          meeting_id: input.meetingId,
+          source: sourceLabel,
+          source_url: tldvViewerUrl,
+          title: input.meetingTitle?.trim() || `Meeting · ${datePart}`,
+          meeting_date: meetingDate,
+          participants,
+          summary: classified.summary || null,
+          brief,
+          transcript: transcriptText || null,
+          task_ids: items.map((i) => i.taskId),
+          created_at: now
+        },
+        { onConflict: "client_id,meeting_id" }
+      )
+      .select("id")
+      .maybeSingle();
+    // On conflict the upsert keeps the existing row's id — reflect that
+    // in the returned outcome so logs/callers point at the real record.
+    if (meetingRow?.id) resourceId = meetingRow.id as string;
   }
 
   // 6) Log the intake row so the webhook dedupes next retry.

@@ -50,11 +50,11 @@ export default async function ClientsPage() {
     <div className="space-y-5 max-w-7xl mx-auto">
       <PageHero
         eyebrow="Clients"
-        headline={["Sorted by ", { accent: "priority" }]}
+        headline={["At-risk ", { accent: "first" }]}
         subtitle={
           canEdit
-            ? "Drag a client up or down to set its priority — top of the list is most urgent."
-            : "Ordered by the Leader's priority — most urgent at the top."
+            ? "At-risk clients surface at the top for everyone. Switch to the Priority sort to drag-reorder by hand."
+            : "At-risk clients surface at the top. Switch to the Priority sort to see the Leader's order."
         }
         icon={<Briefcase />}
         iconTone="amber"
@@ -97,7 +97,7 @@ export default async function ClientsPage() {
       {canEdit && clients.length > 1 && (
         <div className="flex items-center gap-1.5 text-[11px] text-ink/60 px-2">
           <ArrowUpDown className="w-3 h-3" />
-          Most urgent at the top — drag the grip handle to reorder.
+          Switch to the Priority sort, then drag the grip handle to reorder.
         </div>
       )}
 

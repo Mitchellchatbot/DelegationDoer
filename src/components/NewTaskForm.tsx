@@ -6,6 +6,7 @@ import { assignableTargets, assignableDepartments, canChooseDepartment, isLeader
 import { useCurrentUser } from "@/lib/user-context";
 import { useTeam } from "@/lib/team-context";
 import { rankCandidates, buildLoadSignals, type RankedCandidate } from "@/lib/skill-rank";
+import { findFirstImage, requestAttachmentAnalysis, buildAnalyzeNotice } from "@/lib/attachment-analysis";
 import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Sparkles, Wand2, Crown, ShieldCheck, ChevronDown, ChevronRight, Mail, FolderOpen, Server, Link as LinkIcon, KeyRound, MessageSquare, Zap, ScanText, AlertTriangle } from "lucide-react";
@@ -152,16 +153,8 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel, initialValues }: 
   const [analyzing, setAnalyzing] = useState(false);
   const [analyzeError, setAnalyzeError] = useState<string | null>(null);
   const [analyzeNotice, setAnalyzeNotice] = useState<string | null>(null);
-  // The first image attachment, if any — what "Analyze" reads. We bucket by
-  // content-type with a filename-extension fallback (matches MediaPicker's
-  // own categorize()), since clipboard/drag sources sometimes ship no type.
-  const firstImage = useMemo(
-    () => media.find((m) =>
-      (m.contentType ?? "").toLowerCase().startsWith("image/") ||
-      /\.(png|jpe?g|gif|webp)$/i.test(m.name ?? m.url)
-    ) ?? null,
-    [media]
-  );
+  // The first image attachment, if any — what "Analyze" reads.
+  const firstImage = useMemo(() => findFirstImage(media), [media]);
   useEffect(() => {
     fetch("/api/custom-fields", { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : { fields: [] }))
@@ -336,26 +329,8 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel, initialValues }: 
     setAnalyzeError(null);
     setAnalyzeNotice(null);
     try {
-      const res = await fetch("/api/tasks/analyze-attachment", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ imageUrl: firstImage.url, contentType: firstImage.contentType })
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setAnalyzeError(data?.error ?? `Failed (${res.status})`);
-        return;
-      }
-      const f = (data.fields ?? {}) as {
-        title?: string | null;
-        description?: string | null;
-        department?: string | null;
-        priority?: string | null;
-        estimatedHours?: number | null;
-        tags?: string[] | null;
-        clientName?: string | null;
-        website?: string | null;
-      };
+      const result = await requestAttachmentAnalysis(firstImage);
+      const f = result.fields;
 
       // Apply only what the AI returned, and never clobber text the user
       // already typed — title/description/client/website fill empty fields
@@ -377,18 +352,7 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel, initialValues }: 
       if (!internal && f.clientName && !clientName.trim()) { setClientName(f.clientName); filled.push("client"); }
       if (!internal && f.website && !website.trim()) { setWebsite(f.website); filled.push("website"); }
 
-      const notesSuffix = data.notes ? ` ${data.notes}` : "";
-      if (data.needsReview) {
-        setAnalyzeNotice(
-          (filled.length > 0
-            ? `Filled ${filled.join(", ")} from the image — please review before creating.`
-            : "AI couldn't confidently read this image — fill the form in manually.") + notesSuffix
-        );
-      } else if (filled.length > 0) {
-        setAnalyzeNotice(`Filled ${filled.join(", ")} from the image — review, then create.${notesSuffix}`);
-      } else {
-        setAnalyzeNotice(`Nothing new to fill — the form already has those fields.${notesSuffix}`);
-      }
+      setAnalyzeNotice(buildAnalyzeNotice(filled, result));
     } catch (err) {
       setAnalyzeError(err instanceof Error ? err.message : "network error");
     } finally {

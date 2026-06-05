@@ -1,13 +1,15 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback, useMemo, createContext, useContext } from "react";
-import { Check, Clock, Minus, X, AlertTriangle, Plus, Bell, ArrowLeft, Focus, Coffee, Moon, Smile, Sparkles, Play, Square, Crown, Settings as SettingsIcon, LogOut, Camera, Mail } from "lucide-react";
+import { Check, Clock, Minus, X, AlertTriangle, Plus, Bell, ArrowLeft, Focus, Coffee, Moon, Smile, Sparkles, Play, Square, Crown, Settings as SettingsIcon, LogOut, Camera, Mail, ScanText } from "lucide-react";
 import { toast } from "sonner";
 import { AvatarCropper } from "@/components/AvatarCropper";
 import { Countdown } from "@/components/Countdown";
 import { PersonAvatar } from "@/components/PersonAvatar";
 import { MediaPicker } from "@/components/MediaPicker";
 import { assignableTargets, assignableDepartments, canChooseDepartment, isLeader, isHead } from "@/lib/auth";
+import { TAG_PRESETS } from "@/lib/mock-data";
+import { findFirstImage, requestAttachmentAnalysis, buildAnalyzeNotice } from "@/lib/attachment-analysis";
 import type { TaskMedia, User, Department } from "@/lib/types";
 
 interface WidgetTask {
@@ -2260,6 +2262,22 @@ function CreateTaskView({ onClose, onCreated }: { onClose: () => void; onCreated
   const [me, setMe] = useState<WidgetUser | null>(null);
   const [media, setMedia] = useState<TaskMedia[]>([]);
   const [busy, setBusy] = useState(false);
+  // Tags / client / website — populated either manually or by "Analyze
+  // attachment with AI" below. Sent on submit (the /api/tasks POST already
+  // accepts all three); the browser NewTaskForm carries the same fields.
+  const [tags, setTags] = useState<string[]>([]);
+  const [clientName, setClientName] = useState("");
+  const [website, setWebsite] = useState("");
+  // "Analyze attachment with AI" — reads an attached screenshot/image with
+  // Claude vision (shared POST /api/tasks/analyze-attachment) and pre-fills
+  // the form. It only POPULATES fields, never submits — the user still
+  // reviews and clicks "Create task". Loading/error/notice drive the button
+  // + a small banner.
+  const [analyzing, setAnalyzing] = useState(false);
+  const [analyzeError, setAnalyzeError] = useState<string | null>(null);
+  const [analyzeNotice, setAnalyzeNotice] = useState<string | null>(null);
+  // The first image attachment, if any — what "Analyze" reads.
+  const firstImage = useMemo(() => findFirstImage(media), [media]);
 
   // Pull the roster, departments, and current user together. The widget
   // has no TeamProvider/UserProvider (unlike the main app's NewTaskForm),
@@ -2353,6 +2371,49 @@ function CreateTaskView({ onClose, onCreated }: { onClose: () => void; onCreated
     }
   }, [me, canDelegate, assigneeOptions, assigneeId]);
 
+  // Read the attached image with Claude vision and pre-fill the form.
+  // Mirrors NewTaskForm: applies only what the AI returned, never clobbers
+  // text the user already typed, and respects the same permission gates —
+  // a suggested department only lands when the caller may actually pick one
+  // (workers stay locked to their own dept), and assignee is left to the
+  // form's own role-scoped picker. It never submits.
+  async function analyzeAttachment() {
+    if (analyzing) return;
+    if (!firstImage) {
+      setAnalyzeError("Attach an image first, then analyze it.");
+      return;
+    }
+    setAnalyzing(true);
+    setAnalyzeError(null);
+    setAnalyzeNotice(null);
+    try {
+      const result = await requestAttachmentAnalysis(firstImage);
+      const f = result.fields;
+      const filled: string[] = [];
+      if (f.title && !title.trim()) { setTitle(f.title); filled.push("title"); }
+      if (f.description && !description.trim()) { setDescription(f.description); filled.push("description"); }
+      // Department is permission-clamped server-side too; only apply it when
+      // the caller can actually change it (workers are locked to their own).
+      if (f.department && canPickDept) { setDepartmentId(f.department); filled.push("department"); }
+      if (f.priority && PRIORITY_OPTIONS.some((p) => p.value === f.priority)) {
+        setPriority(f.priority as typeof PRIORITY_OPTIONS[number]["value"]);
+        filled.push("priority");
+      }
+      if (typeof f.estimatedHours === "number") { setEstimateHours(f.estimatedHours); filled.push("estimate"); }
+      if (Array.isArray(f.tags) && f.tags.length > 0) {
+        setTags((cur) => Array.from(new Set([...cur, ...f.tags!])));
+        filled.push("tags");
+      }
+      if (f.clientName && !clientName.trim()) { setClientName(f.clientName); filled.push("client"); }
+      if (f.website && !website.trim()) { setWebsite(f.website); filled.push("website"); }
+      setAnalyzeNotice(buildAnalyzeNotice(filled, result));
+    } catch (err) {
+      setAnalyzeError(err instanceof Error ? err.message : "network error");
+    } finally {
+      setAnalyzing(false);
+    }
+  }
+
   async function submit() {
     if (!title.trim()) {
       toast.error("Title required");
@@ -2376,6 +2437,9 @@ function CreateTaskView({ onClose, onCreated }: { onClose: () => void; onCreated
           estimatedHours: estimateHours,
           departmentId: departmentId || undefined,
           assigneeId: effectiveAssignee || undefined,
+          tags,
+          clientName: clientName.trim() || undefined,
+          website: website.trim() || undefined,
           mediaUrls: media
         })
       });
@@ -2469,6 +2533,30 @@ function CreateTaskView({ onClose, onCreated }: { onClose: () => void; onCreated
             </div>
           </div>
 
+          <div>
+            <label className="text-[10px] uppercase tracking-wide font-semibold text-slate-500 px-1">Tags</label>
+            <div className="mt-1 flex flex-wrap gap-1">
+              {TAG_PRESETS.map((t) => {
+                const on = tags.includes(t);
+                return (
+                  <button
+                    key={t}
+                    type="button"
+                    onClick={() => setTags((cur) => on ? cur.filter((x) => x !== t) : [...cur, t])}
+                    className={
+                      "text-[11px] px-2 py-0.5 rounded-full border transition-colors active:scale-95 " +
+                      (on
+                        ? "bg-accent/10 border-accent/40 text-accent"
+                        : "bg-white border-slate-200 text-slate-600 hover:border-slate-300")
+                    }
+                  >
+                    #{t}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
           {me && !hasNoDepartment && (
             <div>
               <label className="text-[10px] uppercase tracking-wide font-semibold text-slate-500 px-1">Department</label>
@@ -2508,16 +2596,71 @@ function CreateTaskView({ onClose, onCreated }: { onClose: () => void; onCreated
             </div>
           </div>
 
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-[10px] uppercase tracking-wide font-semibold text-slate-500 px-1">Client</label>
+              <input
+                type="text"
+                value={clientName}
+                onChange={(e) => setClientName(e.target.value)}
+                placeholder="e.g. Acme"
+                className="mt-1 w-full px-3 py-2 text-[13px] bg-white border border-slate-200/80 rounded-xl outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent/40 transition-all"
+              />
+            </div>
+            <div>
+              <label className="text-[10px] uppercase tracking-wide font-semibold text-slate-500 px-1">Website</label>
+              <input
+                type="text"
+                value={website}
+                onChange={(e) => setWebsite(e.target.value)}
+                placeholder="e.g. acme.com"
+                className="mt-1 w-full px-3 py-2 text-[13px] bg-white border border-slate-200/80 rounded-xl outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent/40 transition-all"
+              />
+            </div>
+          </div>
+
           <div>
-            <label className="text-[10px] uppercase tracking-wide font-semibold text-slate-500 px-1">Attachments</label>
+            <div className="flex items-center justify-between px-1">
+              <label className="text-[10px] uppercase tracking-wide font-semibold text-slate-500">Attachments</label>
+              <button
+                type="button"
+                onClick={analyzeAttachment}
+                disabled={analyzing || !firstImage}
+                title={firstImage
+                  ? "Read the attached image with AI and fill the form"
+                  : "Attach an image first to analyze it"}
+                className={
+                  "inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-medium border transition-colors " +
+                  (analyzing || !firstImage
+                    ? "border-slate-200 text-slate-400 cursor-not-allowed"
+                    : "border-accent/40 text-accent hover:bg-accent/5")
+                }
+              >
+                <ScanText className={"w-3 h-3 " + (analyzing ? "animate-pulse" : "")} />
+                {analyzing ? "Analyzing…" : "Analyze with AI"}
+              </button>
+            </div>
             <div className="mt-1">
               <MediaPicker
                 value={media}
                 onChange={setMedia}
                 compact
                 label="Add files"
+                hint="Attach a screenshot and let AI fill the form."
               />
             </div>
+            {analyzeError && (
+              <div className="mt-1.5 flex items-start gap-1.5 text-[11px] text-rose-600">
+                <AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" />
+                <span>{analyzeError}</span>
+              </div>
+            )}
+            {analyzeNotice && (
+              <div className="mt-1.5 flex items-start gap-1.5 text-[11px] text-accent">
+                <Sparkles className="w-3 h-3 mt-0.5 shrink-0" />
+                <span>{analyzeNotice}</span>
+              </div>
+            )}
           </div>
 
           {hasNoDepartment ? (

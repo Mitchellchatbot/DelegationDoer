@@ -47,6 +47,24 @@ export const HEALTH_META: Record<HealthLabel, {
   }
 };
 
+// Display ordering for the four sentiment bands — worst first. At-risk
+// leads every "needs attention" surface (the /home widget and the
+// clients list), then shaky, steady, thriving. Used as the primary sort
+// key so the at-risk cohort always floats to the top, for every role,
+// regardless of raw score nuance.
+export const HEALTH_RANK: Record<HealthLabel, number> = {
+  at_risk: 0,
+  shaky: 1,
+  steady: 2,
+  thriving: 3
+};
+
+// Sort rank for a possibly-null label. Null = no health computed yet;
+// it sorts after every scored band so clients with a known signal lead.
+export function healthRank(label: HealthLabel | null): number {
+  return label === null ? 99 : HEALTH_RANK[label];
+}
+
 // Thresholds per product spec. Score is the *median* of every scored
 // message (inbound + outbound) for a client.
 export function scoreToLabel(medianScore: number): HealthLabel {

@@ -204,8 +204,12 @@ export async function POST(req: NextRequest) {
       // tl;dv-fetched). Before, this only fired when segments.length>0,
       // so Zapier passthrough silently swallowed every empty-classify.
       warn(`meetingId=${meetingId}: classifier extracted 0 action items from transcript=${transcript.length}chars (verify raw_payload in tldv_intake_log)`);
+    } else if (outcome.items.length > 0 && !outcome.clientMatched) {
+      warn(`meetingId=${meetingId}: itemsCreated=${outcome.items.length} but NO client matched — brief NOT stored. Backfill via POST .../meetings/${meetingId}/backfill in ${elapsed}ms`);
+    } else if (outcome.clientMatched && !outcome.meetingStored) {
+      warn(`meetingId=${meetingId}: client="${outcome.clientName ?? "-"}" matched but client_meetings WRITE FAILED (${outcome.storeError ?? "unknown"}) — brief NOT stored in ${elapsed}ms`);
     } else {
-      log(`meetingId=${meetingId}: itemsCreated=${outcome.items.length} clientName="${outcome.clientName ?? "-"}" resourceId=${outcome.resourceId ?? "-"} in ${elapsed}ms`);
+      log(`meetingId=${meetingId}: itemsCreated=${outcome.items.length} clientName="${outcome.clientName ?? "-"}" stored=${outcome.meetingStored ? "yes" : "no"} resourceId=${outcome.resourceId ?? "-"} in ${elapsed}ms`);
     }
 
     return NextResponse.json({

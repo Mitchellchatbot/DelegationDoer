@@ -26,4 +26,10 @@ export async function register() {
   } catch (err) {
     console.error("[instrumentation] email-notifications bootstrap failed to load:", err);
   }
+  try {
+    const { bootstrapScheduledCrons } = await import("@/lib/cron-bootstrap");
+    bootstrapScheduledCrons();
+  } catch (err) {
+    console.error("[instrumentation] scheduled-crons bootstrap failed to load:", err);
+  }
 }

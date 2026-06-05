@@ -7,7 +7,8 @@ import {
 } from "@hello-pangea/dnd";
 import {
   Briefcase, Globe2, GripVertical, Folder, User as UserIcon, Mail, MailX,
-  Filter, ArrowDownAZ, ArrowUpDown, Clock, LayoutGrid, List as ListIcon
+  Filter, ArrowDownAZ, ArrowUpDown, Clock, LayoutGrid, List as ListIcon,
+  AlertTriangle
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -16,6 +17,7 @@ import { ClientHealthPill } from "./ClientHealthPill";
 import { TouchpointPill } from "./TouchpointPill";
 import { ClientTeamPicker } from "./ClientTeamPicker";
 import { Tooltip } from "./Tooltip";
+import { healthRank } from "@/lib/client-health";
 import {
   computeTouchpointLabel, daysSince, effectiveTouchpoint,
   TOUCHPOINT_META, type TouchpointLabel
@@ -46,7 +48,7 @@ const PRIORITY_TONES = {
   low:    "bg-slate-100 text-slate-600 border-slate-200/60"
 } as const;
 
-type SortMode = "priority" | "stalest" | "freshest" | "name";
+type SortMode = "health" | "priority" | "stalest" | "freshest" | "name";
 type HealthFilter = "all" | TouchpointLabel;
 
 export interface PickableUser {
@@ -71,7 +73,11 @@ export function ClientPriorityList({
   initial, openCounts, canEdit, pickableUsers = []
 }: Props) {
   const [clients, setClients] = useState(initial);
-  const [sortMode, setSortMode] = useState<SortMode>("priority");
+  // Default ordering surfaces the at-risk cohort first for every user
+  // (sentiment health, worst band on top), not the leader's manual
+  // priority. The leader can still drag-reorder under the "Priority"
+  // sort, and any other sort button overrides this default.
+  const [sortMode, setSortMode] = useState<SortMode>("health");
   const [healthFilter, setHealthFilter] = useState<HealthFilter>("all");
   // View mode persists per browser. SSR renders list so initial markup
   // matches what the server emitted; effect below swaps to grid if the
@@ -178,6 +184,16 @@ export function ClientPriorityList({
       });
     }
     switch (sortMode) {
+      case "health":
+        // At-risk first, then shaky / steady / thriving. Uses the
+        // effective sentiment label (leader override wins). Sort is
+        // stable, so within a band clients keep their display_order
+        // (the leader's manual priority).
+        arr.sort((a, b) =>
+          healthRank(a.healthOverrideLabel ?? a.healthLabel) -
+          healthRank(b.healthOverrideLabel ?? b.healthLabel)
+        );
+        break;
       case "stalest":
         arr.sort((a, b) => {
           const ad = a.lastOutboundEmailAt ? new Date(a.lastOutboundEmailAt).getTime() : 0;
@@ -272,6 +288,12 @@ export function ClientPriorityList({
         <div className="inline-flex items-center gap-1.5 text-[11px] text-ink/60 font-medium">
           <ArrowUpDown className="w-3 h-3" /> Sort:
         </div>
+        <SortChip
+          active={sortMode === "health"}
+          onClick={() => setSortMode("health")}
+          icon={<AlertTriangle className="w-3 h-3" />}
+          label="At risk first"
+        />
         <SortChip
           active={sortMode === "priority"}
           onClick={() => setSortMode("priority")}

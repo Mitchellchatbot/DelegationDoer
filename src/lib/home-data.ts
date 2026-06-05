@@ -4,7 +4,7 @@ import {
   isAutomatedOutboundSubject,
   type TouchpointLabel
 } from "@/lib/client-touchpoint";
-import type { HealthLabel } from "@/lib/client-health";
+import { healthRank, type HealthLabel } from "@/lib/client-health";
 
 // Server-side queries for the /home landing surface. Each function
 // returns plain JSON-shaped data so server components can pass it
@@ -943,6 +943,20 @@ export async function getWorstClientsByHealth(topN = 10): Promise<ClientSentimen
   }>)
     .filter((c) => !c.status || c.status === "active")
     .filter((c) => c.health_score !== null && c.health_label !== null);
+
+  // Order at-risk first explicitly by sentiment band (at_risk → shaky →
+  // steady → thriving), not just by raw score, so the "needs attention"
+  // cohort is guaranteed to lead even if the score↔band thresholds ever
+  // shift. Within a band: lower score first, then larger sample first
+  // (a low score backed by many emails is more trustworthy than a noisy
+  // one). Mirrors the default "At risk first" sort on the clients list.
+  rows.sort((a, b) => {
+    const r = healthRank(a.health_label) - healthRank(b.health_label);
+    if (r !== 0) return r;
+    const s = (a.health_score ?? 101) - (b.health_score ?? 101);
+    if (s !== 0) return s;
+    return (b.health_sample_size ?? 0) - (a.health_sample_size ?? 0);
+  });
 
   return rows.slice(0, topN).map((c) => ({
     id: c.id,

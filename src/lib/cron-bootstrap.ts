@@ -72,7 +72,10 @@ interface CronJob {
   intervalMs: number;
   bootCatchupDelayMs: number;
   disableEnv: string;
-  run: () => Promise<string>;
+  // Resolves to a one-line summary plus whether the tick actually did work.
+  // `noteworthy: false` ticks are kept out of the log (scheduled-emails runs
+  // every minute and is idle most of the time) but still update the heartbeat.
+  run: () => Promise<{ summary: string; noteworthy: boolean }>;
 }
 
 const JOBS: CronJob[] = [
@@ -83,7 +86,7 @@ const JOBS: CronJob[] = [
     disableEnv: "INACTIVITY_INTERNAL_CRON",
     run: async () => {
       const r = await runInactivitySweep();
-      return `flagged=${r.flagged}`;
+      return { summary: `flagged=${r.flagged}`, noteworthy: r.flagged > 0 };
     }
   },
   {
@@ -96,8 +99,11 @@ const JOBS: CronJob[] = [
     disableEnv: "EOD_RECAP_INTERNAL_CRON",
     run: async () => {
       const o = await runEodRecap();
-      if (!o.ok) return `reason=${o.reason}`;
-      return "posted" in o ? `posted=${o.posted}` : `skipped=${o.skipped}`;
+      // Only an actual post is noteworthy; the hourly "not-7pm-ny" /
+      // "already-sent-today" / no-channel ticks stay out of the log.
+      if (!o.ok) return { summary: `reason=${o.reason}`, noteworthy: false };
+      if ("posted" in o) return { summary: `posted=${o.posted}`, noteworthy: true };
+      return { summary: `skipped=${o.skipped}`, noteworthy: false };
     }
   },
   {
@@ -107,7 +113,10 @@ const JOBS: CronJob[] = [
     disableEnv: "BIRTHDAY_SYNC_INTERNAL_CRON",
     run: async () => {
       const r = await syncBirthdaysForAllOwners();
-      return `owners=${r.owners} created=${r.created} updated=${r.updated} deleted=${r.deleted}`;
+      return {
+        summary: `owners=${r.owners} created=${r.created} updated=${r.updated} deleted=${r.deleted}`,
+        noteworthy: r.created + r.updated + r.deleted > 0
+      };
     }
   },
   {
@@ -117,10 +126,13 @@ const JOBS: CronJob[] = [
     disableEnv: "SCHEDULED_EMAILS_INTERNAL_CRON",
     run: async () => {
       const r = await runScheduledEmails();
-      return (
-        `replies sent=${r.replies.sent}/${r.replies.considered} ` +
-        `drafts sent=${r.drafts.sent}/${r.drafts.considered}`
-      );
+      const acted = r.replies.sent + r.replies.failed + r.drafts.sent + r.drafts.failed;
+      return {
+        summary:
+          `replies sent=${r.replies.sent}/${r.replies.considered} ` +
+          `drafts sent=${r.drafts.sent}/${r.drafts.considered}`,
+        noteworthy: acted > 0
+      };
     }
   }
 ];
@@ -174,11 +186,16 @@ function scheduleJob(job: CronJob, heartbeats: Heartbeats): void {
     running = true;
     hb.lastRunStartedAt = new Date().toISOString();
     try {
-      const summary = await job.run();
+      const { summary, noteworthy } = await job.run();
       hb.lastRunOk = true;
       hb.lastRunError = null;
       hb.lastRunSummary = summary;
-      console.log(`[cron:${job.name}] (${trigger}) complete — ${summary}`);
+      // Always log the boot-catchup run (so each deploy confirms the job is
+      // alive) and any tick that actually did work; stay silent on routine
+      // idle ticks. The full per-tick state is always in /api/cron/status.
+      if (trigger === "boot-catchup" || noteworthy) {
+        console.log(`[cron:${job.name}] (${trigger}) complete — ${summary}`);
+      }
     } catch (err) {
       hb.lastRunOk = false;
       hb.lastRunError = err instanceof Error ? err.message : String(err);

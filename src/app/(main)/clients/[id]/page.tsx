@@ -381,19 +381,6 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
         canEdit={!!(me && (me.role === "leader" || me.role === "department_head" || me.isAdmin))}
       />
 
-      <ClientTouchpointCard
-        clientId={client.id}
-        lastOutboundEmailAt={client.lastOutboundEmailAt}
-        lastOutboundSubject={client.lastOutboundSubject}
-        touchpointOverrideLabel={client.touchpointOverrideLabel}
-        touchpointOverrideNote={client.touchpointOverrideNote}
-        touchpointOverrideAt={client.touchpointOverrideAt}
-        touchpointSummary={client.touchpointSummary}
-        touchpointSummaryAt={client.touchpointSummaryAt}
-        encourageEmails={client.encourageEmails}
-        canEdit={!!(me && (me.role === "leader" || me.isAdmin))}
-      />
-
       <ClientHealthCard
         clientId={client.id}
         healthLabel={client.healthLabel}
@@ -411,6 +398,19 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
           direction: "inbound" | "outbound";
           subject: string | null;
         }>}
+        canEdit={!!(me && (me.role === "leader" || me.isAdmin))}
+      />
+
+      <ClientTouchpointCard
+        clientId={client.id}
+        lastOutboundEmailAt={client.lastOutboundEmailAt}
+        lastOutboundSubject={client.lastOutboundSubject}
+        touchpointOverrideLabel={client.touchpointOverrideLabel}
+        touchpointOverrideNote={client.touchpointOverrideNote}
+        touchpointOverrideAt={client.touchpointOverrideAt}
+        touchpointSummary={client.touchpointSummary}
+        touchpointSummaryAt={client.touchpointSummaryAt}
+        encourageEmails={client.encourageEmails}
         canEdit={!!(me && (me.role === "leader" || me.isAdmin))}
       />
 

@@ -170,6 +170,17 @@ export function ClientPriorityList({
     return t;
   }, [clients]);
 
+  // Underlying priority position (1-based) for every client, keyed off
+  // the canonical `clients` array which is always in display_order. The
+  // rank badge reads this so a client shows its true priority slot even
+  // when the list is re-sorted (e.g. "At risk first") — the sort changes
+  // the order, not the priority number.
+  const priorityPos = useMemo(() => {
+    const m = new Map<string, number>();
+    clients.forEach((c, i) => m.set(c.id, i + 1));
+    return m;
+  }, [clients]);
+
   // Filtered + sorted view used for rendering. Drag-reorder still
   // mutates the canonical `clients` array (which controls priority);
   // it's only enabled when sortMode === 'priority' and no filter is
@@ -392,9 +403,14 @@ export function ClientPriorityList({
                             : "shadow-soft border-white/60 hover:shadow-lift"
                         )}
                       >
-                        {/* Rank badge */}
+                        {/* Rank badge — shows the client's priority slot
+                            under both the Priority and At-risk-first
+                            sorts; a dot under the time/name sorts where a
+                            position number would be meaningless. */}
                         <div className="shrink-0 w-9 h-9 rounded-xl bg-white/80 border border-white/80 grid place-items-center text-sm font-semibold text-ink/70 shadow-sm tabular-nums">
-                          {sortMode === "priority" ? (i + 1) : "·"}
+                          {sortMode === "priority" || sortMode === "health"
+                            ? (priorityPos.get(c.id) ?? "·")
+                            : "·"}
                         </div>
 
                         {/* Drag handle (only for Leader & default sort) */}
@@ -548,7 +564,9 @@ export function ClientPriorityList({
                   to the name below where it belongs visually. */}
               <div className="flex items-center gap-2 mb-2">
                 <div className="shrink-0 w-7 h-7 rounded-lg bg-white/85 border border-white/80 grid place-items-center text-[11px] font-semibold text-ink/70 shadow-sm tabular-nums">
-                  {sortMode === "priority" ? (i + 1) : "·"}
+                  {sortMode === "priority" || sortMode === "health"
+                    ? (priorityPos.get(c.id) ?? "·")
+                    : "·"}
                 </div>
                 <span className={cn("ml-auto text-[10px] px-2 py-0.5 rounded-full border capitalize", PRIORITY_TONES[c.priority])}>
                   {c.priority}

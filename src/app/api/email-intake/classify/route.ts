@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById, getAllTasks, getAllUsersLight, getDepartments } from "@/lib/server-data";
 import { getThread } from "@/lib/missive-client";
+import { threadBodyFromMessages } from "@/lib/email-intake-utils";
 import { visibleAccountIdsFor } from "@/lib/inbox-access";
 import { classifyEmailThread } from "@/lib/email-classifier";
 import { matchRoutingRule, rowToRule } from "@/lib/routing-match";
@@ -45,9 +46,11 @@ export async function POST(req: NextRequest) {
     const detail = await getThread(threadId);
     const inbound = detail.messages.find((m) => m.direction === "inbound") ?? detail.messages[0];
     const fromEmail = inbound ? extractEmail(inbound.from_addr) : null;
-    const bodyText = detail.messages
-      .map((m) => `--- ${m.from_addr} @ ${m.sent_at} ---\n${m.body_text ?? stripHtml(m.body_html ?? "")}`)
-      .join("\n\n");
+    // Use the shared body builder, which reads the fuller of body_text /
+    // stripped body_html. M365/Graph inboxes store only a ~255-char preview
+    // in body_text, so the naive `body_text ?? html` fed the classifier a
+    // truncated stub and real client mail got mis-judged isActionable=false.
+    const bodyText = threadBodyFromMessages(detail.messages);
     const missiveAppUrl = (process.env.MISSIVE_API_URL ?? "").replace(/\/$/, "");
     const missiveThreadUrl = missiveAppUrl
       ? `${missiveAppUrl}/?thread=${encodeURIComponent(threadId)}`
@@ -197,13 +200,4 @@ function extractEmail(addr: string): string | null {
   if (m) return m[1].toLowerCase();
   if (addr.includes("@")) return addr.trim().toLowerCase();
   return null;
-}
-
-function stripHtml(html: string): string {
-  return html.replace(/<style[\s\S]*?<\/style>/gi, "")
-    .replace(/<script[\s\S]*?<\/script>/gi, "")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
 }

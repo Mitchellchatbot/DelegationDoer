@@ -69,17 +69,19 @@ export function HomeClientHealthTable({ rows }: { rows: ClientSentimentHealthRow
                   <span
                     className={cn(
                       "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border shrink-0",
-                      meta.bg, meta.text, meta.border
+                      meta.bg, meta.text, meta.border,
+                      r.overridden && "ring-1 ring-inset ring-ink/25"
                     )}
+                    title={r.overridden ? "Health set by hand by a leader" : undefined}
                   >
                     <span className={cn("w-1.5 h-1.5 rounded-full", meta.dot)} />
                     {meta.label}
                   </span>
                   <span
                     className="text-[11px] tabular-nums font-semibold text-ink/70 w-8 text-right shrink-0"
-                    title={`${r.sampleSize} scored emails`}
+                    title={r.score === null ? "Set manually — no satisfaction score yet" : `${r.sampleSize} scored emails`}
                   >
-                    {r.score}
+                    {r.score ?? "—"}
                   </span>
                 </Link>
               </li>

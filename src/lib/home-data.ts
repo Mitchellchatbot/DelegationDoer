@@ -902,10 +902,11 @@ export interface ClientSentimentHealthRow {
   id: string;
   name: string;
   contactName: string | null;
-  score: number;            // 0-100 median
-  label: HealthLabel;
+  score: number | null;     // 0-100 median; null when label is leader-set only
+  label: HealthLabel;       // effective: override ?? computed
   sampleSize: number;
   summary: string | null;
+  overridden: boolean;      // true when a leader set the health by hand
   computedAt: string | null;
 }
 
@@ -918,16 +919,21 @@ export interface ClientSentimentHealthRow {
 // a 60-with-3-samples (the latter being noisy).
 export async function getWorstClientsByHealth(topN = 10): Promise<ClientSentimentHealthRow[]> {
   const supabase = getSupabaseAdmin();
+  // Pull every client carrying a sentiment signal — a nightly-computed
+  // label OR a leader override. The clients list renders
+  // (override ?? computed), so this widget must use the same effective
+  // label; otherwise a leader-set "At risk" account (one that was never
+  // auto-scored, so health_score is null) shows red on /clients but
+  // silently vanishes here. That mismatch is exactly the "1 at-risk on
+  // home vs 3 on the clients tab" bug.
   const { data, error } = await supabase
     .from("clients")
     .select(
-      "id, name, contact_name, status, health_label, health_score, " +
-      "health_sample_size, health_summary, health_computed_at"
+      "id, name, contact_name, status, health_label, health_override_label, " +
+      "health_score, health_sample_size, health_summary, health_override_note, " +
+      "health_computed_at"
     )
-    .not("health_score", "is", null)
-    .order("health_score", { ascending: true })
-    .order("health_sample_size", { ascending: false })
-    .limit(topN * 3); // overscan; we filter inactive in JS
+    .or("health_label.not.is.null,health_override_label.not.is.null");
   if (error) return [];
 
   const rows = ((data ?? []) as unknown as Array<{
@@ -936,22 +942,30 @@ export async function getWorstClientsByHealth(topN = 10): Promise<ClientSentimen
     contact_name: string | null;
     status: string | null;
     health_label: HealthLabel | null;
+    health_override_label: HealthLabel | null;
     health_score: number | null;
     health_sample_size: number | null;
     health_summary: string | null;
+    health_override_note: string | null;
     health_computed_at: string | null;
   }>)
     .filter((c) => !c.status || c.status === "active")
-    .filter((c) => c.health_score !== null && c.health_label !== null);
+    .map((c) => ({
+      // Leader override wins, exactly like the clients-list pill.
+      ...c,
+      effectiveLabel: (c.health_override_label ?? c.health_label) as HealthLabel | null,
+      overridden: c.health_override_label !== null
+    }))
+    .filter((c) => c.effectiveLabel !== null);
 
-  // Order at-risk first explicitly by sentiment band (at_risk → shaky →
-  // steady → thriving), not just by raw score, so the "needs attention"
-  // cohort is guaranteed to lead even if the score↔band thresholds ever
-  // shift. Within a band: lower score first, then larger sample first
-  // (a low score backed by many emails is more trustworthy than a noisy
-  // one). Mirrors the default "At risk first" sort on the clients list.
+  // Order at-risk first by sentiment band (at_risk → shaky → steady →
+  // thriving), so the "needs attention" cohort always leads regardless
+  // of raw score. Within a band: lower score first (override-only rows
+  // have no score, so they sort after scored peers in the same band),
+  // then larger sample first. Mirrors the default "At risk first" sort
+  // on the clients list.
   rows.sort((a, b) => {
-    const r = healthRank(a.health_label) - healthRank(b.health_label);
+    const r = healthRank(a.effectiveLabel) - healthRank(b.effectiveLabel);
     if (r !== 0) return r;
     const s = (a.health_score ?? 101) - (b.health_score ?? 101);
     if (s !== 0) return s;
@@ -962,10 +976,11 @@ export async function getWorstClientsByHealth(topN = 10): Promise<ClientSentimen
     id: c.id,
     name: c.name,
     contactName: c.contact_name,
-    score: c.health_score as number,
-    label: c.health_label as HealthLabel,
+    score: c.health_score,
+    label: c.effectiveLabel as HealthLabel,
     sampleSize: c.health_sample_size ?? 0,
-    summary: c.health_summary,
+    summary: c.health_summary ?? c.health_override_note,
+    overridden: c.overridden,
     computedAt: c.health_computed_at
   }));
 }

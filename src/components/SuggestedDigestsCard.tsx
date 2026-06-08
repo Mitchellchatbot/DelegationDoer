@@ -144,24 +144,55 @@ export function SuggestedDigestsCard() {
         Clients with unreported completed work in the last {activeTab.days} day{activeTab.days === 1 ? "" : "s"}.
       </div>
 
-      {loading && !data ? (
-        <div className="px-4 py-8 text-[12px] text-ink/55 inline-flex items-center gap-1.5">
-          <Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading…
-        </div>
-      ) : error ? (
-        <div className="px-4 py-4 text-[12px] text-rose-700">{error}</div>
-      ) : recs.length === 0 ? (
-        <div className="px-4 py-8 text-center text-[12px] text-ink/55 inline-flex items-center justify-center gap-1.5 w-full">
-          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-          Nothing unreported in this window. New entries appear here as tasks get closed.
-        </div>
-      ) : (
-        <ul className="divide-y divide-emerald-100/40">
-          {recs.map((r) => (
-            <RecRow key={r.clientId} rec={r} windowDays={activeTab.days} />
-          ))}
-        </ul>
-      )}
+      {/* Body region — wrapped in a relative container so the
+          tab-switch overlay can hover on top of the previous list
+          without re-flowing the page. The list itself fades to ~55%
+          opacity during load so the user can still see context. */}
+      <div className="relative">
+        {/* Loading overlay — shows on tab switches AND first load.
+            The spinner sits centered over the prior content so the
+            user has clear feedback that work is happening. */}
+        {loading && (
+          <div
+            className="absolute inset-0 z-10 flex items-center justify-center bg-white/55 backdrop-blur-[1px] anim-fade-in pointer-events-none"
+            role="status"
+            aria-live="polite"
+          >
+            <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-white border border-emerald-200/60 shadow-sm text-[12px] font-medium text-emerald-700">
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              Loading {activeTab.label.toLowerCase()}…
+            </div>
+          </div>
+        )}
+
+        {error ? (
+          <div className="px-4 py-4 text-[12px] text-rose-700">{error}</div>
+        ) : !data && loading ? (
+          // First-ever load (no data yet) — give the overlay something
+          // to hover over so it isn't centered on a 0-height box.
+          <div className="px-4 py-12" aria-hidden />
+        ) : recs.length === 0 ? (
+          <div
+            key={`empty-${active}`}
+            className="px-4 py-8 text-center text-[12px] text-ink/55 inline-flex items-center justify-center gap-1.5 w-full anim-fade-in-up"
+          >
+            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+            Nothing unreported in this window. New entries appear here as tasks get closed.
+          </div>
+        ) : (
+          <ul
+            key={`list-${active}`}
+            className={cn(
+              "divide-y divide-emerald-100/40 anim-fade-in-up transition-opacity duration-200",
+              loading && "opacity-55"
+            )}
+          >
+            {recs.map((r) => (
+              <RecRow key={r.clientId} rec={r} windowDays={activeTab.days} />
+            ))}
+          </ul>
+        )}
+      </div>
     </section>
   );
 }

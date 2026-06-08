@@ -48,8 +48,13 @@ export default async function HomePage() {
   // dailyPromptsEnabled flag flipped off (e.g. Mitchell) is also
   // exempt. Skipping the query *and* the card prevents wasted reads
   // for the exempt cohort.
+  //
+  // dailyPromptsRequired force-opts a specific privileged account back
+  // into the ritual (overrides the role exemption + a false flag), so
+  // the card shows for them despite being a leader/admin.
   const dailyPromptsOn = me.dailyPromptsEnabled !== false;
-  const dayBookends = !isLeaderRole && dailyPromptsOn
+  const dailyPromptsRequired = me.dailyPromptsRequired === true;
+  const dayBookends = dailyPromptsRequired || (!isLeaderRole && dailyPromptsOn)
     ? await getDayBookendStatus(userId)
     : null;
 

@@ -7,6 +7,7 @@ import {
   CalendarDays, CalendarRange, Calendar, CalendarClock
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { EodDigestComposerModal } from "@/components/EodDigestComposerModal";
 
 // Lives at the top of /approvals?tab=emails. Four window tabs
 // (Daily / Weekly / Bi-weekly / Monthly) — clicking one shows every
@@ -37,6 +38,7 @@ interface EodNote {
 interface Recommendation {
   clientId: string;
   clientName: string;
+  contactEmails: string[];
   unreportedTaskCount: number;
   lastSentAt: string | null;
   tasks: TaskDetail[];
@@ -74,6 +76,10 @@ export function SuggestedDigestsCard() {
   const [data, setData] = useState<ApiResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Track which recommendation the modal is showing. null = closed.
+  // Setting this opens the composer in-place over /approvals instead
+  // of navigating to /clients/[id].
+  const [modalRec, setModalRec] = useState<Recommendation | null>(null);
 
   const refresh = useCallback(async (w: DigestWindow) => {
     setLoading(true);
@@ -188,17 +194,41 @@ export function SuggestedDigestsCard() {
             )}
           >
             {recs.map((r) => (
-              <RecRow key={r.clientId} rec={r} windowDays={activeTab.days} />
+              <RecRow
+                key={r.clientId}
+                rec={r}
+                windowDays={activeTab.days}
+                onOpen={() => setModalRec(r)}
+              />
             ))}
           </ul>
         )}
       </div>
+
+      <EodDigestComposerModal
+        open={modalRec !== null}
+        lockedClient={modalRec ? {
+          id: modalRec.clientId,
+          name: modalRec.clientName,
+          contactEmails: modalRec.contactEmails
+        } : null}
+        presetDays={activeTab.days}
+        onClose={() => setModalRec(null)}
+        onSubmitted={() => void refresh(active)}
+      />
     </section>
   );
 }
 
-function RecRow({ rec, windowDays }: { rec: Recommendation; windowDays: number }) {
+function RecRow({
+  rec, windowDays, onOpen
+}: {
+  rec: Recommendation;
+  windowDays: number;
+  onOpen: () => void;
+}) {
   const [expanded, setExpanded] = useState(false);
+  void windowDays;
   return (
     <li className="px-4 py-3">
       <div className="flex items-center gap-3">
@@ -252,18 +282,19 @@ function RecRow({ rec, windowDays }: { rec: Recommendation; windowDays: number }
         >
           {expanded ? "Hide" : "Details"}
         </button>
-        <Link
-          href={`/clients/${encodeURIComponent(rec.clientId)}?openComposer=1&days=${windowDays}`}
+        <button
+          type="button"
+          onClick={onOpen}
+          disabled={!rec.hasContact}
           className={cn(
-            "inline-flex items-center gap-1 px-3 py-1 rounded-full text-[11px] font-semibold shrink-0",
+            "inline-flex items-center gap-1 px-3 py-1 rounded-full text-[11px] font-semibold shrink-0 transition-colors",
             rec.hasContact
               ? "bg-emerald-600 text-white hover:bg-emerald-700 shadow-sm"
-              : "bg-slate-100 text-ink/50 pointer-events-none"
+              : "bg-slate-100 text-ink/50 cursor-not-allowed"
           )}
-          aria-disabled={!rec.hasContact}
         >
           Open composer <ArrowRight className="w-3 h-3" />
-        </Link>
+        </button>
       </div>
 
       {expanded && (

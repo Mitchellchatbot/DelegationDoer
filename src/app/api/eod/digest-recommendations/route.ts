@@ -77,6 +77,7 @@ export interface DigestEodNote {
 export interface DigestRecommendation {
   clientId: string;
   clientName: string;
+  contactEmails: string[];        // forwarded so the in-place composer modal can pre-fill To
   unreportedTaskCount: number;
   lastSentAt: string | null;
   tasks: DigestTaskDetail[];      // up to 5 most recent
@@ -247,6 +248,7 @@ export async function GET(req: NextRequest) {
       recommendations.push({
         clientId: c.id,
         clientName: c.name,
+        contactEmails: c.contact_emails ?? [],
         unreportedTaskCount: clientTasks.length,
         lastSentAt: lastSentByClient.get(c.name) ?? null,
         tasks: taskDetails,

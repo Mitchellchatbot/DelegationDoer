@@ -149,7 +149,15 @@ export function EodTypeform({
   const baseStepCount = structuredSteps.length;
   // Website branch is suppressed for Talha — his EOD doesn't surface
   // the client-email composer.
-  const showWebsiteBranch = isWebsiteTeam && !isMarketingTalha;
+  // Per-client email drafting from the EOD flow was removed: the
+  // /approvals "Who needs an email" surface now accumulates client
+  // updates centrally so we don't ask every worker to draft their own
+  // per-client emails on submit. Leaving the constant in place (rather
+  // than ripping the entire branch out) so the related state/handlers
+  // can stay as dead code until they're cleaned up properly — fewer
+  // moving parts in this change.
+  const showWebsiteBranch = false;
+  void isWebsiteTeam;
   // step indices for the Website-team flow:
   //   0..n-1 — structured questions (4 default, 5 for Talha)
   //   n      — "Which clients did you work on today?" multi-picker

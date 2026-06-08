@@ -48,7 +48,7 @@ interface Draft {
   subject: string;
   bodyText: string;
   bodyHtml: string | null;
-  kind: "client_update" | "content_plan" | "custom" | "auto_reply";
+  kind: "client_update" | "content_plan" | "custom" | "auto_reply" | "eod_digest";
   status: DraftStatus;
   approverId: string | null;
   approverName: string | null;
@@ -85,7 +85,8 @@ const KIND_LABELS: Record<Draft["kind"], { label: string; tone: string }> = {
   client_update: { label: "Client email",  tone: "bg-blue-100 text-blue-700 border-blue-200/70" },
   content_plan:  { label: "Content plan",  tone: "bg-violet-100 text-violet-700 border-violet-200/70" },
   custom:        { label: "Custom",        tone: "bg-slate-100 text-slate-700 border-slate-200/70" },
-  auto_reply:    { label: "Auto-reply",    tone: "bg-amber-100 text-amber-700 border-amber-200/70" }
+  auto_reply:    { label: "Auto-reply",    tone: "bg-amber-100 text-amber-700 border-amber-200/70" },
+  eod_digest:    { label: "EOD digest",    tone: "bg-emerald-100 text-emerald-700 border-emerald-200/70" }
 };
 
 // Safe lookup that never returns undefined — covers the case where a

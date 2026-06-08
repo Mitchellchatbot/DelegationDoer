@@ -240,6 +240,18 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       }
     }
 
+    if ("updateCadence" in body) {
+      const raw = body.updateCadence;
+      const allowed = ["daily", "biweekly", "weekly", "monthly", "none"];
+      if (typeof raw !== "string" || !allowed.includes(raw)) {
+        return NextResponse.json(
+          { error: `updateCadence must be one of: ${allowed.join(", ")}` },
+          { status: 400 }
+        );
+      }
+      update.update_cadence = raw;
+    }
+
     if (Object.keys(update).length === 0) {
       return NextResponse.json({ error: "nothing to update" }, { status: 400 });
     }

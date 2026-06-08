@@ -20,7 +20,7 @@ export interface CalendarDraft {
   subject: string;
   bodyText: string;
   to: string[];
-  kind: "client_update" | "content_plan" | "custom" | "auto_reply";
+  kind: "client_update" | "content_plan" | "custom" | "auto_reply" | "eod_digest";
   status: "pending" | "needs_revision" | "approved" | "rejected" | "sent" | "failed";
   scheduledFor: string | null;
   sentAt: string | null;

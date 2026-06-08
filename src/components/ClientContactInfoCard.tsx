@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import {
-  IdCard, Loader2, Pencil, Save, X, Mail, Globe2, CalendarClock, FileText
+  IdCard, Loader2, Pencil, Save, X, Mail, Globe2, CalendarClock, FileText, RefreshCw
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -17,6 +17,20 @@ import { cn } from "@/lib/utils";
 // brief — all in one go so a sales rep doesn't have to bounce between
 // modals.
 
+export type UpdateCadenceValue = "daily" | "biweekly" | "weekly" | "monthly" | "none";
+
+const CADENCE_OPTIONS: Array<{ value: UpdateCadenceValue; label: string; hint: string }> = [
+  { value: "daily",    label: "Daily",     hint: "fires on every EOD submit that touches this client" },
+  { value: "biweekly", label: "Bi-weekly", hint: "Wednesdays + Fridays" },
+  { value: "weekly",   label: "Weekly",    hint: "Fridays" },
+  { value: "monthly",  label: "Monthly",   hint: "1st of the month" },
+  { value: "none",     label: "Off",       hint: "no EOD digest emails queued" }
+];
+
+const CADENCE_LABEL: Record<UpdateCadenceValue, string> = Object.fromEntries(
+  CADENCE_OPTIONS.map((o) => [o.value, o.label])
+) as Record<UpdateCadenceValue, string>;
+
 interface Props {
   clientId: string;
   name: string;
@@ -26,6 +40,7 @@ interface Props {
   contactEmails: string[];
   onboardingDate: string | null;
   businessInformation: string | null;
+  updateCadence: UpdateCadenceValue;
   canEdit: boolean;
 }
 
@@ -37,6 +52,7 @@ interface Draft {
   contactEmails: string;   // comma/newline-separated
   onboardingDate: string;  // YYYY-MM-DD
   businessInformation: string;
+  updateCadence: UpdateCadenceValue;
 }
 
 function fromProps(p: Props): Draft {
@@ -47,7 +63,8 @@ function fromProps(p: Props): Draft {
     contactName: p.contactName ?? "",
     contactEmails: p.contactEmails.join(", "),
     onboardingDate: p.onboardingDate ?? "",
-    businessInformation: p.businessInformation ?? ""
+    businessInformation: p.businessInformation ?? "",
+    updateCadence: p.updateCadence
   };
 }
 
@@ -105,7 +122,8 @@ export function ClientContactInfoCard(props: Props) {
           contactName: draft.contactName.trim() || null,
           contactEmails,
           onboardingDate: draft.onboardingDate || null,
-          businessInformation: draft.businessInformation.trim() || null
+          businessInformation: draft.businessInformation.trim() || null,
+          updateCadence: draft.updateCadence
         })
       });
       const data = await res.json().catch(() => ({}));
@@ -233,6 +251,22 @@ export function ClientContactInfoCard(props: Props) {
             />
           </Field>
 
+          <Field
+            label="EOD update cadence"
+            hint="When the system queues an EOD-digest email to this client. Drafts land in /approvals for review."
+          >
+            <select
+              value={draft.updateCadence}
+              onChange={(e) => setDraft({ ...draft, updateCadence: e.target.value as UpdateCadenceValue })}
+              disabled={busy}
+              className="block w-full rounded-xl border border-indigo-200 bg-white px-3 py-2 text-[13px] outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-200"
+            >
+              {CADENCE_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>{o.label} — {o.hint}</option>
+              ))}
+            </select>
+          </Field>
+
           <div className="flex items-center justify-end gap-2 pt-1">
             <button
               type="button"
@@ -311,6 +345,15 @@ export function ClientContactInfoCard(props: Props) {
             ) : (
               <EmptyHint canEdit={props.canEdit} onClick={startEdit}>No info yet</EmptyHint>
             )}
+          </ReadCell>
+
+          <ReadCell icon={<RefreshCw className="w-3 h-3" />} label="EOD digest cadence">
+            <div className="text-[13px] text-ink font-medium">
+              {CADENCE_LABEL[props.updateCadence]}
+            </div>
+            <div className="text-[11px] text-ink/55 mt-0.5">
+              {CADENCE_OPTIONS.find((o) => o.value === props.updateCadence)?.hint ?? ""}
+            </div>
           </ReadCell>
         </div>
       )}

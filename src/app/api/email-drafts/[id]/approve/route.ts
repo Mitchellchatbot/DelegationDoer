@@ -6,6 +6,7 @@ import { canApproveDraft } from "@/lib/email-approvers";
 import { composeNewThread, sendReply } from "@/lib/missive-client";
 import { recordDraftEvent } from "@/lib/draft-events";
 import { sanitizeMediaUrls, fetchMediaAsAttachments } from "@/lib/media";
+import { markTasksReportedFromDraft } from "@/lib/eod-digest";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
@@ -189,6 +190,15 @@ export async function POST(
           is_reply: isAutoReply
         }
       });
+      // For eod_digest drafts: stamp every linked task as reported so
+      // tomorrow's digest builder skips them. No-op for other kinds
+      // (markTasksReportedFromDraft looks up email_draft_tasks rows;
+      // there won't be any for client_update / content_plan / etc.).
+      if (row.kind === "eod_digest") {
+        await markTasksReportedFromDraft(params.id, sentAt).catch((err) => {
+          console.error("[approve] markTasksReportedFromDraft", err);
+        });
+      }
       return NextResponse.json({
         ok: true,
         status: "sent",

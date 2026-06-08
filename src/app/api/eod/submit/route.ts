@@ -3,6 +3,7 @@ import { requireCurrentUserId } from "@/lib/session";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { openDm, postMessage } from "@/lib/slack";
 import { resolveSlackId } from "@/lib/slack-resolve";
+import { buildEodDigestsForUser } from "@/lib/eod-digest";
 
 export const dynamic = "force-dynamic";
 
@@ -253,6 +254,23 @@ export async function POST(req: NextRequest) {
         deliveries.push({ userId: u.id, name: u.name, delivered: false, reason: "SLACK_BOT_TOKEN missing" });
       }
     }
+
+    // Fire the per-client digest builder in the background. For every
+    // client the caller did work for today, we update or create a
+    // pending eod_digest draft in the approvals queue. Approver
+    // edits / sends the email; the approve route stamps each linked
+    // task's reported_to_client_at so future digests skip them.
+    // Fire-and-forget so the EOD submit response stays snappy — the
+    // Anthropic call inside can take a few seconds.
+    void buildEodDigestsForUser(userId, dateStr)
+      .then((r) => {
+        if (r.clientsTouched > 0 || r.errors.length > 0) {
+          console.log("[eod-submit] digest build", r);
+        }
+      })
+      .catch((err) => {
+        console.error("[eod-submit] digest build failed", err);
+      });
 
     return NextResponse.json({
       ok: true,

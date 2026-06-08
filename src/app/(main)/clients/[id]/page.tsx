@@ -389,6 +389,7 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
         contactEmails={client.contactEmails}
         onboardingDate={client.onboardingDate}
         businessInformation={client.businessInformation}
+        updateCadence={client.updateCadence}
         canEdit={!!(me && (me.role === "leader" || me.role === "department_head" || me.isAdmin))}
       />
 

@@ -15,6 +15,7 @@
 // alongside the in-process loop — can't double-dispatch the same row.
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { sendReply, composeNewThread } from "@/lib/missive-client";
+import { markTasksReportedFromDraft } from "@/lib/eod-digest";
 import { sanitizeMediaUrls, fetchMediaAsAttachments } from "@/lib/media";
 
 export interface ScheduledEmailsResult {
@@ -70,7 +71,7 @@ export async function runScheduledEmails(): Promise<ScheduledEmailsResult> {
   // double-dispatch even if claim race ever happens).
   const { data: dueDrafts, error: draftErr } = await supabase
     .from("email_drafts")
-    .select("id, account_id, to_emails, cc_emails, bcc_emails, subject, body_text, body_html, media_urls")
+    .select("id, account_id, to_emails, cc_emails, bcc_emails, subject, body_text, body_html, media_urls, kind")
     .eq("status", "approved")
     .lte("scheduled_for", nowIso)
     .is("missive_thread_id", null)
@@ -123,6 +124,13 @@ export async function runScheduledEmails(): Promise<ScheduledEmailsResult> {
           send_error: null
         })
         .eq("id", row.id);
+      // eod_digest drafts: stamp linked tasks as reported on send so
+      // tomorrow's digest builder skips them. No-op for other kinds.
+      if (row.kind === "eod_digest") {
+        await markTasksReportedFromDraft(row.id as string, nowIso).catch((err) => {
+          console.error("[scheduled-emails] markTasksReported", err);
+        });
+      }
       sentDrafts++;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

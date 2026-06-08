@@ -193,5 +193,6 @@ export function kindLabel(k: EmailDraftKind): string {
     case "client_update": return "Client update";
     case "custom":        return "Custom";
     case "auto_reply":    return "Auto-reply";
+    case "eod_digest":    return "EOD digest";
   }
 }

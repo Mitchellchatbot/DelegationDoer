@@ -45,6 +45,11 @@ export interface Client {
   // Free-text onboarding brief: company overview, products/services,
   // background, special instructions — anything the team should know.
   businessInformation: string | null;
+  // Cadence for EOD-digest emails to this client. Drives whether the
+  // live EOD-submit path queues a draft for them (daily) and which day
+  // the daily safety-net cron picks them up (biweekly = Wed+Fri,
+  // weekly = Fri, monthly = 1st of month, none = opt-out).
+  updateCadence: "daily" | "biweekly" | "weekly" | "monthly" | "none";
   startDate: string | null;
   subscriptionDate: string | null;
   status: string;
@@ -164,6 +169,7 @@ interface ClientRow {
   contact_emails: string[] | null;
   onboarding_date: string | null;
   business_information: string | null;
+  update_cadence: string | null;
   start_date: string | null;
   subscription_date: string | null;
   status: string | null;
@@ -233,6 +239,12 @@ function rowToClient(r: ClientRow, touchpoint?: {
     contactEmails: r.contact_emails ?? [],
     onboardingDate: r.onboarding_date ?? null,
     businessInformation: r.business_information ?? null,
+    updateCadence: (
+      r.update_cadence === "biweekly" || r.update_cadence === "weekly"
+      || r.update_cadence === "monthly" || r.update_cadence === "none"
+        ? r.update_cadence
+        : "daily"
+    ) as Client["updateCadence"],
     startDate: r.start_date ?? null,
     subscriptionDate: r.subscription_date ?? null,
     status: r.status ?? "active",

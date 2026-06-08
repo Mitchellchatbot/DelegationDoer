@@ -9,6 +9,7 @@ import { CapacityBar } from "@/components/CapacityBar";
 import { OrgChart } from "@/components/OrgChart";
 import { OnShiftList } from "@/components/OnShiftList";
 import { PerformanceReview } from "@/components/PerformanceReview";
+import { DayReportsTab } from "@/components/DayReportsTab";
 import { PageHero } from "@/components/PageHero";
 import { ProfileDialog } from "@/components/ProfileDialog";
 import { SendKudosDialog } from "@/components/SendKudosDialog";
@@ -27,7 +28,7 @@ import {
   UserPlus
 } from "lucide-react";
 
-const TABS = ["People", "Departments", "Org chart", "Performance", "All tasks"] as const;
+const TABS = ["People", "Departments", "Org chart", "Performance", "All tasks", "Day reports"] as const;
 type Tab = typeof TABS[number];
 
 export default function LeaderConsolePage() {
@@ -142,6 +143,7 @@ export default function LeaderConsolePage() {
           {tab === "Org chart" && <OrgChartTab people={people} departments={depts} tasks={tasks} />}
           {tab === "Performance" && <PerformanceReview canCrown={currentUser.role === "leader" || !!currentUser.isAdmin} />}
           {tab === "All tasks" && <AllTasksTab people={people} departments={depts} tasks={tasks} />}
+          {tab === "Day reports" && <DayReportsTab />}
         </motion.div>
       </AnimatePresence>
     </div>

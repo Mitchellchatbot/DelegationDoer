@@ -22,6 +22,15 @@ interface TaskRow {
   tags: string[] | null;
 }
 
+interface InProgressRow {
+  id: string;
+  title: string;
+  status: string;
+  assignee_id: string | null;
+  tags: string[] | null;
+  last_activity_at: string | null;
+}
+
 interface EodNoteRow {
   user_id: string;
   note_date: string;
@@ -39,6 +48,14 @@ export interface ComposerPreview {
     completedAt: string | null;
     assigneeName: string | null;
     tags: string[];
+  }>;
+  tasksInProgress: Array<{
+    id: string;
+    title: string;
+    status: string;
+    assigneeName: string | null;
+    tags: string[];
+    lastActivityAt: string | null;
   }>;
   eodNotes: Array<{
     authorName: string;
@@ -78,45 +95,66 @@ export async function GET(req: NextRequest) {
     //    uses — match on client_name (legacy linkage), filter on
     //    completed_at so "touched but not finished" rows don't sneak
     //    in.
-    const { data: tasksRes } = await supabase
-      .from("tasks")
-      .select("id, title, completed_at, assignee_id, tags")
-      .eq("client_name", clientName)
-      .eq("status", "done")
-      .gte("completed_at", fromIso)
-      .lte("completed_at", toIso)
-      .order("completed_at", { ascending: false })
-      .limit(50);
-    const tasks = (tasksRes ?? []) as TaskRow[];
+    // 2) In-progress tasks — still-open work (status != 'done') that
+    //    was touched in this window (last_activity_at), so the approver
+    //    sees what's still moving for the client, not just what shipped.
+    const [tasksRes, inProgressRes] = await Promise.all([
+      supabase
+        .from("tasks")
+        .select("id, title, completed_at, assignee_id, tags")
+        .eq("client_name", clientName)
+        .eq("status", "done")
+        .gte("completed_at", fromIso)
+        .lte("completed_at", toIso)
+        .order("completed_at", { ascending: false })
+        .limit(50),
+      supabase
+        .from("tasks")
+        .select("id, title, status, assignee_id, tags, last_activity_at")
+        .eq("client_name", clientName)
+        .neq("status", "done")
+        .gte("last_activity_at", fromIso)
+        .lte("last_activity_at", toIso)
+        .order("last_activity_at", { ascending: false })
+        .limit(50)
+    ]);
+    const tasks = (tasksRes.data ?? []) as TaskRow[];
+    const inProgress = (inProgressRes.data ?? []) as InProgressRow[];
 
-    // 2) EOD notes from contributors. Contributors = assignees of the
-    //    tasks above; pull their structured EOD answers for the same
-    //    date window so the composer prompt can fold them into the
+    // 3) EOD notes from contributors. Contributors = assignees of the
+    //    COMPLETED tasks above; pull their structured EOD answers for the
+    //    same date window so the composer prompt can fold them into the
     //    summary.
     const contributorIds = Array.from(new Set(
       tasks.map((t) => t.assignee_id).filter((v): v is string => !!v)
     ));
+    // Names are needed for both completed- and in-progress-task assignees.
+    const assigneeIds = Array.from(new Set(
+      [...tasks, ...inProgress].map((t) => t.assignee_id).filter((v): v is string => !!v)
+    ));
     let notes: EodNoteRow[] = [];
     const userById = new Map<string, string>();
-    if (contributorIds.length > 0) {
-      const [notesRes, usersRes] = await Promise.all([
-        supabase
-          .from("eod_notes")
-          .select("user_id, note_date, worked_on, accomplished")
-          .in("user_id", contributorIds)
-          .gte("note_date", fromDateStr)
-          .lte("note_date", toDateStr)
-          .order("note_date", { ascending: false })
-          .limit(100),
-        supabase
-          .from("users")
-          .select("id, name")
-          .in("id", contributorIds)
-      ]);
-      notes = (notesRes.data ?? []) as EodNoteRow[];
-      for (const u of ((usersRes.data ?? []) as { id: string; name: string }[])) {
-        userById.set(u.id, u.name);
-      }
+    const [notesRes, usersRes] = await Promise.all([
+      contributorIds.length > 0
+        ? supabase
+            .from("eod_notes")
+            .select("user_id, note_date, worked_on, accomplished")
+            .in("user_id", contributorIds)
+            .gte("note_date", fromDateStr)
+            .lte("note_date", toDateStr)
+            .order("note_date", { ascending: false })
+            .limit(100)
+        : Promise.resolve({ data: [] as EodNoteRow[] }),
+      assigneeIds.length > 0
+        ? supabase
+            .from("users")
+            .select("id, name")
+            .in("id", assigneeIds)
+        : Promise.resolve({ data: [] as { id: string; name: string }[] })
+    ]);
+    notes = (notesRes.data ?? []) as EodNoteRow[];
+    for (const u of ((usersRes.data ?? []) as { id: string; name: string }[])) {
+      userById.set(u.id, u.name);
     }
 
     const out: ComposerPreview = {
@@ -129,6 +167,14 @@ export async function GET(req: NextRequest) {
         completedAt: t.completed_at,
         assigneeName: t.assignee_id ? (userById.get(t.assignee_id) ?? null) : null,
         tags: t.tags ?? []
+      })),
+      tasksInProgress: inProgress.map((t) => ({
+        id: t.id,
+        title: t.title,
+        status: t.status,
+        assigneeName: t.assignee_id ? (userById.get(t.assignee_id) ?? null) : null,
+        tags: t.tags ?? [],
+        lastActivityAt: t.last_activity_at
       })),
       eodNotes: notes
         // Keep only notes with at least one filled structured field —

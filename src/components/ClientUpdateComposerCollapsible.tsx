@@ -8,7 +8,7 @@ import { ClientUpdateComposer } from "@/components/ClientUpdateComposer";
 // Collapsed-by-default wrapper for the Client Update composer on the client
 // detail page. Mirrors ContentPlanComposerCollapsible: a one-line CTA that
 // reads as "another section" until clicked, then reveals the full composer
-// (date-range picker + generate + editable preview + submit-for-approval).
+// (context preview + generate + editable preview + submit-for-approval).
 // Kept separate from the composer so the composer keeps its own styling.
 //
 // Auto-opens (and scrolls into view) when `?openComposer=1` is present in

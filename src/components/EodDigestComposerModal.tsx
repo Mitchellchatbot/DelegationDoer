@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
+import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 import { ClientUpdateComposer } from "@/components/ClientUpdateComposer";
 
@@ -8,6 +9,13 @@ import { ClientUpdateComposer } from "@/components/ClientUpdateComposer";
 // /approvals page so an approver can act on a recommendation without
 // navigating away. Same composer component the client detail page
 // renders — just framed in a backdrop+card with a close button.
+//
+// Rendered through a portal at document.body, NOT inline in the
+// approvals tree: the topbar is its own positioned stacking context
+// (sticky z-30), so a backdrop nested under <main> (z-10) can never
+// paint over it no matter its own z-index. Portaling to the body root
+// + a z-index above the topbar lets the backdrop blur cover the whole
+// viewport, topbar included.
 //
 // Closes on backdrop click, the X button, or Esc. Also closes when
 // the composer's submit succeeds (via onSubmitted), so the user lands
@@ -54,11 +62,11 @@ export function EodDigestComposerModal({
     return () => { document.body.style.overflow = prev; };
   }, [open]);
 
-  if (!open || !lockedClient) return null;
+  if (!open || !lockedClient || typeof document === "undefined") return null;
 
-  return (
+  return createPortal(
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center p-4 sm:p-8 bg-black/40 backdrop-blur-sm overflow-y-auto anim-fade-in"
+      className="fixed inset-0 z-[60] flex items-start justify-center p-4 sm:p-8 bg-black/40 backdrop-blur-sm overflow-y-auto anim-fade-in"
       onClick={onClose}
       role="dialog"
       aria-modal="true"
@@ -97,6 +105,7 @@ export function EodDigestComposerModal({
           />
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

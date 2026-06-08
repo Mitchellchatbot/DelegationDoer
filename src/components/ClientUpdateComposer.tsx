@@ -1,14 +1,15 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Sparkles, Loader2, ArrowRight, Send, RefreshCw, Calendar, CheckSquare, MessageSquare } from "lucide-react";
+import { Sparkles, Loader2, ArrowRight, Send, RefreshCw, Calendar, CheckSquare, MessageSquare, Clock } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { MediaPicker } from "@/components/MediaPicker";
 import type { TaskMedia } from "@/lib/types";
 
 // Client Update composer, rendered as a per-client section on /clients/[id].
-// The operator picks a date range, hits Generate -> the AI summarizes the
+// The window is fixed by `presetDays` (set upstream by the tab that opened
+// it; defaults to 7). The operator hits Generate -> the AI summarizes the
 // client's COMPLETED work (plus in-progress) for that window into a
 // client-facing email, the operator reviews/edits, then Submit routes it to
 // the existing approval queue (kind='client_update').
@@ -23,22 +24,18 @@ interface LockedClient {
   contactEmails: string[];
 }
 
-type RangeKey = "7" | "30" | "custom";
+const DEFAULT_DAYS = 7;
 
-// Day boundaries for a preset window, as ISO strings. `from` is the start of
-// the day N days ago; `to` is "now" so today's completed work is included.
-function presetWindow(days: number): { from: string; to: string } {
+// Day boundaries for a fixed N-day window, as ISO strings. `from` is the
+// start of the day N days ago in UTC; `to` is "now" so today's completed
+// work is included. UTC-aligned to match the /approvals recommendations
+// endpoint (which uses the same UTC-midnight floor) so the per-row count
+// there matches what the composer pulls in for the preview + draft.
+function windowFor(days: number): { from: string; to: string } {
   const to = new Date();
-  const from = new Date();
-  from.setDate(from.getDate() - days);
-  from.setHours(0, 0, 0, 0);
+  const from = new Date(to.getTime() - days * 86_400_000);
+  from.setUTCHours(0, 0, 0, 0);
   return { from: from.toISOString(), to: to.toISOString() };
-}
-
-// yyyy-mm-dd for <input type="date">.
-function dateInputValue(d: Date): string {
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
 export function ClientUpdateComposer({
@@ -54,23 +51,12 @@ export function ClientUpdateComposer({
   // undefined and the composer just resets to "compose" as before.
   onSubmitted?: () => void;
 }) {
-  // Deep-link from /approvals can preselect a range. Map 7 → preset 7,
-  // 30 → preset 30, anything else (1, 14, etc.) → custom with that
-  // many days back. Defaults to "7" when no preset is given.
-  const initialRange: RangeKey =
-    presetDays === 7 ? "7" :
-    presetDays === 30 ? "30" :
-    (presetDays && presetDays > 0) ? "custom" : "7";
-  const [range, setRange] = useState<RangeKey>(initialRange);
-  // Custom-range date inputs (yyyy-mm-dd). Default to a 7-day span so the
-  // pickers aren't empty when the user first switches to Custom. When
-  // presetDays is non-standard (e.g. 14), seed the custom-from to that
-  // many days back so Generate works without re-picking.
-  const customSeedDays = presetDays && presetDays !== 7 && presetDays !== 30 ? presetDays : 7;
-  const seedAgo = new Date();
-  seedAgo.setDate(seedAgo.getDate() - customSeedDays);
-  const [customFrom, setCustomFrom] = useState(dateInputValue(seedAgo));
-  const [customTo, setCustomTo] = useState(dateInputValue(new Date()));
+  // Window is fixed for the lifetime of this composer instance —
+  // picked upstream (the /approvals tab the user is on; falls back
+  // to DEFAULT_DAYS when rendered standalone on the client page).
+  // The user already chose the window before opening this; we don't
+  // re-ask here.
+  const days = presetDays && presetDays > 0 ? presetDays : DEFAULT_DAYS;
 
   const [generating, setGenerating] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -85,30 +71,8 @@ export function ClientUpdateComposer({
   const [attachments, setAttachments] = useState<TaskMedia[]>([]);
   const [step, setStep] = useState<"compose" | "preview">("compose");
 
-  // Resolve the selected window to ISO {from,to} for the draft request.
-  function resolveWindow(): { from: string; to: string } | null {
-    if (range === "7") return presetWindow(7);
-    if (range === "30") return presetWindow(30);
-    if (!customFrom || !customTo) {
-      toast.error("Pick both a start and end date");
-      return null;
-    }
-    const from = new Date(`${customFrom}T00:00:00`);
-    const to = new Date(`${customTo}T23:59:59`);
-    if (isNaN(from.getTime()) || isNaN(to.getTime())) {
-      toast.error("Invalid custom dates");
-      return null;
-    }
-    if (from > to) {
-      toast.error("Start date must be before end date");
-      return null;
-    }
-    return { from: from.toISOString(), to: to.toISOString() };
-  }
-
   async function generate() {
-    const window = resolveWindow();
-    if (!window) return;
+    const window = windowFor(days);
     setGenerating(true);
     try {
       const res = await fetch("/api/client-update/draft", {
@@ -183,7 +147,6 @@ export function ClientUpdateComposer({
       setAttachments([]);
       onSubmitted?.();
       setScheduledFor("");
-      setRange("7");
     } catch (err) {
       toast.error(`Submit failed: ${err instanceof Error ? err.message : "unknown"}`);
     } finally {
@@ -200,73 +163,14 @@ export function ClientUpdateComposer({
         <div className="min-w-0">
           <div className="text-sm font-semibold">Client update composer</div>
           <div className="text-[11px] text-ink/55 mt-0.5">
-            AI summarizes completed work for {lockedClient.name} over the period you pick, then routes the draft to approval.
+            AI summarizes the last {days} day{days === 1 ? "" : "s"} of work for {lockedClient.name} and routes the draft to approval.
           </div>
         </div>
       </header>
 
       {step === "compose" ? (
         <div className="p-4 space-y-3">
-          <div>
-            <label className="text-[10px] uppercase tracking-wide font-semibold text-ink/55 block mb-1.5">
-              Date range
-            </label>
-            <div className="inline-flex items-center gap-1">
-              {([
-                ["7", "Last 7 days"],
-                ["30", "Last 30 days"],
-                ["custom", "Custom"]
-              ] as const).map(([key, label]) => (
-                <button
-                  key={key}
-                  type="button"
-                  onClick={() => setRange(key)}
-                  className={cn(
-                    "px-2.5 py-1 rounded-full text-[11px] font-medium border transition-colors",
-                    range === key
-                      ? "bg-sky-100 text-sky-700 border-sky-200"
-                      : "bg-white text-ink/65 border-slate-200 hover:text-ink hover:border-sky-200"
-                  )}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {range === "custom" && (
-            <div className="flex items-center gap-2 flex-wrap">
-              <Field label="From">
-                <input
-                  type="date"
-                  value={customFrom}
-                  max={customTo || undefined}
-                  onChange={(e) => setCustomFrom(e.target.value)}
-                  className="flex-1 text-[13px] bg-transparent border-none outline-none focus:ring-0"
-                />
-              </Field>
-              <Field label="To">
-                <input
-                  type="date"
-                  value={customTo}
-                  min={customFrom || undefined}
-                  onChange={(e) => setCustomTo(e.target.value)}
-                  className="flex-1 text-[13px] bg-transparent border-none outline-none focus:ring-0"
-                />
-              </Field>
-            </div>
-          )}
-
-          <p className="text-[11px] text-ink/55 px-1">
-            Pulls completed tasks for this client in the selected window, plus any work in progress.
-          </p>
-
-          <ComposerPreview
-            clientName={lockedClient.name}
-            range={range}
-            customFrom={customFrom}
-            customTo={customTo}
-          />
+          <ComposerPreview clientName={lockedClient.name} days={days} />
 
           <div className="flex items-center justify-end">
             <button
@@ -349,7 +253,7 @@ export function ClientUpdateComposer({
               onClick={() => setStep("compose")}
               className="inline-flex items-center gap-1.5 text-[12px] text-ink/65 hover:text-ink px-2 py-1"
             >
-              ← Back to range
+              ← Back to preview
             </button>
             <div className="flex items-center gap-2">
               <button
@@ -399,6 +303,14 @@ interface PreviewData {
     assigneeName: string | null;
     tags: string[];
   }>;
+  tasksInProgress: Array<{
+    id: string;
+    title: string;
+    status: string;
+    assigneeName: string | null;
+    tags: string[];
+    lastActivityAt: string | null;
+  }>;
   eodNotes: Array<{
     authorName: string;
     noteDate: string;
@@ -408,41 +320,23 @@ interface PreviewData {
 }
 
 // Live preview of what the AI will summarize: completed tasks in the
-// window + EOD notes from teammates who closed those tasks. Refetches
-// whenever the date range changes so the user sees the input set
-// before clicking Generate.
+// window, work still in progress, + EOD notes from teammates who closed
+// those tasks. Refetches whenever the window (days) changes so the user
+// sees the input set before clicking Generate.
 function ComposerPreview({
-  clientName, range, customFrom, customTo
+  clientName, days
 }: {
   clientName: string;
-  range: RangeKey;
-  customFrom: string;
-  customTo: string;
+  days: number;
 }) {
   const [data, setData] = useState<PreviewData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Resolve the (from, to) ISO pair the same way the real Generate
-  // path does, so the preview matches exactly what will feed the AI.
-  const window =
-    range === "7" ? presetWindow(7) :
-    range === "30" ? presetWindow(30) :
-    (customFrom && customTo
-      ? (() => {
-          const f = new Date(`${customFrom}T00:00:00`);
-          const t = new Date(`${customTo}T23:59:59`);
-          if (isNaN(f.getTime()) || isNaN(t.getTime()) || f > t) return null;
-          return { from: f.toISOString(), to: t.toISOString() };
-        })()
-      : null);
-
   useEffect(() => {
-    if (!window) {
-      setData(null);
-      setLoading(false);
-      return;
-    }
+    // Resolve the (from, to) ISO pair the same way the real Generate
+    // path does, so the preview matches exactly what will feed the AI.
+    const window = windowFor(days);
     let cancelled = false;
     setLoading(true);
     setError(null);
@@ -459,7 +353,11 @@ function ComposerPreview({
           setError(j?.error ?? "preview failed");
           setData(null);
         } else {
-          setData({ tasks: j.tasks ?? [], eodNotes: j.eodNotes ?? [] });
+          setData({
+            tasks: j.tasks ?? [],
+            tasksInProgress: j.tasksInProgress ?? [],
+            eodNotes: j.eodNotes ?? []
+          });
         }
       })
       .catch((err) => {
@@ -468,18 +366,8 @@ function ComposerPreview({
       })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-    // Re-run on any range-input change. window itself is derived from
-    // the three inputs so we depend on the inputs directly.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [clientName, range, customFrom, customTo]);
-
-  if (!window) {
-    return (
-      <div className="rounded-xl border border-amber-200/60 bg-amber-50/40 px-3 py-2 text-[11px] text-amber-800">
-        Pick a valid date range to see what'll go into the draft.
-      </div>
-    );
-  }
+    // Re-run only when the window (days) or client changes.
+  }, [clientName, days]);
 
   return (
     <div className="rounded-xl border border-slate-200/70 bg-white p-3 space-y-3">
@@ -492,9 +380,9 @@ function ComposerPreview({
         </div>
       ) : error ? (
         <div className="text-[11px] text-rose-700">{error}</div>
-      ) : !data || (data.tasks.length === 0 && data.eodNotes.length === 0) ? (
+      ) : !data || (data.tasks.length === 0 && data.tasksInProgress.length === 0 && data.eodNotes.length === 0) ? (
         <div className="text-[11px] text-ink/55 italic">
-          Nothing completed (and no EOD notes from contributors) in this window. Widen the range or pick a different period.
+          Nothing completed, in progress, or noted by contributors in this window. Widen the range or pick a different period.
         </div>
       ) : (
         <div className="space-y-3">
@@ -525,6 +413,43 @@ function ComposerPreview({
                 {data.tasks.length > 8 && (
                   <li className="text-[10px] text-ink/45 italic">
                     + {data.tasks.length - 8} more not shown above (all are included in the draft).
+                  </li>
+                )}
+              </ul>
+            </div>
+          )}
+          {data.tasksInProgress.length > 0 && (
+            <div>
+              <div className="text-[10px] uppercase tracking-wide text-ink/50 font-semibold mb-1.5 inline-flex items-center gap-1">
+                <Clock className="w-3 h-3" />
+                In progress · {data.tasksInProgress.length}
+              </div>
+              <ul className="space-y-1">
+                {data.tasksInProgress.slice(0, 8).map((t) => (
+                  <li key={t.id} className="text-[12px] text-ink/80">
+                    <div className="font-medium truncate">{t.title}</div>
+                    <div className="text-[10px] text-ink/50 flex items-center gap-1.5 flex-wrap">
+                      {t.status && (
+                        <span className="px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 text-[9px]">
+                          {t.status.replace(/_/g, " ")}
+                        </span>
+                      )}
+                      {t.assigneeName && <span>{t.assigneeName}</span>}
+                      {t.lastActivityAt && (
+                        <>
+                          {t.assigneeName && <span>·</span>}
+                          <span className="tabular-nums">{t.lastActivityAt.slice(0, 10)}</span>
+                        </>
+                      )}
+                      {t.tags.slice(0, 3).map((tag) => (
+                        <span key={tag} className="px-1.5 py-0.5 rounded-full bg-slate-100 text-ink/65 text-[9px]">{tag}</span>
+                      ))}
+                    </div>
+                  </li>
+                ))}
+                {data.tasksInProgress.length > 8 && (
+                  <li className="text-[10px] text-ink/45 italic">
+                    + {data.tasksInProgress.length - 8} more not shown above (all are included in the draft).
                   </li>
                 )}
               </ul>

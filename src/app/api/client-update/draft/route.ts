@@ -224,6 +224,11 @@ Return STRICT JSON, no code fences:
       subject: scrub(subjectRaw || `Weekly update — ${clientName}`).slice(0, 300),
       body: scrub(bodyRaw),
       suggestedTo: client.contactEmails,
+      // Task ids that fed the prompt. Composer passes these to
+      // /api/email-drafts on submit so the eventual approve+send can
+      // stamp tasks.reported_to_client_at and the recommendations
+      // surface stops showing them.
+      taskIds: done.map((t) => t.id),
       signals: { completedCount: done.length, inProgressCount: open.length }
     });
   } catch (err) {

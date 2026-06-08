@@ -124,13 +124,13 @@ export async function runScheduledEmails(): Promise<ScheduledEmailsResult> {
           send_error: null
         })
         .eq("id", row.id);
-      // eod_digest drafts: stamp linked tasks as reported on send so
-      // tomorrow's digest builder skips them. No-op for other kinds.
-      if (row.kind === "eod_digest") {
-        await markTasksReportedFromDraft(row.id as string, nowIso).catch((err) => {
-          console.error("[scheduled-emails] markTasksReported", err);
-        });
-      }
+      // Stamp linked tasks as reported on send, regardless of kind.
+      // eod_digest links via the cron; client_update links via the
+      // composer forwarding taskIds. No-op for drafts with no link
+      // rows (custom emails etc).
+      await markTasksReportedFromDraft(row.id as string, nowIso).catch((err) => {
+        console.error("[scheduled-emails] markTasksReported", err);
+      });
       sentDrafts++;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

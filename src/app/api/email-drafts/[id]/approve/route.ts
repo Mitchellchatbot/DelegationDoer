@@ -190,15 +190,16 @@ export async function POST(
           is_reply: isAutoReply
         }
       });
-      // For eod_digest drafts: stamp every linked task as reported so
-      // tomorrow's digest builder skips them. No-op for other kinds
-      // (markTasksReportedFromDraft looks up email_draft_tasks rows;
-      // there won't be any for client_update / content_plan / etc.).
-      if (row.kind === "eod_digest") {
-        await markTasksReportedFromDraft(params.id, sentAt).catch((err) => {
-          console.error("[approve] markTasksReportedFromDraft", err);
-        });
-      }
+      // Stamp every task linked to this draft as reported, regardless
+      // of kind. eod_digest drafts (built by the cron) always link
+      // tasks via email_draft_tasks. The ClientUpdateComposer also
+      // forwards its taskIds on submit so a client_update sent via the
+      // composer marks its tasks reported too. No-op for drafts with
+      // no linked tasks (custom emails, etc.) — the helper just finds
+      // zero rows in email_draft_tasks and returns 0.
+      await markTasksReportedFromDraft(params.id, sentAt).catch((err) => {
+        console.error("[approve] markTasksReportedFromDraft", err);
+      });
       return NextResponse.json({
         ok: true,
         status: "sent",

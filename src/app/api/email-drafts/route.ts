@@ -113,6 +113,16 @@ export async function POST(req: NextRequest) {
 
     const mediaUrls = sanitizeMediaUrls(body.mediaUrls);
 
+    // Optional task linkage — composer / eod-digest builder pass the
+    // task ids that fed the draft. We persist them in email_draft_tasks
+    // so the approve route can stamp tasks.reported_to_client_at on
+    // send (which keeps those tasks from reappearing on the /approvals
+    // 'Who needs an email' recommendations card). Validate light — any
+    // unknown task ids get filtered out before insert below.
+    const incomingTaskIds: string[] = Array.isArray(body.taskIds)
+      ? body.taskIds.filter((v: unknown): v is string => typeof v === "string" && v.length > 0)
+      : [];
+
     const buildInsert = (includeScheduledFor: boolean, includeMedia: boolean) => {
       const row: Record<string, unknown> = {
         id,
@@ -148,6 +158,28 @@ export async function POST(req: NextRequest) {
     }
     if (insertErr) {
       return NextResponse.json({ error: insertErr.message }, { status: 500 });
+    }
+
+    // Persist task linkage. Filter to ids that actually exist in tasks
+    // (cheap belt-and-suspenders against a stale composer) and skip if
+    // the table is missing (eod_digest migration not applied yet).
+    if (incomingTaskIds.length > 0) {
+      const { data: existingTasks } = await supabase
+        .from("tasks")
+        .select("id")
+        .in("id", incomingTaskIds);
+      const validIds = ((existingTasks ?? []) as { id: string }[]).map((r) => r.id);
+      if (validIds.length > 0) {
+        const links = validIds.map((task_id) => ({ draft_id: id, task_id }));
+        const { error: linkErr } = await supabase
+          .from("email_draft_tasks")
+          .insert(links);
+        if (linkErr && !/email_draft_tasks/.test(linkErr.message)) {
+          // Surface non-missing-table errors but don't fail the whole
+          // draft create — the email_drafts row already persisted.
+          console.error("[email-drafts] task link insert", linkErr);
+        }
+      }
     }
 
     // Open the timeline with a "submitted" event so the approvals UI

@@ -71,6 +71,10 @@ export function ClientUpdateComposer({
   const [draftSubject, setDraftSubject] = useState("");
   const [draftBody, setDraftBody] = useState("");
   const [draftTo, setDraftTo] = useState("");
+  // Tasks the AI drafted from. Forwarded to /api/email-drafts on
+  // submit so the eventual approve+send can stamp them as reported
+  // and the /approvals recommendations card stops surfacing them.
+  const [draftTaskIds, setDraftTaskIds] = useState<string[]>([]);
   const [scheduledFor, setScheduledFor] = useState(""); // blank = send on approval
   const [attachments, setAttachments] = useState<TaskMedia[]>([]);
   const [step, setStep] = useState<"compose" | "preview">("compose");
@@ -122,6 +126,7 @@ export function ClientUpdateComposer({
       setDraftSubject(data.subject ?? "");
       setDraftBody(data.body ?? "");
       setDraftTo((data.suggestedTo ?? lockedClient.contactEmails ?? []).join(", "));
+      setDraftTaskIds(Array.isArray(data.taskIds) ? data.taskIds : []);
       setStep("preview");
     } catch (err) {
       toast.error(`Couldn't draft: ${err instanceof Error ? err.message : "unknown"}`);
@@ -151,7 +156,8 @@ export function ClientUpdateComposer({
           bodyText: draftBody.trim(),
           kind: "client_update",
           scheduledFor: scheduledFor ? new Date(scheduledFor).toISOString() : null,
-          mediaUrls: attachments
+          mediaUrls: attachments,
+          taskIds: draftTaskIds
         })
       });
       const data = await res.json();
@@ -167,6 +173,7 @@ export function ClientUpdateComposer({
       setDraftSubject("");
       setDraftBody("");
       setDraftTo("");
+      setDraftTaskIds([]);
       setAttachments([]);
       setScheduledFor("");
       setRange("7");

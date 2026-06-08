@@ -1,8 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { requireCurrentUserId } from "@/lib/session";
+import { publish } from "@/lib/inbox-event-bus";
 
 export const dynamic = "force-dynamic";
+// Node runtime so this handler shares the in-process inbox event bus
+// singleton with the SSE stream (/api/inbox-events) and the badge cache
+// buster — mirrors the SSE route. Without this a future edge migration
+// would silently sever publish() from its subscribers.
+export const runtime = "nodejs";
 
 // POST /api/inboxes/threads/[threadId]/read
 //   body: { accountId: string, readThroughAt: string | null }
@@ -36,6 +42,18 @@ export async function POST(
     { onConflict: "user_id,thread_id" }
   );
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  // Tell the inbox bus the thread's read-state changed so the sidebar
+  // badge cache busts and any concurrently-mounted thread list refreshes
+  // live (the list that triggered this is unmounted on the detail page,
+  // so it relies on router.refresh() on Back instead).
+  publish({
+    event: "thread:updated",
+    account_id: accountId,
+    thread_id: params.threadId,
+    ts: Date.now()
+  });
+
   return NextResponse.json({ ok: true });
 }
 
@@ -46,11 +64,30 @@ export async function DELETE(
 ) {
   const userId = await requireCurrentUserId();
   const supabase = getSupabaseAdmin();
+  // Grab the account before deleting so we can publish a symmetric
+  // thread:updated event (the bus filters/keys on account_id).
+  const { data: existing } = await supabase
+    .from("thread_read_state")
+    .select("account_id")
+    .eq("user_id", userId)
+    .eq("thread_id", params.threadId)
+    .maybeSingle();
+
   const { error } = await supabase
     .from("thread_read_state")
     .delete()
     .eq("user_id", userId)
     .eq("thread_id", params.threadId);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  if (existing?.account_id) {
+    publish({
+      event: "thread:updated",
+      account_id: existing.account_id,
+      thread_id: params.threadId,
+      ts: Date.now()
+    });
+  }
+
   return NextResponse.json({ ok: true });
 }

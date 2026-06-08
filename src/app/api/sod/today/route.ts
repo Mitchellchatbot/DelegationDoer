@@ -70,13 +70,17 @@ export async function GET(req: NextRequest) {
     //     exemption ClockGate and the /home bookend apply — managers
     //     aren't on a personal clock / check-in).
     //   - Anyone with the per-user daily_prompts_enabled flag flipped off.
-    // An explicit simulate=1 still opens the flow so an exempt user can
-    // file voluntarily / test; only the *auto-pop* is suppressed.
+    // ...UNLESS daily_prompts_required is set, which force-opts a specific
+    // privileged account back in (overrides both the role exemption and a
+    // false daily_prompts_enabled). simulate=1 still opens the flow either
+    // way; only the *auto-pop* is suppressed for exempt users.
+    const required = me.dailyPromptsRequired === true;
     const leaderExempt = isLeader(me);
     const promptsOff = me.dailyPromptsEnabled === false;
-    const ritualExempt = leaderExempt || promptsOff;
+    const ritualExempt = !required && (leaderExempt || promptsOff);
     const eligible = !alreadySubmitted && (simulate || (withinShift && !ritualExempt));
-    const reason = leaderExempt ? "leader/admin — SOD exempt"
+    const reason = required ? signal.reason
+      : leaderExempt ? "leader/admin — SOD exempt"
       : promptsOff ? "daily prompts disabled (SOD exempt)"
       : signal.reason;
 

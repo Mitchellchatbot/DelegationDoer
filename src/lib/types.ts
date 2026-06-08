@@ -57,6 +57,13 @@ export interface User {
   // widget EOD client-checkin nudge). Default true — flip off in the
   // DB for executives who don't run that ritual themselves.
   dailyPromptsEnabled?: boolean;
+  // Per-user FORCE-ON for the SOD/EOD ritual. Default false. When true,
+  // the user runs SOD/EOD even though they'd normally be exempt by the
+  // leader/admin role rule — used to opt specific privileged accounts
+  // back into the daily ritual. Overrides both the role exemption and
+  // a false dailyPromptsEnabled. See [[ask-ai-permission-scoping]] for
+  // the broader leader/admin exemption model.
+  dailyPromptsRequired?: boolean;
   // Flips to true once the user finishes the email-notifications
   // onboarding modal. Drives whether the /home email card shows the
   // CTA or the live notification list.

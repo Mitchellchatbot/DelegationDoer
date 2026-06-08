@@ -5,6 +5,7 @@ import Link from "next/link";
 import { Moon, Sunrise, ExternalLink } from "lucide-react";
 import { EodHistoryView } from "@/components/EodHistoryView";
 import { SodHistoryView } from "@/components/SodHistoryView";
+import type { Department } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 type Kind = "eod" | "sod";
@@ -12,8 +13,9 @@ type Kind = "eod" | "sod";
 // Leader-console "Day reports" tab. Mounts the existing team EOD/SOD
 // history views (embedded — no page hero / back links) behind a small
 // EOD|SOD toggle. Visibility is enforced server-side by the history
-// APIs; leaders + stealth admins see the whole org.
-export function DayReportsTab() {
+// APIs; leaders + stealth admins see the whole org. `departments` powers
+// the per-view department chip filter.
+export function DayReportsTab({ departments }: { departments: Department[] }) {
   const [kind, setKind] = useState<Kind>("eod");
 
   return (
@@ -41,7 +43,9 @@ export function DayReportsTab() {
         )}
       </div>
 
-      {kind === "eod" ? <EodHistoryView embedded /> : <SodHistoryView embedded />}
+      {kind === "eod"
+        ? <EodHistoryView embedded departments={departments} />
+        : <SodHistoryView embedded departments={departments} />}
     </div>
   );
 }

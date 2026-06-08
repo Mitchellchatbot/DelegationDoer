@@ -3,13 +3,15 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
-  History as HistoryIcon, Loader2, ChevronLeft, CheckCircle2, Filter
+  History as HistoryIcon, Loader2, ChevronLeft, CheckCircle2, Filter,
+  Users as UsersIcon, FolderKanban
 } from "lucide-react";
 import { toast } from "sonner";
 import { PageHero } from "@/components/PageHero";
 import { PersonAvatar } from "@/components/PersonAvatar";
 import { UpdateFeedback, type ReactionSummary, type ReplyEntry } from "@/components/UpdateFeedback";
 import { useCurrentUser } from "@/lib/user-context";
+import type { Department } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 interface Submission {
@@ -42,12 +44,30 @@ interface PersonOption {
 // `embedded` mounts the same view inside another surface (the leader
 // console "Day reports" tab): it drops the PageHero, the outer max-width
 // wrapper and the "Back to today" link so it fits in the host layout.
-export function EodHistoryView({ embedded = false }: { embedded?: boolean }) {
+// When `departments` is passed (the console tab) and the caller is a
+// leader/admin, a department chip filter is shown above the feed.
+export function EodHistoryView({
+  embedded = false, departments
+}: { embedded?: boolean; departments?: Department[] }) {
   const me = useCurrentUser();
   const [submissions, setSubmissions] = useState<Submission[]>([]);
   const [loading, setLoading] = useState(true);
   const [days, setDays] = useState(30);
   const [personFilter, setPersonFilter] = useState<string>(""); // "" = everyone
+  // Department filter — multi-select, empty Set = all departments.
+  const [selectedDepts, setSelectedDepts] = useState<Set<string>>(new Set());
+  const allDeptsSelected = selectedDepts.size === 0;
+  const deptKey = Array.from(selectedDepts).sort().join(",");
+  const showDeptFilter = !!departments?.length && (me.role === "leader" || me.isAdmin === true);
+
+  function toggleDept(id: string) {
+    setSelectedDepts((cur) => {
+      const next = new Set(cur);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+  function selectAllDepts() { setSelectedDepts(new Set()); }
   // Feedback (reactions + replies) keyed by submission id. Bulk-fetched
   // alongside the main history load so individual cards render
   // synchronously with their initial feedback state.
@@ -67,6 +87,7 @@ export function EodHistoryView({ embedded = false }: { embedded?: boolean }) {
     try {
       const sp = new URLSearchParams({ days: String(days) });
       if (personFilter) sp.set("userId", personFilter);
+      if (deptKey) sp.set("departmentIds", deptKey);
       const res = await fetch(`/api/eod/history?${sp.toString()}`, { cache: "no-store" });
       if (!res.ok) throw new Error(`status ${res.status}`);
       const data = await res.json();
@@ -97,7 +118,7 @@ export function EodHistoryView({ embedded = false }: { embedded?: boolean }) {
     } finally {
       setLoading(false);
     }
-  }, [days, personFilter]);
+  }, [days, personFilter, deptKey]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -176,6 +197,48 @@ export function EodHistoryView({ embedded = false }: { embedded?: boolean }) {
             </Link>
           }
         />
+      )}
+
+      {/* Department picker — multi-select chip row (leaders/admins).
+          "All departments" clears the per-dept selection in one click. */}
+      {showDeptFilter && (
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            type="button"
+            onClick={selectAllDepts}
+            className={cn(
+              "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border transition-colors",
+              allDeptsSelected
+                ? "bg-accent text-white border-accent shadow-sm"
+                : "bg-white border-border text-muted hover:text-ink hover:border-accent/40"
+            )}
+          >
+            <UsersIcon className="w-3.5 h-3.5" />
+            All departments
+          </button>
+          <span className="text-[10px] uppercase tracking-wide text-ink/40 px-1">
+            or pick a few
+          </span>
+          {departments!.map((d) => {
+            const on = selectedDepts.has(d.id);
+            return (
+              <button
+                key={d.id}
+                type="button"
+                onClick={() => toggleDept(d.id)}
+                className={cn(
+                  "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border transition-colors",
+                  on
+                    ? "bg-blue-600 text-white border-blue-600 shadow-sm"
+                    : "bg-white border-border text-muted hover:text-ink hover:border-accent/40"
+                )}
+              >
+                <FolderKanban className="w-3.5 h-3.5" />
+                {d.name}
+              </button>
+            );
+          })}
+        </div>
       )}
 
       {/* Filter row */}

@@ -5,11 +5,15 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 
 export const dynamic = "force-dynamic";
 
-// GET /api/sod/history?days=30
+// GET /api/sod/history?days=30&userId=<filter>&departmentIds=a,b
 //   Paginated SOD submissions, visibility-scoped:
 //     - leaders + admins → see everyone
-//     - dept heads      → see their dept(s)
-//     - workers         → see themselves
+//     - everyone else    → see only themselves
+//   Optional filters (leaders/admins; they can only narrow, never
+//   broaden, the visibility envelope above):
+//     - userId         → narrow to one person
+//     - departmentIds  → narrow to members of those departments
+//   Mirrors the filter contract of /api/eod/history.
 export async function GET(req: NextRequest) {
   try {
     const userId = await requireCurrentUserId();
@@ -25,7 +29,40 @@ export async function GET(req: NextRequest) {
     const sinceIso = since.toISOString().slice(0, 10);
 
     const supabase = getSupabaseAdmin();
+    const sp = new URL(req.url).searchParams;
     const isLeader = me.role === "leader" || me.isAdmin === true;
+
+    // Visibility envelope: leaders/admins see everyone (null = no
+    // restriction); everyone else is scoped to themselves. Cross-team
+    // visibility for dept heads is still intentionally out of scope.
+    let visibleUserIds: string[] | null = isLeader ? null : [userId];
+
+    // Optional department filter — narrow to members of the given
+    // departments (intersect with the envelope above).
+    const deptIds = (sp.get("departmentIds") || "")
+      .split(",").map((s) => s.trim()).filter(Boolean);
+    if (deptIds.length > 0) {
+      const { data } = await supabase
+        .from("department_members")
+        .select("user_id")
+        .in("department_id", deptIds);
+      const deptUserIds = Array.from(new Set(
+        ((data ?? []) as { user_id: string }[]).map((r) => r.user_id)
+      ));
+      if (deptUserIds.length === 0) return NextResponse.json({ submissions: [] });
+      visibleUserIds = visibleUserIds === null
+        ? deptUserIds
+        : visibleUserIds.filter((id) => deptUserIds.includes(id));
+    }
+
+    // Optional userId filter, validated against the visible set.
+    const userIdFilter = sp.get("userId") || null;
+    if (userIdFilter) {
+      if (visibleUserIds && !visibleUserIds.includes(userIdFilter)) {
+        return NextResponse.json({ submissions: [] });
+      }
+      visibleUserIds = [userIdFilter];
+    }
 
     let q = supabase
       .from("sod_notes")
@@ -35,10 +72,9 @@ export async function GET(req: NextRequest) {
       .order("submitted_at", { ascending: false })
       .limit(200);
 
-    if (!isLeader) {
-      // Workers + dept heads currently scoped to self. Cross-team
-      // visibility can be added once roles for SOD reviewers shake out.
-      q = q.eq("user_id", userId);
+    if (visibleUserIds !== null) {
+      if (visibleUserIds.length === 0) return NextResponse.json({ submissions: [] });
+      q = q.in("user_id", visibleUserIds);
     }
 
     const { data, error } = await q;

@@ -143,7 +143,7 @@ export default function LeaderConsolePage() {
           {tab === "Org chart" && <OrgChartTab people={people} departments={depts} tasks={tasks} />}
           {tab === "Performance" && <PerformanceReview canCrown={currentUser.role === "leader" || !!currentUser.isAdmin} />}
           {tab === "All tasks" && <AllTasksTab people={people} departments={depts} tasks={tasks} />}
-          {tab === "Day reports" && <DayReportsTab />}
+          {tab === "Day reports" && <DayReportsTab departments={depts} />}
         </motion.div>
       </AnimatePresence>
     </div>

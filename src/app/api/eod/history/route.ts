@@ -5,16 +5,20 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 
 export const dynamic = "force-dynamic";
 
-// GET /api/eod/history?days=30&userId=<filter>
+// GET /api/eod/history?days=30&userId=<filter>&departmentIds=a,b
 //   Returns a flat chronological list of every submitted EOD the
 //   caller is allowed to see. Powers the EOD history feed at
-//   /updates/eod/history.
+//   /updates/eod/history and the leader-console "Day reports" tab.
 //
 //   Visibility:
 //     - leaders + admins   → every submission
 //     - department_heads   → submissions by anyone in a dept they head,
 //                            plus their own
 //     - workers            → only their own
+//
+//   Optional filters (applied on top of visibility, never broaden it):
+//     - userId         → narrow to one person
+//     - departmentIds  → narrow to members of those departments
 //
 //   Only rows with submitted_at IS NOT NULL are included — autosaved
 //   drafts that the worker never finalized don't pollute the feed.
@@ -74,6 +78,24 @@ export async function GET(req: NextRequest) {
     } else {
       // Worker — only their own.
       visibleUserIds = [callerId];
+    }
+
+    // Optional department filter — narrow to members of the given
+    // departments (intersect with what the caller can already see).
+    const deptIds = (sp.get("departmentIds") || "")
+      .split(",").map((s) => s.trim()).filter(Boolean);
+    if (deptIds.length > 0) {
+      const { data } = await supabase
+        .from("department_members")
+        .select("user_id")
+        .in("department_id", deptIds);
+      const deptUserIds = Array.from(new Set(
+        ((data ?? []) as { user_id: string }[]).map((r) => r.user_id)
+      ));
+      if (deptUserIds.length === 0) return NextResponse.json({ submissions: [] });
+      visibleUserIds = visibleUserIds === null
+        ? deptUserIds
+        : visibleUserIds.filter((id) => deptUserIds.includes(id));
     }
 
     // Apply optional userId filter on top of visibility.

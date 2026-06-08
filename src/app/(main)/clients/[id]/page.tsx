@@ -15,6 +15,7 @@ import { ClientTouchpointCard } from "@/components/ClientTouchpointCard";
 import { DeleteClientButton } from "@/components/DeleteClientButton";
 import { ClientAskAiButton } from "@/components/ClientAskAiButton";
 import { ContentPlanComposerCollapsible } from "@/components/ContentPlanComposerCollapsible";
+import { ClientUpdateComposerCollapsible } from "@/components/ClientUpdateComposerCollapsible";
 import { ClientEmailLog } from "@/components/ClientEmailLog";
 import { listEmailDrafts } from "@/lib/email-drafts-data";
 import { isLeader } from "@/lib/auth";
@@ -225,6 +226,16 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
     !!me.isAdmin ||
     (me.departmentIds ?? []).includes("dep_seo") ||
     me.role === "department_head"
+  );
+
+  // Who can generate a Client Update email? Leaders / admins / department
+  // heads, plus the client's assigned point-person. The /api/client-update
+  // route re-checks this server-side; the approval queue is the final gate.
+  const canComposeClientUpdate = !!me && (
+    isLeader(me) ||
+    !!me.isAdmin ||
+    me.role === "department_head" ||
+    client.assignedUserIds.includes(me.id)
   );
 
   return (
@@ -467,6 +478,16 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
             )}
           </div>
         </section>
+      )}
+
+      {canComposeClientUpdate && (
+        <ClientUpdateComposerCollapsible
+          lockedClient={{
+            id: client.id,
+            name: client.name,
+            contactEmails: client.contactEmails
+          }}
+        />
       )}
 
       {canComposeContentPlan && (

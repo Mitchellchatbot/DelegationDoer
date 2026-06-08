@@ -6,6 +6,7 @@ import { getThread, type MissiveMessage } from "@/lib/missive-client";
 import { visibleAccountIdsFor } from "@/lib/inbox-access";
 import { Avatar } from "@/components/Avatar";
 import { CreateTaskFromThreadButton } from "@/components/CreateTaskFromThreadButton";
+import { ForwardButton } from "@/components/ForwardButton";
 import { ReplyComposer } from "@/components/ReplyComposer";
 import { ThreadAutoMarkRead } from "@/components/ThreadAutoMarkRead";
 import { ScrollToLatestMessage } from "@/components/ScrollToLatestMessage";
@@ -211,13 +212,28 @@ export default async function ThreadDetailPage({
                         )}
                       </div>
                     </div>
-                    <div className="shrink-0 text-right">
+                    <div className="shrink-0 text-right flex flex-col items-end gap-2">
                       <div className="inline-flex items-center px-2.5 py-1 rounded-full text-[11px] bg-white/70 border border-border/60 text-ink/70 tabular-nums">
                         {new Date(m.sent_at).toLocaleString(undefined, {
                           month: "short", day: "numeric", year: "numeric",
                           hour: "numeric", minute: "2-digit"
                         })}
                       </div>
+                      {/* Forward this specific message. Sends from the inbox
+                          in view (params.accountId); the server rebuilds the
+                          quoted body + re-attaches the originals. */}
+                      <ForwardButton
+                        accountId={params.accountId}
+                        threadId={params.threadId}
+                        messageId={m.id}
+                        sourceSubject={m.subject || thread.subject || ""}
+                        sourceFrom={m.from_addr}
+                        sourceDate={new Date(m.sent_at).toLocaleString(undefined, {
+                          month: "short", day: "numeric", year: "numeric",
+                          hour: "numeric", minute: "2-digit"
+                        })}
+                        attachmentCount={(m.attachments ?? []).length}
+                      />
                     </div>
                   </header>
 

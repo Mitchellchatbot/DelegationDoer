@@ -10,6 +10,7 @@ import { toast } from "sonner";
 import { PersonAvatar } from "@/components/PersonAvatar";
 import { useCurrentUser } from "@/lib/user-context";
 import { isApprover } from "@/lib/email-approvers";
+import { SuggestedDigestsCard } from "@/components/SuggestedDigestsCard";
 import { cn } from "@/lib/utils";
 import {
   ApprovalsScheduleCalendar,
@@ -197,6 +198,12 @@ export function EmailApprovalsTab() {
         </aside>
 
         <div className="space-y-5 min-w-0">
+          {/* Suggested EOD digests — clients with unreported work,
+              grouped by whether their cadence-day is today. Approver
+              can kick a draft on demand here without waiting for the
+              daily cron. */}
+          <SuggestedDigestsCard />
+
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <div className="inline-flex items-center rounded-xl border border-slate-200/70 bg-white p-0.5">
               {(["pending", "needs_revision", "all"] as const).map((opt) => (

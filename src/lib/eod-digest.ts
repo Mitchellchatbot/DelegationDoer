@@ -59,76 +59,8 @@ interface ClientRow {
   seo_brief: string | null;
 }
 
-function startOfTodayIso(): string {
-  const d = new Date();
-  d.setHours(0, 0, 0, 0);
-  return d.toISOString();
-}
-
 function lookbackIso(): string {
   return new Date(Date.now() - LOOKBACK_DAYS * 86_400_000).toISOString();
-}
-
-// Public entry point: called from /api/eod/submit after a worker
-// posts their EOD. Looks at every client the worker touched today
-// (via tasks with completed_at >= today and client_name set), and
-// builds/updates the per-client digest draft. Fire-and-forget — the
-// caller passes the user id and date, we handle the rest.
-export async function buildEodDigestsForUser(userId: string, dateStr: string): Promise<{
-  clientsTouched: number;
-  draftsTouched: number;
-  errors: Array<{ clientName: string; message: string }>;
-}> {
-  const supabase = getSupabaseAdmin();
-  const todayIso = new Date(`${dateStr}T00:00:00Z`).toISOString();
-
-  // 1) Which clients did this user actually do work on today? Tasks
-  //    closed today + emails they sent today are the two signals we
-  //    care about — same shape as the existing client-update drafter.
-  const [tasksRes, emailsRes] = await Promise.all([
-    supabase
-      .from("tasks")
-      .select("id, client_name")
-      .eq("assignee_id", userId)
-      .eq("status", "done")
-      .not("client_name", "is", null)
-      .gte("completed_at", todayIso),
-    supabase
-      .from("email_drafts")
-      .select("client_name, client_id")
-      .eq("author_id", userId)
-      .eq("status", "sent")
-      .not("client_name", "is", null)
-      .gte("sent_at", todayIso)
-  ]);
-
-  const clientNames = new Set<string>();
-  for (const r of ((tasksRes.data ?? []) as { client_name: string | null }[])) {
-    if (r.client_name) clientNames.add(r.client_name);
-  }
-  for (const r of ((emailsRes.data ?? []) as { client_name: string | null }[])) {
-    if (r.client_name) clientNames.add(r.client_name);
-  }
-
-  const result = {
-    clientsTouched: clientNames.size,
-    draftsTouched: 0,
-    errors: [] as Array<{ clientName: string; message: string }>
-  };
-
-  for (const clientName of clientNames) {
-    try {
-      const touched = await buildDigestForClient(clientName, dateStr);
-      if (touched) result.draftsTouched += 1;
-    } catch (err) {
-      result.errors.push({
-        clientName,
-        message: err instanceof Error ? err.message : "unknown error"
-      });
-    }
-  }
-
-  return result;
 }
 
 // Build / refresh the digest for a single (clientName, dateStr) pair.

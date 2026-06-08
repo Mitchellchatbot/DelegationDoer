@@ -113,8 +113,14 @@ export async function POST(req: NextRequest) {
       // could be genuine small-talk OR a sign the classifier prompt /
       // payload shape needs attention. Either way, worth a look.
       warn(`meetingId=${meetingId}: classifier extracted 0 items from ${segments.length} segments (classifier judged transcript had no concrete commitments — verify by inspecting raw_payload in tldv_intake_log)`);
+    } else if (outcome.items.length > 0 && !outcome.clientMatched) {
+      // Tasks created but no client matched — brief is NOT stored anywhere.
+      // Loud so the empty Meetings & briefs timeline doesn't go unnoticed.
+      warn(`meetingId=${meetingId}: itemsCreated=${outcome.items.length} but NO client matched — brief NOT stored. Backfill via POST .../meetings/${meetingId}/backfill in ${elapsed}ms`);
+    } else if (outcome.clientMatched && !outcome.meetingStored) {
+      warn(`meetingId=${meetingId}: client="${outcome.clientName ?? "-"}" matched but client_meetings WRITE FAILED (${outcome.storeError ?? "unknown"}) — brief NOT stored in ${elapsed}ms`);
     } else {
-      log(`meetingId=${meetingId}: itemsCreated=${outcome.items.length} clientName="${outcome.clientName ?? "-"}" resourceId=${outcome.resourceId ?? "-"} in ${elapsed}ms`);
+      log(`meetingId=${meetingId}: itemsCreated=${outcome.items.length} clientName="${outcome.clientName ?? "-"}" stored=${outcome.meetingStored ? "yes" : "no"} resourceId=${outcome.resourceId ?? "-"} in ${elapsed}ms`);
     }
 
     return NextResponse.json({

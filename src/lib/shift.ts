@@ -25,7 +25,9 @@ export interface NowInTz {
 
 // Pulls wall-clock time + local calendar-date for an IANA timezone.
 // Server runtimes are UTC so we can't trust new Date().getHours().
-export function nowInTz(tz: string): NowInTz {
+// `at` defaults to now; pass an explicit instant to look at another
+// moment (e.g. "yesterday" for overnight-shift resolution).
+export function nowInTz(tz: string, at: Date = new Date()): NowInTz {
   const fmt = new Intl.DateTimeFormat("en-US", {
     timeZone: tz,
     weekday: "short",
@@ -37,10 +39,11 @@ export function nowInTz(tz: string): NowInTz {
     hour12: false
   });
   const parts = Object.fromEntries(
-    fmt.formatToParts(new Date()).map((p) => [p.type, p.value])
+    fmt.formatToParts(at).map((p) => [p.type, p.value])
   );
   const weekday = (parts.weekday ?? "Mon").toLowerCase().slice(0, 3) as DayKey;
-  const hh = parseInt(parts.hour ?? "0", 10);
+  let hh = parseInt(parts.hour ?? "0", 10);
+  if (hh === 24) hh = 0; // Intl edge case: midnight can format as "24"
   const mm = parseInt(parts.minute ?? "0", 10);
   const ymd = `${parts.year}-${parts.month}-${parts.day}`;
   return { hh, mm, dayKey: weekday, ymd };
@@ -61,7 +64,29 @@ export interface ShiftWindow {
   end: string;            // "HH:MM"
   startMinutes: number;
   endMinutes: number;
+  crossesMidnight: boolean; // end ≤ start, e.g. 19:00 → 03:00
   isDefault: boolean;     // true when we fell back from user.weeklySchedule
+}
+
+interface ScheduleBlock { start: string; end: string }
+
+// Parse a {start,end} schedule block into a window with minute offsets,
+// flagging overnight (end ≤ start) blocks. Returns null when either
+// time is unparseable.
+function windowFromBlock(block: ScheduleBlock | null | undefined): Omit<ShiftWindow, "isDefault"> | null {
+  if (!block) return null;
+  const start = parseHHMM(block.start);
+  const end = parseHHMM(block.end);
+  if (!start || !end) return null;
+  const startMinutes = start.hh * 60 + start.mm;
+  const endMinutes = end.hh * 60 + end.mm;
+  return {
+    start: block.start,
+    end: block.end,
+    startMinutes,
+    endMinutes,
+    crossesMidnight: endMinutes <= startMinutes
+  };
 }
 
 // Resolve today's shift window for the user. Returns null when the
@@ -72,29 +97,94 @@ export function todayShiftWindow(
   user: Pick<User, "weeklySchedule" | "workTimezone">,
   now: NowInTz
 ): ShiftWindow | null {
-  const todays = (user.weeklySchedule ?? {})[now.dayKey];
   if (user.weeklySchedule && Object.keys(user.weeklySchedule).length > 0) {
-    if (!todays) return null;
-    const start = parseHHMM(todays.start);
-    const end = parseHHMM(todays.end);
-    if (!start || !end) return null;
+    const win = windowFromBlock(user.weeklySchedule[now.dayKey]);
+    if (!win) return null;
+    return { ...win, isDefault: false };
+  }
+  // No schedule on file — use the office default (never overnight).
+  const win = windowFromBlock({ start: DEFAULT_SHIFT_START, end: DEFAULT_SHIFT_END })!;
+  return { ...win, isDefault: true };
+}
+
+export interface ResolvedShift {
+  // YYYY-MM-DD of the shift's START day, in the worker's timezone. For an
+  // overnight shift this stays pinned to the evening it began even after
+  // midnight, so a once-per-shift key (SOD note_date) never splits in two.
+  shiftDate: string;
+  start: string;
+  end: string;
+  startMinutes: number;
+  endMinutes: number;
+  crossesMidnight: boolean;
+  withinShift: boolean;  // now ∈ [start, end), wrap-aware
+  isDefault: boolean;
+  reason: string;
+}
+
+// Resolve the shift that the instant `at` belongs to for this user,
+// correctly handling overnight (cross-midnight) schedules.
+//
+// Three cases, checked in order:
+//   1. After midnight, still inside *yesterday's* overnight shift
+//      (e.g. 01:00 on a 19:00→03:00 block) → that shift, dated yesterday.
+//   2. Today has a shift → today's shift. For an overnight block only the
+//      evening portion [start, midnight) counts as "today"; the morning
+//      portion is reached via case 1 on the following calendar day.
+//   3. Today is off and we're not in yesterday's tail → null.
+//
+// Returns null only for "off / no shift right now".
+export function resolveShift(
+  user: Pick<User, "weeklySchedule" | "workTimezone">,
+  at: Date = new Date()
+): ResolvedShift | null {
+  const tz = user.workTimezone || DEFAULT_TZ;
+  const sched = user.weeklySchedule ?? {};
+  const hasCustom = Object.keys(sched).length > 0;
+  const now = nowInTz(tz, at);
+  const nowMin = now.hh * 60 + now.mm;
+
+  if (!hasCustom) {
+    const win = windowFromBlock({ start: DEFAULT_SHIFT_START, end: DEFAULT_SHIFT_END })!;
+    const within = nowMin >= win.startMinutes && nowMin < win.endMinutes;
     return {
-      start: todays.start,
-      end: todays.end,
-      startMinutes: start.hh * 60 + start.mm,
-      endMinutes: end.hh * 60 + end.mm,
-      isDefault: false
+      shiftDate: now.ymd,
+      ...win,
+      withinShift: within,
+      isDefault: true,
+      reason: within ? "in shift" : nowMin < win.startMinutes ? "pre-shift" : "after shift"
     };
   }
-  // No schedule on file — use the office default.
-  const start = parseHHMM(DEFAULT_SHIFT_START)!;
-  const end = parseHHMM(DEFAULT_SHIFT_END)!;
+
+  // Case 1: morning tail of yesterday's overnight shift.
+  const yest = nowInTz(tz, new Date(at.getTime() - 86_400_000));
+  const yWin = windowFromBlock(sched[yest.dayKey]);
+  if (yWin && yWin.crossesMidnight && nowMin < yWin.endMinutes) {
+    return {
+      shiftDate: yest.ymd,
+      ...yWin,
+      withinShift: true,
+      isDefault: false,
+      reason: "in shift (overnight, after midnight)"
+    };
+  }
+
+  // Case 2 / 3: today's shift, or off.
+  const tWin = windowFromBlock(sched[now.dayKey]);
+  if (!tWin) {
+    return null;
+  }
+  const within = tWin.crossesMidnight
+    ? nowMin >= tWin.startMinutes // evening portion; morning handled by case 1 next day
+    : nowMin >= tWin.startMinutes && nowMin < tWin.endMinutes;
   return {
-    start: DEFAULT_SHIFT_START,
-    end: DEFAULT_SHIFT_END,
-    startMinutes: start.hh * 60 + start.mm,
-    endMinutes: end.hh * 60 + end.mm,
-    isDefault: true
+    shiftDate: now.ymd,
+    ...tWin,
+    withinShift: within,
+    isDefault: false,
+    reason: within
+      ? tWin.crossesMidnight ? "in shift (overnight, before midnight)" : "in shift"
+      : nowMin < tWin.startMinutes ? "pre-shift" : "after shift"
   };
 }
 
@@ -120,17 +210,13 @@ export interface SodSignal {
 export function sodSignalFor(
   user: Pick<User, "weeklySchedule" | "workTimezone">
 ): SodSignal | { withinShift: false; reason: string } {
-  const tz = user.workTimezone || DEFAULT_TZ;
-  const now = nowInTz(tz);
-  const win = todayShiftWindow(user, now);
-  if (!win) return { withinShift: false, reason: "day off" };
-  const nowMin = now.hh * 60 + now.mm;
-  const within = nowMin >= win.startMinutes;
+  const shift = resolveShift(user);
+  if (!shift) return { withinShift: false, reason: "day off" };
   return {
-    shiftDate: now.ymd,
-    withinShift: within,
-    shiftStart: win.start,
-    shiftEnd: win.end,
-    reason: within ? "in shift" : "pre-shift"
+    shiftDate: shift.shiftDate,
+    withinShift: shift.withinShift,
+    shiftStart: shift.start,
+    shiftEnd: shift.end,
+    reason: shift.reason
   };
 }

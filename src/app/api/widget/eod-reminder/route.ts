@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { requireCurrentUserId } from "@/lib/session";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { getUserById } from "@/lib/server-data";
+import { nowInTz, parseHHMM } from "@/lib/shift";
 
 export const dynamic = "force-dynamic";
 
@@ -11,47 +12,12 @@ export const dynamic = "force-dynamic";
 //   Fires "due: true" when the worker:
 //     - is on the Website team (dep_web) OR is a leader OR is isAdmin
 //     - has a weeklySchedule with an end time defined for today
-//     - the current time (in their workTimezone) is past that end time
+//     - their shift for today has actually *ended* (in their workTimezone)
+//       — overnight shifts count the evening + early hours as still-working
 //     - hasn't filed any eod_client_checkins rows for today yet
 //
 //   The widget polls this every 15s; when due=true it surfaces a
 //   persistent banner reminding them to file before clocking out.
-
-const DAY_KEYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"] as const;
-
-function nowInTz(tz: string): { hh: number; mm: number; dayKey: typeof DAY_KEYS[number]; ymd: string } {
-  // Intl.DateTimeFormat is the only reliable way to get a wall-clock
-  // value in an arbitrary IANA zone from a Node server (which runs UTC
-  // or whatever Railway gives us). Parsing the parts back is cheap.
-  const fmt = new Intl.DateTimeFormat("en-US", {
-    timeZone: tz,
-    weekday: "short",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false
-  });
-  const parts = Object.fromEntries(
-    fmt.formatToParts(new Date()).map((p) => [p.type, p.value])
-  );
-  const weekday = (parts.weekday ?? "Mon").toLowerCase().slice(0, 3) as typeof DAY_KEYS[number];
-  const hh = parseInt(parts.hour ?? "0", 10);
-  const mm = parseInt(parts.minute ?? "0", 10);
-  const ymd = `${parts.year}-${parts.month}-${parts.day}`;
-  return { hh, mm, dayKey: weekday, ymd };
-}
-
-function parseHHMM(value: string | undefined | null): { hh: number; mm: number } | null {
-  if (!value) return null;
-  const m = /^(\d{1,2}):(\d{2})$/.exec(value.trim());
-  if (!m) return null;
-  const hh = parseInt(m[1], 10);
-  const mm = parseInt(m[2], 10);
-  if (Number.isNaN(hh) || Number.isNaN(mm)) return null;
-  return { hh, mm };
-}
 
 export async function GET() {
   try {
@@ -89,14 +55,25 @@ export async function GET() {
     if (!todaysSchedule) {
       return NextResponse.json({ due: false, reason: "day off" });
     }
+    const start = parseHHMM(todaysSchedule.start);
     const end = parseHHMM(todaysSchedule.end);
     if (!end) {
       return NextResponse.json({ due: false, reason: "no end time" });
     }
 
     const nowMinutes = hh * 60 + mm;
+    const startMinutes = start ? start.hh * 60 + start.mm : 0;
     const endMinutes = end.hh * 60 + end.mm;
-    if (nowMinutes < endMinutes) {
+    // Has the workday actually ended? For a normal shift that's any time
+    // at/after the end. For an overnight shift (end ≤ start, e.g. 19:00 →
+    // 03:00) the worker is still on through the evening AND the early
+    // hours; only the daytime gap [end, start) is post-shift. Without this
+    // an overnight worker got nagged the moment their shift began.
+    const overnight = endMinutes <= startMinutes;
+    const shiftOver = overnight
+      ? nowMinutes >= endMinutes && nowMinutes < startMinutes
+      : nowMinutes >= endMinutes;
+    if (!shiftOver) {
       return NextResponse.json({ due: false, reason: "before end", scheduleEnd: todaysSchedule.end });
     }
 

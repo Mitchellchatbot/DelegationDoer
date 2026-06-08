@@ -145,15 +145,18 @@ export function hoursForDay(args: {
   return Math.max(0, args.dailyCapacity || 0);
 }
 
-// HH:MM end - HH:MM start. Treats end < start (overnight) as zero
-// rather than negative — the editor doesn't allow it and we don't
-// want a stray entry to skew capacity.
+// HH:MM end - HH:MM start, in hours. Handles overnight shifts: when the
+// end is at or before the start (e.g. 19:00 → 03:00) the span wraps past
+// midnight, so it's `end + 24h - start`. The editor uses raw <input
+// type="time"> fields with no start<end guard, so overnight blocks are
+// real and a 7pm–3am shift must count as 8h, not 0.
 function hoursBetween(start: string, end: string): number {
   const a = hmToMinutes(start);
   const b = hmToMinutes(end);
   if (a == null || b == null) return 0;
-  if (b <= a) return 0;
-  return (b - a) / 60;
+  if (b === a) return 0; // zero-length / misconfigured block
+  const span = b > a ? b - a : b + 1440 - a;
+  return span / 60;
 }
 
 function hmToMinutes(s: string): number | null {

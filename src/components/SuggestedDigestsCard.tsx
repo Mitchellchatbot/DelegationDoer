@@ -137,7 +137,37 @@ export function SuggestedDigestsCard() {
       </section>
     );
   }
-  if (totalSuggested === 0) return null;
+  if (totalSuggested === 0) {
+    // Empty state: keep the card visible so the approver knows the
+    // feature is wired up. Most common reason for empty is "no tasks
+    // closed within any cadence's lookback window" — explaining that
+    // up front saves a confused 'is this broken?' message.
+    return (
+      <section className="rounded-2xl border border-slate-200/70 bg-white shadow-soft overflow-hidden">
+        <header className="flex items-center justify-between px-4 py-3 border-b border-slate-100">
+          <div className="text-[13px] font-semibold inline-flex items-center gap-2">
+            <Sparkles className="w-4 h-4 text-emerald-600" />
+            Suggested EOD digests
+            <span className="text-[11px] text-ink/55 font-normal">· 0</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => void refresh()}
+            className="text-ink/45 hover:text-ink/80 transition-colors"
+            title="Refresh suggestions"
+          >
+            <RefreshCw className={cn("w-3.5 h-3.5", loading && "animate-spin")} />
+          </button>
+        </header>
+        <div className="px-4 py-4 text-[12px] text-ink/55 leading-relaxed">
+          Nothing to suggest right now — no client has unreported
+          completed tasks in their cadence window. New EOD digests
+          appear here as soon as someone closes a task linked to a
+          client (and their cadence-day arrives).
+        </div>
+      </section>
+    );
+  }
 
   return (
     <section className="rounded-2xl border border-emerald-200/70 bg-gradient-to-br from-emerald-50/50 via-white to-white shadow-soft overflow-hidden">

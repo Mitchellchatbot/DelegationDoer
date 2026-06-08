@@ -151,9 +151,21 @@ export async function GET() {
     }
 
     // 2) Pull unreported completed tasks per client, scoped to the
-    //    widest lookback window we'll need (monthly's 1st-of-month
-    //    floor). Subset per-client in JS below — saves N round-trips.
-    const widestFloor = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1));
+    //    widest lookback window we'll need. Subset per-client in JS
+    //    below — saves N round-trips.
+    //
+    //    Widest = the OLDEST of monthly's "1st of current month" and
+    //    weekly's "7 days ago". Early in the month the weekly window
+    //    reaches further back than the monthly floor (e.g. on June 2,
+    //    monthly = June 1 but weekly = May 26). Using only the monthly
+    //    floor would drop late-May work from weekly clients on the
+    //    floor of June.
+    const monthlyFloor = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1));
+    const weeklyFloor = new Date(today.getTime() - 7 * 86_400_000);
+    weeklyFloor.setUTCHours(0, 0, 0, 0);
+    const widestFloor = monthlyFloor.getTime() < weeklyFloor.getTime()
+      ? monthlyFloor
+      : weeklyFloor;
     const clientNames = active.map((c) => c.name);
     const [tasksRes, sentRes] = await Promise.all([
       supabase

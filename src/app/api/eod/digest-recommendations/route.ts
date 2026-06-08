@@ -1,36 +1,39 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { isApprover } from "@/lib/email-approvers";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
-import type { UpdateCadence } from "@/lib/eod-digest";
 
 export const dynamic = "force-dynamic";
 
-// GET /api/eod/digest-recommendations
+// GET /api/eod/digest-recommendations?window=daily|weekly|biweekly|monthly
 //
-// "Which clients are due for an EOD update, and how much work would
-// it cover?" Returns one row per client with unreported completed
-// work in their cadence's lookback window. Approvers use this on
-// /approvals to decide where to draft next; the existing cron handles
-// the on-schedule fan-out, this surface is for manual control.
+// "Show me who should get an EOD update in this time window." The
+// caller picks the window via tab; this endpoint returns the list of
+// clients with unreported completed work + the contributors' EOD
+// notes for that period, ordered by how much work is sitting there.
 //
-// Auth: approver only (same gate as the rest of /approvals).
+// IMPORTANT: this surface intentionally does NOT consult the per-
+// client update_cadence column. The window is whatever the approver
+// clicked. (The cadence column still drives the nightly cron, but
+// that's a separate path.)
 //
-// Response shape:
-//   {
-//     today: "YYYY-MM-DD",
-//     dueToday: <recommendation[]>,    // cadence says today IS a report day
-//     waiting:  <recommendation[]>,    // unreported work exists but cadence-day isn't today
-//   }
-// Each recommendation is { clientId, clientName, cadence, unreportedTaskCount,
-//   lastSentAt, lookbackStart, sampleTaskTitles[] }.
+// Auth: approver only.
+
+const WINDOWS = ["daily", "weekly", "biweekly", "monthly"] as const;
+export type DigestWindow = typeof WINDOWS[number];
+
+const WINDOW_DAYS: Record<DigestWindow, number> = {
+  daily: 1,
+  weekly: 7,
+  biweekly: 14,
+  monthly: 30
+};
 
 interface ClientRow {
   id: string;
   name: string;
   status: string | null;
-  update_cadence: UpdateCadence | null;
   contact_emails: string[] | null;
 }
 
@@ -39,6 +42,8 @@ interface TaskRow {
   title: string;
   client_name: string;
   completed_at: string | null;
+  assignee_id: string | null;
+  tags: string[] | null;
 }
 
 interface SentEmailRow {
@@ -46,80 +51,54 @@ interface SentEmailRow {
   sent_at: string | null;
 }
 
+interface EodNoteRow {
+  user_id: string;
+  note_date: string;
+  worked_on: string | null;
+  accomplished: string | null;
+  plan_tomorrow: string | null;
+}
+
+export interface DigestTaskDetail {
+  id: string;
+  title: string;
+  tags: string[];
+  completedAt: string | null;
+  assigneeName: string | null;
+}
+
+export interface DigestEodNote {
+  authorName: string;
+  noteDate: string;
+  workedOn: string | null;
+  accomplished: string | null;
+}
+
 export interface DigestRecommendation {
   clientId: string;
   clientName: string;
-  cadence: UpdateCadence;
-  cadenceDueToday: boolean;
   unreportedTaskCount: number;
   lastSentAt: string | null;
-  lookbackStart: string;
-  sampleTaskTitles: string[];
+  tasks: DigestTaskDetail[];      // up to 5 most recent
+  eodNotes: DigestEodNote[];      // up to 5 most recent contributor notes
+  contributorNames: string[];     // distinct contributors
   hasContact: boolean;
 }
 
-// Match the day-of-week logic in lib/eod-digest.ts:isReportDay.
-function isCadenceDueToday(cadence: UpdateCadence, date: Date): boolean {
-  switch (cadence) {
-    case "daily":    return true;
-    case "biweekly": return date.getUTCDay() === 3 || date.getUTCDay() === 5;
-    case "weekly":   return date.getUTCDay() === 5;
-    case "monthly":  return date.getUTCDate() === 1;
-    case "none":     return false;
-  }
+function isDigestWindow(s: string): s is DigestWindow {
+  return (WINDOWS as readonly string[]).includes(s);
 }
 
-// Lookback window for "what work would this digest cover", per cadence.
-// Daily looks back to start-of-day; weekly looks back 7 days; biweekly
-// looks back to the most recent Wed/Fri (whichever came first); monthly
-// looks back to the 1st of the current month. The actual reported_to_client_at
-// filter ALSO narrows by "tasks never reported", so a quiet month's
-// monthly digest doesn't accidentally include 30 days of already-sent work.
-function lookbackStart(cadence: UpdateCadence, today: Date): Date {
-  const d = new Date(today);
-  switch (cadence) {
-    case "daily":
-      d.setUTCHours(0, 0, 0, 0);
-      return d;
-    case "weekly": {
-      const back = new Date(d.getTime() - 7 * 86_400_000);
-      back.setUTCHours(0, 0, 0, 0);
-      return back;
-    }
-    case "biweekly": {
-      // Walk backwards from today to the most recent Wed (3) or Fri (5).
-      // If today IS Wed/Fri, use a day before to get a usable window.
-      const day = d.getUTCDay();
-      let daysBack = 1;
-      while (daysBack < 8) {
-        const cand = new Date(d.getTime() - daysBack * 86_400_000);
-        const cd = cand.getUTCDay();
-        if (cd === 3 || cd === 5) {
-          cand.setUTCHours(0, 0, 0, 0);
-          return cand;
-        }
-        daysBack += 1;
-      }
-      // Fallback shouldn't happen — we always hit a Wed/Fri within a week.
-      d.setUTCHours(0, 0, 0, 0);
-      d.setUTCDate(d.getUTCDate() - 7);
-      return d;
-      void day;
-    }
-    case "monthly": {
-      const back = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1));
-      return back;
-    }
-    case "none":
-      // Shouldn't reach here — `none` clients are filtered out before
-      // we compute the window. Return today so the empty-window query
-      // matches nothing.
-      d.setUTCHours(0, 0, 0, 0);
-      return d;
-  }
+function windowStart(w: DigestWindow): Date {
+  const d = new Date();
+  d.setUTCHours(0, 0, 0, 0);
+  if (w === "daily") return d;
+  const past = new Date(d.getTime() - WINDOW_DAYS[w] * 86_400_000);
+  past.setUTCHours(0, 0, 0, 0);
+  return past;
 }
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
     const userId = await requireCurrentUserId();
     const me = await getUserById(userId);
@@ -128,55 +107,45 @@ export async function GET() {
       return NextResponse.json({ error: "approver only" }, { status: 403 });
     }
 
-    const supabase = getSupabaseAdmin();
-    const today = new Date();
-    const todayStr = today.toISOString().slice(0, 10);
+    const url = new URL(req.url);
+    const raw = (url.searchParams.get("window") ?? "daily").toLowerCase();
+    const window: DigestWindow = isDigestWindow(raw) ? raw : "daily";
+    const start = windowStart(window);
+    const startIso = start.toISOString();
 
-    // 1) Every active client with a non-"none" cadence — those are the
-    //    candidates. We don't pre-filter to cadence-due-today since the
-    //    UI shows both "due now" and "waiting" lists.
+    const supabase = getSupabaseAdmin();
+
+    // 1) Active clients with at least one contact_emails entry. Clients
+    //    with no contact can't receive an email anyway — drop them so
+    //    the recommendation list reflects what's actually actionable.
     const { data: clientRows, error: clientErr } = await supabase
       .from("clients")
-      .select("id, name, status, update_cadence, contact_emails");
+      .select("id, name, status, contact_emails");
     if (clientErr) {
       return NextResponse.json({ error: clientErr.message }, { status: 500 });
     }
-    const clients = (clientRows ?? []) as ClientRow[];
-    const active = clients
-      .filter((c) => !c.status || c.status === "active")
-      .filter((c) => ((c.update_cadence ?? "daily") as UpdateCadence) !== "none");
-
-    if (active.length === 0) {
-      return NextResponse.json({ today: todayStr, dueToday: [], waiting: [] });
+    const clients = ((clientRows ?? []) as ClientRow[])
+      .filter((c) => !c.status || c.status === "active");
+    if (clients.length === 0) {
+      return NextResponse.json({ window, windowDays: WINDOW_DAYS[window], recommendations: [] });
     }
 
-    // 2) Pull unreported completed tasks per client, scoped to the
-    //    widest lookback window we'll need. Subset per-client in JS
-    //    below — saves N round-trips.
-    //
-    //    Widest = the OLDEST of monthly's "1st of current month" and
-    //    weekly's "7 days ago". Early in the month the weekly window
-    //    reaches further back than the monthly floor (e.g. on June 2,
-    //    monthly = June 1 but weekly = May 26). Using only the monthly
-    //    floor would drop late-May work from weekly clients on the
-    //    floor of June.
-    const monthlyFloor = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1));
-    const weeklyFloor = new Date(today.getTime() - 7 * 86_400_000);
-    weeklyFloor.setUTCHours(0, 0, 0, 0);
-    const widestFloor = monthlyFloor.getTime() < weeklyFloor.getTime()
-      ? monthlyFloor
-      : weeklyFloor;
-    const clientNames = active.map((c) => c.name);
+    const clientNames = clients.map((c) => c.name);
+    const clientByName = new Map<string, ClientRow>();
+    for (const c of clients) clientByName.set(c.name, c);
+
+    // 2) Unreported done tasks in the window, last-sent timestamp per
+    //    client. One round-trip each.
     const [tasksRes, sentRes] = await Promise.all([
       supabase
         .from("tasks")
-        .select("id, title, client_name, completed_at")
+        .select("id, title, client_name, completed_at, assignee_id, tags")
         .in("client_name", clientNames)
         .eq("status", "done")
         .is("reported_to_client_at", null)
-        .gte("completed_at", widestFloor.toISOString())
+        .gte("completed_at", startIso)
+        .order("completed_at", { ascending: false })
         .limit(2000),
-      // Last sent email per client (we order DESC + group in memory).
       supabase
         .from("email_drafts")
         .select("client_name, sent_at")
@@ -203,33 +172,91 @@ export async function GET() {
       }
     }
 
-    const recommendations: DigestRecommendation[] = [];
-    for (const c of active) {
-      const cadence = (c.update_cadence ?? "daily") as UpdateCadence;
-      const windowStart = lookbackStart(cadence, today);
-      const clientTasks = tasksByClient.get(c.name) ?? [];
-      const inWindow = clientTasks.filter(
-        (t) => t.completed_at && new Date(t.completed_at) >= windowStart
+    // 3) Pull EOD notes for the contributing assignees in the window.
+    //    Single round-trip across all contributors, then bucket per
+    //    client below. Limit upper bound for safety.
+    const allAssignees = Array.from(new Set(
+      tasks.map((t) => t.assignee_id).filter((id): id is string => !!id)
+    ));
+    const startDateStr = start.toISOString().slice(0, 10);
+    let notes: EodNoteRow[] = [];
+    let userById = new Map<string, string>(); // user_id → name
+    if (allAssignees.length > 0) {
+      const [notesRes, usersRes] = await Promise.all([
+        supabase
+          .from("eod_notes")
+          .select("user_id, note_date, worked_on, accomplished, plan_tomorrow")
+          .in("user_id", allAssignees)
+          .gte("note_date", startDateStr)
+          .order("note_date", { ascending: false })
+          .limit(500),
+        supabase
+          .from("users")
+          .select("id, name")
+          .in("id", allAssignees)
+      ]);
+      notes = (notesRes.data ?? []) as EodNoteRow[];
+      userById = new Map(
+        ((usersRes.data ?? []) as { id: string; name: string }[])
+          .map((u) => [u.id, u.name])
       );
-      if (inWindow.length === 0) continue;
+    }
+
+    // Notes are global per-user. To bucket them per client we use the
+    // task-assignment graph: any contributor for a client gets their
+    // EOD notes attached to that client. So a worker who closed tasks
+    // for both Acme and Beta has their note visible on both rows.
+    const contributorsByClient = new Map<string, Set<string>>();
+    for (const t of tasks) {
+      if (!t.assignee_id) continue;
+      const set = contributorsByClient.get(t.client_name) ?? new Set<string>();
+      set.add(t.assignee_id);
+      contributorsByClient.set(t.client_name, set);
+    }
+
+    const recommendations: DigestRecommendation[] = [];
+    for (const c of clients) {
+      const clientTasks = tasksByClient.get(c.name) ?? [];
+      if (clientTasks.length === 0) continue;
+
+      const taskDetails: DigestTaskDetail[] = clientTasks
+        .slice(0, 5)
+        .map((t) => ({
+          id: t.id,
+          title: t.title,
+          tags: t.tags ?? [],
+          completedAt: t.completed_at,
+          assigneeName: t.assignee_id ? (userById.get(t.assignee_id) ?? null) : null
+        }));
+
+      const contributorIds = Array.from(contributorsByClient.get(c.name) ?? []);
+      const eodNotes: DigestEodNote[] = notes
+        .filter((n) => contributorIds.includes(n.user_id))
+        .slice(0, 5)
+        .map((n) => ({
+          authorName: userById.get(n.user_id) ?? "Teammate",
+          noteDate: n.note_date,
+          workedOn: n.worked_on,
+          accomplished: n.accomplished
+        }));
+
+      const contributorNames = contributorIds
+        .map((id) => userById.get(id))
+        .filter((n): n is string => !!n);
+
       recommendations.push({
         clientId: c.id,
         clientName: c.name,
-        cadence,
-        cadenceDueToday: isCadenceDueToday(cadence, today),
-        unreportedTaskCount: inWindow.length,
+        unreportedTaskCount: clientTasks.length,
         lastSentAt: lastSentByClient.get(c.name) ?? null,
-        lookbackStart: windowStart.toISOString(),
-        sampleTaskTitles: inWindow
-          .sort((a, b) => (b.completed_at ?? "").localeCompare(a.completed_at ?? ""))
-          .slice(0, 3)
-          .map((t) => t.title),
+        tasks: taskDetails,
+        eodNotes,
+        contributorNames,
         hasContact: (c.contact_emails?.length ?? 0) > 0
       });
     }
 
-    // Order each bucket by count desc, then by lastSent ASC (oldest
-    // first — those have been waiting longest).
+    // Most work first, then oldest last-update (those have waited longest).
     recommendations.sort((a, b) => {
       if (a.unreportedTaskCount !== b.unreportedTaskCount) {
         return b.unreportedTaskCount - a.unreportedTaskCount;
@@ -237,10 +264,11 @@ export async function GET() {
       return (a.lastSentAt ?? "").localeCompare(b.lastSentAt ?? "");
     });
 
-    const dueToday = recommendations.filter((r) => r.cadenceDueToday);
-    const waiting = recommendations.filter((r) => !r.cadenceDueToday);
-
-    return NextResponse.json({ today: todayStr, dueToday, waiting });
+    return NextResponse.json({
+      window,
+      windowDays: WINDOW_DAYS[window],
+      recommendations
+    });
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "unknown error" },

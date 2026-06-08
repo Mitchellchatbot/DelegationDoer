@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { Send, X } from "lucide-react";
 import { ClientUpdateComposer } from "@/components/ClientUpdateComposer";
 
@@ -9,6 +10,10 @@ import { ClientUpdateComposer } from "@/components/ClientUpdateComposer";
 // reads as "another section" until clicked, then reveals the full composer
 // (date-range picker + generate + editable preview + submit-for-approval).
 // Kept separate from the composer so the composer keeps its own styling.
+//
+// Auto-opens (and scrolls into view) when `?openComposer=1` is present in
+// the URL. Used by the /approvals "Who needs an email" card to deep-link
+// straight into the composer with a pre-selected date window.
 
 interface LockedClient {
   id: string;
@@ -17,7 +22,23 @@ interface LockedClient {
 }
 
 export function ClientUpdateComposerCollapsible({ lockedClient }: { lockedClient: LockedClient }) {
-  const [open, setOpen] = useState(false);
+  const params = useSearchParams();
+  const autoOpen = params?.get("openComposer") === "1";
+  const presetDays = params?.get("days") ?? null;
+  const [open, setOpen] = useState(autoOpen);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+
+  // When deep-linked from /approvals, scroll the composer into view on
+  // mount so the user lands on it instead of the top of the page.
+  // Runs once — re-toggling the panel manually shouldn't fight a later
+  // re-scroll.
+  useEffect(() => {
+    if (!autoOpen) return;
+    const t = window.setTimeout(() => {
+      rootRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 60);
+    return () => window.clearTimeout(t);
+  }, [autoOpen]);
 
   if (!open) {
     return (
@@ -41,7 +62,7 @@ export function ClientUpdateComposerCollapsible({ lockedClient }: { lockedClient
   }
 
   return (
-    <div className="relative">
+    <div className="relative" ref={rootRef}>
       <button
         type="button"
         onClick={() => setOpen(false)}
@@ -50,7 +71,10 @@ export function ClientUpdateComposerCollapsible({ lockedClient }: { lockedClient
       >
         <X className="w-3.5 h-3.5" />
       </button>
-      <ClientUpdateComposer lockedClient={lockedClient} />
+      <ClientUpdateComposer
+        lockedClient={lockedClient}
+        presetDays={presetDays ? Number(presetDays) : undefined}
+      />
     </div>
   );
 }

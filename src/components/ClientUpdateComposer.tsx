@@ -41,13 +41,29 @@ function dateInputValue(d: Date): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
-export function ClientUpdateComposer({ lockedClient }: { lockedClient: LockedClient }) {
-  const [range, setRange] = useState<RangeKey>("7");
+export function ClientUpdateComposer({
+  lockedClient,
+  presetDays
+}: {
+  lockedClient: LockedClient;
+  presetDays?: number;
+}) {
+  // Deep-link from /approvals can preselect a range. Map 7 → preset 7,
+  // 30 → preset 30, anything else (1, 14, etc.) → custom with that
+  // many days back. Defaults to "7" when no preset is given.
+  const initialRange: RangeKey =
+    presetDays === 7 ? "7" :
+    presetDays === 30 ? "30" :
+    (presetDays && presetDays > 0) ? "custom" : "7";
+  const [range, setRange] = useState<RangeKey>(initialRange);
   // Custom-range date inputs (yyyy-mm-dd). Default to a 7-day span so the
-  // pickers aren't empty when the user first switches to Custom.
-  const sevenAgo = new Date();
-  sevenAgo.setDate(sevenAgo.getDate() - 7);
-  const [customFrom, setCustomFrom] = useState(dateInputValue(sevenAgo));
+  // pickers aren't empty when the user first switches to Custom. When
+  // presetDays is non-standard (e.g. 14), seed the custom-from to that
+  // many days back so Generate works without re-picking.
+  const customSeedDays = presetDays && presetDays !== 7 && presetDays !== 30 ? presetDays : 7;
+  const seedAgo = new Date();
+  seedAgo.setDate(seedAgo.getDate() - customSeedDays);
+  const [customFrom, setCustomFrom] = useState(dateInputValue(seedAgo));
   const [customTo, setCustomTo] = useState(dateInputValue(new Date()));
 
   const [generating, setGenerating] = useState(false);

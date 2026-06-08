@@ -12,6 +12,7 @@ import { PersonAvatar } from "@/components/PersonAvatar";
 import { Countdown } from "@/components/Countdown";
 import { useCurrentUser } from "@/lib/user-context";
 import { cn, formatDate } from "@/lib/utils";
+import { useHorizontalDragAutoScroll } from "@/lib/useHorizontalDragAutoScroll";
 import type { Task, TaskStatus, User } from "@/lib/types";
 import {
   Clock, Globe2, Building2, Users as UsersIcon, FolderKanban,
@@ -73,6 +74,8 @@ export default function BoardPage() {
   const { users, departments, userById } = useTeam();
   const searchParams = useSearchParams();
   const router = useRouter();
+  const { containerRef, onDragStart, onDragEnd: stopAutoScroll } =
+    useHorizontalDragAutoScroll();
   const [tasks, setTasks] = useState<Task[]>([]);
   const [, setLoading] = useState(true);
 
@@ -587,10 +590,13 @@ export default function BoardPage() {
         </div>
       )}
 
-      <DragDropContext onDragEnd={onDragEnd}>
+      <DragDropContext
+        onDragStart={onDragStart}
+        onDragEnd={(r) => { stopAutoScroll(); void onDragEnd(r); }}
+      >
         {/* Horizontal scroll once column count exceeds what fits. Person
             mode regularly has 10+ columns; status mode always has 5. */}
-        <div className="overflow-x-auto pb-2">
+        <div ref={containerRef} className="overflow-x-auto pb-2">
           <div className="flex gap-3 min-w-max">
             {columns.map((col, colIdx) => (
               <div

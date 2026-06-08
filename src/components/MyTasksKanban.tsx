@@ -11,6 +11,7 @@ import { PersonAvatar } from "./PersonAvatar";
 import { useTeam } from "@/lib/team-context";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { useHorizontalDragAutoScroll } from "@/lib/useHorizontalDragAutoScroll";
 import type { Task, TaskStatus } from "@/lib/types";
 
 // Notion-style Kanban for the current user's tasks. Five columns mapped
@@ -75,6 +76,8 @@ const COLUMNS: ColumnDef[] = [
 
 export function MyTasksKanban({ initialTasks }: { initialTasks: Task[] }) {
   const router = useRouter();
+  const { containerRef, onDragStart, onDragEnd: stopAutoScroll } =
+    useHorizontalDragAutoScroll();
   const [tasks, setTasks] = useState<Task[]>(initialTasks);
 
   const grouped: Record<TaskStatus, Task[]> = {
@@ -147,8 +150,11 @@ export function MyTasksKanban({ initialTasks }: { initialTasks: Task[] }) {
   }
 
   return (
-    <DragDropContext onDragEnd={onDragEnd}>
-      <div className="overflow-x-auto pb-2 -mx-1 px-1">
+    <DragDropContext
+      onDragStart={onDragStart}
+      onDragEnd={(r) => { stopAutoScroll(); void onDragEnd(r); }}
+    >
+      <div ref={containerRef} className="overflow-x-auto pb-2 -mx-1 px-1">
         <div className="flex gap-3 min-w-max">
           {COLUMNS.map((col, colIdx) => (
             <Column

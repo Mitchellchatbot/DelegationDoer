@@ -68,3 +68,20 @@ export function canManagePeople(actor: User): boolean {
 export function canAddDepartments(actor: User): boolean {
   return isLeader(actor);
 }
+
+// Outbound surface — Meta/Facebook ads analytics + (future) other paid
+// channels. Visibility is limited to a curated set of operators rather
+// than role-gated, because growth metrics are sensitive and only a few
+// people own the spend story.
+//
+// Matches against the lowercased display name so a rename in the DB
+// doesn't break the gate. Mirrors the same substring-matching pattern
+// used by SUPER_APPROVER_NAME_PATTERNS in lib/email-approvers.ts —
+// keep the two in sync if the access model evolves.
+const OUTBOUND_NAME_PATTERNS = ["mitchell", "hasan", "mujtaba", "henry"];
+
+export function canSeeOutbound(u: User | null | undefined): boolean {
+  if (!u || !u.name) return false;
+  const lower = u.name.toLowerCase();
+  return OUTBOUND_NAME_PATTERNS.some((p) => lower.includes(p));
+}

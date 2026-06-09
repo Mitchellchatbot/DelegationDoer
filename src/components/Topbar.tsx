@@ -17,6 +17,8 @@ import { NewTaskForm } from "./NewTaskForm";
 import { ROLE_LABELS } from "@/lib/auth";
 import { primaryDepartment } from "@/lib/departments";
 import { useNeedsClockIn } from "./ClockGate";
+import { EnterOutboundDashboardButton } from "./EnterOutboundDashboardButton";
+import { canSeeOutbound } from "@/lib/auth";
 import type { User } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
@@ -306,6 +308,10 @@ export function Topbar({ user }: { user: User }) {
 
       {/* Controls — right-aligned */}
       <div className="flex items-center gap-2 justify-self-end">
+        {/* Outbound dashboard entry — icon-only pill, only rendered for
+            the operator cohort. Sits leftmost in the controls cluster so
+            it's adjacent to the search but doesn't crowd the user pill. */}
+        {canSeeOutbound(user) && <EnterOutboundDashboardButton iconOnly />}
         <Dialog.Root open={newTaskOpen} onOpenChange={setNewTaskOpen}>
           <NewTaskTrigger />
           <Dialog.Portal>

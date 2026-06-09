@@ -56,13 +56,22 @@ interface SeoPayload {
     subject: string;
     sentAt: string;
   }>;
-  priorityComms: Array<{
-    kind: "at_risk_red" | "approval_waiting";
-    clientId?: string;
-    clientName: string;
-    note: string;
-    draftId?: string;
-  }>;
+  // Team-wide client-facing work already completed today, so the
+  // employee sees progress before planning the rest of the day.
+  completedToday: {
+    counts: {
+      emailsSent: number;
+      approvals: number;
+      tasksCompleted: number;
+      clientUpdates: number;
+      meetings: number;
+    };
+    items: Array<{
+      kind: "email" | "approval" | "task" | "update" | "meeting";
+      label: string;
+      at: string;
+    }>;
+  };
 }
 
 interface WebPayload {
@@ -212,44 +221,11 @@ async function buildSeoPayload(userId: string): Promise<SeoPayload> {
     sentAt: r.sent_at
   }));
 
-  // Priority communication = the worst-of-the-worst pulled from two
-  // signals: (1) at-risk health AND red touchpoint, (2) drafts awaiting
-  // approval (any approver sees them; quick action for SEO leads).
-  const priorityComms: SeoPayload["priorityComms"] = [];
-  for (const c of enriched) {
-    if (c.effectiveHealth === "at_risk" && c.touchpoint === "red") {
-      priorityComms.push({
-        kind: "at_risk_red",
-        clientId: c.id,
-        clientName: c.name,
-        note: `at-risk health · ${c.daysSince ?? "—"} days no contact`
-      });
-    }
-  }
-  // Pending drafts awaiting approval — surfaced for SEO leads since
-  // they're often approvers on content-plan emails.
-  try {
-    const { data: pending } = await supabase
-      .from("email_drafts")
-      .select("id, client_name, subject, created_at")
-      .eq("status", "pending")
-      .order("created_at", { ascending: true })
-      .limit(5);
-    for (const d of (pending ?? []) as Array<{
-      id: string; client_name: string; subject: string; created_at: string;
-    }>) {
-      priorityComms.push({
-        kind: "approval_waiting",
-        draftId: d.id,
-        clientName: d.client_name,
-        note: `draft pending approval · ${d.subject}`
-      });
-    }
-  } catch {
-    /* email_drafts missing — ignore */
-  }
-  // Cap the list so the dashboard doesn't get unwieldy.
-  priorityComms.splice(8);
+  // What's been completed today — team-wide client-facing work, so the
+  // employee sees progress already made before planning the rest of the
+  // day. UTC day range matches the existing EOD/dashboard convention
+  // (per-user timezone is deliberately out of scope — see lib/eod.ts).
+  const completedToday = await buildCompletedToday(supabase);
 
   // userId is unused in v1 but kept on the signature for the future
   // "drafts pending YOUR approval" personalisation.
@@ -261,8 +237,97 @@ async function buildSeoPayload(userId: string): Promise<SeoPayload> {
     totalClients: clients.length,
     followUp,
     recentOutbound,
-    priorityComms
+    completedToday
   };
+}
+
+// Today's [00:00, next-00:00) range in UTC. Mirrors utcDayRange() in
+// lib/eod.ts so "completed today" lines up with the EOD report.
+function utcDayRange(now: Date = new Date()): { startIso: string; endIso: string } {
+  const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  const end = new Date(start.getTime() + 24 * 3_600_000);
+  return { startIso: start.toISOString(), endIso: end.toISOString() };
+}
+
+async function buildCompletedToday(
+  supabase: ReturnType<typeof getSupabaseAdmin>
+): Promise<SeoPayload["completedToday"]> {
+  const { startIso, endIso } = utcDayRange();
+  const counts = { emailsSent: 0, approvals: 0, tasksCompleted: 0, clientUpdates: 0, meetings: 0 };
+  const items: SeoPayload["completedToday"]["items"] = [];
+
+  // Tasks completed today — keyed off completed_at, the stable
+  // done-transition stamp (same predicate as the EOD builder; never
+  // last_activity_at, which bumps on any edit).
+  try {
+    const { data: tasks } = await supabase
+      .from("tasks")
+      .select("id, title, completed_at")
+      .eq("status", "done")
+      .gte("completed_at", startIso)
+      .lt("completed_at", endIso);
+    for (const t of (tasks ?? []) as Array<{ id: string; title: string; completed_at: string }>) {
+      counts.tasksCompleted += 1;
+      items.push({ kind: "task", label: t.title, at: t.completed_at });
+    }
+  } catch {
+    /* tasks table issue — skip */
+  }
+
+  // Emails sent today (and the client_update subset). Approvals are
+  // counted off approved_at, which is stamped when status leaves
+  // 'pending'. One select covers all three.
+  try {
+    const { data: drafts } = await supabase
+      .from("email_drafts")
+      .select("id, client_name, subject, kind, status, sent_at, approved_at")
+      .or(`sent_at.gte.${startIso},approved_at.gte.${startIso}`)
+      .limit(500);
+    for (const d of (drafts ?? []) as Array<{
+      id: string; client_name: string | null; subject: string | null;
+      kind: string; status: string; sent_at: string | null; approved_at: string | null;
+    }>) {
+      const sentToday = !!d.sent_at && d.sent_at >= startIso && d.sent_at < endIso;
+      const approvedToday = !!d.approved_at && d.approved_at >= startIso && d.approved_at < endIso;
+      const name = d.client_name ?? "—";
+      if (sentToday && d.status === "sent") {
+        counts.emailsSent += 1;
+        if (d.kind === "client_update") {
+          counts.clientUpdates += 1;
+          items.push({ kind: "update", label: `${name} — ${d.subject ?? "(no subject)"}`, at: d.sent_at! });
+        } else {
+          items.push({ kind: "email", label: `${name} — ${d.subject ?? "(no subject)"}`, at: d.sent_at! });
+        }
+      }
+      if (approvedToday && (d.status === "approved" || d.status === "sent")) {
+        counts.approvals += 1;
+        items.push({ kind: "approval", label: `${name} — ${d.subject ?? "(no subject)"}`, at: d.approved_at! });
+      }
+    }
+  } catch {
+    /* email_drafts table issue — skip */
+  }
+
+  // Meetings completed today.
+  try {
+    const { data: meetings } = await supabase
+      .from("client_meetings")
+      .select("client_id, title, meeting_date")
+      .gte("meeting_date", startIso)
+      .lt("meeting_date", endIso);
+    for (const m of (meetings ?? []) as Array<{ client_id: string; title: string | null; meeting_date: string }>) {
+      counts.meetings += 1;
+      items.push({ kind: "meeting", label: m.title ?? "Client meeting", at: m.meeting_date });
+    }
+  } catch {
+    /* client_meetings table missing — skip */
+  }
+
+  // Newest first, capped so the card stays scannable.
+  items.sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
+  items.splice(8);
+
+  return { counts, items };
 }
 
 async function buildWebPayload(

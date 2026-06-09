@@ -13,12 +13,14 @@ import type { TaskMedia } from "@/lib/types";
 
 // Client Update composer, rendered as a per-client section on /clients/[id].
 // The window is fixed by `presetDays` (set upstream by the tab that opened
-// it; defaults to 7). The operator picks which completed / in-progress
-// tasks to include (checkboxes in the preview), hits Generate -> the AI
-// drafts ONE client-facing email PER DEPARTMENT from the selected tasks,
-// the operator reviews/edits each, then Submit routes every draft to the
-// existing approval queue (kind='client_update') tagged with its
-// department so it lands with that department's head.
+// it; defaults to 7). The source is the team's EOD client-work entries for
+// this client (what each person logged they did + results in their daily
+// end-of-day form). The operator picks which entries to include (checkboxes
+// in the preview, grouped by the contributor's department), hits Generate
+// -> the AI drafts ONE client-facing email PER DEPARTMENT from the selected
+// entries, the operator reviews/edits each, then Submit routes every draft
+// to the approval queue (kind='client_update') tagged with its department
+// so it lands with that department's head.
 //
 // Twin of ContentPlanComposer — same generate -> preview -> submit-for-approval
 // flow and the same submit target (POST /api/email-drafts). The client is
@@ -63,7 +65,7 @@ interface DeptDraft {
   styling: boolean; // an AI editor action is in flight for this draft
   acting: boolean; // a submit/send action is in flight for this draft
   status: "editing" | "submitted" | "sent"; // lifecycle for this single draft
-  taskIds: string[];
+  eodWorkIds: string[]; // the EOD work entries this draft summarized (for reporting)
 }
 
 // Day boundaries for a fixed N-day window, as ISO strings. `from` is the
@@ -225,7 +227,7 @@ export function ClientUpdateComposer({
 
   async function generate() {
     if (selectedIds.size === 0) {
-      return toast.error("Select at least one task to include");
+      return toast.error("Select at least one EOD entry to include");
     }
     const window = windowFor(days);
     setGenerating(true);
@@ -238,7 +240,7 @@ export function ClientUpdateComposer({
           clientName: lockedClient.name,
           from: window.from,
           to: window.to,
-          taskIds: [...selectedIds]
+          entryIds: [...selectedIds]
         })
       });
       const data = await res.json();
@@ -256,7 +258,7 @@ export function ClientUpdateComposer({
       }
       setDrafts(incoming.map((d: {
         departmentId: string | null; departmentName: string;
-        subject?: string; body?: string; suggestedTo?: string[]; taskIds?: string[];
+        subject?: string; body?: string; suggestedTo?: string[]; eodWorkIds?: string[];
       }) => {
         // The draft route signs the body with the caller's name; point it
         // at the default From mailbox so the sign-off matches the sender
@@ -278,7 +280,7 @@ export function ClientUpdateComposer({
           styling: false,
           acting: false,
           status: "editing",
-          taskIds: Array.isArray(d.taskIds) ? d.taskIds : []
+          eodWorkIds: Array.isArray(d.eodWorkIds) ? d.eodWorkIds : []
         };
         return accounts[0]?.id ? applyAccountToDraft(base, accounts[0].id) : base;
       }));
@@ -382,7 +384,7 @@ export function ClientUpdateComposer({
       departmentId: d.departmentId,
       scheduledFor: scheduledFor ? new Date(scheduledFor).toISOString() : null,
       mediaUrls: attachments,
-      taskIds: d.taskIds
+      eodWorkIds: d.eodWorkIds
     };
   }
 
@@ -502,7 +504,7 @@ export function ClientUpdateComposer({
 
           <div className="flex items-center justify-between gap-2">
             <div className="text-[11px] text-ink/55">
-              {selectedIds.size} task{selectedIds.size === 1 ? "" : "s"} selected
+              {selectedIds.size} {selectedIds.size === 1 ? "entry" : "entries"} selected
             </div>
             <button
               type="button"
@@ -572,8 +574,8 @@ export function ClientUpdateComposer({
                       {d.departmentName}
                     </span>
                     <span className="text-[10px] text-ink/50">
-                      {d.taskIds.length > 0
-                        ? `${d.taskIds.length} task${d.taskIds.length === 1 ? "" : "s"} · routes to ${d.departmentName} head`
+                      {d.eodWorkIds.length > 0
+                        ? `${d.eodWorkIds.length} EOD ${d.eodWorkIds.length === 1 ? "entry" : "entries"} · routes to ${d.departmentName} head`
                         : `Progress update · routes to ${d.departmentName} head`}
                     </span>
                   </div>
@@ -953,45 +955,26 @@ function TabBtn({
   );
 }
 
-interface PreviewTask {
+interface PreviewEntry {
   id: string;
-  title: string;
-  completedAt: string | null;
-  assigneeName: string | null;
-  tags: string[];
-  departmentId: string | null;
-  departmentName: string | null;
-}
-
-interface PreviewInProgress {
-  id: string;
-  title: string;
-  status: string;
-  assigneeName: string | null;
-  tags: string[];
-  lastActivityAt: string | null;
+  workedOn: string;
+  results: string | null;
+  noteDate: string;
+  authorName: string | null;
   departmentId: string | null;
   departmentName: string | null;
 }
 
 interface PreviewData {
-  tasks: PreviewTask[];
-  tasksInProgress: PreviewInProgress[];
-  eodNotes: Array<{
-    authorName: string;
-    noteDate: string;
-    workedOn: string | null;
-    accomplished: string | null;
-  }>;
+  entries: PreviewEntry[];
 }
 
-// Live preview of what the AI will summarize: completed tasks in the
-// window, work still in progress, + EOD notes from teammates who closed
-// those tasks. Each task carries a checkbox so the operator controls
-// exactly which work feeds the draft(s); a department chip shows which
-// per-department draft (and which head) the task will route to. EOD
-// notes stay visible as read-only context. Refetches whenever the
-// window (days) changes; on (re)load every task starts selected.
+// Live preview of what the AI will summarize: the EOD client-work entries
+// the team logged for this client in the window (what each person did +
+// results), grouped by the contributor's department (SEO / Website). Each
+// entry carries a checkbox so the operator controls exactly which work
+// feeds the draft(s). Refetches whenever the window (days) changes; on
+// (re)load every entry starts selected.
 function ComposerPreview({
   clientName, days, selected, onToggle, onLoadedIds
 }: {
@@ -1025,11 +1008,9 @@ function ComposerPreview({
           setError(j?.error ?? "preview failed");
           setData(null);
         } else {
-          const tasks: PreviewTask[] = j.tasks ?? [];
-          const tasksInProgress: PreviewInProgress[] = j.tasksInProgress ?? [];
-          setData({ tasks, tasksInProgress, eodNotes: j.eodNotes ?? [] });
-          // Default every task selected on load.
-          onLoadedIds([...tasks.map((t) => t.id), ...tasksInProgress.map((t) => t.id)]);
+          const entries: PreviewEntry[] = j.entries ?? [];
+          setData({ entries });
+          onLoadedIds(entries.map((e) => e.id)); // default every entry selected
         }
       })
       .catch((err) => {
@@ -1043,165 +1024,98 @@ function ComposerPreview({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [clientName, days]);
 
+  // Group entries by department for display (and so the operator sees
+  // which per-department email each will route to).
+  const groups = (() => {
+    if (!data) return [] as Array<{ key: string; name: string; departmentId: string | null; entries: PreviewEntry[] }>;
+    const byKey = new Map<string, { key: string; name: string; departmentId: string | null; entries: PreviewEntry[] }>();
+    for (const e of data.entries) {
+      const key = e.departmentId ?? "__general__";
+      const g = byKey.get(key) ?? { key, name: e.departmentName ?? "General", departmentId: e.departmentId, entries: [] };
+      g.entries.push(e);
+      byKey.set(key, g);
+    }
+    return [...byKey.values()].sort((a, b) =>
+      a.departmentId === null ? 1 : b.departmentId === null ? -1 : a.name.localeCompare(b.name)
+    );
+  })();
+
   return (
     <div className="rounded-xl border border-slate-200/70 bg-white p-3 space-y-3">
       <div className="text-[10px] uppercase tracking-wide font-semibold text-ink/55">
-        Pick what the AI will summarize
+        Pick the EOD work the AI will summarize
       </div>
       {loading ? (
         <div className="text-[11px] text-ink/55 inline-flex items-center gap-1.5">
-          <Loader2 className="w-3 h-3 animate-spin" /> Loading context…
+          <Loader2 className="w-3 h-3 animate-spin" /> Loading EOD work…
         </div>
       ) : error ? (
         <div className="text-[11px] text-rose-700">{error}</div>
-      ) : !data || (data.tasks.length === 0 && data.tasksInProgress.length === 0 && data.eodNotes.length === 0) ? (
+      ) : !data || data.entries.length === 0 ? (
         <div className="text-[11px] text-ink/55 italic">
-          Nothing completed, in progress, or noted by contributors in this window. Widen the range or pick a different period.
+          No EOD client-work logged for {clientName} in this window. Ask the team to log their EOD client work, or widen the range.
         </div>
       ) : (
         <div className="space-y-3">
-          {data.tasks.length > 0 && (
-            <div>
-              <div className="text-[10px] uppercase tracking-wide text-ink/50 font-semibold mb-1.5 inline-flex items-center gap-1">
-                <CheckSquare className="w-3 h-3" />
-                Completed tasks · {data.tasks.length}
+          {groups.map((g) => {
+            const meta = getDepartmentMeta(g.departmentId ?? undefined);
+            return (
+              <div key={g.key}>
+                <div className="text-[10px] uppercase tracking-wide text-ink/50 font-semibold mb-1.5 inline-flex items-center gap-1.5">
+                  <CheckSquare className="w-3 h-3" />
+                  <span className={cn("inline-flex items-center px-1.5 py-0.5 rounded-full border font-medium text-[9px]", meta.chip)}>
+                    {g.name}
+                  </span>
+                  email · {g.entries.length} {g.entries.length === 1 ? "entry" : "entries"}
+                </div>
+                <ul className="space-y-1">
+                  {g.entries.map((e) => (
+                    <EntryRow
+                      key={e.id}
+                      entry={e}
+                      checked={selected.has(e.id)}
+                      onToggle={onToggle}
+                    />
+                  ))}
+                </ul>
               </div>
-              <ul className="space-y-1">
-                {data.tasks.map((t) => (
-                  <TaskRow
-                    key={t.id}
-                    id={t.id}
-                    title={t.title}
-                    checked={selected.has(t.id)}
-                    onToggle={onToggle}
-                    departmentName={t.departmentName}
-                    departmentId={t.departmentId}
-                    metaLine={
-                      <>
-                        {t.assigneeName && <span>{t.assigneeName}</span>}
-                        {t.completedAt && (
-                          <>
-                            {t.assigneeName && <span>·</span>}
-                            <span className="tabular-nums">{t.completedAt.slice(0, 10)}</span>
-                          </>
-                        )}
-                      </>
-                    }
-                    tags={t.tags}
-                  />
-                ))}
-              </ul>
-            </div>
-          )}
-          {data.tasksInProgress.length > 0 && (
-            <div>
-              <div className="text-[10px] uppercase tracking-wide text-ink/50 font-semibold mb-1.5 inline-flex items-center gap-1">
-                <Clock className="w-3 h-3" />
-                In progress · {data.tasksInProgress.length}
-              </div>
-              <ul className="space-y-1">
-                {data.tasksInProgress.map((t) => (
-                  <TaskRow
-                    key={t.id}
-                    id={t.id}
-                    title={t.title}
-                    checked={selected.has(t.id)}
-                    onToggle={onToggle}
-                    departmentName={t.departmentName}
-                    departmentId={t.departmentId}
-                    metaLine={
-                      <>
-                        {t.status && (
-                          <span className="px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 text-[9px]">
-                            {t.status.replace(/_/g, " ")}
-                          </span>
-                        )}
-                        {t.assigneeName && <span>{t.assigneeName}</span>}
-                        {t.lastActivityAt && (
-                          <>
-                            {t.assigneeName && <span>·</span>}
-                            <span className="tabular-nums">{t.lastActivityAt.slice(0, 10)}</span>
-                          </>
-                        )}
-                      </>
-                    }
-                    tags={t.tags}
-                  />
-                ))}
-              </ul>
-            </div>
-          )}
-          {data.eodNotes.length > 0 && (
-            <div>
-              <div className="text-[10px] uppercase tracking-wide text-ink/50 font-semibold mb-1.5 inline-flex items-center gap-1">
-                <MessageSquare className="w-3 h-3" />
-                EOD notes from contributors · {data.eodNotes.length}
-              </div>
-              <ul className="space-y-2">
-                {data.eodNotes.slice(0, 5).map((n, idx) => (
-                  <li key={`${n.authorName}-${n.noteDate}-${idx}`} className="text-[11.5px] text-ink/75 leading-relaxed">
-                    <div className="text-[10px] text-ink/55 font-semibold mb-0.5">
-                      {n.authorName} · <span className="tabular-nums">{n.noteDate}</span>
-                    </div>
-                    {n.workedOn && (
-                      <div><span className="text-ink/55">Worked on: </span>{n.workedOn}</div>
-                    )}
-                    {n.accomplished && (
-                      <div><span className="text-ink/55">Accomplished: </span>{n.accomplished}</div>
-                    )}
-                  </li>
-                ))}
-                <li className="text-[10px] text-ink/45 italic">
-                  EOD notes from contributors on the selected tasks are folded into the draft as context (author names withheld; only client-relevant content is used).
-                </li>
-              </ul>
-            </div>
-          )}
+            );
+          })}
         </div>
       )}
     </div>
   );
 }
 
-// A single selectable task row in the preview. Checkbox + title + a meta
-// line (assignee/date/status) + a department chip showing where it routes.
-function TaskRow({
-  id, title, checked, onToggle, metaLine, tags, departmentName, departmentId
+// A single selectable EOD work entry in the preview. Checkbox + what was
+// worked on + (optional) results + author/date meta.
+function EntryRow({
+  entry, checked, onToggle
 }: {
-  id: string;
-  title: string;
+  entry: PreviewEntry;
   checked: boolean;
   onToggle: (id: string) => void;
-  metaLine: React.ReactNode;
-  tags: string[];
-  departmentName: string | null;
-  departmentId: string | null;
 }) {
-  const meta = getDepartmentMeta(departmentId ?? undefined);
   return (
     <li>
-      <label className="flex items-start gap-2 cursor-pointer rounded-lg px-1 py-0.5 hover:bg-slate-50">
+      <label className="flex items-start gap-2 cursor-pointer rounded-lg px-1 py-1 hover:bg-slate-50">
         <input
           type="checkbox"
           checked={checked}
-          onChange={() => onToggle(id)}
+          onChange={() => onToggle(entry.id)}
           className="mt-0.5 w-3.5 h-3.5 rounded border-slate-300 text-sky-600 focus:ring-sky-400/40 shrink-0"
         />
         <span className="min-w-0 flex-1">
-          <span className="flex items-center gap-1.5">
-            <span className="font-medium text-[12px] text-ink/80 truncate">{title}</span>
-            <span className={cn(
-              "inline-flex items-center text-[9px] px-1.5 py-0.5 rounded-full border font-medium shrink-0",
-              meta.chip
-            )}>
-              {departmentName ?? "General"}
+          <span className="block font-medium text-[12px] text-ink/85 leading-snug">{entry.workedOn}</span>
+          {entry.results && (
+            <span className="block text-[11px] text-ink/60 mt-0.5">
+              <span className="text-ink/45">Results: </span>{entry.results}
             </span>
-          </span>
-          <span className="text-[10px] text-ink/50 flex items-center gap-1.5 flex-wrap">
-            {metaLine}
-            {tags.slice(0, 3).map((tag) => (
-              <span key={tag} className="px-1.5 py-0.5 rounded-full bg-slate-100 text-ink/65 text-[9px]">{tag}</span>
-            ))}
+          )}
+          <span className="text-[10px] text-ink/45 flex items-center gap-1.5 flex-wrap mt-0.5">
+            {entry.authorName && <span>{entry.authorName}</span>}
+            {entry.authorName && <span>·</span>}
+            <span className="tabular-nums">{entry.noteDate}</span>
           </span>
         </span>
       </label>

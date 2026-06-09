@@ -575,7 +575,7 @@ function StructuredQuestion({
             "inline-flex items-center gap-2 px-5 py-2.5 rounded-full text-sm font-semibold text-white shadow-md transition-all hover:-translate-y-0.5 active:scale-95",
             !canAdvance && "opacity-40 cursor-not-allowed hover:translate-y-0"
           )}
-          style={{ background: "linear-gradient(135deg, #2563EB 0%, #1e63ff 100%)" }}
+          style={{ background: "linear-gradient(135deg, #0a4099 0%, #063270 100%)" }}
         >
           Continue <ArrowRight className="w-4 h-4" />
         </button>
@@ -682,7 +682,7 @@ function PerClientComposers({
           type="button"
           onClick={onAdvance}
           className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full text-sm font-semibold text-white shadow-md transition-all hover:-translate-y-0.5 active:scale-95"
-          style={{ background: "linear-gradient(135deg, #2563EB 0%, #1e63ff 100%)" }}
+          style={{ background: "linear-gradient(135deg, #0a4099 0%, #063270 100%)" }}
         >
           Continue <ArrowRight className="w-4 h-4" />
         </button>
@@ -725,7 +725,7 @@ function PerClientComposers({
           type="button"
           onClick={onAdvance}
           className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full text-sm font-semibold text-white shadow-md transition-all hover:-translate-y-0.5 active:scale-95"
-          style={{ background: "linear-gradient(135deg, #2563EB 0%, #1e63ff 100%)" }}
+          style={{ background: "linear-gradient(135deg, #0a4099 0%, #063270 100%)" }}
         >
           {remaining > 0 ? "Continue (and skip the rest)" : "Continue"} <ArrowRight className="w-4 h-4" />
         </button>

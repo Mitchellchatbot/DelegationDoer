@@ -282,7 +282,7 @@ export function TeamCarousel({ users, departments }: Props) {
                   <motion.span
                     layoutId="team-filter-blob"
                     transition={{ type: "spring", stiffness: 480, damping: 36 }}
-                    className="absolute inset-0 -z-10 rounded-full bg-accent shadow-[0_4px_14px_-4px_rgba(30,99,255,0.55),inset_0_1px_0_0_rgba(255,255,255,0.35)] ring-1 ring-accent/40"
+                    className="absolute inset-0 -z-10 rounded-full bg-accent shadow-[0_4px_14px_-4px_rgba(6,50,112,0.55),inset_0_1px_0_0_rgba(255,255,255,0.35)] ring-1 ring-accent/40"
                   />
                 )}
                 <span className="relative">{s.label}</span>
@@ -302,7 +302,7 @@ export function TeamCarousel({ users, departments }: Props) {
           lineHeight: 0.9,
           fontFamily: '"Arial Black", "Arial Bold", Arial, sans-serif',
           background:
-            "linear-gradient(to bottom, rgba(30,99,255,0.16) 25%, rgba(255,255,255,0) 78%)",
+            "linear-gradient(to bottom, rgba(6,50,112,0.16) 25%, rgba(255,255,255,0) 78%)",
           WebkitBackgroundClip: "text",
           backgroundClip: "text",
           color: "transparent"
@@ -377,7 +377,7 @@ export function TeamCarousel({ users, departments }: Props) {
                   transition:
                     "transform 0.7s cubic-bezier(0.25,0.46,0.45,0.94), opacity 0.7s cubic-bezier(0.25,0.46,0.45,0.94), filter 0.7s ease",
                   boxShadow: cls === "center"
-                    ? "0 30px 60px -20px rgba(15,23,42,0.30), 0 18px 36px -18px rgba(30,99,255,0.25)"
+                    ? "0 30px 60px -20px rgba(15,23,42,0.30), 0 18px 36px -18px rgba(6,50,112,0.25)"
                     : "0 20px 40px -16px rgba(15,23,42,0.18)"
                 }}
               >

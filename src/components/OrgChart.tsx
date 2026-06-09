@@ -179,8 +179,8 @@ export function OrgChart({ users, departments, tasks, ceo }: Props) {
         >
           <defs>
             <linearGradient id="org-edge" x1="0%" y1="0%" x2="0%" y2="100%">
-              <stop offset="0%" stopColor="#1e63ff" stopOpacity="0.55" />
-              <stop offset="100%" stopColor="#1e63ff" stopOpacity="0.18" />
+              <stop offset="0%" stopColor="#063270" stopOpacity="0.55" />
+              <stop offset="100%" stopColor="#063270" stopOpacity="0.18" />
             </linearGradient>
           </defs>
           {edges.map((e) => (
@@ -546,7 +546,7 @@ function PersonNode({
                 alt={user.name}
                 draggable={false}
                 className={cn(
-                  "w-full h-full object-cover rounded-full ring-4 ring-offset-2 ring-offset-white shadow-[0_8px_18px_-8px_rgba(15,23,42,0.35)] transition-shadow group-hover:shadow-[0_12px_24px_-8px_rgba(30,99,255,0.40)]",
+                  "w-full h-full object-cover rounded-full ring-4 ring-offset-2 ring-offset-white shadow-[0_8px_18px_-8px_rgba(15,23,42,0.35)] transition-shadow group-hover:shadow-[0_12px_24px_-8px_rgba(6,50,112,0.40)]",
                   ringClass
                 )}
               />
@@ -661,7 +661,7 @@ function NodePopoverContent({
       className="relative flex flex-col text-white max-h-[420px]"
       style={{
         background:
-          "linear-gradient(135deg, #1e63ff 0%, #3a78ff 45%, #1d4ed8 100%)"
+          "linear-gradient(135deg, #063270 0%, #3a78ff 45%, #1d4ed8 100%)"
       }}
     >
       <div

@@ -351,8 +351,8 @@ function renderCustomDisplay(field: CustomField, value: unknown) {
       <span
         className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium"
         style={{
-          background: opt?.color ? `${opt.color}22` : "rgba(30,99,255,0.1)",
-          color: opt?.color ?? "rgb(30,99,255)"
+          background: opt?.color ? `${opt.color}22` : "rgba(6,50,112,0.1)",
+          color: opt?.color ?? "rgb(6,50,112)"
         }}
       >
         {label}
@@ -369,8 +369,8 @@ function renderCustomDisplay(field: CustomField, value: unknown) {
               key={v}
               className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium"
               style={{
-                background: opt?.color ? `${opt.color}22` : "rgba(30,99,255,0.1)",
-                color: opt?.color ?? "rgb(30,99,255)"
+                background: opt?.color ? `${opt.color}22` : "rgba(6,50,112,0.1)",
+                color: opt?.color ?? "rgb(6,50,112)"
               }}
             >
               {opt?.label ?? v}

@@ -110,7 +110,7 @@ export function AddResourceForm({
           onClick={submit}
           disabled={submitting || !title.trim()}
           className="inline-flex items-center gap-1 text-xs px-3 py-1.5 rounded-full font-medium text-white shadow-sm disabled:opacity-50"
-          style={{ background: "linear-gradient(135deg, #2563EB 0%, #1e63ff 100%)" }}
+          style={{ background: "linear-gradient(135deg, #0a4099 0%, #063270 100%)" }}
         >
           {submitting ? "Adding…" : "Add"}
         </button>

@@ -18,7 +18,7 @@
   --ink:       222 47% 11%;     /* slate-900 */
   --muted:     222 14% 46%;     /* slate-500 */
 
-  --accent:    219 100% 56%;    /* #1e63ff */
+  --accent:    215 90% 23%;     /* #063270 */
   --accent-2:  256 90% 64%;     /* indigo-500 */
   --brand-2:   263 90% 66%;     /* indigo-500 */
   --brand-3:   270 95% 75%;     /* blue-400 */
@@ -48,17 +48,26 @@ body {
 ::-webkit-scrollbar-thumb:hover { background: #CBD5E1; }
 ::-webkit-scrollbar-track { background: transparent; }
 
+/* Sidebar is its own colored surface — a default scrollbar would carve
+   an ugly grey strip down the side. Hide it (still scrollable via
+   wheel/keyboard/touchpad). Applies to any scrollable descendant of
+   the sidebar panel. */
+.sidebar-panel ::-webkit-scrollbar,
+.sidebar-panel::-webkit-scrollbar { display: none; }
+.sidebar-panel,
+.sidebar-panel * {
+  scrollbar-width: none;          /* Firefox */
+  -ms-overflow-style: none;       /* Legacy Edge / IE */
+}
+
 .app-shell {
   background: #F8FAFC;
-  /* Tasteful grid-paper backdrop: 1px slate lines every 32px, faint enough
-     not to fight content but visible enough to give the canvas texture.
-     Plus the existing soft ambient blobs in the corners. */
+  /* Soft ambient blobs only — the grid-paper backdrop was removed in
+     favor of a cleaner, sheet-of-paper canvas that lets the white cards
+     pop without competing texture. */
   background-image:
-    linear-gradient(rgba(15, 23, 42, 0.045) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(15, 23, 42, 0.045) 1px, transparent 1px),
-    radial-gradient(1200px 600px at 100% -10%, rgba(30, 99, 255, 0.07), transparent 60%),
+    radial-gradient(1200px 600px at 100% -10%, rgba(6, 50, 112, 0.08), transparent 60%),
     radial-gradient(900px 500px at -10% 110%, rgba(99, 102, 241, 0.05), transparent 60%);
-  background-size: 32px 32px, 32px 32px, auto, auto;
   background-attachment: fixed;
   min-height: 100vh;
 }

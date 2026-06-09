@@ -13,7 +13,7 @@ const config: Config = {
         border: "#E2E8F0",
         ink: "#0F172A",
         muted: "#64748B",
-        accent: "#1e63ff",
+        accent: "#063270",
         warn: "#D97706",
         urgent: "#DC2626",
         ok: "#16A34A",
@@ -28,7 +28,7 @@ const config: Config = {
       borderRadius: { xl: "12px", "2xl": "16px" },
       boxShadow: {
         soft: "0 1px 2px rgba(15,23,42,0.04), 0 4px 12px -6px rgba(15,23,42,0.08)",
-        lift: "0 2px 4px rgba(15,23,42,0.06), 0 12px 28px -10px rgba(30,99,255,0.22)"
+        lift: "0 2px 4px rgba(15,23,42,0.06), 0 12px 28px -10px rgba(6,50,112,0.22)"
       }
     }
   },

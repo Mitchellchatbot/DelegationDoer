@@ -147,7 +147,7 @@ export async function listLabels(): Promise<MissiveLabel[]> {
   return data.labels ?? [];
 }
 
-export async function createLabel(name: string, color = "#2563eb"): Promise<string> {
+export async function createLabel(name: string, color = "#0a4099"): Promise<string> {
   const data = await missiveFetch<{ id: string }>("/api/labels", {
     method: "POST",
     body: JSON.stringify({ name, color })

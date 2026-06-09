@@ -684,7 +684,7 @@ function Welcome({
         type="button"
         onClick={onContinue}
         className="inline-flex items-center gap-2 px-7 py-3 rounded-full text-base font-semibold text-white shadow-md transition-all hover:-translate-y-0.5 active:scale-95"
-        style={{ background: "linear-gradient(135deg, #2563EB 0%, #1e63ff 100%)" }}
+        style={{ background: "linear-gradient(135deg, #0a4099 0%, #063270 100%)" }}
       >
         Continue <ArrowRight className="w-5 h-5" />
       </button>
@@ -757,7 +757,7 @@ function Footer({
         type="button"
         onClick={onNext}
         className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs font-semibold text-white shadow-sm transition-all hover:-translate-y-0.5 active:scale-95"
-        style={{ background: "linear-gradient(135deg, #2563EB 0%, #1e63ff 100%)" }}
+        style={{ background: "linear-gradient(135deg, #0a4099 0%, #063270 100%)" }}
       >
         {nextLabel} <ArrowRight className="w-3 h-3" />
       </button>

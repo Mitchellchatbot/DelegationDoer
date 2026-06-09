@@ -732,7 +732,7 @@ function DraftCard({
                   onClick={saveEdit}
                   disabled={busy === "save"}
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold text-white shadow-sm transition-all hover:-translate-y-0.5 active:scale-95"
-                  style={{ background: "linear-gradient(135deg, #2563EB 0%, #1e63ff 100%)" }}
+                  style={{ background: "linear-gradient(135deg, #0a4099 0%, #063270 100%)" }}
                 >
                   {busy === "save" ? <Loader2 className="w-3 h-3 animate-spin" /> : <Edit2 className="w-3 h-3" />}
                   {busy === "save" ? "Saving…" : "Save edit"}
@@ -944,7 +944,7 @@ function DraftCard({
                     type="button"
                     onClick={() => setShowResubmitBox(true)}
                     className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs font-semibold text-white shadow-sm transition-all hover:-translate-y-0.5 active:scale-95"
-                    style={{ background: "linear-gradient(135deg, #2563EB 0%, #1e63ff 100%)" }}
+                    style={{ background: "linear-gradient(135deg, #0a4099 0%, #063270 100%)" }}
                   >
                     <Send className="w-3 h-3" /> Resubmit for approval
                   </button>
@@ -1046,7 +1046,7 @@ function InlineNoteBox({
     rose:   { border: "border-rose-300/50",   bg: "bg-rose-50/30",   labelText: "text-rose-700",   ring: "focus:ring-rose-200/40 focus:border-rose-400/50",   btnBg: "linear-gradient(135deg, #dc2626 0%, #b91c1c 100%)" },
     orange: { border: "border-orange-300/50", bg: "bg-orange-50/30", labelText: "text-orange-700", ring: "focus:ring-orange-200/40 focus:border-orange-400/50", btnBg: "linear-gradient(135deg, #ea580c 0%, #c2410c 100%)" },
     indigo: { border: "border-indigo-300/50", bg: "bg-indigo-50/30", labelText: "text-indigo-700", ring: "focus:ring-indigo-200/40 focus:border-indigo-400/50", btnBg: "linear-gradient(135deg, #4f46e5 0%, #4338ca 100%)" },
-    blue:   { border: "border-blue-300/50",   bg: "bg-blue-50/30",   labelText: "text-blue-700",   ring: "focus:ring-blue-200/40 focus:border-blue-400/50",   btnBg: "linear-gradient(135deg, #2563EB 0%, #1e63ff 100%)" }
+    blue:   { border: "border-blue-300/50",   bg: "bg-blue-50/30",   labelText: "text-blue-700",   ring: "focus:ring-blue-200/40 focus:border-blue-400/50",   btnBg: "linear-gradient(135deg, #0a4099 0%, #063270 100%)" }
   };
   const t = toneMap[tone];
   return (

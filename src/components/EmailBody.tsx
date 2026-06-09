@@ -44,7 +44,7 @@ export function EmailBody({ html }: { html: string }) {
       }
       img { max-width: 100%; height: auto; }
       table { max-width: 100%; }
-      a { color: #1e63ff; }
+      a { color: #063270; }
       blockquote {
         border-left: 3px solid #e5e7eb;
         margin: 8px 0;

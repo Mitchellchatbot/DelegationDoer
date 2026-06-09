@@ -24,7 +24,7 @@ export function Spinner({
             style={{
               width: size,
               height: size,
-              background: ["#2563EB", "#1e63ff", "#EC4899"][i]
+              background: ["#0a4099", "#063270", "#EC4899"][i]
             }}
             animate={{ scale: [0.6, 1, 0.6], opacity: [0.4, 1, 0.4] }}
             transition={{

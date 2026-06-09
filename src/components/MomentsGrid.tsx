@@ -479,7 +479,7 @@ function UploadButton({
                   "inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs font-semibold text-white shadow-sm transition-all hover:-translate-y-0.5 active:scale-95",
                   (!file || busy) && "opacity-60 cursor-not-allowed hover:translate-y-0"
                 )}
-                style={{ background: "linear-gradient(135deg, #2563EB 0%, #1e63ff 100%)" }}
+                style={{ background: "linear-gradient(135deg, #0a4099 0%, #063270 100%)" }}
               >
                 {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
                 {busy ? "Posting…" : "Post"}
@@ -823,7 +823,7 @@ function CropDialog({
               "inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs font-semibold text-white shadow-sm transition-all hover:-translate-y-0.5 active:scale-95",
               (busy || natW === 0) && "opacity-60 cursor-not-allowed hover:translate-y-0"
             )}
-            style={{ background: "linear-gradient(135deg, #2563EB 0%, #1e63ff 100%)" }}
+            style={{ background: "linear-gradient(135deg, #0a4099 0%, #063270 100%)" }}
           >
             {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
             {busy ? "Cropping…" : "Apply crop"}
@@ -857,7 +857,7 @@ const stageCss = `
   overflow: hidden;
   border: 1px solid rgba(15, 23, 42, 0.08);
   background:
-    radial-gradient(1200px 600px at 80% -10%, rgba(30, 99, 255, 0.10), transparent 60%),
+    radial-gradient(1200px 600px at 80% -10%, rgba(6, 50, 112, 0.10), transparent 60%),
     radial-gradient(800px 600px at 10% 110%, rgba(168, 85, 247, 0.06), transparent 60%),
     #ffffff;
   box-shadow: 0 8px 24px -12px rgba(15, 23, 42, 0.10);
@@ -916,7 +916,7 @@ const stageCss = `
   opacity: 1;
   filter: none;
   box-shadow:
-    0 0 0 2px rgba(30, 99, 255, 0.35),
+    0 0 0 2px rgba(6, 50, 112, 0.35),
     0 30px 60px -20px rgba(15, 23, 42, 0.25);
 }
 
@@ -1069,7 +1069,7 @@ const stageCss = `
   background: rgba(15, 23, 42, 0.25);
 }
 .moments-map-cell.is-selected {
-  background: linear-gradient(135deg, #2563EB, #1e63ff);
+  background: linear-gradient(135deg, #0a4099, #063270);
   opacity: 1;
   transform: scale(1.05);
 }
@@ -1104,7 +1104,7 @@ const stageCss = `
 }
 .moments-zoom-pill:hover { color: #0f172a; background: white; }
 .moments-zoom-pill.is-active {
-  background: linear-gradient(135deg, #2563EB, #1e63ff);
+  background: linear-gradient(135deg, #0a4099, #063270);
   color: white;
   border-color: transparent;
 }
@@ -1124,21 +1124,21 @@ const stageCss = `
   position: absolute;
   width: 1px;
   height: 28px;
-  background: rgba(30, 99, 255, 0.7);
+  background: rgba(6, 50, 112, 0.7);
 }
 .moments-reticle > span:nth-child(2) {
   position: absolute;
   width: 28px;
   height: 1px;
-  background: rgba(30, 99, 255, 0.7);
+  background: rgba(6, 50, 112, 0.7);
 }
 .moments-reticle > span:nth-child(3) {
   position: absolute;
   width: 6px;
   height: 6px;
-  background: #1e63ff;
+  background: #063270;
   border-radius: 999px;
-  box-shadow: 0 0 12px rgba(30, 99, 255, 0.55);
+  box-shadow: 0 0 12px rgba(6, 50, 112, 0.55);
 }
 
 /* Focus button = center hit-target */
@@ -1149,7 +1149,7 @@ const stageCss = `
   width: 56px;
   height: 56px;
   transform: translate(-50%, -50%);
-  border: 2px solid rgba(30, 99, 255, 0.55);
+  border: 2px solid rgba(6, 50, 112, 0.55);
   border-radius: 18px;
   background: rgba(255, 255, 255, 0.4);
   backdrop-filter: blur(2px);
@@ -1159,7 +1159,7 @@ const stageCss = `
   transition: opacity 0.5s var(--ease-glide), transform 0.2s var(--ease-glide), border-color 0.2s var(--ease-glide);
 }
 .moments-focus:hover {
-  border-color: #1e63ff;
+  border-color: #063270;
   transform: translate(-50%, -50%) scale(1.06);
 }
 .moments-stage.is-open .moments-focus { opacity: 0; pointer-events: none; }
@@ -1198,8 +1198,8 @@ const stageCss = `
   font-size: 13px;
   font-weight: 600;
   color: white;
-  background: linear-gradient(135deg, #2563EB, #1e63ff);
-  box-shadow: 0 12px 28px -10px rgba(30, 99, 255, 0.55);
+  background: linear-gradient(135deg, #0a4099, #063270);
+  box-shadow: 0 12px 28px -10px rgba(6, 50, 112, 0.55);
   border: 0;
   cursor: pointer;
   display: inline-flex;
@@ -1208,7 +1208,7 @@ const stageCss = `
   z-index: 9;
   transition: transform 0.2s var(--ease-glide), box-shadow 0.2s var(--ease-glide);
 }
-.moments-upload-fab:hover { transform: translateY(-2px); box-shadow: 0 16px 32px -10px rgba(30, 99, 255, 0.75); }
+.moments-upload-fab:hover { transform: translateY(-2px); box-shadow: 0 16px 32px -10px rgba(6, 50, 112, 0.75); }
 .moments-upload-fab:active { transform: translateY(0) scale(0.97); }
 
 /* Upload modal */
@@ -1269,7 +1269,7 @@ const stageCss = `
   transition: border-color 0.2s, background 0.2s;
 }
 .moments-drop:hover {
-  border-color: rgba(30, 99, 255, 0.4);
+  border-color: rgba(6, 50, 112, 0.4);
   background: rgba(219, 234, 254, 0.4);
 }
 .moments-drop-preview {
@@ -1291,8 +1291,8 @@ const stageCss = `
   transition: border-color 0.2s, box-shadow 0.2s;
 }
 .moments-caption-input:focus {
-  border-color: rgba(30, 99, 255, 0.4);
-  box-shadow: 0 0 0 3px rgba(30, 99, 255, 0.12);
+  border-color: rgba(6, 50, 112, 0.4);
+  box-shadow: 0 0 0 3px rgba(6, 50, 112, 0.12);
 }
 
 @keyframes fadeIn {

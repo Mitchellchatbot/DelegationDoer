@@ -302,7 +302,7 @@ function PeopleTab({
             <button
               type="button"
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold text-white shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-lift active:scale-95"
-              style={{ background: "linear-gradient(135deg, #2563EB 0%, #1e63ff 100%)" }}
+              style={{ background: "linear-gradient(135deg, #0a4099 0%, #063270 100%)" }}
               title="Send a magic-link invite. Multiple department heads are supported."
             >
               <UserPlus className="w-3.5 h-3.5" />

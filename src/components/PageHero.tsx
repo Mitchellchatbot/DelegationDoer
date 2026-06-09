@@ -22,6 +22,18 @@ const ICON_TONE: Record<IconTone, string> = {
   sky:     "bg-sky-50     text-sky-600     ring-sky-200/60"
 };
 
+// One meta entry — e.g. { count: 500, label: "unread", href: "/inbox" }.
+// Rendered as part of a pipe-separated summary row underneath the
+// headline, AA-style ("On the plate: 500 unread · 1 batch today · 109
+// open vacancies →"). Items with hrefs become links; the trailing arrow
+// only renders when at least one item is a link.
+export interface HeroMetaItem {
+  count: number | string;
+  label: string;
+  href?: string;
+  tone?: IconTone;
+}
+
 interface Props {
   eyebrow: string;
   headline: Array<string | { accent: string }>;
@@ -33,10 +45,26 @@ interface Props {
   iconTone?: IconTone;
   className?: string;
   trailing?: React.ReactNode;
+  // Optional inline "on the plate" summary row. Prefixed by `metaLabel`
+  // (default "On the plate:") and joined by middots.
+  meta?: HeroMetaItem[];
+  metaLabel?: string;
 }
 
+const META_TONE: Record<IconTone, string> = {
+  blue:    "text-blue-600    hover:text-blue-700",
+  indigo:  "text-indigo-600  hover:text-indigo-700",
+  teal:    "text-teal-600    hover:text-teal-700",
+  emerald: "text-emerald-600 hover:text-emerald-700",
+  amber:   "text-amber-600   hover:text-amber-700",
+  rose:    "text-rose-600    hover:text-rose-700",
+  fuchsia: "text-fuchsia-600 hover:text-fuchsia-700",
+  sky:     "text-sky-600     hover:text-sky-700"
+};
+
 export function PageHero({
-  eyebrow, headline, subtitle, icon, iconTone = "blue", className, trailing
+  eyebrow, headline, subtitle, icon, iconTone = "blue", className, trailing,
+  meta, metaLabel = "On the plate:"
 }: Props) {
   return (
     <header
@@ -76,6 +104,35 @@ export function PageHero({
             <p className="mt-3 text-[16px] text-ink/65 max-w-2xl leading-relaxed">
               {subtitle}
             </p>
+          )}
+          {meta && meta.length > 0 && (
+            <div className="mt-4 flex flex-wrap items-center gap-x-2 gap-y-1 text-[13.5px] text-ink/65">
+              <span className="text-ink/55">{metaLabel}</span>
+              {meta.map((m, i) => {
+                const tone = META_TONE[m.tone ?? iconTone];
+                const content = (
+                  <>
+                    <span className="font-semibold tabular-nums">{m.count}</span>
+                    <span className="ml-1">{m.label}</span>
+                  </>
+                );
+                return (
+                  <span key={i} className="inline-flex items-center">
+                    {i > 0 && <span aria-hidden className="mx-1.5 text-ink/30">·</span>}
+                    {m.href ? (
+                      <a href={m.href} className={cn("inline-flex items-center transition-colors", tone)}>
+                        {content}
+                      </a>
+                    ) : (
+                      <span className="inline-flex items-center text-ink/75">{content}</span>
+                    )}
+                  </span>
+                );
+              })}
+              {meta.some((m) => m.href) && (
+                <span aria-hidden className={cn("ml-0.5", META_TONE[iconTone])}>→</span>
+              )}
+            </div>
           )}
         </div>
         {trailing && (

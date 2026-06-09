@@ -262,7 +262,7 @@ export function InboxAssignmentCards({ inboxes, users, spaces, initialAssignment
               value={b.id}
               className={
                 "group relative shrink-0 inline-flex items-center gap-2 px-3.5 py-2 rounded-t-xl border border-b-0 text-[12px] font-medium transition-all " +
-                "data-[state=active]:bg-white data-[state=active]:border-slate-200 data-[state=active]:text-ink data-[state=active]:shadow-[0_-2px_0_0_#2563EB_inset] " +
+                "data-[state=active]:bg-white data-[state=active]:border-slate-200 data-[state=active]:text-ink data-[state=active]:shadow-[0_-2px_0_0_#0a4099_inset] " +
                 "data-[state=inactive]:bg-transparent data-[state=inactive]:border-transparent data-[state=inactive]:text-ink/55 hover:data-[state=inactive]:text-ink"
               }
             >
@@ -399,7 +399,7 @@ function InboxTabPanel({
             <button
               type="button"
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold text-white shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-lift active:scale-95"
-              style={{ background: "linear-gradient(135deg, #2563EB 0%, #1e63ff 100%)" }}
+              style={{ background: "linear-gradient(135deg, #0a4099 0%, #063270 100%)" }}
             >
               <UserPlus className="w-3.5 h-3.5" /> Invite by email
             </button>

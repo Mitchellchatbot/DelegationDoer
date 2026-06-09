@@ -177,7 +177,7 @@ export function ReplyComposer({
           >
             <div
               className="w-8 h-8 rounded-full grid place-items-center text-white shrink-0 shadow-sm transition-transform group-hover:scale-105"
-              style={{ background: "linear-gradient(135deg, #2563EB 0%, #1e63ff 100%)" }}
+              style={{ background: "linear-gradient(135deg, #0a4099 0%, #063270 100%)" }}
             >
               <Reply className="w-4 h-4" />
             </div>
@@ -376,7 +376,7 @@ export function ReplyComposer({
                     "inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs font-semibold text-white shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-lift active:scale-95",
                     busy && "opacity-60 cursor-not-allowed hover:translate-y-0"
                   )}
-                  style={{ background: "linear-gradient(135deg, #2563EB 0%, #1e63ff 100%)" }}
+                  style={{ background: "linear-gradient(135deg, #0a4099 0%, #063270 100%)" }}
                 >
                   {busy
                     ? <Loader2 className="w-3.5 h-3.5 animate-spin" />

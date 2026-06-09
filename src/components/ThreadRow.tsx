@@ -106,7 +106,7 @@ export function ThreadRow({ thread, href, unread, index, missiveUrl }: ThreadRow
           aria-hidden
           className={cn(
             "shrink-0 w-2 h-2 rounded-full transition-colors",
-            unread ? "bg-accent shadow-[0_0_8px_2px_rgba(30,99,255,0.45)]" : "bg-transparent"
+            unread ? "bg-accent shadow-[0_0_8px_2px_rgba(6,50,112,0.45)]" : "bg-transparent"
           )}
         />
 

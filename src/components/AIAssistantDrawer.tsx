@@ -491,7 +491,7 @@ function CreateTaskCard({
               "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11.5px] font-semibold text-white shadow-sm transition-all",
               creating ? "opacity-60 cursor-not-allowed" : "hover:-translate-y-0.5 active:scale-95"
             )}
-            style={{ background: "linear-gradient(135deg, #2563EB 0%, #1e63ff 100%)" }}
+            style={{ background: "linear-gradient(135deg, #0a4099 0%, #063270 100%)" }}
           >
             {creating ? <Loader2 className="w-3 h-3 animate-spin" /> : <ClipboardPlus className="w-3 h-3" />}
             Create task
@@ -605,7 +605,7 @@ function Composer({
               ? "text-white hover:-translate-y-0.5 active:scale-95"
               : "bg-slate-100 text-ink/35 cursor-not-allowed"
           )}
-          style={canSend ? { background: "linear-gradient(135deg, #2563EB 0%, #1e63ff 100%)" } : {}}
+          style={canSend ? { background: "linear-gradient(135deg, #0a4099 0%, #063270 100%)" } : {}}
         >
           {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
         </button>

@@ -53,7 +53,7 @@ export default async function OrgChartPage() {
         <div
           aria-hidden
           className="absolute -top-20 -right-10 w-80 h-80 rounded-full pointer-events-none"
-          style={{ background: "radial-gradient(circle, rgba(30,99,255,0.18), transparent 70%)" }}
+          style={{ background: "radial-gradient(circle, rgba(6,50,112,0.18), transparent 70%)" }}
         />
         <div
           aria-hidden

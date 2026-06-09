@@ -85,6 +85,10 @@ export default async function HomePage() {
         <HomeLeaderHero
           meName={me.name}
           scopeLabel={scopeLabel}
+          stalled={stalledCount}
+          todos={leaderTodos.length}
+          briefs={seoBriefs.length}
+          sitesAtRisk={worstByHealth.length}
         />
         {/* Sites needing attention — pinned right under the hero so it's
             the first content every role lands on. */}

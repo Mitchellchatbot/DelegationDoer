@@ -47,15 +47,28 @@ const MANAGE_CEO_ITEM: NavItem = { href: "/leader", label: "Manage", icon: Crown
 const MANAGE_HEAD_ITEM: NavItem = { href: "/leader", label: "Manage", icon: Users, tone: "emerald" };
 const SETTINGS_ITEM: NavItem = { href: "/settings", label: "Settings", icon: Settings, tone: "indigo" };
 
-const TONE_STYLES: Record<Tone, { idle: string; activeBg: string; activeFg: string }> = {
-  blue:    { idle: "text-blue-500",    activeBg: "bg-blue-50",    activeFg: "text-blue-600"    },
-  indigo:  { idle: "text-indigo-500",  activeBg: "bg-indigo-50",  activeFg: "text-indigo-600"  },
-  teal:    { idle: "text-teal-500",    activeBg: "bg-teal-50",    activeFg: "text-teal-600"    },
-  emerald: { idle: "text-emerald-500", activeBg: "bg-emerald-50", activeFg: "text-emerald-600" },
-  amber:   { idle: "text-amber-500",   activeBg: "bg-amber-50",   activeFg: "text-amber-600"   },
-  rose:    { idle: "text-rose-500",    activeBg: "bg-rose-50",    activeFg: "text-rose-600"    },
-  fuchsia: { idle: "text-fuchsia-500", activeBg: "bg-fuchsia-50", activeFg: "text-fuchsia-600" },
-  sky:     { idle: "text-sky-500",     activeBg: "bg-sky-50",     activeFg: "text-sky-600"     }
+// Sidebar lives on a soft slate-blue panel now. Per-row tones drive:
+//   - idle: a low-saturation glyph that reads on the dark background
+//     without competing with the active row
+//   - activeBg: a faint white overlay — pill stays in the sidebar's
+//     color family rather than punching a hard white card into it
+//   - activeFg: white text/label on the active row (kept identical
+//     across tones — the color personality moves to the icon chip)
+//   - iconChip: a saturated colored circle sitting behind the icon on
+//     the active row, matching the orange/blue/sky chips in the AA
+//     reference screenshot
+const TONE_STYLES: Record<Tone, {
+  idle: string; activeBg: string; activeFg: string;
+  chipBg: string; chipFg: string;
+}> = {
+  blue:    { idle: "text-blue-100/80",    activeBg: "bg-white/15", activeFg: "text-white", chipBg: "bg-blue-400",    chipFg: "text-white" },
+  indigo:  { idle: "text-indigo-100/80",  activeBg: "bg-white/15", activeFg: "text-white", chipBg: "bg-indigo-400",  chipFg: "text-white" },
+  teal:    { idle: "text-teal-100/80",    activeBg: "bg-white/15", activeFg: "text-white", chipBg: "bg-teal-400",    chipFg: "text-white" },
+  emerald: { idle: "text-emerald-100/80", activeBg: "bg-white/15", activeFg: "text-white", chipBg: "bg-emerald-400", chipFg: "text-white" },
+  amber:   { idle: "text-amber-200/80",   activeBg: "bg-white/15", activeFg: "text-white", chipBg: "bg-orange-400",  chipFg: "text-white" },
+  rose:    { idle: "text-rose-200/80",    activeBg: "bg-white/15", activeFg: "text-white", chipBg: "bg-rose-400",    chipFg: "text-white" },
+  fuchsia: { idle: "text-fuchsia-200/80", activeBg: "bg-white/15", activeFg: "text-white", chipBg: "bg-fuchsia-400", chipFg: "text-white" },
+  sky:     { idle: "text-sky-100/80",     activeBg: "bg-white/15", activeFg: "text-white", chipBg: "bg-sky-400",     chipFg: "text-white" }
 };
 
 export function Sidebar({ user }: { user: User }) {
@@ -255,6 +268,10 @@ export function Sidebar({ user }: { user: User }) {
   //   5. People/Manage
   //   6. Settings
   const submitsDailies = !isLeaderRole;
+  // Group the sidebar into AA-style sections with small bullet-dot
+  // headers. The flat NAV array still drives every render below (badges,
+  // active pill, etc.) — NAV_GROUPS is just a parallel view that maps
+  // each item into a labeled group, used to render section dividers.
   const NAV: NavItem[] = [
     HOME_ITEM,
     ...(submitsDailies ? [SOD_ITEM, EOD_ITEM] : []),
@@ -274,6 +291,21 @@ export function Sidebar({ user }: { user: User }) {
     manageOrPeople,
     SETTINGS_ITEM
   ];
+  // Section partition. Each entry pairs a label with the hrefs that
+  // belong to it; we render headers between groups by walking NAV in
+  // order and emitting a "• Label" row each time the group changes.
+  const NAV_GROUPS: { label: string; hrefs: string[] }[] = [
+    { label: "Overview", hrefs: ["/home"] },
+    { label: "Today", hrefs: ["/sod", "/eod"] },
+    { label: "Work", hrefs: ["/tasks", "/schedule", "/projects"] },
+    { label: "Communication", hrefs: ["/inboxes", "/approvals"] },
+    { label: "Knowledge", hrefs: ["/clients", "/updates", "/sops"] },
+    { label: "Account", hrefs: ["/people", "/leader", "/settings"] }
+  ];
+  function groupFor(href: string): string | null {
+    const g = NAV_GROUPS.find((g) => g.hrefs.includes(href));
+    return g ? g.label : null;
+  }
 
   // Total of all "updates" surfaces (SEO requests + unseen project
   // activity). Used as the badge count on the Updates nav row.
@@ -282,21 +314,26 @@ export function Sidebar({ user }: { user: User }) {
     (canSeeProjectUpdates ? (unseenProjects ?? 0) : 0);
 
   return (
-    <aside className="w-60 shrink-0 sticky top-3 h-[calc(100vh-1.5rem)] rounded-3xl border border-slate-200/70 bg-white/85 backdrop-blur-xl shadow-soft flex flex-col overflow-hidden">
+    <aside
+      className="sidebar-panel w-60 shrink-0 sticky top-3 h-[calc(100vh-1.5rem)] rounded-3xl border border-white/10 shadow-lift flex flex-col overflow-hidden text-white"
+      style={{
+        background: "#063270"
+      }}
+    >
       {/* Brand row — the logo's ring picks up the user's department tint
           so each team feels at home in their own corner of the app. */}
       {(() => {
         const dept = !isLeader(user) ? primaryDepartment(user.departmentIds) : null;
         const ringClass = dept ? `ring-2 ${dept.ring}` : "ring-2 ring-white";
         return (
-          <div className="px-4 h-16 flex items-center gap-2.5 border-b border-slate-100">
-            <div className={cn("w-9 h-9 rounded-full overflow-hidden border border-slate-200 shrink-0 shadow-sm", ringClass)}>
+          <div className="px-4 h-16 flex items-center gap-2.5 border-b border-white/15">
+            <div className={cn("w-9 h-9 rounded-full overflow-hidden border border-white/40 bg-white shrink-0 shadow-sm", ringClass)}>
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src="/widget-icon.png" alt="" className="w-full h-full object-cover" />
             </div>
             <div className="leading-tight">
-              <div className="text-base font-semibold text-ink">DelegationDoer</div>
-              <div className="text-[12px] text-muted">scaledai.org</div>
+              <div className="text-base font-semibold text-white">DelegationDoer</div>
+              <div className="text-[12px] text-blue-100/80">scaledai.org</div>
             </div>
           </div>
         );
@@ -304,10 +341,16 @@ export function Sidebar({ user }: { user: User }) {
 
       <div className="flex-1 flex flex-col gap-2 px-2 py-4 overflow-y-auto">
         <nav className="space-y-0.5">
-          {NAV.map((item) => {
+          {NAV.map((item, idx) => {
             const Icon = item.icon;
             const active = path === item.href || (item.href !== "/" && path.startsWith(item.href));
             const tone = TONE_STYLES[item.tone];
+            // Render a "• Label" group header above the first item of
+            // each section. Mirrors AA's sidebar where nav rows sit
+            // under small uppercase group labels.
+            const groupLabel = groupFor(item.href);
+            const prevGroupLabel = idx > 0 ? groupFor(NAV[idx - 1].href) : null;
+            const showGroupHeader = groupLabel && groupLabel !== prevGroupLabel;
             // Per-row badges. Each one fans out a single pill on the
             // matching nav item.
             const badge: { count: number; tone: "rose" | "amber"; title: string } | null = (() => {
@@ -360,8 +403,20 @@ export function Sidebar({ user }: { user: User }) {
               return null;
             })();
             return (
+              <div key={item.href}>
+                {showGroupHeader && (
+                  <div className={cn(
+                    "flex items-center gap-1.5 px-3 text-[10.5px] uppercase tracking-[0.16em] font-semibold text-blue-100/65",
+                    // First group sits flush with the top of the nav;
+                    // every subsequent group gets breathing room above
+                    // so the divider reads visually without a hard rule.
+                    idx === 0 ? "pt-1 pb-1.5" : "pt-4 pb-1.5"
+                  )}>
+                    <span aria-hidden className="w-1 h-1 rounded-full bg-white/80" />
+                    <span>{groupLabel}</span>
+                  </div>
+                )}
               <Link
-                key={item.href}
                 href={item.href}
                 className={cn(
                   // active:scale-[0.96] gives a tactile press feedback on
@@ -374,7 +429,7 @@ export function Sidebar({ user }: { user: User }) {
                   // for text + icon tint.
                   active
                     ? cn(tone.activeFg, "font-semibold")
-                    : "text-ink/70 hover:text-ink hover:bg-slate-100/70"
+                    : "text-white/85 hover:text-white hover:bg-white/5"
                 )}
               >
                 {/* Shared active-pill underlay — slides smoothly between
@@ -389,12 +444,22 @@ export function Sidebar({ user }: { user: User }) {
                     transition={{ type: "spring", stiffness: 380, damping: 24 }}
                   />
                 )}
-                <Icon className={cn("w-[18px] h-[18px] shrink-0 relative", active ? tone.activeFg : tone.idle)} />
+                {/* Solid colored icon chip on every row — matches the AA
+                    sidebar where each item carries its own little color
+                    splash (orange for workspace, sky for sales tracker,
+                    etc.). Active state inherits the same chip; the row's
+                    background overlay is what indicates selection. */}
+                <span className={cn(
+                  "relative w-7 h-7 rounded-full grid place-items-center shrink-0 shadow-sm",
+                  tone.chipBg
+                )}>
+                  <Icon className={cn("w-[15px] h-[15px]", tone.chipFg)} />
+                </span>
                 <span className="relative">{item.label}</span>
                 {badge && (
                   <span
                     className={cn(
-                      "ml-auto inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full text-[10px] font-bold tabular-nums text-white shadow-sm ring-2 ring-white relative",
+                      "ml-auto inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full text-[10px] font-bold tabular-nums text-white shadow-sm relative",
                       badge.tone === "rose" ? "bg-rose-500" : "bg-amber-500"
                     )}
                     title={badge.title}
@@ -417,6 +482,7 @@ export function Sidebar({ user }: { user: User }) {
                   />
                 )}
               </Link>
+              </div>
             );
           })}
 
@@ -428,16 +494,16 @@ export function Sidebar({ user }: { user: User }) {
         <div className="space-y-2 px-1 mt-3">
           <button
             onClick={() => setAiOpen(true)}
-            className="w-full inline-flex items-center justify-center gap-2 px-3 py-2 rounded-xl text-sm border border-slate-200 bg-white text-ink hover:bg-slate-50 transition-colors"
+            className="w-full inline-flex items-center justify-center gap-2 px-3 py-2 rounded-xl text-sm border border-white/20 bg-white/10 text-white hover:bg-white/20 transition-colors"
           >
-            <Sparkles className="w-4 h-4 text-fuchsia-500" />
-            Ask AI <span className="ml-auto px-1.5 py-0.5 rounded border border-slate-200 bg-slate-50 text-[11px] font-mono text-muted">⌘K</span>
+            <Sparkles className="w-4 h-4 text-fuchsia-300" />
+            Ask AI <span className="ml-auto px-1.5 py-0.5 rounded border border-white/20 bg-white/10 text-[11px] font-mono text-white/80">⌘K</span>
           </button>
         </div>
       </div>
 
       {/* Footer keeps the raise-money easter egg. */}
-      <div className="p-3 border-t border-slate-100">
+      <div className="p-3 border-t border-white/15 text-blue-100/75">
         <RaiseLink />
       </div>
 

@@ -557,7 +557,7 @@ function DepartmentPanel({
                 "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold text-white shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-lift active:scale-95 " +
                 (sending ? "opacity-60 cursor-not-allowed" : "")
               }
-              style={{ background: "linear-gradient(135deg, #2563EB 0%, #1e63ff 100%)" }}
+              style={{ background: "linear-gradient(135deg, #0a4099 0%, #063270 100%)" }}
               title={summary.slackChannelId ? "Post the EOD digest to this channel" : "Set a channel first in Settings or the Leader Console"}
             >
               {sending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
@@ -748,7 +748,7 @@ function PersonRow({
                 style={
                   person.submittedAt
                     ? undefined
-                    : { background: "linear-gradient(135deg, #2563EB 0%, #1e63ff 100%)" }
+                    : { background: "linear-gradient(135deg, #0a4099 0%, #063270 100%)" }
                 }
                 title={
                   person.submittedAt

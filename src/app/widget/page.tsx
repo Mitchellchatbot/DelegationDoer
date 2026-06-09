@@ -2737,7 +2737,7 @@ function CreateTaskView({ onClose, onCreated }: { onClose: () => void; onCreated
               "inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full text-[11px] font-semibold text-white shadow-sm transition-all hover:-translate-y-0.5 active:scale-95 " +
               (busy || !title.trim() || hasNoDepartment ? "opacity-50 cursor-not-allowed hover:translate-y-0" : "")
             }
-            style={{ background: "linear-gradient(135deg, #2563EB 0%, #1e63ff 100%)" }}
+            style={{ background: "linear-gradient(135deg, #0a4099 0%, #063270 100%)" }}
           >
             <Sparkles className="w-3 h-3" />
             {busy ? "Creating…" : "Create task"}

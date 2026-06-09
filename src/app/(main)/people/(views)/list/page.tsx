@@ -200,7 +200,7 @@ function PersonCard({ user, tasks, accent }: { user: User; tasks: Task[]; accent
         style={{
           background: accent
             ? "radial-gradient(circle, rgba(245,158,11,0.22), transparent 70%)"
-            : "radial-gradient(circle, rgba(30,99,255,0.18), transparent 70%)"
+            : "radial-gradient(circle, rgba(6,50,112,0.18), transparent 70%)"
         }}
       />
         </button>

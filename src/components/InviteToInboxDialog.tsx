@@ -276,7 +276,7 @@ export function InviteToInboxDialog({
                                       "inline-flex items-center gap-1 px-2.5 py-1.5 rounded-full text-[11px] font-semibold text-white shadow-sm transition-all active:scale-95",
                                       isPending && "opacity-60 cursor-not-allowed"
                                     )}
-                                    style={{ background: "linear-gradient(135deg, #2563EB 0%, #1e63ff 100%)" }}
+                                    style={{ background: "linear-gradient(135deg, #0a4099 0%, #063270 100%)" }}
                                   >
                                     {isPending
                                       ? <Loader2 className="w-3 h-3 animate-spin" />

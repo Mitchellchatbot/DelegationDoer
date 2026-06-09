@@ -3,9 +3,9 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import {
   Search, Plus, LogOut, X, ListTodo, Users as UsersIcon, FolderKanban,
-  Loader2, BookOpen
+  Loader2, BookOpen, Home as HomeIcon, ChevronRight
 } from "lucide-react";
-import { useRouter } from "next/navigation";
+import { useRouter, usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { PersonAvatar } from "./PersonAvatar";
@@ -29,6 +29,17 @@ interface SearchResults {
 }
 const EMPTY_RESULTS: SearchResults = { tasks: [], users: [], projects: [], sops: [] };
 
+// Best-effort titlecase for a path segment in the breadcrumb. Replaces
+// dashes/underscores with spaces, then capitalizes each word.
+function prettySegment(seg: string): string {
+  return seg
+    .replace(/[-_]+/g, " ")
+    .split(" ")
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ");
+}
+
 export function Topbar({ user }: { user: User }) {
   const [newTaskOpen, setNewTaskOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -37,6 +48,26 @@ export function Topbar({ user }: { user: User }) {
   const [searchLoading, setSearchLoading] = useState(false);
   const searchWrapRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
+  const pathname = usePathname();
+  // Derive a 1-2 segment breadcrumb from the current URL. We skip
+  // long opaque UUID-looking detail slugs (e.g. /tasks/uuid) so the
+  // crumbs stay readable. Mirrors AA's "Home > Sales > Sales Tracker".
+  const crumbs: { label: string; href: string }[] = (() => {
+    const segs = (pathname ?? "/").split("/").filter(Boolean);
+    const out: { label: string; href: string }[] = [];
+    let acc = "";
+    for (const s of segs) {
+      acc += `/${s}`;
+      // Skip UUID-shaped detail segments so the crumb doesn't carry a
+      // 36-char hex hash. Long alphanumeric ids get the same treatment.
+      const looksLikeId =
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s) ||
+        /^[A-Za-z0-9]{16,}$/.test(s);
+      if (looksLikeId) continue;
+      out.push({ label: prettySegment(s), href: acc });
+    }
+    return out.slice(0, 2);
+  })();
 
   function submitSearch() {
     const q = query.trim();
@@ -105,8 +136,41 @@ export function Topbar({ user }: { user: User }) {
 
   return (
     <header className="h-16 sticky top-3 z-30 px-5 grid grid-cols-[1fr_auto_1fr] items-center gap-3 rounded-3xl border border-slate-200/70 bg-white/85 backdrop-blur-xl shadow-soft">
-      {/* Left placeholder so the search sits in the dead center of the bar */}
-      <div />
+      {/* Breadcrumb pill — mirrors Allocation Assist's left-side
+          "Home › Sales › Sales Tracker" navigation hint. Home icon is
+          always the first crumb and links back to /home; subsequent
+          crumbs come from the URL path. */}
+      <nav aria-label="Breadcrumb" className="min-w-0 justify-self-start">
+        <ol className="inline-flex items-center gap-1.5 px-3 h-9 rounded-full bg-slate-50 border border-slate-200 text-[12.5px] text-ink/65 max-w-full overflow-hidden">
+          <li className="flex items-center shrink-0">
+            <Link
+              href="/home"
+              className="inline-flex items-center text-ink/55 hover:text-ink transition-colors"
+              aria-label="Home"
+            >
+              <HomeIcon className="w-3.5 h-3.5" />
+            </Link>
+          </li>
+          {crumbs.map((c, i) => {
+            const isLast = i === crumbs.length - 1;
+            return (
+              <li key={c.href} className="flex items-center gap-1.5 min-w-0">
+                <ChevronRight className="w-3 h-3 text-ink/30 shrink-0" aria-hidden />
+                {isLast ? (
+                  <span className="font-semibold text-ink truncate">{c.label}</span>
+                ) : (
+                  <Link
+                    href={c.href}
+                    className="text-ink/55 hover:text-ink transition-colors truncate"
+                  >
+                    {c.label}
+                  </Link>
+                )}
+              </li>
+            );
+          })}
+        </ol>
+      </nav>
 
       {/* Centered search with live dropdown. Type → debounced query
           to /api/search → results render below the input. Enter on a

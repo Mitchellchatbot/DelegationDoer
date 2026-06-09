@@ -128,6 +128,15 @@ export async function POST(req: NextRequest) {
       ? body.taskIds.filter((v: unknown): v is string => typeof v === "string" && v.length > 0)
       : [];
 
+    // Optional EOD-work linkage — the client-update composer passes the
+    // eod_client_work entry ids that fed the draft. Persisted in
+    // email_draft_eod_work so the approve route stamps
+    // eod_client_work.reported_to_client_at on send (keeps that work from
+    // reappearing in the composer). Same shape as taskIds.
+    const incomingEodWorkIds: string[] = Array.isArray(body.eodWorkIds)
+      ? body.eodWorkIds.filter((v: unknown): v is string => typeof v === "string" && v.length > 0)
+      : [];
+
     // Optional columns may not exist yet if their migration hasn't run on
     // this environment. Build with all of them, then on a missing-column
     // error strip just that column and retry — so a draft still persists
@@ -191,6 +200,24 @@ export async function POST(req: NextRequest) {
           // Surface non-missing-table errors but don't fail the whole
           // draft create — the email_drafts row already persisted.
           console.error("[email-drafts] task link insert", linkErr);
+        }
+      }
+    }
+
+    // Persist EOD-work linkage (same belt-and-suspenders as taskIds).
+    if (incomingEodWorkIds.length > 0) {
+      const { data: existingWork } = await supabase
+        .from("eod_client_work")
+        .select("id")
+        .in("id", incomingEodWorkIds);
+      const validWorkIds = ((existingWork ?? []) as { id: string }[]).map((r) => r.id);
+      if (validWorkIds.length > 0) {
+        const links = validWorkIds.map((eod_work_id) => ({ draft_id: id, eod_work_id }));
+        const { error: workLinkErr } = await supabase
+          .from("email_draft_eod_work")
+          .insert(links);
+        if (workLinkErr && !/email_draft_eod_work/.test(workLinkErr.message)) {
+          console.error("[email-drafts] eod-work link insert", workLinkErr);
         }
       }
     }

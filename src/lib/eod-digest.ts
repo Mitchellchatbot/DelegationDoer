@@ -344,25 +344,54 @@ Return STRICT JSON, no code fences:
   return true;
 }
 
-// Called by the approve route AFTER a draft moves to status='sent'.
-// Stamps every task the draft references with the send time so it's
-// excluded from future digests. Idempotent: re-running on a draft
-// already sent just re-stamps the same value.
+// Called by the approve route + scheduled-emails runner AFTER a draft
+// moves to status='sent'. Stamps everything the draft references with the
+// send time so it's excluded from future digests/composers:
+//   - tasks it linked (email_draft_tasks)         -> tasks.reported_to_client_at
+//   - EOD work entries it linked (email_draft_eod_work)
+//                                                  -> eod_client_work.reported_to_client_at
+// Idempotent: re-running on an already-sent draft just re-stamps the same
+// value. Returns the total number of rows stamped across both sources.
 export async function markTasksReportedFromDraft(draftId: string, sentAt: string): Promise<number> {
   const supabase = getSupabaseAdmin();
-  const { data: links } = await supabase
+  let stamped = 0;
+
+  const { data: taskLinks } = await supabase
     .from("email_draft_tasks")
     .select("task_id")
     .eq("draft_id", draftId);
-  const taskIds = ((links ?? []) as { task_id: string }[]).map((r) => r.task_id);
-  if (taskIds.length === 0) return 0;
-  const { error } = await supabase
-    .from("tasks")
-    .update({ reported_to_client_at: sentAt })
-    .in("id", taskIds);
-  if (error) {
-    console.error("[eod-digest] mark reported failed", error);
-    return 0;
+  const taskIds = ((taskLinks ?? []) as { task_id: string }[]).map((r) => r.task_id);
+  if (taskIds.length > 0) {
+    const { error } = await supabase
+      .from("tasks")
+      .update({ reported_to_client_at: sentAt })
+      .in("id", taskIds);
+    if (error) console.error("[eod-digest] mark tasks reported failed", error);
+    else stamped += taskIds.length;
   }
-  return taskIds.length;
+
+  // EOD client-work source (the new email source). The link table may not
+  // exist on environments where the 20260702 migration hasn't run — treat
+  // a missing-table error as "nothing to stamp" rather than failing.
+  const { data: workLinks, error: linkErr } = await supabase
+    .from("email_draft_eod_work")
+    .select("eod_work_id")
+    .eq("draft_id", draftId);
+  if (linkErr) {
+    if (!/email_draft_eod_work/.test(linkErr.message)) {
+      console.error("[eod-digest] eod-work link lookup failed", linkErr);
+    }
+  } else {
+    const workIds = ((workLinks ?? []) as { eod_work_id: string }[]).map((r) => r.eod_work_id);
+    if (workIds.length > 0) {
+      const { error } = await supabase
+        .from("eod_client_work")
+        .update({ reported_to_client_at: sentAt })
+        .in("id", workIds);
+      if (error) console.error("[eod-digest] mark eod-work reported failed", error);
+      else stamped += workIds.length;
+    }
+  }
+
+  return stamped;
 }

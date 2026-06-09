@@ -115,6 +115,9 @@ export async function GET(req: NextRequest) {
         // only. is_draft flips to false on HoD/leader approval. Mirrors
         // getAllTasks + the draft route.
         .eq("is_draft", false)
+        // Don't resurface work already reported to this client in an
+        // earlier email — reported_to_client_at is stamped on send.
+        .is("reported_to_client_at", null)
         .gte("completed_at", fromIso)
         .lte("completed_at", toIso)
         .order("completed_at", { ascending: false })
@@ -124,7 +127,11 @@ export async function GET(req: NextRequest) {
         .select("id, title, status, assignee_id, tags, last_activity_at, department_id")
         .eq("client_name", clientName)
         .neq("status", "done")
+        // 'rejected' is the soft-delete state for denied drafts — never
+        // surface it as live work.
+        .neq("status", "rejected")
         .eq("is_draft", false)
+        .is("reported_to_client_at", null)
         .gte("last_activity_at", fromIso)
         .lte("last_activity_at", toIso)
         .order("last_activity_at", { ascending: false })

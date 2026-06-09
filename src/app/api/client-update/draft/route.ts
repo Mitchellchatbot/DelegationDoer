@@ -146,6 +146,9 @@ export async function POST(req: NextRequest) {
       // is_draft flips to false only once a HoD/leader approves them, so
       // client emails summarize verified work only. Mirrors getAllTasks.
       .eq("is_draft", false)
+      // Never re-report work already sent to this client — the approve
+      // route stamps reported_to_client_at on send.
+      .is("reported_to_client_at", null)
       .gte("completed_at", fromIso)
       .lte("completed_at", toIso)
       .order("completed_at", { ascending: false })
@@ -155,7 +158,10 @@ export async function POST(req: NextRequest) {
       .select("id, title, description, status, priority, department_id, assignee_id")
       .eq("client_name", clientName)
       .neq("status", "done")
+      // 'rejected' is the soft-delete state for denied drafts — exclude it.
+      .neq("status", "rejected")
       .eq("is_draft", false)
+      .is("reported_to_client_at", null)
       .order("due_date", { ascending: true })
       .limit(50);
     if (selectedIds !== null) {

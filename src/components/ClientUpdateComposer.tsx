@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { getDepartmentMeta } from "@/lib/departments";
 import { useCurrentUser } from "@/lib/user-context";
+import { renderBlueEmail, type BrandedEmailContent } from "@/lib/email-template";
 import { MediaPicker } from "@/components/MediaPicker";
 import type { TaskMedia } from "@/lib/types";
 
@@ -55,6 +56,8 @@ interface DeptDraft {
   subject: string;
   body: string; // plain-text body — the editable source of truth for content
   bodyHtml: string | null; // brand-styled HTML when "fancy"; null = plain
+  htmlContent: BrandedEmailContent | null; // structured content behind bodyHtml (for instant re-render)
+  signoffName: string; // the name currently stamped in the sign-off (tracks the From mailbox)
   htmlTab: "preview" | "html"; // which view the styled draft shows
   styling: boolean; // an AI editor action is in flight for this draft
   acting: boolean; // a submit/send action is in flight for this draft
@@ -83,6 +86,37 @@ function senderBrandFor(acc?: MailAccount): string {
   const domain = acc.email?.split("@")[1]?.split(".")[0];
   if (domain) return domain.charAt(0).toUpperCase() + domain.slice(1);
   return acc.email || "Scaled";
+}
+
+// The name used in the email sign-off ("Best, <name>"). Tracks the
+// selected From mailbox: its display name, else its email local part
+// title-cased (chris.smith@… -> "Chris Smith").
+function signoffNameFor(acc?: MailAccount): string {
+  if (!acc) return "";
+  if (acc.display_name && acc.display_name.trim()) return acc.display_name.trim();
+  const local = acc.email?.split("@")[0];
+  if (local) {
+    return local
+      .split(/[._-]+/)
+      .filter(Boolean)
+      .map((p) => p.charAt(0).toUpperCase() + p.slice(1))
+      .join(" ");
+  }
+  return "";
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// Swap the trailing sign-off name in a plain-text body (the body ends
+// with "Best,\n<name>"). Only touches a trailing occurrence so a name
+// that also appears mid-body is left alone. No-op if the old name isn't
+// at the end (e.g. the operator hand-edited the sign-off).
+function swapSignoff(body: string, prev: string, next: string): string {
+  if (!prev || prev === next) return body;
+  const re = new RegExp(escapeRegExp(prev) + "\\s*$");
+  return re.test(body) ? body.replace(re, next) : body;
 }
 
 export function ClientUpdateComposer({
@@ -140,6 +174,31 @@ export function ClientUpdateComposer({
     return () => { cancelled = true; };
   }, []);
 
+  // Point a draft at a From mailbox, re-deriving everything that tracks
+  // the sender: the sign-off name (in both the plain body and, if the
+  // draft is a styled email, the HTML), and the brand in the styled
+  // header/footer. The styled HTML is re-rendered from its stored
+  // structured content — but only when it hasn't been hand-edited
+  // (current HTML still matches a fresh render), so manual HTML tweaks
+  // are never clobbered.
+  function applyAccountToDraft(d: DeptDraft, accId: string): DeptDraft {
+    const acc = accounts.find((a) => a.id === accId);
+    const newName = signoffNameFor(acc) || me.name;
+    const newBrand = senderBrandFor(acc);
+    const body = swapSignoff(d.body, d.signoffName, newName);
+    let bodyHtml = d.bodyHtml;
+    let htmlContent = d.htmlContent;
+    if (d.htmlContent && d.bodyHtml && d.bodyHtml === renderBlueEmail(d.htmlContent)) {
+      htmlContent = { ...d.htmlContent, brandName: newBrand, signoff: `Best,\n${newName}` };
+      bodyHtml = renderBlueEmail(htmlContent);
+    }
+    return { ...d, accountId: accId, signoffName: newName, body, bodyHtml, htmlContent };
+  }
+
+  function changeAccount(idx: number, accId: string) {
+    setDrafts((prev) => prev.map((d, i) => (i === idx ? applyAccountToDraft(d, accId) : d)));
+  }
+
   // Backfill the From mailbox on any draft that doesn't have one yet,
   // once the connected accounts load (drafts can be generated before the
   // /api/inboxes round-trip finishes).
@@ -147,9 +206,11 @@ export function ClientUpdateComposer({
     if (accounts.length === 0) return;
     setDrafts((prev) =>
       prev.some((d) => !d.accountId)
-        ? prev.map((d) => (d.accountId ? d : { ...d, accountId: accounts[0].id }))
+        ? prev.map((d) => (d.accountId ? d : applyAccountToDraft(d, accounts[0].id)))
         : prev
     );
+    // applyAccountToDraft is a stable transform over the same closure.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accounts]);
 
   function toggleTask(id: string) {
@@ -195,23 +256,31 @@ export function ClientUpdateComposer({
       setDrafts(incoming.map((d: {
         departmentId: string | null; departmentName: string;
         subject?: string; body?: string; suggestedTo?: string[]; taskIds?: string[];
-      }) => ({
-        departmentId: d.departmentId ?? null,
-        departmentName: d.departmentName ?? "General",
-        accountId: accounts[0]?.id ?? "",
-        to: (d.suggestedTo ?? lockedClient.contactEmails ?? []).join(", "),
-        cc: "",
-        bcc: "",
-        showCcBcc: false,
-        subject: d.subject ?? "",
-        body: d.body ?? "",
-        bodyHtml: null,
-        htmlTab: "preview",
-        styling: false,
-        acting: false,
-        status: "editing",
-        taskIds: Array.isArray(d.taskIds) ? d.taskIds : []
-      })));
+      }) => {
+        // The draft route signs the body with the caller's name; point it
+        // at the default From mailbox so the sign-off matches the sender
+        // from the start.
+        const base: DeptDraft = {
+          departmentId: d.departmentId ?? null,
+          departmentName: d.departmentName ?? "General",
+          accountId: "",
+          to: (d.suggestedTo ?? lockedClient.contactEmails ?? []).join(", "),
+          cc: "",
+          bcc: "",
+          showCcBcc: false,
+          subject: d.subject ?? "",
+          body: d.body ?? "",
+          bodyHtml: null,
+          htmlContent: null,
+          signoffName: me.name,
+          htmlTab: "preview",
+          styling: false,
+          acting: false,
+          status: "editing",
+          taskIds: Array.isArray(d.taskIds) ? d.taskIds : []
+        };
+        return accounts[0]?.id ? applyAccountToDraft(base, accounts[0].id) : base;
+      }));
       setActiveIdx(0);
       setStep("preview");
     } catch (err) {
@@ -238,6 +307,10 @@ export function ClientUpdateComposer({
     const d = drafts[idx];
     if (!d || d.styling) return;
     if (mode === "plain" && !d.bodyHtml) return; // nothing to strip
+    // Brand + sign-off both follow the selected From mailbox — the email
+    // is sent FROM our mailbox TO the client.
+    const acc = accounts.find((a) => a.id === d.accountId);
+    const senderName = signoffNameFor(acc) || me.name;
     patchDraft(idx, { styling: true });
     try {
       const res = await fetch("/api/client-update/style", {
@@ -249,11 +322,8 @@ export function ClientUpdateComposer({
           bodyText: d.body,
           hasHtml: !!d.bodyHtml,
           clientName: lockedClient.name,
-          // The email is sent FROM our mailbox TO the client, so the
-          // styled header/footer brand is the SENDER (the selected
-          // From mailbox), not the client.
-          senderBrand: senderBrandFor(accounts.find((a) => a.id === d.accountId)),
-          senderName: me.name,
+          senderBrand: senderBrandFor(acc),
+          senderName,
           subject: d.subject
         })
       });
@@ -262,6 +332,8 @@ export function ClientUpdateComposer({
       patchDraft(idx, {
         body: typeof data.bodyText === "string" && data.bodyText ? data.bodyText : d.body,
         bodyHtml: typeof data.bodyHtml === "string" ? data.bodyHtml : null,
+        htmlContent: (data.htmlContent && typeof data.htmlContent === "object") ? data.htmlContent as BrandedEmailContent : null,
+        signoffName: senderName,
         htmlTab: "preview"
       });
     } catch (err) {
@@ -533,7 +605,7 @@ export function ClientUpdateComposer({
                   {accounts.length > 0 ? (
                     <select
                       value={d.accountId}
-                      onChange={(e) => patchDraft(idx, { accountId: e.target.value })}
+                      onChange={(e) => changeAccount(idx, e.target.value)}
                       disabled={resolved}
                       className="flex-1 text-[13px] bg-transparent border-none outline-none focus:ring-0 cursor-pointer disabled:cursor-default disabled:text-ink/55"
                     >

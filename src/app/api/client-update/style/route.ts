@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUserId } from "@/lib/session";
 import { getAnthropic, MODELS } from "@/lib/anthropic-client";
-import { renderBlueEmail, type BrandedSection } from "@/lib/email-template";
+import { renderBlueEmail, type BrandedSection, type BrandedEmailContent } from "@/lib/email-template";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -129,9 +129,13 @@ ABSOLUTE RULES:
 The html object must contain the same information as bodyText, just split into parts. Omit a field if there is nothing for it.`
       : "";
 
+    const signoffLine = senderName
+      ? `\n\nEnd the body with "Best," on its own line, then "${senderName}" on the next line as the sign-off (no other closing).`
+      : "";
+
     const userPrompt = `Context: this is a client progress update written by ${senderBrand} (a digital agency) and sent to ${clientName}. Address the client warmly; speak as "we".
 
-Task: ${instr}
+Task: ${instr}${signoffLine}
 
 ${needHtml ? "" : "Keep it as plain text. "}Return STRICT JSON, no code fences:
 { "bodyText": "<the revised plain-text body>"${needHtml ? ', "html": { ... }' : ""} }${htmlSchemaNote}
@@ -169,6 +173,10 @@ ${bodyText.slice(0, 8000)}
     const newBodyText = scrub(asString(parsed.bodyText).trim() || bodyText);
 
     let bodyHtml: string | null = null;
+    // The structured content the HTML was built from. Returned so the
+    // client can re-render the email instantly (e.g. to re-brand + re-sign
+    // when the From mailbox changes) without another model call.
+    let htmlContent: BrandedEmailContent | null = null;
     if (needHtml) {
       const h = parsed.html ?? {};
       const rawSections = Array.isArray(h.sections) ? h.sections : [];
@@ -191,19 +199,22 @@ ${bodyText.slice(0, 8000)}
       const safeSections: BrandedSection[] =
         sections.length > 0 ? sections : [{ body: newBodyText }];
 
-      bodyHtml = renderBlueEmail({
+      htmlContent = {
         brandName: senderBrand,
         greeting: scrub(asString(h.greeting).trim()) || null,
         intro: scrub(asString(h.intro).trim()) || null,
         tagline: scrub(asString(h.tagline).trim()) || null,
         sections: safeSections,
-        signoff:
-          scrub(asString(h.signoff).trim()) ||
-          (senderName ? `Best,\n${senderName}` : null)
-      });
+        // Force the sign-off to the selected sender so it always matches
+        // the mailbox the email is sent from, not whatever the model echoed.
+        signoff: senderName
+          ? `Best,\n${senderName}`
+          : (scrub(asString(h.signoff).trim()) || null)
+      };
+      bodyHtml = renderBlueEmail(htmlContent);
     }
 
-    return NextResponse.json({ bodyText: newBodyText, bodyHtml });
+    return NextResponse.json({ bodyText: newBodyText, bodyHtml, htmlContent });
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "unknown error" },

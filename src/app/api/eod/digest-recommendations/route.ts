@@ -8,15 +8,16 @@ export const dynamic = "force-dynamic";
 
 // GET /api/eod/digest-recommendations?window=daily|weekly|biweekly|monthly
 //
-// "Show me who should get an EOD update in this time window." The
-// caller picks the window via tab; this endpoint returns the list of
-// clients with unreported completed work + the contributors' EOD
-// notes for that period, ordered by how much work is sitting there.
+// "Show me who should get a client update in this time window." Returns
+// every client with UNREPORTED EOD client-work entries in the window —
+// what the team logged they did for that client (worked_on + results) in
+// their daily end-of-day form — ordered by how much is sitting there.
+// This is the same source the composer drafts from, so a client appears
+// here the moment someone logs EOD work for it (and drops off once an
+// email reporting that work sends).
 //
-// IMPORTANT: this surface intentionally does NOT consult the per-
-// client update_cadence column. The window is whatever the approver
-// clicked. (The cadence column still drives the nightly cron, but
-// that's a separate path.)
+// IMPORTANT: this surface intentionally does NOT consult the per-client
+// update_cadence column. The window is whatever the approver clicked.
 //
 // Auth: approver only.
 
@@ -37,13 +38,13 @@ interface ClientRow {
   contact_emails: string[] | null;
 }
 
-interface TaskRow {
+interface WorkRow {
   id: string;
-  title: string;
+  user_id: string;
   client_name: string;
-  completed_at: string | null;
-  assignee_id: string | null;
-  tags: string[] | null;
+  note_date: string;
+  worked_on: string;
+  results: string | null;
 }
 
 interface SentEmailRow {
@@ -51,37 +52,21 @@ interface SentEmailRow {
   sent_at: string | null;
 }
 
-interface EodNoteRow {
-  user_id: string;
-  note_date: string;
-  worked_on: string | null;
-  accomplished: string | null;
-  plan_tomorrow: string | null;
-}
-
-export interface DigestTaskDetail {
+export interface DigestEntryDetail {
   id: string;
-  title: string;
-  tags: string[];
-  completedAt: string | null;
-  assigneeName: string | null;
-}
-
-export interface DigestEodNote {
-  authorName: string;
+  workedOn: string;
+  results: string | null;
   noteDate: string;
-  workedOn: string | null;
-  accomplished: string | null;
+  authorName: string | null;
 }
 
 export interface DigestRecommendation {
   clientId: string;
   clientName: string;
   contactEmails: string[];        // forwarded so the in-place composer modal can pre-fill To
-  unreportedTaskCount: number;
+  entryCount: number;
   lastSentAt: string | null;
-  tasks: DigestTaskDetail[];      // up to 5 most recent
-  eodNotes: DigestEodNote[];      // up to 5 most recent contributor notes
+  entries: DigestEntryDetail[];   // up to 6 most recent
   contributorNames: string[];     // distinct contributors
   hasContact: boolean;
 }
@@ -112,13 +97,13 @@ export async function GET(req: NextRequest) {
     const raw = (url.searchParams.get("window") ?? "daily").toLowerCase();
     const window: DigestWindow = isDigestWindow(raw) ? raw : "daily";
     const start = windowStart(window);
-    const startIso = start.toISOString();
+    const startDateStr = start.toISOString().slice(0, 10);
 
     const supabase = getSupabaseAdmin();
 
-    // 1) Active clients with at least one contact_emails entry. Clients
-    //    with no contact can't receive an email anyway — drop them so
-    //    the recommendation list reflects what's actually actionable.
+    // 1) Active clients. (Clients with no contact_emails still appear so
+    //    the approver can see the work waiting; the row is flagged
+    //    no-contact and the composer button is disabled.)
     const { data: clientRows, error: clientErr } = await supabase
       .from("clients")
       .select("id, name, status, contact_emails");
@@ -132,20 +117,17 @@ export async function GET(req: NextRequest) {
     }
 
     const clientNames = clients.map((c) => c.name);
-    const clientByName = new Map<string, ClientRow>();
-    for (const c of clients) clientByName.set(c.name, c);
 
-    // 2) Unreported done tasks in the window, last-sent timestamp per
-    //    client. One round-trip each.
-    const [tasksRes, sentRes] = await Promise.all([
+    // 2) Unreported EOD work entries in the window + last-sent timestamp
+    //    per client. One round-trip each.
+    const [workRes, sentRes] = await Promise.all([
       supabase
-        .from("tasks")
-        .select("id, title, client_name, completed_at, assignee_id, tags")
+        .from("eod_client_work")
+        .select("id, user_id, client_name, note_date, worked_on, results")
         .in("client_name", clientNames)
-        .eq("status", "done")
         .is("reported_to_client_at", null)
-        .gte("completed_at", startIso)
-        .order("completed_at", { ascending: false })
+        .gte("note_date", startDateStr)
+        .order("note_date", { ascending: false })
         .limit(2000),
       supabase
         .from("email_drafts")
@@ -156,103 +138,53 @@ export async function GET(req: NextRequest) {
         .order("sent_at", { ascending: false })
         .limit(500)
     ]);
-    const tasks = (tasksRes.data ?? []) as TaskRow[];
+    const work = (workRes.data ?? []) as WorkRow[];
     const sent = (sentRes.data ?? []) as SentEmailRow[];
 
-    const tasksByClient = new Map<string, TaskRow[]>();
-    for (const t of tasks) {
-      const list = tasksByClient.get(t.client_name) ?? [];
-      list.push(t);
-      tasksByClient.set(t.client_name, list);
+    const workByClient = new Map<string, WorkRow[]>();
+    for (const w of work) {
+      const list = workByClient.get(w.client_name) ?? [];
+      list.push(w);
+      workByClient.set(w.client_name, list);
     }
     const lastSentByClient = new Map<string, string>();
     for (const r of sent) {
       if (!r.client_name || !r.sent_at) continue;
-      if (!lastSentByClient.has(r.client_name)) {
-        lastSentByClient.set(r.client_name, r.sent_at);
-      }
+      if (!lastSentByClient.has(r.client_name)) lastSentByClient.set(r.client_name, r.sent_at);
     }
 
-    // 3) Pull EOD notes for the contributing assignees in the window.
-    //    Single round-trip across all contributors, then bucket per
-    //    client below. Limit upper bound for safety.
-    const allAssignees = Array.from(new Set(
-      tasks.map((t) => t.assignee_id).filter((id): id is string => !!id)
-    ));
-    const startDateStr = start.toISOString().slice(0, 10);
-    let notes: EodNoteRow[] = [];
-    let userById = new Map<string, string>(); // user_id → name
-    if (allAssignees.length > 0) {
-      const [notesRes, usersRes] = await Promise.all([
-        supabase
-          .from("eod_notes")
-          .select("user_id, note_date, worked_on, accomplished, plan_tomorrow")
-          .in("user_id", allAssignees)
-          .gte("note_date", startDateStr)
-          .order("note_date", { ascending: false })
-          .limit(500),
-        supabase
-          .from("users")
-          .select("id, name")
-          .in("id", allAssignees)
-      ]);
-      notes = (notesRes.data ?? []) as EodNoteRow[];
-      userById = new Map(
-        ((usersRes.data ?? []) as { id: string; name: string }[])
-          .map((u) => [u.id, u.name])
-      );
-    }
-
-    // Notes are global per-user. To bucket them per client we use the
-    // task-assignment graph: any contributor for a client gets their
-    // EOD notes attached to that client. So a worker who closed tasks
-    // for both Acme and Beta has their note visible on both rows.
-    const contributorsByClient = new Map<string, Set<string>>();
-    for (const t of tasks) {
-      if (!t.assignee_id) continue;
-      const set = contributorsByClient.get(t.client_name) ?? new Set<string>();
-      set.add(t.assignee_id);
-      contributorsByClient.set(t.client_name, set);
+    // 3) Resolve contributor names.
+    const userIds = Array.from(new Set(work.map((w) => w.user_id)));
+    const userById = new Map<string, string>();
+    if (userIds.length > 0) {
+      const { data: users } = await supabase.from("users").select("id, name").in("id", userIds);
+      for (const u of ((users ?? []) as { id: string; name: string }[])) userById.set(u.id, u.name);
     }
 
     const recommendations: DigestRecommendation[] = [];
     for (const c of clients) {
-      const clientTasks = tasksByClient.get(c.name) ?? [];
-      if (clientTasks.length === 0) continue;
+      const clientWork = workByClient.get(c.name) ?? [];
+      if (clientWork.length === 0) continue;
 
-      const taskDetails: DigestTaskDetail[] = clientTasks
-        .slice(0, 5)
-        .map((t) => ({
-          id: t.id,
-          title: t.title,
-          tags: t.tags ?? [],
-          completedAt: t.completed_at,
-          assigneeName: t.assignee_id ? (userById.get(t.assignee_id) ?? null) : null
-        }));
+      const entries: DigestEntryDetail[] = clientWork.slice(0, 6).map((w) => ({
+        id: w.id,
+        workedOn: w.worked_on,
+        results: w.results,
+        noteDate: w.note_date,
+        authorName: userById.get(w.user_id) ?? null
+      }));
 
-      const contributorIds = Array.from(contributorsByClient.get(c.name) ?? []);
-      const eodNotes: DigestEodNote[] = notes
-        .filter((n) => contributorIds.includes(n.user_id))
-        .slice(0, 5)
-        .map((n) => ({
-          authorName: userById.get(n.user_id) ?? "Teammate",
-          noteDate: n.note_date,
-          workedOn: n.worked_on,
-          accomplished: n.accomplished
-        }));
-
-      const contributorNames = contributorIds
-        .map((id) => userById.get(id))
-        .filter((n): n is string => !!n);
+      const contributorNames = Array.from(new Set(
+        clientWork.map((w) => userById.get(w.user_id)).filter((n): n is string => !!n)
+      ));
 
       recommendations.push({
         clientId: c.id,
         clientName: c.name,
         contactEmails: c.contact_emails ?? [],
-        unreportedTaskCount: clientTasks.length,
+        entryCount: clientWork.length,
         lastSentAt: lastSentByClient.get(c.name) ?? null,
-        tasks: taskDetails,
-        eodNotes,
+        entries,
         contributorNames,
         hasContact: (c.contact_emails?.length ?? 0) > 0
       });
@@ -260,9 +192,7 @@ export async function GET(req: NextRequest) {
 
     // Most work first, then oldest last-update (those have waited longest).
     recommendations.sort((a, b) => {
-      if (a.unreportedTaskCount !== b.unreportedTaskCount) {
-        return b.unreportedTaskCount - a.unreportedTaskCount;
-      }
+      if (a.entryCount !== b.entryCount) return b.entryCount - a.entryCount;
       return (a.lastSentAt ?? "").localeCompare(b.lastSentAt ?? "");
     });
 

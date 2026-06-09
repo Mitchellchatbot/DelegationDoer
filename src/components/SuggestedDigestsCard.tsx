@@ -11,38 +11,31 @@ import { EodDigestComposerModal } from "@/components/EodDigestComposerModal";
 
 // Lives at the top of /approvals?tab=emails. Four window tabs
 // (Daily / Weekly / Bi-weekly / Monthly) — clicking one shows every
-// client with unreported completed work in that time window, plus the
-// contributors' EOD notes, plus enough detail (task titles, tags, who
-// did them) for the approver to decide who to email next.
+// client with unreported EOD client-work in that time window (what the
+// team logged they did for the client + results), so the approver can
+// decide who to email next. A client appears here the moment someone
+// logs EOD work for it.
 //
 // Per-client cadence is NOT consulted here. The window is whichever
 // tab the approver picked.
 
 type DigestWindow = "daily" | "weekly" | "biweekly" | "monthly";
 
-interface TaskDetail {
+interface EntryDetail {
   id: string;
-  title: string;
-  tags: string[];
-  completedAt: string | null;
-  assigneeName: string | null;
-}
-
-interface EodNote {
-  authorName: string;
+  workedOn: string;
+  results: string | null;
   noteDate: string;
-  workedOn: string | null;
-  accomplished: string | null;
+  authorName: string | null;
 }
 
 interface Recommendation {
   clientId: string;
   clientName: string;
   contactEmails: string[];
-  unreportedTaskCount: number;
+  entryCount: number;
   lastSentAt: string | null;
-  tasks: TaskDetail[];
-  eodNotes: EodNote[];
+  entries: EntryDetail[];
   contributorNames: string[];
   hasContact: boolean;
 }
@@ -109,7 +102,7 @@ export function SuggestedDigestsCard() {
           Who needs an email
           {data && (
             <span className="text-[11px] text-ink/55 font-normal tabular-nums">
-              · {recs.length} client{recs.length === 1 ? "" : "s"} with unreported work
+              · {recs.length} client{recs.length === 1 ? "" : "s"} with unreported EOD work
             </span>
           )}
         </div>
@@ -147,7 +140,7 @@ export function SuggestedDigestsCard() {
       </div>
 
       <div className="px-4 pb-1 text-[11px] text-ink/55">
-        Clients with unreported completed work in the last {activeTab.days} day{activeTab.days === 1 ? "" : "s"}.
+        Clients with unreported EOD client-work in the last {activeTab.days} day{activeTab.days === 1 ? "" : "s"}.
       </div>
 
       {/* Body region — wrapped in a relative container so the
@@ -183,7 +176,7 @@ export function SuggestedDigestsCard() {
             className="px-4 py-8 text-center text-[12px] text-ink/55 inline-flex items-center justify-center gap-1.5 w-full anim-fade-in-up"
           >
             <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-            Nothing unreported in this window. New entries appear here as tasks get closed.
+            Nothing unreported in this window. Clients appear here as the team logs EOD client-work.
           </div>
         ) : (
           <ul
@@ -241,7 +234,7 @@ function RecRow({
               {rec.clientName}
             </Link>
             <span className="text-[11px] tabular-nums font-semibold text-ink/70">
-              {rec.unreportedTaskCount} task{rec.unreportedTaskCount === 1 ? "" : "s"}
+              {rec.entryCount} EOD {rec.entryCount === 1 ? "entry" : "entries"}
             </span>
             <span className="text-[10px] text-ink/45">·</span>
             <span className="text-[11px] text-ink/55">
@@ -257,12 +250,12 @@ function RecRow({
               </>
             )}
           </div>
-          {/* Compact task-titles teaser when collapsed. Expanding shows
-              the full task + EOD breakdown so the approver can see what
-              the composer will actually summarize. */}
-          {!expanded && rec.tasks.length > 0 && (
+          {/* Compact teaser when collapsed. Expanding shows the full EOD
+              work breakdown so the approver can see what the composer
+              will actually summarize. */}
+          {!expanded && rec.entries.length > 0 && (
             <div className="text-[11px] text-ink/55 truncate mt-1">
-              {rec.tasks.slice(0, 3).map((t) => t.title).join(" · ")}
+              {rec.entries.slice(0, 3).map((e) => e.workedOn).join(" · ")}
             </div>
           )}
         </div>
@@ -299,59 +292,32 @@ function RecRow({
 
       {expanded && (
         <div className="mt-3 ml-0 space-y-3">
-          {rec.tasks.length > 0 && (
+          {rec.entries.length > 0 ? (
             <div>
               <div className="text-[10px] uppercase tracking-wide text-ink/50 font-semibold mb-1.5">
-                Completed tasks ({rec.unreportedTaskCount}{rec.unreportedTaskCount > rec.tasks.length && `, showing ${rec.tasks.length}`})
-              </div>
-              <ul className="space-y-1">
-                {rec.tasks.map((t) => (
-                  <li key={t.id} className="text-[12px] text-ink/80">
-                    <div className="font-medium truncate">{t.title}</div>
-                    <div className="text-[10px] text-ink/50 flex items-center gap-1.5 flex-wrap">
-                      {t.assigneeName && <span>{t.assigneeName}</span>}
-                      {t.completedAt && (
-                        <>
-                          {t.assigneeName && <span>·</span>}
-                          <span className="tabular-nums">{relativeDate(t.completedAt)}</span>
-                        </>
-                      )}
-                      {t.tags.length > 0 && t.tags.slice(0, 4).map((tag) => (
-                        <span key={tag} className="px-1.5 py-0.5 rounded-full bg-slate-100 text-ink/65 text-[9px]">
-                          {tag}
-                        </span>
-                      ))}
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-          {rec.eodNotes.length > 0 && (
-            <div>
-              <div className="text-[10px] uppercase tracking-wide text-ink/50 font-semibold mb-1.5">
-                EOD notes from contributors
+                EOD work ({rec.entryCount}{rec.entryCount > rec.entries.length && `, showing ${rec.entries.length}`})
               </div>
               <ul className="space-y-2">
-                {rec.eodNotes.map((n, idx) => (
-                  <li key={`${n.authorName}-${n.noteDate}-${idx}`} className="text-[11.5px] text-ink/75 leading-relaxed">
-                    <div className="text-[10px] text-ink/55 font-semibold mb-0.5">
-                      {n.authorName} · <span className="tabular-nums">{n.noteDate}</span>
+                {rec.entries.map((e) => (
+                  <li key={e.id} className="text-[12px] text-ink/80">
+                    <div className="font-medium leading-snug">{e.workedOn}</div>
+                    {e.results && (
+                      <div className="text-[11px] text-ink/60 mt-0.5">
+                        <span className="text-ink/45">Results: </span>{e.results}
+                      </div>
+                    )}
+                    <div className="text-[10px] text-ink/50 flex items-center gap-1.5 flex-wrap mt-0.5">
+                      {e.authorName && <span>{e.authorName}</span>}
+                      {e.authorName && <span>·</span>}
+                      <span className="tabular-nums">{e.noteDate}</span>
                     </div>
-                    {n.workedOn && (
-                      <div><span className="text-ink/55">Worked on: </span>{n.workedOn}</div>
-                    )}
-                    {n.accomplished && (
-                      <div><span className="text-ink/55">Accomplished: </span>{n.accomplished}</div>
-                    )}
                   </li>
                 ))}
               </ul>
             </div>
-          )}
-          {rec.tasks.length === 0 && rec.eodNotes.length === 0 && (
+          ) : (
             <div className="text-[11px] text-ink/55 italic">
-              Tasks and EOD notes will populate as the team closes work for this client.
+              EOD work will populate as the team logs what they did for this client.
             </div>
           )}
         </div>

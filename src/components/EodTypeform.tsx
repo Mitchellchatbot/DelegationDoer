@@ -3,23 +3,28 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
-  Sparkles, ArrowRight, ArrowLeft, Check, Loader2, X, Mail, Plus, Send, Clipboard
+  Sparkles, ArrowRight, ArrowLeft, Check, Loader2, X, Clipboard, Plus, Trash2, Building2
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
 // Typeform-style end-of-day flow. One question per screen, animated
-// transitions, autosaves each answer on advance via PUT /api/eod/notes
-// so progress survives a refresh. Last step fires /api/eod/submit
-// which DMs leadership + the worker's dept head(s).
+// transitions, autosaves each answer on advance via PUT /api/eod/notes so
+// progress survives a refresh. Last step fires /api/eod/submit which DMs
+// leadership + the worker's dept head(s).
 //
-// The Website team gets an extra branch after the four structured
-// questions — a "want to log a client email?" yes/no, and a loopable
-// composer if yes. Each email POSTs to /api/eod/client-checkins.
+// Three flow shapes:
+//   - "client"   (SEO + Website teams): the day is logged CLIENT BY
+//                CLIENT — pick a client, say what you worked on + results,
+//                "another client?" loop until done — then a short wrap-up
+//                (plan for tomorrow / blockers). Each client entry POSTs to
+//                /api/eod/client-work and is the source the client-update
+//                emails are drafted from.
+//   - "marketing" (Talha Ali): five marketing-shaped questions.
+//   - "default"  (everyone else): the generic four structured questions.
 //
-// Trigger lives on the EOD page: auto-opens within ~60min of the
-// worker's weeklySchedule end_time, or manually via a "Simulate shift
-// end" button for testing.
+// Trigger lives on the EOD page: auto-opens within ~60min of the worker's
+// weeklySchedule end_time, or manually via "Simulate shift end".
 
 interface ClientOption { id: string; name: string; contactEmails: string[] }
 
@@ -29,40 +34,37 @@ interface PriorState {
   planTomorrow: string | null;
   blockers: string | null;
   // Marketing-style flow extras (Talha Ali). Stay null for everyone
-  // else — the standard 4-question flow ignores them entirely.
+  // else — the standard flows ignore them entirely.
   leadsMessaged: string | null;
   linkedinComments: string | null;
 }
 
-interface EmailDraft {
-  localId: string;
-  clientId: string;
-  to: string;          // free-text comma-separated To input
-  subject: string;
-  body: string;
-  // 'drafting' = editable, 'skipped' = user opted out for this client,
-  // 'sending'  = in-flight, 'sent' = queued for approval, 'error' = retry.
-  status: "drafting" | "skipped" | "sending" | "sent" | "error";
-  error?: string;
+// One logged "what I did for this client today" entry (persisted to
+// eod_client_work). localId mirrors the server id once saved.
+interface ClientWorkEntry {
+  id: string;
+  clientId: string | null;
+  clientName: string;
+  workedOn: string;
+  results: string;
 }
 
 interface Props {
   open: boolean;
   today: string;
+  // SEO + Website teams get the client-by-client flow. (Leaders/admins
+  // are folded into this set upstream for oversight.)
   isWebsiteTeam: boolean;
   // Talha's EOD asks five marketing-flavoured questions instead of the
-  // generic four (accomplished today / leads messaged / LinkedIn comments
-  // posted / plan for tomorrow / anything I can help with). When true,
-  // the website-email branch is also suppressed since it doesn't apply.
+  // generic four. Takes precedence over the client flow.
   isMarketingTalha: boolean;
   prior: PriorState;
   onClose: () => void;
   onComplete: () => void;
 }
 
-// Step definitions for the four base questions. Driving them off a
-// constant lets the typeform engine stay generic — adding/removing a
-// step is a one-line change.
+type FlowKind = "client" | "marketing" | "default";
+
 type StructuredStep = {
   key: keyof PriorState;
   title: string;
@@ -71,128 +73,70 @@ type StructuredStep = {
 };
 
 const DEFAULT_STRUCTURED_STEPS: StructuredStep[] = [
-  {
-    key: "workedOn",
-    title: "What did you work on today?",
-    subtitle: "Tasks, deep-work, meetings — the activity, not the outcomes.",
-    required: true
-  },
-  {
-    key: "accomplished",
-    title: "What did you accomplish?",
-    subtitle: "What's shipped, closed, fixed, or decided. Outcomes only.",
-    required: true
-  },
-  {
-    key: "planTomorrow",
-    title: "Plan for tomorrow",
-    subtitle: "Top 1–3 things you'll push on tomorrow morning.",
-    required: true
-  },
-  {
-    key: "blockers",
-    title: "Any questions or blockers?",
-    subtitle: "Stuck? Need a decision? Drop it here so leads see it tonight.",
-    required: false
-  }
+  { key: "workedOn", title: "What did you work on today?", subtitle: "Tasks, deep-work, meetings — the activity, not the outcomes.", required: true },
+  { key: "accomplished", title: "What did you accomplish?", subtitle: "What's shipped, closed, fixed, or decided. Outcomes only.", required: true },
+  { key: "planTomorrow", title: "Plan for tomorrow", subtitle: "Top 1–3 things you'll push on tomorrow morning.", required: true },
+  { key: "blockers", title: "Any questions or blockers?", subtitle: "Stuck? Need a decision? Drop it here so leads see it tonight.", required: false }
 ];
 
-// Talha runs the marketing dept and his EOD is shaped around outbound
-// LinkedIn activity — we ask for accomplishments + the two numbers that
-// drive the funnel (leads messaged, comments posted) before the
-// plan/help wrap-up. Underlying storage: accomplished → workedOn (the
-// "what got done" recap), then leads_messaged + linkedin_comments
-// (new columns), plan_tomorrow, blockers ("anything I can help with").
+// Marketing flow (Talha): accomplishments + the two funnel numbers, then
+// plan/help wrap-up. Storage: accomplished → workedOn, then
+// leads_messaged + linkedin_comments, plan_tomorrow, blockers.
 const TALHA_STRUCTURED_STEPS: StructuredStep[] = [
-  {
-    key: "workedOn",
-    title: "What was accomplished today?",
-    subtitle: "The wins — shipped, closed, decided, learned.",
-    required: true
-  },
-  {
-    key: "leadsMessaged",
-    title: "How many leads did you message?",
-    subtitle: "Outbound DMs / cold emails sent today. A number is fine; add context if useful.",
-    required: true
-  },
-  {
-    key: "linkedinComments",
-    title: "How many comments did you post on LinkedIn?",
-    subtitle: "Engagement comments on prospects' posts. Number + a quick note on the best ones.",
-    required: true
-  },
-  {
-    key: "planTomorrow",
-    title: "Game plan for tomorrow",
-    subtitle: "Top 1–3 things you'll push on tomorrow morning.",
-    required: true
-  },
-  {
-    key: "blockers",
-    title: "Anything I can help with?",
-    subtitle: "Questions, blockers, or anything you'd like leadership to weigh in on tonight.",
-    required: false
-  }
+  { key: "workedOn", title: "What was accomplished today?", subtitle: "The wins — shipped, closed, decided, learned.", required: true },
+  { key: "leadsMessaged", title: "How many leads did you message?", subtitle: "Outbound DMs / cold emails sent today. A number is fine; add context if useful.", required: true },
+  { key: "linkedinComments", title: "How many comments did you post on LinkedIn?", subtitle: "Engagement comments on prospects' posts. Number + a quick note on the best ones.", required: true },
+  { key: "planTomorrow", title: "Game plan for tomorrow", subtitle: "Top 1–3 things you'll push on tomorrow morning.", required: true },
+  { key: "blockers", title: "Anything I can help with?", subtitle: "Questions, blockers, or anything you'd like leadership to weigh in on tonight.", required: false }
+];
+
+// Client flow wrap-up — the per-client loop carries the "what got done"
+// content, so all that's left is the forward look + blockers.
+const CLIENT_WRAPUP_STEPS: StructuredStep[] = [
+  { key: "planTomorrow", title: "Plan for tomorrow", subtitle: "Top 1–3 things you'll push on tomorrow morning.", required: true },
+  { key: "blockers", title: "Any questions or blockers?", subtitle: "Stuck? Need a decision? Drop it here so leads see it tonight.", required: false }
 ];
 
 export function EodTypeform({
   open, today, isWebsiteTeam, isMarketingTalha, prior, onClose, onComplete
 }: Props) {
-  // Talha's flow swaps the standard 4 questions for a marketing-flavoured
-  // 5-step set and skips the website-email branch entirely (he's not
-  // doing client-update emails). Everyone else gets the default 4 +
-  // optional website-email branch.
-  const structuredSteps = isMarketingTalha
-    ? TALHA_STRUCTURED_STEPS
-    : DEFAULT_STRUCTURED_STEPS;
+  const flow: FlowKind = isMarketingTalha ? "marketing" : isWebsiteTeam ? "client" : "default";
+
+  const structuredSteps =
+    flow === "marketing" ? TALHA_STRUCTURED_STEPS :
+    flow === "client" ? CLIENT_WRAPUP_STEPS :
+    DEFAULT_STRUCTURED_STEPS;
+
+  // Client flow prepends the per-client loop as step 0.
+  const hasClientLoop = flow === "client";
+  const loopOffset = hasClientLoop ? 1 : 0;
   const baseStepCount = structuredSteps.length;
-  // Website branch is suppressed for Talha — his EOD doesn't surface
-  // the client-email composer.
-  // Per-client email drafting from the EOD flow was removed: the
-  // /approvals "Who needs an email" surface now accumulates client
-  // updates centrally so we don't ask every worker to draft their own
-  // per-client emails on submit. Leaving the constant in place (rather
-  // than ripping the entire branch out) so the related state/handlers
-  // can stay as dead code until they're cleaned up properly — fewer
-  // moving parts in this change.
-  const showWebsiteBranch = false;
-  void isWebsiteTeam;
-  // step indices for the Website-team flow:
-  //   0..n-1 — structured questions (4 default, 5 for Talha)
-  //   n      — "Which clients did you work on today?" multi-picker
-  //   n+1    — Per-client compose-or-skip stack (one card per picked
-  //            client; user can edit + Send, or hit Skip on each)
-  //   last   — Review & submit
-  const totalSteps = baseStepCount + (showWebsiteBranch ? 2 : 0) + 1; // +1 for the final summary screen
+  const totalSteps = loopOffset + baseStepCount + 1; // +1 for the final review screen
+
   const [stepIdx, setStepIdx] = useState(0);
   const [answers, setAnswers] = useState<PriorState>(prior);
   const [savingField, setSavingField] = useState<string | null>(null);
-  // Multi-select of which clients the worker touched today; drives
-  // step 5's per-client card list.
-  const [selectedClientIds, setSelectedClientIds] = useState<string[]>([]);
-  const [emails, setEmails] = useState<EmailDraft[]>([]);
   const [clients, setClients] = useState<ClientOption[]>([]);
+  const [clientWork, setClientWork] = useState<ClientWorkEntry[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [direction, setDirection] = useState<"forward" | "back">("forward");
 
-  // Reset state every time the modal opens fresh (e.g. user closed it
-  // without submitting and reopened later).
+  // Reset state every time the modal opens fresh.
   useEffect(() => {
     if (!open) return;
     setStepIdx(0);
     setAnswers(prior);
-    setSelectedClientIds([]);
-    setEmails([]);
+    setClientWork([]);
     setSubmitted(false);
     setSubmitting(false);
     setDirection("forward");
   }, [open, prior]);
 
-  // Load clients lazily, only when the Website branch is in scope.
+  // Load clients + any already-logged client work for today — only for the
+  // client flow.
   useEffect(() => {
-    if (!open || !isWebsiteTeam) return;
+    if (!open || !hasClientLoop) return;
     let cancelled = false;
     fetch("/api/clients", { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : null))
@@ -203,9 +147,18 @@ export function EodTypeform({
           .sort((a, b) => a.name.localeCompare(b.name));
         setClients(list);
       })
-      .catch(() => { /* silent — composer falls back to manual */ });
+      .catch(() => { /* picker falls back to manual entry */ });
+    fetch(`/api/eod/client-work?date=${today}`, { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (cancelled || !d) return;
+        const list = ((d.entries ?? []) as Array<{ id: string; clientId: string | null; clientName: string; workedOn: string; results: string | null }>)
+          .map((e) => ({ id: e.id, clientId: e.clientId, clientName: e.clientName, workedOn: e.workedOn, results: e.results ?? "" }));
+        setClientWork(list);
+      })
+      .catch(() => { /* resume is best-effort */ });
     return () => { cancelled = true; };
-  }, [open, isWebsiteTeam]);
+  }, [open, hasClientLoop, today]);
 
   const saveField = useCallback(
     async (key: keyof PriorState, value: string) => {
@@ -236,99 +189,9 @@ export function EodTypeform({
     setStepIdx((i) => Math.max(0, i - 1));
   }
 
-  function newDraft(clientId = ""): EmailDraft {
-    const client = clients.find((c) => c.id === clientId);
-    return {
-      localId: `d_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`,
-      clientId,
-      // Prefill To with the client's stored contact emails so the
-      // worker doesn't have to retype. Easy to edit if they want to
-      // send to a different recipient.
-      to: (client?.contactEmails ?? []).join(", "),
-      subject: client ? `Update for ${client.name}` : "",
-      body: "",
-      status: "drafting"
-    };
-  }
-
-  // Toggle a client in/out of the multi-select for step 4.
-  function toggleClient(clientId: string) {
-    setSelectedClientIds((cur) =>
-      cur.includes(clientId)
-        ? cur.filter((id) => id !== clientId)
-        : [...cur, clientId]
-    );
-  }
-
-  // When advancing from the picker (step 4) into the per-client step,
-  // seed one EmailDraft per selected client. Existing drafts (e.g. if
-  // the user navigated back) are preserved; clients that were
-  // deselected get their drafts removed.
-  function reconcileDraftsForSelection() {
-    setEmails((cur) => {
-      const byClient = new Map<string, EmailDraft>();
-      for (const d of cur) if (d.clientId && !byClient.has(d.clientId)) byClient.set(d.clientId, d);
-      return selectedClientIds.map((cid) => byClient.get(cid) ?? newDraft(cid));
-    });
-  }
-
-  function patchDraft(localId: string, patch: Partial<EmailDraft>) {
-    setEmails((cur) => cur.map((d) => d.localId === localId ? { ...d, ...patch } : d));
-  }
-
-  async function sendDraft(localId: string) {
-    const draft = emails.find((d) => d.localId === localId);
-    if (!draft) return;
-    if (!draft.clientId) return patchDraft(localId, { error: "Pick a client" });
-    if (!draft.subject.trim()) return patchDraft(localId, { error: "Subject required" });
-    if (!draft.body.trim()) return patchDraft(localId, { error: "Body required" });
-    const client = clients.find((c) => c.id === draft.clientId);
-    const toRaw = draft.to.trim()
-      ? draft.to.split(/[,;\s]+/).map((s) => s.trim()).filter(Boolean)
-      : (client?.contactEmails ?? []);
-    if (toRaw.length === 0) {
-      return patchDraft(localId, { error: "Add at least one recipient email" });
-    }
-    patchDraft(localId, { status: "sending", error: undefined });
-    try {
-      // Route through the email-approval queue (kind=client_update).
-      // Mitch / Mujtaba / Sam see it on /approvals and Approve & Send
-      // fires the actual outbound email via missiveclone.
-      const res = await fetch("/api/email-drafts", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          clientId: draft.clientId,
-          clientName: client?.name ?? "Client",
-          to: toRaw,
-          subject: draft.subject.trim(),
-          bodyText: draft.body.trim(),
-          kind: "client_update"
-        })
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data?.error ?? `failed (${res.status})`);
-      patchDraft(localId, { status: "sent" });
-    } catch (err) {
-      patchDraft(localId, {
-        status: "error",
-        error: err instanceof Error ? err.message : "send failed"
-      });
-    }
-  }
-
-  // "Skip this client" — locks the card without sending. Visually
-  // de-emphasized so the user can still see what they passed on.
-  function skipDraft(localId: string) {
-    patchDraft(localId, { status: "skipped", error: undefined });
-  }
-
   async function submitEod() {
     setSubmitting(true);
     try {
-      // Send the answers in the body so we don't depend on autosave
-      // having landed (and even if it errored on a missing column,
-      // the submit endpoint upserts directly).
       const res = await fetch("/api/eod/submit", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -345,8 +208,6 @@ export function EodTypeform({
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error ?? `status ${res.status}`);
       setSubmitted(true);
-      // Detailed recipient + delivery breakdown so it's obvious who
-      // actually got the DM (vs. a silent Slack lookup failure).
       const recipients = (data.recipients ?? []) as Array<{ name: string; delivered: boolean; reason?: string }>;
       const delivered = recipients.filter((r) => r.delivered);
       const failed = recipients.filter((r) => !r.delivered);
@@ -362,9 +223,6 @@ export function EodTypeform({
         );
       }
       onComplete();
-      // Auto-dismiss the overlay so the worker isn't stuck on the
-      // success screen — short pause so they read "EOD submitted"
-      // before it fades. They can also still hit Close manually.
       setTimeout(() => onClose(), 1600);
     } catch (err) {
       toast.error(`Submit failed: ${err instanceof Error ? err.message : "unknown"}`);
@@ -373,16 +231,12 @@ export function EodTypeform({
     }
   }
 
-  // Keyboard shortcuts — Enter to advance from a question, Shift+Enter
-  // for newline inside textareas (default browser behavior), Escape to
-  // close. Arrow keys nudge back/forward when not focused in an input.
+  // Escape closes (progress survives — answers autosave / client work
+  // persists per entry).
   useEffect(() => {
     if (!open) return;
     function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        onClose();
-      }
+      if (e.key === "Escape") { e.preventDefault(); onClose(); }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -391,12 +245,11 @@ export function EodTypeform({
   const progress = useMemo(() => Math.min(100, Math.round((stepIdx / (totalSteps - 1)) * 100)), [stepIdx, totalSteps]);
 
   if (!open) return null;
-
-  // Portal to document.body so the overlay escapes the main panel's
-  // z-10 stacking context — without this, the Topbar (z-30 inside the
-  // parent flex column) sits *above* the typeform and the search bar
-  // stays interactable behind the form.
   if (typeof document === "undefined") return null;
+
+  // Index math: [0..loopOffset) = client loop, then structured questions,
+  // then the final review screen.
+  const structuredIdx = stepIdx - loopOffset;
 
   return createPortal(
     <div
@@ -404,9 +257,6 @@ export function EodTypeform({
       role="dialog"
       aria-modal="true"
     >
-      {/* Bare close button in the top-right — the progress bar moved
-          to the bottom so the user always sees how far they are
-          without it competing with the question header. */}
       <button
         type="button"
         onClick={onClose}
@@ -424,52 +274,36 @@ export function EodTypeform({
             direction === "forward" ? "anim-fade-in-up" : "anim-fade-in"
           )}
         >
-          {stepIdx < baseStepCount && (
-            <StructuredQuestion
-              field={structuredSteps[stepIdx]}
-              value={answers[structuredSteps[stepIdx].key] ?? ""}
-              saving={savingField === structuredSteps[stepIdx].key}
-              onChange={(v) => setAnswers((cur) => ({ ...cur, [structuredSteps[stepIdx].key]: v }))}
-              onAdvance={() => {
-                void saveField(structuredSteps[stepIdx].key, answers[structuredSteps[stepIdx].key] ?? "");
-                advance();
-              }}
-            />
-          )}
-
-          {showWebsiteBranch && stepIdx === baseStepCount && (
-            <ClientPicker
+          {hasClientLoop && stepIdx === 0 && (
+            <ClientWorkLoop
+              today={today}
               clients={clients}
-              selected={selectedClientIds}
-              onToggle={toggleClient}
-              onAdvance={() => {
-                reconcileDraftsForSelection();
-                advance();
-              }}
-            />
-          )}
-
-          {showWebsiteBranch && stepIdx === baseStepCount + 1 && (
-            <PerClientComposers
-              drafts={emails}
-              clients={clients}
-              onAddDraft={(clientId) => setEmails((cur) => [...cur, newDraft(clientId)])}
-              onRemoveDraft={(id) => setEmails((cur) => cur.filter((d) => d.localId !== id))}
-              onPatchDraft={patchDraft}
-              onSendDraft={sendDraft}
-              onSkipDraft={skipDraft}
+              entries={clientWork}
+              onChange={setClientWork}
               onAdvance={advance}
+            />
+          )}
+
+          {structuredIdx >= 0 && structuredIdx < baseStepCount && (
+            <StructuredQuestion
+              field={structuredSteps[structuredIdx]}
+              value={answers[structuredSteps[structuredIdx].key] ?? ""}
+              saving={savingField === structuredSteps[structuredIdx].key}
+              onChange={(v) => setAnswers((cur) => ({ ...cur, [structuredSteps[structuredIdx].key]: v }))}
+              onAdvance={() => {
+                void saveField(structuredSteps[structuredIdx].key, answers[structuredSteps[structuredIdx].key] ?? "");
+                advance();
+              }}
             />
           )}
 
           {stepIdx === totalSteps - 1 && (
             <FinalStep
+              flow={flow}
               submitting={submitting}
               submitted={submitted}
               answers={answers}
-              isMarketingTalha={isMarketingTalha}
-              sentEmailCount={emails.filter((e) => e.status === "sent").length}
-              skippedEmailCount={emails.filter((e) => e.status === "skipped").length}
+              clientWork={clientWork}
               onSubmit={submitEod}
               onClose={onClose}
             />
@@ -477,9 +311,6 @@ export function EodTypeform({
         </div>
       </div>
 
-      {/* Bottom dock: progress + step counter centered, Back arrow
-          left, optional spacer right. Sticky to the bottom so it's
-          always in view regardless of scroll on the question card. */}
       <div className="absolute bottom-0 inset-x-0 z-10 px-6 py-4 bg-gradient-to-t from-white via-white/95 to-transparent">
         <div className="max-w-2xl mx-auto flex items-center gap-3">
           <button
@@ -519,10 +350,7 @@ function StructuredQuestion({
   onAdvance: () => void;
 }) {
   const ref = useRef<HTMLTextAreaElement | null>(null);
-  useEffect(() => {
-    // Autofocus the textarea when the question lands.
-    ref.current?.focus();
-  }, []);
+  useEffect(() => { ref.current?.focus(); }, []);
 
   const canAdvance = !field.required || value.trim().length > 0;
 
@@ -531,9 +359,7 @@ function StructuredQuestion({
       <div className="text-[10px] uppercase tracking-wide font-bold text-fuchsia-500/85">
         Question {field.required ? "(required)" : "(optional)"}
       </div>
-      <h1 className="text-3xl font-semibold leading-tight text-ink">
-        {field.title}
-      </h1>
+      <h1 className="text-3xl font-semibold leading-tight text-ink">{field.title}</h1>
       <p className="text-sm text-ink/65">{field.subtitle}</p>
 
       <textarea
@@ -541,8 +367,6 @@ function StructuredQuestion({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={(e) => {
-          // Cmd/Ctrl + Enter advances; plain Enter just adds a newline
-          // so paragraph answers work naturally.
           if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && canAdvance) {
             e.preventDefault();
             onAdvance();
@@ -584,332 +408,283 @@ function StructuredQuestion({
   );
 }
 
-function ClientPicker({
-  clients, selected, onToggle, onAdvance
+// The client-by-client loop. Three internal phases:
+//   pick   — choose the client you worked on (searchable grid)
+//   detail — what you worked on + any results, for the chosen client
+//   after  — running list of what's logged; add another or continue
+// Each saved entry POSTs to /api/eod/client-work (and DELETE on remove),
+// so progress survives a refresh and the emails can read it later.
+function ClientWorkLoop({
+  today, clients, entries, onChange, onAdvance
 }: {
+  today: string;
   clients: ClientOption[];
-  selected: string[];
-  onToggle: (clientId: string) => void;
+  entries: ClientWorkEntry[];
+  onChange: (entries: ClientWorkEntry[]) => void;
   onAdvance: () => void;
 }) {
-  return (
-    <div className="space-y-5">
-      <div className="text-[10px] uppercase tracking-wide font-bold text-violet-500/85">
-        Client touches
-      </div>
-      <h1 className="text-3xl font-semibold leading-tight text-ink">
-        What clients did you work on today?
-      </h1>
-      <p className="text-sm text-ink/65">
-        Pick everyone you touched. We&apos;ll line up a draft email per client on the next step so you can either send (with approval) or skip.
-      </p>
+  const [phase, setPhase] = useState<"pick" | "detail" | "after">(entries.length > 0 ? "after" : "pick");
+  const [current, setCurrent] = useState<{ clientId: string | null; clientName: string } | null>(null);
+  const [workedOn, setWorkedOn] = useState("");
+  const [results, setResults] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [query, setQuery] = useState("");
 
-      <div className="max-h-[55vh] overflow-y-auto pr-1">
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-          {clients.map((c) => {
-            const isSelected = selected.includes(c.id);
-            return (
-              <button
-                key={c.id}
-                type="button"
-                onClick={() => onToggle(c.id)}
-                className={cn(
-                  "flex items-center gap-2 px-3 py-2 rounded-xl text-left text-[13px] border-2 transition-all active:scale-[0.98]",
-                  isSelected
-                    ? "border-violet-500/70 bg-violet-50/80 text-violet-800 shadow-sm"
-                    : "border-slate-200 bg-white hover:border-violet-300 hover:bg-violet-50/30"
-                )}
-              >
-                <span
-                  className={cn(
-                    "w-4 h-4 rounded-md border-2 grid place-items-center shrink-0 transition-colors",
-                    isSelected ? "border-violet-500 bg-violet-500" : "border-slate-300 bg-white"
-                  )}
-                >
-                  {isSelected && <Check className="w-2.5 h-2.5 text-white" />}
-                </span>
-                <span className="truncate">{c.name}</span>
-              </button>
-            );
-          })}
-        </div>
-        {clients.length === 0 && (
-          <div className="text-sm text-ink/55 italic py-6 text-center">
-            No clients loaded yet — try refreshing the page.
-          </div>
-        )}
-      </div>
+  // Once entries load in (async), surface the running list instead of an
+  // empty picker — unless the user is mid-entry.
+  useEffect(() => {
+    if (entries.length > 0 && phase === "pick" && !current) setPhase("after");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [entries.length]);
 
-      <div className="flex items-center justify-between gap-3 pt-2">
-        <div className="text-[11px] text-ink/55">
-          {selected.length === 0
-            ? "Pick zero if you didn't touch any clients — we'll skip the email step."
-            : `${selected.length} selected`}
-        </div>
-        <button
-          type="button"
-          onClick={onAdvance}
-          className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full text-sm font-semibold text-white shadow-md transition-all hover:-translate-y-0.5 active:scale-95"
-          style={{ background: "linear-gradient(135deg, #7c3aed 0%, #6d28d9 100%)" }}
-        >
-          {selected.length === 0 ? "Skip email step" : `Draft ${selected.length} email${selected.length === 1 ? "" : "s"}`}
-          <ArrowRight className="w-4 h-4" />
-        </button>
-      </div>
-    </div>
-  );
-}
+  function pickClient(c: { id: string | null; name: string }) {
+    setCurrent({ clientId: c.id, clientName: c.name });
+    setWorkedOn("");
+    setResults("");
+    setPhase("detail");
+  }
 
-function PerClientComposers({
-  drafts, clients, onAddDraft, onRemoveDraft, onPatchDraft, onSendDraft, onSkipDraft, onAdvance
-}: {
-  drafts: EmailDraft[];
-  clients: ClientOption[];
-  onAddDraft: (clientId: string) => void;
-  onRemoveDraft: (localId: string) => void;
-  onPatchDraft: (localId: string, patch: Partial<EmailDraft>) => void;
-  onSendDraft: (localId: string) => void;
-  onSkipDraft: (localId: string) => void;
-  onAdvance: () => void;
-}) {
-  if (drafts.length === 0) {
-    // No clients picked — show a soft pass-through.
+  async function saveEntry() {
+    if (!current || !workedOn.trim() || saving) return;
+    setSaving(true);
+    try {
+      const res = await fetch("/api/eod/client-work", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          date: today,
+          clientId: current.clientId,
+          clientName: current.clientName,
+          workedOn: workedOn.trim(),
+          results: results.trim()
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error ?? `failed (${res.status})`);
+      const entry: ClientWorkEntry = data.entry
+        ? { id: data.entry.id, clientId: data.entry.clientId, clientName: data.entry.clientName, workedOn: data.entry.workedOn, results: data.entry.results ?? "" }
+        : { id: `tmp_${Date.now()}`, clientId: current.clientId, clientName: current.clientName, workedOn: workedOn.trim(), results: results.trim() };
+      onChange([...entries, entry]);
+      setCurrent(null);
+      setWorkedOn("");
+      setResults("");
+      setPhase("after");
+    } catch (err) {
+      toast.error(`Couldn't save: ${err instanceof Error ? err.message : "unknown"}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function removeEntry(id: string) {
+    onChange(entries.filter((e) => e.id !== id));
+    try {
+      await fetch(`/api/eod/client-work?id=${encodeURIComponent(id)}`, { method: "DELETE" });
+    } catch { /* list already updated optimistically */ }
+  }
+
+  // Clients not yet logged float to the top of the picker; already-logged
+  // ones are still selectable (you can log a second entry for the same
+  // client) but de-emphasized.
+  const loggedNames = new Set(entries.map((e) => e.clientName));
+  const filtered = clients.filter((c) => c.name.toLowerCase().includes(query.trim().toLowerCase()));
+
+  if (phase === "detail" && current) {
     return (
-      <div className="text-center space-y-3 py-10">
-        <Mail className="w-10 h-10 text-violet-300 mx-auto" />
-        <div className="text-sm text-ink/55">No client emails to draft. You can continue.</div>
-        <button
-          type="button"
-          onClick={onAdvance}
-          className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full text-sm font-semibold text-white shadow-md transition-all hover:-translate-y-0.5 active:scale-95"
-          style={{ background: "linear-gradient(135deg, #0a4099 0%, #063270 100%)" }}
-        >
-          Continue <ArrowRight className="w-4 h-4" />
-        </button>
+      <div className="space-y-5">
+        <div className="text-[10px] uppercase tracking-wide font-bold text-violet-500/85 inline-flex items-center gap-1.5">
+          <Building2 className="w-3 h-3" /> {current.clientName}
+        </div>
+        <h1 className="text-3xl font-semibold leading-tight text-ink">
+          What did you work on for {current.clientName}?
+        </h1>
+        <p className="text-sm text-ink/65">
+          This is what gets summarized into the client&apos;s update email. Be specific.
+        </p>
+
+        <textarea
+          autoFocus
+          value={workedOn}
+          onChange={(e) => setWorkedOn(e.target.value)}
+          placeholder="e.g. Converted 6 Instagram videos into blog posts, rebuilt the service-area page structure…"
+          rows={4}
+          className="w-full text-base bg-white border-2 border-slate-200 rounded-2xl px-5 py-4 outline-none focus:border-violet-400/70 focus:ring-4 focus:ring-violet-200/40 resize-none transition-all placeholder:text-ink/30 shadow-sm"
+        />
+
+        <div>
+          <label className="text-[11px] uppercase tracking-wide font-semibold text-ink/55 mb-1.5 block">
+            Any results or outcomes? <span className="text-ink/35 normal-case">(optional)</span>
+          </label>
+          <textarea
+            value={results}
+            onChange={(e) => setResults(e.target.value)}
+            placeholder="e.g. 3 of the posts already ranking on page 2, bounce rate down on the rebuilt page…"
+            rows={3}
+            className="w-full text-base bg-white border-2 border-slate-200 rounded-2xl px-5 py-4 outline-none focus:border-violet-400/70 focus:ring-4 focus:ring-violet-200/40 resize-none transition-all placeholder:text-ink/30 shadow-sm"
+          />
+        </div>
+
+        <div className="flex items-center justify-between gap-3">
+          <button
+            type="button"
+            onClick={() => { setCurrent(null); setPhase(entries.length > 0 ? "after" : "pick"); }}
+            className="text-sm font-medium text-ink/60 hover:text-ink"
+          >
+            ← Pick a different client
+          </button>
+          <button
+            type="button"
+            onClick={saveEntry}
+            disabled={!workedOn.trim() || saving}
+            className={cn(
+              "inline-flex items-center gap-2 px-5 py-2.5 rounded-full text-sm font-semibold text-white shadow-md transition-all hover:-translate-y-0.5 active:scale-95",
+              (!workedOn.trim() || saving) && "opacity-40 cursor-not-allowed hover:translate-y-0"
+            )}
+            style={{ background: "linear-gradient(135deg, #7c3aed 0%, #6d28d9 100%)" }}
+          >
+            {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+            {saving ? "Saving…" : "Save this client"}
+          </button>
+        </div>
       </div>
     );
   }
 
-  const sentCount = drafts.filter((d) => d.status === "sent").length;
-  const skippedCount = drafts.filter((d) => d.status === "skipped").length;
-  const remaining = drafts.filter((d) => d.status === "drafting" || d.status === "error").length;
+  if (phase === "after") {
+    return (
+      <div className="space-y-5">
+        <div className="text-[10px] uppercase tracking-wide font-bold text-violet-500/85">
+          Client work · {entries.length} logged
+        </div>
+        <h1 className="text-3xl font-semibold leading-tight text-ink">
+          Did you work on any other clients?
+        </h1>
+        <p className="text-sm text-ink/65">
+          Add an entry for each client you touched today. Each one feeds that client&apos;s update email.
+        </p>
 
+        <div className="space-y-2 max-h-[45vh] overflow-y-auto pr-1">
+          {entries.map((e) => (
+            <div key={e.id} className="rounded-xl border border-violet-200/60 bg-white px-4 py-3 shadow-sm">
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="text-[13px] font-semibold text-ink inline-flex items-center gap-1.5">
+                    <Building2 className="w-3.5 h-3.5 text-violet-500" /> {e.clientName}
+                  </div>
+                  <div className="text-[13px] text-ink/75 mt-1 whitespace-pre-wrap">{e.workedOn}</div>
+                  {e.results && (
+                    <div className="text-[12px] text-ink/55 mt-1">
+                      <span className="font-medium text-ink/65">Results: </span>{e.results}
+                    </div>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => removeEntry(e.id)}
+                  className="p-1 rounded text-ink/35 hover:text-rose-600 hover:bg-rose-50 shrink-0"
+                  title="Remove this entry"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+          ))}
+          {entries.length === 0 && (
+            <div className="text-sm text-ink/45 italic py-4 text-center">Nothing logged yet.</div>
+          )}
+        </div>
+
+        <div className="flex items-center justify-between gap-3 pt-1">
+          <button
+            type="button"
+            onClick={() => { setQuery(""); setPhase("pick"); }}
+            className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-full text-sm font-semibold text-violet-700 bg-violet-50 border border-violet-200 hover:bg-violet-100 transition-colors active:scale-95"
+          >
+            <Plus className="w-4 h-4" /> Add another client
+          </button>
+          <button
+            type="button"
+            onClick={onAdvance}
+            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full text-sm font-semibold text-white shadow-md transition-all hover:-translate-y-0.5 active:scale-95"
+            style={{ background: "linear-gradient(135deg, #0a4099 0%, #063270 100%)" }}
+          >
+            {entries.length === 0 ? "No client work today" : "Done with clients"} <ArrowRight className="w-4 h-4" />
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // phase === "pick"
   return (
-    <div className="space-y-4">
+    <div className="space-y-5">
       <div className="text-[10px] uppercase tracking-wide font-bold text-violet-500/85">
-        {sentCount} sent · {skippedCount} skipped · {remaining} remaining
+        Client work
       </div>
       <h1 className="text-3xl font-semibold leading-tight text-ink">
-        Draft email updates for these clients
+        Which client did you work on?
       </h1>
       <p className="text-sm text-ink/65">
-        Each one routes to Mitch / Mujtaba / Sam for approval before it actually sends. Hit Skip if you don&apos;t need to email this client today.
+        Pick one. You&apos;ll say what you did, then you can add more clients.
       </p>
 
-      <div className="space-y-3 max-h-[55vh] overflow-y-auto pr-1">
-        {drafts.map((d) => (
-          <DraftCard
-            key={d.localId}
-            draft={d}
-            clients={clients}
-            onPatch={(p) => onPatchDraft(d.localId, p)}
-            onRemove={() => onRemoveDraft(d.localId)}
-            onSend={() => onSendDraft(d.localId)}
-            onSkip={() => onSkipDraft(d.localId)}
-          />
-        ))}
+      <input
+        type="text"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        placeholder="Search clients…"
+        className="w-full text-sm bg-white border-2 border-slate-200 rounded-xl px-4 py-2.5 outline-none focus:border-violet-400/70 focus:ring-4 focus:ring-violet-200/40 transition-all placeholder:text-ink/35"
+      />
+
+      <div className="max-h-[45vh] overflow-y-auto pr-1">
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+          {filtered.map((c) => (
+            <button
+              key={c.id}
+              type="button"
+              onClick={() => pickClient({ id: c.id, name: c.name })}
+              className={cn(
+                "flex items-center gap-2 px-3 py-2 rounded-xl text-left text-[13px] border-2 transition-all active:scale-[0.98]",
+                loggedNames.has(c.name)
+                  ? "border-violet-200 bg-violet-50/40 text-violet-700"
+                  : "border-slate-200 bg-white hover:border-violet-300 hover:bg-violet-50/30"
+              )}
+            >
+              <Building2 className="w-3.5 h-3.5 shrink-0 text-violet-400" />
+              <span className="truncate">{c.name}</span>
+              {loggedNames.has(c.name) && <Check className="w-3 h-3 text-violet-500 ml-auto shrink-0" />}
+            </button>
+          ))}
+        </div>
+        {clients.length === 0 && (
+          <div className="text-sm text-ink/55 italic py-6 text-center">No clients loaded yet — try refreshing the page.</div>
+        )}
+        {clients.length > 0 && filtered.length === 0 && (
+          <div className="text-sm text-ink/55 italic py-6 text-center">No clients match “{query}”.</div>
+        )}
       </div>
 
-      <div className="flex items-center justify-end gap-2 pt-2">
+      <div className="flex items-center justify-between gap-3 pt-1">
         <button
           type="button"
-          onClick={onAdvance}
-          className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full text-sm font-semibold text-white shadow-md transition-all hover:-translate-y-0.5 active:scale-95"
-          style={{ background: "linear-gradient(135deg, #0a4099 0%, #063270 100%)" }}
+          onClick={() => (entries.length > 0 ? setPhase("after") : onAdvance())}
+          className="text-sm font-medium text-ink/60 hover:text-ink"
         >
-          {remaining > 0 ? "Continue (and skip the rest)" : "Continue"} <ArrowRight className="w-4 h-4" />
+          {entries.length > 0 ? "← Back to logged work" : "Skip — no client work today"}
         </button>
-      </div>
-    </div>
-  );
-}
-
-function DraftCard({
-  draft, clients, onPatch, onRemove, onSend, onSkip
-}: {
-  draft: EmailDraft;
-  clients: ClientOption[];
-  onPatch: (p: Partial<EmailDraft>) => void;
-  onRemove: () => void;
-  onSend: () => void;
-  // Optional — only the per-client compose step passes this; the
-  // legacy ad-hoc composer doesn't have a "skip" affordance.
-  onSkip?: () => void;
-}) {
-  const client = clients.find((c) => c.id === draft.clientId);
-  const clientName = client?.name ?? "";
-  const isSent = draft.status === "sent";
-  const isSkipped = draft.status === "skipped";
-  const isSending = draft.status === "sending";
-  const isLocked = isSent || isSkipped || isSending;
-  const canSend = !!draft.clientId && draft.subject.trim() && draft.body.trim();
-
-  return (
-    <div className={cn(
-      "rounded-xl border bg-white shadow-sm overflow-hidden transition-colors",
-      isSent && "border-emerald-200/70 bg-emerald-50/30",
-      isSkipped && "border-slate-200/70 bg-slate-50/40 opacity-70",
-      !isSent && !isSkipped && "border-violet-200/60"
-    )}>
-      <div className="flex items-center gap-2 px-3 py-2 bg-slate-50/70 border-b border-slate-200/60">
-        <Mail className={cn(
-          "w-4 h-4",
-          isSent ? "text-emerald-600" : isSkipped ? "text-slate-400" : "text-violet-600"
-        )} />
-        <span className="text-[10px] uppercase tracking-wide font-semibold text-ink/55">
-          {clientName && <span className="text-ink/85">{clientName}</span>}
-          {clientName && " · "}
-          {isSent ? "Sent for approval" : isSkipped ? "Skipped" : "Draft"}
-        </span>
-        {!isLocked && onSkip && (
-          <button
-            type="button"
-            onClick={onSkip}
-            className="ml-auto inline-flex items-center gap-1 text-[10px] font-semibold text-ink/55 hover:text-ink px-2 py-0.5 rounded-md hover:bg-slate-200/70"
-            title="Skip — don't send an email to this client today"
-          >
-            Skip
-          </button>
-        )}
-        {!isLocked && !onSkip && (
-          <button
-            type="button"
-            onClick={onRemove}
-            disabled={isSending}
-            className="ml-auto p-1 rounded text-ink/40 hover:text-rose-600 hover:bg-rose-50 disabled:opacity-40"
-            title="Discard"
-          >
-            <X className="w-3.5 h-3.5" />
-          </button>
-        )}
-      </div>
-
-      {!draft.clientId && (
-        <div className="flex items-center gap-2 px-3 py-2 border-b border-slate-200/50">
-          <label className="text-[10px] uppercase tracking-wide font-semibold text-ink/55 w-14">Client</label>
-          <select
-            value={draft.clientId}
-            onChange={(e) => onPatch({ clientId: e.target.value, error: undefined })}
-            disabled={isLocked}
-            className="flex-1 text-[13px] bg-transparent border-none outline-none focus:ring-0 disabled:opacity-70"
-          >
-            <option value="">Pick a client…</option>
-            {clients.map((c) => (
-              <option key={c.id} value={c.id}>{c.name}</option>
-            ))}
-          </select>
-        </div>
-      )}
-
-      <div className="flex items-center gap-2 px-3 py-2 border-b border-slate-200/50">
-        <label className="text-[10px] uppercase tracking-wide font-semibold text-ink/55 w-14">To</label>
-        <input
-          type="text"
-          value={draft.to}
-          onChange={(e) => onPatch({ to: e.target.value, error: undefined })}
-          disabled={isLocked}
-          placeholder={clientName ? `${clientName} contact email…` : "recipient@client.com"}
-          className="flex-1 text-[13px] bg-transparent border-none outline-none focus:ring-0 placeholder:text-ink/35 disabled:opacity-70"
-        />
-      </div>
-
-      <div className="flex items-center gap-2 px-3 py-2 border-b border-slate-200/50">
-        <label className="text-[10px] uppercase tracking-wide font-semibold text-ink/55 w-14">Subject</label>
-        <input
-          type="text"
-          value={draft.subject}
-          onChange={(e) => onPatch({ subject: e.target.value, error: undefined })}
-          disabled={isLocked}
-          placeholder={clientName ? `Update for ${clientName}` : "Email subject"}
-          maxLength={300}
-          className="flex-1 text-[13px] bg-transparent border-none outline-none focus:ring-0 placeholder:text-ink/35 disabled:opacity-70"
-        />
-      </div>
-
-      <div className="relative">
-        <textarea
-          value={draft.body}
-          onChange={(e) => onPatch({ body: e.target.value, error: undefined })}
-          disabled={isLocked}
-          placeholder={clientName
-            ? `Write the email body for ${clientName}…`
-            : "Body of the email"
-          }
-          rows={5}
-          maxLength={4000}
-          className="block w-full text-[13px] bg-white border-none px-3 py-2.5 outline-none focus:ring-0 resize-y placeholder:text-ink/35 disabled:opacity-70"
-        />
-        {/* AI autofill — pulls today's closed tasks + sent emails for
-            this user×client from /api/eod/client-update/draft and
-            stuffs the subject/body. User edits before sending for
-            approval. Hidden when the row is locked (sent/skipped). */}
-        {!isLocked && draft.clientId && (
-          <FillWithAiButton
-            clientId={draft.clientId}
-            onDraft={(d) => onPatch({
-              subject: draft.subject || d.subject,
-              body: d.body,
-              error: undefined
-            })}
-          />
-        )}
-      </div>
-
-      <div className="flex items-center justify-between px-3 py-2 border-t border-slate-200/50 bg-slate-50/40">
-        {draft.error ? (
-          <span className="text-[11px] text-rose-700">{draft.error}</span>
-        ) : (
-          <span className="text-[10px] text-ink/45 tabular-nums">
-            {draft.body.length} / 4000
-          </span>
-        )}
-        {isSent ? (
-          <span className="inline-flex items-center gap-1.5 px-3 py-1 text-[11px] font-semibold text-emerald-700">
-            <Check className="w-3.5 h-3.5" /> Sent for approval
-          </span>
-        ) : isSkipped ? (
-          <span className="inline-flex items-center gap-1.5 px-3 py-1 text-[11px] font-semibold text-ink/55">
-            Skipped
-          </span>
-        ) : (
-          <button
-            type="button"
-            onClick={onSend}
-            disabled={!canSend || isSending}
-            className={cn(
-              "inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-semibold text-white shadow-sm transition-all hover:-translate-y-0.5 active:scale-95",
-              (!canSend || isSending) && "opacity-50 cursor-not-allowed hover:translate-y-0"
-            )}
-            style={{ background: "linear-gradient(135deg, #7c3aed 0%, #6d28d9 100%)" }}
-          >
-            {isSending ? <Loader2 className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
-            {isSending ? "Sending…" : "Send for approval"}
-          </button>
-        )}
       </div>
     </div>
   );
 }
 
 function FinalStep({
-  submitting, submitted, answers, isMarketingTalha, sentEmailCount, skippedEmailCount, onSubmit, onClose
+  flow, submitting, submitted, answers, clientWork, onSubmit, onClose
 }: {
+  flow: FlowKind;
   submitting: boolean;
   submitted: boolean;
   answers: PriorState;
-  isMarketingTalha: boolean;
-  sentEmailCount: number;
-  skippedEmailCount: number;
+  clientWork: ClientWorkEntry[];
   onSubmit: () => void;
   onClose: () => void;
 }) {
@@ -919,11 +694,9 @@ function FinalStep({
         <div className="w-16 h-16 rounded-full bg-emerald-100 mx-auto grid place-items-center">
           <Check className="w-8 h-8 text-emerald-600" />
         </div>
-        <h1 className="text-3xl font-semibold leading-tight text-ink">
-          EOD submitted
-        </h1>
+        <h1 className="text-3xl font-semibold leading-tight text-ink">EOD submitted</h1>
         <p className="text-sm text-ink/65 max-w-md mx-auto">
-          Mitchell and your dept head have been DM'd. Have a good night.
+          Mitchell and your dept head have been DM&apos;d. Have a good night.
         </p>
         <button
           type="button"
@@ -937,57 +710,63 @@ function FinalStep({
     );
   }
 
-  const requiredFilled = isMarketingTalha
-    ? !!answers.workedOn
-        && !!answers.leadsMessaged
-        && !!answers.linkedinComments
-        && !!answers.planTomorrow
-    : !!answers.workedOn && !!answers.accomplished && !!answers.planTomorrow;
+  const requiredFilled =
+    flow === "marketing"
+      ? !!answers.workedOn && !!answers.leadsMessaged && !!answers.linkedinComments && !!answers.planTomorrow
+      : flow === "client"
+      ? !!answers.planTomorrow
+      : !!answers.workedOn && !!answers.accomplished && !!answers.planTomorrow;
 
   return (
     <div className="space-y-5">
-      <div className="text-[10px] uppercase tracking-wide font-bold text-fuchsia-500/85">
-        Review &amp; submit
-      </div>
-      <h1 className="text-3xl font-semibold leading-tight text-ink">
-        One last look
-      </h1>
+      <div className="text-[10px] uppercase tracking-wide font-bold text-fuchsia-500/85">Review &amp; submit</div>
+      <h1 className="text-3xl font-semibold leading-tight text-ink">One last look</h1>
       <p className="text-sm text-ink/65">
         We&apos;ll DM your EOD digest to leadership and your dept head when you submit.
       </p>
 
-      <div className="space-y-2.5">
-        {isMarketingTalha ? (
+      <div className="space-y-2.5 max-h-[50vh] overflow-y-auto pr-1">
+        {flow === "client" && (
+          <div className="rounded-lg border border-violet-200/60 bg-violet-50/40 px-3 py-2.5">
+            <div className="text-[10px] uppercase tracking-wide font-semibold text-violet-700/85 mb-1.5">
+              Client work · {clientWork.length}
+            </div>
+            {clientWork.length === 0 ? (
+              <div className="text-[13px] text-ink/55 italic">No client work logged today.</div>
+            ) : (
+              <ul className="space-y-1.5">
+                {clientWork.map((e) => (
+                  <li key={e.id} className="text-[13px]">
+                    <span className="font-semibold text-ink">{e.clientName}: </span>
+                    <span className="text-ink/75">{e.workedOn}</span>
+                    {e.results && <span className="text-ink/50"> — {e.results}</span>}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+
+        {flow === "marketing" ? (
           <>
             <SummaryRow label="What was accomplished today" value={answers.workedOn} required />
             <SummaryRow label="Leads messaged" value={answers.leadsMessaged} required />
             <SummaryRow label="LinkedIn comments posted" value={answers.linkedinComments} required />
             <SummaryRow label="Game plan for tomorrow" value={answers.planTomorrow} required />
-            {answers.blockers && (
-              <SummaryRow label="Anything I can help with" value={answers.blockers} required={false} />
-            )}
+            {answers.blockers && <SummaryRow label="Anything I can help with" value={answers.blockers} required={false} />}
+          </>
+        ) : flow === "client" ? (
+          <>
+            <SummaryRow label="Plan for tomorrow" value={answers.planTomorrow} required />
+            {answers.blockers && <SummaryRow label="Blockers / questions" value={answers.blockers} required={false} />}
           </>
         ) : (
           <>
             <SummaryRow label="Worked on" value={answers.workedOn} required />
             <SummaryRow label="Accomplished" value={answers.accomplished} required />
             <SummaryRow label="Plan for tomorrow" value={answers.planTomorrow} required />
-            {answers.blockers && (
-              <SummaryRow label="Blockers / questions" value={answers.blockers} required={false} />
-            )}
+            {answers.blockers && <SummaryRow label="Blockers / questions" value={answers.blockers} required={false} />}
           </>
-        )}
-        {(sentEmailCount > 0 || skippedEmailCount > 0) && (
-          <div className="rounded-lg bg-violet-50/60 border border-violet-200/60 px-3 py-2 text-[13px] inline-flex items-center gap-2 flex-wrap">
-            <Mail className="w-3.5 h-3.5 text-violet-600" />
-            {sentEmailCount > 0 && (
-              <span>{sentEmailCount} client email{sentEmailCount === 1 ? "" : "s"} queued for approval</span>
-            )}
-            {sentEmailCount > 0 && skippedEmailCount > 0 && <span className="text-ink/45">·</span>}
-            {skippedEmailCount > 0 && (
-              <span className="text-ink/55">{skippedEmailCount} skipped</span>
-            )}
-          </div>
         )}
       </div>
 
@@ -1025,62 +804,5 @@ function SummaryRow({ label, value, required }: { label: string; value: string |
         <div className="text-amber-700 italic mt-0.5">Not filled in</div>
       )}
     </div>
-  );
-}
-
-// Tiny inline "Fill with AI" button. Floats in the bottom-right corner
-// of the per-client body textarea. POSTs to /api/eod/client-update/draft
-// with the client id; the API pulls today's closed tasks + sent emails
-// for the caller×client and returns a Claude-drafted subject + body.
-// Caller decides what to do with the draft via onDraft.
-function FillWithAiButton({
-  clientId, onDraft
-}: {
-  clientId: string;
-  onDraft: (d: { subject: string; body: string }) => void;
-}) {
-  const [busy, setBusy] = useState(false);
-
-  async function fill() {
-    if (busy) return;
-    setBusy(true);
-    try {
-      const res = await fetch("/api/eod/client-update/draft", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ clientId })
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.error ?? `failed (${res.status})`);
-      onDraft({ subject: data.subject ?? "", body: data.body ?? "" });
-      const signals = data.signals as { tasksCount?: number; emailsCount?: number } | undefined;
-      const summary = signals
-        ? `${signals.tasksCount ?? 0} task${signals.tasksCount === 1 ? "" : "s"} · ${signals.emailsCount ?? 0} email${signals.emailsCount === 1 ? "" : "s"}`
-        : "from today's activity";
-      toast.success(`Drafted from ${summary}.`);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Couldn't draft");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <button
-      type="button"
-      onClick={fill}
-      disabled={busy}
-      title="Draft this message from today's tasks + emails for this client"
-      className={cn(
-        "absolute right-2 bottom-2 inline-flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-semibold border shadow-sm transition-all",
-        "bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white border-transparent hover:-translate-y-0.5 active:scale-95",
-        busy && "opacity-60 cursor-not-allowed hover:translate-y-0"
-      )}
-    >
-      {busy
-        ? <Loader2 className="w-3 h-3 animate-spin" />
-        : <Sparkles className="w-3 h-3" />}
-      {busy ? "Drafting…" : "Fill with AI"}
-    </button>
   );
 }

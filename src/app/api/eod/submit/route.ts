@@ -188,6 +188,28 @@ export async function POST(req: NextRequest) {
     const quote = (s: string) =>
       s.split("\n").map((line) => `> ${line}`).join("\n");
     const sections: string[] = [];
+
+    // Per-client work logged today (the new client-by-client EOD flow).
+    // Folded into the digest as its own section so leadership sees what
+    // each client got, not just the plan/blockers wrap-up. Best-effort:
+    // a missing table (migration not applied) just yields no section.
+    const { data: clientWorkRows } = await supabase
+      .from("eod_client_work")
+      .select("client_name, worked_on, results")
+      .eq("user_id", userId)
+      .eq("note_date", dateStr)
+      .order("created_at", { ascending: true });
+    const clientWork = (clientWorkRows ?? []) as Array<{ client_name: string; worked_on: string; results: string | null }>;
+    if (clientWork.length > 0) {
+      const lines = clientWork
+        .map((c) => {
+          const res = c.results ? ` (results: ${c.results})` : "";
+          return `• *${c.client_name}:* ${c.worked_on}${res}`;
+        })
+        .join("\n");
+      sections.push(`*Client work (${clientWork.length}):*\n${lines}`);
+    }
+
     if (noteRow.worked_on) sections.push(`*Worked on:*\n${quote(noteRow.worked_on)}`);
     if (noteRow.accomplished) sections.push(`*Accomplished:*\n${quote(noteRow.accomplished)}`);
     if (noteRowExt.leads_messaged) sections.push(`*Leads messaged:*\n${quote(noteRowExt.leads_messaged)}`);

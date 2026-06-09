@@ -24,6 +24,9 @@ export interface EodPersonSummary {
   // Marketing-style flow extras (Talha Ali). Null for everyone else.
   leadsMessaged: string | null;
   linkedinComments: string | null;
+  // Per-client work logged via the client-by-client EOD flow (SEO +
+  // Website teams). Empty for the default/marketing flows.
+  clientWork: Array<{ clientName: string; workedOn: string; results: string | null }>;
   // Lifecycle — set when the worker hits "Submit EOD" (DMs leaders +
   // dept heads at that moment) and again when a dept head ticks off.
   submittedAt: string | null;
@@ -88,7 +91,7 @@ export async function buildEodForDepartment(
 
   // 2) Pull user records, completed tasks, time_entries, notes — in
   //    parallel.
-  const [usersRes, tasksRes, entriesRes, notesRes] = await Promise.all([
+  const [usersRes, tasksRes, entriesRes, notesRes, workRes] = await Promise.all([
     supabase
       .from("users")
       .select("id, name, avatar_url")
@@ -116,7 +119,15 @@ export async function buildEodForDepartment(
       .from("eod_notes")
       .select("user_id, note, worked_on, accomplished, plan_tomorrow, blockers, leads_messaged, linkedin_comments, submitted_at, reviewed_at, reviewed_by")
       .in("user_id", memberIds)
+      .eq("note_date", isoDate),
+    // Per-client EOD work logged today (the client-by-client flow). A
+    // missing table (migration not applied) just yields no client work.
+    supabase
+      .from("eod_client_work")
+      .select("user_id, client_name, worked_on, results, created_at")
+      .in("user_id", memberIds)
       .eq("note_date", isoDate)
+      .order("created_at", { ascending: true })
   ]);
 
   const users = (usersRes.data ?? []) as { id: string; name: string; avatar_url: string | null }[];
@@ -172,6 +183,15 @@ export async function buildEodForDepartment(
   const noteByUser = new Map<string, typeof notes[number]>();
   for (const n of notes) noteByUser.set(n.user_id, n);
 
+  // Per-client work logged today, grouped by user.
+  const work = (workRes.data ?? []) as Array<{ user_id: string; client_name: string; worked_on: string; results: string | null }>;
+  const clientWorkByUser = new Map<string, Array<{ clientName: string; workedOn: string; results: string | null }>>();
+  for (const w of work) {
+    const arr = clientWorkByUser.get(w.user_id) ?? [];
+    arr.push({ clientName: w.client_name, workedOn: w.worked_on, results: w.results });
+    clientWorkByUser.set(w.user_id, arr);
+  }
+
   const people: EodPersonSummary[] = users
     .map((u) => {
       const completed = (tasksByUser.get(u.id) ?? []).map((t) => ({
@@ -197,6 +217,7 @@ export async function buildEodForDepartment(
         blockers: blank(row?.blockers),
         leadsMessaged: blank(row?.leads_messaged),
         linkedinComments: blank(row?.linkedin_comments),
+        clientWork: clientWorkByUser.get(u.id) ?? [],
         submittedAt: row?.submitted_at ?? null,
         reviewedAt: row?.reviewed_at ?? null,
         reviewedBy: row?.reviewed_by

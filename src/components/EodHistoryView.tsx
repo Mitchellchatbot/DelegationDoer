@@ -27,6 +27,7 @@ interface Submission {
   leadsMessaged: string | null;
   linkedinComments: string | null;
   note: string | null;
+  clientWork: Array<{ clientName: string; workedOn: string; results: string | null }>;
   submittedAt: string;
   reviewedAt: string | null;
   reviewedBy: { id: string; name: string } | null;
@@ -379,6 +380,25 @@ function SubmissionCard({
           )}
         </div>
       </header>
+
+      {/* Per-client work (the client-by-client EOD flow) — shown above the
+          structured fields since it's the meat of an SEO/Website EOD. */}
+      {s.clientWork.length > 0 && (
+        <div className="rounded-lg border border-violet-200/60 bg-violet-50/30 px-3 py-2">
+          <div className="text-[10px] uppercase tracking-wide text-violet-700/80 font-semibold mb-1.5">
+            Client work · {s.clientWork.length}
+          </div>
+          <ul className="space-y-1.5">
+            {s.clientWork.map((w, i) => (
+              <li key={`${w.clientName}-${i}`} className="text-[12px] leading-snug">
+                <span className="font-semibold text-ink">{w.clientName}: </span>
+                <span className="text-ink/80">{w.workedOn}</span>
+                {w.results && <span className="text-ink/55"> — {w.results}</span>}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
         {s.name === "Talha Ali" ? (

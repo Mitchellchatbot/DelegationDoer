@@ -139,6 +139,33 @@ export async function GET(req: NextRequest) {
       }
     }
 
+    // Attach the per-client EOD work each person logged (the new
+    // client-by-client flow), keyed by user_id|note_date so it lands on
+    // the matching submission card. Best-effort: a missing table just
+    // yields no client work.
+    const clientWorkByKey = new Map<string, Array<{ clientName: string; workedOn: string; results: string | null }>>();
+    const submitterIds = Array.from(new Set(rows.map((r) => r.user_id)));
+    if (submitterIds.length > 0) {
+      const { data: workRows, error: workErr } = await supabase
+        .from("eod_client_work")
+        .select("user_id, note_date, client_name, worked_on, results")
+        .in("user_id", submitterIds)
+        .gte("note_date", sinceIso)
+        .order("created_at", { ascending: true });
+      if (workErr) {
+        if (!/eod_client_work/.test(workErr.message)) {
+          console.error("[eod/history] client-work lookup", workErr);
+        }
+      } else {
+        for (const w of (workRows ?? []) as Array<{ user_id: string; note_date: string; client_name: string; worked_on: string; results: string | null }>) {
+          const key = `${w.user_id}|${w.note_date}`;
+          const arr = clientWorkByKey.get(key) ?? [];
+          arr.push({ clientName: w.client_name, workedOn: w.worked_on, results: w.results });
+          clientWorkByKey.set(key, arr);
+        }
+      }
+    }
+
     return NextResponse.json({
       submissions: rows.map((r) => ({
         id: r.id,
@@ -153,6 +180,7 @@ export async function GET(req: NextRequest) {
         leadsMessaged: r.leads_messaged,
         linkedinComments: r.linkedin_comments,
         note: r.note && r.note.trim() ? r.note : null,
+        clientWork: clientWorkByKey.get(`${r.user_id}|${r.note_date}`) ?? [],
         submittedAt: r.submitted_at,
         reviewedAt: r.reviewed_at,
         reviewedBy: r.reviewed_by

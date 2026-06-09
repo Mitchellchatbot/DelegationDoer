@@ -30,6 +30,8 @@ interface PersonSummary {
   // Marketing-style flow extras (Talha Ali). Null for everyone else.
   leadsMessaged: string | null;
   linkedinComments: string | null;
+  // Per-client work logged via the client-by-client EOD flow.
+  clientWork?: Array<{ clientName: string; workedOn: string; results: string | null }>;
   submittedAt: string | null;
   reviewedAt: string | null;
   reviewedBy: { id: string; name: string | null } | null;
@@ -484,6 +486,7 @@ function hasAnyEod(p: PersonSummary): boolean {
     || p.blockers
     || p.leadsMessaged
     || p.linkedinComments
+    || (p.clientWork?.length ?? 0) > 0
   );
 }
 
@@ -792,6 +795,26 @@ function PersonRow({
               </li>
             ))}
           </ul>
+        )}
+
+        {/* Per-client work (client-by-client EOD flow) — read-only;
+            editing happens in the typeform. Shown above the structured
+            fields since it's the substance of an SEO/Website EOD. */}
+        {(person.clientWork?.length ?? 0) > 0 && (
+          <div className="mt-2 rounded-lg border border-violet-200/60 bg-violet-50/30 px-3 py-2">
+            <div className="text-[10px] uppercase tracking-wide text-violet-700/80 font-semibold mb-1.5">
+              Client work · {person.clientWork!.length}
+            </div>
+            <ul className="space-y-1.5">
+              {person.clientWork!.map((w, i) => (
+                <li key={`${w.clientName}-${i}`} className="text-[13px] leading-snug">
+                  <span className="font-semibold text-ink">{w.clientName}: </span>
+                  <span className="text-ink/80">{w.workedOn}</span>
+                  {w.results && <span className="text-ink/55"> — {w.results}</span>}
+                </li>
+              ))}
+            </ul>
+          </div>
         )}
 
         {/* Structured EOD fields. Editor renders for `isMe` on today;

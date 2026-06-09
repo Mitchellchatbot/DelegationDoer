@@ -3,14 +3,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
-  Sparkles, ArrowRight, ArrowLeft, Loader2, X, Check, Plus, ChevronDown, ChevronRight, Sunrise
+  Sparkles, ArrowRight, ArrowLeft, Loader2, X, Check, Plus, ChevronDown, ChevronRight, Sunrise, Heart
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { TAG_PRESETS } from "@/lib/mock-data";
 import { useTeam } from "@/lib/team-context";
 import { useCurrentUser } from "@/lib/user-context";
-import { SodSeoDashboard, type SeoDashboardData } from "./SodSeoDashboard";
+import {
+  SodSeoDashboard, ClientHealthCard, FollowUpCard, type SeoDashboardData
+} from "./SodSeoDashboard";
 import { SodWebsiteDashboard, type WebDashboardData } from "./SodWebsiteDashboard";
 
 // Orchestrates the full SOD flow:
@@ -20,7 +22,9 @@ import { SodWebsiteDashboard, type WebDashboardData } from "./SodWebsiteDashboar
 //   3. Top priority — "What's the top thing you want to get done?"
 //   4. Tasks — list-builder; each row has "Add as task" + "Pick existing"
 //   5. Blockers — optional
-//   6. Submit — fires /api/sod/submit; DMs leadership.
+//   6. Review Client Health — SEO only; a final "scan where each client
+//      stands before you start" nudge reusing the dashboard payload.
+//   7. Submit — fires /api/sod/submit; DMs leadership.
 //
 // Mounted from the (main) layout via a small gate effect, and from the
 // /updates/sod page's Simulate button. In either case the flow is the
@@ -40,6 +44,7 @@ type Screen =
   | "form_priority"
   | "form_tasks"
   | "form_blockers"
+  | "review_client_health"
   | "submitting"
   | "done";
 
@@ -322,11 +327,17 @@ export function SodFlow({ open, simulate = false, onClose, onComplete }: Props) 
       setTimeout(() => onClose(), 1500);
     } catch (err) {
       toast.error(`Couldn't submit: ${err instanceof Error ? err.message : "unknown"}`);
-      back("form_blockers");
+      // Return to the step the user submitted from: SEO submits from the
+      // client-health review, everyone else from the blockers step.
+      back(today.departmentKey === "dep_seo" ? "review_client_health" : "form_blockers");
     }
   }
 
   if (!mounted || !open) return null;
+
+  // SEO gets the client-health-focused flow (extra review step before
+  // submit); every other department keeps the original sequence.
+  const isSeo = today?.departmentKey === "dep_seo";
 
   const overlay = (
     <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4">
@@ -625,10 +636,42 @@ export function SodFlow({ open, simulate = false, onClose, onComplete }: Props) 
             onBlur={() => void save({ blockers })}
             placeholder="(leave empty if none)"
             onBack={() => back("form_tasks")}
-            onNext={() => void submit()}
-            nextLabel="Submit SOD"
+            // SEO closes the day's plan with a client-health review;
+            // everyone else submits straight from here (unchanged).
+            onNext={() =>
+              isSeo ? advance("review_client_health") : void submit()
+            }
+            nextLabel={isSeo ? "Next" : "Submit SOD"}
             multiline
           />
+        )}
+
+        {screen === "review_client_health" && (
+          <div className="p-8 space-y-5">
+            <header className="flex items-center gap-2 mb-1">
+              <Heart className="w-4 h-4 text-rose-500" />
+              <h2 className="text-lg font-semibold">Review Client Health</h2>
+            </header>
+            <p className="text-sm text-ink/65">
+              Scan where each client stands before you start your day — who&apos;s
+              healthy, who&apos;s at risk, and who needs follow-up.
+            </p>
+            {dashboard?.kind === "seo" ? (
+              <div className="space-y-4">
+                <ClientHealthCard data={dashboard} />
+                <FollowUpCard data={dashboard} />
+              </div>
+            ) : (
+              <div className="text-sm text-ink/55 py-6 text-center">
+                Loading client health…
+              </div>
+            )}
+            <Footer
+              onBack={() => back("form_blockers")}
+              onNext={() => void submit()}
+              nextLabel="Submit SOD"
+            />
+          </div>
         )}
 
         {screen === "submitting" && (

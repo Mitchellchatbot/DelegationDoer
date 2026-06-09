@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Sparkles, Loader2, ArrowRight, Send, RefreshCw, Calendar, CheckSquare, MessageSquare, Clock, X, Wand2, Paintbrush, Eraser, AlignLeft, List, Code, Eye, Mail, Zap, Check } from "lucide-react";
+import * as Popover from "@radix-ui/react-popover";
+import { Sparkles, Loader2, ArrowRight, Send, RefreshCw, Calendar, CheckSquare, MessageSquare, Clock, X, Wand2, Paintbrush, Eraser, AlignLeft, List, Code, Eye, Mail, Zap, Check, ChevronDown } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { getDepartmentMeta } from "@/lib/departments";
@@ -671,39 +672,34 @@ export function ClientUpdateComposer({
                   />
                 </Field>
 
-                {/* AI editor toolbar — rewrites this draft's body in place. */}
-                <div className="rounded-xl border border-sky-200/60 bg-sky-50/40 p-2 space-y-2">
-                  <div className="flex items-center gap-1.5 flex-wrap">
-                    <span className="text-[10px] uppercase tracking-wide font-semibold text-sky-700/80 inline-flex items-center gap-1 mr-0.5">
-                      <Wand2 className="w-3 h-3" /> AI editor
-                    </span>
-                    <StyleBtn icon={RefreshCw} disabled={d.styling} onClick={() => applyStyle(idx, "rephrase")}>Rephrase</StyleBtn>
-                    <StyleBtn icon={List} disabled={d.styling} onClick={() => applyStyle(idx, "structured")}>Structured</StyleBtn>
-                    <StyleBtn icon={MessageSquare} disabled={d.styling} onClick={() => applyStyle(idx, "casual")}>Casual</StyleBtn>
-                    <StyleBtn icon={AlignLeft} disabled={d.styling} onClick={() => applyStyle(idx, "glanceable")}>Glanceable</StyleBtn>
-                    <StyleBtn icon={Paintbrush} disabled={d.styling} primary onClick={() => applyStyle(idx, "fancy")}>
-                      {d.bodyHtml ? "Restyle" : "Make fancy"}
-                    </StyleBtn>
-                    {d.bodyHtml && (
-                      <StyleBtn icon={Eraser} disabled={d.styling} onClick={() => applyStyle(idx, "plain")}>Remove formatting</StyleBtn>
+                {/* Body editor — one compact header row (tabs or label on the
+                    left, a single AI-edit button on the right), then the
+                    plain textarea or the styled-HTML preview/source. */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between gap-2">
+                    {d.bodyHtml ? (
+                      <div className="flex items-center gap-1">
+                        <TabBtn active={d.htmlTab === "preview"} icon={Eye} onClick={() => patchDraft(idx, { htmlTab: "preview" })}>Preview</TabBtn>
+                        <TabBtn active={d.htmlTab === "html"} icon={Code} onClick={() => patchDraft(idx, { htmlTab: "html" })}>HTML</TabBtn>
+                      </div>
+                    ) : (
+                      <span className="text-[10px] uppercase tracking-wide font-semibold text-ink/45">Email body</span>
                     )}
-                    {d.styling && <Loader2 className="w-3.5 h-3.5 animate-spin text-sky-600 ml-0.5" />}
-                  </div>
-                  <CustomInstruction disabled={d.styling} onApply={(text) => applyStyle(idx, "custom", text)} />
-                </div>
-
-                {/* Body editor: plain textarea, or a styled-HTML preview/source
-                    pair once the draft is "fancy". */}
-                {d.bodyHtml ? (
-                  <div className="space-y-1.5">
-                    <div className="flex items-center gap-1">
-                      <TabBtn active={d.htmlTab === "preview"} icon={Eye} onClick={() => patchDraft(idx, { htmlTab: "preview" })}>Preview</TabBtn>
-                      <TabBtn active={d.htmlTab === "html"} icon={Code} onClick={() => patchDraft(idx, { htmlTab: "html" })}>HTML</TabBtn>
-                      <span className="ml-auto text-[10px] text-sky-700/70 inline-flex items-center gap-1">
-                        <Mail className="w-3 h-3" /> Sends as a styled email
-                      </span>
+                    <div className="flex items-center gap-2">
+                      {d.bodyHtml && (
+                        <span className="text-[10px] text-sky-700/70 inline-flex items-center gap-1">
+                          <Mail className="w-3 h-3" /> Styled email
+                        </span>
+                      )}
+                      <AiEditMenu
+                        styling={d.styling}
+                        hasHtml={!!d.bodyHtml}
+                        onAction={(mode, instruction) => applyStyle(idx, mode, instruction)}
+                      />
                     </div>
-                    {d.htmlTab === "preview" ? (
+                  </div>
+                  {d.bodyHtml ? (
+                    d.htmlTab === "preview" ? (
                       <iframe
                         title={`${d.departmentName} preview`}
                         srcDoc={d.bodyHtml}
@@ -718,19 +714,16 @@ export function ClientUpdateComposer({
                         spellCheck={false}
                         className="w-full text-[11px] font-mono bg-white border border-slate-200/70 rounded-xl px-3 py-2.5 outline-none focus:ring-2 focus:ring-sky-200/40 focus:border-sky-400/50 resize-y leading-relaxed"
                       />
-                    )}
-                    <div className="text-[10px] text-ink/45">
-                      Edit the wording with the AI buttons or the HTML tab. Use Remove formatting to go back to plain text.
-                    </div>
-                  </div>
-                ) : (
-                  <textarea
-                    value={d.body}
-                    onChange={(e) => patchDraft(idx, { body: e.target.value })}
-                    rows={14}
-                    className="w-full text-[13px] bg-white border border-slate-200/70 rounded-xl px-3 py-2.5 outline-none focus:ring-2 focus:ring-sky-200/40 focus:border-sky-400/50 resize-y leading-relaxed"
-                  />
-                )}
+                    )
+                  ) : (
+                    <textarea
+                      value={d.body}
+                      onChange={(e) => patchDraft(idx, { body: e.target.value })}
+                      rows={14}
+                      className="w-full text-[13px] bg-white border border-slate-200/70 rounded-xl px-3 py-2.5 outline-none focus:ring-2 focus:ring-sky-200/40 focus:border-sky-400/50 resize-y leading-relaxed"
+                    />
+                  )}
+                </div>
               </div>
             );
           })}
@@ -830,29 +823,107 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-// A single AI-editor preset button in the toolbar.
-function StyleBtn({
-  icon: Icon, children, onClick, disabled, primary
+// Single "AI edit" control: one compact button that opens a popover with
+// the free-text instruction box + the preset actions, instead of a wide
+// toolbar of buttons. Keeps the draft card clean.
+function AiEditMenu({
+  styling, hasHtml, onAction
+}: {
+  styling: boolean;
+  hasHtml: boolean;
+  onAction: (mode: StyleMode, instruction?: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState("");
+
+  function run(mode: StyleMode, instruction?: string) {
+    onAction(mode, instruction);
+    setOpen(false);
+    setText("");
+  }
+  function applyCustom() {
+    const t = text.trim();
+    if (!t) return;
+    run("custom", t);
+  }
+
+  return (
+    <Popover.Root open={open} onOpenChange={setOpen}>
+      <Popover.Trigger asChild>
+        <button
+          type="button"
+          disabled={styling}
+          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold text-sky-700 bg-sky-50 border border-sky-200/70 hover:bg-sky-100 transition-colors disabled:opacity-50"
+        >
+          {styling ? <Loader2 className="w-3 h-3 animate-spin" /> : <Wand2 className="w-3 h-3" />}
+          {styling ? "Editing…" : "AI edit"}
+          <ChevronDown className="w-3 h-3 opacity-60" />
+        </button>
+      </Popover.Trigger>
+      <Popover.Portal>
+        <Popover.Content
+          side="bottom"
+          align="end"
+          sideOffset={6}
+          // Above the composer modal (z-[60]) so it isn't clipped behind it.
+          className="z-[70] w-[290px] rounded-2xl border border-slate-200/70 bg-white shadow-[0_20px_50px_-15px_rgba(15,23,42,0.35)] p-2 outline-none"
+        >
+          <div className="flex items-center gap-1.5 mb-1.5">
+            <input
+              autoFocus
+              type="text"
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); applyCustom(); } }}
+              placeholder="Ask AI to edit…"
+              className="flex-1 text-[12px] bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 outline-none focus:ring-2 focus:ring-sky-200/40 placeholder:text-ink/35"
+            />
+            <button
+              type="button"
+              onClick={applyCustom}
+              disabled={!text.trim()}
+              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold text-white bg-sky-600 hover:bg-sky-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
+            >
+              Apply
+            </button>
+          </div>
+          <div className="h-px bg-slate-100 my-1" />
+          <MenuItem icon={RefreshCw} onClick={() => run("rephrase")}>Rephrase</MenuItem>
+          <MenuItem icon={List} onClick={() => run("structured")}>Make structured</MenuItem>
+          <MenuItem icon={MessageSquare} onClick={() => run("casual")}>Make casual</MenuItem>
+          <MenuItem icon={AlignLeft} onClick={() => run("glanceable")}>Make glanceable</MenuItem>
+          <div className="h-px bg-slate-100 my-1" />
+          <MenuItem icon={Paintbrush} accent onClick={() => run("fancy")}>
+            {hasHtml ? "Restyle email" : "Make fancy email"}
+          </MenuItem>
+          {hasHtml && (
+            <MenuItem icon={Eraser} onClick={() => run("plain")}>Remove formatting</MenuItem>
+          )}
+        </Popover.Content>
+      </Popover.Portal>
+    </Popover.Root>
+  );
+}
+
+// One row inside the AI-edit popover.
+function MenuItem({
+  icon: Icon, children, onClick, accent
 }: {
   icon: React.ComponentType<{ className?: string }>;
   children: React.ReactNode;
   onClick: () => void;
-  disabled?: boolean;
-  primary?: boolean;
+  accent?: boolean;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      disabled={disabled}
       className={cn(
-        "inline-flex items-center gap-1 px-2 py-1 rounded-full text-[11px] font-medium border transition-colors disabled:opacity-50 disabled:cursor-not-allowed",
-        primary
-          ? "bg-sky-600 text-white border-sky-600 hover:bg-sky-700"
-          : "bg-white text-sky-700 border-sky-200/80 hover:bg-sky-50"
+        "w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-[12px] font-medium text-left transition-colors hover:bg-sky-50",
+        accent ? "text-sky-700" : "text-ink/75"
       )}
     >
-      <Icon className="w-3 h-3" />
+      <Icon className={cn("w-3.5 h-3.5", accent ? "text-sky-600" : "text-ink/45")} />
       {children}
     </button>
   );
@@ -879,44 +950,6 @@ function TabBtn({
       <Icon className="w-3 h-3" />
       {children}
     </button>
-  );
-}
-
-// Free-text "ask AI to edit" box. Holds its own input state so typing
-// doesn't re-render the whole draft list; submits on Enter or the button.
-function CustomInstruction({
-  onApply, disabled
-}: {
-  onApply: (text: string) => void;
-  disabled?: boolean;
-}) {
-  const [text, setText] = useState("");
-  function apply() {
-    const t = text.trim();
-    if (!t || disabled) return;
-    onApply(t);
-    setText("");
-  }
-  return (
-    <div className="flex items-center gap-1.5">
-      <input
-        type="text"
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); apply(); } }}
-        placeholder="Ask AI to edit… (e.g. shorten, add a warm intro, emphasize the launch)"
-        disabled={disabled}
-        className="flex-1 text-[12px] bg-white border border-sky-200/70 rounded-full px-3 py-1.5 outline-none focus:ring-2 focus:ring-sky-200/40 placeholder:text-ink/35 disabled:opacity-50"
-      />
-      <button
-        type="button"
-        onClick={apply}
-        disabled={disabled || !text.trim()}
-        className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-full text-[11px] font-semibold text-white bg-sky-600 hover:bg-sky-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
-      >
-        <Wand2 className="w-3 h-3" /> Apply
-      </button>
-    </div>
   );
 }
 

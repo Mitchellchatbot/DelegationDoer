@@ -11,7 +11,7 @@ import { TAG_PRESETS } from "@/lib/mock-data";
 import { useTeam } from "@/lib/team-context";
 import { useCurrentUser } from "@/lib/user-context";
 import {
-  SodSeoDashboard, ClientHealthCard, FollowUpCard, type SeoDashboardData
+  SodSeoDashboard, ClientHealthCard, AtRiskCard, FollowUpCard, type SeoDashboardData
 } from "./SodSeoDashboard";
 import { SodWebsiteDashboard, type WebDashboardData } from "./SodWebsiteDashboard";
 
@@ -659,6 +659,7 @@ export function SodFlow({ open, simulate = false, onClose, onComplete }: Props) 
             {dashboard?.kind === "seo" ? (
               <div className="space-y-4">
                 <ClientHealthCard data={dashboard} />
+                <AtRiskCard data={dashboard} />
                 <FollowUpCard data={dashboard} />
               </div>
             ) : (

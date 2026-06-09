@@ -4,7 +4,7 @@ import { getUserById } from "@/lib/server-data";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { openDm, postMessage } from "@/lib/slack";
 import { resolveSlackId } from "@/lib/slack-resolve";
-import { getApproversForDraft, isApprover, type EmailDraftKind } from "@/lib/email-approvers";
+import { getApproversForDraft, isApprover, headedDepartmentIds, type EmailDraftKind } from "@/lib/email-approvers";
 import { recordDraftEvent } from "@/lib/draft-events";
 import { sanitizeMediaUrls } from "@/lib/media";
 
@@ -45,6 +45,7 @@ interface DraftRow {
   body_text: string;
   body_html: string | null;
   kind: EmailDraftKind;
+  department_id: string | null;
   status: "pending" | "needs_revision" | "approved" | "rejected" | "sent" | "failed";
   approver_id: string | null;
   approved_at: string | null;
@@ -98,6 +99,10 @@ export async function POST(req: NextRequest) {
     const accountId = typeof body.accountId === "string" && body.accountId ? body.accountId : null;
     const clientId = typeof body.clientId === "string" && body.clientId ? body.clientId : null;
     const bodyHtml = typeof body.bodyHtml === "string" ? body.bodyHtml : null;
+    // Department this draft is scoped to (the composer sends one per
+    // department). Drives HoD approver routing below + the GET visibility
+    // filter. null = not department-scoped (universal approvers only).
+    const departmentId = typeof body.departmentId === "string" && body.departmentId ? body.departmentId : null;
 
     // Optional future-dated send. When set, the approve route stops at
     // status='approved' and the scheduled-emails cron picks up the
@@ -123,7 +128,16 @@ export async function POST(req: NextRequest) {
       ? body.taskIds.filter((v: unknown): v is string => typeof v === "string" && v.length > 0)
       : [];
 
-    const buildInsert = (includeScheduledFor: boolean, includeMedia: boolean) => {
+    // Optional columns may not exist yet if their migration hasn't run on
+    // this environment. Build with all of them, then on a missing-column
+    // error strip just that column and retry — so a draft still persists
+    // (the missing field is silently dropped until the migration runs).
+    const optionalCols: Record<string, unknown> = {
+      scheduled_for: scheduledFor,
+      media_urls: mediaUrls,
+      department_id: departmentId
+    };
+    const buildInsert = (omit: Set<string>) => {
       const row: Record<string, unknown> = {
         id,
         author_id: userId,
@@ -138,23 +152,22 @@ export async function POST(req: NextRequest) {
         body_html: bodyHtml,
         kind
       };
-      if (includeScheduledFor) row.scheduled_for = scheduledFor;
-      if (includeMedia) row.media_urls = mediaUrls;
+      for (const [col, val] of Object.entries(optionalCols)) {
+        if (!omit.has(col)) row[col] = val;
+      }
       return row;
     };
-    let { error: insertErr } = await supabase.from("email_drafts").insert(buildInsert(true, true));
-    // If the migration adding scheduled_for / media_urls hasn't been
-    // applied yet, retry with each opt-out so drafts can still be
-    // created. The missing field is just silently dropped until the
-    // migration runs.
-    if (insertErr && /media_urls/.test(insertErr.message)) {
-      ({ error: insertErr } = await supabase.from("email_drafts").insert(buildInsert(true, false)));
-    }
-    if (insertErr && /scheduled_for/.test(insertErr.message)) {
-      ({ error: insertErr } = await supabase.from("email_drafts").insert(buildInsert(false, true)));
-    }
-    if (insertErr && /scheduled_for|media_urls/.test(insertErr.message)) {
-      ({ error: insertErr } = await supabase.from("email_drafts").insert(buildInsert(false, false)));
+    const omit = new Set<string>();
+    let insertErr: { message: string } | null = null;
+    // At most one retry per optional column.
+    for (let attempt = 0; attempt <= Object.keys(optionalCols).length; attempt++) {
+      ({ error: insertErr } = await supabase.from("email_drafts").insert(buildInsert(omit)));
+      if (!insertErr) break;
+      const offending = Object.keys(optionalCols).find(
+        (col) => !omit.has(col) && insertErr!.message.includes(col)
+      );
+      if (!offending) break; // error isn't about a known optional column
+      omit.add(offending);
     }
     if (insertErr) {
       return NextResponse.json({ error: insertErr.message }, { status: 500 });
@@ -202,7 +215,7 @@ export async function POST(req: NextRequest) {
 
     const deliveries: Array<{ userId: string; name: string; delivered: boolean; reason?: string }> = [];
     if (process.env.SLACK_BOT_TOKEN) {
-      const approvers = await getApproversForDraft({ author_id: userId, kind });
+      const approvers = await getApproversForDraft({ author_id: userId, kind, departmentId });
       const kindLabel =
         kind === "content_plan" ? "Content Plan" :
         kind === "custom" ? "Custom email" :
@@ -272,7 +285,7 @@ export async function GET(req: NextRequest) {
 
     let q = supabase
       .from("email_drafts")
-      .select("id, author_id, account_id, client_id, client_name, to_emails, cc_emails, bcc_emails, subject, body_text, body_html, kind, status, approver_id, approved_at, rejected_at, rejection_note, missive_thread_id, missive_message_id, sent_at, send_error, scheduled_for, revision_count, media_urls, created_at, updated_at")
+      .select("id, author_id, account_id, client_id, client_name, to_emails, cc_emails, bcc_emails, subject, body_text, body_html, kind, department_id, status, approver_id, approved_at, rejected_at, rejection_note, missive_thread_id, missive_message_id, sent_at, send_error, scheduled_for, revision_count, media_urls, created_at, updated_at")
       .order("created_at", { ascending: false })
       .limit(limit);
 
@@ -295,9 +308,15 @@ export async function GET(req: NextRequest) {
     let visible = allRows;
     if (!mineOnly) {
       // v3 approvers (leader + Sam/Mujtaba/Farez) see every draft.
-      // Everyone else sees only their own.
+      // Department heads additionally see every draft scoped to a
+      // department they head (so a Website HoD sees Website drafts in
+      // their approvals queue). Everyone else sees only their own.
       if (!isApprover({ name: me.name, role: me.role, isAdmin: me.isAdmin })) {
-        visible = allRows.filter((r) => r.author_id === userId);
+        const myDepts = new Set(headedDepartmentIds({ role: me.role, departmentIds: me.departmentIds }));
+        visible = allRows.filter((r) =>
+          r.author_id === userId ||
+          (!!r.department_id && myDepts.has(r.department_id))
+        );
       }
     }
 
@@ -332,6 +351,7 @@ export async function GET(req: NextRequest) {
         bodyText: r.body_text,
         bodyHtml: r.body_html,
         kind: r.kind,
+        departmentId: r.department_id,
         status: r.status,
         approverId: r.approver_id,
         approverName: r.approver_id ? namesById.get(r.approver_id) ?? null : null,

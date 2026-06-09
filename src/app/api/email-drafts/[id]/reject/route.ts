@@ -31,14 +31,14 @@ export async function POST(
     const supabase = getSupabaseAdmin();
     const { data: row, error: fetchErr } = await supabase
       .from("email_drafts")
-      .select("id, author_id, kind, status, client_name, subject")
+      .select("id, author_id, kind, department_id, status, client_name, subject")
       .eq("id", params.id)
       .maybeSingle();
     if (fetchErr) return NextResponse.json({ error: fetchErr.message }, { status: 500 });
     if (!row) return NextResponse.json({ error: "not found" }, { status: 404 });
     const allowed = await canApproveDraft(
       { id: me.id, name: me.name, role: me.role, isAdmin: me.isAdmin, departmentIds: me.departmentIds },
-      { author_id: row.author_id as string, kind: row.kind }
+      { author_id: row.author_id as string, kind: row.kind, departmentId: row.department_id as string | null }
     );
     if (!allowed) {
       return NextResponse.json({ error: "forbidden" }, { status: 403 });

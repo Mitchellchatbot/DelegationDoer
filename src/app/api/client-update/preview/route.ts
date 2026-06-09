@@ -20,6 +20,7 @@ interface TaskRow {
   completed_at: string | null;
   assignee_id: string | null;
   tags: string[] | null;
+  department_id: string | null;
 }
 
 interface InProgressRow {
@@ -29,6 +30,7 @@ interface InProgressRow {
   assignee_id: string | null;
   tags: string[] | null;
   last_activity_at: string | null;
+  department_id: string | null;
 }
 
 interface EodNoteRow {
@@ -48,6 +50,8 @@ export interface ComposerPreview {
     completedAt: string | null;
     assigneeName: string | null;
     tags: string[];
+    departmentId: string | null;
+    departmentName: string | null;
   }>;
   tasksInProgress: Array<{
     id: string;
@@ -56,6 +60,8 @@ export interface ComposerPreview {
     assigneeName: string | null;
     tags: string[];
     lastActivityAt: string | null;
+    departmentId: string | null;
+    departmentName: string | null;
   }>;
   eodNotes: Array<{
     authorName: string;
@@ -101,7 +107,7 @@ export async function GET(req: NextRequest) {
     const [tasksRes, inProgressRes] = await Promise.all([
       supabase
         .from("tasks")
-        .select("id, title, completed_at, assignee_id, tags")
+        .select("id, title, completed_at, assignee_id, tags, department_id")
         .eq("client_name", clientName)
         .eq("status", "done")
         .gte("completed_at", fromIso)
@@ -110,7 +116,7 @@ export async function GET(req: NextRequest) {
         .limit(50),
       supabase
         .from("tasks")
-        .select("id, title, status, assignee_id, tags, last_activity_at")
+        .select("id, title, status, assignee_id, tags, last_activity_at, department_id")
         .eq("client_name", clientName)
         .neq("status", "done")
         .gte("last_activity_at", fromIso)
@@ -132,9 +138,17 @@ export async function GET(req: NextRequest) {
     const assigneeIds = Array.from(new Set(
       [...tasks, ...inProgress].map((t) => t.assignee_id).filter((v): v is string => !!v)
     ));
+    // Department names for every task we're about to surface, so the
+    // composer can group the checkbox rows by department and show which
+    // HoD each draft will route to.
+    const deptIds = Array.from(new Set(
+      [...tasks, ...inProgress].map((t) => t.department_id).filter((v): v is string => !!v)
+    ));
+
     let notes: EodNoteRow[] = [];
     const userById = new Map<string, string>();
-    const [notesRes, usersRes] = await Promise.all([
+    const deptNameById = new Map<string, string>();
+    const [notesRes, usersRes, deptsRes] = await Promise.all([
       contributorIds.length > 0
         ? supabase
             .from("eod_notes")
@@ -150,11 +164,20 @@ export async function GET(req: NextRequest) {
             .from("users")
             .select("id, name")
             .in("id", assigneeIds)
+        : Promise.resolve({ data: [] as { id: string; name: string }[] }),
+      deptIds.length > 0
+        ? supabase
+            .from("departments")
+            .select("id, name")
+            .in("id", deptIds)
         : Promise.resolve({ data: [] as { id: string; name: string }[] })
     ]);
     notes = (notesRes.data ?? []) as EodNoteRow[];
     for (const u of ((usersRes.data ?? []) as { id: string; name: string }[])) {
       userById.set(u.id, u.name);
+    }
+    for (const d of ((deptsRes.data ?? []) as { id: string; name: string }[])) {
+      deptNameById.set(d.id, d.name);
     }
 
     const out: ComposerPreview = {
@@ -166,7 +189,9 @@ export async function GET(req: NextRequest) {
         title: t.title,
         completedAt: t.completed_at,
         assigneeName: t.assignee_id ? (userById.get(t.assignee_id) ?? null) : null,
-        tags: t.tags ?? []
+        tags: t.tags ?? [],
+        departmentId: t.department_id,
+        departmentName: t.department_id ? (deptNameById.get(t.department_id) ?? null) : null
       })),
       tasksInProgress: inProgress.map((t) => ({
         id: t.id,
@@ -174,7 +199,9 @@ export async function GET(req: NextRequest) {
         status: t.status,
         assigneeName: t.assignee_id ? (userById.get(t.assignee_id) ?? null) : null,
         tags: t.tags ?? [],
-        lastActivityAt: t.last_activity_at
+        lastActivityAt: t.last_activity_at,
+        departmentId: t.department_id,
+        departmentName: t.department_id ? (deptNameById.get(t.department_id) ?? null) : null
       })),
       eodNotes: notes
         // Keep only notes with at least one filled structured field —

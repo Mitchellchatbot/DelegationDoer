@@ -34,7 +34,7 @@ export async function GET(
     const supabase = getSupabaseAdmin();
     const { data: draft, error: draftErr } = await supabase
       .from("email_drafts")
-      .select("id, author_id, kind")
+      .select("id, author_id, kind, department_id")
       .eq("id", params.id)
       .maybeSingle();
     if (draftErr) return NextResponse.json({ error: draftErr.message }, { status: 500 });
@@ -43,7 +43,7 @@ export async function GET(
     const isAuthor = draft.author_id === userId;
     const isApprover = await canApproveDraft(
       { id: me.id, name: me.name, role: me.role, isAdmin: me.isAdmin, departmentIds: me.departmentIds },
-      { author_id: draft.author_id as string, kind: draft.kind }
+      { author_id: draft.author_id as string, kind: draft.kind, departmentId: draft.department_id as string | null }
     );
     if (!isAuthor && !isApprover) {
       return NextResponse.json({ error: "forbidden" }, { status: 403 });

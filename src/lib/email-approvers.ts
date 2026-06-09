@@ -38,6 +38,11 @@ interface DraftRef {
   // kind is unused for routing now, kept on the type so callers don't
   // have to refactor. Slack DM copy still varies by kind.
   kind?: EmailDraftKind;
+  // Department this draft is scoped to (client_update drafts split by
+  // department). When set, the head of that department becomes an
+  // approver IN ADDITION to the universal approver set below. NULL =
+  // not department-scoped (legacy: universal approvers only).
+  departmentId?: string | null;
 }
 
 // Substrings that flag a user as a super-approver. Matched against
@@ -67,17 +72,29 @@ export function isApprover(caller: { name?: string | null; role: string; isAdmin
 }
 
 // Fetch every user who's allowed to approve a given draft. Returns
-// the approver set (role='leader' ∪ stealth admins ∪ super-approvers).
-// Async because we hit the users table for role + is_admin + Slack metadata.
-export async function getApproversForDraft(_draft: DraftRef): Promise<ApproverUser[]> {
+// the universal approver set (role='leader' ∪ stealth admins ∪
+// super-approvers) PLUS, when the draft is department-scoped, the
+// head(s) of that department. Async because we hit the users table for
+// role + is_admin + Slack metadata (and department_members for the
+// department head lookup).
+export async function getApproversForDraft(draft: DraftRef): Promise<ApproverUser[]> {
   const supabase = getSupabaseAdmin();
 
   // One round-trip — pull every user, then filter in memory. The
   // users table is small enough (~25 rows) that this is cheaper than
-  // two targeted queries.
-  const { data } = await supabase
-    .from("users")
-    .select("id, name, email, slack_email, slack_user_id, role, is_admin");
+  // two targeted queries. When the draft is department-scoped we also
+  // need that department's member ids to single out its head.
+  const [{ data }, membersRes] = await Promise.all([
+    supabase
+      .from("users")
+      .select("id, name, email, slack_email, slack_user_id, role, is_admin"),
+    draft.departmentId
+      ? supabase
+          .from("department_members")
+          .select("user_id")
+          .eq("department_id", draft.departmentId)
+      : Promise.resolve({ data: [] as { user_id: string }[] })
+  ]);
   const rows = (data ?? []) as Array<{
     id: string;
     name: string | null;
@@ -87,11 +104,17 @@ export async function getApproversForDraft(_draft: DraftRef): Promise<ApproverUs
     role: string;
     is_admin: boolean | null;
   }>;
+  const deptMemberIds = new Set(
+    ((membersRes.data ?? []) as { user_id: string }[]).map((m) => m.user_id)
+  );
 
   const merged = new Map<string, ApproverUser>();
   for (const u of rows) {
     if (!u.name) continue;
-    if (isApprover({ name: u.name, role: u.role, isAdmin: u.is_admin === true })) {
+    // Universal approver, OR the head of this draft's department.
+    const isDeptHead =
+      !!draft.departmentId && u.role === "department_head" && deptMemberIds.has(u.id);
+    if (isApprover({ name: u.name, role: u.role, isAdmin: u.is_admin === true }) || isDeptHead) {
       merged.set(u.id, {
         id: u.id,
         name: u.name,
@@ -104,15 +127,33 @@ export async function getApproversForDraft(_draft: DraftRef): Promise<ApproverUs
   return Array.from(merged.values());
 }
 
-// Sync permission check used by approve / reject / feedback /
-// request-revision endpoints. `draft` is accepted for backward
-// signature compat but no longer factors in — the approver set is
-// kind-agnostic in v3.
+// Permission check used by approve / reject / feedback /
+// request-revision / edit endpoints. The universal approver set always
+// passes (leaders / admins / super-approvers oversee every draft). For
+// a department-scoped draft, the head of that department also passes —
+// so a Website draft can be approved by the Website HoD, an SEO draft by
+// the SEO HoD, etc. (kind itself still doesn't factor into routing.)
 export async function canApproveDraft(
   caller: { id: string; name?: string | null; role: string; isAdmin?: boolean; departmentIds?: string[] },
-  _draft: DraftRef
+  draft: DraftRef
 ): Promise<boolean> {
-  return isApprover(caller);
+  if (isApprover(caller)) return true;
+  if (
+    draft.departmentId &&
+    caller.role === "department_head" &&
+    (caller.departmentIds ?? []).includes(draft.departmentId)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+// "Can this user act on department-scoped drafts they head?" — used by
+// the GET listing + badge count to widen visibility beyond the universal
+// approver set. Returns the set of department ids the caller heads (empty
+// for everyone who isn't a department_head).
+export function headedDepartmentIds(caller: { role: string; departmentIds?: string[] }): string[] {
+  return caller.role === "department_head" ? (caller.departmentIds ?? []) : [];
 }
 
 // "Are you an approver in general?" — used by the sidebar to decide

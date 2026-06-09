@@ -33,7 +33,7 @@ export async function GET(
     const supabase = getSupabaseAdmin();
     const { data: row } = await supabase
       .from("email_drafts")
-      .select("author_id, kind, account_id")
+      .select("author_id, kind, department_id, account_id")
       .eq("id", params.id)
       .maybeSingle();
     if (!row) return NextResponse.json({ error: "not found" }, { status: 404 });
@@ -41,7 +41,7 @@ export async function GET(
     const isAuthor = row.author_id === userId;
     const isApprover = await canApproveDraft(
       { id: me.id, name: me.name, role: me.role, isAdmin: me.isAdmin, departmentIds: me.departmentIds },
-      { author_id: row.author_id as string, kind: row.kind }
+      { author_id: row.author_id as string, kind: row.kind, departmentId: row.department_id as string | null }
     );
     if (!isAuthor && !isApprover) {
       return NextResponse.json({ error: "forbidden" }, { status: 403 });

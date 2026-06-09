@@ -14,33 +14,61 @@ export const maxDuration = 60;
 //     clientId: string,
 //     clientName?: string,        // display only; clientId is the source of truth
 //     from?: string,              // ISO — window start (default: 7 days ago)
-//     to?: string                 // ISO — window end (default: now)
+//     to?: string,                // ISO — window end (default: now)
+//     taskIds?: string[]          // operator's selected tasks (checkboxes).
+//                                 // Omit = every completed task in the window.
 //   }
 //
-// Drafts a client-facing weekly progress email for a single client over a
-// selected date range. Pulls from the SAME completed-work data already shown
-// on the client page (the "Knowledge base · completed work" card):
+// Drafts client-facing weekly progress email(s) for a single client over a
+// selected date range, SPLIT BY DEPARTMENT. Pulls from the SAME completed-work
+// data already shown on the client page (the "Knowledge base · completed work"
+// card):
 //   - completed tasks for this client (status='done', completed_at in window)
 //     -> Completed work + Key outcomes
 //   - in-progress tasks (status != 'done')
 //     -> Current work in progress + Next steps / upcoming priorities
-// It does NOT introduce any new reporting store — it reads the existing tasks.
+// When `taskIds` is supplied, only those tasks feed the drafts. Selected tasks
+// are grouped by tasks.department_id and each group becomes its own draft so it
+// can route to that department's head — a department with only in-progress work
+// still gets a (progress) draft. It does NOT introduce any new reporting store —
+// it reads the existing tasks.
 //
 // Mirrors the sibling AI drafters (content-plan/draft, eod/client-update/draft):
-// same auth pattern, same robust-JSON-parse + dash-scrub, returns { subject,
-// body } for preview/editing. Never persists — the composer submits the edited
-// draft to POST /api/email-drafts (kind='client_update') for approval.
+// same auth pattern, same robust-JSON-parse + dash-scrub. Returns
+// { ok: true, drafts: DepartmentDraft[] } for preview/editing — one entry per
+// department. Never persists — the composer submits each edited draft to
+// POST /api/email-drafts (kind='client_update', departmentId) for approval.
 //
-// Empty-state: if there is NO completed work in the window, returns
-// { ok: true, empty: true, message } WITHOUT calling the model, so the UI can
-// show a "try a wider range" notice instead of a hollow email.
+// Empty-state: if there is NO selected work at all (neither completed nor
+// in-progress) in the window, returns { ok: true, empty: true, message }
+// WITHOUT calling the model, so the UI can show a "try a wider range / select a
+// task" notice instead of a hollow email.
 
 interface Body {
   clientId?: string;
   clientName?: string;
   from?: string;
   to?: string;
+  // Task ids the operator selected in the composer preview (checkboxes).
+  // When present, ONLY these tasks feed the draft(s). Omitted entirely =
+  // legacy behaviour (every completed task in the window).
+  taskIds?: unknown;
 }
+
+// One generated draft, scoped to a single department. The composer
+// renders one editable card per entry and submits each to
+// POST /api/email-drafts with its departmentId + taskIds so it routes
+// to that department's head and only its own tasks get stamped reported.
+interface DepartmentDraft {
+  departmentId: string | null;
+  departmentName: string;
+  subject: string;
+  body: string;
+  suggestedTo: string[];
+  taskIds: string[]; // completed task ids in this department (for reporting)
+}
+
+const NO_DEPT = "__no_dept__";
 
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -87,80 +115,112 @@ export async function POST(req: NextRequest) {
     const contactName = client.contactName ?? null;
     const callerName = me?.name ?? "The team";
 
+    // Selected-task gate. The composer sends the ids the operator left
+    // checked. `null` = no taskIds key at all (legacy callers) → every
+    // completed task in the window. An explicit empty array means the
+    // operator unchecked everything → nothing to report.
+    const selectedIds: string[] | null = Array.isArray(body.taskIds)
+      ? body.taskIds.filter((v): v is string => typeof v === "string" && v.length > 0)
+      : null;
+    if (selectedIds !== null && selectedIds.length === 0) {
+      return NextResponse.json({
+        ok: true,
+        empty: true,
+        message: "No tasks selected. Pick at least one task to include in the update."
+      });
+    }
+
     // Completed work + in-progress work for this client. Matched on
     // client_name (the legacy linkage used everywhere on the client page).
     // Completed tasks are filtered by completed_at (the done-transition
     // timestamp) so the window means "finished in this period", not "touched".
-    const [doneRes, openRes] = await Promise.all([
-      supabase
-        .from("tasks")
-        .select("id, title, description, tags, completed_at")
-        .eq("client_name", clientName)
-        .eq("status", "done")
-        .gte("completed_at", fromIso)
-        .lte("completed_at", toIso)
-        .order("completed_at", { ascending: false })
-        .limit(50),
-      supabase
-        .from("tasks")
-        .select("id, title, description, status, priority")
-        .eq("client_name", clientName)
-        .neq("status", "done")
-        .order("due_date", { ascending: true })
-        .limit(20)
-    ]);
+    // When the operator selected specific tasks we additionally restrict
+    // to those ids so only checked work feeds the draft(s). department_id
+    // is pulled so we can split the drafts by department below.
+    let doneQuery = supabase
+      .from("tasks")
+      .select("id, title, description, tags, completed_at, department_id")
+      .eq("client_name", clientName)
+      .eq("status", "done")
+      .gte("completed_at", fromIso)
+      .lte("completed_at", toIso)
+      .order("completed_at", { ascending: false })
+      .limit(50);
+    let openQuery = supabase
+      .from("tasks")
+      .select("id, title, description, status, priority, department_id")
+      .eq("client_name", clientName)
+      .neq("status", "done")
+      .order("due_date", { ascending: true })
+      .limit(50);
+    if (selectedIds !== null) {
+      doneQuery = doneQuery.in("id", selectedIds);
+      openQuery = openQuery.in("id", selectedIds);
+    }
+    const [doneRes, openRes] = await Promise.all([doneQuery, openQuery]);
 
     const done = (doneRes.data ?? []) as Array<{
-      id: string; title: string; description: string | null; tags: string[] | null; completed_at: string | null;
+      id: string; title: string; description: string | null; tags: string[] | null; completed_at: string | null; department_id: string | null;
     }>;
     const open = (openRes.data ?? []) as Array<{
-      id: string; title: string; description: string | null; status: string; priority: string | null;
+      id: string; title: string; description: string | null; status: string; priority: string | null; department_id: string | null;
     }>;
 
-    // Graceful empty state — no completed work means no quality update.
-    // Return WITHOUT hitting the model so the UI can prompt for a wider range.
-    if (done.length === 0) {
+    // Graceful empty state — nothing selected at all (no completed AND no
+    // in-progress work) means there's nothing to summarize. Return WITHOUT
+    // hitting the model so the UI can prompt for a wider range. A department
+    // with only in-progress work still produces a (progress) draft below.
+    if (done.length === 0 && open.length === 0) {
       return NextResponse.json({
         ok: true,
         empty: true,
-        message: `No completed work for ${clientName} in this period. Try a wider date range.`,
-        signals: { completedCount: 0, inProgressCount: open.length }
+        message: `No completed or in-progress work for ${clientName} in this selection. Try a wider date range.`,
+        signals: { completedCount: 0, inProgressCount: 0 }
       });
     }
 
-    // Build a structured digest so the model doesn't guess at the shape.
-    const clamp = (s: string | null, n: number) => (s ?? "").replace(/\s+/g, " ").trim().slice(0, n);
-    const completedLines = done
-      .map((t) => {
-        const desc = clamp(t.description, 200);
-        const tags = t.tags?.length ? ` [${t.tags.slice(0, 3).join(", ")}]` : "";
-        return `- ${t.title}${tags}${desc ? `: ${desc}` : ""}`;
-      })
-      .join("\n");
-    const inProgressLines = open.length > 0
-      ? open.map((t) => {
-          const desc = clamp(t.description, 160);
-          return `- ${t.title}${desc ? `: ${desc}` : ""}`;
-        }).join("\n")
-      : "(none)";
+    // Resolve department names for everything we touched, so each draft
+    // can be labelled (and the composer can show which HoD it routes to).
+    const deptIds = Array.from(new Set(
+      [...done, ...open].map((t) => t.department_id).filter((v): v is string => !!v)
+    ));
+    const deptNameById = new Map<string, string>();
+    if (deptIds.length > 0) {
+      const { data: deptRows } = await supabase
+        .from("departments")
+        .select("id, name")
+        .in("id", deptIds);
+      for (const d of ((deptRows ?? []) as { id: string; name: string }[])) {
+        deptNameById.set(d.id, d.name);
+      }
+    }
 
+    // Group selected work by department. A department gets a draft if it
+    // has ANY selected work — completed OR in-progress. Completed tasks
+    // drive the "Completed work / Key outcomes" sections (and are the only
+    // ones stamped reported on send); in-progress tasks drive "In progress
+    // / Next steps". A department with only in-progress work produces a
+    // progress-update draft that links no tasks for reporting. Tasks with
+    // no department_id bucket under NO_DEPT → a single "General" draft
+    // routed to the universal approvers only.
+    const completedByDept = new Map<string, typeof done>();
+    for (const t of done) {
+      const key = t.department_id ?? NO_DEPT;
+      const arr = completedByDept.get(key) ?? [];
+      arr.push(t);
+      completedByDept.set(key, arr);
+    }
+    const inProgressByDept = new Map<string, typeof open>();
+    for (const t of open) {
+      const key = t.department_id ?? NO_DEPT;
+      const arr = inProgressByDept.get(key) ?? [];
+      arr.push(t);
+      inProgressByDept.set(key, arr);
+    }
+
+    const clamp = (s: string | null, n: number) => (s ?? "").replace(/\s+/g, " ").trim().slice(0, n);
     const fmt = (iso: string) =>
       new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
-
-    const userPrompt = [
-      `Client: ${clientName}`,
-      contactName ? `Primary contact: ${contactName}` : "",
-      `Sender (sign-off): ${callerName}`,
-      `Reporting period: ${fmt(fromIso)} to ${fmt(toIso)}`,
-      "",
-      `Completed work this period (${done.length}):`,
-      completedLines,
-      "",
-      "Work currently in progress / upcoming:",
-      inProgressLines,
-      "",
-      "Draft the client update email body. Output STRICT JSON: { subject, body }."
-    ].filter(Boolean).join("\n");
 
     const systemPrompt = `You write client-facing weekly progress update emails for a digital agency. The sender clicked "Generate Client Update Email"; this draft will be edited and then queued for human approval before sending.
 
@@ -182,36 +242,6 @@ ABSOLUTE RULES:
 Return STRICT JSON, no code fences:
 { "subject": "<=70 chars, e.g. 'Weekly update — Acme'>", "body": "<plain-text body>" }`;
 
-    const anthropic = await getAnthropic();
-    const result = await anthropic.messages.create({
-      model: MODELS.chat, // Sonnet — client-facing, multi-section prose
-      max_tokens: 1800,
-      temperature: 0.5,
-      system: systemPrompt,
-      messages: [{ role: "user", content: userPrompt }]
-    });
-
-    const block = result.content.find((b) => b.type === "text");
-    const raw = block && block.type === "text" ? block.text.trim() : "";
-
-    let parsed: { subject?: unknown; body?: unknown } = {};
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      const match = raw.match(/\{[\s\S]*\}/);
-      if (match) {
-        try { parsed = JSON.parse(match[0]); } catch { /* swallow */ }
-      }
-    }
-    const subjectRaw = typeof parsed.subject === "string" ? parsed.subject.trim() : "";
-    const bodyRaw = typeof parsed.body === "string" ? parsed.body.trim() : "";
-    if (!bodyRaw) {
-      return NextResponse.json(
-        { error: "model returned no body — try again or write manually" },
-        { status: 502 }
-      );
-    }
-
     // Belt-and-suspenders dash scrub (mirrors the sibling drafters).
     const scrub = (s: string) => s
       .replace(/\s+—\s+/g, ", ")
@@ -219,17 +249,116 @@ Return STRICT JSON, no code fences:
       .replace(/—/g, ",")
       .replace(/–/g, ",");
 
+    const anthropic = await getAnthropic();
+
+    // One model call per department, in parallel, over every department
+    // that has ANY selected work. A department with only in-progress work
+    // produces a progress-update draft (no "Completed work" section) and
+    // links no tasks for reporting.
+    const deptKeys = Array.from(new Set([
+      ...completedByDept.keys(),
+      ...inProgressByDept.keys()
+    ]));
+    const draftsRaw = await Promise.all(
+      deptKeys.map(async (deptKey): Promise<DepartmentDraft | null> => {
+        const departmentId = deptKey === NO_DEPT ? null : deptKey;
+        const departmentName = departmentId ? (deptNameById.get(departmentId) ?? "Team") : "General";
+        const deptDone = completedByDept.get(deptKey) ?? [];
+        const deptOpen = inProgressByDept.get(deptKey) ?? [];
+
+        const completedLines = deptDone
+          .map((t) => {
+            const desc = clamp(t.description, 200);
+            const tags = t.tags?.length ? ` [${t.tags.slice(0, 3).join(", ")}]` : "";
+            return `- ${t.title}${tags}${desc ? `: ${desc}` : ""}`;
+          })
+          .join("\n");
+        const inProgressLines = deptOpen.length > 0
+          ? deptOpen.map((t) => {
+              const desc = clamp(t.description, 160);
+              return `- ${t.title}${desc ? `: ${desc}` : ""}`;
+            }).join("\n")
+          : "(none)";
+
+        // When a department has no completed work this is a progress-only
+        // update — tell the model so it frames the email around what's
+        // underway instead of leaning on a "Completed work" section.
+        const completedBlock = deptDone.length > 0
+          ? [`Completed work this period (${deptDone.length}):`, completedLines]
+          : ["Completed work this period (0): (none — this is a progress update; do NOT fabricate completed work)"];
+
+        const userPrompt = [
+          `Client: ${clientName}`,
+          departmentId ? `Department focus: ${departmentName} (write the update around this team's work only)` : "",
+          contactName ? `Primary contact: ${contactName}` : "",
+          `Sender (sign-off): ${callerName}`,
+          `Reporting period: ${fmt(fromIso)} to ${fmt(toIso)}`,
+          "",
+          ...completedBlock,
+          "",
+          "Work currently in progress / upcoming:",
+          inProgressLines,
+          "",
+          "Draft the client update email body. Output STRICT JSON: { subject, body }."
+        ].filter(Boolean).join("\n");
+
+        const result = await anthropic.messages.create({
+          model: MODELS.chat, // Sonnet — client-facing, multi-section prose
+          max_tokens: 1800,
+          temperature: 0.5,
+          system: systemPrompt,
+          messages: [{ role: "user", content: userPrompt }]
+        });
+
+        const blk = result.content.find((b) => b.type === "text");
+        const rawText = blk && blk.type === "text" ? blk.text.trim() : "";
+        let parsed: { subject?: unknown; body?: unknown } = {};
+        try {
+          parsed = JSON.parse(rawText);
+        } catch {
+          const match = rawText.match(/\{[\s\S]*\}/);
+          if (match) {
+            try { parsed = JSON.parse(match[0]); } catch { /* swallow */ }
+          }
+        }
+        const subjectRaw = typeof parsed.subject === "string" ? parsed.subject.trim() : "";
+        const bodyRaw = typeof parsed.body === "string" ? parsed.body.trim() : "";
+        if (!bodyRaw) return null; // drop a department that came back empty
+
+        const subjectFallback = departmentId
+          ? `${departmentName} update — ${clientName}`
+          : `Weekly update — ${clientName}`;
+        return {
+          departmentId,
+          departmentName,
+          subject: scrub(subjectRaw || subjectFallback).slice(0, 300),
+          body: scrub(bodyRaw),
+          suggestedTo: client.contactEmails,
+          // Only the COMPLETED task ids — these get stamped reported on
+          // send. In-progress tasks fed context but aren't reported.
+          taskIds: deptDone.map((t) => t.id)
+        };
+      })
+    );
+
+    const drafts = draftsRaw.filter((d): d is DepartmentDraft => d !== null);
+    if (drafts.length === 0) {
+      return NextResponse.json(
+        { error: "model returned no usable drafts — try again or write manually" },
+        { status: 502 }
+      );
+    }
+    // Stable order: named departments alphabetically, General last.
+    drafts.sort((a, b) => {
+      if (a.departmentId === null) return 1;
+      if (b.departmentId === null) return -1;
+      return a.departmentName.localeCompare(b.departmentName);
+    });
+
     return NextResponse.json({
       ok: true,
-      subject: scrub(subjectRaw || `Weekly update — ${clientName}`).slice(0, 300),
-      body: scrub(bodyRaw),
-      suggestedTo: client.contactEmails,
-      // Task ids that fed the prompt. Composer passes these to
-      // /api/email-drafts on submit so the eventual approve+send can
-      // stamp tasks.reported_to_client_at and the recommendations
-      // surface stops showing them.
-      taskIds: done.map((t) => t.id),
-      signals: { completedCount: done.length, inProgressCount: open.length }
+      drafts,
+      signals: { completedCount: done.length, inProgressCount: open.length, departmentCount: drafts.length }
     });
   } catch (err) {
     return NextResponse.json(

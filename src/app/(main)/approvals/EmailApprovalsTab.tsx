@@ -10,6 +10,7 @@ import { toast } from "sonner";
 import { PersonAvatar } from "@/components/PersonAvatar";
 import { useCurrentUser } from "@/lib/user-context";
 import { isApprover } from "@/lib/email-approvers";
+import { getDepartmentMeta } from "@/lib/departments";
 import { SuggestedDigestsCard } from "@/components/SuggestedDigestsCard";
 import { cn } from "@/lib/utils";
 import {
@@ -50,6 +51,10 @@ interface Draft {
   bodyText: string;
   bodyHtml: string | null;
   kind: "client_update" | "content_plan" | "custom" | "auto_reply" | "eod_digest";
+  // Department a client_update draft is scoped to (split per department by
+  // the composer). null = not department-scoped. Drives the dept chip so
+  // an HoD can tell their queue apart at a glance.
+  departmentId: string | null;
   status: DraftStatus;
   approverId: string | null;
   approverName: string | null;
@@ -596,6 +601,14 @@ function DraftCard({
               )}>
                 {kindMeta.label}
               </span>
+              {draft.departmentId && (
+                <span className={cn(
+                  "inline-flex items-center text-[10px] px-1.5 py-0.5 rounded-full border font-medium",
+                  getDepartmentMeta(draft.departmentId).chip
+                )}>
+                  {getDepartmentMeta(draft.departmentId).label}
+                </span>
+              )}
               {draft.revisionCount > 0 && (
                 <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-200/70">
                   <RotateCcw className="w-3 h-3" /> v{draft.revisionCount + 1}

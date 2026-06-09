@@ -40,7 +40,7 @@ export async function POST(
 
     const allowed = await canApproveDraft(
       { id: me.id, name: me.name, role: me.role, isAdmin: me.isAdmin, departmentIds: me.departmentIds },
-      { author_id: row.author_id as string, kind: row.kind }
+      { author_id: row.author_id as string, kind: row.kind, departmentId: row.department_id as string | null }
     );
     if (!allowed) {
       return NextResponse.json({ error: "forbidden" }, { status: 403 });

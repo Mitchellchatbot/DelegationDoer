@@ -30,7 +30,7 @@ export async function PATCH(
     const supabase = getSupabaseAdmin();
     const { data: row, error: fetchErr } = await supabase
       .from("email_drafts")
-      .select("id, author_id, kind, status")
+      .select("id, author_id, kind, department_id, status")
       .eq("id", params.id)
       .maybeSingle();
     if (fetchErr) return NextResponse.json({ error: fetchErr.message }, { status: 500 });
@@ -46,7 +46,7 @@ export async function PATCH(
     const isAuthor = row.author_id === userId;
     const isApprover = await canApproveDraft(
       { id: me.id, name: me.name, role: me.role, isAdmin: me.isAdmin, departmentIds: me.departmentIds },
-      { author_id: row.author_id as string, kind: row.kind }
+      { author_id: row.author_id as string, kind: row.kind, departmentId: row.department_id as string | null }
     );
     if (!isAuthor && !isApprover) {
       return NextResponse.json({ error: "forbidden" }, { status: 403 });

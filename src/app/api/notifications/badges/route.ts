@@ -210,12 +210,25 @@ export async function GET() {
     // draft. Everyone else gets 0 — the sidebar still shows their own
     // drafts via the /emails page but doesn't badge them here.
     const canApprove = isApprover({ name: me.name, role: me.role, isAdmin: me.isAdmin });
+    const headedDepts = me.role === "department_head" ? (me.departmentIds ?? []) : [];
     if (canApprove) {
       try {
         const { count } = await supabase
           .from("email_drafts")
           .select("id", { count: "exact", head: true })
           .eq("status", "pending");
+        approvalsPending = count ?? 0;
+      } catch { /* migration not applied yet — silently zero */ }
+    } else if (headedDepts.length > 0) {
+      // Department heads badge only the pending drafts scoped to a
+      // department they head — mirrors the GET /api/email-drafts
+      // visibility filter so the count never drifts from what they see.
+      try {
+        const { count } = await supabase
+          .from("email_drafts")
+          .select("id", { count: "exact", head: true })
+          .eq("status", "pending")
+          .in("department_id", headedDepts);
         approvalsPending = count ?? 0;
       } catch { /* migration not applied yet — silently zero */ }
     }

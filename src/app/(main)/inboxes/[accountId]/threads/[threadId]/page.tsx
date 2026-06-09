@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import { AtSign, SendHorizontal, Inbox, Send, ExternalLink, Paperclip } from "lucide-react";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
-import { getThread, type MissiveMessage } from "@/lib/missive-client";
+import { getThread, listAccounts, type MissiveMessage } from "@/lib/missive-client";
 import { visibleAccountIdsFor } from "@/lib/inbox-access";
 import { Avatar } from "@/components/Avatar";
 import { CreateTaskFromThreadButton } from "@/components/CreateTaskFromThreadButton";
@@ -89,6 +89,37 @@ export default async function ThreadDetailPage({
   const missiveThreadUrl = missiveAppUrl
     ? `${missiveAppUrl}/?thread=${encodeURIComponent(params.threadId)}`
     : null;
+
+  // Reply-all recipient sets, derived from the last inbound message. We
+  // need the current inbox's own address so we can drop it — replying-all
+  // shouldn't loop the reply back to yourself.
+  const ownEmail = (await listAccounts().catch(() => []))
+    .find((a) => a.id === params.accountId)?.email ?? "";
+  const ownEmailLower = ownEmail.toLowerCase();
+  const lastInboundForReplyAll = [...messages].reverse().find((m) => m.direction === "inbound");
+  // To = original sender + everyone on the original To line.
+  // Cc = the original Cc line. Both: normalize, drop self, de-dupe; and
+  // strip anything from Cc that's already in To.
+  const dedupe = (addrs: string[]) => {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const a of addrs) {
+      const e = rawEmail(a).trim();
+      if (!e) continue;
+      const lower = e.toLowerCase();
+      if (lower === ownEmailLower || seen.has(lower)) continue;
+      seen.add(lower);
+      out.push(e);
+    }
+    return out;
+  };
+  const replyAllTo = lastInboundForReplyAll
+    ? dedupe([lastInboundForReplyAll.from_addr, ...lastInboundForReplyAll.to_addrs])
+    : [];
+  const replyAllToLower = new Set(replyAllTo.map((e) => e.toLowerCase()));
+  const replyAllCc = lastInboundForReplyAll
+    ? dedupe(lastInboundForReplyAll.cc_addrs).filter((e) => !replyAllToLower.has(e.toLowerCase()))
+    : [];
 
   return (
     <div className="space-y-5">
@@ -298,6 +329,8 @@ export default async function ThreadDetailPage({
               return lastInbound ? rawEmail(lastInbound.from_addr) : null;
             })()}
             defaultSubject={thread.subject ?? null}
+            replyAllTo={replyAllTo.join(", ")}
+            replyAllCc={replyAllCc.join(", ")}
           />
 
           {/* Mark-as-read upsert fires on mount — silent. */}

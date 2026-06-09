@@ -24,7 +24,7 @@ interface TodayResp {
   shiftDate: string;
   shiftStart: string | null;
   shiftEnd: string | null;
-  departmentKey: "dep_seo" | "dep_web" | null;
+  departmentKey: string | null;
   motivationalLine: string;
   userName: string | null;
   reason: string;

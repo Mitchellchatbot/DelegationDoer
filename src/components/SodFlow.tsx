@@ -54,7 +54,9 @@ interface TodayResp {
   shiftDate: string;
   shiftStart: string | null;
   shiftEnd: string | null;
-  departmentKey: "dep_seo" | "dep_web" | null;
+  // "dep_seo" drives the bespoke client-health flow; any other
+  // department id renders the generic glance; null skips the dashboard.
+  departmentKey: string | null;
   motivationalLine: string;
   userName: string | null;
   reason: string;

@@ -66,7 +66,7 @@ export function SodWebsiteDashboard({ data }: { data: WebDashboardData }) {
 
       <Card title="Carry-over tasks" icon={<ListChecks className="w-3.5 h-3.5 text-violet-600" />}>
         {data.carryOverTasks.length === 0 ? (
-          <div className="text-sm text-ink/55">No open Website tasks. Clean slate.</div>
+          <div className="text-sm text-ink/55">No open tasks. Clean slate.</div>
         ) : (
           <ul className="space-y-1">
             {data.carryOverTasks.map((t) => (

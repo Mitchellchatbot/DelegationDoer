@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Heart, Mail, Send, CheckCircle2 } from "lucide-react";
+import { Heart, Mail, Send, CheckCircle2, AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 type HealthLabel = "thriving" | "steady" | "shaky" | "at_risk";
@@ -10,6 +10,13 @@ export interface SeoDashboardData {
   kind: "seo";
   healthCounts: Record<HealthLabel, number>;
   totalClients: number;
+  atRisk: Array<{
+    clientId: string;
+    clientName: string;
+    daysSinceLastOutbound: number | null;
+    touchpoint: "green" | "yellow" | "red";
+    health: HealthLabel | null;
+  }>;
   followUp: Array<{
     clientId: string;
     clientName: string;
@@ -101,6 +108,36 @@ export function ClientHealthCard({ data }: { data: SeoDashboardData }) {
   );
 }
 
+// Every at-risk client, regardless of contact recency. Exported so the
+// "Review Client Health" step shows the same list. Sits above follow-up.
+export function AtRiskCard({ data }: { data: SeoDashboardData }) {
+  return (
+    <Card title="At-risk clients" icon={<AlertTriangle className="w-3.5 h-3.5 text-rose-500" />}>
+      {data.atRisk.length === 0 ? (
+        <div className="text-sm text-ink/55">No clients at risk — nice.</div>
+      ) : (
+        <ul className="space-y-1">
+          {data.atRisk.map((c) => (
+            <li key={c.clientId} className="flex items-center justify-between gap-2 text-sm">
+              <Link
+                href={`/clients/${encodeURIComponent(c.clientId)}`}
+                className="font-medium text-ink hover:text-accent truncate"
+              >
+                {c.clientName}
+              </Link>
+              <span className="text-xs text-ink/55 shrink-0 tabular-nums">
+                {c.daysSinceLastOutbound === null
+                  ? "no contact on file"
+                  : `${c.daysSinceLastOutbound}d ago`}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Card>
+  );
+}
+
 // Clients on a red touchpoint band. Exported for reuse in the review step.
 export function FollowUpCard({ data }: { data: SeoDashboardData }) {
   return (
@@ -146,10 +183,13 @@ export function SodSeoDashboard({ data }: { data: SeoDashboardData }) {
       {/* 1. Client health — the primary focus of the page. */}
       <ClientHealthCard data={data} />
 
-      {/* 2. Clients needing follow-up — red touchpoint band. */}
+      {/* 2. At-risk clients — every at-risk client, any touchpoint. */}
+      <AtRiskCard data={data} />
+
+      {/* 3. Clients needing follow-up — red touchpoint band. */}
       <FollowUpCard data={data} />
 
-      {/* 3. Last touchpoints — 5 most recent outbound. */}
+      {/* 4. Last touchpoints — 5 most recent outbound. */}
       <Card title="Last touchpoints" icon={<Send className="w-3.5 h-3.5 text-emerald-600" />}>
         {data.recentOutbound.length === 0 ? (
           <div className="text-sm text-ink/55">No outbound emails yet.</div>
@@ -170,7 +210,7 @@ export function SodSeoDashboard({ data }: { data: SeoDashboardData }) {
         )}
       </Card>
 
-      {/* 4. What's been completed today — progress already made. */}
+      {/* 5. What's been completed today — progress already made. */}
       <Card title="What's been completed today" icon={<CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />}>
         {totalCompleted(data) === 0 ? (
           <div className="text-sm text-ink/55">Nothing logged yet today.</div>

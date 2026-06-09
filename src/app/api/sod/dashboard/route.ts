@@ -8,6 +8,7 @@ import {
   getLatestTouchpointsByClient,
   type TouchpointLabel
 } from "@/lib/client-touchpoint";
+import { healthRank } from "@/lib/client-health";
 import { listThreads } from "@/lib/missive-client";
 import { buildClientSignals, threadMatchesClient } from "@/lib/client-thread-match";
 
@@ -49,6 +50,10 @@ interface SeoPayload {
   // when health labels haven't been computed yet ("12 clients tracked
   // · health pending") instead of a blank panel.
   totalClients: number;
+  // Every client whose effective health is at-risk, regardless of
+  // contact recency — so none slip past just because they were emailed
+  // recently. Distinct from followUp, which is the stale-contact band.
+  atRisk: SeoFollowUpItem[];
   followUp: SeoFollowUpItem[];
   recentOutbound: Array<{
     id: string;
@@ -185,10 +190,29 @@ async function buildSeoPayload(userId: string): Promise<SeoPayload> {
     };
   });
 
-  // Follow-up — clients in the red band, sorted by oldest last contact.
+  // At-risk — every client on an at-risk effective health label, no
+  // matter the touchpoint band, so a recently-emailed at-risk client is
+  // still surfaced. Most-neglected (oldest contact) first.
+  const atRisk: SeoFollowUpItem[] = enriched
+    .filter((c) => c.effectiveHealth === "at_risk")
+    .sort((a, b) => (b.daysSince ?? 9999) - (a.daysSince ?? 9999))
+    .slice(0, 10)
+    .map((c) => ({
+      clientId: c.id,
+      clientName: c.name,
+      daysSinceLastOutbound: c.daysSince,
+      touchpoint: c.touchpoint,
+      health: c.effectiveHealth
+    }));
+
+  // Follow-up — clients in the red band. At-risk health leads (then
+  // shaky/steady/thriving, then clients with no computed health); within
+  // a band, oldest last contact first.
   const followUp: SeoFollowUpItem[] = enriched
     .filter((c) => c.touchpoint === "red")
     .sort((a, b) => {
+      const hr = healthRank(a.effectiveHealth) - healthRank(b.effectiveHealth);
+      if (hr !== 0) return hr;
       const ad = a.daysSince ?? 9999;
       const bd = b.daysSince ?? 9999;
       return bd - ad;
@@ -235,6 +259,7 @@ async function buildSeoPayload(userId: string): Promise<SeoPayload> {
     kind: "seo",
     healthCounts,
     totalClients: clients.length,
+    atRisk,
     followUp,
     recentOutbound,
     completedToday

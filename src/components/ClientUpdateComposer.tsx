@@ -604,7 +604,7 @@ function ComposerPreview({
                   </li>
                 ))}
                 <li className="text-[10px] text-ink/45 italic">
-                  EOD notes are shown for context; the draft is built from the selected tasks.
+                  EOD notes from contributors on the selected tasks are folded into the draft as context (author names withheld; only client-relevant content is used).
                 </li>
               </ul>
             </div>

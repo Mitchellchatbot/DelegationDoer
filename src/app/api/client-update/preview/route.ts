@@ -110,6 +110,11 @@ export async function GET(req: NextRequest) {
         .select("id, title, completed_at, assignee_id, tags, department_id")
         .eq("client_name", clientName)
         .eq("status", "done")
+        // Skip unapproved AI-intake drafts (tl;dv / email / site-alert)
+        // so the preview matches what feeds the email — verified work
+        // only. is_draft flips to false on HoD/leader approval. Mirrors
+        // getAllTasks + the draft route.
+        .eq("is_draft", false)
         .gte("completed_at", fromIso)
         .lte("completed_at", toIso)
         .order("completed_at", { ascending: false })
@@ -119,6 +124,7 @@ export async function GET(req: NextRequest) {
         .select("id, title, status, assignee_id, tags, last_activity_at, department_id")
         .eq("client_name", clientName)
         .neq("status", "done")
+        .eq("is_draft", false)
         .gte("last_activity_at", fromIso)
         .lte("last_activity_at", toIso)
         .order("last_activity_at", { ascending: false })
@@ -127,14 +133,14 @@ export async function GET(req: NextRequest) {
     const tasks = (tasksRes.data ?? []) as TaskRow[];
     const inProgress = (inProgressRes.data ?? []) as InProgressRow[];
 
-    // 3) EOD notes from contributors. Contributors = assignees of the
-    //    COMPLETED tasks above; pull their structured EOD answers for the
-    //    same date window so the composer prompt can fold them into the
-    //    summary.
-    const contributorIds = Array.from(new Set(
-      tasks.map((t) => t.assignee_id).filter((v): v is string => !!v)
-    ));
-    // Names are needed for both completed- and in-progress-task assignees.
+    // 3) EOD notes from contributors. Contributors = assignees of BOTH
+    //    the completed AND in-progress tasks above; pull their structured
+    //    EOD answers for the same date window so the composer prompt can
+    //    fold them into the summary. Including in-progress assignees is
+    //    deliberate — a department whose work this period was only ongoing
+    //    (e.g. SEO) would otherwise have its EOD notes dropped here, which
+    //    is exactly the gap this fixes. Mirrors the draft route's
+    //    allContributorIds.
     const assigneeIds = Array.from(new Set(
       [...tasks, ...inProgress].map((t) => t.assignee_id).filter((v): v is string => !!v)
     ));
@@ -149,11 +155,11 @@ export async function GET(req: NextRequest) {
     const userById = new Map<string, string>();
     const deptNameById = new Map<string, string>();
     const [notesRes, usersRes, deptsRes] = await Promise.all([
-      contributorIds.length > 0
+      assigneeIds.length > 0
         ? supabase
             .from("eod_notes")
             .select("user_id, note_date, worked_on, accomplished")
-            .in("user_id", contributorIds)
+            .in("user_id", assigneeIds)
             .gte("note_date", fromDateStr)
             .lte("note_date", toDateStr)
             .order("note_date", { ascending: false })
@@ -213,7 +219,7 @@ export async function GET(req: NextRequest) {
           workedOn: n.worked_on,
           accomplished: n.accomplished
         })),
-      contributorNames: contributorIds
+      contributorNames: assigneeIds
         .map((id) => userById.get(id))
         .filter((n): n is string => !!n)
     };

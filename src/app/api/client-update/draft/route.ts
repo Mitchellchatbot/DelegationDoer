@@ -139,18 +139,23 @@ export async function POST(req: NextRequest) {
     // is pulled so we can split the drafts by department below.
     let doneQuery = supabase
       .from("tasks")
-      .select("id, title, description, tags, completed_at, department_id")
+      .select("id, title, description, tags, completed_at, department_id, assignee_id")
       .eq("client_name", clientName)
       .eq("status", "done")
+      // Skip unapproved AI-intake drafts (tl;dv / email / site-alert).
+      // is_draft flips to false only once a HoD/leader approves them, so
+      // client emails summarize verified work only. Mirrors getAllTasks.
+      .eq("is_draft", false)
       .gte("completed_at", fromIso)
       .lte("completed_at", toIso)
       .order("completed_at", { ascending: false })
       .limit(50);
     let openQuery = supabase
       .from("tasks")
-      .select("id, title, description, status, priority, department_id")
+      .select("id, title, description, status, priority, department_id, assignee_id")
       .eq("client_name", clientName)
       .neq("status", "done")
+      .eq("is_draft", false)
       .order("due_date", { ascending: true })
       .limit(50);
     if (selectedIds !== null) {
@@ -160,10 +165,10 @@ export async function POST(req: NextRequest) {
     const [doneRes, openRes] = await Promise.all([doneQuery, openQuery]);
 
     const done = (doneRes.data ?? []) as Array<{
-      id: string; title: string; description: string | null; tags: string[] | null; completed_at: string | null; department_id: string | null;
+      id: string; title: string; description: string | null; tags: string[] | null; completed_at: string | null; department_id: string | null; assignee_id: string | null;
     }>;
     const open = (openRes.data ?? []) as Array<{
-      id: string; title: string; description: string | null; status: string; priority: string | null; department_id: string | null;
+      id: string; title: string; description: string | null; status: string; priority: string | null; department_id: string | null; assignee_id: string | null;
     }>;
 
     // Graceful empty state — nothing selected at all (no completed AND no
@@ -184,15 +189,48 @@ export async function POST(req: NextRequest) {
     const deptIds = Array.from(new Set(
       [...done, ...open].map((t) => t.department_id).filter((v): v is string => !!v)
     ));
+
+    // EOD notes from the people who worked this client's selected tasks
+    // (completed OR in-progress). eod_notes has no client/department
+    // column, so contributors are tied to the client through their task
+    // assignments — which is what keeps another client's day out of this
+    // email. Scoped per department below (in-progress assignees are
+    // included, so a department whose work this period was only ongoing,
+    // e.g. SEO, still contributes its EOD context). note_date is a DATE,
+    // so filter on the YYYY-MM-DD slice like the preview route does.
+    const fromDateStr = fromIso.slice(0, 10);
+    const toDateStr = toIso.slice(0, 10);
+    const allContributorIds = Array.from(new Set(
+      [...done, ...open].map((t) => t.assignee_id).filter((v): v is string => !!v)
+    ));
+
     const deptNameById = new Map<string, string>();
-    if (deptIds.length > 0) {
-      const { data: deptRows } = await supabase
-        .from("departments")
-        .select("id, name")
-        .in("id", deptIds);
-      for (const d of ((deptRows ?? []) as { id: string; name: string }[])) {
-        deptNameById.set(d.id, d.name);
-      }
+    const notesByUser = new Map<string, Array<{ worked_on: string | null; accomplished: string | null }>>();
+    const [deptRowsRes, eodRes] = await Promise.all([
+      deptIds.length > 0
+        ? supabase.from("departments").select("id, name").in("id", deptIds)
+        : Promise.resolve({ data: [] as { id: string; name: string }[] }),
+      allContributorIds.length > 0
+        ? supabase
+            .from("eod_notes")
+            .select("user_id, note_date, worked_on, accomplished")
+            .in("user_id", allContributorIds)
+            .gte("note_date", fromDateStr)
+            .lte("note_date", toDateStr)
+            .order("note_date", { ascending: false })
+            .limit(200)
+        : Promise.resolve({ data: [] as Array<{ user_id: string; note_date: string; worked_on: string | null; accomplished: string | null }> })
+    ]);
+    for (const d of ((deptRowsRes.data ?? []) as { id: string; name: string }[])) {
+      deptNameById.set(d.id, d.name);
+    }
+    // Keep only notes with real structured content, grouped by author so
+    // each department can pull its own contributors' notes below.
+    for (const n of ((eodRes.data ?? []) as Array<{ user_id: string; worked_on: string | null; accomplished: string | null }>)) {
+      if (!n.worked_on && !n.accomplished) continue;
+      const arr = notesByUser.get(n.user_id) ?? [];
+      arr.push({ worked_on: n.worked_on, accomplished: n.accomplished });
+      notesByUser.set(n.user_id, arr);
     }
 
     // Group selected work by department. A department gets a draft if it
@@ -287,6 +325,34 @@ Return STRICT JSON, no code fences:
           ? [`Completed work this period (${deptDone.length}):`, completedLines]
           : ["Completed work this period (0): (none — this is a progress update; do NOT fabricate completed work)"];
 
+        // EOD context for THIS department: the worked-on / accomplished
+        // notes of the people assigned to this department's selected
+        // tasks (completed + in-progress). Author names are deliberately
+        // withheld (the system prompt forbids exposing them) and the
+        // notes are NOT client-scoped, so the guardrail below tells the
+        // model to ignore anything not about this client. Empty block =>
+        // nothing injected (the spread adds no lines).
+        const deptContributorIds = Array.from(new Set(
+          [...deptDone, ...deptOpen].map((t) => t.assignee_id).filter((v): v is string => !!v)
+        ));
+        const eodLines = deptContributorIds
+          .flatMap((id) => notesByUser.get(id) ?? [])
+          .slice(0, 12)
+          .map((n) => {
+            const w = clamp(n.worked_on, 240);
+            const a = clamp(n.accomplished, 240);
+            return [w ? `- Worked on: ${w}` : "", a ? `- Accomplished: ${a}` : ""].filter(Boolean).join("\n");
+          })
+          .filter(Boolean);
+        const eodBlock = eodLines.length > 0
+          ? [
+              "",
+              "Contributor end-of-day notes (context only, author names withheld):",
+              `These notes may mention OTHER clients. Use ONLY content clearly relevant to ${clientName}. Do not invent or attribute work not clearly about ${clientName}.`,
+              eodLines.join("\n")
+            ]
+          : [];
+
         const userPrompt = [
           `Client: ${clientName}`,
           departmentId ? `Department focus: ${departmentName} (write the update around this team's work only)` : "",
@@ -298,6 +364,7 @@ Return STRICT JSON, no code fences:
           "",
           "Work currently in progress / upcoming:",
           inProgressLines,
+          ...eodBlock,
           "",
           "Draft the client update email body. Output STRICT JSON: { subject, body }."
         ].filter(Boolean).join("\n");

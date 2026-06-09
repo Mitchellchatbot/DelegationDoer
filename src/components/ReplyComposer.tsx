@@ -15,7 +15,7 @@ import type { TaskMedia } from "@/lib/types";
 // refreshes the thread so the new message appears in the list.
 
 export function ReplyComposer({
-  threadId, accountId, defaultTo, defaultSubject
+  threadId, accountId, defaultTo, defaultSubject, replyAllTo, replyAllCc
 }: {
   threadId: string;
   accountId: string;
@@ -25,13 +25,41 @@ export function ReplyComposer({
   defaultTo: string | null;
   // Original thread subject; we prepend "Re: " if it's not already there.
   defaultSubject: string | null;
+  // Reply-all recipient sets, pre-computed server-side (own address
+  // already excluded), comma-joined. "Reply All" loads these into the
+  // To / Cc fields. Empty string when there's nobody extra to reply to.
+  replyAllTo?: string;
+  replyAllCc?: string;
 }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  // "reply" = sender only (default). "replyAll" loads replyAllTo/replyAllCc.
+  const [mode, setMode] = useState<"reply" | "replyAll">("reply");
   const [to, setTo] = useState(defaultTo ?? "");
+  const [cc, setCc] = useState("");
   const [subject, setSubject] = useState(prefixRe(defaultSubject ?? ""));
   const [bodyText, setBodyText] = useState("");
+  // Whether the Cc row is shown. Auto-revealed in reply-all mode or when
+  // Cc has content; otherwise the user opens it via the "Add Cc" button.
+  const [ccOpen, setCcOpen] = useState(false);
+
+  // Whether reply-all has anyone beyond the default recipient. When the
+  // thread has no extra To/Cc, hide the toggle entirely.
+  const hasReplyAll = Boolean((replyAllTo ?? "").trim() || (replyAllCc ?? "").trim());
+
+  function switchMode(next: "reply" | "replyAll") {
+    setMode(next);
+    if (next === "replyAll") {
+      setTo((replyAllTo ?? "").trim() || to);
+      setCc(replyAllCc ?? "");
+      setCcOpen(true);
+    } else {
+      setTo(defaultTo ?? "");
+      setCc("");
+      setCcOpen(false);
+    }
+  }
   // Send-later state. `scheduleAt` is a datetime-local string ("");
   // when non-empty the Send button becomes "Schedule" and the POST
   // goes to the /schedule endpoint instead of /reply.
@@ -83,6 +111,7 @@ export function ReplyComposer({
 
   async function send() {
     const toList = to.split(/[,\n]/).map((s) => s.trim()).filter(Boolean);
+    const ccList = cc.split(/[,\n]/).map((s) => s.trim()).filter(Boolean);
     if (toList.length === 0) {
       toast.error("Add a recipient");
       return;
@@ -115,8 +144,8 @@ export function ReplyComposer({
         ? `/api/inboxes/threads/${encodeURIComponent(threadId)}/reply/schedule`
         : `/api/inboxes/threads/${encodeURIComponent(threadId)}/reply`;
       const body = scheduling
-        ? { accountId, to: toList, subject: subject.trim() || undefined, bodyText, scheduledForISO }
-        : { accountId, to: toList, subject: subject.trim() || undefined, bodyText, attachmentUrls: attachments };
+        ? { accountId, to: toList, cc: ccList, subject: subject.trim() || undefined, bodyText, scheduledForISO }
+        : { accountId, to: toList, cc: ccList, subject: subject.trim() || undefined, bodyText, attachmentUrls: attachments };
       const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -152,6 +181,9 @@ export function ReplyComposer({
       setAttachments([]);
       setScheduleOpen(false);
       setScheduleAt("");
+      setMode("reply");
+      setCc("");
+      setCcOpen(false);
       setOpen(false);
       router.refresh();
     } catch (err) {
@@ -201,14 +233,33 @@ export function ReplyComposer({
               <div className="flex items-center gap-2 text-xs font-semibold text-ink">
                 <Reply className="w-3.5 h-3.5 text-accent" /> Reply
               </div>
-              <button
-                type="button"
-                onClick={() => setOpen(false)}
-                aria-label="Discard"
-                className="p-1 rounded-lg text-ink/55 hover:text-ink hover:bg-white transition-colors"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
+              <div className="flex items-center gap-2">
+                {hasReplyAll && (
+                  <div className="inline-flex rounded-full bg-white/70 border border-slate-200/70 p-0.5">
+                    {(["reply", "replyAll"] as const).map((m) => (
+                      <button
+                        key={m}
+                        type="button"
+                        onClick={() => switchMode(m)}
+                        className={cn(
+                          "px-2.5 py-0.5 rounded-full text-[11px] font-medium transition-colors",
+                          mode === m ? "bg-accent text-white" : "text-ink/65 hover:text-ink"
+                        )}
+                      >
+                        {m === "reply" ? "Reply" : "Reply All"}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setOpen(false)}
+                  aria-label="Discard"
+                  className="p-1 rounded-lg text-ink/55 hover:text-ink hover:bg-white transition-colors"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
             </header>
 
             <div className="p-3 space-y-2.5">
@@ -224,7 +275,31 @@ export function ReplyComposer({
                   placeholder="recipient@example.com"
                   autoFocus
                 />
+                {!ccOpen && !cc.trim() && (
+                  <button
+                    type="button"
+                    onClick={() => setCcOpen(true)}
+                    className="text-[11px] font-semibold text-accent/80 hover:text-accent shrink-0"
+                  >
+                    Add Cc
+                  </button>
+                )}
               </div>
+
+              {(ccOpen || cc.trim()) && (
+                <div className="flex items-center gap-2 px-3 py-2 rounded-xl border border-slate-200/70 bg-white/60 focus-within:ring-2 focus-within:ring-accent/30 focus-within:border-accent/40 transition-all">
+                  <span className="text-[11px] uppercase tracking-wide font-semibold text-ink/45 w-14 shrink-0">
+                    Cc
+                  </span>
+                  <input
+                    type="text"
+                    value={cc}
+                    onChange={(e) => setCc(e.target.value)}
+                    className="flex-1 bg-transparent text-sm outline-none placeholder:text-ink/40"
+                    placeholder="cc@example.com, …"
+                  />
+                </div>
+              )}
 
               <div className="flex items-center gap-2 px-3 py-2 rounded-xl border border-slate-200/70 bg-white/60 focus-within:ring-2 focus-within:ring-accent/30 focus-within:border-accent/40 transition-all">
                 <span className="text-[11px] uppercase tracking-wide font-semibold text-ink/45 w-14 shrink-0">
@@ -363,7 +438,7 @@ export function ReplyComposer({
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => { setOpen(false); setBodyText(""); setAttachments([]); setScheduleOpen(false); setScheduleAt(""); }}
+                  onClick={() => { setOpen(false); setBodyText(""); setAttachments([]); setScheduleOpen(false); setScheduleAt(""); setMode("reply"); setCc(""); setCcOpen(false); }}
                   className="px-3 py-1.5 rounded-full text-xs font-medium text-ink/70 hover:text-ink hover:bg-white transition-colors"
                 >
                   Discard

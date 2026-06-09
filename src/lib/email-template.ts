@@ -121,7 +121,7 @@ export function renderBlueEmail(content: BrandedEmailContent): string {
       </tr>
       <tr>
         <td style="padding:18px 34px 0 34px;text-align:center;">
-          <div style="font-size:11px;color:#94a3b8;line-height:1.5;">Sent by ${escapeHtml(content.brandName)} &middot; This update was reviewed before sending.</div>
+          <div style="font-size:11px;color:#94a3b8;line-height:1.5;">Sent by ${escapeHtml(content.brandName)}</div>
         </td>
       </tr>
     </table>

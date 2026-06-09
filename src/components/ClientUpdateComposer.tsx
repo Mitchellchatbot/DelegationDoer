@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Sparkles, Loader2, ArrowRight, Send, RefreshCw, Calendar, CheckSquare, MessageSquare, Clock, X, Wand2, Paintbrush, Eraser, AlignLeft, List, Code, Eye, Mail, Zap } from "lucide-react";
+import { Sparkles, Loader2, ArrowRight, Send, RefreshCw, Calendar, CheckSquare, MessageSquare, Clock, X, Wand2, Paintbrush, Eraser, AlignLeft, List, Code, Eye, Mail, Zap, Check } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { getDepartmentMeta } from "@/lib/departments";
@@ -41,9 +41,13 @@ interface MailAccount {
 type StyleMode = "rephrase" | "structured" | "casual" | "glanceable" | "fancy" | "plain" | "custom";
 
 // One per-department draft the operator is reviewing before submit.
+// Each is acted on independently (its own From mailbox, recipients, and
+// submit/send action) and surfaced behind a top selector so the operator
+// works one at a time.
 interface DeptDraft {
   departmentId: string | null;
   departmentName: string;
+  accountId: string; // the "From" mailbox for THIS draft (missiveclone account id)
   to: string;
   cc: string;
   bcc: string;
@@ -53,6 +57,8 @@ interface DeptDraft {
   bodyHtml: string | null; // brand-styled HTML when "fancy"; null = plain
   htmlTab: "preview" | "html"; // which view the styled draft shows
   styling: boolean; // an AI editor action is in flight for this draft
+  acting: boolean; // a submit/send action is in flight for this draft
+  status: "editing" | "submitted" | "sent"; // lifecycle for this single draft
   taskIds: string[];
 }
 
@@ -66,6 +72,17 @@ function windowFor(days: number): { from: string; to: string } {
   const from = new Date(to.getTime() - days * 86_400_000);
   from.setUTCHours(0, 0, 0, 0);
   return { from: from.toISOString(), to: to.toISOString() };
+}
+
+// The brand shown in a styled email's header band + footer. This is the
+// SENDER (our agency mailbox), never the client. Prefer the mailbox's
+// display name; fall back to its domain label, then a neutral default.
+function senderBrandFor(acc?: MailAccount): string {
+  if (!acc) return "Scaled";
+  if (acc.display_name && acc.display_name.trim()) return acc.display_name.trim();
+  const domain = acc.email?.split("@")[1]?.split(".")[0];
+  if (domain) return domain.charAt(0).toUpperCase() + domain.slice(1);
+  return acc.email || "Scaled";
 }
 
 export function ClientUpdateComposer({
@@ -96,36 +113,44 @@ export function ClientUpdateComposer({
   const canSendDirect = me.role === "leader" || !!me.isAdmin || me.role === "department_head";
 
   const [generating, setGenerating] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
-  const [sendingNow, setSendingNow] = useState(false);
   // Tasks the operator has checked in the preview. Only these feed the
   // draft(s). Defaults to "all" each time the preview (re)loads.
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   // Per-department drafts the AI returned, edited in place before submit.
   const [drafts, setDrafts] = useState<DeptDraft[]>([]);
+  // Which draft's editor is currently shown (the top selector tab).
+  const [activeIdx, setActiveIdx] = useState(0);
   const [scheduledFor, setScheduledFor] = useState(""); // blank = send on approval
   const [attachments, setAttachments] = useState<TaskMedia[]>([]);
   const [step, setStep] = useState<"compose" | "preview">("compose");
 
-  // Connected sending mailboxes + the one chosen as the "From" for this
-  // batch. Loaded once; defaults to the first visible inbox. When none
-  // are connected the picker hides and the send path falls back to the
-  // author's mailbox (resolved server-side in the approve route).
+  // Connected sending mailboxes for the per-draft "From" picker. Loaded
+  // once. When none are connected the picker shows a connect hint and the
+  // send path falls back to the author's mailbox (resolved server-side).
   const [accounts, setAccounts] = useState<MailAccount[]>([]);
-  const [fromAccountId, setFromAccountId] = useState<string>("");
   useEffect(() => {
     let cancelled = false;
     fetch("/api/inboxes", { cache: "no-store" })
       .then((r) => r.json())
       .then((j) => {
         if (cancelled) return;
-        const list: MailAccount[] = Array.isArray(j?.inboxes) ? j.inboxes : [];
-        setAccounts(list);
-        setFromAccountId((prev) => prev || list[0]?.id || "");
+        setAccounts(Array.isArray(j?.inboxes) ? j.inboxes : []);
       })
-      .catch(() => { /* picker just stays hidden */ });
+      .catch(() => { /* picker just shows the connect hint */ });
     return () => { cancelled = true; };
   }, []);
+
+  // Backfill the From mailbox on any draft that doesn't have one yet,
+  // once the connected accounts load (drafts can be generated before the
+  // /api/inboxes round-trip finishes).
+  useEffect(() => {
+    if (accounts.length === 0) return;
+    setDrafts((prev) =>
+      prev.some((d) => !d.accountId)
+        ? prev.map((d) => (d.accountId ? d : { ...d, accountId: accounts[0].id }))
+        : prev
+    );
+  }, [accounts]);
 
   function toggleTask(id: string) {
     setSelectedIds((prev) => {
@@ -173,6 +198,7 @@ export function ClientUpdateComposer({
       }) => ({
         departmentId: d.departmentId ?? null,
         departmentName: d.departmentName ?? "General",
+        accountId: accounts[0]?.id ?? "",
         to: (d.suggestedTo ?? lockedClient.contactEmails ?? []).join(", "),
         cc: "",
         bcc: "",
@@ -182,8 +208,11 @@ export function ClientUpdateComposer({
         bodyHtml: null,
         htmlTab: "preview",
         styling: false,
+        acting: false,
+        status: "editing",
         taskIds: Array.isArray(d.taskIds) ? d.taskIds : []
       })));
+      setActiveIdx(0);
       setStep("preview");
     } catch (err) {
       toast.error(`Couldn't draft: ${err instanceof Error ? err.message : "unknown"}`);
@@ -198,6 +227,8 @@ export function ClientUpdateComposer({
 
   function removeDraft(idx: number) {
     setDrafts((prev) => prev.filter((_, i) => i !== idx));
+    // Keep the active tab in range after a drop.
+    setActiveIdx((cur) => Math.max(0, cur > idx ? cur - 1 : cur >= drafts.length - 1 ? drafts.length - 2 : cur));
   }
 
   // AI editor action on a single draft body. Sends the current plain-text
@@ -218,6 +249,10 @@ export function ClientUpdateComposer({
           bodyText: d.body,
           hasHtml: !!d.bodyHtml,
           clientName: lockedClient.name,
+          // The email is sent FROM our mailbox TO the client, so the
+          // styled header/footer brand is the SENDER (the selected
+          // From mailbox), not the client.
+          senderBrand: senderBrandFor(accounts.find((a) => a.id === d.accountId)),
           senderName: me.name,
           subject: d.subject
         })
@@ -248,137 +283,125 @@ export function ClientUpdateComposer({
     return s.split(/[,;\s]+/).map((x) => x.trim()).filter(Boolean);
   }
 
-  // Validate the batch + build the per-draft POST payloads. Returns null
-  // (after toasting) if anything is missing so the caller can bail.
-  function buildPayloads(): Array<Record<string, unknown>> | null {
-    if (drafts.length === 0) return null;
-    const payloads: Array<Record<string, unknown>> = [];
-    for (const d of drafts) {
-      if (!d.subject.trim() || !d.body.trim()) {
-        toast.error(`${d.departmentName}: subject and body are required`);
-        return null;
-      }
-      const toArr = parseEmails(d.to);
-      if (toArr.length === 0) {
-        toast.error(`${d.departmentName}: add at least one recipient email`);
-        return null;
-      }
-      payloads.push({
-        clientId: lockedClient.id,
-        clientName: lockedClient.name,
-        accountId: fromAccountId || undefined,
-        to: toArr,
-        cc: parseEmails(d.cc),
-        bcc: parseEmails(d.bcc),
-        subject: d.subject.trim(),
-        bodyText: d.body.trim(),
-        bodyHtml: d.bodyHtml || undefined,
-        kind: "client_update",
-        departmentId: d.departmentId,
-        scheduledFor: scheduledFor ? new Date(scheduledFor).toISOString() : null,
-        mediaUrls: attachments,
-        taskIds: d.taskIds
+  // Validate one draft + build its POST payload. Returns null (after
+  // toasting) if anything is missing so the caller can bail.
+  function buildPayloadFor(d: DeptDraft): Record<string, unknown> | null {
+    if (!d.subject.trim() || !d.body.trim()) {
+      toast.error(`${d.departmentName}: subject and body are required`);
+      return null;
+    }
+    const toArr = parseEmails(d.to);
+    if (toArr.length === 0) {
+      toast.error(`${d.departmentName}: add at least one recipient email`);
+      return null;
+    }
+    return {
+      clientId: lockedClient.id,
+      clientName: lockedClient.name,
+      accountId: d.accountId || undefined,
+      to: toArr,
+      cc: parseEmails(d.cc),
+      bcc: parseEmails(d.bcc),
+      subject: d.subject.trim(),
+      bodyText: d.body.trim(),
+      bodyHtml: d.bodyHtml || undefined,
+      kind: "client_update",
+      departmentId: d.departmentId,
+      scheduledFor: scheduledFor ? new Date(scheduledFor).toISOString() : null,
+      mediaUrls: attachments,
+      taskIds: d.taskIds
+    };
+  }
+
+  // After a draft resolves (submitted/sent), either finish the whole
+  // batch (when none are left to act on) or hop to the next editable
+  // draft. `list` is the post-update draft array.
+  function finishOrAdvance(list: DeptDraft[]) {
+    const remaining = list.findIndex((d) => d.status === "editing");
+    if (remaining === -1) {
+      // Everything is resolved — reset, then notify (the modal closes on
+      // this; resetting first avoids a setState on an unmounting tree).
+      resetComposer();
+      onSubmitted?.();
+    } else {
+      setActiveIdx(remaining);
+    }
+  }
+
+  // Submit a single draft to the approval queue.
+  async function submitOne(idx: number) {
+    const d = drafts[idx];
+    if (!d || d.acting || d.status !== "editing") return;
+    const payload = buildPayloadFor(d);
+    if (!payload) return;
+    patchDraft(idx, { acting: true });
+    try {
+      const res = await fetch("/api/email-drafts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
       });
-    }
-    return payloads;
-  }
-
-  async function submitAll() {
-    const payloads = buildPayloads();
-    if (!payloads) return;
-
-    setSubmitting(true);
-    try {
-      let totalDelivered = 0;
-      const failures: string[] = [];
-      // Sequential — keeps the Slack fan-out + insert order predictable
-      // and the failure list readable. There are only a handful of drafts.
-      for (let i = 0; i < payloads.length; i++) {
-        try {
-          const res = await fetch("/api/email-drafts", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payloads[i])
-          });
-          const data = await res.json();
-          if (!res.ok) throw new Error(data?.error ?? `failed (${res.status})`);
-          totalDelivered += (data.slackDeliveries ?? []).filter((s: { delivered: boolean }) => s.delivered).length;
-        } catch (err) {
-          failures.push(`${drafts[i].departmentName}: ${err instanceof Error ? err.message : "failed"}`);
-        }
-      }
-
-      if (failures.length > 0) {
-        toast.error(`${failures.length} draft${failures.length === 1 ? "" : "s"} failed — ${failures[0]}`);
-        return; // leave the batch on screen so the operator can retry
-      }
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error ?? `failed (${res.status})`);
+      const delivered = (data.slackDeliveries ?? []).filter((s: { delivered: boolean }) => s.delivered).length;
       toast.success(
-        totalDelivered > 0
-          ? `Submitted ${drafts.length} draft${drafts.length === 1 ? "" : "s"} — ${totalDelivered} approver ping${totalDelivered === 1 ? "" : "s"}`
-          : `Submitted ${drafts.length} draft${drafts.length === 1 ? "" : "s"} for approval`
+        delivered > 0
+          ? `${d.departmentName} submitted — ${delivered} approver ping${delivered === 1 ? "" : "s"}`
+          : `${d.departmentName} submitted for approval`
       );
-      resetComposer();
-      onSubmitted?.();
-    } finally {
-      setSubmitting(false);
+      const resolved = drafts.map((x, i) => (i === idx ? { ...x, status: "submitted" as const, acting: false } : x));
+      setDrafts(resolved);
+      finishOrAdvance(resolved);
+    } catch (err) {
+      toast.error(`${d.departmentName}: ${err instanceof Error ? err.message : "failed"}`);
+      patchDraft(idx, { acting: false });
     }
   }
 
-  // Send-now: create each draft, then immediately approve it (which fires
+  // Send-now: create the draft, then immediately approve it (which fires
   // the outbound send) — bypassing the approval queue. The approve route
-  // enforces permissions, so a non-approver gets a clear error per draft
-  // rather than a silent send. Honors the shared "Send on" schedule: a
-  // future date just approves + queues for the scheduled-emails cron.
-  async function sendAllNow() {
-    const payloads = buildPayloads();
-    if (!payloads) return;
-    const scheduled = scheduledFor ? new Date(scheduledFor).toISOString() : null;
-
-    setSendingNow(true);
+  // enforces permissions, so a non-approver gets a clear error rather than
+  // a silent send. Honors the "Send on" schedule: a future date just
+  // approves + queues for the scheduled-emails cron.
+  async function sendOne(idx: number) {
+    const d = drafts[idx];
+    if (!d || d.acting || d.status !== "editing") return;
+    const payload = buildPayloadFor(d);
+    if (!payload) return;
+    const scheduled = !!scheduledFor;
+    patchDraft(idx, { acting: true });
     try {
-      let sent = 0;
-      let queued = 0;
-      const failures: string[] = [];
-      for (let i = 0; i < payloads.length; i++) {
-        const label = drafts[i].departmentName;
-        try {
-          const createRes = await fetch("/api/email-drafts", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payloads[i])
-          });
-          const created = await createRes.json();
-          if (!createRes.ok) throw new Error(created?.error ?? `create failed (${createRes.status})`);
+      const createRes = await fetch("/api/email-drafts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      const created = await createRes.json();
+      if (!createRes.ok) throw new Error(created?.error ?? `create failed (${createRes.status})`);
 
-          const apprRes = await fetch(`/api/email-drafts/${created.id}/approve`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ accountId: fromAccountId || undefined })
-          });
-          const appr = await apprRes.json();
-          if (!apprRes.ok) throw new Error(appr?.error ?? `send failed (${apprRes.status})`);
-          if (appr.status === "approved" && scheduled) queued++;
-          else sent++;
-        } catch (err) {
-          failures.push(`${label}: ${err instanceof Error ? err.message : "failed"}`);
-        }
-      }
-
-      if (failures.length > 0) {
-        toast.error(`${failures.length} of ${payloads.length} failed — ${failures[0]}`);
-        return; // leave the batch up so the operator can retry the rest
-      }
-      toast.success(
-        queued > 0 && sent === 0
-          ? `Queued ${queued} update${queued === 1 ? "" : "s"} for the scheduled send`
-          : `Sent ${sent} update${sent === 1 ? "" : "s"} directly${queued > 0 ? `, ${queued} queued` : ""}`
+      const apprRes = await fetch(`/api/email-drafts/${created.id}/approve`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ accountId: d.accountId || undefined })
+      });
+      const appr = await apprRes.json();
+      if (!apprRes.ok) throw new Error(appr?.error ?? `send failed (${apprRes.status})`);
+      const wasQueued = appr.status === "approved" && scheduled;
+      toast.success(wasQueued ? `${d.departmentName} queued for the scheduled send` : `${d.departmentName} sent directly`);
+      const resolved = drafts.map((x, i) =>
+        i === idx ? { ...x, status: (wasQueued ? "submitted" : "sent") as DeptDraft["status"], acting: false } : x
       );
-      resetComposer();
-      onSubmitted?.();
-    } finally {
-      setSendingNow(false);
+      setDrafts(resolved);
+      finishOrAdvance(resolved);
+    } catch (err) {
+      toast.error(`${d.departmentName}: ${err instanceof Error ? err.message : "failed"}`);
+      patchDraft(idx, { acting: false });
     }
   }
+
+  // The draft whose editor is currently shown, plus a few footer flags.
+  const activeDraft = drafts[activeIdx];
+  const anyActing = drafts.some((d) => d.acting);
 
   return (
     <section className="rounded-2xl border border-sky-200/60 bg-gradient-to-br from-sky-50/50 to-white shadow-soft overflow-hidden">
@@ -429,12 +452,42 @@ export function ClientUpdateComposer({
           <div className="flex items-center gap-2 text-[11px] text-sky-700/85 bg-sky-50 border border-sky-200/60 rounded-lg px-2.5 py-1.5">
             <Sparkles className="w-3 h-3" />
             {drafts.length === 1
-              ? "AI drafted — edit anything before submitting for approval."
-              : `AI drafted ${drafts.length} updates, one per department — edit each before submitting.`}
+              ? "AI drafted — edit anything before submitting, or send it directly."
+              : `AI drafted ${drafts.length} updates, one per department — handle each on its own tab below.`}
           </div>
 
+          {/* Per-department selector — work one draft at a time so you can
+              send one and submit another independently. */}
+          {drafts.length > 1 && (
+            <div className="flex items-center justify-center">
+              <div className="inline-flex items-center gap-1 p-1 rounded-full bg-slate-100/80 border border-slate-200/70">
+                {drafts.map((d, i) => {
+                  const active = i === activeIdx;
+                  return (
+                    <button
+                      key={`tab-${d.departmentId ?? "general"}-${i}`}
+                      type="button"
+                      onClick={() => setActiveIdx(i)}
+                      className={cn(
+                        "inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[12px] font-semibold transition-colors",
+                        active ? "bg-white text-ink shadow-sm" : "text-ink/55 hover:text-ink"
+                      )}
+                    >
+                      {d.departmentName}
+                      {d.status === "sent" && <Check className="w-3 h-3 text-emerald-600" />}
+                      {d.status === "submitted" && <Clock className="w-3 h-3 text-sky-600" />}
+                      {d.acting && <Loader2 className="w-3 h-3 animate-spin text-sky-600" />}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           {drafts.map((d, idx) => {
+            if (idx !== activeIdx) return null; // only the selected draft is shown
             const meta = getDepartmentMeta(d.departmentId ?? undefined);
+            const resolved = d.status !== "editing";
             return (
               <div key={`${d.departmentId ?? "general"}-${idx}`} className="rounded-xl border border-slate-200/70 bg-white p-3 space-y-2.5">
                 <div className="flex items-center justify-between gap-2">
@@ -451,7 +504,7 @@ export function ClientUpdateComposer({
                         : `Progress update · routes to ${d.departmentName} head`}
                     </span>
                   </div>
-                  {drafts.length > 1 && (
+                  {drafts.length > 1 && !resolved && (
                     <button
                       type="button"
                       onClick={() => removeDraft(idx)}
@@ -462,6 +515,40 @@ export function ClientUpdateComposer({
                     </button>
                   )}
                 </div>
+
+                {resolved && (
+                  <div className={cn(
+                    "flex items-center gap-1.5 text-[11px] rounded-lg px-2.5 py-1.5 border",
+                    d.status === "sent"
+                      ? "text-emerald-700 bg-emerald-50 border-emerald-200/60"
+                      : "text-sky-700 bg-sky-50 border-sky-200/60"
+                  )}>
+                    {d.status === "sent" ? <Check className="w-3 h-3" /> : <Clock className="w-3 h-3" />}
+                    {d.status === "sent" ? "Sent directly to the client." : "Submitted for approval."}
+                  </div>
+                )}
+
+                <Field label="From">
+                  <Mail className="w-3 h-3 text-ink/45" />
+                  {accounts.length > 0 ? (
+                    <select
+                      value={d.accountId}
+                      onChange={(e) => patchDraft(idx, { accountId: e.target.value })}
+                      disabled={resolved}
+                      className="flex-1 text-[13px] bg-transparent border-none outline-none focus:ring-0 cursor-pointer disabled:cursor-default disabled:text-ink/55"
+                    >
+                      {accounts.map((a) => (
+                        <option key={a.id} value={a.id}>
+                          {a.display_name ? `${a.display_name} · ${a.email}` : a.email}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <span className="flex-1 text-[12px] text-ink/45">
+                      Sends from your connected mailbox. <a href="/inboxes" className="text-sky-700 font-medium hover:underline">Connect one</a> to choose.
+                    </span>
+                  )}
+                </Field>
 
                 <Field label="To">
                   <input
@@ -576,23 +663,7 @@ export function ClientUpdateComposer({
             );
           })}
 
-          {/* Shared From mailbox, send date + attachments apply to every draft. */}
-          {accounts.length > 0 && (
-            <Field label="From">
-              <Mail className="w-3 h-3 text-ink/45" />
-              <select
-                value={fromAccountId}
-                onChange={(e) => setFromAccountId(e.target.value)}
-                className="flex-1 text-[13px] bg-transparent border-none outline-none focus:ring-0 cursor-pointer"
-              >
-                {accounts.map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.display_name ? `${a.display_name} · ${a.email}` : a.email}
-                  </option>
-                ))}
-              </select>
-            </Field>
-          )}
+          {/* Shared send date + attachments apply to every draft in the batch. */}
           <Field label="Send on">
             <Calendar className="w-3 h-3 text-ink/45" />
             <input
@@ -623,7 +694,8 @@ export function ClientUpdateComposer({
             <button
               type="button"
               onClick={() => setStep("compose")}
-              className="inline-flex items-center gap-1.5 text-[12px] text-ink/65 hover:text-ink px-2 py-1"
+              disabled={anyActing}
+              className="inline-flex items-center gap-1.5 text-[12px] text-ink/65 hover:text-ink px-2 py-1 disabled:opacity-50"
             >
               ← Back to selection
             </button>
@@ -631,44 +703,44 @@ export function ClientUpdateComposer({
               <button
                 type="button"
                 onClick={generate}
-                disabled={generating || submitting || sendingNow}
+                disabled={generating || anyActing}
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium text-sky-700 bg-white border border-sky-200/70 hover:bg-sky-50 transition-colors disabled:opacity-50"
               >
                 {generating ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
                 Re-draft
               </button>
-              {canSendDirect && (
-                <button
-                  type="button"
-                  onClick={sendAllNow}
-                  disabled={submitting || sendingNow || drafts.length === 0}
-                  title="Send directly, skipping the approval queue"
-                  className={cn(
-                    "inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-semibold text-sky-700 bg-white border border-sky-300 hover:bg-sky-50 transition-all active:scale-95",
-                    (submitting || sendingNow || drafts.length === 0) && "opacity-60 cursor-not-allowed"
+              {activeDraft && activeDraft.status === "editing" && (
+                <>
+                  {canSendDirect && (
+                    <button
+                      type="button"
+                      onClick={() => sendOne(activeIdx)}
+                      disabled={activeDraft.acting}
+                      title="Send this update directly, skipping the approval queue"
+                      className={cn(
+                        "inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-semibold text-sky-700 bg-white border border-sky-300 hover:bg-sky-50 transition-all active:scale-95",
+                        activeDraft.acting && "opacity-60 cursor-not-allowed"
+                      )}
+                    >
+                      {activeDraft.acting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Zap className="w-3 h-3" />}
+                      {scheduledFor ? "Schedule send" : "Send now"}
+                    </button>
                   )}
-                >
-                  {sendingNow ? <Loader2 className="w-3 h-3 animate-spin" /> : <Zap className="w-3 h-3" />}
-                  {sendingNow
-                    ? "Sending…"
-                    : scheduledFor ? "Schedule send" : "Send now"}
-                </button>
+                  <button
+                    type="button"
+                    onClick={() => submitOne(activeIdx)}
+                    disabled={activeDraft.acting}
+                    className={cn(
+                      "inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs font-semibold text-white shadow-sm transition-all hover:-translate-y-0.5 active:scale-95",
+                      activeDraft.acting && "opacity-60 cursor-not-allowed hover:translate-y-0"
+                    )}
+                    style={{ background: "linear-gradient(135deg, #10b981 0%, #059669 100%)" }}
+                  >
+                    {activeDraft.acting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
+                    {drafts.length === 1 ? "Submit for approval" : `Submit ${activeDraft.departmentName}`}
+                  </button>
+                </>
               )}
-              <button
-                type="button"
-                onClick={submitAll}
-                disabled={submitting || sendingNow || drafts.length === 0}
-                className={cn(
-                  "inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs font-semibold text-white shadow-sm transition-all hover:-translate-y-0.5 active:scale-95",
-                  (submitting || sendingNow || drafts.length === 0) && "opacity-60 cursor-not-allowed hover:translate-y-0"
-                )}
-                style={{ background: "linear-gradient(135deg, #10b981 0%, #059669 100%)" }}
-              >
-                {submitting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
-                {submitting
-                  ? "Submitting…"
-                  : drafts.length === 1 ? "Submit for approval" : `Submit ${drafts.length} for approval`}
-              </button>
             </div>
           </div>
         </div>

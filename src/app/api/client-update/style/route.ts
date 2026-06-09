@@ -35,8 +35,9 @@ interface Body {
   bodyText?: unknown;
   hasHtml?: unknown;
   instruction?: unknown;
-  clientName?: unknown;
-  senderName?: unknown;
+  clientName?: unknown; // the client we're writing TO (greeting context)
+  senderBrand?: unknown; // the agency/mailbox the email is sent FROM (header + footer brand)
+  senderName?: unknown; // the human signing off
   subject?: unknown;
 }
 
@@ -94,7 +95,11 @@ export async function POST(req: NextRequest) {
     if (mode === "custom" && !instruction) {
       return NextResponse.json({ error: "instruction required for custom mode" }, { status: 400 });
     }
-    const clientName = asString(body.clientName).trim() || "Update";
+    const clientName = asString(body.clientName).trim() || "your team";
+    // The styled email is sent FROM the agency TO the client, so the
+    // header band + footer must carry the SENDER's brand, never the
+    // client's. Falls back to a neutral agency label if not provided.
+    const senderBrand = asString(body.senderBrand).trim() || "Scaled";
     const senderName = asString(body.senderName).trim();
 
     // Styled HTML is produced when the user asks to "make fancy", or when
@@ -124,7 +129,9 @@ ABSOLUTE RULES:
 The html object must contain the same information as bodyText, just split into parts. Omit a field if there is nothing for it.`
       : "";
 
-    const userPrompt = `Task: ${instr}
+    const userPrompt = `Context: this is a client progress update written by ${senderBrand} (a digital agency) and sent to ${clientName}. Address the client warmly; speak as "we".
+
+Task: ${instr}
 
 ${needHtml ? "" : "Keep it as plain text. "}Return STRICT JSON, no code fences:
 { "bodyText": "<the revised plain-text body>"${needHtml ? ', "html": { ... }' : ""} }${htmlSchemaNote}
@@ -185,7 +192,7 @@ ${bodyText.slice(0, 8000)}
         sections.length > 0 ? sections : [{ body: newBodyText }];
 
       bodyHtml = renderBlueEmail({
-        brandName: clientName,
+        brandName: senderBrand,
         greeting: scrub(asString(h.greeting).trim()) || null,
         intro: scrub(asString(h.intro).trim()) || null,
         tagline: scrub(asString(h.tagline).trim()) || null,

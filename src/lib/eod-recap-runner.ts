@@ -10,7 +10,6 @@
 //   2. last_eod_recap_at — if a recap already posted in the same UTC day we
 //      skip, so two ticks inside the 7pm hour can't double-post.
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
-import { buildEodForAllDepartments, formatEodForSlack } from "@/lib/eod";
 import { postMessage } from "@/lib/slack";
 
 // Discriminated outcome so the route can echo the same JSON it always has
@@ -58,11 +57,76 @@ export async function runEodRecap(): Promise<EodRecapOutcome> {
     }
   }
 
-  // Build per-department summaries and stitch them into one Block Kit payload.
-  const summaries = await buildEodForAllDepartments();
-  if (summaries.length === 0) {
-    return { ok: true, skipped: "no-departments-with-data" };
+  // ---- Client-based recap ----
+  // For each client worked on today: the tasks completed (attributed to
+  // whoever closed them) + the EOD client-work reports (attributed to who
+  // logged them). "Today" is the America/New_York calendar day, since the
+  // recap fires at 7pm NY and EOD work is filed against the worker's local
+  // date.
+  const now = new Date();
+  const nyFmt = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }); // -> YYYY-MM-DD
+  const nyDateStr = nyFmt.format(now);
+  // Wide completed_at lower bound (30h), then narrowed to NY-today below so
+  // we don't depend on TZ-midnight arithmetic.
+  const sinceIso = new Date(now.getTime() - 30 * 3_600_000).toISOString();
+
+  const [taskRes, workRes] = await Promise.all([
+    supabase
+      .from("tasks")
+      .select("id, title, client_name, assignee_id, completed_at, is_draft")
+      .eq("status", "done")
+      .gte("completed_at", sinceIso)
+      .order("completed_at", { ascending: true })
+      .limit(3000),
+    supabase
+      .from("eod_client_work")
+      .select("client_name, user_id, worked_on, results, created_at")
+      .eq("note_date", nyDateStr)
+      .order("created_at", { ascending: true })
+      .limit(3000)
+  ]);
+
+  interface TaskRow { id: string; title: string; client_name: string | null; assignee_id: string | null; completed_at: string | null; is_draft: boolean | null }
+  interface WorkRow { client_name: string; user_id: string; worked_on: string; results: string | null }
+  const tasks = ((taskRes.data ?? []) as TaskRow[])
+    .filter((t) => !t.is_draft && t.completed_at && nyFmt.format(new Date(t.completed_at)) === nyDateStr);
+  const work = (workRes.data ?? []) as WorkRow[];
+
+  if (tasks.length === 0 && work.length === 0) {
+    // Quiet day — don't post an empty recap. Leave last_eod_recap_at
+    // untouched so we re-check on the next tick within the 7pm hour.
+    return { ok: true, skipped: "no-client-activity" };
   }
+
+  // Resolve contributor names (assignees + EOD authors) in one round-trip.
+  const userIds = Array.from(new Set(
+    [...tasks.map((t) => t.assignee_id), ...work.map((w) => w.user_id)]
+      .filter((v): v is string => !!v)
+  ));
+  const nameById = new Map<string, string>();
+  if (userIds.length > 0) {
+    const { data: us } = await supabase.from("users").select("id, name").in("id", userIds);
+    for (const u of (us ?? []) as { id: string; name: string | null }[]) {
+      nameById.set(u.id, u.name ?? "Someone");
+    }
+  }
+  const who = (id: string | null) => (id ? (nameById.get(id) ?? "Someone") : "Unassigned");
+
+  // Group by client. Tasks with no client_name fall into a trailing
+  // "Internal" bucket so output isn't lost.
+  const tasksByClient = new Map<string, TaskRow[]>();
+  const internalTasks: TaskRow[] = [];
+  for (const t of tasks) {
+    if (t.client_name) {
+      const arr = tasksByClient.get(t.client_name) ?? []; arr.push(t); tasksByClient.set(t.client_name, arr);
+    } else internalTasks.push(t);
+  }
+  const workByClient = new Map<string, WorkRow[]>();
+  for (const w of work) {
+    const arr = workByClient.get(w.client_name) ?? []; arr.push(w); workByClient.set(w.client_name, arr);
+  }
+  const clientNames = Array.from(new Set([...tasksByClient.keys(), ...workByClient.keys()]))
+    .sort((a, b) => a.localeCompare(b));
 
   const today = new Date().toLocaleDateString("en-US", {
     weekday: "long", month: "short", day: "numeric", timeZone: "America/New_York"
@@ -71,25 +135,51 @@ export async function runEodRecap(): Promise<EodRecapOutcome> {
     { type: "header", text: { type: "plain_text", text: `📒 Daily Recap · ${today}`, emoji: true } },
     {
       type: "context",
-      elements: [
-        { type: "mrkdwn", text: "*7pm EST roll-up* — every department's day in one place." }
-      ]
+      elements: [{ type: "mrkdwn", text: "*7pm EST roll-up* — today's work by client, with who did what." }]
     },
     { type: "divider" }
   ];
-  const perDeptBlocks: unknown[] = [];
+
+  // Slack caps section text at 3000 chars and a message at 50 blocks; one
+  // section per client keeps it readable, with per-section + per-list caps
+  // as a backstop on a very busy day.
+  const clamp = (s: string) => (s.length > 2990 ? s.slice(0, 2987) + "…" : s);
+  const MAX_CLIENTS = 40;
+  const PER_LIST = 15;
+  const clientBlocks: unknown[] = [];
   const summaryLines: string[] = [];
-  for (const s of summaries) {
-    summaryLines.push(`${s.departmentName}: ${s.totalCompleted} done · ${s.totalHoursLogged.toFixed(1)}h`);
-    // Reuse the formatter but strip its leading header / footer so the
-    // combined recap doesn't repeat the same context line N times.
-    const { blocks } = formatEodForSlack(s);
-    const body = blocks.filter((b) => {
-      const blk = b as { type?: string };
-      return blk.type !== "header" && blk.type !== "context";
+
+  for (const name of clientNames.slice(0, MAX_CLIENTS)) {
+    const ts = tasksByClient.get(name) ?? [];
+    const ws = workByClient.get(name) ?? [];
+    const lines: string[] = [`*${name}*`];
+    if (ts.length > 0) {
+      lines.push("✅ *Completed:*");
+      for (const t of ts.slice(0, PER_LIST)) lines.push(`   • ${t.title}  _— ${who(t.assignee_id)}_`);
+      if (ts.length > PER_LIST) lines.push(`   • _+${ts.length - PER_LIST} more_`);
+    }
+    if (ws.length > 0) {
+      lines.push("📝 *EOD reports:*");
+      for (const w of ws.slice(0, PER_LIST)) {
+        const res = w.results ? `  (results: ${w.results})` : "";
+        lines.push(`   • ${w.worked_on}${res}  _— ${who(w.user_id)}_`);
+      }
+      if (ws.length > PER_LIST) lines.push(`   • _+${ws.length - PER_LIST} more_`);
+    }
+    clientBlocks.push({ type: "section", text: { type: "mrkdwn", text: clamp(lines.join("\n")) } });
+    summaryLines.push(`${name}: ${ts.length}✅ ${ws.length}📝`);
+  }
+  if (clientNames.length > MAX_CLIENTS) {
+    clientBlocks.push({
+      type: "context",
+      elements: [{ type: "mrkdwn", text: `_+${clientNames.length - MAX_CLIENTS} more clients with activity today_` }]
     });
-    if (body.length === 0) continue;
-    perDeptBlocks.push(...body);
+  }
+  if (internalTasks.length > 0) {
+    const lines = ["*Internal (no client)*", "✅ *Completed:*"];
+    for (const t of internalTasks.slice(0, PER_LIST)) lines.push(`   • ${t.title}  _— ${who(t.assignee_id)}_`);
+    if (internalTasks.length > PER_LIST) lines.push(`   • _+${internalTasks.length - PER_LIST} more_`);
+    clientBlocks.push({ type: "divider" }, { type: "section", text: { type: "mrkdwn", text: clamp(lines.join("\n")) } });
   }
 
   // Thrown failures bubble to the caller (route → 500). The dedupe write only
@@ -97,11 +187,11 @@ export async function runEodRecap(): Promise<EodRecapOutcome> {
   await postMessage(
     recapChannel,
     `Daily Recap · ${today}\n` + summaryLines.join(" · "),
-    [...headerBlocks, ...perDeptBlocks]
+    [...headerBlocks, ...clientBlocks]
   );
   await supabase
     .from("workspace_settings")
     .update({ last_eod_recap_at: new Date().toISOString() })
     .eq("id", "workspace");
-  return { ok: true, posted: summaries.length };
+  return { ok: true, posted: clientNames.length };
 }

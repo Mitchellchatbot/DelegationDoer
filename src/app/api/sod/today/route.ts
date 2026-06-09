@@ -43,13 +43,14 @@ export async function GET(req: NextRequest) {
     const shiftDate =
       "shiftDate" in signal ? signal.shiftDate : new Date().toISOString().slice(0, 10);
 
-    // SEO + Website get the personalised dashboard between welcome and
-    // form. Everyone else jumps welcome → form.
+    // Every department member gets a "Today at a glance" dashboard
+    // between welcome and form. SEO has its bespoke client-health shape;
+    // all other departments share the generic agenda + carry-over view,
+    // scoped to the member's own department. Workers with no department
+    // (and exempt leaders/admins, handled below) jump welcome → form.
     const deps = me.departmentIds ?? [];
-    const departmentKey: "dep_seo" | "dep_web" | null =
-      deps.includes("dep_seo") ? "dep_seo"
-      : deps.includes("dep_web") ? "dep_web"
-      : null;
+    const departmentKey: string | null =
+      deps.includes("dep_seo") ? "dep_seo" : (deps[0] ?? null);
 
     const supabase = getSupabaseAdmin();
     let alreadySubmitted = false;

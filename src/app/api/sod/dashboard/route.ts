@@ -18,7 +18,10 @@ export const dynamic = "force-dynamic";
 //
 // Returns the per-department "today at a glance" payload shown between
 // the welcome modal and the SOD form. Department is resolved from the
-// caller — SEO and Website have their own shape; others get null.
+// caller — SEO has its bespoke client-health shape; every other
+// department shares the generic agenda + carry-over view (kind "web"),
+// scoped to the caller's own department. Callers with no department
+// get null.
 
 type HealthLabel = "thriving" | "steady" | "shaky" | "at_risk";
 
@@ -107,18 +110,19 @@ export async function GET() {
     if (!me) return NextResponse.json({ error: "no user" }, { status: 401 });
 
     const deps = me.departmentIds ?? [];
-    const isSeo = deps.includes("dep_seo");
-    const isWeb = deps.includes("dep_web");
-    if (!isSeo && !isWeb) {
-      return NextResponse.json({ payload: null });
-    }
-
-    if (isSeo) {
+    if (deps.includes("dep_seo")) {
       const payload = await buildSeoPayload(userId);
       return NextResponse.json({ payload });
     }
 
-    const payload = await buildWebPayload(me);
+    // Every other department shares the generic agenda + carry-over
+    // glance, scoped to the member's primary department. No department →
+    // no dashboard.
+    const deptId = deps[0] ?? null;
+    if (!deptId) {
+      return NextResponse.json({ payload: null });
+    }
+    const payload = await buildDeptPayload(me, deptId);
     return NextResponse.json({ payload });
   } catch (err) {
     return NextResponse.json(
@@ -355,19 +359,22 @@ async function buildCompletedToday(
   return { counts, items };
 }
 
-async function buildWebPayload(
-  me: { id: string; weeklySchedule?: unknown; workTimezone?: string | null }
+// Generic department glance (kind "web"): the agenda + carry-over view
+// shared by every non-SEO department, scoped to `departmentId`.
+async function buildDeptPayload(
+  me: { id: string; weeklySchedule?: unknown; workTimezone?: string | null },
+  departmentId: string
 ): Promise<WebPayload> {
   const supabase = getSupabaseAdmin();
 
-  // 1) Carry-over tasks — every dep_web task that isn't done and whose
-  // due date hasn't already passed (or has no due date). Sorted by
-  // client priority (high → low) then due_date ascending.
+  // 1) Carry-over tasks — every task in this department that isn't done
+  // and whose due date hasn't already passed (or has no due date).
+  // Sorted by client priority (high → low) then due_date ascending.
   const today = new Date().toISOString().slice(0, 10);
   const { data: taskRows } = await supabase
     .from("tasks")
     .select("id, title, status, priority, due_date, client_name")
-    .eq("department_id", "dep_web")
+    .eq("department_id", departmentId)
     .neq("status", "done")
     .or(`due_date.gte.${today},due_date.is.null`)
     .limit(50);

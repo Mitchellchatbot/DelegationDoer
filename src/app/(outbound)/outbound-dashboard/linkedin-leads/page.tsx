@@ -1,26 +1,28 @@
 import { Linkedin } from "lucide-react";
 import { PageHero } from "@/components/PageHero";
-import { EmptyChannelPanel } from "@/components/EmptyChannelPanel";
+import { LinkedInLeadsContent } from "@/components/LinkedInLeadsContent";
+import { getLinkedInLeadsMetrics } from "@/lib/linkedin-leads-metrics";
 
-// LinkedIn Leads channel — placeholder for now. Will sit on top of a
-// Sales Navigator export or a Phantombuster pipeline; the unified view
-// here is connections sent / accepted / replied / booked.
+// LinkedIn Leads channel — reads aggregated counts from the standalone
+// LinkedIn-leads Supabase project (project_metrics view). Server-rendered
+// so the service_role key never leaves the Node process.
+//
+// React render layer caches for 5 minutes alongside the fetch layer's
+// own cache; revisiting the tab inside that window is a no-op upstream.
+export const revalidate = 300;
 
-export default function OutboundLinkedInLeadsPage() {
+export default async function OutboundLinkedInLeadsPage() {
+  const result = await getLinkedInLeadsMetrics();
   return (
     <div className="space-y-4 max-w-7xl mx-auto">
       <PageHero
         eyebrow="Channel · Social"
         headline={["LinkedIn ", { accent: "Leads" }]}
-        subtitle="Connection requests, acceptance rate, reply rate, and meetings booked from outbound DMs."
+        subtitle="Outreach volume, success rate, and category mix from the LinkedIn-leads pipeline."
         icon={<Linkedin />}
         iconTone="sky"
       />
-      <EmptyChannelPanel
-        title="LinkedIn pipeline pending"
-        body="Wire up a Sales Navigator export or Phantombuster webhook, then this surface renders the connect → accept → reply → booked funnel for every outbound seat."
-        next="Pick an ingest path (CSV upload, Phantombuster webhook, or direct Sales Nav API) and let me know which to scaffold."
-      />
+      <LinkedInLeadsContent result={result} />
     </div>
   );
 }

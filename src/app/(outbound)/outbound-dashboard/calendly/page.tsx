@@ -1,26 +1,28 @@
 import { CalendarClock } from "lucide-react";
+import { getCalendlySummary } from "@/lib/calendly";
 import { PageHero } from "@/components/PageHero";
-import { EmptyChannelPanel } from "@/components/EmptyChannelPanel";
+import { CalendlyContent } from "@/components/CalendlyContent";
 
-// Calendly channel — placeholder for now. Drop in the Calendly v2 API
-// client once we have a token: bookings/created, no-shows, scheduled
-// vs cancelled rate, top hosts.
+// Calendly — booking volume, no-show / cancel rate, top event types,
+// recent bookings. Wired to the Calendly v2 API via the Personal Access
+// Token in CALENDLY_API_TOKEN (server env). Defaults to a 30-day window.
+// Without the token, renders a soft error panel telling you what to set.
 
-export default function OutboundCalendlyPage() {
+export const revalidate = 60;
+export const dynamic = "force-dynamic";
+
+export default async function OutboundCalendlyPage() {
+  const result = await getCalendlySummary({ days: 30 });
   return (
     <div className="space-y-4 max-w-7xl mx-auto">
       <PageHero
         eyebrow="Channel · Meetings"
         headline={["Calend", { accent: "ly" }]}
-        subtitle="Booking volume, no-show rate, and top hosts — wired to the Calendly v2 API."
+        subtitle="Booking volume, cancellation rate, and event-type breakdown — sourced live from the Calendly v2 API."
         icon={<CalendarClock />}
         iconTone="rose"
       />
-      <EmptyChannelPanel
-        title="Calendly hookup pending"
-        body="Add a Calendly personal-access token to the server env (CALENDLY_API_TOKEN) and this surface lights up with bookings, cancellations, and host leaderboards. No client work needed — it'll mirror the Facebook Ads tile layout."
-        next="Set CALENDLY_API_TOKEN → restart → refresh."
-      />
+      <CalendlyContent result={result} />
     </div>
   );
 }

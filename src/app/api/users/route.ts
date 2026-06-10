@@ -28,7 +28,7 @@ export async function GET() {
   let lastError: string | null = null;
 
   const tries = [
-    "id, name, email, role, avatar_url, presence, presence_updated_at, status_emoji, clock_enabled, is_admin, daily_capacity, work_timezone, weekly_schedule, manager_user_id, secondary_manager_user_id, slack_email, slack_user_id",
+    "id, name, email, role, avatar_url, presence, presence_updated_at, status_emoji, clock_enabled, is_admin, daily_capacity, work_timezone, weekly_schedule, manager_user_id, secondary_manager_user_id, slack_email, slack_user_id, daily_prompts_required",
     "id, name, email, role, avatar_url, presence, presence_updated_at, status_emoji, clock_enabled, is_admin, daily_capacity, work_timezone, weekly_schedule, manager_user_id, secondary_manager_user_id",
     "id, name, email, role, avatar_url, presence, presence_updated_at, status_emoji, clock_enabled, is_admin, daily_capacity, work_timezone, weekly_schedule, manager_user_id",
     "id, name, email, role, avatar_url, presence, presence_updated_at, status_emoji, clock_enabled, is_admin, daily_capacity, work_timezone, weekly_schedule",
@@ -86,6 +86,9 @@ export async function GET() {
       // Default to true so callers that didn't pull this column (older
       // partial-migration fallback) keep the existing behavior.
       clockEnabled: (u as unknown as { clock_enabled?: boolean }).clock_enabled ?? true,
+      // Default false — only true force-opts a privileged account into the
+      // SOD/EOD popup forms. Drives the console's per-admin/leader switch.
+      dailyPromptsRequired: (u as unknown as { daily_prompts_required?: boolean }).daily_prompts_required === true,
       isAdmin: (u as unknown as { is_admin?: boolean }).is_admin === true,
       dailyCapacity: Number((u as unknown as { daily_capacity?: number }).daily_capacity ?? 8),
       workTimezone:

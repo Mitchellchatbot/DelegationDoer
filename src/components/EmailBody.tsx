@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { collapseQuotedHistory } from "@/lib/collapse-quoted-history";
 
 // Render an email's HTML body inside a sandboxed iframe so the email's
 // inline <style> + font-family rules can't cascade into the rest of
@@ -58,7 +59,21 @@ export function EmailBody({ html }: { html: string }) {
       }
       pre { padding: 8px; overflow-x: auto; }
       code { padding: 1px 4px; }
+      details.dd-quote { margin: 6px 0; }
+      summary.dd-quote-toggle {
+        display: inline-block; width: fit-content; margin: 2px 0;
+        padding: 2px 10px; line-height: 1; font-size: 14px; letter-spacing: 1px;
+        color: #59636e; background: #eef1f4; border: 1px solid #d0d7de;
+        border-radius: 12px; cursor: pointer; list-style: none; user-select: none;
+      }
+      summary.dd-quote-toggle::-webkit-details-marker { display: none; }
+      summary.dd-quote-toggle::marker { content: ""; }
+      summary.dd-quote-toggle:hover { background: #e3e7ec; }
     `;
+    // Collapse quoted reply history behind a native <details> toggle (Gmail
+    // style). When no quote is found the original html passes through untouched.
+    // The ResizeObserver below re-fits the iframe when the user expands it.
+    const { html: processed } = collapseQuotedHistory(html);
     const doc = `<!doctype html>
 <html>
 <head>
@@ -66,7 +81,7 @@ export function EmailBody({ html }: { html: string }) {
   <base target="_blank" />
   <style>${baselineCss}</style>
 </head>
-<body>${html}</body>
+<body>${processed}</body>
 </html>`;
 
     iframe.srcdoc = doc;

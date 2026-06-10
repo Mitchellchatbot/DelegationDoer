@@ -1,47 +1,19 @@
 import { redirect } from "next/navigation";
-import { AtSign, SendHorizontal, Inbox, Send, ExternalLink, Paperclip } from "lucide-react";
+import { AtSign, Inbox, ExternalLink } from "lucide-react";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { getThread, listAccounts, type MissiveMessage } from "@/lib/missive-client";
 import { visibleAccountIdsFor } from "@/lib/inbox-access";
-import { Avatar } from "@/components/Avatar";
+import { rawEmail } from "@/lib/email-format";
 import { CreateTaskFromThreadButton } from "@/components/CreateTaskFromThreadButton";
-import { ForwardButton } from "@/components/ForwardButton";
 import { ReplyComposer } from "@/components/ReplyComposer";
 import { ThreadAutoMarkRead } from "@/components/ThreadAutoMarkRead";
 import { ScrollToLatestMessage } from "@/components/ScrollToLatestMessage";
-import { EmailBody } from "@/components/EmailBody";
+import { ThreadMessages } from "@/components/ThreadMessages";
 
 const LATEST_MESSAGE_ID = "thread-latest-message";
 
 export const dynamic = "force-dynamic";
-
-// Pull "Name" out of "Name <email>", or fall back to the local-part of the
-// address. Used to label the avatar + sender pill.
-function shortName(addr: string): string {
-  const m = addr.match(/^"?([^<"]+?)"?\s*<([^>]+)>$/);
-  if (m) return m[1].trim();
-  const at = addr.indexOf("@");
-  return at > 0 ? addr.slice(0, at) : addr;
-}
-
-function rawEmail(addr: string): string {
-  const m = addr.match(/<([^>]+)>/);
-  return m ? m[1] : addr;
-}
-
-// Compact human-readable byte size for the attachment chip (e.g. "7.2 MB").
-function formatBytes(n: number): string {
-  if (!n || n <= 0) return "";
-  const units = ["B", "KB", "MB", "GB"];
-  let v = n;
-  let u = 0;
-  while (v >= 1024 && u < units.length - 1) {
-    v /= 1024;
-    u += 1;
-  }
-  return `${v >= 10 || u === 0 ? Math.round(v) : v.toFixed(1)} ${units[u]}`;
-}
 
 export default async function ThreadDetailPage({
   params
@@ -179,145 +151,15 @@ export default async function ThreadDetailPage({
             />
           </header>
 
-          {/* Messages */}
-          <div className="space-y-4">
-            {messages.map((m, i) => {
-              const senderName = shortName(m.from_addr);
-              const senderEmail = rawEmail(m.from_addr);
-              const outbound = m.direction === "outbound";
-              return (
-                <article
-                  key={m.id}
-                  id={i === messages.length - 1 ? LATEST_MESSAGE_ID : undefined}
-                  className={
-                    "relative overflow-hidden rounded-2xl border shadow-soft hover:shadow-lift transition-shadow animate-rise " +
-                    (outbound
-                      ? "border-blue-200/60 bg-gradient-to-br from-blue-50 to-white"
-                      : "border-indigo-200/60 bg-white")
-                  }
-                  style={{ animationDelay: `${Math.min(i * 0.05, 0.5)}s` }}
-                >
-                  {/* left accent stripe (color-codes direction) */}
-                  <span
-                    aria-hidden
-                    className={
-                      "absolute left-0 top-0 bottom-0 w-1 " +
-                      (outbound ? "bg-blue-400" : "bg-indigo-400")
-                    }
-                  />
-
-                  {/* Header band */}
-                  <header
-                    className="flex items-start gap-3 p-4 border-b border-border/60"
-                    style={{
-                      background: outbound
-                        ? "linear-gradient(90deg, rgba(219,234,254,0.4) 0%, rgba(255,255,255,0) 60%)"
-                        : "linear-gradient(90deg, rgba(237,233,254,0.5) 0%, rgba(255,255,255,0) 60%)"
-                    }}
-                  >
-                    <Avatar name={senderName} size={40} />
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <div className="text-sm font-semibold truncate">{senderName}</div>
-                        <span
-                          className={
-                            "inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full border " +
-                            (outbound
-                              ? "bg-blue-100 text-blue-700 border-blue-200/60"
-                              : "bg-indigo-100 text-indigo-700 border-indigo-200/60")
-                          }
-                        >
-                          {outbound ? <Send className="w-2.5 h-2.5" /> : <Inbox className="w-2.5 h-2.5" />}
-                          {outbound ? "Sent" : "Received"}
-                        </span>
-                      </div>
-                      <div className="text-[11px] text-muted truncate">{senderEmail}</div>
-
-                      {/* Recipient pills */}
-                      <div className="flex flex-wrap gap-1.5 mt-2">
-                        {m.to_addrs.length > 0 && (
-                          <RecipientPill label="to" addrs={m.to_addrs} />
-                        )}
-                        {m.cc_addrs.length > 0 && (
-                          <RecipientPill label="cc" addrs={m.cc_addrs} />
-                        )}
-                      </div>
-                    </div>
-                    <div className="shrink-0 text-right flex flex-col items-end gap-2">
-                      <div className="inline-flex items-center px-2.5 py-1 rounded-full text-[11px] bg-white/70 border border-border/60 text-ink/70 tabular-nums">
-                        {new Date(m.sent_at).toLocaleString(undefined, {
-                          month: "short", day: "numeric", year: "numeric",
-                          hour: "numeric", minute: "2-digit"
-                        })}
-                      </div>
-                      {/* Forward this specific message. Sends from the inbox
-                          in view (params.accountId); the server rebuilds the
-                          quoted body + re-attaches the originals. */}
-                      <ForwardButton
-                        accountId={params.accountId}
-                        threadId={params.threadId}
-                        messageId={m.id}
-                        sourceSubject={m.subject || thread.subject || ""}
-                        sourceFrom={m.from_addr}
-                        sourceDate={new Date(m.sent_at).toLocaleString(undefined, {
-                          month: "short", day: "numeric", year: "numeric",
-                          hour: "numeric", minute: "2-digit"
-                        })}
-                        attachmentCount={(m.attachments ?? []).length}
-                      />
-                    </div>
-                  </header>
-
-                  {/* Body — rendered inside a sandboxed iframe so the
-                      email's <style> and font-family declarations can't
-                      cascade into the rest of the app. Plain-text
-                      fallback gets the regular prose treatment. */}
-                  <div className="p-5">
-                    {m.body_html ? (
-                      <EmailBody html={m.body_html} />
-                    ) : (
-                      <pre className="text-sm whitespace-pre-wrap font-sans leading-relaxed">
-                        {m.body_text || "(empty)"}
-                      </pre>
-                    )}
-                  </div>
-
-                  {/* Attachments — one chip per file, matching missiveclone's
-                      own ThreadView which renders every attachment
-                      unconditionally. We deliberately do NOT filter out
-                      "inline" (cid) images: DelegationDoer's sandboxed iframe
-                      can't resolve cid: refs, so hiding them would make real
-                      attachments vanish (inbound images often arrive embedded
-                      with a content_id). Each chip links to the proxy that
-                      streams bytes from the clone with an access check. */}
-                  {(() => {
-                    const atts = m.attachments ?? [];
-                    if (atts.length === 0) return null;
-                    return (
-                      <div className="px-5 pb-5 -mt-1 flex flex-wrap gap-2">
-                        {atts.map((a) => (
-                          <a
-                            key={a.id}
-                            href={`/api/inboxes/attachments/${encodeURIComponent(a.id)}?account=${encodeURIComponent(params.accountId)}&thread=${encodeURIComponent(params.threadId)}`}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center gap-2 px-3 py-2 rounded-xl border border-border/60 bg-white/70 hover:border-accent/40 hover:text-accent transition-all hover:-translate-y-0.5 shadow-sm max-w-full"
-                            title={`Download ${a.filename}`}
-                          >
-                            <Paperclip className="w-3.5 h-3.5 shrink-0" />
-                            <span className="text-xs font-medium truncate max-w-[200px]">{a.filename}</span>
-                            {a.size_bytes > 0 && (
-                              <span className="text-[10px] text-muted shrink-0 tabular-nums">{formatBytes(a.size_bytes)}</span>
-                            )}
-                          </a>
-                        ))}
-                      </div>
-                    );
-                  })()}
-                </article>
-              );
-            })}
-          </div>
+          {/* Messages — Gmail-style: latest expanded, older ones collapsed
+              into clickable stubs. Client component owns the collapse state. */}
+          <ThreadMessages
+            messages={messages}
+            accountId={params.accountId}
+            threadId={params.threadId}
+            threadSubject={thread.subject || ""}
+            latestMessageId={LATEST_MESSAGE_ID}
+          />
 
           {/* Inline reply — Gmail-style folded composer that expands
               when the user clicks. */}
@@ -347,18 +189,5 @@ export default async function ThreadDetailPage({
         </>
       )}
     </div>
-  );
-}
-
-function RecipientPill({ label, addrs }: { label: "to" | "cc"; addrs: string[] }) {
-  return (
-    <span className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-200/60">
-      <SendHorizontal className="w-3 h-3" />
-      <span className="text-slate-500 mr-0.5">{label}</span>
-      <span className="truncate max-w-[220px]">
-        {addrs.slice(0, 2).map(shortName).join(", ")}
-        {addrs.length > 2 ? ` +${addrs.length - 2}` : ""}
-      </span>
-    </span>
   );
 }

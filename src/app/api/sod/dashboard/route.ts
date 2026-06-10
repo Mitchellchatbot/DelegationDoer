@@ -54,9 +54,10 @@ interface SeoPayload {
   // when health labels haven't been computed yet ("12 clients tracked
   // · health pending") instead of a blank panel.
   totalClients: number;
-  // Every client whose effective health is at-risk, regardless of
-  // contact recency — so none slip past just because they were emailed
-  // recently. Distinct from followUp, which is the stale-contact band.
+  // Every client whose effective health is at-risk or shaky, regardless
+  // of contact recency — so none slip past just because they were
+  // emailed recently. Distinct from followUp, which is the stale-contact
+  // band.
   atRisk: SeoFollowUpItem[];
   followUp: SeoFollowUpItem[];
   recentOutbound: Array<{
@@ -195,12 +196,17 @@ async function buildSeoPayload(userId: string): Promise<SeoPayload> {
     };
   });
 
-  // At-risk — every client on an at-risk effective health label, no
-  // matter the touchpoint band, so a recently-emailed at-risk client is
-  // still surfaced. Most-neglected (oldest contact) first.
+  // At-risk — every client on an at-risk *or* shaky effective health
+  // label, no matter the touchpoint band, so a recently-emailed
+  // at-risk/shaky client is still surfaced. At-risk leads shaky
+  // (healthRank); within a band, most-neglected (oldest contact) first.
   const atRisk: SeoFollowUpItem[] = enriched
-    .filter((c) => c.effectiveHealth === "at_risk")
-    .sort((a, b) => (b.daysSince ?? 9999) - (a.daysSince ?? 9999))
+    .filter((c) => c.effectiveHealth === "at_risk" || c.effectiveHealth === "shaky")
+    .sort((a, b) => {
+      const hr = healthRank(a.effectiveHealth) - healthRank(b.effectiveHealth);
+      if (hr !== 0) return hr;
+      return (b.daysSince ?? 9999) - (a.daysSince ?? 9999);
+    })
     .slice(0, 10)
     .map((c) => ({
       clientId: c.id,

@@ -25,6 +25,7 @@ interface NavItem { href: string; label: string; icon: typeof BarChart3; tone: T
 
 const NAV: NavItem[] = [
   { href: "/outbound-dashboard/facebook-ads",   label: "Facebook Ads",   icon: BarChart3,     tone: "indigo"  },
+  { href: "/outbound-dashboard/facebook-ads-2", label: "Facebook Ads 2", icon: BarChart3,     tone: "violet"  },
   { href: "/outbound-dashboard/calendly",       label: "Calendly",       icon: CalendarClock, tone: "rose"    },
   { href: "/outbound-dashboard/linkedin-leads", label: "LinkedIn Leads", icon: Linkedin,      tone: "sky"     },
   { href: "/outbound-dashboard/people",         label: "Team",           icon: UsersIcon,     tone: "fuchsia" }

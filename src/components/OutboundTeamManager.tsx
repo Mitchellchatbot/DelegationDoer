@@ -2,7 +2,12 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { Check, Plus, Search, X } from "lucide-react";
-import { PersonAvatar } from "./PersonAvatar";
+// NB: NOT PersonAvatar — that hook-chains into PresenceProvider /
+// EomProvider / SlackEmojiProvider, which only live in the (main)
+// layout. Using it inside the (outbound) shell throws
+// "Cannot read properties of null (reading 'useContext')" at render.
+// The plain Avatar has no provider dependencies.
+import { Avatar } from "./Avatar";
 import { cn } from "@/lib/utils";
 
 // Stand-in storage for the outbound roster. Lives in localStorage so
@@ -124,7 +129,7 @@ export function OutboundTeamManager({ users }: { users: OrgUser[] }) {
                 key={u.id}
                 className="inline-flex items-center gap-2 pl-1 pr-2.5 py-1 rounded-full bg-violet-50 border border-violet-200/60 text-[12.5px] text-violet-900"
               >
-                <PersonAvatar userId={u.id} name={u.name} imageUrl={u.avatarUrl ?? undefined} size={20} />
+                <Avatar name={u.name} imageUrl={u.avatarUrl ?? null} size={20} />
                 {u.name}
                 <button
                   onClick={() => toggle(u.id)}
@@ -174,7 +179,7 @@ export function OutboundTeamManager({ users }: { users: OrgUser[] }) {
                   on ? "bg-violet-50/60" : "hover:bg-slate-50"
                 )}
               >
-                <PersonAvatar userId={u.id} name={u.name} imageUrl={u.avatarUrl ?? undefined} size={32} />
+                <Avatar name={u.name} imageUrl={u.avatarUrl ?? null} size={32} />
                 <div className="min-w-0 flex-1">
                   <div className="text-[14px] font-medium text-ink truncate">{u.name}</div>
                   <div className="text-[12px] text-ink/55 truncate">{u.email}</div>

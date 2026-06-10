@@ -16,14 +16,10 @@ import { StatCard } from "@/components/StatCard";
 
 export function FacebookAdsContent({ result }: { result: FbResult<FbAggregatedInsights> }) {
   if (!result.ok) return <ErrorPanel error={result.error} />;
-  return (
-    <>
-      <KpiGrid data={result.data} />
-      {result.data.perAccount.length > 1 && (
-        <PerAccountBreakdown rows={result.data.perAccount} currency={result.data.currency} />
-      )}
-    </>
-  );
+  // Per-account breakdown panel removed — the aggregated KPI grid is
+  // sufficient for the dashboard; the per-account splits were noisy and
+  // the secondary token's PKR account zeros made the row read as broken.
+  return <KpiGrid data={result.data} />;
 }
 
 function KpiGrid({ data }: { data: FbAggregatedInsights }) {
@@ -100,60 +96,6 @@ function KpiGrid({ data }: { data: FbAggregatedInsights }) {
           subtitle="form submissions"
           info="Counts every Meta action with action_type matching /lead/ — primarily lead-form submissions (the 'Submit Application' CTA), plus any on-platform or offsite-conversion leads."
         />
-      </div>
-    </div>
-  );
-}
-
-function PerAccountBreakdown({
-  rows, currency
-}: {
-  rows: FbAggregatedInsights["perAccount"];
-  currency: string;
-}) {
-  const sorted = [...rows].sort((a, b) => b.insights.spend - a.insights.spend);
-  return (
-    <div className="rounded-2xl border border-slate-200 bg-white shadow-soft overflow-hidden">
-      <div className="px-5 py-4 border-b border-slate-100">
-        <div className="text-[11px] uppercase tracking-[0.16em] font-semibold text-ink/55">
-          Per ad account
-        </div>
-        <h2 className="text-[18px] font-semibold text-ink mt-0.5">Spend breakdown</h2>
-      </div>
-      <div className="divide-y divide-slate-100">
-        {sorted.map(({ account, insights }) => {
-          const share = sorted.reduce((s, r) => s + r.insights.spend, 0);
-          const pct = share > 0 ? (insights.spend / share) * 100 : 0;
-          return (
-            <div key={account.id} className="px-5 py-3 flex items-center gap-4">
-              <div className="min-w-0 flex-1">
-                <div className="text-[14px] font-medium text-ink truncate">{account.name}</div>
-                <div className="text-[11px] text-ink/55 mt-0.5">
-                  {account.id} · {account.currency}
-                </div>
-              </div>
-              <div className="hidden sm:flex items-center gap-6 text-[12px] text-ink/65">
-                <div className="tabular-nums">{fmtNumber(insights.impressions)} <span className="text-ink/45">impr</span></div>
-                <div className="tabular-nums">{fmtNumber(insights.clicks)} <span className="text-ink/45">clicks</span></div>
-                <div className="tabular-nums">{fmtNumber(insights.leads)} <span className="text-ink/45">submits</span></div>
-              </div>
-              <div className="w-40 shrink-0">
-                <div className="flex items-baseline justify-end gap-2">
-                  <span className="text-[14px] font-semibold text-ink tabular-nums">
-                    {fmtCurrency(insights.spend, account.currency || currency)}
-                  </span>
-                  <span className="text-[10px] text-ink/55 tabular-nums">{pct.toFixed(0)}%</span>
-                </div>
-                <div className="mt-1 h-1.5 rounded-full bg-slate-100 overflow-hidden">
-                  <div
-                    className="h-full bg-accent"
-                    style={{ width: `${Math.max(2, Math.min(100, pct))}%` }}
-                  />
-                </div>
-              </div>
-            </div>
-          );
-        })}
       </div>
     </div>
   );

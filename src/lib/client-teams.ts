@@ -73,6 +73,18 @@ export const TEAM_DEPARTMENT: Record<TeamId, string> = {
   team_seo_saif:   "dep_seo"
 };
 
+// Inverse of TEAM_DEPARTMENT: the team buckets that belong to a given
+// department. Used to scope client-facing surfaces (e.g. the SOD "today
+// at a glance" agenda) to the caller's own department — a Software
+// member shouldn't see SEO/Website client mail and vice versa. Returns
+// [] for a department with no client teams (e.g. dep_mkt).
+export function teamsForDepartment(departmentId: string | null | undefined): TeamId[] {
+  if (!departmentId) return [];
+  return (Object.keys(TEAM_DEPARTMENT) as TeamId[]).filter(
+    (t) => TEAM_DEPARTMENT[t] === departmentId
+  );
+}
+
 const TEAM_IDS: Set<string> = new Set(TEAMS.map((t) => t.id));
 
 export function isValidTeamId(id: unknown): id is TeamId {

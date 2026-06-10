@@ -11,6 +11,7 @@ import {
 import { healthRank } from "@/lib/client-health";
 import { listThreads } from "@/lib/missive-client";
 import { buildClientSignals, threadMatchesClient } from "@/lib/client-thread-match";
+import { teamsForDepartment } from "@/lib/client-teams";
 
 export const dynamic = "force-dynamic";
 
@@ -419,50 +420,58 @@ async function buildDeptPayload(
     .slice(0, 15);
 
   // 2) Inbound email agenda — recent threads (last 16h) that match a
-  // known client. Missive integration is wrapped in try/catch so a
-  // misconfigured / down clone doesn't break the whole dashboard.
+  // client *in this department*. Scoped via clients.team_id → department
+  // (teamsForDepartment) so a member only sees their own department's
+  // client mail — a Software person never sees SEO/Website threads. A
+  // department with no client teams (e.g. dep_mkt) gets an empty agenda
+  // and we skip the Missive round-trip entirely. Wrapped in try/catch so
+  // a misconfigured / down clone doesn't break the whole dashboard.
   const inbound: WebPayload["inbound"] = [];
-  try {
-    const sinceMs = Date.now() - 16 * 60 * 60 * 1000;
-    const allClientsRes = await supabase
-      .from("clients")
-      .select("id, name, website, websites, contact_emails");
-    type ClientLite = {
-      id: string; name: string; website: string | null;
-      websites: string[] | null; contact_emails: string[] | null;
-    };
-    const allClients = (allClientsRes.data ?? []) as ClientLite[];
-    const clientSignals = allClients.map((c) => ({
-      client: c,
-      signals: buildClientSignals({
-        website: c.website,
-        websites: c.websites ?? [],
-        contactEmails: c.contact_emails ?? []
-      })
-    }));
+  const teamIds = teamsForDepartment(departmentId);
+  if (teamIds.length > 0) {
+    try {
+      const sinceMs = Date.now() - 16 * 60 * 60 * 1000;
+      const allClientsRes = await supabase
+        .from("clients")
+        .select("id, name, website, websites, contact_emails")
+        .in("team_id", teamIds);
+      type ClientLite = {
+        id: string; name: string; website: string | null;
+        websites: string[] | null; contact_emails: string[] | null;
+      };
+      const allClients = (allClientsRes.data ?? []) as ClientLite[];
+      const clientSignals = allClients.map((c) => ({
+        client: c,
+        signals: buildClientSignals({
+          website: c.website,
+          websites: c.websites ?? [],
+          contactEmails: c.contact_emails ?? []
+        })
+      }));
 
-    const threads = await listThreads({ folder: "INBOX", limit: 100 });
-    for (const t of threads) {
-      const lastMs = new Date(t.last_message_at).getTime();
-      if (Number.isNaN(lastMs) || lastMs < sinceMs) continue;
-      // Find the first client this thread matches.
-      const match = clientSignals.find((cs) =>
-        cs.signals.emailSet.size + cs.signals.domainSet.size > 0
-        && threadMatchesClient(t.participants, cs.signals)
-      );
-      if (!match) continue;
-      inbound.push({
-        threadId: t.id,
-        accountId: t.account_emails?.[0]?.email ?? null,
-        subject: t.subject || "(no subject)",
-        clientName: match.client.name,
-        lastAt: t.last_message_at,
-        participants: t.participants ?? []
-      });
-      if (inbound.length >= 15) break;
+      const threads = await listThreads({ folder: "INBOX", limit: 100 });
+      for (const t of threads) {
+        const lastMs = new Date(t.last_message_at).getTime();
+        if (Number.isNaN(lastMs) || lastMs < sinceMs) continue;
+        // Find the first client this thread matches.
+        const match = clientSignals.find((cs) =>
+          cs.signals.emailSet.size + cs.signals.domainSet.size > 0
+          && threadMatchesClient(t.participants, cs.signals)
+        );
+        if (!match) continue;
+        inbound.push({
+          threadId: t.id,
+          accountId: t.account_emails?.[0]?.email ?? null,
+          subject: t.subject || "(no subject)",
+          clientName: match.client.name,
+          lastAt: t.last_message_at,
+          participants: t.participants ?? []
+        });
+        if (inbound.length >= 15) break;
+      }
+    } catch {
+      /* Missive unreachable — render empty inbound list */
     }
-  } catch {
-    /* Missive unreachable — render empty inbound list */
   }
 
   void me; // kept on signature for future personalisation (user's inbox)

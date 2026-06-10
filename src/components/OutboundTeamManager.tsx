@@ -43,7 +43,22 @@ interface OrgUser {
   departmentIds: string[];
 }
 
-export function OutboundTeamManager({ users }: { users: OrgUser[] }) {
+// "Pinned" members are always part of the team — they bypass the
+// localStorage picker entirely and render at the top of the roster
+// with a chip instead of a remove button. Use this when someone
+// should always count as outbound regardless of whether the page's
+// org-fetched user list contains them or not.
+export function OutboundTeamManager({
+  users: usersProp, pinned = []
+}: {
+  users: OrgUser[];
+  pinned?: OrgUser[];
+}) {
+  // Pinned ids are excluded from the picker list — they're already on
+  // the team, no point letting the operator click them again. We still
+  // include them in the roster display below.
+  const pinnedIds = new Set(pinned.map((p) => p.id));
+  const users = usersProp.filter((u) => !pinnedIds.has(u.id));
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [query, setQuery] = useState("");
   // Hydrate from localStorage post-mount to avoid the SSR/CSR mismatch
@@ -107,9 +122,9 @@ export function OutboundTeamManager({ users }: { users: OrgUser[] }) {
               Current roster
             </div>
             <div className="text-[16px] font-semibold text-ink mt-0.5">
-              {selected.size === 0
+              {pinned.length + selected.size === 0
                 ? "No one on the outbound team yet"
-                : `${selected.size} ${selected.size === 1 ? "member" : "members"}`}
+                : `${pinned.length + selected.size} ${pinned.length + selected.size === 1 ? "member" : "members"}`}
             </div>
           </div>
           {selected.size > 0 && (
@@ -118,12 +133,28 @@ export function OutboundTeamManager({ users }: { users: OrgUser[] }) {
               className="inline-flex items-center gap-1.5 text-[12px] text-ink/60 hover:text-rose-600 transition-colors"
             >
               <X className="w-3.5 h-3.5" />
-              Clear all
+              Clear picked
             </button>
           )}
         </div>
-        {selectedUsers.length > 0 ? (
+        {pinned.length + selectedUsers.length > 0 ? (
           <div className="px-5 py-4 flex flex-wrap gap-2">
+            {/* Pinned members first — visually identical pill but with
+                a small "pinned" indicator instead of the remove button.
+                They can't be cleared from the UI; only via code. */}
+            {pinned.map((u) => (
+              <span
+                key={u.id}
+                className="inline-flex items-center gap-2 pl-1 pr-2.5 py-1 rounded-full bg-fuchsia-50 border border-fuchsia-200/60 text-[12.5px] text-fuchsia-900"
+                title="Pinned member — always on the team"
+              >
+                <Avatar name={u.name} imageUrl={u.avatarUrl ?? null} size={20} />
+                {u.name}
+                <span className="ml-0.5 px-1.5 py-0.5 rounded-full bg-fuchsia-100 text-[9px] uppercase tracking-wide font-bold text-fuchsia-700">
+                  pinned
+                </span>
+              </span>
+            ))}
             {selectedUsers.map((u) => (
               <span
                 key={u.id}

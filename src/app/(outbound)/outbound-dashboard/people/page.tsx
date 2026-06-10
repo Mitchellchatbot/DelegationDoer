@@ -13,6 +13,24 @@ import { OutboundTeamManager } from "@/components/OutboundTeamManager";
 
 export const dynamic = "force-dynamic";
 
+// Manually pinned outbound team members — they always show in the
+// roster regardless of whether they exist in the org users table. Use
+// this for people who aren't in Supabase yet (contractors, new hires
+// pre-onboarding, etc.) so the team section is useful immediately.
+//
+// To add another: drop a new entry here. ID prefix `pinned_` keeps
+// these from colliding with real Supabase user ids.
+const PINNED_MEMBERS = [
+  {
+    id: "pinned_hamza",
+    name: "Hamza",
+    email: "",
+    avatarUrl: null,
+    role: "worker",
+    departmentIds: []
+  }
+];
+
 export default async function OutboundPeoplePage() {
   const allUsers = await getAllUsers();
   // Strip down to just what the client picker needs — no need to ship
@@ -35,7 +53,7 @@ export default async function OutboundPeoplePage() {
         icon={<UsersIcon />}
         iconTone="fuchsia"
       />
-      <OutboundTeamManager users={orgUsers} />
+      <OutboundTeamManager users={orgUsers} pinned={PINNED_MEMBERS} />
     </div>
   );
 }

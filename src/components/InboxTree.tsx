@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 import { motion } from "framer-motion";
 import { useEffect, useState } from "react";
 import { Inbox, Mail, Settings as SettingsIcon, Layers, Plus, ChevronDown } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { cn, initials } from "@/lib/utils";
 import { ConnectInboxDialog } from "./ConnectInboxDialog";
 import { InboxFavicon } from "./InboxFavicon";
 
@@ -135,9 +135,17 @@ export function InboxTree({ accounts, canManage }: Props) {
                     icon={
                       <InboxFavicon
                         email={a.email}
-                        label={a.label || a.email || a.id}
-                        fallbackClass={
+                        title={a.label || a.email || a.id}
+                        className="rounded-md"
+                        loadedClassName="bg-white ring-1 ring-black/5"
+                        fallbackClassName={cn(
+                          "text-white",
                           SPACE_COLOR_DOT[sp.color] ?? DOT_TONES[hueIndex(a.id)]
+                        )}
+                        fallback={
+                          <span className="text-[9px] font-semibold leading-none uppercase">
+                            {initials(a.label || a.email || a.id) || "@"}
+                          </span>
                         }
                       />
                     }
@@ -191,8 +199,15 @@ export function InboxTree({ accounts, canManage }: Props) {
                 icon={
                   <InboxFavicon
                     email={a.email}
-                    label={a.label || a.email || a.id}
-                    fallbackClass={DOT_TONES[hueIndex(a.id)]}
+                    title={a.label || a.email || a.id}
+                    className="rounded-md"
+                    loadedClassName="bg-white ring-1 ring-black/5"
+                    fallbackClassName={cn("text-white", DOT_TONES[hueIndex(a.id)])}
+                    fallback={
+                      <span className="text-[9px] font-semibold leading-none uppercase">
+                        {initials(a.label || a.email || a.id) || "@"}
+                      </span>
+                    }
                   />
                 }
                 label={a.label || a.email || a.id}

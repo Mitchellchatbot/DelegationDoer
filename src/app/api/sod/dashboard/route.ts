@@ -102,6 +102,7 @@ interface WebPayload {
     dueDate: string | null;
     clientName: string | null;
     clientPriority: "low" | "medium" | "high" | null;
+    assigneeName: string | null;
   }>;
 }
 
@@ -380,14 +381,14 @@ async function buildDeptPayload(
   const today = new Date().toISOString().slice(0, 10);
   const { data: taskRows } = await supabase
     .from("tasks")
-    .select("id, title, status, priority, due_date, client_name")
+    .select("id, title, status, priority, due_date, client_name, assignee_id")
     .eq("department_id", departmentId)
     .neq("status", "done")
     .or(`due_date.gte.${today},due_date.is.null`)
     .limit(50);
   type TaskRow = {
     id: string; title: string; status: string; priority: string;
-    due_date: string | null; client_name: string | null;
+    due_date: string | null; client_name: string | null; assignee_id: string | null;
   };
   const tasks = (taskRows ?? []) as TaskRow[];
 
@@ -404,6 +405,22 @@ async function buildDeptPayload(
       priorityByName.set(c.name, c.priority);
     }
   }
+
+  // Resolve assignee names in one round-trip (same shape as the client
+  // priority lookup above). Tasks carry a single assignee_id → users(id).
+  const assigneeIds = Array.from(
+    new Set(tasks.map((t) => t.assignee_id).filter((id): id is string => !!id))
+  );
+  const nameById = new Map<string, string>();
+  if (assigneeIds.length > 0) {
+    const { data: usr } = await supabase
+      .from("users")
+      .select("id, name")
+      .in("id", assigneeIds);
+    for (const u of (usr ?? []) as Array<{ id: string; name: string }>) {
+      nameById.set(u.id, u.name);
+    }
+  }
   const PRIO_RANK = { high: 0, medium: 1, low: 2 } as const;
   const carryOverTasks: WebPayload["carryOverTasks"] = tasks
     .map((t) => ({
@@ -413,7 +430,8 @@ async function buildDeptPayload(
       priority: t.priority,
       dueDate: t.due_date,
       clientName: t.client_name,
-      clientPriority: t.client_name ? priorityByName.get(t.client_name) ?? null : null
+      clientPriority: t.client_name ? priorityByName.get(t.client_name) ?? null : null,
+      assigneeName: t.assignee_id ? nameById.get(t.assignee_id) ?? null : null
     }))
     .sort((a, b) => {
       const ap = a.clientPriority ? PRIO_RANK[a.clientPriority] : 99;

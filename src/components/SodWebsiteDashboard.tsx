@@ -22,6 +22,7 @@ export interface WebDashboardData {
     dueDate: string | null;
     clientName: string | null;
     clientPriority: "low" | "medium" | "high" | null;
+    assigneeName: string | null;
   }>;
 }
 
@@ -79,6 +80,9 @@ export function SodWebsiteDashboard({ data }: { data: WebDashboardData }) {
                   {t.clientName && <span className="text-ink/45"> · {t.clientName}</span>}
                 </Link>
                 <div className="flex items-center gap-1.5 text-xs shrink-0">
+                  {t.assigneeName && (
+                    <span className="text-ink/55">{t.assigneeName}</span>
+                  )}
                   {t.clientPriority && (
                     <span className={cn(
                       "px-1.5 py-0.5 rounded-full font-medium border",

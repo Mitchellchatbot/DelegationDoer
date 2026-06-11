@@ -108,8 +108,10 @@ export function ClientHealthCard({ data }: { data: SeoDashboardData }) {
   );
 }
 
-// Every at-risk client, regardless of contact recency. Exported so the
-// "Review Client Health" step shows the same list. Sits above follow-up.
+// Every at-risk or shaky client, regardless of contact recency. Exported
+// so the "Review Client Health" step shows the same list. Sits above
+// follow-up. Each row carries a health pill so shaky reads distinctly
+// from at-risk now that both share this card.
 export function AtRiskCard({ data }: { data: SeoDashboardData }) {
   return (
     <Card title="At-risk clients" icon={<AlertTriangle className="w-3.5 h-3.5 text-rose-500" />}>
@@ -125,11 +127,21 @@ export function AtRiskCard({ data }: { data: SeoDashboardData }) {
               >
                 {c.clientName}
               </Link>
-              <span className="text-xs text-ink/55 shrink-0 tabular-nums">
-                {c.daysSinceLastOutbound === null
-                  ? "no contact on file"
-                  : `${c.daysSinceLastOutbound}d ago`}
-              </span>
+              <div className="flex items-center gap-1.5 text-xs text-ink/55 shrink-0">
+                {c.health && (
+                  <span className={cn(
+                    "px-1.5 py-0.5 rounded-full font-medium",
+                    HEALTH_TONE[c.health].bg, HEALTH_TONE[c.health].text
+                  )}>
+                    {HEALTH_TONE[c.health].label}
+                  </span>
+                )}
+                <span className="tabular-nums">
+                  {c.daysSinceLastOutbound === null
+                    ? "no contact on file"
+                    : `${c.daysSinceLastOutbound}d ago`}
+                </span>
+              </div>
             </li>
           ))}
         </ul>

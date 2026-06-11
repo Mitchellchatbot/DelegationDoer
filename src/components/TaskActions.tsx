@@ -2,11 +2,12 @@
 
 import * as Dialog from "@radix-ui/react-dialog";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Check, ChevronDown, X, Pencil, CalendarPlus } from "lucide-react";
 import { toast } from "sonner";
 import { MediaPicker } from "@/components/MediaPicker";
+import { useTeam } from "@/lib/team-context";
 import type { Priority, Task, TaskMedia, TaskStatus } from "@/lib/types";
 
 const STATUS_OPTIONS: { value: TaskStatus; label: string }[] = [
@@ -103,6 +104,7 @@ function EditButton({ task }: { task: Task }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const router = useRouter();
+  const { tasks } = useTeam();
 
   // Lazy-fetch departments on dialog open so we don't pay the cost
   // for every task card render.
@@ -119,6 +121,43 @@ function EditButton({ task }: { task: Task }) {
       .catch(() => { /* leave list empty — Department field shows "—" */ });
     return () => { cancelled = true; };
   }, [open, departments.length]);
+
+  // Canonical client roster — lazy-fetched on open, same as departments.
+  // Drives the Website picker: when this task has a client, we surface
+  // that client's sites (primary + the `websites` array, e.g. the Villa
+  // cohort) so the editor can pick rather than retype a URL.
+  interface ClientRow { name: string; website: string | null; websites: string[] }
+  const [clientRoster, setClientRoster] = useState<ClientRow[]>([]);
+  useEffect(() => {
+    if (!open || clientRoster.length > 0) return;
+    let cancelled = false;
+    fetch("/api/clients", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (cancelled || !d) return;
+        setClientRoster(((d.clients ?? []) as ClientRow[])
+          .map((c) => ({ name: c.name, website: c.website ?? null, websites: c.websites ?? [] })));
+      })
+      .catch(() => { /* picker just falls back to task-derived sites */ });
+    return () => { cancelled = true; };
+  }, [open, clientRoster.length]);
+
+  // Website suggestions for the datalist. The selected client's own sites
+  // come first; everything else (other clients' sites + sites already used
+  // on tasks) follows as a fallback so freshly-typed domains still appear.
+  const websiteOptions = useMemo(() => {
+    const match = clientRoster.find(
+      (c) => c.name.toLowerCase() === clientName.trim().toLowerCase()
+    );
+    const own = match
+      ? [match.website, ...match.websites].filter((s): s is string => !!s && s.trim().length > 0)
+      : [];
+    const rest = [
+      ...clientRoster.flatMap((c) => [c.website, ...c.websites]),
+      ...tasks.map((t) => t.website)
+    ].filter((s): s is string => !!s && s.trim().length > 0);
+    return Array.from(new Set([...own, ...rest]));
+  }, [clientRoster, tasks, clientName]);
 
   async function save() {
     if (saving) return;
@@ -206,7 +245,16 @@ function EditButton({ task }: { task: Task }) {
               </div>
               <div>
                 <label className="label">Website</label>
-                <input className="input" value={website} onChange={(e) => setWebsite(e.target.value)} placeholder="—" />
+                <input
+                  list="edit-website-options"
+                  className="input"
+                  value={website}
+                  onChange={(e) => setWebsite(e.target.value)}
+                  placeholder="—"
+                />
+                <datalist id="edit-website-options">
+                  {websiteOptions.map((w) => <option key={w} value={w} />)}
+                </datalist>
               </div>
             </div>
             <div>

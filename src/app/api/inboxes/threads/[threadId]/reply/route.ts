@@ -4,6 +4,7 @@ import { getUserById } from "@/lib/server-data";
 import { visibleAccountIdsFor } from "@/lib/inbox-access";
 import { sendReply, getThread } from "@/lib/missive-client";
 import { sanitizeMediaUrls, fetchMediaAsAttachments } from "@/lib/media";
+import { deleteReplyDraft } from "@/lib/inbox-drafts";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -105,6 +106,10 @@ export async function POST(
       inReplyTo,
       attachments
     });
+
+    // The reply went out — clear the working draft for this thread. Never let
+    // a draft-cleanup failure turn a successful send into an error.
+    await deleteReplyDraft(userId, params.threadId).catch(() => {});
 
     return NextResponse.json({ ok: true, messageId: result.messageId });
   } catch (err) {

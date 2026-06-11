@@ -58,7 +58,9 @@ export default function LeaderConsolePage() {
             dailyCapacity: u.dailyCapacity ?? 8,
             throughput: {},
             avatarUrl: u.avatarUrl ?? undefined,
-            managerId: u.managerId ?? null
+            managerId: u.managerId ?? null,
+            // Needed to scope the SOD/EOD forms switch to admin/leader rows.
+            isAdmin: u.isAdmin === true
           }));
           setPeople(live);
         }
@@ -168,6 +170,9 @@ function PeopleTab({
   // isn't part of types.User, so we track it separately. Pulled from
   // /api/users which already returns clockEnabled per row.
   const [clockEnabled, setClockEnabled] = useState<Record<string, boolean>>({});
+  // Per-user SOD/EOD-forms flag (daily_prompts_required). Tracked separately
+  // like clockEnabled; only surfaced as a switch on admin/leader rows.
+  const [dailyPromptsRequired, setDailyPromptsRequired] = useState<Record<string, boolean>>({});
   useEffect(() => {
     let cancelled = false;
     fetch("/api/tasks", { cache: "no-store" })
@@ -182,10 +187,15 @@ function PeopleTab({
       .then((data) => {
         if (cancelled || !Array.isArray(data?.users)) return;
         const ce: Record<string, boolean> = {};
-        for (const u of data.users) ce[u.id] = u.clockEnabled !== false;
+        const dpr: Record<string, boolean> = {};
+        for (const u of data.users) {
+          ce[u.id] = u.clockEnabled !== false;
+          dpr[u.id] = u.dailyPromptsRequired === true;
+        }
         setClockEnabled(ce);
+        setDailyPromptsRequired(dpr);
       })
-      .catch(() => { /* leave empty → renders as default-on */ });
+      .catch(() => { /* leave empty → renders as default-off */ });
     return () => { cancelled = true; };
   }, []);
 
@@ -235,6 +245,25 @@ function PeopleTab({
     } catch (err) {
       toast.error(`Couldn't save — ${err instanceof Error ? err.message : "unknown error"}`);
       setClockEnabled(prev);
+    }
+  }
+  async function togglePromptsRequired(id: string) {
+    const prev = dailyPromptsRequired;
+    const next = !(prev[id] ?? false);
+    setDailyPromptsRequired({ ...prev, [id]: next });
+    try {
+      const res = await fetch(`/api/users/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dailyPromptsRequired: next })
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        throw new Error(d?.error || `HTTP ${res.status}`);
+      }
+    } catch (err) {
+      toast.error(`Couldn't save — ${err instanceof Error ? err.message : "unknown error"}`);
+      setDailyPromptsRequired(prev);
     }
   }
 
@@ -321,6 +350,7 @@ function PeopleTab({
               <th className="px-4 py-2.5 font-normal">Departments</th>
               <th className="px-4 py-2.5 font-normal">Reports to</th>
               <th className="px-4 py-2.5 font-normal text-center" title="Whether this person needs to clock in/out via the widget">Clock</th>
+              <th className="px-4 py-2.5 font-normal text-center" title="Whether admins/leaders get the SOD/EOD popup forms (off = role-exempt)">SOD/EOD forms</th>
               <th className="px-4 py-2.5 font-normal text-right">Actions</th>
             </tr>
           </thead>
@@ -392,10 +422,26 @@ function PeopleTab({
                     />
                   </td>
                   <td className="px-4 py-3 text-center">
-                    <ClockSwitch
+                    <ToggleSwitch
                       enabled={clockEnabled[u.id] ?? true}
                       onToggle={() => toggleClock(u.id)}
+                      title={(clockEnabled[u.id] ?? true)
+                        ? "Clocking in: required. Click to switch off."
+                        : "Clocking in: not required. Click to switch on."}
                     />
+                  </td>
+                  <td className="px-4 py-3 text-center">
+                    {(u.role === "leader" || u.isAdmin) ? (
+                      <ToggleSwitch
+                        enabled={dailyPromptsRequired[u.id] ?? false}
+                        onToggle={() => togglePromptsRequired(u.id)}
+                        title={(dailyPromptsRequired[u.id] ?? false)
+                          ? "SOD/EOD popup forms: ON. Click to disable for this admin/leader."
+                          : "SOD/EOD popup forms: OFF (role-exempt). Click to enable."}
+                      />
+                    ) : (
+                      <span className="text-muted" title="Governed by the per-user daily prompts setting, not this override">—</span>
+                    )}
                   </td>
                   <td className="px-4 py-3 text-right">
                     <div className="inline-flex items-center gap-1.5 justify-end">
@@ -425,7 +471,7 @@ function PeopleTab({
                 {isExpanded && (
                   <tr className="bg-slate-50/40">
                     <td className="w-8" />
-                    <td colSpan={6} className="px-4 py-3">
+                    <td colSpan={7} className="px-4 py-3">
                       <PersonTaskList userId={u.id} tasks={liveTasks} />
                     </td>
                   </tr>
@@ -594,16 +640,16 @@ function InviteLinkCard() {
   );
 }
 
-function ClockSwitch({
-  enabled, onToggle
-}: { enabled: boolean; onToggle: () => void }) {
+function ToggleSwitch({
+  enabled, onToggle, title
+}: { enabled: boolean; onToggle: () => void; title?: string }) {
   return (
     <button
       type="button"
       onClick={onToggle}
       role="switch"
       aria-checked={enabled}
-      title={enabled ? "Clocking in: required. Click to switch off." : "Clocking in: not required. Click to switch on."}
+      title={title}
       className={
         "relative inline-flex items-center w-9 h-5 rounded-full border transition-colors " +
         (enabled

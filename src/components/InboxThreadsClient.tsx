@@ -1,12 +1,16 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { toast } from "sonner";
 import {
   Search, Loader2, X, Users, KeyRound, BellRing, Receipt, Calendar, AlertTriangle,
-  Inbox, Send, ShieldAlert
+  Inbox, Send, ShieldAlert, FileText
 } from "lucide-react";
 import { ThreadList, type ThreadListItem } from "./ThreadList";
 import { useInboxSplit } from "@/components/InboxSplit";
+import { DraftList } from "./DraftList";
+import type { InboxDraft } from "@/lib/inbox-drafts";
 import { cn } from "@/lib/utils";
 
 type Category = "all" | "people" | "codes" | "newsletters" | "receipts" | "calendar" | "bounces";
@@ -15,12 +19,15 @@ type Category = "all" | "people" | "codes" | "newsletters" | "receipts" | "calen
 // first page unchanged; SENT/SPAM switch the server-side `folder` scope on
 // every /api/inboxes/threads fetch (which keeps the same per-user
 // visibility filter, so no inbox the user can't already see is exposed).
-type Folder = "INBOX" | "SENT" | "SPAM";
+// DRAFTS is DD-local (the inbox_drafts table), not a missive folder — it's
+// fetched from /api/inboxes/drafts and rendered with <DraftList>.
+type Folder = "INBOX" | "SENT" | "SPAM" | "DRAFTS";
 
 const MAILBOXES: Array<{ id: Folder; label: string; icon: typeof Inbox }> = [
-  { id: "INBOX", label: "Inbox", icon: Inbox },
-  { id: "SENT",  label: "Sent",  icon: Send },
-  { id: "SPAM",  label: "Spam",  icon: ShieldAlert }
+  { id: "INBOX",  label: "Inbox",  icon: Inbox },
+  { id: "SENT",   label: "Sent",   icon: Send },
+  { id: "DRAFTS", label: "Drafts", icon: FileText },
+  { id: "SPAM",   label: "Spam",   icon: ShieldAlert }
 ];
 
 const CATEGORIES: Array<{ id: Category; label: string; icon: typeof Users; tone: string }> = [
@@ -67,14 +74,62 @@ export function InboxThreadsClient({
   const [searchActive, setSearchActive] = useState(false);
   const [category, setCategory] = useState<Category>("all");
   const [folder, setFolder] = useState<Folder>("INBOX");
+  const [drafts, setDrafts] = useState<InboxDraft[]>([]);
+  const [draftsLoading, setDraftsLoading] = useState(false);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   // Threads opened in the reading pane this session — drop their unread style
   // live without a server refresh (see InboxSplit). Empty when not in a split.
   const { readIds } = useInboxSplit();
+  const router = useRouter();
+  const searchParams = useSearchParams();
 
   // Inbox view shows the SSR'd first page; Sent/Spam are always fetched
   // client-side from /api/inboxes/threads with the folder scope applied.
   const isDefaultView = folder === "INBOX" && category === "all" && !debouncedQ;
+
+  // Fetch the caller's drafts when the Drafts view is open. Kept separate
+  // from the thread fetch below: drafts are DD-local and never hit the
+  // missive threads endpoint.
+  useEffect(() => {
+    if (folder !== "DRAFTS") return;
+    let cancelled = false;
+    setDraftsLoading(true);
+    (async () => {
+      try {
+        const res = await fetch("/api/inboxes/drafts", { cache: "no-store" });
+        const data = await res.json();
+        if (!cancelled) setDrafts(data.drafts ?? []);
+      } catch {
+        if (!cancelled) setDrafts([]);
+      } finally {
+        if (!cancelled) setDraftsLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [folder]);
+
+  // Open a compose draft back into the new-message modal. ComposeButton (a
+  // sibling on the page header) watches this query param and auto-opens +
+  // hydrates from it.
+  const openComposeDraft = useCallback((draftId: string) => {
+    const params = new URLSearchParams(Array.from(searchParams.entries()));
+    params.set("composeDraft", draftId);
+    router.replace(`?${params.toString()}`, { scroll: false });
+  }, [router, searchParams]);
+
+  // Discard a draft — optimistic removal + DELETE.
+  const discardDraft = useCallback(async (draft: InboxDraft) => {
+    setDrafts((prev) => prev.filter((d) => d.id !== draft.id));
+    const url = draft.threadId
+      ? `/api/inboxes/drafts/thread/${encodeURIComponent(draft.threadId)}`
+      : `/api/inboxes/drafts/${encodeURIComponent(draft.id)}`;
+    try {
+      const res = await fetch(url, { method: "DELETE" });
+      if (!res.ok) throw new Error();
+    } catch {
+      toast.error("Couldn't discard the draft — refresh and try again.");
+    }
+  }, []);
 
   // Debounce search input — fires once 350ms after the user stops typing.
   useEffect(() => {
@@ -150,6 +205,9 @@ export function InboxThreadsClient({
     filterKeyRef.current = filterKey;
     let cancelled = false;
     async function run() {
+      // Drafts are DD-local and fetched by their own effect — never hit the
+      // missive threads endpoint for this view.
+      if (folder === "DRAFTS") return;
       // Restore SSR'd page only on the default Inbox view — no search, no
       // category filter, INBOX folder. Any other combination is fetched.
       if (isDefaultView) {
@@ -188,7 +246,7 @@ export function InboxThreadsClient({
   }, [debouncedQ, initialThreads, initialHasMore, mailboxId, category, folder, isDefaultView]);
 
   const loadMore = useCallback(async () => {
-    if (loading || !hasMore) return;
+    if (loading || !hasMore || folder === "DRAFTS") return;
     setLoading(true);
     try {
       const params = new URLSearchParams();
@@ -286,6 +344,22 @@ export function InboxThreadsClient({
         })}
       </div>
 
+      {folder === "DRAFTS" ? (
+        <div className="space-y-2">
+          <div className="flex justify-end text-[11px] text-ink/55 tabular-nums">
+            {draftsLoading
+              ? <span className="inline-flex items-center gap-1"><Loader2 className="w-3 h-3 animate-spin" /> Loading…</span>
+              : <><span className="font-medium">{drafts.length}</span> draft{drafts.length === 1 ? "" : "s"}</>}
+          </div>
+          <DraftList
+            drafts={drafts}
+            linkAccountId={linkAccountId}
+            onOpenCompose={openComposeDraft}
+            onDiscard={discardDraft}
+          />
+        </div>
+      ) : (
+      <>
       {/* Search + status line — search is what users reach for first;
           categories sit just below as a secondary filter row. Tighter
           rhythm (space-y-2, smaller padding) since this used to take
@@ -383,6 +457,8 @@ export function InboxThreadsClient({
             {loading ? "Loading more…" : "Load more"}
           </button>
         </div>
+      )}
+      </>
       )}
     </div>
   );

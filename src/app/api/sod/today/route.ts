@@ -53,6 +53,25 @@ export async function GET(req: NextRequest) {
       deps.includes("dep_seo") ? "dep_seo" : (deps[0] ?? null);
 
     const supabase = getSupabaseAdmin();
+
+    // Don't auto-pop the SOD modal while the first-run profile onboarding
+    // is still pending — that dialog is a Radix modal that locks pointer
+    // events on everything outside it (including this higher-z SOD
+    // overlay), so showing both at once deadlocks the screen. Let
+    // onboarding finish first; SOD pops on the next check. Best-effort:
+    // a missing column means "not pending", so SOD behaves as before.
+    let onboardingPending = false;
+    try {
+      const { data: ob } = await supabase
+        .from("users")
+        .select("onboarded_at")
+        .eq("id", userId)
+        .maybeSingle();
+      onboardingPending = ob ? !ob.onboarded_at : false;
+    } catch {
+      onboardingPending = false;
+    }
+
     let alreadySubmitted = false;
     try {
       const { data } = await supabase
@@ -87,6 +106,7 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.json({
       eligible,
+      onboardingPending,
       alreadySubmitted,
       shiftDate,
       shiftStart: "shiftStart" in signal ? signal.shiftStart : null,

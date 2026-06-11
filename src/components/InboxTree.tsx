@@ -5,8 +5,9 @@ import { usePathname } from "next/navigation";
 import { motion } from "framer-motion";
 import { useEffect, useState } from "react";
 import { Inbox, Mail, Settings as SettingsIcon, Layers, Plus, ChevronDown } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { cn, initials } from "@/lib/utils";
 import { ConnectInboxDialog } from "./ConnectInboxDialog";
+import { InboxFavicon } from "./InboxFavicon";
 
 // Left-rail tree for the inbox surface. Sections collapse into:
 //   • Smart — All inboxes (combined view, "/inboxes/all")
@@ -132,11 +133,20 @@ export function InboxTree({ accounts, canManage }: Props) {
                     href={href}
                     active={path.startsWith(href)}
                     icon={
-                      <span
-                        className={cn(
-                          "w-2 h-2 rounded-full shrink-0",
+                      <InboxFavicon
+                        email={a.email}
+                        title={a.label || a.email || a.id}
+                        className="rounded-md"
+                        loadedClassName="bg-white ring-1 ring-black/5"
+                        fallbackClassName={cn(
+                          "text-white",
                           SPACE_COLOR_DOT[sp.color] ?? DOT_TONES[hueIndex(a.id)]
                         )}
+                        fallback={
+                          <span className="text-[9px] font-semibold leading-none uppercase">
+                            {initials(a.label || a.email || a.id) || "@"}
+                          </span>
+                        }
                       />
                     }
                     label={a.label || a.email || a.id}
@@ -187,11 +197,17 @@ export function InboxTree({ accounts, canManage }: Props) {
                 href={href}
                 active={path.startsWith(href)}
                 icon={
-                  <span
-                    className={cn(
-                      "w-2 h-2 rounded-full shrink-0",
-                      DOT_TONES[hueIndex(a.id)]
-                    )}
+                  <InboxFavicon
+                    email={a.email}
+                    title={a.label || a.email || a.id}
+                    className="rounded-md"
+                    loadedClassName="bg-white ring-1 ring-black/5"
+                    fallbackClassName={cn("text-white", DOT_TONES[hueIndex(a.id)])}
+                    fallback={
+                      <span className="text-[9px] font-semibold leading-none uppercase">
+                        {initials(a.label || a.email || a.id) || "@"}
+                      </span>
+                    }
                   />
                 }
                 label={a.label || a.email || a.id}

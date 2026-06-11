@@ -54,9 +54,10 @@ interface SeoPayload {
   // when health labels haven't been computed yet ("12 clients tracked
   // · health pending") instead of a blank panel.
   totalClients: number;
-  // Every client whose effective health is at-risk, regardless of
-  // contact recency — so none slip past just because they were emailed
-  // recently. Distinct from followUp, which is the stale-contact band.
+  // Every client whose effective health is at-risk or shaky, regardless
+  // of contact recency — so none slip past just because they were
+  // emailed recently. Distinct from followUp, which is the stale-contact
+  // band.
   atRisk: SeoFollowUpItem[];
   followUp: SeoFollowUpItem[];
   recentOutbound: Array<{
@@ -101,6 +102,7 @@ interface WebPayload {
     dueDate: string | null;
     clientName: string | null;
     clientPriority: "low" | "medium" | "high" | null;
+    assigneeName: string | null;
   }>;
 }
 
@@ -195,12 +197,17 @@ async function buildSeoPayload(userId: string): Promise<SeoPayload> {
     };
   });
 
-  // At-risk — every client on an at-risk effective health label, no
-  // matter the touchpoint band, so a recently-emailed at-risk client is
-  // still surfaced. Most-neglected (oldest contact) first.
+  // At-risk — every client on an at-risk *or* shaky effective health
+  // label, no matter the touchpoint band, so a recently-emailed
+  // at-risk/shaky client is still surfaced. At-risk leads shaky
+  // (healthRank); within a band, most-neglected (oldest contact) first.
   const atRisk: SeoFollowUpItem[] = enriched
-    .filter((c) => c.effectiveHealth === "at_risk")
-    .sort((a, b) => (b.daysSince ?? 9999) - (a.daysSince ?? 9999))
+    .filter((c) => c.effectiveHealth === "at_risk" || c.effectiveHealth === "shaky")
+    .sort((a, b) => {
+      const hr = healthRank(a.effectiveHealth) - healthRank(b.effectiveHealth);
+      if (hr !== 0) return hr;
+      return (b.daysSince ?? 9999) - (a.daysSince ?? 9999);
+    })
     .slice(0, 10)
     .map((c) => ({
       clientId: c.id,
@@ -374,16 +381,35 @@ async function buildDeptPayload(
   const today = new Date().toISOString().slice(0, 10);
   const { data: taskRows } = await supabase
     .from("tasks")
-    .select("id, title, status, priority, due_date, client_name")
+    .select("id, title, status, priority, due_date, client_name, assignee_id")
     .eq("department_id", departmentId)
     .neq("status", "done")
     .or(`due_date.gte.${today},due_date.is.null`)
     .limit(50);
   type TaskRow = {
     id: string; title: string; status: string; priority: string;
-    due_date: string | null; client_name: string | null;
+    due_date: string | null; client_name: string | null; assignee_id: string | null;
   };
-  const tasks = (taskRows ?? []) as TaskRow[];
+  const allTasks = (taskRows ?? []) as TaskRow[];
+
+  // A task can carry department_id = this dept while being assigned to a
+  // member of another team (e.g. an SEO worker on a Website task). The
+  // per-department glance is a team view, so drop tasks owned by someone
+  // outside this department — they shouldn't surface in another team's
+  // start-of-day. Unassigned department tasks are kept: they're open
+  // pickup work with no owner to be out-of-team. Membership lives in the
+  // department_members join table (same source as userDepartmentIds in
+  // lib/server-data.ts).
+  const { data: memberRows } = await supabase
+    .from("department_members")
+    .select("user_id")
+    .eq("department_id", departmentId);
+  const memberIds = new Set(
+    (memberRows ?? []).map((r: { user_id: string }) => r.user_id)
+  );
+  const tasks = allTasks.filter(
+    (t) => !t.assignee_id || memberIds.has(t.assignee_id)
+  );
 
   const clientNames = Array.from(
     new Set(tasks.map((t) => t.client_name).filter((n): n is string => !!n))
@@ -398,6 +424,22 @@ async function buildDeptPayload(
       priorityByName.set(c.name, c.priority);
     }
   }
+
+  // Resolve assignee names in one round-trip (same shape as the client
+  // priority lookup above). Tasks carry a single assignee_id → users(id).
+  const assigneeIds = Array.from(
+    new Set(tasks.map((t) => t.assignee_id).filter((id): id is string => !!id))
+  );
+  const nameById = new Map<string, string>();
+  if (assigneeIds.length > 0) {
+    const { data: usr } = await supabase
+      .from("users")
+      .select("id, name")
+      .in("id", assigneeIds);
+    for (const u of (usr ?? []) as Array<{ id: string; name: string }>) {
+      nameById.set(u.id, u.name);
+    }
+  }
   const PRIO_RANK = { high: 0, medium: 1, low: 2 } as const;
   const carryOverTasks: WebPayload["carryOverTasks"] = tasks
     .map((t) => ({
@@ -407,7 +449,8 @@ async function buildDeptPayload(
       priority: t.priority,
       dueDate: t.due_date,
       clientName: t.client_name,
-      clientPriority: t.client_name ? priorityByName.get(t.client_name) ?? null : null
+      clientPriority: t.client_name ? priorityByName.get(t.client_name) ?? null : null,
+      assigneeName: t.assignee_id ? nameById.get(t.assignee_id) ?? null : null
     }))
     .sort((a, b) => {
       const ap = a.clientPriority ? PRIO_RANK[a.clientPriority] : 99;

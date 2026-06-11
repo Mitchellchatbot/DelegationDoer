@@ -1,10 +1,10 @@
 "use client";
 
 import * as Dialog from "@radix-ui/react-dialog";
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useState, useEffect, useRef, useCallback } from "react";
+import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
-import { PenSquare, Send, X, Loader2, Clock } from "lucide-react";
+import { PenSquare, Send, X, Loader2, Clock, Check } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { MediaPicker } from "@/components/MediaPicker";
@@ -26,8 +26,17 @@ export function ComposeButton({
   accounts?: { id: string; email: string; display_name?: string | null }[];
 }) {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const pathname = usePathname();
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  // Draft autosave. draftIdRef identifies this compose draft (client-owned,
+  // since there's no thread to key on). saveState drives the header chip;
+  // skipSaveRef swallows the autosave run that opening / hydration triggers.
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle");
+  const draftIdRef = useRef<string | null>(null);
+  const skipSaveRef = useRef(false);
+  const composeDraftParam = searchParams.get("composeDraft");
   // When `accounts` is supplied, this picks which mailbox to send FROM.
   // Defaults to the first; the picker only renders if there's >1 option.
   const initialFromId = accountId ?? accounts?.[0]?.id ?? "";
@@ -61,7 +70,90 @@ export function ComposeButton({
     setScheduleOpen(false);
     setSendAtLocal("");
     setAttachments([]);
+    // Forget the draft id so the next Compose starts a fresh draft. The
+    // server-side draft row (if any) is left intact — closing keeps it.
+    draftIdRef.current = null;
+    skipSaveRef.current = true;
+    setSaveState("idle");
   }
+
+  // Strip the ?composeDraft param after resuming/sending so a refresh
+  // doesn't re-open the modal.
+  const clearComposeParam = useCallback(() => {
+    if (!searchParams.get("composeDraft")) return;
+    const params = new URLSearchParams(Array.from(searchParams.entries()));
+    params.delete("composeDraft");
+    const qs = params.toString();
+    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+  }, [router, pathname, searchParams]);
+
+  // Resume a compose draft when the Drafts folder navigates here with
+  // ?composeDraft=<id>. Opens the modal pre-filled.
+  useEffect(() => {
+    if (!composeDraftParam) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(
+          `/api/inboxes/drafts/${encodeURIComponent(composeDraftParam)}`,
+          { cache: "no-store" }
+        );
+        if (!res.ok) return;
+        const data = await res.json();
+        const d = data.draft;
+        if (cancelled || !d) return;
+        draftIdRef.current = d.id;
+        if (Array.isArray(d.to)) setTo(d.to.join(", "));
+        if (Array.isArray(d.cc) && d.cc.length > 0) { setCc(d.cc.join(", ")); setShowCc(true); }
+        if (typeof d.subject === "string") setSubject(d.subject);
+        if (typeof d.bodyText === "string") setBodyText(d.bodyText);
+        if (Array.isArray(d.attachments)) setAttachments(d.attachments);
+        if (d.accountId) setFromAccountId(d.accountId);
+        setSaveState("saved");
+        skipSaveRef.current = true;
+        setOpen(true);
+      } catch {
+        /* draft gone / network blip — ignore */
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [composeDraftParam]);
+
+  const saveDraft = useCallback(async () => {
+    if (!draftIdRef.current) return;
+    const toList = to.split(/[,\n]/).map((s) => s.trim()).filter(Boolean);
+    const ccList = cc.split(/[,\n]/).map((s) => s.trim()).filter(Boolean);
+    setSaveState("saving");
+    try {
+      const res = await fetch("/api/inboxes/drafts", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: draftIdRef.current,
+          accountId: effectiveAccountId || undefined,
+          threadId: null,
+          to: toList,
+          cc: ccList,
+          subject: subject.trim() || undefined,
+          bodyText,
+          attachmentUrls: attachments
+        })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { setSaveState("idle"); return; }
+      setSaveState(data.deleted ? "idle" : "saved");
+    } catch {
+      setSaveState("idle");
+    }
+  }, [to, cc, subject, bodyText, attachments, effectiveAccountId]);
+
+  // Debounced autosave while the modal is open.
+  useEffect(() => {
+    if (!open) return;
+    if (skipSaveRef.current) { skipSaveRef.current = false; return; }
+    const t = setTimeout(() => { void saveDraft(); }, 700);
+    return () => clearTimeout(t);
+  }, [open, saveDraft]);
 
   async function submit() {
     const toList = to.split(/[,\n]/).map((s) => s.trim()).filter(Boolean);
@@ -110,6 +202,8 @@ export function ComposeButton({
           cc: ccList,
           subject: subject.trim(),
           bodyText: bodyText,
+          // Lets the compose route clear this draft after a successful send.
+          ...(draftIdRef.current ? { draftId: draftIdRef.current } : {}),
           ...(sendAtISO ? { sendAt: sendAtISO } : { attachmentUrls: attachments })
         })
       });
@@ -120,6 +214,7 @@ export function ComposeButton({
       }
       toast.success(sendAtISO ? `Scheduled for ${new Date(sendAtISO).toLocaleString()}` : "Sent ✉️");
       reset();
+      clearComposeParam();
       setOpen(false);
       router.refresh();
     } catch (err) {
@@ -130,7 +225,23 @@ export function ComposeButton({
   }
 
   return (
-    <Dialog.Root open={open} onOpenChange={(v) => { setOpen(v); if (!v) reset(); }}>
+    <Dialog.Root
+      open={open}
+      onOpenChange={(v) => {
+        setOpen(v);
+        if (v) {
+          if (!draftIdRef.current) {
+            draftIdRef.current = `cd_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+            skipSaveRef.current = true;
+          }
+        } else {
+          // Closing keeps the saved draft (it shows in the Drafts folder);
+          // just clear the form + the resume param.
+          reset();
+          clearComposeParam();
+        }
+      }}
+    >
       <Dialog.Trigger asChild>
         <button
           type="button"
@@ -176,6 +287,13 @@ export function ComposeButton({
                   <div className="flex items-center gap-2">
                     <PenSquare className="w-4 h-4 text-accent" />
                     <Dialog.Title className="text-sm font-semibold">New message</Dialog.Title>
+                    {saveState !== "idle" && (
+                      <span className="inline-flex items-center gap-1 text-[10px] uppercase tracking-wide text-ink/45 font-semibold">
+                        {saveState === "saving"
+                          ? <><Loader2 className="w-3 h-3 animate-spin" /> Saving…</>
+                          : <><Check className="w-3 h-3 text-emerald-500" /> Saved</>}
+                      </span>
+                    )}
                     {fromOptions.length > 1 ? (
                       <label className="inline-flex items-center gap-1.5 text-[11px] text-ink/55">
                         from

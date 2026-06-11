@@ -7,6 +7,7 @@ import { Inbox, MessageSquare, ExternalLink } from "lucide-react";
 import { cn, initials as nameInitials } from "@/lib/utils";
 import { useInboxSplit } from "@/components/InboxSplit";
 import type { MissiveThread } from "@/lib/missive-client";
+import { InboxFavicon } from "./InboxFavicon";
 
 // Email-row visualization for an inbox thread. Lays out like Gmail /
 // Front / Mail.app:
@@ -53,6 +54,16 @@ function shortAddress(addr: string | undefined | null): string {
   if (m) return m[1].trim();
   const at = addr.indexOf("@");
   return at > 0 ? addr.slice(0, at) : addr;
+}
+
+// Pull the bare email out of a participant string — handles both
+// `"Name" <addr@host>` and a plain `addr@host`. Used to derive the
+// sender's domain favicon. Returns null when there's no address.
+function addressEmail(addr: string | undefined | null): string | null {
+  if (!addr) return null;
+  const angle = addr.match(/<([^>]+)>/);
+  const raw = (angle ? angle[1] : addr).trim();
+  return raw.includes("@") ? raw : null;
 }
 
 function relativeMail(iso: string | null | undefined): string {
@@ -130,16 +141,24 @@ export function ThreadRow({ thread, href, unread, index, accountId, threadId, mi
           )}
         />
 
-        {/* Avatar — initials-based, tone hashed off the sender so the
-            same person always gets the same color. */}
-        <div
-          className={cn(
-            "shrink-0 w-9 h-9 rounded-full grid place-items-center text-[12px] font-bold tracking-tight bg-gradient-to-br ring-1 ring-white shadow-sm",
-            avatarTone
-          )}
-        >
-          {initials || "?"}
-        </div>
+        {/* Avatar — the sender domain's favicon, falling back to the
+            initials tile (tone hashed off the sender so the same person
+            always gets the same color) when there's no favicon. */}
+        <InboxFavicon
+          email={addressEmail(senderRaw)}
+          size={36}
+          title={sender}
+          className="rounded-full ring-1 ring-white shadow-sm"
+          loadedClassName="bg-white ring-1 ring-slate-200/80 shadow-sm"
+          fallbackClassName={cn("bg-gradient-to-br", avatarTone)}
+          fallback={
+            <span className="text-[12px] font-bold tracking-tight">
+              {initials || "?"}
+            </span>
+          }
+          // pad the square favicon so its corners don't clip on the circle
+          imgClassName="p-1.5"
+        />
 
         {/* Sender + subject */}
         <div className="min-w-0 flex-1">

@@ -14,7 +14,7 @@ export async function GET() {
     const { data, error } = await getSupabaseAdmin()
       .from("clients")
       .select(
-        "id, name, website, contact_name, contact_emails, onboarding_date, business_information, priority, priority_rank, display_order, status, start_date, subscription_date, did_build_website, tawk_installed, google_profile_automation, domain_location, hosting_location, notes"
+        "id, name, website, websites, contact_name, contact_emails, onboarding_date, business_information, priority, priority_rank, display_order, status, start_date, subscription_date, did_build_website, tawk_installed, google_profile_automation, domain_location, hosting_location, notes"
       )
       .order("display_order", { ascending: true })
       .order("name", { ascending: true });
@@ -23,6 +23,10 @@ export async function GET() {
       id: c.id as string,
       name: c.name as string,
       website: (c.website as string | null) ?? null,
+      // Full set of sites a client runs (Villa cohort etc.). Primary
+      // `website` stays canonical; `websites` lets task forms offer
+      // every site as a pickable option.
+      websites: (c.websites as string[] | null) ?? [],
       contactName: (c.contact_name as string | null) ?? null,
       contactEmails: (c.contact_emails as string[] | null) ?? [],
       onboardingDate: (c.onboarding_date as string | null) ?? null,

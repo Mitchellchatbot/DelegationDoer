@@ -35,7 +35,10 @@ export function SodGate() {
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
         if (cancelled || !d) return;
-        if (d.eligible) setOpen(true);
+        // Hold off while first-run profile onboarding is still open — the
+        // two modals stack and deadlock (the onboarding Radix dialog locks
+        // pointer events on this overlay). SOD pops once they're onboarded.
+        if (d.eligible && !d.onboardingPending) setOpen(true);
       })
       .catch(() => { /* silent — fallback to manual entry */ });
     return () => { cancelled = true; };

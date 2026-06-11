@@ -62,6 +62,24 @@ export async function PATCH(
       }
     }
 
+    // ---- SOD/EOD popup forms toggle ----
+    // Flips daily_prompts_required, which force-opts a privileged account
+    // (leader/admin) back into the SOD modal + /home bookend despite the
+    // role exemption. The console only exposes this switch on leader/admin
+    // rows, but the column is safe to set on anyone.
+    if (typeof body.dailyPromptsRequired === "boolean") {
+      const { error: promptsErr } = await supabase
+        .from("users")
+        .update({ daily_prompts_required: body.dailyPromptsRequired })
+        .eq("id", params.id);
+      if (promptsErr) {
+        return NextResponse.json(
+          { error: `forms toggle: ${promptsErr.message}` },
+          { status: 500 }
+        );
+      }
+    }
+
     // ---- manager (reports-to) ----
     // `null` clears it. A string sets it, but only when it points to a
     // real, distinct user — self-reference is rejected up front so a

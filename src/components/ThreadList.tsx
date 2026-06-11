@@ -94,6 +94,8 @@ export function ThreadList({
             thread={t}
             unread={unread}
             index={i}
+            accountId={acct}
+            threadId={t.id}
             href={`/inboxes/${encodeURIComponent(acct)}/threads/${encodeURIComponent(t.id)}`}
             missiveUrl={
               missiveAppUrl

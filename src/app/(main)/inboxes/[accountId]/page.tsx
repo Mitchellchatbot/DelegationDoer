@@ -7,6 +7,7 @@ import { visibleAccountIdsFor } from "@/lib/inbox-access";
 import { readStateForThreads, isThreadUnread } from "@/lib/thread-read-state";
 import { InboxThreadsClient } from "@/components/InboxThreadsClient";
 import { ComposeButton } from "@/components/ComposeButton";
+import { InboxSplit } from "@/components/InboxSplit";
 
 export const dynamic = "force-dynamic";
 
@@ -75,6 +76,7 @@ export default async function InboxThreadsPage({
   const unreadCount = decoratedThreads.filter((d) => d.unread).length;
 
   return (
+    <InboxSplit>
     <div className="space-y-5">
       <header
         className="relative overflow-hidden rounded-2xl border border-border shadow-soft p-5"
@@ -124,5 +126,6 @@ export default async function InboxThreadsPage({
         />
       )}
     </div>
+    </InboxSplit>
   );
 }

@@ -5,6 +5,7 @@ import { motion } from "framer-motion";
 import { useMemo } from "react";
 import { Inbox, MessageSquare, ExternalLink } from "lucide-react";
 import { cn, initials as nameInitials } from "@/lib/utils";
+import { useInboxSplit } from "@/components/InboxSplit";
 import type { MissiveThread } from "@/lib/missive-client";
 import { InboxFavicon } from "./InboxFavicon";
 
@@ -21,6 +22,9 @@ export interface ThreadRowProps {
   href: string;
   unread: boolean;
   index: number;
+  // Inbox + thread ids used to open the reading pane via ?thread=&acct=.
+  accountId: string;
+  threadId: string;
   // Optional "Open in Missive" deep-link rendered as a sibling chip.
   missiveUrl?: string;
 }
@@ -77,12 +81,24 @@ function relativeMail(iso: string | null | undefined): string {
   );
 }
 
-export function ThreadRow({ thread, href, unread, index, missiveUrl }: ThreadRowProps) {
+export function ThreadRow({ thread, href, unread, index, accountId, threadId, missiveUrl }: ThreadRowProps) {
+  const { select, isSelected } = useInboxSplit();
+  const selected = isSelected(threadId);
+
   const senderRaw = thread.participants[0] ?? "";
   const sender = shortAddress(senderRaw);
   const recipientCount = Math.max(0, thread.participants.length - 1);
   const messageCount = thread.message_count ?? null;
   const time = relativeMail(thread.last_message_at);
+
+  // Plain left-click opens the email in the reading pane via client-local state
+  // (no navigation/SSR, so the list keeps its scroll + loaded pages). Modifier/
+  // middle clicks fall through to the <Link> so "open in new tab" still works.
+  function openInPane(e: React.MouseEvent<HTMLAnchorElement>) {
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+    e.preventDefault();
+    select(accountId, threadId);
+  }
 
   const avatarTone = useMemo(
     () => AVATAR_TONES[hashStringToIndex(senderRaw || "?", AVATAR_TONES.length)],
@@ -103,12 +119,16 @@ export function ThreadRow({ thread, href, unread, index, missiveUrl }: ThreadRow
     >
       <Link
         href={href}
+        onClick={openInPane}
+        aria-current={selected ? "true" : undefined}
         className={cn(
           "relative flex items-center gap-3 px-3 py-2.5 border-b border-slate-100/80",
           "transition-colors duration-150",
-          unread
-            ? "bg-blue-50/40 hover:bg-blue-50/70"
-            : "bg-white hover:bg-slate-50/70"
+          selected
+            ? "bg-accent/10 hover:bg-accent/15"
+            : unread
+              ? "bg-blue-50/40 hover:bg-blue-50/70"
+              : "bg-white hover:bg-slate-50/70"
         )}
       >
         {/* Left rail: unread dot. Reserves the width even when read so

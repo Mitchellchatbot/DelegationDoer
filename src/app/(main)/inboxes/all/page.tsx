@@ -6,6 +6,7 @@ import { listAccounts, listThreadsPaged, type MissiveThread } from "@/lib/missiv
 import { visibleAccountIdsFor } from "@/lib/inbox-access";
 import { InboxThreadsClient } from "@/components/InboxThreadsClient";
 import { ComposeButton } from "@/components/ComposeButton";
+import { InboxSplit } from "@/components/InboxSplit";
 import { readStateForThreads, isThreadUnread } from "@/lib/thread-read-state";
 
 export const dynamic = "force-dynamic";
@@ -92,6 +93,7 @@ export default async function AllInboxesPage({
   }));
 
   return (
+    <InboxSplit>
     <div className="space-y-5">
       <header
         className="relative overflow-hidden rounded-2xl border border-white/60 shadow-soft p-5"
@@ -149,5 +151,6 @@ export default async function AllInboxesPage({
         />
       )}
     </div>
+    </InboxSplit>
   );
 }

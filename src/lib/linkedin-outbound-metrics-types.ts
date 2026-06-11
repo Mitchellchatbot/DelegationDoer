@@ -16,10 +16,31 @@ export interface EngagementTotals {
   replied: number;
 }
 
-// Pipeline funnel buckets. Order matches the natural progression:
-// discovered → invited → accepted → messaged → replied → booked.
-// `dead` and `re_enrolled` are terminal states that pull from the
-// funnel rather than continuing it.
+// Per-day activity row from outbound.daily. The upstream window is
+// 30 days; we render it as a sparkline grid keyed on `date`.
+export interface OutboundDailyPoint {
+  date: string;     // YYYY-MM-DD
+  messages: number;
+  likes: number;
+  comments: number;
+}
+
+// Pre-computed funnel from the upstream service. `count` is
+// CUMULATIVE — how many leads have ever entered this stage — so it's
+// distinct from leads_by_status, which is a current-bucket snapshot.
+// `conversion` is a percentage (0-100), not a 0-1 rate, and is null
+// for the head of the funnel (discovered).
+export interface FunnelEntry {
+  stage: FunnelStage;
+  label: string;
+  count: number;
+  conversion: number | null;
+}
+
+// Pipeline funnel buckets — snapshot of where each lead currently
+// sits. discovered → invited → accepted → messaged → replied → booked
+// is the natural progression; dead and re_enrolled are terminal
+// states that pull *from* the funnel rather than continuing it.
 export interface LeadsByStatus {
   discovered: number;
   invited: number;
@@ -37,7 +58,11 @@ export interface LeadsTotals {
 }
 
 export interface LinkedInOutboundMetrics {
+  generatedAt: string | null;
+  periodDays: number | null;
   engagement: EngagementTotals;
+  daily: OutboundDailyPoint[];
+  funnel: FunnelEntry[];
   leads_by_status: LeadsByStatus;
   leads: LeadsTotals;
 }
@@ -46,9 +71,8 @@ export type LinkedInOutboundResult =
   | { ok: true; data: LinkedInOutboundMetrics }
   | { ok: false; error: string };
 
-// Funnel + terminal status definitions. Single source of truth so the
-// hero row, funnel widget, and terminal tiles all agree on ordering
-// and labels.
+// Funnel + terminal status definitions. Single source of truth so
+// every widget agrees on ordering and labels.
 export type FunnelStage =
   | "discovered" | "invited" | "accepted" | "messaged" | "replied" | "booked";
 

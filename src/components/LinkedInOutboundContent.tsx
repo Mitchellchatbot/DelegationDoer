@@ -9,7 +9,8 @@ import {
 import { StatCard } from "@/components/StatCard";
 import {
   FUNNEL_STAGES, STAGE_LABEL, STAGE_HINT,
-  type FunnelStage, type LeadsByStatus, type LinkedInOutboundMetrics,
+  type FunnelStage, type FunnelEntry, type LeadsByStatus,
+  type OutboundDailyPoint, type LinkedInOutboundMetrics,
   type LinkedInOutboundResult
 } from "@/lib/linkedin-outbound-metrics-types";
 import { cn } from "@/lib/utils";
@@ -34,21 +35,22 @@ function Dashboard({ data }: { data: LinkedInOutboundMetrics }) {
     <div className="space-y-4">
       <HeroRow data={data} replyRate={replyRate} />
       {callout && <Callout {...callout} />}
+      {data.daily.length > 0 && <DailyActivityChart daily={data.daily} periodDays={data.periodDays} />}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
         <div className="lg:col-span-2">
-          <FunnelWidget data={data} />
+          <FunnelWidget funnel={data.funnel} />
         </div>
         <EngagementCard data={data} />
       </div>
+      <PipelineSnapshot leadsByStatus={data.leads_by_status} active={data.leads.active_in_pipeline} />
       <TerminalStates data={data} />
+      {data.generatedAt && <GeneratedFooter generatedAt={data.generatedAt} periodDays={data.periodDays} />}
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
 // Hero row — Total Leads · Active in Pipeline · DMs Sent · Reply Rate.
-// Same 4-up grid as the FB / Website Builder pages so the channels
-// feel like siblings.
 // ---------------------------------------------------------------------------
 function HeroRow({
   data, replyRate
@@ -77,7 +79,7 @@ function HeroRow({
         valueLabel={fmtNumber(data.engagement.dms_sent)}
         icon={<Send />}
         tone="violet"
-        subtitle="lifetime outbound"
+        subtitle={data.periodDays ? `last ${data.periodDays}d` : "lifetime outbound"}
       />
       <StatCard
         label="Reply Rate"
@@ -93,56 +95,136 @@ function HeroRow({
 }
 
 // ---------------------------------------------------------------------------
-// Funnel — stepped horizontal bars for the six core stages. Width is
-// scaled to the *largest* bucket rather than monotonically shrinking,
-// because real-world LinkedIn data isn't strictly funnel-shaped
-// (legacy "messaged" rows often outnumber "invited"/"accepted" once a
-// campaign migrates ingest paths). Each row also surfaces the
-// step-over-step retention so the user can see where leads drop off.
+// Daily activity sparkline. Renders the upstream's outbound.daily
+// array as three stacked bar lanes (messages / likes / comments)
+// across the period. Hand-rolled SVG so we don't add a chart lib.
 // ---------------------------------------------------------------------------
-function FunnelWidget({ data }: { data: LinkedInOutboundMetrics }) {
-  const buckets = data.leads_by_status;
-  const max = Math.max(1, ...FUNNEL_STAGES.map((s) => buckets[s]));
+function DailyActivityChart({
+  daily, periodDays
+}: { daily: OutboundDailyPoint[]; periodDays: number | null }) {
+  const max = Math.max(1, ...daily.map((d) => Math.max(d.messages, d.likes, d.comments)));
+  const W = 100;            // viewBox width in arbitrary units
+  const H = 28;             // viewBox height per lane
+  const GAP = 2;            // gap between lanes (in viewBox units)
+  const colWidth = W / daily.length;
+  const lanes: Array<{ key: keyof OutboundDailyPoint; label: string; stroke: string; fill: string }> = [
+    { key: "messages", label: "Messages", stroke: "stroke-violet-500", fill: "fill-violet-500"  },
+    { key: "likes",    label: "Likes",    stroke: "stroke-rose-500",   fill: "fill-rose-500"    },
+    { key: "comments", label: "Comments", stroke: "stroke-amber-500",  fill: "fill-amber-500"   }
+  ];
+  const total = daily.reduce(
+    (acc, d) => ({ messages: acc.messages + d.messages, likes: acc.likes + d.likes, comments: acc.comments + d.comments }),
+    { messages: 0, likes: 0, comments: 0 }
+  );
+
+  return (
+    <div className="rounded-2xl border border-slate-200/70 bg-white shadow-soft p-5">
+      <div className="flex items-center justify-between mb-1 flex-wrap gap-2">
+        <div className="text-[13px] font-semibold text-ink">
+          Daily activity{periodDays ? ` · last ${periodDays} days` : ""}
+        </div>
+        <div className="flex items-center gap-3 text-[10.5px] text-ink/65">
+          {lanes.map((l) => (
+            <span key={l.key} className="inline-flex items-center gap-1">
+              <span className={cn("inline-block w-2.5 h-2.5 rounded-sm", l.fill.replace("fill-", "bg-"))} />
+              {l.label}
+              <span className="text-ink/45 tabular-nums">· {fmtNumber(total[l.key as "messages" | "likes" | "comments"])}</span>
+            </span>
+          ))}
+        </div>
+      </div>
+      <div className="text-[11px] text-ink/55 mb-3">
+        Each column is a day. Per-lane scaling is shared so spikes line up across messages / likes / comments.
+      </div>
+      <div className="space-y-1.5">
+        {lanes.map((lane) => (
+          <div key={lane.key}>
+            <svg
+              viewBox={`0 0 ${W} ${H}`}
+              preserveAspectRatio="none"
+              className="w-full h-7"
+              role="img"
+              aria-label={`${lane.label} per day`}
+            >
+              {daily.map((d, i) => {
+                const v = d[lane.key as "messages" | "likes" | "comments"] as number;
+                const h = max === 0 ? 0 : (v / max) * (H - GAP);
+                if (h <= 0) return null;
+                return (
+                  <rect
+                    key={`${lane.key}-${d.date}`}
+                    x={i * colWidth + colWidth * 0.1}
+                    y={H - h}
+                    width={Math.max(0.5, colWidth * 0.8)}
+                    height={h}
+                    className={lane.fill}
+                    rx={0.5}
+                  >
+                    <title>{`${d.date} — ${lane.label}: ${v}`}</title>
+                  </rect>
+                );
+              })}
+              {/* baseline */}
+              <line x1="0" y1={H} x2={W} y2={H} className="stroke-slate-200" strokeWidth="0.3" />
+            </svg>
+          </div>
+        ))}
+      </div>
+      {daily.length > 1 && (
+        <div className="flex justify-between text-[10px] text-ink/45 mt-2">
+          <span>{daily[0].date}</span>
+          <span>{daily[daily.length - 1].date}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Funnel — uses upstream's pre-computed funnel array. `count` is
+// cumulative lifetime; `conversion` is a percent (0-100, not 0-1).
+// Width is scaled to the largest bucket since real-world LinkedIn
+// data isn't strictly funnel-shaped.
+// ---------------------------------------------------------------------------
+function FunnelWidget({ funnel }: { funnel: FunnelEntry[] }) {
+  const max = Math.max(1, ...funnel.map((s) => s.count));
   return (
     <div className="rounded-2xl border border-slate-200/70 bg-white shadow-soft p-5 h-full">
       <div className="flex items-center justify-between mb-1">
-        <div className="text-[13px] font-semibold text-ink">Funnel by status</div>
-        <div className="text-[10.5px] text-ink/55">step-over-step retention shown on right</div>
+        <div className="text-[13px] font-semibold text-ink">Funnel (lifetime)</div>
+        <div className="text-[10.5px] text-ink/55">conversion vs prior stage on right</div>
       </div>
       <div className="text-[11px] text-ink/55 mb-4">
-        Width scaled to the largest bucket. Cohort overlaps aren't strict so steps may grow before they shrink.
+        Counts are cumulative — every lead that ever reached this stage. Width is scaled to the largest bucket.
       </div>
       <div className="space-y-2.5">
-        {FUNNEL_STAGES.map((stage, i) => {
-          const value = buckets[stage];
-          const widthPct = (value / max) * 100;
-          const prev = i > 0 ? buckets[FUNNEL_STAGES[i - 1]] : null;
-          const retention = prev != null && prev > 0 ? value / prev : null;
-          const palette = STAGE_PALETTE[stage];
+        {funnel.map((entry) => {
+          const widthPct = (entry.count / max) * 100;
+          const palette = STAGE_PALETTE[entry.stage];
           const Icon = palette.icon;
           return (
-            <div key={stage} className="flex items-center gap-3">
+            <div key={entry.stage} className="flex items-center gap-3">
               <div className={cn("w-7 h-7 rounded-lg grid place-items-center shrink-0", palette.iconBg, palette.iconFg)}>
                 <Icon className="w-[14px] h-[14px]" />
               </div>
               <div className="flex-1 min-w-0">
                 <div className="flex items-baseline justify-between gap-2 mb-1">
-                  <span className="text-[12px] font-medium text-ink" title={STAGE_HINT[stage]}>
-                    {STAGE_LABEL[stage]}
+                  <span className="text-[12px] font-medium text-ink" title={STAGE_HINT[entry.stage]}>
+                    {entry.label}
                   </span>
-                  <span className="text-[11px] text-ink/55 tabular-nums">{fmtNumber(value)}</span>
+                  <span className="text-[11px] text-ink/55 tabular-nums">{fmtNumber(entry.count)}</span>
                 </div>
                 <div className="h-2.5 rounded-full bg-slate-100 overflow-hidden">
                   <div
                     className={cn("h-full transition-[width]", palette.barFill)}
-                    style={{ width: `${Math.max(value > 0 ? 2 : 0, widthPct)}%` }}
+                    style={{ width: `${Math.max(entry.count > 0 ? 2 : 0, widthPct)}%` }}
                   />
                 </div>
               </div>
-              <div className="w-14 text-right text-[11px] text-ink/55 tabular-nums shrink-0">
-                {retention == null
+              <div className="w-16 text-right text-[11px] tabular-nums shrink-0">
+                {entry.conversion == null
                   ? <span className="text-ink/35">—</span>
-                  : <span className={retentionTone(retention)}>{fmtPercent(retention)}</span>}
+                  : <span className={conversionTone(entry.conversion)}>{fmtPercentRaw(entry.conversion)}</span>}
               </div>
             </div>
           );
@@ -153,24 +235,22 @@ function FunnelWidget({ data }: { data: LinkedInOutboundMetrics }) {
 }
 
 // ---------------------------------------------------------------------------
-// Engagement side panel — sits next to the funnel. Splits the four
-// engagement signals into compact rows with their relative share of
-// the total engagement volume.
+// Engagement side panel — sits next to the funnel.
 // ---------------------------------------------------------------------------
 function EngagementCard({ data }: { data: LinkedInOutboundMetrics }) {
   const e = data.engagement;
   const total = e.dms_sent + e.likes + e.comments + e.replied;
   const items: Array<{ key: keyof typeof e; label: string; icon: typeof Send; tone: keyof typeof ENGAGEMENT_PALETTE }> = [
-    { key: "dms_sent", label: "DMs sent",  icon: Send,          tone: "violet" },
-    { key: "likes",    label: "Likes",     icon: ThumbsUp,      tone: "rose"   },
-    { key: "comments", label: "Comments",  icon: MessageCircle, tone: "amber"  },
+    { key: "dms_sent", label: "DMs sent",  icon: Send,           tone: "violet"  },
+    { key: "likes",    label: "Likes",     icon: ThumbsUp,       tone: "rose"    },
+    { key: "comments", label: "Comments",  icon: MessageCircle,  tone: "amber"   },
     { key: "replied",  label: "Replies",   icon: CornerDownLeft, tone: "emerald" }
   ];
   return (
     <div className="rounded-2xl border border-slate-200/70 bg-white shadow-soft p-5 h-full">
       <div className="text-[13px] font-semibold text-ink mb-1">Engagement activity</div>
       <div className="text-[11px] text-ink/55 mb-4">
-        Lifetime — outbound actions across the LinkedIn automation runner.
+        {data.periodDays ? `Last ${data.periodDays} days. ` : ""}Outbound actions from the automation runner.
       </div>
       <div className="space-y-3">
         {items.map(({ key, label, icon: Icon, tone }) => {
@@ -205,12 +285,66 @@ function EngagementCard({ data }: { data: LinkedInOutboundMetrics }) {
 }
 
 // ---------------------------------------------------------------------------
-// Terminal status tiles — `dead` and `re_enrolled` pull from the
-// funnel rather than continuing it, so they get their own row.
+// Pipeline snapshot — where the *currently active* leads sit right
+// now, per leads_by_status. Different from the funnel widget above
+// because that's cumulative-lifetime; this is "where are people
+// today". Rendered as a horizontal stacked bar.
+// ---------------------------------------------------------------------------
+function PipelineSnapshot({
+  leadsByStatus, active
+}: { leadsByStatus: LeadsByStatus; active: number }) {
+  const total = FUNNEL_STAGES.reduce((sum, s) => sum + leadsByStatus[s], 0);
+  return (
+    <div className="rounded-2xl border border-slate-200/70 bg-white shadow-soft p-5">
+      <div className="flex items-center justify-between mb-1 flex-wrap gap-2">
+        <div className="text-[13px] font-semibold text-ink">Pipeline snapshot</div>
+        <div className="text-[10.5px] text-ink/55 tabular-nums">{fmtNumber(active)} active</div>
+      </div>
+      <div className="text-[11px] text-ink/55 mb-3">
+        Where each currently-active lead sits right now. Sums to the active-pipeline count.
+      </div>
+      <div className="h-3 rounded-full bg-slate-100 overflow-hidden flex mb-3">
+        {FUNNEL_STAGES.map((stage) => {
+          const v = leadsByStatus[stage];
+          if (v <= 0 || total <= 0) return null;
+          const widthPct = (v / total) * 100;
+          return (
+            <div
+              key={stage}
+              className={cn("h-full", STAGE_PALETTE[stage].barFill)}
+              style={{ width: `${widthPct}%` }}
+              title={`${STAGE_LABEL[stage]}: ${v}`}
+            />
+          );
+        })}
+      </div>
+      <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
+        {FUNNEL_STAGES.map((stage) => {
+          const v = leadsByStatus[stage];
+          return (
+            <div
+              key={stage}
+              className="rounded-lg border border-slate-200/60 bg-white p-2"
+            >
+              <div className="flex items-center gap-1.5 text-[10.5px] text-ink/60">
+                <span className={cn("inline-block w-2 h-2 rounded-sm", STAGE_PALETTE[stage].barFill)} />
+                {STAGE_LABEL[stage]}
+              </div>
+              <div className="text-[15px] font-semibold tabular-nums text-ink mt-1">{fmtNumber(v)}</div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Terminal status tiles.
 // ---------------------------------------------------------------------------
 function TerminalStates({ data }: { data: LinkedInOutboundMetrics }) {
   const items: Array<{ key: keyof LeadsByStatus; tone: "rose" | "indigo"; icon: typeof XCircle }> = [
-    { key: "dead",        tone: "rose",   icon: XCircle },
+    { key: "dead",        tone: "rose",   icon: XCircle  },
     { key: "re_enrolled", tone: "indigo", icon: RotateCw }
   ];
   return (
@@ -236,6 +370,19 @@ function TerminalStates({ data }: { data: LinkedInOutboundMetrics }) {
           </div>
         );
       })}
+    </div>
+  );
+}
+
+function GeneratedFooter({
+  generatedAt, periodDays
+}: { generatedAt: string; periodDays: number | null }) {
+  // Render the ISO string verbatim — toLocaleString() would diverge
+  // between SSR and the first client render and trip a hydration
+  // warning. Operators see ISO across the rest of DD anyway.
+  return (
+    <div className="text-[10.5px] text-ink/50 text-right">
+      Data {generatedAt}{periodDays ? ` · ${periodDays}-day window` : ""}
     </div>
   );
 }
@@ -334,7 +481,7 @@ function ErrorPanel({ error }: { error: string }) {
 }
 
 // ---------------------------------------------------------------------------
-// Palettes — keeps stage/engagement colors in one place.
+// Palettes.
 // ---------------------------------------------------------------------------
 const STAGE_PALETTE: Record<FunnelStage, {
   icon: typeof Eye;
@@ -372,10 +519,10 @@ function replyTone(rate: number): "emerald" | "amber" | "rose" {
   return "rose";
 }
 
-function retentionTone(rate: number): string {
-  if (rate >= 1)    return "text-emerald-600";
-  if (rate >= 0.5)  return "text-emerald-600";
-  if (rate >= 0.2)  return "text-amber-600";
+// Tone for upstream's `conversion` value (0-100 percent, not 0-1 rate).
+function conversionTone(pct: number): string {
+  if (pct >= 50)  return "text-emerald-600";
+  if (pct >= 20)  return "text-amber-600";
   return "text-rose-600";
 }
 
@@ -392,4 +539,11 @@ function fmtNumber(n: number): string {
 function fmtPercent(rate: number): string {
   if (!Number.isFinite(rate)) return "—";
   return `${(rate * 100).toFixed(rate >= 0.995 ? 0 : 1)}%`;
+}
+
+// Format an already-percentage value (0-100). Used for upstream's
+// `conversion` field which is already in percent units.
+function fmtPercentRaw(pct: number): string {
+  if (!Number.isFinite(pct)) return "—";
+  return `${pct.toFixed(pct >= 99.5 ? 0 : 1)}%`;
 }

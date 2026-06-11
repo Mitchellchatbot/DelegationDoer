@@ -2,8 +2,10 @@ import "server-only";
 
 import type {
   LinkedInOutboundMetrics, LinkedInOutboundResult,
-  EngagementTotals, LeadsByStatus, LeadsTotals
+  EngagementTotals, LeadsByStatus, LeadsTotals,
+  OutboundDailyPoint, FunnelEntry, FunnelStage
 } from "./linkedin-outbound-metrics-types";
+import { FUNNEL_STAGES, STAGE_LABEL } from "./linkedin-outbound-metrics-types";
 
 // LinkedIn outbound dashboard data source.
 //
@@ -13,11 +15,16 @@ import type {
 // LINKEDIN_OUTBOUND_KPIS_URL and treated as a credential — server-only
 // import keeps it out of the client bundle.
 //
-// Response shape is forgiving: the upstream service has shipped two
-// flavors (a flat layout where `totals` means engagement totals, and a
-// nested layout with explicit `engagement` / `leads` blocks). The
-// parser below tries both so a schema flip on the LinkedIn service
-// doesn't break this dashboard.
+// Schema (verified June 2026):
+//   {
+//     period_days, generated_at,
+//     outbound: { totals: {...}, daily: [{date, messages, likes, comments}] },
+//     funnel: [{stage, label, count, conversion}],
+//     leads_by_status: {...},
+//     totals: { total_leads, active_in_pipeline }
+//   }
+// The parser also keeps a flat-shape fallback so an upstream schema
+// flip doesn't immediately break the dashboard.
 
 export async function getLinkedInOutboundMetrics(): Promise<LinkedInOutboundResult> {
   const url = process.env.LINKEDIN_OUTBOUND_KPIS_URL?.trim();
@@ -69,15 +76,6 @@ export async function getLinkedInOutboundMetrics(): Promise<LinkedInOutboundResu
   return { ok: true, data: parsed };
 }
 
-// Defensive parser. Handles all of:
-//   { engagement: { totals: {...} }, leads: { leads_by_status: {...}, totals: {...} } }
-//   { totals: { dms_sent, ... }, leads_by_status: {...}, leads_totals: {...} }
-//   { totals: { dms_sent, ... }, leads_by_status: {...}, totals: { total_leads, ... } } *
-//
-// (*) JSON can't really have two top-level `totals` keys, but if the
-// upstream is constructed by string-concat anywhere we'd see whichever
-// one was emitted last. The cascade below picks the most informative
-// available value rather than relying on a single field name.
 function parseMetrics(raw: unknown): LinkedInOutboundMetrics | null {
   if (!raw || typeof raw !== "object") return null;
   const r = raw as Record<string, unknown>;
@@ -85,50 +83,114 @@ function parseMetrics(raw: unknown): LinkedInOutboundMetrics | null {
   const engagement = extractEngagement(r);
   const leads_by_status = extractLeadsByStatus(r);
   const leads = extractLeadsTotals(r);
+  const daily = extractDaily(r);
+  // Funnel comes from upstream if present, otherwise we synthesize one
+  // from leads_by_status so the funnel widget still has something to
+  // render on legacy shapes.
+  const funnel = extractFunnel(r) ?? synthesizeFunnel(leads_by_status);
 
-  if (!engagement && !leads_by_status && !leads) return null;
+  if (!engagement && !leads_by_status && !leads && !daily.length && !funnel.length) {
+    return null;
+  }
 
   return {
+    generatedAt: typeof r.generated_at === "string" ? r.generated_at : null,
+    periodDays: typeof r.period_days === "number" ? r.period_days : null,
     engagement: engagement ?? { dms_sent: 0, likes: 0, comments: 0, replied: 0 },
     leads_by_status: leads_by_status ?? {
       discovered: 0, invited: 0, accepted: 0, messaged: 0,
       replied: 0, booked: 0, dead: 0, re_enrolled: 0
     },
-    leads: leads ?? { total_leads: 0, active_in_pipeline: 0 }
+    leads: leads ?? { total_leads: 0, active_in_pipeline: 0 },
+    daily,
+    funnel
   };
 }
 
 function extractEngagement(r: Record<string, unknown>): EngagementTotals | null {
-  // 1. Nested: r.engagement.totals
+  // 1. New shape: r.outbound.totals
+  const outbound = (r.outbound as { totals?: unknown } | undefined)?.totals;
+  if (looksLikeEngagement(outbound)) return coerceEngagement(outbound as Record<string, unknown>);
+  // 2. Legacy nested: r.engagement.totals
   const nested = (r.engagement as { totals?: unknown } | undefined)?.totals;
   if (looksLikeEngagement(nested)) return coerceEngagement(nested as Record<string, unknown>);
-  // 2. Flat: r.totals (only if it has engagement-shaped keys)
+  // 3. Flat: r.totals (only if it has engagement-shaped keys)
   if (looksLikeEngagement(r.totals)) return coerceEngagement(r.totals as Record<string, unknown>);
   return null;
 }
 
+function extractDaily(r: Record<string, unknown>): OutboundDailyPoint[] {
+  const raw = (r.outbound as { daily?: unknown } | undefined)?.daily ?? r.daily;
+  if (!Array.isArray(raw)) return [];
+  const out: OutboundDailyPoint[] = [];
+  for (const row of raw as Array<Record<string, unknown>>) {
+    if (typeof row?.date !== "string") continue;
+    out.push({
+      date: row.date,
+      messages: num(row, "messages"),
+      likes: num(row, "likes"),
+      comments: num(row, "comments")
+    });
+  }
+  return out;
+}
+
+function extractFunnel(r: Record<string, unknown>): FunnelEntry[] | null {
+  const raw = r.funnel;
+  if (!Array.isArray(raw) || raw.length === 0) return null;
+  const out: FunnelEntry[] = [];
+  for (const row of raw as Array<Record<string, unknown>>) {
+    const stage = row?.stage;
+    if (typeof stage !== "string" || !FUNNEL_STAGES.includes(stage as FunnelStage)) continue;
+    const conv = row.conversion;
+    out.push({
+      stage: stage as FunnelStage,
+      label: typeof row.label === "string" ? row.label : STAGE_LABEL[stage as FunnelStage],
+      count: num(row, "count"),
+      conversion: conv == null ? null : Number(conv)
+    });
+  }
+  // Order by FUNNEL_STAGES so downstream rendering doesn't rely on
+  // upstream array order.
+  out.sort((a, b) => FUNNEL_STAGES.indexOf(a.stage) - FUNNEL_STAGES.indexOf(b.stage));
+  return out.length > 0 ? out : null;
+}
+
+// Fallback: build a funnel array from the current-bucket leads_by_status
+// snapshot when the upstream doesn't ship a pre-computed one.
+function synthesizeFunnel(buckets: LeadsByStatus | null): FunnelEntry[] {
+  if (!buckets) return [];
+  return FUNNEL_STAGES.map((stage, i) => {
+    const prev = i > 0 ? buckets[FUNNEL_STAGES[i - 1]] : null;
+    const count = buckets[stage];
+    return {
+      stage,
+      label: STAGE_LABEL[stage],
+      count,
+      conversion: prev != null && prev > 0 ? (count / prev) * 100 : null
+    };
+  });
+}
+
 function extractLeadsByStatus(r: Record<string, unknown>): LeadsByStatus | null {
-  // 1. Nested
-  const nested = (r.leads as { leads_by_status?: unknown } | undefined)?.leads_by_status;
-  if (looksLikeLeadsByStatus(nested)) return coerceLeadsByStatus(nested as Record<string, unknown>);
-  // 2. Flat
+  // 1. Flat at root — current shape
   if (looksLikeLeadsByStatus(r.leads_by_status)) {
     return coerceLeadsByStatus(r.leads_by_status as Record<string, unknown>);
   }
+  // 2. Legacy nested
+  const nested = (r.leads as { leads_by_status?: unknown } | undefined)?.leads_by_status;
+  if (looksLikeLeadsByStatus(nested)) return coerceLeadsByStatus(nested as Record<string, unknown>);
   return null;
 }
 
 function extractLeadsTotals(r: Record<string, unknown>): LeadsTotals | null {
-  // 1. Nested: r.leads.totals
+  // 1. Flat at root (current shape) — r.totals contains total_leads / active_in_pipeline.
+  if (looksLikeLeadsTotals(r.totals)) return coerceLeadsTotals(r.totals as Record<string, unknown>);
+  // 2. Legacy nested: r.leads.totals
   const nested = (r.leads as { totals?: unknown } | undefined)?.totals;
   if (looksLikeLeadsTotals(nested)) return coerceLeadsTotals(nested as Record<string, unknown>);
-  // 2. Flat with explicit name
+  // 3. Explicit alt name
   if (looksLikeLeadsTotals(r.leads_totals)) return coerceLeadsTotals(r.leads_totals as Record<string, unknown>);
-  // 3. Last resort: r.totals if it's shaped like leads totals (the
-  //    engagement-totals path above would have already claimed it
-  //    otherwise, so the two shapes are mutually exclusive in
-  //    practice).
-  if (looksLikeLeadsTotals(r.totals)) return coerceLeadsTotals(r.totals as Record<string, unknown>);
   return null;
 }
 

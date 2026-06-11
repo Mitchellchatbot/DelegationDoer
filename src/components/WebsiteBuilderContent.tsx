@@ -10,15 +10,15 @@ import {
   PERIODS, PERIOD_LABEL, CATEGORY_LABEL,
   metricValue,
   type Category, type Period, type ProjectMetricsRow, type MetricsResult
-} from "@/lib/linkedin-leads-metrics-types";
+} from "@/lib/website-builder-metrics-types";
 import { cn } from "@/lib/utils";
 
-// LinkedIn Leads outbound dashboard body. Wired in the (outbound) shell
-// page at /outbound-dashboard/linkedin-leads. Receives a server-fetched
-// MetricsResult so the dashboard renders synchronously and survives
-// upstream Supabase outages with a soft empty state.
+// Website Builder outbound dashboard body. Wired in the (outbound)
+// shell page at /outbound-dashboard/website-builder. Receives a
+// server-fetched MetricsResult so the dashboard renders synchronously
+// and survives upstream Supabase outages with a soft empty state.
 
-export function LinkedInLeadsContent({ result }: { result: MetricsResult }) {
+export function WebsiteBuilderContent({ result }: { result: MetricsResult }) {
   if (!result.ok) return <ErrorPanel error={result.error} />;
   return <Dashboard data={result.data} />;
 }
@@ -54,11 +54,11 @@ function HeroRow({ data }: { data: ProjectMetricsRow }) {
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
       <StatCard
-        label="Total Sent"
+        label="Total Built"
         value={data.total_all}
         valueLabel={fmtNumber(data.total_all)}
         icon={<Send />}
-        tone="sky"
+        tone="amber"
         subtitle="lifetime"
       />
       <StatCard
@@ -68,7 +68,7 @@ function HeroRow({ data }: { data: ProjectMetricsRow }) {
         icon={<CheckCircle2 />}
         tone={successTone(data.success_rate_all)}
         subtitle="across all categories"
-        info="Share of attempts that succeeded across leads, custom, and general outreach combined."
+        info="Share of attempts that succeeded across leads, custom, and general categories combined."
       />
       <StatCard
         label="Failures"
@@ -79,7 +79,7 @@ function HeroRow({ data }: { data: ProjectMetricsRow }) {
         subtitle={failuresAllInLeads ? "all in Leads" : "across all categories"}
       />
       <StatCard
-        label="Sent This Week"
+        label="Built This Week"
         value={data.this_week_all}
         valueLabel={fmtNumber(data.this_week_all)}
         icon={<CalendarRange />}
@@ -109,7 +109,7 @@ function PeriodSelector({
             className={cn(
               "px-3 py-1 rounded-full text-[12px] font-medium transition-colors border",
               active
-                ? "bg-sky-500 text-white border-sky-500 shadow-sm"
+                ? "bg-amber-500 text-white border-amber-500 shadow-sm"
                 : "bg-white text-ink/70 border-slate-200 hover:bg-slate-50 hover:text-ink"
             )}
           >
@@ -342,14 +342,14 @@ function deriveCallout(data: ProjectMetricsRow): { tone: "rose" | "amber" | "sky
   if (data.today_all === 0 && data.this_week_all > 0) {
     return {
       tone: "amber",
-      title: "Nothing sent today",
-      body: `${fmtNumber(data.this_week_all)} went out earlier this week. Pipeline may be paused — check the scheduler.`
+      title: "Nothing built today",
+      body: `${fmtNumber(data.this_week_all)} were built earlier this week. Pipeline may be paused — check the scheduler.`
     };
   }
   if (data.today_all === 0 && data.this_week_all === 0 && data.this_month_all > 0) {
     return {
       tone: "rose",
-      title: "Nothing sent this week",
+      title: "Nothing built this week",
       body: "The pipeline has been quiet for a full week. Investigate the runner / scheduler."
     };
   }
@@ -379,10 +379,10 @@ function Callout({ tone, title, body }: { tone: "rose" | "amber" | "sky"; title:
 function ErrorPanel({ error }: { error: string }) {
   const lower = error.toLowerCase();
   const hint =
-    lower.includes("missing linkedin_metrics_supabase")
-      ? "Set LINKEDIN_METRICS_SUPABASE_URL and LINKEDIN_METRICS_SUPABASE_KEY in the server env (Vercel → Project → Settings → Environment Variables for production, .env.local then restart `npm run dev` for local), then refresh."
+    lower.includes("missing website_builder_metrics_supabase")
+      ? "Set WEBSITE_BUILDER_METRICS_SUPABASE_URL and WEBSITE_BUILDER_METRICS_SUPABASE_KEY in the server env (Vercel → Project → Settings → Environment Variables for production, .env.local then restart `npm run dev` for local), then refresh."
     : lower.includes("network error") || lower.includes("fetch failed")
-      ? "Couldn't reach the LinkedIn-leads Supabase project. Check the URL value and that the project isn't paused."
+      ? "Couldn't reach the Website Builder Supabase project. Check the URL value and that the project isn't paused."
     : lower.includes("jwt") || lower.includes("invalid api key") || lower.includes("invalid token")
       ? "The service_role key was rejected. Re-copy it from Supabase → Project → Settings → API and update the env var."
     : lower.includes("no rows")
@@ -396,7 +396,7 @@ function ErrorPanel({ error }: { error: string }) {
         </div>
         <div className="min-w-0">
           <div className="text-[14px] font-semibold text-rose-900">
-            Couldn't load LinkedIn Leads metrics
+            Couldn't load Website Builder metrics
           </div>
           <div className="text-[13px] text-rose-900/75 mt-1 break-words">
             <span className="font-mono text-[12px] bg-rose-100/80 px-1.5 py-0.5 rounded">{error}</span>

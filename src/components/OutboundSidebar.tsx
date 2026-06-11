@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import {
-  BarChart3, CalendarClock, Linkedin, Users as UsersIcon, ArrowLeft
+  BarChart3, CalendarClock, Globe, Linkedin, Users as UsersIcon, ArrowLeft
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { User } from "@/lib/types";
@@ -28,6 +28,7 @@ const NAV: NavItem[] = [
   { href: "/outbound-dashboard/facebook-ads-2", label: "Facebook Ads 2", icon: BarChart3,     tone: "violet"  },
   { href: "/outbound-dashboard/calendly",       label: "Calendly",       icon: CalendarClock, tone: "rose"    },
   { href: "/outbound-dashboard/linkedin-leads", label: "LinkedIn Leads", icon: Linkedin,      tone: "sky"     },
+  { href: "/outbound-dashboard/website-builder", label: "Website Builder", icon: Globe,        tone: "amber"   },
   { href: "/outbound-dashboard/people",         label: "Team",           icon: UsersIcon,     tone: "fuchsia" }
 ];
 

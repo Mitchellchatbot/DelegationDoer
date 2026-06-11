@@ -15,6 +15,9 @@ export async function GET() {
       .from("tasks")
       .select("id, title, status, priority, due_date")
       .eq("assignee_id", userId)
+      // is_draft=true means the task is a routing draft awaiting dept-head
+      // approval — exclude those so "Pick existing" only shows live tasks.
+      .eq("is_draft", false)
       .in("status", ["pending", "in_progress", "urgent", "waiting_on_client"])
       .order("status", { ascending: true })
       .order("due_date", { ascending: true, nullsFirst: false })

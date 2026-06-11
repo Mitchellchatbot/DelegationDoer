@@ -390,7 +390,26 @@ async function buildDeptPayload(
     id: string; title: string; status: string; priority: string;
     due_date: string | null; client_name: string | null; assignee_id: string | null;
   };
-  const tasks = (taskRows ?? []) as TaskRow[];
+  const allTasks = (taskRows ?? []) as TaskRow[];
+
+  // A task can carry department_id = this dept while being assigned to a
+  // member of another team (e.g. an SEO worker on a Website task). The
+  // per-department glance is a team view, so drop tasks owned by someone
+  // outside this department — they shouldn't surface in another team's
+  // start-of-day. Unassigned department tasks are kept: they're open
+  // pickup work with no owner to be out-of-team. Membership lives in the
+  // department_members join table (same source as userDepartmentIds in
+  // lib/server-data.ts).
+  const { data: memberRows } = await supabase
+    .from("department_members")
+    .select("user_id")
+    .eq("department_id", departmentId);
+  const memberIds = new Set(
+    (memberRows ?? []).map((r: { user_id: string }) => r.user_id)
+  );
+  const tasks = allTasks.filter(
+    (t) => !t.assignee_id || memberIds.has(t.assignee_id)
+  );
 
   const clientNames = Array.from(
     new Set(tasks.map((t) => t.client_name).filter((n): n is string => !!n))

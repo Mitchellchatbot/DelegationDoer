@@ -71,7 +71,7 @@ export function InboxPrivacySection({
         <div className="min-w-0">
           <div className="text-sm font-semibold text-ink">Private inboxes</div>
           <div className="text-[12px] text-ink/60 mt-0.5">
-            A private inbox is visible only to its owner — hidden from everyone else, leaders and admins included.
+            A private inbox is visible only to the people assigned to it — hidden from everyone else, other admins included. Assign someone (in Spaces / inbox access) to give them in.
             {privateCount > 0 && <span className="font-medium text-amber-700"> · {privateCount} private</span>}
           </div>
         </div>
@@ -82,9 +82,9 @@ export function InboxPrivacySection({
           const ownerId = owners[a.id] ?? "";
           const isPrivate = !!ownerId;
           const busy = !!saving[a.id];
-          // Only the owner can change/clear a private inbox (the server
-          // enforces this too). Other admins see it locked.
-          const lockedToOther = isPrivate && ownerId !== meId;
+          // Once private, only the owner (manager) can flip it back —
+          // the server enforces this too. Other admins see it locked.
+          const canManage = !isPrivate || ownerId === meId;
           return (
             <li key={a.id} className="px-5 py-3 flex items-center gap-3 flex-wrap">
               <div className="min-w-0 flex-1">
@@ -95,40 +95,39 @@ export function InboxPrivacySection({
                 {a.display_name && a.display_name !== a.email && (
                   <div className="text-[11px] text-ink/55 truncate">{a.email}</div>
                 )}
+                {isPrivate && (
+                  <div className="text-[10px] text-amber-700/80 mt-0.5">
+                    Private · assigned people only{ownerId && ` · managed by ${nameById.get(ownerId) ?? "owner"}`}
+                  </div>
+                )}
               </div>
               {busy && <Loader2 className="w-3.5 h-3.5 animate-spin text-ink/40 shrink-0" />}
-              {lockedToOther ? (
-                <span className="text-[11px] font-semibold text-amber-700 inline-flex items-center gap-1 shrink-0">
-                  <Lock className="w-3 h-3" /> Private to {nameById.get(ownerId) ?? "another user"}
-                </span>
-              ) : (
-                <>
-                  <select
-                    value={ownerId}
+              {canManage ? (
+                isPrivate ? (
+                  <button
+                    type="button"
                     disabled={busy}
-                    onChange={(e) => setOwner(a.id, e.target.value || null)}
-                    className={cn(
-                      "text-[12px] rounded-lg border bg-white px-2.5 py-1.5 outline-none focus:ring-2 focus:ring-accent/20 shrink-0 max-w-[260px]",
-                      isPrivate ? "border-amber-300 text-amber-800" : "border-slate-200 text-ink/70"
-                    )}
+                    onClick={() => setOwner(a.id, null)}
+                    className="text-[11px] font-semibold text-ink/60 hover:text-ink inline-flex items-center gap-1 shrink-0 disabled:opacity-50"
+                    title="Make this inbox visible to everyone again"
                   >
-                    <option value="">Everyone (all admins)</option>
-                    {people.map((p) => (
-                      <option key={p.id} value={p.id}>{p.name} only (private)</option>
-                    ))}
-                  </select>
-                  {!isPrivate && people.length > 0 && (
-                    <button
-                      type="button"
-                      disabled={busy}
-                      onClick={() => setOwner(a.id, suggestedOwner(a))}
-                      className="text-[11px] font-semibold text-amber-700 hover:text-amber-800 inline-flex items-center gap-1 shrink-0 disabled:opacity-50"
-                      title="Make private to its likely owner"
-                    >
-                      <ShieldCheck className="w-3 h-3" /> Make private
-                    </button>
-                  )}
-                </>
+                    Make public
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => setOwner(a.id, suggestedOwner(a))}
+                    className="text-[11px] font-semibold text-amber-700 hover:text-amber-800 inline-flex items-center gap-1 shrink-0 disabled:opacity-50"
+                    title="Hide this inbox from everyone except the people assigned to it"
+                  >
+                    <ShieldCheck className="w-3 h-3" /> Make private
+                  </button>
+                )
+              ) : (
+                <span className="text-[11px] font-semibold text-amber-700 inline-flex items-center gap-1 shrink-0">
+                  <Lock className="w-3 h-3" /> Locked
+                </span>
               )}
             </li>
           );

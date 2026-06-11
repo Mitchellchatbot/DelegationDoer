@@ -62,8 +62,11 @@ export async function getAssignmentsForUser(userId: string): Promise<InboxAssign
 }
 
 // Private inboxes ("the boss's container"): account_id -> owner_user_id.
-// A private inbox is visible ONLY to its owner — everyone else, leaders
-// and admins included, is excluded regardless of role or assignment.
+// A private inbox drops out of the default "leaders/admins see everything"
+// rule — it's visible ONLY to the people explicitly ASSIGNED to it (via
+// inbox_assignments), plus the owner who manages the flag. Everyone else,
+// other admins included, is excluded. So assigning someone to a private
+// inbox is how you grant them access to it.
 // Best-effort: a missing table (migration not applied) yields an empty
 // map, i.e. nothing is private.
 export async function getPrivateInboxOwners(): Promise<Map<string, string | null>> {
@@ -109,15 +112,19 @@ export async function setInboxPrivacy(
     );
 }
 
-// The set of account ids `actor` is barred from seeing because they're
-// private and owned by someone else.
+// The set of account ids `actor` is barred from seeing: private inboxes
+// the actor is neither assigned to nor the owner of. `assignedIds` is the
+// actor's DIRECT inbox_assignments (assignment is what grants access to a
+// private inbox — not role, and not a manager seeing a report's inboxes).
 function privateExclusionsFor(
   actor: User,
-  privateOwners: Map<string, string | null>
+  privateOwners: Map<string, string | null>,
+  assignedIds: Set<string>
 ): Set<string> {
   const excluded = new Set<string>();
   for (const [accountId, ownerId] of privateOwners) {
-    if (ownerId !== actor.id) excluded.add(accountId);
+    const allowed = ownerId === actor.id || assignedIds.has(accountId);
+    if (!allowed) excluded.add(accountId);
   }
   return excluded;
 }
@@ -134,10 +141,16 @@ function privateExclusionsFor(
 export async function visibleAccountIdsFor(
   actor: User
 ): Promise<Set<string> | null> {
-  // Private inboxes are excluded for everyone but their owner — including
-  // leaders/admins. Computed up front so it applies on every branch.
+  // Private inboxes are visible only to people assigned to them (plus the
+  // owner) — including for leaders/admins. Computed up front so it applies
+  // on every branch. Only fetch the actor's assignments when privacy is
+  // actually in play, to keep the common (nothing-private) path cheap.
   const privateOwners = await getPrivateInboxOwners();
-  const excluded = privateExclusionsFor(actor, privateOwners);
+  const assignedIds = new Set<string>();
+  if (privateOwners.size > 0) {
+    for (const a of await getAssignmentsForUser(actor.id)) assignedIds.add(a.missiveAccountId);
+  }
+  const excluded = privateExclusionsFor(actor, privateOwners, assignedIds);
 
   if (actor.role === "leader" || actor.isAdmin) {
     // Fast path preserved: with no private inboxes to hide from this

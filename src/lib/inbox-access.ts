@@ -129,6 +129,31 @@ function privateExclusionsFor(
   return excluded;
 }
 
+// Account ids the actor is granted via inbox_space membership (member of a
+// space -> every account in that space). Best-effort: space tables may be
+// absent on older deploys, in which case this returns an empty set.
+async function spaceGrantedAccountIds(userId: string): Promise<Set<string>> {
+  const out = new Set<string>();
+  try {
+    const supabase = getSupabaseAdmin();
+    const { data: memberships } = await supabase
+      .from("inbox_space_members")
+      .select("space_id")
+      .eq("user_id", userId);
+    const spaceIds = (memberships ?? []).map((r: { space_id: string }) => r.space_id);
+    if (spaceIds.length > 0) {
+      const { data: accts } = await supabase
+        .from("inbox_space_accounts")
+        .select("account_id")
+        .in("space_id", spaceIds);
+      for (const r of (accts ?? []) as { account_id: string }[]) out.add(r.account_id);
+    }
+  } catch {
+    /* space tables absent on older deploys — ignore */
+  }
+  return out;
+}
+
 // Returns the set of missive_account_ids the actor can read. `null` means
 // "all accounts" (Leader scope) — caller should not filter further.
 //
@@ -141,16 +166,20 @@ function privateExclusionsFor(
 export async function visibleAccountIdsFor(
   actor: User
 ): Promise<Set<string> | null> {
-  // Private inboxes are visible only to people assigned to them (plus the
-  // owner) — including for leaders/admins. Computed up front so it applies
-  // on every branch. Only fetch the actor's assignments when privacy is
-  // actually in play, to keep the common (nothing-private) path cheap.
+  // Private inboxes are visible only to people GRANTED access to them
+  // (plus the owner) — including for leaders/admins. Access is granted by a
+  // direct inbox_assignment OR membership in a space that contains the
+  // inbox (e.g. the "Boss's mail" space). A manager seeing a report's
+  // inboxes, or a leader's see-everything, does NOT count. Only fetch the
+  // actor's grants when privacy is actually in play, to keep the common
+  // (nothing-private) path cheap.
   const privateOwners = await getPrivateInboxOwners();
-  const assignedIds = new Set<string>();
+  const grantedIds = new Set<string>();
   if (privateOwners.size > 0) {
-    for (const a of await getAssignmentsForUser(actor.id)) assignedIds.add(a.missiveAccountId);
+    for (const a of await getAssignmentsForUser(actor.id)) grantedIds.add(a.missiveAccountId);
+    for (const id of await spaceGrantedAccountIds(actor.id)) grantedIds.add(id);
   }
-  const excluded = privateExclusionsFor(actor, privateOwners, assignedIds);
+  const excluded = privateExclusionsFor(actor, privateOwners, grantedIds);
 
   if (actor.role === "leader" || actor.isAdmin) {
     // Fast path preserved: with no private inboxes to hide from this
@@ -192,32 +221,14 @@ export async function visibleAccountIdsFor(
   }
 
   // Space-granted visibility: every account in any space the actor
-  // belongs to. Best-effort — schema may not exist yet on older
-  // deploys, so swallow the error and fall back to direct-assignment
-  // results.
-  try {
-    const { data: spaceMemberships } = await supabase
-      .from("inbox_space_members")
-      .select("space_id")
-      .eq("user_id", actor.id);
-    const spaceIds = (spaceMemberships ?? []).map(
-      (r: { space_id: string }) => r.space_id
-    );
-    if (spaceIds.length > 0) {
-      const { data: accts } = await supabase
-        .from("inbox_space_accounts")
-        .select("account_id")
-        .in("space_id", spaceIds);
-      for (const r of (accts ?? []) as { account_id: string }[]) {
-        visible.add(r.account_id);
-      }
-    }
-  } catch {
-    /* space tables absent on older deploys — ignore */
-  }
+  // belongs to (this is also how someone is granted access to a private
+  // inbox — e.g. the "Boss's mail" space).
+  for (const id of await spaceGrantedAccountIds(actor.id)) visible.add(id);
 
-  // A private inbox is never visible to a non-owner, even if a stale
-  // assignment or space membership would otherwise grant it.
+  // Drop private inboxes the actor isn't granted (not a direct assignee,
+  // not a space member, not the owner) — e.g. a dept head who'd otherwise
+  // see a report's private inbox via team visibility. Space/own grants are
+  // already spared via `excluded` above.
   for (const id of excluded) visible.delete(id);
 
   return visible;

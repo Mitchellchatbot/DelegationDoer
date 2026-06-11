@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { motion } from "framer-motion";
 import { useEffect, useState } from "react";
-import { Inbox, Mail, Settings as SettingsIcon, Layers, Plus, ChevronDown } from "lucide-react";
+import { Inbox, Mail, Settings as SettingsIcon, Layers, Plus, ChevronDown, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { cn, initials } from "@/lib/utils";
 import { ConnectInboxDialog } from "./ConnectInboxDialog";
 import { InboxFavicon } from "./InboxFavicon";
@@ -92,9 +92,95 @@ export function InboxTree({ accounts, canManage }: Props) {
     return Math.abs(h) % DOT_TONES.length;
   }
 
+  // Whole-rail collapse → a thin icon strip, so the inbox account tree stops
+  // eating a second full nav column (the list + reading pane reclaim the room).
+  // Default expanded; persisted in localStorage, read on mount like Section.
+  const [collapsed, setCollapsed] = useState(false);
+  useEffect(() => {
+    try {
+      if (window.localStorage.getItem("inbox-tree:collapsed") === "1") setCollapsed(true);
+    } catch { /* localStorage blocked — keep default */ }
+  }, []);
+  function toggleCollapsed() {
+    setCollapsed((cur) => {
+      const next = !cur;
+      try { window.localStorage.setItem("inbox-tree:collapsed", next ? "1" : "0"); } catch { /* ignore */ }
+      return next;
+    });
+  }
+
+  // Flat account list for the collapsed rail — spaces first (in order), then
+  // orphans — so switching inboxes stays available without expanding.
+  const railAccounts = [
+    ...visibleSpaces.flatMap((sp) => sp.accountIds.map((id) => accountById.get(id)!)),
+    ...orphanAccounts
+  ];
+
+  if (collapsed) {
+    return (
+      <aside className="w-12 shrink-0">
+        <div className="sticky top-3 max-h-[calc(100vh-1.5rem)] overflow-y-auto flex flex-col items-center gap-1.5 pb-2">
+          <button
+            type="button"
+            onClick={toggleCollapsed}
+            title="Expand inboxes"
+            className="w-9 h-9 grid place-items-center rounded-xl text-ink/55 hover:text-accent hover:bg-accent/10 transition-colors"
+          >
+            <PanelLeftOpen className="w-4 h-4" />
+          </button>
+
+          <RailLink
+            href="/inboxes/all"
+            active={path === "/inboxes/all" || path === "/inboxes"}
+            title="All inboxes"
+          >
+            <Layers className="w-4 h-4" />
+          </RailLink>
+
+          {railAccounts.map((a) => {
+            const href = `/inboxes/${encodeURIComponent(a.id)}`;
+            return (
+              <RailLink key={a.id} href={href} active={path.startsWith(href)} title={a.label || a.email || a.id}>
+                <InboxFavicon
+                  email={a.email}
+                  title={a.label || a.email || a.id}
+                  size={30}
+                  className="rounded-md"
+                  loadedClassName="bg-white ring-1 ring-black/5"
+                  fallbackClassName={cn("text-white", DOT_TONES[hueIndex(a.id)])}
+                  fallback={
+                    <span className="text-[9px] font-semibold leading-none uppercase">
+                      {initials(a.label || a.email || a.id) || "@"}
+                    </span>
+                  }
+                />
+              </RailLink>
+            );
+          })}
+
+          {canManage && (
+            <RailLink href="/inboxes/manage" active={path === "/inboxes/manage"} title="Manage access">
+              <SettingsIcon className="w-4 h-4" />
+            </RailLink>
+          )}
+        </div>
+      </aside>
+    );
+  }
+
   return (
     <aside className="w-60 shrink-0">
       <div className="sticky top-3 space-y-4 max-h-[calc(100vh-1.5rem)] overflow-y-auto pr-1">
+        <div className="flex justify-end -mb-2">
+          <button
+            type="button"
+            onClick={toggleCollapsed}
+            title="Collapse inboxes"
+            className="w-7 h-7 grid place-items-center rounded-lg text-ink/45 hover:text-accent hover:bg-accent/10 transition-colors"
+          >
+            <PanelLeftClose className="w-4 h-4" />
+          </button>
+        </div>
         <Section label="Smart">
           <Row
             href="/inboxes/all"
@@ -250,6 +336,34 @@ const DOT_TONES = [
   "bg-blue-500", "bg-indigo-500", "bg-violet-500", "bg-fuchsia-500",
   "bg-pink-500", "bg-amber-500", "bg-emerald-500", "bg-teal-500"
 ];
+
+// Icon-only row for the collapsed rail. Tooltip carries the inbox name; the
+// active inbox gets an accent ring so you can still see where you are.
+function RailLink({
+  href, active, title, children
+}: {
+  href: string;
+  active: boolean;
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <Link
+      href={href}
+      title={title}
+      aria-label={title}
+      aria-current={active ? "true" : undefined}
+      className={cn(
+        "w-9 h-9 grid place-items-center rounded-xl transition-colors",
+        active
+          ? "bg-accent/10 ring-1 ring-accent/30 text-accent"
+          : "text-ink/60 hover:text-ink hover:bg-slate-100"
+      )}
+    >
+      {children}
+    </Link>
+  );
+}
 
 function Section({
   label, children, emptyHint, action, collapsible, forceOpen, storageKey, count

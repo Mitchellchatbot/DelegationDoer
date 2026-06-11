@@ -60,7 +60,11 @@ export async function POST(
       ? body.cc.filter((s: unknown): s is string => typeof s === "string")
       : [];
     let subject: string | undefined = explicitSubject;
-    let inReplyTo: string | undefined;
+    // Caller-pinned reply target (the RFC Message-ID of a specific message in
+    // the chain). When omitted we default to the thread's latest message below,
+    // preserving the old reply-to-latest behaviour.
+    let inReplyTo: string | undefined =
+      typeof body.inReplyTo === "string" && body.inReplyTo ? body.inReplyTo : undefined;
 
     if (to.length === 0 || !subject) {
       const detail = await getThread(params.threadId);
@@ -77,7 +81,7 @@ export async function POST(
           ? detail.thread.subject
           : `Re: ${detail.thread.subject ?? ""}`;
       }
-      inReplyTo = detail.messages.at(-1)?.message_id ?? undefined;
+      if (!inReplyTo) inReplyTo = detail.messages.at(-1)?.message_id ?? undefined;
     }
 
     if (to.length === 0) {

@@ -8,6 +8,8 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { MediaPicker } from "@/components/MediaPicker";
 import type { TaskMedia } from "@/lib/types";
+import type { MissiveMessage } from "@/lib/missive-client";
+import { rawEmail, shortName } from "@/lib/email-format";
 
 // Inline reply panel that sits at the bottom of a thread detail. Folded
 // into a "Reply" pill by default; expands into a Gmail-style composer
@@ -15,7 +17,8 @@ import type { TaskMedia } from "@/lib/types";
 // refreshes the thread so the new message appears in the list.
 
 export function ReplyComposer({
-  threadId, accountId, defaultTo, defaultSubject, replyAllTo, replyAllCc
+  threadId, accountId, defaultTo, defaultSubject, replyAllTo, replyAllCc,
+  replyTarget, onClearReplyTarget
 }: {
   threadId: string;
   accountId: string;
@@ -30,6 +33,12 @@ export function ReplyComposer({
   // To / Cc fields. Empty string when there's nobody extra to reply to.
   replyAllTo?: string;
   replyAllCc?: string;
+  // A specific message in the chain the user clicked "Reply" on. When set we
+  // open the composer, pre-fill To/subject from it, and thread the reply under
+  // it (via its RFC message_id). null = default composer (threads to latest).
+  replyTarget?: MissiveMessage | null;
+  // Clears the pinned target back to the default (reply-to-latest).
+  onClearReplyTarget?: () => void;
 }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -69,6 +78,14 @@ export function ReplyComposer({
   // server pulls each URL via /api/upload and forwards as multipart
   // files[] to the missive clone.
   const [attachments, setAttachments] = useState<TaskMedia[]>([]);
+
+  // RFC Message-ID of the message we're replying to, when the user pinned a
+  // specific one via its per-message Reply button. null = thread under the
+  // latest message (server default). Sent as `inReplyTo` on both send paths.
+  const [inReplyTo, setInReplyTo] = useState<string | null>(null);
+  // Outer wrapper — scrolled into view when a target is picked from a message
+  // higher up the thread.
+  const containerRef = useRef<HTMLDivElement>(null);
 
   // Draft autosave. We persist the in-progress reply to inbox_drafts
   // (debounced) so it survives navigation/reload, and re-hydrate it on
@@ -137,6 +154,45 @@ export function ReplyComposer({
     const t = setTimeout(() => { void saveDraft(); }, 700);
     return () => clearTimeout(t);
   }, [loaded, saveDraft]);
+
+  // When the user clicks "Reply" on a specific message, open the composer and
+  // pre-fill the addressing fields from THAT message — without touching the
+  // body they may already have typed. Keyed on the target's id so it only fires
+  // when a *different* message is picked, not on every render.
+  useEffect(() => {
+    if (!replyTarget) return;
+    setOpen(true);
+    // Outbound = a message we sent; replying should go back to its original
+    // recipients, not to ourselves.
+    const nextTo =
+      replyTarget.direction === "outbound"
+        ? replyTarget.to_addrs.join(", ") || defaultTo || ""
+        : rawEmail(replyTarget.from_addr);
+    setTo(nextTo);
+    setSubject(prefixRe(replyTarget.subject || defaultSubject || ""));
+    setMode("reply");
+    setCc("");
+    setCcOpen(false);
+    // Pin threading to this message. null when it has no RFC Message-ID yet —
+    // the server then falls back to the thread's latest message.
+    setInReplyTo(replyTarget.message_id ?? null);
+    // The picked message may be far above the composer — bring it into view.
+    requestAnimationFrame(() => {
+      containerRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [replyTarget?.id]);
+
+  // Reset the pinned target + addressing fields back to the thread defaults.
+  const clearTarget = useCallback(() => {
+    setInReplyTo(null);
+    setTo(defaultTo ?? "");
+    setSubject(prefixRe(defaultSubject ?? ""));
+    setMode("reply");
+    setCc("");
+    setCcOpen(false);
+    onClearReplyTarget?.();
+  }, [defaultTo, defaultSubject, onClearReplyTarget]);
 
   // Discard the persisted draft (best-effort) on top of clearing local state.
   const discardDraft = useCallback(() => {
@@ -219,8 +275,8 @@ export function ReplyComposer({
         ? `/api/inboxes/threads/${encodeURIComponent(threadId)}/reply/schedule`
         : `/api/inboxes/threads/${encodeURIComponent(threadId)}/reply`;
       const body = scheduling
-        ? { accountId, to: toList, cc: ccList, subject: subject.trim() || undefined, bodyText, scheduledForISO }
-        : { accountId, to: toList, cc: ccList, subject: subject.trim() || undefined, bodyText, attachmentUrls: attachments };
+        ? { accountId, to: toList, cc: ccList, subject: subject.trim() || undefined, bodyText, scheduledForISO, inReplyTo: inReplyTo ?? undefined }
+        : { accountId, to: toList, cc: ccList, subject: subject.trim() || undefined, bodyText, attachmentUrls: attachments, inReplyTo: inReplyTo ?? undefined };
       const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -263,6 +319,8 @@ export function ReplyComposer({
       setMode("reply");
       setCc("");
       setCcOpen(false);
+      setInReplyTo(null);
+      onClearReplyTarget?.();
       setOpen(false);
       router.refresh();
     } catch (err) {
@@ -273,7 +331,7 @@ export function ReplyComposer({
   }
 
   return (
-    <div className="relative">
+    <div className="relative" ref={containerRef}>
       <AnimatePresence mode="wait" initial={false}>
         {!open ? (
           <motion.button
@@ -311,6 +369,23 @@ export function ReplyComposer({
             <header className="px-4 py-2.5 flex items-center justify-between border-b border-slate-100 bg-gradient-to-r from-blue-50/60 to-indigo-50/40">
               <div className="flex items-center gap-2 text-xs font-semibold text-ink">
                 <Reply className="w-3.5 h-3.5 text-accent" /> Reply
+                {replyTarget && (
+                  <span className="inline-flex items-center gap-1 text-[10px] font-medium normal-case px-2 py-0.5 rounded-full bg-accent/10 text-accent border border-accent/20">
+                    Replying to{" "}
+                    {replyTarget.direction === "outbound"
+                      ? (replyTarget.to_addrs[0] ? shortName(replyTarget.to_addrs[0]) : "recipients")
+                      : shortName(replyTarget.from_addr)}
+                    <button
+                      type="button"
+                      onClick={clearTarget}
+                      aria-label="Reply to latest instead"
+                      title="Reply to latest instead"
+                      className="hover:text-accent/60 transition-colors"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </span>
+                )}
                 {saveState !== "idle" && (
                   <span className="inline-flex items-center gap-1 text-[10px] uppercase tracking-wide text-ink/45 font-semibold">
                     {saveState === "saving"
@@ -524,7 +599,7 @@ export function ReplyComposer({
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => { discardDraft(); setOpen(false); setBodyText(""); setAttachments([]); setScheduleOpen(false); setScheduleAt(""); setMode("reply"); setCc(""); setCcOpen(false); }}
+                  onClick={() => { discardDraft(); setOpen(false); setBodyText(""); setAttachments([]); setScheduleOpen(false); setScheduleAt(""); setMode("reply"); setCc(""); setCcOpen(false); setInReplyTo(null); onClearReplyTarget?.(); }}
                   className="px-3 py-1.5 rounded-full text-xs font-medium text-ink/70 hover:text-ink hover:bg-white transition-colors"
                 >
                   Discard

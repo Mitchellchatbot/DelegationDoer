@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { AtSign, Inbox, ExternalLink } from "lucide-react";
 import type { MissiveThread, MissiveMessage } from "@/lib/missive-client";
 import { CreateTaskFromThreadButton } from "@/components/CreateTaskFromThreadButton";
@@ -35,6 +36,11 @@ export function ThreadConversation({
   defaultTo,
   missiveThreadUrl
 }: ThreadDetailData & { accountId: string; threadId: string }) {
+  // Which message the user is replying to. null = the default bottom composer,
+  // which threads under the latest message. Picking a message from the list
+  // (its per-message Reply button) pins the reply to that specific email.
+  const [replyTarget, setReplyTarget] = useState<MissiveMessage | null>(null);
+
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-end gap-2 flex-wrap">
@@ -90,6 +96,7 @@ export function ThreadConversation({
         threadId={threadId}
         threadSubject={thread.subject || ""}
         latestMessageId={LATEST_MESSAGE_ID}
+        onReplyToMessage={setReplyTarget}
       />
 
       {/* Inline reply — Gmail-style folded composer that expands when clicked. */}
@@ -100,6 +107,8 @@ export function ThreadConversation({
         defaultSubject={thread.subject ?? null}
         replyAllTo={replyAllTo}
         replyAllCc={replyAllCc}
+        replyTarget={replyTarget}
+        onClearReplyTarget={() => setReplyTarget(null)}
       />
 
       {/* Mark-as-read upsert fires on mount — silent. refresh={false}: the

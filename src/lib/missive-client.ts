@@ -448,7 +448,11 @@ export async function sendReply(args: ReplyArgs): Promise<{ messageId: string }>
     body_html: args.bodyHtml ?? null,
     to: args.to.join(", "),
     cc: (args.cc ?? []).join(", "),
-    subject: args.subject ?? null
+    subject: args.subject ?? null,
+    // RFC Message-ID of the message being replied to. The clone threads the
+    // reply under it (Graph createReply / SMTP In-Reply-To); null ⇒ the clone
+    // falls back to the thread's latest message.
+    in_reply_to: args.inReplyTo ?? null
   };
   const form = new FormData();
   form.append("payload", JSON.stringify(payload));

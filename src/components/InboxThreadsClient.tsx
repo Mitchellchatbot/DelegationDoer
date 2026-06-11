@@ -6,6 +6,7 @@ import {
   Inbox, Send, ShieldAlert
 } from "lucide-react";
 import { ThreadList, type ThreadListItem } from "./ThreadList";
+import { useInboxSplit } from "@/components/InboxSplit";
 import { cn } from "@/lib/utils";
 
 type Category = "all" | "people" | "codes" | "newsletters" | "receipts" | "calendar" | "bounces";
@@ -67,6 +68,9 @@ export function InboxThreadsClient({
   const [category, setCategory] = useState<Category>("all");
   const [folder, setFolder] = useState<Folder>("INBOX");
   const sentinelRef = useRef<HTMLDivElement | null>(null);
+  // Threads opened in the reading pane this session — drop their unread style
+  // live without a server refresh (see InboxSplit). Empty when not in a split.
+  const { readIds } = useInboxSplit();
 
   // Inbox view shows the SSR'd first page; Sent/Spam are always fetched
   // client-side from /api/inboxes/threads with the folder scope applied.
@@ -132,9 +136,18 @@ export function InboxThreadsClient({
     };
   }, [debouncedQ, category, mailboxId, folder]);
 
-  // Whenever the debounced query changes, replace the list. Empty
-  // query → restore the SSR'd initial page so no extra fetch happens.
+  // Reseed/replace the visible list ONLY when the actual filter/scope changes
+  // (search, category, folder, mailbox) — NOT on every `initialThreads` identity
+  // change. The list page is force-dynamic, so any server re-render (e.g. a
+  // sibling reading-pane's mark-read, or a router.refresh) hands us a fresh
+  // `initialThreads` array; without this gate that would reset the default view
+  // back to the SSR'd first page and discard every infinite-scroll page + the
+  // scroll position. The key gate keeps the loaded list stable across re-renders.
+  const filterKeyRef = useRef<string | null>(null);
   useEffect(() => {
+    const filterKey = `${debouncedQ}|${category}|${folder}|${mailboxId ?? ""}`;
+    if (filterKeyRef.current === filterKey) return;
+    filterKeyRef.current = filterKey;
     let cancelled = false;
     async function run() {
       // Restore SSR'd page only on the default Inbox view — no search, no
@@ -219,7 +232,19 @@ export function InboxThreadsClient({
     return () => obs.disconnect();
   }, [loadMore]);
 
-  const unreadCount = useMemo(() => threads.filter((d) => d.unread).length, [threads]);
+  // Apply session-local read-state (threads opened in the pane) so their unread
+  // style clears immediately, without a server round-trip resetting the list.
+  const visibleThreads = useMemo(
+    () =>
+      readIds.size === 0
+        ? threads
+        : threads.map((d) =>
+            d.unread && readIds.has(d.thread.id) ? { ...d, unread: false } : d
+          ),
+    [threads, readIds]
+  );
+
+  const unreadCount = useMemo(() => visibleThreads.filter((d) => d.unread).length, [visibleThreads]);
 
   // Empty-state copy. Search wins (it's the most specific intent), then
   // the mailbox view; Inbox keeps ThreadList's default ("No threads yet").
@@ -329,7 +354,7 @@ export function InboxThreadsClient({
       </div>
 
       <ThreadList
-        threads={threads}
+        threads={visibleThreads}
         linkAccountId={linkAccountId}
         accountIdByEmail={accountIdByEmail}
         missiveAppUrl={missiveAppUrl}

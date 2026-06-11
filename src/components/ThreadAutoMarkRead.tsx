@@ -7,11 +7,16 @@ import { useRouter } from "next/navigation";
 // mark-read upsert in the background — failures are silent (the worst
 // case is the row still reads as unread on the next list refresh).
 export function ThreadAutoMarkRead({
-  threadId, accountId, readThroughAt
+  threadId, accountId, readThroughAt, refresh = true
 }: {
   threadId: string;
   accountId: string;
   readThroughAt: string | null;
+  // When false, skip router.refresh() after the upsert. The inbox reading pane
+  // passes false because it updates the list's unread badge locally (see
+  // InboxSplit.markRead) — a router.refresh there would needlessly re-run the
+  // whole list SSR on every open.
+  refresh?: boolean;
 }) {
   const router = useRouter();
   useEffect(() => {
@@ -32,7 +37,7 @@ export function ThreadAutoMarkRead({
         // inbox list re-runs SSR with the fresh read-state and the unread
         // blip disappears without a manual refresh. router.refresh() does
         // not change this effect's deps, so it won't re-fire the effect.
-        if (!cancelled && res.ok) router.refresh();
+        if (!cancelled && res.ok && refresh) router.refresh();
       } catch {
         /* aborted or network blip — row self-heals on next list SSR */
       }
@@ -41,7 +46,7 @@ export function ThreadAutoMarkRead({
       cancelled = true;
       ac.abort();
     };
-  }, [threadId, accountId, readThroughAt, router]);
+  }, [threadId, accountId, readThroughAt, router, refresh]);
 
   return null;
 }

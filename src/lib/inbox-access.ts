@@ -10,6 +10,7 @@
 // before serving — assignments could reference deleted accounts.
 
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
+import { listAccounts } from "@/lib/missive-client";
 import type { User } from "@/lib/types";
 
 export interface InboxAssignment {
@@ -60,6 +61,67 @@ export async function getAssignmentsForUser(userId: string): Promise<InboxAssign
   return (data ?? []).map((r) => rowToAssignment(r as AssignmentRow));
 }
 
+// Private inboxes ("the boss's container"): account_id -> owner_user_id.
+// A private inbox is visible ONLY to its owner — everyone else, leaders
+// and admins included, is excluded regardless of role or assignment.
+// Best-effort: a missing table (migration not applied) yields an empty
+// map, i.e. nothing is private.
+export async function getPrivateInboxOwners(): Promise<Map<string, string | null>> {
+  const { data, error } = await getSupabaseAdmin()
+    .from("inbox_privacy")
+    .select("missive_account_id, owner_user_id");
+  const map = new Map<string, string | null>();
+  if (error) {
+    if (!/inbox_privacy/.test(error.message)) {
+      console.error("[inbox-access] private-inbox lookup failed", error);
+    }
+    return map;
+  }
+  for (const r of (data ?? []) as { missive_account_id: string; owner_user_id: string | null }[]) {
+    map.set(r.missive_account_id, r.owner_user_id);
+  }
+  return map;
+}
+
+// Set or clear an inbox's private flag. Passing ownerUserId marks it
+// private (visible only to that user); passing null clears it (back to
+// role-based visibility). Leader/admin gating is enforced at the API.
+export async function setInboxPrivacy(
+  accountId: string,
+  ownerUserId: string | null,
+  byUserId: string
+): Promise<void> {
+  const supabase = getSupabaseAdmin();
+  if (ownerUserId === null) {
+    await supabase.from("inbox_privacy").delete().eq("missive_account_id", accountId);
+    return;
+  }
+  await supabase
+    .from("inbox_privacy")
+    .upsert(
+      {
+        missive_account_id: accountId,
+        owner_user_id: ownerUserId,
+        created_by: byUserId,
+        updated_at: new Date().toISOString()
+      },
+      { onConflict: "missive_account_id" }
+    );
+}
+
+// The set of account ids `actor` is barred from seeing because they're
+// private and owned by someone else.
+function privateExclusionsFor(
+  actor: User,
+  privateOwners: Map<string, string | null>
+): Set<string> {
+  const excluded = new Set<string>();
+  for (const [accountId, ownerId] of privateOwners) {
+    if (ownerId !== actor.id) excluded.add(accountId);
+  }
+  return excluded;
+}
+
 // Returns the set of missive_account_ids the actor can read. `null` means
 // "all accounts" (Leader scope) — caller should not filter further.
 //
@@ -72,7 +134,22 @@ export async function getAssignmentsForUser(userId: string): Promise<InboxAssign
 export async function visibleAccountIdsFor(
   actor: User
 ): Promise<Set<string> | null> {
-  if (actor.role === "leader" || actor.isAdmin) return null;
+  // Private inboxes are excluded for everyone but their owner — including
+  // leaders/admins. Computed up front so it applies on every branch.
+  const privateOwners = await getPrivateInboxOwners();
+  const excluded = privateExclusionsFor(actor, privateOwners);
+
+  if (actor.role === "leader" || actor.isAdmin) {
+    // Fast path preserved: with no private inboxes to hide from this
+    // actor, leaders/admins still get "all" (null). Only when a private
+    // inbox is in play do we enumerate accounts to return "all minus the
+    // private ones" as a concrete set.
+    if (excluded.size === 0) return null;
+    const accounts = await listAccounts().catch(() => []);
+    const all = new Set(accounts.map((a) => a.id));
+    for (const id of excluded) all.delete(id);
+    return all;
+  }
 
   const supabase = getSupabaseAdmin();
   const visible = new Set<string>();
@@ -125,6 +202,10 @@ export async function visibleAccountIdsFor(
   } catch {
     /* space tables absent on older deploys — ignore */
   }
+
+  // A private inbox is never visible to a non-owner, even if a stale
+  // assignment or space membership would otherwise grant it.
+  for (const id of excluded) visible.delete(id);
 
   return visible;
 }

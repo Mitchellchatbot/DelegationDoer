@@ -8,6 +8,8 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { AutoIntakeToggleSection } from "@/components/AutoIntakeToggleSection";
 import { ConnectInboxDialog } from "@/components/ConnectInboxDialog";
 import { SpacesManager } from "@/components/SpacesManager";
+import { InboxPrivacySection } from "@/components/InboxPrivacySection";
+import { getPrivateInboxOwners } from "@/lib/inbox-access";
 
 interface AutoIntakeRow {
   account_id: string;
@@ -46,6 +48,7 @@ export default async function ManageInboxesPage() {
   // redeploy.
   const livePeople = await getAllUsersLight().catch(() => []);
 
+  let privateOwners = new Map<string, string | null>();
   try {
     inboxes = await listAccounts();
     const supabase = getSupabaseAdmin();
@@ -53,8 +56,14 @@ export default async function ManageInboxesPage() {
       .from("missive_account_settings")
       .select("account_id, auto_intake_enabled, last_polled_at");
     autoIntakeSettings = (settings ?? []) as AutoIntakeRow[];
+    privateOwners = await getPrivateInboxOwners();
   } catch (err) {
     fetchError = err instanceof Error ? err.message : "unknown error";
+  }
+  // accountId -> ownerUserId for inboxes that are currently private.
+  const initialPrivate: Record<string, string> = {};
+  for (const [accountId, ownerId] of privateOwners) {
+    if (ownerId) initialPrivate[accountId] = ownerId;
   }
 
   const missiveAppUrl = (process.env.MISSIVE_API_URL ?? "").replace(/\/$/, "");
@@ -134,6 +143,11 @@ export default async function ManageInboxesPage() {
           <AutoIntakeToggleSection
             inboxes={inboxes}
             initialSettings={autoIntakeSettings}
+          />
+          <InboxPrivacySection
+            inboxes={inboxes.map((a) => ({ id: a.id, email: a.email, display_name: a.display_name }))}
+            people={livePeople.map((p) => ({ id: p.id, name: p.name, email: p.email }))}
+            initialPrivate={initialPrivate}
           />
           <SpacesManager
             inboxes={inboxes.map((a) => ({

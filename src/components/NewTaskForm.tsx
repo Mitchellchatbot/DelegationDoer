@@ -171,6 +171,7 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel, initialValues }: 
     id: string;
     name: string;
     website: string | null;
+    websites: string[];
     priorityRank: number | null;
     contactName: string | null;
   }
@@ -178,24 +179,38 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel, initialValues }: 
   useEffect(() => {
     fetch("/api/clients", { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : { clients: [] }))
-      .then((d) => setClientRoster(d.clients ?? []))
+      .then((d) => setClientRoster(((d.clients ?? []) as ClientRow[])
+        .map((c) => ({ ...c, websites: c.websites ?? [] }))))
       .catch(() => { /* dropdown just falls back to task-derived names */ });
   }, []);
 
-  const websiteList = useMemo(
-    () => Array.from(new Set([
-      ...clientRoster.map((c) => c.website).filter((s): s is string => !!s),
-      ...tasks.map((t) => t.website).filter((s): s is string => !!s && s.trim().length > 0)
-    ])).sort(),
-    [tasks, clientRoster]
-  );
+  // Website suggestions for the datalist. When a client is selected we
+  // float that client's own sites (primary `website` + the `websites`
+  // array, e.g. the Villa cohort's Treatment/Behavioral/Healing sites)
+  // to the top, then list every other known site as a fallback so
+  // freshly-typed domains still surface.
+  const websiteList = useMemo(() => {
+    const match = clientRoster.find(
+      (c) => c.name.toLowerCase() === clientName.trim().toLowerCase()
+    );
+    const own = match
+      ? [match.website, ...match.websites].filter((s): s is string => !!s && s.trim().length > 0)
+      : [];
+    const rest = [
+      ...clientRoster.flatMap((c) => [c.website, ...c.websites]),
+      ...tasks.map((t) => t.website)
+    ].filter((s): s is string => !!s && s.trim().length > 0).sort();
+    return Array.from(new Set([...own, ...rest]));
+  }, [tasks, clientRoster, clientName]);
   // Map each client name to the canonical website on file. The clients
-  // table wins; falls back to the most-recent task pairing for clients
-  // that don't have a website seeded yet.
+  // table wins (primary `website`, else its first listed site); falls
+  // back to the most-recent task pairing for clients that don't have a
+  // website seeded yet.
   const clientToWebsite = useMemo(() => {
     const map = new Map<string, string>();
     for (const c of clientRoster) {
-      if (c.website) map.set(c.name, c.website);
+      const primary = c.website ?? c.websites[0] ?? null;
+      if (primary) map.set(c.name, primary);
     }
     const sorted = [...tasks].sort(
       (a, b) => +new Date(b.lastActivityAt) - +new Date(a.lastActivityAt)

@@ -2280,6 +2280,8 @@ function CreateTaskView({ onClose, onCreated }: { onClose: () => void; onCreated
   // Villa cohort) instead of retyping a URL. Same source the browser
   // NewTaskForm reads; the widget hydrates it directly (no TeamProvider).
   const [clientRoster, setClientRoster] = useState<WidgetClient[]>([]);
+  // Open-state for the Client autocomplete panel (mirrors NewTaskForm).
+  const [clientDropdownOpen, setClientDropdownOpen] = useState(false);
   // "Analyze attachment with AI" — reads an attached screenshot/image with
   // Claude vision (shared POST /api/tasks/analyze-attachment) and pre-fills
   // the form. It only POPULATES fields, never submits — the user still
@@ -2364,6 +2366,25 @@ function CreateTaskView({ onClose, onCreated }: { onClose: () => void; onCreated
       .filter((s): s is string => !!s && s.trim().length > 0);
     return Array.from(new Set([...own, ...rest]));
   }, [clientRoster, clientName]);
+
+  // Client autocomplete (mirrors NewTaskForm). The widget has no live
+  // task pool, so suggestions come purely from the canonical roster.
+  const clientMatches = useMemo(() => {
+    const q = clientName.trim().toLowerCase();
+    const names = clientRoster.map((c) => c.name);
+    if (!q) return names.slice(0, 10);
+    return names.filter((n) => n.toLowerCase().includes(q)).slice(0, 10);
+  }, [clientRoster, clientName]);
+  // Pick a client from the panel. Auto-fills the website iff we know one
+  // for this client and the user hasn't already typed one — their typing
+  // always wins (same rule as NewTaskForm).
+  function pickClient(name: string) {
+    setClientName(name);
+    setClientDropdownOpen(false);
+    const c = clientRoster.find((x) => x.name === name);
+    const site = c?.website ?? c?.websites[0] ?? null;
+    if (site && !website.trim()) setWebsite(site);
+  }
 
   // Department scoping mirrors NewTaskForm (and the /api/tasks server gate):
   //   - leaders/admins may target any department,
@@ -2639,15 +2660,56 @@ function CreateTaskView({ onClose, onCreated }: { onClose: () => void; onCreated
           </div>
 
           <div className="grid grid-cols-2 gap-2">
-            <div>
+            <div className="relative">
               <label className="text-[10px] uppercase tracking-wide font-semibold text-slate-500 px-1">Client</label>
               <input
                 type="text"
                 value={clientName}
-                onChange={(e) => setClientName(e.target.value)}
+                onChange={(e) => { setClientName(e.target.value); setClientDropdownOpen(true); }}
+                onFocus={() => setClientDropdownOpen(true)}
+                // Delay so a click on a panel row registers before blur closes it.
+                onBlur={() => setTimeout(() => setClientDropdownOpen(false), 120)}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") setClientDropdownOpen(false);
+                  if (e.key === "Enter" && clientDropdownOpen && clientMatches.length > 0) {
+                    e.preventDefault();
+                    pickClient(clientMatches[0]);
+                  }
+                }}
                 placeholder="e.g. Acme"
+                autoComplete="off"
                 className="mt-1 w-full px-3 py-2 text-[13px] bg-white border border-slate-200/80 rounded-xl outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent/40 transition-all"
               />
+              {clientDropdownOpen && clientMatches.length > 0 && (
+                <div className="absolute left-0 right-0 top-full mt-1 z-20 rounded-xl border border-slate-200 bg-white shadow-lg overflow-hidden">
+                  {clientMatches.map((c) => {
+                    const match = clientRoster.find((x) => x.name === c);
+                    const site = match?.website ?? match?.websites[0] ?? null;
+                    const isExact = c.toLowerCase() === clientName.trim().toLowerCase();
+                    return (
+                      <button
+                        key={c}
+                        type="button"
+                        onMouseDown={(e) => { e.preventDefault(); pickClient(c); }}
+                        className={
+                          "w-full text-left px-3 py-2 flex items-center gap-2 hover:bg-accent/5 transition-colors " +
+                          (isExact ? "bg-accent/5" : "")
+                        }
+                      >
+                        <span className="text-[13px] flex-1 truncate">{c}</span>
+                        {site && (
+                          <span className="text-[10px] text-slate-400 truncate max-w-[120px]">{site}</span>
+                        )}
+                      </button>
+                    );
+                  })}
+                  {clientName.trim() && !clientMatches.some((c) => c.toLowerCase() === clientName.trim().toLowerCase()) && (
+                    <div className="px-3 py-1.5 text-[10px] text-slate-500 border-t border-slate-100 bg-slate-50/60">
+                      No match — &quot;{clientName.trim()}&quot; will be saved as a new client.
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
             <div>
               <label className="text-[10px] uppercase tracking-wide font-semibold text-slate-500 px-1">Website</label>

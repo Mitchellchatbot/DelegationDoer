@@ -2239,6 +2239,13 @@ interface WidgetDept {
   name: string;
 }
 
+// Slim view of /api/clients — only what the Website picker needs.
+interface WidgetClient {
+  name: string;
+  website: string | null;
+  websites: string[];
+}
+
 const PRIORITY_OPTIONS: { value: "low" | "medium" | "high" | "critical"; label: string; tone: string }[] = [
   { value: "low",      label: "Low",      tone: "border-slate-300 bg-slate-50 text-slate-700" },
   { value: "medium",   label: "Medium",   tone: "border-blue-300 bg-blue-50 text-blue-800" },
@@ -2268,6 +2275,11 @@ function CreateTaskView({ onClose, onCreated }: { onClose: () => void; onCreated
   const [tags, setTags] = useState<string[]>([]);
   const [clientName, setClientName] = useState("");
   const [website, setWebsite] = useState("");
+  // Canonical client roster — drives the Website picker so the user can
+  // select a client's site (primary + the `websites` array, e.g. the
+  // Villa cohort) instead of retyping a URL. Same source the browser
+  // NewTaskForm reads; the widget hydrates it directly (no TeamProvider).
+  const [clientRoster, setClientRoster] = useState<WidgetClient[]>([]);
   // "Analyze attachment with AI" — reads an attached screenshot/image with
   // Claude vision (shared POST /api/tasks/analyze-attachment) and pre-fills
   // the form. It only POPULATES fields, never submits — the user still
@@ -2322,6 +2334,36 @@ function CreateTaskView({ onClose, onCreated }: { onClose: () => void; onCreated
       .catch(() => { /* widget still works; submit surfaces any real error */ });
     return () => { cancelled = true; };
   }, []);
+
+  // Client roster for the Website picker. Fetched separately so a slow or
+  // failed /api/clients never blocks the roster/department hydration above.
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/clients", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : { clients: [] }))
+      .then((d) => {
+        if (cancelled) return;
+        setClientRoster(((d.clients ?? []) as WidgetClient[])
+          .map((c) => ({ name: c.name, website: c.website ?? null, websites: c.websites ?? [] })));
+      })
+      .catch(() => { /* picker just stays empty — Website is still free-text */ });
+    return () => { cancelled = true; };
+  }, []);
+
+  // Website suggestions for the datalist. The selected client's own sites
+  // come first; every other client's sites follow as a fallback.
+  const websiteOptions = useMemo(() => {
+    const match = clientRoster.find(
+      (c) => c.name.toLowerCase() === clientName.trim().toLowerCase()
+    );
+    const own = match
+      ? [match.website, ...match.websites].filter((s): s is string => !!s && s.trim().length > 0)
+      : [];
+    const rest = clientRoster
+      .flatMap((c) => [c.website, ...c.websites])
+      .filter((s): s is string => !!s && s.trim().length > 0);
+    return Array.from(new Set([...own, ...rest]));
+  }, [clientRoster, clientName]);
 
   // Department scoping mirrors NewTaskForm (and the /api/tasks server gate):
   //   - leaders/admins may target any department,
@@ -2611,11 +2653,15 @@ function CreateTaskView({ onClose, onCreated }: { onClose: () => void; onCreated
               <label className="text-[10px] uppercase tracking-wide font-semibold text-slate-500 px-1">Website</label>
               <input
                 type="text"
+                list="widget-website-options"
                 value={website}
                 onChange={(e) => setWebsite(e.target.value)}
                 placeholder="e.g. acme.com"
                 className="mt-1 w-full px-3 py-2 text-[13px] bg-white border border-slate-200/80 rounded-xl outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent/40 transition-all"
               />
+              <datalist id="widget-website-options">
+                {websiteOptions.map((w) => <option key={w} value={w} />)}
+              </datalist>
             </div>
           </div>
 

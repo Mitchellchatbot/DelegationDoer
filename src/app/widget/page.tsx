@@ -2683,8 +2683,6 @@ function CreateTaskView({ onClose, onCreated }: { onClose: () => void; onCreated
               {clientDropdownOpen && clientMatches.length > 0 && (
                 <div className="absolute left-0 right-0 top-full mt-1 z-20 rounded-xl border border-slate-200 bg-white shadow-lg overflow-hidden">
                   {clientMatches.map((c) => {
-                    const match = clientRoster.find((x) => x.name === c);
-                    const site = match?.website ?? match?.websites[0] ?? null;
                     const isExact = c.toLowerCase() === clientName.trim().toLowerCase();
                     return (
                       <button
@@ -2696,10 +2694,9 @@ function CreateTaskView({ onClose, onCreated }: { onClose: () => void; onCreated
                           (isExact ? "bg-accent/5" : "")
                         }
                       >
+                        {/* Client name only — the site lands in the Website
+                            field (auto-filled on pick), not on this row. */}
                         <span className="text-[13px] flex-1 truncate">{c}</span>
-                        {site && (
-                          <span className="text-[10px] text-slate-400 truncate max-w-[120px]">{site}</span>
-                        )}
                       </button>
                     );
                   })}

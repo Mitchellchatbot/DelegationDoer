@@ -4,6 +4,7 @@ import { getUserById } from "@/lib/server-data";
 import { visibleAccountIdsFor } from "@/lib/inbox-access";
 import { composeNewThread } from "@/lib/missive-client";
 import { sanitizeMediaUrls, fetchMediaAsAttachments } from "@/lib/media";
+import { deleteDraftById } from "@/lib/inbox-drafts";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -94,6 +95,11 @@ export async function POST(req: NextRequest) {
       sendAtMs,
       attachments
     });
+
+    // If this send came from a saved compose draft, clear it now. Best-effort
+    // so draft cleanup can't fail an otherwise-successful send.
+    const draftId = typeof body.draftId === "string" && body.draftId.length > 0 ? body.draftId : null;
+    if (draftId) await deleteDraftById(userId, draftId).catch(() => {});
 
     return NextResponse.json({
       ok: true,

@@ -1,9 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
-import { Reply, Send, Loader2, X, CalendarClock, Sparkles } from "lucide-react";
+import { Reply, Send, Loader2, X, CalendarClock, Sparkles, Check } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { MediaPicker } from "@/components/MediaPicker";
@@ -69,6 +69,81 @@ export function ReplyComposer({
   // server pulls each URL via /api/upload and forwards as multipart
   // files[] to the missive clone.
   const [attachments, setAttachments] = useState<TaskMedia[]>([]);
+
+  // Draft autosave. We persist the in-progress reply to inbox_drafts
+  // (debounced) so it survives navigation/reload, and re-hydrate it on
+  // mount. `loaded` gates autosave until the initial fetch settles;
+  // `skipSaveRef` swallows the one effect run caused by hydration so we
+  // don't immediately re-save unchanged content.
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle");
+  const [loaded, setLoaded] = useState(false);
+  const skipSaveRef = useRef(false);
+
+  // Load an existing draft for this thread (once).
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(
+          `/api/inboxes/drafts/thread/${encodeURIComponent(threadId)}`,
+          { cache: "no-store" }
+        );
+        const data = await res.json();
+        if (!cancelled && data.draft) {
+          const d = data.draft;
+          if (Array.isArray(d.to) && d.to.length > 0) setTo(d.to.join(", "));
+          if (Array.isArray(d.cc) && d.cc.length > 0) { setCc(d.cc.join(", ")); setCcOpen(true); }
+          if (typeof d.subject === "string" && d.subject) setSubject(d.subject);
+          if (typeof d.bodyText === "string") setBodyText(d.bodyText);
+          if (Array.isArray(d.attachments)) setAttachments(d.attachments);
+          setSaveState("saved");
+          setOpen(true);
+        }
+      } catch {
+        /* no draft / network blip — start fresh */
+      } finally {
+        if (!cancelled) { skipSaveRef.current = true; setLoaded(true); }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [threadId]);
+
+  const saveDraft = useCallback(async () => {
+    const toList = to.split(/[,\n]/).map((s) => s.trim()).filter(Boolean);
+    const ccList = cc.split(/[,\n]/).map((s) => s.trim()).filter(Boolean);
+    setSaveState("saving");
+    try {
+      const res = await fetch("/api/inboxes/drafts", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          threadId, accountId, to: toList, cc: ccList,
+          subject: subject.trim() || undefined, bodyText, attachmentUrls: attachments
+        })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { setSaveState("idle"); return; }
+      setSaveState(data.deleted ? "idle" : "saved");
+    } catch {
+      setSaveState("idle");
+    }
+  }, [threadId, accountId, to, cc, subject, bodyText, attachments]);
+
+  // Debounced autosave. Skips until the initial load settles and swallows
+  // the hydration-triggered run.
+  useEffect(() => {
+    if (!loaded) return;
+    if (skipSaveRef.current) { skipSaveRef.current = false; return; }
+    const t = setTimeout(() => { void saveDraft(); }, 700);
+    return () => clearTimeout(t);
+  }, [loaded, saveDraft]);
+
+  // Discard the persisted draft (best-effort) on top of clearing local state.
+  const discardDraft = useCallback(() => {
+    skipSaveRef.current = true;
+    setSaveState("idle");
+    void fetch(`/api/inboxes/drafts/thread/${encodeURIComponent(threadId)}`, { method: "DELETE" }).catch(() => {});
+  }, [threadId]);
 
   // AI drafting state. `aiOpen` reveals an inline instruction box;
   // `aiBusy` blocks repeat clicks while the model is generating.
@@ -177,6 +252,10 @@ export function ReplyComposer({
       } else {
         toast.success("Reply sent ✉️");
       }
+      // The send routes already delete the draft server-side; swallow the
+      // autosave that clearing these fields would otherwise trigger.
+      skipSaveRef.current = true;
+      setSaveState("idle");
       setBodyText("");
       setAttachments([]);
       setScheduleOpen(false);
@@ -232,6 +311,13 @@ export function ReplyComposer({
             <header className="px-4 py-2.5 flex items-center justify-between border-b border-slate-100 bg-gradient-to-r from-blue-50/60 to-indigo-50/40">
               <div className="flex items-center gap-2 text-xs font-semibold text-ink">
                 <Reply className="w-3.5 h-3.5 text-accent" /> Reply
+                {saveState !== "idle" && (
+                  <span className="inline-flex items-center gap-1 text-[10px] uppercase tracking-wide text-ink/45 font-semibold">
+                    {saveState === "saving"
+                      ? <><Loader2 className="w-3 h-3 animate-spin" /> Saving…</>
+                      : <><Check className="w-3 h-3 text-emerald-500" /> Saved</>}
+                  </span>
+                )}
               </div>
               <div className="flex items-center gap-2">
                 {hasReplyAll && (
@@ -438,7 +524,7 @@ export function ReplyComposer({
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => { setOpen(false); setBodyText(""); setAttachments([]); setScheduleOpen(false); setScheduleAt(""); setMode("reply"); setCc(""); setCcOpen(false); }}
+                  onClick={() => { discardDraft(); setOpen(false); setBodyText(""); setAttachments([]); setScheduleOpen(false); setScheduleAt(""); setMode("reply"); setCc(""); setCcOpen(false); }}
                   className="px-3 py-1.5 rounded-full text-xs font-medium text-ink/70 hover:text-ink hover:bg-white transition-colors"
                 >
                   Discard

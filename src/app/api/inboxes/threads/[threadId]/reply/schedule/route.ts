@@ -3,6 +3,7 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { visibleAccountIdsFor } from "@/lib/inbox-access";
+import { deleteReplyDraft } from "@/lib/inbox-drafts";
 
 export const dynamic = "force-dynamic";
 
@@ -80,6 +81,11 @@ export async function POST(
       .select()
       .single();
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+    // Reply content now lives in scheduled_emails — clear the working draft so
+    // it doesn't linger in the Drafts folder. Best-effort.
+    await deleteReplyDraft(userId, params.threadId).catch(() => {});
+
     return NextResponse.json({ ok: true, scheduled: data });
   } catch (err) {
     return NextResponse.json(

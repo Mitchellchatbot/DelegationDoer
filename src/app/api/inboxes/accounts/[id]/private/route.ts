@@ -34,6 +34,23 @@ export async function POST(
     const ownerUserId =
       typeof body.ownerUserId === "string" && body.ownerUserId ? body.ownerUserId : null;
 
+    // Once an inbox is private, only its OWNER may change or clear that
+    // setting — not every leader/admin. Otherwise a full-access grantee
+    // could just un-hide the boss's inbox. (Setting a brand-new private
+    // inbox is open to any leader/admin via the gate above.)
+    const { data: existing } = await getSupabaseAdmin()
+      .from("inbox_privacy")
+      .select("owner_user_id")
+      .eq("missive_account_id", accountId)
+      .maybeSingle();
+    const currentOwner = (existing?.owner_user_id as string | null) ?? null;
+    if (currentOwner && currentOwner !== userId) {
+      return NextResponse.json(
+        { error: "This inbox is private to someone else — only its owner can change that." },
+        { status: 403 }
+      );
+    }
+
     // Validate the owner is a real user before marking private.
     if (ownerUserId) {
       const { data: owner } = await getSupabaseAdmin()

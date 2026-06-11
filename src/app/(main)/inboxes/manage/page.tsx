@@ -148,6 +148,7 @@ export default async function ManageInboxesPage() {
             inboxes={inboxes.map((a) => ({ id: a.id, email: a.email, display_name: a.display_name }))}
             people={livePeople.map((p) => ({ id: p.id, name: p.name, email: p.email }))}
             initialPrivate={initialPrivate}
+            meId={me.id}
           />
           <SpacesManager
             inboxes={inboxes.map((a) => ({

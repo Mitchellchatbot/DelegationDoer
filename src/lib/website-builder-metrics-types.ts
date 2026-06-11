@@ -1,5 +1,5 @@
-// Client-safe types + constants for the LinkedIn Leads dashboard. The
-// fetcher lives in linkedin-leads-metrics.ts which is marked
+// Client-safe types + constants for the Website Builder dashboard. The
+// fetcher lives in website-builder-metrics.ts which is marked
 // `server-only` (it holds the Supabase service_role key). Splitting the
 // pure types out into their own file lets the dashboard's "use client"
 // content component import the constants without dragging the

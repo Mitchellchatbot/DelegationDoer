@@ -1,40 +1,41 @@
 import "server-only";
 
-import type { MetricsResult, ProjectMetricsRow } from "./linkedin-leads-metrics-types";
+import type { MetricsResult, ProjectMetricsRow } from "./website-builder-metrics-types";
 
-// LinkedIn Leads outbound dashboard data source.
+// Website Builder outbound dashboard data source.
 //
-// Reads the `project_metrics` view from the standalone LinkedIn-leads
-// Supabase project. That project is owned by the outreach pipeline,
-// not by DelegationDoer's main Supabase — so we hold its URL + service
-// role key in dedicated env vars (LINKEDIN_METRICS_SUPABASE_*) instead
-// of reusing the SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY pair the rest
-// of the app uses.
+// Reads the `project_metrics` view from the standalone Website Builder
+// Supabase project. That project is owned by the website-generation
+// pipeline, not by DelegationDoer's main Supabase — so we hold its URL
+// + service role key in dedicated env vars
+// (WEBSITE_BUILDER_METRICS_SUPABASE_*) instead of reusing the
+// SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY pair the rest of the app
+// uses.
 //
 // service_role bypasses RLS, so this module is `server-only`: any
 // attempt to import it from a Client Component is a compile error and
 // the key cannot end up in the browser bundle. Types + constants the
-// UI also needs live in linkedin-leads-metrics-types.ts (no
+// UI also needs live in website-builder-metrics-types.ts (no
 // server-only directive) so client components can pull them in safely.
 
 const PROJECT_METRICS_PATH = "/rest/v1/project_metrics?select=*";
 
-export async function getLinkedInLeadsMetrics(): Promise<MetricsResult> {
-  const url = process.env.LINKEDIN_METRICS_SUPABASE_URL?.trim();
-  const key = process.env.LINKEDIN_METRICS_SUPABASE_KEY?.trim();
+export async function getWebsiteBuilderMetrics(): Promise<MetricsResult> {
+  const url = process.env.WEBSITE_BUILDER_METRICS_SUPABASE_URL?.trim();
+  const key = process.env.WEBSITE_BUILDER_METRICS_SUPABASE_KEY?.trim();
   if (!url || !key) {
     return {
       ok: false,
-      error: "Missing LINKEDIN_METRICS_SUPABASE_URL or LINKEDIN_METRICS_SUPABASE_KEY"
+      error: "Missing WEBSITE_BUILDER_METRICS_SUPABASE_URL or WEBSITE_BUILDER_METRICS_SUPABASE_KEY"
     };
   }
 
   let res: Response;
   try {
     // 5-min server cache mirrors the Facebook Ads layer — the upstream
-    // view aggregates a large outreach pipeline and doesn't move that
-    // fast. UI-driven refresh (router refresh on focus) bypasses this
-    // when the page is revisited.
+    // view aggregates the website-builder pipeline and doesn't move
+    // that fast. UI-driven refresh (router refresh on focus) bypasses
+    // this when the page is revisited.
     res = await fetch(`${url.replace(/\/$/, "")}${PROJECT_METRICS_PATH}`, {
       headers: {
         apikey: key,

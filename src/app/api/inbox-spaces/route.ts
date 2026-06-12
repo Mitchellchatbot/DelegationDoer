@@ -19,12 +19,26 @@ export async function GET() {
   try {
     await requireCurrentUserId();
     const supabase = getSupabaseAdmin();
-    const [spacesRes, acctsRes, membersRes] = await Promise.all([
-      supabase
+    // Order by `position` (set by 20260704000000_inbox_space_position) so pinned
+    // spaces like "Boss's Mail" lead, then created_at. Fall back to created_at
+    // only if the position column isn't present yet (code deployed ahead of the
+    // migration) — otherwise that query errors and the sidebar loses ALL its
+    // grouping for everyone, not just the ordering.
+    const fetchSpaces = async () => {
+      const withPos = await supabase
         .from("inbox_spaces")
         .select("id, name, color, position, created_at, created_by")
         .order("position", { ascending: true })
-        .order("created_at", { ascending: true }),
+        .order("created_at", { ascending: true });
+      if (!withPos.error) return withPos;
+      console.warn("[inbox-spaces] position ordering unavailable, using created_at:", withPos.error.message);
+      return supabase
+        .from("inbox_spaces")
+        .select("id, name, color, created_at, created_by")
+        .order("created_at", { ascending: true });
+    };
+    const [spacesRes, acctsRes, membersRes] = await Promise.all([
+      fetchSpaces(),
       supabase.from("inbox_space_accounts").select("space_id, account_id"),
       supabase.from("inbox_space_members").select("space_id, user_id")
     ]);
@@ -42,8 +56,12 @@ export async function GET() {
       membersBySpace.set(r.space_id, arr);
     }
 
+    type SpaceRow = {
+      id: string; name: string; color: string;
+      created_at: string; created_by: string | null;
+    };
     return NextResponse.json({
-      spaces: (spacesRes.data ?? []).map((s) => ({
+      spaces: ((spacesRes.data ?? []) as SpaceRow[]).map((s) => ({
         id: s.id,
         name: s.name,
         color: s.color,

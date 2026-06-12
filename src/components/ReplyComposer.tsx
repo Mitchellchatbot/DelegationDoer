@@ -68,7 +68,7 @@ function buildQuoteDoc(quoteHtml: string): string {
 
 export function ReplyComposer({
   threadId, accountId, defaultTo, defaultSubject, replyAllTo, replyAllCc,
-  replyTarget, onClearReplyTarget, quoteSource
+  replyTarget, onClearReplyTarget, quoteSource, accounts
 }: {
   threadId: string;
   accountId: string;
@@ -92,6 +92,9 @@ export function ReplyComposer({
   // The message to quote (the pinned target, or the latest message for a
   // thread-level reply). Drives the collapsed "•••" quote below the textarea.
   quoteSource?: MissiveMessage | null;
+  // Connected accounts (access-scoped) the user may send FROM. Powers the
+  // "From" selector; defaults to the thread's inbox (`accountId`).
+  accounts?: { id: string; email: string; display_name: string | null }[];
 }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -100,6 +103,11 @@ export function ReplyComposer({
   const [mode, setMode] = useState<"reply" | "replyAll">("reply");
   const [to, setTo] = useState(defaultTo ?? "");
   const [cc, setCc] = useState("");
+  // Which connected account the reply is sent FROM. Defaults to the thread's
+  // inbox; the component remounts per-thread (key={threadId}) so this resets on
+  // thread switch. The options are the user's access-scoped accounts.
+  const fromOptions = accounts ?? [];
+  const [fromAccountId, setFromAccountId] = useState(accountId);
   const [subject, setSubject] = useState(prefixRe(defaultSubject ?? ""));
   const [bodyText, setBodyText] = useState("");
   // Whether the Cc row is shown. Auto-revealed in reply-all mode or when
@@ -171,6 +179,11 @@ export function ReplyComposer({
           if (typeof d.subject === "string" && d.subject) setSubject(d.subject);
           if (typeof d.bodyText === "string") setBodyText(d.bodyText);
           if (Array.isArray(d.attachments)) setAttachments(d.attachments);
+          // Restore the saved "From" account, but only if it's still one the
+          // user can send from (else keep the thread's inbox default).
+          if (typeof d.accountId === "string" && (accounts ?? []).some((a) => a.id === d.accountId)) {
+            setFromAccountId(d.accountId);
+          }
           setSaveState("saved");
           setOpen(true);
         }
@@ -181,6 +194,7 @@ export function ReplyComposer({
       }
     })();
     return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [threadId]);
 
   const saveDraft = useCallback(async () => {
@@ -192,7 +206,7 @@ export function ReplyComposer({
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          threadId, accountId, to: toList, cc: ccList,
+          threadId, accountId: fromAccountId, to: toList, cc: ccList,
           subject: subject.trim() || undefined, bodyText, attachmentUrls: attachments
         })
       });
@@ -202,7 +216,7 @@ export function ReplyComposer({
     } catch {
       setSaveState("idle");
     }
-  }, [threadId, accountId, to, cc, subject, bodyText, attachments]);
+  }, [threadId, fromAccountId, to, cc, subject, bodyText, attachments]);
 
   // Debounced autosave. Skips until the initial load settles and swallows
   // the hydration-triggered run.
@@ -347,8 +361,8 @@ export function ReplyComposer({
         ? `/api/inboxes/threads/${encodeURIComponent(threadId)}/reply/schedule`
         : `/api/inboxes/threads/${encodeURIComponent(threadId)}/reply`;
       const body = scheduling
-        ? { accountId, to: toList, cc: ccList, subject: subject.trim() || undefined, bodyText: sendText, bodyHtml: fullHtml, scheduledForISO, inReplyTo: inReplyTo ?? undefined }
-        : { accountId, to: toList, cc: ccList, subject: subject.trim() || undefined, bodyText: sendText, bodyHtml: fullHtml, attachmentUrls: attachments, inReplyTo: inReplyTo ?? undefined };
+        ? { accountId: fromAccountId, to: toList, cc: ccList, subject: subject.trim() || undefined, bodyText: sendText, bodyHtml: fullHtml, scheduledForISO, inReplyTo: inReplyTo ?? undefined }
+        : { accountId: fromAccountId, to: toList, cc: ccList, subject: subject.trim() || undefined, bodyText: sendText, bodyHtml: fullHtml, attachmentUrls: attachments, inReplyTo: inReplyTo ?? undefined };
       const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -393,6 +407,7 @@ export function ReplyComposer({
       setCcOpen(false);
       setInReplyTo(null);
       setQuoteOpen(false);
+      setFromAccountId(accountId);
       onClearReplyTarget?.();
       setOpen(false);
       router.refresh();
@@ -497,6 +512,36 @@ export function ReplyComposer({
             </header>
 
             <div className="p-3 space-y-2.5">
+              {/* From — which connected inbox sends the reply. Dropdown when the
+                  user can send from more than one account; a static label otherwise. */}
+              {fromOptions.length > 1 ? (
+                <div className="flex items-center gap-2 px-3 py-2 rounded-xl border border-slate-200/70 bg-white/60 focus-within:ring-2 focus-within:ring-accent/30 focus-within:border-accent/40 transition-all">
+                  <span className="text-[11px] uppercase tracking-wide font-semibold text-ink/45 w-14 shrink-0">
+                    From
+                  </span>
+                  <select
+                    value={fromAccountId}
+                    onChange={(e) => setFromAccountId(e.target.value)}
+                    className="flex-1 bg-transparent text-sm outline-none cursor-pointer"
+                  >
+                    {fromOptions.map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {a.display_name ? `${a.display_name} <${a.email}>` : a.email}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              ) : fromOptions.length === 1 ? (
+                <div className="flex items-center gap-2 px-3 py-2 rounded-xl border border-slate-200/70 bg-white/60">
+                  <span className="text-[11px] uppercase tracking-wide font-semibold text-ink/45 w-14 shrink-0">
+                    From
+                  </span>
+                  <span className="flex-1 text-sm text-ink/70 truncate">
+                    {fromOptions[0].display_name ? `${fromOptions[0].display_name} <${fromOptions[0].email}>` : fromOptions[0].email}
+                  </span>
+                </div>
+              ) : null}
+
               <div className="flex items-center gap-2 px-3 py-2 rounded-xl border border-slate-200/70 bg-white/60 focus-within:ring-2 focus-within:ring-accent/30 focus-within:border-accent/40 transition-all">
                 <span className="text-[11px] uppercase tracking-wide font-semibold text-ink/45 w-14 shrink-0">
                   To

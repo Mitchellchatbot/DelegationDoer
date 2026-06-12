@@ -51,10 +51,18 @@ export async function loadThreadDetail(
     ? `${missiveAppUrl}/?thread=${encodeURIComponent(threadId)}`
     : null;
 
+  // The connected accounts this user may send FROM (access-scoped), surfaced so
+  // the reply composer can offer a "From" selector. We already have `visibleIds`
+  // above, so reuse one listAccounts() call for both this and `ownEmail`.
+  const allAccounts = await listAccounts().catch(() => []);
+  const fromAccounts = (visibleIds === null
+    ? allAccounts
+    : allAccounts.filter((a) => visibleIds.has(a.id))
+  ).map((a) => ({ id: a.id, email: a.email, display_name: a.display_name }));
+
   // Reply-all recipient sets, derived from the last inbound message. Drop the
   // current inbox's own address so replying-all doesn't loop back to yourself.
-  const ownEmail =
-    (await listAccounts().catch(() => [])).find((a) => a.id === accountId)?.email ?? "";
+  const ownEmail = allAccounts.find((a) => a.id === accountId)?.email ?? "";
   const ownEmailLower = ownEmail.toLowerCase();
   const lastInbound = [...messages].reverse().find((m) => m.direction === "inbound");
   const dedupe = (addrs: string[]) => {
@@ -86,7 +94,8 @@ export async function loadThreadDetail(
       replyAllTo: replyAllTo.join(", "),
       replyAllCc: replyAllCc.join(", "),
       defaultTo: lastInbound ? rawEmail(lastInbound.from_addr) : null,
-      missiveThreadUrl
+      missiveThreadUrl,
+      fromAccounts
     }
   };
 }

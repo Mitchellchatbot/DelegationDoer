@@ -268,6 +268,10 @@ ipcMain.handle("widget:collapse", () => setSize(BUBBLE));
 ipcMain.handle("widget:set-state", (_e, state) => setSize(sizeForState(state)));
 ipcMain.handle("widget:hide", () => widget?.hide());
 ipcMain.handle("widget:openMain", () => shell.openExternal(APP_URL));
+ipcMain.handle("widget:openMainWindow", (_e, path) => {
+  const dest = typeof path === "string" && path.startsWith("/") ? APP_URL + path : APP_URL;
+  shell.openExternal(dest);
+});
 ipcMain.handle("widget:poll", () => pollAssignments());
 
 // OS-level notifications. The renderer owns the "what's fresh" dedup and
@@ -276,11 +280,17 @@ ipcMain.handle("widget:poll", () => pollAssignments());
 // node-notifier there (it ships a signed terminal-notifier helper that
 // delivers regardless of our app's signature). Native Notification is fine
 // on Windows. The renderer plays its own chime, so keep these silent.
-ipcMain.handle("widget:notify", (_e, { title, body }) => {
+// `path` is an optional app-relative route (e.g. an inbox deep link). When
+// present, clicking the notification opens it in the default browser — native
+// `click` event on Windows, node-notifier's `open` option on macOS.
+ipcMain.handle("widget:notify", (_e, { title, body, path }) => {
+  const url = typeof path === "string" && path.startsWith("/") ? APP_URL + path : null;
   if (process.platform === "darwin") {
-    notifier.notify({ title, message: body, sound: false });
+    notifier.notify({ title, message: body, sound: false, ...(url ? { open: url } : {}) });
   } else if (Notification.isSupported()) {
-    new Notification({ title, body }).show();
+    const n = new Notification({ title, body });
+    if (url) n.on("click", () => shell.openExternal(url));
+    n.show();
   }
 });
 

@@ -21,6 +21,8 @@ export interface ThreadDetailData {
   replyAllCc: string;
   defaultTo: string | null;
   missiveThreadUrl: string | null;
+  // Connected accounts (access-scoped) the user may send replies FROM.
+  fromAccounts: { id: string; email: string; display_name: string | null }[];
 }
 
 // The conversation UI for a single thread. Extracted verbatim from the thread
@@ -34,7 +36,8 @@ export function ThreadConversation({
   replyAllTo,
   replyAllCc,
   defaultTo,
-  missiveThreadUrl
+  missiveThreadUrl,
+  fromAccounts
 }: ThreadDetailData & { accountId: string; threadId: string }) {
   // Which message the user is replying to. null = the default bottom composer,
   // which threads under the latest message. Picking a message from the list
@@ -110,6 +113,7 @@ export function ThreadConversation({
         replyTarget={replyTarget}
         onClearReplyTarget={() => setReplyTarget(null)}
         quoteSource={replyTarget ?? messages.at(-1) ?? null}
+        accounts={fromAccounts}
       />
 
       {/* Mark-as-read upsert fires on mount — silent. refresh={false}: the

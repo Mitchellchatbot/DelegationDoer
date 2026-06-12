@@ -22,7 +22,8 @@ export async function GET() {
     const [spacesRes, acctsRes, membersRes] = await Promise.all([
       supabase
         .from("inbox_spaces")
-        .select("id, name, color, created_at, created_by")
+        .select("id, name, color, position, created_at, created_by")
+        .order("position", { ascending: true })
         .order("created_at", { ascending: true }),
       supabase.from("inbox_space_accounts").select("space_id, account_id"),
       supabase.from("inbox_space_members").select("space_id, user_id")

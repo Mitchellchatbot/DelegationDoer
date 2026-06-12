@@ -27,7 +27,9 @@
     },
     "files": [
       "electron/**/*",
-      "!electron/assets/**/*.psd"
+      "!electron/assets/**/*.psd",
+      "!node_modules/**/*",
+      "node_modules/{growly,is-docker,is-wsl,isexe,node-notifier,semver,shellwords,uuid,which}/**/*"
     ],
     "asarUnpack": [
       "**/node_modules/node-notifier/**"

@@ -253,6 +253,11 @@ async function pollAssignments() {
 }
 
 app.whenReady().then(() => {
+  // Brand Windows toast notifications and make their click activation reliable
+  // when running unpackaged (`npm run electron`). Must match the electron-builder
+  // appId; packaged builds set this automatically.
+  if (process.platform === "win32") app.setAppUserModelId("com.scaledai.delegationdoer");
+
   createWidget();
   buildTray();
   pollAssignments();

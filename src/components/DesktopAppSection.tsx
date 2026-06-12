@@ -14,7 +14,7 @@ import { Apple, Monitor, Download } from "lucide-react";
 // If both are empty, the platform's button is disabled with a "Coming soon".
 
 const FALLBACK_WIN_URL =
-  "https://hbmggvsmmilxvsoxcneh.supabase.co/storage/v1/object/public/desktop-app/DelegationDoer%20Setup%200.1.0.exe";
+  "https://hbmggvsmmilxvsoxcneh.supabase.co/storage/v1/object/public/desktop-app/DelegationDoer%20Setup%200.1.1.exe";
 const FALLBACK_MAC_URL = "";
 
 type OS = "mac" | "win" | "other";

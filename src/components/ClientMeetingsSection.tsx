@@ -49,8 +49,8 @@ export function ClientMeetingsSection({ meetings }: { meetings: ClientMeetingVie
         </div>
       ) : (
         <div className="space-y-2.5">
-          {meetings.map((m) => (
-            <MeetingCard key={m.id} meeting={m} />
+          {meetings.map((m, i) => (
+            <MeetingCard key={m.id} meeting={m} defaultExpanded={i === 0} />
           ))}
         </div>
       )}
@@ -58,27 +58,43 @@ export function ClientMeetingsSection({ meetings }: { meetings: ClientMeetingVie
   );
 }
 
-function MeetingCard({ meeting: m }: { meeting: ClientMeetingView }) {
+function MeetingCard({ meeting: m, defaultExpanded = false }: {
+  meeting: ClientMeetingView;
+  defaultExpanded?: boolean;
+}) {
+  const [expanded, setExpanded] = useState(defaultExpanded);
   const [showTranscript, setShowTranscript] = useState(false);
 
   return (
     <div className="rounded-xl bg-white/80 border border-white/70 p-3.5 space-y-2.5">
-      {/* Header — title, date, source, recording link. */}
+      {/* Header — clickable to expand/collapse. Title + date/source live in the
+          toggle button; the Recording link stays a sibling so it isn't nested
+          inside the button (invalid HTML) and can be clicked independently. */}
       <div className="flex items-start justify-between gap-2 flex-wrap">
-        <div className="min-w-0">
-          <div className="text-sm font-semibold text-ink">{m.title}</div>
-          <div className="flex items-center gap-2 flex-wrap mt-0.5 text-[11px] text-ink/55">
-            <span className="inline-flex items-center gap-1 tabular-nums">
-              <CalendarClock className="w-3 h-3" />
-              {new Date(m.meetingDate).toLocaleDateString(undefined, {
-                year: "numeric", month: "short", day: "numeric"
-              })}
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          aria-expanded={expanded}
+          className="min-w-0 flex items-start gap-1.5 text-left group"
+        >
+          <span className="shrink-0 mt-0.5 text-ink/45 group-hover:text-ink/70 transition-colors">
+            {expanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+          </span>
+          <span className="min-w-0">
+            <span className="block text-sm font-semibold text-ink">{m.title}</span>
+            <span className="flex items-center gap-2 flex-wrap mt-0.5 text-[11px] text-ink/55">
+              <span className="inline-flex items-center gap-1 tabular-nums">
+                <CalendarClock className="w-3 h-3" />
+                {new Date(m.meetingDate).toLocaleDateString(undefined, {
+                  year: "numeric", month: "short", day: "numeric"
+                })}
+              </span>
+              <span className="uppercase tracking-wide px-1.5 py-0.5 rounded-full bg-slate-100 text-ink/60 border border-slate-200/70">
+                {m.source}
+              </span>
             </span>
-            <span className="uppercase tracking-wide px-1.5 py-0.5 rounded-full bg-slate-100 text-ink/60 border border-slate-200/70">
-              {m.source}
-            </span>
-          </div>
-        </div>
+          </span>
+        </button>
         {m.sourceUrl && (
           <a
             href={m.sourceUrl}
@@ -91,6 +107,8 @@ function MeetingCard({ meeting: m }: { meeting: ClientMeetingView }) {
         )}
       </div>
 
+      {expanded && (
+      <>
       {/* Participants. */}
       {m.participants.length > 0 && (
         <div className="flex items-center gap-1.5 flex-wrap text-[11px] text-ink/65">
@@ -188,6 +206,8 @@ function MeetingCard({ meeting: m }: { meeting: ClientMeetingView }) {
             </div>
           )}
         </div>
+      )}
+      </>
       )}
     </div>
   );

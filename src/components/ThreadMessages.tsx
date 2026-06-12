@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Send, Inbox, Paperclip, SendHorizontal } from "lucide-react";
+import { Send, Inbox, Paperclip, SendHorizontal, Reply } from "lucide-react";
 import type { MissiveMessage } from "@/lib/missive-client";
 import { shortName, rawEmail, formatBytes, messageSnippet } from "@/lib/email-format";
 import { Avatar } from "@/components/Avatar";
@@ -30,13 +30,16 @@ export function ThreadMessages({
   accountId,
   threadId,
   threadSubject,
-  latestMessageId
+  latestMessageId,
+  onReplyToMessage
 }: {
   messages: MissiveMessage[];
   accountId: string;
   threadId: string;
   threadSubject: string;
   latestMessageId: string;
+  // Pin the bottom composer to a specific message in the chain.
+  onReplyToMessage: (m: MissiveMessage) => void;
 }) {
   // Set of message ids shown expanded; null = not initialised yet (default to
   // the latest). Keyed on the message-id signature so unrelated re-renders don't
@@ -169,18 +172,31 @@ export function ThreadMessages({
                     <div className="inline-flex items-center px-2.5 py-1 rounded-full text-[11px] bg-white/70 border border-border/60 text-ink/70 tabular-nums">
                       {fmtDate(m.sent_at)}
                     </div>
-                    {/* Forward this specific message. Sends from the inbox in
-                        view (accountId); the server rebuilds the quoted body +
-                        re-attaches the originals. */}
-                    <ForwardButton
-                      accountId={accountId}
-                      threadId={threadId}
-                      messageId={m.id}
-                      sourceSubject={m.subject || threadSubject || ""}
-                      sourceFrom={m.from_addr}
-                      sourceDate={fmtDate(m.sent_at)}
-                      attachmentCount={(m.attachments ?? []).length}
-                    />
+                    <div className="flex items-center gap-2">
+                      {/* Reply to THIS specific message. Pins the bottom
+                          composer so the reply threads under this email (and
+                          pre-fills its sender), instead of always the latest. */}
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); onReplyToMessage(m); }}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium bg-white/70 border border-border/60 text-ink/70 hover:text-accent hover:border-accent/40 transition-all hover:-translate-y-0.5 shadow-sm"
+                        title="Reply to this email"
+                      >
+                        <Reply className="w-3 h-3" /> Reply
+                      </button>
+                      {/* Forward this specific message. Sends from the inbox in
+                          view (accountId); the server rebuilds the quoted body +
+                          re-attaches the originals. */}
+                      <ForwardButton
+                        accountId={accountId}
+                        threadId={threadId}
+                        messageId={m.id}
+                        sourceSubject={m.subject || threadSubject || ""}
+                        sourceFrom={m.from_addr}
+                        sourceDate={fmtDate(m.sent_at)}
+                        attachmentCount={(m.attachments ?? []).length}
+                      />
+                    </div>
                   </div>
                 </header>
 

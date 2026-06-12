@@ -8,14 +8,67 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { MediaPicker } from "@/components/MediaPicker";
 import type { TaskMedia } from "@/lib/types";
+import type { MissiveMessage } from "@/lib/missive-client";
+import { rawEmail, shortName } from "@/lib/email-format";
 
 // Inline reply panel that sits at the bottom of a thread detail. Folded
 // into a "Reply" pill by default; expands into a Gmail-style composer
 // on click. Submitting hits /api/inboxes/threads/[threadId]/reply and
 // refreshes the thread so the new message appears in the list.
 
+function escapeHtml(s: string): string {
+  return String(s || "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] as string));
+}
+
+// Plain textarea text → minimal HTML for the body (the user types plain text;
+// the quote we append is HTML, so the whole body becomes HTML on send).
+function plainTextToHtml(t: string): string {
+  return escapeHtml(t || "").replace(/\n/g, "<br/>");
+}
+
+// Browser-only HTML → text, for the plain-text MIME alternative. Called from
+// send() (a click handler), never during SSR/render.
+function htmlToText(html: string): string {
+  const div = document.createElement("div");
+  div.innerHTML = html || "";
+  return div.innerText;
+}
+
+// Gmail-style attribution date, e.g. "Fri, Jun 12, 2026 at 3:10 AM".
+function formatQuoteDate(d: Date): string {
+  const date = d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" });
+  const time = d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+  return `${date} at ${time}`;
+}
+
+// Build a Gmail-standard quoted block for the message being replied to. Matches
+// missiveclone's composer markup byte-for-byte (outer div.gmail_quote,
+// div.gmail_attr attribution, blockquote.gmail_quote with Gmail's inline style)
+// so replies sent from either app render — and collapse — identically.
+function buildReplyQuoteHtml(m: MissiveMessage): string {
+  if (!m) return "";
+  const when = m.sent_at ? formatQuoteDate(new Date(m.sent_at)) : "";
+  const who = escapeHtml(m.from_addr || "");
+  const inner = m.body_html || escapeHtml(m.body_text || "").replace(/\n/g, "<br/>");
+  return `<br/><br/><div class="gmail_quote">` +
+    `<div dir="ltr" class="gmail_attr">On ${escapeHtml(when)} ${who} wrote:<br></div>` +
+    `<blockquote class="gmail_quote" style="margin:0 0 0 .8ex;border-left:1px #ccc solid;padding-left:1ex">${inner}</blockquote>` +
+    `</div>`;
+}
+
+// Wrap the quote in a minimal sandboxed document for the composer preview, so
+// the quoted email's own CSS can't leak into the composer layout.
+function buildQuoteDoc(quoteHtml: string): string {
+  return `<!doctype html><html><head><meta charset="utf-8"><base target="_blank"><style>
+    body{margin:0;padding:8px 10px;font-family:-apple-system,'Segoe UI',Roboto,sans-serif;font-size:13px;line-height:1.5;color:#475467}
+    img{max-width:100% !important;height:auto !important} a{color:#2f6feb}
+    blockquote{border-left:1px solid #ccc;margin:0 0 0 .8ex;padding-left:1ex}
+  </style></head><body>${quoteHtml || ""}</body></html>`;
+}
+
 export function ReplyComposer({
-  threadId, accountId, defaultTo, defaultSubject, replyAllTo, replyAllCc
+  threadId, accountId, defaultTo, defaultSubject, replyAllTo, replyAllCc,
+  replyTarget, onClearReplyTarget, quoteSource
 }: {
   threadId: string;
   accountId: string;
@@ -30,6 +83,15 @@ export function ReplyComposer({
   // To / Cc fields. Empty string when there's nobody extra to reply to.
   replyAllTo?: string;
   replyAllCc?: string;
+  // A specific message in the chain the user clicked "Reply" on. When set we
+  // open the composer, pre-fill To/subject from it, and thread the reply under
+  // it (via its RFC message_id). null = default composer (threads to latest).
+  replyTarget?: MissiveMessage | null;
+  // Clears the pinned target back to the default (reply-to-latest).
+  onClearReplyTarget?: () => void;
+  // The message to quote (the pinned target, or the latest message for a
+  // thread-level reply). Drives the collapsed "•••" quote below the textarea.
+  quoteSource?: MissiveMessage | null;
 }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -69,6 +131,19 @@ export function ReplyComposer({
   // server pulls each URL via /api/upload and forwards as multipart
   // files[] to the missive clone.
   const [attachments, setAttachments] = useState<TaskMedia[]>([]);
+
+  // RFC Message-ID of the message we're replying to, when the user pinned a
+  // specific one via its per-message Reply button. null = thread under the
+  // latest message (server default). Sent as `inReplyTo` on both send paths.
+  const [inReplyTo, setInReplyTo] = useState<string | null>(null);
+  // The quoted-original block (Gmail-standard HTML), shown below the textarea
+  // behind a collapsed "•••" toggle and appended to the body on send. Kept out
+  // of `bodyText` so drafts/AI-compose stay clean.
+  const [quoteHtml, setQuoteHtml] = useState("");
+  const [quoteOpen, setQuoteOpen] = useState(false);
+  // Outer wrapper — scrolled into view when a target is picked from a message
+  // higher up the thread.
+  const containerRef = useRef<HTMLDivElement>(null);
 
   // Draft autosave. We persist the in-progress reply to inbox_drafts
   // (debounced) so it survives navigation/reload, and re-hydrate it on
@@ -137,6 +212,54 @@ export function ReplyComposer({
     const t = setTimeout(() => { void saveDraft(); }, 700);
     return () => clearTimeout(t);
   }, [loaded, saveDraft]);
+
+  // When the user clicks "Reply" on a specific message, open the composer and
+  // pre-fill the addressing fields from THAT message — without touching the
+  // body they may already have typed. Keyed on the target's id so it only fires
+  // when a *different* message is picked, not on every render.
+  useEffect(() => {
+    if (!replyTarget) return;
+    setOpen(true);
+    // Outbound = a message we sent; replying should go back to its original
+    // recipients, not to ourselves.
+    const nextTo =
+      replyTarget.direction === "outbound"
+        ? replyTarget.to_addrs.join(", ") || defaultTo || ""
+        : rawEmail(replyTarget.from_addr);
+    setTo(nextTo);
+    setSubject(prefixRe(replyTarget.subject || defaultSubject || ""));
+    setMode("reply");
+    setCc("");
+    setCcOpen(false);
+    // Pin threading to this message. null when it has no RFC Message-ID yet —
+    // the server then falls back to the thread's latest message.
+    setInReplyTo(replyTarget.message_id ?? null);
+    // The picked message may be far above the composer — bring it into view.
+    requestAnimationFrame(() => {
+      containerRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [replyTarget?.id]);
+
+  // Derive the quoted-original block (pinned target, or latest for a thread-level
+  // reply) and collapse it by default. Never touches bodyText — switching targets
+  // just swaps the quote.
+  useEffect(() => {
+    setQuoteHtml(quoteSource ? buildReplyQuoteHtml(quoteSource) : "");
+    setQuoteOpen(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [quoteSource?.id]);
+
+  // Reset the pinned target + addressing fields back to the thread defaults.
+  const clearTarget = useCallback(() => {
+    setInReplyTo(null);
+    setTo(defaultTo ?? "");
+    setSubject(prefixRe(defaultSubject ?? ""));
+    setMode("reply");
+    setCc("");
+    setCcOpen(false);
+    onClearReplyTarget?.();
+  }, [defaultTo, defaultSubject, onClearReplyTarget]);
 
   // Discard the persisted draft (best-effort) on top of clearing local state.
   const discardDraft = useCallback(() => {
@@ -215,12 +338,17 @@ export function ReplyComposer({
     }
     setBusy(true);
     try {
+      // Append the quoted original below the user's text so the reply carries
+      // its context — the same wire shape missiveclone sends (body_html =
+      // userHtml + gmail_quote, body_text derived from the combined HTML).
+      const fullHtml = plainTextToHtml(bodyText) + (quoteHtml || "");
+      const sendText = htmlToText(fullHtml);
       const url = scheduling
         ? `/api/inboxes/threads/${encodeURIComponent(threadId)}/reply/schedule`
         : `/api/inboxes/threads/${encodeURIComponent(threadId)}/reply`;
       const body = scheduling
-        ? { accountId, to: toList, cc: ccList, subject: subject.trim() || undefined, bodyText, scheduledForISO }
-        : { accountId, to: toList, cc: ccList, subject: subject.trim() || undefined, bodyText, attachmentUrls: attachments };
+        ? { accountId, to: toList, cc: ccList, subject: subject.trim() || undefined, bodyText: sendText, bodyHtml: fullHtml, scheduledForISO, inReplyTo: inReplyTo ?? undefined }
+        : { accountId, to: toList, cc: ccList, subject: subject.trim() || undefined, bodyText: sendText, bodyHtml: fullHtml, attachmentUrls: attachments, inReplyTo: inReplyTo ?? undefined };
       const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -263,6 +391,9 @@ export function ReplyComposer({
       setMode("reply");
       setCc("");
       setCcOpen(false);
+      setInReplyTo(null);
+      setQuoteOpen(false);
+      onClearReplyTarget?.();
       setOpen(false);
       router.refresh();
     } catch (err) {
@@ -273,7 +404,7 @@ export function ReplyComposer({
   }
 
   return (
-    <div className="relative">
+    <div className="relative" ref={containerRef}>
       <AnimatePresence mode="wait" initial={false}>
         {!open ? (
           <motion.button
@@ -311,6 +442,23 @@ export function ReplyComposer({
             <header className="px-4 py-2.5 flex items-center justify-between border-b border-slate-100 bg-gradient-to-r from-blue-50/60 to-indigo-50/40">
               <div className="flex items-center gap-2 text-xs font-semibold text-ink">
                 <Reply className="w-3.5 h-3.5 text-accent" /> Reply
+                {replyTarget && (
+                  <span className="inline-flex items-center gap-1 text-[10px] font-medium normal-case px-2 py-0.5 rounded-full bg-accent/10 text-accent border border-accent/20">
+                    Replying to{" "}
+                    {replyTarget.direction === "outbound"
+                      ? (replyTarget.to_addrs[0] ? shortName(replyTarget.to_addrs[0]) : "recipients")
+                      : shortName(replyTarget.from_addr)}
+                    <button
+                      type="button"
+                      onClick={clearTarget}
+                      aria-label="Reply to latest instead"
+                      title="Reply to latest instead"
+                      className="hover:text-accent/60 transition-colors"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </span>
+                )}
                 {saveState !== "idle" && (
                   <span className="inline-flex items-center gap-1 text-[10px] uppercase tracking-wide text-ink/45 font-semibold">
                     {saveState === "saving"
@@ -487,6 +635,32 @@ export function ReplyComposer({
                 className="w-full text-sm bg-white/60 border border-slate-200/70 rounded-xl px-3 py-2.5 outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent/40 resize-none transition-all"
               />
 
+              {/* Quoted original — collapsed behind a "•••" toggle like Gmail's
+                  compose, so the textarea above stays clean. The quote is
+                  appended to the body on send; here it's a read-only, sandboxed
+                  preview (no scripts, isolated CSS). */}
+              {quoteHtml && (
+                <div>
+                  <button
+                    type="button"
+                    onClick={() => setQuoteOpen((o) => !o)}
+                    title={quoteOpen ? "Hide quoted text" : "Show quoted text"}
+                    aria-expanded={quoteOpen}
+                    className="inline-flex items-center px-2.5 py-0.5 rounded-full text-sm leading-none tracking-widest text-ink/50 bg-slate-100 border border-slate-200/70 hover:text-ink/80 transition-colors"
+                  >
+                    •••
+                  </button>
+                  {quoteOpen && (
+                    <iframe
+                      title="Quoted message"
+                      sandbox="allow-popups allow-popups-to-escape-sandbox"
+                      srcDoc={buildQuoteDoc(quoteHtml)}
+                      className="w-full h-48 mt-2 rounded-xl border border-slate-200/70 bg-white block"
+                    />
+                  )}
+                </div>
+              )}
+
               <MediaPicker
                 value={attachments}
                 onChange={setAttachments}
@@ -524,7 +698,7 @@ export function ReplyComposer({
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => { discardDraft(); setOpen(false); setBodyText(""); setAttachments([]); setScheduleOpen(false); setScheduleAt(""); setMode("reply"); setCc(""); setCcOpen(false); }}
+                  onClick={() => { discardDraft(); setOpen(false); setBodyText(""); setAttachments([]); setScheduleOpen(false); setScheduleAt(""); setMode("reply"); setCc(""); setCcOpen(false); setInReplyTo(null); setQuoteOpen(false); onClearReplyTarget?.(); }}
                   className="px-3 py-1.5 rounded-full text-xs font-medium text-ink/70 hover:text-ink hover:bg-white transition-colors"
                 >
                   Discard

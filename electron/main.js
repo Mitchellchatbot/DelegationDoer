@@ -7,6 +7,7 @@
 // - That anchor is remembered, so collapse/expand keeps the same corner/edge.
 
 const { app, BrowserWindow, Tray, Menu, nativeImage, screen, ipcMain, net, shell, Notification } = require("electron");
+const notifier = require("node-notifier");
 const path = require("path");
 
 // Production deploy by default. `DD_APP_URL=http://localhost:3000 npm run electron`
@@ -37,7 +38,6 @@ let currentAnchor = "br";
 
 let widget = null;
 let tray = null;
-let lastTaskIds = new Set();
 let dragOffset = null;
 
 function currentDisplay() {
@@ -243,16 +243,6 @@ async function pollAssignments() {
     if (!res.ok) return; // 401 before login — no-op until user authenticates
     const data = await res.json();
     const tasks = data.tasks ?? [];
-    const ids = new Set(tasks.map((t) => t.id));
-
-    if (lastTaskIds.size > 0) {
-      for (const t of tasks) {
-        if (!lastTaskIds.has(t.id)) {
-          new Notification({ title: "New task assigned", body: t.title }).show();
-        }
-      }
-    }
-    lastTaskIds = ids;
 
     if (widget && !widget.isDestroyed()) {
       widget.webContents.send("widget:tasks", tasks);
@@ -279,6 +269,20 @@ ipcMain.handle("widget:set-state", (_e, state) => setSize(sizeForState(state)));
 ipcMain.handle("widget:hide", () => widget?.hide());
 ipcMain.handle("widget:openMain", () => shell.openExternal(APP_URL));
 ipcMain.handle("widget:poll", () => pollAssignments());
+
+// OS-level notifications. The renderer owns the "what's fresh" dedup and
+// fires one of these per new task / mention / email. macOS silently drops
+// Electron's native Notification from an unsigned app, so route through
+// node-notifier there (it ships a signed terminal-notifier helper that
+// delivers regardless of our app's signature). Native Notification is fine
+// on Windows. The renderer plays its own chime, so keep these silent.
+ipcMain.handle("widget:notify", (_e, { title, body }) => {
+  if (process.platform === "darwin") {
+    notifier.notify({ title, message: body, sound: false });
+  } else if (Notification.isSupported()) {
+    new Notification({ title, body }).show();
+  }
+});
 
 // Drag pipeline. Renderer sends absolute screen coords.
 ipcMain.on("widget:drag-start", (_e, sx, sy) => {

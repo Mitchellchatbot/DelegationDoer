@@ -109,6 +109,7 @@ export function ThreadConversation({
         replyAllCc={replyAllCc}
         replyTarget={replyTarget}
         onClearReplyTarget={() => setReplyTarget(null)}
+        quoteSource={replyTarget ?? messages.at(-1) ?? null}
       />
 
       {/* Mark-as-read upsert fires on mount — silent. refresh={false}: the

@@ -16,18 +16,18 @@ declare
 begin
   select id into v_space_id
     from public.inbox_spaces
-   where regexp_replace(lower(name), '[^a-z0-9]+', '', 'g') = 'bossmail'
+   where name ilike 'boss%mail%'
    limit 1;
   if v_space_id is null then
-    raise exception 'Boss''s Mail space not found (no inbox_spaces.name normalizes to "bossmail")';
+    raise exception 'Boss''s mail space not found — no inbox_spaces.name matches the boss-mail pattern';
   end if;
 
   select id into v_user_id
     from public.users
-   where lower(email) = lower('shaheerkhosa6@gmail.com')
+   where email ilike '%shaheer%'
    limit 1;
   if v_user_id is null then
-    raise exception 'User shaheerkhosa6@gmail.com not found in public.users — confirm shaheer''s actual email';
+    raise exception 'No user with "shaheer" in their email found in public.users — confirm the account';
   end if;
 
   insert into public.inbox_space_members (space_id, user_id)

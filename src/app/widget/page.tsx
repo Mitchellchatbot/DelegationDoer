@@ -228,6 +228,11 @@ export default function WidgetPage() {
   const seenKudosRef = useRef<Set<string>>(new Set());
   const seenNotifIdsRef = useRef<Set<string>>(new Set());
   const seenEmailIdsRef = useRef<Set<string>>(new Set());
+  // First successful poll only primes the seen* sets — it must NOT fire OS
+  // notifications, or every pre-existing task/mention/email would toast on
+  // launch (the old main.js used `lastTaskIds.size > 0` for the same reason).
+  // Reset on sign-out so a later account switch re-baselines silently too.
+  const notifsPrimedRef = useRef(false);
   const seenEomMonthRef = useRef<string | null>(null);
   const lastFetchedRef = useRef<number>(0);
 
@@ -274,6 +279,7 @@ export default function WidgetPage() {
       // prompt and stop trying to render normal UI on stale/empty data.
       if (taskRes.status === 401 || kudosRes.status === 401) {
         setSignedOut(true);
+        notifsPrimedRef.current = false;
         setState((prev) => prev === "panel" ? "panel" : "bubble");
         return;
       }
@@ -336,6 +342,30 @@ export default function WidgetPage() {
       if (freshKudos.length > 0) playKudosChime();
       const freshEmails = nextEmails.filter((e) => !seenEmailIdsRef.current.has(e.id));
       if (freshEmails.length > 0) playEmailChime();
+
+      // OS-level system notifications (Electron only). The main process
+      // delivers them — native on Windows, node-notifier on macOS. We drive
+      // it from here because this is the single place that knows what's fresh
+      // (the seen*Ref dedup). Kudos stays sound-only by design.
+      const notify = (window as any).widgetAPI?.notify;
+      if (notify && notifsPrimedRef.current) {
+        for (const t of fresh)
+          notify({ title: "New task assigned", body: t.title });
+        for (const n of freshNotifs)
+          notify({
+            title: n.kind === "mention"
+              ? `${n.from?.name ?? "Someone"} mentioned you`
+              : `${n.from?.name ?? "Someone"} pinged you on a task`,
+            body: n.note ? `${n.taskTitle} — "${n.note}"` : n.taskTitle,
+          });
+        for (const e of freshEmails)
+          notify({
+            title: "New email",
+            body: `${e.fromName ?? e.fromEmail ?? "Someone"}: ${e.subject ?? "(no subject)"}`,
+          });
+      }
+      notifsPrimedRef.current = true;
+
       seenIdsRef.current = new Set(unackedNow.map((t) => t.id));
       seenKudosRef.current = new Set(nextKudos.map((k) => k.id));
       seenNotifIdsRef.current = new Set(nextNotifs.map((n) => n.id));

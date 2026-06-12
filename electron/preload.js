@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld("widgetAPI", {
   setState: (state) => ipcRenderer.invoke("widget:set-state", state),
   hide: () => ipcRenderer.invoke("widget:hide"),
   openMain: () => ipcRenderer.invoke("widget:openMain"),
+  openMainWindow: (path) => ipcRenderer.invoke("widget:openMainWindow", path),
   poll: () => ipcRenderer.invoke("widget:poll"),
   notify: (payload) => ipcRenderer.invoke("widget:notify", payload),
   dragStart: (sx, sy) => ipcRenderer.send("widget:drag-start", sx, sy),

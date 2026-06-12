@@ -51,12 +51,21 @@ interface WidgetNotification {
 
 interface WidgetEmail {
   id: string;
+  accountId: string;
   threadId: string;
   subject: string | null;
   fromName: string | null;
   fromEmail: string | null;
   preview: string | null;
   receivedAt: string;
+}
+
+// Canonical inbox deep link — opens the thread in the reading pane. Mirrors the
+// legacy redirect at inboxes/[accountId]/threads/[threadId]/page.tsx; InboxSplit
+// hydrates the pane from the `thread` + `acct` query params (both required).
+function inboxThreadPath(accountId: string, threadId: string) {
+  const a = encodeURIComponent(accountId);
+  return `/inboxes/${a}?thread=${encodeURIComponent(threadId)}&acct=${a}`;
 }
 
 interface EomState {
@@ -319,14 +328,14 @@ export default function WidgetPage() {
       if (emailRes.ok) {
         const emailData = await emailRes.json().catch(() => ({}));
         const all = (emailData?.notifications ?? []) as Array<{
-          id: string; threadId: string; subject: string | null;
+          id: string; accountId: string; threadId: string; subject: string | null;
           fromName: string | null; fromEmail: string | null;
           preview: string | null; receivedAt: string; seenAt: string | null;
         }>;
         nextEmails = all
           .filter((r) => r.seenAt === null)
           .map((r) => ({
-            id: r.id, threadId: r.threadId, subject: r.subject,
+            id: r.id, accountId: r.accountId, threadId: r.threadId, subject: r.subject,
             fromName: r.fromName, fromEmail: r.fromEmail,
             preview: r.preview, receivedAt: r.receivedAt
           }));
@@ -362,6 +371,7 @@ export default function WidgetPage() {
           notify({
             title: "New email",
             body: `${e.fromName ?? e.fromEmail ?? "Someone"}: ${e.subject ?? "(no subject)"}`,
+            path: inboxThreadPath(e.accountId, e.threadId),
           });
       }
       notifsPrimedRef.current = true;
@@ -488,6 +498,13 @@ export default function WidgetPage() {
     });
   }
 
+  // Open the email's thread in DD (default browser, like "Open full app").
+  // Opening counts as handling it, so mark it seen too — same end state as "Got it".
+  function openEmail(email: WidgetEmail) {
+    (window as any).widgetAPI?.openMainWindow?.(inboxThreadPath(email.accountId, email.threadId));
+    void dismissEmail(email.id);
+  }
+
   async function acknowledge(taskId: string) {
     // Optimistic
     setTasks((cur) => cur.map((t) => t.id === taskId ? { ...t, needsAck: false } : t));
@@ -537,7 +554,7 @@ export default function WidgetPage() {
       return <NotifAlert notif={notifications[0]} count={notifications.length} onDismiss={dismissNotification} onExpand={expandToPanel} crowned={eom.isMe} iconUrl={widgetIconUrl} />;
     }
     if (emails.length > 0) {
-      return <EmailAlert email={emails[0]} count={emails.length} onDismiss={dismissEmail} onExpand={expandToPanel} crowned={eom.isMe} iconUrl={widgetIconUrl} />;
+      return <EmailAlert email={emails[0]} count={emails.length} onDismiss={dismissEmail} onOpen={() => openEmail(emails[0])} onExpand={expandToPanel} crowned={eom.isMe} iconUrl={widgetIconUrl} />;
     }
     if (kudos.length > 0) {
       return <KudosAlert kudos={kudos[0]} count={kudos.length} onAck={acknowledgeKudos} onExpand={expandToPanel} crowned={eom.isMe} iconUrl={widgetIconUrl} />;
@@ -1028,11 +1045,12 @@ function NotifAlert({
 /* ============================ EMAIL ALERT (new inbound email) ============================ */
 
 function EmailAlert({
-  email, count, onDismiss, onExpand, crowned = false, iconUrl,
+  email, count, onDismiss, onOpen, onExpand, crowned = false, iconUrl,
 }: {
   email: WidgetEmail;
   count: number;
   onDismiss: (id: string) => void;
+  onOpen: () => void;
   onExpand: () => void;
   crowned?: boolean;
   iconUrl?: string | null;
@@ -1045,7 +1063,7 @@ function EmailAlert({
       style={{ width: "100vw", height: "100vh", display: "flex", alignItems: "center", justifyContent: "flex-end", padding: 20, gap: 8, background: "transparent", WebkitAppRegion: "drag" } as any}
     >
       <div
-        onClick={onExpand}
+        onClick={onOpen}
         // @ts-ignore
         style={{ WebkitAppRegion: "no-drag" } as any}
         className="relative flex-1 cursor-pointer anim-pop-bubble"

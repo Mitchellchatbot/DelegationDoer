@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUserId } from "@/lib/session";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
+import { requiresClockIn } from "@/lib/access";
+import { hasOpenSegment } from "@/lib/time-tracking";
 import { openDm, postMessage } from "@/lib/slack";
 import { resolveSlackId } from "@/lib/slack-resolve";
 
@@ -68,7 +70,7 @@ export async function POST(req: NextRequest) {
     const [{ data: meRow }, noteRes] = await Promise.all([
       supabase
         .from("users")
-        .select("id, name, email, role, is_admin, manager_user_id, secondary_manager_user_id")
+        .select("id, name, email, role, is_admin, clock_enabled, manager_user_id, secondary_manager_user_id")
         .eq("id", userId)
         .maybeSingle(),
       supabase
@@ -80,6 +82,26 @@ export async function POST(req: NextRequest) {
     ]);
 
     if (!meRow) return NextResponse.json({ error: "user not found" }, { status: 404 });
+
+    // Clock-in gate. Workers + dept_heads must have started a shift before
+    // filing their EOD (mirrors POST /api/tasks + the SOD submit gate).
+    // Runs before the submitted_at upsert so a blocked submit leaves the
+    // note un-submitted. Leaders, stealth admins, and clock-disabled
+    // (salaried) users are exempt.
+    if (
+      requiresClockIn({
+        role: meRow.role,
+        isAdmin: meRow.is_admin === true,
+        clockEnabled: meRow.clock_enabled !== false
+      }) &&
+      !(await hasOpenSegment(userId))
+    ) {
+      return NextResponse.json(
+        { error: "Clock in before submitting your end-of-day. Start a shift from the topbar clock or your widget." },
+        { status: 403 }
+      );
+    }
+
     if (noteRes.error) {
       // Surface the actual DB error — most commonly the structured
       // columns don't exist yet (migration 20260601 not applied).

@@ -31,8 +31,10 @@ export function ClockGate({
   // Who needs the gate?
   //   - Leaders never (they're managers, not on a clock)
   //   - Stealth admins never (same — they're building / overseeing)
+  //   - Clock-disabled (salaried/on-call) users never — they have no
+  //     clock UI to satisfy the gate with
   //   - Everyone else gets gated until they've clocked in
-  const exempt = me.role === "leader" || me.isAdmin === true;
+  const exempt = me.role === "leader" || me.isAdmin === true || me.clockEnabled === false;
   if (exempt || clock.open) return <>{children}</>;
 
   async function clockIn() {
@@ -79,7 +81,7 @@ export function ClockGate({
 export function useNeedsClockIn(): boolean {
   const me = useCurrentUser();
   const { clock } = useClock();
-  const exempt = me.role === "leader" || me.isAdmin === true;
+  const exempt = me.role === "leader" || me.isAdmin === true || me.clockEnabled === false;
   if (exempt) return false;
   return !clock.open;
 }

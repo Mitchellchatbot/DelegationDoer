@@ -1,8 +1,32 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUserId } from "@/lib/session";
-import { listUserEvents, createUserEvent } from "@/lib/google-calendar";
+import {
+  listUserEvents,
+  createUserEvent,
+  GoogleAuthError
+} from "@/lib/google-calendar";
 
 export const dynamic = "force-dynamic";
+
+// Turn a thrown error into the right JSON response. Auth errors get a
+// 400 + connection flags so the frontend can show a reconnect prompt
+// instead of a raw Google string; everything else is a 500.
+function errorResponse(err: unknown) {
+  const msg = err instanceof Error ? err.message : "unknown error";
+  if (err instanceof GoogleAuthError) {
+    return NextResponse.json(
+      {
+        error: msg,
+        connected: false,
+        needsReconnect: err.reason === "refresh_failed",
+        reconnectNote:
+          "Your Google Calendar connection expired — reconnect in Settings."
+      },
+      { status: 400 }
+    );
+  }
+  return NextResponse.json({ error: msg }, { status: 500 });
+}
 
 // GET /api/calendar/events?days=7
 //   Returns the auth'd user's upcoming events from now → +days.
@@ -18,11 +42,7 @@ export async function GET(req: NextRequest) {
     const events = await listUserEvents({ userId, timeMin, timeMax, maxResults: 50 });
     return NextResponse.json({ events });
   } catch (err) {
-    const msg = err instanceof Error ? err.message : "unknown error";
-    if (msg.includes("not connected")) {
-      return NextResponse.json({ error: msg, connected: false }, { status: 400 });
-    }
-    return NextResponse.json({ error: msg }, { status: 500 });
+    return errorResponse(err);
   }
 }
 
@@ -57,10 +77,6 @@ export async function POST(req: NextRequest) {
     });
     return NextResponse.json({ ok: true, event });
   } catch (err) {
-    const msg = err instanceof Error ? err.message : "unknown error";
-    if (msg.includes("not connected")) {
-      return NextResponse.json({ error: msg, connected: false }, { status: 400 });
-    }
-    return NextResponse.json({ error: msg }, { status: 500 });
+    return errorResponse(err);
   }
 }

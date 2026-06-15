@@ -14,6 +14,7 @@ import {
   SodSeoDashboard, ClientHealthCard, AtRiskCard, FollowUpCard, type SeoDashboardData
 } from "./SodSeoDashboard";
 import { SodWebsiteDashboard, type WebDashboardData } from "./SodWebsiteDashboard";
+import { ClockGate, useNeedsClockIn } from "./ClockGate";
 
 // Orchestrates the full SOD flow:
 //   1. Welcome — "Welcome, {name}!" + a motivational line + Continue
@@ -69,6 +70,10 @@ interface MyTaskOption {
 }
 
 export function SodFlow({ open, simulate = false, onClose, onComplete }: Props) {
+  // SOD now requires the user to be on the clock (mirrors the server gate
+  // in /api/sod/submit). Exempt users (leaders/admins/clock-disabled) and
+  // already-clocked-in users return false here and see the normal flow.
+  const needsClockIn = useNeedsClockIn();
   const [mounted, setMounted] = useState(false);
   const [screen, setScreen] = useState<Screen>("loading");
   const [today, setToday] = useState<TodayResp | null>(null);
@@ -336,6 +341,31 @@ export function SodFlow({ open, simulate = false, onClose, onComplete }: Props) 
   }
 
   if (!mounted || !open) return null;
+
+  // Clock-in gate. Until the user has started a shift, the SOD form is
+  // replaced by the standard clock-in CTA (reusing ClockGate so the copy
+  // + behaviour match the task surfaces). Clocking in flips clock.open in
+  // context, which re-renders this into the real flow below.
+  if (needsClockIn) {
+    return createPortal(
+      <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4">
+        <div className="relative w-full max-w-xl">
+          <button
+            type="button"
+            onClick={onClose}
+            className="absolute top-2 right-2 text-ink/45 hover:text-ink p-1 rounded-lg hover:bg-slate-100 z-10"
+            aria-label="Close"
+          >
+            <X className="w-4 h-4" />
+          </button>
+          <ClockGate fallbackSubtitle="Clock in to start your shift before filing your start-of-day. You can clock out from the topbar or widget anytime.">
+            <></>
+          </ClockGate>
+        </div>
+      </div>,
+      document.body
+    );
+  }
 
   // SEO gets the client-health-focused flow (extra review step before
   // submit); every other department keeps the original sequence.

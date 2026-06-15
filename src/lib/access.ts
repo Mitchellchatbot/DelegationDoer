@@ -27,6 +27,18 @@ export function isLeader(u: Pick<User, "role" | "isAdmin"> | null | undefined): 
   return !!u && (u.role === "leader" || u.isAdmin === true);
 }
 
+// Whether this user must be clocked in (have an open time_entries
+// segment) to perform shift-gated actions — task creation and SOD/EOD
+// submission. Two groups are exempt:
+//   - leaders + stealth admins (managers, not on a personal clock), and
+//   - users with clock_enabled = false (salaried/on-call), who have no
+//     clock UI at all and so could never satisfy the gate.
+export function requiresClockIn(
+  u: Pick<User, "role" | "isAdmin" | "clockEnabled"> | null | undefined
+): boolean {
+  return !!u && !isLeader(u) && u.clockEnabled !== false;
+}
+
 export function isDepartmentHead(u: Pick<User, "role"> | null | undefined): boolean {
   return !!u && u.role === "department_head";
 }

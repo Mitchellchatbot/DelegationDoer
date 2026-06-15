@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { ClockGate, useNeedsClockIn } from "./ClockGate";
 
 // Typeform-style end-of-day flow. One question per screen, animated
 // transitions, autosaves each answer on advance via PUT /api/eod/notes so
@@ -121,6 +122,11 @@ export function EodTypeform({
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [direction, setDirection] = useState<"forward" | "back">("forward");
+
+  // EOD now requires the user to be on the clock (mirrors the server gate
+  // in /api/eod/submit). Exempt users (leaders/admins/clock-disabled) and
+  // already-clocked-in users return false and see the normal typeform.
+  const needsClockIn = useNeedsClockIn();
 
   // Reset state every time the modal opens fresh.
   useEffect(() => {
@@ -246,6 +252,34 @@ export function EodTypeform({
 
   if (!open) return null;
   if (typeof document === "undefined") return null;
+
+  // Clock-in gate. Until the user has started a shift, the typeform is
+  // replaced by the standard clock-in CTA (reuses ClockGate). Clocking in
+  // flips clock.open in context and re-renders into the real flow.
+  if (needsClockIn) {
+    return createPortal(
+      <div
+        className="fixed inset-0 z-[100] bg-gradient-to-br from-slate-50 via-white to-blue-50/40 overflow-hidden anim-fade-in flex items-center justify-center p-4"
+        role="dialog"
+        aria-modal="true"
+      >
+        <button
+          type="button"
+          onClick={onClose}
+          className="absolute top-4 right-4 z-10 p-2 rounded-full bg-white/80 border border-slate-200/70 text-ink/55 hover:text-ink hover:bg-white shadow-sm transition-colors"
+          title="Close (you can finish later)"
+        >
+          <X className="w-4 h-4" />
+        </button>
+        <div className="w-full max-w-xl">
+          <ClockGate fallbackSubtitle="Clock in to start your shift before filing your end-of-day. You can clock out from the topbar or widget once you're done.">
+            <></>
+          </ClockGate>
+        </div>
+      </div>,
+      document.body
+    );
+  }
 
   // Index math: [0..loopOffset) = client loop, then structured questions,
   // then the final review screen.

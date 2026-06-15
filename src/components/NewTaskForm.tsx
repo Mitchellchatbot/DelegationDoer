@@ -2,7 +2,7 @@
 
 import { TAG_PRESETS } from "@/lib/mock-data";
 import { userCapacity, etaDays, deadlineFromEstimate } from "@/lib/capacity";
-import { assignableTargets, assignableDepartments, canChooseDepartment, isLeader, ROLE_LABELS } from "@/lib/auth";
+import { assignableTargets, assignableDepartments, canChooseDepartment, canCreateTasksForOthers, isLeader, ROLE_LABELS } from "@/lib/auth";
 import { useCurrentUser } from "@/lib/user-context";
 import { useTeam } from "@/lib/team-context";
 import { rankCandidates, buildLoadSignals, type RankedCandidate } from "@/lib/skill-rank";
@@ -289,7 +289,12 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel, initialValues }: 
   // chosen anyone yet), nudge the assigneeId to it. Doesn't override a
   // manual selection — only fills the empty initial state.
   useEffect(() => {
-    if (!assigneeId && topPick) setAssigneeId(topPick.userId);
+    if (assigneeId) return;
+    if (topPick) { setAssigneeId(topPick.userId); return; }
+    // Workers always own the tasks they create; if the ranker surfaced
+    // nobody (e.g. they're over capacity and filtered out), still default
+    // to themselves so the task is created assigned — mirrors the backend.
+    if (!canCreateTasksForOthers(currentUser)) setAssigneeId(currentUser.id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [topPick?.userId]);
 

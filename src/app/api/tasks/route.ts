@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { requireCurrentUserId } from "@/lib/session";
 import { getAllTasks, getDeletedTasks, getArchivedTasks, getUserById } from "@/lib/server-data";
-import { isLeader, canCreateTaskInDepartment, canAssignTaskTo } from "@/lib/access";
+import { isLeader, isWorker, canCreateTaskInDepartment, canAssignTaskTo } from "@/lib/access";
 import { notifyAssignment, postMessage } from "@/lib/slack";
 import { syncTaskToCalendar } from "@/lib/task-calendar-sync";
 import { sanitizeMediaUrls } from "@/lib/media";
@@ -167,6 +167,12 @@ export async function POST(req: NextRequest) {
         );
       }
     }
+    // Default an unspecified assignee to the creator themselves for workers,
+    // who can only ever assign to themselves (mirrors the department default
+    // above). Department heads + leaders may leave a task unassigned for the
+    // routing-review queue, so they're exempt.
+    const assigneeId =
+      requestedAssigneeId ?? (!privileged && isWorker(caller) ? userId : null);
 
     const id = `t_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
     const now = new Date().toISOString();
@@ -181,7 +187,7 @@ export async function POST(req: NextRequest) {
       actual_hours: 0,
       tags: Array.isArray(body.tags) ? body.tags.filter((t: unknown) => typeof t === "string") : [],
       department_id: departmentId,
-      assignee_id: requestedAssigneeId,
+      assignee_id: assigneeId,
       creator_id: userId,
       project_id: typeof body.projectId === "string" && body.projectId.length > 0 ? body.projectId : null,
       due_date: typeof body.dueDate === "string" ? body.dueDate : null,

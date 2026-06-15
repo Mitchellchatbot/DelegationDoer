@@ -43,7 +43,9 @@ export default async function InboxesLayout({
   }));
 
   return (
-    <div className="flex gap-5 max-w-7xl mx-auto">
+    // Full-width email shell: the inbox tree (left rail) + content fill all
+    // the available space rather than being capped to a centered column.
+    <div className="flex gap-5 w-full">
       <InboxTree accounts={nodes} canManage={canManageAssignments(me)} />
       <div className="flex-1 min-w-0">{children}</div>
     </div>

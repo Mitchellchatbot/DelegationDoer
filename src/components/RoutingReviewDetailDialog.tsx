@@ -1,7 +1,7 @@
 "use client";
 
 import * as Dialog from "@radix-ui/react-dialog";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Check, X, Loader2, Sparkles, Mail, Brain, History } from "lucide-react";
 import { toast } from "sonner";
@@ -45,6 +45,23 @@ export function RoutingReviewDetailDialog({
   const [busy, setBusy] = useState<"approve" | "deny" | "save" | null>(null);
   const [denyPanel, setDenyPanel] = useState(false);
   const [denyReason, setDenyReason] = useState("");
+
+  // Assignee options scoped to the selected department. Mirrors the
+  // ranker's in-department semantics (skill-rank.ts): a set department
+  // narrows to its members; "(none)" leaves everyone. The currently-
+  // selected assignee is always kept (flagged "outside dept" when it
+  // isn't a member) so changing the department never silently blanks an
+  // AI pick or a previously-saved value.
+  const assigneeOptions = useMemo(() => {
+    const inDept = departmentId
+      ? lookups.users.filter((u) => u.departmentIds.includes(departmentId))
+      : lookups.users;
+    if (assigneeId && !inDept.some((u) => u.id === assigneeId)) {
+      const current = lookups.users.find((u) => u.id === assigneeId);
+      if (current) return [...inDept, { ...current, name: `${current.name} (outside dept)` }];
+    }
+    return inDept;
+  }, [lookups.users, departmentId, assigneeId]);
 
   // Lazy thread + history
   const [thread, setThread] = useState<ThreadDetail | null>(null);
@@ -226,7 +243,7 @@ export function RoutingReviewDetailDialog({
                         className="mt-1 w-full text-sm px-3 py-2 rounded-lg border border-slate-200 outline-none"
                       >
                         <option value="">(unassigned)</option>
-                        {lookups.users.map((u) => (
+                        {assigneeOptions.map((u) => (
                           <option key={u.id} value={u.id}>{u.name}</option>
                         ))}
                       </select>

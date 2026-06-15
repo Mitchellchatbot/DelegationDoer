@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { requireCurrentUserId } from "@/lib/session";
-import { getUserById, getDepartments, getAllUsersLight } from "@/lib/server-data";
+import { getUserById, getDepartments, getAllUsers } from "@/lib/server-data";
 import { getClients } from "@/lib/clients-data";
 
 export const dynamic = "force-dynamic";
@@ -154,12 +154,14 @@ export async function GET() {
 }
 
 async function loadLookups(): Promise<{
-  users: Array<{ id: string; name: string; email: string; avatarUrl: string | null }>;
+  users: Array<{ id: string; name: string; email: string; avatarUrl: string | null; departmentIds: string[] }>;
   departments: Array<{ id: string; name: string }>;
   clients: Array<{ id: string; name: string }>;
 }> {
   const [users, departments, clients] = await Promise.all([
-    getAllUsersLight(),
+    // Full user list (with department membership joined in) so the review
+    // modal can scope the assignee dropdown to the task's department.
+    getAllUsers(),
     getDepartments(),
     getClients().catch(() => [])
   ]);
@@ -168,7 +170,8 @@ async function loadLookups(): Promise<{
       id: u.id,
       name: u.name,
       email: u.email,
-      avatarUrl: u.avatarUrl ?? null
+      avatarUrl: u.avatarUrl ?? null,
+      departmentIds: u.departmentIds
     })),
     departments: departments.map((d) => ({ id: d.id, name: d.name })),
     clients: clients.map((c) => ({ id: c.id, name: c.name }))

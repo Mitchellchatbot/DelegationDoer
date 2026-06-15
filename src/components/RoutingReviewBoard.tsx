@@ -79,7 +79,9 @@ export interface DecisionRow {
 }
 
 export interface LookupBundle {
-  users: Array<{ id: string; name: string; email: string; avatarUrl: string | null }>;
+  // departmentIds is used by the review modal to scope the assignee
+  // dropdown to the task's department. Other consumers ignore it.
+  users: Array<{ id: string; name: string; email: string; avatarUrl: string | null; departmentIds: string[] }>;
   departments: Array<{ id: string; name: string }>;
   clients: Array<{ id: string; name: string }>;
 }

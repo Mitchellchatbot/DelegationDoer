@@ -15,6 +15,22 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const CALENDAR_BASE = "https://www.googleapis.com/calendar/v3";
 
+// Raised when we can't get a usable access token for the user, either
+// because they never connected ("not_connected") or because the stored
+// refresh token is dead — revoked / expired / app in Testing mode
+// ("refresh_failed", which Google reports as invalid_grant). Callers
+// use this to tell the user to reconnect instead of dumping a raw
+// Google error string. Mirrors SlackResolveError's reason discriminator.
+export class GoogleAuthError extends Error {
+  constructor(
+    message: string,
+    public reason: "not_connected" | "refresh_failed",
+    public googleError?: string
+  ) {
+    super(message);
+  }
+}
+
 interface UserGoogleRow {
   google_access_token: string | null;
   google_refresh_token: string | null;
@@ -58,8 +74,22 @@ async function refreshAccessToken(
   });
   const data = await res.json();
   if (!res.ok || !data.access_token) {
-    throw new Error(
-      `google refresh failed: ${data.error_description || data.error || res.status}`
+    // Log the full Google response so the real cause (usually
+    // invalid_grant) is visible in Railway logs — the user-facing
+    // message only gets the short version.
+    console.error("[google-calendar] token refresh failed", {
+      userId,
+      status: res.status,
+      error: data.error,
+      error_description: data.error_description
+    });
+    const detail =
+      [data.error, data.error_description].filter(Boolean).join(" — ") ||
+      String(res.status);
+    throw new GoogleAuthError(
+      `google refresh failed: ${detail}`,
+      "refresh_failed",
+      data.error
     );
   }
   const expiresIn = Number(data.expires_in ?? 3600);
@@ -80,7 +110,7 @@ async function refreshAccessToken(
 export async function getValidAccessToken(userId: string): Promise<string> {
   const row = await getUserCreds(userId);
   if (!row?.google_refresh_token) {
-    throw new Error("google not connected");
+    throw new GoogleAuthError("google not connected", "not_connected");
   }
   const expMs = row.google_token_expiry
     ? new Date(row.google_token_expiry).getTime()

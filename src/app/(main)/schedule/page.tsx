@@ -35,6 +35,7 @@ export default function SchedulePage() {
   const [events, setEvents] = useState<CalendarEvent[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notConnected, setNotConnected] = useState(false);
+  const [needsReconnect, setNeedsReconnect] = useState(false);
   const [creatingFor, setCreatingFor] = useState<{ dayIdx: number; hour: number } | null>(null);
 
   const weekDays = useMemo(() => {
@@ -51,6 +52,13 @@ export default function SchedulePage() {
       );
       const data = await res.json();
       if (!res.ok) {
+        // Token expired / revoked — was connected, needs to re-auth.
+        if (data?.needsReconnect) {
+          setNeedsReconnect(true);
+          setEvents([]);
+          return;
+        }
+        // Never connected.
         if (data?.connected === false) {
           setNotConnected(true);
           setEvents([]);
@@ -61,6 +69,7 @@ export default function SchedulePage() {
         return;
       }
       setNotConnected(false);
+      setNeedsReconnect(false);
       setEvents(data.events ?? []);
     } catch (e) {
       setError(e instanceof Error ? e.message : "network error");
@@ -127,20 +136,35 @@ export default function SchedulePage() {
         </div>
       )}
 
+      {needsReconnect && (
+        <div className="rounded-2xl border border-amber-200/70 bg-amber-50/50 p-5 text-sm">
+          <div className="font-semibold text-ink mb-1">Google Calendar connection expired</div>
+          <div className="text-ink/65 mb-3">
+            We couldn't refresh your Google access. Reconnect to keep your week in sync.
+          </div>
+          <a
+            href="/settings"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold text-white bg-accent hover:bg-accent/90"
+          >
+            Reconnect in Settings →
+          </a>
+        </div>
+      )}
+
       {error && (
         <div className="rounded-2xl border border-urgent/30 bg-urgent/5 p-4 text-sm text-urgent">
           {error}
         </div>
       )}
 
-      {!notConnected && events === null && !error && (
+      {!notConnected && !needsReconnect && events === null && !error && (
         <div className="rounded-2xl border border-slate-200/70 bg-white p-8 text-center text-sm text-ink/55 inline-flex items-center gap-2">
           <Loader2 className="w-4 h-4 animate-spin" />
           Loading week…
         </div>
       )}
 
-      {!notConnected && events !== null && (
+      {!notConnected && !needsReconnect && events !== null && (
         <WeekGrid
           weekDays={weekDays}
           events={events}

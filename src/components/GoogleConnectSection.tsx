@@ -58,6 +58,7 @@ function GoogleCard() {
   const [busy, setBusy] = useState(false);
   const [events, setEvents] = useState<CalendarEvent[] | null>(null);
   const [eventsError, setEventsError] = useState<string | null>(null);
+  const [needsReconnect, setNeedsReconnect] = useState(false);
 
   async function load() {
     try {
@@ -78,9 +79,17 @@ function GoogleCard() {
   async function loadEvents() {
     try {
       setEventsError(null);
+      setNeedsReconnect(false);
       const res = await fetch("/api/calendar/events?days=7", { cache: "no-store" });
       const data = await res.json();
       if (!res.ok) {
+        // Token expired / revoked — prompt a reconnect instead of
+        // showing the raw Google error.
+        if (data?.needsReconnect) {
+          setNeedsReconnect(true);
+          setEvents([]);
+          return;
+        }
         setEventsError(data?.error ?? "failed");
         setEvents([]);
         return;
@@ -190,6 +199,22 @@ function GoogleCard() {
             <div className="text-[12px] text-ink/55 inline-flex items-center gap-1.5">
               <Loader2 className="w-3 h-3 animate-spin" />
               Loading events…
+            </div>
+          ) : needsReconnect ? (
+            <div className="space-y-2">
+              <div className="text-[12px] text-amber-700">
+                Your Google connection expired — reconnect to resume calendar sync.
+              </div>
+              <button
+                type="button"
+                onClick={connect}
+                disabled={busy}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold text-white shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-lift active:scale-95 disabled:opacity-60"
+                style={{ background: "linear-gradient(135deg, #1a73e8 0%, #0F9D58 100%)" }}
+              >
+                {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CalendarDays className="w-3.5 h-3.5" />}
+                Reconnect Google
+              </button>
             </div>
           ) : eventsError ? (
             <div className="text-[12px] text-rose-700">{eventsError}</div>

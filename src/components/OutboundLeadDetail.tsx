@@ -259,9 +259,9 @@ function Timeline({ events }: { events: LeadEvent[] }) {
                 <div className="text-[11px] text-ink/55 mt-0.5">
                   {fmtTimestamp(e.createdAt)}
                 </div>
-                {e.kind === "transitioned" && e.payload && typeof e.payload === "object" && (
-                  <TransitionPayload payload={e.payload as { from?: string; to?: string }} />
-                )}
+                {e.kind === "transitioned" && e.payload && typeof e.payload === "object"
+                  ? <TransitionPayload payload={e.payload as { from?: string; to?: string }} />
+                  : null}
               </div>
             </div>
           );

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
 import { SodFlow } from "@/components/SodFlow";
 import { useClock } from "@/components/ClockContext";
@@ -56,18 +56,20 @@ export function SodGate() {
     return () => { cancelled = true; };
   }, [pathname, dismissedAt, clock.open]);
 
-  return (
-    <SodFlow
-      open={open}
-      onClose={() => {
-        setOpen(false);
-        setDismissedAt(Date.now());
-      }}
-      onComplete={() => {
-        // Server-side state will now report alreadySubmitted=true, so
-        // the next mount/pathname check won't re-pop.
-        setOpen(false);
-      }}
-    />
-  );
+  // Stable identities: with the clock now driving a 1s tick, SodGate
+  // re-renders every second while a shift is open. Fresh inline arrows
+  // here would change SodFlow's `onClose` prop each tick, re-running its
+  // boot effect (which cancels the in-flight /api/sod/today fetch and
+  // resets to "loading") — leaving the modal stuck on "Loading your day…".
+  const handleClose = useCallback(() => {
+    setOpen(false);
+    setDismissedAt(Date.now());
+  }, []);
+  const handleComplete = useCallback(() => {
+    // Server-side state will now report alreadySubmitted=true, so the
+    // next mount/pathname check won't re-pop.
+    setOpen(false);
+  }, []);
+
+  return <SodFlow open={open} onClose={handleClose} onComplete={handleComplete} />;
 }

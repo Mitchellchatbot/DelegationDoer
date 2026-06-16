@@ -64,6 +64,12 @@ export interface User {
   // a false dailyPromptsEnabled. See [[ask-ai-permission-scoping]] for
   // the broader leader/admin exemption model.
   dailyPromptsRequired?: boolean;
+  // Whether the user punches a clock. Default true. Salaried / on-call
+  // roles are flipped to false in the DB — they have no clock UI (the
+  // widget hides it) and so are exempt from every clock-in gate
+  // (task creation, SOD/EOD submission). See `requiresClockIn` in
+  // access.ts and the `clock_enabled` column (migration 20260515).
+  clockEnabled?: boolean;
   // Flips to true once the user finishes the email-notifications
   // onboarding modal. Drives whether the /home email card shows the
   // CTA or the live notification list.

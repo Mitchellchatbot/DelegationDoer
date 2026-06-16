@@ -39,6 +39,10 @@
     {
       "path": "/api/cron/eod-digests",
       "schedule": "0 18 * * *"
+    },
+    {
+      "path": "/api/cron/outbound-sequences",
+      "schedule": "* * * * *"
     }
   ]
 }

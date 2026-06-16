@@ -9,7 +9,7 @@ import { cn } from "@/lib/utils";
 // the heavy lavender-gradient banners that used to sit at the top of
 // every page.
 
-type IconTone = "blue" | "indigo" | "teal" | "emerald" | "amber" | "rose" | "fuchsia" | "sky";
+type IconTone = "blue" | "indigo" | "teal" | "emerald" | "amber" | "rose" | "fuchsia" | "sky" | "violet";
 
 const ICON_TONE: Record<IconTone, string> = {
   blue:    "bg-blue-50    text-blue-600    ring-blue-200/60",
@@ -19,7 +19,8 @@ const ICON_TONE: Record<IconTone, string> = {
   amber:   "bg-amber-50   text-amber-600   ring-amber-200/60",
   rose:    "bg-rose-50    text-rose-600    ring-rose-200/60",
   fuchsia: "bg-fuchsia-50 text-fuchsia-600 ring-fuchsia-200/60",
-  sky:     "bg-sky-50     text-sky-600     ring-sky-200/60"
+  sky:     "bg-sky-50     text-sky-600     ring-sky-200/60",
+  violet:  "bg-violet-50  text-violet-600  ring-violet-200/60"
 };
 
 // One meta entry — e.g. { count: 500, label: "unread", href: "/inbox" }.
@@ -59,7 +60,8 @@ const META_TONE: Record<IconTone, string> = {
   amber:   "text-amber-600   hover:text-amber-700",
   rose:    "text-rose-600    hover:text-rose-700",
   fuchsia: "text-fuchsia-600 hover:text-fuchsia-700",
-  sky:     "text-sky-600     hover:text-sky-700"
+  sky:     "text-sky-600     hover:text-sky-700",
+  violet:  "text-violet-600  hover:text-violet-700"
 };
 
 export function PageHero({

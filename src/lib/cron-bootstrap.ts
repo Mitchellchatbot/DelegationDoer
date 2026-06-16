@@ -35,6 +35,7 @@ import { runInactivitySweep } from "@/lib/inactivity-runner";
 import { runEodRecap } from "@/lib/eod-recap-runner";
 import { runScheduledEmails } from "@/lib/scheduled-emails-runner";
 import { syncBirthdaysForAllOwners } from "@/lib/birthday-calendar-sync";
+import { runOutboundSequences } from "@/lib/outbound-sequence-runner";
 
 const globalKey = "__ddCronBootstrap" as const;
 const stateKey = "__ddCronHeartbeats" as const;
@@ -121,6 +122,16 @@ const JOBS: CronJob[] = [
         `replies sent=${r.replies.sent}/${r.replies.considered} ` +
         `drafts sent=${r.drafts.sent}/${r.drafts.considered}`
       );
+    }
+  },
+  {
+    name: "outbound-sequences",
+    intervalMs: MINUTE, // matches vercel.json "* * * * *"
+    bootCatchupDelayMs: 25_000,
+    disableEnv: "OUTBOUND_SEQUENCES_INTERNAL_CRON",
+    run: async () => {
+      const r = await runOutboundSequences();
+      return `sent=${r.sent}/${r.considered} failed=${r.failed}`;
     }
   }
 ];

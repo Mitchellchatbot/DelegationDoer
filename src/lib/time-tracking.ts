@@ -140,4 +140,19 @@ export async function openSegment(
   };
 }
 
+// Whether the user has an open shift segment right now. Powers the
+// clock-in gate on task creation and SOD/EOD submission. Mirrors the
+// inline check in POST /api/tasks (the partial unique index guarantees
+// at most one open segment per user, so limit(1) is exact).
+export async function hasOpenSegment(userId: string): Promise<boolean> {
+  const { data } = await getSupabaseAdmin()
+    .from("time_entries")
+    .select("id")
+    .eq("user_id", userId)
+    .is("ended_at", null)
+    .limit(1)
+    .maybeSingle();
+  return !!data;
+}
+
 export const TIME_TRACKING_MS_PER_HOUR = MS_PER_HOUR;

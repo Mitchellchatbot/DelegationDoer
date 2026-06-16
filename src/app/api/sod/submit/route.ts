@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
+import { requiresClockIn } from "@/lib/access";
+import { hasOpenSegment } from "@/lib/time-tracking";
 import { sodSignalFor } from "@/lib/shift";
 import { openDm, postMessage } from "@/lib/slack";
 import { resolveSlackId } from "@/lib/slack-resolve";
@@ -32,6 +34,16 @@ export async function POST(req: NextRequest) {
     const supabase = getSupabaseAdmin();
     const me = await getUserById(userId);
     if (!me) return NextResponse.json({ error: "no user" }, { status: 401 });
+
+    // Clock-in gate. Workers + dept_heads must have started a shift
+    // before filing their SOD (mirrors POST /api/tasks). Leaders, stealth
+    // admins, and clock-disabled (salaried) users are exempt.
+    if (requiresClockIn(me) && !(await hasOpenSegment(userId))) {
+      return NextResponse.json(
+        { error: "Clock in before submitting your start-of-day. Start a shift from the topbar clock or your widget." },
+        { status: 403 }
+      );
+    }
 
     const body = (await req.json().catch(() => ({}))) as {
       date?: string;

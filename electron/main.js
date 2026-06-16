@@ -7,7 +7,6 @@
 // - That anchor is remembered, so collapse/expand keeps the same corner/edge.
 
 const { app, BrowserWindow, Tray, Menu, nativeImage, screen, ipcMain, net, shell, Notification } = require("electron");
-const notifier = require("node-notifier");
 const path = require("path");
 
 // Production deploy by default. `DD_APP_URL=http://localhost:3000 npm run electron`
@@ -253,6 +252,11 @@ async function pollAssignments() {
 }
 
 app.whenReady().then(() => {
+  // Brand Windows toast notifications and make their click activation reliable
+  // when running unpackaged (`npm run electron`). Must match the electron-builder
+  // appId; packaged builds set this automatically.
+  if (process.platform === "win32") app.setAppUserModelId("com.scaledai.delegationdoer");
+
   createWidget();
   buildTray();
   pollAssignments();
@@ -286,6 +290,9 @@ ipcMain.handle("widget:poll", () => pollAssignments());
 ipcMain.handle("widget:notify", (_e, { title, body, path }) => {
   const url = typeof path === "string" && path.startsWith("/") ? APP_URL + path : null;
   if (process.platform === "darwin") {
+    // Lazy + macOS-only: node-notifier is never used on Windows, so don't load
+    // it at startup there (and it's the only node_modules dep the shell needs).
+    const notifier = require("node-notifier");
     notifier.notify({ title, message: body, sound: false, ...(url ? { open: url } : {}) });
   } else if (Notification.isSupported()) {
     const n = new Notification({ title, body });

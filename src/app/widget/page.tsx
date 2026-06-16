@@ -498,11 +498,19 @@ export default function WidgetPage() {
     });
   }
 
-  // Open the email's thread in DD (default browser, like "Open full app").
-  // Opening counts as handling it, so mark it seen too — same end state as "Got it".
+  // Open the email's thread in DD. New widget shell: deep-link straight to the
+  // reading pane in the default browser, and mark it handled (same end state as
+  // "Got it"). Old shell — a not-yet-reinstalled .exe whose preload predates the
+  // openMainWindow IPC — falls back to expanding the panel like every other alert,
+  // and deliberately does NOT mark seen, so the email isn't silently swallowed.
   function openEmail(email: WidgetEmail) {
-    (window as any).widgetAPI?.openMainWindow?.(inboxThreadPath(email.accountId, email.threadId));
-    void dismissEmail(email.id);
+    const api = (window as any).widgetAPI;
+    if (api?.openMainWindow) {
+      api.openMainWindow(inboxThreadPath(email.accountId, email.threadId));
+      void dismissEmail(email.id);
+    } else {
+      expandToPanel();
+    }
   }
 
   async function acknowledge(taskId: string) {

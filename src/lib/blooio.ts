@@ -121,14 +121,34 @@ async function bFetch<T>(
   } catch (e) {
     return { ok: false, error: `Network error: ${(e as Error).message}` };
   }
-  let json: unknown;
-  try { json = await res.json(); }
-  catch { return { ok: false, error: `Non-JSON response (HTTP ${res.status})` }; }
+  // Read the body as text first so we can fall back to the raw response
+  // when it isn't JSON or when JSON only contains a generic error class
+  // name (Blooio returns {"error":"ApiError"} for half its failures).
+  const rawBody = await res.text();
+  let json: unknown = null;
+  try { json = JSON.parse(rawBody); }
+  catch { /* non-JSON — handled below via rawBody */ }
+
   if (!res.ok) {
-    const e = json as { error?: string; message?: string };
-    return { ok: false, error: e?.error ?? e?.message ?? `HTTP ${res.status}` };
+    // Extract the most-informative string we can find from the response.
+    // Order of preference: detail/message → string error → stringified
+    // object error → raw body text. Always include HTTP status so the
+    // operator can distinguish 4xx (request bad) from 5xx (Blooio down)
+    // even when the body itself is opaque ("ApiError" et al.).
+    const obj = (json && typeof json === "object" ? json : {}) as Record<string, unknown>;
+    const candidates: Array<unknown> = [
+      obj.detail, obj.description, obj.message,
+      typeof obj.error === "string" ? obj.error : null,
+      typeof obj.error === "object" && obj.error ? JSON.stringify(obj.error) : null
+    ];
+    const inner = candidates.find((c) => typeof c === "string" && (c as string).length > 0) as string | undefined;
+    const reason = inner ?? (rawBody.length > 0 ? rawBody.slice(0, 400) : `HTTP ${res.status}`);
+    return { ok: false, error: `${reason} (HTTP ${res.status})` };
   }
-  return { ok: true, data: json as T };
+  // For success responses, json should be parsed. If not (unexpected
+  // empty body on a 200), fall back to an empty object so callers don't
+  // crash on undefined.
+  return { ok: true, data: (json ?? {}) as T };
 }
 
 // Epoch milliseconds → ISO. Returns "" for missing/zero values so the

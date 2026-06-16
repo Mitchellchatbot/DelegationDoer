@@ -143,6 +143,18 @@ async function bFetch<T>(
     ];
     const inner = candidates.find((c) => typeof c === "string" && (c as string).length > 0) as string | undefined;
     const reason = inner ?? (rawBody.length > 0 ? rawBody.slice(0, 400) : `HTTP ${res.status}`);
+    // Aggressive server-side log when Blooio rejects. Captures method +
+    // path + status + raw response body so Railway logs show the full
+    // picture even when the DB-persisted `error` is "ApiError (HTTP
+    // 400)" with nothing else useful.
+    // eslint-disable-next-line no-console
+    console.error("[blooio] request failed", {
+      method,
+      path,
+      status: res.status,
+      requestBody: opts?.body !== undefined ? JSON.stringify(opts.body).slice(0, 400) : undefined,
+      responseBody: rawBody.slice(0, 1000)
+    });
     return { ok: false, error: `${reason} (HTTP ${res.status})` };
   }
   // For success responses, json should be parsed. If not (unexpected

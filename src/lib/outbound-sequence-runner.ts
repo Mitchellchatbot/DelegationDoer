@@ -102,6 +102,21 @@ export async function runOutboundSequences(): Promise<OutboundSequenceResult> {
       // 3. Send via Blooio.
       const send = await sendBlooioMessage(lead.phone, row.body);
       if (!send.ok) {
+        // Log with full context so Railway logs show which lead/phone/
+        // template failed alongside the [blooio] line for the raw
+        // response. Together these tell you everything needed to
+        // diagnose without poking the DB.
+        // eslint-disable-next-line no-console
+        console.error("[outbound-runner] Blooio send failed", {
+          scheduledMessageId: row.id,
+          leadId: lead.id,
+          leadName: lead.name,
+          phone: lead.phone,
+          kind: row.kind,
+          sequenceIndex: row.sequence_index,
+          bodyPreview: row.body.slice(0, 120),
+          error: send.error
+        });
         await supabase
           .from("outbound_scheduled_messages")
           .update({ status: "failed", error: send.error })

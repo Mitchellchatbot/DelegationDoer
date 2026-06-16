@@ -38,6 +38,12 @@ const PUBLIC_PREFIXES = [
   // missiveclone inbound-mail webhook — HMAC verified inside the handler
   // (x-missive-signature). missiveclone has no Supabase session cookie.
   "/api/missive-webhook",
+  // Typeform funnel intake — HMAC-SHA256 base64 verified inside the
+  // handler (Typeform-Signature header). Typeform POSTs anonymously.
+  "/api/integrations/typeform/webhook",
+  // Calendly booking events — v1=HMAC-SHA256 over `${t}.${body}` verified
+  // inside the handler (Calendly-Webhook-Signature). Calendly POSTs anonymously.
+  "/api/integrations/calendly/webhook",
   // The widget renderer must be reachable inside Electron without a
   // session — when the cookie jar is empty (fresh launch) we want the
   // widget to render its own "Sign in" state rather than redirect to

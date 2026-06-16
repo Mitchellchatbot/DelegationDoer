@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { Mail, BellRing, BellOff, ArrowRight, Loader2 } from "lucide-react";
+import { Mail, BellRing, Settings, ArrowRight, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { EmailNotificationsOnboardingModal } from "@/components/EmailNotificationsOnboardingModal";
 // Relative time for past timestamps. The dashboard's existing
@@ -362,10 +362,11 @@ export function HomeEmailNotifications({ onboarded: initialOnboarded }: Props) {
             <button
               type="button"
               onClick={() => setModalOpen(true)}
-              title="Pick which inboxes ping you"
-              className="text-ink/45 hover:text-ink/80 transition-colors"
+              title="Choose which inboxes notify you here and in the widget"
+              className="text-[11px] font-medium text-sky-700 hover:text-sky-800 inline-flex items-center gap-1"
             >
-              <BellOff className="w-3.5 h-3.5" />
+              <Settings className="w-3.5 h-3.5" />
+              Manage inboxes
             </button>
           </div>
         </header>

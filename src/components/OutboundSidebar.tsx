@@ -4,7 +4,8 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import {
-  BarChart3, CalendarClock, Globe, Linkedin, Users as UsersIcon, ArrowLeft
+  BarChart3, CalendarClock, Globe, Linkedin, Users as UsersIcon, ArrowLeft,
+  MessageSquare, Flame, GitBranch
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { User } from "@/lib/types";
@@ -24,12 +25,15 @@ type Tone = "violet" | "fuchsia" | "indigo" | "rose" | "amber" | "sky";
 interface NavItem { href: string; label: string; icon: typeof BarChart3; tone: Tone }
 
 const NAV: NavItem[] = [
-  { href: "/outbound-dashboard/facebook-ads",   label: "Facebook Ads",   icon: BarChart3,     tone: "indigo"  },
-  { href: "/outbound-dashboard/facebook-ads-2", label: "Facebook Ads 2", icon: BarChart3,     tone: "violet"  },
-  { href: "/outbound-dashboard/calendly",       label: "Calendly",       icon: CalendarClock, tone: "rose"    },
-  { href: "/outbound-dashboard/linkedin-leads", label: "LinkedIn Leads", icon: Linkedin,      tone: "sky"     },
-  { href: "/outbound-dashboard/website-builder", label: "Website Builder", icon: Globe,        tone: "amber"   },
-  { href: "/outbound-dashboard/people",         label: "Team",           icon: UsersIcon,     tone: "fuchsia" }
+  { href: "/outbound-dashboard/leads",           label: "Leads",              icon: Flame,         tone: "amber"   },
+  { href: "/outbound-dashboard/flows",           label: "Flows",              icon: GitBranch,     tone: "indigo"  },
+  { href: "/outbound-dashboard/facebook-ads",    label: "Facebook Ads",       icon: BarChart3,     tone: "indigo"  },
+  { href: "/outbound-dashboard/facebook-ads-2",  label: "Facebook Ads 2",     icon: BarChart3,     tone: "violet"  },
+  { href: "/outbound-dashboard/calendly",        label: "Calendly",           icon: CalendarClock, tone: "rose"    },
+  { href: "/outbound-dashboard/messaging",       label: "Outbound messaging", icon: MessageSquare, tone: "amber"   },
+  { href: "/outbound-dashboard/linkedin-leads",  label: "LinkedIn Leads",     icon: Linkedin,      tone: "sky"     },
+  { href: "/outbound-dashboard/website-builder", label: "Website Builder",    icon: Globe,         tone: "amber"   },
+  { href: "/outbound-dashboard/people",          label: "Team",               icon: UsersIcon,     tone: "fuchsia" }
 ];
 
 const CHIP: Record<Tone, string> = {

@@ -78,7 +78,7 @@ export function canAddDepartments(actor: User): boolean {
 // doesn't break the gate. Mirrors the same substring-matching pattern
 // used by SUPER_APPROVER_NAME_PATTERNS in lib/email-approvers.ts —
 // keep the two in sync if the access model evolves.
-const OUTBOUND_NAME_PATTERNS = ["mitchell", "hasan", "mujtaba", "henry", "hamza"];
+const OUTBOUND_NAME_PATTERNS = ["mitchell", "hasan", "mujtaba", "henry", "hamza", "sofyan"];
 
 export function canSeeOutbound(u: User | null | undefined): boolean {
   if (!u || !u.name) return false;

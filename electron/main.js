@@ -6,7 +6,7 @@
 //   of 8 anchors (4 corners + 4 edge midpoints) on whichever display it's on.
 // - That anchor is remembered, so collapse/expand keeps the same corner/edge.
 
-const { app, BrowserWindow, Tray, Menu, nativeImage, screen, ipcMain, net, shell, Notification } = require("electron");
+const { app, BrowserWindow, Tray, Menu, nativeImage, screen, ipcMain, shell, Notification } = require("electron");
 const path = require("path");
 
 // Production deploy by default. `DD_APP_URL=http://localhost:3000 npm run electron`
@@ -229,28 +229,6 @@ function buildTray() {
   });
 }
 
-async function pollAssignments() {
-  if (!widget || widget.isDestroyed()) return;
-  try {
-    // Use Electron's net.fetch with the BrowserWindow's session so the
-    // session cookie set by /login is carried automatically. A plain
-    // global fetch() has no cookies and would redirect to /login forever.
-    const res = await net.fetch(`${APP_URL}/api/widget/my-tasks`, {
-      session: widget.webContents.session,
-      credentials: "include"
-    });
-    if (!res.ok) return; // 401 before login — no-op until user authenticates
-    const data = await res.json();
-    const tasks = data.tasks ?? [];
-
-    if (widget && !widget.isDestroyed()) {
-      widget.webContents.send("widget:tasks", tasks);
-    }
-  } catch {
-    // App not running yet; silent.
-  }
-}
-
 app.whenReady().then(() => {
   // Brand Windows toast notifications and make their click activation reliable
   // when running unpackaged (`npm run electron`). Must match the electron-builder
@@ -259,8 +237,6 @@ app.whenReady().then(() => {
 
   createWidget();
   buildTray();
-  pollAssignments();
-  setInterval(pollAssignments, 60_000);
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWidget();
@@ -276,7 +252,6 @@ ipcMain.handle("widget:openMainWindow", (_e, path) => {
   const dest = typeof path === "string" && path.startsWith("/") ? APP_URL + path : APP_URL;
   shell.openExternal(dest);
 });
-ipcMain.handle("widget:poll", () => pollAssignments());
 
 // OS-level notifications. The renderer owns the "what's fresh" dedup and
 // fires one of these per new task / mention / email. macOS silently drops

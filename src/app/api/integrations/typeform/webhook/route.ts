@@ -64,27 +64,56 @@ interface TypeformResponse {
   event_type?: string;
 }
 
+// Stringify whichever value the answer carries — Typeform shapes vary
+// by question type. Falls back to JSON for things like choices, dates,
+// numbers so the templating layer always has SOMETHING string-renderable.
+function answerValueAsString(a: TypeformAnswer): string | null {
+  if (a.phone_number) return a.phone_number;
+  if (a.email) return a.email;
+  if (a.text) return a.text;
+  if (a.number != null) return String(a.number);
+  if (a.choice?.label) return a.choice.label;
+  return null;
+}
+
 function extractFields(payload: TypeformResponse): {
   phone: string | null;
   email: string | null;
   name: string | null;
+  // Every answer keyed by the question's `ref` (operator-set in
+  // Typeform; stable across form copies). This is the source of dynamic
+  // {ref} placeholders the operator can drop into SMS templates.
+  answers: Record<string, string>;
 } {
-  const answers = payload.form_response?.answers ?? [];
+  const list = payload.form_response?.answers ?? [];
   let phone: string | null = null;
   let email: string | null = null;
   let name: string | null = null;
-  for (const a of answers) {
+  const answers: Record<string, string> = {};
+
+  for (const a of list) {
+    const v = answerValueAsString(a);
     if (a.type === "phone_number" && a.phone_number) phone = a.phone_number;
     else if (a.type === "email" && a.email) email = a.email;
     else if (a.type === "short_text" && a.text) {
-      // Heuristic: the first short_text answer is treated as the name.
-      // Typeform forms in this space conventionally start with "What's
-      // your name?" — if the user reorders we'll catch the wrong one
-      // and need to switch to ref-based extraction.
+      // Heuristic: the first short_text answer is treated as the name
+      // unless the question's `ref` matches "name" (then it's explicit).
       if (!name) name = a.text;
     }
+    // Stash every answer under its ref. Fall back to the field id if no
+    // ref was set in Typeform (operator left "ref" empty). Anything that
+    // can't be stringified is skipped.
+    const key = a.field?.ref ?? a.field?.id;
+    if (key && v != null) answers[key] = v;
   }
-  return { phone, email, name };
+
+  // Typeform's hidden fields (utm passthroughs etc.) — also exposed as
+  // {hidden_key} so the operator can splice campaign metadata into SMS.
+  for (const [k, v] of Object.entries(payload.form_response?.hidden ?? {})) {
+    if (v != null) answers[k] = String(v);
+  }
+
+  return { phone, email, name, answers };
 }
 
 export async function POST(req: NextRequest) {
@@ -116,7 +145,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "missing response id" }, { status: 400 });
   }
 
-  const { phone, email, name } = extractFields(payload);
+  const { phone, email, name, answers } = extractFields(payload);
   if (!phone) {
     console.warn("[typeform-webhook] no phone_number field in submission", {
       responseId
@@ -136,7 +165,8 @@ export async function POST(req: NextRequest) {
       email,
       name,
       typeformResponseId: responseId,
-      typeformPayload: payload
+      typeformPayload: payload,
+      typeformAnswers: answers
     });
 
     if (isNew) {

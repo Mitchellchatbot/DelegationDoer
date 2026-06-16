@@ -1,8 +1,7 @@
 import "server-only";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import {
-  buildContext, fmtMeetingFriendly, renderConfirmation, renderReminder24h,
-  renderReminder1h, renderRecoveryDrip, renderEngagementDrip,
+  buildContext, fmtMeetingFriendly, renderTemplate, getFallbackTemplate,
   DRIP_OFFSETS_DAYS, DAY_MS,
   type TemplateContext
 } from "@/lib/outbound-sms-templates";
@@ -38,6 +37,9 @@ export interface OutboundLead {
   status: LeadStatus;
   assignedRepId: string | null;
   typeformResponseId: string | null;
+  // Normalized map of every Typeform answer keyed by question ref.
+  // Used by the renderer as the source of `{ref}` dynamic placeholders.
+  typeformAnswers: Record<string, string>;
   calendlyEventUri: string | null;
   meetingStartsAt: string | null;
   meetingEndsAt: string | null;
@@ -57,6 +59,7 @@ interface LeadRow {
   status: LeadStatus;
   assigned_rep_id: string | null;
   typeform_response_id: string | null;
+  typeform_answers: Record<string, string> | null;
   calendly_event_uri: string | null;
   meeting_starts_at: string | null;
   meeting_ends_at: string | null;
@@ -77,6 +80,7 @@ function normalizeLead(r: LeadRow): OutboundLead {
     status: r.status,
     assignedRepId: r.assigned_rep_id,
     typeformResponseId: r.typeform_response_id,
+    typeformAnswers: r.typeform_answers ?? {},
     calendlyEventUri: r.calendly_event_uri,
     meetingStartsAt: r.meeting_starts_at,
     meetingEndsAt: r.meeting_ends_at,
@@ -132,6 +136,9 @@ export interface TypeformIntake {
   name: string | null;
   typeformResponseId: string;
   typeformPayload: unknown;  // raw payload for audit
+  // Normalized answers map (ref → string). Becomes the source of {ref}
+  // placeholders the operator can drop into SMS templates.
+  typeformAnswers: Record<string, string>;
 }
 
 // Upsert by phone — same human filling the form twice should not produce
@@ -146,13 +153,17 @@ export async function upsertLeadFromTypeform(intake: TypeformIntake): Promise<{
   if (existing) {
     // Refresh metadata on a re-submission — they may have updated their
     // email/name. Don't touch the status (the state machine owns that).
+    // Merge typeform_answers so dynamic vars from earlier submissions
+    // aren't lost if the new one happens to omit a field.
+    const mergedAnswers = { ...existing.typeformAnswers, ...intake.typeformAnswers };
     const { data, error } = await supabase
       .from("outbound_leads")
       .update({
         email: intake.email?.toLowerCase() ?? existing.email,
         name: intake.name ?? existing.name,
         typeform_response_id: intake.typeformResponseId,
-        typeform_payload: intake.typeformPayload
+        typeform_payload: intake.typeformPayload,
+        typeform_answers: mergedAnswers
       })
       .eq("id", existing.id)
       .select("*")
@@ -168,7 +179,8 @@ export async function upsertLeadFromTypeform(intake: TypeformIntake): Promise<{
       name: intake.name ?? null,
       status: "warm_lead",
       typeform_response_id: intake.typeformResponseId,
-      typeform_payload: intake.typeformPayload
+      typeform_payload: intake.typeformPayload,
+      typeform_answers: intake.typeformAnswers
     })
     .select("*")
     .single();
@@ -291,6 +303,87 @@ export async function cancelAllPending(leadId: string): Promise<number> {
   ]);
 }
 
+// ---- TEMPLATE LOADING ----
+
+export type TemplateMap = Map<string, { body: string; updatedAt: string | null }>;
+
+interface TemplateRow {
+  kind: string;
+  sequence_index: number;
+  body: string;
+  updated_at: string | null;
+  updated_by: string | null;
+}
+
+// Load every template row in one round-trip and return a Map keyed by
+// `kind#sequenceIndex`. Composers call this once per scheduling pass so
+// rendering a 5-message drip doesn't fan out 5 SELECTs. Falls back to
+// in-code constants for any (kind, sequence_index) the DB doesn't have.
+export async function loadTemplateMap(): Promise<TemplateMap> {
+  const supabase = getSupabaseAdmin();
+  const { data, error } = await supabase
+    .from("outbound_message_templates")
+    .select("kind, sequence_index, body, updated_at, updated_by");
+  if (error) throw new Error(error.message);
+  const map: TemplateMap = new Map();
+  for (const r of (data ?? []) as TemplateRow[]) {
+    map.set(`${r.kind}#${r.sequence_index}`, { body: r.body, updatedAt: r.updated_at });
+  }
+  return map;
+}
+
+function templateFor(map: TemplateMap, kind: string, sequenceIndex: number): string {
+  const fromDb = map.get(`${kind}#${sequenceIndex}`)?.body;
+  if (fromDb && fromDb.trim().length > 0) return fromDb;
+  return getFallbackTemplate(kind, sequenceIndex);
+}
+
+// Public listing for the templates editor — returns the metadata-joined
+// rows in the order operators expect to see them.
+export interface MessageTemplateRow {
+  kind: string;
+  sequenceIndex: number;
+  body: string;
+  updatedAt: string | null;
+}
+export async function listMessageTemplates(): Promise<MessageTemplateRow[]> {
+  const map = await loadTemplateMap();
+  return Array.from(map.entries())
+    .map(([key, v]) => {
+      const [kind, idx] = key.split("#");
+      return {
+        kind,
+        sequenceIndex: parseInt(idx, 10),
+        body: v.body,
+        updatedAt: v.updatedAt
+      };
+    })
+    .sort((a, b) => {
+      if (a.kind !== b.kind) return a.kind.localeCompare(b.kind);
+      return a.sequenceIndex - b.sequenceIndex;
+    });
+}
+
+// Upsert a single template — called from the templates editor's save
+// endpoint. Bumps updated_by so the UI can show who last edited.
+export async function upsertMessageTemplate(args: {
+  kind: string;
+  sequenceIndex: number;
+  body: string;
+  updatedBy: string | null;
+}): Promise<void> {
+  const supabase = getSupabaseAdmin();
+  const { error } = await supabase
+    .from("outbound_message_templates")
+    .upsert({
+      kind: args.kind,
+      sequence_index: args.sequenceIndex,
+      body: args.body,
+      updated_by: args.updatedBy
+    }, { onConflict: "kind,sequence_index" });
+  if (error) throw new Error(error.message);
+}
+
 // ---- COMPOSED FLOWS ----
 
 // Called by the Calendly webhook on invitee.created. Renders + schedules
@@ -308,6 +401,8 @@ export async function scheduleBookingMessages(
   });
   const meetingMs = new Date(meetingStartsAtIso).getTime();
   const nowMs = Date.now();
+  const tmpls = await loadTemplateMap();
+  const extras = lead.typeformAnswers;
 
   const rows: ScheduleInput[] = [];
 
@@ -315,19 +410,17 @@ export async function scheduleBookingMessages(
   rows.push({
     leadId: lead.id,
     kind: "confirmation",
-    body: renderConfirmation(ctx),
+    body: renderTemplate(templateFor(tmpls, "confirmation", 1), ctx, extras),
     scheduledFor: new Date(nowMs + 30_000)
   });
 
-  // 24h reminder — only if the meeting is >24h away (otherwise it'd
-  // schedule in the past and the runner would fire it immediately,
-  // which is fine but confusing).
+  // 24h reminder — only if the meeting is >24h away.
   const reminder24Ms = meetingMs - 24 * 60 * 60 * 1000;
   if (reminder24Ms > nowMs) {
     rows.push({
       leadId: lead.id,
       kind: "reminder_24h",
-      body: renderReminder24h(ctx),
+      body: renderTemplate(templateFor(tmpls, "reminder_24h", 1), ctx, extras),
       scheduledFor: new Date(reminder24Ms)
     });
   }
@@ -338,7 +431,7 @@ export async function scheduleBookingMessages(
     rows.push({
       leadId: lead.id,
       kind: "reminder_1h",
-      body: renderReminder1h(ctx),
+      body: renderTemplate(templateFor(tmpls, "reminder_1h", 1), ctx, extras),
       scheduledFor: new Date(reminder1Ms)
     });
   }
@@ -359,6 +452,8 @@ export async function scheduleRecoveryDrip(
     meetingLink: meetingLink ?? (process.env.CALENDLY_BOOKING_URL ?? null)
   });
   const nowMs = Date.now();
+  const tmpls = await loadTemplateMap();
+  const extras = lead.typeformAnswers;
   // Day 0 message goes out a couple of hours later (not instantly) so it
   // doesn't collide with the form-submission Slack notification AND so
   // the lead has a chance to land on the booking page first.
@@ -371,7 +466,7 @@ export async function scheduleRecoveryDrip(
       leadId: lead.id,
       kind: "recovery_drip",
       sequenceIndex,
-      body: renderRecoveryDrip(ctx, sequenceIndex),
+      body: renderTemplate(templateFor(tmpls, "recovery_drip", sequenceIndex), ctx, extras),
       scheduledFor: new Date(nowMs + offsetMs)
     };
   });
@@ -389,6 +484,8 @@ export async function scheduleEngagementDrip(
     meetingLink: meetingLink ?? (process.env.CALENDLY_BOOKING_URL ?? null)
   });
   const nowMs = Date.now();
+  const tmpls = await loadTemplateMap();
+  const extras = lead.typeformAnswers;
   const FIRST_TOUCH_DELAY_MS = 2 * 60 * 60 * 1000;
   const rows: ScheduleInput[] = DRIP_OFFSETS_DAYS.map((days, i) => {
     const sequenceIndex = i + 1;
@@ -398,7 +495,7 @@ export async function scheduleEngagementDrip(
       leadId: lead.id,
       kind: "engagement_drip",
       sequenceIndex,
-      body: renderEngagementDrip(ctx, sequenceIndex),
+      body: renderTemplate(templateFor(tmpls, "engagement_drip", sequenceIndex), ctx, extras),
       scheduledFor: new Date(nowMs + offsetMs)
     };
   });

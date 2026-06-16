@@ -4,10 +4,10 @@ import {
   ArrowRight, MessageSquare, Phone
 } from "lucide-react";
 import {
-  FLOW_DEFINITIONS,
+  FLOW_DEFINITIONS, getFallbackTemplate,
   type FlowDefinition, type FlowStepDefinition
 } from "@/lib/outbound-sms-templates";
-import type { FlowStepBucket, LeadStatus } from "@/lib/outbound-leads";
+import type { FlowStepBucket, LeadStatus, TemplateMap } from "@/lib/outbound-leads";
 import { cn } from "@/lib/utils";
 
 // Renders the three outbound flows side-by-side. Each step card combines
@@ -17,6 +17,16 @@ import { cn } from "@/lib/utils";
 
 interface Props {
   buckets: Map<string, FlowStepBucket>;
+  // Live template bodies keyed by `${kind}#${sequenceIndex}`. Loaded
+  // from outbound_message_templates by the page so edits show up here
+  // without a code change.
+  templates: TemplateMap;
+}
+
+function templateBody(map: TemplateMap, kind: string, idx: number): string {
+  const fromDb = map.get(`${kind}#${idx}`)?.body;
+  if (fromDb && fromDb.trim().length > 0) return fromDb;
+  return getFallbackTemplate(kind, idx);
 }
 
 // Status pill palette shared with the leads table — kept inline so the
@@ -30,21 +40,22 @@ const STATUS_STYLES: Record<LeadStatus, { label: string; cls: string }> = {
   lost:      { label: "Lost",    cls: "bg-slate-100 text-slate-600 border-slate-300/60" }
 };
 
-export function OutboundFlowsView({ buckets }: Props) {
+export function OutboundFlowsView({ buckets, templates }: Props) {
   return (
     <div className="space-y-6">
       {FLOW_DEFINITIONS.map((flow) => (
-        <FlowSection key={flow.key} flow={flow} buckets={buckets} />
+        <FlowSection key={flow.key} flow={flow} buckets={buckets} templates={templates} />
       ))}
     </div>
   );
 }
 
 function FlowSection({
-  flow, buckets
+  flow, buckets, templates
 }: {
   flow: FlowDefinition;
   buckets: Map<string, FlowStepBucket>;
+  templates: TemplateMap;
 }) {
   // Roll-up total currently queued across every step in this flow —
   // useful at-a-glance so the operator sees pipeline volume per flow.
@@ -91,7 +102,11 @@ function FlowSection({
       <div className="mt-3 flex items-stretch gap-2 overflow-x-auto pb-2">
         {flow.steps.map((step, i) => (
           <div key={`${step.kind}-${step.sequenceIndex}`} className="flex items-stretch gap-2">
-            <StepCard step={step} bucket={buckets.get(`${step.kind}#${step.sequenceIndex}`)} />
+            <StepCard
+              step={step}
+              bucket={buckets.get(`${step.kind}#${step.sequenceIndex}`)}
+              body={templateBody(templates, step.kind, step.sequenceIndex)}
+            />
             {i < flow.steps.length - 1 && (
               <ArrowRight className="self-center w-4 h-4 text-ink/25 shrink-0" aria-hidden />
             )}
@@ -103,10 +118,11 @@ function FlowSection({
 }
 
 function StepCard({
-  step, bucket
+  step, bucket, body
 }: {
   step: FlowStepDefinition;
   bucket: FlowStepBucket | undefined;
+  body: string;
 }) {
   const counts = bucket?.counts ?? { pending: 0, sending: 0, sent: 0, failed: 0, canceled: 0 };
   const queued = bucket?.queued ?? [];
@@ -138,7 +154,7 @@ function StepCard({
           <MessageSquare className="w-3 h-3" /> Template
         </div>
         <div className="text-[12.5px] text-ink/80 leading-relaxed whitespace-pre-wrap break-words">
-          {step.template}
+          {body}
         </div>
       </div>
 

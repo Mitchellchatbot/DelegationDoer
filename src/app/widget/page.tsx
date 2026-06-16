@@ -269,10 +269,26 @@ export default function WidgetPage() {
 
   const fetchTasks = useCallback(async () => {
     try {
-      // Run both polls in parallel — they're independent reads on the
-      // same Supabase connection.
-      const [taskRes, kudosRes, eomRes, bdayRes, eodRes, clockRes, emailRes] = await Promise.all([
-        fetch("/api/widget/my-tasks", { cache: "no-store" }),
+      // Lead request first, awaited on its own: it's a single pass through
+      // middleware, so it alone performs any Supabase token refresh. The
+      // parallel batch below then runs against the freshly-rotated cookie and
+      // triggers no second refresh. Firing all seven at once used to race the
+      // refresh across separate responses, corrupt the auth cookie, and log
+      // the widget out every few minutes.
+      const taskRes = await fetch("/api/widget/my-tasks", { cache: "no-store" });
+      // 401 → no session in this Electron renderer. Show the sign-in
+      // prompt and stop trying to render normal UI on stale/empty data.
+      if (taskRes.status === 401) {
+        setSignedOut(true);
+        notifsPrimedRef.current = false;
+        setState((prev) => prev === "panel" ? "panel" : "bubble");
+        return;
+      }
+      if (!taskRes.ok) return;
+
+      // The rest are independent reads — safe to run in parallel now that the
+      // session cookie is already fresh.
+      const [kudosRes, eomRes, bdayRes, eodRes, clockRes, emailRes] = await Promise.all([
         fetch("/api/widget/kudos", { cache: "no-store" }),
         fetch("/api/eom", { cache: "no-store" }),
         fetch("/api/widget/birthdays", { cache: "no-store" }),
@@ -284,15 +300,6 @@ export default function WidgetPage() {
         const c = await clockRes.json().catch(() => null);
         setOnShift(!!c?.open);
       }
-      // 401 → no session in this Electron renderer. Show the sign-in
-      // prompt and stop trying to render normal UI on stale/empty data.
-      if (taskRes.status === 401 || kudosRes.status === 401) {
-        setSignedOut(true);
-        notifsPrimedRef.current = false;
-        setState((prev) => prev === "panel" ? "panel" : "bubble");
-        return;
-      }
-      if (!taskRes.ok) return;
       setSignedOut(false);
       const taskData = await taskRes.json();
       const next: WidgetTask[] = taskData.tasks ?? [];
@@ -868,7 +875,7 @@ function SignInPanel({ onCollapse }: { onCollapse: () => void }) {
             Sign in to <span className="text-accent">DelegationDoer</span>
           </div>
           <div className="text-[12px] text-ink/60 mt-1.5 max-w-[260px] leading-relaxed">
-            Once you're logged in in the browser, this widget picks it up automatically — usually within 15 seconds.
+            Sign in right here in the widget — it keeps its own login, separate from your browser.
           </div>
           <button
             onClick={signIn}

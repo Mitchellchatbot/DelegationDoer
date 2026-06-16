@@ -7,8 +7,10 @@ import { cn } from "@/lib/utils";
 
 // 2-step modal walkthrough:
 //   1. Pick inboxes — checkbox list of the accounts the caller can see.
-//      Defaults every box to checked so a user who just "Save"s ends up
-//      with all their inboxes pinging them (the typical case).
+//      The user's OWN inboxes (directly assigned to them) start checked;
+//      inboxes they only oversee as a dept head / leader start unchecked,
+//      so no one is opted into a teammate's inbox by default. (Returning
+//      users instead see their saved selection.)
 //   2. Confirm — quick "you're all set" with a hint that the browser may
 //      ask for notification permission on the next email so cross-tab
 //      pings work.
@@ -21,6 +23,10 @@ export interface OnboardingInbox {
   email: string;
   label: string | null;
   enabled: boolean;
+  // True when this inbox is directly assigned to the current user (their
+  // own), as opposed to one they only oversee as a dept head / leader.
+  // First-run pre-checks only these.
+  assignedToMe: boolean;
 }
 
 type EmptyReason = "missive_error" | "no_accounts" | "no_assignments" | null;
@@ -58,14 +64,16 @@ export function EmailNotificationsOnboardingModal({ open, onClose, onDone }: Pro
         setInboxes(list);
         setEmptyReason(data?.emptyReason ?? null);
         setMissiveError(data?.missiveError ?? null);
-        // First-time users (never onboarded) default to every inbox
-        // checked so they don't have to think. Returning users re-opening
-        // the picker see their *actual saved selection* — so they can
-        // untick an inbox to stop it pinging them and keep the rest.
-        setSelected(new Set(
-          (data?.onboarded ? list.filter((i) => i.enabled) : list)
-            .map((i) => i.accountId)
-        ));
+        // First-time users get their OWN inboxes (directly assigned to
+        // them) pre-checked — zero friction for the common case — but NOT
+        // inboxes they merely oversee as a dept head / leader, so no one is
+        // silently opted into a teammate's inbox. Returning users instead
+        // see their *actual saved selection*, so they can untick an inbox to
+        // stop it pinging them and keep the rest.
+        const initial: OnboardingInbox[] = data?.onboarded
+          ? list.filter((i) => i.enabled)
+          : list.filter((i) => i.assignedToMe);
+        setSelected(new Set(initial.map((i) => i.accountId)));
       })
       .catch(() => toast.error("Couldn't load your inboxes"))
       .finally(() => setLoading(false));
@@ -146,8 +154,9 @@ export function EmailNotificationsOnboardingModal({ open, onClose, onDone }: Pro
           <div className="p-5 space-y-3">
             <p className="text-[12.5px] text-ink/70 leading-relaxed">
               When a new email lands in one of these, you'll get a chime on
-              your dashboard and a popup in the widget. Toggle off the ones
-              you don't want to be pinged about.
+              your dashboard and a popup in the widget. Your own inboxes are
+              ticked by default — add any others you want, and untick any you
+              don't.
             </p>
             {loading ? (
               <div className="py-6 flex items-center justify-center text-ink/55 text-[12px]">

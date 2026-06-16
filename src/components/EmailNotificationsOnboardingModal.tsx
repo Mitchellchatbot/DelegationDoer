@@ -58,9 +58,14 @@ export function EmailNotificationsOnboardingModal({ open, onClose, onDone }: Pro
         setInboxes(list);
         setEmptyReason(data?.emptyReason ?? null);
         setMissiveError(data?.missiveError ?? null);
-        // Default: every visible inbox is checked. First-time users
-        // don't have to think; power users with many inboxes can untick.
-        setSelected(new Set(list.map((i) => i.accountId)));
+        // First-time users (never onboarded) default to every inbox
+        // checked so they don't have to think. Returning users re-opening
+        // the picker see their *actual saved selection* — so they can
+        // untick an inbox to stop it pinging them and keep the rest.
+        setSelected(new Set(
+          (data?.onboarded ? list.filter((i) => i.enabled) : list)
+            .map((i) => i.accountId)
+        ));
       })
       .catch(() => toast.error("Couldn't load your inboxes"))
       .finally(() => setLoading(false));

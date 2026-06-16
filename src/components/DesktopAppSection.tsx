@@ -10,11 +10,16 @@ import { Apple, Monitor, Download } from "lucide-react";
 //
 //   NEXT_PUBLIC_DESKTOP_APP_URL_MAC=https://.../DelegationDoer.dmg
 //   NEXT_PUBLIC_DESKTOP_APP_URL_WIN=https://.../DelegationDoer-Setup.exe
+//   NEXT_PUBLIC_DESKTOP_APP_URL_WIN_PREVIOUS=https://.../DelegationDoer-Setup-prev.exe
 //
 // If both are empty, the platform's button is disabled with a "Coming soon".
 
 const FALLBACK_WIN_URL =
   "https://hbmggvsmmilxvsoxcneh.supabase.co/storage/v1/object/public/desktop-app/DelegationDoer%20Setup%200.1.1.exe";
+// Previous Windows build, kept as a fallback download in case the latest
+// release regresses. The older installer stays in the Supabase bucket.
+const FALLBACK_WIN_URL_PREVIOUS =
+  "https://hbmggvsmmilxvsoxcneh.supabase.co/storage/v1/object/public/desktop-app/DelegationDoer%20Setup%200.1.0.exe";
 const FALLBACK_MAC_URL = "";
 
 type OS = "mac" | "win" | "other";
@@ -33,6 +38,7 @@ export function DesktopAppSection() {
 
   const macUrl = process.env.NEXT_PUBLIC_DESKTOP_APP_URL_MAC || FALLBACK_MAC_URL;
   const winUrl = process.env.NEXT_PUBLIC_DESKTOP_APP_URL_WIN || FALLBACK_WIN_URL;
+  const prevWinUrl = process.env.NEXT_PUBLIC_DESKTOP_APP_URL_WIN_PREVIOUS || FALLBACK_WIN_URL_PREVIOUS;
 
   return (
     <section className="card p-4">
@@ -65,6 +71,15 @@ export function DesktopAppSection() {
         choose Open. On Windows, click "More info" → "Run anyway." The app is unsigned because
         it's an internal tool.
       </p>
+
+      {prevWinUrl && (
+        <p className="text-[11px] text-muted mt-2">
+          Trouble with the latest version?{" "}
+          <a href={prevWinUrl} className="underline underline-offset-2 hover:text-ink">
+            Download the previous Windows build (0.1.0)
+          </a>
+        </p>
+      )}
     </section>
   );
 }

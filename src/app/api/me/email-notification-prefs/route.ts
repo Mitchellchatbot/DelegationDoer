@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
-import { visibleAccountIdsFor } from "@/lib/inbox-access";
+import { visibleAccountIdsFor, getAssignmentsForUser } from "@/lib/inbox-access";
 import { listAccounts } from "@/lib/missive-client";
 
 export const dynamic = "force-dynamic";
@@ -38,7 +38,7 @@ export async function GET() {
     // Without this, all three collapsed into "no inboxes assigned" which
     // misdirected admins to ask themselves for access.
     let missiveError: string | null = null;
-    const [visible, accounts, prefsRes] = await Promise.all([
+    const [visible, accounts, prefsRes, myAssignments] = await Promise.all([
       visibleAccountIdsFor(me),
       listAccounts().catch((err) => {
         missiveError = err instanceof Error ? err.message : "missive fetch failed";
@@ -47,13 +47,17 @@ export async function GET() {
       supabase
         .from("user_email_notification_prefs")
         .select("missive_account_id, enabled")
-        .eq("user_id", userId)
+        .eq("user_id", userId),
+      // The user's OWN inboxes (directly assigned), distinct from ones they
+      // merely oversee as a dept head / leader via visibleAccountIdsFor.
+      getAssignmentsForUser(userId)
     ]);
 
     const prefMap = new Map<string, boolean>();
     for (const r of ((prefsRes.data ?? []) as PrefRow[])) {
       prefMap.set(r.missive_account_id, r.enabled);
     }
+    const assignedToMe = new Set(myAssignments.map((a) => a.missiveAccountId));
 
     // Filter Missive accounts to ones the user can see.
     const allowed = accounts.filter((a) => visible === null || visible.has(a.id));
@@ -62,9 +66,13 @@ export async function GET() {
       accountId: a.id,
       email: a.email,
       label: a.display_name ?? null,
-      // Default to true ("not yet decided" reads as opted-in once they
-      // finish onboarding). The modal Save persists explicit choices.
-      enabled: prefMap.get(a.id) ?? false
+      // Persisted opt-in state. Absent (never decided) reads as off — the
+      // modal Save writes explicit choices.
+      enabled: prefMap.get(a.id) ?? false,
+      // Whether this is one of the user's own inboxes. The onboarding picker
+      // pre-checks only these by default, so a dept head / leader isn't
+      // silently opted into a teammate's inbox they can merely see.
+      assignedToMe: assignedToMe.has(a.id)
     }));
 
     const emptyReason: "missive_error" | "no_accounts" | "no_assignments" | null =

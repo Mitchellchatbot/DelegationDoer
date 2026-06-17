@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import {
-  CalendarDays, ChevronLeft, ChevronRight, Loader2, Plus, ExternalLink
+  CalendarDays, CalendarClock, ChevronLeft, ChevronRight, Loader2, Plus, ExternalLink, Video
 } from "lucide-react";
 import { PageHero } from "@/components/PageHero";
 import { cn } from "@/lib/utils";
@@ -165,11 +165,26 @@ export default function SchedulePage() {
       )}
 
       {!notConnected && !needsReconnect && events !== null && (
-        <WeekGrid
-          weekDays={weekDays}
-          events={events}
-          onSlotClick={(dayIdx, hour) => setCreatingFor({ dayIdx, hour })}
-        />
+        // Two equal columns on lg+: the week grid (min-w-0 lets it reflow
+        // narrower) on the left and the Upcoming-meetings panel on the right,
+        // each ~50%. Below lg they stack, grid then meetings.
+        <div className="lg:grid lg:gap-5 lg:grid-cols-2 space-y-4 lg:space-y-0">
+          <div className="min-w-0">
+            <WeekGrid
+              weekDays={weekDays}
+              events={events}
+              onSlotClick={(dayIdx, hour) => setCreatingFor({ dayIdx, hour })}
+            />
+          </div>
+          <aside>
+            <div className="sticky top-4 space-y-2">
+              <div className="text-[11px] font-semibold uppercase tracking-wide text-ink/55 inline-flex items-center gap-1.5">
+                <CalendarClock className="w-3.5 h-3.5" /> Upcoming meetings
+              </div>
+              <MeetingsPanel />
+            </div>
+          </aside>
+        </div>
       )}
 
       {creatingFor && (
@@ -182,6 +197,81 @@ export default function SchedulePage() {
             load();
           }}
         />
+      )}
+    </div>
+  );
+}
+
+// Right-rail panel listing the signed-in user's upcoming meetings for the
+// next 7 days, pulled from /api/calendar/meetings (client-matched, capped).
+// Deliberately "next 7 days from now" regardless of the week being viewed —
+// matches the Home "Upcoming meetings" tile that links here. Mounted only in
+// the connected state, so the fetch never fires when Calendar isn't linked.
+interface Meeting {
+  id: string;
+  summary: string;
+  startISO: string;
+  htmlLink: string;
+  hangoutLink: string | null;
+  clientId: string | null;
+  clientName: string | null;
+  guest: string | null;
+}
+
+function MeetingsPanel() {
+  // null = still loading; [] = connected but nothing upcoming.
+  const [meetings, setMeetings] = useState<Meeting[] | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const res = await fetch("/api/calendar/meetings?days=7", { cache: "no-store" });
+        const data = await res.json();
+        if (!alive) return;
+        setMeetings(res.ok ? ((data.meetings ?? []) as Meeting[]) : []);
+      } catch {
+        if (alive) setMeetings([]);
+      }
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  return (
+    <div className="rounded-2xl border border-slate-200/70 bg-white shadow-soft p-3">
+      {meetings === null ? (
+        <div className="text-sm text-ink/55 inline-flex items-center gap-2 px-1 py-2">
+          <Loader2 className="w-4 h-4 animate-spin" /> Loading…
+        </div>
+      ) : meetings.length === 0 ? (
+        <div className="text-[12px] text-ink/55 px-1 py-2">
+          No meetings in the next 7 days.
+        </div>
+      ) : (
+        <div className="space-y-1.5">
+          {meetings.map((m) => (
+            <a
+              key={m.id}
+              href={m.htmlLink}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="block rounded-lg border border-slate-200/70 px-2.5 py-2 hover:bg-slate-50 transition-colors"
+            >
+              <div className="flex items-center gap-1.5">
+                <span className="text-[11px] font-semibold tabular-nums text-accent shrink-0">
+                  {fmtWhen(m.startISO)}
+                </span>
+                {m.hangoutLink && <Video className="w-3 h-3 text-emerald-600 shrink-0" />}
+              </div>
+              <div className="text-[12px] font-medium text-ink leading-tight mt-0.5 truncate">
+                {m.clientName ?? m.summary}
+              </div>
+              {m.guest && (
+                <div className="text-[10px] text-ink/50 leading-tight truncate">{m.guest}</div>
+              )}
+            </a>
+          ))}
+        </div>
       )}
     </div>
   );
@@ -519,4 +609,17 @@ function fmtTime(d: Date): string {
   const ampm = h < 12 ? "am" : "pm";
   const display = h % 12 === 0 ? 12 : h % 12;
   return m === 0 ? `${display}${ampm}` : `${display}:${pad(m)}${ampm}`;
+}
+// Compact "Today · 3pm" / "Tmrw · 9:30am" / "Wed · 9am" label for the
+// upcoming-meetings rail.
+function fmtWhen(iso: string): string {
+  const d = new Date(iso);
+  const now = new Date();
+  const startOfDay = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const dayDiff = Math.round((startOfDay(d) - startOfDay(now)) / 86_400_000);
+  const day =
+    dayDiff === 0 ? "Today" :
+    dayDiff === 1 ? "Tmrw" :
+    d.toLocaleDateString(undefined, { weekday: "short" });
+  return `${day} · ${fmtTime(d)}`;
 }

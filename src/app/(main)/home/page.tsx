@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { isLeader } from "@/lib/auth";
+import { isApprover } from "@/lib/email-approvers";
 import {
   getTodayTasksForUser,
   getDayBookendStatus,
@@ -9,8 +10,10 @@ import {
   getLeaderPulse,
   getStalledTaskCount,
   getLeaderOpenTasks,
-  getWorstClientsByHealth
+  getWorstClientsByHealth,
+  getTodaysFocus
 } from "@/lib/home-data";
+import { HomeTodaysFocus } from "@/components/HomeTodaysFocus";
 import { HomeWorker } from "@/components/HomeWorker";
 import { HomeLeaderHero } from "@/components/HomeLeaderHero";
 import { HomeSeoBriefs } from "@/components/HomeSeoBriefs";
@@ -79,6 +82,24 @@ export default async function HomePage() {
       getLeaderOpenTasks(userId, 30)
     ]);
 
+    // Today's Focus — the leader/head triage card. Reuses the counts we
+    // already fetched (stalled + the worst-by-health rows) and computes
+    // the rest (approvals, overdue, team-offline, meetings, routing) from
+    // the same primitives the badge endpoint uses.
+    // At-risk client names for the Clients tile's flip side (reuses the
+    // already-fetched worst-by-health rows; no extra query).
+    const atRiskList = worstByHealth
+      .filter((r) => r.label === "at_risk" || r.label === "shaky")
+      .map((r) => ({ name: r.name, label: r.label as "at_risk" | "shaky" }));
+
+    const focus = await getTodaysFocus({
+      canApprove: isApprover({ name: me.name, role: me.role, isAdmin: me.isAdmin }),
+      scopedDepartmentIds,
+      isLeaderRole,
+      hourLocal,
+      atRiskClients: atRiskList.length
+    });
+
     return (
       <div className="space-y-4 max-w-7xl mx-auto">
         {dayBookends && <DayBookends status={dayBookends} hourLocal={hourLocal} />}
@@ -90,6 +111,11 @@ export default async function HomePage() {
           briefs={seoBriefs.length}
           sitesAtRisk={worstByHealth.length}
         />
+        {/* Today's Focus — a compact tile strip right under the greeting
+            so leaders/heads see "what's waiting on me" at a glance. The
+            upcoming-meetings tile inside it is fetched client-side from
+            Google Calendar. */}
+        <HomeTodaysFocus focus={focus} atRiskList={atRiskList} />
         {/* Sites needing attention — pinned right under the hero so it's
             the first content every role lands on. */}
         <HomeClientHealthTable rows={worstByHealth} />

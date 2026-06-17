@@ -20,7 +20,8 @@ const FALLBACK_WIN_URL =
 // release regresses. The older installer stays in the Supabase bucket.
 const FALLBACK_WIN_URL_PREVIOUS =
   "https://hbmggvsmmilxvsoxcneh.supabase.co/storage/v1/object/public/desktop-app/DelegationDoer%20Setup%200.1.0.exe";
-const FALLBACK_MAC_URL = "";
+const FALLBACK_MAC_URL =
+  "https://hbmggvsmmilxvsoxcneh.supabase.co/storage/v1/object/public/desktop-app/DelegationDoer-0.1.1-arm64.dmg";
 
 type OS = "mac" | "win" | "other";
 

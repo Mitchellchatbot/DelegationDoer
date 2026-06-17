@@ -246,17 +246,28 @@ export async function POST(req: NextRequest) {
       weekday: "long", month: "short", day: "numeric", timeZone: "UTC"
     });
     const text = `📝 ${meRow.name ?? "Someone"} submitted their EOD for ${friendlyDate}`;
+    // Slack caps section text at 3000 chars and a message at 50 blocks
+    // (same constraint the recap runner clamps for). Emitting each field
+    // as its own clamped section keeps us under both limits — joining
+    // everything into a single section overflowed 3000 chars on busy days
+    // (lots of client work + long fields) and Slack rejected the whole DM
+    // with invalid_blocks.
+    const clamp = (s: string) => (s.length > 2990 ? s.slice(0, 2987) + "…" : s);
+    const headerText = `📝 EOD · ${meRow.name ?? "Someone"} · ${friendlyDate}`;
     const blocks: unknown[] = [
       {
         type: "header",
-        text: { type: "plain_text", text: `📝 EOD · ${meRow.name ?? "Someone"} · ${friendlyDate}` }
+        // plain_text headers cap at 150 chars.
+        text: { type: "plain_text", text: headerText.slice(0, 150) }
       }
     ];
     if (sections.length > 0) {
-      blocks.push({
-        type: "section",
-        text: { type: "mrkdwn", text: sections.join("\n\n") }
-      });
+      for (const s of sections) {
+        blocks.push({
+          type: "section",
+          text: { type: "mrkdwn", text: clamp(s) }
+        });
+      }
     } else {
       blocks.push({
         type: "section",

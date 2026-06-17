@@ -1064,3 +1064,159 @@ export async function getNeedsYouCounts(args: {
     inboxesUnread: args.inboxesUnread ?? 0
   };
 }
+
+// ────────────────────────────────────────────────────────────────────────
+// Today's Focus — at-a-glance triage card for /home (leaders + heads)
+// ────────────────────────────────────────────────────────────────────────
+
+// One number per priority lane. The card hides any lane that's zero, so
+// these are just counts — the component owns labels/links/icons.
+export interface TodaysFocus {
+  approvals: number;        // pending email drafts awaiting the caller's eye
+  overdue: number;          // tasks past due (for the breakdown tooltip)
+  stalled: number;          // open assigned tasks idle 7+ days (tooltip)
+  overdueOrStalled: number; // deduped union of the two — the tile number
+  atRiskClients: number;    // clients reading at_risk / shaky
+  meetings: number;         // tl;dv meetings with pending action-item drafts
+  unassigned: number;       // inbound threads still needing manual routing
+}
+
+// Exact "needs a push" task tally for the focus tile: tasks that are
+// overdue OR stalled, deduped — a task that's both past-due AND idle 7+
+// days counts once (`total` is a single OR-count, not overdue+stalled).
+// The individual tallies are returned too (they overlap) for the tooltip.
+// Scoped to the caller's team via department membership for heads; leaders
+// see all. Three head-count queries, no rows transferred.
+async function getOverdueStalledBreakdown(
+  scopedDepartmentIds: string[] | null
+): Promise<{ overdue: number; stalled: number; total: number }> {
+  const supabase = getSupabaseAdmin();
+  const now = new Date().toISOString();
+  const cutoff = new Date(Date.now() - 7 * 86_400_000).toISOString();
+
+  let assigneeFilter: string[] | null = null;
+  if (scopedDepartmentIds && scopedDepartmentIds.length > 0) {
+    const { data: members } = await supabase
+      .from("department_members")
+      .select("user_id")
+      .in("department_id", scopedDepartmentIds);
+    assigneeFilter = Array.from(new Set(
+      ((members ?? []) as { user_id: string }[]).map((m) => m.user_id)
+    ));
+    if (assigneeFilter.length === 0) return { overdue: 0, stalled: 0, total: 0 };
+  }
+
+  // Shared base predicate: open, non-draft, assigned tasks.
+  const base = () => {
+    const q = supabase
+      .from("tasks")
+      .select("id", { count: "exact", head: true })
+      .eq("is_draft", false)
+      .neq("status", "done")
+      .not("assignee_id", "is", null);
+    return assigneeFilter ? q.in("assignee_id", assigneeFilter) : q;
+  };
+
+  const [overdueRes, stalledRes, unionRes] = await Promise.all([
+    base().lt("due_date", now),
+    base().lt("last_activity_at", cutoff),
+    // The OR makes this the deduped union — Postgres counts each row once.
+    base().or(`due_date.lt.${now},last_activity_at.lt.${cutoff}`)
+  ]);
+
+  return {
+    overdue: overdueRes.count ?? 0,
+    stalled: stalledRes.count ?? 0,
+    total: unionRes.count ?? 0
+  };
+}
+
+// Count tl;dv meetings that still have at least one pending action-item
+// draft. Mirrors /api/integrations/tldv/meetings: pull the intake log,
+// then check which of its task ids are still pending drafts. Heads only
+// count meetings whose pending drafts fall in a department they head.
+async function countPendingMeetings(
+  scopedDepartmentIds: string[] | null
+): Promise<number> {
+  const supabase = getSupabaseAdmin();
+  const { data: logs } = await supabase
+    .from("tldv_intake_log")
+    .select("meeting_id, task_ids")
+    .order("processed_at", { ascending: false })
+    .limit(100);
+  const rows = (logs ?? []) as Array<{ meeting_id: string; task_ids: string[] | null }>;
+  const allTaskIds = Array.from(new Set(
+    rows.flatMap((r) => r.task_ids ?? [])
+  ));
+  if (allTaskIds.length === 0) return 0;
+
+  // A meeting reads as "pending" if any of its spawned tasks is still a
+  // draft — same rule as /api/integrations/tldv/meetings (is_draft alone;
+  // approval clears the flag). No status filter, so the count always
+  // matches what the Meetings approval tab actually shows.
+  let q = supabase
+    .from("tasks")
+    .select("id, department_id")
+    .in("id", allTaskIds)
+    .eq("is_draft", true);
+  if (scopedDepartmentIds && scopedDepartmentIds.length > 0) {
+    q = q.in("department_id", scopedDepartmentIds);
+  }
+  const { data: pending } = await q;
+  const pendingIds = new Set(
+    ((pending ?? []) as Array<{ id: string }>).map((t) => t.id)
+  );
+  if (pendingIds.size === 0) return 0;
+
+  return rows.filter((r) => (r.task_ids ?? []).some((id) => pendingIds.has(id))).length;
+}
+
+// Count inbound threads the auto-routing pipeline bailed on (no task yet,
+// flagged for review). Leaders-only — these threads have no department,
+// so heads have nothing to act on. Mirrors /api/routing-review.
+async function countNeedsRouting(): Promise<number> {
+  const supabase = getSupabaseAdmin();
+  const { count } = await supabase
+    .from("routing_decisions")
+    .select("id", { count: "exact", head: true })
+    .eq("needs_review", true)
+    .is("task_id", null);
+  return count ?? 0;
+}
+
+// Aggregate the leader/head triage counts in one shot. Reuses the same
+// primitives the rest of /home and the badge endpoint already use, so the
+// numbers stay consistent. `stalled` and `atRiskClients` are passed in
+// because the page already fetched them (getStalledTaskCount +
+// getWorstClientsByHealth) — no point re-querying. Every lane is
+// best-effort: a single unreachable signal degrades to 0 instead of
+// blanking the card.
+export async function getTodaysFocus(args: {
+  canApprove: boolean;
+  scopedDepartmentIds: string[] | null; // null = leader sees all
+  isLeaderRole: boolean;                 // needs-routing is leaders-only
+  hourLocal: number;
+  atRiskClients: number;                 // reuse from worstByHealth
+}): Promise<TodaysFocus> {
+  const [needsYou, meetings, unassigned, tasks] = await Promise.all([
+    getNeedsYouCounts({
+      canApprove: args.canApprove,
+      visibleDepartmentIds: args.scopedDepartmentIds,
+      hourLocal: args.hourLocal
+    }).catch(() => ({ approvalsPending: 0, inboxesUnread: 0, peopleEodPending: 0 })),
+    countPendingMeetings(args.scopedDepartmentIds).catch(() => 0),
+    args.isLeaderRole ? countNeedsRouting().catch(() => 0) : Promise.resolve(0),
+    getOverdueStalledBreakdown(args.scopedDepartmentIds)
+      .catch(() => ({ overdue: 0, stalled: 0, total: 0 }))
+  ]);
+
+  return {
+    approvals: needsYou.approvalsPending,
+    overdue: tasks.overdue,
+    stalled: tasks.stalled,
+    overdueOrStalled: tasks.total,
+    atRiskClients: args.atRiskClients,
+    meetings,
+    unassigned
+  };
+}

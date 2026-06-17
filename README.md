@@ -42,6 +42,30 @@ The widget is frameless, 380×520, always-on-top, snaps to the bottom-right of t
 
 To ship a real tray icon, drop a 16×16 (or 22×22 retina) `iconTemplate.png` into `electron/assets/`. Until then the tray uses an empty image.
 
+## Install the desktop widget (macOS, end users)
+
+The packaged macOS build is an unsigned `.dmg` (arm64 / Apple Silicon) hosted in the Supabase
+`desktop-app` bucket and linked from **Settings → Desktop widget**.
+
+1. **Download** — in DelegationDoer, go to **Settings → Desktop widget → Mac (.dmg)**.
+2. **Install** — open the `.dmg` and drag **DelegationDoer** into **Applications**.
+3. **First launch (unsigned)** — open it from Applications; macOS blocks it. Right-click the app →
+   **Open → Open**. If still blocked: **System Settings → Privacy & Security → Open Anyway**. One-time.
+4. **Sign in** — the widget keeps its own session. On the Sign-in card click **"Sign in here →"**,
+   log in, and it returns to the live view.
+5. **Allow notifications** — choose **Allow** when prompted. macOS delivers them via the bundled
+   **terminal-notifier** helper, so they appear under that name in System Settings → Notifications.
+
+Once running: drag the floating bubble to reposition (it snaps to edges); a new email pops a system
+notification and an in-widget card — clicking either opens that thread in the browser. Click the
+bubble to expand the panel (tasks, kudos, mentions, presence, clock); the menu-bar icon has
+Show/Hide, Open full app, Quit.
+
+Notes: the app is unsigned, so notifications are attributed to **terminal-notifier**, not
+DelegationDoer. The build is arm64 — Intel Macs would need a universal/x64 build. To cut a new build,
+run `npm run electron:build:mac` **on macOS** and upload the resulting
+`dist-electron/DelegationDoer-<version>-arm64.dmg` to the `desktop-app` bucket.
+
 ## Connecting the real database
 
 `.env.local` is pre-filled with your Supabase project ref + anon key. Replace `PASSWORD` in `DATABASE_URL` with the database password from Supabase → Project Settings → Database, then:

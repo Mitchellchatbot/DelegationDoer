@@ -23,6 +23,7 @@ import { HomePulseCard } from "@/components/HomePulseCard";
 import { HomeChartsRow } from "@/components/HomeChartsRow";
 import { LeaderTodoList } from "@/components/LeaderTodoList";
 import { DayBookends } from "@/components/DayBookends";
+import { nowInTz, DEFAULT_TZ } from "@/lib/shift";
 
 export const dynamic = "force-dynamic";
 
@@ -44,7 +45,13 @@ export default async function HomePage() {
 
   const isLeaderRole = isLeader(me) || !!me.isAdmin;
   const isHead = me.role === "department_head";
-  const hourLocal = new Date().getHours();
+  // Anchor to the user's work timezone, not the server's. This page is
+  // server-rendered (force-dynamic), so new Date().getHours() returned
+  // the server's wall-clock hour — wrong for everyone outside the
+  // server's zone. Mirrors the shift system's resolution so /home stays
+  // consistent with SOD/EOD shift detection.
+  const tz = me.workTimezone || DEFAULT_TZ;
+  const hourLocal = nowInTz(tz).hh;
 
   // Day Bookends — only for people who actually submit SOD/EOD.
   // Leaders + stealth admins don't, and anyone with the per-user
@@ -102,7 +109,7 @@ export default async function HomePage() {
 
     return (
       <div className="space-y-4 max-w-7xl mx-auto">
-        {dayBookends && <DayBookends status={dayBookends} hourLocal={hourLocal} />}
+        {dayBookends && <DayBookends status={dayBookends} hourLocal={hourLocal} tz={tz} />}
         <HomeLeaderHero
           meName={me.name}
           scopeLabel={scopeLabel}
@@ -146,7 +153,7 @@ export default async function HomePage() {
 
   return (
     <div className="space-y-4 max-w-5xl mx-auto">
-      {dayBookends && <DayBookends status={dayBookends} hourLocal={hourLocal} />}
+      {dayBookends && <DayBookends status={dayBookends} hourLocal={hourLocal} tz={tz} />}
       <HomeWorker meName={me.name} tasks={tasks} briefCount={seoBriefs.length} />
       <HomeClientHealthTable rows={worstByHealth} />
       <HomeEmailNotifications onboarded={me.emailNotificationsOnboarded === true} />

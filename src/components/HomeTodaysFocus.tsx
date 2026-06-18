@@ -2,8 +2,12 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { ClipboardCheck, AlertTriangle, Activity, CalendarClock, Video, CheckCircle2 } from "lucide-react";
+import {
+  ClipboardCheck, AlertTriangle, Activity, CalendarClock,
+  Mail, Video, Inbox, Hourglass, CheckCircle2
+} from "lucide-react";
 import type { TodaysFocus } from "@/lib/home-data";
+import { HEALTH_META } from "@/lib/client-health";
 import { cn } from "@/lib/utils";
 
 // "Today's Focus" — the leader/head triage strip on /home, sitting just
@@ -15,35 +19,35 @@ import { cn } from "@/lib/utils";
 //   - Upcoming meetings  = next 7 days of client meetings (Google Calendar)
 //
 // Every tile is a flip card: a count by default, flipping on hover/focus to
-// reveal the detail behind the number (Approvals → emails/meetings/routing;
-// Overdue → overdue/stalled; Clients → the at-risk client names; Meetings →
-// the meeting list). Clicking a tile opens the relevant page. The first
-// three counts come from server props; the meetings tile is fetched
-// client-side so it never adds a Google round-trip to the server render.
-// Tiles at zero (or a disconnected calendar) are dropped; when everything's
-// clear we show a quiet success line.
+// reveal the detail behind the number. The reverse is a frosted glass panel
+// whose rows cascade in as the card turns. The first three counts come from
+// server props; the meetings tile is fetched client-side so it never adds a
+// Google round-trip to the server render. Tiles at zero (or a disconnected
+// calendar) are dropped; when everything's clear we show a quiet success line.
 
 type Tone = "rose" | "amber" | "indigo" | "emerald";
 
+// Front icon chip (soft tint).
 const TONE: Record<Tone, string> = {
   rose:    "bg-rose-50 text-rose-600",
   amber:   "bg-amber-50 text-amber-600",
   indigo:  "bg-indigo-50 text-indigo-600",
   emerald: "bg-emerald-50 text-emerald-600"
 };
-// Accent text for back-face values.
-const TONE_TEXT: Record<Tone, string> = {
-  rose:    "text-rose-600",
-  amber:   "text-amber-600",
-  indigo:  "text-indigo-600",
-  emerald: "text-emerald-700"
+// Back-face row icon + value accents.
+const TONE_ICON: Record<Tone, string> = {
+  rose: "text-rose-500", amber: "text-amber-500", indigo: "text-indigo-500", emerald: "text-emerald-500"
 };
-// Tint for the back panel, keyed by the same tone.
-const TONE_BACK: Record<Tone, string> = {
-  rose:    "border-rose-200/60 bg-rose-50/40",
-  amber:   "border-amber-200/60 bg-amber-50/40",
-  indigo:  "border-indigo-200/60 bg-indigo-50/40",
-  emerald: "border-emerald-200/70 bg-emerald-50/40"
+const TONE_VALUE: Record<Tone, string> = {
+  rose: "text-rose-700", amber: "text-amber-700", indigo: "text-indigo-700", emerald: "text-emerald-700"
+};
+// Frosted-glass back panel: a soft tone→white gradient + inset ring, keyed
+// by the same tone. Mirrors the gradient/blur idiom used elsewhere on /home.
+const TONE_BACK_GLASS: Record<Tone, string> = {
+  rose:    "from-rose-50/80 via-white/70 to-white/60 ring-rose-200/50",
+  amber:   "from-amber-50/80 via-white/70 to-white/60 ring-amber-200/50",
+  indigo:  "from-indigo-50/80 via-white/70 to-white/60 ring-indigo-200/50",
+  emerald: "from-emerald-50/80 via-white/70 to-white/60 ring-emerald-200/50"
 };
 
 interface MeetingLite {
@@ -63,7 +67,8 @@ interface Tile {
   href: string;
   icon: React.ReactNode;
   tone: Tone;
-  back: React.ReactNode;
+  // Inner content of each back-face row; FlipTile lays them out + animates.
+  backRows: React.ReactNode[];
 }
 
 export function HomeTodaysFocus({
@@ -110,11 +115,11 @@ export function HomeTodaysFocus({
       href: "/approvals",
       icon: <ClipboardCheck className="w-4 h-4" />,
       tone: "indigo",
-      back: countRows([
-        [focus.approvals, "Emails"],
-        [focus.meetings, "Meetings"],
-        [focus.unassigned, "Routing"]
-      ], "indigo")
+      backRows: ledgerRows("indigo", [
+        { n: focus.approvals, label: "Emails", icon: <Mail className="w-3.5 h-3.5" /> },
+        { n: focus.meetings, label: "Meetings", icon: <Video className="w-3.5 h-3.5" /> },
+        { n: focus.unassigned, label: "Routing", icon: <Inbox className="w-3.5 h-3.5" /> }
+      ])
     },
     {
       key: "overdue",
@@ -125,10 +130,10 @@ export function HomeTodaysFocus({
       href: "/tasks",
       icon: <AlertTriangle className="w-4 h-4" />,
       tone: "amber",
-      back: countRows([
-        [focus.overdue, "Overdue"],
-        [focus.stalled, "Stalled 7+ days"]
-      ], "amber")
+      backRows: ledgerRows("amber", [
+        { n: focus.overdue, label: "Overdue", icon: <AlertTriangle className="w-3.5 h-3.5" /> },
+        { n: focus.stalled, label: "Stalled 7+ days", icon: <Hourglass className="w-3.5 h-3.5" /> }
+      ])
     },
     {
       key: "clients",
@@ -138,7 +143,7 @@ export function HomeTodaysFocus({
       href: "/clients",
       icon: <Activity className="w-4 h-4" />,
       tone: "rose",
-      back: clientRows(atRiskList)
+      backRows: clientRows(atRiskList)
     }
   ];
 
@@ -166,7 +171,7 @@ export function HomeTodaysFocus({
         href: "/schedule",
         icon: <CalendarClock className="w-4 h-4" />,
         tone: "emerald" as Tone,
-        back: meetingRows(meetings!)
+        backRows: meetingRows(meetings!)
       }]
     : visible;
 
@@ -181,10 +186,10 @@ export function HomeTodaysFocus({
   );
 }
 
-// Generic flip card: count on the front, `tile.back` on the reverse. Flips
-// on hover and keyboard focus; the whole tile links to its page. The 3D is
-// inline-styled (the rest of the strip uses no arbitrary CSS-property
-// utilities) so it's self-contained and robust.
+// Generic flip card: count on the front, the detail rows on a frosted-glass
+// reverse. Flips on hover and keyboard focus; the whole tile links to its
+// page. The 3D + the staggered row reveal are inline-styled (the strip uses
+// no arbitrary CSS-property utilities) so it's self-contained and robust.
 function FlipTile({ tile, reduceMotion }: { tile: Tile; reduceMotion: boolean }) {
   const [flipped, setFlipped] = useState(false);
   return (
@@ -201,7 +206,7 @@ function FlipTile({ tile, reduceMotion }: { tile: Tile; reduceMotion: boolean })
         style={{
           position: "relative",
           transformStyle: "preserve-3d",
-          transition: reduceMotion ? undefined : "transform .35s ease",
+          transition: reduceMotion ? undefined : "transform .42s cubic-bezier(.2,.7,.2,1)",
           transform: flipped ? "rotateY(180deg)" : undefined
         }}
       >
@@ -226,7 +231,7 @@ function FlipTile({ tile, reduceMotion }: { tile: Tile; reduceMotion: boolean })
           </div>
         </div>
 
-        {/* BACK — the detail, overlaid on the front's footprint. */}
+        {/* BACK — frosted glass panel; rows cascade in as the card turns. */}
         <div
           style={{
             position: "absolute",
@@ -236,86 +241,95 @@ function FlipTile({ tile, reduceMotion }: { tile: Tile; reduceMotion: boolean })
             WebkitBackfaceVisibility: "hidden"
           }}
           className={cn(
-            "rounded-xl border px-2.5 py-2 overflow-hidden flex flex-col justify-center gap-0.5",
-            TONE_BACK[tile.tone]
+            "rounded-xl px-2.5 py-2 overflow-hidden flex flex-col justify-center gap-1",
+            "bg-gradient-to-br backdrop-blur-sm ring-1 ring-inset shadow-soft",
+            TONE_BACK_GLASS[tile.tone]
           )}
         >
-          {tile.back}
+          {tile.backRows.map((row, i) => (
+            <div
+              key={i}
+              className="flex items-center gap-2 leading-tight"
+              style={
+                reduceMotion
+                  ? undefined
+                  : {
+                      opacity: flipped ? 1 : 0,
+                      transform: flipped ? "translateY(0)" : "translateY(4px)",
+                      transition: "opacity .28s ease, transform .28s ease",
+                      transitionDelay: flipped ? `${80 + i * 45}ms` : "0ms"
+                    }
+              }
+            >
+              {row}
+            </div>
+          ))}
         </div>
       </div>
     </Link>
   );
 }
 
-// ── back-face row builders ──────────────────────────────────────────────
+// ── back-face row builders (return the inner content of each row) ─────────
 
-// Breakdown rows: a tone-colored count + a muted label, dropping zeros.
-function countRows(parts: Array<[number, string]>, tone: Tone) {
-  const items = parts.filter(([n]) => n > 0);
-  return (
-    <>
-      {items.map(([n, label]) => (
-        <div key={label} className="flex items-center gap-2 leading-tight">
-          <span className={cn("text-[11px] font-bold tabular-nums w-5 text-right shrink-0", TONE_TEXT[tone])}>
-            {n}
-          </span>
-          <span className="text-[10px] text-ink/70 truncate">{label}</span>
-        </div>
-      ))}
-    </>
-  );
+// Metric breakdown: tone icon + label + right-aligned value. Drops zeros.
+function ledgerRows(
+  tone: Tone,
+  items: Array<{ n: number; label: string; icon: React.ReactNode }>
+): React.ReactNode[] {
+  return items
+    .filter((it) => it.n > 0)
+    .map((it) => (
+      <>
+        <span className={cn("shrink-0", TONE_ICON[tone])}>{it.icon}</span>
+        <span className="text-[10.5px] font-medium text-ink/70 truncate flex-1 min-w-0">{it.label}</span>
+        <span className={cn("text-[12px] font-bold tabular-nums shrink-0", TONE_VALUE[tone])}>{it.n}</span>
+      </>
+    ));
 }
 
-const CLIENT_CHIP: Record<AtRiskClient["label"], string> = {
-  at_risk: "bg-rose-50 text-rose-600 border-rose-200/70",
-  shaky:   "bg-amber-50 text-amber-600 border-amber-200/70"
-};
-const CLIENT_CHIP_LABEL: Record<AtRiskClient["label"], string> = {
-  at_risk: "at-risk",
-  shaky:   "shaky"
-};
-
-// At-risk client names + a small label chip. Capped at 3 lines.
-function clientRows(list: AtRiskClient[]) {
+// At-risk client names + the app's standard health pill. Capped at 3 lines.
+function clientRows(list: AtRiskClient[]): React.ReactNode[] {
   const cap = list.length > 3 ? 2 : 3;
   const shown = list.slice(0, cap);
   const extra = list.length - shown.length;
-  return (
-    <>
-      {shown.map((c, i) => (
-        <div key={i} className="flex items-center gap-1.5 leading-tight">
-          <span className="text-[10px] text-ink/75 truncate flex-1 min-w-0">{c.name}</span>
-          <span className={cn("text-[8.5px] font-semibold px-1 py-px rounded border shrink-0", CLIENT_CHIP[c.label])}>
-            {CLIENT_CHIP_LABEL[c.label]}
-          </span>
-        </div>
-      ))}
-      {extra > 0 && <div className="text-[9px] text-ink/45 leading-tight">+{extra} more</div>}
-    </>
-  );
+  const rows: React.ReactNode[] = shown.map((c) => {
+    const meta = HEALTH_META[c.label];
+    return (
+      <>
+        <span className="text-[11px] font-medium text-ink/80 truncate flex-1 min-w-0">{c.name}</span>
+        <span className={cn(
+          "shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[8.5px] font-semibold border",
+          meta.bg, meta.text, meta.border
+        )}>
+          <span className={cn("w-1 h-1 rounded-full", meta.dot)} />
+          {meta.label}
+        </span>
+      </>
+    );
+  });
+  if (extra > 0) rows.push(<span className="text-[9px] text-ink/40 font-medium">+{extra} more</span>);
+  return rows;
 }
 
 // Upcoming meetings: time + client + a Meet dot. Capped at 3 lines.
-function meetingRows(meetings: MeetingLite[]) {
+function meetingRows(meetings: MeetingLite[]): React.ReactNode[] {
   const cap = meetings.length > 3 ? 2 : 3;
   const shown = meetings.slice(0, cap);
   const extra = meetings.length - shown.length;
-  return (
+  const rows: React.ReactNode[] = shown.map((m) => (
     <>
-      {shown.map((m, i) => (
-        <div key={i} className="flex items-center gap-1.5 leading-tight">
-          <span className="text-[10px] font-semibold tabular-nums text-emerald-700 shrink-0">
-            {fmtWhenShort(m.startISO)}
-          </span>
-          <span className="text-[10px] text-ink/70 truncate flex-1 min-w-0">
-            {m.clientName ?? m.summary}
-          </span>
-          {m.hangoutLink && <Video className="w-2.5 h-2.5 text-emerald-600 shrink-0" />}
-        </div>
-      ))}
-      {extra > 0 && <div className="text-[9px] text-ink/45 leading-tight">+{extra} more</div>}
+      <span className={cn("text-[10px] font-semibold tabular-nums shrink-0", TONE_VALUE.emerald)}>
+        {fmtWhenShort(m.startISO)}
+      </span>
+      <span className="text-[10px] text-ink/75 truncate flex-1 min-w-0">
+        {m.clientName ?? m.summary}
+      </span>
+      {m.hangoutLink && <Video className="w-2.5 h-2.5 text-emerald-600 shrink-0" />}
     </>
-  );
+  ));
+  if (extra > 0) rows.push(<span className="text-[9px] text-ink/40 font-medium">+{extra} more</span>);
+  return rows;
 }
 
 // Compact "Today 3p" / "Wed 9:30a" label for the cramped back face.

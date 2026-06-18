@@ -237,6 +237,9 @@ export default function WidgetPage() {
   const seenKudosRef = useRef<Set<string>>(new Set());
   const seenNotifIdsRef = useRef<Set<string>>(new Set());
   const seenEmailIdsRef = useRef<Set<string>>(new Set());
+  // Client meetings we've already fired a ~30-min reminder for this session.
+  // Belt-and-suspenders on top of the server-side dedup table.
+  const seenMeetingEventIdsRef = useRef<Set<string>>(new Set());
   // First successful poll only primes the seen* sets — it must NOT fire OS
   // notifications, or every pre-existing task/mention/email would toast on
   // launch (the old main.js used `lastTaskIds.size > 0` for the same reason).
@@ -288,13 +291,14 @@ export default function WidgetPage() {
 
       // The rest are independent reads — safe to run in parallel now that the
       // session cookie is already fresh.
-      const [kudosRes, eomRes, bdayRes, eodRes, clockRes, emailRes] = await Promise.all([
+      const [kudosRes, eomRes, bdayRes, eodRes, clockRes, emailRes, meetingRes] = await Promise.all([
         fetch("/api/widget/kudos", { cache: "no-store" }),
         fetch("/api/eom", { cache: "no-store" }),
         fetch("/api/widget/birthdays", { cache: "no-store" }),
         fetch("/api/widget/eod-reminder", { cache: "no-store" }),
         fetch("/api/clock", { cache: "no-store" }),
-        fetch("/api/email-notifications?limit=5", { cache: "no-store" })
+        fetch("/api/email-notifications?limit=5", { cache: "no-store" }),
+        fetch("/api/widget/meeting-reminder", { cache: "no-store" })
       ]);
       if (clockRes.ok) {
         const c = await clockRes.json().catch(() => null);
@@ -382,6 +386,25 @@ export default function WidgetPage() {
           });
       }
       notifsPrimedRef.current = true;
+
+      // Client meeting starting in ~30 min → native heads-up that deep-links
+      // to the Schedule tab (the prep panel auto-generates the brief on
+      // arrival). The server dedups per (user, event), so each meeting fires
+      // exactly once; we intentionally do NOT gate on notifsPrimedRef —
+      // opening the widget shortly before a call should still warn you.
+      if (meetingRes.ok) {
+        const md = await meetingRes.json().catch(() => ({}));
+        const dueMeetings = (md?.meetings ?? []) as Array<{
+          id: string; clientName: string | null; summary: string;
+        }>;
+        const freshMeetings = dueMeetings.filter((m) => !seenMeetingEventIdsRef.current.has(m.id));
+        if (notify) {
+          for (const m of freshMeetings)
+            notify({ title: "Client meeting in ~30 min", body: m.clientName ?? m.summary, path: "/schedule" });
+        }
+        if (freshMeetings.length > 0) playAlertSound();
+        for (const m of freshMeetings) seenMeetingEventIdsRef.current.add(m.id);
+      }
 
       seenIdsRef.current = new Set(unackedNow.map((t) => t.id));
       seenKudosRef.current = new Set(nextKudos.map((k) => k.id));

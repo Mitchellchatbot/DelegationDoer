@@ -18,9 +18,15 @@ import type { DayBookendStatus } from "@/lib/home-data";
 interface Props {
   status: DayBookendStatus;
   hourLocal: number;
+  // Viewer's work timezone (IANA). The page is server-rendered, so the
+  // runtime default zone is the server's, not the user's — submitted
+  // times must be formatted in this tz or they show shifted (e.g. a
+  // 7pm PKT submit rendering as 3pm). Falls back to the office default
+  // upstream, never the server zone.
+  tz: string;
 }
 
-export function DayBookends({ status, hourLocal }: Props) {
+export function DayBookends({ status, hourLocal, tz }: Props) {
   const bothDone = status.sod.submitted && status.eod.submitted;
   // Loudness threshold: SOD loud until 11am, EOD loud from 4pm. In the
   // overlap (11am–4pm) both are calm — neither is yelling for the
@@ -43,6 +49,7 @@ export function DayBookends({ status, hourLocal }: Props) {
           href="/sod"
           loud={sodLoud}
           submittedAt={status.sod.submittedAt}
+          tz={tz}
           icon={<Sunrise className="w-4 h-4" />}
           title="Start your day"
           prompt="Plan your day in 60 seconds"
@@ -53,6 +60,7 @@ export function DayBookends({ status, hourLocal }: Props) {
           href="/eod"
           loud={eodLoud}
           submittedAt={status.eod.submittedAt}
+          tz={tz}
           icon={<Moon className="w-4 h-4" />}
           title="Wrap your day"
           prompt="5 quick questions"
@@ -68,13 +76,14 @@ interface HalfProps {
   href: string;
   loud: boolean;
   submittedAt: string | null;
+  tz: string;
   icon: React.ReactNode;
   title: string;
   prompt: string;
   cta: string;
 }
 
-function Half({ side, href, loud, submittedAt, icon, title, prompt, cta }: HalfProps) {
+function Half({ side, href, loud, submittedAt, tz, icon, title, prompt, cta }: HalfProps) {
   const submitted = !!submittedAt;
   const tone = side === "sod"
     ? {
@@ -116,7 +125,7 @@ function Half({ side, href, loud, submittedAt, icon, title, prompt, cta }: HalfP
         </div>
         <div className="text-[13px] font-semibold text-ink truncate">
           {submitted
-            ? `Submitted at ${formatTime(submittedAt)}`
+            ? `Submitted at ${formatTime(submittedAt, tz)}`
             : prompt}
         </div>
       </div>
@@ -141,9 +150,17 @@ function Half({ side, href, loud, submittedAt, icon, title, prompt, cta }: HalfP
   );
 }
 
-function formatTime(iso: string | null): string {
+function formatTime(iso: string | null, tz: string): string {
   if (!iso) return "—";
   const d = new Date(iso);
   if (isNaN(d.getTime())) return "—";
-  return d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  // Fixed "en-US" locale + explicit timeZone so the rendered time is
+  // the viewer's wall clock regardless of the server's locale/zone. The
+  // caller validates tz, but guard anyway: an unknown IANA zone makes
+  // toLocaleTimeString throw, and a render helper must never throw.
+  try {
+    return d.toLocaleTimeString("en-US", { timeZone: tz, hour: "numeric", minute: "2-digit" });
+  } catch {
+    return d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+  }
 }

@@ -47,9 +47,35 @@ export interface OutboundLead {
   soldNotes: string | null;
   noShowAt: string | null;
   markedLostAt: string | null;
+  // Website-Builder integration (added 2026-06-19). The URL is extracted
+  // from typeform_answers on lead creation and used as the scrape target.
+  // wb_* columns mirror the Website-Builder pipeline so DD can render
+  // build status + the final Netlify demo URL on the lead detail page.
+  companyWebsiteUrl: string | null;
+  wbLeadId: string | null;
+  wbBuildId: string | null;
+  wbBuildStatus: WebsiteBuildStatus | null;
+  wbDemoUrl: string | null;
+  wbStartedAt: string | null;
+  wbCompletedAt: string | null;
   createdAt: string;
   updatedAt: string;
 }
+
+// Mirrors Website-Builder's lead_websites.status enum. Kept in this lib
+// (not website-builder-integration) so client components that render
+// OutboundLead can type-check the badge without pulling in any
+// server-only modules.
+export type WebsiteBuildStatus =
+  | "pending"
+  | "scraping"
+  | "generating"
+  | "awaiting_approval"  // transient — auto-deploy kicks straight to deploying
+  | "deploying"
+  | "completed"
+  | "failed"
+  | "skipped"
+  | "cancelled";
 
 interface LeadRow {
   id: string;
@@ -67,6 +93,13 @@ interface LeadRow {
   sold_notes: string | null;
   no_show_at: string | null;
   marked_lost_at: string | null;
+  company_website_url: string | null;
+  wb_lead_id: string | null;
+  wb_build_id: string | null;
+  wb_build_status: WebsiteBuildStatus | null;
+  wb_demo_url: string | null;
+  wb_started_at: string | null;
+  wb_completed_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -88,6 +121,13 @@ function normalizeLead(r: LeadRow): OutboundLead {
     soldNotes: r.sold_notes,
     noShowAt: r.no_show_at,
     markedLostAt: r.marked_lost_at,
+    companyWebsiteUrl: r.company_website_url ?? null,
+    wbLeadId: r.wb_lead_id ?? null,
+    wbBuildId: r.wb_build_id ?? null,
+    wbBuildStatus: r.wb_build_status ?? null,
+    wbDemoUrl: r.wb_demo_url ?? null,
+    wbStartedAt: r.wb_started_at ?? null,
+    wbCompletedAt: r.wb_completed_at ?? null,
     createdAt: r.created_at,
     updatedAt: r.updated_at
   };

@@ -6,6 +6,7 @@ import {
 } from "@/lib/outbound-leads";
 import { OutboundLeadsTable, StatusFilterBar, NoLeadsHint } from "@/components/OutboundLeadsTable";
 import { OutboundFunnelStrip } from "@/components/OutboundFunnelStrip";
+import { extractWebsiteUrl } from "@/lib/website-builder-integration";
 
 // /outbound-dashboard/leads — every lead in the funnel, status-filtered.
 // Auth + cohort gate live in the (outbound) layout.
@@ -42,7 +43,14 @@ export default async function OutboundLeadsPage({
     leadsPage.rows.map((l) => getNextScheduledMessage(l.id))
   );
   const tableRows = leadsPage.rows.map((lead, i) => ({
-    lead,
+    // Fallback for pre-integration leads — surface a URL from
+    // typeform_answers so the Demo column doesn't look empty while the
+    // backfill is pending.
+    lead: {
+      ...lead,
+      companyWebsiteUrl:
+        lead.companyWebsiteUrl ?? extractWebsiteUrl(lead.typeformAnswers)
+    },
     nextMessage: nextMessages[i]
   }));
 

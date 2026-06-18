@@ -66,12 +66,16 @@ export default async function MyTasksPage() {
       .select("*")
       .eq("assignee_id", me.id)
       .eq("is_draft", false)
+      .is("deleted_at", null)
+      .is("archived_at", null)
       .neq("status", "done"),
     supabase
       .from("tasks")
       .select("*")
       .eq("assignee_id", me.id)
       .eq("is_draft", false)
+      .is("deleted_at", null)
+      .is("archived_at", null)
       .eq("status", "done")
       .order("last_activity_at", { ascending: false })
       .limit(30)

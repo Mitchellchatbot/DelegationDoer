@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUserId } from "@/lib/session";
-import {
-  listUserEvents,
-  GoogleAuthError,
-  type CalendarEvent
-} from "@/lib/google-calendar";
+import { listUserEvents, GoogleAuthError } from "@/lib/google-calendar";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
+import {
+  buildClientMatchIndex,
+  matchEventToClient,
+  type ClientMatchRow
+} from "@/lib/calendar-client-match";
 
 export const dynamic = "force-dynamic";
 
@@ -17,7 +18,9 @@ export const dynamic = "force-dynamic";
 //   Matching (most precise first): an attendee email exactly in a client's
 //   contact_emails → that client; else an attendee email's domain matches
 //   a client's website/contact domain (generic providers like gmail are
-//   skipped); else the client's name appears in the event title.
+//   skipped); else the client's name appears in the event title. The
+//   matcher lives in lib/calendar-client-match.ts so the widget
+//   meeting-reminder shares the exact same logic.
 //
 //   "Client-facing only": we drop internal/no-match meetings. But if the
 //   user has meetings yet none matched a client, we fall back to showing
@@ -26,14 +29,6 @@ export const dynamic = "force-dynamic";
 //
 //   Auth/connection errors mirror /api/calendar/events so the card can
 //   reuse the same not-connected / reconnect handling.
-
-const GENERIC_EMAIL_DOMAINS = new Set([
-  "gmail.com", "googlemail.com", "yahoo.com", "outlook.com", "hotmail.com",
-  "live.com", "icloud.com", "me.com", "aol.com", "msn.com",
-  "proton.me", "protonmail.com"
-]);
-
-interface ClientLite { id: string; name: string }
 
 interface Meeting {
   id: string;
@@ -63,23 +58,6 @@ function errorResponse(err: unknown) {
   return NextResponse.json({ error: msg }, { status: 500 });
 }
 
-function emailDomain(email: string): string | null {
-  const at = email.lastIndexOf("@");
-  return at >= 0 ? email.slice(at + 1).toLowerCase().trim() : null;
-}
-
-// URL or bare host → registrable host, lowercased, www stripped.
-function hostOf(raw: string | null): string | null {
-  if (!raw) return null;
-  try {
-    const url = raw.includes("://") ? raw : `https://${raw}`;
-    const host = new URL(url).hostname.toLowerCase().replace(/^www\./, "");
-    return host || null;
-  } catch {
-    return null;
-  }
-}
-
 export async function GET(req: NextRequest) {
   try {
     const userId = await requireCurrentUserId();
@@ -96,64 +74,13 @@ export async function GET(req: NextRequest) {
     const { data: clientRows } = await getSupabaseAdmin()
       .from("clients")
       .select("id, name, contact_emails, website, websites");
-    const clients = (clientRows ?? []) as Array<{
-      id: string; name: string | null;
-      contact_emails: string[] | null;
-      website: string | null; websites: string[] | null;
-    }>;
-
-    // Build match indices once.
-    const emailToClient = new Map<string, ClientLite>();
-    const domainToClient = new Map<string, ClientLite>();
-    const named: Array<{ name: string; client: ClientLite }> = [];
-    for (const c of clients) {
-      if (!c.name) continue;
-      const lite: ClientLite = { id: c.id, name: c.name };
-      for (const raw of c.contact_emails ?? []) {
-        const e = raw.trim().toLowerCase();
-        if (!e) continue;
-        if (!emailToClient.has(e)) emailToClient.set(e, lite);
-        const d = emailDomain(e);
-        if (d && !GENERIC_EMAIL_DOMAINS.has(d) && !domainToClient.has(d)) {
-          domainToClient.set(d, lite);
-        }
-      }
-      for (const w of [c.website, ...(c.websites ?? [])]) {
-        const d = hostOf(w);
-        if (d && !GENERIC_EMAIL_DOMAINS.has(d) && !domainToClient.has(d)) {
-          domainToClient.set(d, lite);
-        }
-      }
-      // Names shorter than 4 chars are too collision-prone for substring
-      // matching against free-text event titles.
-      if (c.name.trim().length >= 4) named.push({ name: c.name.toLowerCase(), client: lite });
-    }
-
-    function matchClient(ev: CalendarEvent): ClientLite | null {
-      const emails = (ev.attendees ?? []).map((a) => a.email.toLowerCase());
-      for (const e of emails) {
-        const hit = emailToClient.get(e);
-        if (hit) return hit;
-      }
-      for (const e of emails) {
-        const d = emailDomain(e);
-        if (d) {
-          const hit = domainToClient.get(d);
-          if (hit) return hit;
-        }
-      }
-      const summary = (ev.summary ?? "").toLowerCase();
-      for (const n of named) {
-        if (summary.includes(n.name)) return n.client;
-      }
-      return null;
-    }
+    const index = buildClientMatchIndex((clientRows ?? []) as ClientMatchRow[]);
 
     // Real meetings only: timed events, minus the 📝 task blocks
     // task-calendar-sync mirrors in.
     const timed = events.filter((e) => !!e.start.dateTime && !e.summary.startsWith("📝"));
     const enriched: Meeting[] = timed.map((e) => {
-      const client = matchClient(e);
+      const client = matchEventToClient(e, index);
       const at = e.attendees ?? [];
       const guest = at.length
         ? (at[0].displayName || at[0].email) + (at.length > 1 ? ` +${at.length - 1}` : "")

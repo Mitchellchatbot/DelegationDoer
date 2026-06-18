@@ -248,10 +248,17 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel, initialValues }: 
 
   // assignableTargets used to default to the mock users array; pass
   // the live pool explicitly.
-  const targets = useMemo(
-    () => assignableTargets(currentUser, users),
-    [currentUser, users]
-  );
+  const targets = useMemo(() => {
+    const pool = assignableTargets(currentUser, users);
+    // HoDs & leaders: once a department is chosen, only that department's
+    // members are assignable here (mirrors the routing-review dropdown and
+    // the ranker's in-dept rule). Workers can't switch departments, so their
+    // pool (self + direct reports) is left intact.
+    if (canPickDepartment && departmentId) {
+      return pool.filter((u) => u.departmentIds.includes(departmentId));
+    }
+    return pool;
+  }, [currentUser, users, canPickDepartment, departmentId]);
   const targetIds = useMemo(() => new Set(targets.map((u) => u.id)), [targets]);
 
   // Build skill rank: combine the manual+auto skill matrix with the
@@ -285,18 +292,24 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel, initialValues }: 
   const topPick = ranked[0] ?? null;
   const restRanked = ranked.slice(1, 5);
 
-  // Whenever the AI top-pick changes (and the user hasn't manually
-  // chosen anyone yet), nudge the assigneeId to it. Doesn't override a
-  // manual selection — only fills the empty initial state.
+  // Keep the assignee in sync with the suggestions. Normally we only fill
+  // the empty initial state with the AI top-pick and never override a
+  // manual choice — but a department switch can drop the current assignee
+  // out of the scoped pool, leaving a stale id no card reflects. So we hold
+  // an explicit pick only while it's still a valid target; otherwise re-pick
+  // the new top suggestion (or clear, so submit stays gated).
   useEffect(() => {
-    if (assigneeId) return;
+    if (assigneeId && targetIds.has(assigneeId)) return;
     if (topPick) { setAssigneeId(topPick.userId); return; }
     // Workers always own the tasks they create; if the ranker surfaced
     // nobody (e.g. they're over capacity and filtered out), still default
     // to themselves so the task is created assigned — mirrors the backend.
-    if (!canCreateTasksForOthers(currentUser)) setAssigneeId(currentUser.id);
+    if (!canCreateTasksForOthers(currentUser)) { setAssigneeId(currentUser.id); return; }
+    // Leader/HoD whose narrowed department has no eligible members: drop the
+    // stale cross-dept pick so submit stays disabled until they choose again.
+    if (assigneeId) setAssigneeId("");
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [topPick?.userId]);
+  }, [topPick?.userId, targetIds]);
 
   const eta = useMemo(() => {
     const u = users.find((x) => x.id === (assigneeId || topPick?.userId));

@@ -10,7 +10,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Sparkles, Loader2, RefreshCw, CheckCircle2, CircleDot,
-  AlertTriangle, MessageSquare, Lightbulb, type LucideIcon
+  AlertTriangle, MessageSquare, Lightbulb, ChevronDown, ChevronRight, type LucideIcon
 } from "lucide-react";
 import type { MeetingPrepBrief } from "@/lib/meeting-prep";
 
@@ -41,6 +41,9 @@ export function MeetingPrepPanel({ meetings }: { meetings: Meeting[] | null }) {
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [briefs, setBriefs] = useState<Record<string, BriefState>>({});
+  // Per-meeting collapse state (default expanded). Tracking collapsed ids
+  // means switching meetings via the selector remembers each one's view.
+  const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set());
   // Read latest cache inside effects without making them depend on it.
   const briefsRef = useRef(briefs);
   briefsRef.current = briefs;
@@ -94,6 +97,15 @@ export function MeetingPrepPanel({ meetings }: { meetings: Meeting[] | null }) {
 
   const selected = clientMeetings.find((m) => m.id === selectedId) ?? null;
   const state = selectedId ? briefs[selectedId] : undefined;
+  const expanded = selectedId ? !collapsedIds.has(selectedId) : true;
+  function toggleCollapsed(id: string) {
+    setCollapsedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
 
   return (
     <div className="space-y-2">
@@ -139,13 +151,27 @@ export function MeetingPrepPanel({ meetings }: { meetings: Meeting[] | null }) {
 
             {selected && (
               <div className="flex items-center justify-between gap-2">
-                <div className="min-w-0">
-                  <div className="text-[12px] font-semibold text-ink truncate">
-                    {selected.clientName ?? selected.summary}
-                  </div>
-                  <div className="text-[10px] text-ink/50">{fmtWhen(selected.startISO)}</div>
-                </div>
-                {state?.status === "ready" && (
+                {/* Header doubles as the collapse/expand toggle (mirrors
+                    ClientMeetingsSection). Refresh stays a sibling so it isn't
+                    nested inside the toggle button (invalid HTML). */}
+                <button
+                  type="button"
+                  onClick={() => toggleCollapsed(selected.id)}
+                  aria-expanded={expanded}
+                  className="min-w-0 flex items-center gap-1.5 text-left group"
+                  title={expanded ? "Collapse" : "Expand"}
+                >
+                  <span className="shrink-0 text-ink/45 group-hover:text-ink/70 transition-colors">
+                    {expanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block text-[12px] font-semibold text-ink truncate">
+                      {selected.clientName ?? selected.summary}
+                    </span>
+                    <span className="block text-[10px] text-ink/50">{fmtWhen(selected.startISO)}</span>
+                  </span>
+                </button>
+                {expanded && state?.status === "ready" && (
                   <button
                     type="button"
                     onClick={() => generate(selected, true)}
@@ -158,26 +184,28 @@ export function MeetingPrepPanel({ meetings }: { meetings: Meeting[] | null }) {
               </div>
             )}
 
-            {/* Body */}
-            {!state || state.status === "loading" ? (
-              <div className="text-[12px] text-ink/55 inline-flex items-center gap-2 px-0.5 py-1">
-                <Loader2 className="w-3.5 h-3.5 animate-spin" /> Preparing brief…
-              </div>
-            ) : state.status === "error" ? (
-              <div className="text-[12px] text-rose-700 flex items-center gap-2">
-                <span className="min-w-0 truncate">Couldn&apos;t prepare: {state.message}</span>
-                {selected && (
-                  <button
-                    type="button"
-                    onClick={() => generate(selected, true)}
-                    className="shrink-0 underline hover:no-underline"
-                  >
-                    Retry
-                  </button>
-                )}
-              </div>
-            ) : (
-              <BriefView brief={state.data} />
+            {/* Body — hidden when collapsed. */}
+            {expanded && (
+              !state || state.status === "loading" ? (
+                <div className="text-[12px] text-ink/55 inline-flex items-center gap-2 px-0.5 py-1">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" /> Preparing brief…
+                </div>
+              ) : state.status === "error" ? (
+                <div className="text-[12px] text-rose-700 flex items-center gap-2">
+                  <span className="min-w-0 truncate">Couldn&apos;t prepare: {state.message}</span>
+                  {selected && (
+                    <button
+                      type="button"
+                      onClick={() => generate(selected, true)}
+                      className="shrink-0 underline hover:no-underline"
+                    >
+                      Retry
+                    </button>
+                  )}
+                </div>
+              ) : (
+                <BriefView brief={state.data} />
+              )
             )}
           </div>
         )}

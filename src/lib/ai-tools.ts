@@ -715,7 +715,7 @@ async function getClient(input: Record<string, unknown>, ctx: ToolContext) {
 // included, completedBy is joined in). Caller is expected to resolve
 // the client by name or id; ambiguous names return an error so the AI
 // can disambiguate with the user instead of guessing.
-async function listClientCompletedTasks(input: Record<string, unknown>, ctx: ToolContext) {
+export async function listClientCompletedTasks(input: Record<string, unknown>, ctx: ToolContext) {
   const supabase = getSupabaseAdmin();
   let clientName: string | null = typeof input.clientName === "string" ? input.clientName : null;
   let clientId: string | null = typeof input.clientId === "string" ? input.clientId : null;
@@ -825,7 +825,7 @@ async function listClientCompletedTasks(input: Record<string, unknown>, ctx: Too
 // the client detail page shows every update for a client to anyone who
 // can open the page (see clients/[id]/page.tsx). This tool mirrors that
 // surface rather than the stricter task/email scoping.
-async function listClientEodUpdates(input: Record<string, unknown>) {
+export async function listClientEodUpdates(input: Record<string, unknown>) {
   const supabase = getSupabaseAdmin();
   let clientName: string | null = typeof input.clientName === "string" ? input.clientName : null;
   let clientId: string | null = typeof input.clientId === "string" ? input.clientId : null;
@@ -919,7 +919,7 @@ async function listClientEodUpdates(input: Record<string, unknown>) {
 // client detail page shows every meeting to anyone who can open it. This
 // tool mirrors that surface (same posture as listClientEodUpdates), not
 // the stricter task/email scoping.
-async function listClientMeetings(input: Record<string, unknown>) {
+export async function listClientMeetings(input: Record<string, unknown>) {
   const supabase = getSupabaseAdmin();
   let clientName: string | null = typeof input.clientName === "string" ? input.clientName : null;
   let clientId: string | null = typeof input.clientId === "string" ? input.clientId : null;
@@ -1038,7 +1038,7 @@ async function listClientMeetings(input: Record<string, unknown>) {
 // /api/inboxes/threads. A worker asking about a client whose mail lives
 // in an inbox they can't see gets an access-denied note, never the
 // bodies. This is enforced here server-side, not via the prompt.
-async function listClientRecentEmails(input: Record<string, unknown>, ctx: ToolContext) {
+export async function listClientRecentEmails(input: Record<string, unknown>, ctx: ToolContext) {
   const supabase = getSupabaseAdmin();
   let clientName: string | null = typeof input.clientName === "string" ? input.clientName : null;
   let clientId: string | null = typeof input.clientId === "string" ? input.clientId : null;

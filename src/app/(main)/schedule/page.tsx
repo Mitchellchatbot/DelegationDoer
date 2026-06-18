@@ -5,6 +5,7 @@ import {
   CalendarDays, CalendarClock, ChevronLeft, ChevronRight, Loader2, Plus, ExternalLink, Video
 } from "lucide-react";
 import { PageHero } from "@/components/PageHero";
+import { MeetingPrepPanel } from "@/components/MeetingPrepPanel";
 import { cn } from "@/lib/utils";
 
 interface CalendarEvent {
@@ -37,6 +38,9 @@ export default function SchedulePage() {
   const [notConnected, setNotConnected] = useState(false);
   const [needsReconnect, setNeedsReconnect] = useState(false);
   const [creatingFor, setCreatingFor] = useState<{ dayIdx: number; hour: number } | null>(null);
+  // Upcoming meetings (next 7 days), lifted here so both the Upcoming-meetings
+  // and Meeting-prep panels share one fetch.
+  const [meetings, setMeetings] = useState<Meeting[] | null>(null);
 
   const weekDays = useMemo(() => {
     return Array.from({ length: 7 }, (_, i) => addDays(anchor, i));
@@ -77,6 +81,26 @@ export default function SchedulePage() {
   }
 
   useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [anchor]);
+
+  // Fetch upcoming meetings once the calendar is confirmed connected. The
+  // window is "next 7 days from now" regardless of the week being viewed, so
+  // this never refetches on week navigation.
+  const meetingsReady = events !== null && !notConnected && !needsReconnect;
+  useEffect(() => {
+    if (!meetingsReady) return;
+    let alive = true;
+    (async () => {
+      try {
+        const res = await fetch("/api/calendar/meetings?days=7", { cache: "no-store" });
+        const data = await res.json();
+        if (!alive) return;
+        setMeetings(res.ok ? ((data.meetings ?? []) as Meeting[]) : []);
+      } catch {
+        if (alive) setMeetings([]);
+      }
+    })();
+    return () => { alive = false; };
+  }, [meetingsReady]);
 
   function goPrev() { setAnchor(addDays(anchor, -7)); }
   function goNext() { setAnchor(addDays(anchor, 7)); }
@@ -177,11 +201,14 @@ export default function SchedulePage() {
             />
           </div>
           <aside>
-            <div className="sticky top-4 space-y-2">
-              <div className="text-[11px] font-semibold uppercase tracking-wide text-ink/55 inline-flex items-center gap-1.5">
-                <CalendarClock className="w-3.5 h-3.5" /> Upcoming meetings
+            <div className="sticky top-4 space-y-3">
+              <div className="space-y-2">
+                <div className="text-[11px] font-semibold uppercase tracking-wide text-ink/55 inline-flex items-center gap-1.5">
+                  <CalendarClock className="w-3.5 h-3.5" /> Upcoming meetings
+                </div>
+                <MeetingsPanel meetings={meetings} />
               </div>
-              <MeetingsPanel />
+              <MeetingPrepPanel meetings={meetings} />
             </div>
           </aside>
         </div>
@@ -203,10 +230,10 @@ export default function SchedulePage() {
 }
 
 // Right-rail panel listing the signed-in user's upcoming meetings for the
-// next 7 days, pulled from /api/calendar/meetings (client-matched, capped).
-// Deliberately "next 7 days from now" regardless of the week being viewed —
-// matches the Home "Upcoming meetings" tile that links here. Mounted only in
-// the connected state, so the fetch never fires when Calendar isn't linked.
+// next 7 days (client-matched, capped). The fetch lives in SchedulePage and
+// is passed in as a prop so the Meeting-prep panel below shares the same
+// data. Deliberately "next 7 days from now" regardless of the week being
+// viewed — matches the Home "Upcoming meetings" tile that links here.
 interface Meeting {
   id: string;
   summary: string;
@@ -218,25 +245,8 @@ interface Meeting {
   guest: string | null;
 }
 
-function MeetingsPanel() {
+function MeetingsPanel({ meetings }: { meetings: Meeting[] | null }) {
   // null = still loading; [] = connected but nothing upcoming.
-  const [meetings, setMeetings] = useState<Meeting[] | null>(null);
-
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      try {
-        const res = await fetch("/api/calendar/meetings?days=7", { cache: "no-store" });
-        const data = await res.json();
-        if (!alive) return;
-        setMeetings(res.ok ? ((data.meetings ?? []) as Meeting[]) : []);
-      } catch {
-        if (alive) setMeetings([]);
-      }
-    })();
-    return () => { alive = false; };
-  }, []);
-
   return (
     <div className="rounded-2xl border border-slate-200/70 bg-white shadow-soft p-3">
       {meetings === null ? (

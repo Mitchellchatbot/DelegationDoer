@@ -38,6 +38,22 @@ export const dynamic = "force-dynamic";
 //
 // Everything's server-fetched so the page hydrates with real numbers
 // instead of null-then-flash.
+
+// work_timezone is stored without IANA validation (see /api/users/me),
+// and Intl throws a RangeError on an unknown zone — which would 500 this
+// server-rendered page. Probe the stored value once and fall back to the
+// office default, matching dayKeyInTz's graceful degradation so a bad
+// row can never take down /home.
+function resolveWorkTz(tz: string | null | undefined): string {
+  const candidate = tz || DEFAULT_TZ;
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: candidate }).format(0);
+    return candidate;
+  } catch {
+    return DEFAULT_TZ;
+  }
+}
+
 export default async function HomePage() {
   const userId = await requireCurrentUserId();
   const me = await getUserById(userId);
@@ -50,7 +66,7 @@ export default async function HomePage() {
   // the server's wall-clock hour — wrong for everyone outside the
   // server's zone. Mirrors the shift system's resolution so /home stays
   // consistent with SOD/EOD shift detection.
-  const tz = me.workTimezone || DEFAULT_TZ;
+  const tz = resolveWorkTz(me.workTimezone);
   const hourLocal = nowInTz(tz).hh;
 
   // Day Bookends — only for people who actually submit SOD/EOD.

@@ -155,6 +155,12 @@ function formatTime(iso: string | null, tz: string): string {
   const d = new Date(iso);
   if (isNaN(d.getTime())) return "—";
   // Fixed "en-US" locale + explicit timeZone so the rendered time is
-  // the viewer's wall clock regardless of the server's locale/zone.
-  return d.toLocaleTimeString("en-US", { timeZone: tz, hour: "numeric", minute: "2-digit" });
+  // the viewer's wall clock regardless of the server's locale/zone. The
+  // caller validates tz, but guard anyway: an unknown IANA zone makes
+  // toLocaleTimeString throw, and a render helper must never throw.
+  try {
+    return d.toLocaleTimeString("en-US", { timeZone: tz, hour: "numeric", minute: "2-digit" });
+  } catch {
+    return d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+  }
 }

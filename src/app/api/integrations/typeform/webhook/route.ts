@@ -4,6 +4,10 @@ import {
   upsertLeadFromTypeform, scheduleRecoveryDrip, recordEvent
 } from "@/lib/outbound-leads";
 import { notifyFormSubmitted } from "@/lib/outbound-slack";
+import {
+  extractWebsiteUrl, triggerWebsiteBuild
+} from "@/lib/website-builder-integration";
+import { getSupabaseAdmin } from "@/lib/supabase-admin";
 
 export const dynamic = "force-dynamic";
 
@@ -182,6 +186,41 @@ export async function POST(req: NextRequest) {
       await recordEvent(lead.id, "form_submitted", {
         response_id: responseId, resubmission: true
       });
+    }
+
+    // Website-Builder hook (auto-trigger).
+    //
+    // The form usually carries a `company_website_url` answer (the test
+    // record had it under a UUID-keyed field). We scan the values for the
+    // first http(s):// match, persist it on outbound_leads, then kick off
+    // the Website-Builder pipeline fire-and-forget so the Typeform ACK
+    // stays fast. Idempotent: on resubmission, triggerWebsiteBuild
+    // re-uses the existing wb_lead_id (it bails out cleanly if a build
+    // is already in flight via WB's own /generate dedupe).
+    const websiteUrl = extractWebsiteUrl(answers);
+    if (websiteUrl) {
+      try {
+        // Always store the column — both for new leads and resubmissions
+        // — so the detail page can render it even before WB responds.
+        const supabase = getSupabaseAdmin();
+        await supabase
+          .from("outbound_leads")
+          .update({ company_website_url: websiteUrl })
+          .eq("id", lead.id);
+      } catch (urlErr) {
+        console.error("[typeform-webhook] failed to persist company_website_url", urlErr);
+      }
+      if (isNew) {
+        // Fire-and-forget — never let a WB outage delay the Typeform ACK.
+        // Failures are logged inside triggerWebsiteBuild.
+        void triggerWebsiteBuild(lead.id).then((r) => {
+          if (!r.ok) {
+            console.error("[typeform-webhook] triggerWebsiteBuild failed", {
+              leadId: lead.id, error: r.error
+            });
+          }
+        });
+      }
     }
 
     return NextResponse.json({ ok: true, leadId: lead.id, isNew });

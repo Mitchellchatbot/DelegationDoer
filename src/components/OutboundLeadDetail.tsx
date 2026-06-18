@@ -7,6 +7,7 @@ import type {
   OutboundLead, LeadStatus, LeadEvent, ScheduledMessage
 } from "@/lib/outbound-leads";
 import { OutboundLeadActionButtons } from "@/components/OutboundLeadActionButtons";
+import { OutboundLeadDemoSiteCard } from "@/components/OutboundLeadDemoSiteCard";
 import { cn } from "@/lib/utils";
 
 interface Props {
@@ -138,6 +139,15 @@ export function OutboundLeadDetail({ lead, events, messages }: Props) {
       </div>
 
       <OutboundLeadActionButtons leadId={lead.id} status={lead.status} />
+
+      <OutboundLeadDemoSiteCard
+        leadId={lead.id}
+        websiteUrl={lead.companyWebsiteUrl}
+        buildStatus={lead.wbBuildStatus}
+        demoUrl={lead.wbDemoUrl}
+        startedAt={lead.wbStartedAt}
+        completedAt={lead.wbCompletedAt}
+      />
 
       <div className="grid grid-cols-1 lg:grid-cols-[3fr_2fr] gap-4">
         <ScheduledMessages

@@ -36,6 +36,7 @@ import { runEodRecap } from "@/lib/eod-recap-runner";
 import { runScheduledEmails } from "@/lib/scheduled-emails-runner";
 import { syncBirthdaysForAllOwners } from "@/lib/birthday-calendar-sync";
 import { runOutboundSequences } from "@/lib/outbound-sequence-runner";
+import { syncWebsiteBuildStatuses } from "@/lib/website-builder-integration";
 
 const globalKey = "__ddCronBootstrap" as const;
 const stateKey = "__ddCronHeartbeats" as const;
@@ -132,6 +133,20 @@ const JOBS: CronJob[] = [
     run: async () => {
       const r = await runOutboundSequences();
       return `sent=${r.sent}/${r.considered} failed=${r.failed}`;
+    }
+  },
+  {
+    name: "outbound-website-builds",
+    intervalMs: MINUTE, // matches vercel.json "* * * * *"
+    bootCatchupDelayMs: 30_000,
+    disableEnv: "OUTBOUND_WEBSITE_BUILDS_INTERNAL_CRON",
+    run: async () => {
+      const r = await syncWebsiteBuildStatuses();
+      return (
+        `scanned=${r.scanned} updated=${r.updated} ` +
+        `deployed=${r.deployed} completed=${r.completed} ` +
+        `errors=${r.errors.length}`
+      );
     }
   }
 ];

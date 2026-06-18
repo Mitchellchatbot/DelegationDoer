@@ -1,6 +1,11 @@
 import Link from "next/link";
-import { Phone, Mail, Clock, Calendar, AlertCircle } from "lucide-react";
-import type { OutboundLead, LeadStatus, ScheduledMessage } from "@/lib/outbound-leads";
+import {
+  Phone, Mail, Clock, Calendar, AlertCircle,
+  Globe, Loader2, CheckCircle2 as GlobeOk, AlertTriangle as GlobeBad
+} from "lucide-react";
+import type {
+  OutboundLead, LeadStatus, ScheduledMessage, WebsiteBuildStatus
+} from "@/lib/outbound-leads";
 import { cn } from "@/lib/utils";
 
 // Server-rendered table for /outbound-dashboard/leads. Each row renders
@@ -87,6 +92,7 @@ export function OutboundLeadsTable({ rows, totalCount, statusFilter }: Props) {
             <tr>
               <Th>Lead</Th>
               <Th>Status</Th>
+              <Th>Demo</Th>
               <Th>Next touch</Th>
               <Th>Last activity</Th>
               <Th>Created</Th>
@@ -132,6 +138,13 @@ export function OutboundLeadsTable({ rows, totalCount, statusFilter }: Props) {
                         })}
                       </div>
                     )}
+                  </Td>
+                  <Td>
+                    <DemoCell
+                      buildStatus={lead.wbBuildStatus}
+                      demoUrl={lead.wbDemoUrl}
+                      websiteUrl={lead.companyWebsiteUrl}
+                    />
                   </Td>
                   <Td>
                     {nextMessage ? (
@@ -212,6 +225,72 @@ function Th({ children }: { children: React.ReactNode }) {
 }
 function Td({ children }: { children: React.ReactNode }) {
   return <td className="px-4 py-3 align-top">{children}</td>;
+}
+
+// Demo-site column. One-glance globe icon with tone driven by the
+// Website-Builder pipeline state. When the build is done the cell
+// becomes a click-through to the Netlify URL; in-flight states show a
+// spinning amber icon; pre-build shows a grey globe. Server-rendered
+// (no client interaction) — opens in a new tab so the lead page stays
+// where it is.
+const IN_FLIGHT_STATUSES: WebsiteBuildStatus[] = [
+  "pending", "scraping", "generating", "awaiting_approval", "deploying"
+];
+function DemoCell({
+  buildStatus, demoUrl, websiteUrl
+}: {
+  buildStatus: WebsiteBuildStatus | null;
+  demoUrl: string | null;
+  websiteUrl: string | null;
+}) {
+  // Ready: clickable, green. The leads table is a server component, so
+  // we use a plain <a> (no event handlers). The detail-page Link only
+  // wraps the name cell, so there's nothing to stop-propagate against.
+  if (buildStatus === "completed" && demoUrl) {
+    return (
+      <a
+        href={demoUrl}
+        target="_blank"
+        rel="noreferrer"
+        title="Open generated demo"
+        className="inline-flex items-center gap-1.5 text-emerald-700 hover:text-emerald-900 transition-colors"
+      >
+        <GlobeOk className="w-4 h-4" />
+        <span className="text-[12px] font-medium">Live</span>
+      </a>
+    );
+  }
+  // In-flight: spinner.
+  if (buildStatus && IN_FLIGHT_STATUSES.includes(buildStatus)) {
+    return (
+      <span className="inline-flex items-center gap-1.5 text-amber-700" title={`Build ${buildStatus.replace(/_/g, " ")}`}>
+        <Loader2 className="w-4 h-4 animate-spin" />
+        <span className="text-[12px] capitalize">{buildStatus.replace(/_/g, " ")}</span>
+      </span>
+    );
+  }
+  // Failed / cancelled / skipped.
+  if (buildStatus === "failed" || buildStatus === "cancelled" || buildStatus === "skipped") {
+    return (
+      <span className="inline-flex items-center gap-1.5 text-rose-700/85" title={`Build ${buildStatus}`}>
+        <GlobeBad className="w-4 h-4" />
+        <span className="text-[12px] capitalize">{buildStatus}</span>
+      </span>
+    );
+  }
+  // No build yet — show grey globe (dimmer when no URL on file).
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-1.5",
+        websiteUrl ? "text-ink/55" : "text-ink/30"
+      )}
+      title={websiteUrl ? "No build yet" : "No website URL on this lead"}
+    >
+      <Globe className="w-4 h-4" />
+      <span className="text-[12px]">—</span>
+    </span>
+  );
 }
 
 // Soft warning when this page isn't useful yet (no leads + no token

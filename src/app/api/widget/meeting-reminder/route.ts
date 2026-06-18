@@ -39,12 +39,20 @@ const CLIENTS_TTL_MS = 300_000;
 let clientIndexCache: { at: number; index: ClientMatchIndex } | null = null;
 
 async function getUpcomingEvents(userId: string): Promise<CalendarEvent[]> {
+  const now = Date.now();
   const cached = eventsCache.get(userId);
-  if (cached && Date.now() - cached.at < EVENTS_TTL_MS) return cached.events;
-  const timeMin = new Date().toISOString();
-  const timeMax = new Date(Date.now() + (WINDOW_MIN + 5) * 60_000).toISOString();
+  if (cached && now - cached.at < EVENTS_TTL_MS) return cached.events;
+  const timeMin = new Date(now).toISOString();
+  const timeMax = new Date(now + (WINDOW_MIN + 5) * 60_000).toISOString();
   const events = await listUserEvents({ userId, timeMin, timeMax, maxResults: 20 });
-  eventsCache.set(userId, { at: Date.now(), events });
+  eventsCache.set(userId, { at: now, events });
+  // Bound memory: once the map grows, drop entries past their TTL. Cheap —
+  // runs only when the map is already large and only deletes stale keys.
+  if (eventsCache.size > 200) {
+    for (const [k, v] of eventsCache) {
+      if (now - v.at >= EVENTS_TTL_MS) eventsCache.delete(k);
+    }
+  }
   return events;
 }
 
@@ -92,23 +100,31 @@ export async function GET() {
 
     if (due.length === 0) return NextResponse.json({ meetings: [] });
 
-    // Atomically claim each due meeting. With ignoreDuplicates, .select()
-    // returns ONLY the rows this call inserted (meetings not previously
-    // notified) — so re-polls and restarts never re-fire. A missing table
-    // (migration not applied) degrades to "no reminders" rather than
-    // spamming undeduped.
+    // Dedup with SELECT-then-INSERT (the repo's idempotent-upsert idiom, see
+    // inbox-access) rather than relying on what .upsert().select() returns.
+    // A missing table (migration not applied) degrades to "no reminders"
+    // rather than firing undeduped every poll.
     const supabase = getSupabaseAdmin();
-    const { data: claimed, error } = await supabase
+    const candidateIds = due.map((d) => d.e.id);
+    const { data: existing, error: selErr } = await supabase
+      .from("meeting_reminders")
+      .select("event_id")
+      .eq("user_id", userId)
+      .in("event_id", candidateIds);
+    if (selErr) return NextResponse.json({ meetings: [] });
+
+    const seen = new Set(((existing ?? []) as { event_id: string }[]).map((r) => r.event_id));
+    const fresh = due.filter((d) => !seen.has(d.e.id));
+    if (fresh.length === 0) return NextResponse.json({ meetings: [] });
+
+    // Record the fresh ones so the next poll / a widget restart won't re-fire.
+    // ignoreDuplicates keeps a rare concurrent poll from erroring.
+    await supabase
       .from("meeting_reminders")
       .upsert(
-        due.map((d) => ({ user_id: userId, event_id: d.e.id, client_id: d.client?.id ?? null })),
+        fresh.map((d) => ({ user_id: userId, event_id: d.e.id, client_id: d.client?.id ?? null })),
         { onConflict: "user_id,event_id", ignoreDuplicates: true }
-      )
-      .select("event_id");
-    if (error) return NextResponse.json({ meetings: [] });
-
-    const claimedIds = new Set(((claimed ?? []) as { event_id: string }[]).map((r) => r.event_id));
-    const fresh = due.filter((d) => claimedIds.has(d.e.id));
+      );
 
     return NextResponse.json({
       meetings: fresh.map((d) => ({

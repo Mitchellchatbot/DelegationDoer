@@ -49,6 +49,9 @@ export function RecipientAutocomplete({
 }) {
   const [focused, setFocused] = useState(false);
   const [active, setActive] = useState(0);
+  // Escape hides the dropdown without blurring; cleared on the next
+  // keystroke (or refocus) so typing more brings suggestions back.
+  const [dismissed, setDismissed] = useState(false);
   const blurTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // The address fragment being typed (everything after the last comma).
@@ -119,7 +122,7 @@ export function RecipientAutocomplete({
     if (blurTimer.current) clearTimeout(blurTimer.current);
   }, []);
 
-  const showDropdown = focused && items.length > 0;
+  const showDropdown = focused && !dismissed && items.length > 0;
 
   function insertEmails(emails: string[]) {
     const idx = lastBoundary(value);
@@ -151,9 +154,11 @@ export function RecipientAutocomplete({
       if (it) selectItem(it);
     } else if (e.key === "Escape") {
       // Swallow it so the surrounding Radix dialog doesn't also close.
+      // (Once the dropdown is hidden, a later Escape falls through the
+      // early return above and bubbles, closing the dialog as before.)
       e.preventDefault();
       e.stopPropagation();
-      setFocused(false);
+      setDismissed(true);
     }
   }
 
@@ -163,10 +168,11 @@ export function RecipientAutocomplete({
         autoFocus={autoFocus}
         type="text"
         value={value}
-        onChange={(e) => onChange(e.target.value)}
+        onChange={(e) => { setDismissed(false); onChange(e.target.value); }}
         onFocus={() => {
           if (blurTimer.current) clearTimeout(blurTimer.current);
           setFocused(true);
+          setDismissed(false);
         }}
         onBlur={() => {
           // Delay so an onMouseDown selection lands before we hide.

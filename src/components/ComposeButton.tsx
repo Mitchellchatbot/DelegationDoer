@@ -8,6 +8,7 @@ import { PenSquare, Send, X, Loader2, Clock, Check } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { MediaPicker } from "@/components/MediaPicker";
+import { RecipientAutocomplete, type ClientSuggestion } from "@/components/RecipientAutocomplete";
 import type { TaskMedia } from "@/lib/types";
 
 // "Compose" affordance — pill button on the inbox header that opens a
@@ -55,6 +56,10 @@ export function ComposeButton({
   // clone. Scheduled sends reject attachments at the backend, so we
   // block that combo in submit() with a friendly toast.
   const [attachments, setAttachments] = useState<TaskMedia[]>([]);
+  // Client roster for the To/Cc typeahead. Loaded once when the modal
+  // first opens; only clients with an email on file are useful here.
+  const [clients, setClients] = useState<ClientSuggestion[]>([]);
+  const clientsLoadedRef = useRef(false);
 
   const fromOptions = accounts ?? (accountId ? [{ id: accountId, email: accountEmail ?? "", display_name: null }] : []);
   const fromMeta = fromOptions.find((a) => a.id === fromAccountId) ?? fromOptions[0];
@@ -118,6 +123,31 @@ export function ComposeButton({
     })();
     return () => { cancelled = true; };
   }, [composeDraftParam]);
+
+  // Load the client roster the first time the modal opens, so typing a
+  // name/email in To or Cc can suggest saved client addresses. Silent on
+  // failure — the fields just behave as plain inputs.
+  useEffect(() => {
+    if (!open || clientsLoadedRef.current) return;
+    clientsLoadedRef.current = true;
+    let cancelled = false;
+    fetch("/api/clients", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : { clients: [] }))
+      .then((d) => {
+        if (cancelled) return;
+        const list = ((d.clients ?? []) as Array<{ id: string; name: string; contactName?: string | null; contactEmails?: string[] }>)
+          .map((c) => ({
+            id: c.id,
+            name: c.name,
+            contactName: c.contactName ?? null,
+            contactEmails: c.contactEmails ?? [],
+          }))
+          .filter((c) => c.contactEmails.length > 0);
+        setClients(list);
+      })
+      .catch(() => { clientsLoadedRef.current = false; });
+    return () => { cancelled = true; };
+  }, [open]);
 
   const saveDraft = useCallback(async () => {
     if (!draftIdRef.current) return;
@@ -327,13 +357,12 @@ export function ComposeButton({
 
                 <div className="p-4 space-y-2.5">
                   <FieldRow label="To">
-                    <input
-                      autoFocus
-                      type="text"
+                    <RecipientAutocomplete
                       value={to}
-                      onChange={(e) => setTo(e.target.value)}
+                      onChange={setTo}
+                      clients={clients}
+                      autoFocus
                       placeholder="someone@example.com, another@example.com"
-                      className="flex-1 bg-transparent text-sm outline-none placeholder:text-ink/40"
                     />
                     {!showCc && (
                       <button
@@ -355,12 +384,11 @@ export function ComposeButton({
                         transition={{ duration: 0.18 }}
                       >
                         <FieldRow label="Cc">
-                          <input
-                            type="text"
+                          <RecipientAutocomplete
                             value={cc}
-                            onChange={(e) => setCc(e.target.value)}
+                            onChange={setCc}
+                            clients={clients}
                             placeholder="optional cc list"
-                            className="flex-1 bg-transparent text-sm outline-none placeholder:text-ink/40"
                           />
                         </FieldRow>
                       </motion.div>

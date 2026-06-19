@@ -312,22 +312,27 @@ function clientRows(list: AtRiskClient[]): React.ReactNode[] {
   return rows;
 }
 
-// Upcoming meetings: time + client + a Meet dot. Capped at 3 lines.
+// Upcoming meetings: leading icon (Video for a Meet link, else
+// CalendarClock) + client + a trailing emerald time pill — mirrors the
+// ledger leading-icon and the client trailing-pill patterns. Capped at 3.
 function meetingRows(meetings: MeetingLite[]): React.ReactNode[] {
   const cap = meetings.length > 3 ? 2 : 3;
   const shown = meetings.slice(0, cap);
   const extra = meetings.length - shown.length;
-  const rows: React.ReactNode[] = shown.map((m) => (
-    <>
-      <span className={cn("text-[10px] font-semibold tabular-nums shrink-0", TONE_VALUE.emerald)}>
-        {fmtWhenShort(m.startISO)}
-      </span>
-      <span className="text-[10px] text-ink/75 truncate flex-1 min-w-0">
-        {m.clientName ?? m.summary}
-      </span>
-      {m.hangoutLink && <Video className="w-2.5 h-2.5 text-emerald-600 shrink-0" />}
-    </>
-  ));
+  const rows: React.ReactNode[] = shown.map((m) => {
+    const Icon = m.hangoutLink ? Video : CalendarClock;
+    return (
+      <>
+        <span className="shrink-0 text-emerald-500"><Icon className="w-3.5 h-3.5" /></span>
+        <span className="text-[10.5px] font-medium text-ink/80 truncate flex-1 min-w-0">
+          {m.clientName ?? m.summary}
+        </span>
+        <span className="shrink-0 inline-flex items-center px-1.5 py-0.5 rounded-full text-[8.5px] font-semibold tabular-nums bg-emerald-50 text-emerald-700 border border-emerald-200">
+          {fmtWhenShort(m.startISO)}
+        </span>
+      </>
+    );
+  });
   if (extra > 0) rows.push(<span className="text-[9px] text-ink/40 font-medium">+{extra} more</span>);
   return rows;
 }

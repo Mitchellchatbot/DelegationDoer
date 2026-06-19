@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { motion } from "framer-motion";
 import { useEffect, useState } from "react";
-import { Inbox, Mail, Settings as SettingsIcon, Layers, Plus, ChevronDown, PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import { Inbox, Mail, Settings as SettingsIcon, Layers, ListChecks, Plus, ChevronDown, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { cn, initials } from "@/lib/utils";
 import { ConnectInboxDialog } from "./ConnectInboxDialog";
 import { InboxFavicon } from "./InboxFavicon";
@@ -137,6 +137,14 @@ export function InboxTree({ accounts, canManage }: Props) {
             <Layers className="w-4 h-4" />
           </RailLink>
 
+          <RailLink
+            href="/inboxes/selected"
+            active={path === "/inboxes/selected"}
+            title="Selected inboxes"
+          >
+            <ListChecks className="w-4 h-4" />
+          </RailLink>
+
           {railAccounts.map((a) => {
             const href = `/inboxes/${encodeURIComponent(a.id)}`;
             return (
@@ -187,6 +195,13 @@ export function InboxTree({ accounts, canManage }: Props) {
             active={path === "/inboxes/all" || path === "/inboxes"}
             icon={<Layers className="w-3.5 h-3.5" />}
             label="All inboxes"
+            tone="indigo"
+          />
+          <Row
+            href="/inboxes/selected"
+            active={path === "/inboxes/selected"}
+            icon={<ListChecks className="w-3.5 h-3.5" />}
+            label="Selected inboxes"
             tone="indigo"
           />
         </Section>

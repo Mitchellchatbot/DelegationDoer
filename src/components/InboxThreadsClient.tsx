@@ -49,6 +49,16 @@ interface Props {
   // Optional server-side scope. Passed to /api/inboxes/threads so the
   // pagination & search stay scoped to one connected account.
   mailboxId?: string;
+  // Optional multi-inbox scope for the combined "Selected inboxes" view.
+  // Serialized to /api/inboxes/threads as `mailboxIds` and intersected with
+  // the caller's visible set server-side. `mailboxId` (single) wins if both
+  // are somehow passed.
+  mailboxIds?: string[];
+  // The scope `initialThreads` was SSR-fetched for (sorted-join of the initial
+  // mailboxIds). Lets the default-view restore tell "the SSR'd page" apart from
+  // "default filters but the live selection changed" so the latter refetches
+  // instead of snapping back to a stale SSR page. Undefined for single/all views.
+  initialScopeKey?: string;
 }
 
 const PAGE_SIZE = 50;
@@ -64,7 +74,8 @@ const SEARCH_DEBOUNCE_MS = 350;
 // replaces the visible list when the user types. Clearing the input
 // reverts to the initial SSR'd page.
 export function InboxThreadsClient({
-  initialThreads, initialHasMore, linkAccountId, accountIdByEmail, missiveAppUrl, mailboxId
+  initialThreads, initialHasMore, linkAccountId, accountIdByEmail, missiveAppUrl,
+  mailboxId, mailboxIds, initialScopeKey
 }: Props) {
   const [threads, setThreads] = useState<ThreadListItem[]>(initialThreads);
   const [hasMore, setHasMore] = useState(initialHasMore);
@@ -82,6 +93,14 @@ export function InboxThreadsClient({
   const { readIds } = useInboxSplit();
   const router = useRouter();
   const searchParams = useSearchParams();
+
+  // Stable, order-independent key for the multi-inbox scope. Sorting means a
+  // reordered selection doesn't trigger a refetch; using this string (never the
+  // array) in effect deps + the filter key avoids identity-driven refetch loops.
+  const mailboxIdsKey = useMemo(
+    () => (mailboxIds && mailboxIds.length ? [...mailboxIds].sort().join(",") : ""),
+    [mailboxIds]
+  );
 
   // Inbox view shows the SSR'd first page; Sent/Spam are always fetched
   // client-side from /api/inboxes/threads with the folder scope applied.
@@ -160,6 +179,7 @@ export function InboxThreadsClient({
         params.set("limit", String(PAGE_SIZE));
         params.set("offset", "0");
         if (mailboxId) params.set("mailboxId", mailboxId);
+        else if (mailboxIdsKey) params.set("mailboxIds", mailboxIdsKey);
         const res = await fetch(`/api/inboxes/threads?${params}`, { cache: "no-store" });
         if (!res.ok) return;
         const data = await res.json();
@@ -189,7 +209,7 @@ export function InboxThreadsClient({
       es?.close();
       if (retryTimer) clearTimeout(retryTimer);
     };
-  }, [debouncedQ, category, mailboxId, folder]);
+  }, [debouncedQ, category, mailboxId, mailboxIdsKey, folder]);
 
   // Reseed/replace the visible list ONLY when the actual filter/scope changes
   // (search, category, folder, mailbox) — NOT on every `initialThreads` identity
@@ -200,7 +220,7 @@ export function InboxThreadsClient({
   // scroll position. The key gate keeps the loaded list stable across re-renders.
   const filterKeyRef = useRef<string | null>(null);
   useEffect(() => {
-    const filterKey = `${debouncedQ}|${category}|${folder}|${mailboxId ?? ""}`;
+    const filterKey = `${debouncedQ}|${category}|${folder}|${mailboxId ?? ""}|${mailboxIdsKey}`;
     if (filterKeyRef.current === filterKey) return;
     filterKeyRef.current = filterKey;
     let cancelled = false;
@@ -210,7 +230,7 @@ export function InboxThreadsClient({
       if (folder === "DRAFTS") return;
       // Restore SSR'd page only on the default Inbox view — no search, no
       // category filter, INBOX folder. Any other combination is fetched.
-      if (isDefaultView) {
+      if (isDefaultView && (initialScopeKey === undefined || mailboxIdsKey === initialScopeKey)) {
         setThreads(initialThreads);
         setHasMore(initialHasMore);
         setSearchActive(false);
@@ -224,6 +244,7 @@ export function InboxThreadsClient({
         params.set("offset", "0");
         if (debouncedQ) params.set("q", debouncedQ);
         if (mailboxId) params.set("mailboxId", mailboxId);
+        else if (mailboxIdsKey) params.set("mailboxIds", mailboxIdsKey);
         if (category !== "all") params.set("category", category);
         if (folder !== "INBOX") params.set("folder", folder);
         const res = await fetch(`/api/inboxes/threads?${params}`, { cache: "no-store" });
@@ -243,7 +264,7 @@ export function InboxThreadsClient({
     }
     void run();
     return () => { cancelled = true; };
-  }, [debouncedQ, initialThreads, initialHasMore, mailboxId, category, folder, isDefaultView]);
+  }, [debouncedQ, initialThreads, initialHasMore, mailboxId, mailboxIdsKey, initialScopeKey, category, folder, isDefaultView]);
 
   const loadMore = useCallback(async () => {
     if (loading || !hasMore || folder === "DRAFTS") return;
@@ -254,6 +275,7 @@ export function InboxThreadsClient({
       params.set("offset", String(threads.length));
       if (debouncedQ) params.set("q", debouncedQ);
       if (mailboxId) params.set("mailboxId", mailboxId);
+      else if (mailboxIdsKey) params.set("mailboxIds", mailboxIdsKey);
       if (category !== "all") params.set("category", category);
       if (folder !== "INBOX") params.set("folder", folder);
       const res = await fetch(`/api/inboxes/threads?${params}`, { cache: "no-store" });
@@ -269,7 +291,7 @@ export function InboxThreadsClient({
     } finally {
       setLoading(false);
     }
-  }, [loading, hasMore, threads, debouncedQ, mailboxId, category, folder]);
+  }, [loading, hasMore, threads, debouncedQ, mailboxId, mailboxIdsKey, category, folder]);
 
   // IntersectionObserver on the sentinel below the list. When it
   // scrolls into view, kick off the next page. Setting rootMargin

@@ -469,14 +469,6 @@ export default function WidgetPage() {
     return () => clearInterval(id);
   }, [fetchTasks]);
 
-  // While in alert state, replay the alarm every 25s until acked. Annoying-
-  // by-design — that was the brief.
-  useEffect(() => {
-    if (state !== "alert") return;
-    const id = setInterval(playAlertSound, 25_000);
-    return () => clearInterval(id);
-  }, [state]);
-
   const unacked = tasks.filter((t) => t.needsAck);
 
   async function acknowledgeKudos(kudosId: string) {

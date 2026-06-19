@@ -109,11 +109,12 @@ export async function GET(req: NextRequest) {
     // account_emails) — which keeps the offset/hasMore cursor exact. It's
     // kept purely as a defensive backstop so a stale backend that ignores
     // mailbox_ids can't leak inboxes the caller may not see.
-    // When a concrete id scope is in play (selected view, single inbox, or
-    // non-leader "all visible"), build the allow-set from exactly those ids so
-    // the backstop agrees with the selected subset — not the full visible set.
-    // A leader with no id scope keeps null (whole workspace, nothing to hide).
-    const scopeIds = scope.mailboxIds ?? (scope.mailboxId ? [scope.mailboxId] : null);
+    // For an explicit multi-inbox scope (the "Selected inboxes" view, and the
+    // non-leader "all visible" set) clamp the backstop to exactly those ids so
+    // it agrees with the selected subset — not the full visible set. The
+    // single-inbox (mailboxId) and leader-all paths are deliberately left on
+    // their original behavior so this change can't alter those existing views.
+    const scopeIds = scope.mailboxIds ?? null;
     const scopeIdSet = scopeIds ? new Set(scopeIds) : null;
     const visibleEmails = scopeIdSet
       ? new Set(

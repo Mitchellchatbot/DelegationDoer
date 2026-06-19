@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { requireCurrentUserId } from "@/lib/session";
 import { closeOpenSegment, openSegment } from "@/lib/time-tracking";
-import { dayKeyInTz, hoursForDay } from "@/lib/work-hours";
+import { scheduledHoursForActiveShift } from "@/lib/work-hours";
 
 export const dynamic = "force-dynamic";
 
@@ -22,20 +22,24 @@ export async function GET() {
       .maybeSingle(),
     supabase
       .from("users")
-      .select("daily_capacity, work_timezone, weekly_schedule")
+      .select("daily_capacity, work_timezone, weekly_schedule, work_hours_start, work_hours_end")
       .eq("id", userId)
       .maybeSingle()
   ]);
   // Schedule-aware "today" budget: 0 on off days, short on short days.
   // Falls back to the flat daily_capacity column on weekdays when no
-  // per-day schedule has been set.
+  // per-day schedule has been set. Overnight-aware: the post-midnight tail
+  // of a shift (e.g. 12–3 AM for a 7 PM–3 AM Karachi shift) is credited to
+  // the day the shift started, not the current calendar day.
   const flatDaily = Number(me?.daily_capacity ?? 8);
-  const dayKey = dayKeyInTz(new Date(), (me?.work_timezone as string | null) ?? null);
-  const dailyCapacity = hoursForDay({
-    dayKey,
+  const dailyCapacity = scheduledHoursForActiveShift({
+    now: new Date(),
+    tz: (me?.work_timezone as string | null) ?? null,
     dailyCapacity: flatDaily,
     weeklySchedule:
-      (me?.weekly_schedule as Record<string, { start: string; end: string } | null> | null) ?? {}
+      (me?.weekly_schedule as Record<string, { start: string; end: string } | null> | null) ?? {},
+    flatStart: (me?.work_hours_start as string | null) ?? null,
+    flatEnd: (me?.work_hours_end as string | null) ?? null
   });
 
   const startOfDay = new Date();

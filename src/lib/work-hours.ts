@@ -145,15 +145,17 @@ export function hoursForDay(args: {
   return Math.max(0, args.dailyCapacity || 0);
 }
 
-// HH:MM end - HH:MM start. Treats end < start (overnight) as zero
-// rather than negative — the editor doesn't allow it and we don't
-// want a stray entry to skew capacity.
+// HH:MM end - HH:MM start. When end is at or before start the block is an
+// overnight shift that wraps past midnight (e.g. 19:00–03:00 = 8h), so we
+// add a day's worth of minutes. end === start is treated as a misconfigured
+// zero-length block rather than a 24h shift.
 function hoursBetween(start: string, end: string): number {
   const a = hmToMinutes(start);
   const b = hmToMinutes(end);
   if (a == null || b == null) return 0;
-  if (b <= a) return 0;
-  return (b - a) / 60;
+  if (b === a) return 0;
+  const span = b > a ? b - a : b + 1440 - a; // wrap past midnight for overnight shifts
+  return span / 60;
 }
 
 function hmToMinutes(s: string): number | null {
@@ -163,4 +165,107 @@ function hmToMinutes(s: string): number | null {
   const mm = Number(m[2]);
   if (h > 23) return null;
   return h * 60 + mm;
+}
+
+// Current minutes-since-midnight in the given IANA timezone. Server
+// runtimes are UTC, so we ask Intl what wall-clock time the user sees
+// rather than trusting new Date().getHours().
+function minutesOfDayInTz(date: Date, tz: string | null | undefined): number {
+  const zone = tz ?? "UTC";
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: zone,
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false
+    }).formatToParts(date);
+    const get = (t: string) => Number(parts.find((p) => p.type === t)?.value ?? "0");
+    let hh = get("hour");
+    if (hh === 24) hh = 0; // Intl edge case: midnight can show as "24"
+    return hh * 60 + get("minute");
+  } catch {
+    return date.getHours() * 60 + date.getMinutes();
+  }
+}
+
+// The schedule block on file for a given day, unifying both editor modes:
+// an explicit weekly_schedule wins; otherwise the flat work_hours_start/end
+// columns apply Mon–Fri ("Same every weekday") with weekends off. Returns
+// null when there's no block to read (day off, or no explicit hours set).
+// NOTE: only used to *detect* an overnight shift; the hours themselves come
+// from hoursForDay() so flat-mode semantics (Mon–Fri → dailyCapacity even
+// when no start/end is on file) are preserved exactly.
+function blockForDay(
+  dayKey: DayKey,
+  args: {
+    weeklySchedule?: Partial<Record<DayKey, { start: string; end: string } | null>>;
+    flatStart?: string | null;
+    flatEnd?: string | null;
+  }
+): { start: string; end: string } | null {
+  const sched = args.weeklySchedule ?? {};
+  if (Object.keys(sched).length > 0) {
+    return sched[dayKey] ?? null;
+  }
+  if (dayKey === "sat" || dayKey === "sun") return null;
+  if (args.flatStart && args.flatEnd) {
+    return { start: args.flatStart, end: args.flatEnd };
+  }
+  return null;
+}
+
+// If the given day's shift wraps past midnight (end < start), return its
+// end time in minutes-of-day; otherwise null. Used to recognise that we're
+// in the early-morning tail of a shift that started the night before.
+function overnightEndMinutes(
+  dayKey: DayKey,
+  args: {
+    weeklySchedule?: Partial<Record<DayKey, { start: string; end: string } | null>>;
+    flatStart?: string | null;
+    flatEnd?: string | null;
+  }
+): number | null {
+  const block = blockForDay(dayKey, args);
+  if (!block) return null;
+  const s = hmToMinutes(block.start);
+  const e = hmToMinutes(block.end);
+  if (s == null || e == null || e >= s) return null; // not overnight
+  return e;
+}
+
+// Scheduled hours for the shift currently in effect, anchored to the user's
+// timezone and overnight-aware. The post-midnight tail of an overnight
+// shift (e.g. 12–3 AM Saturday for a 7 PM–3 AM Fri shift) belongs to the
+// day the shift *started*, not the current calendar day — so plain
+// dayKeyInTz()/hoursForDay() would wrongly report an off day.
+//
+// Behaviour is identical to hoursForDay(dayKeyInTz(now)) for every user
+// EXCEPT one who is currently inside the post-midnight tail of an overnight
+// shift; only then do we credit yesterday's hours instead of today's.
+// Used by /api/clock for the "Workday remaining" bar.
+export function scheduledHoursForActiveShift(args: {
+  now: Date;
+  tz: string | null | undefined;
+  dailyCapacity: number;
+  weeklySchedule?: Partial<Record<DayKey, { start: string; end: string } | null>>;
+  flatStart?: string | null; // work_hours_start (used when weeklySchedule is empty)
+  flatEnd?: string | null; // work_hours_end
+}): number {
+  const todayKey = dayKeyInTz(args.now, args.tz);
+  const prevKey = DAY_BY_WEEKDAY[(DAY_BY_WEEKDAY.indexOf(todayKey) + 6) % 7];
+
+  // In yesterday's overnight tail? (before yesterday's shift end time today)
+  const yEnd = overnightEndMinutes(prevKey, args);
+  if (yEnd != null && minutesOfDayInTz(args.now, args.tz) < yEnd) {
+    return hoursForDay({
+      dayKey: prevKey,
+      dailyCapacity: args.dailyCapacity,
+      weeklySchedule: args.weeklySchedule
+    });
+  }
+  return hoursForDay({
+    dayKey: todayKey,
+    dailyCapacity: args.dailyCapacity,
+    weeklySchedule: args.weeklySchedule
+  });
 }

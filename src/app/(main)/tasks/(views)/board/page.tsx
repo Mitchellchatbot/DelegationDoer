@@ -601,7 +601,7 @@ export default function BoardPage() {
             {columns.map((col, colIdx) => (
               <div
                 key={col.id}
-                className={cn("rounded-2xl bg-surface/40 border anim-fade-in-up shrink-0 w-72", col.tone)}
+                className={cn("rounded-2xl bg-surface/40 border anim-fade-in shrink-0 w-72", col.tone)}
                 style={{ animationDelay: `${colIdx * 30}ms` }}
               >
                 <div className="px-3 py-2 flex items-center justify-between gap-2">
@@ -648,12 +648,26 @@ export default function BoardPage() {
                                 }}
                                 style={{
                                   ...p.draggableProps.style,
-                                  animationDelay: `${i * 30}ms`,
-                                  ...(s.isDragging ? { zIndex: 9999 } : null),
-                                  cursor: s.isDragging ? "grabbing" : "pointer"
+                                  // While dragging, the clone gets NO entrance
+                                  // animation or animationDelay — dnd owns its
+                                  // transform/position entirely (see className
+                                  // note below).
+                                  ...(s.isDragging
+                                    ? { zIndex: 9999, cursor: "grabbing" }
+                                    : { animationDelay: `${i * 30}ms`, cursor: "pointer" })
                                 }}
                                 className={cn(
-                                  "card p-3 anim-fade-in-up transition-shadow hover:shadow-lift",
+                                  // Never put a transform-animating class
+                                  // (anim-fade-in-up etc.) on the draggable: a
+                                  // fill:both keyframe pins `transform` above
+                                  // inline styles and clobbers the per-frame
+                                  // transform dnd writes to track the cursor,
+                                  // freezing the clone and stopping siblings
+                                  // from shifting. Opacity-only entrance, and
+                                  // only when not dragging so the portaled
+                                  // clone has none at all.
+                                  "card p-3 transition-shadow hover:shadow-lift",
+                                  !s.isDragging && "anim-fade-in",
                                   t.inactiveFlag && "border-stalled/50",
                                   // Done tasks get a soft green tint + emerald
                                   // border so they read as "finished" at a

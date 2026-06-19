@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import * as Popover from "@radix-ui/react-popover";
 import { Sparkles, Loader2, ArrowRight, Send, RefreshCw, Calendar, CheckSquare, MessageSquare, Clock, X, Wand2, Paintbrush, Eraser, AlignLeft, List, Code, Eye, Mail, Zap, Check, ChevronDown } from "lucide-react";
 import { toast } from "sonner";
@@ -9,6 +9,7 @@ import { getDepartmentMeta } from "@/lib/departments";
 import { useCurrentUser } from "@/lib/user-context";
 import { renderBlueEmail, type BrandedEmailContent } from "@/lib/email-template";
 import { MediaPicker } from "@/components/MediaPicker";
+import { RecipientAutocomplete, type ClientSuggestion } from "@/components/RecipientAutocomplete";
 import type { TaskMedia } from "@/lib/types";
 
 // Client Update composer, rendered as a per-client section on /clients/[id].
@@ -296,6 +297,21 @@ export function ClientUpdateComposer({
   function patchDraft(idx: number, patch: Partial<DeptDraft>) {
     setDrafts((prev) => prev.map((d, i) => (i === idx ? { ...d, ...patch } : d)));
   }
+
+  // Recipient typeahead source: this locked client's saved contacts only
+  // (no full roster — a client update only ever goes to its own contacts).
+  const clientSuggestions = useMemo<ClientSuggestion[]>(
+    () =>
+      lockedClient.contactEmails.length
+        ? [{
+            id: lockedClient.id,
+            name: lockedClient.name,
+            contactName: null,
+            contactEmails: lockedClient.contactEmails,
+          }]
+        : [],
+    [lockedClient]
+  );
 
   function removeDraft(idx: number) {
     setDrafts((prev) => prev.filter((_, i) => i !== idx));
@@ -626,12 +642,12 @@ export function ClientUpdateComposer({
                 </Field>
 
                 <Field label="To">
-                  <input
-                    type="text"
+                  <RecipientAutocomplete
                     value={d.to}
-                    onChange={(e) => patchDraft(idx, { to: e.target.value })}
+                    onChange={(v) => patchDraft(idx, { to: v })}
+                    clients={clientSuggestions}
                     placeholder="recipient@client.com, second@client.com"
-                    className="flex-1 text-[13px] bg-transparent border-none outline-none focus:ring-0 placeholder:text-ink/35"
+                    inputClassName="w-full text-[13px] bg-transparent border-none outline-none focus:ring-0 placeholder:text-ink/35"
                   />
                   {!d.showCcBcc && (
                     <button
@@ -646,21 +662,21 @@ export function ClientUpdateComposer({
                 {d.showCcBcc && (
                   <>
                     <Field label="Cc">
-                      <input
-                        type="text"
+                      <RecipientAutocomplete
                         value={d.cc}
-                        onChange={(e) => patchDraft(idx, { cc: e.target.value })}
+                        onChange={(v) => patchDraft(idx, { cc: v })}
+                        clients={clientSuggestions}
                         placeholder="cc@client.com"
-                        className="flex-1 text-[13px] bg-transparent border-none outline-none focus:ring-0 placeholder:text-ink/35"
+                        inputClassName="w-full text-[13px] bg-transparent border-none outline-none focus:ring-0 placeholder:text-ink/35"
                       />
                     </Field>
                     <Field label="Bcc">
-                      <input
-                        type="text"
+                      <RecipientAutocomplete
                         value={d.bcc}
-                        onChange={(e) => patchDraft(idx, { bcc: e.target.value })}
+                        onChange={(v) => patchDraft(idx, { bcc: v })}
+                        clients={clientSuggestions}
                         placeholder="bcc@internal.com"
-                        className="flex-1 text-[13px] bg-transparent border-none outline-none focus:ring-0 placeholder:text-ink/35"
+                        inputClassName="w-full text-[13px] bg-transparent border-none outline-none focus:ring-0 placeholder:text-ink/35"
                       />
                     </Field>
                   </>

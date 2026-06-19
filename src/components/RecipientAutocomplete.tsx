@@ -40,12 +40,16 @@ export function RecipientAutocomplete({
   clients,
   placeholder,
   autoFocus,
+  inputClassName,
 }: {
   value: string;
   onChange: (v: string) => void;
   clients: ClientSuggestion[];
   placeholder?: string;
   autoFocus?: boolean;
+  // Override the input's styling so the typeahead can blend into hosts
+  // with different field sizes (defaults to the compose-modal look).
+  inputClassName?: string;
 }) {
   const [focused, setFocused] = useState(false);
   const [active, setActive] = useState(0);
@@ -181,7 +185,7 @@ export function RecipientAutocomplete({
         onKeyDown={onKeyDown}
         placeholder={placeholder}
         autoComplete="off"
-        className="w-full bg-transparent text-sm outline-none placeholder:text-ink/40"
+        className={inputClassName ?? "w-full bg-transparent text-sm outline-none placeholder:text-ink/40"}
       />
       {showDropdown && (
         <div className="absolute left-0 right-0 top-full mt-1 z-20 rounded-xl border border-slate-200 bg-white shadow-lift overflow-hidden max-h-72 overflow-y-auto">

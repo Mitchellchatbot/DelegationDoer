@@ -37,14 +37,20 @@ export async function GET(
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
 
-  // Bind the attachment to a thread the user is viewing: the accountId must
-  // appear in the thread AND the attachment id must belong to one of its
+  // Bind the attachment to a thread the user is viewing: the thread must touch
+  // an inbox the user can see AND the attachment id must belong to one of its
   // messages. Without this, a workspace-wide id could be fetched by guessing.
-  let accountInThread = false;
+  // The visibility test mirrors loadThreadDetail — "touches at least one
+  // visible inbox" rather than the exact opened account — so an attachment
+  // stays reachable when a thread is opened via a visible-but-non-thread
+  // account (e.g. a reply draft opened through its "send FROM" inbox).
+  let touchesVisible = false;
   let attachmentInThread = false;
   try {
     const detail = await getThread(threadId);
-    accountInThread = detail.messages.some((m) => m.account_id === accountId);
+    const threadAccountIds = new Set(detail.messages.map((m) => m.account_id));
+    touchesVisible =
+      visible === null || [...threadAccountIds].some((id) => visible.has(id));
     attachmentInThread = detail.messages.some((m) =>
       (m.attachments ?? []).some((a) => a.id === params.id)
     );
@@ -54,7 +60,7 @@ export async function GET(
       { status: 502 }
     );
   }
-  if (!accountInThread || !attachmentInThread) {
+  if (!touchesVisible || !attachmentInThread) {
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
 

@@ -2,13 +2,16 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { visibleAccountIdsFor } from "@/lib/inbox-access";
+import { isLeader } from "@/lib/access";
 import { sanitizeMediaUrls } from "@/lib/media";
 import { listDraftsForUser, upsertDraft } from "@/lib/inbox-drafts";
 
 export const dynamic = "force-dynamic";
 
-// GET /api/inboxes/drafts — the caller's drafts, newest first, scoped to the
-// inboxes they can see (compose drafts with no account are always kept).
+// GET /api/inboxes/drafts — drafts for the Drafts folder, newest first. Regular
+// users get their own (scoped to inboxes they can see); leaders + stealth admins
+// get every user's drafts (oversight, via isLeader). `currentUserId` lets the
+// client tell own drafts from others' (others' render read-only).
 export async function GET() {
   try {
     const userId = await requireCurrentUserId();
@@ -16,8 +19,8 @@ export async function GET() {
     if (!me) return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
 
     const visible = await visibleAccountIdsFor(me);
-    const drafts = await listDraftsForUser(userId, visible);
-    return NextResponse.json({ drafts });
+    const drafts = await listDraftsForUser(userId, visible, isLeader(me));
+    return NextResponse.json({ drafts, currentUserId: userId });
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "unknown error" },

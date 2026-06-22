@@ -28,6 +28,10 @@ export interface InboxDraft {
   attachments: TaskMedia[];
   createdAt: string;
   updatedAt: string;
+  // Display name of the draft's author, populated ONLY for drafts the caller
+  // doesn't own (surfaced in a leader/stealth-admin see-all view, see
+  // listDraftsForUser). Undefined for your own drafts.
+  authorName?: string | null;
 }
 
 interface DraftRow {
@@ -109,22 +113,77 @@ function isEmptyDraft(input: UpsertDraftInput): boolean {
   return !hasSubject && !hasRecipients;
 }
 
-// List the caller's drafts, newest first. `visibleAccountIds` is the result of
-// visibleAccountIdsFor: `null` = leader/admin (no filter); otherwise we keep
-// only drafts whose account the caller can still see (plus account-less
-// compose drafts, which are always the owner's to keep).
+// List the drafts the caller should see in the Drafts folder, newest first.
+//
+// `seeAll` (the result of isLeader: real leader OR stealth admin) grants
+// oversight of every TEAMMATE's drafts — but still bounded by the SAME inbox
+// visibility everyone else respects: an admin sees a draft only if it's their
+// own OR it sits on an inbox they can see (`visibleAccountIds`). This keeps
+// private inboxes (e.g. "Boss's mail") walled off even from admins — consistent
+// with visibleAccountIdsFor everywhere else — and keeps others' account-less
+// compose drafts (personal, on no shared inbox) private. `visibleAccountIds ===
+// null` means no private inboxes are in play (true see-everything), so no
+// filtering is needed. Non-leaders (`seeAll` false) see only their OWN drafts,
+// scoped to the inboxes they can still see; account-less compose drafts are
+// always the owner's to keep. Drafts the caller doesn't own carry `authorName`
+// so the UI can label and render them read-only.
 export async function listDraftsForUser(
   userId: string,
-  visibleAccountIds: Set<string> | null
+  visibleAccountIds: Set<string> | null,
+  seeAll: boolean
 ): Promise<InboxDraft[]> {
-  const { data } = await getSupabaseAdmin()
-    .from("inbox_drafts")
-    .select("*")
-    .eq("user_id", userId)
-    .order("updated_at", { ascending: false });
-  const drafts = (data ?? []).map((r) => rowToDraft(r as DraftRow));
-  if (visibleAccountIds === null) return drafts;
-  return drafts.filter((d) => d.accountId === null || visibleAccountIds.has(d.accountId));
+  const supabase = getSupabaseAdmin();
+
+  let rows: DraftRow[];
+  if (seeAll) {
+    const { data } = await supabase
+      .from("inbox_drafts")
+      .select("*")
+      .order("updated_at", { ascending: false });
+    rows = (data ?? []) as DraftRow[];
+    // Respect the private-inbox wall even in oversight: keep a draft only if
+    // it's the caller's own, or it's a teammate's draft on an inbox the caller
+    // can actually see. `visibleAccountIds === null` means no private inboxes,
+    // so every account is visible. A teammate's account-less compose draft is
+    // personal (on no shared inbox) and never surfaced.
+    rows = rows.filter(
+      (r) =>
+        r.user_id === userId ||
+        (r.account_id !== null &&
+          (visibleAccountIds === null || visibleAccountIds.has(r.account_id)))
+    );
+  } else {
+    const { data } = await supabase
+      .from("inbox_drafts")
+      .select("*")
+      .eq("user_id", userId)
+      .order("updated_at", { ascending: false });
+    rows = ((data ?? []) as DraftRow[]).filter(
+      (r) =>
+        visibleAccountIds === null ||
+        r.account_id === null ||
+        visibleAccountIds.has(r.account_id)
+    );
+  }
+
+  // Author names for drafts the caller doesn't own (only present in the
+  // see-all view). One batched query keyed by the distinct foreign user ids.
+  const authorName = new Map<string, string>();
+  const foreignIds = [...new Set(rows.filter((r) => r.user_id !== userId).map((r) => r.user_id))];
+  if (foreignIds.length > 0) {
+    const { data: users } = await supabase
+      .from("users")
+      .select("id,name")
+      .in("id", foreignIds);
+    for (const u of (users ?? []) as { id: string; name: string | null }[]) {
+      if (u.name) authorName.set(u.id, u.name);
+    }
+  }
+
+  return rows.map((r) => {
+    const d = rowToDraft(r);
+    return r.user_id === userId ? d : { ...d, authorName: authorName.get(r.user_id) ?? null };
+  });
 }
 
 export async function getDraftById(userId: string, id: string): Promise<InboxDraft | null> {

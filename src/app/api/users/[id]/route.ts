@@ -114,9 +114,29 @@ export async function PATCH(
           { status: 400 }
         );
       }
+      // If the chosen primary is currently this user's SECONDARY manager, a
+      // plain update would momentarily set primary == secondary and trip
+      // users_secondary_manager_not_primary. Resolve it atomically by
+      // swapping: promote the co-lead to primary and demote the old primary
+      // to secondary (no one is silently dropped). Both columns differ in the
+      // single write, so the check constraint is satisfied.
+      const managerPatch: {
+        manager_user_id: string | null;
+        secondary_manager_user_id?: string | null;
+      } = { manager_user_id: managerUserId };
+      if (managerUserId !== null) {
+        const { data: current } = await supabase
+          .from("users")
+          .select("manager_user_id, secondary_manager_user_id")
+          .eq("id", params.id)
+          .maybeSingle();
+        if (current?.secondary_manager_user_id === managerUserId) {
+          managerPatch.secondary_manager_user_id = current.manager_user_id ?? null;
+        }
+      }
       const { error: mErr } = await supabase
         .from("users")
-        .update({ manager_user_id: managerUserId })
+        .update(managerPatch)
         .eq("id", params.id);
       if (mErr) {
         return NextResponse.json(

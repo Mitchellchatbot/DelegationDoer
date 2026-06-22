@@ -126,6 +126,7 @@ export async function GET(req: NextRequest) {
         .select("id, user_id, client_name, note_date, worked_on, results")
         .in("client_name", clientNames)
         .is("reported_to_client_at", null)
+        .is("dismissed_at", null)
         .gte("note_date", startDateStr)
         .order("note_date", { ascending: false })
         .limit(2000),

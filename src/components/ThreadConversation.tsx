@@ -190,7 +190,7 @@ export function ThreadConversation({
               // z-10 stacking context, so a fixed overlay can't paint over the
               // Topbar; anchoring at top-24 keeps the card's Minimize bar clear
               // of it. (The Sidebar is z-auto and paints below, so it's covered.)
-              "fixed left-1/2 top-24 z-50 -translate-x-1/2 w-[calc(100%-3rem)] max-w-5xl max-h-[calc(100vh-7rem)] overflow-y-auto rounded-3xl bg-white shadow-[0_30px_80px_-15px_rgba(0,0,0,0.6)]"
+              "fixed left-1/2 top-24 z-50 -translate-x-1/2 w-[calc(100%-2rem)] max-h-[calc(100vh-7rem)] overflow-y-auto rounded-3xl bg-white shadow-[0_30px_80px_-15px_rgba(0,0,0,0.6)]"
             : ""
         }
       >

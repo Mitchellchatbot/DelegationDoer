@@ -936,14 +936,14 @@ function MaxableOverlay({
   if (!maximized || typeof document === "undefined") return <>{children}</>;
   return createPortal(
     <div
-      className="fixed inset-0 z-[64] flex items-start justify-center p-4 sm:p-8 bg-black/50 backdrop-blur-sm overflow-y-auto anim-fade-in"
+      className="fixed inset-0 z-[64] flex items-start justify-center p-3 sm:p-4 bg-black/50 backdrop-blur-sm overflow-y-auto anim-fade-in"
       onClick={(e) => { e.stopPropagation(); onMinimize(); }}
       role="dialog"
       aria-modal="true"
       aria-label={`Maximized client update draft for ${title}`}
     >
       <div
-        className="relative w-full max-w-5xl bg-white rounded-2xl shadow-2xl my-auto anim-fade-in-up"
+        className="relative w-full bg-white rounded-2xl shadow-2xl my-auto anim-fade-in-up"
         onClick={(e) => e.stopPropagation()}
       >
         <header className="flex items-center justify-between px-5 py-3.5 border-b border-slate-100 sticky top-0 bg-white rounded-t-2xl z-10">

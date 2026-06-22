@@ -7,6 +7,7 @@ import { shortName, rawEmail, formatBytes, messageSnippet } from "@/lib/email-fo
 import { Avatar } from "@/components/Avatar";
 import { ForwardButton } from "@/components/ForwardButton";
 import { EmailBody } from "@/components/EmailBody";
+import { rewriteInlineCids } from "@/lib/inline-cid";
 
 // Gmail-style thread collapse. A thread can hold many messages; rendering every
 // one fully expanded turns it into a wall of email. Instead we show only the
@@ -204,7 +205,14 @@ export function ThreadMessages({
                     can't cascade into the app. Plain-text fallback gets prose. */}
                 <div className="p-5">
                   {m.body_html ? (
-                    <EmailBody html={m.body_html} />
+                    <EmailBody
+                      html={rewriteInlineCids(
+                        m.body_html,
+                        m.attachments ?? [],
+                        accountId,
+                        threadId
+                      )}
+                    />
                   ) : (
                     <pre className="text-sm whitespace-pre-wrap font-sans leading-relaxed">
                       {m.body_text || "(empty)"}

@@ -7,9 +7,11 @@ import {
   getThread,
   fetchAttachment,
   type MissiveAttachment,
-  type MissiveMessage
+  type MissiveMessage,
+  type MissiveMessageAttachment
 } from "@/lib/missive-client";
 import { sanitizeMediaUrls, fetchMediaAsAttachments } from "@/lib/media";
+import { cidPattern } from "@/lib/inline-cid";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -87,27 +89,40 @@ export async function POST(
     }
 
     const subject = explicitSubject ?? fwdSubject(src.subject || detail.thread.subject || "");
-    const { bodyHtml, bodyText } = buildForwardBodies(src, note);
 
-    // Re-attach the original message's files. The bytes aren't inlined in
-    // getThread; pull each one from the clone with the service token (the
-    // browser proxy needs a cookie, so it can't be used server-side here).
-    const attachments: MissiveAttachment[] = [];
+    // Pull the original message's files ONCE. The bytes aren't inlined in
+    // getThread; fetch each from the clone with the service token (the browser
+    // proxy needs a cookie, so it can't be used server-side here). We keep the
+    // attachment metadata alongside the bytes so buildForwardBodies can embed
+    // inline images directly into the forwarded body as data: URIs.
+    const fetched: { meta: MissiveMessageAttachment; content: Buffer }[] = [];
     if (includeAttachments) {
       for (const a of src.attachments ?? []) {
         try {
           const upstream = await fetchAttachment(a.id);
           if (!upstream.ok) continue;
-          attachments.push({
-            filename: a.filename || "attachment",
-            contentType: a.content_type || "application/octet-stream",
-            content: Buffer.from(await upstream.arrayBuffer())
-          });
+          fetched.push({ meta: a, content: Buffer.from(await upstream.arrayBuffer()) });
         } catch {
           // Skip one bad attachment rather than failing the whole forward.
         }
       }
     }
+
+    // Inline images (cid: refs) are baked into the body as data: URIs so the
+    // forwarded message is self-contained — the original `cid:` linkage is lost
+    // once the clone re-sends, so dangling refs would otherwise render broken.
+    const { bodyHtml, bodyText, inlinedIds } = buildForwardBodies(src, note, fetched);
+
+    // Re-attach only the files NOT embedded inline above (ordinary attachments);
+    // inlined images already travel inside the body, so re-attaching them would
+    // just duplicate them as download chips.
+    const attachments: MissiveAttachment[] = fetched
+      .filter((f) => !inlinedIds.has(f.meta.id))
+      .map((f) => ({
+        filename: f.meta.filename || "attachment",
+        contentType: f.meta.content_type || "application/octet-stream",
+        content: f.content
+      }));
 
     // Optional extra files the user attaches in the forward composer.
     const extraItems = sanitizeMediaUrls(body.attachmentUrls);
@@ -168,8 +183,9 @@ function stripHtml(html: string): string {
 // mail looks consistent whether it originates in DD or the clone UI.
 function buildForwardBodies(
   src: MissiveMessage,
-  note: string
-): { bodyHtml: string; bodyText: string } {
+  note: string,
+  fetched: { meta: MissiveMessageAttachment; content: Buffer }[]
+): { bodyHtml: string; bodyText: string; inlinedIds: Set<string> } {
   const sentDate = src.sent_at ? new Date(src.sent_at).toLocaleString() : "";
   const toLine = (src.to_addrs ?? []).join(", ");
   const ccLine = (src.cc_addrs ?? []).join(", ");
@@ -182,8 +198,26 @@ function buildForwardBodies(
     `<b>To:</b> ${escapeHtml(toLine)}<br/>` +
     (ccLine ? `<b>Cc:</b> ${escapeHtml(ccLine)}<br/>` : "") +
     `<br/>`;
-  const originalHtml =
+
+  // Embed inline images as self-contained data: URIs. For each fetched
+  // attachment that has a content_id AND is actually referenced in the body,
+  // swap its cid: refs for the base64 bytes and record the id so the caller
+  // doesn't re-attach it as a duplicate file.
+  let originalHtml =
     src.body_html || escapeHtml(src.body_text || "").replace(/\n/g, "<br/>");
+  const inlinedIds = new Set<string>();
+  if (src.body_html) {
+    for (const f of fetched) {
+      if (!f.meta.content_id) continue;
+      const before = originalHtml;
+      const dataUri =
+        `data:${f.meta.content_type || "application/octet-stream"};base64,` +
+        f.content.toString("base64");
+      originalHtml = originalHtml.replace(cidPattern(f.meta.content_id), dataUri);
+      if (originalHtml !== before) inlinedIds.add(f.meta.id);
+    }
+  }
+
   const noteHtml = note.trim()
     ? `${escapeHtml(note.trim()).replace(/\n/g, "<br/>")}<br/><br/>`
     : "";
@@ -200,5 +234,5 @@ function buildForwardBodies(
   const originalText = src.body_text || stripHtml(src.body_html || "");
   const bodyText = `${note.trim() ? note.trim() + "\n\n" : ""}${headerText}${originalText}`;
 
-  return { bodyHtml, bodyText };
+  return { bodyHtml, bodyText, inlinedIds };
 }

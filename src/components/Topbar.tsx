@@ -137,7 +137,7 @@ export function Topbar({ user }: { user: User }) {
   }
 
   return (
-    <header className="h-16 sticky top-3 z-30 px-5 grid grid-cols-[1fr_auto_1fr] items-center gap-3 rounded-3xl border border-slate-200/70 bg-white/85 backdrop-blur-xl shadow-soft">
+    <header className="h-16 sticky top-3 z-30 px-5 grid grid-cols-[auto_1fr_auto] items-center gap-3 rounded-3xl border border-slate-200/70 bg-white/85 backdrop-blur-xl shadow-soft">
       {/* Breadcrumb pill — mirrors Allocation Assist's left-side
           "Home › Sales › Sales Tracker" navigation hint. Home icon is
           always the first crumb and links back to /home; subsequent
@@ -179,7 +179,7 @@ export function Topbar({ user }: { user: User }) {
           non-empty query navigates to /search?q=… for the full list. */}
       <div
         ref={searchWrapRef}
-        className="relative w-[460px] max-w-full justify-self-center"
+        className="relative w-[460px] max-w-full min-w-0 justify-self-start"
       >
         <form
           onSubmit={(e) => {

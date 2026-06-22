@@ -18,6 +18,9 @@ export const dynamic = "force-dynamic";
 //   q           — full-text query (subject / sender / body via missive
 //                 tsvector + ILIKE operators on the missive side)
 //   mailboxId   — scope to one connected account
+//   mailboxIds  — comma-separated account ids ("Selected inboxes" view);
+//                 intersected with the caller's visible set, narrows within it
+//                 only. Ignored when mailboxId is also present.
 //   folder      — "INBOX" | "SENT" | "SPAM", default INBOX
 export async function GET(req: NextRequest) {
   try {
@@ -30,6 +33,11 @@ export async function GET(req: NextRequest) {
     const offset = Math.max(0, Number(sp.get("offset")) || 0);
     const q = sp.get("q")?.trim() || undefined;
     const mailboxId = sp.get("mailboxId") || undefined;
+    // Multi-inbox scope for the "Selected inboxes" view. Comma-separated ids;
+    // intersected with visibility below so it can only narrow within the
+    // caller's visible set, never widen past it.
+    const requestedMailboxIds = (sp.get("mailboxIds") ?? "")
+      .split(",").map((s) => s.trim()).filter(Boolean);
     // Whitelist the mailbox view; anything unknown falls back to INBOX so
     // a bad param can never widen the query past the provider folders.
     const rawFolder = sp.get("folder");
@@ -59,8 +67,9 @@ export async function GET(req: NextRequest) {
 
     // Determine the effective mailbox scope.
     //  - explicit mailboxId (single-inbox view): allow only if visible.
-    //  - no mailboxId, non-leader: scope to all visible inbox ids.
-    //  - no mailboxId, leader (visibleIds === null): whole workspace.
+    //  - explicit mailboxIds ("Selected inboxes"): intersect with visibility.
+    //  - no scope, non-leader: scope to all visible inbox ids.
+    //  - no scope, leader (visibleIds === null): whole workspace.
     let scope: { mailboxId?: string; mailboxIds?: string[] };
     if (mailboxId) {
       if (visibleIds !== null && !visibleIds.has(mailboxId)) {
@@ -68,6 +77,19 @@ export async function GET(req: NextRequest) {
         return NextResponse.json({ threads: [], limit, offset, hasMore: false });
       }
       scope = { mailboxId };
+    } else if (requestedMailboxIds.length > 0) {
+      // Keep only ids the caller may see. Leaders (visibleIds === null) can
+      // pick any real account; everyone else is clamped to their visible set.
+      const accountIdSet = new Set(accounts.map((a) => a.id));
+      const allowed = requestedMailboxIds.filter((id) =>
+        visibleIds === null ? accountIdSet.has(id) : visibleIds.has(id)
+      );
+      if (allowed.length === 0) {
+        // Nothing survives the visibility intersection — return empty; never
+        // fall through to a wider scope.
+        return NextResponse.json({ threads: [], limit, offset, hasMore: false });
+      }
+      scope = { mailboxIds: allowed };
     } else if (visibleIds !== null) {
       if (visibleAccounts.length === 0) {
         return NextResponse.json({ threads: [], limit, offset, hasMore: false });
@@ -87,9 +109,20 @@ export async function GET(req: NextRequest) {
     // account_emails) — which keeps the offset/hasMore cursor exact. It's
     // kept purely as a defensive backstop so a stale backend that ignores
     // mailbox_ids can't leak inboxes the caller may not see.
-    const visibleEmails = visibleIds === null
-      ? null
-      : new Set(visibleAccounts.map((a) => a.email.toLowerCase()));
+    // For an explicit multi-inbox scope (the "Selected inboxes" view, and the
+    // non-leader "all visible" set) clamp the backstop to exactly those ids so
+    // it agrees with the selected subset — not the full visible set. The
+    // single-inbox (mailboxId) and leader-all paths are deliberately left on
+    // their original behavior so this change can't alter those existing views.
+    const scopeIds = scope.mailboxIds ?? null;
+    const scopeIdSet = scopeIds ? new Set(scopeIds) : null;
+    const visibleEmails = scopeIdSet
+      ? new Set(
+          accounts.filter((a) => scopeIdSet.has(a.id)).map((a) => a.email.toLowerCase())
+        )
+      : visibleIds === null
+        ? null
+        : new Set(visibleAccounts.map((a) => a.email.toLowerCase()));
     const inScope = visibleEmails === null
       ? page.threads
       : page.threads.filter((t) =>

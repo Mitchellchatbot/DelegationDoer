@@ -124,6 +124,7 @@ export async function POST(req: NextRequest) {
       .select("id, user_id, note_date, worked_on, results")
       .eq("client_name", clientName)
       .is("reported_to_client_at", null)
+      .is("dismissed_at", null)
       .gte("note_date", fromDateStr)
       .lte("note_date", toDateStr)
       .order("note_date", { ascending: false })

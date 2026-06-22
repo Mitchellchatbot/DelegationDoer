@@ -4,8 +4,9 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import {
   Sparkles, Loader2, RefreshCw, ArrowRight, CheckCircle2,
-  CalendarDays, CalendarRange, Calendar, CalendarClock
+  CalendarDays, CalendarRange, Calendar, CalendarClock, Trash2
 } from "lucide-react";
+import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { EodDigestComposerModal } from "@/components/EodDigestComposerModal";
 
@@ -90,6 +91,31 @@ export function SuggestedDigestsCard() {
   }, []);
 
   useEffect(() => { void refresh(active); }, [active, refresh]);
+
+  // Skip a whole client this window — bulk-dismisses all its unreported EOD work
+  // in the selected window (server resolves the entries by client + window) so
+  // the row drops off the list, mirroring the composer's per-entry discard.
+  // Prunes the client locally on success; returns whether it succeeded.
+  const discardClient = useCallback(async (rec: Recommendation): Promise<boolean> => {
+    try {
+      const res = await fetch("/api/client-update/discard-client", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ clientName: rec.clientName, window: active })
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body?.error ?? `failed (${res.status})`);
+      const n = typeof body.dismissed === "number" ? body.dismissed : rec.entryCount;
+      setData((prev) => prev
+        ? { ...prev, recommendations: prev.recommendations.filter((r) => r.clientId !== rec.clientId) }
+        : prev);
+      toast.success(`Discarded ${n} ${n === 1 ? "entry" : "entries"} for ${rec.clientName}`);
+      return true;
+    } catch (err) {
+      toast.error(`Couldn't discard: ${err instanceof Error ? err.message : "unknown"}`);
+      return false;
+    }
+  }, [active]);
 
   const recs = data?.recommendations ?? [];
   const activeTab = WINDOW_TABS.find((t) => t.id === active)!;
@@ -192,6 +218,7 @@ export function SuggestedDigestsCard() {
                 rec={r}
                 windowDays={activeTab.days}
                 onOpen={() => setModalRec(r)}
+                onDiscard={() => discardClient(r)}
               />
             ))}
           </ul>
@@ -214,14 +241,30 @@ export function SuggestedDigestsCard() {
 }
 
 function RecRow({
-  rec, windowDays, onOpen
+  rec, windowDays, onOpen, onDiscard
 }: {
   rec: Recommendation;
   windowDays: number;
   onOpen: () => void;
+  // Skip this whole client this window. Resolves once the dismiss completes.
+  onDiscard: () => Promise<boolean>;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const [discarding, setDiscarding] = useState(false);
   void windowDays;
+
+  async function handleDiscard() {
+    if (discarding) return;
+    if (!window.confirm(`Discard ${rec.clientName}? Its ${rec.entryCount} unreported ${rec.entryCount === 1 ? "entry" : "entries"} won't be reported and it'll drop off this list for now.`)) {
+      return;
+    }
+    setDiscarding(true);
+    try {
+      await onDiscard();
+    } finally {
+      setDiscarding(false);
+    }
+  }
   return (
     <li className="px-4 py-3">
       <div className="flex items-center gap-3">
@@ -267,6 +310,15 @@ function RecRow({
             no contact
           </span>
         )}
+        <button
+          type="button"
+          disabled={discarding}
+          onClick={handleDiscard}
+          title="Discard this client — skip it for this window"
+          className="shrink-0 inline-flex items-center justify-center w-7 h-7 rounded-md text-ink/35 hover:text-rose-600 hover:bg-rose-50 transition-colors disabled:opacity-50"
+        >
+          {discarding ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+        </button>
         <button
           type="button"
           onClick={() => setExpanded((v) => !v)}

@@ -130,6 +130,10 @@ export function OrgChart({ users, departments, tasks, ceo }: Props) {
       // a line from the parent's element to this one.
       for (const [key, el] of nodeRefs.current) {
         if (!el) continue;
+        // Drop refs whose element has been detached by a prior render (the
+        // map is keyed by path and never otherwise pruned) so a stale-but-
+        // live entry can't draw a phantom edge after an in-place data change.
+        if (!el.isConnected) { nodeRefs.current.delete(key); continue; }
         const colonAt = key.indexOf(":");
         if (colonAt < 0) continue;
         const deptId = key.slice(0, colonAt);
@@ -448,7 +452,7 @@ function Subtree({
   const kidIds = childrenByParent.get(user.id) ?? [];
   const kids = kidIds.map((k) => userById.get(k)).filter((u): u is User => !!u);
   return (
-    <div className="flex flex-col items-center gap-4">
+    <div className="flex flex-col items-center gap-4 shrink-0">
       <div ref={(el) => { nodeRefs.current.set(`${deptId}:${myPath}`, el); }}>
         <PersonNode
           user={user}
@@ -459,7 +463,7 @@ function Subtree({
         />
       </div>
       {kids.length > 0 && (
-        <div className="flex items-start justify-center gap-4 flex-wrap">
+        <div className="flex flex-nowrap items-start justify-center gap-4 w-max">
           {kids.map((kid) => (
             <Subtree
               key={`${myPath}>${kid.id}`}

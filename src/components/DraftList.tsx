@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { motion } from "framer-motion";
-import { FileText, Reply, PenSquare, Trash2 } from "lucide-react";
+import { FileText, Reply, PenSquare, Trash2, Users } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { InboxDraft } from "@/lib/inbox-drafts";
 
@@ -16,6 +16,10 @@ interface Props {
   // Fallback inbox id for building a reply draft's thread href when the draft
   // didn't capture an account (e.g. composed before a from-mailbox existed).
   linkAccountId: string;
+  // The viewer's own user id. In the leader/stealth-admin see-all view, drafts
+  // whose userId differs belong to someone else — shown read-only (no open, no
+  // discard) so an admin can't hijack another user's draft row via autosave.
+  currentUserId: string | null;
   // Open a compose draft back into the new-message modal (parent owns the
   // modal / query-param wiring).
   onOpenCompose: (draftId: string) => void;
@@ -51,10 +55,11 @@ function snippet(d: InboxDraft): string {
 }
 
 function DraftRow({
-  draft, linkAccountId, onOpenCompose, onDiscard, index
+  draft, linkAccountId, currentUserId, onOpenCompose, onDiscard, index
 }: {
   draft: InboxDraft;
   linkAccountId: string;
+  currentUserId: string | null;
   onOpenCompose: (id: string) => void;
   onDiscard: (d: InboxDraft) => void;
   index: number;
@@ -64,14 +69,22 @@ function DraftRow({
   const href = isReply
     ? `/inboxes/${encodeURIComponent(acct)}/threads/${encodeURIComponent(draft.threadId as string)}`
     : null;
+  // Someone else's draft (only ever surfaced to a leader/stealth admin). Read
+  // only here: viewable for oversight, but not editable or discardable — those
+  // would write to or delete a row this user doesn't own. Defaults to read-only
+  // until currentUserId loads, which is the safe direction.
+  const isOwn = currentUserId != null && draft.userId === currentUserId;
 
   const body = (
     <>
       <div
-        className="shrink-0 w-9 h-9 rounded-full grid place-items-center bg-gradient-to-br from-amber-200 to-amber-100 text-amber-700 ring-1 ring-white shadow-sm"
+        className={cn(
+          "shrink-0 w-9 h-9 rounded-full grid place-items-center ring-1 ring-white shadow-sm bg-gradient-to-br",
+          isOwn ? "from-amber-200 to-amber-100 text-amber-700" : "from-indigo-200 to-indigo-100 text-indigo-700"
+        )}
         aria-hidden
       >
-        {isReply ? <Reply className="w-4 h-4" /> : <PenSquare className="w-4 h-4" />}
+        {!isOwn ? <Users className="w-4 h-4" /> : isReply ? <Reply className="w-4 h-4" /> : <PenSquare className="w-4 h-4" />}
       </div>
 
       <div className="min-w-0 flex-1">
@@ -79,9 +92,15 @@ function DraftRow({
           <span className="text-[13px] font-medium text-ink/80 truncate">
             {recipientLabel(draft)}
           </span>
-          <span className="text-[10px] uppercase tracking-wide font-semibold text-amber-600 shrink-0">
-            Draft
-          </span>
+          {isOwn ? (
+            <span className="text-[10px] uppercase tracking-wide font-semibold text-amber-600 shrink-0">
+              Draft
+            </span>
+          ) : (
+            <span className="text-[10px] uppercase tracking-wide font-semibold text-indigo-600 shrink-0">
+              Draft · {draft.authorName?.trim() || "teammate"}
+            </span>
+          )}
         </div>
         <div className="text-[13px] text-ink/65 truncate mt-0.5">
           {draft.subject?.trim() || "(no subject)"}
@@ -104,7 +123,12 @@ function DraftRow({
       transition={{ delay: Math.min(index * 0.025, 0.4), duration: 0.28, ease: [0.2, 0.8, 0.2, 1] }}
       className="relative group"
     >
-      {href ? (
+      {!isOwn ? (
+        // Someone else's draft — read-only oversight row (no navigation).
+        <div className="relative flex items-center gap-3 px-3 py-2.5 border-b border-slate-100/80 bg-white">
+          {body}
+        </div>
+      ) : href ? (
         <Link
           href={href}
           className="relative flex items-center gap-3 px-3 py-2.5 border-b border-slate-100/80 bg-white hover:bg-slate-50/70 transition-colors duration-150"
@@ -121,20 +145,22 @@ function DraftRow({
         </button>
       )}
 
-      <button
-        type="button"
-        onClick={() => onDiscard(draft)}
-        aria-label="Discard draft"
-        title="Discard draft"
-        className="absolute top-1/2 -translate-y-1/2 right-3 z-10 opacity-0 group-hover:opacity-100 transition-opacity p-1.5 rounded-lg bg-white border border-slate-200 text-ink/55 hover:text-rose-600 hover:border-rose-200 shadow-sm"
-      >
-        <Trash2 className="w-3.5 h-3.5" />
-      </button>
+      {isOwn && (
+        <button
+          type="button"
+          onClick={() => onDiscard(draft)}
+          aria-label="Discard draft"
+          title="Discard draft"
+          className="absolute top-1/2 -translate-y-1/2 right-3 z-10 opacity-0 group-hover:opacity-100 transition-opacity p-1.5 rounded-lg bg-white border border-slate-200 text-ink/55 hover:text-rose-600 hover:border-rose-200 shadow-sm"
+        >
+          <Trash2 className="w-3.5 h-3.5" />
+        </button>
+      )}
     </motion.div>
   );
 }
 
-export function DraftList({ drafts, linkAccountId, onOpenCompose, onDiscard }: Props) {
+export function DraftList({ drafts, linkAccountId, currentUserId, onOpenCompose, onDiscard }: Props) {
   if (drafts.length === 0) {
     return (
       <div className="card p-10 text-center">
@@ -156,6 +182,7 @@ export function DraftList({ drafts, linkAccountId, onOpenCompose, onDiscard }: P
           key={d.id}
           draft={d}
           linkAccountId={linkAccountId}
+          currentUserId={currentUserId}
           onOpenCompose={onOpenCompose}
           onDiscard={onDiscard}
           index={i}

@@ -76,6 +76,9 @@ export function InboxThreadsClient({
   const [folder, setFolder] = useState<Folder>("INBOX");
   const [drafts, setDrafts] = useState<InboxDraft[]>([]);
   const [draftsLoading, setDraftsLoading] = useState(false);
+  // The viewer's own id — lets DraftList tell own drafts from others' (in the
+  // leader/stealth-admin see-all view). Sourced from the drafts response.
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   // Threads opened in the reading pane this session — drop their unread style
   // live without a server refresh (see InboxSplit). Empty when not in a split.
@@ -98,7 +101,10 @@ export function InboxThreadsClient({
       try {
         const res = await fetch("/api/inboxes/drafts", { cache: "no-store" });
         const data = await res.json();
-        if (!cancelled) setDrafts(data.drafts ?? []);
+        if (!cancelled) {
+          setDrafts(data.drafts ?? []);
+          setCurrentUserId(data.currentUserId ?? null);
+        }
       } catch {
         if (!cancelled) setDrafts([]);
       } finally {
@@ -354,6 +360,7 @@ export function InboxThreadsClient({
           <DraftList
             drafts={drafts}
             linkAccountId={linkAccountId}
+            currentUserId={currentUserId}
             onOpenCompose={openComposeDraft}
             onDiscard={discardDraft}
           />

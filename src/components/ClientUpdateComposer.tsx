@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import * as Popover from "@radix-ui/react-popover";
-import { Sparkles, Loader2, ArrowRight, Send, RefreshCw, Calendar, CheckSquare, MessageSquare, Clock, X, Wand2, Paintbrush, Eraser, AlignLeft, List, Code, Eye, Mail, Zap, Check, ChevronDown } from "lucide-react";
+import { Sparkles, Loader2, ArrowRight, Send, RefreshCw, Calendar, CheckSquare, MessageSquare, Clock, X, Wand2, Paintbrush, Eraser, AlignLeft, List, Code, Eye, Mail, Zap, Check, ChevronDown, Maximize2, Minimize2 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { getDepartmentMeta } from "@/lib/departments";
@@ -160,6 +161,39 @@ export function ClientUpdateComposer({
   const [scheduledFor, setScheduledFor] = useState(""); // blank = send on approval
   const [attachments, setAttachments] = useState<TaskMedia[]>([]);
   const [step, setStep] = useState<"compose" | "preview">("compose");
+  // Pop the draft editor into a full-screen overlay so long emails read/edit
+  // wide. Portaled to body (see render) because the composer can live inside
+  // EodDigestComposerModal's backdrop-blur modal, which would otherwise trap a
+  // fixed overlay.
+  const [maximized, setMaximized] = useState(false);
+
+  // While maximized: lock body scroll + close on Escape. The Esc listener is
+  // capture-phase with stopImmediatePropagation so it minimizes WITHOUT also
+  // firing EodDigestComposerModal's own window Esc handler (which would close
+  // the whole modal). Harmless in the inline (client page) context.
+  useEffect(() => {
+    if (!maximized) return;
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.stopImmediatePropagation();
+        e.preventDefault();
+        setMaximized(false);
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      window.removeEventListener("keydown", onKey, true);
+    };
+  }, [maximized]);
+
+  // Leaving the draft step (Back to selection, or reset after a submit) drops
+  // the overlay — otherwise we'd strand a scroll-locked page with nothing shown.
+  useEffect(() => {
+    if (step !== "preview") setMaximized(false);
+  }, [step]);
 
   // Connected sending mailboxes for the per-draft "From" picker. Loaded
   // once. When none are connected the picker shows a connect hint and the
@@ -523,12 +557,31 @@ export function ClientUpdateComposer({
           </div>
         </div>
       ) : (
+        <MaxableOverlay
+          maximized={maximized}
+          onMinimize={() => setMaximized(false)}
+          title={lockedClient.name}
+        >
         <div className="p-4 space-y-3">
-          <div className="flex items-center gap-2 text-[11px] text-sky-700/85 bg-sky-50 border border-sky-200/60 rounded-lg px-2.5 py-1.5">
-            <Sparkles className="w-3 h-3" />
-            {drafts.length === 1
-              ? "AI drafted — edit anything before submitting, or send it directly."
-              : `AI drafted ${drafts.length} updates, one per department — handle each on its own tab below.`}
+          <div className="flex items-center justify-between gap-2 text-[11px] text-sky-700/85 bg-sky-50 border border-sky-200/60 rounded-lg px-2.5 py-1.5">
+            <span className="inline-flex items-center gap-2 min-w-0">
+              <Sparkles className="w-3 h-3 shrink-0" />
+              <span className="truncate">
+                {drafts.length === 1
+                  ? "AI drafted — edit anything before submitting, or send it directly."
+                  : `AI drafted ${drafts.length} updates, one per department — handle each on its own tab below.`}
+              </span>
+            </span>
+            {!maximized && (
+              <button
+                type="button"
+                onClick={() => setMaximized(true)}
+                title="Open the draft full-screen to read/edit long emails"
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold text-sky-700 bg-white border border-sky-200/70 hover:bg-sky-100 transition-colors shrink-0"
+              >
+                <Maximize2 className="w-3 h-3" /> Maximize
+              </button>
+            )}
           </div>
 
           {/* Per-department selector — work one draft at a time so you can
@@ -811,8 +864,61 @@ export function ClientUpdateComposer({
             </div>
           </div>
         </div>
+        </MaxableOverlay>
       )}
     </section>
+  );
+}
+
+// Renders the draft step either in place (default) or, when `maximized`, in a
+// full-screen overlay portaled to document.body. The portal is required because
+// this composer can live inside EodDigestComposerModal's `backdrop-blur` modal,
+// which creates a containing block that would otherwise trap a fixed overlay —
+// and, on the inline client page, it escapes the z-10 <main> stacking context so
+// the overlay paints over the topbar. Same look/animation as that modal.
+// z-[64] sits above the composer modal (z-[60]) but below the AI-edit popover
+// (z-[70]) so AI edit still layers correctly. Backdrop/card stopPropagation
+// keeps a click from bubbling (React portal tree) into the modal's onClose.
+function MaxableOverlay({
+  maximized, onMinimize, title, children
+}: {
+  maximized: boolean;
+  onMinimize: () => void;
+  title: string;
+  children: React.ReactNode;
+}) {
+  if (!maximized || typeof document === "undefined") return <>{children}</>;
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[64] flex items-start justify-center p-4 sm:p-8 bg-black/50 backdrop-blur-sm overflow-y-auto anim-fade-in"
+      onClick={(e) => { e.stopPropagation(); onMinimize(); }}
+      role="dialog"
+      aria-modal="true"
+      aria-label={`Maximized client update draft for ${title}`}
+    >
+      <div
+        className="relative w-full max-w-5xl bg-white rounded-2xl shadow-2xl my-auto anim-fade-in-up"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <header className="flex items-center justify-between px-5 py-3.5 border-b border-slate-100 sticky top-0 bg-white rounded-t-2xl z-10">
+          <div className="min-w-0">
+            <div className="text-[10px] uppercase tracking-[0.18em] font-semibold text-sky-700">
+              Client update composer
+            </div>
+            <div className="text-[15px] font-bold text-ink truncate">{title}</div>
+          </div>
+          <button
+            type="button"
+            onClick={onMinimize}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold text-sky-700 bg-white border border-sky-200/70 hover:bg-sky-50 transition-colors shrink-0"
+          >
+            <Minimize2 className="w-3.5 h-3.5" /> Minimize
+          </button>
+        </header>
+        {children}
+      </div>
+    </div>,
+    document.body
   );
 }
 

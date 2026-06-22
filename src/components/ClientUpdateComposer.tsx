@@ -361,8 +361,8 @@ export function ClientUpdateComposer({
     setDrafts((prev) => prev.map((d, i) => (i === idx ? { ...d, ...patch } : d)));
   }
 
-  // Recipient typeahead source: this locked client's saved contacts only
-  // (no full roster — a client update only ever goes to its own contacts).
+  // To typeahead source: this locked client's saved contacts (the update is
+  // addressed to this client).
   const clientSuggestions = useMemo<ClientSuggestion[]>(
     () =>
       lockedClient.contactEmails.length
@@ -375,6 +375,27 @@ export function ClientUpdateComposer({
         : [],
     [lockedClient]
   );
+
+  // Cc/Bcc can go to anyone, not just this client — suggest the full client
+  // roster there (same source the inbox Compose uses). Falls back to this
+  // client's contacts until the roster loads / if the fetch fails.
+  const [roster, setRoster] = useState<ClientSuggestion[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/clients", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : { clients: [] }))
+      .then((d) => {
+        if (cancelled) return;
+        const list = ((d.clients ?? []) as Array<{ id: string; name: string; contactName?: string | null; contactEmails?: string[] }>)
+          .map((c) => ({ id: c.id, name: c.name, contactName: c.contactName ?? null, contactEmails: c.contactEmails ?? [] }))
+          .filter((c) => c.contactEmails.length > 0);
+        setRoster(list);
+      })
+      .catch(() => { /* silent — Cc/Bcc fall back to this client's contacts */ });
+    return () => { cancelled = true; };
+  }, []);
+
+  const ccBccSuggestions = roster.length ? roster : clientSuggestions;
 
   function removeDraft(idx: number) {
     setDrafts((prev) => prev.filter((_, i) => i !== idx));
@@ -748,7 +769,7 @@ export function ClientUpdateComposer({
                       <RecipientAutocomplete
                         value={d.cc}
                         onChange={(v) => patchDraft(idx, { cc: v })}
-                        clients={clientSuggestions}
+                        clients={ccBccSuggestions}
                         placeholder="cc@client.com"
                         inputClassName="w-full text-[13px] bg-transparent border-none outline-none focus:ring-0 placeholder:text-ink/35"
                       />
@@ -757,7 +778,7 @@ export function ClientUpdateComposer({
                       <RecipientAutocomplete
                         value={d.bcc}
                         onChange={(v) => patchDraft(idx, { bcc: v })}
-                        clients={clientSuggestions}
+                        clients={ccBccSuggestions}
                         placeholder="bcc@internal.com"
                         inputClassName="w-full text-[13px] bg-transparent border-none outline-none focus:ring-0 placeholder:text-ink/35"
                       />

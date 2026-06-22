@@ -1,14 +1,15 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import * as Popover from "@radix-ui/react-popover";
-import { Sparkles, Loader2, ArrowRight, Send, RefreshCw, Calendar, CheckSquare, MessageSquare, Clock, X, Wand2, Paintbrush, Eraser, AlignLeft, List, Code, Eye, Mail, Zap, Check, ChevronDown } from "lucide-react";
+import { Sparkles, Loader2, ArrowRight, Send, RefreshCw, Calendar, CheckSquare, MessageSquare, Clock, X, Wand2, Paintbrush, Eraser, AlignLeft, List, Code, Eye, Mail, Zap, Check, ChevronDown, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { getDepartmentMeta } from "@/lib/departments";
 import { useCurrentUser } from "@/lib/user-context";
 import { renderBlueEmail, type BrandedEmailContent } from "@/lib/email-template";
 import { MediaPicker } from "@/components/MediaPicker";
+import { RecipientAutocomplete, type ClientSuggestion } from "@/components/RecipientAutocomplete";
 import type { TaskMedia } from "@/lib/types";
 
 // Client Update composer, rendered as a per-client section on /clients/[id].
@@ -225,6 +226,35 @@ export function ClientUpdateComposer({
     });
   }
 
+  // Discard EOD entries the operator doesn't want to report — stamps them
+  // dismissed server-side so they drop out of this composer AND the "Who
+  // needs an email" card instead of lingering as unselected leftovers (the
+  // duplication problem). Drops them from the selection on success; the
+  // preview prunes the rows itself. Returns whether it succeeded.
+  async function discardEntries(ids: string[]): Promise<boolean> {
+    if (ids.length === 0) return false;
+    try {
+      const res = await fetch("/api/client-update/discard", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ entryIds: ids })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error ?? `failed (${res.status})`);
+      const n = typeof data.dismissed === "number" ? data.dismissed : ids.length;
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        for (const id of ids) next.delete(id);
+        return next;
+      });
+      toast.success(`Discarded ${n} ${n === 1 ? "entry" : "entries"}`);
+      return true;
+    } catch (err) {
+      toast.error(`Couldn't discard: ${err instanceof Error ? err.message : "unknown"}`);
+      return false;
+    }
+  }
+
   async function generate() {
     if (selectedIds.size === 0) {
       return toast.error("Select at least one EOD entry to include");
@@ -296,6 +326,21 @@ export function ClientUpdateComposer({
   function patchDraft(idx: number, patch: Partial<DeptDraft>) {
     setDrafts((prev) => prev.map((d, i) => (i === idx ? { ...d, ...patch } : d)));
   }
+
+  // Recipient typeahead source: this locked client's saved contacts only
+  // (no full roster — a client update only ever goes to its own contacts).
+  const clientSuggestions = useMemo<ClientSuggestion[]>(
+    () =>
+      lockedClient.contactEmails.length
+        ? [{
+            id: lockedClient.id,
+            name: lockedClient.name,
+            contactName: null,
+            contactEmails: lockedClient.contactEmails,
+          }]
+        : [],
+    [lockedClient]
+  );
 
   function removeDraft(idx: number) {
     setDrafts((prev) => prev.filter((_, i) => i !== idx));
@@ -500,6 +545,7 @@ export function ClientUpdateComposer({
             selected={selectedIds}
             onToggle={toggleTask}
             onLoadedIds={(ids) => setSelectedIds(new Set(ids))}
+            onDiscard={discardEntries}
           />
 
           <div className="flex items-center justify-between gap-2">
@@ -626,12 +672,12 @@ export function ClientUpdateComposer({
                 </Field>
 
                 <Field label="To">
-                  <input
-                    type="text"
+                  <RecipientAutocomplete
                     value={d.to}
-                    onChange={(e) => patchDraft(idx, { to: e.target.value })}
+                    onChange={(v) => patchDraft(idx, { to: v })}
+                    clients={clientSuggestions}
                     placeholder="recipient@client.com, second@client.com"
-                    className="flex-1 text-[13px] bg-transparent border-none outline-none focus:ring-0 placeholder:text-ink/35"
+                    inputClassName="w-full text-[13px] bg-transparent border-none outline-none focus:ring-0 placeholder:text-ink/35"
                   />
                   {!d.showCcBcc && (
                     <button
@@ -646,21 +692,21 @@ export function ClientUpdateComposer({
                 {d.showCcBcc && (
                   <>
                     <Field label="Cc">
-                      <input
-                        type="text"
+                      <RecipientAutocomplete
                         value={d.cc}
-                        onChange={(e) => patchDraft(idx, { cc: e.target.value })}
+                        onChange={(v) => patchDraft(idx, { cc: v })}
+                        clients={clientSuggestions}
                         placeholder="cc@client.com"
-                        className="flex-1 text-[13px] bg-transparent border-none outline-none focus:ring-0 placeholder:text-ink/35"
+                        inputClassName="w-full text-[13px] bg-transparent border-none outline-none focus:ring-0 placeholder:text-ink/35"
                       />
                     </Field>
                     <Field label="Bcc">
-                      <input
-                        type="text"
+                      <RecipientAutocomplete
                         value={d.bcc}
-                        onChange={(e) => patchDraft(idx, { bcc: e.target.value })}
+                        onChange={(v) => patchDraft(idx, { bcc: v })}
+                        clients={clientSuggestions}
                         placeholder="bcc@internal.com"
-                        className="flex-1 text-[13px] bg-transparent border-none outline-none focus:ring-0 placeholder:text-ink/35"
+                        inputClassName="w-full text-[13px] bg-transparent border-none outline-none focus:ring-0 placeholder:text-ink/35"
                       />
                     </Field>
                   </>
@@ -976,17 +1022,37 @@ interface PreviewData {
 // feeds the draft(s). Refetches whenever the window (days) changes; on
 // (re)load every entry starts selected.
 function ComposerPreview({
-  clientName, days, selected, onToggle, onLoadedIds
+  clientName, days, selected, onToggle, onLoadedIds, onDiscard
 }: {
   clientName: string;
   days: number;
   selected: Set<string>;
   onToggle: (id: string) => void;
   onLoadedIds: (ids: string[]) => void;
+  // Dismiss entries so they stop re-appearing here + in the digest card.
+  // Resolves true on success; the preview then prunes the rows locally.
+  onDiscard: (ids: string[]) => Promise<boolean>;
 }) {
   const [data, setData] = useState<PreviewData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [discarding, setDiscarding] = useState(false);
+
+  // Run a discard, then prune the dismissed rows from the local list so they
+  // disappear without a refetch. Shared by the per-row icon + the bulk button.
+  async function discard(ids: string[]) {
+    if (discarding || ids.length === 0) return;
+    setDiscarding(true);
+    try {
+      const ok = await onDiscard(ids);
+      if (ok) {
+        const drop = new Set(ids);
+        setData((prev) => prev ? { entries: prev.entries.filter((e) => !drop.has(e.id)) } : prev);
+      }
+    } finally {
+      setDiscarding(false);
+    }
+  }
 
   useEffect(() => {
     // Resolve the (from, to) ISO pair the same way the real Generate
@@ -1040,10 +1106,32 @@ function ComposerPreview({
     );
   })();
 
+  // Currently-unchecked entries — the leftovers the bulk "Discard" clears so
+  // they stop re-surfacing on the next draft.
+  const unselectedIds = (data?.entries ?? []).map((e) => e.id).filter((id) => !selected.has(id));
+
   return (
     <div className="rounded-xl border border-slate-200/70 bg-white p-3 space-y-3">
-      <div className="text-[10px] uppercase tracking-wide font-semibold text-ink/55">
-        Pick the EOD work the AI will summarize
+      <div className="flex items-center justify-between gap-2">
+        <div className="text-[10px] uppercase tracking-wide font-semibold text-ink/55">
+          Pick the EOD work the AI will summarize
+        </div>
+        {unselectedIds.length > 0 && (
+          <button
+            type="button"
+            disabled={discarding}
+            onClick={() => {
+              if (window.confirm(`Discard ${unselectedIds.length} unselected ${unselectedIds.length === 1 ? "entry" : "entries"}? They won't be reported to the client and will stop appearing here.`)) {
+                discard(unselectedIds);
+              }
+            }}
+            className="inline-flex items-center gap-1 text-[10px] font-semibold text-ink/35 hover:text-rose-600 transition-colors disabled:opacity-50 shrink-0"
+            title="Dismiss every unchecked entry so it stops re-appearing"
+          >
+            {discarding ? <Loader2 className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3 h-3" />}
+            Discard {unselectedIds.length} unselected
+          </button>
+        )}
       </div>
       {loading ? (
         <div className="text-[11px] text-ink/55 inline-flex items-center gap-1.5">
@@ -1075,6 +1163,8 @@ function ComposerPreview({
                       entry={e}
                       checked={selected.has(e.id)}
                       onToggle={onToggle}
+                      onDiscard={(id) => discard([id])}
+                      discarding={discarding}
                     />
                   ))}
                 </ul>
@@ -1090,15 +1180,17 @@ function ComposerPreview({
 // A single selectable EOD work entry in the preview. Checkbox + what was
 // worked on + (optional) results + author/date meta.
 function EntryRow({
-  entry, checked, onToggle
+  entry, checked, onToggle, onDiscard, discarding
 }: {
   entry: PreviewEntry;
   checked: boolean;
   onToggle: (id: string) => void;
+  onDiscard: (id: string) => void;
+  discarding: boolean;
 }) {
   return (
     <li>
-      <label className="flex items-start gap-2 cursor-pointer rounded-lg px-1 py-1 hover:bg-slate-50">
+      <label className="group flex items-start gap-2 cursor-pointer rounded-lg px-1 py-1 hover:bg-slate-50">
         <input
           type="checkbox"
           checked={checked}
@@ -1118,6 +1210,23 @@ function EntryRow({
             <span className="tabular-nums">{entry.noteDate}</span>
           </span>
         </span>
+        {/* Discard this one entry. The row is a <label>, so swallow the click
+            to avoid toggling the checkbox. */}
+        <button
+          type="button"
+          disabled={discarding}
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (window.confirm("Discard this entry? It won't be reported to the client and will stop appearing here.")) {
+              onDiscard(entry.id);
+            }
+          }}
+          title="Discard this entry"
+          className="mt-0.5 shrink-0 inline-flex items-center justify-center w-5 h-5 rounded-md text-ink/35 hover:text-rose-600 hover:bg-rose-50 transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100 disabled:opacity-50"
+        >
+          <Trash2 className="w-3 h-3" />
+        </button>
       </label>
     </li>
   );

@@ -32,19 +32,13 @@ const WINDOW_DAYS: Record<DigestWindow, number> = {
   monthly: 30
 };
 
-// Overlap detection — Signal A ("duplicate / over-cadence send"). A client
-// emailed again sooner than its own update_cadence interval allows is at
-// risk of a double-send (the approver-chosen window ignores cadence, so
-// nothing else guards this). Gap = the minimum days we'd expect between two
-// sends under that cadence. daily=0 → never flagged (daily sends are
-// expected). 'none' uses 30 so an opted-out client still flags if emailed.
-const CADENCE_MIN_GAP_DAYS: Record<UpdateCadence, number> = {
-  daily: 0,
-  biweekly: 3,
-  weekly: 7,
-  monthly: 30,
-  none: 30
-};
+// Overlap detection — Signal A ("recently emailed"). Flags a client that
+// already received a CLIENT-UPDATE email (kind client_update / eod_digest)
+// within the browsing window — i.e. "you've already sent this client an
+// update this period; sending again would double up." Window-based, not
+// cadence-based, and scoped to client updates so auto-replies / custom /
+// content-plan sends don't trip it. The kinds that count as a client update:
+const CLIENT_UPDATE_KINDS: string[] = ["client_update", "eod_digest"];
 
 function coerceCadence(raw: string | null | undefined): UpdateCadence {
   if (raw === "biweekly" || raw === "weekly" || raw === "monthly" || raw === "none") return raw;
@@ -100,7 +94,7 @@ export interface DigestRecommendation {
   hasContact: boolean;
   cadence: UpdateCadence;         // this client's own cadence (for overlap UI)
   // Overlap detection. Both default to no-overlap (null / empty array).
-  recentlyEmailed: { daysSince: number; cadence: UpdateCadence } | null; // Signal A
+  recentlyEmailed: { daysSince: number; window: DigestWindow } | null;   // Signal A
   sharedRecipients: SharedRecipient[];                                    // Signal B
 }
 
@@ -151,9 +145,11 @@ export async function GET(req: NextRequest) {
 
     const clientNames = clients.map((c) => c.name);
 
-    // 2) Unreported EOD work entries in the window + last-sent timestamp
-    //    per client. One round-trip each.
-    const [workRes, sentRes] = await Promise.all([
+    // 2) In parallel (one round-trip): unreported EOD work in the window;
+    //    last-sent timestamp per client (ALL kinds — feeds the "last update
+    //    X ago" label, unchanged); and CLIENT-UPDATE sends within the window
+    //    (Signal A — "recently emailed").
+    const [workRes, sentRes, recentUpdatesRes] = await Promise.all([
       supabase
         .from("eod_client_work")
         .select("id, user_id, client_name, note_date, worked_on, results")
@@ -170,10 +166,21 @@ export async function GET(req: NextRequest) {
         .eq("status", "sent")
         .not("sent_at", "is", null)
         .order("sent_at", { ascending: false })
-        .limit(500)
+        .limit(500),
+      supabase
+        .from("email_drafts")
+        .select("client_name, sent_at")
+        .in("client_name", clientNames)
+        .eq("status", "sent")
+        .in("kind", CLIENT_UPDATE_KINDS)
+        .gte("sent_at", start.toISOString())
+        .not("sent_at", "is", null)
+        .order("sent_at", { ascending: false })
+        .limit(1000)
     ]);
     const work = (workRes.data ?? []) as WorkRow[];
     const sent = (sentRes.data ?? []) as SentEmailRow[];
+    const recentUpdates = (recentUpdatesRes.data ?? []) as SentEmailRow[];
 
     const workByClient = new Map<string, WorkRow[]>();
     for (const w of work) {
@@ -185,6 +192,15 @@ export async function GET(req: NextRequest) {
     for (const r of sent) {
       if (!r.client_name || !r.sent_at) continue;
       if (!lastSentByClient.has(r.client_name)) lastSentByClient.set(r.client_name, r.sent_at);
+    }
+    // Most recent CLIENT-UPDATE send within the window, per client (Signal A).
+    // Rows are ordered sent_at desc, so the first seen per client is newest.
+    const lastUpdateInWindowByClient = new Map<string, string>();
+    for (const r of recentUpdates) {
+      if (!r.client_name || !r.sent_at) continue;
+      if (!lastUpdateInWindowByClient.has(r.client_name)) {
+        lastUpdateInWindowByClient.set(r.client_name, r.sent_at);
+      }
     }
 
     // 3) Resolve contributor names.
@@ -232,14 +248,14 @@ export async function GET(req: NextRequest) {
       const cadence = coerceCadence(c.update_cadence);
       const lastSent = lastSentByClient.get(c.name) ?? null;
 
-      // Signal A: last send is more recent than the cadence interval allows.
-      let recentlyEmailed: { daysSince: number; cadence: UpdateCadence } | null = null;
-      if (lastSent) {
-        const since = Math.floor((Date.now() - new Date(lastSent).getTime()) / 86_400_000);
-        if (since < CADENCE_MIN_GAP_DAYS[cadence]) {
-          recentlyEmailed = { daysSince: since, cadence };
-        }
-      }
+      // Signal A: a client-update email already went out within this window.
+      const inWindow = lastUpdateInWindowByClient.get(c.name) ?? null;
+      const recentlyEmailed: { daysSince: number; window: DigestWindow } | null = inWindow
+        ? {
+            daysSince: Math.floor((Date.now() - new Date(inWindow).getTime()) / 86_400_000),
+            window
+          }
+        : null;
 
       // Signal B: a contact email also belongs to another active client.
       const sharedRecipients: SharedRecipient[] = [];

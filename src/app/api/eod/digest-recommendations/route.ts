@@ -3,6 +3,7 @@ import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { isApprover } from "@/lib/email-approvers";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
+import type { UpdateCadence } from "@/lib/eod-digest";
 
 export const dynamic = "force-dynamic";
 
@@ -31,11 +32,31 @@ const WINDOW_DAYS: Record<DigestWindow, number> = {
   monthly: 30
 };
 
+// Overlap detection — Signal A ("duplicate / over-cadence send"). A client
+// emailed again sooner than its own update_cadence interval allows is at
+// risk of a double-send (the approver-chosen window ignores cadence, so
+// nothing else guards this). Gap = the minimum days we'd expect between two
+// sends under that cadence. daily=0 → never flagged (daily sends are
+// expected). 'none' uses 30 so an opted-out client still flags if emailed.
+const CADENCE_MIN_GAP_DAYS: Record<UpdateCadence, number> = {
+  daily: 0,
+  biweekly: 3,
+  weekly: 7,
+  monthly: 30,
+  none: 30
+};
+
+function coerceCadence(raw: string | null | undefined): UpdateCadence {
+  if (raw === "biweekly" || raw === "weekly" || raw === "monthly" || raw === "none") return raw;
+  return "daily"; // back-compat default for rows predating the cadence column
+}
+
 interface ClientRow {
   id: string;
   name: string;
   status: string | null;
   contact_emails: string[] | null;
+  update_cadence: string | null;
 }
 
 interface WorkRow {
@@ -60,6 +81,14 @@ export interface DigestEntryDetail {
   authorName: string | null;
 }
 
+// Signal B ("shared recipient across clients") — one contact address that
+// also receives updates for OTHER active clients. When those clients have a
+// different cadence, that person gets both the weekly and the monthly email.
+export interface SharedRecipient {
+  email: string;
+  others: Array<{ name: string; cadence: UpdateCadence }>;
+}
+
 export interface DigestRecommendation {
   clientId: string;
   clientName: string;
@@ -69,6 +98,10 @@ export interface DigestRecommendation {
   entries: DigestEntryDetail[];   // up to 6 most recent
   contributorNames: string[];     // distinct contributors
   hasContact: boolean;
+  cadence: UpdateCadence;         // this client's own cadence (for overlap UI)
+  // Overlap detection. Both default to no-overlap (null / empty array).
+  recentlyEmailed: { daysSince: number; cadence: UpdateCadence } | null; // Signal A
+  sharedRecipients: SharedRecipient[];                                    // Signal B
 }
 
 function isDigestWindow(s: string): s is DigestWindow {
@@ -106,7 +139,7 @@ export async function GET(req: NextRequest) {
     //    no-contact and the composer button is disabled.)
     const { data: clientRows, error: clientErr } = await supabase
       .from("clients")
-      .select("id, name, status, contact_emails");
+      .select("id, name, status, contact_emails, update_cadence");
     if (clientErr) {
       return NextResponse.json({ error: clientErr.message }, { status: 500 });
     }
@@ -162,6 +195,23 @@ export async function GET(req: NextRequest) {
       for (const u of ((users ?? []) as { id: string; name: string }[])) userById.set(u.id, u.name);
     }
 
+    // Index every ACTIVE client's contact emails (Signal B). An address that
+    // maps to more than one client means that inbox receives an update for
+    // each of them — and if their cadences differ, both a weekly and a
+    // monthly send. Includes non-recommended clients so the overlap still
+    // surfaces. Normalize the same way buildClientSignals does.
+    const clientsByEmail = new Map<string, Array<{ id: string; name: string; cadence: UpdateCadence }>>();
+    for (const c of clients) {
+      const cadence = coerceCadence(c.update_cadence);
+      for (const raw of c.contact_emails ?? []) {
+        const email = raw.trim().toLowerCase();
+        if (!email) continue;
+        const list = clientsByEmail.get(email) ?? [];
+        list.push({ id: c.id, name: c.name, cadence });
+        clientsByEmail.set(email, list);
+      }
+    }
+
     const recommendations: DigestRecommendation[] = [];
     for (const c of clients) {
       const clientWork = workByClient.get(c.name) ?? [];
@@ -179,15 +229,41 @@ export async function GET(req: NextRequest) {
         clientWork.map((w) => userById.get(w.user_id)).filter((n): n is string => !!n)
       ));
 
+      const cadence = coerceCadence(c.update_cadence);
+      const lastSent = lastSentByClient.get(c.name) ?? null;
+
+      // Signal A: last send is more recent than the cadence interval allows.
+      let recentlyEmailed: { daysSince: number; cadence: UpdateCadence } | null = null;
+      if (lastSent) {
+        const since = Math.floor((Date.now() - new Date(lastSent).getTime()) / 86_400_000);
+        if (since < CADENCE_MIN_GAP_DAYS[cadence]) {
+          recentlyEmailed = { daysSince: since, cadence };
+        }
+      }
+
+      // Signal B: a contact email also belongs to another active client.
+      const sharedRecipients: SharedRecipient[] = [];
+      for (const raw of c.contact_emails ?? []) {
+        const email = raw.trim().toLowerCase();
+        if (!email) continue;
+        const others = (clientsByEmail.get(email) ?? [])
+          .filter((o) => o.id !== c.id)
+          .map((o) => ({ name: o.name, cadence: o.cadence }));
+        if (others.length > 0) sharedRecipients.push({ email, others });
+      }
+
       recommendations.push({
         clientId: c.id,
         clientName: c.name,
         contactEmails: c.contact_emails ?? [],
         entryCount: clientWork.length,
-        lastSentAt: lastSentByClient.get(c.name) ?? null,
+        lastSentAt: lastSent,
         entries,
         contributorNames,
-        hasContact: (c.contact_emails?.length ?? 0) > 0
+        hasContact: (c.contact_emails?.length ?? 0) > 0,
+        cadence,
+        recentlyEmailed,
+        sharedRecipients
       });
     }
 

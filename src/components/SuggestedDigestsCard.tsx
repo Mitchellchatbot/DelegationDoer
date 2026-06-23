@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import {
   Sparkles, Loader2, RefreshCw, ArrowRight, CheckCircle2,
-  CalendarDays, CalendarRange, Calendar, CalendarClock, Trash2
+  CalendarDays, CalendarRange, Calendar, CalendarClock, Trash2, AlertTriangle
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -30,6 +30,13 @@ interface EntryDetail {
   authorName: string | null;
 }
 
+type Cadence = "daily" | "biweekly" | "weekly" | "monthly" | "none";
+
+interface SharedRecipient {
+  email: string;
+  others: Array<{ name: string; cadence: Cadence }>;
+}
+
 interface Recommendation {
   clientId: string;
   clientName: string;
@@ -39,6 +46,52 @@ interface Recommendation {
   entries: EntryDetail[];
   contributorNames: string[];
   hasContact: boolean;
+  cadence: Cadence;
+  // Overlap detection (see /api/eod/digest-recommendations).
+  recentlyEmailed: { daysSince: number; cadence: Cadence } | null;
+  sharedRecipients: SharedRecipient[];
+}
+
+const CADENCE_LABEL: Record<Cadence, string> = {
+  daily: "daily",
+  biweekly: "bi-weekly",
+  weekly: "weekly",
+  monthly: "monthly",
+  none: "no"
+};
+
+// Build the inline overlap warning for a recommendation, or null if there's
+// no overlap. "Both email types" (a shared recipient on a client with a
+// DIFFERENT cadence) is the strongest case and gets a rose tone; a plain
+// over-cadence re-send or same-cadence shared recipient stays amber.
+function overlapWarning(rec: Recommendation): { tone: "rose" | "amber"; label: string; title: string } | null {
+  const lines: string[] = [];
+
+  if (rec.recentlyEmailed) {
+    const { daysSince, cadence } = rec.recentlyEmailed;
+    const ago = daysSince <= 0 ? "today" : `${daysSince}d ago`;
+    lines.push(`Already emailed ${ago}, sooner than its ${CADENCE_LABEL[cadence]} cadence. Sending again may duplicate.`);
+  }
+
+  // Tolerate a missing array (defensive against any partial response).
+  const shared = rec.sharedRecipients ?? [];
+  let crossCadence = false;
+  for (const sr of shared) {
+    for (const o of sr.others ?? []) {
+      if (o.cadence !== rec.cadence) crossCadence = true;
+      lines.push(`${sr.email} also gets the ${CADENCE_LABEL[o.cadence]} email for ${o.name}.`);
+    }
+  }
+
+  if (lines.length === 0) return null;
+
+  const tone = crossCadence ? "rose" : "amber";
+  const label = shared.length > 0 && rec.recentlyEmailed
+    ? "Overlap"
+    : shared.length > 0
+      ? "Shared recipient"
+      : "Recently emailed";
+  return { tone, label, title: lines.join(" ") };
 }
 
 interface ApiResponse {
@@ -252,6 +305,7 @@ function RecRow({
   const [expanded, setExpanded] = useState(false);
   const [discarding, setDiscarding] = useState(false);
   void windowDays;
+  const warning = overlapWarning(rec);
 
   async function handleDiscard() {
     if (discarding) return;
@@ -276,6 +330,20 @@ function RecRow({
             >
               {rec.clientName}
             </Link>
+            {warning && (
+              <span
+                className={cn(
+                  "inline-flex items-center gap-1 rounded-full border font-medium px-1.5 py-0.5 text-[10px] shrink-0",
+                  warning.tone === "rose"
+                    ? "bg-rose-100 text-rose-700 border-rose-200/60"
+                    : "bg-amber-100 text-amber-700 border-amber-200/60"
+                )}
+                title={warning.title}
+              >
+                <AlertTriangle className="w-3 h-3" />
+                {warning.label}
+              </span>
+            )}
             <span className="text-[11px] tabular-nums font-semibold text-ink/70">
               {rec.entryCount} EOD {rec.entryCount === 1 ? "entry" : "entries"}
             </span>

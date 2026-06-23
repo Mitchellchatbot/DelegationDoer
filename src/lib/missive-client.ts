@@ -39,6 +39,11 @@ export interface MissiveThread {
   // of every account whose messages appear in this thread, so we can
   // tell which inboxes a thread "belongs to" without joining per-message.
   account_emails?: { email: string; name: string | null }[];
+  // Newest-message preview for the conversation list: who sent the most
+  // recent message and a short plaintext snippet of its body. Optional —
+  // ThreadRow falls back to the original sender + no snippet if absent.
+  last_from?: string | null;
+  last_snippet?: string | null;
 }
 
 // Per-message attachment metadata as returned by the clone's

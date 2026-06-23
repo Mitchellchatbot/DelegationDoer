@@ -399,7 +399,7 @@ export function InboxThreadsClient({
           type="search"
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          placeholder="Search subject, sender, body…"
+          placeholder="Search subject, sender, recipients…"
           className="w-full rounded-xl border border-slate-200/70 bg-white pl-9 pr-9 py-2 text-[13px] outline-none focus:border-accent/50 focus:ring-2 focus:ring-accent/20"
         />
         {(loading || q) && (

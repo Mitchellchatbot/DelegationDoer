@@ -37,6 +37,11 @@ export interface OutboundLead {
   status: LeadStatus;
   assignedRepId: string | null;
   typeformResponseId: string | null;
+  // Which Typeform sent this submission. Stamped from
+  // payload.form_response.form_id on the webhook. Joined against the
+  // outbound_typeform_forms catalog to render per-form blocks on the
+  // leads page; null for legacy leads we can't back-fill.
+  typeformFormId: string | null;
   // Normalized map of every Typeform answer keyed by question ref.
   // Used by the renderer as the source of `{ref}` dynamic placeholders.
   typeformAnswers: Record<string, string>;
@@ -85,6 +90,7 @@ interface LeadRow {
   status: LeadStatus;
   assigned_rep_id: string | null;
   typeform_response_id: string | null;
+  typeform_form_id: string | null;
   typeform_answers: Record<string, string> | null;
   calendly_event_uri: string | null;
   meeting_starts_at: string | null;
@@ -113,6 +119,7 @@ function normalizeLead(r: LeadRow): OutboundLead {
     status: r.status,
     assignedRepId: r.assigned_rep_id,
     typeformResponseId: r.typeform_response_id,
+    typeformFormId: r.typeform_form_id ?? null,
     typeformAnswers: r.typeform_answers ?? {},
     calendlyEventUri: r.calendly_event_uri,
     meetingStartsAt: r.meeting_starts_at,
@@ -175,6 +182,9 @@ export interface TypeformIntake {
   email: string | null;
   name: string | null;
   typeformResponseId: string;
+  // Which Typeform sent this submission. Stamped from
+  // payload.form_response.form_id so the leads page can group by form.
+  typeformFormId: string | null;
   typeformPayload: unknown;  // raw payload for audit
   // Normalized answers map (ref → string). Becomes the source of {ref}
   // placeholders the operator can drop into SMS templates.
@@ -202,6 +212,7 @@ export async function upsertLeadFromTypeform(intake: TypeformIntake): Promise<{
         email: intake.email?.toLowerCase() ?? existing.email,
         name: intake.name ?? existing.name,
         typeform_response_id: intake.typeformResponseId,
+        typeform_form_id: intake.typeformFormId ?? existing.typeformFormId,
         typeform_payload: intake.typeformPayload,
         typeform_answers: mergedAnswers
       })
@@ -219,6 +230,7 @@ export async function upsertLeadFromTypeform(intake: TypeformIntake): Promise<{
       name: intake.name ?? null,
       status: "warm_lead",
       typeform_response_id: intake.typeformResponseId,
+      typeform_form_id: intake.typeformFormId ?? null,
       typeform_payload: intake.typeformPayload,
       typeform_answers: intake.typeformAnswers
     })

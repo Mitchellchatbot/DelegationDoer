@@ -48,7 +48,7 @@ interface Recommendation {
   hasContact: boolean;
   cadence: Cadence;
   // Overlap detection (see /api/eod/digest-recommendations).
-  recentlyEmailed: { daysSince: number; cadence: Cadence } | null;
+  recentlyEmailed: { daysSince: number; window: DigestWindow } | null;
   sharedRecipients: SharedRecipient[];
 }
 
@@ -60,17 +60,24 @@ const CADENCE_LABEL: Record<Cadence, string> = {
   none: "no"
 };
 
+const WINDOW_LABEL: Record<DigestWindow, string> = {
+  daily: "daily",
+  weekly: "weekly",
+  biweekly: "bi-weekly",
+  monthly: "monthly"
+};
+
 // Build the inline overlap warning for a recommendation, or null if there's
 // no overlap. "Both email types" (a shared recipient on a client with a
 // DIFFERENT cadence) is the strongest case and gets a rose tone; a plain
-// over-cadence re-send or same-cadence shared recipient stays amber.
+// recently-emailed re-send or same-cadence shared recipient stays amber.
 function overlapWarning(rec: Recommendation): { tone: "rose" | "amber"; label: string; title: string } | null {
   const lines: string[] = [];
 
   if (rec.recentlyEmailed) {
-    const { daysSince, cadence } = rec.recentlyEmailed;
-    const ago = daysSince <= 0 ? "today" : `${daysSince}d ago`;
-    lines.push(`Already emailed ${ago}, sooner than its ${CADENCE_LABEL[cadence]} cadence. Sending again may duplicate.`);
+    const re = rec.recentlyEmailed;
+    const ago = re.daysSince <= 0 ? "today" : `${re.daysSince}d ago`;
+    lines.push(`Already sent a client update ${ago} (within the ${WINDOW_LABEL[re.window]} window). Sending again may duplicate.`);
   }
 
   // Tolerate a missing array (defensive against any partial response).

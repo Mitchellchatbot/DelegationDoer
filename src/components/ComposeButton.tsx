@@ -53,8 +53,8 @@ export function ComposeButton({
   const [sendAtLocal, setSendAtLocal] = useState("");
   // Forwarded to /api/inboxes/compose as attachmentUrls; the route
   // fetches each URL and re-forwards as multipart files[] to the missive
-  // clone. Scheduled sends reject attachments at the backend, so we
-  // block that combo in submit() with a friendly toast.
+  // clone. Works for scheduled sends too — the clone stashes them and
+  // sends them when the message comes due.
   const [attachments, setAttachments] = useState<TaskMedia[]>([]);
   // Client roster for the To/Cc typeahead. Loaded once when the modal
   // first opens; only clients with an email on file are useful here.
@@ -216,10 +216,6 @@ export function ComposeButton({
       }
       sendAtISO = new Date(ms).toISOString();
     }
-    if (sendAtISO && attachments.length > 0) {
-      toast.error("Attachments aren't supported on scheduled sends — remove them or send now.");
-      return;
-    }
 
     setBusy(true);
     try {
@@ -234,7 +230,8 @@ export function ComposeButton({
           bodyText: bodyText,
           // Lets the compose route clear this draft after a successful send.
           ...(draftIdRef.current ? { draftId: draftIdRef.current } : {}),
-          ...(sendAtISO ? { sendAt: sendAtISO } : { attachmentUrls: attachments })
+          ...(sendAtISO ? { sendAt: sendAtISO } : {}),
+          ...(attachments.length > 0 ? { attachmentUrls: attachments } : {})
         })
       });
       const data = await res.json();
@@ -418,7 +415,6 @@ export function ComposeButton({
                     onChange={setAttachments}
                     label="Attach files"
                     compact
-                    hint={scheduleOpen ? "Attachments are not supported on scheduled sends." : undefined}
                   />
                 </div>
 

@@ -1,7 +1,7 @@
 "use client";
 
 import * as Dialog from "@radix-ui/react-dialog";
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import { PenSquare, Send, X, Loader2, Clock, Check } from "lucide-react";
@@ -59,7 +59,16 @@ export function ComposeButton({
   // Client roster for the To/Cc typeahead. Loaded once when the modal
   // first opens; only clients with an email on file are useful here.
   const [clients, setClients] = useState<ClientSuggestion[]>([]);
+  // Our own team inboxes + teammates (seoteam@…, frank@…) for the same
+  // To/Cc typeahead, loaded alongside the client roster. Shown under a
+  // "Team" section in the dropdown.
+  const [teamSuggestions, setTeamSuggestions] = useState<ClientSuggestion[]>([]);
   const clientsLoadedRef = useRef(false);
+  // Clients first so the typeahead's "Team" section renders after them.
+  const recipientSuggestions = useMemo(
+    () => [...clients, ...teamSuggestions],
+    [clients, teamSuggestions]
+  );
 
   const fromOptions = accounts ?? (accountId ? [{ id: accountId, email: accountEmail ?? "", display_name: null }] : []);
   const fromMeta = fromOptions.find((a) => a.id === fromAccountId) ?? fromOptions[0];
@@ -146,6 +155,24 @@ export function ComposeButton({
         setClients(list);
       })
       .catch(() => { clientsLoadedRef.current = false; });
+    // Team inboxes + teammates. Already in ClientSuggestion shape from the
+    // route; silent on failure — the typeahead just shows clients only.
+    fetch("/api/team-emails", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : { suggestions: [] }))
+      .then((d) => {
+        if (cancelled) return;
+        const list = ((d.suggestions ?? []) as Array<{ id: string; name: string; contactName?: string | null; contactEmails?: string[] }>)
+          .map((s) => ({
+            id: s.id,
+            name: s.name,
+            contactName: s.contactName ?? null,
+            contactEmails: s.contactEmails ?? [],
+            category: "team" as const,
+          }))
+          .filter((s) => s.contactEmails.length > 0);
+        setTeamSuggestions(list);
+      })
+      .catch(() => { /* silent — To/Cc fall back to clients only */ });
     return () => { cancelled = true; };
   }, [open]);
 
@@ -360,7 +387,7 @@ export function ComposeButton({
                     <RecipientAutocomplete
                       value={to}
                       onChange={setTo}
-                      clients={clients}
+                      clients={recipientSuggestions}
                       autoFocus
                       placeholder="someone@example.com, another@example.com"
                     />
@@ -387,7 +414,7 @@ export function ComposeButton({
                           <RecipientAutocomplete
                             value={cc}
                             onChange={setCc}
-                            clients={clients}
+                            clients={recipientSuggestions}
                             placeholder="optional cc list"
                           />
                         </FieldRow>

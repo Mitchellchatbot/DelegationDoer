@@ -144,7 +144,10 @@ export async function POST(req: NextRequest) {
             bodyText: renderTemplate(bodyText, c),
             bodyHtml: bodyHtml ? renderTemplate(bodyHtml, c) : undefined,
             sendAtMs,
-            attachments
+            attachments,
+            // Mark every blast so it's excluded from client touchpoint health
+            // regardless of the (worker-authored) subject.
+            automated: true
           });
           return {
             clientId: c.clientId,

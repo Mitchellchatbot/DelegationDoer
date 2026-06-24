@@ -86,6 +86,11 @@ export async function syncClientTouchpointsFromMissive(
       // counts toward anyInWindow above so paging keeps going for the
       // real emails sitting on later pages.
       if (isAutomatedOutboundSubject(t.subject)) continue;
+      // Same exclusion, but driven by an explicit per-message marker from
+      // the clone (the bulk-email tool sets automated:true) so it works
+      // regardless of the worker-authored subject. `automated` reflects the
+      // thread's latest OUTBOUND message, so a later personal reply re-counts.
+      if (t.automated) continue;
 
       // A thread can match multiple clients via different participants
       // OR a single participant that several clients share (e.g. one

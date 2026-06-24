@@ -72,7 +72,10 @@ export function BulkEmailComposer({
   clients: RosterClient[];
 }) {
   const [fromAccountId, setFromAccountId] = useState<string>(fromOptions[0]?.id ?? "");
-  const [subject, setSubject] = useState("Your Monthly SEO Update");
+  // Minimal starter — the worker writes the rest of the subject. The blast is
+  // kept out of touchpoint health by a marker (automated flag), not the
+  // subject text, so this can be anything.
+  const [subject, setSubject] = useState("Update ");
   const [bodyText, setBodyText] = useState("");
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [sendAtLocal, setSendAtLocal] = useState("");
@@ -221,7 +224,7 @@ export function BulkEmailComposer({
             <code className="px-1 py-0.5 rounded bg-slate-100 text-ink/70">{"{{website}}"}</code>{" "}
             — filled per client at send time.
             <span className="block mt-1 text-ink/45">
-              Tip: start the subject with “Monthly SEO Update” so this blast stays out of touchpoint health.
+              These sends are automatically kept out of touchpoint health, so they won&apos;t reset clients&apos; last-contacted status.
             </span>
           </div>
 

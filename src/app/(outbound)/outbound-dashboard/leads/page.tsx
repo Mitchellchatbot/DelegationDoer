@@ -14,13 +14,13 @@ import { OutboundTypeformFormsDrawer } from "@/components/OutboundTypeformFormsD
 // /outbound-dashboard/leads — every lead in the funnel, grouped by the
 // Typeform that sent them. Each form is a collapsible block; unknown
 // form_ids surface in a single catch-all block at the bottom so no lead
-// is hidden.
+// is hidden. (The drag-and-drop pipeline board lives on the Flows tab.)
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 const VALID_STATUSES: LeadStatus[] = [
-  "warm_lead", "booked", "showed", "no_show", "success", "lost"
+  "warm_lead", "booked", "showed", "no_show", "contract", "success", "lost"
 ];
 
 function parseStatus(raw: string | string[] | undefined): LeadStatus | null {

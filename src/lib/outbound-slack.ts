@@ -126,6 +126,20 @@ export async function notifyMarkedSold(args: {
   await fire(headline, blocks);
 }
 
+// 📝 Contract — lead moved to the contract / closing stage. No drip
+// changes; a heads-up so the team knows paperwork is out for signature.
+export async function notifyMarkedContract(lead: OutboundLead): Promise<void> {
+  const headline = `📝 ${lead.name ?? lead.phone} moved to contract`;
+  await fire(headline, [
+    { type: "header", text: { type: "plain_text", text: headline, emoji: true } },
+    {
+      type: "context",
+      elements: [{ type: "mrkdwn", text: "Contract is out — awaiting signature." }]
+    },
+    leadActionButton(lead.id)
+  ]);
+}
+
 // 🪦 Lost — terminal failure state. Cancels every pending sequence.
 export async function notifyMarkedLost(lead: OutboundLead): Promise<void> {
   const headline = `🪦 ${lead.name ?? lead.phone} marked lost`;

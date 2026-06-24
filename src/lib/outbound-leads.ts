@@ -1,5 +1,7 @@
 import "server-only";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
+import { ALLOWED_TRANSITIONS, type LeadStatus } from "@/lib/outbound-stages";
+import { kindToFlow, type FlowKey } from "@/lib/outbound-flow-config";
 import {
   buildContext, fmtMeetingFriendly, renderTemplate, getFallbackTemplate,
   DRIP_OFFSETS_DAYS, DAY_MS,
@@ -22,8 +24,11 @@ import {
 // Templates are rendered HERE at schedule time, not at send time, so
 // outbound_scheduled_messages.body always reflects exactly what was sent.
 
-export type LeadStatus =
-  | "warm_lead" | "booked" | "showed" | "no_show" | "success" | "lost";
+// LeadStatus + the state-machine transition map are defined in the
+// client-safe lib/outbound-stages module so the kanban board and the data
+// layer share one source of truth. Re-exported here so existing imports
+// (`import { LeadStatus } from "@/lib/outbound-leads"`) keep working.
+export type { LeadStatus };
 
 export type MessageKind =
   | "confirmation" | "reminder_24h" | "reminder_1h"
@@ -246,7 +251,8 @@ export type EventKind =
   | "form_submitted" | "meeting_booked" | "meeting_canceled"
   | "first_text_sent" | "reminder_24h_sent" | "reminder_1h_sent"
   | "drip_sent" | "marked_no_show" | "marked_showed" | "marked_sold"
-  | "marked_lost" | "sequence_completed" | "transitioned";
+  | "marked_lost" | "sequence_completed" | "transitioned"
+  | "sequence_changed";
 
 export async function recordEvent(
   leadId: string,
@@ -261,18 +267,10 @@ export async function recordEvent(
 }
 
 // ---- STATE MACHINE ----
-
-// Allowed transitions. Anything outside this map is rejected. Keep this
-// table small and obvious; if it grows past a few entries split into
-// per-status helpers.
-const ALLOWED_TRANSITIONS: Record<LeadStatus, LeadStatus[]> = {
-  warm_lead: ["booked", "lost"],
-  booked:    ["showed", "no_show", "warm_lead", "success", "lost"], // success = rep skips ahead
-  showed:    ["success", "lost"],
-  no_show:   ["success", "lost"],
-  success:   [],  // terminal
-  lost:      ["warm_lead"]  // resurrect-from-lost is allowed (rare)
-};
+//
+// ALLOWED_TRANSITIONS + the LeadStatus union live in lib/outbound-stages (a
+// client-safe module) so the kanban board and the data layer share one
+// source of truth. transitionLead enforces the map on every write.
 
 export async function transitionLead(
   leadId: string,
@@ -565,14 +563,14 @@ export function chatIdForLead(lead: OutboundLead): string {
 // Counts per status — feeds the Funnel KPI strip on the dashboard.
 export async function getLeadStatusCounts(): Promise<Record<LeadStatus, number>> {
   const supabase = getSupabaseAdmin();
-  // One query per status is fine for the count surface (6 statuses);
+  // One query per status is fine for the count surface (7 statuses);
   // group-by-on-the-server would be cleaner but Supabase RPC isn't
-  // worth the indirection for a half-dozen aggregates.
+  // worth the indirection for a handful of aggregates.
   const statuses: LeadStatus[] = [
-    "warm_lead", "booked", "showed", "no_show", "success", "lost"
+    "warm_lead", "booked", "showed", "no_show", "contract", "success", "lost"
   ];
   const counts: Record<LeadStatus, number> = {
-    warm_lead: 0, booked: 0, showed: 0, no_show: 0, success: 0, lost: 0
+    warm_lead: 0, booked: 0, showed: 0, no_show: 0, contract: 0, success: 0, lost: 0
   };
   await Promise.all(statuses.map(async (s) => {
     const { count, error } = await supabase
@@ -841,6 +839,92 @@ export async function getFlowsOverview(): Promise<Map<string, FlowStepBucket>> {
   }
 
   return buckets;
+}
+
+// ---- FLOW BOARD (Flows tab → "Flow board" view) ----
+//
+// Each lead currently being nurtured, grouped by its active SMS sequence. A
+// lead's flow is derived from the kinds of its PENDING scheduled messages
+// (recovery_drip → recovery, engagement_drip → engagement, confirmation /
+// reminder_* → booking). Leads with no pending sequence messages (terminal or
+// idle) don't appear. Powers OutboundSequenceBoard.
+
+export interface FlowLeadCard {
+  leadId: string;
+  name: string | null;
+  phone: string;
+  email: string | null;
+  status: LeadStatus;
+  typeformFormId: string | null;
+  flow: FlowKey;
+  nextScheduledFor: string | null;  // soonest pending send — the "next touch"
+  pendingCount: number;
+}
+
+export async function getLeadsByFlow(): Promise<Record<FlowKey, FlowLeadCard[]>> {
+  const supabase = getSupabaseAdmin();
+  const { data, error } = await supabase
+    .from("outbound_scheduled_messages")
+    .select(`
+      lead_id, kind, scheduled_for,
+      outbound_leads!inner ( id, name, phone, email, status, typeform_form_id )
+    `)
+    .eq("status", "pending")
+    .order("scheduled_for", { ascending: true });
+  if (error) throw new Error(error.message);
+
+  interface JoinedLead {
+    id: string; name: string | null; phone: string;
+    email: string | null; status: LeadStatus; typeform_form_id: string | null;
+  }
+  interface JoinedRow {
+    lead_id: string;
+    kind: MessageKind;
+    scheduled_for: string;
+    outbound_leads: JoinedLead | JoinedLead[] | null;
+  }
+  const leadOf = (r: JoinedRow): JoinedLead | null =>
+    !r.outbound_leads
+      ? null
+      : (Array.isArray(r.outbound_leads) ? (r.outbound_leads[0] ?? null) : r.outbound_leads);
+
+  // Higher-priority flow wins if a lead somehow has pending of more than one.
+  const PRIORITY: FlowKey[] = ["booking", "recovery", "engagement"];
+  const byLead = new Map<string, FlowLeadCard>();
+  for (const r of (data ?? []) as unknown as JoinedRow[]) {
+    const flow = kindToFlow(r.kind);
+    if (!flow) continue;
+    const lead = leadOf(r);
+    if (!lead) continue;
+    const existing = byLead.get(r.lead_id);
+    if (existing) {
+      existing.pendingCount += 1;
+      if (PRIORITY.indexOf(flow) < PRIORITY.indexOf(existing.flow)) existing.flow = flow;
+      continue;
+    }
+    byLead.set(r.lead_id, {
+      leadId: r.lead_id,
+      name: lead.name,
+      phone: lead.phone,
+      email: lead.email,
+      status: lead.status,
+      typeformFormId: lead.typeform_form_id ?? null,
+      flow,
+      nextScheduledFor: r.scheduled_for,  // rows ordered asc → first seen is soonest
+      pendingCount: 1
+    });
+  }
+
+  const out: Record<FlowKey, FlowLeadCard[]> = { booking: [], recovery: [], engagement: [] };
+  for (const card of byLead.values()) out[card.flow].push(card);
+  for (const k of Object.keys(out) as FlowKey[]) {
+    out[k].sort((a, b) => {
+      const av = a.nextScheduledFor ? +new Date(a.nextScheduledFor) : Infinity;
+      const bv = b.nextScheduledFor ? +new Date(b.nextScheduledFor) : Infinity;
+      return av - bv;
+    });
+  }
+  return out;
 }
 
 // Re-export for callers — keeps the consumer's import list short.

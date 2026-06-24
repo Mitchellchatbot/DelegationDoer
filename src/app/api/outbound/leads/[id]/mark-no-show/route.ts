@@ -2,11 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { canSeeOutbound } from "@/lib/auth";
-import {
-  transitionLead, recordEvent, getLeadById,
-  cancelMessagesByKind, scheduleEngagementDrip
-} from "@/lib/outbound-leads";
-import { notifyMarkedNoShow } from "@/lib/outbound-slack";
+import { getLeadById } from "@/lib/outbound-leads";
+import { applyManualTransition } from "@/lib/outbound-transitions";
 
 export const dynamic = "force-dynamic";
 
@@ -29,16 +26,8 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
   const existing = await getLeadById(id);
   if (!existing) return NextResponse.json({ error: "not_found" }, { status: 404 });
   try {
-    const updated = await transitionLead(id, "no_show", {
-      no_show_at: new Date().toISOString()
-    });
-    await recordEvent(id, "marked_no_show", { by: me.id });
-    // Reminders that haven't fired yet (e.g. marked no-show before the
-    // 1h reminder fired) are now moot.
-    await cancelMessagesByKind(id, ["reminder_24h", "reminder_1h", "confirmation"]);
-    const scheduled = await scheduleEngagementDrip(updated);
-    await notifyMarkedNoShow(updated);
-    return NextResponse.json({ ok: true, lead: updated, scheduled });
+    const result = await applyManualTransition(id, "no_show", { by: me.id });
+    return NextResponse.json({ ok: true, lead: result.lead, scheduled: result.scheduled });
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "transition failed" },

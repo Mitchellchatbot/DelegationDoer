@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Check, X, Trophy, Skull, Loader2 } from "lucide-react";
+import { Check, X, Trophy, Skull, Loader2, FileSignature } from "lucide-react";
 import type { LeadStatus } from "@/lib/outbound-leads";
 import { cn } from "@/lib/utils";
 
@@ -21,7 +21,7 @@ interface Props {
 }
 
 interface ActionDef {
-  key: "showed" | "no-show" | "sold" | "lost";
+  key: "showed" | "no-show" | "contract" | "sold" | "lost";
   label: string;
   icon: typeof Check;
   // Statuses from which this action is legal. Matches
@@ -52,18 +52,25 @@ const ACTIONS: ActionDef[] = [
     confirmPrompt: "Mark this lead as a no-show? The engagement drip will start sending."
   },
   {
+    key: "contract",
+    label: "Mark contract",
+    icon: FileSignature,
+    validFrom: ["booked", "showed", "no_show"],
+    cls: "bg-violet-50 text-violet-700 border-violet-200/60 hover:bg-violet-100"
+  },
+  {
     key: "sold",
     label: "Mark sold",
     icon: Trophy,
-    validFrom: ["booked", "showed", "no_show"],
-    cls: "bg-violet-50 text-violet-700 border-violet-200/60 hover:bg-violet-100",
+    validFrom: ["booked", "showed", "no_show", "contract"],
+    cls: "bg-emerald-50 text-emerald-700 border-emerald-200/60 hover:bg-emerald-100",
     promptForNotes: true
   },
   {
     key: "lost",
     label: "Mark lost",
     icon: Skull,
-    validFrom: ["warm_lead", "booked", "showed", "no_show"],
+    validFrom: ["warm_lead", "booked", "showed", "no_show", "contract"],
     cls: "bg-slate-100 text-slate-700 border-slate-300/60 hover:bg-slate-200",
     confirmPrompt: "Mark this lead as lost? All pending messages will be canceled."
   }

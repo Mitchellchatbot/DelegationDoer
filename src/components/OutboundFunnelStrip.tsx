@@ -21,11 +21,14 @@ export function OutboundFunnelStrip({ counts }: Props) {
   // success implies showed implies booked implies warm. no_show is a
   // terminal off-shoot but still came through booked.
   const everReachedWarm =
-    counts.warm_lead + counts.booked + counts.showed + counts.no_show + counts.success + counts.lost;
+    counts.warm_lead + counts.booked + counts.showed + counts.no_show +
+    counts.contract + counts.success + counts.lost;
   const everReachedBooked =
-    counts.booked + counts.showed + counts.no_show + counts.success;
+    counts.booked + counts.showed + counts.no_show + counts.contract + counts.success;
   const everReachedShowed =
-    counts.showed + counts.success;
+    counts.showed + counts.contract + counts.success;
+  const everReachedContract =
+    counts.contract + counts.success;
   const won = counts.success;
 
   const stages: Array<{
@@ -53,9 +56,15 @@ export function OutboundFunnelStrip({ counts }: Props) {
       tone: { num: "text-indigo-700",  bar: "bg-indigo-500" }
     },
     {
+      label: "Contract",
+      count: everReachedContract,
+      prev: everReachedShowed,
+      tone: { num: "text-violet-700",  bar: "bg-violet-500" }
+    },
+    {
       label: "Won",
       count: won,
-      prev: everReachedShowed,
+      prev: everReachedContract,
       tone: { num: "text-emerald-700", bar: "bg-emerald-500" }
     }
   ];

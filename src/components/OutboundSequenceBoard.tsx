@@ -42,7 +42,7 @@ const EMPTY = (): Record<FlowKey, FlowLeadCard[]> => ({ booking: [], recovery: [
 
 export function OutboundSequenceBoard({ cards: initial, forms }: Props) {
   const router = useRouter();
-  const { containerRef, onDragStart, onDragEnd: stopAutoScroll } =
+  const { containerRef, onDragStart, onDragEnd: stopAutoScroll, resolveDroppableId } =
     useHorizontalDragAutoScroll();
   const [cards, setCards] = useState<FlowLeadCard[]>(initial);
   const [sourceFilter, setSourceFilter] = useState<string>("all");
@@ -70,7 +70,10 @@ export function OutboundSequenceBoard({ cards: initial, forms }: Props) {
 
   async function onDragEnd(result: DropResult) {
     if (!result.destination) return;
-    const dest = result.destination.droppableId as FlowKey;
+    // Re-resolve against the live DOM so a drop after horizontal auto-scroll
+    // lands in the column actually under the cursor (not the library's
+    // pre-scroll destination).
+    const dest = resolveDroppableId(result.destination.droppableId) as FlowKey;
     const id = result.draggableId;
     const before = cards.find((c) => c.leadId === id);
     if (!before || before.flow === dest) return;

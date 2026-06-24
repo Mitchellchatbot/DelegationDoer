@@ -28,14 +28,22 @@ export function useHorizontalDragAutoScroll() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const draggingRef = useRef(false);
   const pointerXRef = useRef(0);
+  const pointerYRef = useRef(0);
+  // Whether a pointer (mouse/touch) is driving this drag. False for keyboard
+  // drags, where we leave drop targeting entirely to the library.
+  const sawPointerRef = useRef(false);
   const rafRef = useRef<number | null>(null);
 
   const onPointerMove = useCallback((e: MouseEvent | TouchEvent) => {
     if (!draggingRef.current) return;
-    pointerXRef.current =
-      "touches" in e
-        ? e.touches[0]?.clientX ?? pointerXRef.current
-        : e.clientX;
+    sawPointerRef.current = true;
+    if ("touches" in e) {
+      const t = e.touches[0];
+      if (t) { pointerXRef.current = t.clientX; pointerYRef.current = t.clientY; }
+    } else {
+      pointerXRef.current = e.clientX;
+      pointerYRef.current = e.clientY;
+    }
   }, []);
 
   const tick = useCallback(() => {
@@ -74,6 +82,7 @@ export function useHorizontalDragAutoScroll() {
   const onDragStart = useCallback(() => {
     if (draggingRef.current) return;
     draggingRef.current = true;
+    sawPointerRef.current = false;
     // Passive listeners — the library owns gesture suppression; we never
     // preventDefault (doing so would fight its touch sensor).
     window.addEventListener("mousemove", onPointerMove, { passive: true });
@@ -91,9 +100,30 @@ export function useHorizontalDragAutoScroll() {
     }
   }, [onPointerMove]);
 
+  // Resolve the droppable actually under the cursor at drop time. The library
+  // computes result.destination against its own droppable-position model,
+  // which is NOT adjusted for our outer-wrapper horizontal scroll (that wrapper
+  // isn't the droppables' registered scrollable — each column's own
+  // overflow-y-auto is) — so after auto-scroll its destination is the
+  // pre-scroll column. We re-resolve from the live DOM: hit-test the last
+  // pointer position and return the column under it. The portaled drag clone
+  // sits on document.body (not inside a droppable), so elementsFromPoint's
+  // topmost hit yields null via closest() and we fall through to the column
+  // beneath. Keyboard drags (no pointer) keep the library's destination.
+  const resolveDroppableId = useCallback((fallback: string): string => {
+    if (!sawPointerRef.current || typeof document === "undefined") return fallback;
+    const hits = document.elementsFromPoint(pointerXRef.current, pointerYRef.current);
+    for (const el of hits) {
+      const drop = el instanceof Element ? el.closest("[data-rfd-droppable-id]") : null;
+      const id = drop?.getAttribute("data-rfd-droppable-id");
+      if (id) return id;
+    }
+    return fallback;
+  }, []);
+
   // Safety net: if the tree unmounts mid-drag (navigation, router.refresh)
   // onDragEnd may never fire — tear down listeners and the RAF loop.
   useEffect(() => onDragEnd, [onDragEnd]);
 
-  return { containerRef, onDragStart, onDragEnd };
+  return { containerRef, onDragStart, onDragEnd, resolveDroppableId };
 }

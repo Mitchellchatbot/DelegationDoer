@@ -47,7 +47,7 @@ const EMPTY_GROUPS = (): Record<LeadStatus, OutboundLead[]> => ({
 
 export function OutboundLeadsBoard({ leads: initialLeads, forms }: Props) {
   const router = useRouter();
-  const { containerRef, onDragStart, onDragEnd: stopAutoScroll } =
+  const { containerRef, onDragStart, onDragEnd: stopAutoScroll, resolveDroppableId } =
     useHorizontalDragAutoScroll();
   const [leads, setLeads] = useState<OutboundLead[]>(initialLeads);
   const [sourceFilter, setSourceFilter] = useState<string>("all");
@@ -76,7 +76,10 @@ export function OutboundLeadsBoard({ leads: initialLeads, forms }: Props) {
 
   async function onDragEnd(result: DropResult) {
     if (!result.destination) return;
-    const dest = result.destination.droppableId as LeadStatus;
+    // Re-resolve against the live DOM so a drop after horizontal auto-scroll
+    // lands in the column actually under the cursor (not the library's
+    // pre-scroll destination).
+    const dest = resolveDroppableId(result.destination.droppableId) as LeadStatus;
     const id = result.draggableId;
     const before = leads.find((l) => l.id === id);
     if (!before || before.status === dest) return;

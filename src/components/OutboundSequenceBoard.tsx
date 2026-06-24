@@ -42,7 +42,7 @@ const EMPTY = (): Record<FlowKey, FlowLeadCard[]> => ({ booking: [], recovery: [
 
 export function OutboundSequenceBoard({ cards: initial, forms }: Props) {
   const router = useRouter();
-  const { containerRef, onDragStart, onDragEnd: stopAutoScroll, resolveDroppableId } =
+  const { containerRef, onDragStart, onDragEnd: stopAutoScroll, resolveDroppableId, activeDroppableId } =
     useHorizontalDragAutoScroll();
   const [cards, setCards] = useState<FlowLeadCard[]>(initial);
   const [sourceFilter, setSourceFilter] = useState<string>("all");
@@ -137,6 +137,7 @@ export function OutboundSequenceBoard({ cards: initial, forms }: Props) {
                 labelForForm={labelForForm}
                 onOpen={(id) => router.push(`/outbound-dashboard/leads/${id}`)}
                 animationDelay={colIdx * 40}
+                activeDroppableId={activeDroppableId}
               />
             ))}
           </div>
@@ -147,13 +148,14 @@ export function OutboundSequenceBoard({ cards: initial, forms }: Props) {
 }
 
 function Column({
-  flow, cards, labelForForm, onOpen, animationDelay
+  flow, cards, labelForForm, onOpen, animationDelay, activeDroppableId
 }: {
   flow: FlowKey;
   cards: FlowLeadCard[];
   labelForForm: (c: FlowLeadCard) => string | null;
   onOpen: (id: string) => void;
   animationDelay: number;
+  activeDroppableId: string | null;
 }) {
   const meta = FLOW_META[flow];
   return (
@@ -183,13 +185,19 @@ function Column({
         </span>
       </div>
       <Droppable droppableId={flow}>
-        {(prov, snap) => (
+        {(prov, snap) => {
+          // Prefer the live hit-tested column (correct during horizontal
+          // auto-scroll); fall back to the library snapshot for keyboard drags.
+          const over = activeDroppableId !== null
+            ? activeDroppableId === flow
+            : snap.isDraggingOver;
+          return (
           <div
             ref={prov.innerRef}
             {...prov.droppableProps}
             className={cn(
               "flex-1 px-2 pb-2 pt-1 space-y-2 min-h-[160px] max-h-[calc(100vh-340px)] overflow-y-auto transition-colors rounded-b-2xl",
-              snap.isDraggingOver && "bg-accent/5 ring-2 ring-accent/20"
+              over && "bg-accent/5 ring-2 ring-accent/20"
             )}
           >
             {cards.map((c, i) => (
@@ -209,13 +217,14 @@ function Column({
               </Draggable>
             ))}
             {prov.placeholder}
-            {cards.length === 0 && !snap.isDraggingOver && (
+            {cards.length === 0 && !over && (
               <div className="text-[11px] text-muted italic text-center py-6">
                 {meta.emptyHint}
               </div>
             )}
           </div>
-        )}
+          );
+        }}
       </Droppable>
     </div>
   );

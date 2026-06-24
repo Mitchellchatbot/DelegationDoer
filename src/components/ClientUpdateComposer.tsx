@@ -380,6 +380,9 @@ export function ClientUpdateComposer({
   // roster there (same source the inbox Compose uses). Falls back to this
   // client's contacts until the roster loads / if the fetch fails.
   const [roster, setRoster] = useState<ClientSuggestion[]>([]);
+  // Our own team inboxes + teammates, suggested under a "Team" section in
+  // Cc/Bcc (same source the inbox Compose uses).
+  const [teamSuggestions, setTeamSuggestions] = useState<ClientSuggestion[]>([]);
   useEffect(() => {
     let cancelled = false;
     fetch("/api/clients", { cache: "no-store" })
@@ -392,10 +395,21 @@ export function ClientUpdateComposer({
         setRoster(list);
       })
       .catch(() => { /* silent — Cc/Bcc fall back to this client's contacts */ });
+    fetch("/api/team-emails", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : { suggestions: [] }))
+      .then((d) => {
+        if (cancelled) return;
+        const list = ((d.suggestions ?? []) as Array<{ id: string; name: string; contactName?: string | null; contactEmails?: string[] }>)
+          .map((s) => ({ id: s.id, name: s.name, contactName: s.contactName ?? null, contactEmails: s.contactEmails ?? [], category: "team" as const }))
+          .filter((s) => s.contactEmails.length > 0);
+        setTeamSuggestions(list);
+      })
+      .catch(() => { /* silent — Cc/Bcc just won't suggest team addresses */ });
     return () => { cancelled = true; };
   }, []);
 
-  const ccBccSuggestions = roster.length ? roster : clientSuggestions;
+  // Clients first so the typeahead's "Team" section renders after them.
+  const ccBccSuggestions = [...(roster.length ? roster : clientSuggestions), ...teamSuggestions];
 
   function removeDraft(idx: number) {
     setDrafts((prev) => prev.filter((_, i) => i !== idx));

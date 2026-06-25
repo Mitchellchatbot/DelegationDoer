@@ -112,9 +112,11 @@ export function OutboundLeadsTable({ rows, totalCount, statusFilter }: Props) {
                         {lead.name ?? "(no name)"}
                       </div>
                       <div className="text-[11px] text-ink/55 flex items-center gap-2 mt-0.5">
-                        <span className="inline-flex items-center gap-1">
-                          <Phone className="w-3 h-3" /> {lead.phone}
-                        </span>
+                        {lead.phone && (
+                          <span className="inline-flex items-center gap-1">
+                            <Phone className="w-3 h-3" /> {lead.phone}
+                          </span>
+                        )}
                         {lead.email && (
                           <span className="inline-flex items-center gap-1 truncate">
                             <Mail className="w-3 h-3" /> {lead.email}

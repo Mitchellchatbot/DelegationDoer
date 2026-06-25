@@ -6,6 +6,7 @@ import {
 } from "@/lib/outbound-leads";
 import { OutboundLeadsTable, StatusFilterBar, NoLeadsHint } from "@/components/OutboundLeadsTable";
 import { OutboundFunnelStrip } from "@/components/OutboundFunnelStrip";
+import { AddLeadButton } from "@/components/AddLeadButton";
 import { extractWebsiteUrl } from "@/lib/website-builder-integration";
 
 // /outbound-dashboard/leads — every lead in the funnel, status-filtered.
@@ -66,7 +67,10 @@ export default async function OutboundLeadsPage({
         iconTone="fuchsia"
       />
       <OutboundFunnelStrip counts={counts} />
-      <StatusFilterBar counts={counts} active={statusFilter} />
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <StatusFilterBar counts={counts} active={statusFilter} />
+        <AddLeadButton />
+      </div>
       {showEmptyHint && <NoLeadsHint />}
       <OutboundLeadsTable
         rows={tableRows}

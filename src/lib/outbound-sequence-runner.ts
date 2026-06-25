@@ -99,6 +99,21 @@ export async function runOutboundSequences(): Promise<OutboundSequenceResult> {
         continue;
       }
 
+      // 2b. Email-only leads have no phone — Blooio can't text them. This
+      //     shouldn't happen (SMS is never scheduled without a phone) but
+      //     guard so we fail the row cleanly instead of calling with null.
+      if (!lead.phone) {
+        await supabase
+          .from("outbound_scheduled_messages")
+          .update({
+            status: "failed",
+            error: `Lead ${lead.id} has no phone at send time`
+          })
+          .eq("id", row.id);
+        failed++;
+        continue;
+      }
+
       // 3. Send via Blooio.
       const send = await sendBlooioMessage(lead.phone, row.body);
       if (!send.ok) {

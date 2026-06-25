@@ -31,7 +31,8 @@ export type MessageKind =
 
 export interface OutboundLead {
   id: string;
-  phone: string;
+  // Nullable since manual lead entry allows email-only leads (no phone).
+  phone: string | null;
   email: string | null;
   name: string | null;
   status: LeadStatus;
@@ -79,7 +80,7 @@ export type WebsiteBuildStatus =
 
 interface LeadRow {
   id: string;
-  phone: string;
+  phone: string | null;
   email: string | null;
   name: string | null;
   status: LeadStatus;
@@ -226,6 +227,51 @@ export async function upsertLeadFromTypeform(intake: TypeformIntake): Promise<{
     .single();
   if (error) throw new Error(error.message);
   return { lead: normalizeLead(data as LeadRow), isNew: true };
+}
+
+// ---- MANUAL ENTRY ----
+
+// Operator-driven lead creation from the dashboard "Add lead" form. Unlike
+// the Typeform path a manual lead may have no phone (email-only), and the
+// operator decides per-lead whether the SMS recovery drip starts. Dedups by
+// phone then email (reusing the same finders the webhooks use) so adding a
+// lead that already exists is a no-op rather than a unique-violation.
+export async function createLeadManual(input: {
+  phone: string | null;          // already normalized to E.164 by the route, or null
+  email: string | null;
+  name: string | null;
+  startSequence: boolean;        // operator checkbox — only honored if a phone exists
+  createdBy: string;             // user id, for the audit event
+}): Promise<{ lead: OutboundLead; isNew: boolean }> {
+  if (!input.phone && !input.email) throw new Error("phone or email required");
+
+  const existing =
+    (input.phone ? await findLeadByPhone(input.phone) : null) ??
+    (input.email ? await findLeadByEmail(input.email) : null);
+  if (existing) return { lead: existing, isNew: false };
+
+  const supabase = getSupabaseAdmin();
+  const { data, error } = await supabase
+    .from("outbound_leads")
+    .insert({
+      phone: input.phone,
+      email: input.email?.toLowerCase() ?? null,
+      name: input.name,
+      status: "warm_lead"
+    })
+    .select("*")
+    .single();
+  if (error) throw new Error(error.message);
+  const lead = normalizeLead(data as LeadRow);
+
+  // Reuse the whitelisted 'form_submitted' event kind (the events table has a
+  // CHECK constraint); the payload source distinguishes it from real intake.
+  await recordEvent(lead.id, "form_submitted", { source: "manual_entry", by: input.createdBy });
+
+  // SMS sequence is only possible with a phone — Blooio chats are keyed by it.
+  if (input.startSequence && lead.phone) await scheduleRecoveryDrip(lead);
+
+  return { lead, isNew: true };
 }
 
 // ---- EVENTS ----
@@ -543,8 +589,10 @@ export async function scheduleEngagementDrip(
 }
 
 // Resolve the Blooio chat id from a lead. For now it's just the lead's
-// phone — Blooio chats are keyed by E.164 contact number.
-export function chatIdForLead(lead: OutboundLead): string {
+// phone — Blooio chats are keyed by E.164 contact number. Null for
+// email-only leads (which never get SMS scheduled, so this is never
+// reached in the send path).
+export function chatIdForLead(lead: OutboundLead): string | null {
   return lead.phone;
 }
 
@@ -731,7 +779,7 @@ export interface QueuedLeadSummary {
   leadId: string;
   scheduledMessageId: string;
   name: string | null;
-  phone: string;
+  phone: string | null;
   status: LeadStatus;
   scheduledFor: string;
   // Time-until in plain English for the UI ("in 3h", "due now", etc.).
@@ -788,10 +836,10 @@ export async function getFlowsOverview(): Promise<Map<string, FlowStepBucket>> {
     sequence_index: number;
     status: "pending" | "sending" | "sent" | "failed" | "canceled";
     scheduled_for: string;
-    outbound_leads: { name: string | null; phone: string; status: LeadStatus } | Array<{ name: string | null; phone: string; status: LeadStatus }> | null;
+    outbound_leads: { name: string | null; phone: string | null; status: LeadStatus } | Array<{ name: string | null; phone: string | null; status: LeadStatus }> | null;
   }
 
-  function leadOf(r: JoinedRow): { name: string | null; phone: string; status: LeadStatus } | null {
+  function leadOf(r: JoinedRow): { name: string | null; phone: string | null; status: LeadStatus } | null {
     if (!r.outbound_leads) return null;
     return Array.isArray(r.outbound_leads) ? (r.outbound_leads[0] ?? null) : r.outbound_leads;
   }

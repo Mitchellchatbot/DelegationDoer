@@ -17,6 +17,7 @@ export default async function OutboundWebsiteBuilderPage() {
   return (
     <div className="space-y-4 max-w-7xl mx-auto">
       <PageHero
+        density="compact"
         eyebrow="Channel · Product"
         headline={["Website ", { accent: "Builder" }]}
         subtitle="Project volume, success rate, and category mix from the website-builder pipeline."

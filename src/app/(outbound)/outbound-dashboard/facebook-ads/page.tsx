@@ -15,6 +15,7 @@ export default async function OutboundFacebookAdsPage() {
   return (
     <div className="space-y-4 max-w-7xl mx-auto">
       <PageHero
+        density="compact"
         eyebrow="Channel · Paid"
         headline={["Mike's Facebook ", { accent: "Campaign" }]}
         subtitle="Live performance from the Meta Marketing API — last 30 days."

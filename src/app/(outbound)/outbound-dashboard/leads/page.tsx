@@ -183,6 +183,7 @@ function Hero({ view }: { view: View }) {
   const isFlow = view === "flow" || view === "sequences";
   return (
     <PageHero
+      density="compact"
       eyebrow={isFlow ? "Funnel · Flows" : "Funnel · Leads"}
       headline={["Outbound ", { accent: isFlow ? "flows" : "leads" }]}
       subtitle={SUBTITLES[view]}

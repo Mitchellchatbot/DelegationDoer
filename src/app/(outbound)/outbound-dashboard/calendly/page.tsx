@@ -16,6 +16,7 @@ export default async function OutboundCalendlyPage() {
   return (
     <div className="space-y-4 max-w-7xl mx-auto">
       <PageHero
+        density="compact"
         eyebrow="Channel · Meetings"
         headline={["Calend", { accent: "ly" }]}
         subtitle="Booking volume, cancellation rate, and event-type breakdown — sourced live from the Calendly v2 API."

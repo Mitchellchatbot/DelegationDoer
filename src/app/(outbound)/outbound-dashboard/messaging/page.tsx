@@ -15,6 +15,7 @@ export default async function OutboundMessagingPage() {
   return (
     <div className="space-y-4 max-w-7xl mx-auto">
       <PageHero
+        density="compact"
         eyebrow="Channel · Messaging"
         headline={["Outbound ", { accent: "messaging" }]}
         subtitle="iMessage + SMS volume, replies, and conversation activity from Blooio. Cost-per-X tiles arrive once we lock in a cost basis."

@@ -34,6 +34,7 @@ export default async function OutboundFacebookAds2Page() {
   return (
     <div className="space-y-4 max-w-7xl mx-auto">
       <PageHero
+        density="compact"
         eyebrow="Channel · Paid · Funnel"
         headline={["Facebook ", { accent: "Ads 2" }]}
         subtitle="Twin-source view — Meta Marketing API for delivery (impressions/clicks/spend) and the ops sheet for post-lead funnel (VOB → Approved → Pitchable → Admit)."

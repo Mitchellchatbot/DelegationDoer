@@ -41,31 +41,31 @@ export function OutboundFunnelStrip({ counts }: Props) {
       label: "Warm leads",
       count: everReachedWarm,
       prev: null,
-      tone: { num: "text-amber-700",   bar: "bg-amber-500" }
+      tone: { num: "text-amber-600",   bar: "bg-amber-500" }
     },
     {
       label: "Booked",
       count: everReachedBooked,
       prev: everReachedWarm,
-      tone: { num: "text-sky-700",     bar: "bg-sky-500" }
+      tone: { num: "text-sky-600",     bar: "bg-sky-500" }
     },
     {
       label: "Showed",
       count: everReachedShowed,
       prev: everReachedBooked,
-      tone: { num: "text-indigo-700",  bar: "bg-indigo-500" }
+      tone: { num: "text-indigo-600",  bar: "bg-indigo-500" }
     },
     {
       label: "Contract",
       count: everReachedContract,
       prev: everReachedShowed,
-      tone: { num: "text-violet-700",  bar: "bg-violet-500" }
+      tone: { num: "text-violet-600",  bar: "bg-violet-500" }
     },
     {
       label: "Won",
       count: won,
       prev: everReachedContract,
-      tone: { num: "text-emerald-700", bar: "bg-emerald-500" }
+      tone: { num: "text-emerald-600", bar: "bg-emerald-500" }
     }
   ];
 

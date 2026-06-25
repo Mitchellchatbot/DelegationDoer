@@ -32,6 +32,7 @@ export default async function OutboundTemplatesPage() {
   return (
     <div className="space-y-4 max-w-[1400px] mx-auto">
       <PageHero
+        density="compact"
         eyebrow="Funnel · Texting"
         headline={["SMS ", { accent: "templates" }]}
         subtitle="Edit the copy that lands in every lead's SMS. Changes take effect for the next lead that enters a flow; messages already queued keep the body they were created with so audits stay clean."

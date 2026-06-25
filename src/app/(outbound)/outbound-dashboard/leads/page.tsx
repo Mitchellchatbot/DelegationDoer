@@ -14,6 +14,7 @@ import { OutboundSequenceBoard } from "@/components/OutboundSequenceBoard";
 import { OutboundLeadsByForm } from "@/components/OutboundLeadsByForm";
 import { OutboundTypeformFormsDrawer } from "@/components/OutboundTypeformFormsDrawer";
 import { StatusFilterBar, NoLeadsHint } from "@/components/OutboundLeadsTable";
+import { AddLeadButton } from "@/components/AddLeadButton";
 import { extractWebsiteUrl } from "@/lib/website-builder-integration";
 import { cn } from "@/lib/utils";
 
@@ -258,10 +259,13 @@ export default async function OutboundLeadsPage({
         <OutboundFunnelStrip counts={counts} />
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <StatusFilterBar counts={counts} active={statusFilter} />
-          <OutboundTypeformFormsDrawer
-            initialForms={forms}
-            unknownFormIds={unknownFormIds}
-          />
+          <div className="flex items-center gap-2">
+            <AddLeadButton />
+            <OutboundTypeformFormsDrawer
+              initialForms={forms}
+              unknownFormIds={unknownFormIds}
+            />
+          </div>
         </div>
         {showEmptyHint && <NoLeadsHint />}
         <OutboundLeadsByForm
@@ -298,7 +302,8 @@ export default async function OutboundLeadsPage({
       <Hero view={view} />
       <ViewToggle active="board" />
       <OutboundFunnelStrip counts={counts} />
-      <div className="flex items-center justify-end">
+      <div className="flex items-center justify-end gap-2">
+        <AddLeadButton />
         <OutboundTypeformFormsDrawer
           initialForms={forms}
           unknownFormIds={unknownFormIds}

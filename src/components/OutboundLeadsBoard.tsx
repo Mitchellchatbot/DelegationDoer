@@ -84,7 +84,7 @@ export function OutboundLeadsBoard({ leads: initialLeads, forms }: Props) {
     const before = leads.find((l) => l.id === id);
     if (!before || before.status === dest) return;
 
-    const who = before.name ?? before.phone;
+    const who = before.name ?? before.phone ?? before.email ?? "lead";
     if (!canManuallyTransition(before.status, dest)) {
       toast.error(
         dest === "booked"
@@ -275,9 +275,11 @@ function CardInner({
         {lead.name ?? "(no name)"}
       </div>
       <div className="mt-1 flex flex-col gap-0.5 text-[11px] text-ink/55">
-        <span className="inline-flex items-center gap-1 truncate">
-          <Phone className="w-3 h-3 shrink-0" /> {lead.phone}
-        </span>
+        {lead.phone && (
+          <span className="inline-flex items-center gap-1 truncate">
+            <Phone className="w-3 h-3 shrink-0" /> {lead.phone}
+          </span>
+        )}
         {lead.email && (
           <span className="inline-flex items-center gap-1 truncate">
             <Mail className="w-3 h-3 shrink-0" /> {lead.email}

@@ -189,7 +189,7 @@ function StepCard({
                         {q.name ?? <span className="text-ink/45">(no name)</span>}
                       </div>
                       <div className="text-[11px] text-ink/55 inline-flex items-center gap-1 mt-0.5">
-                        <Phone className="w-3 h-3" /> {q.phone}
+                        <Phone className="w-3 h-3" /> {q.phone ?? "—"}
                       </div>
                     </div>
                     <div className="text-right shrink-0">

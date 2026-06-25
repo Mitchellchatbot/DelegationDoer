@@ -14,6 +14,9 @@ export interface OutboundTypeformForm {
   id: string;
   label: string;
   description: string | null;
+  // When false, submissions from this form create a lead but are NOT
+  // auto-enrolled in the Recovery drip SMS sequence. Defaults to true.
+  enrollInFlow: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -22,6 +25,7 @@ interface FormRow {
   id: string;
   label: string;
   description: string | null;
+  enroll_in_flow: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -31,6 +35,9 @@ function normalize(r: FormRow): OutboundTypeformForm {
     id: r.id,
     label: r.label,
     description: r.description,
+    // Legacy rows read before the column existed could be null/undefined —
+    // treat anything other than an explicit false as enrolled.
+    enrollInFlow: r.enroll_in_flow !== false,
     createdAt: r.created_at,
     updatedAt: r.updated_at
   };
@@ -61,6 +68,7 @@ export async function upsertForm(input: {
   id: string;
   label: string;
   description?: string | null;
+  enrollInFlow?: boolean;
 }): Promise<OutboundTypeformForm> {
   const id = input.id.trim();
   const label = input.label.trim();
@@ -72,12 +80,31 @@ export async function upsertForm(input: {
     .upsert({
       id,
       label,
-      description: input.description?.trim() || null
+      description: input.description?.trim() || null,
+      // Default ON so first-time registers keep enrolling unless the
+      // operator explicitly switches it off.
+      enroll_in_flow: input.enrollInFlow ?? true
     })
     .select("*")
     .single();
   if (error) throw new Error(error.message);
   return normalize(data as FormRow);
+}
+
+// Webhook gate: should a submission from this form be auto-enrolled in the
+// Recovery drip? Default ON — an unregistered form (null/missing formId, or no
+// catalog row) still enrolls so leads are never silently dropped from nurture.
+// Fails OPEN: a transient catalog read error returns true rather than throwing,
+// so a DB hiccup can never suppress nurture or break the webhook's ACK path.
+export async function isFormEnrolledInFlow(formId: string | null): Promise<boolean> {
+  if (!formId) return true;
+  try {
+    const form = await getForm(formId);
+    return form ? form.enrollInFlow : true;
+  } catch (err) {
+    console.error("[outbound-typeform-forms] isFormEnrolledInFlow read failed, defaulting to enrolled", err);
+    return true;
+  }
 }
 
 export async function deleteForm(id: string): Promise<void> {

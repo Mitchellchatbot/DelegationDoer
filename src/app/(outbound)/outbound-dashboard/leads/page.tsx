@@ -63,6 +63,9 @@ interface Group {
   formId: string | null;
   label: string;
   description: string | null;
+  // Whether this form auto-enrolls submissions in the Recovery drip.
+  // Unknown / legacy buckets default true (the webhook enrolls them).
+  enrollInFlow: boolean;
   rows: GroupRow[];
 }
 
@@ -95,6 +98,7 @@ function buildGroups(
       formId: f.id,
       label: f.label,
       description: f.description,
+      enrollInFlow: f.enrollInFlow,
       rows: buckets.get(f.id) ?? []
     });
   }
@@ -107,6 +111,7 @@ function buildGroups(
       formId: id,
       label: "Unregistered form",
       description: id,
+      enrollInFlow: true,
       rows: buckets.get(id) ?? []
     });
   }
@@ -119,6 +124,7 @@ function buildGroups(
       formId: null,
       label: "Legacy leads (no form ID)",
       description: "Submitted before per-form tracking was wired up",
+      enrollInFlow: true,
       rows: legacyBucket
     });
   }

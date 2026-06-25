@@ -16,7 +16,7 @@ export default async function OutboundFacebookAdsPage() {
     <div className="space-y-4 max-w-7xl mx-auto">
       <PageHero
         eyebrow="Channel · Paid"
-        headline={["Facebook ", { accent: "Ads" }]}
+        headline={["Mike's Facebook ", { accent: "Campaign" }]}
         subtitle="Live performance from the Meta Marketing API — last 30 days."
         icon={<BarChart3 />}
         iconTone="indigo"

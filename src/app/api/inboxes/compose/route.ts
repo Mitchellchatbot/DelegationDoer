@@ -71,15 +71,10 @@ export async function POST(req: NextRequest) {
       sendAtMs = ms;
     }
 
-    // Attachments forwarding. Skipped automatically on scheduled sends
-    // because the missive clone rejects that combination.
+    // Attachments forwarding. Works for both immediate and scheduled sends —
+    // the missive clone stashes them with the scheduled message and replays
+    // them when it comes due.
     const attachmentItems = sanitizeMediaUrls(body.attachmentUrls);
-    if (attachmentItems.length > 0 && sendAtMs) {
-      return NextResponse.json(
-        { error: "attachments are not supported on scheduled sends — send immediately or strip the attachments" },
-        { status: 400 }
-      );
-    }
     const attachments = attachmentItems.length > 0
       ? await fetchMediaAsAttachments(attachmentItems)
       : undefined;

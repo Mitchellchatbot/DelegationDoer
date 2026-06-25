@@ -1,23 +1,48 @@
-import { Users as UsersIcon } from "lucide-react";
+import { GitBranch, LayoutGrid, Shuffle, List, Users as UsersIcon } from "lucide-react";
+import Link from "next/link";
 import { PageHero } from "@/components/PageHero";
 import {
-  listLeads, getLeadStatusCounts, getNextScheduledMessage,
+  getFlowsOverview, loadTemplateMap, getLeadStatusCounts, listLeads,
+  getLeadsByFlow, getNextScheduledMessage,
   type LeadStatus, type OutboundLead, type ScheduledMessage
 } from "@/lib/outbound-leads";
-import { StatusFilterBar, NoLeadsHint } from "@/components/OutboundLeadsTable";
-import { OutboundFunnelStrip } from "@/components/OutboundFunnelStrip";
-import { extractWebsiteUrl } from "@/lib/website-builder-integration";
 import { listForms, type OutboundTypeformForm } from "@/lib/outbound-typeform-forms";
+import { OutboundFlowsView } from "@/components/OutboundFlowsView";
+import { OutboundFunnelStrip } from "@/components/OutboundFunnelStrip";
+import { OutboundLeadsBoard } from "@/components/OutboundLeadsBoard";
+import { OutboundSequenceBoard } from "@/components/OutboundSequenceBoard";
 import { OutboundLeadsByForm } from "@/components/OutboundLeadsByForm";
 import { OutboundTypeformFormsDrawer } from "@/components/OutboundTypeformFormsDrawer";
+import { StatusFilterBar, NoLeadsHint } from "@/components/OutboundLeadsTable";
+import { extractWebsiteUrl } from "@/lib/website-builder-integration";
+import { cn } from "@/lib/utils";
 
-// /outbound-dashboard/leads — every lead in the funnel, grouped by the
-// Typeform that sent them. Each form is a collapsible block; unknown
-// form_ids surface in a single catch-all block at the bottom so no lead
-// is hidden. (The drag-and-drop pipeline board lives on the Flows tab.)
+// /outbound-dashboard/leads — the single Outbound pipeline tab. Four views,
+// toggled via ?view= (formerly split across the Leads + Flows tabs):
+//   - "board" (default): Notion-style kanban of the sales pipeline. One column
+//     per stage; drag a lead between columns to update its stage.
+//   - "list": every lead grouped by the Typeform that sent them — collapsible
+//     per-form blocks, status filter, next-touch + demo-site columns.
+//   - "flow": Notion-style kanban of the SMS nurture sequences. One column per
+//     sequence (Booking / Recovery / Engagement); drag a lead between drips.
+//   - "sequences": the flow-centric texting view — every step in every SMS
+//     sequence with live counts and the leads queued at each.
+//
+// The old /outbound-dashboard/flows route now redirects here. Auth + cohort
+// gate live in the (outbound) layout.
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
+
+type View = "board" | "list" | "flow" | "sequences";
+
+function parseView(raw: string | string[] | undefined): View {
+  const v = Array.isArray(raw) ? raw[0] : raw;
+  if (v === "list") return "list";
+  if (v === "flow") return "flow";
+  if (v === "sequences") return "sequences";
+  return "board";
+}
 
 const VALID_STATUSES: LeadStatus[] = [
   "warm_lead", "booked", "showed", "no_show", "contract", "success", "lost"
@@ -107,64 +132,180 @@ function buildGroups(
   return { groups: filtered, unknownFormIds: [...unknownIds] };
 }
 
+// Board / List / Flow board / Sequences switch, styled like the status chips.
+function ViewToggle({ active }: { active: View }) {
+  const tabs = [
+    { key: "board", label: "Board", Icon: LayoutGrid },
+    { key: "list", label: "List", Icon: List },
+    { key: "flow", label: "Flow board", Icon: Shuffle },
+    { key: "sequences", label: "Sequences", Icon: GitBranch }
+  ] as const;
+  return (
+    <div className="inline-flex rounded-full border border-slate-200 bg-white p-0.5">
+      {tabs.map((t) => {
+        const isActive = t.key === active;
+        return (
+          <Link
+            key={t.key}
+            href={`/outbound-dashboard/leads?view=${t.key}`}
+            className={cn(
+              "px-3 py-1.5 rounded-full text-[12.5px] inline-flex items-center gap-1.5 transition-colors",
+              isActive ? "bg-ink text-white shadow-sm" : "text-ink/65 hover:bg-slate-50"
+            )}
+          >
+            <t.Icon className="w-3.5 h-3.5" />
+            {t.label}
+          </Link>
+        );
+      })}
+    </div>
+  );
+}
+
+const SUBTITLES: Record<View, string> = {
+  board: "Your sales pipeline as a board — drag a lead between stages to update it. Filter by Typeform source up top, or switch views for the texting flows.",
+  list: "Everyone in the funnel right now — grouped by Typeform source. Click a row to see the full timeline, scheduled SMS queue, and rep actions.",
+  flow: "Each lead's active SMS sequence. Drag between Recovery and Engagement, or pull a lead out of Booking into a drip. (Booking itself is set when a Calendly meeting is booked.)",
+  sequences: "Every step in every texting sequence, with live counts and the lead names currently queued. Click a queued lead to jump to their detail page."
+};
+
+// The two lead-centric views wear the fuchsia "Leads" identity; the two
+// flow-centric views wear the indigo "Flows" identity, so the merged tab
+// stays visually self-labeling as you switch.
+function Hero({ view }: { view: View }) {
+  const isFlow = view === "flow" || view === "sequences";
+  return (
+    <PageHero
+      eyebrow={isFlow ? "Funnel · Flows" : "Funnel · Leads"}
+      headline={["Outbound ", { accent: isFlow ? "flows" : "leads" }]}
+      subtitle={SUBTITLES[view]}
+      icon={isFlow ? <GitBranch /> : <UsersIcon />}
+      iconTone={isFlow ? "indigo" : "fuchsia"}
+    />
+  );
+}
+
 export default async function OutboundLeadsPage({
   searchParams
 }: {
-  searchParams: Promise<{ status?: string }>;
+  searchParams: Promise<{ view?: string; status?: string }>;
 }) {
   const sp = await searchParams;
-  const statusFilter = parseStatus(sp.status);
+  const view = parseView(sp.view);
 
+  // ---- Sequences view (the original flow-centric texting view) ----
+  if (view === "sequences") {
+    const [buckets, templates] = await Promise.all([
+      getFlowsOverview(),
+      loadTemplateMap()
+    ]);
+    return (
+      <div className="space-y-4 max-w-[1400px] mx-auto">
+        <Hero view={view} />
+        <ViewToggle active="sequences" />
+        <OutboundFlowsView buckets={buckets} templates={templates} />
+      </div>
+    );
+  }
+
+  // ---- Flow board view (drag leads between SMS sequences) ----
+  if (view === "flow") {
+    const [flowGroups, forms] = await Promise.all([getLeadsByFlow(), listForms()]);
+    const cards = [...flowGroups.booking, ...flowGroups.recovery, ...flowGroups.engagement];
+    return (
+      <div className="space-y-4 max-w-7xl mx-auto">
+        <Hero view={view} />
+        <ViewToggle active="flow" />
+        {cards.length === 0 ? <NoLeadsHint /> : <OutboundSequenceBoard cards={cards} forms={forms} />}
+      </div>
+    );
+  }
+
+  // ---- List view (every lead, grouped by the Typeform that sent them) ----
+  if (view === "list") {
+    const statusFilter = parseStatus(sp.status);
+    const [counts, leadsPage, forms] = await Promise.all([
+      getLeadStatusCounts(),
+      listLeads({ status: statusFilter, limit: 100 }),
+      listForms()
+    ]);
+
+    const nextMessages = await Promise.all(
+      leadsPage.rows.map((l) => getNextScheduledMessage(l.id))
+    );
+
+    const tableRows: GroupRow[] = leadsPage.rows.map((lead, i) => ({
+      // Fallback for pre-integration leads — surface a URL from
+      // typeform_answers so the Demo column doesn't look empty while the
+      // backfill is pending.
+      lead: {
+        ...lead,
+        companyWebsiteUrl:
+          lead.companyWebsiteUrl ?? extractWebsiteUrl(lead.typeformAnswers)
+      },
+      nextMessage: nextMessages[i]
+    }));
+
+    const { groups, unknownFormIds } = buildGroups(tableRows, forms);
+
+    const showEmptyHint =
+      leadsPage.rows.length === 0 && !statusFilter && leadsPage.total === 0;
+
+    return (
+      <div className="space-y-4 max-w-7xl mx-auto">
+        <Hero view={view} />
+        <ViewToggle active="list" />
+        <OutboundFunnelStrip counts={counts} />
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <StatusFilterBar counts={counts} active={statusFilter} />
+          <OutboundTypeformFormsDrawer
+            initialForms={forms}
+            unknownFormIds={unknownFormIds}
+          />
+        </div>
+        {showEmptyHint && <NoLeadsHint />}
+        <OutboundLeadsByForm
+          groups={groups}
+          statusFilter={statusFilter}
+          forms={forms}
+        />
+      </div>
+    );
+  }
+
+  // ---- Board view (default — stage kanban) ----
+  // The board shows the whole active pipeline at once — pull a wider page than
+  // the list view's 100. No per-lead "next touch" fetch: the board is about
+  // stage, and fanning out a query per lead doesn't scale.
   const [counts, leadsPage, forms] = await Promise.all([
     getLeadStatusCounts(),
-    listLeads({ status: statusFilter, limit: 100 }),
+    listLeads({ status: null, limit: 500 }),
     listForms()
   ]);
-
-  const nextMessages = await Promise.all(
-    leadsPage.rows.map((l) => getNextScheduledMessage(l.id))
-  );
-
-  const tableRows: GroupRow[] = leadsPage.rows.map((lead, i) => ({
-    // Fallback for pre-integration leads — surface a URL from
-    // typeform_answers so the Demo column doesn't look empty while the
-    // backfill is pending.
-    lead: {
-      ...lead,
-      companyWebsiteUrl:
-        lead.companyWebsiteUrl ?? extractWebsiteUrl(lead.typeformAnswers)
-    },
-    nextMessage: nextMessages[i]
-  }));
-
-  const { groups, unknownFormIds } = buildGroups(tableRows, forms);
-
-  const showEmptyHint =
-    leadsPage.rows.length === 0 && !statusFilter && leadsPage.total === 0;
+  const boardLeads = leadsPage.rows;
+  const catalogIds = new Set(forms.map((f) => f.id));
+  const unknownFormIds = [
+    ...new Set(
+      boardLeads
+        .map((l) => l.typeformFormId)
+        .filter((x): x is string => !!x && !catalogIds.has(x))
+    )
+  ];
+  const showEmptyHint = boardLeads.length === 0;
 
   return (
     <div className="space-y-4 max-w-7xl mx-auto">
-      <PageHero
-        eyebrow="Funnel · Leads"
-        headline={["Outbound ", { accent: "leads" }]}
-        subtitle="Everyone in the funnel right now — grouped by Typeform source. Click a row to see the full timeline, scheduled SMS queue, and rep actions."
-        icon={<UsersIcon />}
-        iconTone="fuchsia"
-      />
+      <Hero view={view} />
+      <ViewToggle active="board" />
       <OutboundFunnelStrip counts={counts} />
-      <div className="flex items-center justify-between gap-3 flex-wrap">
-        <StatusFilterBar counts={counts} active={statusFilter} />
+      <div className="flex items-center justify-end">
         <OutboundTypeformFormsDrawer
           initialForms={forms}
           unknownFormIds={unknownFormIds}
         />
       </div>
       {showEmptyHint && <NoLeadsHint />}
-      <OutboundLeadsByForm
-        groups={groups}
-        statusFilter={statusFilter}
-        forms={forms}
-      />
+      <OutboundLeadsBoard leads={boardLeads} forms={forms} />
     </div>
   );
 }

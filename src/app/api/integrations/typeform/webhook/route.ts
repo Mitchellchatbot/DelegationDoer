@@ -61,6 +61,9 @@ interface TypeformResponse {
   form_response?: {
     token?: string;            // unique submission id
     submitted_at?: string;
+    // Typeform always includes form_id in deliveries — we stamp it onto
+    // the lead so /outbound-dashboard/leads can group rows per-form.
+    form_id?: string;
     answers?: TypeformAnswer[];
     hidden?: Record<string, string>;  // hidden field passthroughs (utm, etc.)
   };
@@ -164,11 +167,13 @@ export async function POST(req: NextRequest) {
   // 200 to Typeform — a transient DB failure shouldn't trigger their
   // retry loop, which would fire the recovery drip twice.
   try {
+    const formId = payload.form_response?.form_id ?? null;
     const { lead, isNew } = await upsertLeadFromTypeform({
       phone,
       email,
       name,
       typeformResponseId: responseId,
+      typeformFormId: formId,
       typeformPayload: payload,
       typeformAnswers: answers
     });

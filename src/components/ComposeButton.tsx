@@ -1,10 +1,10 @@
 "use client";
 
 import * as Dialog from "@radix-ui/react-dialog";
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
-import { PenSquare, Send, X, Loader2, Clock, Check } from "lucide-react";
+import { PenSquare, Send, X, Loader2, Clock, Check, Maximize2, Minimize2 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { MediaPicker } from "@/components/MediaPicker";
@@ -31,6 +31,10 @@ export function ComposeButton({
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  // Pop the compact card out to a wide/tall surface for reading & editing
+  // long emails. Radix already portals + scroll-locks + Escape-closes the
+  // Dialog, so this is purely a size toggle on the card it already shows.
+  const [maximized, setMaximized] = useState(false);
   // Draft autosave. draftIdRef identifies this compose draft (client-owned,
   // since there's no thread to key on). saveState drives the header chip;
   // skipSaveRef swallows the autosave run that opening / hydration triggers.
@@ -59,7 +63,16 @@ export function ComposeButton({
   // Client roster for the To/Cc typeahead. Loaded once when the modal
   // first opens; only clients with an email on file are useful here.
   const [clients, setClients] = useState<ClientSuggestion[]>([]);
+  // Our own team inboxes + teammates (seoteam@…, frank@…) for the same
+  // To/Cc typeahead, loaded alongside the client roster. Shown under a
+  // "Team" section in the dropdown.
+  const [teamSuggestions, setTeamSuggestions] = useState<ClientSuggestion[]>([]);
   const clientsLoadedRef = useRef(false);
+  // Clients first so the typeahead's "Team" section renders after them.
+  const recipientSuggestions = useMemo(
+    () => [...clients, ...teamSuggestions],
+    [clients, teamSuggestions]
+  );
 
   const fromOptions = accounts ?? (accountId ? [{ id: accountId, email: accountEmail ?? "", display_name: null }] : []);
   const fromMeta = fromOptions.find((a) => a.id === fromAccountId) ?? fromOptions[0];
@@ -75,6 +88,7 @@ export function ComposeButton({
     setScheduleOpen(false);
     setSendAtLocal("");
     setAttachments([]);
+    setMaximized(false);
     // Forget the draft id so the next Compose starts a fresh draft. The
     // server-side draft row (if any) is left intact — closing keeps it.
     draftIdRef.current = null;
@@ -146,6 +160,24 @@ export function ComposeButton({
         setClients(list);
       })
       .catch(() => { clientsLoadedRef.current = false; });
+    // Team inboxes + teammates. Already in ClientSuggestion shape from the
+    // route; silent on failure — the typeahead just shows clients only.
+    fetch("/api/team-emails", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : { suggestions: [] }))
+      .then((d) => {
+        if (cancelled) return;
+        const list = ((d.suggestions ?? []) as Array<{ id: string; name: string; contactName?: string | null; contactEmails?: string[] }>)
+          .map((s) => ({
+            id: s.id,
+            name: s.name,
+            contactName: s.contactName ?? null,
+            contactEmails: s.contactEmails ?? [],
+            category: "team" as const,
+          }))
+          .filter((s) => s.contactEmails.length > 0);
+        setTeamSuggestions(list);
+      })
+      .catch(() => { /* silent — To/Cc fall back to clients only */ });
     return () => { cancelled = true; };
   }, [open]);
 
@@ -305,7 +337,10 @@ export function ComposeButton({
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 exit={{ opacity: 0, y: 24, scale: 0.96 }}
                 transition={{ duration: 0.22, ease: [0.2, 0.8, 0.2, 1] }}
-                className="pointer-events-auto w-[640px] max-w-full rounded-2xl border border-slate-200/70 bg-white shadow-[0_30px_60px_-20px_rgba(15,23,42,0.35)] overflow-hidden"
+                className={cn(
+                  "pointer-events-auto max-w-full rounded-2xl border border-slate-200/70 bg-white shadow-[0_30px_60px_-20px_rgba(15,23,42,0.35)] overflow-hidden",
+                  maximized ? "w-[min(1100px,95vw)] h-[88vh] flex flex-col" : "w-[640px]"
+                )}
               >
                 <header
                   className="px-5 py-3 flex items-center justify-between border-b border-slate-100"
@@ -342,22 +377,34 @@ export function ComposeButton({
                       </span>
                     )}
                   </div>
-                  <Dialog.Close asChild>
+                  <div className="flex items-center gap-1.5 shrink-0">
                     <button
-                      aria-label="Close"
-                      className="p-1 rounded-lg text-ink/60 hover:text-ink hover:bg-white/60 transition-colors"
+                      type="button"
+                      onClick={() => setMaximized((v) => !v)}
+                      title={maximized ? "Shrink back to the compact composer" : "Expand the composer to read/edit long emails"}
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold text-sky-700 bg-white border border-sky-200/70 hover:bg-sky-100 transition-colors shrink-0"
                     >
-                      <X className="w-4 h-4" />
+                      {maximized
+                        ? <><Minimize2 className="w-3 h-3" /> Minimize</>
+                        : <><Maximize2 className="w-3 h-3" /> Maximize</>}
                     </button>
-                  </Dialog.Close>
+                    <Dialog.Close asChild>
+                      <button
+                        aria-label="Close"
+                        className="p-1 rounded-lg text-ink/60 hover:text-ink hover:bg-white/60 transition-colors"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </Dialog.Close>
+                  </div>
                 </header>
 
-                <div className="p-4 space-y-2.5">
+                <div className={cn("p-4 space-y-2.5", maximized && "flex-1 flex flex-col min-h-0 overflow-y-auto")}>
                   <FieldRow label="To">
                     <RecipientAutocomplete
                       value={to}
                       onChange={setTo}
-                      clients={clients}
+                      clients={recipientSuggestions}
                       autoFocus
                       placeholder="someone@example.com, another@example.com"
                     />
@@ -384,7 +431,7 @@ export function ComposeButton({
                           <RecipientAutocomplete
                             value={cc}
                             onChange={setCc}
-                            clients={clients}
+                            clients={recipientSuggestions}
                             placeholder="optional cc list"
                           />
                         </FieldRow>
@@ -407,7 +454,10 @@ export function ComposeButton({
                     onChange={(e) => setBodyText(e.target.value)}
                     placeholder="Write your message…"
                     rows={9}
-                    className="w-full text-sm bg-white/60 border border-slate-200/70 rounded-xl px-3 py-2.5 outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent/40 resize-none transition-all"
+                    className={cn(
+                      "w-full text-sm bg-white/60 border border-slate-200/70 rounded-xl px-3 py-2.5 outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent/40 resize-none transition-all",
+                      maximized && "flex-1 min-h-0"
+                    )}
                   />
 
                   <MediaPicker

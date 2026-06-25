@@ -5,7 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import {
   BarChart3, CalendarClock, Globe, Linkedin, Users as UsersIcon, ArrowLeft,
-  MessageSquare, Flame, GitBranch
+  MessageSquare, Flame
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { User } from "@/lib/types";
@@ -26,7 +26,6 @@ interface NavItem { href: string; label: string; icon: typeof BarChart3; tone: T
 
 const NAV: NavItem[] = [
   { href: "/outbound-dashboard/leads",           label: "Leads",              icon: Flame,         tone: "amber"   },
-  { href: "/outbound-dashboard/flows",           label: "Flows",              icon: GitBranch,     tone: "indigo"  },
   { href: "/outbound-dashboard/templates",       label: "Templates",          icon: MessageSquare, tone: "violet"  },
   { href: "/outbound-dashboard/facebook-ads",    label: "Facebook Ads",       icon: BarChart3,     tone: "indigo"  },
   { href: "/outbound-dashboard/facebook-ads-2",  label: "Facebook Ads 2",     icon: BarChart3,     tone: "violet"  },

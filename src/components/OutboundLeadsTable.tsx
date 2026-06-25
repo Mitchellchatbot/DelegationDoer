@@ -188,8 +188,8 @@ export function StatusFilterBar({
       {entries.map((e) => {
         const isActive = (e.key ?? null) === active;
         const href = e.key
-          ? `/outbound-dashboard/leads?status=${e.key}`
-          : `/outbound-dashboard/leads`;
+          ? `/outbound-dashboard/leads?view=list&status=${e.key}`
+          : `/outbound-dashboard/leads?view=list`;
         return (
           <Link
             key={e.key ?? "all"}

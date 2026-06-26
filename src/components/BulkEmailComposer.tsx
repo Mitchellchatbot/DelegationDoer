@@ -25,6 +25,8 @@ interface RosterClient {
   contactName: string | null;
   website: string | null;
   contactEmails: string[];
+  // False when no contact email is on file — listed (disabled) but never sent.
+  canEmail: boolean;
   updateCadence: string;
   status: string;
   teamId: string | null;
@@ -86,9 +88,19 @@ export function BulkEmailComposer({
 
   const fromMeta = fromOptions.find((a) => a.id === fromAccountId) ?? fromOptions[0];
 
-  const includedCount = clients.length - excluded.size;
+  // Only clients with a contact email can actually be sent to — no-email
+  // clients are listed (disabled) for visibility but never count toward the
+  // send. The "of N" denominator is this emailable universe.
+  const emailableCount = useMemo(() => clients.filter((c) => c.canEmail).length, [clients]);
+  const includedCount = useMemo(
+    () => clients.filter((c) => c.canEmail && !excluded.has(c.clientId)).length,
+    [clients, excluded]
+  );
   const previewClient = useMemo(
-    () => clients.find((c) => !excluded.has(c.clientId)) ?? clients[0] ?? null,
+    () =>
+      clients.find((c) => c.canEmail && !excluded.has(c.clientId)) ??
+      clients.find((c) => c.canEmail) ??
+      null,
     [clients, excluded]
   );
 
@@ -101,7 +113,7 @@ export function BulkEmailComposer({
     });
   }
   function selectAll() { setExcluded(new Set()); }
-  function clearAll() { setExcluded(new Set(clients.map((c) => c.clientId))); }
+  function clearAll() { setExcluded(new Set(clients.filter((c) => c.canEmail).map((c) => c.clientId))); }
 
   async function submit() {
     if (!fromAccountId) { toast.error("Pick a sending inbox"); return; }
@@ -278,7 +290,7 @@ export function BulkEmailComposer({
             <Users className="w-4 h-4 text-accent" />
             Recipients
             <span className="text-[11px] text-ink/55 font-normal tabular-nums">
-              · sending to {includedCount} of {clients.length}
+              · sending to {includedCount} of {emailableCount}
             </span>
           </div>
           <div className="flex items-center gap-2 text-[11px]">
@@ -297,26 +309,36 @@ export function BulkEmailComposer({
 
         {clients.length === 0 ? (
           <div className="px-4 py-8 text-center text-[12px] text-ink/55">
-            No active clients with a contact email on file.
+            No clients found.
           </div>
         ) : (
           <ul className="divide-y divide-slate-100/70 max-h-[460px] overflow-y-auto">
             {clients.map((c) => {
-              const included = !excluded.has(c.clientId);
+              const included = c.canEmail && !excluded.has(c.clientId);
               return (
                 <li key={c.clientId} className="px-4 py-2.5">
-                  <label className="flex items-start gap-3 cursor-pointer">
+                  <label className={cn("flex items-start gap-3", c.canEmail ? "cursor-pointer" : "cursor-default")}>
                     <input
                       type="checkbox"
                       checked={included}
+                      disabled={!c.canEmail}
                       onChange={() => toggle(c.clientId)}
-                      className="mt-0.5 w-4 h-4 rounded border-slate-300 text-accent focus:ring-accent/30 shrink-0"
+                      className={cn(
+                        "mt-0.5 w-4 h-4 rounded border-slate-300 text-accent focus:ring-accent/30 shrink-0",
+                        !c.canEmail && "opacity-40 cursor-not-allowed"
+                      )}
                     />
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className={cn("text-[13px] font-semibold truncate", included ? "text-ink" : "text-ink/40")}>
                           {c.name}
                         </span>
+                        {!c.canEmail && (
+                          <span className="inline-flex items-center gap-1 rounded-full border font-medium px-1.5 py-0.5 text-[10px] shrink-0 cursor-default bg-amber-50 text-amber-700 border-amber-200/70">
+                            <AlertTriangle className="w-3 h-3" />
+                            No email on file
+                          </span>
+                        )}
                         {c.sharedEmails.length > 0 && (
                           <Tooltip
                             side="top"
@@ -342,7 +364,7 @@ export function BulkEmailComposer({
                         )}
                       </div>
                       <div className={cn("text-[11px] truncate mt-0.5", included ? "text-ink/55" : "text-ink/35")}>
-                        {c.contactEmails.join(", ")}
+                        {c.canEmail ? c.contactEmails.join(", ") : "No contact email on file"}
                       </div>
                     </div>
                   </label>

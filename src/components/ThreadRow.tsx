@@ -85,7 +85,9 @@ export function ThreadRow({ thread, href, unread, index, accountId, threadId, mi
   const { select, isSelected } = useInboxSplit();
   const selected = isSelected(threadId);
 
-  const senderRaw = thread.participants[0] ?? "";
+  // Show whoever sent the most recent message (the "last person who emailed"),
+  // falling back to the thread originator when the backend doesn't supply it.
+  const senderRaw = thread.last_from ?? thread.participants[0] ?? "";
   const sender = shortAddress(senderRaw);
   const recipientCount = Math.max(0, thread.participants.length - 1);
   const messageCount = thread.message_count ?? null;
@@ -184,6 +186,9 @@ export function ThreadRow({ thread, href, unread, index, accountId, threadId, mi
             )}
           >
             {thread.subject || "(no subject)"}
+            {thread.last_snippet && (
+              <span className="font-normal text-ink/45">{" — "}{thread.last_snippet}</span>
+            )}
           </div>
         </div>
 

@@ -1,11 +1,37 @@
 import "server-only";
 import { getThread, listAccounts } from "@/lib/missive-client";
+import type { MissiveMessage } from "@/lib/missive-client";
 import { visibleAccountIdsFor } from "@/lib/inbox-access";
 import { getUserById } from "@/lib/server-data";
 import { rawEmail } from "@/lib/email-format";
 import type { ThreadDetailData } from "@/components/ThreadConversation";
 
 type AppUser = NonNullable<Awaited<ReturnType<typeof getUserById>>>;
+
+// The clone keeps one message row per (RFC Message-ID × inbox × direction), so
+// an email delivered to several connected inboxes returns two or three
+// identical copies. Collapse to one row per (Message-ID, direction), keeping
+// the earliest copy (messages arrive sorted ASC).
+//
+// Direction is part of the key on purpose: a self-sent email legitimately has
+// BOTH an inbound (INBOX) and an outbound (Sent) row under the same Message-ID,
+// and those should still render as two messages (and keep the last-inbound
+// reply-all derivation intact) — only the cross-inbox copies (same direction,
+// different inbox) are duplicates. Rows with no Message-ID can't be matched, so
+// they key on their own id and are never merged. The thread's account_emails
+// still records every inbox the conversation touches, so the multi-inbox
+// association is preserved.
+function dedupeByMessageId(messages: MissiveMessage[]): MissiveMessage[] {
+  const seen = new Set<string>();
+  const out: MissiveMessage[] = [];
+  for (const m of messages) {
+    const key = m.message_id ? `mid:${m.message_id}:${m.direction}` : `row:${m.id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(m);
+  }
+  return out;
+}
 
 export type LoadThreadOutcome =
   | { ok: true; data: ThreadDetailData }
@@ -62,7 +88,10 @@ export async function loadThreadDetail(
     ? accountId
     : [...threadAccountIds].find((id) => visibleIds === null || visibleIds.has(id)) ?? accountId;
 
-  const { thread, messages } = detail;
+  const { thread } = detail;
+  // Collapse the per-inbox copies of each email so a thread visible across
+  // multiple inboxes doesn't render the same message two or three times.
+  const messages = dedupeByMessageId(detail.messages);
 
   const missiveAppUrl = (process.env.MISSIVE_API_URL ?? "").replace(/\/$/, "");
   const missiveThreadUrl = missiveAppUrl

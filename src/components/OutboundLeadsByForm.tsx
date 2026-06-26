@@ -20,6 +20,7 @@ interface Group {
   formId: string | null;        // null = legacy lead, no form_id stamped yet
   label: string;
   description: string | null;
+  enrollInFlow: boolean;        // false = submissions skip the SMS sequence
   rows: Array<{
     lead: OutboundLead;
     nextMessage: ScheduledMessage | null;
@@ -113,8 +114,18 @@ export function OutboundLeadsByForm({ groups, statusFilter }: Props) {
                   ? <HelpCircle className="w-4 h-4 text-amber-700 shrink-0" />
                   : <Inbox className="w-4 h-4 text-ink/55 shrink-0" />}
                 <div className="min-w-0 text-left">
-                  <div className="text-[14px] font-semibold text-ink truncate">
-                    {g.label}
+                  <div className="flex items-center gap-2">
+                    <span className="text-[14px] font-semibold text-ink truncate">
+                      {g.label}
+                    </span>
+                    {!isUnknown && !g.enrollInFlow && (
+                      <span
+                        className="shrink-0 inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold uppercase tracking-wide bg-slate-100 text-ink/55"
+                        title="Submissions from this form create leads but skip the SMS sequence"
+                      >
+                        No flow
+                      </span>
+                    )}
                   </div>
                   {g.description && (
                     <div className="text-[11.5px] text-ink/55 truncate mt-0.5">

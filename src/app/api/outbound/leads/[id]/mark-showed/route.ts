@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { canSeeOutbound } from "@/lib/auth";
-import { transitionLead, recordEvent, getLeadById } from "@/lib/outbound-leads";
+import { getLeadById } from "@/lib/outbound-leads";
+import { applyManualTransition } from "@/lib/outbound-transitions";
 
 export const dynamic = "force-dynamic";
 
@@ -23,9 +24,8 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
   const existing = await getLeadById(id);
   if (!existing) return NextResponse.json({ error: "not_found" }, { status: 404 });
   try {
-    const updated = await transitionLead(id, "showed");
-    await recordEvent(id, "marked_showed", { by: me.id });
-    return NextResponse.json({ ok: true, lead: updated });
+    const result = await applyManualTransition(id, "showed", { by: me.id });
+    return NextResponse.json({ ok: true, lead: result.lead });
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "transition failed" },

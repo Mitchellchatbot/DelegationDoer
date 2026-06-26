@@ -47,6 +47,7 @@ export default async function OutboundPeoplePage() {
   return (
     <div className="space-y-4 max-w-7xl mx-auto">
       <PageHero
+        density="compact"
         eyebrow="Team · Roster"
         headline={["Outbound ", { accent: "team" }]}
         subtitle="Pick the people from your org who own outbound. They'll be the ones the dashboards attribute spend, bookings, and leads to."

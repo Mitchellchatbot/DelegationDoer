@@ -1,7 +1,7 @@
 import Link from "next/link";
 import {
   ArrowLeft, Phone, Mail, Calendar, ExternalLink, Send, Inbox,
-  CheckCircle2, XCircle, Clock, Sparkles, AlertCircle
+  CheckCircle2, XCircle, Clock, Sparkles, AlertCircle, Shuffle
 } from "lucide-react";
 import type {
   OutboundLead, LeadStatus, LeadEvent, ScheduledMessage
@@ -22,6 +22,7 @@ const STATUS_STYLES: Record<LeadStatus, { label: string; cls: string }> = {
   warm_lead: { label: "Warm",      cls: "bg-amber-50 text-amber-700 border-amber-200/60" },
   booked:    { label: "Booked",    cls: "bg-sky-50 text-sky-700 border-sky-200/60" },
   showed:    { label: "Showed",    cls: "bg-indigo-50 text-indigo-700 border-indigo-200/60" },
+  contract:  { label: "Contract",  cls: "bg-violet-50 text-violet-700 border-violet-200/60" },
   no_show:   { label: "No show",   cls: "bg-rose-50 text-rose-700 border-rose-200/60" },
   success:   { label: "Won",       cls: "bg-emerald-50 text-emerald-700 border-emerald-200/60" },
   lost:      { label: "Lost",      cls: "bg-slate-100 text-slate-600 border-slate-300/60" }
@@ -40,7 +41,8 @@ const EVENT_KIND_META: Record<LeadEvent["kind"], { label: string; icon: typeof S
   marked_sold:        { label: "Marked sold",        icon: Sparkles,     tone: "text-violet-700 bg-violet-50" },
   marked_lost:        { label: "Marked lost",        icon: XCircle,      tone: "text-slate-600 bg-slate-100" },
   sequence_completed: { label: "Sequence completed", icon: Clock,        tone: "text-amber-700 bg-amber-50" },
-  transitioned:       { label: "State transition",   icon: ArrowLeft,    tone: "text-ink/65 bg-slate-100" }
+  transitioned:       { label: "State transition",   icon: ArrowLeft,    tone: "text-ink/65 bg-slate-100" },
+  sequence_changed:   { label: "Sequence changed",   icon: Shuffle,      tone: "text-fuchsia-700 bg-fuchsia-50" }
 };
 
 const MESSAGE_STATUS_STYLES: Record<ScheduledMessage["status"], string> = {
@@ -101,9 +103,11 @@ export function OutboundLeadDetail({ lead, events, messages }: Props) {
               </span>
             </div>
             <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[13px] text-ink/65">
-              <span className="inline-flex items-center gap-1.5">
-                <Phone className="w-3.5 h-3.5" /> {lead.phone}
-              </span>
+              {lead.phone && (
+                <span className="inline-flex items-center gap-1.5">
+                  <Phone className="w-3.5 h-3.5" /> {lead.phone}
+                </span>
+              )}
               {lead.email && (
                 <span className="inline-flex items-center gap-1.5">
                   <Mail className="w-3.5 h-3.5" /> {lead.email}

@@ -2,10 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { canSeeOutbound } from "@/lib/auth";
-import {
-  transitionLead, recordEvent, getLeadById, cancelAllPending
-} from "@/lib/outbound-leads";
-import { notifyMarkedSold } from "@/lib/outbound-slack";
+import { getLeadById } from "@/lib/outbound-leads";
+import { applyManualTransition } from "@/lib/outbound-transitions";
 
 export const dynamic = "force-dynamic";
 
@@ -36,14 +34,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     // Empty body is fine — notes is optional.
   }
   try {
-    const updated = await transitionLead(id, "success", {
-      sold_at: new Date().toISOString(),
-      sold_notes: notes
-    });
-    await recordEvent(id, "marked_sold", { by: me.id, notes });
-    await cancelAllPending(id);
-    await notifyMarkedSold({ lead: updated, notes });
-    return NextResponse.json({ ok: true, lead: updated });
+    const result = await applyManualTransition(id, "success", { by: me.id, notes });
+    return NextResponse.json({ ok: true, lead: result.lead });
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "transition failed" },

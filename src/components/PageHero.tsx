@@ -50,6 +50,11 @@ interface Props {
   // (default "On the plate:") and joined by middots.
   meta?: HeroMetaItem[];
   metaLabel?: string;
+  // Visual density. "default" keeps the large landing-style hero used
+  // across the main app. "compact" is a tighter, more enterprise scale
+  // (smaller headline + chip + padding) opted into by the outbound
+  // dashboard pages — additive, so existing callers are unaffected.
+  density?: "default" | "compact";
 }
 
 const META_TONE: Record<IconTone, string> = {
@@ -66,12 +71,14 @@ const META_TONE: Record<IconTone, string> = {
 
 export function PageHero({
   eyebrow, headline, subtitle, icon, iconTone = "blue", className, trailing,
-  meta, metaLabel = "On the plate:"
+  meta, metaLabel = "On the plate:", density = "default"
 }: Props) {
+  const compact = density === "compact";
   return (
     <header
       className={cn(
-        "rounded-3xl border border-slate-200/70 bg-white p-8 shadow-soft",
+        "border border-slate-200/70 bg-white shadow-soft",
+        compact ? "rounded-2xl p-6" : "rounded-3xl p-8",
         className
       )}
     >
@@ -85,17 +92,24 @@ export function PageHero({
       <div className="flex items-start gap-5 flex-wrap">
         {icon && (
           <div className={cn(
-            "w-14 h-14 rounded-2xl grid place-items-center shrink-0 ring-1",
+            "grid place-items-center shrink-0 ring-1",
+            compact ? "w-11 h-11 rounded-xl" : "w-14 h-14 rounded-2xl",
             ICON_TONE[iconTone]
           )}>
-            <span className="[&>svg]:w-6 [&>svg]:h-6">{icon}</span>
+            <span className={compact ? "[&>svg]:w-5 [&>svg]:h-5" : "[&>svg]:w-6 [&>svg]:h-6"}>{icon}</span>
           </div>
         )}
         <div className="flex-1 min-w-[280px]">
-          <div className="text-[12px] uppercase tracking-[0.18em] font-semibold text-accent">
+          <div className={cn(
+            "text-[12px] uppercase font-semibold text-accent",
+            compact ? "tracking-[0.14em]" : "tracking-[0.18em]"
+          )}>
             {eyebrow}
           </div>
-          <h1 className="mt-2 text-[40px] leading-[1.05] font-bold text-ink tracking-tight">
+          <h1 className={cn(
+            "mt-2 leading-[1.05] text-ink tracking-tight",
+            compact ? "text-[28px] font-semibold" : "text-[40px] font-bold"
+          )}>
             {headline.map((part, i) =>
               typeof part === "string"
                 ? <span key={i}>{part}</span>
@@ -103,7 +117,10 @@ export function PageHero({
             )}
           </h1>
           {subtitle && (
-            <p className="mt-3 text-[16px] text-ink/65 max-w-2xl leading-relaxed">
+            <p className={cn(
+              "mt-3 text-ink/65 max-w-2xl leading-relaxed",
+              compact ? "text-[14px]" : "text-[16px]"
+            )}>
               {subtitle}
             </p>
           )}

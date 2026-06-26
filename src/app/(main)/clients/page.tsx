@@ -1,10 +1,11 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { ArrowUpDown, Briefcase, LayoutGrid, FileSpreadsheet, Activity } from "lucide-react";
+import { ArrowUpDown, Briefcase, LayoutGrid, FileSpreadsheet, Activity, Mail } from "lucide-react";
 import { PageHero } from "@/components/PageHero";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { canManageAssignments } from "@/lib/inbox-access";
+import { isApprover } from "@/lib/email-approvers";
 import { getClients, getOpenTaskCountsByClient } from "@/lib/clients-data";
 import { getAllUsers } from "@/lib/server-data";
 import { NewClientDialog } from "@/components/NewClientDialog";
@@ -45,6 +46,7 @@ export default async function ClientsPage() {
     }));
 
   const canEdit = canManageAssignments(me);
+  const canBulkEmail = isApprover({ name: me.name, role: me.role, isAdmin: me.isAdmin });
 
   return (
     <div className="space-y-5 max-w-7xl mx-auto">
@@ -79,6 +81,15 @@ export default async function ClientsPage() {
               <LayoutGrid className="w-3.5 h-3.5" />
               Cross-client board
             </Link>
+            {canBulkEmail && (
+              <Link
+                href="/clients/bulk-email"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-white border border-slate-200 text-ink/75 hover:text-accent hover:border-accent/40 transition-colors"
+              >
+                <Mail className="w-3.5 h-3.5" />
+                Bulk SEO update
+              </Link>
+            )}
             {canEdit && (
               <Link
                 href="/clients/import"

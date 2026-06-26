@@ -50,6 +50,20 @@ export async function syncClientTouchpointsFromMissive(
     : Date.now() - 180 * 24 * 60 * 60 * 1000;
   const maxThreads = opts.maxThreads ?? 4000;
 
+  // Clone-independent exclusion of bulk "SEO update" blasts: the bulk-email
+  // route logs every thread it creates into bulk_email_threads. Skip those
+  // SENT threads so a mass send never advances a client's "last contacted".
+  // Scoped to the same window we walk, keyed by thread id. (Complements the
+  // per-message `automated` flag below, which an older clone build may drop.)
+  const supabase = getSupabaseAdmin();
+  const { data: excludedRows } = await supabase
+    .from("bulk_email_threads")
+    .select("thread_id")
+    .gte("sent_at", new Date(scopeFrom).toISOString());
+  const excludedThreadIds = new Set(
+    (excludedRows ?? []).map((r) => r.thread_id as string)
+  );
+
   // Per-client running max. SENT folder threads can have multiple
   // matching participants (e.g. an email CC'd between two of our
   // clients); we update both, picking the freshest hit.
@@ -86,6 +100,15 @@ export async function syncClientTouchpointsFromMissive(
       // counts toward anyInWindow above so paging keeps going for the
       // real emails sitting on later pages.
       if (isAutomatedOutboundSubject(t.subject)) continue;
+      // Same exclusion, but driven by an explicit per-message marker from
+      // the clone (the bulk-email tool sets automated:true) so it works
+      // regardless of the worker-authored subject. `automated` reflects the
+      // thread's latest OUTBOUND message, so a later personal reply re-counts.
+      if (t.automated) continue;
+      // Clone-independent backstop: this thread was created by the bulk-email
+      // tool (recorded at send time), so it's a blast regardless of subject or
+      // the clone's `automated` flag.
+      if (excludedThreadIds.has(t.id)) continue;
 
       // A thread can match multiple clients via different participants
       // OR a single participant that several clients share (e.g. one
@@ -133,8 +156,8 @@ export async function syncClientTouchpointsFromMissive(
 
   // Bulk-write. We can't onConflict.upsert into clients (no upsert on
   // the existing PK without a full row), so we issue one update per
-  // client. With <100 clients in practice this is cheap.
-  const supabase = getSupabaseAdmin();
+  // client. With <100 clients in practice this is cheap. (`supabase` is the
+  // admin client created above for the exclusion-list load.)
   const syncedAt = new Date().toISOString();
   let updated = 0;
   for (const [clientId, data] of latestByClient) {

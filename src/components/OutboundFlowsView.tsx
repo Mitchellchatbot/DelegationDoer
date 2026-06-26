@@ -35,6 +35,7 @@ const STATUS_STYLES: Record<LeadStatus, { label: string; cls: string }> = {
   warm_lead: { label: "Warm",    cls: "bg-amber-50 text-amber-700 border-amber-200/60" },
   booked:    { label: "Booked",  cls: "bg-sky-50 text-sky-700 border-sky-200/60" },
   showed:    { label: "Showed",  cls: "bg-indigo-50 text-indigo-700 border-indigo-200/60" },
+  contract:  { label: "Contract",cls: "bg-violet-50 text-violet-700 border-violet-200/60" },
   no_show:   { label: "No show", cls: "bg-rose-50 text-rose-700 border-rose-200/60" },
   success:   { label: "Won",     cls: "bg-emerald-50 text-emerald-700 border-emerald-200/60" },
   lost:      { label: "Lost",    cls: "bg-slate-100 text-slate-600 border-slate-300/60" }
@@ -188,7 +189,7 @@ function StepCard({
                         {q.name ?? <span className="text-ink/45">(no name)</span>}
                       </div>
                       <div className="text-[11px] text-ink/55 inline-flex items-center gap-1 mt-0.5">
-                        <Phone className="w-3 h-3" /> {q.phone}
+                        <Phone className="w-3 h-3" /> {q.phone ?? "—"}
                       </div>
                     </div>
                     <div className="text-right shrink-0">

@@ -20,6 +20,12 @@ function leadUrl(leadId: string): string {
   return `${base}/outbound-dashboard/leads/${leadId}`;
 }
 
+// Best human label for a lead — name first, then phone, then email. Manual
+// leads may have no phone, so we fall through to email before a generic word.
+function who(lead: OutboundLead): string {
+  return lead.name ?? lead.phone ?? lead.email ?? "lead";
+}
+
 // Common header for every funnel event — the headline + a "view lead"
 // link button that takes the rep to the in-app detail page.
 function leadActionButton(leadId: string): unknown {
@@ -51,13 +57,13 @@ async function fire(text: string, blocks: unknown[]): Promise<void> {
 // 🌱 Form submitted — first signal a new lead exists.
 export async function notifyFormSubmitted(lead: OutboundLead): Promise<void> {
   const headline = lead.name ? `🌱 New lead: ${lead.name}` : `🌱 New lead`;
-  const text = `${headline} (${lead.phone})`;
+  const text = `${headline} (${lead.phone ?? lead.email ?? "no contact"})`;
   await fire(text, [
     { type: "header", text: { type: "plain_text", text: headline, emoji: true } },
     {
       type: "section",
       fields: [
-        { type: "mrkdwn", text: `*Phone*\n${lead.phone}` },
+        { type: "mrkdwn", text: `*Phone*\n${lead.phone ?? "—"}` },
         { type: "mrkdwn", text: `*Email*\n${lead.email ?? "—"}` }
       ]
     },
@@ -77,11 +83,11 @@ export async function notifyMeetingBooked(args: {
     weekday: "short", month: "short", day: "numeric",
     hour: "numeric", minute: "2-digit", timeZoneName: "short"
   });
-  const headline = `📅 ${args.lead.name ?? args.lead.phone} booked a meeting`;
+  const headline = `📅 ${who(args.lead)} booked a meeting`;
   const text = `${headline} for ${startFriendly}`;
   const fields: { type: "mrkdwn"; text: string }[] = [
     { type: "mrkdwn", text: `*When*\n${startFriendly}` },
-    { type: "mrkdwn", text: `*Phone*\n${args.lead.phone}` }
+    { type: "mrkdwn", text: `*Phone*\n${args.lead.phone ?? "—"}` }
   ];
   if (args.meetingName) fields.push({ type: "mrkdwn", text: `*Event type*\n${args.meetingName}` });
   if (args.lead.email) fields.push({ type: "mrkdwn", text: `*Email*\n${args.lead.email}` });
@@ -95,7 +101,7 @@ export async function notifyMeetingBooked(args: {
 // 👻 No-show — rep clicked "Mark no-show" on the dashboard. The
 // engagement drip starts; the channel can see the loss + acknowledge.
 export async function notifyMarkedNoShow(lead: OutboundLead): Promise<void> {
-  const headline = `👻 ${lead.name ?? lead.phone} no-showed`;
+  const headline = `👻 ${who(lead)} no-showed`;
   const text = `${headline} — engagement drip queued`;
   await fire(text, [
     { type: "header", text: { type: "plain_text", text: headline, emoji: true } },
@@ -112,7 +118,7 @@ export async function notifyMarkedSold(args: {
   lead: OutboundLead;
   notes?: string | null;
 }): Promise<void> {
-  const headline = `💰 ${args.lead.name ?? args.lead.phone} marked sold`;
+  const headline = `💰 ${who(args.lead)} marked sold`;
   const blocks: unknown[] = [
     { type: "header", text: { type: "plain_text", text: headline, emoji: true } }
   ];
@@ -126,9 +132,23 @@ export async function notifyMarkedSold(args: {
   await fire(headline, blocks);
 }
 
+// 📝 Contract — lead moved to the contract / closing stage. No drip
+// changes; a heads-up so the team knows paperwork is out for signature.
+export async function notifyMarkedContract(lead: OutboundLead): Promise<void> {
+  const headline = `📝 ${lead.name ?? lead.phone} moved to contract`;
+  await fire(headline, [
+    { type: "header", text: { type: "plain_text", text: headline, emoji: true } },
+    {
+      type: "context",
+      elements: [{ type: "mrkdwn", text: "Contract is out — awaiting signature." }]
+    },
+    leadActionButton(lead.id)
+  ]);
+}
+
 // 🪦 Lost — terminal failure state. Cancels every pending sequence.
 export async function notifyMarkedLost(lead: OutboundLead): Promise<void> {
-  const headline = `🪦 ${lead.name ?? lead.phone} marked lost`;
+  const headline = `🪦 ${who(lead)} marked lost`;
   await fire(headline, [
     { type: "header", text: { type: "plain_text", text: headline, emoji: true } },
     leadActionButton(lead.id)
@@ -143,14 +163,14 @@ export async function notifySequenceCompleted(args: {
 }): Promise<void> {
   const kindLabel = args.sequenceKind === "recovery_drip" ? "recovery" : "engagement";
   const headline = `🤔 30-day ${kindLabel} sequence completed`;
-  const text = `${headline} for ${args.lead.name ?? args.lead.phone}`;
+  const text = `${headline} for ${who(args.lead)}`;
   await fire(text, [
     { type: "header", text: { type: "plain_text", text: headline, emoji: true } },
     {
       type: "section",
       text: {
         type: "mrkdwn",
-        text: `*${args.lead.name ?? args.lead.phone}* finished the ${kindLabel} drip with no booking / sale. Review the timeline and update their status manually.`
+        text: `*${who(args.lead)}* finished the ${kindLabel} drip with no booking / sale. Review the timeline and update their status manually.`
       }
     },
     leadActionButton(args.lead.id)
@@ -163,7 +183,7 @@ export async function notifyMeetingCanceled(args: {
   lead: OutboundLead;
   reason?: string | null;
 }): Promise<void> {
-  const headline = `❌ ${args.lead.name ?? args.lead.phone} canceled their booking`;
+  const headline = `❌ ${who(args.lead)} canceled their booking`;
   const text = headline;
   const blocks: unknown[] = [
     { type: "header", text: { type: "plain_text", text: headline, emoji: true } }

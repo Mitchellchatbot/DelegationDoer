@@ -6,6 +6,7 @@ import {
   cancelMessagesByKind, recordEvent
 } from "@/lib/outbound-leads";
 import { notifyMeetingBooked, notifyMeetingCanceled } from "@/lib/outbound-slack";
+import { isFormEnrolledInFlow } from "@/lib/outbound-typeform-forms";
 
 export const dynamic = "force-dynamic";
 
@@ -188,7 +189,12 @@ export async function POST(req: NextRequest) {
         reason: invitee.cancellation?.reason ?? null
       });
       await cancelMessagesByKind(lead.id, ["reminder_24h", "reminder_1h", "confirmation"]);
-      const restarted = await scheduleRecoveryDrip(updated);
+      // Respect the per-form flow toggle: a lead whose source form is set to
+      // "no flow" must not be auto-re-enrolled in the SMS drip on cancel. This
+      // mirrors the Typeform-webhook gate. Default ON for null/unregistered.
+      const restarted = (await isFormEnrolledInFlow(updated.typeformFormId))
+        ? await scheduleRecoveryDrip(updated)
+        : 0;
       await notifyMeetingCanceled({
         lead: updated,
         reason: invitee.cancellation?.reason ?? null

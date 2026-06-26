@@ -4,10 +4,12 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import {
   Sparkles, Loader2, RefreshCw, ArrowRight, CheckCircle2,
-  CalendarDays, CalendarRange, Calendar, CalendarClock, Trash2, AlertTriangle
+  CalendarDays, CalendarRange, Calendar, CalendarClock, Trash2, AlertTriangle,
+  Clock, Users
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { Tooltip } from "@/components/Tooltip";
 import { EodDigestComposerModal } from "@/components/EodDigestComposerModal";
 
 // Lives at the top of /approvals?tab=emails. Four window tabs
@@ -48,7 +50,7 @@ interface Recommendation {
   hasContact: boolean;
   cadence: Cadence;
   // Overlap detection (see /api/eod/digest-recommendations).
-  recentlyEmailed: { daysSince: number; cadence: Cadence } | null;
+  recentlyEmailed: { daysSince: number; window: DigestWindow } | null;
   sharedRecipients: SharedRecipient[];
 }
 
@@ -60,38 +62,95 @@ const CADENCE_LABEL: Record<Cadence, string> = {
   none: "no"
 };
 
+const WINDOW_LABEL: Record<DigestWindow, string> = {
+  daily: "daily",
+  weekly: "weekly",
+  biweekly: "bi-weekly",
+  monthly: "monthly"
+};
+
+// Each overlap tag gets its own colour so the three are distinguishable at a
+// glance: Recently emailed (amber), Shared recipient (blue), Overlap (rose —
+// the strongest, shown when a client trips both signals at once).
+type OverlapTone = "amber" | "blue" | "rose";
+
+const OVERLAP_TONE_CLASSES: Record<OverlapTone, string> = {
+  amber: "bg-amber-100 text-amber-700 border-amber-200/60", // Recently emailed
+  blue:  "bg-blue-100 text-blue-700 border-blue-200/60",    // Shared recipient
+  rose:  "bg-rose-100 text-rose-700 border-rose-200/60"     // Overlap (both)
+};
+
+// Lighter shades for the tooltip header — legible on the dark slate bubble.
+const OVERLAP_TONE_ACCENT: Record<OverlapTone, string> = {
+  amber: "text-amber-300",
+  blue:  "text-blue-300",
+  rose:  "text-rose-300"
+};
+
+interface OverlapWarning {
+  tone: OverlapTone;
+  label: string;
+  // One row per detail; `kind` picks the leading icon in the tooltip.
+  items: Array<{ kind: "recent" | "shared"; text: string }>;
+}
+
 // Build the inline overlap warning for a recommendation, or null if there's
-// no overlap. "Both email types" (a shared recipient on a client with a
-// DIFFERENT cadence) is the strongest case and gets a rose tone; a plain
-// over-cadence re-send or same-cadence shared recipient stays amber.
-function overlapWarning(rec: Recommendation): { tone: "rose" | "amber"; label: string; title: string } | null {
-  const lines: string[] = [];
+// no overlap. Cross-cadence detail (which other clients a shared contact gets
+// email for, and on what cadence) lives in the tooltip rather than the colour.
+function overlapWarning(rec: Recommendation): OverlapWarning | null {
+  const items: OverlapWarning["items"] = [];
 
   if (rec.recentlyEmailed) {
-    const { daysSince, cadence } = rec.recentlyEmailed;
-    const ago = daysSince <= 0 ? "today" : `${daysSince}d ago`;
-    lines.push(`Already emailed ${ago}, sooner than its ${CADENCE_LABEL[cadence]} cadence. Sending again may duplicate.`);
+    const re = rec.recentlyEmailed;
+    const ago = re.daysSince <= 0 ? "today" : `${re.daysSince}d ago`;
+    items.push({
+      kind: "recent",
+      text: `Already sent a client update ${ago} (within the ${WINDOW_LABEL[re.window]} window). Sending again may duplicate.`
+    });
   }
 
   // Tolerate a missing array (defensive against any partial response).
   const shared = rec.sharedRecipients ?? [];
-  let crossCadence = false;
   for (const sr of shared) {
     for (const o of sr.others ?? []) {
-      if (o.cadence !== rec.cadence) crossCadence = true;
-      lines.push(`${sr.email} also gets the ${CADENCE_LABEL[o.cadence]} email for ${o.name}.`);
+      items.push({ kind: "shared", text: `${sr.email} also gets the ${CADENCE_LABEL[o.cadence]} email for ${o.name}.` });
     }
   }
 
-  if (lines.length === 0) return null;
+  if (items.length === 0) return null;
 
-  const tone = crossCadence ? "rose" : "amber";
-  const label = shared.length > 0 && rec.recentlyEmailed
-    ? "Overlap"
-    : shared.length > 0
-      ? "Shared recipient"
-      : "Recently emailed";
-  return { tone, label, title: lines.join(" ") };
+  const hasShared = shared.length > 0;
+  const hasRecent = !!rec.recentlyEmailed;
+  let tone: OverlapTone;
+  let label: string;
+  if (hasShared && hasRecent) { tone = "rose"; label = "Overlap"; }
+  else if (hasShared)         { tone = "blue"; label = "Shared recipient"; }
+  else                        { tone = "amber"; label = "Recently emailed"; }
+  return { tone, label, items };
+}
+
+// Structured content for the dark tooltip bubble: a tone-coloured header,
+// a hairline divider, then one icon'd row per detail.
+function OverlapTooltipContent({ warning }: { warning: OverlapWarning }) {
+  return (
+    <div className="max-w-[16rem]">
+      <div className={cn("flex items-center gap-1.5 font-semibold", OVERLAP_TONE_ACCENT[warning.tone])}>
+        <AlertTriangle className="w-3 h-3 shrink-0" />
+        {warning.label}
+      </div>
+      <div className="mt-1.5 pt-1.5 border-t border-white/10 space-y-1.5">
+        {warning.items.map((it, i) => {
+          const Icon = it.kind === "recent" ? Clock : Users;
+          return (
+            <div key={i} className="flex items-start gap-1.5">
+              <Icon className="w-3 h-3 mt-px shrink-0 text-white/45" />
+              <span className="text-white/85 leading-snug break-words">{it.text}</span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 interface ApiResponse {
@@ -331,18 +390,22 @@ function RecRow({
               {rec.clientName}
             </Link>
             {warning && (
-              <span
-                className={cn(
-                  "inline-flex items-center gap-1 rounded-full border font-medium px-1.5 py-0.5 text-[10px] shrink-0",
-                  warning.tone === "rose"
-                    ? "bg-rose-100 text-rose-700 border-rose-200/60"
-                    : "bg-amber-100 text-amber-700 border-amber-200/60"
-                )}
-                title={warning.title}
+              <Tooltip
+                side="top"
+                align="start"
+                className="max-w-xs rounded-lg px-3 py-2.5 shadow-xl ring-1 ring-white/10"
+                label={<OverlapTooltipContent warning={warning} />}
               >
-                <AlertTriangle className="w-3 h-3" />
-                {warning.label}
-              </span>
+                <span
+                  className={cn(
+                    "inline-flex items-center gap-1 rounded-full border font-medium px-1.5 py-0.5 text-[10px] shrink-0 cursor-default",
+                    OVERLAP_TONE_CLASSES[warning.tone]
+                  )}
+                >
+                  <AlertTriangle className="w-3 h-3" />
+                  {warning.label}
+                </span>
+              </Tooltip>
             )}
             <span className="text-[11px] tabular-nums font-semibold text-ink/70">
               {rec.entryCount} EOD {rec.entryCount === 1 ? "entry" : "entries"}

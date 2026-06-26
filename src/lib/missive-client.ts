@@ -44,6 +44,11 @@ export interface MissiveThread {
   // ThreadRow falls back to the original sender + no snippet if absent.
   last_from?: string | null;
   last_snippet?: string | null;
+  // True when this thread's latest OUTBOUND message was sent as an
+  // automated/templated blast (DelegationDoer's bulk-email tool). The clone
+  // derives it from the newest outbound message's is_automated flag;
+  // touchpoint-sync skips these so a mass send doesn't reset "last contacted".
+  automated?: boolean;
 }
 
 // Per-message attachment metadata as returned by the clone's
@@ -249,14 +254,17 @@ function toIsoString(raw: unknown): string {
   return "";
 }
 
-function normalizeThread<T extends { participants: unknown; last_message_at?: unknown; snoozed_until?: unknown }>(
+function normalizeThread<T extends { participants: unknown; last_message_at?: unknown; snoozed_until?: unknown; automated?: unknown }>(
   t: T
-): T & { participants: string[]; last_message_at: string; snoozed_until: string | null } {
+): T & { participants: string[]; last_message_at: string; snoozed_until: string | null; automated: boolean } {
   return {
     ...t,
     participants: toStringArray(t.participants),
     last_message_at: toIsoString(t.last_message_at),
-    snoozed_until: t.snoozed_until ? toIsoString(t.snoozed_until) : null
+    snoozed_until: t.snoozed_until ? toIsoString(t.snoozed_until) : null,
+    // Clone returns is_automated as 0/1 (or omits it on an older build) →
+    // coerce to a real boolean; undefined safely becomes false.
+    automated: !!t.automated
   };
 }
 
@@ -496,6 +504,10 @@ export interface ComposeArgs {
   // immediate and scheduled sends — the clone stashes them in
   // scheduled_attachments and replays them when the message comes due.
   attachments?: MissiveAttachment[];
+  // Marks this send as an automated/templated blast (the bulk-email tool).
+  // The clone stores it on the message; touchpoint-sync then excludes it so
+  // a mass send doesn't reset every client's "last contacted" status.
+  automated?: boolean;
 }
 
 export async function composeNewThread(args: ComposeArgs): Promise<{
@@ -515,6 +527,7 @@ export async function composeNewThread(args: ComposeArgs): Promise<{
     body_html: args.bodyHtml ?? null
   };
   if (args.sendAtMs) payload.send_at = args.sendAtMs;
+  if (args.automated) payload.automated = true;
   const form = new FormData();
   form.append("payload", JSON.stringify(payload));
   // Attachments are forwarded for both immediate and scheduled sends; the

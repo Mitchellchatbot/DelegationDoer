@@ -103,18 +103,11 @@ const AUTOMATED_OUTBOUND_SUBJECT_PATTERNS: Array<{ re: RegExp; label: string }> 
   {
     re: /^your\s+blog('?s)?\b.*\b(visibilit(y|ies)|traffic|views?|reach|exposure|impressions?|ranking|getting\s+more|more\s+(visibility|traffic|views?|reach))\b/i,
     label: "weekly blog performance update"
-  },
-  // Monthly SEO update blast sent from the bulk tool (/clients/bulk-email).
-  // It goes to every client from a normal team address, so the only tell is
-  // the templated subject — same approach as the blog mailer above. Anchored
-  // to the START of the subject (the composer prefills "Your Monthly SEO
-  // Update") so it matches the blast but NOT a personal reply that merely
-  // mentions the phrase mid-subject (e.g. "Re: your monthly SEO update?"),
-  // which should still count as a real touchpoint.
-  {
-    re: /^(your\s+)?monthly\s+seo\s+update\b/i,
-    label: "monthly SEO update blast"
   }
+  // NOTE: the monthly SEO-update blast (/clients/bulk-email) is NOT matched by
+  // subject — its subject is worker-authored. It's excluded from touchpoint via
+  // an explicit per-message marker (messages.is_automated on the clone, surfaced
+  // as MissiveThread.automated and skipped in touchpoint-sync.ts).
 ];
 
 // True when a subject looks like one of our automated outbound blasts

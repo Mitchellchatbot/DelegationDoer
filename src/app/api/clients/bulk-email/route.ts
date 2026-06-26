@@ -6,6 +6,7 @@ import { visibleAccountIdsFor } from "@/lib/inbox-access";
 import { composeNewThread } from "@/lib/missive-client";
 import { sanitizeMediaUrls, fetchMediaAsAttachments } from "@/lib/media";
 import { getBulkRoster, renderTemplate, mapWithConcurrency } from "@/lib/bulk-email";
+import { getSupabaseAdmin } from "@/lib/supabase-admin";
 
 export const dynamic = "force-dynamic";
 // Bulk send loops over every included client (one Missive thread each), so
@@ -144,7 +145,10 @@ export async function POST(req: NextRequest) {
             bodyText: renderTemplate(bodyText, c),
             bodyHtml: bodyHtml ? renderTemplate(bodyHtml, c) : undefined,
             sendAtMs,
-            attachments
+            attachments,
+            // Mark every blast so it's excluded from client touchpoint health
+            // regardless of the (worker-authored) subject.
+            automated: true
           });
           return {
             clientId: c.clientId,
@@ -165,6 +169,31 @@ export async function POST(req: NextRequest) {
         }
       }
     );
+
+    // Record every thread we just created so touchpoint-sync excludes it from
+    // client health (a mass send must not reset "last contacted"). Immediate
+    // sends return a thread id; scheduled sends return an empty threadId (no
+    // thread exists yet) so they're naturally skipped here and rely on the
+    // per-message `automated` flag instead. Best-effort: a logging failure must
+    // never fail the send the user already triggered.
+    const sentThreads = results
+      .filter((r) => r.ok && r.threadId)
+      .map((r) => ({
+        thread_id: r.threadId as string,
+        client_id: r.clientId,
+        subject,
+        sent_by: me.id
+      }));
+    if (sentThreads.length > 0) {
+      try {
+        await getSupabaseAdmin()
+          .from("bulk_email_threads")
+          .upsert(sentThreads, { onConflict: "thread_id" });
+      } catch {
+        // Swallow — the emails went out; the worst case is a re-sync briefly
+        // counting this blast until the row lands or the `automated` flag covers it.
+      }
+    }
 
     const sent = results.filter((r) => r.ok).length;
     const failed = results.length - sent;

@@ -14,8 +14,18 @@ import { toast } from "sonner";
 // A lead needs at least one contact channel (phone and/or email). The SMS
 // recovery sequence can only start when there's a phone, so the checkbox is
 // disabled + forced off until a phone is entered.
+//
+// `forms` is the registered Typeform catalog (outbound_typeform_forms),
+// passed from the leads page so the operator can attribute a manual lead to
+// the same form a webhook submission would carry. Optional — leaving it unset
+// stores no form (the lead lands under "Legacy / no form ID" grouping).
 
-export function AddLeadButton() {
+interface FormOption {
+  id: string;
+  label: string;
+}
+
+export function AddLeadButton({ forms }: { forms: FormOption[] }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [pending, startTransition] = useTransition();
@@ -23,6 +33,7 @@ export function AddLeadButton() {
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
+  const [formId, setFormId] = useState("");
   const [startSequence, setStartSequence] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -33,6 +44,7 @@ export function AddLeadButton() {
     setName("");
     setPhone("");
     setEmail("");
+    setFormId("");
     setStartSequence(false);
     setError(null);
   }
@@ -52,6 +64,8 @@ export function AddLeadButton() {
           name: name.trim() || undefined,
           phone: phone.trim() || undefined,
           email: email.trim() || undefined,
+          // The route validates this against the form catalog; unknown → null.
+          typeformFormId: formId || undefined,
           // Only meaningful with a phone; the route ignores it otherwise.
           startSequence: hasPhone && startSequence
         })
@@ -130,6 +144,22 @@ export function AddLeadButton() {
                 className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-[14px] text-ink placeholder:text-ink/35 focus:border-fuchsia-300 focus:outline-none"
               />
             </label>
+
+            {forms.length > 0 && (
+              <label className="block">
+                <span className="text-[12px] font-medium text-ink/65">Typeform</span>
+                <select
+                  value={formId}
+                  onChange={(e) => setFormId(e.target.value)}
+                  className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-[14px] text-ink focus:border-fuchsia-300 focus:outline-none"
+                >
+                  <option value="">No specific form</option>
+                  {forms.map((f) => (
+                    <option key={f.id} value={f.id}>{f.label}</option>
+                  ))}
+                </select>
+              </label>
+            )}
 
             <label className={`flex items-start gap-2.5 rounded-xl border px-3 py-2.5 ${hasPhone ? "border-slate-200" : "border-slate-100 bg-slate-50/60"}`}>
               <input

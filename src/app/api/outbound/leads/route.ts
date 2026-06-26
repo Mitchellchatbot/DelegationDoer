@@ -3,6 +3,7 @@ import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { canSeeOutbound } from "@/lib/auth";
 import { createLeadManual } from "@/lib/outbound-leads";
+import { getForm } from "@/lib/outbound-typeform-forms";
 
 export const dynamic = "force-dynamic";
 
@@ -45,6 +46,13 @@ export async function POST(req: NextRequest) {
   const name = typeof body.name === "string" && body.name.trim() ? body.name.trim() : null;
   const startSequence = body.startSequence === true;
 
+  // Optional Typeform attribution. The operator picks from the registered
+  // outbound_typeform_forms catalog; validate the id against it and store null
+  // for anything unknown, so manual leads slot into the same per-form grouping
+  // the webhook produces on the leads page.
+  const rawFormId = typeof body.typeformFormId === "string" ? body.typeformFormId.trim() : "";
+  const typeformFormId = rawFormId && (await getForm(rawFormId)) ? rawFormId : null;
+
   if (!phone && !email) {
     return NextResponse.json({ error: "phone or email required" }, { status: 400 });
   }
@@ -54,7 +62,7 @@ export async function POST(req: NextRequest) {
 
   try {
     const { lead, isNew } = await createLeadManual({
-      phone, email, name, startSequence, createdBy: me.id
+      phone, email, name, typeformFormId, startSequence, createdBy: me.id
     });
     if (!isNew) {
       return NextResponse.json(

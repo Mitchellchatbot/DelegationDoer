@@ -257,6 +257,7 @@ export async function createLeadManual(input: {
   phone: string | null;          // already normalized to E.164 by the route, or null
   email: string | null;
   name: string | null;
+  typeformFormId: string | null;  // catalog form id the operator picked, or null
   startSequence: boolean;        // operator checkbox — only honored if a phone exists
   createdBy: string;             // user id, for the audit event
 }): Promise<{ lead: OutboundLead; isNew: boolean }> {
@@ -274,6 +275,7 @@ export async function createLeadManual(input: {
       phone: input.phone,
       email: input.email?.toLowerCase() ?? null,
       name: input.name,
+      typeform_form_id: input.typeformFormId ?? null,
       status: "warm_lead"
     })
     .select("*")

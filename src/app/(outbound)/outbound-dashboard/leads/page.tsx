@@ -283,7 +283,7 @@ export default async function OutboundLeadsPage({
 
       {/* Board (top) */}
       <div className="flex items-center justify-end gap-2">
-        <AddLeadButton />
+        <AddLeadButton forms={forms} />
         <OutboundTypeformFormsDrawer
           initialForms={forms}
           unknownFormIds={unknownFormIds}

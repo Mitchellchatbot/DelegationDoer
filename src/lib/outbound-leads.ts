@@ -824,21 +824,31 @@ function fmtTimeUntil(iso: string): string {
 //
 // Returns a Map keyed by `${kind}#${sequenceIndex}` so the page can
 // look up each step in O(1).
-export async function getFlowsOverview(): Promise<Map<string, FlowStepBucket>> {
+// `sourceFormId` filters the whole roll-up to one typeform source (null = all
+// sources). Filtering server-side before bucketing keeps the counts AND the
+// queued lists consistent — a client-side filter couldn't, since the
+// sent/failed/canceled counts carry no per-lead rows in `queued`.
+export async function getFlowsOverview(
+  sourceFormId: string | null = null
+): Promise<Map<string, FlowStepBucket>> {
   const supabase = getSupabaseAdmin();
 
-  const { data, error } = await supabase
+  let query = supabase
     .from("outbound_scheduled_messages")
     .select(`
       id, lead_id, kind, sequence_index, status, scheduled_for,
-      outbound_leads!inner ( name, phone, status )
-    `)
-    .order("scheduled_for", { ascending: true });
+      outbound_leads!inner ( name, phone, status, typeform_form_id )
+    `);
+  if (sourceFormId) {
+    query = query.eq("outbound_leads.typeform_form_id", sourceFormId);
+  }
+  const { data, error } = await query.order("scheduled_for", { ascending: true });
   if (error) throw new Error(error.message);
 
   // Shape of the joined row — outbound_leads comes back as an array per
   // Supabase's PostgREST embed semantics, even on a many-to-one. We
   // take [0] for the inner-join case.
+  type JoinedLead = { name: string | null; phone: string | null; status: LeadStatus; typeform_form_id: string | null };
   interface JoinedRow {
     id: string;
     lead_id: string;
@@ -846,10 +856,10 @@ export async function getFlowsOverview(): Promise<Map<string, FlowStepBucket>> {
     sequence_index: number;
     status: "pending" | "sending" | "sent" | "failed" | "canceled";
     scheduled_for: string;
-    outbound_leads: { name: string | null; phone: string | null; status: LeadStatus } | Array<{ name: string | null; phone: string | null; status: LeadStatus }> | null;
+    outbound_leads: JoinedLead | JoinedLead[] | null;
   }
 
-  function leadOf(r: JoinedRow): { name: string | null; phone: string | null; status: LeadStatus } | null {
+  function leadOf(r: JoinedRow): JoinedLead | null {
     if (!r.outbound_leads) return null;
     return Array.isArray(r.outbound_leads) ? (r.outbound_leads[0] ?? null) : r.outbound_leads;
   }

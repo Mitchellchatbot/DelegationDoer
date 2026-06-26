@@ -13,6 +13,7 @@ import { OutboundLeadsBoard } from "@/components/OutboundLeadsBoard";
 import { OutboundSequenceBoard } from "@/components/OutboundSequenceBoard";
 import { OutboundLeadsByForm } from "@/components/OutboundLeadsByForm";
 import { OutboundTypeformFormsDrawer } from "@/components/OutboundTypeformFormsDrawer";
+import { OutboundSourceSelect } from "@/components/OutboundSourceSelect";
 import { StatusFilterBar, NoLeadsHint } from "@/components/OutboundLeadsTable";
 import { AddLeadButton } from "@/components/AddLeadButton";
 import { extractWebsiteUrl } from "@/lib/website-builder-integration";
@@ -55,6 +56,14 @@ function parseStatus(raw: string | string[] | undefined): LeadStatus | null {
   const v = Array.isArray(raw) ? raw[0] : raw;
   if (!v) return null;
   return (VALID_STATUSES as string[]).includes(v) ? (v as LeadStatus) : null;
+}
+
+// Source filter = a typeform form id, or null for "all sources". Unknown ids
+// just produce an empty flow roll-up, so we pass the raw value straight through.
+function parseSource(raw: string | string[] | undefined): string | null {
+  const v = Array.isArray(raw) ? raw[0] : raw;
+  if (!v || v === "all") return null;
+  return v;
 }
 
 interface GroupRow {
@@ -196,21 +205,28 @@ function Hero({ view }: { view: View }) {
 export default async function OutboundLeadsPage({
   searchParams
 }: {
-  searchParams: Promise<{ view?: string; status?: string }>;
+  searchParams: Promise<{ view?: string; status?: string; source?: string }>;
 }) {
   const sp = await searchParams;
   const view = parseView(sp.view);
 
   // ---- Sequences view (the original flow-centric texting view) ----
   if (view === "sequences") {
-    const [buckets, templates] = await Promise.all([
-      getFlowsOverview(),
-      loadTemplateMap()
+    const sourceFilter = parseSource(sp.source);
+    const [buckets, templates, forms] = await Promise.all([
+      getFlowsOverview(sourceFilter),
+      loadTemplateMap(),
+      listForms()
     ]);
     return (
       <div className="space-y-4 max-w-[1400px] mx-auto">
         <Hero view={view} />
         <ViewToggle active="sequences" />
+        <div className="flex items-center justify-end gap-2">
+          <OutboundSourceSelect forms={forms} value={sourceFilter ?? "all"} />
+          <AddLeadButton />
+          <OutboundTypeformFormsDrawer initialForms={forms} unknownFormIds={[]} />
+        </div>
         <OutboundFlowsView buckets={buckets} templates={templates} />
       </div>
     );
@@ -220,10 +236,24 @@ export default async function OutboundLeadsPage({
   if (view === "flow") {
     const [flowGroups, forms] = await Promise.all([getLeadsByFlow(), listForms()]);
     const cards = [...flowGroups.booking, ...flowGroups.recovery, ...flowGroups.engagement];
+    // Surface unregistered sources seen on the queued cards so the Manage-forms
+    // badge mirrors the Board view (which derives the same from its lead pull).
+    const flowCatalogIds = new Set(forms.map((f) => f.id));
+    const unknownFormIds = [
+      ...new Set(
+        cards
+          .map((c) => c.typeformFormId)
+          .filter((x): x is string => !!x && !flowCatalogIds.has(x))
+      )
+    ];
     return (
       <div className="space-y-4 max-w-7xl mx-auto">
         <Hero view={view} />
         <ViewToggle active="flow" />
+        <div className="flex items-center justify-end gap-2">
+          <AddLeadButton />
+          <OutboundTypeformFormsDrawer initialForms={forms} unknownFormIds={unknownFormIds} />
+        </div>
         {cards.length === 0 ? <NoLeadsHint /> : <OutboundSequenceBoard cards={cards} forms={forms} />}
       </div>
     );

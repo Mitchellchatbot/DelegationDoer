@@ -61,11 +61,14 @@ interface SendResult {
 //     attachmentUrls?: MediaItem[]
 //   }
 //
-// Sends the same (placeholder-rendered) email to every active client that
-// has a contact email and isn't excluded — one outbound Missive thread per
+// Sends the same (placeholder-rendered) email to every client that has a
+// contact email and isn't excluded — one outbound Missive thread per
 // client. Partial-failure tolerant: one bad send is recorded and the batch
-// continues. Writes NOTHING to the DB (these are automated blasts that must
-// stay out of touchpoint health — see lib/client-touchpoint.ts).
+// continues. The only DB write is an EXCLUSION log of the thread ids it
+// created (bulk_email_threads): these blasts must stay OUT of touchpoint
+// health, and touchpoint-sync skips any thread id recorded there. This is a
+// clone-independent backstop to the per-message `automated` flag — see
+// lib/touchpoint-sync.ts and lib/client-touchpoint.ts.
 export async function POST(req: NextRequest) {
   try {
     const userId = await requireCurrentUserId();
@@ -125,9 +128,11 @@ export async function POST(req: NextRequest) {
       : undefined;
 
     // Server re-derives the eligible roster so the client can't inject
-    // arbitrary recipients — it only gets to EXCLUDE from this set.
+    // arbitrary recipients — it only gets to EXCLUDE from this set. canEmail
+    // is required so a client with no contact address is never sent to (an
+    // empty `to`), regardless of what the UI submitted.
     const { clients } = await getBulkRoster();
-    const recipients = clients.filter((c) => !excludedClientIds.has(c.clientId));
+    const recipients = clients.filter((c) => c.canEmail && !excludedClientIds.has(c.clientId));
 
     if (recipients.length === 0) {
       return NextResponse.json({ error: "no clients selected to send to" }, { status: 400 });

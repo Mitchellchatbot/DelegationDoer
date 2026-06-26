@@ -3,7 +3,9 @@
 // The tool writes ONE email and sends it to many clients in a single
 // action (one outbound Missive thread per client, via composeNewThread).
 // This module is the single source of truth for:
-//   - which clients are eligible (active + at least one contact email),
+//   - the full client roster (every client is listed so the picker is
+//     complete; canEmail flags whether a contact address is on file —
+//     clients without one are shown disabled and are never sent to),
 //   - the "shared recipient" overlap flag (one contact email that's also
 //     the contact for another client — flagged so the approver can
 //     manually exclude duplicates; see [[thread-read-auth-invariant]]
@@ -12,8 +14,10 @@
 //   - a small bounded-concurrency runner so we don't fire N sends at once.
 //
 // Deliberately does NOT touch email_drafts — these blasts must stay out
-// of touchpoint health (see lib/client-touchpoint.ts). The only record
-// of a send is the route's response + the resulting Missive threads.
+// of touchpoint health (see lib/client-touchpoint.ts). The route logs the
+// created thread ids to bulk_email_threads purely so touchpoint-sync can
+// EXCLUDE them; the only other record of a send is the route's response +
+// the resulting Missive threads.
 
 import { getClients, type Client } from "@/lib/clients-data";
 
@@ -28,12 +32,16 @@ export interface BulkRecipientClient {
   contactName: string | null;
   website: string | null;
   // Cleaned (trimmed, non-empty) contact addresses, original casing.
+  // May be empty when canEmail is false.
   contactEmails: string[];
+  // False when no contact email is on file — the client is still listed
+  // (disabled) for visibility but is never sent to (also enforced in the route).
+  canEmail: boolean;
   updateCadence: Client["updateCadence"];
   status: string;
   teamId: string | null;
   // Non-empty when one of this client's addresses is ALSO the contact for
-  // another active client — surfaced as a warning tag in the UI.
+  // another client — surfaced as a warning tag in the UI.
   sharedEmails: SharedEmail[];
 }
 
@@ -42,24 +50,23 @@ export function normalizeEmail(raw: string): string {
   return raw.trim().toLowerCase();
 }
 
-// Active clients with at least one usable contact email, in display order
-// (getClients already sorts by display_order asc, then name). Each client
-// carries its sharedEmails overlap so the UI can warn about contacts that
-// span multiple businesses.
+// Every client, in display order (getClients already sorts by display_order
+// asc, then name). Status is not a gate — non-active clients with an email
+// are valid recipients. A client with no usable contact email is flagged
+// canEmail=false so the UI can list it (disabled) without ever sending to it.
+// Each client carries its sharedEmails overlap so the UI can warn about
+// contacts that span multiple businesses.
 export async function getBulkRoster(): Promise<{ clients: BulkRecipientClient[] }> {
   const all = await getClients();
 
-  // Eligible = active (status null/empty treated as active, mirroring the
-  // digest route) AND has >=1 non-empty contact email.
-  const eligible = all
-    .map((c) => ({ client: c, emails: c.contactEmails.map((e) => e.trim()).filter(Boolean) }))
-    .filter(({ client, emails }) => (!client.status || client.status === "active") && emails.length > 0);
+  // Keep the whole roster; emails may be empty (→ canEmail=false below).
+  const roster = all
+    .map((c) => ({ client: c, emails: c.contactEmails.map((e) => e.trim()).filter(Boolean) }));
 
-  // Index every eligible client's addresses → who else holds that address.
-  // Built from the eligible set only: a client with no contact email can't
-  // share one, so it can never appear here.
+  // Index every client's addresses → who else holds that address. A client
+  // with no contact email contributes nothing, so it can never appear here.
   const clientsByEmail = new Map<string, Array<{ clientId: string; name: string }>>();
-  for (const { client, emails } of eligible) {
+  for (const { client, emails } of roster) {
     for (const raw of emails) {
       const key = normalizeEmail(raw);
       if (!key) continue;
@@ -69,7 +76,7 @@ export async function getBulkRoster(): Promise<{ clients: BulkRecipientClient[] 
     }
   }
 
-  const clients: BulkRecipientClient[] = eligible.map(({ client, emails }) => {
+  const clients: BulkRecipientClient[] = roster.map(({ client, emails }) => {
     const sharedEmails: SharedEmail[] = [];
     for (const raw of emails) {
       const key = normalizeEmail(raw);
@@ -82,6 +89,7 @@ export async function getBulkRoster(): Promise<{ clients: BulkRecipientClient[] 
       contactName: client.contactName,
       website: client.website ?? client.websites[0] ?? null,
       contactEmails: emails,
+      canEmail: emails.length > 0,
       updateCadence: client.updateCadence,
       status: client.status,
       teamId: client.teamId,

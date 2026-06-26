@@ -2,9 +2,11 @@
 
 import { motion } from "framer-motion";
 
-// Brief purple radial flash that plays once when the outbound dashboard
-// shell mounts. Pointer-events:none so it never blocks clicks. Auto-
-// removes itself ~900ms in by fading to fully transparent.
+// Brief, subtle radial wash that plays once when the outbound dashboard
+// shell mounts. Tinted to the brand accent (not a saturated purple) and
+// kept low-opacity so it reads as a premium reveal against the light
+// chrome. Pointer-events:none so it never blocks clicks. Auto-removes
+// itself ~900ms in by fading to fully transparent.
 //
 // This pairs with the wipe in EnterOutboundDashboardButton — the wipe
 // covers the navigation gap, then this overlay reveals the new shell
@@ -23,7 +25,7 @@ export function OutboundShellIntro() {
         className="w-[60vmin] h-[60vmin] rounded-full"
         style={{
           background:
-            "radial-gradient(circle, rgba(168, 85, 247, 0.55) 0%, rgba(168, 85, 247, 0.0) 65%)"
+            "radial-gradient(circle, rgba(6, 50, 112, 0.14) 0%, rgba(6, 50, 112, 0.0) 65%)"
         }}
       />
     </motion.div>

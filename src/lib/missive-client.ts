@@ -39,6 +39,11 @@ export interface MissiveThread {
   // of every account whose messages appear in this thread, so we can
   // tell which inboxes a thread "belongs to" without joining per-message.
   account_emails?: { email: string; name: string | null }[];
+  // Newest-message preview for the conversation list: who sent the most
+  // recent message and a short plaintext snippet of its body. Optional —
+  // ThreadRow falls back to the original sender + no snippet if absent.
+  last_from?: string | null;
+  last_snippet?: string | null;
   // True when this thread's latest OUTBOUND message was sent as an
   // automated/templated blast (DelegationDoer's bulk-email tool). The clone
   // derives it from the newest outbound message's is_automated flag;
@@ -495,10 +500,9 @@ export interface ComposeArgs {
   // the future, the clone stores the message in scheduled_messages with
   // status='pending' instead of sending immediately.
   sendAtMs?: number;
-  // Optional file attachments. Note: the clone currently REJECTS
-  // attachments on scheduled sends (returns 400). Callers should only
-  // pass attachments alongside immediate (sendAtMs absent) sends, or
-  // accept that scheduled+attachment combinations will fail.
+  // Optional file attachments. Forwarded as multipart files[] for both
+  // immediate and scheduled sends — the clone stashes them in
+  // scheduled_attachments and replays them when the message comes due.
   attachments?: MissiveAttachment[];
   // Marks this send as an automated/templated blast (the bulk-email tool).
   // The clone stores it on the message; touchpoint-sync then excludes it so
@@ -526,17 +530,14 @@ export async function composeNewThread(args: ComposeArgs): Promise<{
   if (args.automated) payload.automated = true;
   const form = new FormData();
   form.append("payload", JSON.stringify(payload));
-  // Skip attachments on scheduled sends — the clone explicitly rejects
-  // that combination (see compose.js, "attachments with scheduled send
-  // not supported in MVP").
-  if (!args.sendAtMs) {
-    for (const att of args.attachments ?? []) {
-      form.append(
-        "files",
-        new Blob([new Uint8Array(att.content)], { type: att.contentType }),
-        att.filename
-      );
-    }
+  // Attachments are forwarded for both immediate and scheduled sends; the
+  // clone stores them against the scheduled message and sends them when due.
+  for (const att of args.attachments ?? []) {
+    form.append(
+      "files",
+      new Blob([new Uint8Array(att.content)], { type: att.contentType }),
+      att.filename
+    );
   }
   // Scheduled sends return { ok: true, scheduled_id } instead of a
   // thread/message id — handle both shapes.

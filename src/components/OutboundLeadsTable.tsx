@@ -7,6 +7,7 @@ import type {
   OutboundLead, LeadStatus, ScheduledMessage, WebsiteBuildStatus
 } from "@/lib/outbound-leads";
 import { cn } from "@/lib/utils";
+import { STAGE_META } from "@/lib/outbound-stages";
 
 // Server-rendered table for /outbound-dashboard/leads. Each row renders
 // a status pill, the lead's name + phone, the next scheduled SMS, and
@@ -21,18 +22,9 @@ interface Props {
   statusFilter: LeadStatus | null;
 }
 
-// Per-status badge styling. Kept here (not in a tone map) because the
-// status palette is tied to funnel meaning — "success" is always green,
-// "lost" is always grey, etc. Not interchangeable with the StatCard
-// tone vocabulary.
-const STATUS_STYLES: Record<LeadStatus, { label: string; cls: string }> = {
-  warm_lead: { label: "Warm",      cls: "bg-amber-50 text-amber-700 border-amber-200/60" },
-  booked:    { label: "Booked",    cls: "bg-sky-50 text-sky-700 border-sky-200/60" },
-  showed:    { label: "Showed",    cls: "bg-indigo-50 text-indigo-700 border-indigo-200/60" },
-  no_show:   { label: "No show",   cls: "bg-rose-50 text-rose-700 border-rose-200/60" },
-  success:   { label: "Won",       cls: "bg-emerald-50 text-emerald-700 border-emerald-200/60" },
-  lost:      { label: "Lost",      cls: "bg-slate-100 text-slate-600 border-slate-300/60" }
-};
+// Per-stage label + pill classes come from the shared STAGE_META in
+// lib/outbound-stages, so the table, the kanban board, and the funnel
+// strip all read the same palette (and pick up the "contract" stage).
 
 const MESSAGE_KIND_LABELS: Record<ScheduledMessage["kind"], string> = {
   confirmation:     "Confirmation",
@@ -72,7 +64,7 @@ export function OutboundLeadsTable({ rows, totalCount, statusFilter }: Props) {
       <div className="rounded-2xl border border-slate-200 bg-white shadow-soft p-10 text-center">
         <div className="text-[14px] text-ink/55">
           {statusFilter
-            ? `No leads in status "${STATUS_STYLES[statusFilter].label}".`
+            ? `No leads in status "${STAGE_META[statusFilter].label}".`
             : "No leads yet. Submit a Typeform to populate this table."}
         </div>
       </div>
@@ -83,7 +75,7 @@ export function OutboundLeadsTable({ rows, totalCount, statusFilter }: Props) {
       <div className="px-5 py-3 border-b border-slate-100 text-[12px] text-ink/55">
         Showing {rows.length} of {totalCount} {totalCount === 1 ? "lead" : "leads"}
         {statusFilter && (
-          <span> · filtered to <span className="text-ink/75 font-medium">{STATUS_STYLES[statusFilter].label}</span></span>
+          <span> · filtered to <span className="text-ink/75 font-medium">{STAGE_META[statusFilter].label}</span></span>
         )}
       </div>
       <div className="overflow-x-auto">
@@ -100,7 +92,7 @@ export function OutboundLeadsTable({ rows, totalCount, statusFilter }: Props) {
           </thead>
           <tbody className="divide-y divide-slate-100">
             {rows.map(({ lead, nextMessage }) => {
-              const s = STATUS_STYLES[lead.status];
+              const s = STAGE_META[lead.status];
               return (
                 <tr key={lead.id} className="hover:bg-slate-50/60 transition-colors">
                   <Td>
@@ -112,9 +104,11 @@ export function OutboundLeadsTable({ rows, totalCount, statusFilter }: Props) {
                         {lead.name ?? "(no name)"}
                       </div>
                       <div className="text-[11px] text-ink/55 flex items-center gap-2 mt-0.5">
-                        <span className="inline-flex items-center gap-1">
-                          <Phone className="w-3 h-3" /> {lead.phone}
-                        </span>
+                        {lead.phone && (
+                          <span className="inline-flex items-center gap-1">
+                            <Phone className="w-3 h-3" /> {lead.phone}
+                          </span>
+                        )}
                         {lead.email && (
                           <span className="inline-flex items-center gap-1 truncate">
                             <Mail className="w-3 h-3" /> {lead.email}
@@ -126,7 +120,7 @@ export function OutboundLeadsTable({ rows, totalCount, statusFilter }: Props) {
                   <Td>
                     <span className={cn(
                       "inline-flex items-center px-2 py-0.5 rounded-full border text-[11px] font-semibold",
-                      s.cls
+                      s.pill
                     )}>
                       {s.label}
                     </span>
@@ -183,12 +177,13 @@ export function StatusFilterBar({
   const all = Object.values(counts).reduce((s, n) => s + n, 0);
   const entries: Array<{ key: LeadStatus | null; label: string; count: number; cls: string | null }> = [
     { key: null, label: "All", count: all, cls: null },
-    { key: "warm_lead", label: STATUS_STYLES.warm_lead.label, count: counts.warm_lead, cls: STATUS_STYLES.warm_lead.cls },
-    { key: "booked", label: STATUS_STYLES.booked.label, count: counts.booked, cls: STATUS_STYLES.booked.cls },
-    { key: "showed", label: STATUS_STYLES.showed.label, count: counts.showed, cls: STATUS_STYLES.showed.cls },
-    { key: "no_show", label: STATUS_STYLES.no_show.label, count: counts.no_show, cls: STATUS_STYLES.no_show.cls },
-    { key: "success", label: STATUS_STYLES.success.label, count: counts.success, cls: STATUS_STYLES.success.cls },
-    { key: "lost", label: STATUS_STYLES.lost.label, count: counts.lost, cls: STATUS_STYLES.lost.cls }
+    { key: "warm_lead", label: STAGE_META.warm_lead.label, count: counts.warm_lead, cls: STAGE_META.warm_lead.pill },
+    { key: "booked", label: STAGE_META.booked.label, count: counts.booked, cls: STAGE_META.booked.pill },
+    { key: "showed", label: STAGE_META.showed.label, count: counts.showed, cls: STAGE_META.showed.pill },
+    { key: "contract", label: STAGE_META.contract.label, count: counts.contract, cls: STAGE_META.contract.pill },
+    { key: "no_show", label: STAGE_META.no_show.label, count: counts.no_show, cls: STAGE_META.no_show.pill },
+    { key: "success", label: STAGE_META.success.label, count: counts.success, cls: STAGE_META.success.pill },
+    { key: "lost", label: STAGE_META.lost.label, count: counts.lost, cls: STAGE_META.lost.pill }
   ];
   return (
     <div className="flex flex-wrap items-center gap-2">

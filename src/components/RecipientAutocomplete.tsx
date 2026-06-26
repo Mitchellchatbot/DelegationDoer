@@ -14,6 +14,9 @@ export type ClientSuggestion = {
   name: string;
   contactName: string | null;
   contactEmails: string[];
+  // "client" (default) groups render as-is; "team" groups (our own inboxes
+  // / teammates) are listed after a one-time "Team" section divider.
+  category?: "client" | "team";
 };
 
 // One selectable row in the dropdown. "all" inserts every (still-absent)
@@ -23,6 +26,7 @@ type FlatItem = {
   clientId: string;
   clientName: string;
   contactName: string | null;
+  category: "client" | "team";
   groupStart: boolean; // render the client header before this row
 } & ({ kind: "all"; emails: string[] } | { kind: "email"; email: string });
 
@@ -86,6 +90,7 @@ export function RecipientAutocomplete({
       const remaining = c.contactEmails.filter((e) => !presentEmails.has(e.toLowerCase()));
       if (remaining.length === 0) continue;
       clientCount++;
+      const category = c.category ?? "client";
       let firstOfGroup = true;
       // "Add all" only earns its own row when there's more than one address
       // left — otherwise it would duplicate the single email row below it.
@@ -95,6 +100,7 @@ export function RecipientAutocomplete({
           clientId: c.id,
           clientName: c.name,
           contactName: c.contactName,
+          category,
           groupStart: true,
           kind: "all",
           emails: remaining,
@@ -107,6 +113,7 @@ export function RecipientAutocomplete({
           clientId: c.id,
           clientName: c.name,
           contactName: c.contactName,
+          category,
           groupStart: firstOfGroup,
           kind: "email",
           email,
@@ -189,8 +196,13 @@ export function RecipientAutocomplete({
       />
       {showDropdown && (
         <div className="absolute left-0 right-0 top-full mt-1 z-20 rounded-xl border border-slate-200 bg-white shadow-lift overflow-hidden max-h-72 overflow-y-auto">
-          {items.map((it) => (
+          {items.map((it, i) => (
             <Fragment key={`${it.clientId}-${it.kind}-${it.kind === "email" ? it.email : "all"}`}>
+              {it.category === "team" && (i === 0 || items[i - 1].category !== "team") && (
+                <div className="px-3 pt-2 pb-1 text-[10px] uppercase tracking-wide font-semibold text-accent/70 border-t border-slate-100">
+                  Team inboxes &amp; members
+                </div>
+              )}
               {it.groupStart && (
                 <div className="px-3 pt-2 pb-1 text-[10px] uppercase tracking-wide font-semibold text-ink/40 truncate">
                   {it.clientName}

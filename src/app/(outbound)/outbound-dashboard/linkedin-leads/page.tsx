@@ -17,6 +17,7 @@ export default async function OutboundLinkedInLeadsPage() {
   return (
     <div className="space-y-4 max-w-7xl mx-auto">
       <PageHero
+        density="compact"
         eyebrow="Channel · Social"
         headline={["LinkedIn ", { accent: "Leads" }]}
         subtitle="Connection requests, acceptance, replies, and meetings booked from the LinkedIn automation runner."

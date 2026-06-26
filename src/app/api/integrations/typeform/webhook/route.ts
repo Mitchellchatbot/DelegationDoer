@@ -4,6 +4,7 @@ import {
   upsertLeadFromTypeform, scheduleRecoveryDrip, recordEvent
 } from "@/lib/outbound-leads";
 import { notifyFormSubmitted } from "@/lib/outbound-slack";
+import { isFormEnrolledInFlow } from "@/lib/outbound-typeform-forms";
 import {
   extractWebsiteUrl, triggerWebsiteBuild
 } from "@/lib/website-builder-integration";
@@ -183,7 +184,13 @@ export async function POST(req: NextRequest) {
         response_id: responseId,
         name, email, phone
       });
-      await scheduleRecoveryDrip(lead);
+      // Only enroll in the Recovery drip if this form is flagged for it.
+      // Default ON: unregistered forms (no catalog row) still enroll, so a
+      // newly-wired form nurtures leads before anyone names it. The lead,
+      // Slack ping, and website build below all run regardless.
+      if (await isFormEnrolledInFlow(formId)) {
+        await scheduleRecoveryDrip(lead);
+      }
       await notifyFormSubmitted(lead);
     } else {
       // Resubmission — log the event but skip re-scheduling the drip

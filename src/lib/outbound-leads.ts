@@ -1,5 +1,7 @@
 import "server-only";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
+import { ALLOWED_TRANSITIONS, type LeadStatus } from "@/lib/outbound-stages";
+import { kindToFlow, type FlowKey } from "@/lib/outbound-flow-config";
 import {
   buildContext, fmtMeetingFriendly, renderTemplate, getFallbackTemplate,
   DRIP_OFFSETS_DAYS, DAY_MS,
@@ -22,8 +24,11 @@ import {
 // Templates are rendered HERE at schedule time, not at send time, so
 // outbound_scheduled_messages.body always reflects exactly what was sent.
 
-export type LeadStatus =
-  | "warm_lead" | "booked" | "showed" | "no_show" | "success" | "lost";
+// LeadStatus + the state-machine transition map are defined in the
+// client-safe lib/outbound-stages module so the kanban board and the data
+// layer share one source of truth. Re-exported here so existing imports
+// (`import { LeadStatus } from "@/lib/outbound-leads"`) keep working.
+export type { LeadStatus };
 
 export type MessageKind =
   | "confirmation" | "reminder_24h" | "reminder_1h"
@@ -31,7 +36,8 @@ export type MessageKind =
 
 export interface OutboundLead {
   id: string;
-  phone: string;
+  // Nullable since manual lead entry allows email-only leads (no phone).
+  phone: string | null;
   email: string | null;
   name: string | null;
   status: LeadStatus;
@@ -84,7 +90,7 @@ export type WebsiteBuildStatus =
 
 interface LeadRow {
   id: string;
-  phone: string;
+  phone: string | null;
   email: string | null;
   name: string | null;
   status: LeadStatus;
@@ -240,13 +246,61 @@ export async function upsertLeadFromTypeform(intake: TypeformIntake): Promise<{
   return { lead: normalizeLead(data as LeadRow), isNew: true };
 }
 
+// ---- MANUAL ENTRY ----
+
+// Operator-driven lead creation from the dashboard "Add lead" form. Unlike
+// the Typeform path a manual lead may have no phone (email-only), and the
+// operator decides per-lead whether the SMS recovery drip starts. Dedups by
+// phone then email (reusing the same finders the webhooks use) so adding a
+// lead that already exists is a no-op rather than a unique-violation.
+export async function createLeadManual(input: {
+  phone: string | null;          // already normalized to E.164 by the route, or null
+  email: string | null;
+  name: string | null;
+  typeformFormId: string | null;  // catalog form id the operator picked, or null
+  startSequence: boolean;        // operator checkbox — only honored if a phone exists
+  createdBy: string;             // user id, for the audit event
+}): Promise<{ lead: OutboundLead; isNew: boolean }> {
+  if (!input.phone && !input.email) throw new Error("phone or email required");
+
+  const existing =
+    (input.phone ? await findLeadByPhone(input.phone) : null) ??
+    (input.email ? await findLeadByEmail(input.email) : null);
+  if (existing) return { lead: existing, isNew: false };
+
+  const supabase = getSupabaseAdmin();
+  const { data, error } = await supabase
+    .from("outbound_leads")
+    .insert({
+      phone: input.phone,
+      email: input.email?.toLowerCase() ?? null,
+      name: input.name,
+      typeform_form_id: input.typeformFormId ?? null,
+      status: "warm_lead"
+    })
+    .select("*")
+    .single();
+  if (error) throw new Error(error.message);
+  const lead = normalizeLead(data as LeadRow);
+
+  // Reuse the whitelisted 'form_submitted' event kind (the events table has a
+  // CHECK constraint); the payload source distinguishes it from real intake.
+  await recordEvent(lead.id, "form_submitted", { source: "manual_entry", by: input.createdBy });
+
+  // SMS sequence is only possible with a phone — Blooio chats are keyed by it.
+  if (input.startSequence && lead.phone) await scheduleRecoveryDrip(lead);
+
+  return { lead, isNew: true };
+}
+
 // ---- EVENTS ----
 
 export type EventKind =
   | "form_submitted" | "meeting_booked" | "meeting_canceled"
   | "first_text_sent" | "reminder_24h_sent" | "reminder_1h_sent"
   | "drip_sent" | "marked_no_show" | "marked_showed" | "marked_sold"
-  | "marked_lost" | "sequence_completed" | "transitioned";
+  | "marked_lost" | "sequence_completed" | "transitioned"
+  | "sequence_changed";
 
 export async function recordEvent(
   leadId: string,
@@ -261,18 +315,10 @@ export async function recordEvent(
 }
 
 // ---- STATE MACHINE ----
-
-// Allowed transitions. Anything outside this map is rejected. Keep this
-// table small and obvious; if it grows past a few entries split into
-// per-status helpers.
-const ALLOWED_TRANSITIONS: Record<LeadStatus, LeadStatus[]> = {
-  warm_lead: ["booked", "lost"],
-  booked:    ["showed", "no_show", "warm_lead", "success", "lost"], // success = rep skips ahead
-  showed:    ["success", "lost"],
-  no_show:   ["success", "lost"],
-  success:   [],  // terminal
-  lost:      ["warm_lead"]  // resurrect-from-lost is allowed (rare)
-};
+//
+// ALLOWED_TRANSITIONS + the LeadStatus union live in lib/outbound-stages (a
+// client-safe module) so the kanban board and the data layer share one
+// source of truth. transitionLead enforces the map on every write.
 
 export async function transitionLead(
   leadId: string,
@@ -555,8 +601,10 @@ export async function scheduleEngagementDrip(
 }
 
 // Resolve the Blooio chat id from a lead. For now it's just the lead's
-// phone — Blooio chats are keyed by E.164 contact number.
-export function chatIdForLead(lead: OutboundLead): string {
+// phone — Blooio chats are keyed by E.164 contact number. Null for
+// email-only leads (which never get SMS scheduled, so this is never
+// reached in the send path).
+export function chatIdForLead(lead: OutboundLead): string | null {
   return lead.phone;
 }
 
@@ -565,14 +613,14 @@ export function chatIdForLead(lead: OutboundLead): string {
 // Counts per status — feeds the Funnel KPI strip on the dashboard.
 export async function getLeadStatusCounts(): Promise<Record<LeadStatus, number>> {
   const supabase = getSupabaseAdmin();
-  // One query per status is fine for the count surface (6 statuses);
+  // One query per status is fine for the count surface (7 statuses);
   // group-by-on-the-server would be cleaner but Supabase RPC isn't
-  // worth the indirection for a half-dozen aggregates.
+  // worth the indirection for a handful of aggregates.
   const statuses: LeadStatus[] = [
-    "warm_lead", "booked", "showed", "no_show", "success", "lost"
+    "warm_lead", "booked", "showed", "no_show", "contract", "success", "lost"
   ];
   const counts: Record<LeadStatus, number> = {
-    warm_lead: 0, booked: 0, showed: 0, no_show: 0, success: 0, lost: 0
+    warm_lead: 0, booked: 0, showed: 0, no_show: 0, contract: 0, success: 0, lost: 0
   };
   await Promise.all(statuses.map(async (s) => {
     const { count, error } = await supabase
@@ -743,7 +791,7 @@ export interface QueuedLeadSummary {
   leadId: string;
   scheduledMessageId: string;
   name: string | null;
-  phone: string;
+  phone: string | null;
   status: LeadStatus;
   scheduledFor: string;
   // Time-until in plain English for the UI ("in 3h", "due now", etc.).
@@ -778,21 +826,31 @@ function fmtTimeUntil(iso: string): string {
 //
 // Returns a Map keyed by `${kind}#${sequenceIndex}` so the page can
 // look up each step in O(1).
-export async function getFlowsOverview(): Promise<Map<string, FlowStepBucket>> {
+// `sourceFormId` filters the whole roll-up to one typeform source (null = all
+// sources). Filtering server-side before bucketing keeps the counts AND the
+// queued lists consistent — a client-side filter couldn't, since the
+// sent/failed/canceled counts carry no per-lead rows in `queued`.
+export async function getFlowsOverview(
+  sourceFormId: string | null = null
+): Promise<Map<string, FlowStepBucket>> {
   const supabase = getSupabaseAdmin();
 
-  const { data, error } = await supabase
+  let query = supabase
     .from("outbound_scheduled_messages")
     .select(`
       id, lead_id, kind, sequence_index, status, scheduled_for,
-      outbound_leads!inner ( name, phone, status )
-    `)
-    .order("scheduled_for", { ascending: true });
+      outbound_leads!inner ( name, phone, status, typeform_form_id )
+    `);
+  if (sourceFormId) {
+    query = query.eq("outbound_leads.typeform_form_id", sourceFormId);
+  }
+  const { data, error } = await query.order("scheduled_for", { ascending: true });
   if (error) throw new Error(error.message);
 
   // Shape of the joined row — outbound_leads comes back as an array per
   // Supabase's PostgREST embed semantics, even on a many-to-one. We
   // take [0] for the inner-join case.
+  type JoinedLead = { name: string | null; phone: string | null; status: LeadStatus; typeform_form_id: string | null };
   interface JoinedRow {
     id: string;
     lead_id: string;
@@ -800,10 +858,10 @@ export async function getFlowsOverview(): Promise<Map<string, FlowStepBucket>> {
     sequence_index: number;
     status: "pending" | "sending" | "sent" | "failed" | "canceled";
     scheduled_for: string;
-    outbound_leads: { name: string | null; phone: string; status: LeadStatus } | Array<{ name: string | null; phone: string; status: LeadStatus }> | null;
+    outbound_leads: JoinedLead | JoinedLead[] | null;
   }
 
-  function leadOf(r: JoinedRow): { name: string | null; phone: string; status: LeadStatus } | null {
+  function leadOf(r: JoinedRow): JoinedLead | null {
     if (!r.outbound_leads) return null;
     return Array.isArray(r.outbound_leads) ? (r.outbound_leads[0] ?? null) : r.outbound_leads;
   }
@@ -841,6 +899,92 @@ export async function getFlowsOverview(): Promise<Map<string, FlowStepBucket>> {
   }
 
   return buckets;
+}
+
+// ---- FLOW BOARD (Flows tab → "Flow board" view) ----
+//
+// Each lead currently being nurtured, grouped by its active SMS sequence. A
+// lead's flow is derived from the kinds of its PENDING scheduled messages
+// (recovery_drip → recovery, engagement_drip → engagement, confirmation /
+// reminder_* → booking). Leads with no pending sequence messages (terminal or
+// idle) don't appear. Powers OutboundSequenceBoard.
+
+export interface FlowLeadCard {
+  leadId: string;
+  name: string | null;
+  phone: string;
+  email: string | null;
+  status: LeadStatus;
+  typeformFormId: string | null;
+  flow: FlowKey;
+  nextScheduledFor: string | null;  // soonest pending send — the "next touch"
+  pendingCount: number;
+}
+
+export async function getLeadsByFlow(): Promise<Record<FlowKey, FlowLeadCard[]>> {
+  const supabase = getSupabaseAdmin();
+  const { data, error } = await supabase
+    .from("outbound_scheduled_messages")
+    .select(`
+      lead_id, kind, scheduled_for,
+      outbound_leads!inner ( id, name, phone, email, status, typeform_form_id )
+    `)
+    .eq("status", "pending")
+    .order("scheduled_for", { ascending: true });
+  if (error) throw new Error(error.message);
+
+  interface JoinedLead {
+    id: string; name: string | null; phone: string;
+    email: string | null; status: LeadStatus; typeform_form_id: string | null;
+  }
+  interface JoinedRow {
+    lead_id: string;
+    kind: MessageKind;
+    scheduled_for: string;
+    outbound_leads: JoinedLead | JoinedLead[] | null;
+  }
+  const leadOf = (r: JoinedRow): JoinedLead | null =>
+    !r.outbound_leads
+      ? null
+      : (Array.isArray(r.outbound_leads) ? (r.outbound_leads[0] ?? null) : r.outbound_leads);
+
+  // Higher-priority flow wins if a lead somehow has pending of more than one.
+  const PRIORITY: FlowKey[] = ["booking", "recovery", "engagement"];
+  const byLead = new Map<string, FlowLeadCard>();
+  for (const r of (data ?? []) as unknown as JoinedRow[]) {
+    const flow = kindToFlow(r.kind);
+    if (!flow) continue;
+    const lead = leadOf(r);
+    if (!lead) continue;
+    const existing = byLead.get(r.lead_id);
+    if (existing) {
+      existing.pendingCount += 1;
+      if (PRIORITY.indexOf(flow) < PRIORITY.indexOf(existing.flow)) existing.flow = flow;
+      continue;
+    }
+    byLead.set(r.lead_id, {
+      leadId: r.lead_id,
+      name: lead.name,
+      phone: lead.phone,
+      email: lead.email,
+      status: lead.status,
+      typeformFormId: lead.typeform_form_id ?? null,
+      flow,
+      nextScheduledFor: r.scheduled_for,  // rows ordered asc → first seen is soonest
+      pendingCount: 1
+    });
+  }
+
+  const out: Record<FlowKey, FlowLeadCard[]> = { booking: [], recovery: [], engagement: [] };
+  for (const card of byLead.values()) out[card.flow].push(card);
+  for (const k of Object.keys(out) as FlowKey[]) {
+    out[k].sort((a, b) => {
+      const av = a.nextScheduledFor ? +new Date(a.nextScheduledFor) : Infinity;
+      const bv = b.nextScheduledFor ? +new Date(b.nextScheduledFor) : Infinity;
+      return av - bv;
+    });
+  }
+  return out;
 }
 
 // Re-export for callers — keeps the consumer's import list short.

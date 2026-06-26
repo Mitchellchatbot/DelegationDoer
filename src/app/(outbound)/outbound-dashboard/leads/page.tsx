@@ -224,7 +224,7 @@ export default async function OutboundLeadsPage({
         <ViewToggle active="sequences" />
         <div className="flex items-center justify-end gap-2">
           <OutboundSourceSelect forms={forms} value={sourceFilter ?? "all"} />
-          <AddLeadButton />
+          <AddLeadButton forms={forms} />
           <OutboundTypeformFormsDrawer initialForms={forms} unknownFormIds={[]} />
         </div>
         <OutboundFlowsView buckets={buckets} templates={templates} />
@@ -251,7 +251,7 @@ export default async function OutboundLeadsPage({
         <Hero view={view} />
         <ViewToggle active="flow" />
         <div className="flex items-center justify-end gap-2">
-          <AddLeadButton />
+          <AddLeadButton forms={forms} />
           <OutboundTypeformFormsDrawer initialForms={forms} unknownFormIds={unknownFormIds} />
         </div>
         {cards.length === 0 ? <NoLeadsHint /> : <OutboundSequenceBoard cards={cards} forms={forms} />}

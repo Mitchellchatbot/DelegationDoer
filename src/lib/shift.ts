@@ -9,7 +9,7 @@
 
 import type { User } from "@/lib/types";
 
-export const DAY_KEYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"] as const;
+const DAY_KEYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"] as const;
 export type DayKey = typeof DAY_KEYS[number];
 
 export const DEFAULT_TZ = "America/New_York";

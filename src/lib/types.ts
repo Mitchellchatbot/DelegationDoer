@@ -43,6 +43,11 @@ export interface User {
     "mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun",
     { start: string; end: string } | null
   >>;
+  // Flat "Same every weekday" shift times (HH:MM in workTimezone), used when
+  // weeklySchedule is empty. Populated by /api/users; may be undefined when a
+  // user object comes from a source that doesn't select these columns.
+  workHoursStart?: string | null;
+  workHoursEnd?: string | null;
   // Optional explicit reporting line. When set, the OrgChart nests this
   // user under `managerId` (used for team-lead trees inside a dept).
   // When null/undefined, the renderer falls back to the dept head, which

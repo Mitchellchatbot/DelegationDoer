@@ -233,6 +233,35 @@ function overnightEndMinutes(
   return e;
 }
 
+// Absolute UTC instant of the user's shift END for the shift anchored on
+// `anchor`'s calendar date (observed in their tz). Unifies both editor modes
+// (weekly_schedule wins, else flat work_hours_start/end Mon–Fri), is
+// timezone-correct, and overnight-aware: a 19:00–03:00 shift ends at 03:00 the
+// NEXT day. Returns null when there's no shift that day (genuine day off / no
+// hours on file) so the caller can decide its own fallback.
+export function shiftEndInstant(args: {
+  anchor: Date;
+  tz: string | null | undefined;
+  weeklySchedule?: Partial<Record<DayKey, { start: string; end: string } | null>>;
+  flatStart?: string | null;
+  flatEnd?: string | null;
+}): Date | null {
+  const tz = args.tz || "UTC";
+  const dayKey = dayKeyInTz(args.anchor, tz);
+  const block = blockForDay(dayKey, {
+    weeklySchedule: args.weeklySchedule,
+    flatStart: args.flatStart,
+    flatEnd: args.flatEnd
+  });
+  if (!block) return null;
+  const s = hmToMinutes(block.start);
+  const e = hmToMinutes(block.end);
+  if (s == null || e == null) return null;
+  // Overnight (end <= start): the end falls on the following calendar day.
+  const endAnchor = e <= s ? new Date(args.anchor.getTime() + 86_400_000) : args.anchor;
+  return hhmmInTzToUtc(block.end, tz, endAnchor);
+}
+
 // Scheduled hours for the shift currently in effect, anchored to the user's
 // timezone and overnight-aware. The post-midnight tail of an overnight
 // shift (e.g. 12–3 AM Saturday for a 7 PM–3 AM Fri shift) belongs to the

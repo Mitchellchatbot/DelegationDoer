@@ -4,6 +4,8 @@ import { publish, type InboxEvent } from "@/lib/inbox-event-bus";
 import { isDuplicateMessage } from "@/lib/missive-socket";
 import { fanOutInboxEvent } from "@/lib/email-notifications";
 import { autoLabelByClients } from "@/lib/auto-label-by-client";
+import { loadClientMatcher } from "@/lib/client-thread-match";
+import { markClientWeeklyUpdateReported } from "@/lib/eod-digest";
 
 export const dynamic = "force-dynamic";
 
@@ -31,6 +33,42 @@ function verify(rawBody: string, sig: string | null): boolean {
   }
 }
 
+// Split a comma/semicolon-joined address list into individual entries.
+// Mirrors auto-label-by-client.ts / missiveclone's normalizeAddrList.
+function splitAddrs(s: string | null | undefined): string[] {
+  if (!s) return [];
+  return s.split(/[,;]\s*/).map((x) => x.trim()).filter(Boolean);
+}
+
+// Resolve recipient addresses to clients and clear each from the
+// "Who needs an email" card. Recipients only (not the sender) — the
+// outbound email went TO the client.
+async function markWeeklyUpdateRecipients(
+  addrLists: Array<string | null | undefined>,
+  ts: number
+): Promise<void> {
+  const addrs = addrLists.flatMap((l) => splitAddrs(l));
+  if (addrs.length === 0) return;
+
+  const matcher = await loadClientMatcher();
+  const matched = new Map<string, { id: string; name: string }>();
+  for (const a of addrs) {
+    for (const hit of matcher.matchAll(a)) matched.set(hit.id, hit);
+  }
+  if (matched.size === 0) return;
+
+  const sentAt = new Date(ts).toISOString();
+  for (const client of matched.values()) {
+    const stamped = await markClientWeeklyUpdateReported(client.name, sentAt);
+    if (stamped > 0) {
+      console.log("[missive-webhook] weekly-update cleared client", {
+        client: client.name,
+        rows: stamped
+      });
+    }
+  }
+}
+
 export async function POST(req: NextRequest) {
   const rawBody = await req.text();
   const sig = req.headers.get("x-missive-signature");
@@ -54,6 +92,29 @@ export async function POST(req: NextRequest) {
   }
   if (!payload.event || !payload.account_id || !payload.thread_id) {
     return NextResponse.json({ error: "missing fields" }, { status: 400 });
+  }
+  // Weekly-SEO-update marker (set by the inbox composer checkbox). Handle this
+  // BEFORE the dedup gate below: the socket bridge fires for the same send but
+  // never carries `weekly_update`/recipients, and it usually wins the race —
+  // which would register the message_id and cause this webhook (the only
+  // carrier of the flag) to be deduped away. Running it here, independent of
+  // dedup, makes the card-clear reliable. The DB stamp is idempotent, so even
+  // if this webhook were delivered twice it does no extra work. Only acts when
+  // the flag is present, so normal inbound/outbound mail is untouched.
+  if (payload.event === "message:new") {
+    const wu = payload as Partial<InboxEvent> & {
+      to_addrs?: string | null;
+      cc_addrs?: string | null;
+      weekly_update?: boolean;
+    };
+    if (wu.weekly_update === true) {
+      void markWeeklyUpdateRecipients(
+        [wu.to_addrs, wu.cc_addrs],
+        payload.ts ?? Date.now()
+      ).catch((err) => {
+        console.error("[missive-webhook] weekly-update", err);
+      });
+    }
   }
   // Dedup against the socket bridge. When both paths deliver the same
   // message_id within 30s, suppress the second one so the bus doesn't

@@ -395,3 +395,34 @@ export async function markTasksReportedFromDraft(draftId: string, sentAt: string
 
   return stamped;
 }
+
+// Marks ALL of a client's still-pending EOD client-work as reported, keyed by
+// client name. Used when a weekly SEO update is sent straight from the inbox
+// composer (flagged via missiveclone's webhook) rather than through the EOD
+// approval composer — so the client drops off the "Who needs an email" card
+// exactly as if an EOD digest had been sent for them.
+//
+// Only touches rows that are still unreported AND not dismissed, so it's
+// idempotent: redundant webhook deliveries re-stamp nothing. Returns the
+// number of rows stamped (0 when the client had no pending work).
+export async function markClientWeeklyUpdateReported(
+  clientName: string,
+  sentAt: string
+): Promise<number> {
+  const supabase = getSupabaseAdmin();
+  const { data, error } = await supabase
+    .from("eod_client_work")
+    .update({ reported_to_client_at: sentAt })
+    .eq("client_name", clientName)
+    .is("reported_to_client_at", null)
+    .is("dismissed_at", null)
+    .select("id");
+  if (error) {
+    console.error("[eod-digest] mark client weekly-update reported failed", {
+      clientName,
+      err: error.message
+    });
+    return 0;
+  }
+  return (data ?? []).length;
+}

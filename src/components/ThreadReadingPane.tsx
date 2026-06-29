@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { Mail, Loader2, AlertCircle } from "lucide-react";
 import { ThreadConversation, type ThreadDetailData } from "@/components/ThreadConversation";
 import { useInboxSplit } from "@/components/InboxSplit";
+import { fetchThread, getCachedThread } from "@/lib/thread-cache";
 
 // The right-hand reading pane in the inbox split view. The selected thread comes
 // from InboxSplit's client-local context (NOT the router), so opening a thread
@@ -27,18 +28,19 @@ export function ThreadReadingPane() {
       return;
     }
     const ac = new AbortController();
-    setState({ status: "loading" });
-    fetch(
-      `/api/inboxes/threads/${encodeURIComponent(threadId)}?account=${encodeURIComponent(accountId)}`,
-      { signal: ac.signal }
-    )
-      .then(async (r) => {
-        if (!r.ok) {
-          const j = await r.json().catch(() => ({}));
-          throw new Error(j.error || `Couldn't load thread (${r.status})`);
-        }
-        return (await r.json()) as ThreadDetailData;
-      })
+
+    // Stale-while-revalidate: if we've already loaded this thread this session
+    // (or a hover prefetch resolved it), show it INSTANTLY — no spinner — then
+    // refresh in the background. Otherwise show the loading spinner. Either way
+    // the fetch is deduped against any in-flight prefetch for the same thread.
+    const cached = getCachedThread(threadId, accountId);
+    if (cached) {
+      setState({ status: "ready", data: cached });
+    } else {
+      setState({ status: "loading" });
+    }
+
+    fetchThread(threadId, accountId, ac.signal)
       .then((data) => {
         setState({ status: "ready", data });
         // Opening = read: flip the list's unread style locally (no SSR refresh).
@@ -46,6 +48,9 @@ export function ThreadReadingPane() {
       })
       .catch((err: unknown) => {
         if (err instanceof DOMException && err.name === "AbortError") return;
+        // A background revalidation failure shouldn't blow away content we're
+        // already showing from cache — only surface errors on a cold open.
+        if (cached) return;
         setState({
           status: "error",
           message: err instanceof Error ? err.message : "Couldn't load thread"

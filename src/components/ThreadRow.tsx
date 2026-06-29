@@ -6,6 +6,7 @@ import { useMemo } from "react";
 import { Inbox, MessageSquare, ExternalLink } from "lucide-react";
 import { cn, initials as nameInitials } from "@/lib/utils";
 import { useInboxSplit } from "@/components/InboxSplit";
+import { prefetchThread } from "@/lib/thread-cache";
 import type { MissiveThread } from "@/lib/missive-client";
 import { InboxFavicon } from "./InboxFavicon";
 
@@ -102,6 +103,13 @@ export function ThreadRow({ thread, href, unread, index, accountId, threadId, mi
     select(accountId, threadId);
   }
 
+  // Warm the thread cache before the click lands. Hover starts it early;
+  // mousedown (a few ms ahead of the click) covers fast clickers; focus covers
+  // keyboard nav. The cache dedupes, so calling this repeatedly is cheap.
+  function warm() {
+    prefetchThread(threadId, accountId);
+  }
+
   const avatarTone = useMemo(
     () => AVATAR_TONES[hashStringToIndex(senderRaw || "?", AVATAR_TONES.length)],
     [senderRaw]
@@ -122,6 +130,9 @@ export function ThreadRow({ thread, href, unread, index, accountId, threadId, mi
       <Link
         href={href}
         onClick={openInPane}
+        onMouseEnter={warm}
+        onMouseDown={warm}
+        onFocus={warm}
         aria-current={selected ? "true" : undefined}
         className={cn(
           "relative flex items-center gap-3 px-3 py-2.5 border-b border-slate-100/80",

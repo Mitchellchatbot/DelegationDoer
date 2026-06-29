@@ -55,9 +55,17 @@ export async function loadThreadDetail(
     return { ok: false, status: 403, error: "Access denied" };
   }
 
+  // getThread and listAccounts are independent clone round-trips, so fire them
+  // together instead of back-to-back — this drops one full RTT off the critical
+  // path. listAccounts is request-memoized (see missive-client), so the copy
+  // visibleAccountIdsFor may already have fetched is reused, not re-requested.
   let detail;
+  let allAccounts;
   try {
-    detail = await getThread(threadId);
+    [detail, allAccounts] = await Promise.all([
+      getThread(threadId),
+      listAccounts().catch(() => [])
+    ]);
   } catch (err) {
     return {
       ok: false,
@@ -99,9 +107,8 @@ export async function loadThreadDetail(
     : null;
 
   // The connected accounts this user may send FROM (access-scoped), surfaced so
-  // the reply composer can offer a "From" selector. We already have `visibleIds`
-  // above, so reuse one listAccounts() call for both this and `ownEmail`.
-  const allAccounts = await listAccounts().catch(() => []);
+  // the reply composer can offer a "From" selector. `allAccounts` was fetched in
+  // parallel with the thread above; reuse it for both this and `ownEmail`.
   const fromAccounts = (visibleIds === null
     ? allAccounts
     : allAccounts.filter((a) => visibleIds.has(a.id))

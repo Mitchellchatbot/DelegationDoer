@@ -7,6 +7,8 @@
 //   MISSIVE_API_TOKEN  — long-lived JWT issued by the clone for our service
 //                        account. Pull from missive UI's localStorage for now.
 
+import { cache } from "react";
+
 export interface MissiveAccount {
   id: string;
   email: string;
@@ -127,14 +129,20 @@ async function missiveFetch<T>(path: string, init: RequestInit = {}): Promise<T>
   return (await res.json()) as T;
 }
 
-export async function listAccounts(): Promise<MissiveAccount[]> {
-  // The clone returns { accounts: [...] }. If you've extended it, adjust here.
-  const data = await missiveFetch<{ accounts: MissiveAccount[] }>("/api/accounts");
-  return (data.accounts ?? []).map((a) => ({
-    ...a,
-    last_synced_at: a.last_synced_at ? toIsoString(a.last_synced_at) : null
-  }));
-}
+// Request-scoped memoization: the account list is stable within a single server
+// request, so the copies fetched by visibleAccountIdsFor and loadThreadDetail
+// (and any other caller in the same request) collapse to ONE clone round-trip.
+// React's cache() is keyed by args; listAccounts takes none, so one call/request.
+export const listAccounts = cache(
+  async function listAccounts(): Promise<MissiveAccount[]> {
+    // The clone returns { accounts: [...] }. If you've extended it, adjust here.
+    const data = await missiveFetch<{ accounts: MissiveAccount[] }>("/api/accounts");
+    return (data.accounts ?? []).map((a) => ({
+      ...a,
+      last_synced_at: a.last_synced_at ? toIsoString(a.last_synced_at) : null
+    }));
+  }
+);
 
 export async function listTeamMembers(): Promise<MissiveTeamMember[]> {
   const data = await missiveFetch<{ members: MissiveTeamMember[] }>("/api/auth/team");

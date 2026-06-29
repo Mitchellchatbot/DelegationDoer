@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import * as Dialog from "@radix-ui/react-dialog";
+import { motion, AnimatePresence } from "framer-motion";
 import {
   Image as ImageIcon,
   Music,
@@ -11,7 +13,8 @@ import {
   FileText,
   FileArchive,
   File as FileIcon,
-  UploadCloud
+  UploadCloud,
+  Download
 } from "lucide-react";
 import { toast } from "sonner";
 import type { TaskMedia } from "@/lib/types";
@@ -51,6 +54,9 @@ export function MediaPicker({
   const inputRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
   const [dragOver, setDragOver] = useState(false);
+  // Which attachment (if any) is open in the full-screen viewer. A single
+  // overlay is rendered here in the parent rather than one per chip.
+  const [preview, setPreview] = useState<TaskMedia | null>(null);
   // Drag events fire many times as the pointer crosses child elements.
   // Counter avoids the dropzone flickering between active/idle states
   // while the pointer is still inside the box.
@@ -158,10 +164,17 @@ export function MediaPicker({
       {value.length > 0 && (
         <div className="flex flex-wrap gap-2">
           {value.map((m, i) => (
-            <MediaChip key={`${m.url}-${i}`} media={m} onRemove={() => remove(i)} compact={compact} />
+            <MediaChip
+              key={`${m.url}-${i}`}
+              media={m}
+              onRemove={() => remove(i)}
+              onOpen={() => setPreview(m)}
+              compact={compact}
+            />
           ))}
         </div>
       )}
+      <MediaLightbox media={preview} onClose={() => setPreview(null)} />
       <div
         onDragEnter={onDragEnter}
         onDragOver={onDragOver}
@@ -263,26 +276,37 @@ function iconFor(cat: Category) {
 }
 
 function MediaChip({
-  media, onRemove, compact
+  media, onRemove, onOpen, compact
 }: {
   media: TaskMedia;
   onRemove: () => void;
+  onOpen: () => void;
   compact?: boolean;
 }) {
   const cat = categorize(media);
   const labelText = media.name ?? media.url.split("/").pop() ?? "file";
+  // The remove "×" sits on top of the clickable chip; stop the click from
+  // also opening the viewer.
+  const handleRemove = (e: React.MouseEvent) => { e.stopPropagation(); onRemove(); };
   if (cat === "image") {
     return (
       <div className="relative">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          src={media.url}
-          alt={labelText}
-          className={(compact ? "h-14 w-14" : "h-16 w-16") + " object-cover rounded-lg border border-slate-200"}
-        />
         <button
           type="button"
-          onClick={onRemove}
+          onClick={onOpen}
+          aria-label={`View ${labelText}`}
+          className="block cursor-pointer rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={media.url}
+            alt={labelText}
+            className={(compact ? "h-14 w-14" : "h-16 w-16") + " object-cover rounded-lg border border-slate-200 hover:opacity-90 transition-opacity"}
+          />
+        </button>
+        <button
+          type="button"
+          onClick={handleRemove}
           aria-label="Remove"
           className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-black/70 text-white grid place-items-center hover:bg-black"
         >
@@ -294,16 +318,23 @@ function MediaChip({
   if (cat === "video") {
     return (
       <div className="relative">
-        <video
-          src={media.url}
-          className={(compact ? "h-14 w-14" : "h-16 w-16") + " object-cover rounded-lg border border-slate-200 bg-slate-900"}
-          muted
-          playsInline
-          preload="metadata"
-        />
         <button
           type="button"
-          onClick={onRemove}
+          onClick={onOpen}
+          aria-label={`View ${labelText}`}
+          className="block cursor-pointer rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+        >
+          <video
+            src={media.url}
+            className={(compact ? "h-14 w-14" : "h-16 w-16") + " object-cover rounded-lg border border-slate-200 bg-slate-900 hover:opacity-90 transition-opacity"}
+            muted
+            playsInline
+            preload="metadata"
+          />
+        </button>
+        <button
+          type="button"
+          onClick={handleRemove}
           aria-label="Remove"
           className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-black/70 text-white grid place-items-center hover:bg-black"
         >
@@ -315,22 +346,134 @@ function MediaChip({
   const Icon = iconFor(cat);
   return (
     <div
+      role="button"
+      tabIndex={0}
+      onClick={onOpen}
+      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpen(); } }}
+      title={`View ${labelText}`}
       className={
         (compact ? "px-2 py-1.5 text-[11px]" : "px-2.5 py-1.5 text-xs") +
-        " inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white"
+        " inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white cursor-pointer hover:bg-slate-50 transition-colors outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
       }
     >
       <Icon className="w-3.5 h-3.5 text-slate-500" />
-      <span className="max-w-[160px] truncate" title={labelText}>{labelText}</span>
+      <span className="max-w-[160px] truncate">{labelText}</span>
       <button
         type="button"
-        onClick={onRemove}
+        onClick={handleRemove}
         aria-label="Remove"
         className="ml-1 text-slate-400 hover:text-slate-700"
       >
         <X className="w-3 h-3" />
       </button>
     </div>
+  );
+}
+
+// Full-screen, in-app viewer for a single attachment. Built on the same
+// Radix Dialog + framer-motion stack as the compose modal so that when it
+// opens while nested inside that modal, Esc / focus trapping stack
+// correctly — Esc dismisses this viewer first, not the whole composer.
+function MediaLightbox({ media, onClose }: { media: TaskMedia | null; onClose: () => void }) {
+  const cat = media ? categorize(media) : "other";
+  const labelText = media ? (media.name ?? media.url.split("/").pop() ?? "file") : "";
+  return (
+    <Dialog.Root open={media != null} onOpenChange={(v) => { if (!v) onClose(); }}>
+      <AnimatePresence>
+        {media && (
+          <Dialog.Portal forceMount>
+            <Dialog.Overlay asChild>
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.18 }}
+                className="fixed inset-0 z-[60] bg-slate-950/80 backdrop-blur-sm"
+              />
+            </Dialog.Overlay>
+            <Dialog.Content
+              aria-describedby={undefined}
+              onClick={onClose}
+              className="fixed inset-0 z-[60] outline-none flex flex-col"
+            >
+              <Dialog.Title className="sr-only">{labelText}</Dialog.Title>
+              <header
+                className="flex items-center justify-between gap-3 px-4 py-3 text-white"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <span className="text-sm font-medium truncate" title={labelText}>{labelText}</span>
+                <div className="flex items-center gap-2 shrink-0">
+                  <a
+                    href={media.url}
+                    download={media.name}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-full text-xs font-medium bg-white/10 hover:bg-white/20 transition-colors"
+                  >
+                    <Download className="w-3.5 h-3.5" /> Download
+                  </a>
+                  <Dialog.Close asChild>
+                    <button
+                      type="button"
+                      aria-label="Close"
+                      className="p-1.5 rounded-lg hover:bg-white/15 transition-colors"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </Dialog.Close>
+                </div>
+              </header>
+              <motion.div
+                initial={{ opacity: 0, scale: 0.97 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.97 }}
+                transition={{ duration: 0.2, ease: [0.2, 0.8, 0.2, 1] }}
+                onClick={(e) => e.stopPropagation()}
+                className="flex-1 min-h-0 flex items-center justify-center px-4 pb-6"
+              >
+                {cat === "image" ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={media.url}
+                    alt={labelText}
+                    className="max-h-[85vh] max-w-[90vw] object-contain rounded-lg"
+                  />
+                ) : cat === "video" ? (
+                  <video
+                    src={media.url}
+                    controls
+                    autoPlay
+                    className="max-h-[85vh] max-w-[90vw] rounded-lg bg-black"
+                  />
+                ) : cat === "audio" ? (
+                  <audio src={media.url} controls autoPlay className="w-[min(90vw,28rem)]" />
+                ) : cat === "pdf" ? (
+                  <iframe
+                    src={media.url}
+                    title={labelText}
+                    className="w-[90vw] h-[85vh] rounded-lg bg-white border-0"
+                  />
+                ) : (
+                  <div className="flex flex-col items-center gap-3 text-white/90">
+                    {(() => { const Icon = iconFor(cat); return <Icon className="w-12 h-12 text-white/70" />; })()}
+                    <span className="text-sm">{labelText}</span>
+                    <a
+                      href={media.url}
+                      download={media.name}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-white/10 hover:bg-white/20 transition-colors"
+                    >
+                      <Download className="w-3.5 h-3.5" /> Open / Download
+                    </a>
+                  </div>
+                )}
+              </motion.div>
+            </Dialog.Content>
+          </Dialog.Portal>
+        )}
+      </AnimatePresence>
+    </Dialog.Root>
   );
 }
 

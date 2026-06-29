@@ -7,6 +7,7 @@ import { useCurrentUser } from "@/lib/user-context";
 import { useTeam } from "@/lib/team-context";
 import { rankCandidates, buildLoadSignals, type RankedCandidate } from "@/lib/skill-rank";
 import { findFirstImage, requestAttachmentAnalysis, buildAnalyzeNotice } from "@/lib/attachment-analysis";
+import { todayShiftWindow, parseHHMM, DEFAULT_SHIFT_END, DAY_KEYS } from "@/lib/shift";
 import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Sparkles, Wand2, Crown, ShieldCheck, ChevronDown, ChevronRight, Mail, FolderOpen, Server, Link as LinkIcon, KeyRound, MessageSquare, Zap, ScanText, AlertTriangle } from "lucide-react";
@@ -323,6 +324,27 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel, initialValues }: 
     return deadlineFromEstimate(estimate, u);
   }, [assigneeId, topPick?.userId, estimate]);
 
+  // "Default EOD" — set the deadline time to the assignee's end of day,
+  // reusing the canonical shift logic (weeklySchedule end, fallback 18:00 NY).
+  // Keeps any date the user already picked; otherwise uses the auto-computed
+  // deadline's date, else today.
+  function setDeadlineToEod() {
+    const u = users.find((x) => x.id === (assigneeId || topPick?.userId));
+    const base = dueDateOverride
+      ? new Date(dueDateOverride)
+      : computedDueDate
+        ? new Date(computedDueDate)
+        : new Date();
+    if (Number.isNaN(base.getTime())) return;
+    // todayShiftWindow only reads now.dayKey, so a minimal object with the
+    // target weekday reuses its weeklySchedule lookup + default fallback.
+    const dayKey = DAY_KEYS[base.getDay()];
+    const win = u ? todayShiftWindow(u, { dayKey, hh: 0, mm: 0, ymd: "" }) : null;
+    const end = parseHHMM(win?.end ?? DEFAULT_SHIFT_END)!;
+    base.setHours(end.hh, end.mm, 0, 0);
+    setDueDateOverride(isoToLocalInput(base.toISOString()));
+  }
+
   async function askAI() {
     if (aiThinking) return;
     if (!title.trim() && !description.trim()) {
@@ -560,20 +582,30 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel, initialValues }: 
           <div className="col-span-2">
             <div className="flex items-center justify-between">
               <label className="label">Deadline</label>
-              {dueDateOverride ? (
+              <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => setDueDateOverride("")}
+                  onClick={setDeadlineToEod}
                   className="text-[11px] text-muted hover:text-accent transition-colors"
-                  title="Clear override — use the auto-suggested deadline below"
+                  title="Set the deadline time to end of day (assignee's shift end)"
                 >
-                  Use suggested
+                  Default EOD
                 </button>
-              ) : (
-                <span className="text-[11px] text-muted">
-                  leave blank to auto-set from estimate
-                </span>
-              )}
+                {dueDateOverride ? (
+                  <button
+                    type="button"
+                    onClick={() => setDueDateOverride("")}
+                    className="text-[11px] text-muted hover:text-accent transition-colors"
+                    title="Clear override — use the auto-suggested deadline below"
+                  >
+                    Use suggested
+                  </button>
+                ) : (
+                  <span className="text-[11px] text-muted">
+                    leave blank to auto-set from estimate
+                  </span>
+                )}
+              </div>
             </div>
             <input
               type="datetime-local"

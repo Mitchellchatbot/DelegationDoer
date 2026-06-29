@@ -55,6 +55,10 @@ export function ComposeButton({
   // <input type="datetime-local"> value: "YYYY-MM-DDTHH:mm" (no seconds,
   // no zone). We convert to ISO at submit time.
   const [sendAtLocal, setSendAtLocal] = useState("");
+  // "Mark as Weekly SEO Update" — when on, the send is flagged so DD clears
+  // the recipient client from the "Who needs an email" card (avoids the
+  // direct-vs-EOD double-email overlap). Sent through /api/inboxes/compose.
+  const [weeklyUpdate, setWeeklyUpdate] = useState(false);
   // Forwarded to /api/inboxes/compose as attachmentUrls; the route
   // fetches each URL and re-forwards as multipart files[] to the missive
   // clone. Works for scheduled sends too — the clone stashes them and
@@ -87,6 +91,7 @@ export function ComposeButton({
     setShowCc(false);
     setScheduleOpen(false);
     setSendAtLocal("");
+    setWeeklyUpdate(false);
     setAttachments([]);
     setMaximized(false);
     // Forget the draft id so the next Compose starts a fresh draft. The
@@ -263,6 +268,7 @@ export function ComposeButton({
           // Lets the compose route clear this draft after a successful send.
           ...(draftIdRef.current ? { draftId: draftIdRef.current } : {}),
           ...(sendAtISO ? { sendAt: sendAtISO } : {}),
+          ...(weeklyUpdate ? { weeklyUpdate: true } : {}),
           ...(attachments.length > 0 ? { attachmentUrls: attachments } : {})
         })
       });
@@ -493,6 +499,21 @@ export function ComposeButton({
                         min={new Date(Date.now() + 60_000).toISOString().slice(0, 16)}
                       />
                     )}
+                    <button
+                      type="button"
+                      onClick={() => setWeeklyUpdate((v) => !v)}
+                      aria-pressed={weeklyUpdate}
+                      className={cn(
+                        "inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-full text-[11px] font-medium border transition-colors",
+                        weeklyUpdate
+                          ? "bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100"
+                          : "bg-white text-ink/65 border-slate-200 hover:text-ink hover:border-slate-300"
+                      )}
+                      title="Mark as a weekly SEO update — clears this client from the &quot;Who needs an email&quot; list"
+                    >
+                      <Check className="w-3 h-3" />
+                      Weekly SEO Update
+                    </button>
                   </div>
 
                   <div className="flex items-center gap-2 ml-auto">

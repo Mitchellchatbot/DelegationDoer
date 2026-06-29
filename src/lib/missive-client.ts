@@ -516,6 +516,11 @@ export interface ComposeArgs {
   // The clone stores it on the message; touchpoint-sync then excludes it so
   // a mass send doesn't reset every client's "last contacted" status.
   automated?: boolean;
+  // Marks this send as a weekly SEO update. The clone stores it and echoes
+  // it back in the message:new webhook with the recipients, so DD clears the
+  // client from the "Who needs an email" card. Distinct from `automated`:
+  // a weekly update is a real touchpoint, just one that also reports EOD work.
+  weeklyUpdate?: boolean;
 }
 
 export async function composeNewThread(args: ComposeArgs): Promise<{
@@ -536,6 +541,7 @@ export async function composeNewThread(args: ComposeArgs): Promise<{
   };
   if (args.sendAtMs) payload.send_at = args.sendAtMs;
   if (args.automated) payload.automated = true;
+  if (args.weeklyUpdate) payload.weekly_update = true;
   const form = new FormData();
   form.append("payload", JSON.stringify(payload));
   // Attachments are forwarded for both immediate and scheduled sends; the

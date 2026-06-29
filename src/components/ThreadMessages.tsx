@@ -248,7 +248,10 @@ export function ThreadMessages({
 
 function RecipientPill({ label, addrs }: { label: "to" | "cc"; addrs: string[] }) {
   return (
-    <span className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-200/60">
+    <span
+      className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-200/60"
+      title={addrs.join("\n")}
+    >
       <SendHorizontal className="w-3 h-3" />
       <span className="text-slate-500 mr-0.5">{label}</span>
       <span className="truncate max-w-[220px]">

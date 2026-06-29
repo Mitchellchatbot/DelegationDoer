@@ -88,7 +88,12 @@ export async function POST(req: NextRequest) {
       bodyText,
       bodyHtml: typeof body.bodyHtml === "string" ? body.bodyHtml : undefined,
       sendAtMs,
-      attachments
+      attachments,
+      // When set, the clone echoes weekly_update back in the message:new
+      // webhook so DD clears the recipient client from the "Who needs an
+      // email" card. Covers immediate + scheduled (the clone carries the
+      // flag through scheduled_messages).
+      weeklyUpdate: body.weeklyUpdate === true
     });
 
     // If this send came from a saved compose draft, clear it now. Best-effort

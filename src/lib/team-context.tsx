@@ -57,6 +57,11 @@ export function TeamProvider({ children }: { children: React.ReactNode }) {
               isAdmin: u.isAdmin === true,
               workTimezone: (u.workTimezone as string | null) ?? null,
               weeklySchedule: (u.weeklySchedule as User["weeklySchedule"]) ?? {},
+              // Flat "Same every weekday" shift times — this whitelist drops
+              // anything not listed (see managerId note below), so the New task
+              // EOD helper needs these mapped through explicitly.
+              workHoursStart: (u.workHoursStart as string | null) ?? null,
+              workHoursEnd: (u.workHoursEnd as string | null) ?? null,
               // Manager-tree fields were getting dropped here, so
               // assignableTargets()'s `u.managerId === actor.id`
               // check always saw undefined and team-leads (workers

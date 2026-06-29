@@ -7,10 +7,10 @@ import { useCurrentUser } from "@/lib/user-context";
 import { useTeam } from "@/lib/team-context";
 import { rankCandidates, buildLoadSignals, type RankedCandidate } from "@/lib/skill-rank";
 import { findFirstImage, requestAttachmentAnalysis, buildAnalyzeNotice } from "@/lib/attachment-analysis";
-import { todayShiftWindow, parseHHMM, DEFAULT_SHIFT_END, DAY_KEYS } from "@/lib/shift";
+import { shiftEndInstant } from "@/lib/work-hours";
 import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Sparkles, Wand2, Crown, ShieldCheck, ChevronDown, ChevronRight, Mail, FolderOpen, Server, Link as LinkIcon, KeyRound, MessageSquare, Zap, ScanText, AlertTriangle } from "lucide-react";
+import { Sparkles, Wand2, Crown, ShieldCheck, ChevronDown, ChevronRight, Mail, FolderOpen, Server, Link as LinkIcon, KeyRound, MessageSquare, Zap, ScanText, AlertTriangle, Clock } from "lucide-react";
 import { PersonAvatar } from "@/components/PersonAvatar";
 import { MediaPicker } from "@/components/MediaPicker";
 import { toast } from "sonner";
@@ -324,25 +324,36 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel, initialValues }: 
     return deadlineFromEstimate(estimate, u);
   }, [assigneeId, topPick?.userId, estimate]);
 
-  // "Default EOD" — set the deadline time to the assignee's end of day,
-  // reusing the canonical shift logic (weeklySchedule end, fallback 18:00 NY).
-  // Keeps any date the user already picked; otherwise uses the auto-computed
-  // deadline's date, else today.
+  // "Default EOD" — set the deadline to the assignee's end of day. Resolves
+  // their actual shift end (weekly_schedule or flat "Same every weekday" hours),
+  // timezone-correct and overnight-aware (e.g. a 7pm–3am Karachi shift lands at
+  // 3am the next day). Anchors to any date already picked, else the auto-computed
+  // deadline's date, else now. Falls back to 18:00 on a day off / unknown assignee.
   function setDeadlineToEod() {
     const u = users.find((x) => x.id === (assigneeId || topPick?.userId));
-    const base = dueDateOverride
+    const anchor = dueDateOverride
       ? new Date(dueDateOverride)
       : computedDueDate
         ? new Date(computedDueDate)
         : new Date();
-    if (Number.isNaN(base.getTime())) return;
-    // todayShiftWindow only reads now.dayKey, so a minimal object with the
-    // target weekday reuses its weeklySchedule lookup + default fallback.
-    const dayKey = DAY_KEYS[base.getDay()];
-    const win = u ? todayShiftWindow(u, { dayKey, hh: 0, mm: 0, ymd: "" }) : null;
-    const end = parseHHMM(win?.end ?? DEFAULT_SHIFT_END)!;
-    base.setHours(end.hh, end.mm, 0, 0);
-    setDueDateOverride(isoToLocalInput(base.toISOString()));
+    if (Number.isNaN(anchor.getTime())) return;
+    const instant = u
+      ? shiftEndInstant({
+          anchor,
+          tz: u.workTimezone,
+          weeklySchedule: u.weeklySchedule,
+          flatStart: u.workHoursStart,
+          flatEnd: u.workHoursEnd
+        })
+      : null;
+    if (instant) {
+      setDueDateOverride(isoToLocalInput(instant.toISOString()));
+    } else {
+      // No shift that day / unknown assignee — office default 6pm on the anchor date.
+      const d = new Date(anchor);
+      d.setHours(18, 0, 0, 0);
+      setDueDateOverride(isoToLocalInput(d.toISOString()));
+    }
   }
 
   async function askAI() {
@@ -586,9 +597,10 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel, initialValues }: 
                 <button
                   type="button"
                   onClick={setDeadlineToEod}
-                  className="text-[11px] text-muted hover:text-accent transition-colors"
-                  title="Set the deadline time to end of day (assignee's shift end)"
+                  className="btn px-2.5 py-1 text-[11px]"
+                  title="Set the deadline to the assignee's end of day (shift end, in their timezone)"
                 >
+                  <Clock className="w-3 h-3 text-accent" />
                   Default EOD
                 </button>
                 {dueDateOverride ? (

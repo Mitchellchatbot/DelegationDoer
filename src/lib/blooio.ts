@@ -40,7 +40,8 @@ export interface BlooioChat {
   messageCount: number;
   inboundCount: number;
   outboundCount: number;
-  lastMessageTime: string | null;     // ISO
+  lastMessageTime: string | null;     // ISO — newest message in EITHER direction
+  lastInboundTime: string | null;     // ISO — newest INBOUND message (for the support poller watermark)
   lastMessagePreview: string | null;  // text of the most recent message
   lastDirection: "outbound" | "inbound" | null;
 }
@@ -225,6 +226,7 @@ function normalizeChat(c: RawChat): BlooioChat {
     inboundCount: c.inbound_count ?? 0,
     outboundCount: c.outbound_count ?? 0,
     lastMessageTime: msToIso(c.last_message_time) || null,
+    lastInboundTime: msToIso(c.last_inbound_time) || null,
     lastMessagePreview: c.last_message?.text ?? null,
     lastDirection: c.last_message?.direction ?? null
   };
@@ -259,14 +261,18 @@ async function listAllChats(): Promise<{ ok: true; data: RawChat[] } | { ok: fal
   return { ok: true, data: all };
 }
 
-async function listChatMessages(chatId: string): Promise<{ ok: true; data: RawMessage[] } | { ok: false; error: string }> {
+async function listChatMessages(
+  chatId: string,
+  maxPages = 10
+): Promise<{ ok: true; data: RawMessage[] } | { ok: false; error: string }> {
   const all: RawMessage[] = [];
   let pageToken: string | null = null;
   // Encode the +1... chat id for the URL — Blooio accepts both raw and
   // percent-encoded, but URL-encoding is the safer choice for arbitrary
   // identifiers.
   const encoded = encodeURIComponent(chatId);
-  for (let page = 0; page < 10; page++) {
+  let page = 0;
+  for (; page < maxPages; page++) {
     const query: Record<string, string> = { limit: "100" };
     if (pageToken) query.page_token = pageToken;
     const r = await bFetch<RawChatMessagesResponse>(`/chats/${encoded}/messages`, { query });
@@ -274,6 +280,14 @@ async function listChatMessages(chatId: string): Promise<{ ok: true; data: RawMe
     for (const m of r.data.messages ?? []) all.push(m);
     pageToken = r.data.pagination?.next_page_token ?? null;
     if (!pageToken) break;
+  }
+  // Make truncation observable: a still-set token at the cap means we did NOT
+  // fetch the whole history. The dashboard sample tolerates this; the support
+  // poller must know if a chat's newest messages could be beyond the cap.
+  if (pageToken) {
+    console.warn("[blooio] listChatMessages hit page cap with more pages pending", {
+      chatId, fetched: all.length, maxPages
+    });
   }
   return { ok: true, data: all };
 }
@@ -431,6 +445,66 @@ export async function sendBlooioMessage(
 // env var isn't set in local dev.
 export function getBlooioSendingLine(): string {
   return (process.env.BLOOIO_LINE_NUMBER ?? "+15126672513").trim();
+}
+
+// ---- READ HELPERS (for the customer-support inbox + poller) ----
+//
+// getBlooioSummary() above keeps its read paths private because it caps the
+// per-chat fan-out at 25 for the dashboard. The customer-support inbox needs
+// the full, normalized lists instead, so we expose thin wrappers over the
+// same private fetchers. Both stay server-only via the file-level import.
+
+// Every chat on the account, newest activity first, normalized to BlooioChat.
+export async function listBlooioChats(): Promise<BlooioChat[]> {
+  const r = await listAllChats();
+  if (!r.ok) {
+    console.error("[blooio] listBlooioChats failed", { error: r.error });
+    return [];
+  }
+  return r.data
+    .map(normalizeChat)
+    .sort((a, b) => (b.lastMessageTime ?? "").localeCompare(a.lastMessageTime ?? ""));
+}
+
+// Full message history for one chat, oldest first (chat-render order),
+// normalized to BlooioMessage. Returns [] on a read error so callers render
+// an empty thread rather than crash.
+export async function getBlooioChatMessages(chatId: string): Promise<BlooioMessage[]> {
+  if (!chatId) return [];
+  // The support inbox wants the full thread (and the poller must reach a chat's
+  // newest inbound), so allow many more pages than the dashboard's sample path.
+  const r = await listChatMessages(chatId, 100);
+  if (!r.ok) {
+    console.error("[blooio] getBlooioChatMessages failed", { chatId, error: r.error });
+    return [];
+  }
+  return r.data
+    .map((m) => normalizeMessage(m, chatId))
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+}
+
+// A single message by id — GET /chats/{chatId}/messages/{messageId}. The inbound
+// webhook uses this to fetch the AUTHORITATIVE message a delivery refers to
+// (from the payload's top-level chat_id + message_id) instead of trusting the
+// webhook body's `data` blob. Returns null on error or if the message isn't
+// available yet (propagation lag) — the poller backstops anything dropped.
+export async function getBlooioMessage(
+  chatId: string,
+  messageId: string
+): Promise<BlooioMessage | null> {
+  if (!chatId || !messageId) return null;
+  const encChat = encodeURIComponent(chatId);
+  const encMsg = encodeURIComponent(messageId);
+  const r = await bFetch<Record<string, unknown>>(`/chats/${encChat}/messages/${encMsg}`);
+  if (!r.ok) {
+    console.error("[blooio] getBlooioMessage failed", { chatId, messageId, error: r.error });
+    return null;
+  }
+  // Tolerate the message being returned bare or wrapped in {message}/{data}.
+  const d = r.data as { message?: RawMessage; data?: RawMessage } & Partial<RawMessage>;
+  const raw = (d.message ?? d.data ?? d) as RawMessage;
+  if (!raw || !raw.message_id) return null;
+  return normalizeMessage(raw, chatId);
 }
 
 // ---- formatters ----

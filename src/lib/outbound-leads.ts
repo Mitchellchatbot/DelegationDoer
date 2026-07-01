@@ -259,7 +259,12 @@ export async function createLeadManual(input: {
   name: string | null;
   typeformFormId: string | null;  // catalog form id the operator picked, or null
   startSequence: boolean;        // operator checkbox — only honored if a phone exists
-  createdBy: string;             // user id, for the audit event
+  createdBy: string;             // user id (or a system sentinel), for the audit event
+  // Where this lead came from — stamped into the audit event payload so the
+  // funnel timeline can tell a dashboard-typed lead ("manual_entry") from one
+  // routed in by another system (e.g. "blooio_inbound"). Default keeps the
+  // historical label for existing callers.
+  source?: string;
 }): Promise<{ lead: OutboundLead; isNew: boolean }> {
   if (!input.phone && !input.email) throw new Error("phone or email required");
 
@@ -280,12 +285,28 @@ export async function createLeadManual(input: {
     })
     .select("*")
     .single();
-  if (error) throw new Error(error.message);
+  if (error) {
+    // A concurrent creator won the race on the unique phone (a contact who texts
+    // in within milliseconds of a Typeform/manual create for the same number).
+    // The check-then-insert above is a TOCTOU; rather than throw the 23505 up
+    // (which would crash a caller mid-routing and leave a half-linked record),
+    // re-resolve the row the winner created and return it as a dedup hit.
+    if (error.code === "23505") {
+      const raced =
+        (input.phone ? await findLeadByPhone(input.phone) : null) ??
+        (input.email ? await findLeadByEmail(input.email) : null);
+      if (raced) return { lead: raced, isNew: false };
+    }
+    throw new Error(error.message);
+  }
   const lead = normalizeLead(data as LeadRow);
 
   // Reuse the whitelisted 'form_submitted' event kind (the events table has a
   // CHECK constraint); the payload source distinguishes it from real intake.
-  await recordEvent(lead.id, "form_submitted", { source: "manual_entry", by: input.createdBy });
+  await recordEvent(lead.id, "form_submitted", {
+    source: input.source ?? "manual_entry",
+    by: input.createdBy
+  });
 
   // SMS sequence is only possible with a phone — Blooio chats are keyed by it.
   if (input.startSequence && lead.phone) await scheduleRecoveryDrip(lead);

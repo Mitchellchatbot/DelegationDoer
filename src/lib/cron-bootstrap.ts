@@ -37,6 +37,7 @@ import { runScheduledEmails } from "@/lib/scheduled-emails-runner";
 import { syncBirthdaysForAllOwners } from "@/lib/birthday-calendar-sync";
 import { runOutboundSequences } from "@/lib/outbound-sequence-runner";
 import { syncWebsiteBuildStatuses } from "@/lib/website-builder-integration";
+import { runSupportInboxPoll } from "@/lib/support-inbox-poller";
 
 const globalKey = "__ddCronBootstrap" as const;
 const stateKey = "__ddCronHeartbeats" as const;
@@ -147,6 +148,19 @@ const JOBS: CronJob[] = [
         `deployed=${r.deployed} completed=${r.completed} ` +
         `errors=${r.errors.length}`
       );
+    }
+  },
+  {
+    // Backstop for the real-time Blooio inbound-SMS webhook. Sweeps the Blooio
+    // API for inbound texts a missed webhook dropped; idempotent via the
+    // support_messages UNIQUE constraint, so it never double-processes.
+    name: "support-inbox-poll",
+    intervalMs: MINUTE,
+    bootCatchupDelayMs: 35_000,
+    disableEnv: "SUPPORT_INBOX_POLL_INTERNAL_CRON",
+    run: async () => {
+      const r = await runSupportInboxPoll();
+      return `scanned=${r.scanned} ingested=${r.ingested} classified=${r.classified} reconciled=${r.reconciled}`;
     }
   }
 ];

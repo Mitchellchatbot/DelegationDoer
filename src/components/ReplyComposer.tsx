@@ -3,10 +3,13 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
-import { Reply, Send, Loader2, X, CalendarClock, Sparkles, Check } from "lucide-react";
+import { Reply, Send, Loader2, X, CalendarClock, Sparkles, Check, Maximize2, Minimize2 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { MediaPicker } from "@/components/MediaPicker";
+import { RecipientAutocomplete } from "@/components/RecipientAutocomplete";
+import { useInboxFocus } from "@/components/InboxFocusProvider";
+import { useRecipientSuggestions } from "@/lib/use-recipient-suggestions";
 import type { TaskMedia } from "@/lib/types";
 import type { MissiveMessage } from "@/lib/missive-client";
 import { rawEmail, shortName } from "@/lib/email-format";
@@ -99,6 +102,19 @@ export function ReplyComposer({
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  // Focus Mode — collapses the inbox rail + thread list so the composer gets
+  // the whole content area (see InboxFocusProvider). Only meaningful while the
+  // composer is expanded; every path that leaves the composer clears it below.
+  const { focusMode, setFocusMode } = useInboxFocus();
+  // To/Cc typeahead roster (saved clients + team inboxes), shared verbatim with
+  // the main Compose window. Loaded once the composer is expanded.
+  const recipientSuggestions = useRecipientSuggestions(open);
+
+  // Never leave the rail/list collapsed once this composer is gone (thread
+  // switch remounts it — ThreadConversation is keyed by threadId).
+  useEffect(() => () => setFocusMode(false), [setFocusMode]);
+  // Collapsing the composer back to the pill also exits focus mode.
+  useEffect(() => { if (!open) setFocusMode(false); }, [open, setFocusMode]);
   // "reply" = sender only (default). "replyAll" loads replyAllTo/replyAllCc.
   const [mode, setMode] = useState<"reply" | "replyAll">("reply");
   const [to, setTo] = useState(defaultTo ?? "");
@@ -502,6 +518,17 @@ export function ReplyComposer({
                 )}
                 <button
                   type="button"
+                  onClick={() => setFocusMode(!focusMode)}
+                  aria-label={focusMode ? "Collapse focus mode" : "Expand to focus mode"}
+                  title={focusMode ? "Back to the inbox layout" : "Expand — more room to write, hides the inbox list"}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold text-sky-700 bg-white border border-sky-200/70 hover:bg-sky-100 transition-colors shrink-0"
+                >
+                  {focusMode
+                    ? <><Minimize2 className="w-3 h-3" /> Collapse</>
+                    : <><Maximize2 className="w-3 h-3" /> Expand</>}
+                </button>
+                <button
+                  type="button"
                   onClick={() => setOpen(false)}
                   aria-label="Discard"
                   className="p-1 rounded-lg text-ink/55 hover:text-ink hover:bg-white transition-colors"
@@ -546,13 +573,12 @@ export function ReplyComposer({
                 <span className="text-[11px] uppercase tracking-wide font-semibold text-ink/45 w-14 shrink-0">
                   To
                 </span>
-                <input
-                  type="text"
+                <RecipientAutocomplete
                   value={to}
-                  onChange={(e) => setTo(e.target.value)}
-                  className="flex-1 bg-transparent text-sm outline-none placeholder:text-ink/40"
-                  placeholder="recipient@example.com"
+                  onChange={setTo}
+                  clients={recipientSuggestions}
                   autoFocus
+                  placeholder="recipient@example.com"
                 />
                 {!ccOpen && !cc.trim() && (
                   <button
@@ -570,11 +596,10 @@ export function ReplyComposer({
                   <span className="text-[11px] uppercase tracking-wide font-semibold text-ink/45 w-14 shrink-0">
                     Cc
                   </span>
-                  <input
-                    type="text"
+                  <RecipientAutocomplete
                     value={cc}
-                    onChange={(e) => setCc(e.target.value)}
-                    className="flex-1 bg-transparent text-sm outline-none placeholder:text-ink/40"
+                    onChange={setCc}
+                    clients={recipientSuggestions}
                     placeholder="cc@example.com, …"
                   />
                 </div>
@@ -677,7 +702,10 @@ export function ReplyComposer({
                 onChange={(e) => setBodyText(e.target.value)}
                 placeholder="Write your reply…"
                 rows={7}
-                className="w-full text-sm bg-white/60 border border-slate-200/70 rounded-xl px-3 py-2.5 outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent/40 resize-none transition-all"
+                className={cn(
+                  "w-full text-sm bg-white/60 border border-slate-200/70 rounded-xl px-3 py-2.5 outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent/40 resize-none transition-all",
+                  focusMode && "min-h-[45vh]"
+                )}
               />
 
               {/* Quoted original — collapsed behind a "•••" toggle like Gmail's

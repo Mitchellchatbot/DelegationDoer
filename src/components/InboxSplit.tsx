@@ -9,7 +9,10 @@ import {
   type ReactNode
 } from "react";
 import { useSearchParams } from "next/navigation";
+import { motion } from "framer-motion";
+import { cn } from "@/lib/utils";
 import { ThreadReadingPane } from "@/components/ThreadReadingPane";
+import { useInboxFocus } from "@/components/InboxFocusProvider";
 
 // Gmail/Outlook-style split for the inbox LIST routes only (wrapped around each
 // list page's body — NOT the shared inboxes layout, so /inboxes/manage and
@@ -50,6 +53,9 @@ export const useInboxSplit = () => useContext(Ctx);
 
 export function InboxSplit({ children }: { children: ReactNode }) {
   const searchParams = useSearchParams();
+  // Focus Mode (driven by the reply composer) collapses the thread list so the
+  // reading pane — which holds the composer — fills the content area.
+  const { focusMode } = useInboxFocus();
   // Hydrate the initial selection from the URL once (supports refresh, bookmarks
   // and the legacy /threads/[id] redirect). Subsequent selections are local.
   const [selected, setSelected] = useState<Selected | null>(() => {
@@ -95,10 +101,20 @@ export function InboxSplit({ children }: { children: ReactNode }) {
   return (
     <Ctx.Provider value={value}>
       <div className="flex gap-5 items-start">
-        {/* List column — own scroll, never unmounts on selection. */}
-        <div className="w-[400px] shrink-0 min-w-0 sticky top-3 self-start max-h-[calc(100vh-1.5rem)] overflow-y-auto">
+        {/* List column — own scroll, never unmounts on selection. In Focus Mode
+            its width/opacity animate to 0 so the reading pane fills the row;
+            the column stays mounted (scroll + infinite-scroll state preserved). */}
+        <motion.div
+          initial={false}
+          animate={{ width: focusMode ? 0 : 400, opacity: focusMode ? 0 : 1 }}
+          transition={{ duration: 0.25, ease: [0.2, 0.8, 0.2, 1] }}
+          className={cn(
+            "shrink-0 min-w-0 sticky top-3 self-start max-h-[calc(100vh-1.5rem)] overflow-y-auto overflow-x-hidden",
+            focusMode && "pointer-events-none"
+          )}
+        >
           {children}
-        </div>
+        </motion.div>
         <ThreadReadingPane />
       </div>
     </Ctx.Provider>

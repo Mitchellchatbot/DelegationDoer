@@ -7,7 +7,11 @@ import {
 import {
   getConversation, getConversationByChatId, listMessages, type SupportConversation
 } from "@/lib/support-data";
-import { findLeadByPhone, getLeadById, createLeadManual } from "@/lib/outbound-leads";
+import {
+  findLeadByPhone, getLeadById, createLeadManual,
+  scheduleRecoveryDrip, hasPendingRecoveryDrip, recordEvent
+} from "@/lib/outbound-leads";
+import { isFormEnrolledInFlow } from "@/lib/outbound-typeform-forms";
 import { notifyFormSubmitted } from "@/lib/outbound-slack";
 
 // The single entry point both inbound capture paths funnel through — the
@@ -184,9 +188,14 @@ async function classifyOrShortCircuit(
 }
 
 // Feed a routed lead into the EXISTING outbound funnel. Reuses createLeadManual
-// (dedups by phone→email, returns isNew) — no new SMS drip is started
-// (startSequence:false) because the person already texted us. Only ping Slack
-// for a genuinely new lead, mirroring the typeform webhook's isNew gate.
+// (dedups by phone→email, returns isNew) with startSequence:false, so a
+// brand-new SMS number is created WITHOUT a drip (it has no originating
+// typeform to enroll from). When we instead MATCH an existing lead, we respect
+// that lead's typeform "add to flow" scope: if its form is enrolled and the
+// lead is a warm_lead not already mid-drip, we (re-)enroll it in the recovery
+// drip — treating the inbound text as re-engagement. Guarded against
+// double-scheduling a live sequence. Slack ping only for a genuinely new lead
+// (mirrors the typeform webhook's isNew gate).
 async function routeToLeadFunnel(
   convo: SupportConversation,
   phone: string,
@@ -206,9 +215,28 @@ async function routeToLeadFunnel(
     .from("support_conversations")
     .update({ linked_lead_id: lead.id })
     .eq("id", convo.id);
+
   if (isNew) {
-    // Best-effort; notifyFormSubmitted swallows its own errors.
-    await notifyFormSubmitted(lead);
+    // Brand-new SMS number: create + notify, but start no flow (no form scope).
+    await notifyFormSubmitted(lead); // best-effort; swallows its own errors.
+    return;
+  }
+
+  // Matched an EXISTING lead — follow its typeform's add-to-flow toggle.
+  // Only enroll when: the lead's form is enrolled, the lead is still a warm_lead
+  // (not booked/showed/sold/lost), and it isn't already mid-recovery-drip.
+  if (
+    lead.phone &&
+    lead.status === "warm_lead" &&
+    lead.typeformFormId &&
+    (await isFormEnrolledInFlow(lead.typeformFormId)) &&
+    !(await hasPendingRecoveryDrip(lead.id))
+  ) {
+    await scheduleRecoveryDrip(lead);
+    await recordEvent(lead.id, "sequence_changed", {
+      source: "blooio_inbound",
+      action: "enrolled_recovery_drip"
+    });
   }
 }
 

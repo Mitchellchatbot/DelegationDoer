@@ -422,6 +422,21 @@ export async function cancelAllPending(leadId: string): Promise<number> {
   ]);
 }
 
+// Is the lead already mid-recovery-drip (a pending recovery_drip queued)? Used
+// to avoid double-enrolling a lead who is already in the flow — e.g. when a
+// known lead re-engages via inbound SMS and we'd otherwise re-schedule the drip.
+export async function hasPendingRecoveryDrip(leadId: string): Promise<boolean> {
+  const supabase = getSupabaseAdmin();
+  const { count, error } = await supabase
+    .from("outbound_scheduled_messages")
+    .select("id", { count: "exact", head: true })
+    .eq("lead_id", leadId)
+    .eq("status", "pending")
+    .eq("kind", "recovery_drip");
+  if (error) throw new Error(error.message);
+  return (count ?? 0) > 0;
+}
+
 // ---- TEMPLATE LOADING ----
 
 export type TemplateMap = Map<string, { body: string; updatedAt: string | null }>;

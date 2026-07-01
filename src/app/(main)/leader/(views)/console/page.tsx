@@ -14,6 +14,7 @@ import { PageHero } from "@/components/PageHero";
 import { ProfileDialog } from "@/components/ProfileDialog";
 import { SendKudosDialog } from "@/components/SendKudosDialog";
 import { MagicLinkButton } from "@/components/MagicLinkButton";
+import { OffboardButton } from "@/components/OffboardButton";
 import { DepartmentSlackSection } from "@/components/DepartmentSlackSection";
 import { InvitePersonDialog } from "@/components/InvitePersonDialog";
 import { userCapacity } from "@/lib/capacity";
@@ -462,6 +463,18 @@ function PeopleTab({
                               <Sparkles className="w-3 h-3" />
                               Kudos
                             </button>
+                          }
+                        />
+                      )}
+                      {/* Off-board hard-deletes the person + their login;
+                          hidden on the self row (you can't remove yourself). */}
+                      {u.id !== currentUser?.id && (
+                        <OffboardButton
+                          userId={u.id}
+                          userName={u.name}
+                          userEmail={u.email}
+                          onOffboarded={() =>
+                            setPeople(people.filter((p) => p.id !== u.id))
                           }
                         />
                       )}

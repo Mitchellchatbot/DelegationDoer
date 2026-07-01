@@ -233,3 +233,88 @@ export async function PATCH(
     );
   }
 }
+
+// DELETE /api/users/[id] — leader/admin-only off-board. Hard-deletes the
+// teammate and their login. The messy part (FK blockers + array columns
+// + auth.users) lives in the transactional public.offboard_user() SQL
+// function; here we just gate access, apply the two safety rails that
+// need app context (no self-delete, don't strand the console with zero
+// leaders), run the purge, then remove the Supabase Auth login so the
+// handle_new_auth_user() trigger can't resurrect the row on next sign-in.
+export async function DELETE(
+  _req: NextRequest,
+  { params }: { params: { id: string } }
+) {
+  try {
+    const actorId = await requireCurrentUserId();
+    const actor = await getUserById(actorId);
+    if (!isLeader(actor)) {
+      return NextResponse.json({ error: "Leader only" }, { status: 403 });
+    }
+    if (params.id === actorId) {
+      return NextResponse.json(
+        { error: "You can't off-board yourself." },
+        { status: 400 }
+      );
+    }
+
+    const target = await getUserById(params.id);
+    if (!target) {
+      return NextResponse.json({ error: "user not found" }, { status: 404 });
+    }
+
+    const supabase = getSupabaseAdmin();
+
+    // Don't let the last leader be removed — that would lock everyone out
+    // of the console. Stealth admins (is_admin) don't count as leaders for
+    // this check because their public role can be anything; we specifically
+    // guard the visible leadership seat.
+    if (target.role === "leader") {
+      const { count, error: cErr } = await supabase
+        .from("users")
+        .select("id", { count: "exact", head: true })
+        .eq("role", "leader");
+      if (cErr) {
+        return NextResponse.json(
+          { error: `leader count: ${cErr.message}` },
+          { status: 500 }
+        );
+      }
+      if ((count ?? 0) <= 1) {
+        return NextResponse.json(
+          { error: "Can't off-board the last leader." },
+          { status: 400 }
+        );
+      }
+    }
+
+    // Atomic purge. Authored tasks are reassigned to the actor so no task
+    // history is lost. Returns the target's auth.users id (may be null).
+    const { data: authUserId, error: rpcErr } = await supabase.rpc(
+      "offboard_user",
+      { target_user_id: params.id, successor_user_id: actorId }
+    );
+    if (rpcErr) {
+      return NextResponse.json(
+        { error: `offboard: ${rpcErr.message}` },
+        { status: 500 }
+      );
+    }
+
+    // Remove the login. Best-effort: the app row is already gone, and a
+    // stray auth row only matters if they try to sign in again — surface
+    // it in the response rather than failing the whole off-board.
+    let authDeleteError: string | null = null;
+    if (typeof authUserId === "string" && authUserId) {
+      const { error: aErr } = await supabase.auth.admin.deleteUser(authUserId);
+      if (aErr) authDeleteError = aErr.message;
+    }
+
+    return NextResponse.json({ ok: true, authDeleteError });
+  } catch (err) {
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : "unknown error" },
+      { status: 500 }
+    );
+  }
+}

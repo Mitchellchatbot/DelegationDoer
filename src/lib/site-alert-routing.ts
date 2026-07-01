@@ -35,11 +35,14 @@ import { deadlineFromEstimate } from "@/lib/capacity";
 import { getPermalink, notifyTeamFyi } from "@/lib/slack";
 import type { Priority, User } from "@/lib/types";
 
-// Website team: tasks are assigned to the first name here (the team lead),
-// and EVERY name is notified (Slack DM + widget alarm). The DelegationDoer
-// `tasks` schema carries a single `assignee_id`, so "assign to Elaine and
-// Leizel" is modeled as primary-owner + co-notified — Leizel reports to
-// Elaine in the org tree (see 20260528000001_seed_org_structure.sql).
+// Website team: ownership of each task is split deterministically across the
+// names here by domain (see the stableHash pick in handleSiteHealthAlert), so
+// each website consistently routes to the same owner while the set of sites
+// divides ~evenly — this keeps any one person from being buried under every
+// alert. EVERY name is still notified (Slack DM + widget alarm). The
+// DelegationDoer `tasks` schema carries a single `assignee_id`, so the roster
+// is modeled as one per-domain primary-owner + the rest co-notified. Elaine
+// and Leizel are on the Website team (see 20260528000001_seed_org_structure.sql).
 // Edit this list to change who owns / is alerted on site-health tasks.
 const WEBSITE_ALERT_ASSIGNEE_NAMES = ["Elaine", "Leizel"];
 const WEBSITE_DEPARTMENT_ID = "dep_web";
@@ -147,6 +150,20 @@ function genId(prefix: string): string {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
+// Stable, deterministic string hash → non-negative 32-bit int (FNV-1a). Used
+// to pick a per-domain owner from the assignee roster, so the same website
+// always routes to the same person while distinct sites split ~evenly. Must
+// stay free of Date.now()/Math.random() so retries of the same alert resolve
+// to the same owner.
+function stableHash(s: string): number {
+  let h = 2166136261; // FNV-1a 32-bit offset basis
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619); // FNV prime
+  }
+  return h >>> 0;
+}
+
 // ── Website health handler ───────────────────────────────────────────────
 
 async function handleSiteHealthAlert(
@@ -187,7 +204,13 @@ async function handleSiteHealthAlert(
   // 3) Resolve the Website-team assignees by name.
   const users = await getAllUsersLight();
   const assignees = resolveAssignees(users, WEBSITE_ALERT_ASSIGNEE_NAMES);
-  const primary = assignees[0] ?? null;
+  // Owner is chosen deterministically by domain (not always index 0), so the
+  // alert load splits ~evenly across the roster while each site keeps a stable
+  // owner. The rest of `assignees` is still co-notified below.
+  const primary =
+    assignees.length > 0
+      ? assignees[stableHash(domain.toLowerCase()) % assignees.length]
+      : null;
   if (!primary) {
     // No one to own it — log the alert so it's visible, skip task creation.
     await recordAlert(supabase, {

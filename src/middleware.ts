@@ -44,6 +44,9 @@ const PUBLIC_PREFIXES = [
   // Calendly booking events — v1=HMAC-SHA256 over `${t}.${body}` verified
   // inside the handler (Calendly-Webhook-Signature). Calendly POSTs anonymously.
   "/api/integrations/calendly/webhook",
+  // Blooio inbound-SMS webhook — HMAC-SHA256 verified inside the handler
+  // (BLOOIO_WEBHOOK_SECRET). Blooio POSTs anonymously with no Supabase cookie.
+  "/api/integrations/blooio/webhook",
   // The widget renderer must be reachable inside Electron without a
   // session — when the cookie jar is empty (fresh launch) we want the
   // widget to render its own "Sign in" state rather than redirect to

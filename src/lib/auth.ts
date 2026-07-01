@@ -85,3 +85,17 @@ export function canSeeOutbound(u: User | null | undefined): boolean {
   const lower = u.name.toLowerCase();
   return OUTBOUND_NAME_PATTERNS.some((p) => lower.includes(p));
 }
+
+// Customer Support inbox (/customer-support) — the inbound-SMS triage surface.
+// Scoped to Mujtaba (mike@scaledai.org) plus stealth admins (is_admin), who see
+// every surface for support/debugging. Deliberately NARROWER than
+// canSeeOutbound: that group is the whole spend-story cohort, not just Mujtaba.
+// Matches on email (stable, exact) OR name substring (survives a DB rename),
+// mirroring the same belt-and-braces gating used across the app.
+export function canSeeCustomerSupport(u: User | null | undefined): boolean {
+  if (!u) return false;
+  if (u.isAdmin === true) return true;
+  if (u.email && u.email.toLowerCase() === "mike@scaledai.org") return true;
+  if (u.name && u.name.toLowerCase().includes("mujtaba")) return true;
+  return false;
+}

@@ -6,13 +6,13 @@ import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
 import {
   ListTodo, Users, Sparkles, Crown, Mail, Home as HomeIcon, Sunrise, Moon, Briefcase,
-  CalendarDays, FolderKanban, ClipboardCheck, BookOpen, Settings
+  CalendarDays, FolderKanban, ClipboardCheck, BookOpen, Settings, LifeBuoy
 } from "lucide-react";
 // Sparkles is reused for both Ask AI and Updates — same icon, different context.
 import { useEffect, useState } from "react";
 import { AIAssistantDrawer } from "./AIAssistantDrawer";
 import { RaiseLink } from "./RaiseLink";
-import { isLeader, isHead } from "@/lib/auth";
+import { isLeader, isHead, canSeeCustomerSupport } from "@/lib/auth";
 import { primaryDepartment } from "@/lib/departments";
 import type { User } from "@/lib/types";
 
@@ -39,6 +39,7 @@ const SCHEDULE_ITEM: NavItem = { href: "/schedule", label: "Schedule", icon: Cal
 const PROJECTS_ITEM: NavItem = { href: "/projects", label: "Projects", icon: FolderKanban, tone: "indigo" };
 const INBOXES_ITEM: NavItem = { href: "/inboxes", label: "Inboxes", icon: Mail, tone: "fuchsia" };
 const APPROVALS_ITEM: NavItem = { href: "/approvals", label: "Approvals", icon: ClipboardCheck, tone: "emerald" };
+const CUSTOMER_SUPPORT_ITEM: NavItem = { href: "/customer-support", label: "Customer Support", icon: LifeBuoy, tone: "teal" };
 const CLIENTS_ITEM: NavItem = { href: "/clients", label: "Clients", icon: Briefcase, tone: "amber" };
 const UPDATES_ITEM: NavItem = { href: "/updates", label: "Updates", icon: Sparkles, tone: "fuchsia" };
 const SOPS_ITEM: NavItem = { href: "/sops", label: "SOPs", icon: BookOpen, tone: "teal" };
@@ -109,6 +110,10 @@ export function Sidebar({ user }: { user: User }) {
   // pattern so the badge feels consistent.
   const canSeeRoutingReview = isLeader(user) || isHead(user);
   const [routingReviewPending, setRoutingReviewPending] = useState<number | null>(null);
+  // Customer Support inbox — Mujtaba + stealth admins only. Badge counts the
+  // Needs Review queue (uncertain inbound texts awaiting triage).
+  const canSeeSupport = canSeeCustomerSupport(user);
+  const [supportReviewCount, setSupportReviewCount] = useState<number | null>(null);
   // Pull the cached counts into state after mount — initializing them
   // synchronously from localStorage caused an SSR/CSR hydration mismatch
   // (server rendered no badge, client rendered the cached count).
@@ -118,6 +123,7 @@ export function Sidebar({ user }: { user: User }) {
     setApprovalsPending((v) => v ?? readCached("badge:approvals"));
     setInboxesUnread((v) => v ?? readCached("badge:inboxesUnread"));
     setRoutingReviewPending((v) => v ?? readCached("badge:routingReview"));
+    setSupportReviewCount((v) => v ?? readCached("badge:supportReview"));
   }, []);
   useEffect(() => {
     let cancelled = false;
@@ -148,6 +154,19 @@ export function Sidebar({ user }: { user: User }) {
             if (!cancelled) {
               setRoutingReviewPending(n);
               try { window.localStorage.setItem("badge:routingReview", String(n)); }
+              catch { /* localStorage blocked */ }
+            }
+          }
+        }
+        if (canSeeSupport) {
+          // Needs Review count for the Customer Support nav badge.
+          const res = await fetch("/api/support/conversations?bucket=review", { cache: "no-store" });
+          if (res.ok) {
+            const data = await res.json();
+            const n = Array.isArray(data.conversations) ? data.conversations.length : 0;
+            if (!cancelled) {
+              setSupportReviewCount(n);
+              try { window.localStorage.setItem("badge:supportReview", String(n)); }
               catch { /* localStorage blocked */ }
             }
           }
@@ -223,7 +242,7 @@ export function Sidebar({ user }: { user: User }) {
       if (retryTimer) clearTimeout(retryTimer);
       es?.close();
     };
-  }, [canSeeSeo, canSeeProjectUpdates, canSeeRoutingReview]);
+  }, [canSeeSeo, canSeeProjectUpdates, canSeeRoutingReview, canSeeSupport]);
 
   // ⌘K / Ctrl+K opens the Ask AI drawer — wires up the hint shown on
   // the button. Suppressed when the user is mid-edit (so it doesn't
@@ -285,6 +304,7 @@ export function Sidebar({ user }: { user: User }) {
     // routing review — they'll land on the right default tab and
     // the badge below sums both queues.
     ...(canApprove || canSeeRoutingReview ? [APPROVALS_ITEM] : []),
+    ...(canSeeSupport ? [CUSTOMER_SUPPORT_ITEM] : []),
     CLIENTS_ITEM,
     UPDATES_ITEM,
     SOPS_ITEM,
@@ -298,7 +318,7 @@ export function Sidebar({ user }: { user: User }) {
     { label: "Overview", hrefs: ["/home"] },
     { label: "Today", hrefs: ["/sod", "/eod"] },
     { label: "Work", hrefs: ["/tasks", "/schedule", "/projects"] },
-    { label: "Communication", hrefs: ["/inboxes", "/approvals"] },
+    { label: "Communication", hrefs: ["/inboxes", "/approvals", "/customer-support"] },
     { label: "Knowledge", hrefs: ["/clients", "/updates", "/sops"] },
     { label: "Account", hrefs: ["/people", "/leader", "/settings"] }
   ];
@@ -380,6 +400,13 @@ export function Sidebar({ user }: { user: User }) {
                   count: updatesTotal,
                   tone: "rose",
                   title: `${updatesTotal} new update${updatesTotal === 1 ? "" : "s"} waiting`
+                };
+              }
+              if (item.href === "/customer-support" && (supportReviewCount ?? 0) > 0) {
+                return {
+                  count: supportReviewCount!,
+                  tone: "amber",
+                  title: `${supportReviewCount} support ${supportReviewCount === 1 ? "message" : "messages"} need review`
                 };
               }
               if (item.href === "/approvals") {

@@ -120,6 +120,7 @@ export function SodFlow({ open, simulate = false, onClose, onComplete }: Props) 
     );
   }, [advDept, team.departments, currentUser.departmentIds]);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickerQuery, setPickerQuery] = useState("");
   const [myTasks, setMyTasks] = useState<MyTaskOption[]>([]);
   const [direction, setDirection] = useState<"forward" | "back">("forward");
 
@@ -282,6 +283,7 @@ export function SodFlow({ open, simulate = false, onClose, onComplete }: Props) 
       return next;
     });
     setPickerOpen(false);
+    setPickerQuery("");
     // 'pending' (not started) and 'waiting_on_client' both indicate the
     // task isn't actively being worked yet — picking either into SOD
     // means "I'm starting on this today," so auto-flip to in_progress.
@@ -484,7 +486,7 @@ export function SodFlow({ open, simulate = false, onClose, onComplete }: Props) 
               <div className="relative">
                 <button
                   type="button"
-                  onClick={() => setPickerOpen((v) => !v)}
+                  onClick={() => setPickerOpen((v) => { if (v) setPickerQuery(""); return !v; })}
                   className="inline-flex items-center gap-1 text-xs font-medium px-3 py-2 rounded-lg bg-white border border-slate-200/70 hover:border-accent/40 hover:text-accent"
                 >
                   <ChevronDown className="w-3 h-3" /> Pick existing
@@ -500,32 +502,47 @@ export function SodFlow({ open, simulate = false, onClose, onComplete }: Props) 
                       .filter((v): v is string => typeof v === "string")
                   );
                   const available = myTasks.filter((t) => !usedIds.has(t.id));
+                  const q = pickerQuery.trim().toLowerCase();
+                  const shown = q
+                    ? available.filter((t) => t.title.toLowerCase().includes(q))
+                    : available;
                   return (
-                    <div className="absolute right-0 top-full mt-1 w-72 max-h-72 overflow-y-auto rounded-xl border border-slate-200/70 bg-white shadow-lg z-10 p-1">
-                      {available.length === 0 ? (
-                        <div className="p-3 text-xs text-ink/55">
-                          {myTasks.length === 0
-                            ? "No open tasks assigned to you."
-                            : "All your open tasks are already on this SOD."}
-                        </div>
-                      ) : (
-                        available.map((t) => (
-                          <button
-                            key={t.id}
-                            type="button"
-                            onClick={() => void pickExisting(t)}
-                            className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-slate-100 text-xs"
-                          >
-                            <div className="font-medium text-ink truncate">{t.title}</div>
-                            <div className="text-[10px] text-ink/55">
-                              {t.status === "pending" ? "Not started" :
-                               t.status === "in_progress" ? "In progress" :
-                               t.status === "urgent" ? "Urgent" :
-                               "Waiting on client"}
-                            </div>
-                          </button>
-                        ))
-                      )}
+                    <div className="absolute right-0 top-full mt-1 w-72 rounded-xl border border-slate-200/70 bg-white shadow-lg z-10 p-1">
+                      <input
+                        type="text"
+                        value={pickerQuery}
+                        onChange={(e) => setPickerQuery(e.target.value)}
+                        placeholder="Search your tasks…"
+                        className="w-full text-xs px-2 py-1.5 mb-1 rounded-lg border border-slate-200/70 focus:outline-none focus:border-accent/40"
+                      />
+                      <div className="max-h-72 overflow-y-auto">
+                        {available.length === 0 ? (
+                          <div className="p-3 text-xs text-ink/55">
+                            {myTasks.length === 0
+                              ? "No open tasks assigned to you."
+                              : "All your open tasks are already on this SOD."}
+                          </div>
+                        ) : shown.length === 0 ? (
+                          <div className="p-3 text-xs text-ink/55">No tasks match.</div>
+                        ) : (
+                          shown.map((t) => (
+                            <button
+                              key={t.id}
+                              type="button"
+                              onClick={() => void pickExisting(t)}
+                              className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-slate-100 text-xs"
+                            >
+                              <div className="font-medium text-ink truncate">{t.title}</div>
+                              <div className="text-[10px] text-ink/55">
+                                {t.status === "pending" ? "Not started" :
+                                 t.status === "in_progress" ? "In progress" :
+                                 t.status === "urgent" ? "Urgent" :
+                                 "Waiting on client"}
+                              </div>
+                            </button>
+                          ))
+                        )}
+                      </div>
                     </div>
                   );
                 })()}

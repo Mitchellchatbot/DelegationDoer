@@ -422,6 +422,29 @@ export async function cancelAllPending(leadId: string): Promise<number> {
   ]);
 }
 
+// Cancel pending drips for every lead sourced from a form — used when the
+// operator switches a Typeform to "No flow", so leads already mid-drip drop
+// off the Flow board instead of lingering. Only the two drip kinds the toggle
+// governs; Calendly confirmations/reminders (Booking) are untouched.
+export async function cancelFlowDripsForForm(formId: string): Promise<number> {
+  const supabase = getSupabaseAdmin();
+  const { data: leads, error: leadErr } = await supabase
+    .from("outbound_leads")
+    .select("id")
+    .eq("typeform_form_id", formId);
+  if (leadErr) throw new Error(leadErr.message);
+  const ids = (leads ?? []).map((r) => r.id as string);
+  if (ids.length === 0) return 0;
+  const { error, count } = await supabase
+    .from("outbound_scheduled_messages")
+    .update({ status: "canceled" }, { count: "exact" })
+    .in("lead_id", ids)
+    .eq("status", "pending")
+    .in("kind", ["recovery_drip", "engagement_drip"]);
+  if (error) throw new Error(error.message);
+  return count ?? 0;
+}
+
 // ---- TEMPLATE LOADING ----
 
 export type TemplateMap = Map<string, { body: string; updatedAt: string | null }>;

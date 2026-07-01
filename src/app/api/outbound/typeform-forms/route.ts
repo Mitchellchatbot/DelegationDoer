@@ -3,6 +3,7 @@ import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { canSeeOutbound } from "@/lib/auth";
 import { listForms, upsertForm } from "@/lib/outbound-typeform-forms";
+import { cancelFlowDripsForForm } from "@/lib/outbound-leads";
 
 export const dynamic = "force-dynamic";
 
@@ -42,6 +43,17 @@ export async function POST(req: NextRequest) {
   }
   try {
     const form = await upsertForm({ id, label, description, enrollInFlow });
+    // Switching a form to "No flow" retroactively pulls its leads off the
+    // board — cancel their pending drips. Idempotent, so re-saving an
+    // already-off form clears any stragglers. Fail-soft: the form save is
+    // already committed, so a cancel hiccup is logged, not surfaced.
+    if (!form.enrollInFlow) {
+      try {
+        await cancelFlowDripsForForm(form.id);
+      } catch (cancelErr) {
+        console.error("[typeform-forms] failed to cancel drips on disable", cancelErr);
+      }
+    }
     return NextResponse.json({ ok: true, form });
   } catch (err) {
     return NextResponse.json(

@@ -8,6 +8,7 @@ import { Inbox, Mail, Settings as SettingsIcon, Layers, ListChecks, Plus, Chevro
 import { cn, initials } from "@/lib/utils";
 import { ConnectInboxDialog } from "./ConnectInboxDialog";
 import { InboxFavicon } from "./InboxFavicon";
+import { useInboxFocus } from "./InboxFocusProvider";
 
 // Left-rail tree for the inbox surface. Sections collapse into:
 //   • Smart — All inboxes (combined view, "/inboxes/all")
@@ -47,6 +48,10 @@ const SPACE_COLOR_DOT: Record<string, string> = {
 
 export function InboxTree({ accounts, canManage }: Props) {
   const path = usePathname();
+  // Focus Mode (driven by the reply composer) collapses the whole rail so the
+  // thread + composer can fill the content area. Width/opacity animate to 0;
+  // the DD sidebar (outside this provider) is untouched.
+  const { focusMode } = useInboxFocus();
   const [spaces, setSpaces] = useState<Space[]>([]);
   useEffect(() => {
     let cancelled = false;
@@ -118,7 +123,12 @@ export function InboxTree({ accounts, canManage }: Props) {
 
   if (collapsed) {
     return (
-      <aside className="w-12 shrink-0">
+      <motion.aside
+        initial={false}
+        animate={{ width: focusMode ? 0 : 48, opacity: focusMode ? 0 : 1 }}
+        transition={{ duration: 0.25, ease: [0.2, 0.8, 0.2, 1] }}
+        className={cn("shrink-0 overflow-hidden", focusMode && "pointer-events-none")}
+      >
         <div className="sticky top-3 max-h-[calc(100vh-1.5rem)] overflow-y-auto flex flex-col items-center gap-1.5 pb-2">
           <button
             type="button"
@@ -172,12 +182,17 @@ export function InboxTree({ accounts, canManage }: Props) {
             </RailLink>
           )}
         </div>
-      </aside>
+      </motion.aside>
     );
   }
 
   return (
-    <aside className="w-60 shrink-0">
+    <motion.aside
+      initial={false}
+      animate={{ width: focusMode ? 0 : 240, opacity: focusMode ? 0 : 1 }}
+      transition={{ duration: 0.25, ease: [0.2, 0.8, 0.2, 1] }}
+      className={cn("shrink-0 overflow-hidden", focusMode && "pointer-events-none")}
+    >
       <div className="sticky top-3 space-y-4 max-h-[calc(100vh-1.5rem)] overflow-y-auto pr-1">
         <div className="flex justify-end -mb-2">
           <button
@@ -343,7 +358,7 @@ export function InboxTree({ accounts, canManage }: Props) {
           </Section>
         )}
       </div>
-    </aside>
+    </motion.aside>
   );
 }
 

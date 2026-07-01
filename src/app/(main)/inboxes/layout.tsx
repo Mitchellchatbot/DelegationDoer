@@ -6,6 +6,7 @@ import {
   visibleAccountIdsFor, canManageAssignments
 } from "@/lib/inbox-access";
 import { InboxTree, type InboxNode } from "@/components/InboxTree";
+import { InboxFocusProvider } from "@/components/InboxFocusProvider";
 
 export const dynamic = "force-dynamic";
 
@@ -44,10 +45,14 @@ export default async function InboxesLayout({
 
   return (
     // Full-width email shell: the inbox tree (left rail) + content fill all
-    // the available space rather than being capped to a centered column.
-    <div className="flex gap-5 w-full">
-      <InboxTree accounts={nodes} canManage={canManageAssignments(me)} />
-      <div className="flex-1 min-w-0">{children}</div>
-    </div>
+    // the available space rather than being capped to a centered column. The
+    // focus provider wraps both so the reply composer's Focus Mode can collapse
+    // the rail AND the thread list together (see InboxTree + InboxSplit).
+    <InboxFocusProvider>
+      <div className="flex gap-5 w-full">
+        <InboxTree accounts={nodes} canManage={canManageAssignments(me)} />
+        <div className="flex-1 min-w-0">{children}</div>
+      </div>
+    </InboxFocusProvider>
   );
 }

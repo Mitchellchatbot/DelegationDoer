@@ -6,6 +6,7 @@ import {
 import type {
   OutboundLead, LeadStatus, LeadEvent, ScheduledMessage
 } from "@/lib/outbound-leads";
+import type { LeadSmsThread } from "@/lib/support-data";
 import { OutboundLeadActionButtons } from "@/components/OutboundLeadActionButtons";
 import { OutboundLeadDemoSiteCard } from "@/components/OutboundLeadDemoSiteCard";
 import { cn } from "@/lib/utils";
@@ -14,6 +15,9 @@ interface Props {
   lead: OutboundLead;
   events: LeadEvent[];
   messages: ScheduledMessage[];
+  // The two-way inbound-SMS thread linked to this lead (from the customer-
+  // support tables), or null when the lead hasn't texted in.
+  smsThread: LeadSmsThread | null;
 }
 
 // Same status palette as the table — kept inline so adjusting one
@@ -68,7 +72,7 @@ function fmtTimestamp(iso: string): string {
   });
 }
 
-export function OutboundLeadDetail({ lead, events, messages }: Props) {
+export function OutboundLeadDetail({ lead, events, messages, smsThread }: Props) {
   const s = STATUS_STYLES[lead.status];
   // Group scheduled messages so the table reads as the operator thinks:
   // upcoming first (pending), then sent history, then failures, then
@@ -153,6 +157,10 @@ export function OutboundLeadDetail({ lead, events, messages }: Props) {
         completedAt={lead.wbCompletedAt}
       />
 
+      {smsThread && smsThread.messages.length > 0 && (
+        <TextConversation thread={smsThread} />
+      )}
+
       <div className="grid grid-cols-1 lg:grid-cols-[3fr_2fr] gap-4">
         <ScheduledMessages
           pending={pending}
@@ -161,6 +169,47 @@ export function OutboundLeadDetail({ lead, events, messages }: Props) {
           canceled={canceled}
         />
         <Timeline events={events} />
+      </div>
+    </div>
+  );
+}
+
+// The two-way text thread (the lead's inbound replies + any replies we sent
+// from the customer-support tab). Read-only here — replying happens in the CS
+// tab. Distinct from the automated "Scheduled messages" nurture queue.
+function TextConversation({ thread }: { thread: LeadSmsThread }) {
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white shadow-soft overflow-hidden">
+      <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between gap-2 flex-wrap">
+        <div>
+          <div className="text-[11px] uppercase tracking-[0.16em] font-semibold text-ink/55">
+            SMS
+          </div>
+          <h2 className="text-[18px] font-semibold text-ink mt-0.5">Text conversation</h2>
+        </div>
+        {thread.conversation.needsReview && (
+          <span className="inline-flex items-center px-2 py-0.5 rounded-full border text-[11px] font-semibold bg-amber-50 text-amber-700 border-amber-200/60">
+            Needs review
+          </span>
+        )}
+      </div>
+      <div className="p-5 space-y-2.5 max-h-[520px] overflow-y-auto bg-slate-50/40">
+        {thread.messages.map((m) => {
+          const inbound = m.direction === "inbound";
+          return (
+            <div key={m.id} className={cn("flex", inbound ? "justify-start" : "justify-end")}>
+              <div className={cn(
+                "max-w-[78%] rounded-2xl px-3.5 py-2 text-[13px] leading-snug shadow-sm whitespace-pre-wrap break-words",
+                inbound ? "bg-white border border-slate-200 text-ink" : "bg-accent text-white"
+              )}>
+                <div>{m.body || <span className="opacity-60 italic">(no text)</span>}</div>
+                <div className={cn("mt-1 text-[10.5px]", inbound ? "text-ink/40" : "text-white/70")}>
+                  {fmtTimestamp(m.sentAt)}
+                </div>
+              </div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );

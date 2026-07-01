@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 import { getLeadDetail } from "@/lib/outbound-leads";
+import { getLeadSmsThread } from "@/lib/support-data";
 import { OutboundLeadDetail } from "@/components/OutboundLeadDetail";
 import { extractWebsiteUrl } from "@/lib/website-builder-integration";
 
@@ -19,6 +20,9 @@ export default async function OutboundLeadDetailPage({
   const { id } = await params;
   const detail = await getLeadDetail(id);
   if (!detail) notFound();
+  // The inbound-SMS thread (the lead's replies + any support-tab replies) lives
+  // in the customer-support tables; surface it here so the rep sees it.
+  const smsThread = await getLeadSmsThread(id);
   // Pre-integration leads have `typeform_answers` populated but
   // `company_website_url` is still null. Surface the URL the rep would
   // see in the form by falling back to extractWebsiteUrl so the Demo
@@ -35,6 +39,7 @@ export default async function OutboundLeadDetailPage({
         lead={lead}
         events={detail.events}
         messages={detail.messages}
+        smsThread={smsThread}
       />
     </div>
   );

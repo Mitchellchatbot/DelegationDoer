@@ -173,3 +173,27 @@ export async function countNeedsReview(): Promise<number> {
   if (error) throw new Error(error.message);
   return count ?? 0;
 }
+
+// The inbound-SMS conversation linked to an outbound lead (if any). The lead
+// detail page uses this to surface the two-way text thread that otherwise lives
+// only in the customer-support tables — so a rep can see that a lead replied.
+export interface LeadSmsThread {
+  conversation: SupportConversation;
+  messages: SupportMessage[];
+}
+
+export async function getLeadSmsThread(leadId: string): Promise<LeadSmsThread | null> {
+  const supabase = getSupabaseAdmin();
+  const { data, error } = await supabase
+    .from("support_conversations")
+    .select("*")
+    .eq("linked_lead_id", leadId)
+    .order("last_message_at", { ascending: false, nullsFirst: false })
+    .limit(1);
+  if (error) throw new Error(error.message);
+  const row = (data ?? [])[0];
+  if (!row) return null;
+  const conversation = normalizeConversation(row as ConversationRow);
+  const messages = await listMessages(conversation.id);
+  return { conversation, messages };
+}

@@ -5,6 +5,7 @@ import {
   scheduleRecoveryDrip, scheduleEngagementDrip,
   type OutboundLead, type MessageKind
 } from "@/lib/outbound-leads";
+import { isFormEnrolledInFlow } from "@/lib/outbound-typeform-forms";
 import { manualTransitionTargets, type LeadStatus } from "@/lib/outbound-stages";
 import { FLOW_KINDS, canMoveToSequence, type FlowKey } from "@/lib/outbound-flow-config";
 import {
@@ -56,7 +57,12 @@ export async function applyManualTransition(
       const canceled = await cancelMessagesByKind(leadId, [
         "reminder_24h", "reminder_1h", "confirmation"
       ]);
-      const scheduled = await scheduleEngagementDrip(updated);
+      // Only auto-enroll in the engagement drip if the lead's form allows the
+      // flow. A "No flow" form still transitions to no_show — it just doesn't
+      // get the drip. Leads with no form (null) default to enrolled.
+      const scheduled = (await isFormEnrolledInFlow(updated.typeformFormId))
+        ? await scheduleEngagementDrip(updated)
+        : 0;
       await notifyMarkedNoShow(updated);
       return { lead: updated, scheduled, canceled };
     }
@@ -128,6 +134,14 @@ export async function moveLeadToSequence(
   }
   const lead = await getLeadById(leadId);
   if (!lead) throw new Error(`Lead not found: ${leadId}`);
+
+  // Respect the per-form flow toggle even for manual drags — a "No flow" form's
+  // leads can't be dropped into a drip until the operator re-enables it.
+  if (lead.typeformFormId && !(await isFormEnrolledInFlow(lead.typeformFormId))) {
+    throw new Error(
+      `This lead's form is set to "No flow" — enable it in Manage forms before adding leads to a sequence.`
+    );
+  }
 
   const keep = new Set<MessageKind>(FLOW_KINDS[to]);
   const canceled = await cancelMessagesByKind(

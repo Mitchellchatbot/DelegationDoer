@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getSupabaseAdmin } from "@/lib/supabase-admin";
+import { getSupabaseAdmin, fetchAllRows } from "@/lib/supabase-admin";
 
 export const dynamic = "force-dynamic";
 
@@ -36,14 +36,24 @@ interface TaskRow {
 export async function GET() {
   const supabase = getSupabaseAdmin();
 
+  // task_handoffs and tasks can exceed Supabase's ~1000-row cap, so they're
+  // paged via fetchAllRows — otherwise the completion + hold-time aggregates
+  // run over an arbitrary slice. tasks is filtered to real, non-deleted rows
+  // (archived done tasks kept as completion history). users stays single-shot.
   const [handoffsRes, usersRes, tasksRes] = await Promise.all([
-    supabase
-      .from("task_handoffs")
-      .select("task_id, from_user_id, to_user_id, stage, held_minutes, created_at"),
+    fetchAllRows<HandoffRow>(() =>
+      supabase
+        .from("task_handoffs")
+        .select("task_id, from_user_id, to_user_id, stage, held_minutes, created_at")
+    ),
     supabase.from("users").select("id, name, avatar_url, role"),
-    supabase
-      .from("tasks")
-      .select("id, title, assignee_id, estimated_hours, actual_hours, status, completed_at")
+    fetchAllRows<TaskRow>(() =>
+      supabase
+        .from("tasks")
+        .select("id, title, assignee_id, estimated_hours, actual_hours, status, completed_at")
+        .eq("is_draft", false)
+        .is("deleted_at", null)
+    )
   ]);
 
   if (handoffsRes.error) return NextResponse.json({ error: handoffsRes.error.message }, { status: 500 });

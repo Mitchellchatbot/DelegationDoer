@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getSupabaseAdmin } from "@/lib/supabase-admin";
+import { getSupabaseAdmin, fetchAllRows } from "@/lib/supabase-admin";
 import { requireCurrentUserId } from "@/lib/session";
 
 export const dynamic = "force-dynamic";
@@ -39,14 +39,25 @@ export async function GET() {
   const now = new Date();
   const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString();
 
+  // tasks / task_handoffs / time_entries can each exceed Supabase's ~1000-row
+  // cap, so they're paged via fetchAllRows — otherwise per-user completion,
+  // hold-time, and on-shift counts run over an arbitrary slice. tasks is also
+  // filtered to real, non-deleted rows (archived done tasks are kept — they're
+  // legitimate completion history). users / month-scoped kudos stay single-shot.
   const [usersRes, tasksRes, kudosRes, handoffRes, timeRes] = await Promise.all([
     supabase.from("users").select("id, name, avatar_url, role"),
-    supabase
-      .from("tasks")
-      .select("id, assignee_id, status, estimated_hours, actual_hours, completed_at, created_at"),
+    fetchAllRows<TaskRow>(() =>
+      supabase
+        .from("tasks")
+        .select("id, assignee_id, status, estimated_hours, actual_hours, completed_at, created_at")
+        .eq("is_draft", false)
+        .is("deleted_at", null)
+    ),
     supabase.from("kudos").select("to_user_id, created_at").gte("created_at", monthStart),
-    supabase.from("task_handoffs").select("from_user_id, held_minutes"),
-    supabase.from("time_entries").select("user_id, started_at, ended_at").gte("started_at", monthStart)
+    fetchAllRows<HandoffRow>(() => supabase.from("task_handoffs").select("from_user_id, held_minutes")),
+    fetchAllRows<TimeRow>(() =>
+      supabase.from("time_entries").select("user_id, started_at, ended_at").gte("started_at", monthStart)
+    )
   ]);
   if (usersRes.error) return NextResponse.json({ error: usersRes.error.message }, { status: 500 });
   if (tasksRes.error) return NextResponse.json({ error: tasksRes.error.message }, { status: 500 });

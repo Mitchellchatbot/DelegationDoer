@@ -17,6 +17,7 @@ import { MagicLinkButton } from "@/components/MagicLinkButton";
 import { OffboardButton } from "@/components/OffboardButton";
 import { DepartmentSlackSection } from "@/components/DepartmentSlackSection";
 import { InvitePersonDialog } from "@/components/InvitePersonDialog";
+import { HoverScrollArea } from "@/components/HoverScrollArea";
 import { userCapacity } from "@/lib/capacity";
 import { ROLE_LABELS } from "@/lib/auth";
 import { useCurrentUser } from "@/lib/user-context";
@@ -342,7 +343,7 @@ function PeopleTab({
         />
       </div>
       <div className="card overflow-hidden">
-        <div className="overflow-x-auto">
+        <HoverScrollArea>
         <table className="w-full text-sm min-w-[920px]">
           <thead className="bg-surface2/60">
             <tr className="text-left text-xs text-muted">
@@ -495,7 +496,7 @@ function PeopleTab({
             })}
           </tbody>
         </table>
-        </div>
+        </HoverScrollArea>
       </div>
     </div>
   );

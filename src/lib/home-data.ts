@@ -72,6 +72,7 @@ export async function getTodayTasksForUser(userId: string, limit = 8): Promise<H
       .select("id, title, status, priority, due_date")
       .eq("assignee_id", userId)
       .eq("is_draft", false)
+      .is("deleted_at", null)
       .in("status", ["in_progress", "urgent"])
       .limit(20),
     supabase
@@ -79,6 +80,7 @@ export async function getTodayTasksForUser(userId: string, limit = 8): Promise<H
       .select("id, title, status, priority, due_date")
       .eq("assignee_id", userId)
       .eq("is_draft", false)
+      .is("deleted_at", null)
       .neq("status", "done")
       .gte("due_date", todayIso)
       .lt("due_date", tomorrowIso)
@@ -246,6 +248,7 @@ export async function getTeamStatusToday(
       .select("assignee_id")
       .in("assignee_id", ids)
       .eq("is_draft", false)
+      .is("deleted_at", null)
       .neq("status", "done")
       .lt("due_date", nowIso)
   ]);
@@ -306,6 +309,7 @@ export async function getTodayDeliverables(
     .from("tasks")
     .select("id, title, status, priority, due_date, assignee_id")
     .eq("is_draft", false)
+    .is("deleted_at", null)
     .neq("status", "done")
     .gte("due_date", todayIso)
     .lt("due_date", tomorrowIso)
@@ -377,6 +381,7 @@ export async function getStalledTaskCount(): Promise<number> {
     .select("id", { count: "exact", head: true })
     .neq("status", "done")
     .eq("is_draft", false)
+    .is("deleted_at", null)
     .lt("last_activity_at", cutoff)
     .not("assignee_id", "is", null);
   return count ?? 0;
@@ -400,6 +405,7 @@ export async function getLeaderOpenTasks(userId: string, limit = 30): Promise<Le
     .eq("assignee_id", userId)
     .neq("status", "done")
     .eq("is_draft", false)
+    .is("deleted_at", null)
     .order("priority", { ascending: false })
     .order("due_date", { ascending: true, nullsFirst: false })
     .limit(limit);
@@ -493,6 +499,7 @@ export async function getLeaderPulse(opts: {
       .select("id, title, client_name, created_at, status")
       .contains("tags", ["seo-report-request"])
       .neq("status", "done")
+      .is("deleted_at", null)
       .gte("created_at", sinceIso)
       .order("created_at", { ascending: false })
       .limit(8);
@@ -529,7 +536,7 @@ export async function getLeaderPulse(opts: {
         ? supabase.from("users").select("id, name").in("id", Array.from(userIds))
         : Promise.resolve({ data: [] as { id: string; name: string | null }[] }),
       taskIds.length > 0
-        ? supabase.from("tasks").select("id, title, client_name").in("id", taskIds)
+        ? supabase.from("tasks").select("id, title, client_name").in("id", taskIds).is("deleted_at", null)
         : Promise.resolve({ data: [] as { id: string; title: string | null; client_name: string | null }[] })
     ]);
     const nameById = new Map((users ?? []).map((u) => [u.id, u.name ?? "Someone"]));
@@ -557,6 +564,7 @@ export async function getLeaderPulse(opts: {
       .select("id, title, client_name, assignee_id, last_activity_at, status")
       .neq("status", "done")
       .eq("is_draft", false)
+      .is("deleted_at", null)
       .lt("last_activity_at", stalledCutoffIso)
       .not("assignee_id", "is", null)
       .order("last_activity_at", { ascending: true })
@@ -659,7 +667,7 @@ export async function getLeaderPulse(opts: {
     const rows = (data ?? []) as Array<{ id: string; task_id: string | null; routed_via: string | null; reason: string | null; needs_review: boolean; created_at: string }>;
     const taskIds = rows.map((r) => r.task_id).filter((id): id is string => !!id);
     const { data: taskRows } = taskIds.length > 0
-      ? await supabase.from("tasks").select("id, title, client_name").in("id", taskIds)
+      ? await supabase.from("tasks").select("id, title, client_name").in("id", taskIds).is("deleted_at", null)
       : { data: [] as { id: string; title: string | null; client_name: string | null }[] };
     const taskById = new Map((taskRows ?? []).map((t) => [t.id, t]));
     for (const r of rows) {
@@ -683,6 +691,7 @@ export async function getLeaderPulse(opts: {
       .from("tasks")
       .select("id, title, client_name, completed_at, assignee_id")
       .eq("status", "done")
+      .is("deleted_at", null)
       .not("completed_at", "is", null)
       .gte("completed_at", completedSince)
       .order("completed_at", { ascending: false })
@@ -719,6 +728,7 @@ export async function getLeaderPulse(opts: {
       .in("priority", ["critical", "high"])
       .neq("status", "done")
       .eq("is_draft", false)
+      .is("deleted_at", null)
       .gte("created_at", newSince)
       .order("created_at", { ascending: false })
       .limit(5);
@@ -1112,6 +1122,7 @@ async function getOverdueStalledBreakdown(
       .from("tasks")
       .select("id", { count: "exact", head: true })
       .eq("is_draft", false)
+      .is("deleted_at", null)
       .neq("status", "done")
       .not("assignee_id", "is", null);
     return assigneeFilter ? q.in("assignee_id", assigneeFilter) : q;
@@ -1158,7 +1169,8 @@ async function countPendingMeetings(
     .from("tasks")
     .select("id, department_id")
     .in("id", allTaskIds)
-    .eq("is_draft", true);
+    .eq("is_draft", true)
+    .is("deleted_at", null);
   if (scopedDepartmentIds && scopedDepartmentIds.length > 0) {
     q = q.in("department_id", scopedDepartmentIds);
   }

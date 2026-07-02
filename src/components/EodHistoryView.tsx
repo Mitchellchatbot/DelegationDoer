@@ -39,8 +39,9 @@ interface PersonOption {
 }
 
 // Historical feed of submitted EODs. Leaders see everyone, dept heads
-// see their team, workers see themselves. Defaults to the last 30
-// days; dropdown lets you scope to one person or change the window.
+// see their team, workers see their own department (self-only if they
+// belong to no department). Defaults to the last 30 days; dropdown lets
+// you scope to one person or change the window.
 //
 // `embedded` mounts the same view inside another surface (the leader
 // console "Day reports" tab): it drops the PageHero, the outer max-width

@@ -142,8 +142,8 @@ export function Topbar({ user }: { user: User }) {
           "Home › Sales › Sales Tracker" navigation hint. Home icon is
           always the first crumb and links back to /home; subsequent
           crumbs come from the URL path. */}
-      <nav aria-label="Breadcrumb" className="min-w-0 justify-self-start">
-        <ol className="inline-flex items-center gap-1.5 px-3 h-9 rounded-full bg-slate-50 border border-slate-200 text-[12.5px] text-ink/65 max-w-full overflow-hidden">
+      <nav aria-label="Breadcrumb" className="justify-self-start">
+        <ol className="inline-flex items-center gap-1.5 px-3 h-9 rounded-full bg-slate-50 border border-slate-200 text-[12.5px] text-ink/65 whitespace-nowrap">
           <li className="flex items-center shrink-0">
             <Link
               href="/home"

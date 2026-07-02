@@ -42,8 +42,14 @@ export interface SupportPollResult {
   reconciled: number; // half-routed lead conversations re-linked this run
 }
 
-export async function runSupportInboxPoll(): Promise<SupportPollResult> {
-  const watermarkMs = Date.now() - POLL_LOOKBACK_MS;
+// `lookbackMs` widens the scan horizon for a one-time historical backfill (the
+// /api/cron/support-inbox-poll route passes ?days=N). Defaults to the 24h
+// backstop window. Every gate below derives from `watermarkMs`, so a large
+// lookback re-offers old inbound the normal window excludes — deduped on insert.
+export async function runSupportInboxPoll(
+  opts?: { lookbackMs?: number }
+): Promise<SupportPollResult> {
+  const watermarkMs = Date.now() - (opts?.lookbackMs ?? POLL_LOOKBACK_MS);
   const chats = await listBlooioChats(); // sorted by lastMessageTime desc
 
   let scanned = 0;
@@ -64,11 +70,14 @@ export async function runSupportInboxPoll(): Promise<SupportPollResult> {
     // the window every remaining chat does too — safe to BREAK.
     const lastMsgMs = chat.lastMessageTime ? new Date(chat.lastMessageTime).getTime() : 0;
     if (lastMsgMs && lastMsgMs < watermarkMs) break;
-    // Within the in-window chats, skip ones whose newest INBOUND predates the
-    // window (e.g. a chat kept "recent" only by our own outbound replies) — they
-    // have no inbound to recover, so scanning them is wasted Blooio fetches.
+    // Within the in-window chats, skip only ones we can POSITIVELY prove have no
+    // recoverable inbound — i.e. their newest INBOUND predates the window (a chat
+    // kept "recent" only by our own outbound replies). When Blooio omits
+    // last_inbound_time (lastInMs === 0) we can't prove that, so we must NOT skip:
+    // fall through and scan. The per-message direction + window filter below is
+    // the real correctness gate; this watermark is only a fetch-saving hint.
     const lastInMs = chat.lastInboundTime ? new Date(chat.lastInboundTime).getTime() : 0;
-    if (!lastInMs || lastInMs < watermarkMs) continue;
+    if (lastInMs && lastInMs < watermarkMs) continue;
 
     scanned++;
     const messages = await getBlooioChatMessages(chat.id); // oldest first

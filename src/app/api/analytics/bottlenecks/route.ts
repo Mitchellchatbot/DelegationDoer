@@ -26,7 +26,7 @@ interface TaskRow {
   estimated_hours: number;
   actual_hours: number;
   status: string;
-  last_activity_at: string;
+  completed_at: string | null;
 }
 
 // GET /api/analytics/bottlenecks — aggregates that drive the bottleneck
@@ -43,7 +43,7 @@ export async function GET() {
     supabase.from("users").select("id, name, avatar_url, role"),
     supabase
       .from("tasks")
-      .select("id, title, assignee_id, estimated_hours, actual_hours, status, last_activity_at")
+      .select("id, title, assignee_id, estimated_hours, actual_hours, status, completed_at")
   ]);
 
   if (handoffsRes.error) return NextResponse.json({ error: handoffsRes.error.message }, { status: 500 });
@@ -195,7 +195,7 @@ export async function GET() {
       totalCount: 0
     };
     prev.totalCount += 1;
-    if (t.last_activity_at && new Date(t.last_activity_at).getTime() >= weekAgo) {
+    if (t.completed_at && new Date(t.completed_at).getTime() >= weekAgo) {
       prev.weekCount += 1;
     }
     completionsByUser.set(t.assignee_id, prev);
@@ -207,15 +207,15 @@ export async function GET() {
   // 6. Recently completed: latest 8 done tasks for the "you just shipped
   //    this!" reassurance feed.
   const recentCompletions = tasks
-    .filter((t) => t.status === "done" && t.assignee_id)
-    .sort((a, b) => +new Date(b.last_activity_at) - +new Date(a.last_activity_at))
+    .filter((t) => t.status === "done" && t.assignee_id && t.completed_at)
+    .sort((a, b) => +new Date(b.completed_at!) - +new Date(a.completed_at!))
     .slice(0, 8)
     .map((t) => {
       const u = t.assignee_id ? usersById.get(t.assignee_id) : null;
       return {
         taskId: t.id,
         title: t.title,
-        completedAt: t.last_activity_at,
+        completedAt: t.completed_at,
         assigneeId: t.assignee_id,
         assigneeName: u?.name ?? null,
         assigneeAvatarUrl: u?.avatar_url ?? null,
@@ -235,8 +235,8 @@ export async function GET() {
     completionsByDayMap.set(toISODate(d), 0);
   }
   for (const t of tasks) {
-    if (t.status !== "done" || !t.last_activity_at) continue;
-    const key = toISODate(new Date(t.last_activity_at));
+    if (t.status !== "done" || !t.completed_at) continue;
+    const key = toISODate(new Date(t.completed_at));
     if (completionsByDayMap.has(key)) {
       completionsByDayMap.set(key, (completionsByDayMap.get(key) ?? 0) + 1);
     }

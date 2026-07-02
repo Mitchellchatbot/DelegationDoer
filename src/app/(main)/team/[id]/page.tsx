@@ -58,13 +58,14 @@ export default async function ProfilePage({ params }: { params: { id: string } }
 
   // Throughput = a few simple metrics computed from the user's tasks.
   // No reliance on the (often unwritten) users.throughput JSON column.
-  // "This month" uses lastActivityAt as a "completed at" proxy — when
-  // a task moves to done its last_activity_at updates, so it's a good
-  // signal for completion timing without a dedicated completed_at col.
+  // "This month" keys off completedAt — the stable done-transition timestamp
+  // (set on done, cleared on reopen) — matching the leaderboard, EOD digest,
+  // and analytics. A done task with a null completedAt (legacy pre-migration)
+  // simply doesn't fall in the month window.
   const now = new Date();
   const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString();
   const doneTasks = myTasks.filter((t) => t.status === "done");
-  const doneThisMonth = doneTasks.filter((t) => t.lastActivityAt >= monthStart);
+  const doneThisMonth = doneTasks.filter((t) => t.completedAt != null && t.completedAt >= monthStart);
   const totalEstimated = doneTasks.reduce((sum, t) => sum + (t.estimatedHours ?? 0), 0);
   const totalActual = doneTasks.reduce((sum, t) => sum + (t.actualHours ?? 0), 0);
   const accuracy = totalEstimated > 0 ? totalActual / totalEstimated : null;

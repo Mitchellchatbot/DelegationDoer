@@ -11,7 +11,7 @@ interface TaskRow {
   status: string;
   estimated_hours: number;
   actual_hours: number;
-  last_activity_at: string;
+  completed_at: string | null;
   created_at: string;
 }
 interface KudosRow { to_user_id: string; }
@@ -43,7 +43,7 @@ export async function GET() {
     supabase.from("users").select("id, name, avatar_url, role"),
     supabase
       .from("tasks")
-      .select("id, assignee_id, status, estimated_hours, actual_hours, last_activity_at, created_at"),
+      .select("id, assignee_id, status, estimated_hours, actual_hours, completed_at, created_at"),
     supabase.from("kudos").select("to_user_id, created_at").gte("created_at", monthStart),
     supabase.from("task_handoffs").select("from_user_id, held_minutes"),
     supabase.from("time_entries").select("user_id, started_at, ended_at").gte("started_at", monthStart)
@@ -62,8 +62,17 @@ export async function GET() {
 
   const rows = users.map((u) => {
     const myTasks = tasks.filter((t) => t.assignee_id === u.id);
+    // "Done this month" is keyed off completed_at — the stable
+    // done-transition timestamp (set on done, cleared on reopen), matching
+    // the EOD digest (src/lib/eod.ts). last_activity_at was wrong here: it
+    // bumps on any edit (comment, message, timer, extension), so tasks
+    // finished this month but untouched since were undercounted, and tasks
+    // finished last month but touched today were miscounted as this month's.
     const doneThisMonth = myTasks.filter(
-      (t) => t.status === "done" && new Date(t.last_activity_at).getTime() >= monthStartMs
+      (t) =>
+        t.status === "done" &&
+        t.completed_at != null &&
+        new Date(t.completed_at).getTime() >= monthStartMs
     );
     const doneAllTime = myTasks.filter((t) => t.status === "done");
     const estHours = doneThisMonth.reduce((s, t) => s + Number(t.estimated_hours ?? 0), 0);
@@ -119,6 +128,15 @@ export async function GET() {
     };
   });
 
-  rows.sort((a, b) => b.compositeScore - a.compositeScore);
+  // Rank by composite score; break ties deterministically by more
+  // completions this month, then faster average hold time (null = worst),
+  // then name so the order is stable across refreshes.
+  rows.sort(
+    (a, b) =>
+      b.compositeScore - a.compositeScore ||
+      b.completedThisMonth - a.completedThisMonth ||
+      (a.avgHoldMinutes ?? Infinity) - (b.avgHoldMinutes ?? Infinity) ||
+      a.name.localeCompare(b.name)
+  );
   return NextResponse.json({ leaderboard: rows });
 }

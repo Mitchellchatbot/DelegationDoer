@@ -157,6 +157,10 @@ export async function GET(req: Request) {
         project_id: null,
         due_date: null,
         inactive_flag: false,
+        // Seeded tasks are done "today" — stamp completed_at so they surface
+        // in the completed_at-keyed EOD digest and performance leaderboard
+        // (both filter on completed_at, not last_activity_at).
+        completed_at: lastActivity.toISOString(),
         last_activity_at: lastActivity.toISOString(),
         created_at: new Date(lastActivity.getTime() - 6 * 3_600_000).toISOString(),
         blocks_task_ids: [],

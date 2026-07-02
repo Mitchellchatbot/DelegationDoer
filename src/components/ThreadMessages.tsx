@@ -1,9 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Send, Inbox, Paperclip, SendHorizontal, Reply } from "lucide-react";
+import { Send, Inbox, Paperclip, SendHorizontal, Reply, Loader2 } from "lucide-react";
 import type { MissiveMessage } from "@/lib/missive-client";
 import { shortName, rawEmail, formatBytes, messageSnippet } from "@/lib/email-format";
+import { fetchDeferredBody } from "@/lib/message-body-cache";
 import { Avatar } from "@/components/Avatar";
 import { ForwardButton } from "@/components/ForwardButton";
 import { EmailBody } from "@/components/EmailBody";
@@ -201,10 +202,19 @@ export function ThreadMessages({
                 </header>
 
                 {/* Body — sandboxed iframe so the email's <style> + font rules
-                    can't cascade into the app. Plain-text fallback gets prose. */}
+                    can't cascade into the app. Plain-text fallback gets prose.
+                    Deferred bodies (older messages, withheld on thread open) are
+                    fetched on expand — this card only mounts when expanded. */}
                 <div className="p-5">
                   {m.body_html ? (
                     <EmailBody html={m.body_html} />
+                  ) : m.body_deferred ? (
+                    <DeferredMessageBody
+                      messageId={m.id}
+                      accountId={accountId}
+                      threadId={threadId}
+                      fallbackText={m.body_text}
+                    />
                   ) : (
                     <pre className="text-sm whitespace-pre-wrap font-sans leading-relaxed">
                       {m.body_text || "(empty)"}
@@ -243,6 +253,64 @@ export function ThreadMessages({
         );
       })}
     </div>
+  );
+}
+
+// Renders a message body that was deferred on thread open. Mounts only when its
+// message is expanded (the expanded card is conditionally rendered), so it
+// fetches on first expand; the module cache makes collapse→re-expand instant and
+// shares the request with a reply that quotes the same message.
+function DeferredMessageBody({
+  messageId,
+  accountId,
+  threadId,
+  fallbackText
+}: {
+  messageId: string;
+  accountId: string;
+  threadId: string;
+  fallbackText: string | null;
+}) {
+  const [state, setState] = useState<
+    | { status: "loading" }
+    | { status: "error" }
+    | { status: "ready"; html: string | null; text: string | null }
+  >({ status: "loading" });
+
+  useEffect(() => {
+    const ac = new AbortController();
+    setState({ status: "loading" });
+    fetchDeferredBody(messageId, accountId, threadId, ac.signal)
+      .then((body) =>
+        setState({ status: "ready", html: body.body_html, text: body.body_text })
+      )
+      .catch((err: unknown) => {
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        setState({ status: "error" });
+      });
+    return () => ac.abort();
+  }, [messageId, accountId, threadId]);
+
+  if (state.status === "loading") {
+    return (
+      <div className="flex items-center gap-2 text-sm text-ink/50 py-4">
+        <Loader2 className="w-4 h-4 animate-spin" /> Loading message…
+      </div>
+    );
+  }
+  if (state.status === "error") {
+    // Fall back to whatever text we have (usually none) rather than a blank body.
+    return (
+      <pre className="text-sm whitespace-pre-wrap font-sans leading-relaxed text-ink/70">
+        {fallbackText || "Couldn't load this message."}
+      </pre>
+    );
+  }
+  if (state.html) return <EmailBody html={state.html} />;
+  return (
+    <pre className="text-sm whitespace-pre-wrap font-sans leading-relaxed">
+      {state.text || fallbackText || "(empty)"}
+    </pre>
   );
 }
 

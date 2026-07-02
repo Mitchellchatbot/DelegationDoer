@@ -88,6 +88,12 @@ export interface MissiveMessage {
   has_attachments: boolean;
   // Only populated by getThread; the thread-list endpoints omit it.
   attachments?: MissiveMessageAttachment[];
+  // Set only on getThread(..., { deferBodies: true }) responses from an
+  // upgraded clone. `snippet` is a server-computed one-line preview for the
+  // collapsed stub; `body_deferred` marks a message whose body_html/body_text
+  // were withheld (null) and must be fetched on demand via fetchMessageBody.
+  snippet?: string | null;
+  body_deferred?: boolean;
 }
 
 export interface MissiveThreadDetail {
@@ -324,13 +330,39 @@ export async function listThreadsPaged(opts: ListThreadsOpts = {}): Promise<List
   };
 }
 
-export async function getThread(threadId: string): Promise<MissiveThreadDetail> {
-  const data = await missiveFetch<MissiveThreadDetail>(`/api/threads/${encodeURIComponent(threadId)}`);
+// Fetch a thread + its messages. `deferBodies` opts into the clone's
+// ?defer_bodies=1 mode: only the latest message keeps its body inline, the rest
+// arrive as metadata + snippet with body_deferred=true (fetch on demand via
+// fetchMessageBody). Default is OFF — every existing caller (reply/forward
+// quoting, AI draft, classify, scoring) keeps full bodies. Only the reading-pane
+// loader (loadThreadDetail) opts in. An old clone ignores the param → full
+// bodies, so this stays safe before the clone is deployed.
+export async function getThread(
+  threadId: string,
+  opts: { deferBodies?: boolean } = {}
+): Promise<MissiveThreadDetail> {
+  const qs = opts.deferBodies ? "?defer_bodies=1" : "";
+  const data = await missiveFetch<MissiveThreadDetail>(
+    `/api/threads/${encodeURIComponent(threadId)}${qs}`
+  );
   return {
     ...data,
     thread: normalizeThread(data.thread),
     messages: (data.messages ?? []).map(normalizeMessage)
   };
+}
+
+// Fetch a single message's body (HTML + text) from the clone, for the
+// lazy/deferred-body flow. Mirrors fetchAttachment's service-token auth but
+// returns parsed JSON. Caller is responsible for per-user access control before
+// invoking — this carries the workspace-wide service token.
+export async function fetchMessageBody(
+  messageId: string
+): Promise<{ body_html: string | null; body_text: string | null }> {
+  const data = await missiveFetch<{ body_html: string | null; body_text: string | null }>(
+    `/api/messages/${encodeURIComponent(messageId)}/body`
+  );
+  return { body_html: data.body_html ?? null, body_text: data.body_text ?? null };
 }
 
 // Stream an attachment's raw bytes from the clone. Returns the upstream

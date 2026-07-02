@@ -63,7 +63,10 @@ export async function loadThreadDetail(
   let allAccounts;
   try {
     [detail, allAccounts] = await Promise.all([
-      getThread(threadId),
+      // deferBodies: the reading pane renders only the latest message on open
+      // and fetches older bodies on expand — so ship just the latest body + a
+      // snippet per message. This is the ONLY caller that opts in.
+      getThread(threadId, { deferBodies: true }),
       listAccounts().catch(() => [])
     ]);
   } catch (err) {

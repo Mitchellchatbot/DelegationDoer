@@ -97,6 +97,10 @@ export async function POST(req: NextRequest) {
         project_id: null,
         due_date: s(r.dueDate),
         inactive_flag: false,
+        // Stamp completed_at for rows imported as already-done so they count
+        // in completed_at-keyed views (EOD digest + performance leaderboard);
+        // null otherwise, cleared on any later reopen by the tasks PATCH route.
+        completed_at: status === "done" ? now : null,
         last_activity_at: now,
         created_at: now,
         blocks_task_ids: [],

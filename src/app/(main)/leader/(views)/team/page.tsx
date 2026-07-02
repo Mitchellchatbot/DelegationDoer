@@ -120,7 +120,7 @@ export default function TeamOverviewPage() {
 
   const open = scopedTasks.filter((t) => t.status !== "done");
   const doneThisWeek = scopedTasks.filter(
-    (t) => t.status === "done" && new Date(t.lastActivityAt).getTime() >= weekAgoMs
+    (t) => t.status === "done" && t.completedAt != null && new Date(t.completedAt).getTime() >= weekAgoMs
   );
   const overdue = open.filter(
     (t) => t.dueDate && new Date(t.dueDate).getTime() < now
@@ -153,8 +153,8 @@ export default function TeamOverviewPage() {
   const recentlyDone = doneThisWeek
     .sort(
       (a, b) =>
-        new Date(b.lastActivityAt).getTime() -
-        new Date(a.lastActivityAt).getTime()
+        new Date(b.completedAt ?? 0).getTime() -
+        new Date(a.completedAt ?? 0).getTime()
     )
     .slice(0, 6);
 

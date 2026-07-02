@@ -880,12 +880,13 @@ function OrgChartTab({ people, departments, tasks }: { people: User[]; departmen
   const leaders = people.filter((u) => u.role === "leader");
 
   // Org-wide aggregates. "Completed this week" counts tasks whose status is
-  // `done` AND whose lastActivityAt — the timestamp the task changed state —
-  // landed within the last 7 days. There's no separate completedAt column
-  // but lastActivityAt is the canonical write on status change.
+  // `done` AND whose completedAt — the stable done-transition timestamp (set
+  // on done, cleared on reopen) — landed within the last 7 days. Matches the
+  // leaderboard, EOD digest, and analytics; last_activity_at was wrong here
+  // because it bumps on any edit (comment, timer, extension).
   const weekAgo = Date.now() - 7 * 86_400_000;
   const completedThisWeek = tasks.filter(
-    (t) => t.status === "done" && new Date(t.lastActivityAt).getTime() >= weekAgo
+    (t) => t.status === "done" && t.completedAt != null && new Date(t.completedAt).getTime() >= weekAgo
   ).length;
   const openCount = tasks.filter((t) => t.status !== "done").length;
   const urgentCount = tasks.filter(

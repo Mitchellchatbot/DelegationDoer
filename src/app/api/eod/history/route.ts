@@ -14,7 +14,9 @@ export const dynamic = "force-dynamic";
 //     - leaders + admins   → every submission
 //     - department_heads   → submissions by anyone in a dept they head,
 //                            plus their own
-//     - workers            → only their own
+//     - workers            → submissions by anyone in a department they
+//                            belong to, plus their own (self-only if they
+//                            have no department)
 //
 //   Optional filters (applied on top of visibility, never broaden it):
 //     - userId         → narrow to one person
@@ -63,7 +65,9 @@ export async function GET(req: NextRequest) {
 
     if (isLeader) {
       visibleUserIds = null;
-    } else if (me.role === "department_head" && (me.departmentIds ?? []).length > 0) {
+    } else if ((me.departmentIds ?? []).length > 0) {
+      // Non-leaders (workers + dept heads) see submissions by anyone in a
+      // department they belong to, plus their own.
       const { data } = await supabase
         .from("department_members")
         .select("user_id")
@@ -71,12 +75,11 @@ export async function GET(req: NextRequest) {
       const ids = Array.from(new Set(
         ((data ?? []) as { user_id: string }[]).map((r) => r.user_id)
       ));
-      // Always include the caller so a dept head sees their own past
-      // submissions too.
+      // Always include the caller so they see their own past submissions too.
       if (!ids.includes(callerId)) ids.push(callerId);
       visibleUserIds = ids;
     } else {
-      // Worker — only their own.
+      // No department — only their own.
       visibleUserIds = [callerId];
     }
 

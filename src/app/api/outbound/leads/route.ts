@@ -4,6 +4,7 @@ import { getUserById } from "@/lib/server-data";
 import { canSeeOutbound } from "@/lib/auth";
 import { createLeadManual } from "@/lib/outbound-leads";
 import { getForm } from "@/lib/outbound-typeform-forms";
+import { normalizeE164 } from "@/lib/phone";
 
 export const dynamic = "force-dynamic";
 
@@ -14,18 +15,6 @@ export const dynamic = "force-dynamic";
 // contact channel (phone and/or email); the SMS sequence can only start if
 // there's a phone. Adding a lead that already exists (same phone or email)
 // returns 409 rather than creating a duplicate.
-
-// Minimal E.164 normalizer — nothing reusable exists in the repo (Typeform
-// passes phones already-E.164). Strip everything but digits/+, default a bare
-// 10-digit number to US (+1). Returns null when the result isn't a plausible
-// E.164 number.
-function normalizeE164(raw: string): string | null {
-  let digits = raw.replace(/[^\d+]/g, "");
-  if (!digits.startsWith("+")) {
-    digits = digits.length === 10 ? "+1" + digits : "+" + digits;
-  }
-  return /^\+\d{8,15}$/.test(digits) ? digits : null;
-}
 
 export async function POST(req: NextRequest) {
   const userId = await requireCurrentUserId();

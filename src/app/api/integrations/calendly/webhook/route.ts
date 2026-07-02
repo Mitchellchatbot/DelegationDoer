@@ -7,6 +7,7 @@ import {
 } from "@/lib/outbound-leads";
 import { notifyMeetingBooked, notifyMeetingCanceled } from "@/lib/outbound-slack";
 import { isFormEnrolledInFlow } from "@/lib/outbound-typeform-forms";
+import { normalizeE164 } from "@/lib/phone";
 
 export const dynamic = "force-dynamic";
 
@@ -127,8 +128,12 @@ export async function POST(req: NextRequest) {
 
   // Look up the lead — phone preferred, email fallback. Calendly is
   // strict about email, so most flows will have a usable address.
+  // Calendly delivers phones in local/free-form shapes ("(415) 555-1234")
+  // while outbound_leads stores E.164 — normalize before the exact-match
+  // lookup or it silently misses. Unparseable → skip phone, fall to email.
   let lead = null;
-  const phone = extractPhone(invitee);
+  const rawPhone = extractPhone(invitee);
+  const phone = rawPhone ? normalizeE164(rawPhone) : null;
   if (phone) lead = await findLeadByPhone(phone);
   if (!lead && invitee.email) lead = await findLeadByEmail(invitee.email);
 
@@ -139,7 +144,8 @@ export async function POST(req: NextRequest) {
     console.warn("[calendly-webhook] no matching lead", {
       event: eventKind,
       inviteeEmail: invitee.email,
-      phone
+      rawPhone,
+      normalizedPhone: phone
     });
     return NextResponse.json({ ok: true, skipped: "no matching lead" });
   }

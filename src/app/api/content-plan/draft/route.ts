@@ -105,13 +105,19 @@ async function draftEmailBody(args: {
   ].filter(Boolean).join("\n");
 
   const client = await getAnthropic();
-  const result = await client.messages.create({
-    model: MODELS.chat,
-    max_tokens: 1800,
-    temperature: 0.55,
-    system: BELLA_TEMPLATE_GUIDANCE,
-    messages: [{ role: "user", content: userPrompt }]
-  });
+  // Stream the completion so SSE bytes keep flowing over the socket. A
+  // non-streaming call leaves the connection idle for the whole generation,
+  // and an intermediary can drop the idle connection -> "Premature close".
+  // .finalMessage() returns the same Message shape as .create().
+  const result = await client.messages
+    .stream({
+      model: MODELS.chat,
+      max_tokens: 1800,
+      temperature: 0.55,
+      system: BELLA_TEMPLATE_GUIDANCE,
+      messages: [{ role: "user", content: userPrompt }]
+    })
+    .finalMessage();
 
   const block = result.content.find((b) => b.type === "text");
   const raw = block && block.type === "text" ? block.text.trim() : "";

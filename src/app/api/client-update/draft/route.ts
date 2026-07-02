@@ -241,13 +241,20 @@ Return STRICT JSON, no code fences:
           "Draft the client update email body. Output STRICT JSON: { subject, body }."
         ].filter(Boolean).join("\n");
 
-        const result = await anthropic.messages.create({
-          model: MODELS.chat,
-          max_tokens: 1800,
-          temperature: 0.5,
-          system: systemPrompt,
-          messages: [{ role: "user", content: userPrompt }]
-        });
+        // Stream the completion so SSE bytes keep flowing over the socket.
+        // Non-streaming leaves the connection idle for the whole generation,
+        // and with a large selection (many EOD entries / departments) an
+        // intermediary drops the idle connection -> "Premature close".
+        // .finalMessage() returns the same Message shape as .create().
+        const result = await anthropic.messages
+          .stream({
+            model: MODELS.chat,
+            max_tokens: 1800,
+            temperature: 0.5,
+            system: systemPrompt,
+            messages: [{ role: "user", content: userPrompt }]
+          })
+          .finalMessage();
 
         const blk = result.content.find((b) => b.type === "text");
         const rawText = blk && blk.type === "text" ? blk.text.trim() : "";

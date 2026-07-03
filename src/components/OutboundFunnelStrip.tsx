@@ -114,7 +114,7 @@ export function OutboundFunnelStrip({ counts }: Props) {
         )}
       </div>
       <div className="p-5">
-        <div className="flex items-stretch gap-2 overflow-x-auto">
+        <div className="flex items-stretch gap-2 overflow-x-auto overflow-y-clip">
           {stages.map((s, i) => (
             <div key={s.label} className="flex items-stretch gap-2 min-w-fit flex-1">
               <FlipStage

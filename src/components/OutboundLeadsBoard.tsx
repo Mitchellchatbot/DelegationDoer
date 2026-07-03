@@ -27,6 +27,9 @@ import type { OutboundTypeformForm } from "@/lib/outbound-typeform-forms";
 interface Props {
   leads: OutboundLead[];
   forms: OutboundTypeformForm[];
+  // Page-level actions (Add lead, Manage forms) rendered inline in the board's
+  // header row, right of the Source filter — so all three controls share one line.
+  actions?: React.ReactNode;
 }
 
 function timeAgo(iso: string): string {
@@ -45,7 +48,7 @@ const EMPTY_GROUPS = (): Record<LeadStatus, OutboundLead[]> => ({
   warm_lead: [], booked: [], showed: [], no_show: [], contract: [], success: [], lost: []
 });
 
-export function OutboundLeadsBoard({ leads: initialLeads, forms }: Props) {
+export function OutboundLeadsBoard({ leads: initialLeads, forms, actions }: Props) {
   const router = useRouter();
   const { containerRef, onDragStart, onDragEnd: stopAutoScroll, resolveDroppableId, activeDroppableId } =
     useHorizontalDragAutoScroll();
@@ -130,6 +133,7 @@ export function OutboundLeadsBoard({ leads: initialLeads, forms }: Props) {
             <option key={f.id} value={f.id}>{f.label}</option>
           ))}
         </select>
+        {actions}
       </div>
 
       <DragDropContext

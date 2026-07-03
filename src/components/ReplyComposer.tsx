@@ -10,6 +10,7 @@ import { MediaPicker } from "@/components/MediaPicker";
 import { RecipientAutocomplete } from "@/components/RecipientAutocomplete";
 import { useInboxFocus } from "@/components/InboxFocusProvider";
 import { useRecipientSuggestions } from "@/lib/use-recipient-suggestions";
+import { fetchDeferredBody } from "@/lib/message-body-cache";
 import type { TaskMedia } from "@/lib/types";
 import type { MissiveMessage } from "@/lib/missive-client";
 import { rawEmail, shortName } from "@/lib/email-format";
@@ -273,12 +274,42 @@ export function ReplyComposer({
 
   // Derive the quoted-original block (pinned target, or latest for a thread-level
   // reply) and collapse it by default. Never touches bodyText — switching targets
-  // just swaps the quote.
+  // just swaps the quote. When the target's body was deferred (an older message,
+  // withheld on thread open), fetch it first so the quote isn't empty — a cache
+  // hit if the user already expanded it. The default target (latest message)
+  // ships its body inline, so this stays synchronous in the common case.
   useEffect(() => {
-    setQuoteHtml(quoteSource ? buildReplyQuoteHtml(quoteSource) : "");
     setQuoteOpen(false);
+    if (!quoteSource) {
+      setQuoteHtml("");
+      return;
+    }
+    if (!quoteSource.body_deferred || quoteSource.body_html || quoteSource.body_text) {
+      setQuoteHtml(buildReplyQuoteHtml(quoteSource));
+      return;
+    }
+    let cancelled = false;
+    setQuoteHtml("");
+    fetchDeferredBody(quoteSource.id, accountId, threadId)
+      .then((body) => {
+        if (cancelled) return;
+        setQuoteHtml(
+          buildReplyQuoteHtml({
+            ...quoteSource,
+            body_html: body.body_html,
+            body_text: body.body_text
+          })
+        );
+      })
+      .catch(() => {
+        // Best-effort: on failure send with no quoted history rather than block.
+        if (!cancelled) setQuoteHtml("");
+      });
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [quoteSource?.id]);
+  }, [quoteSource?.id, accountId, threadId]);
 
   // Reset the pinned target + addressing fields back to the thread defaults.
   const clearTarget = useCallback(() => {

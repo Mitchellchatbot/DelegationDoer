@@ -311,16 +311,22 @@ export default async function OutboundLeadsPage({
       <ViewToggle active="board" />
       <OutboundFunnelStrip counts={counts} />
 
-      {/* Board (top) */}
-      <div className="flex items-center justify-end gap-2">
-        <AddLeadButton forms={forms} />
-        <OutboundTypeformFormsDrawer
-          initialForms={forms}
-          unknownFormIds={unknownFormIds}
-        />
-      </div>
+      {/* Board (top) — Add lead + Manage forms render inline in the board's
+          Source-filter header row so all three controls share one line. */}
       {showEmptyHint && <NoLeadsHint />}
-      <OutboundLeadsBoard leads={boardLeads} forms={forms} />
+      <OutboundLeadsBoard
+        leads={boardLeads}
+        forms={forms}
+        actions={
+          <>
+            <AddLeadButton forms={forms} />
+            <OutboundTypeformFormsDrawer
+              initialForms={forms}
+              unknownFormIds={unknownFormIds}
+            />
+          </>
+        }
+      />
 
       {/* List (scroll down) — the status filter applies to this section only */}
       <div className="pt-4 border-t border-slate-200">

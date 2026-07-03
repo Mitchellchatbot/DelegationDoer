@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback, useMemo, createContext, useContext } from "react";
-import { Check, Clock, Minus, X, AlertTriangle, Plus, Bell, ArrowLeft, Focus, Coffee, Moon, Smile, Sparkles, Play, Square, Crown, Settings as SettingsIcon, LogOut, Camera, Mail, ScanText } from "lucide-react";
+import { Check, Clock, Minus, X, AlertTriangle, Plus, Bell, ArrowLeft, Focus, Coffee, Moon, Smile, Sparkles, Play, Square, Crown, Settings as SettingsIcon, LogOut, Camera, Mail, ScanText, LifeBuoy } from "lucide-react";
 import { toast } from "sonner";
 import { AvatarCropper } from "@/components/AvatarCropper";
 import { Countdown } from "@/components/Countdown";
@@ -59,6 +59,19 @@ interface WidgetEmail {
   preview: string | null;
   receivedAt: string;
 }
+
+interface WidgetSupport {
+  id: string;
+  conversationId: string;
+  contactName: string | null;
+  phone: string | null;
+  preview: string | null;
+  receivedAt: string;
+}
+
+// The Customer Support inbox selects a conversation via client state only —
+// there's no per-conversation URL param — so the deep link just opens the tab.
+const SUPPORT_PATH = "/customer-support";
 
 // Canonical inbox deep link — opens the thread in the reading pane. Mirrors the
 // legacy redirect at inboxes/[accountId]/threads/[threadId]/page.tsx; InboxSplit
@@ -199,6 +212,7 @@ export default function WidgetPage() {
   const [kudos, setKudos] = useState<WidgetKudos[]>([]);
   const [notifications, setNotifications] = useState<WidgetNotification[]>([]);
   const [emails, setEmails] = useState<WidgetEmail[]>([]);
+  const [support, setSupport] = useState<WidgetSupport[]>([]);
   // Tracks whether the widget's API polls are returning 401. When true
   // we render a sign-in prompt instead of the normal task/kudos UI.
   const [signedOut, setSignedOut] = useState(false);
@@ -237,6 +251,7 @@ export default function WidgetPage() {
   const seenKudosRef = useRef<Set<string>>(new Set());
   const seenNotifIdsRef = useRef<Set<string>>(new Set());
   const seenEmailIdsRef = useRef<Set<string>>(new Set());
+  const seenSupportIdsRef = useRef<Set<string>>(new Set());
   // Client meetings we've already fired a ~30-min reminder for this session.
   // Belt-and-suspenders on top of the server-side dedup table.
   const seenMeetingEventIdsRef = useRef<Set<string>>(new Set());
@@ -291,14 +306,15 @@ export default function WidgetPage() {
 
       // The rest are independent reads — safe to run in parallel now that the
       // session cookie is already fresh.
-      const [kudosRes, eomRes, bdayRes, eodRes, clockRes, emailRes, meetingRes] = await Promise.all([
+      const [kudosRes, eomRes, bdayRes, eodRes, clockRes, emailRes, meetingRes, supportRes] = await Promise.all([
         fetch("/api/widget/kudos", { cache: "no-store" }),
         fetch("/api/eom", { cache: "no-store" }),
         fetch("/api/widget/birthdays", { cache: "no-store" }),
         fetch("/api/widget/eod-reminder", { cache: "no-store" }),
         fetch("/api/clock", { cache: "no-store" }),
         fetch("/api/email-notifications?limit=5", { cache: "no-store" }),
-        fetch("/api/widget/meeting-reminder", { cache: "no-store" })
+        fetch("/api/widget/meeting-reminder", { cache: "no-store" }),
+        fetch("/api/support-notifications?limit=5", { cache: "no-store" })
       ]);
       if (clockRes.ok) {
         const c = await clockRes.json().catch(() => null);
@@ -352,6 +368,24 @@ export default function WidgetPage() {
           }));
       }
 
+      // Unseen customer-support notifications — same seen_at=null "still
+      // actionable" model as emails. Only support-visible users get rows.
+      let nextSupport: WidgetSupport[] = [];
+      if (supportRes.ok) {
+        const supportData = await supportRes.json().catch(() => ({}));
+        const all = (supportData?.notifications ?? []) as Array<{
+          id: string; conversationId: string; contactName: string | null;
+          phone: string | null; preview: string | null;
+          receivedAt: string; seenAt: string | null;
+        }>;
+        nextSupport = all
+          .filter((r) => r.seenAt === null)
+          .map((r) => ({
+            id: r.id, conversationId: r.conversationId, contactName: r.contactName,
+            phone: r.phone, preview: r.preview, receivedAt: r.receivedAt
+          }));
+      }
+
       // Fresh task → harsh alarm. Fresh kudos → celebratory chime.
       // Fresh mention/notify → same harsh alarm so the user looks.
       // Fresh email → softer inbox ding, distinct from the task alarm.
@@ -362,6 +396,8 @@ export default function WidgetPage() {
       if (freshKudos.length > 0) playKudosChime();
       const freshEmails = nextEmails.filter((e) => !seenEmailIdsRef.current.has(e.id));
       if (freshEmails.length > 0) playEmailChime();
+      const freshSupport = nextSupport.filter((s) => !seenSupportIdsRef.current.has(s.id));
+      if (freshSupport.length > 0) playEmailChime();
 
       // OS-level system notifications (Electron only). The main process
       // delivers them — native on Windows, node-notifier on macOS. We drive
@@ -383,6 +419,12 @@ export default function WidgetPage() {
             title: "New email",
             body: `${e.fromName ?? e.fromEmail ?? "Someone"}: ${e.subject ?? "(no subject)"}`,
             path: inboxThreadPath(e.accountId, e.threadId),
+          });
+        for (const s of freshSupport)
+          notify({
+            title: "New support message",
+            body: `${s.contactName ?? s.phone ?? "Someone"}: ${s.preview ?? "(no preview)"}`,
+            path: SUPPORT_PATH,
           });
       }
       notifsPrimedRef.current = true;
@@ -410,11 +452,13 @@ export default function WidgetPage() {
       seenKudosRef.current = new Set(nextKudos.map((k) => k.id));
       seenNotifIdsRef.current = new Set(nextNotifs.map((n) => n.id));
       seenEmailIdsRef.current = new Set(nextEmails.map((e) => e.id));
+      seenSupportIdsRef.current = new Set(nextSupport.map((s) => s.id));
 
       setTasks(next);
       setKudos(nextKudos);
       setNotifications(nextNotifs);
       setEmails(nextEmails);
+      setSupport(nextSupport);
       if (bdayRes.ok) {
         const bd = await bdayRes.json();
         setBirthdays({
@@ -454,7 +498,7 @@ export default function WidgetPage() {
       // an open mention / notify-teammates ping).
       setState((prev) => {
         if (prev === "panel") return "panel"; // user is already looking
-        return unackedNow.length > 0 || nextKudos.length > 0 || nextNotifs.length > 0 || nextEmails.length > 0 || eodDue
+        return unackedNow.length > 0 || nextKudos.length > 0 || nextNotifs.length > 0 || nextEmails.length > 0 || nextSupport.length > 0 || eodDue
           ? "alert"
           : "bubble";
       });
@@ -535,6 +579,40 @@ export default function WidgetPage() {
     }
   }
 
+  async function dismissSupport(supportId: string) {
+    // Optimistic — drop from local state, then stamp seen_at on the server.
+    // Mirrors dismissEmail: mark-seen accepts a specific id list so other
+    // unseen support messages are unaffected.
+    setSupport((cur) => cur.filter((s) => s.id !== supportId));
+    seenSupportIdsRef.current.delete(supportId);
+    try {
+      await fetch("/api/support-notifications/mark-seen", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: [supportId] })
+      });
+    } catch { /* surfaces on next poll if it actually failed */ }
+    setState((prev) => {
+      if (prev === "panel") return "panel";
+      const remaining = support.filter((s) => s.id !== supportId);
+      return unacked.length > 0 || kudos.length > 0 || notifications.length > 0 || emails.length > 0 || remaining.length > 0 ? "alert" : "bubble";
+    });
+  }
+
+  // Open the Customer Support tab and mark the message handled (same end state
+  // as "Got it"). Old widget shells without the openMainWindow IPC fall back to
+  // expanding the panel and deliberately do NOT mark seen, so nothing is
+  // silently swallowed.
+  function openSupport(item: WidgetSupport) {
+    const api = (window as any).widgetAPI;
+    if (api?.openMainWindow) {
+      api.openMainWindow(SUPPORT_PATH);
+      void dismissSupport(item.id);
+    } else {
+      expandToPanel();
+    }
+  }
+
   async function acknowledge(taskId: string) {
     // Optimistic
     setTasks((cur) => cur.map((t) => t.id === taskId ? { ...t, needsAck: false } : t));
@@ -586,6 +664,9 @@ export default function WidgetPage() {
     if (emails.length > 0) {
       return <EmailAlert email={emails[0]} count={emails.length} onDismiss={dismissEmail} onOpen={() => openEmail(emails[0])} onExpand={expandToPanel} crowned={eom.isMe} iconUrl={widgetIconUrl} />;
     }
+    if (support.length > 0) {
+      return <SupportAlert item={support[0]} count={support.length} onDismiss={dismissSupport} onOpen={() => openSupport(support[0])} onExpand={expandToPanel} crowned={eom.isMe} iconUrl={widgetIconUrl} />;
+    }
     if (kudos.length > 0) {
       return <KudosAlert kudos={kudos[0]} count={kudos.length} onAck={acknowledgeKudos} onExpand={expandToPanel} crowned={eom.isMe} iconUrl={widgetIconUrl} />;
     }
@@ -593,7 +674,7 @@ export default function WidgetPage() {
       return <EodReminderAlert onExpand={expandToPanel} crowned={eom.isMe} iconUrl={widgetIconUrl} />;
     }
   }
-  return <Bubble onExpand={expandToPanel} unackedCount={unacked.length + kudos.length + notifications.length + emails.length + (eodReminderDue ? 1 : 0)} crowned={eom.isMe} iconUrl={widgetIconUrl} />;
+  return <Bubble onExpand={expandToPanel} unackedCount={unacked.length + kudos.length + notifications.length + emails.length + support.length + (eodReminderDue ? 1 : 0)} crowned={eom.isMe} iconUrl={widgetIconUrl} />;
 }
 
 // Banner that appears when the worker's scheduled day has ended and
@@ -1135,6 +1216,81 @@ function EmailAlert({
             background: "rgb(240, 249, 255)",
             borderRight: "1px solid #7DD3FC",
             borderTop: "1px solid #7DD3FC"
+          }}
+        />
+      </div>
+
+      <button
+        onClick={onExpand}
+        // @ts-ignore
+        style={{ WebkitAppRegion: "no-drag", padding: 0, border: "none", background: "transparent" } as any}
+        className="shrink-0 wg-bubble-btn anim-scale-in"
+        aria-label="Open"
+      >
+        <BubbleIcon unackedCount={count} crowned={crowned} iconUrl={iconUrl} />
+      </button>
+    </div>
+  );
+}
+
+// Customer-support speech bubble. Cloned from EmailAlert with support copy +
+// an emerald tint so it's visually distinct from the sky-blue email alert.
+function SupportAlert({
+  item, count, onDismiss, onOpen, onExpand, crowned = false, iconUrl,
+}: {
+  item: WidgetSupport;
+  count: number;
+  onDismiss: (id: string) => void;
+  onOpen: () => void;
+  onExpand: () => void;
+  crowned?: boolean;
+  iconUrl?: string | null;
+}) {
+  const sender = item.contactName || item.phone || "New message";
+  const preview = item.preview || "(no preview)";
+  return (
+    <div
+      // @ts-ignore — Electron-only
+      style={{ width: "100vw", height: "100vh", display: "flex", alignItems: "center", justifyContent: "flex-end", padding: 20, gap: 8, background: "transparent", WebkitAppRegion: "drag" } as any}
+    >
+      <div
+        onClick={onOpen}
+        // @ts-ignore
+        style={{ WebkitAppRegion: "no-drag" } as any}
+        className="relative flex-1 cursor-pointer anim-pop-bubble"
+      >
+        <div className="bg-gradient-to-br from-emerald-50 to-teal-50 rounded-2xl border border-emerald-300 shadow-[0_8px_24px_rgba(5,150,105,0.25)] px-3 py-2.5 pr-4">
+          <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-emerald-700 font-semibold">
+            <LifeBuoy className="w-3 h-3" />
+            New support message
+            {count > 1 && <span className="ml-auto text-emerald-700/70">+{count - 1} more</span>}
+          </div>
+          <div className="text-[12px] text-slate-700 font-medium truncate mt-0.5">
+            {sender}
+          </div>
+          <div className="text-[13px] text-slate-900 font-semibold leading-snug mt-0.5 line-clamp-2">
+            {preview}
+          </div>
+          <div className="mt-1.5 flex items-center justify-end gap-2">
+            <button
+              onClick={(e) => { e.stopPropagation(); onDismiss(item.id); }}
+              // @ts-ignore
+              style={{ WebkitAppRegion: "no-drag" } as any}
+              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-medium shadow-sm"
+            >
+              <Check className="w-3 h-3" /> Got it
+            </button>
+          </div>
+        </div>
+
+        <div
+          className="absolute"
+          style={{
+            right: -7, top: "50%", transform: "translateY(-50%) rotate(45deg)",
+            width: 14, height: 14,
+            background: "rgb(236, 253, 245)",
+            borderRight: "1px solid #6EE7B7",
+            borderTop: "1px solid #6EE7B7"
           }}
         />
       </div>

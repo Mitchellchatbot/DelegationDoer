@@ -9,6 +9,7 @@ import {
 } from "@/lib/support-data";
 import { findLeadByPhone, getLeadById, createLeadManual } from "@/lib/outbound-leads";
 import { notifyFormSubmitted } from "@/lib/outbound-slack";
+import { fanOutSupportMessage } from "@/lib/support-notifications";
 
 // The single entry point both inbound capture paths funnel through — the
 // real-time Blooio webhook AND the polling-cron backstop. It is idempotent by
@@ -104,8 +105,22 @@ export async function ingestInboundMessage(input: InboundMessageInput): Promise<
     return { conversationId: convo.id, outcome: "appended" };
   }
 
-  // 5. Already categorized → just an appended inbound message.
+  // 5. Already categorized → just an appended inbound message. If it lives in
+  //    the Customer Support tab (customer_support or uncertain), ping the
+  //    support team's widget — this covers customer replies on an existing or
+  //    reopened thread, not just the first message.
   if (convo.category) {
+    if (convo.category === "customer_support" || convo.category === "uncertain") {
+      await fanOutSupportMessage({
+        conversationId: convo.id,
+        messageId: blooioMessageId,
+        contactName: convo.contactName ?? contactName,
+        phone: convo.phone ?? phone,
+        body,
+        sentAt,
+        category: convo.category
+      });
+    }
     return { conversationId: convo.id, outcome: "appended", category: convo.category };
   }
 
@@ -132,9 +147,24 @@ export async function ingestInboundMessage(input: InboundMessageInput): Promise<
     return { conversationId: convo.id, outcome: "appended" };
   }
 
-  // 8. Route side-effects (exactly once — we won the flip above).
+  // 8. Route side-effects (exactly once — we won the flip above). A meta_or_lead
+  //    goes to the outbound funnel (its own Slack ping); a customer_support or
+  //    uncertain message lands in the CS tab, so ping the support team's widget.
   if (classification.category === "meta_or_lead") {
     await routeToLeadFunnel(convo, phone, contactName);
+  } else if (
+    classification.category === "customer_support" ||
+    classification.category === "uncertain"
+  ) {
+    await fanOutSupportMessage({
+      conversationId: convo.id,
+      messageId: blooioMessageId,
+      contactName: convo.contactName ?? contactName,
+      phone: convo.phone ?? phone,
+      body,
+      sentAt,
+      category: classification.category
+    });
   }
 
   return {

@@ -31,6 +31,14 @@ interface SearchResults {
 }
 const EMPTY_RESULTS: SearchResults = { tasks: [], users: [], projects: [], sops: [] };
 
+// A path segment directly under one of these routes is an opaque detail
+// id (task id, user id, thread id, …) — drop it from the breadcrumb so it
+// reads "Tasks" instead of "Tasks › t-mqpcflz5-3mqeo". Mirrors the app's
+// actual [id] routes under src/app.
+const DETAIL_COLLECTIONS = new Set([
+  "tasks", "team", "projects", "clients", "inboxes", "threads", "leads",
+]);
+
 // Best-effort titlecase for a path segment in the breadcrumb. Replaces
 // dashes/underscores with spaces, then capitalizes each word.
 function prettySegment(seg: string): string {
@@ -58,13 +66,18 @@ export function Topbar({ user }: { user: User }) {
     const segs = (pathname ?? "/").split("/").filter(Boolean);
     const out: { label: string; href: string }[] = [];
     let acc = "";
-    for (const s of segs) {
+    for (let i = 0; i < segs.length; i++) {
+      const s = segs[i];
       acc += `/${s}`;
-      // Skip UUID-shaped detail segments so the crumb doesn't carry a
-      // 36-char hex hash. Long alphanumeric ids get the same treatment.
+      const prev = segs[i - 1];
+      // Skip detail-id segments so the crumb doesn't carry an opaque hash.
+      // Caught three ways: UUID-shaped, a long alphanumeric run, or any
+      // segment sitting directly under a known collection route (catches
+      // dashed slugs like `t-mqpcflz5-3mqeo` the regexes miss).
       const looksLikeId =
         /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s) ||
-        /^[A-Za-z0-9]{16,}$/.test(s);
+        /^[A-Za-z0-9]{16,}$/.test(s) ||
+        (prev !== undefined && DETAIL_COLLECTIONS.has(prev));
       if (looksLikeId) continue;
       out.push({ label: prettySegment(s), href: acc });
     }
@@ -137,7 +150,7 @@ export function Topbar({ user }: { user: User }) {
   }
 
   return (
-    <header className="h-16 sticky top-3 z-30 px-5 grid grid-cols-[auto_1fr_auto] items-center gap-3 rounded-3xl border border-slate-200/70 bg-white/85 backdrop-blur-xl shadow-soft">
+    <header className="h-16 sticky top-3 z-30 px-5 grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 rounded-3xl border border-slate-200/70 bg-white/85 backdrop-blur-xl shadow-soft">
       {/* Breadcrumb pill — mirrors Allocation Assist's left-side
           "Home › Sales › Sales Tracker" navigation hint. Home icon is
           always the first crumb and links back to /home; subsequent
@@ -202,7 +215,7 @@ export function Topbar({ user }: { user: User }) {
             onKeyDown={(e) => {
               if (e.key === "Escape") setSearchOpen(false);
             }}
-            className="w-full h-10 pl-10 pr-9 rounded-xl bg-slate-50 border border-slate-200 text-[15px] text-ink placeholder:text-muted focus:outline-none focus:bg-white focus:border-accent/50 focus:ring-2 focus:ring-accent/20 transition-colors"
+            className="w-full min-w-0 h-10 pl-10 pr-9 rounded-xl bg-slate-50 border border-slate-200 text-[15px] text-ink placeholder:text-muted focus:outline-none focus:bg-white focus:border-accent/50 focus:ring-2 focus:ring-accent/20 transition-colors"
             placeholder="Search tasks, projects, people…"
           />
         </form>

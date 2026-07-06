@@ -45,19 +45,16 @@ export function OutboundSequenceBoard({ cards: initial, forms }: Props) {
   const { containerRef, onDragStart, onDragEnd: stopAutoScroll, resolveDroppableId, activeDroppableId } =
     useHorizontalDragAutoScroll();
   const [cards, setCards] = useState<FlowLeadCard[]>(initial);
-  const [sourceFilter, setSourceFilter] = useState<string>("all");
 
   const labelForForm = (c: FlowLeadCard): string | null => {
     if (!c.typeformFormId) return null;
     return forms.find((f) => f.id === c.typeformFormId)?.label ?? "Unregistered form";
   };
 
-  const visible = sourceFilter === "all"
-    ? cards
-    : cards.filter((c) => c.typeformFormId === sourceFilter);
-
+  // `cards` arrives already source-filtered from the server (the Source select
+  // now drives ?source= in the URL), so we group over it directly.
   const grouped = EMPTY();
-  for (const c of visible) {
+  for (const c of cards) {
     if (grouped[c.flow]) grouped[c.flow].push(c);
   }
   for (const k of Object.keys(grouped) as FlowKey[]) {
@@ -109,20 +106,6 @@ export function OutboundSequenceBoard({ cards: initial, forms }: Props) {
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center justify-end gap-2">
-        <label className="text-[12px] text-ink/55">Source</label>
-        <select
-          value={sourceFilter}
-          onChange={(e) => setSourceFilter(e.target.value)}
-          className="text-[12.5px] rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-ink/80 focus:outline-none focus:ring-2 focus:ring-accent/20"
-        >
-          <option value="all">All sources</option>
-          {forms.map((f) => (
-            <option key={f.id} value={f.id}>{f.label}</option>
-          ))}
-        </select>
-      </div>
-
       <DragDropContext
         onDragStart={onDragStart}
         onDragEnd={(r) => { stopAutoScroll(); void onDragEnd(r); }}

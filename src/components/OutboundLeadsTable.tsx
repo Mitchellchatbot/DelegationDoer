@@ -169,10 +169,11 @@ export function OutboundLeadsTable({ rows, totalCount, statusFilter }: Props) {
 }
 
 export function StatusFilterBar({
-  counts, active
+  counts, active, source
 }: {
   counts: Record<LeadStatus, number>;
   active: LeadStatus | null;
+  source?: string | null;
 }) {
   const all = Object.values(counts).reduce((s, n) => s + n, 0);
   const entries: Array<{ key: LeadStatus | null; label: string; count: number; cls: string | null }> = [
@@ -189,8 +190,13 @@ export function StatusFilterBar({
     <div className="flex flex-wrap items-center gap-2">
       {entries.map((e) => {
         const isActive = (e.key ?? null) === active;
-        const href = e.key
-          ? `/outbound-dashboard/leads?status=${e.key}`
+        // Preserve the active source when switching status so the whole page
+        // stays scoped to one Typeform (the chips only ever land on the board).
+        const p = new URLSearchParams();
+        if (e.key) p.set("status", e.key);
+        if (source) p.set("source", source);
+        const href = p.toString()
+          ? `/outbound-dashboard/leads?${p.toString()}`
           : `/outbound-dashboard/leads`;
         return (
           <Link

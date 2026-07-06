@@ -120,11 +120,17 @@ async function extractDocxText(bytes: Buffer): Promise<string> {
 }
 
 async function captionImage(args: {
-  bytes: Buffer;
-  mimeType: string;
   apiKey: string;
+  // Caption either from raw bytes (image-file SOP uploads) or from an
+  // already-hosted public URL (Loom screenshots uploaded to Storage
+  // before ingest). OpenAI's image_url.url accepts a public URL or a
+  // data: URL interchangeably.
+  bytes?: Buffer;
+  mimeType?: string;
+  imageUrl?: string;
 }): Promise<string> {
-  const dataUrl = `data:${args.mimeType};base64,${args.bytes.toString("base64")}`;
+  const url = args.imageUrl
+    ?? `data:${args.mimeType};base64,${args.bytes!.toString("base64")}`;
   const res = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -143,7 +149,7 @@ async function captionImage(args: {
           role: "user",
           content: [
             { type: "text", text: "Describe this SOP image in detail." },
-            { type: "image_url", image_url: { url: dataUrl } }
+            { type: "image_url", image_url: { url } }
           ]
         }
       ],
@@ -244,4 +250,77 @@ export async function embedQuery(query: string): Promise<number[]> {
   if (!apiKey) throw new Error("OPENAI_API_KEY not configured");
   const results = await embedBatch({ texts: [query], apiKey });
   return results[0];
+}
+
+// --------------------------- Loom SOPs -----------------------------
+
+// Ingest a Loom recording captured as a transcript + a set of
+// screenshots the author grabbed from the video. Produces the same
+// SopChunk shape as ingestSopFile so the existing search_sops tool and
+// the Ask AI drawer surface the text + screenshots with no changes:
+//   * transcript → ~500-token text chunks (imageUrl null)
+//   * each screenshot → a vision caption chunk that carries the image
+//     URL, so answers can cite the picture inline via markdown.
+// Screenshots are already uploaded to Storage by the caller, so we
+// caption from their public URL rather than raw bytes.
+export async function ingestLoomSop(args: {
+  transcript: string;
+  screenshots: { url: string; label?: string }[];
+}): Promise<IngestResult> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) throw new Error("OPENAI_API_KEY not configured");
+
+  const transcript = args.transcript.trim();
+  const screenshots = args.screenshots ?? [];
+  const warnings: string[] = [];
+
+  // 1. Transcript → text chunks (same greedy paragraph packing as docs).
+  const textChunks = transcript ? chunkText(transcript, CHUNK_TARGET_CHARS) : [];
+  if (!transcript) {
+    warnings.push("No transcript provided — this SOP is indexed by its screenshots only.");
+  }
+
+  // 2. Each screenshot → a captioned chunk that keeps the image URL so
+  //    the chatbot can show the picture, not just its caption. The
+  //    optional author label is prepended so the frame is retrievable
+  //    by the step name too (there are no per-frame timestamps to tie a
+  //    frame to a transcript position, so the label is the anchor).
+  const captions = await Promise.all(
+    screenshots.map((shot) =>
+      captionImage({ imageUrl: shot.url, apiKey }).catch((err) => {
+        warnings.push(
+          `Couldn't caption a screenshot (${err instanceof Error ? err.message : "error"}).`
+        );
+        return "";
+      })
+    )
+  );
+  const shotChunks: { content: string; imageUrl: string }[] = [];
+  screenshots.forEach((shot, i) => {
+    const caption = captions[i]?.trim();
+    const label = shot.label?.trim();
+    const content = [label, caption].filter(Boolean).join("\n").trim();
+    // Skip a screenshot that produced neither a label nor a caption —
+    // an empty chunk would just be retrieval noise.
+    if (content) shotChunks.push({ content, imageUrl: shot.url });
+  });
+
+  // 3. Assemble chunk texts (transcript first, then screenshots in the
+  //    order the author added them) and embed them all in one batch.
+  const contents = [...textChunks, ...shotChunks.map((c) => c.content)];
+  if (contents.length === 0) {
+    return { chunks: [], warnings: warnings.concat("Nothing could be indexed.").join(" ") };
+  }
+  const embeddings = await embedBatch({ texts: contents, apiKey });
+
+  const chunks: SopChunk[] = contents.map((content, i) => ({
+    content,
+    embedding: embeddings[i],
+    tokenCount: Math.ceil(content.length / 4),
+    // The first textChunks.length chunks are transcript text (no image);
+    // the rest are screenshots and carry their source image URL.
+    imageUrl: i < textChunks.length ? null : shotChunks[i - textChunks.length].imageUrl
+  }));
+
+  return { chunks, warnings: warnings.join(" ") };
 }

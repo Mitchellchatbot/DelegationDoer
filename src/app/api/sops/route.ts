@@ -22,10 +22,33 @@ export async function GET(_req: NextRequest) {
   try {
     await requireCurrentUserId();
     const supabase = getSupabaseAdmin();
-    const { data, error } = await supabase
+    const COLS_WITH_KIND =
+      "id, title, source_filename, mime_type, kind, file_url, byte_size, created_by, ingest_warnings, created_at";
+    const COLS_LEGACY =
+      "id, title, source_filename, mime_type, file_url, byte_size, created_by, ingest_warnings, created_at";
+    const primary = await supabase
       .from("sops")
-      .select("id, title, source_filename, mime_type, file_url, byte_size, created_by, ingest_warnings, created_at")
+      .select(COLS_WITH_KIND)
       .order("created_at", { ascending: false });
+    let data: any[] | null = primary.data;
+    let error = primary.error;
+    // Tolerate the kind column not existing yet (code deployed before the
+    // sops_loom migration runs). The primary select differs from the
+    // legacy one ONLY by the `kind` column, so if it errors for any
+    // reason we safely retry with the legacy columns — rows then default
+    // to kind='document' in the mapping below. We don't pattern-match the
+    // message because PostgREST's missing-column error wording varies by
+    // version (e.g. "column sops.kind does not exist" vs. "Could not find
+    // the 'kind' column of 'sops' in the schema cache"); a retry with a
+    // strict subset of columns is always at least as safe as the first.
+    if (error) {
+      const legacy = await supabase
+        .from("sops")
+        .select(COLS_LEGACY)
+        .order("created_at", { ascending: false });
+      data = legacy.data;
+      error = legacy.error;
+    }
     if (error) {
       if (/relation .* does not exist/i.test(error.message)) {
         return NextResponse.json({ sops: [], userById: {} });
@@ -57,6 +80,7 @@ export async function GET(_req: NextRequest) {
         title: r.title,
         sourceFilename: r.source_filename,
         mimeType: r.mime_type,
+        kind: (r.kind as string) ?? "document",
         fileUrl: r.file_url,
         byteSize: r.byte_size,
         createdBy: r.created_by,

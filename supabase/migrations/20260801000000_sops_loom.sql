@@ -1,0 +1,14 @@
+-- Loom-sourced SOPs: transcript + user-supplied screenshots.
+--
+-- These reuse the existing sops / sop_chunks / search_sop_chunks RAG
+-- pipeline verbatim — a Loom SOP is just a sops row whose chunks are
+-- transcript slices (image_url null) plus captioned screenshots
+-- (image_url set), exactly the shape search_sops already returns.
+--
+-- The only schema change needed is a discriminator so the SOP library
+-- can badge Loom procedures and future tooling can tell them apart.
+-- Backward-compatible: it's defaulted and not referenced by any
+-- existing query, so GET /api/sops, the POST insert, and the
+-- search_sop_chunks RPC all keep working unchanged (old + document
+-- rows read as 'document').
+alter table sops add column if not exists kind text not null default 'document';

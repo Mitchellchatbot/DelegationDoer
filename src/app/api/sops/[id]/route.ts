@@ -31,12 +31,23 @@ export async function DELETE(_req: NextRequest, { params }: { params: { id: stri
     const { error } = await supabase.from("sops").delete().eq("id", params.id);
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-    // Best-effort: parse the storage key out of the public URL and
-    // remove the blob. Failure here is non-fatal — the row is gone.
+    // Best-effort storage cleanup — non-fatal, the row is already gone.
+    // Every SOP's blobs live under sops/<id>/ (the source file for a
+    // document/image SOP; the transcript + screenshots for a Loom SOP).
+    // List that folder and remove everything, so Loom SOPs — whose
+    // file_url may be an external Loom link — clean up their screenshots
+    // too, not just the single file_url blob.
     try {
-      const match = /\/storage\/v1\/object\/public\/ticket-attachments\/(.+)$/.exec(sop.file_url as string);
-      if (match?.[1]) {
-        await supabase.storage.from("ticket-attachments").remove([decodeURIComponent(match[1])]);
+      const bucket = supabase.storage.from("ticket-attachments");
+      const prefix = `sops/${params.id}`;
+      const { data: listed } = await bucket.list(prefix);
+      const keys = (listed ?? []).map((obj) => `${prefix}/${obj.name}`);
+      if (keys.length > 0) {
+        await bucket.remove(keys);
+      } else {
+        // Fallback for pre-folder layouts: parse the key out of the URL.
+        const match = /\/storage\/v1\/object\/public\/ticket-attachments\/(.+)$/.exec(sop.file_url as string);
+        if (match?.[1]) await bucket.remove([decodeURIComponent(match[1])]);
       }
     } catch { /* swallow */ }
 

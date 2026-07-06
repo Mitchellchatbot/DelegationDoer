@@ -162,6 +162,9 @@ export function EmailApprovalsTab() {
   );
 
   async function handleSchedule(draftId: string, isoTimestamp: string) {
+    // Read-only viewers can't schedule — the calendar disables drag/drop for
+    // them and the server 403s, but guard here too so nothing slips through.
+    if (!viewerIsApprover) return;
     try {
       const res = await fetch(`/api/email-drafts/${draftId}/schedule`, {
         method: "POST",
@@ -197,6 +200,7 @@ export function EmailApprovalsTab() {
               <ApprovalsScheduleCalendar
                 drafts={calendarDrafts}
                 onSchedule={handleSchedule}
+                readOnly={!viewerIsApprover}
               />
             </div>
           </div>
@@ -207,7 +211,7 @@ export function EmailApprovalsTab() {
               grouped by whether their cadence-day is today. Approver
               can kick a draft on demand here without waiting for the
               daily cron. */}
-          <SuggestedDigestsCard />
+          <SuggestedDigestsCard readOnly={!viewerIsApprover} />
 
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <div className="inline-flex items-center rounded-xl border border-slate-200/70 bg-white p-0.5">
@@ -519,7 +523,9 @@ function DraftCard({
     }
   }
 
-  const isDraggable = isPending || isNeedsRevision;
+  // Dragging a card schedules its send — an approver-only write. Read-only
+  // viewers see the cards but can't drag them onto the calendar.
+  const isDraggable = viewerIsApprover && (isPending || isNeedsRevision);
   const dragGhostRef = useRef<HTMLDivElement>(null);
   const [isDragging, setIsDragging] = useState(false);
 

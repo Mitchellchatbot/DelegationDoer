@@ -177,7 +177,11 @@ function relativeDate(iso: string | null): string {
   return `${Math.floor(days / 30)}mo ago`;
 }
 
-export function SuggestedDigestsCard() {
+// readOnly = the viewer can see who needs an email but can't act on it
+// (SEO team leads on the read-only /approvals Emails tab). Hides the
+// "Open composer" and per-client discard affordances; the list, overlap
+// tags, Details expander and EOD breakdown all stay visible.
+export function SuggestedDigestsCard({ readOnly = false }: { readOnly?: boolean }) {
   const [active, setActive] = useState<DigestWindow>("daily");
   const [data, setData] = useState<ApiResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -329,6 +333,7 @@ export function SuggestedDigestsCard() {
                 key={r.clientId}
                 rec={r}
                 windowDays={activeTab.days}
+                readOnly={readOnly}
                 onOpen={() => setModalRec(r)}
                 onDiscard={() => discardClient(r)}
               />
@@ -353,10 +358,12 @@ export function SuggestedDigestsCard() {
 }
 
 function RecRow({
-  rec, windowDays, onOpen, onDiscard
+  rec, windowDays, readOnly, onOpen, onDiscard
 }: {
   rec: Recommendation;
   windowDays: number;
+  // Read-only viewers see the row but not its write actions (compose/discard).
+  readOnly: boolean;
   onOpen: () => void;
   // Skip this whole client this window. Resolves once the dismiss completes.
   onDiscard: () => Promise<boolean>;
@@ -441,15 +448,17 @@ function RecRow({
             no contact
           </span>
         )}
-        <button
-          type="button"
-          disabled={discarding}
-          onClick={handleDiscard}
-          title="Discard this client — skip it for this window"
-          className="shrink-0 inline-flex items-center justify-center w-7 h-7 rounded-md text-ink/35 hover:text-rose-600 hover:bg-rose-50 transition-colors disabled:opacity-50"
-        >
-          {discarding ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
-        </button>
+        {!readOnly && (
+          <button
+            type="button"
+            disabled={discarding}
+            onClick={handleDiscard}
+            title="Discard this client — skip it for this window"
+            className="shrink-0 inline-flex items-center justify-center w-7 h-7 rounded-md text-ink/35 hover:text-rose-600 hover:bg-rose-50 transition-colors disabled:opacity-50"
+          >
+            {discarding ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+          </button>
+        )}
         <button
           type="button"
           onClick={() => setExpanded((v) => !v)}
@@ -458,19 +467,21 @@ function RecRow({
         >
           {expanded ? "Hide" : "Details"}
         </button>
-        <button
-          type="button"
-          onClick={onOpen}
-          disabled={!rec.hasContact}
-          className={cn(
-            "inline-flex items-center gap-1 px-3 py-1 rounded-full text-[11px] font-semibold shrink-0 transition-colors",
-            rec.hasContact
-              ? "bg-emerald-600 text-white hover:bg-emerald-700 shadow-sm"
-              : "bg-slate-100 text-ink/50 cursor-not-allowed"
-          )}
-        >
-          Open composer <ArrowRight className="w-3 h-3" />
-        </button>
+        {!readOnly && (
+          <button
+            type="button"
+            onClick={onOpen}
+            disabled={!rec.hasContact}
+            className={cn(
+              "inline-flex items-center gap-1 px-3 py-1 rounded-full text-[11px] font-semibold shrink-0 transition-colors",
+              rec.hasContact
+                ? "bg-emerald-600 text-white hover:bg-emerald-700 shadow-sm"
+                : "bg-slate-100 text-ink/50 cursor-not-allowed"
+            )}
+          >
+            Open composer <ArrowRight className="w-3 h-3" />
+          </button>
+        )}
       </div>
 
       {expanded && (

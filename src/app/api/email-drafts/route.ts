@@ -4,7 +4,7 @@ import { getUserById } from "@/lib/server-data";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { openDm, postMessage } from "@/lib/slack";
 import { resolveSlackId } from "@/lib/slack-resolve";
-import { getApproversForDraft, isApprover, headedDepartmentIds, type EmailDraftKind } from "@/lib/email-approvers";
+import { getApproversForDraft, isApprover, isEmailApprovalsViewer, headedDepartmentIds, type EmailDraftKind } from "@/lib/email-approvers";
 import { recordDraftEvent } from "@/lib/draft-events";
 import { sanitizeMediaUrls } from "@/lib/media";
 
@@ -334,11 +334,17 @@ export async function GET(req: NextRequest) {
 
     let visible = allRows;
     if (!mineOnly) {
-      // v3 approvers (leader + Sam/Mujtaba/Farez) see every draft.
-      // Department heads additionally see every draft scoped to a
-      // department they head (so a Website HoD sees Website drafts in
-      // their approvals queue). Everyone else sees only their own.
-      if (!isApprover({ name: me.name, role: me.role, isAdmin: me.isAdmin })) {
+      // v3 approvers (leader + Sam/Mujtaba/Farez) see every draft. Read-only
+      // email-approvals viewers (SEO team leads) also see the full queue —
+      // it feeds the read-only /approvals Emails tab + send-schedule calendar;
+      // their write routes stay blocked. Department heads additionally see
+      // every draft scoped to a department they head (so a Website HoD sees
+      // Website drafts in their approvals queue). Everyone else sees only
+      // their own.
+      if (
+        !isApprover({ name: me.name, role: me.role, isAdmin: me.isAdmin }) &&
+        !isEmailApprovalsViewer({ email: me.email })
+      ) {
         const myDepts = new Set(headedDepartmentIds({ role: me.role, departmentIds: me.departmentIds }));
         visible = allRows.filter((r) =>
           r.author_id === userId ||

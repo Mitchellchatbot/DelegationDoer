@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
-import { isApprover } from "@/lib/email-approvers";
+import { canViewEmailApprovals } from "@/lib/email-approvers";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import type { UpdateCadence } from "@/lib/eod-digest";
 
@@ -20,7 +20,8 @@ export const dynamic = "force-dynamic";
 // IMPORTANT: this surface intentionally does NOT consult the per-client
 // update_cadence column. The window is whatever the approver clicked.
 //
-// Auth: approver only.
+// Auth: approvers + read-only email-approvals viewers (SEO team leads).
+// Read-only endpoint — the compose/discard writes it feeds stay approver-only.
 
 const WINDOWS = ["daily", "weekly", "biweekly", "monthly"] as const;
 export type DigestWindow = typeof WINDOWS[number];
@@ -116,7 +117,9 @@ export async function GET(req: NextRequest) {
     const userId = await requireCurrentUserId();
     const me = await getUserById(userId);
     if (!me) return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
-    if (!isApprover({ name: me.name, role: me.role, isAdmin: me.isAdmin })) {
+    // Read-only surface: approvers AND read-only SEO viewers may see it.
+    // Write actions (compose / discard) stay approver-gated in their routes.
+    if (!canViewEmailApprovals({ name: me.name, email: me.email, role: me.role, isAdmin: me.isAdmin })) {
       return NextResponse.json({ error: "approver only" }, { status: 403 });
     }
 

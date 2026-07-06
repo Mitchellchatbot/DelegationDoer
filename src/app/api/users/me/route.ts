@@ -17,7 +17,7 @@ export async function GET() {
     {
       const { data, error } = await supabase
         .from("users")
-        .select("id, name, email, avatar_url, role, is_admin, widget_icon_url, slack_user_id, slack_team_id, slack_connected_at, birthday, onboarded_at, slack_last_sync_at, slack_last_sync_ok, slack_last_sync_msg, google_user_id, google_email, google_connected_at, clock_enabled, personal_email, phone, job_title, location, bio, pronouns, work_hours_start, work_hours_end, work_timezone, weekly_schedule")
+        .select("id, name, email, avatar_url, role, is_admin, widget_icon_url, slack_user_id, slack_team_id, slack_connected_at, birthday, onboarded_at, slack_last_sync_at, slack_last_sync_ok, slack_last_sync_msg, google_user_id, google_email, google_connected_at, google_last_sync_at, google_last_sync_ok, google_last_sync_msg, clock_enabled, personal_email, phone, job_title, location, bio, pronouns, work_hours_start, work_hours_end, work_timezone, weekly_schedule")
         .eq("id", userId)
         .maybeSingle();
       if (!error && data) row = data;
@@ -52,6 +52,9 @@ export async function GET() {
         googleUserId: (row.google_user_id as string | null) ?? null,
         googleEmail: (row.google_email as string | null) ?? null,
         googleConnectedAt: (row.google_connected_at as string | null) ?? null,
+        googleLastSyncAt: (row.google_last_sync_at as string | null) ?? null,
+        googleLastSyncOk: (row.google_last_sync_ok as boolean | null) ?? null,
+        googleLastSyncMsg: (row.google_last_sync_msg as string | null) ?? null,
         clockEnabled: (row.clock_enabled as boolean | null) ?? true,
         personalEmail: (row.personal_email as string | null) ?? null,
         phone: (row.phone as string | null) ?? null,

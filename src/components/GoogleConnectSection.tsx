@@ -11,6 +11,11 @@ interface GoogleStatus {
   connected: boolean;
   email: string | null;
   connectedAt: string | null;
+  // Last token-refresh outcome (mirrors slack_last_sync_*). null when
+  // the connection has never been exercised since the columns landed.
+  lastSyncOk: boolean | null;
+  lastSyncMsg: string | null;
+  lastSyncAt: string | null;
 }
 
 interface CalendarEvent {
@@ -69,7 +74,10 @@ function GoogleCard() {
       setStatus({
         connected,
         email: data?.user?.googleEmail ?? null,
-        connectedAt: data?.user?.googleConnectedAt ?? null
+        connectedAt: data?.user?.googleConnectedAt ?? null,
+        lastSyncOk: data?.user?.googleLastSyncOk ?? null,
+        lastSyncMsg: data?.user?.googleLastSyncMsg ?? null,
+        lastSyncAt: data?.user?.googleLastSyncAt ?? null
       });
       if (connected) loadEvents();
       else setEvents(null);
@@ -95,6 +103,9 @@ function GoogleCard() {
         return;
       }
       setEvents(data.events ?? []);
+      // A successful read means a token refresh just succeeded — clear
+      // any stale failure so the badge doesn't cry wolf.
+      setStatus((s) => (s ? { ...s, lastSyncOk: true, lastSyncMsg: null } : s));
     } catch (e) {
       setEventsError(e instanceof Error ? e.message : "network error");
     }
@@ -126,6 +137,19 @@ function GoogleCard() {
     }
   }
 
+  // Connected, but the last token refresh was rejected (dead refresh
+  // token / invalid_grant) — treat the connection as needing repair
+  // rather than showing a green "Connected" badge that lies.
+  const broken =
+    !!status?.connected && (needsReconnect || status.lastSyncOk === false);
+
+  const fmtWhen = (iso: string | null | undefined) =>
+    iso
+      ? new Date(iso).toLocaleString(undefined, {
+          month: "short", day: "numeric", hour: "numeric", minute: "2-digit"
+        })
+      : null;
+
   return (
     <section className="rounded-2xl border border-slate-200/70 bg-white shadow-soft p-5">
       <div className="flex items-start justify-between gap-3 flex-wrap">
@@ -137,10 +161,17 @@ function GoogleCard() {
             <div className="text-sm font-semibold inline-flex items-center gap-2">
               Google Calendar
               {status?.connected && (
-                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200/60 text-[10px] font-medium">
-                  <CheckCircle2 className="w-3 h-3" />
-                  Connected
-                </span>
+                broken ? (
+                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200/60 text-[10px] font-medium">
+                    <Link2Off className="w-3 h-3" />
+                    Reconnect needed
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200/60 text-[10px] font-medium">
+                    <CheckCircle2 className="w-3 h-3" />
+                    Connected
+                  </span>
+                )
               )}
             </div>
             <p className="text-xs text-ink/60 mt-1 max-w-prose">
@@ -205,6 +236,20 @@ function GoogleCard() {
               <div className="text-[12px] text-amber-700">
                 Your Google connection expired — reconnect to resume calendar sync.
               </div>
+              {(status?.connectedAt || status?.lastSyncAt) && (
+                <div className="text-[10px] text-ink/55 leading-relaxed">
+                  {status?.connectedAt && (
+                    <>Connected {fmtWhen(status.connectedAt)}</>
+                  )}
+                  {status?.lastSyncAt && (
+                    <>
+                      {status?.connectedAt ? " · " : ""}
+                      last refresh failed {fmtWhen(status.lastSyncAt)}
+                      {status?.lastSyncMsg ? ` — ${status.lastSyncMsg}` : ""}
+                    </>
+                  )}
+                </div>
+              )}
               <button
                 type="button"
                 onClick={connect}

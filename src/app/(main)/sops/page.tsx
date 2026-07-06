@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
-  BookOpen, Upload, FileText, FileImage, Trash2, Loader2, AlertTriangle, X,
+  BookOpen, Upload, FileText, FileImage, Video, Trash2, Loader2, AlertTriangle, X,
   Sparkles, ArrowRight, CheckCircle2, Clock
 } from "lucide-react";
 import { toast } from "sonner";
@@ -11,12 +11,14 @@ import { cn } from "@/lib/utils";
 import { useCurrentUser } from "@/lib/user-context";
 import { PersonAvatar } from "@/components/PersonAvatar";
 import { AIAssistantDrawer } from "@/components/AIAssistantDrawer";
+import { AddLoomSopDialog } from "@/components/AddLoomSopDialog";
 
 interface Sop {
   id: string;
   title: string;
   sourceFilename: string;
   mimeType: string;
+  kind: string;
   fileUrl: string;
   byteSize: number;
   createdBy: string;
@@ -39,6 +41,7 @@ export default function SopsPage() {
   const [sops, setSops] = useState<Sop[] | null>(null);
   const [authors, setAuthors] = useState<Record<string, AuthorRef>>({});
   const [uploadOpen, setUploadOpen] = useState(false);
+  const [loomOpen, setLoomOpen] = useState(false);
   const [aiOpen, setAiOpen] = useState(false);
 
   const refresh = useCallback(async () => {
@@ -84,15 +87,25 @@ export default function SopsPage() {
           </p>
         </div>
         {canEdit && (
-          <button
-            type="button"
-            onClick={() => setUploadOpen(true)}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-full text-sm font-semibold text-white shadow-sm transition-all hover:-translate-y-0.5 active:scale-95"
-            style={{ background: "linear-gradient(135deg, #0a4099 0%, #063270 100%)" }}
-          >
-            <Upload className="w-4 h-4" />
-            Upload SOP
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setLoomOpen(true)}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-full text-sm font-semibold text-accent bg-white border border-accent/30 shadow-sm transition-all hover:-translate-y-0.5 hover:bg-accent/5 active:scale-95"
+            >
+              <Video className="w-4 h-4" />
+              Add Loom SOP
+            </button>
+            <button
+              type="button"
+              onClick={() => setUploadOpen(true)}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-full text-sm font-semibold text-white shadow-sm transition-all hover:-translate-y-0.5 active:scale-95"
+              style={{ background: "linear-gradient(135deg, #0a4099 0%, #063270 100%)" }}
+            >
+              <Upload className="w-4 h-4" />
+              Upload SOP
+            </button>
+          </div>
         )}
       </header>
 
@@ -110,7 +123,7 @@ export default function SopsPage() {
               className="flex items-start gap-3 p-4 rounded-2xl border border-slate-200/70 bg-white shadow-soft"
             >
               <div className="w-10 h-10 rounded-xl bg-indigo-50 ring-1 ring-indigo-200/60 grid place-items-center text-indigo-600 shrink-0">
-                <KindIcon mime={sop.mimeType} />
+                <KindIcon mime={sop.mimeType} kind={sop.kind} />
               </div>
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2 flex-wrap">
@@ -168,6 +181,13 @@ export default function SopsPage() {
         <UploadDialog
           onClose={() => setUploadOpen(false)}
           onUploaded={() => { setUploadOpen(false); refresh(); }}
+        />
+      )}
+
+      {loomOpen && (
+        <AddLoomSopDialog
+          onClose={() => setLoomOpen(false)}
+          onUploaded={() => { setLoomOpen(false); refresh(); }}
         />
       )}
 
@@ -487,7 +507,8 @@ function StatusGlyph({ status }: { status: QueueStatus }) {
   return <Clock className="w-3.5 h-3.5 text-ink/35 shrink-0" />;
 }
 
-function KindIcon({ mime }: { mime: string }) {
+function KindIcon({ mime, kind }: { mime: string; kind?: string }) {
+  if (kind === "loom") return <Video className="w-4 h-4" />;
   if (mime.startsWith("image/")) return <FileImage className="w-4 h-4" />;
   return <FileText className="w-4 h-4" />;
 }

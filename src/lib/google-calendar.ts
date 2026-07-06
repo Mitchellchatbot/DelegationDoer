@@ -86,6 +86,18 @@ async function refreshAccessToken(
     const detail =
       [data.error, data.error_description].filter(Boolean).join(" — ") ||
       String(res.status);
+    // Record the failure on the user row so the Settings card can show
+    // *why* + *when* the connection broke (a ~7-day connect->break delta
+    // with invalid_grant means a Testing-mode / pre-publish refresh
+    // token). We keep the dead tokens in place — reconnect overwrites.
+    await getSupabaseAdmin()
+      .from("users")
+      .update({
+        google_last_sync_ok: false,
+        google_last_sync_msg: detail,
+        google_last_sync_at: new Date().toISOString()
+      })
+      .eq("id", userId);
     throw new GoogleAuthError(
       `google refresh failed: ${detail}`,
       "refresh_failed",
@@ -98,7 +110,10 @@ async function refreshAccessToken(
     .from("users")
     .update({
       google_access_token: data.access_token,
-      google_token_expiry: expiry
+      google_token_expiry: expiry,
+      google_last_sync_ok: true,
+      google_last_sync_msg: null,
+      google_last_sync_at: new Date().toISOString()
     })
     .eq("id", userId);
   return data.access_token as string;

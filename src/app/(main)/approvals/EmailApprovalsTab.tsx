@@ -263,6 +263,8 @@ export function EmailApprovalsTab() {
                   draft={d}
                   meId={me.id}
                   viewerIsApprover={viewerIsApprover}
+                  viewerRole={me.role}
+                  viewerDeptIds={me.departmentIds}
                   onChanged={load}
                 />
               ))}
@@ -275,11 +277,13 @@ export function EmailApprovalsTab() {
 }
 
 function DraftCard({
-  draft, meId, viewerIsApprover, onChanged
+  draft, meId, viewerIsApprover, viewerRole, viewerDeptIds, onChanged
 }: {
   draft: Draft;
   meId: string;
   viewerIsApprover: boolean;
+  viewerRole: string;
+  viewerDeptIds: string[];
   onChanged: () => void;
 }) {
   const isPending = draft.status === "pending";
@@ -289,6 +293,14 @@ function DraftCard({
   const isRejected = draft.status === "rejected";
   const isApproved = draft.status === "approved";
   const isAuthor = draft.authorId === meId;
+  // Can this viewer ACT on THIS draft? Mirrors server-side canApproveDraft:
+  // a universal approver, or the head of the draft's own department. Read-only
+  // viewers (SEO leads) are neither, so every write affordance below hides.
+  const canApproveThisDraft =
+    viewerIsApprover ||
+    (viewerRole === "department_head" && viewerDeptIds.includes(draft.departmentId ?? ""));
+  // Authors may still edit/resubmit their own draft.
+  const canEditThisDraft = canApproveThisDraft || isAuthor;
 
   const [expanded, setExpanded] = useState(isPending || isNeedsRevision);
   const [editing, setEditing] = useState(false);
@@ -620,7 +632,7 @@ function DraftCard({
                   <RotateCcw className="w-3 h-3" /> v{draft.revisionCount + 1}
                 </span>
               )}
-              {!isSent && !isRejected && (
+              {canApproveThisDraft && !isSent && !isRejected && (
                 <ScheduleEditor
                   draftId={draft.id}
                   scheduledFor={draft.scheduledFor}
@@ -871,7 +883,7 @@ function DraftCard({
           {!editing && !showRejectBox && !showFeedbackBox && !showRevisionBox && !showResubmitBox && (isPending || isFailed || isNeedsRevision) && (
             <div className="space-y-2 pt-1">
               {/* Send-from picker — only relevant when sending is the next action. */}
-              {sendFromOptions.length > 0 && (isPending || isFailed) && (
+              {canApproveThisDraft && sendFromOptions.length > 0 && (isPending || isFailed) && (
                 <div className="flex items-center gap-2 text-[11px] text-ink/60 px-1">
                   <Send className="w-3 h-3 text-ink/40" />
                   <span>Send from:</span>
@@ -905,6 +917,7 @@ function DraftCard({
                     <MessageSquare className="w-3 h-3" /> Leave feedback
                   </button>
                 )}
+                {canEditThisDraft && (
                 <button
                   type="button"
                   onClick={() => setEditing(true)}
@@ -912,7 +925,8 @@ function DraftCard({
                 >
                   <Edit2 className="w-3 h-3" /> Edit
                 </button>
-                {isPending && (
+                )}
+                {canApproveThisDraft && isPending && (
                   <>
                     <button
                       type="button"
@@ -930,7 +944,7 @@ function DraftCard({
                     </button>
                   </>
                 )}
-                {(isPending || isFailed) && (
+                {canApproveThisDraft && (isPending || isFailed) && (
                   <button
                     type="button"
                     onClick={approve}

@@ -71,6 +71,42 @@ export function isApprover(caller: { name?: string | null; role: string; isAdmin
   return false;
 }
 
+// SEO team leads get READ-ONLY visibility into the email-approvals surface
+// (/approvals Emails tab) — they can see which clients still need an update
+// and the send schedule, so they avoid firing duplicate manual emails. They
+// are NOT approvers: every write affordance stays hidden and every write
+// route rejects them (they don't pass isApprover).
+//
+// Curated by EXACT email (stable + collision-free) rather than name substring
+// — mirrors canSeeCustomerSupport in lib/auth.ts. Deliberately email-keyed:
+// a name-substring list would misfire (e.g. "sam" already matches "Samir" in
+// SUPER_APPROVER_NAME_PATTERNS). To add/remove a viewer, edit only this list.
+const EMAIL_VIEWER_EMAILS = [
+  "bella@scaledai.org",
+  "steve@scaledai.org",
+  "samir@scaledai.org"
+];
+
+function isEmailViewerEmail(email: string | null | undefined): boolean {
+  if (!email) return false;
+  return EMAIL_VIEWER_EMAILS.includes(email.trim().toLowerCase());
+}
+
+// "Is this person a read-only email-approvals viewer (SEO team lead)?" — no
+// DB calls, email-only. Used to gate the read-only nav item + the "hide write
+// affordances" flag on the /approvals Emails tab.
+export function isEmailApprovalsViewer(caller: { email?: string | null }): boolean {
+  return isEmailViewerEmail(caller.email);
+}
+
+// "Can this person open the /approvals Emails tab at all?" — full approvers
+// (leader / admin / super-approver) OR read-only SEO viewers. Used by the
+// tab's READ routes (digest-recommendations, drafts listing, draft events)
+// and the sidebar nav. Write routes keep using isApprover / canApproveDraft.
+export function canViewEmailApprovals(caller: { name?: string | null; email?: string | null; role: string; isAdmin?: boolean }): boolean {
+  return isApprover(caller) || isEmailApprovalsViewer(caller);
+}
+
 // Fetch every user who's allowed to approve a given draft. Returns
 // the universal approver set (role='leader' ∪ stealth admins ∪
 // super-approvers) PLUS, when the draft is department-scoped, the

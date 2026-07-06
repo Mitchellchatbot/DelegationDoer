@@ -13,6 +13,7 @@ import { useEffect, useState } from "react";
 import { AIAssistantDrawer } from "./AIAssistantDrawer";
 import { RaiseLink } from "./RaiseLink";
 import { isLeader, isHead, canSeeCustomerSupport } from "@/lib/auth";
+import { isEmailApprovalsViewer } from "@/lib/email-approvers";
 import { primaryDepartment } from "@/lib/departments";
 import type { User } from "@/lib/types";
 
@@ -110,6 +111,10 @@ export function Sidebar({ user }: { user: User }) {
   // pattern so the badge feels consistent.
   const canSeeRoutingReview = isLeader(user) || isHead(user);
   const [routingReviewPending, setRoutingReviewPending] = useState<number | null>(null);
+  // Read-only email-approvals viewers (SEO team leads) — get the Approvals
+  // nav row so they can open the read-only Emails tab, even though they
+  // aren't approvers and get no pending-approvals badge.
+  const canViewApprovalsReadOnly = isEmailApprovalsViewer(user);
   // Customer Support inbox — Mujtaba + stealth admins only. Badge counts the
   // Needs Review queue (uncertain inbound texts awaiting triage).
   const canSeeSupport = canSeeCustomerSupport(user);
@@ -303,7 +308,7 @@ export function Sidebar({ user }: { user: User }) {
     // the Approvals row to anyone who can approve OR who can see
     // routing review — they'll land on the right default tab and
     // the badge below sums both queues.
-    ...(canApprove || canSeeRoutingReview ? [APPROVALS_ITEM] : []),
+    ...(canApprove || canSeeRoutingReview || canViewApprovalsReadOnly ? [APPROVALS_ITEM] : []),
     ...(canSeeSupport ? [CUSTOMER_SUPPORT_ITEM] : []),
     CLIENTS_ITEM,
     UPDATES_ITEM,

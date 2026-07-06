@@ -32,6 +32,9 @@ interface Props {
   // Called after the user picks a time. Parent owns the API call so it
   // can also refresh card-list state on success.
   onSchedule: (draftId: string, isoTimestamp: string) => Promise<void>;
+  // Read-only viewers (SEO team leads) see the schedule but can't drag a
+  // draft onto a date — the drop targets + scheduling hint are suppressed.
+  readOnly?: boolean;
 }
 
 const WEEKDAYS = ["M", "T", "W", "T", "F", "S", "S"];
@@ -99,7 +102,7 @@ function statusPill(status: CalendarDraft["status"]): string {
   }
 }
 
-export function ApprovalsScheduleCalendar({ drafts, onSchedule }: Props) {
+export function ApprovalsScheduleCalendar({ drafts, onSchedule, readOnly = false }: Props) {
   const [anchor, setAnchor] = useState<Date>(() => startOfMonth(new Date()));
   const [dragOverKey, setDragOverKey] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<{ dayKey: string; draftId: string } | null>(null);
@@ -194,10 +197,12 @@ export function ApprovalsScheduleCalendar({ drafts, onSchedule }: Props) {
         </button>
       </div>
 
-      <div className="text-[10px] text-ink/55 inline-flex items-center gap-1.5">
-        <CalendarClock className="w-3 h-3" />
-        Drag a draft card onto a date to schedule its send.
-      </div>
+      {!readOnly && (
+        <div className="text-[10px] text-ink/55 inline-flex items-center gap-1.5">
+          <CalendarClock className="w-3 h-3" />
+          Drag a draft card onto a date to schedule its send.
+        </div>
+      )}
 
       <div className="grid grid-cols-7 gap-1 text-[10px] uppercase tracking-wide text-ink/45 font-semibold px-1">
         {WEEKDAYS.map((w, i) => (
@@ -222,9 +227,9 @@ export function ApprovalsScheduleCalendar({ drafts, onSchedule }: Props) {
           return (
             <div
               key={key}
-              onDragOver={(e) => !isPast && handleDragOver(e, key)}
+              onDragOver={(e) => !readOnly && !isPast && handleDragOver(e, key)}
               onDragLeave={(e) => handleDragLeave(e, key)}
-              onDrop={(e) => !isPast && handleDrop(e, key)}
+              onDrop={(e) => !readOnly && !isPast && handleDrop(e, key)}
               className={cn(
                 "rounded-lg border p-1 min-h-[68px] flex flex-col transition-colors",
                 inMonth ? "bg-white border-slate-200/70" : "bg-slate-50/40 border-slate-100",

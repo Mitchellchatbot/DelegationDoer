@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
-import { canApproveDraft } from "@/lib/email-approvers";
+import { canApproveDraft, isEmailApprovalsViewer } from "@/lib/email-approvers";
 
 export const dynamic = "force-dynamic";
 
@@ -11,7 +11,9 @@ export const dynamic = "force-dynamic";
 //   comments, revision requests, resubmissions, approves, rejects,
 //   sent / send_failed. The approvals UI renders this under each row.
 //
-// Access: author OR any approver of the draft's kind.
+// Access: author OR any approver of the draft's kind OR a read-only
+// email-approvals viewer (SEO team lead) — so expanding a draft row on the
+// read-only /approvals Emails tab shows its timeline instead of erroring.
 
 interface EventRow {
   id: string;
@@ -45,7 +47,8 @@ export async function GET(
       { id: me.id, name: me.name, role: me.role, isAdmin: me.isAdmin, departmentIds: me.departmentIds },
       { author_id: draft.author_id as string, kind: draft.kind, departmentId: draft.department_id as string | null }
     );
-    if (!isAuthor && !isApprover) {
+    const isViewer = isEmailApprovalsViewer({ email: me.email });
+    if (!isAuthor && !isApprover && !isViewer) {
       return NextResponse.json({ error: "forbidden" }, { status: 403 });
     }
 

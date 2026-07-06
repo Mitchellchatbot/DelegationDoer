@@ -151,7 +151,9 @@ function buildGroups(
 }
 
 // Board / Flow board / Sequences switch, styled like the status chips.
-function ViewToggle({ active }: { active: View }) {
+// `source` carries the active Typeform filter across view switches so the page
+// stays scoped when you flip between boards.
+function ViewToggle({ active, source }: { active: View; source?: string | null }) {
   const tabs = [
     { key: "board", label: "Board", Icon: LayoutGrid },
     { key: "flow", label: "Flow board", Icon: Shuffle },
@@ -161,10 +163,12 @@ function ViewToggle({ active }: { active: View }) {
     <div className="inline-flex rounded-full border border-slate-200 bg-white p-0.5">
       {tabs.map((t) => {
         const isActive = t.key === active;
+        const p = new URLSearchParams({ view: t.key });
+        if (source) p.set("source", source);
         return (
           <Link
             key={t.key}
-            href={`/outbound-dashboard/leads?view=${t.key}`}
+            href={`/outbound-dashboard/leads?${p.toString()}`}
             className={cn(
               "px-3 py-1.5 rounded-full text-[12.5px] inline-flex items-center gap-1.5 transition-colors",
               isActive ? "bg-ink text-white shadow-sm" : "text-ink/65 hover:bg-slate-50"
@@ -221,9 +225,9 @@ export default async function OutboundLeadsPage({
     return (
       <div className="space-y-4 max-w-[1400px] mx-auto">
         <Hero view={view} />
-        <ViewToggle active="sequences" />
+        <ViewToggle active="sequences" source={sourceFilter} />
         <div className="flex items-center justify-end gap-2">
-          <OutboundSourceSelect forms={forms} value={sourceFilter ?? "all"} />
+          <OutboundSourceSelect forms={forms} value={sourceFilter ?? "all"} view="sequences" />
           <AddLeadButton forms={forms} />
           <OutboundTypeformFormsDrawer initialForms={forms} unknownFormIds={[]} />
         </div>
@@ -234,7 +238,8 @@ export default async function OutboundLeadsPage({
 
   // ---- Flow board view (drag leads between SMS sequences) ----
   if (view === "flow") {
-    const [flowGroups, forms] = await Promise.all([getLeadsByFlow(), listForms()]);
+    const sourceFilter = parseSource(sp.source);
+    const [flowGroups, forms] = await Promise.all([getLeadsByFlow(sourceFilter), listForms()]);
     const cards = [...flowGroups.booking, ...flowGroups.recovery, ...flowGroups.engagement];
     // Surface unregistered sources seen on the queued cards so the Manage-forms
     // badge mirrors the Board view (which derives the same from its lead pull).
@@ -249,8 +254,9 @@ export default async function OutboundLeadsPage({
     return (
       <div className="space-y-4 max-w-7xl mx-auto">
         <Hero view={view} />
-        <ViewToggle active="flow" />
+        <ViewToggle active="flow" source={sourceFilter} />
         <div className="flex items-center justify-end gap-2">
+          <OutboundSourceSelect forms={forms} value={sourceFilter ?? "all"} view="flow" />
           <AddLeadButton forms={forms} />
           <OutboundTypeformFormsDrawer initialForms={forms} unknownFormIds={unknownFormIds} />
         </div>
@@ -264,10 +270,11 @@ export default async function OutboundLeadsPage({
   // (up to 500) than the list section's status-filtered 100. The status filter
   // (?status=) narrows only the list below; the board always shows every stage.
   const statusFilter = parseStatus(sp.status);
+  const sourceFilter = parseSource(sp.source);
   const [counts, boardPage, listPage, forms] = await Promise.all([
-    getLeadStatusCounts(),
-    listLeads({ status: null, limit: 500 }),         // board: whole pipeline
-    listLeads({ status: statusFilter, limit: 100 }), // list: status-filtered
+    getLeadStatusCounts(sourceFilter),
+    listLeads({ status: null, source: sourceFilter, limit: 500 }),         // board: whole pipeline
+    listLeads({ status: statusFilter, source: sourceFilter, limit: 100 }), // list: status-filtered
     listForms()
   ]);
 
@@ -308,17 +315,18 @@ export default async function OutboundLeadsPage({
   return (
     <div className="space-y-4 max-w-7xl mx-auto">
       <Hero view="board" />
-      <ViewToggle active="board" />
+      <ViewToggle active="board" source={sourceFilter} />
       <OutboundFunnelStrip counts={counts} />
 
-      {/* Board (top) — Add lead + Manage forms render inline in the board's
-          Source-filter header row so all three controls share one line. */}
+      {/* Board (top) — Source filter + Add lead + Manage forms render inline in
+          the board's header row so all three controls share one line. */}
       {showEmptyHint && <NoLeadsHint />}
       <OutboundLeadsBoard
         leads={boardLeads}
         forms={forms}
         actions={
           <>
+            <OutboundSourceSelect forms={forms} value={sourceFilter ?? "all"} view="board" />
             <AddLeadButton forms={forms} />
             <OutboundTypeformFormsDrawer
               initialForms={forms}
@@ -330,7 +338,7 @@ export default async function OutboundLeadsPage({
 
       {/* List (scroll down) — the status filter applies to this section only */}
       <div className="pt-4 border-t border-slate-200">
-        <StatusFilterBar counts={counts} active={statusFilter} />
+        <StatusFilterBar counts={counts} active={statusFilter} source={sourceFilter} />
       </div>
       <OutboundLeadsByForm
         groups={groups}

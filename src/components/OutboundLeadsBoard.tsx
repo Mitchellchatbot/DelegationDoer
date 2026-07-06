@@ -21,8 +21,9 @@ import type { OutboundTypeformForm } from "@/lib/outbound-typeform-forms";
 // INTO "Booked" (or any move outside MANUAL_TRANSITIONS) is rejected with a
 // toast and the card snaps back.
 //
-// One board across every Typeform; a source dropdown filters by form and each
-// card carries its source as a badge.
+// One board across every Typeform. The Source filter (page-level, URL-driven via
+// ?source=) narrows the leads server-side before they reach here; each card
+// carries its source as a badge.
 
 interface Props {
   leads: OutboundLead[];
@@ -53,7 +54,6 @@ export function OutboundLeadsBoard({ leads: initialLeads, forms, actions }: Prop
   const { containerRef, onDragStart, onDragEnd: stopAutoScroll, resolveDroppableId, activeDroppableId } =
     useHorizontalDragAutoScroll();
   const [leads, setLeads] = useState<OutboundLead[]>(initialLeads);
-  const [sourceFilter, setSourceFilter] = useState<string>("all");
 
   // form_id → label for the per-card source badge.
   const labelForForm = useMemo(() => {
@@ -64,12 +64,10 @@ export function OutboundLeadsBoard({ leads: initialLeads, forms, actions }: Prop
     };
   }, [forms]);
 
-  const visible = sourceFilter === "all"
-    ? leads
-    : leads.filter((l) => l.typeformFormId === sourceFilter);
-
+  // `leads` arrives already source-filtered from the server (the Source select
+  // now drives ?source= in the URL), so we group over it directly.
   const grouped = EMPTY_GROUPS();
-  for (const l of visible) {
+  for (const l of leads) {
     if (grouped[l.status]) grouped[l.status].push(l);
   }
   // Newest first within each column.
@@ -122,17 +120,6 @@ export function OutboundLeadsBoard({ leads: initialLeads, forms, actions }: Prop
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-end gap-2">
-        <label className="text-[12px] text-ink/55">Source</label>
-        <select
-          value={sourceFilter}
-          onChange={(e) => setSourceFilter(e.target.value)}
-          className="text-[12.5px] rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-ink/80 focus:outline-none focus:ring-2 focus:ring-accent/20"
-        >
-          <option value="all">All sources</option>
-          {forms.map((f) => (
-            <option key={f.id} value={f.id}>{f.label}</option>
-          ))}
-        </select>
         {actions}
       </div>
 

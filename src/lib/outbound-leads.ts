@@ -654,8 +654,13 @@ export function chatIdForLead(lead: OutboundLead): string | null {
 
 // ---- DASHBOARD READS ----
 
-// Counts per status — feeds the Funnel KPI strip on the dashboard.
-export async function getLeadStatusCounts(): Promise<Record<LeadStatus, number>> {
+// Counts per status — feeds the Funnel KPI strip on the dashboard. Pass a
+// sourceFormId to scope the counts to a single Typeform source; filtering
+// server-side keeps the strip/chips consistent with the source-filtered board
+// (a client-side filter couldn't — see getFlowsOverview).
+export async function getLeadStatusCounts(
+  sourceFormId: string | null = null
+): Promise<Record<LeadStatus, number>> {
   const supabase = getSupabaseAdmin();
   // One query per status is fine for the count surface (7 statuses);
   // group-by-on-the-server would be cleaner but Supabase RPC isn't
@@ -667,20 +672,23 @@ export async function getLeadStatusCounts(): Promise<Record<LeadStatus, number>>
     warm_lead: 0, booked: 0, showed: 0, no_show: 0, contract: 0, success: 0, lost: 0
   };
   await Promise.all(statuses.map(async (s) => {
-    const { count, error } = await supabase
+    let q = supabase
       .from("outbound_leads")
       .select("id", { count: "exact", head: true })
       .eq("status", s);
+    if (sourceFormId) q = q.eq("typeform_form_id", sourceFormId);
+    const { count, error } = await q;
     if (error) throw new Error(error.message);
     counts[s] = count ?? 0;
   }));
   return counts;
 }
 
-// Paginated list, optionally filtered by status. Newest leads first so
-// the dashboard table opens on freshly-arrived activity.
+// Paginated list, optionally filtered by status and/or Typeform source.
+// Newest leads first so the dashboard table opens on freshly-arrived activity.
 export async function listLeads(opts: {
   status?: LeadStatus | null;
+  source?: string | null;
   limit?: number;
   offset?: number;
 } = {}): Promise<{ rows: OutboundLead[]; total: number }> {
@@ -693,6 +701,7 @@ export async function listLeads(opts: {
     .order("created_at", { ascending: false })
     .range(offset, offset + limit - 1);
   if (opts.status) q = q.eq("status", opts.status);
+  if (opts.source) q = q.eq("typeform_form_id", opts.source);
   const { data, error, count } = await q;
   if (error) throw new Error(error.message);
   return {
@@ -965,16 +974,21 @@ export interface FlowLeadCard {
   pendingCount: number;
 }
 
-export async function getLeadsByFlow(): Promise<Record<FlowKey, FlowLeadCard[]>> {
+export async function getLeadsByFlow(
+  sourceFormId: string | null = null
+): Promise<Record<FlowKey, FlowLeadCard[]>> {
   const supabase = getSupabaseAdmin();
-  const { data, error } = await supabase
+  let query = supabase
     .from("outbound_scheduled_messages")
     .select(`
       lead_id, kind, scheduled_for,
       outbound_leads!inner ( id, name, phone, email, status, typeform_form_id )
     `)
-    .eq("status", "pending")
-    .order("scheduled_for", { ascending: true });
+    .eq("status", "pending");
+  // Scope to one Typeform source server-side (via the !inner join) so the Flow
+  // board's columns + counts stay consistent — mirrors getFlowsOverview.
+  if (sourceFormId) query = query.eq("outbound_leads.typeform_form_id", sourceFormId);
+  const { data, error } = await query.order("scheduled_for", { ascending: true });
   if (error) throw new Error(error.message);
 
   interface JoinedLead {

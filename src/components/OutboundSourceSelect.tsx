@@ -1,26 +1,31 @@
 "use client";
 
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import type { OutboundTypeformForm } from "@/lib/outbound-typeform-forms";
 
-// Source filter for the Sequences view. The Board and Flow board keep their
-// source filter as in-component client state; the Sequences roll-up is
-// server-filtered (counts + queued lists must stay consistent), so this select
-// drives it via the URL (?view=sequences&source=<formId>) instead. Styled
-// identically to the inline selects in OutboundSequenceBoard / OutboundLeadsBoard.
+// Source filter for the Board, Flow board, and Sequences views. All three are
+// server-filtered (counts + queued lists must stay consistent — a client-side
+// filter couldn't), so this select drives the source via the URL
+// (?view=<view>&source=<formId>) instead of component state. It preserves the
+// other params already in the URL (e.g. ?status= on the board) and only rewrites
+// `source` + `view`.
 
 interface Props {
   forms: OutboundTypeformForm[];
   value: string; // form id, or "all"
+  view?: "board" | "flow" | "sequences"; // which view this select lives on
 }
 
-export function OutboundSourceSelect({ forms, value }: Props) {
+export function OutboundSourceSelect({ forms, value, view = "sequences" }: Props) {
   const router = useRouter();
+  const params = useSearchParams();
 
   function onChange(next: string) {
-    const params = new URLSearchParams({ view: "sequences" });
-    if (next !== "all") params.set("source", next);
-    router.push(`/outbound-dashboard/leads?${params.toString()}`);
+    const p = new URLSearchParams(params.toString());
+    p.set("view", view);
+    if (next === "all") p.delete("source");
+    else p.set("source", next);
+    router.push(`/outbound-dashboard/leads?${p.toString()}`);
   }
 
   return (

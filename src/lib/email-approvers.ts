@@ -45,16 +45,21 @@ interface DraftRef {
   departmentId?: string | null;
 }
 
-// Substrings that flag a user as a super-approver. Matched against
-// the lowercased name so a rename doesn't require a code change.
+// Whole-word name tokens that flag a user as a super-approver (matched
+// case-insensitively so a rename doesn't require a code change). Whole-word,
+// not substring — see isSuperApproverName below; "sam" must not catch "Samir".
 // To add/remove a super-approver, change this list and only this list
 // — every other check funnels through isApprover() below.
 const SUPER_APPROVER_NAME_PATTERNS = ["sam", "mujtaba", "farez"];
 
 function isSuperApproverName(name: string | null | undefined): boolean {
   if (!name) return false;
-  const lower = name.toLowerCase();
-  return SUPER_APPROVER_NAME_PATTERNS.some((p) => lower.includes(p));
+  // Whole-word match, not substring — a bare `includes` let "sam" also
+  // match "Samir" (a different person) and silently make them an approver.
+  // Split the display name into alphanumeric tokens and match a pattern
+  // exactly ("Farez Khan" -> ["farez","khan"] still matches "farez").
+  const tokens = name.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+  return SUPER_APPROVER_NAME_PATTERNS.some((p) => tokens.includes(p));
 }
 
 // Single source of truth for "is this person an approver?" — used by

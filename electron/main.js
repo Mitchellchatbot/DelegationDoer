@@ -24,7 +24,13 @@ const WIDGET_URL = `${APP_URL}/widget`;
 // ALERT/PANEL: ~20px shadow margin per side on top of the card's natural
 //   width/height.
 const BUBBLE = { w: 96, h: 96 };
-const ALERT  = { w: 420, h: 140 };
+// Bigger than the historical 420 — the aggregate mentions card
+// production now serves ("Mark all seen" / "See all in widget") is
+// wider than the classic single-alert cards and was clipping on the
+// left. h=240 (up from 140) gives room for the taller aggregate card
+// too. Feel free to nudge these dimensions per operator preference —
+// they only affect the widget window bounds, not the card CSS.
+const ALERT  = { w: 900, h: 240 };
 const PANEL  = { w: 420, h: 560 };
 const MARGIN = 16;
 
@@ -205,6 +211,38 @@ function buildTray() {
     { type: "separator" },
     { label: "Open full app", click: () => shell.openExternal(APP_URL) },
     { type: "separator" },
+    // Notification helpers — added in v0.1.2 so Mac users can verify the
+    // permission grant and jump to system settings without hunting.
+    {
+      label: "Test notification",
+      click: () => {
+        const ok = showNotification({
+          title: "DelegationDoer",
+          body: "Notifications are working. You'll get pinged for mentions, kudos, emails, and EOD reminders.",
+          silent: false
+        });
+        // On the very first invocation macOS pops the permission prompt
+        // BEFORE the notification renders — the user grants once, then
+        // subsequent clicks pop the actual toast. Log so a diagnosing
+        // engineer can tell which path fired from the widget dev console.
+        console.log("[notify] test click delivered=" + ok);
+      }
+    },
+    {
+      label: "Notification settings…",
+      click: () => {
+        // Deep-link straight into the OS Notifications pane so the user
+        // can flip permission if they hit "Don't allow" earlier.
+        if (process.platform === "darwin") {
+          shell.openExternal("x-apple.systempreferences:com.apple.preference.notifications");
+        } else if (process.platform === "win32") {
+          shell.openExternal("ms-settings:notifications");
+        } else {
+          shell.openExternal(APP_URL);
+        }
+      }
+    },
+    { type: "separator" },
     {
       label: "Reload widget",
       click: () => widget?.webContents.reloadIgnoringCache()
@@ -238,6 +276,31 @@ app.whenReady().then(() => {
   createWidget();
   buildTray();
 
+  // macOS-only permission priming. The very first Notification.show() on
+  // Mac triggers the "Allow DelegationDoer to send notifications?"
+  // dialog. Firing a bare, silent, no-body priming notification a couple
+  // seconds after boot gets the dialog in front of the user immediately
+  // (instead of waiting until the first real mention/kudos/email lands
+  // and possibly getting missed). Wrapped in try/catch so a boot-time
+  // failure never blocks the widget itself. Windows toasts don't need
+  // priming — permission is granted per-app-manifest at install time.
+  if (process.platform === "darwin") {
+    setTimeout(() => {
+      try {
+        if (Notification.isSupported()) {
+          const primer = new Notification({
+            title: "DelegationDoer",
+            body: "Notifications enabled — you'll be pinged for mentions, kudos, and reminders.",
+            silent: true
+          });
+          primer.show();
+        }
+      } catch (err) {
+        console.error("[notify] mac permission priming failed", err);
+      }
+    }, 2500);
+  }
+
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWidget();
   });
@@ -254,26 +317,55 @@ ipcMain.handle("widget:openMainWindow", (_e, path) => {
 });
 
 // OS-level notifications. The renderer owns the "what's fresh" dedup and
-// fires one of these per new task / mention / email. macOS silently drops
-// Electron's native Notification from an unsigned app, so route through
-// node-notifier there (it ships a signed terminal-notifier helper that
-// delivers regardless of our app's signature). Native Notification is fine
-// on Windows. The renderer plays its own chime, so keep these silent.
+// fires one of these per new task / mention / email.
+//
+// v0.1.2 change: unify Mac + Windows on Electron's native Notification API.
+// Modern Electron (>=20) delivers reliably on unsigned Mac apps too, as long
+// as macOS has granted permission (auto-prompted the first time a
+// notification is shown from our app bundle). node-notifier stays as a
+// last-ditch fallback for the case where isSupported() returns false —
+// should never happen in practice, but keeps us from silent-failing if it
+// does. The renderer plays its own chime, so we ask the OS to be silent.
 // `path` is an optional app-relative route (e.g. an inbox deep link). When
-// present, clicking the notification opens it in the default browser — native
-// `click` event on Windows, node-notifier's `open` option on macOS.
-ipcMain.handle("widget:notify", (_e, { title, body, path }) => {
+// present, clicking the notification opens it in the default browser.
+function showNotification({ title, body, path, silent = true } = {}) {
   const url = typeof path === "string" && path.startsWith("/") ? APP_URL + path : null;
-  if (process.platform === "darwin") {
-    // Lazy + macOS-only: node-notifier is never used on Windows, so don't load
-    // it at startup there (and it's the only node_modules dep the shell needs).
-    const notifier = require("node-notifier");
-    notifier.notify({ title, message: body, sound: false, ...(url ? { open: url } : {}) });
-  } else if (Notification.isSupported()) {
-    const n = new Notification({ title, body });
-    if (url) n.on("click", () => shell.openExternal(url));
-    n.show();
+  const platform = process.platform;
+
+  if (Notification.isSupported()) {
+    try {
+      const n = new Notification({ title, body, silent });
+      if (url) n.on("click", () => shell.openExternal(url));
+      n.on("failed", (_e, err) => {
+        console.error(`[notify] native failed (${platform})`, err);
+      });
+      n.show();
+      console.log(`[notify] native → ${platform}: ${title}`);
+      return true;
+    } catch (err) {
+      console.error(`[notify] native threw (${platform}), falling back`, err);
+    }
+  } else {
+    console.warn(`[notify] Notification.isSupported() false on ${platform}`);
   }
+
+  // Fallback: node-notifier (mac helper binary bundled via electron-builder).
+  // Only reached when the native path is unavailable or throws.
+  if (platform === "darwin") {
+    try {
+      const notifier = require("node-notifier");
+      notifier.notify({ title, message: body, sound: false, ...(url ? { open: url } : {}) });
+      console.log(`[notify] node-notifier fallback → darwin: ${title}`);
+      return true;
+    } catch (err) {
+      console.error("[notify] node-notifier fallback failed", err);
+    }
+  }
+  return false;
+}
+
+ipcMain.handle("widget:notify", (_e, payload) => {
+  showNotification(payload || {});
 });
 
 // Drag pipeline. Renderer sends absolute screen coords.

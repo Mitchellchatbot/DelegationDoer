@@ -2139,6 +2139,13 @@ function Panel({
   // does nothing.
   const [canOpenThreads, setCanOpenThreads] = useState(false);
   useEffect(() => { setCanOpenThreads(!!(window as any).widgetAPI?.openMainWindow); }, []);
+  // Emails get their own tab so a stack of email cards doesn't push the task
+  // lists below the fold. The toggle only appears when there are unseen emails;
+  // deriving `tab` from emails.length means dismissing the last email falls back
+  // to Tasks and hides the toggle with no extra bookkeeping. Panel unmounts on
+  // collapse, so this resets to "tasks" every time the widget is opened.
+  const [panelTab, setPanelTab] = useState<"tasks" | "emails">("tasks");
+  const tab = emails.length > 0 ? panelTab : "tasks";
   const acked = tasks.filter((t) => !t.needsAck).sort(
     (a, b) => PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority]
   );
@@ -2215,17 +2222,54 @@ function Panel({
         <PresenceRow />
         <ClockSection />
 
+        {/* Tasks | Emails toggle — only shown when there are unseen emails, so
+            the panel is unchanged for users with none. Mirrors the PresenceRow
+            pill idiom. Pinned here (not in the scroll area) so switching is
+            always one tap away. */}
+        {emails.length > 0 && (
+          <div className="px-3 pt-3">
+            <div className="grid grid-cols-2 gap-1">
+              <button
+                onClick={() => setPanelTab("tasks")}
+                className={
+                  "flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-xl text-[11px] font-semibold transition-all border " +
+                  (tab === "tasks"
+                    ? "bg-gradient-to-r from-slate-700 to-slate-800 text-white border-transparent shadow-sm"
+                    : "bg-white border-slate-200/70 text-ink/65 hover:text-ink hover:border-slate-300 hover:bg-slate-50")
+                }
+              >
+                Tasks
+                {unacked.length > 0 && (
+                  <span className={"inline-flex items-center justify-center min-w-[16px] h-4 px-1 rounded-full text-[10px] font-bold " + (tab === "tasks" ? "bg-white/25 text-white" : "bg-amber-100 text-amber-700")}>{unacked.length}</span>
+                )}
+              </button>
+              <button
+                onClick={() => setPanelTab("emails")}
+                className={
+                  "flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-xl text-[11px] font-semibold transition-all border " +
+                  (tab === "emails"
+                    ? "bg-gradient-to-r from-sky-500 to-cyan-500 text-white border-transparent shadow-sm"
+                    : "bg-white border-slate-200/70 text-ink/65 hover:text-ink hover:border-slate-300 hover:bg-slate-50")
+                }
+              >
+                <Mail className="w-3.5 h-3.5" /> Emails
+                <span className={"inline-flex items-center justify-center min-w-[16px] h-4 px-1 rounded-full text-[10px] font-bold " + (tab === "emails" ? "bg-white/25 text-white" : "bg-sky-100 text-sky-700")}>{emails.length}</span>
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Everything below scrolls — including kudos, banners, birthdays,
             today's focus, and the task list. Status + clock stay pinned
             up top so the widget always shows the bits the user needs to
             interact with first, even when the task list grows long. */}
         <div className="flex-1 overflow-y-auto">
-          {eom.isMe && <EomBanner month={eom.month} />}
-          {birthdays.celebrantsToday.length > 0 && (
+          {tab === "tasks" && eom.isMe && <EomBanner month={eom.month} />}
+          {tab === "tasks" && birthdays.celebrantsToday.length > 0 && (
             <BirthdayBanner celebrants={birthdays.celebrantsToday} />
           )}
-          {!birthdays.hasBirthday && <BirthdayPrompt onSaved={onUpdated} />}
-          {notifications.length > 0 && (
+          {tab === "tasks" && !birthdays.hasBirthday && <BirthdayPrompt onSaved={onUpdated} />}
+          {tab === "tasks" && notifications.length > 0 && (
             <div className="px-3 pt-3">
               <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-violet-600 mb-2 inline-flex items-center gap-1.5">
                 <Bell className="w-3 h-3" /> Mentions · {notifications.length}
@@ -2261,7 +2305,7 @@ function Panel({
               </div>
             </div>
           )}
-          {kudos.length > 0 && (
+          {tab === "tasks" && kudos.length > 0 && (
             <div className="px-3 pt-3">
               <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-fuchsia-600 mb-2 inline-flex items-center gap-1.5">
                 <Sparkles className="w-3 h-3" /> Kudos · {kudos.length}
@@ -2298,7 +2342,7 @@ function Panel({
             </div>
           )}
 
-          {emails.length > 0 && (
+          {tab === "emails" && (
             <div className="px-3 pt-3">
               <div className="mb-2 flex items-center justify-between">
                 <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-600 inline-flex items-center gap-1.5">
@@ -2350,7 +2394,7 @@ function Panel({
             </div>
           )}
 
-          {unacked.length > 0 && (
+          {tab === "tasks" && unacked.length > 0 && (
             <div className="px-3 pt-3">
               <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-600 mb-2 inline-flex items-center gap-1.5">
                 <AlertTriangle className="w-3 h-3" /> Action required · {unacked.length}
@@ -2387,7 +2431,7 @@ function Panel({
             </div>
           )}
 
-          {acked.length > 0 && (
+          {tab === "tasks" && acked.length > 0 && (
             <div className="px-3 pt-4 pb-3">
               <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-accent mb-2 inline-flex items-center gap-1.5">
                 <Bell className="w-3 h-3" /> Today's focus
@@ -2422,7 +2466,7 @@ function Panel({
             </div>
           )}
 
-          {unacked.length === 0 && acked.length === 0 && kudos.length === 0 && emails.length === 0 && (
+          {tab === "tasks" && unacked.length === 0 && acked.length === 0 && kudos.length === 0 && (
             <div className="text-xs text-slate-400 text-center py-10">All clear.</div>
           )}
         </div>

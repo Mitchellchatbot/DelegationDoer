@@ -3,13 +3,14 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import {
   Search, Plus, LogOut, X, ListTodo, Users as UsersIcon, FolderKanban,
-  Loader2, BookOpen, Home as HomeIcon, ChevronRight
+  Loader2, BookOpen, Home as HomeIcon, ChevronRight, Menu
 } from "lucide-react";
 import { useRouter, usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { PersonAvatar } from "./PersonAvatar";
 import { NewTaskForm } from "./NewTaskForm";
+import { useNavDrawer } from "./NavDrawerProvider";
 // EomPill + NotificationsBell removed from the topbar — they were
 // crowding the right side and squeezing the user pill. EOM crowning
 // still surfaces inline on rec / leaderboard pages; mention / kudos
@@ -59,6 +60,8 @@ export function Topbar({ user }: { user: User }) {
   const searchWrapRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
   const pathname = usePathname();
+  // Opens the app-shell nav drawer on mobile (hamburger). Inert on md+.
+  const { toggle: toggleNav } = useNavDrawer();
   // Derive a 1-2 segment breadcrumb from the current URL. We skip
   // long opaque UUID-looking detail slugs (e.g. /tasks/uuid) so the
   // crumbs stay readable. Mirrors AA's "Home > Sales > Sales Tracker".
@@ -150,12 +153,23 @@ export function Topbar({ user }: { user: User }) {
   }
 
   return (
-    <header className="h-16 sticky top-3 z-30 px-5 grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 rounded-3xl border border-slate-200/70 bg-white/85 backdrop-blur-xl shadow-soft">
-      {/* Breadcrumb pill — mirrors Allocation Assist's left-side
-          "Home › Sales › Sales Tracker" navigation hint. Home icon is
-          always the first crumb and links back to /home; subsequent
-          crumbs come from the URL path. */}
-      <nav aria-label="Breadcrumb" className="justify-self-start">
+    <header className="h-16 sticky top-3 z-30 px-3 md:px-5 grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 rounded-3xl border border-slate-200/70 bg-white/85 backdrop-blur-xl shadow-soft">
+      {/* First cell: hamburger on mobile, breadcrumb pill on md+. Wrapped
+          together so the grid keeps its 3 columns at every width. */}
+      <div className="justify-self-start flex items-center gap-2 min-w-0">
+        <button
+          type="button"
+          onClick={toggleNav}
+          aria-label="Open navigation menu"
+          className="md:hidden shrink-0 w-9 h-9 grid place-items-center rounded-full bg-slate-50 border border-slate-200 text-ink/70 hover:text-ink hover:bg-slate-100 transition-colors"
+        >
+          <Menu className="w-4 h-4" />
+        </button>
+        {/* Breadcrumb pill — mirrors Allocation Assist's left-side
+            "Home › Sales › Sales Tracker" navigation hint. Home icon is
+            always the first crumb and links back to /home; subsequent
+            crumbs come from the URL path. Hidden on phones to save width. */}
+        <nav aria-label="Breadcrumb" className="hidden md:block min-w-0">
         <ol className="inline-flex items-center gap-1.5 px-3 h-9 rounded-full bg-slate-50 border border-slate-200 text-[12.5px] text-ink/65 whitespace-nowrap">
           <li className="flex items-center shrink-0">
             <Link
@@ -185,7 +199,8 @@ export function Topbar({ user }: { user: User }) {
             );
           })}
         </ol>
-      </nav>
+        </nav>
+      </div>
 
       {/* Centered search with live dropdown. Type → debounced query
           to /api/search → results render below the input. Enter on a
@@ -455,14 +470,14 @@ function NewTaskTrigger() {
         title="Clock in first to add a new task."
         className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full text-[14px] font-medium text-ink/50 bg-slate-200/70 cursor-not-allowed whitespace-nowrap shrink-0"
       >
-        <Plus className="w-4 h-4" /> New task
+        <Plus className="w-4 h-4" /> <span className="hidden sm:inline">New task</span>
       </button>
     );
   }
   return (
     <Dialog.Trigger asChild>
       <button className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full text-[14px] font-medium text-white bg-accent hover:bg-accent/90 shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-lift whitespace-nowrap shrink-0">
-        <Plus className="w-4 h-4" /> New task
+        <Plus className="w-4 h-4" /> <span className="hidden sm:inline">New task</span>
       </button>
     </Dialog.Trigger>
   );

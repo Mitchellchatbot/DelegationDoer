@@ -12,6 +12,7 @@ import { ClockProvider } from "@/components/ClockContext";
 import { OnboardingDialog } from "@/components/OnboardingDialog";
 import { SodGate } from "@/components/SodGate";
 import { TooltipRoot } from "@/components/Tooltip";
+import { NavDrawerProvider } from "@/components/NavDrawerProvider";
 import { primaryDepartment } from "@/lib/departments";
 
 export default async function MainLayout({ children }: { children: React.ReactNode }) {
@@ -44,6 +45,10 @@ export default async function MainLayout({ children }: { children: React.ReactNo
           own rounded card with a 12px gutter between them. The page bg
           (app-shell gradient) shows through the gaps so each panel feels
           like it's floating on the canvas. */}
+      {/* NavDrawerProvider shares open/close state between the Topbar
+          hamburger and the Sidebar (which is an off-canvas drawer on mobile,
+          a static rail on md+). It also renders the scrim + owns scroll-lock. */}
+      <NavDrawerProvider>
       <div className="app-shell flex gap-3 p-3 min-h-screen">
         <Sidebar user={user} />
         <div className="flex-1 min-w-0 flex flex-col gap-3">
@@ -63,10 +68,11 @@ export default async function MainLayout({ children }: { children: React.ReactNo
               pattern show through as the canvas. Content sits on white
               cards on top of the grid. */}
           <div className="relative flex-1">
-            <main className="relative z-10 p-6">{children}</main>
+            <main className="relative z-10 px-3 py-4 md:p-6">{children}</main>
           </div>
         </div>
       </div>
+      </NavDrawerProvider>
       <Toaster position="bottom-right" richColors closeButton />
       <OnboardingDialog />
       <SodGate />

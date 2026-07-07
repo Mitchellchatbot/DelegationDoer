@@ -7,6 +7,8 @@ import {
 } from "@/lib/inbox-access";
 import { InboxTree, type InboxNode } from "@/components/InboxTree";
 import { InboxFocusProvider } from "@/components/InboxFocusProvider";
+import { InboxTreeDrawerProvider } from "@/components/InboxTreeDrawerProvider";
+import { InboxTreeToggle } from "@/components/InboxTreeToggle";
 
 export const dynamic = "force-dynamic";
 
@@ -49,10 +51,16 @@ export default async function InboxesLayout({
     // focus provider wraps both so the reply composer's Focus Mode can collapse
     // the rail AND the thread list together (see InboxTree + InboxSplit).
     <InboxFocusProvider>
-      <div className="flex gap-5 w-full">
-        <InboxTree accounts={nodes} canManage={canManageAssignments(me)} />
-        <div className="flex-1 min-w-0">{children}</div>
-      </div>
+      <InboxTreeDrawerProvider>
+        <div className="flex gap-5 w-full">
+          <InboxTree accounts={nodes} canManage={canManageAssignments(me)} />
+          <div className="flex-1 min-w-0">
+            {/* Mobile: opens the inbox tree as a drawer. Hidden on md+. */}
+            <InboxTreeToggle />
+            {children}
+          </div>
+        </div>
+      </InboxTreeDrawerProvider>
     </InboxFocusProvider>
   );
 }

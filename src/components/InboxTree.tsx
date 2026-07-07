@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { createPortal } from "react-dom";
 import { usePathname } from "next/navigation";
 import { motion } from "framer-motion";
 import { useEffect, useState } from "react";
@@ -9,6 +10,8 @@ import { cn, initials } from "@/lib/utils";
 import { ConnectInboxDialog } from "./ConnectInboxDialog";
 import { InboxFavicon } from "./InboxFavicon";
 import { useInboxFocus } from "./InboxFocusProvider";
+import { useInboxTreeDrawer } from "./InboxTreeDrawerProvider";
+import { useIsMobile } from "@/lib/use-is-mobile";
 
 // Left-rail tree for the inbox surface. Sections collapse into:
 //   • Smart — All inboxes (combined view, "/inboxes/all")
@@ -52,6 +55,10 @@ export function InboxTree({ accounts, canManage }: Props) {
   // thread + composer can fill the content area. Width/opacity animate to 0;
   // the DD sidebar (outside this provider) is untouched.
   const { focusMode } = useInboxFocus();
+  // On phones the rail becomes a left drawer (fixed, off-canvas) toggled from
+  // the inbox layout's "Inboxes" button. isMobile gates the framer width.
+  const isMobile = useIsMobile();
+  const { open: treeOpen } = useInboxTreeDrawer();
   const [spaces, setSpaces] = useState<Space[]>([]);
   useEffect(() => {
     let cancelled = false;
@@ -121,7 +128,9 @@ export function InboxTree({ accounts, canManage }: Props) {
     ...orphanAccounts
   ];
 
-  if (collapsed) {
+  // On mobile the tree is always the full drawer (the icon-strip collapse is a
+  // desktop space-saver that makes no sense in an off-canvas drawer).
+  if (collapsed && !isMobile) {
     return (
       <motion.aside
         initial={false}
@@ -186,15 +195,29 @@ export function InboxTree({ accounts, canManage }: Props) {
     );
   }
 
-  return (
+  const drawer = (
     <motion.aside
       initial={false}
-      animate={{ width: focusMode ? 0 : 240, opacity: focusMode ? 0 : 1 }}
+      animate={{
+        width: isMobile ? 288 : (focusMode ? 0 : 240),
+        opacity: isMobile ? 1 : (focusMode ? 0 : 1)
+      }}
       transition={{ duration: 0.25, ease: [0.2, 0.8, 0.2, 1] }}
-      className={cn("shrink-0 overflow-hidden", focusMode && "pointer-events-none")}
+      className={cn(
+        "shrink-0 overflow-hidden",
+        // Mobile: off-canvas left drawer over a scrim (fixed → out of flow, so
+        // the list/pane reclaim the full width). CSS `-translate-x-full` hides
+        // it from first paint even before isMobile flips, so no width flash.
+        // z-50 (portaled to body below) so it clears the sticky Topbar (z-30).
+        "fixed inset-y-0 left-0 z-50 -translate-x-full transition-transform duration-300 bg-white shadow-lift rounded-r-2xl",
+        treeOpen && "translate-x-0",
+        // md+: restore the original inline static rail.
+        "md:static md:inset-auto md:z-auto md:transform-none md:transition-none md:bg-transparent md:shadow-none md:rounded-none",
+        focusMode && "pointer-events-none"
+      )}
     >
-      <div className="sticky top-3 space-y-4 max-h-[calc(100vh-1.5rem)] overflow-y-auto pr-1">
-        <div className="flex justify-end -mb-2">
+      <div className="sticky top-3 space-y-4 max-h-[calc(100vh-1.5rem)] overflow-y-auto px-3 md:px-0 md:pr-1">
+        <div className="hidden md:flex justify-end -mb-2">
           <button
             type="button"
             onClick={toggleCollapsed}
@@ -360,6 +383,13 @@ export function InboxTree({ accounts, canManage }: Props) {
       </div>
     </motion.aside>
   );
+
+  // On mobile, portal the drawer to <body> so its `fixed` positioning escapes
+  // the `<main className="relative z-10">` stacking context (otherwise z-50
+  // would still paint under the Topbar). On desktop it stays inline as the
+  // static rail. isMobile is only ever true after mount (client), so
+  // document.body is defined — SSR renders the inline branch.
+  return isMobile ? createPortal(drawer, document.body) : drawer;
 }
 
 const DOT_TONES = [

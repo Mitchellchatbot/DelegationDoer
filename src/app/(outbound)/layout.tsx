@@ -5,6 +5,8 @@ import { getUserById } from "@/lib/server-data";
 import { canSeeOutbound } from "@/lib/auth";
 import { OutboundSidebar } from "@/components/OutboundSidebar";
 import { OutboundShellIntro } from "@/components/OutboundShellIntro";
+import { NavDrawerProvider } from "@/components/NavDrawerProvider";
+import { OutboundNavToggle } from "@/components/OutboundNavToggle";
 
 // (outbound) — separate route group with its own layout. The whole
 // surface swaps to a purple-sidebar dashboard mode for the outbound
@@ -22,6 +24,7 @@ export default async function OutboundLayout({ children }: { children: React.Rea
   if (!canSeeOutbound(user)) notFound();
 
   return (
+    <NavDrawerProvider>
     <div className="app-shell flex gap-3 p-3 min-h-screen">
       <OutboundSidebar user={user} />
       <div className="flex-1 min-w-0 flex flex-col">
@@ -30,9 +33,13 @@ export default async function OutboundLayout({ children }: { children: React.Rea
             animation in EnterOutboundDashboardButton so the transition
             feels continuous from click → arrival. */}
         <OutboundShellIntro />
-        <main className="relative z-10 p-6">{children}</main>
+        <main className="relative z-10 px-3 py-4 md:p-6">
+          <OutboundNavToggle />
+          {children}
+        </main>
       </div>
       <Toaster position="bottom-right" richColors closeButton />
     </div>
+    </NavDrawerProvider>
   );
 }

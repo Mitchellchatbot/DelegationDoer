@@ -13,6 +13,7 @@ import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { ThreadReadingPane } from "@/components/ThreadReadingPane";
 import { useInboxFocus } from "@/components/InboxFocusProvider";
+import { useIsMobile } from "@/lib/use-is-mobile";
 
 // Gmail/Outlook-style split for the inbox LIST routes only (wrapped around each
 // list page's body — NOT the shared inboxes layout, so /inboxes/manage and
@@ -34,6 +35,9 @@ interface Selected {
 interface InboxSplitCtx {
   selected: Selected | null;
   select: (accountId: string, threadId: string) => void;
+  // Clear the open thread (mobile "‹ Back": pane → list). Also strips the
+  // thread/acct URL params so a refresh doesn't reopen it.
+  clearSelection: () => void;
   isSelected: (threadId: string) => boolean;
   // Threads the user has opened this session — used to drop the unread style
   // in the live list without a server round-trip (the pane marks read).
@@ -44,6 +48,7 @@ interface InboxSplitCtx {
 const Ctx = createContext<InboxSplitCtx>({
   selected: null,
   select: () => {},
+  clearSelection: () => {},
   isSelected: () => false,
   readIds: new Set(),
   markRead: () => {}
@@ -56,6 +61,9 @@ export function InboxSplit({ children }: { children: ReactNode }) {
   // Focus Mode (driven by the reply composer) collapses the thread list so the
   // reading pane — which holds the composer — fills the content area.
   const { focusMode } = useInboxFocus();
+  // On phones the split becomes master-detail: one pane at a time. Only used to
+  // gate the framer-motion inline widths below (Tailwind can't override those).
+  const isMobile = useIsMobile();
   // Hydrate the initial selection from the URL once (supports refresh, bookmarks
   // and the legacy /threads/[id] redirect). Subsequent selections are local.
   const [selected, setSelected] = useState<Selected | null>(() => {
@@ -79,6 +87,20 @@ export function InboxSplit({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const clearSelection = useCallback(() => {
+    setSelected(null);
+    // Symmetric to select(): drop the deep-link params so a refresh returns to
+    // the list, not the (now closed) thread. Same replaceState, no navigation.
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("thread");
+      url.searchParams.delete("acct");
+      window.history.replaceState(null, "", url.toString());
+    } catch {
+      /* non-browser / blocked — state already cleared */
+    }
+  }, []);
+
   const markRead = useCallback((threadId: string) => {
     setReadIds((prev) => {
       if (prev.has(threadId)) return prev;
@@ -94,23 +116,31 @@ export function InboxSplit({ children }: { children: ReactNode }) {
   );
 
   const value = useMemo<InboxSplitCtx>(
-    () => ({ selected, select, isSelected, readIds, markRead }),
-    [selected, select, isSelected, readIds, markRead]
+    () => ({ selected, select, clearSelection, isSelected, readIds, markRead }),
+    [selected, select, clearSelection, isSelected, readIds, markRead]
   );
 
   return (
     <Ctx.Provider value={value}>
-      <div className="flex gap-5 items-start">
+      {/* gap-0 on mobile: only one pane is visible at a time, so the 20px
+          gutter (which would otherwise sit past the full-width pane and cause a
+          clipped overflow) collapses. md+ keeps the split gutter. */}
+      <div className="flex gap-0 md:gap-5 items-start">
         {/* List column — own scroll, never unmounts on selection. In Focus Mode
-            its width/opacity animate to 0 so the reading pane fills the row;
-            the column stays mounted (scroll + infinite-scroll state preserved). */}
+            (and on mobile when a thread is open) its width/opacity animate to 0
+            so the reading pane fills the row; the column stays MOUNTED so its
+            scroll + infinite-scroll state is preserved. On mobile with no
+            selection it's full-width (master-detail: list, then thread). */}
         <motion.div
           initial={false}
-          animate={{ width: focusMode ? 0 : 400, opacity: focusMode ? 0 : 1 }}
+          animate={{
+            width: isMobile ? (selected ? 0 : "100%") : (focusMode ? 0 : 400),
+            opacity: isMobile && selected ? 0 : (focusMode ? 0 : 1)
+          }}
           transition={{ duration: 0.25, ease: [0.2, 0.8, 0.2, 1] }}
           className={cn(
             "shrink-0 min-w-0 sticky top-3 self-start max-h-[calc(100vh-1.5rem)] overflow-y-auto overflow-x-hidden",
-            focusMode && "pointer-events-none"
+            (focusMode || (isMobile && selected)) && "pointer-events-none"
           )}
         >
           {children}

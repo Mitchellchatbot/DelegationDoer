@@ -11,6 +11,7 @@ import {
 // Sparkles is reused for both Ask AI and Updates — same icon, different context.
 import { useEffect, useState } from "react";
 import { AIAssistantDrawer } from "./AIAssistantDrawer";
+import { useNavDrawer } from "./NavDrawerProvider";
 import { RaiseLink } from "./RaiseLink";
 import { isLeader, isHead, canSeeCustomerSupport } from "@/lib/auth";
 import { isEmailApprovalsViewer } from "@/lib/email-approvers";
@@ -75,6 +76,8 @@ const TONE_STYLES: Record<Tone, {
 
 export function Sidebar({ user }: { user: User }) {
   const path = usePathname();
+  // Off-canvas drawer state (mobile only; the aside is `md:static` on desktop).
+  const { open: navOpen } = useNavDrawer();
   const [aiOpen, setAiOpen] = useState(false);
 
   // Aggregate "things waiting in /updates" badge. Folds in the open
@@ -340,7 +343,15 @@ export function Sidebar({ user }: { user: User }) {
 
   return (
     <aside
-      className="sidebar-panel w-60 shrink-0 sticky top-3 h-[calc(100vh-1.5rem)] rounded-3xl border border-white/10 shadow-lift flex flex-col overflow-hidden text-white"
+      className={cn(
+        "sidebar-panel shrink-0 rounded-3xl border border-white/10 shadow-lift flex flex-col overflow-hidden text-white",
+        // Mobile: off-canvas drawer sliding in from the left over a scrim.
+        "fixed inset-y-0 left-0 z-50 w-[min(84vw,320px)] h-full transition-transform duration-300 will-change-transform",
+        navOpen ? "translate-x-0" : "-translate-x-full",
+        // md+: restore the original static 240px sticky rail (transform-none
+        // drops the containing block so nothing changes vs. desktop before).
+        "md:sticky md:top-3 md:bottom-auto md:left-auto md:z-auto md:w-60 md:h-[calc(100vh-1.5rem)] md:transform-none md:transition-none md:will-change-auto"
+      )}
       style={{
         background: "#063270"
       }}

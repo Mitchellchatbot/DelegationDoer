@@ -1,10 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Mail, Loader2, AlertCircle } from "lucide-react";
+import { Mail, Loader2, AlertCircle, ChevronLeft } from "lucide-react";
 import { ThreadConversation, type ThreadDetailData } from "@/components/ThreadConversation";
 import { useInboxSplit } from "@/components/InboxSplit";
 import { fetchThread, getCachedThread } from "@/lib/thread-cache";
+import { useIsMobile } from "@/lib/use-is-mobile";
 
 // The right-hand reading pane in the inbox split view. The selected thread comes
 // from InboxSplit's client-local context (NOT the router), so opening a thread
@@ -17,7 +18,8 @@ type State =
   | { status: "ready"; data: ThreadDetailData };
 
 export function ThreadReadingPane() {
-  const { selected, markRead } = useInboxSplit();
+  const { selected, markRead, clearSelection } = useInboxSplit();
+  const isMobile = useIsMobile();
   const threadId = selected?.threadId ?? null;
   const accountId = selected?.accountId ?? null;
   const [state, setState] = useState<State>({ status: "idle" });
@@ -61,6 +63,19 @@ export function ThreadReadingPane() {
 
   return (
     <div className="flex-1 min-w-0 sticky top-3 self-start max-h-[calc(100vh-1.5rem)] overflow-y-auto">
+      {/* Mobile master-detail back affordance: returns to the full-width list
+          (which stayed mounted, so its scroll position is intact). Only shown
+          on phones when a thread is open. */}
+      {isMobile && selected && (
+        <button
+          type="button"
+          onClick={clearSelection}
+          className="sticky top-0 z-10 flex items-center gap-1 w-full px-1 py-2 mb-1 bg-white/90 backdrop-blur-sm text-sm font-medium text-ink/70 hover:text-ink border-b border-slate-100"
+        >
+          <ChevronLeft className="w-4 h-4" />
+          Back
+        </button>
+      )}
       {state.status === "idle" && <Empty />}
       {state.status === "loading" && (
         <Centered>

@@ -9,6 +9,7 @@ import {
   MessageSquare, Flame
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useNavDrawer } from "./NavDrawerProvider";
 import type { User } from "@/lib/types";
 
 // The outbound dashboard's dedicated sidebar — a clean, light panel that
@@ -38,6 +39,8 @@ export function OutboundSidebar({ user }: { user: User }) {
   const path = usePathname();
   const router = useRouter();
   const ref = useRef<HTMLElement>(null);
+  // Off-canvas drawer state (mobile only; `md:static` on desktop).
+  const { open: navOpen } = useNavDrawer();
 
   // Mouse-tracking halo — captures cursor pos relative to the sidebar and
   // spring-smooths it so the highlight glides behind the cursor instead of
@@ -58,7 +61,14 @@ export function OutboundSidebar({ user }: { user: User }) {
         my.set(e.clientY - r.top);
       }}
       onMouseLeave={() => { mx.set(-400); my.set(-400); }}
-      className="sidebar-panel relative w-60 shrink-0 sticky top-3 h-[calc(100vh-1.5rem)] rounded-2xl border border-slate-200 bg-white shadow-soft flex flex-col overflow-hidden text-ink"
+      className={cn(
+        "sidebar-panel relative shrink-0 rounded-2xl border border-slate-200 bg-white shadow-soft flex flex-col overflow-hidden text-ink",
+        // Mobile: off-canvas drawer from the left over a scrim.
+        "fixed inset-y-0 left-0 z-50 w-[min(84vw,320px)] h-full transition-transform duration-300 will-change-transform",
+        navOpen ? "translate-x-0" : "-translate-x-full",
+        // md+: restore the original static 240px sticky rail.
+        "md:sticky md:top-3 md:bottom-auto md:left-auto md:z-auto md:w-60 md:h-[calc(100vh-1.5rem)] md:transform-none md:transition-none md:will-change-auto"
+      )}
     >
       {/* Soft iridescent wash — multiple low-opacity radial blooms sitting
           beneath everything; gives the white surface a holographic tint

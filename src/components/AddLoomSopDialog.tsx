@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import { Video, X, Loader2, FileText, ImagePlus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { cleanTranscript } from "@/lib/transcript-clean";
 
 // Authoring dialog for a Loom-sourced SOP: paste (or load) the Loom
 // transcript and attach the screenshots grabbed from the recording.
@@ -54,7 +55,7 @@ export function AddLoomSopDialog({
   async function loadTranscriptFile(file: File | undefined | null) {
     if (!file) return;
     try {
-      const text = await file.text();
+      const text = cleanTranscript(await file.text());
       setTranscript((prev) => (prev.trim() ? `${prev}\n${text}` : text));
       if (!title.trim()) setTitle(file.name.replace(/\.[^.]+$/, ""));
     } catch {

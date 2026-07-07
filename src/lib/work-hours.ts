@@ -70,12 +70,14 @@ export function formatHHMMInViewerTz(
 
 // Short timezone abbreviation for the viewer's tz, e.g. "EST", "PKT".
 // Used to clarify which local zone a converted time is in.
-export function viewerTzAbbrev(viewerTz?: string): string {
+export function viewerTzAbbrev(viewerTz?: string, at?: Date): string {
   const tz = viewerTz ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
+  // `at` labels a specific instant (e.g. a due date) so the abbreviation is
+  // DST-correct for the moment shown; defaults to now.
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: tz,
     timeZoneName: "short"
-  }).formatToParts(new Date());
+  }).formatToParts(at ?? new Date());
   return parts.find((p) => p.type === "timeZoneName")?.value ?? "";
 }
 

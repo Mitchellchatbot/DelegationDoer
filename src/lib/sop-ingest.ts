@@ -17,6 +17,8 @@
 // is good enough for retrieval quality at the scale we're at;
 // upgrade to tiktoken when it actually matters.
 
+import { cleanTranscript } from "./transcript-clean";
+
 const CHUNK_TARGET_TOKENS = 500;
 const CHUNK_TARGET_CHARS = CHUNK_TARGET_TOKENS * 4;
 const SPARSE_TEXT_THRESHOLD = 500; // chars
@@ -270,7 +272,7 @@ export async function ingestLoomSop(args: {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error("OPENAI_API_KEY not configured");
 
-  const transcript = args.transcript.trim();
+  const transcript = cleanTranscript(args.transcript);
   const screenshots = args.screenshots ?? [];
   const warnings: string[] = [];
 

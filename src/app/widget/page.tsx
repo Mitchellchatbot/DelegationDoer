@@ -252,6 +252,15 @@ export default function WidgetPage() {
   const seenNotifIdsRef = useRef<Set<string>>(new Set());
   const seenEmailIdsRef = useRef<Set<string>>(new Set());
   const seenSupportIdsRef = useRef<Set<string>>(new Set());
+  // Freshness high-water marks (ms since epoch). The seen*IdsRef sets above are
+  // rebuilt every poll from only the fetched window (newest N unseen by
+  // received_at desc), so an OLD unseen row that later slides into that window —
+  // e.g. after dismissing a newer one when >N are unseen — would look brand-new
+  // and wrongly re-chime/re-notify. Gating freshness on received_at being newer
+  // than everything seen so far prevents that. Start at 0 so the first poll still
+  // primes exactly as before (all rows count as fresh once).
+  const emailHighWaterRef = useRef<number>(0);
+  const supportHighWaterRef = useRef<number>(0);
   // Client meetings we've already fired a ~30-min reminder for this session.
   // Belt-and-suspenders on top of the server-side dedup table.
   const seenMeetingEventIdsRef = useRef<Set<string>>(new Set());
@@ -312,7 +321,7 @@ export default function WidgetPage() {
         fetch("/api/widget/birthdays", { cache: "no-store" }),
         fetch("/api/widget/eod-reminder", { cache: "no-store" }),
         fetch("/api/clock", { cache: "no-store" }),
-        fetch("/api/email-notifications?limit=5", { cache: "no-store" }),
+        fetch("/api/email-notifications?unseenOnly=1&limit=20", { cache: "no-store" }),
         fetch("/api/widget/meeting-reminder", { cache: "no-store" }),
         fetch("/api/support-notifications?limit=5", { cache: "no-store" })
       ]);
@@ -394,9 +403,15 @@ export default function WidgetPage() {
       if (fresh.length > 0 || freshNotifs.length > 0) playAlertSound();
       const freshKudos = nextKudos.filter((k) => !seenKudosRef.current.has(k.id));
       if (freshKudos.length > 0) playKudosChime();
-      const freshEmails = nextEmails.filter((e) => !seenEmailIdsRef.current.has(e.id));
+      const freshEmails = nextEmails.filter(
+        (e) => !seenEmailIdsRef.current.has(e.id)
+          && new Date(e.receivedAt).getTime() > emailHighWaterRef.current
+      );
       if (freshEmails.length > 0) playEmailChime();
-      const freshSupport = nextSupport.filter((s) => !seenSupportIdsRef.current.has(s.id));
+      const freshSupport = nextSupport.filter(
+        (s) => !seenSupportIdsRef.current.has(s.id)
+          && new Date(s.receivedAt).getTime() > supportHighWaterRef.current
+      );
       if (freshSupport.length > 0) playEmailChime();
 
       // OS-level system notifications (Electron only). The main process
@@ -414,12 +429,23 @@ export default function WidgetPage() {
               : `${n.from?.name ?? "Someone"} pinged you on a task`,
             body: n.note ? `${n.taskTitle} — "${n.note}"` : n.taskTitle,
           });
-        for (const e of freshEmails)
+        // Cap the burst: now that we fetch up to 20 unseen, a flood of new mail
+        // (a sync backfill, a mailing) must not fire 20 native toasts at once.
+        // Above a small threshold collapse to a single summary linking to inbox.
+        if (freshEmails.length > 3) {
           notify({
-            title: "New email",
-            body: `${e.fromName ?? e.fromEmail ?? "Someone"}: ${e.subject ?? "(no subject)"}`,
-            path: inboxThreadPath(e.accountId, e.threadId),
+            title: `${freshEmails.length} new emails`,
+            body: "Open the widget to review them.",
+            path: "/inboxes",
           });
+        } else {
+          for (const e of freshEmails)
+            notify({
+              title: "New email",
+              body: `${e.fromName ?? e.fromEmail ?? "Someone"}: ${e.subject ?? "(no subject)"}`,
+              path: inboxThreadPath(e.accountId, e.threadId),
+            });
+        }
         for (const s of freshSupport)
           notify({
             title: "New support message",
@@ -453,6 +479,17 @@ export default function WidgetPage() {
       seenNotifIdsRef.current = new Set(nextNotifs.map((n) => n.id));
       seenEmailIdsRef.current = new Set(nextEmails.map((e) => e.id));
       seenSupportIdsRef.current = new Set(nextSupport.map((s) => s.id));
+      // Advance the freshness high-water marks to the newest received_at in this
+      // poll's window (NaN-safe: skip unparseable timestamps). Rows that later
+      // slide in from outside the window are older than this, so they won't ring.
+      for (const e of nextEmails) {
+        const t = new Date(e.receivedAt).getTime();
+        if (Number.isFinite(t) && t > emailHighWaterRef.current) emailHighWaterRef.current = t;
+      }
+      for (const s of nextSupport) {
+        const t = new Date(s.receivedAt).getTime();
+        if (Number.isFinite(t) && t > supportHighWaterRef.current) supportHighWaterRef.current = t;
+      }
 
       setTasks(next);
       setKudos(nextKudos);
@@ -560,7 +597,34 @@ export default function WidgetPage() {
     setState((prev) => {
       if (prev === "panel") return "panel";
       const remaining = emails.filter((e) => e.id !== emailId);
-      return unacked.length > 0 || kudos.length > 0 || notifications.length > 0 || remaining.length > 0 ? "alert" : "bubble";
+      return unacked.length > 0 || kudos.length > 0 || notifications.length > 0 || remaining.length > 0
+        || support.length > 0 || eodReminderDue ? "alert" : "bubble";
+    });
+  }
+
+  async function markAllEmailsSeen() {
+    // Optimistic — clear all shown emails locally, then stamp exactly those
+    // ids server-side. Passing explicit ids (not a bodyless call) scopes the
+    // mark to what's on screen, so emails that arrived since the last poll — or
+    // that live outside the fetched window — aren't silently swallowed.
+    const ids = emails.map((e) => e.id);
+    if (ids.length === 0) return;
+    setEmails([]);
+    // Intentionally do NOT delete these ids from seenEmailIdsRef: if a 15s poll
+    // races the in-flight mark-seen POST (rows still read as unseen), leaving the
+    // ids in the ref keeps them flagged as "already chimed" so they don't re-ding.
+    // The ref self-heals on the next poll's rebuild once the server excludes them.
+    try {
+      await fetch("/api/email-notifications/mark-seen", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids })
+      });
+    } catch { /* surfaces on next poll if it actually failed */ }
+    setState((prev) => {
+      if (prev === "panel") return "panel";
+      return unacked.length > 0 || kudos.length > 0 || notifications.length > 0
+        || support.length > 0 || eodReminderDue ? "alert" : "bubble";
     });
   }
 
@@ -648,7 +712,7 @@ export default function WidgetPage() {
 
   if (state === "panel") return (
     <ClockProvider>
-      <Panel tasks={tasks} unacked={unacked} kudos={kudos} notifications={notifications} eom={eom} birthdays={birthdays} onAck={acknowledge} onAckKudos={acknowledgeKudos} onDismissNotif={dismissNotification} onCollapse={collapseToBubble} onUpdated={fetchTasks} widgetIconUrl={widgetIconUrl} onIconChanged={fetchMe} online={onShift} />
+      <Panel tasks={tasks} unacked={unacked} kudos={kudos} notifications={notifications} emails={emails} eom={eom} birthdays={birthdays} onAck={acknowledge} onAckKudos={acknowledgeKudos} onDismissNotif={dismissNotification} onDismissEmail={dismissEmail} onMarkAllEmailsSeen={markAllEmailsSeen} onCollapse={collapseToBubble} onUpdated={fetchTasks} widgetIconUrl={widgetIconUrl} onIconChanged={fetchMe} online={onShift} />
     </ClockProvider>
   );
   if (state === "alert") {
@@ -656,13 +720,13 @@ export default function WidgetPage() {
     // task is the loudest signal; mentions are real-time pings; kudos
     // is celebratory and can wait.
     if (unacked.length > 0) {
-      return <Alert task={unacked[0]} unackedCount={unacked.length} onAck={acknowledge} onExpand={expandToPanel} crowned={eom.isMe} iconUrl={widgetIconUrl} />;
+      return <Alert task={unacked[0]} unackedCount={unacked.length} emailCount={emails.length} onAck={acknowledge} onExpand={expandToPanel} crowned={eom.isMe} iconUrl={widgetIconUrl} />;
     }
     if (notifications.length > 0) {
-      return <NotifAlert notif={notifications[0]} count={notifications.length} onDismiss={dismissNotification} onExpand={expandToPanel} crowned={eom.isMe} iconUrl={widgetIconUrl} />;
+      return <NotifAlert notif={notifications[0]} count={notifications.length} emailCount={emails.length} onDismiss={dismissNotification} onExpand={expandToPanel} crowned={eom.isMe} iconUrl={widgetIconUrl} />;
     }
     if (emails.length > 0) {
-      return <EmailAlert email={emails[0]} count={emails.length} onDismiss={dismissEmail} onOpen={() => openEmail(emails[0])} onExpand={expandToPanel} crowned={eom.isMe} iconUrl={widgetIconUrl} />;
+      return <EmailAlert emails={emails} onDismiss={dismissEmail} onMarkAllSeen={markAllEmailsSeen} onOpen={openEmail} onExpand={expandToPanel} crowned={eom.isMe} iconUrl={widgetIconUrl} />;
     }
     if (support.length > 0) {
       return <SupportAlert item={support[0]} count={support.length} onDismiss={dismissSupport} onOpen={() => openSupport(support[0])} onExpand={expandToPanel} crowned={eom.isMe} iconUrl={widgetIconUrl} />;
@@ -844,10 +908,11 @@ function Bubble({ onExpand, unackedCount, crowned = false, iconUrl, }: { onExpan
 /* ============================ ALERT (speech bubble) ============================ */
 
 function Alert({
-  task, unackedCount, onAck, onExpand, crowned = false, iconUrl,
+  task, unackedCount, emailCount = 0, onAck, onExpand, crowned = false, iconUrl,
 }: {
   task: WidgetTask | undefined;
   unackedCount: number;
+  emailCount?: number;
   onAck: (id: string) => void;
   onExpand: () => void;
   crowned?: boolean;
@@ -874,6 +939,16 @@ function Alert({
             New {priorityLabel(task.priority)} task
             {unackedCount > 1 && <span className="ml-auto text-amber-700/70">+{unackedCount - 1} more</span>}
           </div>
+          {emailCount > 0 && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onExpand(); }}
+              // @ts-ignore
+              style={{ WebkitAppRegion: "no-drag" } as any}
+              className="mt-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-sky-100 hover:bg-sky-200 text-sky-700 text-[10px] font-medium border border-sky-300/70 transition-colors"
+            >
+              <Mail className="w-3 h-3" /> {emailCount} new email{emailCount > 1 ? "s" : ""}
+            </button>
+          )}
           <div className="text-[13px] text-slate-900 font-medium leading-snug mt-0.5 line-clamp-2">
             {task.title}
           </div>
@@ -1078,10 +1153,11 @@ function KudosAlert({
 /* ============================ NOTIF ALERT (mention / notify-teammates) ============================ */
 
 function NotifAlert({
-  notif, count, onDismiss, onExpand, crowned = false, iconUrl,
+  notif, count, emailCount = 0, onDismiss, onExpand, crowned = false, iconUrl,
 }: {
   notif: WidgetNotification;
   count: number;
+  emailCount?: number;
   onDismiss: (id: string) => void;
   onExpand: () => void;
   crowned?: boolean;
@@ -1108,6 +1184,16 @@ function NotifAlert({
             {headline}
             {count > 1 && <span className="ml-auto text-violet-700/70">+{count - 1} more</span>}
           </div>
+          {emailCount > 0 && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onExpand(); }}
+              // @ts-ignore
+              style={{ WebkitAppRegion: "no-drag" } as any}
+              className="mt-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-sky-100 hover:bg-sky-200 text-sky-700 text-[10px] font-medium border border-sky-300/70 transition-colors"
+            >
+              <Mail className="w-3 h-3" /> {emailCount} new email{emailCount > 1 ? "s" : ""}
+            </button>
+          )}
           <div className="text-[13px] text-slate-900 font-medium leading-snug mt-0.5 line-clamp-2">
             {notif.taskTitle}
           </div>
@@ -1156,56 +1242,84 @@ function NotifAlert({
 /* ============================ EMAIL ALERT (new inbound email) ============================ */
 
 function EmailAlert({
-  email, count, onDismiss, onOpen, onExpand, crowned = false, iconUrl,
+  emails, onDismiss, onMarkAllSeen, onOpen, onExpand, crowned = false, iconUrl,
 }: {
-  email: WidgetEmail;
-  count: number;
+  emails: WidgetEmail[];
   onDismiss: (id: string) => void;
-  onOpen: () => void;
+  onMarkAllSeen: () => void;
+  onOpen: (email: WidgetEmail) => void;
   onExpand: () => void;
   crowned?: boolean;
   iconUrl?: string | null;
 }) {
-  const sender = email.fromName || email.fromEmail || "New email";
-  const subject = email.subject || "(no subject)";
+  const count = emails.length;
+  if (count === 0) return null;
   return (
     <div
       // @ts-ignore — Electron-only
       style={{ width: "100vw", height: "100vh", display: "flex", alignItems: "center", justifyContent: "flex-end", padding: 20, gap: 8, background: "transparent", WebkitAppRegion: "drag" } as any}
     >
       <div
-        onClick={onOpen}
         // @ts-ignore
         style={{ WebkitAppRegion: "no-drag" } as any}
-        className="relative flex-1 cursor-pointer anim-pop-bubble"
+        className="relative flex-1 anim-pop-bubble"
       >
-        <div className="bg-gradient-to-br from-sky-50 to-cyan-50 rounded-2xl border border-sky-300 shadow-[0_8px_24px_rgba(2,132,199,0.25)] px-3 py-2.5 pr-4">
-          <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-sky-700 font-semibold">
+        <div
+          className="flex flex-col bg-gradient-to-br from-sky-50 to-cyan-50 rounded-2xl border border-sky-300 shadow-[0_8px_24px_rgba(2,132,199,0.25)] overflow-hidden"
+          // The alert window is a FIXED ~140px tall (electron/main.js ALERT.h),
+          // leaving a ~100px content band after the 20px shadow padding. Cap the
+          // card and make ONLY the list scroll so the header (count + Mark all
+          // seen), the newest row, and the footer stay on-screen — otherwise the
+          // whole card overflows and gets center-clipped. Preview text is dropped
+          // here (it's shown in the panel) to keep each row compact.
+          style={{ maxHeight: 100 }}
+        >
+          <div className="shrink-0 flex items-center gap-1.5 px-3 pt-2.5 pb-1.5 text-[10px] uppercase tracking-wide text-sky-700 font-semibold">
             <Mail className="w-3 h-3" />
-            New email
-            {count > 1 && <span className="ml-auto text-sky-700/70">+{count - 1} more</span>}
+            {count === 1 ? "New email" : `${count} new emails`}
+            {count > 1 && (
+              <button
+                onClick={(e) => { e.stopPropagation(); onMarkAllSeen(); }}
+                className="ml-auto normal-case tracking-normal text-[10px] font-medium text-sky-700 hover:text-sky-900"
+              >
+                Mark all seen
+              </button>
+            )}
           </div>
-          <div className="text-[12px] text-slate-700 font-medium truncate mt-0.5">
-            {sender}
+          <div className="flex-1 min-h-0 overflow-y-auto px-2 py-1 space-y-1.5">
+            {emails.map((email) => (
+              <div
+                key={email.id}
+                onClick={() => onOpen(email)}
+                className="rounded-xl bg-white/80 border border-sky-200/70 px-2.5 py-1.5 cursor-pointer hover:bg-white transition-colors"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="text-[11px] text-slate-700 font-medium truncate">
+                      {email.fromName || email.fromEmail || "New email"}
+                    </div>
+                    <div className="text-[13px] text-slate-900 font-semibold leading-snug truncate">
+                      {email.subject || "(no subject)"}
+                    </div>
+                  </div>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); onDismiss(email.id); }}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-sky-600 hover:bg-sky-700 text-white text-[10px] font-medium shadow-sm shrink-0"
+                  >
+                    <Check className="w-3 h-3" /> Got it
+                  </button>
+                </div>
+              </div>
+            ))}
           </div>
-          <div className="text-[13px] text-slate-900 font-semibold leading-snug mt-0.5 line-clamp-2">
-            {subject}
-          </div>
-          {email.preview && (
-            <div className="text-[11px] text-slate-600 mt-0.5 line-clamp-2">
-              {email.preview}
-            </div>
-          )}
-          <div className="mt-1.5 flex items-center justify-end gap-2">
+          {count > 1 && (
             <button
-              onClick={(e) => { e.stopPropagation(); onDismiss(email.id); }}
-              // @ts-ignore
-              style={{ WebkitAppRegion: "no-drag" } as any}
-              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-sky-600 hover:bg-sky-700 text-white text-[11px] font-medium shadow-sm"
+              onClick={(e) => { e.stopPropagation(); onExpand(); }}
+              className="shrink-0 w-full text-center text-[10px] font-medium text-sky-700 hover:text-sky-900 border-t border-sky-200/60 py-1.5"
             >
-              <Check className="w-3 h-3" /> Got it
+              See all in widget
             </button>
-          </div>
+          )}
         </div>
 
         <div
@@ -1984,13 +2098,15 @@ function TaskTimerButton({ taskId, compact = false }: { taskId: string; compact?
 /* ============================ PANEL ============================ */
 
 function Panel({
-  tasks, unacked, kudos, notifications, eom, birthdays, onAck, onAckKudos, onDismissNotif, onCollapse, onUpdated,
+  tasks, unacked, kudos, notifications, emails, eom, birthdays, onAck, onAckKudos, onDismissNotif,
+  onDismissEmail, onMarkAllEmailsSeen, onCollapse, onUpdated,
   widgetIconUrl, onIconChanged, online
 }: {
   tasks: WidgetTask[];
   unacked: WidgetTask[];
   kudos: WidgetKudos[];
   notifications: WidgetNotification[];
+  emails: WidgetEmail[];
   eom: EomState;
   birthdays: {
     hasBirthday: boolean;
@@ -1999,6 +2115,8 @@ function Panel({
   onAck: (id: string) => void;
   onAckKudos: (id: string) => void;
   onDismissNotif: (id: string) => void;
+  onDismissEmail: (id: string) => void;
+  onMarkAllEmailsSeen: () => void;
   onCollapse: () => void;
   onUpdated: () => void;
   widgetIconUrl: string | null;
@@ -2013,6 +2131,14 @@ function Panel({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [showingSettings, setShowingSettings] = useState(false);
+  // Whether this desktop shell exposes the openMainWindow IPC (deep-link a
+  // thread). Read in an effect, never at render — /widget is prerendered, so
+  // `window` is undefined during the build pass. Older .exe shells whose preload
+  // predates openMainWindow return false, so the email row below renders as a
+  // plain card (the "Got it" button still dismisses) instead of a pointer that
+  // does nothing.
+  const [canOpenThreads, setCanOpenThreads] = useState(false);
+  useEffect(() => { setCanOpenThreads(!!(window as any).widgetAPI?.openMainWindow); }, []);
   const acked = tasks.filter((t) => !t.needsAck).sort(
     (a, b) => PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority]
   );
@@ -2172,6 +2298,58 @@ function Panel({
             </div>
           )}
 
+          {emails.length > 0 && (
+            <div className="px-3 pt-3">
+              <div className="mb-2 flex items-center justify-between">
+                <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-600 inline-flex items-center gap-1.5">
+                  <Mail className="w-3 h-3" /> Emails · {emails.length}
+                </div>
+                {emails.length > 1 && (
+                  <button
+                    onClick={onMarkAllEmailsSeen}
+                    className="text-[10px] font-medium text-sky-700 hover:text-sky-900"
+                  >
+                    Mark all seen
+                  </button>
+                )}
+              </div>
+              <div className="space-y-2">
+                {emails.map((e, i) => (
+                  <div
+                    key={e.id}
+                    role={canOpenThreads ? "button" : undefined}
+                    onClick={canOpenThreads ? () => {
+                      (window as any).widgetAPI?.openMainWindow?.(inboxThreadPath(e.accountId, e.threadId));
+                      onDismissEmail(e.id);
+                    } : undefined}
+                    style={{ animationDelay: `${i * 35}ms` }}
+                    className={"wg-card anim-fade-in-up rounded-2xl bg-gradient-to-br from-sky-50 to-cyan-50/60 border border-sky-200/80 p-3 transition-colors shadow-sm" + (canOpenThreads ? " cursor-pointer hover:bg-sky-100/40" : "")}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="text-[11px] font-semibold text-sky-700 truncate">
+                          {e.fromName || e.fromEmail || "New email"}
+                        </div>
+                        <div className="text-[13px] text-slate-900 leading-snug mt-0.5 truncate">
+                          {e.subject || "(no subject)"}
+                        </div>
+                        {e.preview && (
+                          <div className="text-[11px] text-slate-600 mt-1 line-clamp-2">{e.preview}</div>
+                        )}
+                      </div>
+                      <button
+                        onClick={(ev) => { ev.stopPropagation(); onDismissEmail(e.id); }}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-white/85 hover:bg-white text-sky-700 text-[11px] font-medium border border-sky-300/70 transition-all active:scale-95 shrink-0"
+                      >
+                        <Check className="w-3 h-3" /> Got it
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {unacked.length > 0 && (
             <div className="px-3 pt-3">
               <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-600 mb-2 inline-flex items-center gap-1.5">
@@ -2244,7 +2422,7 @@ function Panel({
             </div>
           )}
 
-          {unacked.length === 0 && acked.length === 0 && kudos.length === 0 && (
+          {unacked.length === 0 && acked.length === 0 && kudos.length === 0 && emails.length === 0 && (
             <div className="text-xs text-slate-400 text-center py-10">All clear.</div>
           )}
         </div>

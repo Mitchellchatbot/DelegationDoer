@@ -51,6 +51,11 @@ export interface MissiveThread {
   // derives it from the newest outbound message's is_automated flag;
   // touchpoint-sync skips these so a mass send doesn't reset "last contacted".
   automated?: boolean;
+  // ISO timestamp of this thread's newest OUTBOUND message — i.e. when WE last
+  // actually sent, distinct from last_message_at (which advances on inbound
+  // client replies too). Only present from an upgraded clone; undefined/null on
+  // older builds, so consumers fall back to last_message_at.
+  last_outbound_at?: string | null;
 }
 
 // Per-message attachment metadata as returned by the clone's
@@ -268,9 +273,9 @@ function toIsoString(raw: unknown): string {
   return "";
 }
 
-function normalizeThread<T extends { participants: unknown; last_message_at?: unknown; snoozed_until?: unknown; automated?: unknown }>(
+function normalizeThread<T extends { participants: unknown; last_message_at?: unknown; snoozed_until?: unknown; automated?: unknown; last_outbound_at?: unknown }>(
   t: T
-): T & { participants: string[]; last_message_at: string; snoozed_until: string | null; automated: boolean } {
+): T & { participants: string[]; last_message_at: string; snoozed_until: string | null; automated: boolean; last_outbound_at: string | null } {
   return {
     ...t,
     participants: toStringArray(t.participants),
@@ -278,7 +283,10 @@ function normalizeThread<T extends { participants: unknown; last_message_at?: un
     snoozed_until: t.snoozed_until ? toIsoString(t.snoozed_until) : null,
     // Clone returns is_automated as 0/1 (or omits it on an older build) →
     // coerce to a real boolean; undefined safely becomes false.
-    automated: !!t.automated
+    automated: !!t.automated,
+    // Newest outbound message's sent_at (bigint epoch-ms from pg). Null when the
+    // clone doesn't send it (older build) or the thread has no outbound message.
+    last_outbound_at: t.last_outbound_at ? toIsoString(t.last_outbound_at) : null
   };
 }
 

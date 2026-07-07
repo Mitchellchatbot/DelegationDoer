@@ -3,7 +3,7 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { requireCurrentUserId } from "@/lib/session";
 import { getAllTasks, getDeletedTasks, getArchivedTasks, getUserById } from "@/lib/server-data";
 import { isLeader, isWorker, canCreateTaskInDepartment, canAssignTaskTo } from "@/lib/access";
-import { notifyAssignment, postMessage } from "@/lib/slack";
+import { formatDueBothZones, notifyAssignment, postMessage } from "@/lib/slack";
 import { syncTaskToCalendar } from "@/lib/task-calendar-sync";
 import { sanitizeMediaUrls } from "@/lib/media";
 
@@ -297,7 +297,7 @@ export async function POST(req: NextRequest) {
           const assigneeLine = assigneeName ? `*Assigned to:* ${assigneeName}` : "*Unassigned*";
           const clientLine = row.client_name ? `\n*Client:* ${row.client_name}` : "";
           const dueLine = row.due_date
-            ? `\n*Due:* ${new Date(row.due_date).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}`
+            ? `\n*Due:* ${formatDueBothZones(row.due_date)}`
             : "";
           await postMessage(channel, headline, [
             { type: "header", text: { type: "plain_text", text: headline, emoji: true } },

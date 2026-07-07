@@ -63,14 +63,18 @@ export async function GET(req: NextRequest) {
     const rawLimit = Number(url.searchParams.get("limit") ?? "20");
     const limit = Math.min(50, Math.max(1, Number.isFinite(rawLimit) ? rawLimit : 20));
     const sinceMs = Number(url.searchParams.get("since") ?? "");
+    const unseenOnly = url.searchParams.get("unseenOnly") === "1";
 
     const supabase = getSupabaseAdmin();
     let q = supabase
       .from("email_notifications")
       .select("id, missive_account_id, thread_id, message_id, subject, from_name, from_email, preview, received_at, seen_at")
-      .eq("user_id", userId)
-      .order("received_at", { ascending: false })
-      .limit(limit);
+      .eq("user_id", userId);
+    // Widget passes unseenOnly=1 so still-unseen emails older than the newest
+    // `limit` rows aren't stranded outside the window (uses the partial index
+    // email_notifications_user_unseen_idx). Home card omits it (wants seen+unseen).
+    if (unseenOnly) q = q.is("seen_at", null);
+    q = q.order("received_at", { ascending: false }).limit(limit);
     if (Number.isFinite(sinceMs) && sinceMs > 0) {
       q = q.gt("received_at", new Date(sinceMs).toISOString());
     }

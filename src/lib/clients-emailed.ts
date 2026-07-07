@@ -26,7 +26,11 @@
 // Real human contact only: the exact same three exclusions the sync applies
 // (automated-subject blast, per-message `automated` flag, bulk_email_threads
 // backstop) are reused here so a mass "Monthly SEO update" never shows up as
-// "we emailed this client today".
+// "we emailed this client today". PLUS a card-local subject filter
+// (CARD_EXCLUDED_SUBJECT_PATTERNS) for externally-sent automated SEO mailers and
+// calendar-client-generated messages that reach the clone via IMAP with no
+// is_automated flag — those slip past the three shared exclusions. Kept scoped to
+// this card (not the shared touchpoint filter) on purpose.
 
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { listThreadsPaged, type MissiveThread } from "@/lib/missive-client";
@@ -65,6 +69,29 @@ function nyDate(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "";
   return NY_DATE_FMT.format(d);
+}
+
+// Card-local exclusions — deliberately NOT shared with touchpoint health (the
+// shared isAutomatedOutboundSubject stays as-is so the dashboard's "last
+// contacted" is unchanged). These outbound subjects are automated SEO mailers or
+// calendar-client-generated messages that arrive via IMAP with is_automated=0 and
+// no label/category, so t.automated + bulk_email_threads + the narrow shared
+// subject pattern can't catch them. Kept anchored so real human subjects pass
+// (e.g. "Your blog redesign is ready", "New blog post draft", a "Re: …" reply).
+const CARD_EXCLUDED_SUBJECT_PATTERNS: RegExp[] = [
+  // Blog-performance mailers, broader than the shared "^your blog … visibility"
+  // pattern so "Your blog got more visitors this month" is caught too.
+  /^your\s+blog\b.*\b(visibilit(y|ies)|traffic|visitors?|views?|reach|exposure|impressions?|ranking|(getting|got)\s+more)\b/i,
+  // "New Blog Posts Published" / "3 New Blog Posts Published"
+  /^(\d+\s+)?new\s+blog\s+posts?\s+published\b/i,
+  // "Weekly/Monthly Citation Update - <client>"
+  /^(weekly|monthly|new)?\s*citation\s+update\b/i,
+  // Calendar-client-generated subjects (mirrors the clone's `calendar` category).
+  /^(accepted|declined|tentative|tentatively\s+accepted|cancell?ed|invitation|updated\s+invitation):\s/i
+];
+function isCardExcludedSubject(subject: string | null): boolean {
+  const s = (subject ?? "").trim();
+  return s.length > 0 && CARD_EXCLUDED_SUBJECT_PATTERNS.some((re) => re.test(s));
 }
 
 const DAY_KEYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"] as const;
@@ -164,8 +191,11 @@ export async function listClientsEmailedInWindow(
       if (Number.isNaN(sentMs)) continue;
       if (nyDate(sentRaw) < win.startNyDate) continue;
 
-      // Same three exclusions, same order, as touchpoint-sync.ts:102-111.
+      // Same three exclusions, same order, as touchpoint-sync.ts:102-111, plus a
+      // card-local subject filter for externally-sent automated/calendar mail the
+      // clone never flags (see CARD_EXCLUDED_SUBJECT_PATTERNS).
       if (isAutomatedOutboundSubject(t.subject)) continue;
+      if (isCardExcludedSubject(t.subject)) continue;
       if (t.automated) continue;
       if (excludedThreadIds.has(t.id)) continue;
 
@@ -215,7 +245,7 @@ export async function listClientsEmailedInWindow(
   }[]) {
     if (!row.client_id || !row.sent_at) continue;
     if (nyDate(row.sent_at) < win.startNyDate) continue;
-    if (isAutomatedOutboundSubject(row.subject)) continue;
+    if (isAutomatedOutboundSubject(row.subject) || isCardExcludedSubject(row.subject)) continue;
     const ms = new Date(row.sent_at).getTime();
     if (Number.isNaN(ms)) continue;
 

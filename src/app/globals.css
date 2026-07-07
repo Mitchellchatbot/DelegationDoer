@@ -72,6 +72,29 @@ body {
   min-height: 100vh;
 }
 
+/* Mobile-only rules. Scoped to < md (768px) so desktop is byte-for-byte
+   unchanged. */
+@media (max-width: 767px) {
+  /* Horizontal-overflow safety net: no view can push the page sideways on a
+     phone. `clip` (not `hidden`) — `hidden` coerces overflow-y to auto, turning
+     this into a scroll container and breaking every `sticky top-3` panel; clip
+     also doesn't create a containing block, so `position:fixed` drawers/portals
+     still anchor to the viewport. Wide content (tables, boards) supplies its
+     own `overflow-x-auto` so it scrolls locally instead. */
+  .app-shell { overflow-x: clip; }
+
+  /* iOS Safari zooms the page when a focused control's font-size is < 16px.
+     Many inputs here are 13–15px, so tapping a search/compose field would
+     zoom-and-pan on a phone. Force 16px on mobile form controls (keeps
+     pinch-zoom intact, which the maximum-scale alternative would kill).
+     `!important` beats Tailwind's arbitrary `text-[13px]` utilities. */
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+  textarea,
+  select {
+    font-size: 16px !important;
+  }
+}
+
 /* Wrapped in @layer components so individual utility classes (e.g. pl-9 to
    make room for a leading icon inside a .input) can still override the
    @applied padding/etc. without specificity bumps. */

@@ -552,7 +552,9 @@ export function ReplyComposer({
                   onClick={() => setFocusMode(!focusMode)}
                   aria-label={focusMode ? "Collapse focus mode" : "Expand to focus mode"}
                   title={focusMode ? "Back to the inbox layout" : "Expand — more room to write, hides the inbox list"}
-                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold text-sky-700 bg-white border border-sky-200/70 hover:bg-sky-100 transition-colors shrink-0"
+                  /* Focus Mode widens the composer by collapsing tree+list —
+                     redundant on mobile where it's already one-pane-at-a-time. */
+                  className="hidden md:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold text-sky-700 bg-white border border-sky-200/70 hover:bg-sky-100 transition-colors shrink-0"
                 >
                   {focusMode
                     ? <><Minimize2 className="w-3 h-3" /> Collapse</>

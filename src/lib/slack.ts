@@ -12,20 +12,31 @@ const SLACK_API = "https://slack.com/api";
 const PKT_TZ = "Asia/Karachi";
 const ET_TZ = "America/New_York";
 
-// Render a stored (UTC) due timestamp in both team zones, e.g.
-// "Tue, Jul 7 · 9:30 PM PKT · 12:30 PM EDT". Date is anchored to PKT.
+// Render a stored (UTC) due timestamp in both team zones. When both zones fall
+// on the same calendar day the date is shown once, e.g.
+//   "Tue, Jul 7 · 9:30 PM PKT · 12:30 PM EDT"
+// When a late-night deadline rolls the date over in one zone but not the other,
+// each zone carries its own date so neither is mislabeled, e.g.
+//   "Wed, Jul 8, 3:00 AM PKT · Tue, Jul 7, 6:00 PM EDT"
 export function formatDueBothZones(dueIso: string): string {
   const d = new Date(dueIso);
-  const date = d.toLocaleDateString("en-US", {
-    timeZone: PKT_TZ, weekday: "short", month: "short", day: "numeric"
-  });
-  const pkt = d.toLocaleTimeString("en-US", {
-    timeZone: PKT_TZ, hour: "numeric", minute: "2-digit"
-  });
-  const et = d.toLocaleTimeString("en-US", {
-    timeZone: ET_TZ, hour: "numeric", minute: "2-digit"
-  });
-  return `${date} · ${pkt} PKT · ${et} ${viewerTzAbbrev(ET_TZ)}`;
+  const dateInTz = (tz: string) =>
+    d.toLocaleDateString("en-US", {
+      timeZone: tz, weekday: "short", month: "short", day: "numeric"
+    });
+  const timeInTz = (tz: string) =>
+    d.toLocaleTimeString("en-US", {
+      timeZone: tz, hour: "numeric", minute: "2-digit"
+    });
+
+  const pktDate = dateInTz(PKT_TZ);
+  const etDate = dateInTz(ET_TZ);
+  const pkt = `${timeInTz(PKT_TZ)} PKT`;
+  const et = `${timeInTz(ET_TZ)} ${viewerTzAbbrev(ET_TZ, d)}`;
+
+  return pktDate === etDate
+    ? `${pktDate} · ${pkt} · ${et}`
+    : `${pktDate}, ${pkt} · ${etDate}, ${et}`;
 }
 
 interface SlackResponse {

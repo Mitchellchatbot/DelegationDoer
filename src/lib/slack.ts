@@ -2,7 +2,31 @@
 // Three operations we need today: lookup user by email, open a DM channel
 // with that user, post a message into it.
 
+import { viewerTzAbbrev } from "./work-hours";
+
 const SLACK_API = "https://slack.com/api";
+
+// The team is split between Pakistan and US Eastern, so due times are shown in
+// both zones. Karachi has no DST (PKT year-round); Eastern's abbreviation
+// (EDT/EST) is derived so it stays correct across daylight saving.
+const PKT_TZ = "Asia/Karachi";
+const ET_TZ = "America/New_York";
+
+// Render a stored (UTC) due timestamp in both team zones, e.g.
+// "Tue, Jul 7 · 9:30 PM PKT · 12:30 PM EDT". Date is anchored to PKT.
+export function formatDueBothZones(dueIso: string): string {
+  const d = new Date(dueIso);
+  const date = d.toLocaleDateString("en-US", {
+    timeZone: PKT_TZ, weekday: "short", month: "short", day: "numeric"
+  });
+  const pkt = d.toLocaleTimeString("en-US", {
+    timeZone: PKT_TZ, hour: "numeric", minute: "2-digit"
+  });
+  const et = d.toLocaleTimeString("en-US", {
+    timeZone: ET_TZ, hour: "numeric", minute: "2-digit"
+  });
+  return `${date} · ${pkt} PKT · ${et} ${viewerTzAbbrev(ET_TZ)}`;
+}
 
 interface SlackResponse {
   ok: boolean;
@@ -446,12 +470,7 @@ export async function notifyAssignment(args: {
   const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
   const taskUrl = `${baseUrl}/tasks/${args.taskId}`;
 
-  const dueLabel = args.dueDate
-    ? new Date(args.dueDate).toLocaleString(undefined, {
-        weekday: "short", month: "short", day: "numeric",
-        hour: "numeric", minute: "2-digit", timeZoneName: "short"
-      })
-    : "no deadline";
+  const dueLabel = args.dueDate ? formatDueBothZones(args.dueDate) : "no deadline";
 
   // Slack Block Kit. The `text` field is the plain-text fallback.
   const text = `${args.assignerName} assigned you a task: ${args.title}`;

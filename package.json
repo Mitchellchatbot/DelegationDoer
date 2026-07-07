@@ -1,6 +1,6 @@
 {
   "name": "delegation-doer",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "main": "electron/main.js",
   "scripts": {
@@ -39,14 +39,16 @@
       "category": "public.app-category.productivity",
       "identity": null,
       "hardenedRuntime": false,
-      "gatekeeperAssess": false
+      "gatekeeperAssess": false,
+      "icon": "electron/assets/icon.icns"
     },
     "dmg": {
       "writeUpdateInfo": false
     },
     "win": {
       "target": "nsis",
-      "signtoolOptions": null
+      "signtoolOptions": null,
+      "icon": "electron/assets/icon.png"
     },
     "nsis": {
       "oneClick": false,

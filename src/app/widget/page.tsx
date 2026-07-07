@@ -931,9 +931,9 @@ function Alert({
         onClick={onExpand}
         // @ts-ignore
         style={{ WebkitAppRegion: "no-drag" } as any}
-        className="relative flex-1 cursor-pointer anim-pop-bubble"
+        className="relative flex-1 min-w-0 max-w-lg cursor-pointer anim-pop-bubble"
       >
-        <div className="bg-white rounded-2xl border border-amber-300 shadow-[0_8px_24px_rgba(60,40,20,0.25)] px-3 py-2.5 pr-4">
+        <div className="bg-white rounded-2xl border border-amber-300 shadow-[0_8px_24px_rgba(60,40,20,0.25)] px-4 py-3.5 pr-5">
           <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-amber-700 font-semibold">
             <Bell className="w-3 h-3" />
             New {priorityLabel(task.priority)} task
@@ -1101,15 +1101,15 @@ function KudosAlert({
         onClick={onExpand}
         // @ts-ignore
         style={{ WebkitAppRegion: "no-drag" } as any}
-        className="relative flex-1 cursor-pointer anim-pop-bubble"
+        className="relative flex-1 min-w-0 max-w-lg cursor-pointer anim-pop-bubble"
       >
-        <div className="bg-gradient-to-br from-fuchsia-50 to-pink-50 rounded-2xl border border-fuchsia-300 shadow-[0_8px_24px_rgba(120,40,120,0.25)] px-3 py-2.5 pr-4">
+        <div className="bg-gradient-to-br from-fuchsia-50 to-pink-50 rounded-2xl border border-fuchsia-300 shadow-[0_8px_24px_rgba(120,40,120,0.25)] px-4 py-3.5 pr-5">
           <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-fuchsia-700 font-semibold">
             <Sparkles className="w-3 h-3" />
             {k.from?.name ?? "Someone"} sent you kudos
             {count > 1 && <span className="ml-auto text-fuchsia-700/70">+{count - 1} more</span>}
           </div>
-          <div className="text-[13px] text-slate-900 font-medium leading-snug mt-0.5 line-clamp-2 flex items-start gap-1.5">
+          <div className="text-[13px] text-slate-900 font-medium leading-snug mt-0.5 line-clamp-3 flex items-start gap-1.5">
             <span className="text-base shrink-0 leading-none mt-0.5">{k.emoji || "👏"}</span>
             <span>{k.message}</span>
           </div>
@@ -1176,9 +1176,9 @@ function NotifAlert({
         onClick={onExpand}
         // @ts-ignore
         style={{ WebkitAppRegion: "no-drag" } as any}
-        className="relative flex-1 cursor-pointer anim-pop-bubble"
+        className="relative flex-1 min-w-0 max-w-lg cursor-pointer anim-pop-bubble"
       >
-        <div className="bg-gradient-to-br from-violet-50 to-blue-50 rounded-2xl border border-violet-300 shadow-[0_8px_24px_rgba(80,40,150,0.25)] px-3 py-2.5 pr-4">
+        <div className="bg-gradient-to-br from-violet-50 to-blue-50 rounded-2xl border border-violet-300 shadow-[0_8px_24px_rgba(80,40,150,0.25)] px-4 py-3.5 pr-5">
           <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-violet-700 font-semibold">
             <Bell className="w-3 h-3" />
             {headline}
@@ -1198,7 +1198,7 @@ function NotifAlert({
             {notif.taskTitle}
           </div>
           {notif.note && (
-            <div className="text-[11px] text-slate-600 mt-0.5 line-clamp-2 italic">
+            <div className="text-[11px] text-slate-600 mt-0.5 line-clamp-3 italic">
               "{notif.note}"
             </div>
           )}
@@ -1371,9 +1371,9 @@ function SupportAlert({
         onClick={onOpen}
         // @ts-ignore
         style={{ WebkitAppRegion: "no-drag" } as any}
-        className="relative flex-1 cursor-pointer anim-pop-bubble"
+        className="relative flex-1 min-w-0 max-w-lg cursor-pointer anim-pop-bubble"
       >
-        <div className="bg-gradient-to-br from-emerald-50 to-teal-50 rounded-2xl border border-emerald-300 shadow-[0_8px_24px_rgba(5,150,105,0.25)] px-3 py-2.5 pr-4">
+        <div className="bg-gradient-to-br from-emerald-50 to-teal-50 rounded-2xl border border-emerald-300 shadow-[0_8px_24px_rgba(5,150,105,0.25)] px-4 py-3.5 pr-5">
           <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-emerald-700 font-semibold">
             <LifeBuoy className="w-3 h-3" />
             New support message
@@ -1382,7 +1382,7 @@ function SupportAlert({
           <div className="text-[12px] text-slate-700 font-medium truncate mt-0.5">
             {sender}
           </div>
-          <div className="text-[13px] text-slate-900 font-semibold leading-snug mt-0.5 line-clamp-2">
+          <div className="text-[13px] text-slate-900 font-semibold leading-snug mt-0.5 line-clamp-3">
             {preview}
           </div>
           <div className="mt-1.5 flex items-center justify-end gap-2">

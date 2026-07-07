@@ -18,6 +18,7 @@ import { HomeWorker } from "@/components/HomeWorker";
 import { HomeLeaderHero } from "@/components/HomeLeaderHero";
 import { HomeSeoBriefs } from "@/components/HomeSeoBriefs";
 import { HomeClientHealthTable } from "@/components/HomeClientHealthTable";
+import { HomeClientsEmailed } from "@/components/HomeClientsEmailed";
 import { HomeEmailNotifications } from "@/components/HomeEmailNotifications";
 import { HomePulseCard } from "@/components/HomePulseCard";
 import { HomeChartsRow } from "@/components/HomeChartsRow";
@@ -142,6 +143,12 @@ export default async function HomePage() {
         {/* Sites needing attention — pinned right under the hero so it's
             the first content every role lands on. */}
         <HomeClientHealthTable rows={worstByHealth} />
+        {/* Clients emailed today / this week — Sam & Mitchell's ask. Client-
+            side fetched (Today/This-week toggle), workspace-wide. Leaders/admins
+            only, matching the /api/clients-emailed gate — department heads (who
+            also reach this branch) would otherwise see a permanently-empty card
+            from the route's 403. */}
+        {isLeaderRole && <HomeClientsEmailed />}
         {/* Notifications — the focus of the new leader home. */}
         <HomePulseCard events={pulse} />
         <HomeEmailNotifications onboarded={me.emailNotificationsOnboarded === true} />

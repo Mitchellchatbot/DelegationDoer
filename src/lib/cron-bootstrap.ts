@@ -33,6 +33,7 @@
 
 import { runInactivitySweep } from "@/lib/inactivity-runner";
 import { runEodRecap } from "@/lib/eod-recap-runner";
+import { runClientsEmailedWeekly } from "@/lib/clients-emailed-weekly-runner";
 import { runScheduledEmails } from "@/lib/scheduled-emails-runner";
 import { syncBirthdaysForAllOwners } from "@/lib/birthday-calendar-sync";
 import { runOutboundSequences } from "@/lib/outbound-sequence-runner";
@@ -101,6 +102,21 @@ const JOBS: CronJob[] = [
       const o = await runEodRecap();
       if (!o.ok) return `reason=${o.reason}`;
       return "posted" in o ? `posted=${o.posted}` : `skipped=${o.skipped}`;
+    }
+  },
+  {
+    name: "clients-emailed-weekly",
+    // vercel.json fires at Fri 23:00 + Sat 00:00 UTC to straddle DST; the
+    // runner's NY-Friday + 7pm guards mean only the tick that lands in the 7pm
+    // NY hour on a Friday DMs Sam & Mitchell, so an hourly cadence hits that
+    // window exactly once a week.
+    intervalMs: HOUR,
+    bootCatchupDelayMs: 50_000,
+    disableEnv: "CLIENTS_EMAILED_WEEKLY_INTERNAL_CRON",
+    run: async () => {
+      const o = await runClientsEmailedWeekly();
+      if (!o.ok) return `reason=${o.reason}`;
+      return "posted" in o ? `posted=${o.posted} clients=${o.clients}` : `skipped=${o.skipped}`;
     }
   },
   {

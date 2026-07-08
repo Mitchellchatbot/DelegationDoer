@@ -146,8 +146,28 @@ export async function runEodRecap(): Promise<EodRecapOutcome> {
   const clamp = (s: string) => (s.length > 2990 ? s.slice(0, 2987) + "…" : s);
   const MAX_CLIENTS = 40;
   const PER_LIST = 15;
+  // Slack rejects the whole message past 50 blocks, so the "Show full list"
+  // buttons below only get appended while there's room (the "+N more" text
+  // in the section remains as the fallback when there isn't).
+  const MAX_BLOCKS = 50;
   const clientBlocks: unknown[] = [];
   const summaryLines: string[] = [];
+
+  // "Show full list" button for a client whose lists got truncated. Handled
+  // by /api/slack/interactions (action_id eod_recap_show_more), which
+  // re-queries this client + date without the PER_LIST cap and opens a modal.
+  const showMoreBlock = (client: string) => ({
+    type: "actions",
+    block_id: `eod_more_${client}`,
+    elements: [
+      {
+        type: "button",
+        text: { type: "plain_text", text: "Show full list", emoji: true },
+        action_id: "eod_recap_show_more",
+        value: JSON.stringify({ client, date: nyDateStr })
+      }
+    ]
+  });
 
   for (const name of clientNames.slice(0, MAX_CLIENTS)) {
     const ts = tasksByClient.get(name) ?? [];
@@ -167,6 +187,12 @@ export async function runEodRecap(): Promise<EodRecapOutcome> {
       if (ws.length > PER_LIST) lines.push(`   • _+${ws.length - PER_LIST} more_`);
     }
     clientBlocks.push({ type: "section", text: { type: "mrkdwn", text: clamp(lines.join("\n")) } });
+    const truncated = ts.length > PER_LIST || ws.length > PER_LIST;
+    // Reserve 4 blocks: the "+N more clients" context plus the internal
+    // bucket's divider + section + button.
+    if (truncated && headerBlocks.length + clientBlocks.length < MAX_BLOCKS - 4) {
+      clientBlocks.push(showMoreBlock(name));
+    }
     summaryLines.push(`${name}: ${ts.length}✅ ${ws.length}📝`);
   }
   if (clientNames.length > MAX_CLIENTS) {
@@ -180,6 +206,9 @@ export async function runEodRecap(): Promise<EodRecapOutcome> {
     for (const t of internalTasks.slice(0, PER_LIST)) lines.push(`   • ${t.title}  _— ${who(t.assignee_id)}_`);
     if (internalTasks.length > PER_LIST) lines.push(`   • _+${internalTasks.length - PER_LIST} more_`);
     clientBlocks.push({ type: "divider" }, { type: "section", text: { type: "mrkdwn", text: clamp(lines.join("\n")) } });
+    if (internalTasks.length > PER_LIST && headerBlocks.length + clientBlocks.length < MAX_BLOCKS) {
+      clientBlocks.push(showMoreBlock("__internal__"));
+    }
   }
 
   // Thrown failures bubble to the caller (route → 500). The dedupe write only

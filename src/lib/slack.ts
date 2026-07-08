@@ -423,6 +423,17 @@ export async function postMessage(
   return { ts: data.ts };
 }
 
+// Open a modal in response to an interaction (button click etc.). The
+// trigger_id Slack hands us expires after 3 seconds, so callers must invoke
+// this promptly inside their interaction handler. Uses the bot token — no
+// extra scope needed once Interactivity is enabled on the Slack app.
+export async function openView(
+  triggerId: string,
+  view: Record<string, unknown>
+): Promise<void> {
+  await slackCall("views.open", { trigger_id: triggerId, view });
+}
+
 // Resolve a public permalink for a posted message (channel + ts). Used to
 // give auto-created tasks a one-click back-link to the originating Slack
 // alert. Best-effort — returns null on any error so callers can fall back

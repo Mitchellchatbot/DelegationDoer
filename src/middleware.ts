@@ -32,6 +32,10 @@ const PUBLIC_PREFIXES = [
   // handler (and answers Slack's url_verification challenge). Slack POSTs
   // with no Supabase cookie, so it must not be session-gated.
   "/api/slack/events",
+  // Slack Interactivity (button clicks, e.g. the Daily Recap "Show full
+  // list" button) — same x-slack-signature verification in-handler, same
+  // no-cookie POST.
+  "/api/slack/interactions",
   // n8n website-monitor webhook — shared-secret check inside the handler
   // (x-site-monitor-secret header), no Supabase cookie.
   "/api/integrations/site-monitor",

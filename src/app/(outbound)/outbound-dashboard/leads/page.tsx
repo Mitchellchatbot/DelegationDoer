@@ -260,7 +260,10 @@ export default async function OutboundLeadsPage({
           <AddLeadButton forms={forms} />
           <OutboundTypeformFormsDrawer initialForms={forms} unknownFormIds={unknownFormIds} />
         </div>
-        {cards.length === 0 ? <NoLeadsHint /> : <OutboundSequenceBoard cards={cards} forms={forms} />}
+        {/* key by source: OutboundSequenceBoard seeds its cards into useState,
+            so a client-side source change (soft nav, no remount) must remount it
+            to re-seed from the newly source-scoped server data. */}
+        {cards.length === 0 ? <NoLeadsHint /> : <OutboundSequenceBoard key={`flow-${sourceFilter ?? "all"}`} cards={cards} forms={forms} />}
       </div>
     );
   }
@@ -321,7 +324,11 @@ export default async function OutboundLeadsPage({
       {/* Board (top) — Source filter + Add lead + Manage forms render inline in
           the board's header row so all three controls share one line. */}
       {showEmptyHint && <NoLeadsHint />}
+      {/* key by source: OutboundLeadsBoard seeds its leads into useState, so a
+          client-side source change (soft nav, no remount) must remount it to
+          re-seed from the newly source-scoped server data. */}
       <OutboundLeadsBoard
+        key={`board-${sourceFilter ?? "all"}`}
         leads={boardLeads}
         forms={forms}
         actions={

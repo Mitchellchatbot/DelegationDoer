@@ -116,9 +116,12 @@ const JOBS: CronJob[] = [
     run: async () => {
       const o = await runClientsEmailedPush();
       if (!o.ok) return `reason=${o.reason}`;
-      if (!("posted" in o)) return `skipped=${o.skipped}`;
-      const week = o.weekClients === null ? "" : ` week=${o.weekClients}`;
-      return `posted=${o.posted} clients=${o.clients}${week}`;
+      if ("posted" in o) {
+        const week = o.weekClients === null ? "" : ` week=${o.weekClients}`;
+        return `posted=${o.posted} clients=${o.clients}${week}`;
+      }
+      // The scheduled path never passes dryRun, so only the skip shape is left.
+      return "skipped" in o ? `skipped=${o.skipped}` : "dry-run";
     }
   },
   {

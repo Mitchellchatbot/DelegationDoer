@@ -34,6 +34,14 @@ export type ClientsEmailedPushOutcome =
   | { ok: true; skipped: string; nyHour?: number }
   | {
       ok: true;
+      dryRun: true;
+      clients: number;
+      weekClients: number | null;
+      text: string;
+      blocks: unknown[];
+    }
+  | {
+      ok: true;
       posted: number;
       clients: number;
       weekClients: number | null;
@@ -172,7 +180,7 @@ function buildBlocks(args: {
 }
 
 export async function runClientsEmailedPush(
-  opts: { force?: boolean; includeWeek?: boolean } = {}
+  opts: { force?: boolean; includeWeek?: boolean; dryRun?: boolean } = {}
 ): Promise<ClientsEmailedPushOutcome> {
   const now = nowInTz(DEFAULT_TZ);
 
@@ -193,8 +201,8 @@ export async function runClientsEmailedPush(
     .eq("id", "workspace")
     .maybeSingle();
 
-  // Same-UTC-day dedupe (skipped on force so tests can re-run).
-  if (!opts.force) {
+  // Same-UTC-day dedupe (skipped on force/dryRun so tests can re-run).
+  if (!opts.force && !opts.dryRun) {
     const last = settings?.last_clients_emailed_push_at as string | null;
     if (last) {
       const lastDay = new Date(last).toISOString().slice(0, 10);
@@ -203,7 +211,8 @@ export async function runClientsEmailedPush(
     }
   }
 
-  if (!process.env.SLACK_BOT_TOKEN) {
+  // A dry run only renders, so it doesn't need Slack creds.
+  if (!opts.dryRun && !process.env.SLACK_BOT_TOKEN) {
     return { ok: false, reason: "SLACK_BOT_TOKEN missing" };
   }
 
@@ -250,6 +259,20 @@ export async function runClientsEmailedPush(
   ]
     .filter(Boolean)
     .join("\n");
+
+  // Render-only: hand back the exact payload without DMing anyone or stamping.
+  // The recipients are real people, so this is how you eyeball a change to the
+  // blocks before it reaches them (same posture as archive-done's ?dryRun=true).
+  if (opts.dryRun) {
+    return {
+      ok: true,
+      dryRun: true,
+      clients: todayClients.length,
+      weekClients: weekClients?.length ?? null,
+      text: fallbackText,
+      blocks
+    };
+  }
 
   // Resolve the recipient user rows (id/name/slack fields) in one trip.
   const { data: users } = await supabase

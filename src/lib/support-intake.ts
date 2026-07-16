@@ -5,7 +5,8 @@ import {
   classifySupportMessage, type SupportCategory, type SupportClassification
 } from "@/lib/support-classifier";
 import {
-  getConversation, getConversationByChatId, listMessages, type SupportConversation
+  getConversation, getConversationByChatId, listMessages, normalizeConversation,
+  type ConversationRow, type SupportConversation
 } from "@/lib/support-data";
 import { findLeadByPhone, getLeadById, createLeadManual } from "@/lib/outbound-leads";
 import { notifyFormSubmitted } from "@/lib/outbound-slack";
@@ -334,6 +335,99 @@ export async function reconcileUnlinkedLeadConversations(): Promise<number> {
     }
   }
   return fixed;
+}
+
+// Create (or find) the conversation for an operator-composed outbound text —
+// the compose route's pre-step. Inbound capture normally creates conversations;
+// compose is the one path that starts a thread with a number that has never
+// texted us, so the row must exist BEFORE recordOutboundMessage runs (step 1
+// drops outbound messages for unknown chats on the grounds that they'd mint a
+// category-null orphan, visible in neither bucket — pre-creating with a
+// non-null category is exactly what that guard asks for, so it stays as-is).
+//
+// Race-safe by the same lock as the inbound path: blooio_chat_id is UNIQUE, so
+// two operators composing to one number collapse to a single row.
+export async function ensureOperatorConversation(input: {
+  // MUST already be E.164 — this string becomes blooio_chat_id, and it has to
+  // byte-match what the inbound path stores (Blooio's chat id, verbatim) or one
+  // human ends up with two conversation rows that UNIQUE cannot collapse.
+  phone: string;
+  contactName: string | null;
+  createdBy: string;
+}): Promise<{ conversation: SupportConversation; isNew: boolean }> {
+  const supabase = getSupabaseAdmin();
+  const { phone, contactName, createdBy } = input;
+
+  // Category mirrors classifyOrShortCircuit's rule rather than inventing a
+  // second one: a phone already in outbound_leads IS a funnel lead, so texting
+  // it from the CS tab must not launder it into the support inbox.
+  //
+  // This lookup carries more weight than it looks. A lead who has only received
+  // drip SMS has no conversation row at all (the sequence runner sends via
+  // Blooio but never calls recordOutboundMessage), and ingestInboundMessage
+  // skips classification on any non-null category — so a wrong customer_support
+  // written here could never be corrected by the classifier later.
+  // findLeadByPhone is an exact .eq("phone", ...) with no normalization of its
+  // own; it only matches because `phone` is already E.164.
+  const lead = await findLeadByPhone(phone);
+  const category: SupportCategory = lead ? "meta_or_lead" : "customer_support";
+
+  // ignoreDuplicates is load-bearing, not incidental: composing into a thread
+  // that already exists must be purely additive, never clobbering its category,
+  // needs_review, assigned_to or classifier_output. So this is insert-if-absent,
+  // never an update. Rows come back only when we inserted — that's isNew (the
+  // same idiom as the message insert in step 2).
+  const { data: inserted, error } = await supabase
+    .from("support_conversations")
+    .upsert(
+      {
+        blooio_chat_id: phone,
+        phone,
+        contact_name: contactName,
+        category,
+        status: "open",
+        needs_review: false,
+        linked_lead_id: lead?.id ?? null,
+        assigned_to: createdBy,
+        classifier_output: {
+          category,
+          confidence: "high",
+          reason: lead
+            ? "Operator-composed outbound to a phone already in the lead funnel."
+            : "Operator-composed outbound — no inbound message to classify.",
+          source: "operator_compose",
+          createdBy
+        }
+      },
+      { onConflict: "blooio_chat_id", ignoreDuplicates: true }
+    )
+    .select("*");
+  if (error) throw new Error(error.message);
+
+  const insertedRow = (inserted ?? [])[0];
+  if (insertedRow) {
+    return { conversation: normalizeConversation(insertedRow as ConversationRow), isNew: true };
+  }
+
+  const existing = await getConversationByChatId(phone);
+  if (!existing) throw new Error(`support_conversations row missing after upsert for ${phone}`);
+
+  // Fill a BLANK name from what the operator typed. The insert above couldn't
+  // (ignoreDuplicates), and recordOutboundMessage can't either — it passes
+  // contactName: null — so without this the typed name is silently dropped and
+  // the thread keeps showing a bare phone number. Filling a null is additive,
+  // not the clobber ignoreDuplicates exists to prevent; same rule (and same
+  // `&& !convo.contactName` guard) as touchConversationActivity.
+  if (contactName && !existing.contactName) {
+    const { error: nameErr } = await supabase
+      .from("support_conversations")
+      .update({ contact_name: contactName })
+      .eq("id", existing.id)
+      .is("contact_name", null);
+    if (nameErr) throw new Error(nameErr.message);
+    return { conversation: { ...existing, contactName }, isNew: false };
+  }
+  return { conversation: existing, isNew: false };
 }
 
 // Persist an outbound reply we just sent through Blooio. Used by the reply API

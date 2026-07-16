@@ -33,7 +33,7 @@
 
 import { runInactivitySweep } from "@/lib/inactivity-runner";
 import { runEodRecap } from "@/lib/eod-recap-runner";
-import { runClientsEmailedWeekly } from "@/lib/clients-emailed-weekly-runner";
+import { runClientsEmailedPush } from "@/lib/clients-emailed-push-runner";
 import { runScheduledEmails } from "@/lib/scheduled-emails-runner";
 import { syncBirthdaysForAllOwners } from "@/lib/birthday-calendar-sync";
 import { runOutboundSequences } from "@/lib/outbound-sequence-runner";
@@ -105,18 +105,23 @@ const JOBS: CronJob[] = [
     }
   },
   {
-    name: "clients-emailed-weekly",
-    // vercel.json fires at Fri 23:00 + Sat 00:00 UTC to straddle DST; the
-    // runner's NY-Friday + 7pm guards mean only the tick that lands in the 7pm
-    // NY hour on a Friday DMs Sam & Mitchell, so an hourly cadence hits that
-    // window exactly once a week.
+    name: "clients-emailed-push",
+    // vercel.json fires at 23:00 + 00:00 UTC to straddle DST; the runner's 7pm
+    // guard means only the tick that lands in the 7pm NY hour DMs Sam &
+    // Mitchell, so an hourly cadence hits that window exactly once a day. The
+    // runner folds the week's roll-up into Friday's DM on its own.
     intervalMs: HOUR,
     bootCatchupDelayMs: 50_000,
-    disableEnv: "CLIENTS_EMAILED_WEEKLY_INTERNAL_CRON",
+    disableEnv: "CLIENTS_EMAILED_PUSH_INTERNAL_CRON",
     run: async () => {
-      const o = await runClientsEmailedWeekly();
+      const o = await runClientsEmailedPush();
       if (!o.ok) return `reason=${o.reason}`;
-      return "posted" in o ? `posted=${o.posted} clients=${o.clients}` : `skipped=${o.skipped}`;
+      if ("posted" in o) {
+        const week = o.weekClients === null ? "" : ` week=${o.weekClients}`;
+        return `posted=${o.posted} clients=${o.clients}${week}`;
+      }
+      // The scheduled path never passes dryRun, so only the skip shape is left.
+      return "skipped" in o ? `skipped=${o.skipped}` : "dry-run";
     }
   },
   {

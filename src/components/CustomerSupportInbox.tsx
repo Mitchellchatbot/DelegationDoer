@@ -7,9 +7,11 @@ import {
   ArrowRightCircle, LifeBuoy, RefreshCw
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { ComposeSmsButton, type ComposeResult } from "./ComposeSmsButton";
 
 // Client inbox for /customer-support. Two sub-tabs:
-//   - Conversations : open customer_support threads (reply-enabled).
+//   - Conversations : open customer_support threads (reply-enabled), plus the
+//                     "New message" composer for numbers that never texted us.
 //   - Needs Review  : uncertain classifications, with reclassify (→ Support /
 //                     → Lead) actions.
 // Vanilla fetch + useState/useEffect (house pattern — no SWR); Sonner toasts.
@@ -18,7 +20,7 @@ import { cn } from "@/lib/utils";
 type Bucket = "support" | "review";
 type Category = "customer_support" | "meta_or_lead" | "uncertain";
 
-interface Conversation {
+export interface Conversation {
   id: string;
   blooioChatId: string;
   phone: string;
@@ -94,14 +96,24 @@ export function CustomerSupportInbox() {
     } catch { /* non-fatal */ }
   }, []);
 
+  // Data-loading only. Clearing the selection lives in the tab button's own
+  // handler (below), NOT here: this effect also runs when compose switches the
+  // tab programmatically, and resetting here would wipe the very thread compose
+  // just asked us to open.
   useEffect(() => {
-    setSelectedId(null);
-    setThread(null);
     void loadList(tab);
     // refreshReviewCount is the single writer of the badge count — refresh it on
     // mount and every tab switch so it never disagrees with a dual writer.
     void refreshReviewCount();
   }, [tab, loadList, refreshReviewCount]);
+
+  // A user-initiated tab switch drops the open thread (it belongs to the tab
+  // they just left); a programmatic one from compose deliberately doesn't.
+  function switchTab(next: Bucket) {
+    setTab(next);
+    setSelectedId(null);
+    setThread(null);
+  }
 
   const loadThread = useCallback(async (id: string) => {
     setLoadingThread(true);
@@ -142,6 +154,56 @@ export function CustomerSupportInbox() {
       toast.error(`Send failed: ${err instanceof Error ? err.message : "unknown"}`);
     } finally {
       setSending(false);
+    }
+  }
+
+  // Compose sent a text. The route already did the work; we just narrate what
+  // happened and open the thread. Note a composed message can land somewhere the
+  // current list doesn't show (a lead or needs-review thread) — the toast is
+  // what makes that visible, so it has to be specific rather than a bare "Sent".
+  async function handleComposed(r: ComposeResult) {
+    const c = r.conversation;
+    const who = c ? (c.contactName?.trim() || c.phone) : "them";
+
+    if (r.degraded) {
+      // The text went out; only the bookkeeping failed. Don't dress that up as
+      // a clean send — the bubble may be missing until they reply.
+      toast.warning("Text sent, but saving it to the thread failed — it may not appear until they reply.");
+    } else if (r.isNew) {
+      toast.success("Message sent");
+    } else if (c?.category === "meta_or_lead") {
+      toast.success(`${who} is a lead — added to their lead thread`);
+    } else if (c?.needsReview) {
+      toast.success("Added to a thread awaiting review");
+    } else if (r.reopened) {
+      toast.success(`Reopened the conversation with ${who}`);
+    } else {
+      toast.success(`Added to the existing conversation with ${who}`);
+    }
+
+    if (!r.conversationId) return; // nothing to refresh or open
+
+    // Only move tabs when the thread will actually be listed there. Conversations
+    // shows customer_support + open only, so a lead or needs-review thread would
+    // land the operator on a tab that doesn't contain it, having yanked them off
+    // the queue they were working. In that case stay put and refresh where we are.
+    const listedInSupport = c?.category === "customer_support";
+    if (listedInSupport && tab !== "support") {
+      // setTab (not switchTab) — this must not clear the selection we're about to
+      // make. The [tab] effect owns the reload for the new tab; doing it here too
+      // would fire the same fetch twice.
+      setTab("support");
+    } else {
+      await Promise.all([loadList(tab), refreshReviewCount()]);
+    }
+
+    if (selectedId === r.conversationId) {
+      // Already open (composed a second text to the number on screen). Setting
+      // the same id is a no-op React bails on, so the [selectedId] effect would
+      // never refire and the new bubble would never render — reload directly.
+      await loadThread(r.conversationId);
+    } else {
+      setSelectedId(r.conversationId);
     }
   }
 
@@ -196,7 +258,7 @@ export function CustomerSupportInbox() {
 
   return (
     <div className="space-y-4">
-      <SubTabBar tab={tab} onChange={setTab} reviewCount={reviewCount} />
+      <SubTabBar tab={tab} onChange={switchTab} reviewCount={reviewCount} />
 
       <div className="grid grid-cols-1 lg:grid-cols-[340px_1fr] gap-4">
         {/* Conversation list */}
@@ -205,13 +267,16 @@ export function CustomerSupportInbox() {
             <span className="text-[13px] font-medium text-ink/70">
               {tab === "support" ? "Open conversations" : "Awaiting review"}
             </span>
-            <button
-              onClick={() => void loadList(tab)}
-              className="text-ink/40 hover:text-ink/70 transition-colors"
-              title="Refresh"
-            >
-              <RefreshCw className="w-3.5 h-3.5" />
-            </button>
+            <div className="flex items-center gap-2.5">
+              <ComposeSmsButton onSent={handleComposed} />
+              <button
+                onClick={() => void loadList(tab)}
+                className="text-ink/40 hover:text-ink/70 transition-colors"
+                title="Refresh"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+              </button>
+            </div>
           </div>
           <div className="max-h-[60vh] overflow-y-auto divide-y divide-slate-100">
             {loadingList ? (

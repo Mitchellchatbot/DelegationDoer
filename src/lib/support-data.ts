@@ -19,7 +19,7 @@ export interface SupportConversation {
   status: ConversationStatus;
   needsReview: boolean;
   linkedLeadId: string | null;
-  classifierOutput: (SupportClassification & { model?: string }) | null;
+  classifierOutput: SupportClassifierOutput | null;
   lastMessageAt: string | null;
   lastInboundAt: string | null;
   lastMessagePreview: string | null;
@@ -27,6 +27,15 @@ export interface SupportConversation {
   createdAt: string;
   updatedAt: string;
 }
+
+// What landed in classifier_output. `model` is stamped by the AI path; `source`
+// + `createdBy` by the operator-compose path, which has no inbound message to
+// classify and so records the human decision here instead of leaving it null.
+export type SupportClassifierOutput = SupportClassification & {
+  model?: string;
+  source?: "operator_compose";
+  createdBy?: string;
+};
 
 export interface SupportMessage {
   id: string;
@@ -38,7 +47,7 @@ export interface SupportMessage {
   createdAt: string;
 }
 
-interface ConversationRow {
+export interface ConversationRow {
   id: string;
   blooio_chat_id: string;
   phone: string;
@@ -47,7 +56,7 @@ interface ConversationRow {
   status: ConversationStatus;
   needs_review: boolean;
   linked_lead_id: string | null;
-  classifier_output: (SupportClassification & { model?: string }) | null;
+  classifier_output: SupportClassifierOutput | null;
   last_message_at: string | null;
   last_inbound_at: string | null;
   last_message_preview: string | null;

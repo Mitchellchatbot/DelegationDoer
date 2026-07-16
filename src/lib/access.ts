@@ -74,13 +74,37 @@ export function canManageTask(
   return false;
 }
 
+// SEO team leads (Bismah, Saifullah, Samir G) can delete tasks in their own
+// department, matching what the SEO department head can do. They are NOT
+// department heads by role: 20260720000000_seo_org_structure_email_keyed.sql
+// deliberately pins every SEO lead to role='worker' so the org chart renders a
+// single root, so this grant can't come from `leadsDepartment`.
+//
+// Curated by EXACT email (stable + collision-free) — mirrors EMAIL_VIEWER_EMAILS
+// in lib/email-approvers.ts, which grants this same trio read-only email-approvals
+// access. That list is NOT reused here on purpose: email-approvers.ts imports
+// getSupabaseAdmin (server-only) and access.ts must stay client-safe for TaskCard.
+// The two grants are separate concerns and may legitimately diverge — but if you
+// add someone here, consider whether they belong there too.
+const SEO_LEAD_DELETER_EMAILS = [
+  "bella@scaledai.org",
+  "steve@scaledai.org",
+  "samir@scaledai.org"
+];
+
+function isSeoLeadDeleter(u: Pick<User, "email"> | null | undefined): boolean {
+  if (!u?.email) return false;
+  return SEO_LEAD_DELETER_EMAILS.includes(u.email.trim().toLowerCase());
+}
+
 // "Can delete" is deliberately STRICTER than canManageTask. Deletion is
 // destructive and outside the normal task lifecycle, so it's restricted to
-// admins/leaders (any task) and department heads (tasks in a department they
-// lead). Note this intentionally does NOT grant the assignee or creator
-// delete rights the way canManageTask does — a worker can't delete tasks
-// just because they own or were assigned one. Soft delete is recoverable by
-// admins, so this gate only governs who can initiate a deletion.
+// admins/leaders (any task), department heads (tasks in a department they
+// lead), and the SEO team leads above (SEO tasks only — see
+// SEO_LEAD_DELETER_EMAILS). Note this intentionally does NOT grant the assignee
+// or creator delete rights the way canManageTask does — a worker can't delete
+// tasks just because they own or were assigned one. Soft delete is recoverable
+// by admins, so this gate only governs who can initiate a deletion.
 export function canDeleteTask(
   actor: User | null | undefined,
   task: Pick<Task, "departmentId"> | null | undefined
@@ -88,6 +112,7 @@ export function canDeleteTask(
   if (!actor || !task) return false;
   if (isLeader(actor)) return true;
   if (leadsDepartment(actor, task.departmentId)) return true;
+  if (task.departmentId === "dep_seo" && isSeoLeadDeleter(actor)) return true;
   return false;
 }
 

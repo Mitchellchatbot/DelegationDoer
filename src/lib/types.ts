@@ -31,6 +31,15 @@ export interface User {
   // shows for `role`. Used for a builder who needs full access while
   // appearing as a regular worker. Default false.
   isAdmin?: boolean;
+  // Scoped delegate: department ids this user may act as a department
+  // head WITHIN (assign tasks to any member + create tasks in that dept)
+  // while their public `role` stays whatever it is — typically "worker",
+  // so the UI shows no crown/head label. A narrower sibling of `isAdmin`:
+  // is_admin grants full leader power everywhere; this grants only the
+  // department-scoped assignment/creation power, and only for the listed
+  // departments. Empty/undefined = no delegate power. See canAssignTaskTo
+  // / canCreateTaskInDepartment in access.ts.
+  delegateDepartmentIds?: string[];
   // The user's stated timezone (IANA). Used by capacity + clock to
   // decide which day-of-week "today" is for them. Falls back to UTC
   // when missing.

@@ -26,7 +26,10 @@ export function isHead(u: User | null | undefined): boolean {
 //             points to the actor). This lets team-leads inside a dept
 //             (e.g. Bismah → Gul + Komal in the SEO sub-tree) push work
 //             down without being promoted to dept_head. Workers with no
-//             reports just see themselves.
+//             reports just see themselves. A worker who ALSO holds a
+//             delegate grant (delegateDepartmentIds) additionally reaches
+//             every member of the delegated department(s) — head-style
+//             reach, scoped, without the head role. Mirrors canAssignTaskTo.
 // Anyone can always self-assign regardless of role.
 export function assignableTargets(actor: User, pool: User[] = users): User[] {
   let candidates: User[];
@@ -37,13 +40,23 @@ export function assignableTargets(actor: User, pool: User[] = users): User[] {
       u.id === actor.id || u.departmentIds.some((d) => actor.departmentIds.includes(d))
     );
   } else {
-    candidates = pool.filter((u) => u.id === actor.id || u.managerId === actor.id);
+    const delegated = actor.delegateDepartmentIds ?? [];
+    candidates = pool.filter(
+      (u) =>
+        u.id === actor.id ||
+        u.managerId === actor.id ||
+        (delegated.length > 0 && u.departmentIds.some((d) => delegated.includes(d)))
+    );
   }
   return candidates.some((u) => u.id === actor.id) ? candidates : [actor, ...candidates];
 }
 
 export function canCreateTasksForOthers(actor: User): boolean {
-  return isLeader(actor) || actor.role === "department_head";
+  return (
+    isLeader(actor) ||
+    actor.role === "department_head" ||
+    (actor.delegateDepartmentIds?.length ?? 0) > 0
+  );
 }
 
 // Which departments can `actor` create a task in? Drives the New-task
@@ -52,13 +65,19 @@ export function canCreateTasksForOthers(actor: User): boolean {
 // Mirrors `canCreateTaskInDepartment` in access.ts — keep the two in sync.
 export function assignableDepartments(actor: User, pool: Department[]): Department[] {
   if (isLeader(actor)) return pool.slice();
-  return pool.filter((d) => actor.departmentIds.includes(d.id));
+  return pool.filter(
+    (d) =>
+      actor.departmentIds.includes(d.id) ||
+      (actor.delegateDepartmentIds?.includes(d.id) ?? false)
+  );
 }
 
 // Can the actor pick a different department, or are they locked to their
-// own? Leaders/admins + department heads may change it; workers can't.
+// own? Leaders/admins + department heads may change it; so can scoped
+// delegates (they need to target the department they manage). Plain
+// workers can't.
 export function canChooseDepartment(actor: User): boolean {
-  return isLeader(actor) || isHead(actor);
+  return isLeader(actor) || isHead(actor) || (actor.delegateDepartmentIds?.length ?? 0) > 0;
 }
 
 export function canManagePeople(actor: User): boolean {

@@ -515,6 +515,14 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel, initialValues }: 
         .join(", ");
       return `As a Department Head you can assign to anyone in: ${deptNames || "your departments"}.`;
     }
+    const delegated = currentUser.delegateDepartmentIds ?? [];
+    if (delegated.length > 0) {
+      const deptNames = delegated
+        .map((d) => departments.find((x) => x.id === d)?.name)
+        .filter(Boolean)
+        .join(", ");
+      return `You can assign to anyone in: ${deptNames || "your delegated departments"}.`;
+    }
     return "Workers can create tasks only for themselves.";
   })();
 

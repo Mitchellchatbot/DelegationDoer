@@ -28,7 +28,17 @@ import {
 // Who the summary is DM'd to. Kept explicit (not role-derived) because this is a
 // specific ask from these two — mirrors how named-user behaviour is targeted
 // elsewhere in the app.
-const RECIPIENT_EMAILS = ["sam@scaledai.org", "mitchell@scaledai.org"];
+//
+// Mechael rides along to watch the notification itself. This job is otherwise
+// invisible when it half-breaks: a Slack failure is per-recipient and swallowed
+// into `recipients[].reason`, and a data-side break just renders a wrong number
+// that reads as a quiet day. Without someone watching who'd notice, the first
+// signal is Sam or Mitchell asking why they stopped getting it.
+const RECIPIENT_EMAILS = [
+  "sam@scaledai.org",
+  "mitchell@scaledai.org",
+  "mechaelsyed@gmail.com"
+];
 
 export type ClientsEmailedPushOutcome =
   | { ok: true; skipped: string; nyHour?: number }

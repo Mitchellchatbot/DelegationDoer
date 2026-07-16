@@ -28,7 +28,7 @@ export async function GET() {
   let lastError: string | null = null;
 
   const tries = [
-    "id, name, email, role, avatar_url, presence, presence_updated_at, status_emoji, clock_enabled, is_admin, daily_capacity, work_timezone, work_hours_start, work_hours_end, weekly_schedule, manager_user_id, secondary_manager_user_id, slack_email, slack_user_id, daily_prompts_required",
+    "id, name, email, role, avatar_url, presence, presence_updated_at, status_emoji, clock_enabled, is_admin, daily_capacity, work_timezone, work_hours_start, work_hours_end, weekly_schedule, manager_user_id, secondary_manager_user_id, delegate_department_ids, slack_email, slack_user_id, daily_prompts_required",
     "id, name, email, role, avatar_url, presence, presence_updated_at, status_emoji, clock_enabled, is_admin, daily_capacity, work_timezone, work_hours_start, work_hours_end, weekly_schedule, manager_user_id, secondary_manager_user_id",
     "id, name, email, role, avatar_url, presence, presence_updated_at, status_emoji, clock_enabled, is_admin, daily_capacity, work_timezone, work_hours_start, work_hours_end, weekly_schedule, manager_user_id",
     "id, name, email, role, avatar_url, presence, presence_updated_at, status_emoji, clock_enabled, is_admin, daily_capacity, work_timezone, work_hours_start, work_hours_end, weekly_schedule",
@@ -108,6 +108,11 @@ export async function GET() {
         (u as unknown as { manager_user_id?: string | null }).manager_user_id ?? null,
       secondaryManagerId:
         (u as unknown as { secondary_manager_user_id?: string | null }).secondary_manager_user_id ?? null,
+      // Department-scoped delegate power. [] when the column hasn't migrated
+      // (older fallback select) or the user has no delegate grant. Drives the
+      // New-task picker's department + assignee options for delegates.
+      delegateDepartmentIds:
+        (u as unknown as { delegate_department_ids?: string[] | null }).delegate_department_ids ?? [],
       slack_email:
         (u as unknown as { slack_email?: string | null }).slack_email ?? null,
       slack_user_id:

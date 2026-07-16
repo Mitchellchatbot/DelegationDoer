@@ -133,16 +133,21 @@ export async function POST(req: NextRequest) {
       ? body.departmentId
       : null;
     if (!privileged) {
-      if (!caller || caller.departmentIds.length === 0) {
+      // A scoped delegate can create in the department(s) they manage even
+      // without a home membership, so their delegated depts count here too.
+      // For everyone else delegateDepartmentIds is empty, so this is a no-op.
+      const delegateDepts = caller?.delegateDepartmentIds ?? [];
+      if (!caller || (caller.departmentIds.length === 0 && delegateDepts.length === 0)) {
         return NextResponse.json(
           { error: "You have no department assigned. Ask a leader to add you to a department before creating tasks." },
           { status: 400 }
         );
       }
-      // Default an unspecified department to the caller's own; reject any
-      // explicit department outside the ones they belong to.
+      // Default an unspecified department to the caller's own (or their
+      // delegated dept if they have no home dept); reject any explicit
+      // department outside the ones they belong to or manage.
       if (!departmentId) {
-        departmentId = caller.departmentIds[0];
+        departmentId = caller.departmentIds[0] ?? delegateDepts[0];
       } else if (!canCreateTaskInDepartment(caller, departmentId)) {
         return NextResponse.json(
           { error: "You can only create tasks within your own department." },

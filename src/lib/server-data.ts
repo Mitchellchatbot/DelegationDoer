@@ -23,6 +23,7 @@ interface UserRow {
   weekly_schedule?: Record<string, unknown> | null;
   manager_user_id?: string | null;
   secondary_manager_user_id?: string | null;
+  delegate_department_ids?: string[] | null;
   email_notifications_onboarded?: boolean;
   daily_prompts_enabled?: boolean;
   daily_prompts_required?: boolean;
@@ -93,6 +94,7 @@ function userFromRow(row: UserRow, departmentIds: string[]): User {
     weeklySchedule: (row.weekly_schedule as User["weeklySchedule"]) ?? {},
     managerId: row.manager_user_id ?? null,
     secondaryManagerId: row.secondary_manager_user_id ?? null,
+    delegateDepartmentIds: row.delegate_department_ids ?? [],
     emailNotificationsOnboarded: row.email_notifications_onboarded === true,
     // Defaults true at the DB level; we surface the explicit value so a
     // false in the row turns the SOD/EOD prompts off on /home + widget.
@@ -178,7 +180,7 @@ async function _getUserById(id: string | null | undefined): Promise<User | null>
   const supabase = getSupabaseAdmin();
   const { data: row } = await supabase
     .from("users")
-    .select("id,name,email,role,daily_capacity,throughput,skills,avatar_url,is_admin,work_timezone,weekly_schedule,manager_user_id,secondary_manager_user_id,email_notifications_onboarded,daily_prompts_enabled,daily_prompts_required,clock_enabled")
+    .select("id,name,email,role,daily_capacity,throughput,skills,avatar_url,is_admin,work_timezone,weekly_schedule,manager_user_id,secondary_manager_user_id,delegate_department_ids,email_notifications_onboarded,daily_prompts_enabled,daily_prompts_required,clock_enabled")
     .eq("id", id)
     .maybeSingle();
   if (!row) return null;
@@ -265,7 +267,7 @@ export async function getArchivedTasks(): Promise<Task[]> {
 export async function getAllUsersLight(): Promise<User[]> {
   const { data } = await getSupabaseAdmin()
     .from("users")
-    .select("id,name,email,role,daily_capacity,throughput,skills,avatar_url,is_admin,work_timezone,weekly_schedule,manager_user_id,secondary_manager_user_id,email_notifications_onboarded,daily_prompts_enabled,daily_prompts_required,clock_enabled")
+    .select("id,name,email,role,daily_capacity,throughput,skills,avatar_url,is_admin,work_timezone,weekly_schedule,manager_user_id,secondary_manager_user_id,delegate_department_ids,email_notifications_onboarded,daily_prompts_enabled,daily_prompts_required,clock_enabled")
     .order("name");
   return (data ?? []).map((r) =>
     userFromRow(r as UserRow, [])
@@ -282,7 +284,7 @@ export async function getAllUsers(): Promise<User[]> {
   const [usersRes, membersRes] = await Promise.all([
     supabase
       .from("users")
-      .select("id,name,email,role,daily_capacity,throughput,skills,avatar_url,is_admin,work_timezone,weekly_schedule,manager_user_id,secondary_manager_user_id,email_notifications_onboarded,daily_prompts_enabled,daily_prompts_required,clock_enabled")
+      .select("id,name,email,role,daily_capacity,throughput,skills,avatar_url,is_admin,work_timezone,weekly_schedule,manager_user_id,secondary_manager_user_id,delegate_department_ids,email_notifications_onboarded,daily_prompts_enabled,daily_prompts_required,clock_enabled")
       .order("name"),
     supabase
       .from("department_members")

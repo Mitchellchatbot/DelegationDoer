@@ -135,7 +135,10 @@ export function canViewDepartmentConsole(
 ): boolean {
   if (!actor || !departmentId) return false;
   if (isLeader(actor)) return true;
-  return actor.departmentIds.includes(departmentId);
+  if (actor.departmentIds.includes(departmentId)) return true;
+  // Scoped delegates can view the console for the department(s) they manage
+  // so they can see the work they assign there.
+  return actor.delegateDepartmentIds?.includes(departmentId) ?? false;
 }
 
 // Can `actor` see this task at all? Used to gate the detail page and
@@ -188,9 +191,11 @@ export function canViewTaskScopedToDepartment(
   if (task.assigneeId && leaderIds.has(task.assigneeId)) return false;
   if (task.creatorId && leaderIds.has(task.creatorId)) return false;
   // Department scoping: the task must live in one of the actor's
-  // departments. No department → outside every team → hidden.
+  // departments — or a department they've been delegated to manage. No
+  // department → outside every team → hidden.
   if (!task.departmentId) return false;
-  return actor.departmentIds.includes(task.departmentId);
+  if (actor.departmentIds.includes(task.departmentId)) return true;
+  return actor.delegateDepartmentIds?.includes(task.departmentId) ?? false;
 }
 
 // Notify-teammates affordance: anyone with skin in the task's game
@@ -219,13 +224,19 @@ export function canCreateProject(actor: User | null | undefined): boolean {
 // This is the single source of truth the /api/tasks route enforces; the
 // NewTaskForm mirrors it in the UI but is NOT trusted on its own.
 export function canCreateTaskInDepartment(
-  actor: Pick<User, "role" | "isAdmin" | "departmentIds"> | null | undefined,
+  actor:
+    | Pick<User, "role" | "isAdmin" | "departmentIds" | "delegateDepartmentIds">
+    | null
+    | undefined,
   departmentId: string | null | undefined
 ): boolean {
   if (!actor) return false;
   if (isLeader(actor)) return true;
   if (!departmentId) return false;
-  return actor.departmentIds.includes(departmentId);
+  if (actor.departmentIds.includes(departmentId)) return true;
+  // Scoped delegates can also create in the department(s) they manage on a
+  // head's behalf, even if it isn't their own home department.
+  return actor.delegateDepartmentIds?.includes(departmentId) ?? false;
 }
 
 // Can `actor` assign a task to `target`? Server-side mirror of
@@ -236,7 +247,10 @@ export function canCreateTaskInDepartment(
 // Everyone can always assign to themselves. The /api/tasks route enforces
 // this for non-leaders; the widget/form picker is convenience, not the gate.
 export function canAssignTaskTo(
-  actor: Pick<User, "id" | "role" | "isAdmin" | "departmentIds"> | null | undefined,
+  actor:
+    | Pick<User, "id" | "role" | "isAdmin" | "departmentIds" | "delegateDepartmentIds">
+    | null
+    | undefined,
   target: Pick<User, "id" | "departmentIds" | "managerId"> | null | undefined
 ): boolean {
   if (!actor || !target) return false;
@@ -244,6 +258,12 @@ export function canAssignTaskTo(
   if (isLeader(actor)) return true;
   if (isDepartmentHead(actor)) {
     return target.departmentIds.some((d) => actor.departmentIds.includes(d));
+  }
+  // Scoped delegates get department-head-style reach, but only WITHIN the
+  // department(s) they've been delegated (delegate_department_ids), and
+  // without changing their public role. Mirrors the head branch above.
+  if (actor.delegateDepartmentIds?.some((d) => target.departmentIds.includes(d))) {
+    return true;
   }
   // Workers: only their own direct reports.
   return target.managerId === actor.id;

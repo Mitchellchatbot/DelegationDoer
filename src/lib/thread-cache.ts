@@ -73,14 +73,44 @@ export function fetchThread(
   return signal ? withSignal(req, signal) : req;
 }
 
-// Fire-and-forget warm-up for a thread the user is likely about to open
-// (hover / mousedown). Reuses the resolved cache and in-flight dedupe, so it's
-// cheap to call repeatedly and never duplicates a request. Swallows errors —
-// the real open will surface them.
+// Background prefetch is concurrency-capped so viewport/eager warming can't
+// fire a dozen getThread calls at the clone at once. The CLICK path
+// (fetchThread, called directly by the reading pane) is never throttled — a
+// real open always goes immediately and dedupes against any queued/active
+// prefetch.
+const MAX_PREFETCH_CONCURRENCY = 4;
+let activePrefetches = 0;
+const prefetchQueue: Array<() => void> = [];
+
+function pumpPrefetchQueue(): void {
+  while (activePrefetches < MAX_PREFETCH_CONCURRENCY && prefetchQueue.length > 0) {
+    const run = prefetchQueue.shift();
+    run?.();
+  }
+}
+
+// Fire-and-forget warm-up for a thread the user is likely about to open (hover /
+// mousedown / scrolled into view). Reuses the resolved cache and in-flight
+// dedupe, so it's cheap to call repeatedly and never duplicates a request.
+// Swallows errors — the real open will surface them.
 export function prefetchThread(threadId: string, accountId: string): void {
   const key = keyOf(threadId, accountId);
   if (resolved.has(key) || inFlight.has(key)) return;
-  void fetchThread(threadId, accountId).catch(() => {});
+  prefetchQueue.push(() => {
+    // A click (or another prefetch) may have started this while it was queued.
+    if (resolved.has(key) || inFlight.has(key)) {
+      pumpPrefetchQueue();
+      return;
+    }
+    activePrefetches++;
+    void fetchThread(threadId, accountId)
+      .catch(() => {})
+      .finally(() => {
+        activePrefetches--;
+        pumpPrefetchQueue();
+      });
+  });
+  pumpPrefetchQueue();
 }
 
 // Wrap a shared promise so the caller's await rejects on its own abort signal

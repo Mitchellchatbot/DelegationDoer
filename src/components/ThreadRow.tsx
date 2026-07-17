@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { motion } from "framer-motion";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { Inbox, MessageSquare, ExternalLink } from "lucide-react";
 import { cn, initials as nameInitials } from "@/lib/utils";
 import { useInboxSplit } from "@/components/InboxSplit";
@@ -94,13 +94,36 @@ export function ThreadRow({ thread, href, unread, index, accountId, threadId, mi
   const messageCount = thread.message_count ?? null;
   const time = relativeMail(thread.last_message_at);
 
-  // Eagerly warm the first few rows on mount, so clicking a top thread right
-  // after the list loads (before any hover) still opens instantly — the ~1.1s
-  // getThread round-trip runs up front instead of after the click. Hover/focus
-  // still cover the rest of the list. The cache dedupes, so this is cheap.
+  // Warm each thread as it scrolls into view, so by the time the user clicks it
+  // the full thread is usually already loaded → the open is instant. A short
+  // dwell skips rows blown past in a fast scroll; a 300px rootMargin fetches a
+  // row just BEFORE it's reached. Concurrency is capped in thread-cache so this
+  // never floods the backend, and the cache dedupes with hover/click. This
+  // covers the initially-visible rows on mount too, so the top of the list is
+  // warm within ~200ms of load.
+  const rowRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (index < 3) prefetchThread(threadId, accountId);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    const el = rowRef.current;
+    if (!el || typeof IntersectionObserver === "undefined") return;
+    let dwell: ReturnType<typeof setTimeout> | null = null;
+    const io = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            dwell = setTimeout(() => prefetchThread(threadId, accountId), 200);
+          } else if (dwell) {
+            clearTimeout(dwell);
+            dwell = null;
+          }
+        }
+      },
+      { rootMargin: "300px" }
+    );
+    io.observe(el);
+    return () => {
+      io.disconnect();
+      if (dwell) clearTimeout(dwell);
+    };
   }, [threadId, accountId]);
 
   // Plain left-click opens the email in the reading pane via client-local state
@@ -134,6 +157,7 @@ export function ThreadRow({ thread, href, unread, index, accountId, threadId, mi
 
   return (
     <motion.div
+      ref={rowRef}
       initial={{ opacity: 0, y: 6 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{

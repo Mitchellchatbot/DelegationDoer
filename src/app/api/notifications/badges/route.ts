@@ -216,7 +216,8 @@ export async function GET() {
         const { count } = await supabase
           .from("email_drafts")
           .select("id", { count: "exact", head: true })
-          .eq("status", "pending");
+          .eq("status", "pending")
+          .is("dismissed_at", null);
         approvalsPending = count ?? 0;
       } catch { /* migration not applied yet — silently zero */ }
     } else if (headedDepts.length > 0) {
@@ -228,6 +229,7 @@ export async function GET() {
           .from("email_drafts")
           .select("id", { count: "exact", head: true })
           .eq("status", "pending")
+          .is("dismissed_at", null)
           .in("department_id", headedDepts);
         approvalsPending = count ?? 0;
       } catch { /* migration not applied yet — silently zero */ }

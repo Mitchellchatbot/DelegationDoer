@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import {
   Search, Loader2, X, Users, KeyRound, BellRing, Receipt, Calendar, AlertTriangle,
-  Inbox, Send, ShieldAlert, FileText
+  Inbox, Send, ShieldAlert, FileText, ChevronLeft, ChevronRight
 } from "lucide-react";
 import { ThreadList, type ThreadListItem } from "./ThreadList";
 import { useInboxSplit } from "@/components/InboxSplit";
@@ -64,6 +64,25 @@ interface Props {
 const PAGE_SIZE = 50;
 const SEARCH_DEBOUNCE_MS = 350;
 
+// The threads API returns "has more", not a total, so we can't render a full
+// "1 … N" range up front. Instead the known range grows as the user pages
+// forward: each page prefetches the next (revealing whether a further page
+// exists), and a page that reports no-more fixes the final count. Given a
+// current page and the furthest page known to exist, produce the windowed list
+// of page numbers (with "…" gaps) to render.
+function pageWindow(current: number, maxKnown: number): Array<number | "…"> {
+  const wanted = new Set<number>([1, maxKnown, current - 1, current, current + 1]);
+  const nums = [...wanted].filter((p) => p >= 1 && p <= maxKnown).sort((a, b) => a - b);
+  const out: Array<number | "…"> = [];
+  let prev = 0;
+  for (const p of nums) {
+    if (prev && p - prev > 1) out.push("…");
+    out.push(p);
+    prev = p;
+  }
+  return out;
+}
+
 // Client-side wrapper that gives any inbox page server-paginated
 // infinite scroll + full-text search. The first page is rendered
 // from SSR; subsequent pages stream in via /api/inboxes/threads as
@@ -79,6 +98,9 @@ export function InboxThreadsClient({
 }: Props) {
   const [threads, setThreads] = useState<ThreadListItem[]>(initialThreads);
   const [hasMore, setHasMore] = useState(initialHasMore);
+  const [page, setPage] = useState(1);
+  // Furthest page we've confirmed exists (grows as pages are fetched/prefetched).
+  const [maxKnownPage, setMaxKnownPage] = useState(initialHasMore ? 2 : 1);
   const [loading, setLoading] = useState(false);
   const [q, setQ] = useState("");
   const [debouncedQ, setDebouncedQ] = useState("");
@@ -90,7 +112,15 @@ export function InboxThreadsClient({
   // The viewer's own id — lets DraftList tell own drafts from others' (in the
   // leader/stealth-admin see-all view). Sourced from the drafts response.
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
-  const sentinelRef = useRef<HTMLDivElement | null>(null);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  // Current page mirrored to a ref so the SSE handler can read it without
+  // re-subscribing on every page change.
+  const pageRef = useRef(1);
+  useEffect(() => { pageRef.current = page; }, [page]);
+  // Per-scope page cache (page number → its items + hasMore). Cleared whenever
+  // the scope/filter/search changes. Makes Prev/Next and prefetched neighbors
+  // instant.
+  const pageCacheRef = useRef<Map<number, { items: ThreadListItem[]; hasMore: boolean }>>(new Map());
   // Threads opened in the reading pane this session — drop their unread style
   // live without a server refresh (see InboxSplit). Empty when not in a split.
   const { readIds } = useInboxSplit();
@@ -175,11 +205,14 @@ export function InboxThreadsClient({
     let attempt = 0;
     let stopped = false;
 
-    async function refreshPageZero() {
+    async function refreshFirstPage() {
       // The inbox SSE event signals new *inbound* mail, so it only maps to
       // the Inbox view. Skip while searching, category-filtering, or on the
-      // Sent/Spam views so a push can't mutate a list the user is reading.
+      // Sent/Spam views so a push can't mutate a list the user is reading — and
+      // only when the user is on page 1 (the newest), so a push never yanks the
+      // page out from under someone reading further back.
       if (debouncedQ || category !== "all" || folder !== "INBOX") return;
+      if (pageRef.current !== 1) return;
       try {
         const params = new URLSearchParams();
         params.set("limit", String(PAGE_SIZE));
@@ -189,8 +222,11 @@ export function InboxThreadsClient({
         const res = await fetch(`/api/inboxes/threads?${params}`, { cache: "no-store" });
         if (!res.ok) return;
         const data = await res.json();
-        setThreads(data.threads ?? []);
+        const items: ThreadListItem[] = data.threads ?? [];
+        pageCacheRef.current.set(1, { items, hasMore: !!data.hasMore });
+        setThreads(items);
         setHasMore(!!data.hasMore);
+        setMaxKnownPage((m) => Math.max(m, data.hasMore ? 2 : 1));
       } catch { /* network blip — next event tries again */ }
     }
 
@@ -198,7 +234,7 @@ export function InboxThreadsClient({
       if (stopped) return;
       try {
         es = new EventSource("/api/inbox-events");
-        es.addEventListener("inbox", () => { void refreshPageZero(); });
+        es.addEventListener("inbox", () => { void refreshFirstPage(); });
         es.onopen = () => { attempt = 0; };
         es.onerror = () => {
           es?.close();
@@ -217,106 +253,97 @@ export function InboxThreadsClient({
     };
   }, [debouncedQ, category, mailboxId, mailboxIdsKey, folder]);
 
-  // Reseed/replace the visible list ONLY when the actual filter/scope changes
-  // (search, category, folder, mailbox) — NOT on every `initialThreads` identity
-  // change. The list page is force-dynamic, so any server re-render (e.g. a
-  // sibling reading-pane's mark-read, or a router.refresh) hands us a fresh
-  // `initialThreads` array; without this gate that would reset the default view
-  // back to the SSR'd first page and discard every infinite-scroll page + the
-  // scroll position. The key gate keeps the loaded list stable across re-renders.
-  const filterKeyRef = useRef<string | null>(null);
-  useEffect(() => {
-    const filterKey = `${debouncedQ}|${category}|${folder}|${mailboxId ?? ""}|${mailboxIdsKey}`;
-    if (filterKeyRef.current === filterKey) return;
-    filterKeyRef.current = filterKey;
-    let cancelled = false;
-    async function run() {
-      // Drafts are DD-local and fetched by their own effect — never hit the
-      // missive threads endpoint for this view.
-      if (folder === "DRAFTS") return;
-      // Restore SSR'd page only on the default Inbox view — no search, no
-      // category filter, INBOX folder. Any other combination is fetched.
-      if (isDefaultView && (initialScopeKey === undefined || mailboxIdsKey === initialScopeKey)) {
-        setThreads(initialThreads);
-        setHasMore(initialHasMore);
-        setSearchActive(false);
-        return;
-      }
-      setLoading(true);
-      setSearchActive(!!debouncedQ);
-      try {
-        const params = new URLSearchParams();
-        params.set("limit", String(PAGE_SIZE));
-        params.set("offset", "0");
-        if (debouncedQ) params.set("q", debouncedQ);
-        if (mailboxId) params.set("mailboxId", mailboxId);
-        else if (mailboxIdsKey) params.set("mailboxIds", mailboxIdsKey);
-        if (category !== "all") params.set("category", category);
-        if (folder !== "INBOX") params.set("folder", folder);
-        const res = await fetch(`/api/inboxes/threads?${params}`, { cache: "no-store" });
-        const data = await res.json();
-        if (!cancelled) {
-          setThreads(data.threads ?? []);
-          setHasMore(!!data.hasMore);
-        }
-      } catch {
-        if (!cancelled) {
-          setThreads([]);
-          setHasMore(false);
-        }
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    }
-    void run();
-    return () => { cancelled = true; };
-  }, [debouncedQ, initialThreads, initialHasMore, mailboxId, mailboxIdsKey, initialScopeKey, category, folder, isDefaultView]);
+  // Build the /api/inboxes/threads query for a given 1-based page in the current
+  // scope. Search (q) + the mailbox scope are sent server-side, so search always
+  // spans the WHOLE scope (every inbox in the selection), never just this page.
+  const buildParams = useCallback((pageNum: number) => {
+    const params = new URLSearchParams();
+    params.set("limit", String(PAGE_SIZE));
+    params.set("offset", String((pageNum - 1) * PAGE_SIZE));
+    if (debouncedQ) params.set("q", debouncedQ);
+    if (mailboxId) params.set("mailboxId", mailboxId);
+    else if (mailboxIdsKey) params.set("mailboxIds", mailboxIdsKey);
+    if (category !== "all") params.set("category", category);
+    if (folder !== "INBOX") params.set("folder", folder);
+    return params;
+  }, [debouncedQ, mailboxId, mailboxIdsKey, category, folder]);
 
-  const loadMore = useCallback(async () => {
-    if (loading || !hasMore || folder === "DRAFTS") return;
-    setLoading(true);
+  // Warm a page into the cache without touching the visible list, so Prev/Next
+  // (and the current page's neighbours) resolve instantly. Also grows
+  // maxKnownPage as it discovers further pages exist.
+  const prefetchPage = useCallback(async (pageNum: number) => {
+    if (pageNum < 1 || folder === "DRAFTS") return;
+    if (pageCacheRef.current.has(pageNum)) return;
     try {
-      const params = new URLSearchParams();
-      params.set("limit", String(PAGE_SIZE));
-      params.set("offset", String(threads.length));
-      if (debouncedQ) params.set("q", debouncedQ);
-      if (mailboxId) params.set("mailboxId", mailboxId);
-      else if (mailboxIdsKey) params.set("mailboxIds", mailboxIdsKey);
-      if (category !== "all") params.set("category", category);
-      if (folder !== "INBOX") params.set("folder", folder);
-      const res = await fetch(`/api/inboxes/threads?${params}`, { cache: "no-store" });
+      const res = await fetch(`/api/inboxes/threads?${buildParams(pageNum)}`, { cache: "no-store" });
+      if (!res.ok) return;
       const data = await res.json();
-      const more: ThreadListItem[] = data.threads ?? [];
-      // Dedupe in case a new message bumped a thread between fetches.
-      const seen = new Set(threads.map((d) => d.thread.id));
-      const append = more.filter((d) => !seen.has(d.thread.id));
-      setThreads((prev) => [...prev, ...append]);
-      setHasMore(!!data.hasMore);
-    } catch {
-      setHasMore(false);
-    } finally {
-      setLoading(false);
-    }
-  }, [loading, hasMore, threads, debouncedQ, mailboxId, mailboxIdsKey, category, folder]);
+      const items: ThreadListItem[] = data.threads ?? [];
+      pageCacheRef.current.set(pageNum, { items, hasMore: !!data.hasMore });
+      if (items.length > 0) {
+        setMaxKnownPage((m) => Math.max(m, data.hasMore ? pageNum + 1 : pageNum));
+      }
+    } catch { /* prefetch failures are silent — the real nav will surface them */ }
+  }, [buildParams, folder]);
 
-  // IntersectionObserver on the sentinel below the list. When it
-  // scrolls into view, kick off the next page. Setting rootMargin
-  // makes the load fire slightly before the sentinel is fully visible
-  // so the page feels seamless instead of stalling at the edge.
+  // Navigate to a page: serve from cache instantly when we have it, else fetch.
+  // Warms the neighbours afterward and returns the list to the top.
+  const goToPage = useCallback(async (pageNum: number) => {
+    if (pageNum < 1 || folder === "DRAFTS") return;
+    const cached = pageCacheRef.current.get(pageNum);
+    if (cached) {
+      setThreads(cached.items);
+      setHasMore(cached.hasMore);
+      setPage(pageNum);
+      setMaxKnownPage((m) => Math.max(m, cached.hasMore ? pageNum + 1 : pageNum));
+    } else {
+      setLoading(true);
+      try {
+        const res = await fetch(`/api/inboxes/threads?${buildParams(pageNum)}`, { cache: "no-store" });
+        const data = await res.json();
+        const items: ThreadListItem[] = data.threads ?? [];
+        pageCacheRef.current.set(pageNum, { items, hasMore: !!data.hasMore });
+        setThreads(items);
+        setHasMore(!!data.hasMore);
+        setPage(pageNum);
+        setMaxKnownPage((m) => Math.max(m, data.hasMore ? pageNum + 1 : pageNum));
+      } catch {
+        setThreads([]);
+        setHasMore(false);
+      } finally {
+        setLoading(false);
+      }
+    }
+    void prefetchPage(pageNum + 1);
+    if (pageNum > 1) void prefetchPage(pageNum - 1);
+    rootRef.current?.scrollIntoView({ block: "start" });
+  }, [buildParams, folder, prefetchPage]);
+
+  // Reseed to page 1 whenever the scope/filter/search actually changes — NOT on
+  // every `initialThreads` identity change (the force-dynamic page hands us a
+  // fresh array on any server re-render, e.g. a sibling pane's mark-read; the
+  // scopeKey gate keeps our current page stable across those). The default INBOX
+  // view with the SSR'd scope seeds page 1 from SSR (no fetch); everything else
+  // fetches page 1.
+  const scopeKey = `${debouncedQ}|${category}|${folder}|${mailboxId ?? ""}|${mailboxIdsKey}`;
+  const scopeKeyRef = useRef<string | null>(null);
   useEffect(() => {
-    const node = sentinelRef.current;
-    if (!node) return;
-    const obs = new IntersectionObserver(
-      (entries) => {
-        for (const e of entries) {
-          if (e.isIntersecting) void loadMore();
-        }
-      },
-      { rootMargin: "400px 0px" }
-    );
-    obs.observe(node);
-    return () => obs.disconnect();
-  }, [loadMore]);
+    if (folder === "DRAFTS") return;
+    if (scopeKeyRef.current === scopeKey) return;
+    scopeKeyRef.current = scopeKey;
+    pageCacheRef.current = new Map();
+    setPage(1);
+    setSearchActive(!!debouncedQ);
+    if (isDefaultView && (initialScopeKey === undefined || mailboxIdsKey === initialScopeKey)) {
+      pageCacheRef.current.set(1, { items: initialThreads, hasMore: initialHasMore });
+      setThreads(initialThreads);
+      setHasMore(initialHasMore);
+      setMaxKnownPage(initialHasMore ? 2 : 1);
+      void prefetchPage(2);
+      return;
+    }
+    void goToPage(1);
+  }, [scopeKey, isDefaultView, initialThreads, initialHasMore, initialScopeKey, mailboxIdsKey, debouncedQ, folder, goToPage, prefetchPage]);
 
   // Apply session-local read-state (threads opened in the pane) so their unread
   // style clears immediately, without a server round-trip resetting the list.
@@ -343,7 +370,7 @@ export function InboxThreadsClient({
         : undefined;
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-2" ref={rootRef}>
       {/* Mailbox views — Gmail-style Inbox / Sent / Spam switcher. This is
           the primary navigation for the list below; search + category
           chips compose *within* the selected mailbox. Switching keeps the
@@ -449,7 +476,7 @@ export function InboxThreadsClient({
         </div>
         <div className="text-[11px] text-ink/55 tabular-nums whitespace-nowrap shrink-0">
           {searchActive ? (
-            <><span className="font-medium">{threads.length}</span> result{threads.length === 1 ? "" : "s"}</>
+            <>Page <span className="font-medium">{page}</span></>
           ) : (
             <><span className="font-semibold text-accent">{unreadCount}</span> unread</>
           )}
@@ -464,28 +491,56 @@ export function InboxThreadsClient({
         emptyMessage={emptyMessage}
       />
 
-      {/* Sentinel + load-more indicator. Stays mounted as long as
-          there are more pages; observer fires when it scrolls into
-          view. Manual click as a fallback for users on environments
-          where IntersectionObserver feels stuck (some embedded
-          webviews). */}
-      {hasMore && (
-        <div ref={sentinelRef} className="py-4 text-center">
+      {/* Numbered pagination. The threads API returns "has more" (not a total),
+          so the known range grows as you page forward — Next reveals the next
+          number, and a page reporting no-more fixes the final count. Neighbour
+          pages are prefetched, so Prev/Next are usually instant. */}
+      {(page > 1 || hasMore || maxKnownPage > 1) && (
+        <nav className="flex items-center justify-center gap-1 py-3" aria-label="Pagination">
           <button
             type="button"
-            onClick={() => { void loadMore(); }}
-            disabled={loading}
-            className={cn(
-              "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-medium border transition-colors",
-              loading
-                ? "border-slate-200 bg-slate-50 text-ink/45"
-                : "border-slate-200 bg-white text-ink/65 hover:text-accent hover:border-accent/40"
-            )}
+            onClick={() => { void goToPage(page - 1); }}
+            disabled={page <= 1 || loading}
+            aria-label="Previous page"
+            className="inline-flex items-center justify-center w-8 h-8 rounded-lg border border-slate-200 bg-white text-ink/65 enabled:hover:text-accent enabled:hover:border-accent/40 disabled:opacity-40 transition-colors"
           >
-            {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
-            {loading ? "Loading more…" : "Load more"}
+            <ChevronLeft className="w-4 h-4" />
           </button>
-        </div>
+
+          {pageWindow(page, maxKnownPage).map((p, i) =>
+            p === "…" ? (
+              <span key={`gap-${i}`} className="px-1 text-ink/40 select-none">…</span>
+            ) : (
+              <button
+                key={p}
+                type="button"
+                onClick={() => { void goToPage(p); }}
+                aria-current={p === page ? "page" : undefined}
+                disabled={loading && p === page}
+                className={cn(
+                  "min-w-[32px] h-8 px-2 rounded-lg text-[12px] font-medium border tabular-nums transition-colors",
+                  p === page
+                    ? "bg-accent text-white border-accent"
+                    : "bg-white text-ink/70 border-slate-200 hover:text-accent hover:border-accent/40"
+                )}
+              >
+                {p}
+              </button>
+            )
+          )}
+
+          <button
+            type="button"
+            onClick={() => { void goToPage(page + 1); }}
+            disabled={!hasMore || loading}
+            aria-label="Next page"
+            className="inline-flex items-center justify-center w-8 h-8 rounded-lg border border-slate-200 bg-white text-ink/65 enabled:hover:text-accent enabled:hover:border-accent/40 disabled:opacity-40 transition-colors"
+          >
+            <ChevronRight className="w-4 h-4" />
+          </button>
+
+          {loading && <Loader2 className="w-3.5 h-3.5 animate-spin text-muted ml-1" />}
+        </nav>
       )}
       </>
       )}

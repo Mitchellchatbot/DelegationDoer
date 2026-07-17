@@ -178,12 +178,12 @@ export const listAccountsCached = unstable_cache(
   { revalidate: 60, tags: ["missive-accounts"] }
 );
 
-// SSR only a small first page of threads; the client's infinite scroll
-// (InboxThreadsClient streams the rest in on scroll). The clone's
-// /api/threads cost scales ~linearly with the row count (it computes a
-// snippet + account_emails per thread), so a smaller first page is a large
-// TTFB win with no data lost — hasMore stays true and the client backfills.
-export const INBOX_SSR_PAGE = 25;
+// Page 1 of the numbered-pages list is SSR'd. This MUST equal the client's
+// PAGE_SIZE (InboxThreadsClient) so page offsets line up — page 2 starts at
+// offset PAGE_SIZE. The clone's /api/threads cost scales ~linearly with the row
+// count (it computes a snippet + account_emails per thread), so this is also the
+// per-page fetch cost; 50 fills the reading-pane list in one round-trip.
+export const INBOX_SSR_PAGE = 50;
 
 export async function listTeamMembers(): Promise<MissiveTeamMember[]> {
   const data = await missiveFetch<{ members: MissiveTeamMember[] }>("/api/auth/team");

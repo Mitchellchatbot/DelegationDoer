@@ -58,6 +58,7 @@ interface DraftRow {
   scheduled_for: string | null;
   revision_count: number | null;
   media_urls: Array<{ url: string; name?: string; contentType?: string; size?: number }> | null;
+  dismissed_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -308,29 +309,44 @@ export async function GET(req: NextRequest) {
     const kindParam = sp.get("kind");
     const mineOnly = sp.get("mine") === "1";
     const clientIdParam = sp.get("clientId");
+    // Kind grouping for the Emails tab's Client-emails vs Auto-replies
+    // sub-tabs: excludeKind=auto_reply fetches the client group (every
+    // non-auto kind), kind=auto_reply fetches the auto-reply group. Splitting
+    // the fetch gives each group its own row budget so a flood of pending
+    // auto-replies can't starve client emails out of the newest-N window.
+    const excludeKindParam = sp.get("excludeKind");
+    // Archived (dismissed) drafts are hidden by default; the Auto-replies
+    // "Show archived" view opts back in.
+    const includeDismissed = sp.get("includeDismissed") === "1";
     const limit = Math.min(100, Math.max(1, parseInt(sp.get("limit") ?? "50", 10) || 50));
 
-    let q = supabase
-      .from("email_drafts")
-      .select("id, author_id, account_id, client_id, client_name, to_emails, cc_emails, bcc_emails, subject, body_text, body_html, kind, department_id, status, approver_id, approved_at, rejected_at, rejection_note, missive_thread_id, missive_message_id, sent_at, send_error, scheduled_for, revision_count, media_urls, created_at, updated_at")
-      .order("created_at", { ascending: false })
-      .limit(limit);
+    // Built as a function so we can gracefully retry WITHOUT the dismissed_at
+    // column if its migration hasn't run yet on this environment — mirrors the
+    // POST route's optional-column handling so the Emails tab never hard-fails
+    // on a not-yet-applied column (leaders/admins/viewers see everything;
+    // narrower callers are filtered client-side below — small table, cheap).
+    const baseCols = "id, author_id, account_id, client_id, client_name, to_emails, cc_emails, bcc_emails, subject, body_text, body_html, kind, department_id, status, approver_id, approved_at, rejected_at, rejection_note, missive_thread_id, missive_message_id, sent_at, send_error, scheduled_for, revision_count, media_urls, created_at, updated_at";
+    const runQuery = (withDismissed: boolean) => {
+      let q = supabase
+        .from("email_drafts")
+        .select(withDismissed ? `${baseCols}, dismissed_at` : baseCols, { count: "exact" })
+        .order("created_at", { ascending: false })
+        .limit(limit);
+      if (statusParam) q = q.eq("status", statusParam);
+      if (kindParam) q = q.eq("kind", kindParam);
+      if (excludeKindParam) q = q.neq("kind", excludeKindParam);
+      if (withDismissed && !includeDismissed) q = q.is("dismissed_at", null);
+      if (clientIdParam) q = q.eq("client_id", clientIdParam);
+      if (mineOnly) q = q.eq("author_id", userId);
+      return q;
+    };
 
-    if (statusParam) q = q.eq("status", statusParam);
-    if (kindParam) q = q.eq("kind", kindParam);
-    if (clientIdParam) q = q.eq("client_id", clientIdParam);
-    if (mineOnly) {
-      q = q.eq("author_id", userId);
-    } else {
-      // Non-mineOnly: leaders/admins see everything. Others see their
-      // own drafts + any pending draft of a kind they can approve.
-      // Implement by fetching everything they MIGHT see and filtering
-      // client-side — small table, cheap.
+    let { data, error, count } = await runQuery(true);
+    if (error && /dismissed_at/.test(error.message)) {
+      ({ data, error, count } = await runQuery(false));
     }
-
-    const { data, error } = await q;
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-    const allRows = (data ?? []) as DraftRow[];
+    const allRows = (data ?? []) as unknown as DraftRow[];
 
     let visible = allRows;
     if (!mineOnly) {
@@ -352,6 +368,17 @@ export async function GET(req: NextRequest) {
         );
       }
     }
+
+    // Total matching the query filters (kind/status/dismissed), ignoring the
+    // row limit, so the Auto-replies sub-tab label can show the true count
+    // (e.g. 527) even though only the newest `limit` rows render. Exact only
+    // for full-visibility callers (approvers/viewers); narrowed callers get
+    // their rendered count — they never hit the pile-up anyway.
+    const total = (!mineOnly &&
+      (isApprover({ name: me.name, role: me.role, isAdmin: me.isAdmin }) ||
+        isEmailApprovalsViewer({ email: me.email })))
+      ? (count ?? visible.length)
+      : visible.length;
 
     // Resolve author + approver names in one round-trip.
     const userIds = Array.from(new Set([
@@ -398,9 +425,11 @@ export async function GET(req: NextRequest) {
         scheduledFor: r.scheduled_for,
         revisionCount: Number(r.revision_count ?? 0),
         mediaUrls: Array.isArray(r.media_urls) ? r.media_urls : [],
+        dismissedAt: r.dismissed_at,
         createdAt: r.created_at,
         updatedAt: r.updated_at
-      }))
+      })),
+      total
     });
   } catch (err) {
     return NextResponse.json(

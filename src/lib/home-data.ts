@@ -1028,7 +1028,8 @@ export async function getNeedsYouCounts(args: {
       const { count } = await supabase
         .from("email_drafts")
         .select("id", { count: "exact", head: true })
-        .eq("status", "pending");
+        .eq("status", "pending")
+        .is("dismissed_at", null);
       approvalsPending = count ?? 0;
     } catch { /* migration not applied */ }
   }

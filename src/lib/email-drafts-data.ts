@@ -53,6 +53,11 @@ export async function listEmailDrafts(filters: ListFilters = {}): Promise<EmailD
   const supabase = getSupabaseAdmin();
   const limit = Math.min(500, Math.max(1, filters.limit ?? 100));
 
+  // Hide archived (dismissed) drafts by default so they leave the /emails
+  // page + per-client log the same way they leave the /approvals queue.
+  // Flipped off by the fallback below if the column isn't migrated yet.
+  let filterDismissed = true;
+
   const buildQuery = (includeScheduledFor: boolean, includeRevisionCount: boolean) => {
     const cols = [
       "id", "author_id", "client_id", "client_name",
@@ -67,6 +72,7 @@ export async function listEmailDrafts(filters: ListFilters = {}): Promise<EmailD
       .select(cols.join(", "))
       .order("created_at", { ascending: false })
       .limit(limit);
+    if (filterDismissed) q = q.is("dismissed_at", null);
     if (filters.clientId) q = q.eq("client_id", filters.clientId);
     if (filters.status) q = q.eq("status", filters.status);
     if (filters.kind) q = q.eq("kind", filters.kind);
@@ -78,6 +84,10 @@ export async function listEmailDrafts(filters: ListFilters = {}): Promise<EmailD
   // progressively fewer optional columns so the page still renders
   // during transitions.
   let result = await buildQuery(true, true);
+  if (result.error && /dismissed_at/.test(result.error.message)) {
+    filterDismissed = false;
+    result = await buildQuery(true, true);
+  }
   if (result.error && /revision_count/.test(result.error.message)) {
     result = await buildQuery(true, false);
   }

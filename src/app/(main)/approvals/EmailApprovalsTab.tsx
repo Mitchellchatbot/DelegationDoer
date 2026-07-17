@@ -4,7 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ClipboardCheck, Mail, Send, CheckCircle2, XCircle, Loader2,
   AlertTriangle, Edit2, ChevronDown, ChevronUp, RefreshCw, Clock,
-  MessageSquare, RotateCcw, History, GripVertical, CalendarClock
+  MessageSquare, RotateCcw, History, GripVertical, CalendarClock,
+  Archive, Bot
 } from "lucide-react";
 import { toast } from "sonner";
 import { PersonAvatar } from "@/components/PersonAvatar";
@@ -65,6 +66,7 @@ interface Draft {
   sendError: string | null;
   scheduledFor: string | null;
   revisionCount: number;
+  dismissedAt: string | null;
   createdAt: string;
 }
 
@@ -107,32 +109,60 @@ function kindLabel(kind: string): { label: string; tone: string } {
 }
 
 type Filter = "pending" | "needs_revision" | "all";
+// Kind-group sub-tabs: "client" = every non-auto kind (composed client
+// emails / EOD digests), "auto" = kind=auto_reply. Splitting them keeps a
+// flood of pending auto-replies from burying the emails people care about.
+type Group = "client" | "auto";
 
 export function EmailApprovalsTab() {
   const me = useCurrentUser();
   const viewerIsApprover = isApprover({ name: me.name, role: me.role, isAdmin: me.isAdmin });
-  const [drafts, setDrafts] = useState<Draft[]>([]);
+  // Two kind-groups fetched separately so each gets its own (server-capped)
+  // row budget — a pile of pending auto-replies can't push client emails out
+  // of the newest-100 window. Totals come from the server's exact count.
+  const [group, setGroup] = useState<Group>("client");
+  const [clientDrafts, setClientDrafts] = useState<Draft[]>([]);
+  const [autoDrafts, setAutoDrafts] = useState<Draft[]>([]);
+  const [clientTotal, setClientTotal] = useState(0);
+  const [autoTotal, setAutoTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<Filter>("pending");
+  // Auto-replies "Show archived" reveals dismissed rows so they can be
+  // restored; only meaningful on the auto group.
+  const [showArchived, setShowArchived] = useState(false);
+  const [busyBulk, setBusyBulk] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      // Always fetch the full visible set — the chip filter narrows the
-      // card list client-side, and the right-side calendar needs the
-      // whole schedule regardless of the active chip.
-      const res = await fetch(`/api/email-drafts?limit=200`, { cache: "no-store" });
-      if (!res.ok) throw new Error(`status ${res.status}`);
-      const data = await res.json();
-      setDrafts(data.drafts ?? []);
+      // Split fetch: client group (every non-auto kind) and auto group
+      // (kind=auto_reply) each get their own row budget. The auto group
+      // opts into archived rows only when "Show archived" is on.
+      const autoQs = showArchived
+        ? `kind=auto_reply&includeDismissed=1&limit=100`
+        : `kind=auto_reply&limit=100`;
+      const [clientRes, autoRes] = await Promise.all([
+        fetch(`/api/email-drafts?excludeKind=auto_reply&limit=100`, { cache: "no-store" }),
+        fetch(`/api/email-drafts?${autoQs}`, { cache: "no-store" })
+      ]);
+      if (!clientRes.ok) throw new Error(`client drafts ${clientRes.status}`);
+      if (!autoRes.ok) throw new Error(`auto-replies ${autoRes.status}`);
+      const [clientData, autoData] = await Promise.all([clientRes.json(), autoRes.json()]);
+      setClientDrafts(clientData.drafts ?? []);
+      setClientTotal(clientData.total ?? (clientData.drafts?.length ?? 0));
+      setAutoDrafts(autoData.drafts ?? []);
+      setAutoTotal(autoData.total ?? (autoData.drafts?.length ?? 0));
     } catch (err) {
       toast.error(`Couldn't load drafts: ${err instanceof Error ? err.message : "unknown"}`);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [showArchived]);
 
   useEffect(() => { void load(); }, [load]);
+
+  // Active group's rows drive the status chips + card list.
+  const drafts = group === "client" ? clientDrafts : autoDrafts;
 
   const pendingCount = drafts.filter((d) => d.status === "pending").length;
   const revisionCount = drafts.filter((d) => d.status === "needs_revision").length;
@@ -145,7 +175,7 @@ export function EmailApprovalsTab() {
   // Calendar-only projection of the drafts. Stays the full set —
   // chip filter shouldn't hide the team's send schedule.
   const calendarDrafts: CalendarDraft[] = useMemo(() =>
-    drafts.map((d) => ({
+    clientDrafts.map((d) => ({
       id: d.id,
       authorName: d.authorName,
       clientName: d.clientName,
@@ -158,8 +188,34 @@ export function EmailApprovalsTab() {
       sentAt: d.sentAt,
       createdAt: d.createdAt
     })),
-    [drafts]
+    [clientDrafts]
   );
+
+  // Archive every PENDING auto-reply (the queue-clogging ones) in one silent
+  // call (no Slack pings, no notes). Restore reverses it for the archived view.
+  const bulkArchive = useCallback(async (restore: boolean) => {
+    setBusyBulk(true);
+    try {
+      const res = await fetch(`/api/email-drafts/dismiss`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(
+          restore
+            ? { all: { kind: "auto_reply" }, restore: true }
+            : { all: { kind: "auto_reply", status: "pending" } }
+        )
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error ?? `status ${res.status}`);
+      const n = restore ? (data.restored ?? 0) : (data.dismissed ?? 0);
+      toast.success(`${restore ? "Restored" : "Archived"} ${n} auto-repl${n === 1 ? "y" : "ies"}`);
+      void load();
+    } catch (err) {
+      toast.error(`Couldn't ${restore ? "restore" : "archive"}: ${err instanceof Error ? err.message : "unknown"}`);
+    } finally {
+      setBusyBulk(false);
+    }
+  }, [load]);
 
   async function handleSchedule(draftId: string, isoTimestamp: string) {
     // Read-only viewers can't schedule — the calendar disables drag/drop for
@@ -182,13 +238,19 @@ export function EmailApprovalsTab() {
 
   return (
     <div className="space-y-5">
-      {/* PageHero now lives on the parent /approvals page so it's
-          shared across Emails / Meetings / Routing tabs. */}
-      {/* Two-column on lg+: calendar pinned to the LEFT (was right), email
-          drafts fill the rest. Flipped the order so the calendar sits in
-          what used to be wasted whitespace on the left of the viewport,
-          and stays in view as the user scrolls a long drafts list. */}
-      <div className="lg:grid lg:gap-5 lg:grid-cols-[340px_minmax(0,1fr)] space-y-5 lg:space-y-0">
+      {/* Sub-tabs split the queue by kind so a flood of pending auto-replies
+          can't bury composed client emails. Defaults to Client emails. */}
+      <GroupTabs
+        group={group}
+        onChange={setGroup}
+        clientTotal={clientTotal}
+        autoTotal={autoTotal}
+      />
+      {/* Client emails keep the two-column layout with the send-schedule
+          calendar pinned left. Auto-replies go full-width (the schedule is a
+          client-send concern) with a bulk archive bar instead. */}
+      <div className={cn("space-y-5", group === "client" && "lg:grid lg:gap-5 lg:grid-cols-[340px_minmax(0,1fr)] lg:space-y-0")}>
+        {group === "client" && (
         <aside className="hidden lg:block">
           <div className="sticky top-4 space-y-2">
             <div className="flex items-center justify-between">
@@ -205,13 +267,26 @@ export function EmailApprovalsTab() {
             </div>
           </div>
         </aside>
+        )}
 
         <div className="space-y-5 min-w-0">
           {/* Suggested EOD digests — clients with unreported work,
               grouped by whether their cadence-day is today. Approver
               can kick a draft on demand here without waiting for the
               daily cron. */}
-          <SuggestedDigestsCard readOnly={!viewerIsApprover} />
+          {group === "client" ? (
+            <SuggestedDigestsCard readOnly={!viewerIsApprover} />
+          ) : (
+            <AutoReplyBulkBar
+              total={autoTotal}
+              showArchived={showArchived}
+              onToggleArchived={() => setShowArchived((v) => !v)}
+              onArchiveAll={() => void bulkArchive(false)}
+              onRestoreAll={() => void bulkArchive(true)}
+              busy={busyBulk}
+              canManage={viewerIsApprover}
+            />
+          )}
 
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <div className="inline-flex items-center rounded-xl border border-slate-200/70 bg-white p-0.5">
@@ -276,6 +351,120 @@ export function EmailApprovalsTab() {
   );
 }
 
+function GroupTabs({
+  group, onChange, clientTotal, autoTotal
+}: {
+  group: Group;
+  onChange: (g: Group) => void;
+  clientTotal: number;
+  autoTotal: number;
+}) {
+  const tabs: Array<{ id: Group; label: string; count: number; icon: typeof Mail }> = [
+    { id: "client", label: "Client emails", count: clientTotal, icon: Mail },
+    { id: "auto",   label: "Auto-replies",  count: autoTotal,   icon: Bot }
+  ];
+  return (
+    <div className="inline-flex items-center rounded-xl border border-slate-200/70 bg-white p-0.5">
+      {tabs.map((t) => {
+        const Icon = t.icon;
+        const active = group === t.id;
+        return (
+          <button
+            key={t.id}
+            type="button"
+            onClick={() => onChange(t.id)}
+            className={cn(
+              "inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-medium transition-colors",
+              active ? "bg-accent/10 text-accent" : "text-ink/60 hover:text-ink"
+            )}
+          >
+            <Icon className="w-3.5 h-3.5" />
+            {t.label}
+            <span className={cn(
+              "inline-flex items-center justify-center min-w-[20px] px-1.5 h-5 rounded-full text-[10px] font-semibold",
+              active ? "bg-accent/15 text-accent" : "bg-slate-100 text-ink/55"
+            )}>
+              {t.count}
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// Bulk toolbar for the Auto-replies sub-tab. Archive clears the pending pile
+// from the queue without emailing anyone (recoverable); Show archived reveals
+// dismissed rows so they can be restored.
+function AutoReplyBulkBar({
+  total, showArchived, onToggleArchived, onArchiveAll, onRestoreAll, busy, canManage
+}: {
+  total: number;
+  showArchived: boolean;
+  onToggleArchived: () => void;
+  onArchiveAll: () => void;
+  onRestoreAll: () => void;
+  busy: boolean;
+  canManage: boolean;
+}) {
+  return (
+    <div className="card p-4 flex items-start justify-between gap-3 flex-wrap">
+      <div className="min-w-0">
+        <div className="text-sm font-semibold text-ink inline-flex items-center gap-2">
+          <Bot className="w-4 h-4 text-amber-500" /> Auto-reply drafts
+        </div>
+        <p className="text-[12px] text-ink/60 mt-0.5 max-w-xl">
+          AI-drafted acknowledgements queued from inbound email. Nothing sends
+          without an approval. Archive clears them from the queue without
+          emailing anyone; they stay recoverable under Show archived.
+        </p>
+      </div>
+      <div className="flex items-center gap-2 flex-wrap shrink-0">
+        <button
+          type="button"
+          onClick={onToggleArchived}
+          className={cn(
+            "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border transition-colors",
+            showArchived
+              ? "bg-accent/10 text-accent border-accent/30"
+              : "bg-white text-ink/70 border-slate-200 hover:text-ink hover:border-slate-300"
+          )}
+        >
+          <Archive className="w-3 h-3" /> {showArchived ? "Hide archived" : "Show archived"}
+        </button>
+        {canManage && (
+          <button
+            type="button"
+            onClick={onArchiveAll}
+            disabled={busy || total === 0}
+            className={cn(
+              "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold text-white shadow-sm transition-all hover:-translate-y-0.5 active:scale-95",
+              (busy || total === 0) && "opacity-60 cursor-not-allowed hover:translate-y-0"
+            )}
+            style={{ background: "linear-gradient(135deg, #dc2626 0%, #b91c1c 100%)" }}
+          >
+            {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : <Archive className="w-3 h-3" />} Archive all pending
+          </button>
+        )}
+        {canManage && showArchived && (
+          <button
+            type="button"
+            onClick={onRestoreAll}
+            disabled={busy}
+            className={cn(
+              "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold text-white shadow-sm transition-all hover:-translate-y-0.5 active:scale-95",
+              busy && "opacity-60 cursor-not-allowed hover:translate-y-0"
+            )}
+            style={{ background: "linear-gradient(135deg, #0a4099 0%, #063270 100%)" }}
+          >
+            {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : <RotateCcw className="w-3 h-3" />} Restore all
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function DraftCard({
   draft, meId, viewerIsApprover, viewerRole, viewerDeptIds, onChanged
 }: {
@@ -292,6 +481,7 @@ function DraftCard({
   const isSent = draft.status === "sent";
   const isRejected = draft.status === "rejected";
   const isApproved = draft.status === "approved";
+  const isDismissed = !!draft.dismissedAt;
   const isAuthor = draft.authorId === meId;
   // Can this viewer ACT on THIS draft? Mirrors server-side canApproveDraft:
   // a universal approver, or the head of the draft's own department. Read-only
@@ -304,7 +494,7 @@ function DraftCard({
 
   const [expanded, setExpanded] = useState(isPending || isNeedsRevision);
   const [editing, setEditing] = useState(false);
-  const [busy, setBusy] = useState<"approve" | "reject" | "save" | "feedback" | "revision" | "resubmit" | null>(null);
+  const [busy, setBusy] = useState<"approve" | "reject" | "save" | "feedback" | "revision" | "resubmit" | "archive" | null>(null);
   const [rejectNote, setRejectNote] = useState("");
   const [showRejectBox, setShowRejectBox] = useState(false);
   const [feedbackNote, setFeedbackNote] = useState("");
@@ -418,6 +608,27 @@ function DraftCard({
       onChanged();
     } catch (err) {
       toast.error(`Couldn't reject: ${err instanceof Error ? err.message : "unknown"}`);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  // Silent archive/restore for auto-replies — hits /dismiss (no Slack DM, no
+  // note), unlike reject. Powers the Auto-replies sub-tab's per-card action.
+  async function archive(restore: boolean) {
+    setBusy("archive");
+    try {
+      const res = await fetch(`/api/email-drafts/dismiss`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: [draft.id], restore })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error ?? `status ${res.status}`);
+      toast.success(restore ? "Restored" : "Archived");
+      onChanged();
+    } catch (err) {
+      toast.error(`Couldn't ${restore ? "restore" : "archive"}: ${err instanceof Error ? err.message : "unknown"}`);
     } finally {
       setBusy(null);
     }
@@ -664,6 +875,11 @@ function DraftCard({
                   <RotateCcw className="w-3 h-3" /> Needs revision
                 </span>
               )}
+              {isDismissed && (
+                <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200/70">
+                  <Archive className="w-3 h-3" /> Archived
+                </span>
+              )}
             </div>
             <div className="text-[11px] text-ink/55 mt-0.5">
               <span className="font-medium text-ink/70">{draft.clientName}</span>
@@ -880,7 +1096,7 @@ function DraftCard({
           )}
 
           {/* Action bar. Switches by status + viewer role. */}
-          {!editing && !showRejectBox && !showFeedbackBox && !showRevisionBox && !showResubmitBox && (isPending || isFailed || isNeedsRevision) && (
+          {!editing && !showRejectBox && !showFeedbackBox && !showRevisionBox && !showResubmitBox && !isDismissed && (isPending || isFailed || isNeedsRevision) && (
             <div className="space-y-2 pt-1">
               {/* Send-from picker — only relevant when sending is the next action. */}
               {canApproveThisDraft && sendFromOptions.length > 0 && (isPending || isFailed) && (
@@ -908,6 +1124,17 @@ function DraftCard({
                 </div>
               )}
               <div className="flex items-center justify-end gap-2 flex-wrap">
+                {draft.kind === "auto_reply" && canApproveThisDraft && (
+                  <button
+                    type="button"
+                    onClick={() => void archive(false)}
+                    disabled={busy === "archive"}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium text-ink/70 bg-white border border-slate-200 hover:border-slate-400/60 hover:text-ink transition-colors"
+                    title="Hide this auto-reply from the queue — no email sent, recoverable under Show archived"
+                  >
+                    {busy === "archive" ? <Loader2 className="w-3 h-3 animate-spin" /> : <Archive className="w-3 h-3" />} Archive
+                  </button>
+                )}
                 {viewerIsApprover && (
                   <button
                     type="button"
@@ -976,6 +1203,19 @@ function DraftCard({
           {/* Approver-only "Add comment" on terminal states so the
               leader can leave a retrospective note. Authors don't get
               this surface — their only path is edit + resubmit. */}
+          {isDismissed && canApproveThisDraft && !editing && (
+            <div className="flex items-center justify-end pt-1">
+              <button
+                type="button"
+                onClick={() => void archive(true)}
+                disabled={busy === "archive"}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium text-ink/70 bg-white border border-slate-200 hover:border-emerald-400/50 hover:text-emerald-700 transition-colors"
+              >
+                {busy === "archive" ? <Loader2 className="w-3 h-3 animate-spin" /> : <RotateCcw className="w-3 h-3" />} Restore
+              </button>
+            </div>
+          )}
+
           {viewerIsApprover && !editing && !showFeedbackBox && (isSent || isRejected || isApproved) && (
             <div className="flex items-center justify-end pt-1">
               <button

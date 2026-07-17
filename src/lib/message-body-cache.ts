@@ -75,6 +75,38 @@ export function fetchDeferredBody(
   return signal ? withSignal(req, signal) : req;
 }
 
+// Bulk pre-warm every deferred body in a thread in the background, so expanding
+// any collapsed message is instant (its body is already cached). Concurrency-
+// capped so a long chain doesn't fire dozens of requests at once. Skips bodies
+// already cached or in flight; the on-expand path (fetchDeferredBody) dedupes
+// against these, and getCachedBody lets the card render with no loading flash
+// once warmed. Fire-and-forget — errors are swallowed (a later expand retries).
+const MAX_BODY_PREFETCH = 5;
+
+export function prefetchThreadBodies(
+  messages: Array<{ id: string; body_deferred?: boolean | null; body_html?: string | null }>,
+  accountId: string,
+  threadId: string
+): void {
+  const ids = messages
+    .filter((m) => m.body_deferred && !m.body_html && !resolved.has(m.id) && !inFlight.has(m.id))
+    .map((m) => m.id);
+  if (ids.length === 0) return;
+  let idx = 0;
+  let active = 0;
+  const pump = () => {
+    while (active < MAX_BODY_PREFETCH && idx < ids.length) {
+      const id = ids[idx++];
+      if (resolved.has(id) || inFlight.has(id)) continue;
+      active++;
+      fetchDeferredBody(id, accountId, threadId)
+        .catch(() => {})
+        .finally(() => { active--; pump(); });
+    }
+  };
+  pump();
+}
+
 // Wrap a shared promise so the caller's await rejects on its own abort signal
 // without cancelling the underlying (possibly shared) request.
 function withSignal<T>(p: Promise<T>, signal: AbortSignal): Promise<T> {

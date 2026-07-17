@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Send, Inbox, Paperclip, SendHorizontal, Reply, Loader2 } from "lucide-react";
 import type { MissiveMessage } from "@/lib/missive-client";
 import { shortName, rawEmail, formatBytes, messageSnippet } from "@/lib/email-format";
-import { fetchDeferredBody } from "@/lib/message-body-cache";
+import { fetchDeferredBody, prefetchThreadBodies, getCachedBody } from "@/lib/message-body-cache";
 import { Avatar } from "@/components/Avatar";
 import { ForwardButton } from "@/components/ForwardButton";
 import { EmailBody } from "@/components/EmailBody";
@@ -55,6 +55,13 @@ export function ThreadMessages({
       messages.length ? new Set([messages[messages.length - 1].id]) : null
     );
   }, [messages]);
+
+  // Bulk pre-warm every deferred (collapsed) body in the background the moment
+  // the thread opens — kept collapsed, just held in the client cache — so
+  // expanding any message is instant instead of fetching on click.
+  useEffect(() => {
+    prefetchThreadBodies(messages, accountId, threadId);
+  }, [messages, accountId, threadId]);
 
   const lastId = messages.length ? messages[messages.length - 1].id : null;
   const toggleMsg = useCallback(
@@ -275,9 +282,20 @@ function DeferredMessageBody({
     | { status: "loading" }
     | { status: "error" }
     | { status: "ready"; html: string | null; text: string | null }
-  >({ status: "loading" });
+  >(() => {
+    // Usually already warmed by the thread's bulk prefetch → render instantly.
+    const cached = getCachedBody(messageId);
+    return cached
+      ? { status: "ready", html: cached.body_html, text: cached.body_text }
+      : { status: "loading" };
+  });
 
   useEffect(() => {
+    const cached = getCachedBody(messageId);
+    if (cached) {
+      setState({ status: "ready", html: cached.body_html, text: cached.body_text });
+      return;
+    }
     const ac = new AbortController();
     setState({ status: "loading" });
     fetchDeferredBody(messageId, accountId, threadId, ac.signal)

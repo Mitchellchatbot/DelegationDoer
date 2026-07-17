@@ -6,7 +6,7 @@ import { useEffect, useMemo, useRef } from "react";
 import { Inbox, MessageSquare, ExternalLink } from "lucide-react";
 import { cn, initials as nameInitials } from "@/lib/utils";
 import { useInboxSplit } from "@/components/InboxSplit";
-import { prefetchThread } from "@/lib/thread-cache";
+import { prefetchThread, prefetchThreadChain } from "@/lib/thread-cache";
 import type { MissiveThread } from "@/lib/missive-client";
 import { InboxFavicon } from "./InboxFavicon";
 
@@ -149,6 +149,30 @@ export function ThreadRow({ thread, href, unread, index, accountId, threadId, mi
     prefetchThread(threadId, accountId);
   }
 
+  // Also warm the FULL message chain (every collapsed body) so expanding any
+  // message after opening is instant. Gated behind a short hover dwell so we
+  // don't fan out body fetches for rows the cursor merely skims past; mousedown
+  // and focus (committed intent) trigger it immediately.
+  const chainDwellRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  function warmChainSoon() {
+    if (chainDwellRef.current) return;
+    chainDwellRef.current = setTimeout(() => {
+      chainDwellRef.current = null;
+      prefetchThreadChain(threadId, accountId);
+    }, 180);
+  }
+  function cancelChainWarm() {
+    if (chainDwellRef.current) {
+      clearTimeout(chainDwellRef.current);
+      chainDwellRef.current = null;
+    }
+  }
+  function warmChainNow() {
+    cancelChainWarm();
+    prefetchThreadChain(threadId, accountId);
+  }
+  useEffect(() => () => cancelChainWarm(), []);
+
   const avatarTone = useMemo(
     () => AVATAR_TONES[hashStringToIndex(senderRaw || "?", AVATAR_TONES.length)],
     [senderRaw]
@@ -170,9 +194,11 @@ export function ThreadRow({ thread, href, unread, index, accountId, threadId, mi
       <Link
         href={href}
         onClick={openInPane}
-        onMouseEnter={warm}
-        onMouseDown={warm}
-        onFocus={warm}
+        onMouseEnter={() => { warm(); warmChainSoon(); }}
+        onMouseLeave={cancelChainWarm}
+        onMouseDown={() => { warm(); warmChainNow(); }}
+        onFocus={() => { warm(); warmChainNow(); }}
+        onBlur={cancelChainWarm}
         aria-current={selected ? "true" : undefined}
         className={cn(
           "relative flex items-center gap-3 px-3 py-2.5 border-b border-slate-100/80",

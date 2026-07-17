@@ -1,6 +1,7 @@
 "use client";
 
 import type { ThreadDetailData } from "@/components/ThreadConversation";
+import { prefetchThreadBodies } from "@/lib/message-body-cache";
 
 // Client-side cache for opened email threads. Two goals:
 //   1. Stale-while-revalidate: re-opening a thread you've already viewed renders
@@ -111,6 +112,17 @@ export function prefetchThread(threadId: string, accountId: string): void {
       });
   });
   pumpPrefetchQueue();
+}
+
+// Warm a thread's detail AND its full message chain (every collapsed body), so
+// that opening it and then expanding any message is instant. Heavier than a
+// plain detail prefetch (it fans out to the per-message body endpoint), so
+// callers gate it behind real intent (a hover dwell / mousedown), not the
+// viewport sweep. Dedupes at every layer, so repeat calls are cheap.
+export function prefetchThreadChain(threadId: string, accountId: string): void {
+  fetchThread(threadId, accountId)
+    .then((data) => prefetchThreadBodies(data.messages, accountId, threadId))
+    .catch(() => {});
 }
 
 // Wrap a shared promise so the caller's await rejects on its own abort signal

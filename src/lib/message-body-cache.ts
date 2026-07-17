@@ -90,7 +90,11 @@ export function prefetchThreadBodies(
 ): void {
   const ids = messages
     .filter((m) => m.body_deferred && !m.body_html && !resolved.has(m.id) && !inFlight.has(m.id))
-    .map((m) => m.id);
+    .map((m) => m.id)
+    // Newest-deferred first: messages are ordered oldest→newest, and the reader
+    // works down from the (inline) latest, so warm the ones nearest the bottom
+    // — the most-likely-next expands — before the old ones at the top.
+    .reverse();
   if (ids.length === 0) return;
   let idx = 0;
   let active = 0;

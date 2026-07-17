@@ -2,7 +2,7 @@ import { notFound, redirect } from "next/navigation";
 import { Mail, PenSquare } from "lucide-react";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
-import { listAccounts, listThreadsPaged, type MissiveThread } from "@/lib/missive-client";
+import { listAccountsCached, listThreadsPaged, INBOX_SSR_PAGE, type MissiveThread } from "@/lib/missive-client";
 import { visibleAccountIdsFor } from "@/lib/inbox-access";
 import { readStateForThreads, isThreadUnread } from "@/lib/thread-read-state";
 import { InboxThreadsClient } from "@/components/InboxThreadsClient";
@@ -46,13 +46,15 @@ export default async function InboxThreadsPage({
   let inboxEmail = "";
   let fetchError: string | null = null;
   try {
-    // SSR the first 50 — the client component handles infinite scroll
+    // SSR a small first page — the client component handles infinite scroll
     // + search via /api/inboxes/threads from there. mailboxId is
     // critical: without it, listThreadsPaged returns the whole
-    // workspace, leaking other inboxes into this view.
+    // workspace, leaking other inboxes into this view. Accounts come from the
+    // cross-request cache (≈0ms warm) so the thread list is the only real
+    // round-trip left on the critical path.
     const [allAccounts, firstPage] = await Promise.all([
-      listAccounts(),
-      listThreadsPaged({ folder: "INBOX", limit: 50, mailboxId: params.accountId })
+      listAccountsCached(),
+      listThreadsPaged({ folder: "INBOX", limit: INBOX_SSR_PAGE, mailboxId: params.accountId })
     ]);
     const account = allAccounts.find((a) => a.id === params.accountId);
     if (!account) notFound();

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { revalidateTag } from "next/cache";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { deleteAccount } from "@/lib/missive-client";
@@ -59,6 +60,10 @@ export async function DELETE(
       .from("inbox_assignments")
       .delete()
       .eq("missive_account_id", params.id);
+
+    // The account is gone from the workspace — bust the cached account list
+    // so the inbox views stop showing it right away.
+    revalidateTag("missive-accounts");
 
     return NextResponse.json({ ok: true, mode: "deleted" });
   } catch (err) {

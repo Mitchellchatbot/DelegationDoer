@@ -4,7 +4,7 @@
 // that haven't been ported yet, but is no longer the source of truth on the
 // server.
 
-import { cache } from "react";
+import { cache } from "@/lib/safe-cache";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import type { Department, Task, User } from "@/lib/types";
 

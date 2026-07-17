@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import { Mail, Inbox } from "lucide-react";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
-import { listAccounts, listThreadsPaged, type MissiveThread } from "@/lib/missive-client";
+import { listAccountsCached, listThreadsPaged, INBOX_SSR_PAGE, type MissiveThread } from "@/lib/missive-client";
 import { visibleAccountIdsFor } from "@/lib/inbox-access";
 import { InboxThreadsClient } from "@/components/InboxThreadsClient";
 import { ComposeButton } from "@/components/ComposeButton";
@@ -40,7 +40,7 @@ export default async function AllInboxesPage({
     // workspace and filtering in JS (which broke offset/hasMore and left
     // the combined view stuck on "Loading more…" forever).
     const [allAccounts, visibleIds] = await Promise.all([
-      listAccounts(),
+      listAccountsCached(),
       visibleAccountIdsFor(me)
     ]);
 
@@ -60,7 +60,7 @@ export default async function AllInboxesPage({
       // else is scoped to exactly their visible inbox ids.
       const firstPage = await listThreadsPaged({
         folder: "INBOX",
-        limit: 50,
+        limit: INBOX_SSR_PAGE,
         mailboxIds: visibleIds === null ? undefined : inboxes.map((a) => a.id)
       });
       // Defensive backstop (no-op against an up-to-date backend that honors

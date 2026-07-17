@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { revalidateTag } from "next/cache";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { createAccount } from "@/lib/missive-client";
@@ -94,6 +95,11 @@ export async function POST(req: NextRequest) {
         console.warn("[inboxes/accounts] auto-assignment failed:", err);
       }
     }
+
+    // A new connected account changes the workspace account list — bust the
+    // cross-request cache so it shows up on the inbox views immediately
+    // instead of waiting out listAccountsCached's TTL.
+    revalidateTag("missive-accounts");
 
     return NextResponse.json({ ok: true, account });
   } catch (err) {

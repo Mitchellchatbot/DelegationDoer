@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
-import { listAccounts, type MissiveAccount } from "@/lib/missive-client";
+import { listAccountsCached, type MissiveAccount } from "@/lib/missive-client";
 import {
   visibleAccountIdsFor, canManageAssignments
 } from "@/lib/inbox-access";
@@ -27,7 +27,7 @@ export default async function InboxesLayout({
   let accounts: MissiveAccount[] = [];
   try {
     const [fetched, visibleIds] = await Promise.all([
-      listAccounts(),
+      listAccountsCached(),
       visibleAccountIdsFor(me)
     ]);
     accounts =

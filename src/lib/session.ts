@@ -8,7 +8,7 @@
 //    yet share session cookies. Removed when the widget gets its own auth
 //    flow in Phase 4.
 
-import { cache } from "react";
+import { cache } from "@/lib/safe-cache";
 import { getSupabaseServer } from "@/lib/supabase-server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 

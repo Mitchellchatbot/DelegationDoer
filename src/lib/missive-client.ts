@@ -7,7 +7,8 @@
 //   MISSIVE_API_TOKEN  — long-lived JWT issued by the clone for our service
 //                        account. Pull from missive UI's localStorage for now.
 
-import { cache } from "react";
+import { cache } from "@/lib/safe-cache";
+import { unstable_cache } from "next/cache";
 
 export interface MissiveAccount {
   id: string;
@@ -144,16 +145,45 @@ async function missiveFetch<T>(path: string, init: RequestInit = {}): Promise<T>
 // request, so the copies fetched by visibleAccountIdsFor and loadThreadDetail
 // (and any other caller in the same request) collapse to ONE clone round-trip.
 // React's cache() is keyed by args; listAccounts takes none, so one call/request.
-export const listAccounts = cache(
-  async function listAccounts(): Promise<MissiveAccount[]> {
-    // The clone returns { accounts: [...] }. If you've extended it, adjust here.
-    const data = await missiveFetch<{ accounts: MissiveAccount[] }>("/api/accounts");
-    return (data.accounts ?? []).map((a) => ({
-      ...a,
-      last_synced_at: a.last_synced_at ? toIsoString(a.last_synced_at) : null
-    }));
-  }
+// The raw clone round-trip. Kept as a plain function so BOTH the request-scoped
+// listAccounts (React cache) and the cross-request listAccountsCached
+// (unstable_cache) can wrap it directly — nesting React's cache() inside
+// unstable_cache's callback is unsafe, since revalidation can run outside a
+// request scope where cache() isn't valid.
+async function fetchAccounts(): Promise<MissiveAccount[]> {
+  // The clone returns { accounts: [...] }. If you've extended it, adjust here.
+  const data = await missiveFetch<{ accounts: MissiveAccount[] }>("/api/accounts");
+  return (data.accounts ?? []).map((a) => ({
+    ...a,
+    last_synced_at: a.last_synced_at ? toIsoString(a.last_synced_at) : null
+  }));
+}
+
+// `cache` here is the runtime-safe wrapper (see safe-cache): the real React
+// cache() in an RSC render, a pass-through when this module is loaded from the
+// instrumentation/cron runtime where cache() doesn't exist.
+export const listAccounts = cache(fetchAccounts);
+
+// Cross-request cached variant of listAccounts for the hot READ paths (the
+// inbox list/detail pages). The connected-account list changes only when an
+// inbox is connected or disconnected, so a short TTL removes the ~1s
+// /api/accounts round-trip from most page loads (React's cache() only
+// de-dupes within a single request). Access checks and the manage/mutation
+// paths keep calling listAccounts() so they stay request-fresh. To reflect a
+// connect/disconnect immediately instead of waiting out the TTL, call
+// revalidateTag("missive-accounts") from that mutation.
+export const listAccountsCached = unstable_cache(
+  fetchAccounts,
+  ["missive-accounts-v1"],
+  { revalidate: 60, tags: ["missive-accounts"] }
 );
+
+// SSR only a small first page of threads; the client's infinite scroll
+// (InboxThreadsClient streams the rest in on scroll). The clone's
+// /api/threads cost scales ~linearly with the row count (it computes a
+// snippet + account_emails per thread), so a smaller first page is a large
+// TTFB win with no data lost — hasMore stays true and the client backfills.
+export const INBOX_SSR_PAGE = 25;
 
 export async function listTeamMembers(): Promise<MissiveTeamMember[]> {
   const data = await missiveFetch<{ members: MissiveTeamMember[] }>("/api/auth/team");

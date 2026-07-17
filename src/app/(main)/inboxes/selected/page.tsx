@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import { Inbox } from "lucide-react";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
-import { listAccounts, listThreadsPaged, type MissiveThread } from "@/lib/missive-client";
+import { listAccountsCached, listThreadsPaged, INBOX_SSR_PAGE, type MissiveThread } from "@/lib/missive-client";
 import { visibleAccountIdsFor } from "@/lib/inbox-access";
 import { getSelectedInboxIds } from "@/lib/selected-inboxes";
 import { ComposeButton } from "@/components/ComposeButton";
@@ -29,7 +29,7 @@ export default async function SelectedInboxesPage() {
   let fetchError: string | null = null;
   try {
     const [allAccounts, visibleIds, storedIds] = await Promise.all([
-      listAccounts(),
+      listAccountsCached(),
       visibleAccountIdsFor(me),
       getSelectedInboxIds(userId)
     ]);
@@ -47,7 +47,7 @@ export default async function SelectedInboxesPage() {
       // scroll via /api/inboxes/threads with the same selected scope.
       const firstPage = await listThreadsPaged({
         folder: "INBOX",
-        limit: 50,
+        limit: INBOX_SSR_PAGE,
         mailboxIds: selectedAccounts.map((a) => a.id)
       });
       // Defensive backstop mirroring /api/inboxes/threads: clamp to the

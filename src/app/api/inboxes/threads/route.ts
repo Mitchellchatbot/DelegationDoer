@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { visibleAccountIdsFor } from "@/lib/inbox-access";
-import { listAccounts, listThreadsPaged } from "@/lib/missive-client";
+import { listAccountsCached, listThreadsPaged } from "@/lib/missive-client";
 import { readStateForThreads, isThreadUnread } from "@/lib/thread-read-state";
 
 export const dynamic = "force-dynamic";
@@ -58,7 +58,7 @@ export async function GET(req: NextRequest) {
     // raw (pre-filter) page, the cursor drifted and the list never finished
     // loading. Scoping by mailbox id(s) makes pagination exact instead.
     const [accounts, visibleIds] = await Promise.all([
-      listAccounts(),
+      listAccountsCached(),
       visibleAccountIdsFor(me)
     ]);
     const visibleAccounts = visibleIds === null

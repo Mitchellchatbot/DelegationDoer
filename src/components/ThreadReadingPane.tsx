@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { Mail, Loader2, AlertCircle, ChevronLeft } from "lucide-react";
 import { ThreadConversation, type ThreadDetailData } from "@/components/ThreadConversation";
-import { useInboxSplit } from "@/components/InboxSplit";
+import { useInboxSplit, type ThreadPreview } from "@/components/InboxSplit";
 import { fetchThread, getCachedThread } from "@/lib/thread-cache";
 import { useIsMobile } from "@/lib/use-is-mobile";
 
@@ -78,9 +78,16 @@ export function ThreadReadingPane() {
       )}
       {state.status === "idle" && <Empty />}
       {state.status === "loading" && (
-        <Centered>
-          <Loader2 className="w-5 h-5 animate-spin text-accent" />
-        </Centered>
+        // Cold open: if the row handed us a preview, paint the header + a body
+        // skeleton immediately so it feels instant. Fall back to a spinner only
+        // when we have nothing to show (e.g. a deep-link open with no list row).
+        selected?.preview ? (
+          <ThreadOpeningSkeleton preview={selected.preview} />
+        ) : (
+          <Centered>
+            <Loader2 className="w-5 h-5 animate-spin text-accent" />
+          </Centered>
+        )
       )}
       {state.status === "error" && (
         <Centered>
@@ -106,6 +113,52 @@ export function ThreadReadingPane() {
 
 function Centered({ children }: { children: React.ReactNode }) {
   return <div className="grid place-items-center min-h-[300px]">{children}</div>;
+}
+
+// Instant placeholder shown on a cold open, built purely from the list row's
+// data (no fetch). Subject + sender + date land immediately; the body area is a
+// shimmer that the real conversation replaces the moment the fetch resolves.
+function ThreadOpeningSkeleton({ preview }: { preview: ThreadPreview }) {
+  const from = cleanFrom(preview.from);
+  return (
+    <div className="p-4">
+      <h2 className="text-lg font-semibold text-ink leading-snug">
+        {preview.subject || "(no subject)"}
+      </h2>
+      <div className="mt-1 flex items-center gap-2 text-sm text-ink/60">
+        {from && <span className="font-medium text-ink/80">{from}</span>}
+        {preview.date && <span>· {shortWhen(preview.date)}</span>}
+      </div>
+      {preview.snippet && (
+        <p className="mt-3 text-sm text-ink/70 line-clamp-3">{preview.snippet}</p>
+      )}
+      <div className="mt-5 space-y-2.5 animate-pulse" aria-hidden>
+        <div className="h-3 rounded bg-slate-200/70 w-11/12" />
+        <div className="h-3 rounded bg-slate-200/70 w-full" />
+        <div className="h-3 rounded bg-slate-200/70 w-4/5" />
+        <div className="h-3 rounded bg-slate-200/70 w-10/12" />
+        <div className="h-3 rounded bg-slate-200/70 w-2/3" />
+      </div>
+      <div className="mt-4 flex items-center gap-1.5 text-xs text-ink/40">
+        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+        Loading conversation…
+      </div>
+    </div>
+  );
+}
+
+// Strip a display name out of `"Name" <addr@host>`; otherwise show as-is.
+function cleanFrom(addr: string): string {
+  const m = addr.match(/^"?([^<"]+?)"?\s*<[^>]+>$/);
+  return (m ? m[1] : addr).trim();
+}
+
+function shortWhen(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleString(undefined, {
+    month: "short", day: "numeric", hour: "numeric", minute: "2-digit"
+  });
 }
 
 function Empty() {

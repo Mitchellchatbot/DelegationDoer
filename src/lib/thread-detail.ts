@@ -1,5 +1,5 @@
 import "server-only";
-import { getThread, listAccounts } from "@/lib/missive-client";
+import { getThread, listAccountsCached } from "@/lib/missive-client";
 import type { MissiveMessage } from "@/lib/missive-client";
 import { visibleAccountIdsFor } from "@/lib/inbox-access";
 import { getUserById } from "@/lib/server-data";
@@ -55,10 +55,11 @@ export async function loadThreadDetail(
     return { ok: false, status: 403, error: "Access denied" };
   }
 
-  // getThread and listAccounts are independent clone round-trips, so fire them
-  // together instead of back-to-back — this drops one full RTT off the critical
-  // path. listAccounts is request-memoized (see missive-client), so the copy
-  // visibleAccountIdsFor may already have fetched is reused, not re-requested.
+  // getThread and the account list are independent clone round-trips, so fire
+  // them together instead of back-to-back — this drops one full RTT off the
+  // critical path. listAccountsCached is cross-request cached (see
+  // missive-client), so on a warm cache it resolves without a clone round-trip
+  // at all and getThread is the only real latency here.
   let detail;
   let allAccounts;
   try {
@@ -67,7 +68,7 @@ export async function loadThreadDetail(
       // and fetches older bodies on expand — so ship just the latest body + a
       // snippet per message. This is the ONLY caller that opts in.
       getThread(threadId, { deferBodies: true }),
-      listAccounts().catch(() => [])
+      listAccountsCached().catch(() => [])
     ]);
   } catch (err) {
     return {

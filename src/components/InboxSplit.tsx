@@ -27,14 +27,26 @@ import { useIsMobile } from "@/lib/use-is-mobile";
 // history.replaceState keeps the list mounted and untouched while still syncing
 // the URL for refresh/deep-link.
 
+// Lightweight thread summary the list row already has on hand (no fetch). Passed
+// through select() so the reading pane can paint a header INSTANTLY on a cold
+// open — subject/sender/date show immediately while the full thread loads,
+// instead of a bare spinner.
+export interface ThreadPreview {
+  subject: string;
+  from: string;
+  snippet?: string | null;
+  date?: string | null;
+}
+
 interface Selected {
   accountId: string;
   threadId: string;
+  preview?: ThreadPreview;
 }
 
 interface InboxSplitCtx {
   selected: Selected | null;
-  select: (accountId: string, threadId: string) => void;
+  select: (accountId: string, threadId: string, preview?: ThreadPreview) => void;
   // Clear the open thread (mobile "‹ Back": pane → list). Also strips the
   // thread/acct URL params so a refresh doesn't reopen it.
   clearSelection: () => void;
@@ -73,8 +85,8 @@ export function InboxSplit({ children }: { children: ReactNode }) {
   });
   const [readIds, setReadIds] = useState<Set<string>>(() => new Set());
 
-  const select = useCallback((accountId: string, threadId: string) => {
-    setSelected({ accountId, threadId });
+  const select = useCallback((accountId: string, threadId: string, preview?: ThreadPreview) => {
+    setSelected({ accountId, threadId, preview });
     // Keep the address bar in sync WITHOUT a Next navigation (no SSR re-run, so
     // the list isn't reset). replaceState avoids stacking history entries.
     try {

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { motion } from "framer-motion";
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import { Inbox, MessageSquare, ExternalLink } from "lucide-react";
 import { cn, initials as nameInitials } from "@/lib/utils";
 import { useInboxSplit } from "@/components/InboxSplit";
@@ -94,13 +94,29 @@ export function ThreadRow({ thread, href, unread, index, accountId, threadId, mi
   const messageCount = thread.message_count ?? null;
   const time = relativeMail(thread.last_message_at);
 
+  // Eagerly warm the first few rows on mount, so clicking a top thread right
+  // after the list loads (before any hover) still opens instantly — the ~1.1s
+  // getThread round-trip runs up front instead of after the click. Hover/focus
+  // still cover the rest of the list. The cache dedupes, so this is cheap.
+  useEffect(() => {
+    if (index < 3) prefetchThread(threadId, accountId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [threadId, accountId]);
+
   // Plain left-click opens the email in the reading pane via client-local state
   // (no navigation/SSR, so the list keeps its scroll + loaded pages). Modifier/
   // middle clicks fall through to the <Link> so "open in new tab" still works.
   function openInPane(e: React.MouseEvent<HTMLAnchorElement>) {
     if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
     e.preventDefault();
-    select(accountId, threadId);
+    // Hand the pane what we already know so it can paint a header instantly
+    // (no bare spinner) while the full thread loads.
+    select(accountId, threadId, {
+      subject: thread.subject,
+      from: senderRaw,
+      snippet: thread.last_snippet,
+      date: thread.last_message_at
+    });
   }
 
   // Warm the thread cache before the click lands. Hover starts it early;

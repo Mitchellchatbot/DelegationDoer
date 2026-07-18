@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AtSign, Inbox, ExternalLink, Maximize2, Minimize2 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import type { MissiveThread, MissiveMessage } from "@/lib/missive-client";
+import { rawEmail } from "@/lib/email-format";
 import { CreateTaskFromThreadButton } from "@/components/CreateTaskFromThreadButton";
 import { ReplyComposer } from "@/components/ReplyComposer";
 import { ThreadAutoMarkRead } from "@/components/ThreadAutoMarkRead";
@@ -64,6 +65,24 @@ export function ThreadConversation({
       window.removeEventListener("keydown", onKey);
     };
   }, [maximized]);
+
+  // Every address that appears anywhere in this thread (senders + recipients +
+  // participants), deduped and lower-cased. Handed to the reply composer so it
+  // can warn before a reply goes to someone who isn't part of the conversation.
+  const threadAddresses = useMemo(() => {
+    const set = new Set<string>();
+    const add = (addr: string | null | undefined) => {
+      const e = addr ? rawEmail(addr).toLowerCase() : "";
+      if (e) set.add(e);
+    };
+    for (const m of messages) {
+      add(m.from_addr);
+      m.to_addrs?.forEach(add);
+      m.cc_addrs?.forEach(add);
+    }
+    thread.participants?.forEach(add);
+    return [...set];
+  }, [messages, thread.participants]);
 
   const body = (
     <div className="space-y-5">
@@ -144,6 +163,7 @@ export function ThreadConversation({
         onClearReplyTarget={() => setReplyTarget(null)}
         quoteSource={replyTarget ?? messages.at(-1) ?? null}
         accounts={fromAccounts}
+        threadAddresses={threadAddresses}
       />
 
       {/* Mark-as-read upsert fires on mount — silent. refresh={false}: the

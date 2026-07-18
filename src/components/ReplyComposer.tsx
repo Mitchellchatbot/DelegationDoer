@@ -72,7 +72,7 @@ function buildQuoteDoc(quoteHtml: string): string {
 
 export function ReplyComposer({
   threadId, accountId, defaultTo, defaultSubject, replyAllTo, replyAllCc,
-  replyTarget, onClearReplyTarget, quoteSource, accounts
+  replyTarget, onClearReplyTarget, quoteSource, accounts, threadAddresses
 }: {
   threadId: string;
   accountId: string;
@@ -99,6 +99,11 @@ export function ReplyComposer({
   // Connected accounts (access-scoped) the user may send FROM. Powers the
   // "From" selector; defaults to the thread's inbox (`accountId`).
   accounts?: { id: string; email: string; display_name: string | null }[];
+  // Every email address that appears anywhere in this thread (lower-cased,
+  // display-names stripped). Powers the pre-send guardrail that warns when a
+  // reply's "To" contains someone who isn't part of the conversation. When
+  // absent/empty the guardrail stays silent (fails open).
+  threadAddresses?: string[];
 }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -134,6 +139,29 @@ export function ReplyComposer({
   // Whether reply-all has anyone beyond the default recipient. When the
   // thread has no extra To/Cc, hide the toggle entirely.
   const hasReplyAll = Boolean((replyAllTo ?? "").trim() || (replyAllCc ?? "").trim());
+
+  // Recipient guardrail. `knownAddrs` = every address already in this thread;
+  // any "To" entry outside it is a "stranger" (not part of the conversation) —
+  // the signal that catches the Chris Barnes → Charles Smellie class of misfire
+  // (a reply to one person addressed to someone from a different thread). We
+  // fail OPEN when the thread has no known addresses, so a data gap never blocks
+  // sending. `confirmedStrangerSigRef` records the exact stranger set the user
+  // OK'd via "Send anyway", so an acknowledged send isn't re-challenged.
+  const confirmedStrangerSigRef = useRef<string>("");
+  const knownAddrs = new Set((threadAddresses ?? []).map((a) => a.toLowerCase()));
+  const strangerRecipients: string[] = [];
+  if (knownAddrs.size > 0) {
+    const seen = new Set<string>();
+    for (const part of to.split(/[,\n]/)) {
+      const trimmed = part.trim();
+      if (!trimmed) continue;
+      const email = rawEmail(trimmed).toLowerCase();
+      if (!email || knownAddrs.has(email) || seen.has(email)) continue;
+      seen.add(email);
+      strangerRecipients.push(rawEmail(trimmed));
+    }
+  }
+  const strangerSig = strangerRecipients.map((a) => a.toLowerCase()).sort().join(",");
 
   function switchMode(next: "reply" | "replyAll") {
     setMode(next);
@@ -397,6 +425,18 @@ export function ReplyComposer({
       toast.error("Attachments aren't supported on scheduled sends — remove them or send now.");
       return;
     }
+    // Guardrail: block a reply addressed to someone who isn't part of this
+    // thread until the user explicitly confirms via "Send anyway". Prevents the
+    // Chris Barnes → Charles Smellie class of misfire. `strangerRecipients` is
+    // only non-empty when we have known thread addresses, so this fails open.
+    if (strangerRecipients.length > 0 && confirmedStrangerSigRef.current !== strangerSig) {
+      toast.error(
+        strangerRecipients.length === 1
+          ? `${strangerRecipients[0]} isn't part of this thread — use “Send anyway” to confirm`
+          : `${strangerRecipients.length} recipients aren't part of this thread — use “Send anyway” to confirm`
+      );
+      return;
+    }
     setBusy(true);
     try {
       // Append the quoted original below the user's text so the reply carries
@@ -635,6 +675,29 @@ export function ReplyComposer({
                     clients={recipientSuggestions}
                     placeholder="cc@example.com, …"
                   />
+                </div>
+              )}
+
+              {/* Mis-recipient guardrail — surfaces the moment a "To" entry isn't
+                  part of this thread, with an explicit "Send anyway" to override. */}
+              {strangerRecipients.length > 0 && (
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 px-3 py-2.5 rounded-xl border border-amber-300/80 bg-amber-50 text-amber-900">
+                  <span className="inline-flex items-start gap-1.5 text-[12.5px] leading-snug">
+                    <span aria-hidden className="mt-px">⚠️</span>
+                    <span>
+                      <strong className="break-all">{strangerRecipients.join(", ")}</strong>{" "}
+                      {strangerRecipients.length === 1 ? "isn't" : "aren't"} part of this
+                      conversation — double-check the recipient before sending.
+                    </span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => { confirmedStrangerSigRef.current = strangerSig; void send(); }}
+                    disabled={busy}
+                    className="ml-auto shrink-0 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-60 transition-colors"
+                  >
+                    Send anyway
+                  </button>
                 </div>
               )}
 

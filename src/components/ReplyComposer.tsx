@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import { Reply, Send, Loader2, X, CalendarClock, Sparkles, Check, Maximize2, Minimize2 } from "lucide-react";
@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { MediaPicker } from "@/components/MediaPicker";
 import { RecipientAutocomplete } from "@/components/RecipientAutocomplete";
+import type { ClientSuggestion } from "@/components/RecipientAutocomplete";
 import { useInboxFocus } from "@/components/InboxFocusProvider";
 import { useRecipientSuggestions } from "@/lib/use-recipient-suggestions";
 import { fetchDeferredBody } from "@/lib/message-body-cache";
@@ -70,9 +71,26 @@ function buildQuoteDoc(quoteHtml: string): string {
   </style></head><body>${quoteHtml || ""}</body></html>`;
 }
 
+// A "To" token only counts as a real recipient once it's a COMPLETE address:
+// a non-empty local part, an "@", and a dotted domain. Mid-typing fragments
+// like "charles.s" (no "@") are incomplete, so the recipient guardrail ignores
+// them instead of flagging them as strangers.
+function isCompleteEmail(addr: string): boolean {
+  const at = addr.indexOf("@");
+  if (at <= 0) return false;
+  const domain = addr.slice(at + 1);
+  const dot = domain.indexOf(".");
+  return dot > 0 && dot < domain.length - 1;
+}
+
+// Our own side of a conversation — connected inboxes plus our domains. The
+// in-thread mismatch guardrail uses this to decide who counts as an "external"
+// party, so a colleague's inbox in the thread never looks like a misfire.
+const OWN_DOMAINS = ["scaledai.org", "scaledai.com"];
+
 export function ReplyComposer({
   threadId, accountId, defaultTo, defaultSubject, replyAllTo, replyAllCc,
-  replyTarget, onClearReplyTarget, quoteSource, accounts, threadAddresses
+  replyTarget, onClearReplyTarget, quoteSource, accounts, threadAddresses, threadParticipants
 }: {
   threadId: string;
   accountId: string;
@@ -104,6 +122,10 @@ export function ReplyComposer({
   // reply's "To" contains someone who isn't part of the conversation. When
   // absent/empty the guardrail stays silent (fails open).
   threadAddresses?: string[];
+  // This thread's own participants (name + email) as pick-able typeahead
+  // suggestions, so the user can address a reply to someone already in the
+  // conversation instead of hand-typing. Merged ahead of the global roster.
+  threadParticipants?: ClientSuggestion[];
 }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -156,12 +178,82 @@ export function ReplyComposer({
       const trimmed = part.trim();
       if (!trimmed) continue;
       const email = rawEmail(trimmed).toLowerCase();
-      if (!email || knownAddrs.has(email) || seen.has(email)) continue;
+      // Only flag COMPLETE addresses — a half-typed fragment like "charles.s"
+      // (rawEmail returns it unchanged, no "@") is not a stranger, just unfinished.
+      if (!email || !isCompleteEmail(email) || knownAddrs.has(email) || seen.has(email)) continue;
       seen.add(email);
       strangerRecipients.push(rawEmail(trimmed));
     }
   }
   const strangerSig = strangerRecipients.map((a) => a.toLowerCase()).sort().join(",");
+
+  // Typeahead roster: this thread's own participants first (so the user can pick
+  // "Charles Smellie <…>" / "Chris Hintz <…>" instead of hand-typing), then the
+  // global saved-clients + team roster.
+  const suggestions = useMemo(
+    () => [...(threadParticipants ?? []), ...recipientSuggestions],
+    [threadParticipants, recipientSuggestions]
+  );
+
+  // email(lower) -> display name, from this thread's participants. Used to label
+  // the "Sending to" preview so a bare address in the To line is recognisable.
+  const nameByEmail = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const s of threadParticipants ?? []) {
+      const e = (s.contactEmails[0] ?? "").toLowerCase();
+      if (e) map.set(e, s.name);
+    }
+    return map;
+  }, [threadParticipants]);
+
+  // Resolved recipients for the "Sending to" line — every COMPLETE address in
+  // the To field, labelled with its thread name when we know it. Incomplete
+  // mid-typing tokens are skipped so the line stays quiet while typing.
+  const toPreview = useMemo(() => {
+    const seen = new Set<string>();
+    const out: { email: string; label: string }[] = [];
+    for (const part of to.split(/[,\n]/)) {
+      const t = part.trim();
+      if (!t) continue;
+      const email = rawEmail(t);
+      const key = email.toLowerCase();
+      if (!isCompleteEmail(key) || seen.has(key)) continue;
+      seen.add(key);
+      out.push({ email, label: nameByEmail.get(key) ?? shortName(t) });
+    }
+    return out;
+  }, [to, nameByEmail]);
+
+  // In-thread mismatch guardrail: in a thread with >=2 EXTERNAL parties, warn
+  // when you've clicked Reply on one specific message but the person that
+  // message is with isn't in the To line — the "replied to Charles's message,
+  // addressed to Chris" trap the stranger check can't catch (both are in-thread).
+  const confirmedMismatchSigRef = useRef<string>("");
+  const mismatch = useMemo(() => {
+    if (!replyTarget) return null;
+    const ownAddrs = new Set(
+      (accounts ?? []).map((a) => rawEmail(a.email).toLowerCase()).filter(Boolean)
+    );
+    const isOwn = (e: string) => ownAddrs.has(e) || OWN_DOMAINS.some((d) => e.endsWith("@" + d));
+    const externals = new Set(
+      (threadAddresses ?? []).filter((a) => isCompleteEmail(a) && !isOwn(a))
+    );
+    if (externals.size < 2) return null;
+    const targetRaw =
+      replyTarget.direction === "outbound"
+        ? (replyTarget.to_addrs[0] ?? "")
+        : replyTarget.from_addr;
+    const email = rawEmail(targetRaw).toLowerCase();
+    if (!isCompleteEmail(email) || isOwn(email)) return null;
+    const toSet = new Set<string>();
+    for (const part of to.split(/[,\n]/)) {
+      const e = rawEmail(part.trim()).toLowerCase();
+      if (isCompleteEmail(e)) toSet.add(e);
+    }
+    if (toSet.has(email)) return null;
+    return { name: shortName(targetRaw), email: rawEmail(targetRaw) };
+  }, [replyTarget, threadAddresses, accounts, to]);
+  const mismatchSig = mismatch ? mismatch.email.toLowerCase() : "";
 
   function switchMode(next: "reply" | "replyAll") {
     setMode(next);
@@ -437,6 +529,13 @@ export function ReplyComposer({
       );
       return;
     }
+    // Guardrail: you're replying to a specific message but the person it's with
+    // isn't in the To line (a wrong-but-in-thread recipient). Block until "Send
+    // anyway" confirms the exact address, so an ack'd send isn't re-challenged.
+    if (mismatch && confirmedMismatchSigRef.current !== mismatchSig) {
+      toast.error(`You're replying to ${mismatch.name}'s message, but ${mismatch.email} isn't in the To line — use “Send anyway” to confirm`);
+      return;
+    }
     setBusy(true);
     try {
       // Append the quoted original below the user's text so the reply carries
@@ -545,17 +644,27 @@ export function ReplyComposer({
               <div className="flex items-center gap-2 text-xs font-semibold text-ink">
                 <Reply className="w-3.5 h-3.5 text-accent" /> Reply
                 {replyTarget && (
-                  <span className="inline-flex items-center gap-1 text-[10px] font-medium normal-case px-2 py-0.5 rounded-full bg-accent/10 text-accent border border-accent/20">
-                    Replying to{" "}
-                    {replyTarget.direction === "outbound"
-                      ? (replyTarget.to_addrs[0] ? shortName(replyTarget.to_addrs[0]) : "recipients")
-                      : shortName(replyTarget.from_addr)}
+                  <span className="inline-flex items-center gap-1 text-[10px] font-medium normal-case px-2 py-0.5 rounded-full bg-accent/10 text-accent border border-accent/20 max-w-full">
+                    <span className="truncate min-w-0">
+                      Replying to{" "}
+                      {(() => {
+                        const raw = replyTarget.direction === "outbound"
+                          ? replyTarget.to_addrs[0]
+                          : replyTarget.from_addr;
+                        if (!raw) return "recipients";
+                        const name = shortName(raw);
+                        const email = rawEmail(raw);
+                        return name && name.toLowerCase() !== email.toLowerCase()
+                          ? `${name} <${email}>`
+                          : email;
+                      })()}
+                    </span>
                     <button
                       type="button"
                       onClick={clearTarget}
                       aria-label="Reply to latest instead"
                       title="Reply to latest instead"
-                      className="hover:text-accent/60 transition-colors"
+                      className="shrink-0 hover:text-accent/60 transition-colors"
                     >
                       <X className="w-3 h-3" />
                     </button>
@@ -649,7 +758,7 @@ export function ReplyComposer({
                 <RecipientAutocomplete
                   value={to}
                   onChange={setTo}
-                  clients={recipientSuggestions}
+                  clients={suggestions}
                   autoFocus
                   placeholder="recipient@example.com"
                 />
@@ -664,6 +773,20 @@ export function ReplyComposer({
                 )}
               </div>
 
+              {/* Resolved recipients — spells out exactly who each address is,
+                  so a wrong-but-in-thread recipient (e.g. Chris when you meant
+                  Charles) is obvious before send. Quiet while mid-typing. */}
+              {toPreview.length > 0 && (
+                <div className="px-3 -mt-1 text-[11px] text-ink/55 flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                  <span className="uppercase tracking-wide font-semibold text-ink/40 shrink-0">Sending to</span>
+                  {toPreview.map((r) => (
+                    <span key={r.email} className="text-ink/70 break-all">
+                      {r.label !== r.email ? `${r.label} <${r.email}>` : r.email}
+                    </span>
+                  ))}
+                </div>
+              )}
+
               {(ccOpen || cc.trim()) && (
                 <div className="flex items-center gap-2 px-3 py-2 rounded-xl border border-slate-200/70 bg-white/60 focus-within:ring-2 focus-within:ring-accent/30 focus-within:border-accent/40 transition-all">
                   <span className="text-[11px] uppercase tracking-wide font-semibold text-ink/45 w-14 shrink-0">
@@ -672,7 +795,7 @@ export function ReplyComposer({
                   <RecipientAutocomplete
                     value={cc}
                     onChange={setCc}
-                    clients={recipientSuggestions}
+                    clients={suggestions}
                     placeholder="cc@example.com, …"
                   />
                 </div>
@@ -693,6 +816,30 @@ export function ReplyComposer({
                   <button
                     type="button"
                     onClick={() => { confirmedStrangerSigRef.current = strangerSig; void send(); }}
+                    disabled={busy}
+                    className="ml-auto shrink-0 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-60 transition-colors"
+                  >
+                    Send anyway
+                  </button>
+                </div>
+              )}
+
+              {/* In-thread mismatch guardrail — you're replying to a specific
+                  message but the person it's with isn't in the To line. Blocks
+                  send until "Send anyway" (only fires for explicit per-message
+                  replies in threads with >=2 external parties). */}
+              {mismatch && (
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 px-3 py-2.5 rounded-xl border border-amber-300/80 bg-amber-50 text-amber-900">
+                  <span className="inline-flex items-start gap-1.5 text-[12.5px] leading-snug">
+                    <span aria-hidden className="mt-px">⚠️</span>
+                    <span>
+                      You&rsquo;re replying to <strong>{mismatch.name}</strong>&rsquo;s message, but{" "}
+                      <strong className="break-all">{mismatch.email}</strong> isn&rsquo;t in the To line.
+                    </span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => { confirmedMismatchSigRef.current = mismatchSig; void send(); }}
                     disabled={busy}
                     className="ml-auto shrink-0 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-60 transition-colors"
                   >

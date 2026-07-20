@@ -4,9 +4,10 @@ import { useEffect, useMemo, useState } from "react";
 import { AtSign, Inbox, ExternalLink, Maximize2, Minimize2 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import type { MissiveThread, MissiveMessage } from "@/lib/missive-client";
-import { rawEmail } from "@/lib/email-format";
+import { rawEmail, shortName } from "@/lib/email-format";
 import { CreateTaskFromThreadButton } from "@/components/CreateTaskFromThreadButton";
 import { ReplyComposer } from "@/components/ReplyComposer";
+import type { ClientSuggestion } from "@/components/RecipientAutocomplete";
 import { ThreadAutoMarkRead } from "@/components/ThreadAutoMarkRead";
 import { ScrollToLatestMessage } from "@/components/ScrollToLatestMessage";
 import { ThreadMessages } from "@/components/ThreadMessages";
@@ -83,6 +84,45 @@ export function ThreadConversation({
     thread.participants?.forEach(add);
     return [...set];
   }, [messages, thread.participants]);
+
+  // This thread's own participants as pick-able typeahead suggestions (name +
+  // email), so a reply can be addressed to someone already in the conversation
+  // without hand-typing (and hand-typing a fragment that trips the guardrail).
+  // Built from the same messages + participants as `threadAddresses`, so every
+  // suggested address is guaranteed to be in the guardrail's known set. Our own
+  // connected inboxes are excluded so we never suggest replying to ourselves.
+  const threadParticipants = useMemo<ClientSuggestion[]>(() => {
+    const own = new Set(
+      fromAccounts.map((a) => rawEmail(a.email).toLowerCase()).filter(Boolean)
+    );
+    // email(lower) -> best label + original-cased address. Prefer an occurrence
+    // that carries a real display name over a bare-address occurrence.
+    const byEmail = new Map<string, { addr: string; name: string; named: boolean }>();
+    const consider = (raw: string | null | undefined) => {
+      if (!raw) return;
+      const addr = rawEmail(raw);
+      const key = addr.toLowerCase();
+      if (!key.includes("@") || own.has(key)) return;
+      const name = shortName(raw);
+      const named = /<[^>]+>/.test(raw) && !!name && name.toLowerCase() !== key;
+      const prev = byEmail.get(key);
+      if (!prev) byEmail.set(key, { addr, name: name || addr, named });
+      else if (!prev.named && named) { prev.name = name; prev.named = true; }
+    };
+    for (const m of messages) {
+      consider(m.from_addr);
+      m.to_addrs?.forEach(consider);
+      m.cc_addrs?.forEach(consider);
+    }
+    thread.participants?.forEach(consider);
+    return [...byEmail.values()].map((p) => ({
+      id: `thread:${p.addr.toLowerCase()}`,
+      name: p.name,
+      contactName: null,
+      contactEmails: [p.addr],
+      category: "thread" as const,
+    }));
+  }, [messages, thread.participants, fromAccounts]);
 
   const body = (
     <div className="space-y-5">
@@ -164,6 +204,7 @@ export function ThreadConversation({
         quoteSource={replyTarget ?? messages.at(-1) ?? null}
         accounts={fromAccounts}
         threadAddresses={threadAddresses}
+        threadParticipants={threadParticipants}
       />
 
       {/* Mark-as-read upsert fires on mount — silent. refresh={false}: the

@@ -15,8 +15,10 @@ export type ClientSuggestion = {
   contactName: string | null;
   contactEmails: string[];
   // "client" (default) groups render as-is; "team" groups (our own inboxes
-  // / teammates) are listed after a one-time "Team" section divider.
-  category?: "client" | "team";
+  // / teammates) are listed after a one-time "Team" section divider; "thread"
+  // groups are this thread's own participants, listed first under an "In this
+  // thread" divider and exempt from the MAX_CLIENTS cap.
+  category?: "client" | "team" | "thread";
 };
 
 // One selectable row in the dropdown. "all" inserts every (still-absent)
@@ -26,7 +28,7 @@ type FlatItem = {
   clientId: string;
   clientName: string;
   contactName: string | null;
-  category: "client" | "team";
+  category: "client" | "team" | "thread";
   groupStart: boolean; // render the client header before this row
 } & ({ kind: "all"; emails: string[] } | { kind: "email"; email: string });
 
@@ -81,7 +83,11 @@ export function RecipientAutocomplete({
     const out: FlatItem[] = [];
     let clientCount = 0;
     for (const c of clients) {
-      if (clientCount >= MAX_CLIENTS) break;
+      const category = c.category ?? "client";
+      // Thread participants (merged first) always show — they're never capped
+      // out by the 8-client budget and never spend it. Everything else stops
+      // once the budget's exhausted.
+      if (category !== "thread" && clientCount >= MAX_CLIENTS) break;
       const matches =
         c.name.toLowerCase().includes(q) ||
         (c.contactName?.toLowerCase().includes(q) ?? false) ||
@@ -89,8 +95,7 @@ export function RecipientAutocomplete({
       if (!matches) continue;
       const remaining = c.contactEmails.filter((e) => !presentEmails.has(e.toLowerCase()));
       if (remaining.length === 0) continue;
-      clientCount++;
-      const category = c.category ?? "client";
+      if (category !== "thread") clientCount++;
       let firstOfGroup = true;
       // "Add all" only earns its own row when there's more than one address
       // left — otherwise it would duplicate the single email row below it.
@@ -198,6 +203,11 @@ export function RecipientAutocomplete({
         <div className="absolute left-0 right-0 top-full mt-1 z-20 rounded-xl border border-slate-200 bg-white shadow-lift overflow-hidden max-h-72 overflow-y-auto">
           {items.map((it, i) => (
             <Fragment key={`${it.clientId}-${it.kind}-${it.kind === "email" ? it.email : "all"}`}>
+              {it.category === "thread" && (i === 0 || items[i - 1].category !== "thread") && (
+                <div className="px-3 pt-2 pb-1 text-[10px] uppercase tracking-wide font-semibold text-accent/70">
+                  In this thread
+                </div>
+              )}
               {it.category === "team" && (i === 0 || items[i - 1].category !== "team") && (
                 <div className="px-3 pt-2 pb-1 text-[10px] uppercase tracking-wide font-semibold text-accent/70 border-t border-slate-100">
                   Team inboxes &amp; members

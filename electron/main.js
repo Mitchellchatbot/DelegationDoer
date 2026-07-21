@@ -200,7 +200,7 @@ function buildTray() {
     icon = nativeImage.createEmpty();
   }
   tray = new Tray(icon);
-  tray.setToolTip("DelegationDoer");
+  tray.setToolTip("Scaled Operations");
 
   const menu = Menu.buildFromTemplate([
     { label: "Show widget", click: () => widget?.show() },
@@ -217,7 +217,7 @@ function buildTray() {
       label: "Test notification",
       click: () => {
         const ok = showNotification({
-          title: "DelegationDoer",
+          title: "Scaled Operations",
           body: "Notifications are working. You'll get pinged for mentions, kudos, emails, and EOD reminders.",
           silent: false
         });
@@ -277,7 +277,7 @@ app.whenReady().then(() => {
   buildTray();
 
   // macOS-only permission priming. The very first Notification.show() on
-  // Mac triggers the "Allow DelegationDoer to send notifications?"
+  // Mac triggers the "Allow Scaled Operations to send notifications?"
   // dialog. Firing a bare, silent, no-body priming notification a couple
   // seconds after boot gets the dialog in front of the user immediately
   // (instead of waiting until the first real mention/kudos/email lands
@@ -289,7 +289,7 @@ app.whenReady().then(() => {
       try {
         if (Notification.isSupported()) {
           const primer = new Notification({
-            title: "DelegationDoer",
+            title: "Scaled Operations",
             body: "Notifications enabled — you'll be pinged for mentions, kudos, and reminders.",
             silent: true
           });

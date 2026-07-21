@@ -364,7 +364,7 @@ export function formatEodForSlack(s: EodDepartmentSummary): { text: string; bloc
     elements: [
       {
         type: "mrkdwn",
-        text: `Sent from DelegationDoer · ${dateStr}`
+        text: `Sent from Scaled Operations · ${dateStr}`
       }
     ]
   });

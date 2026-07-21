@@ -58,7 +58,7 @@ export function ClientEmailsCombined({
         <Mail className="w-4 h-4 text-blue-600" />
         <div className="text-sm font-semibold">Email</div>
         <span className="text-[10px] text-ink/50 ml-1">
-          Inbox history + outbound drafts from DelegationDoer.
+          Inbox history + outbound drafts from Scaled Operations.
         </span>
         <div className="ml-auto inline-flex rounded-xl border border-slate-200/70 bg-white p-0.5">
           <TabButton

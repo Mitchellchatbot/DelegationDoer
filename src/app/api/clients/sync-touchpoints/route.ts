@@ -11,7 +11,7 @@ export const maxDuration = 60;
 // Walks missiveclone's SENT folder and writes the latest send date /
 // subject onto each matching client. Drives the touchpoint
 // dashboard's "last outbound email" reading for mail that didn't
-// originate inside DelegationDoer.
+// originate inside Scaled Operations.
 //
 // Leader/admin only — the operation is cheap (per-client UPDATE) but
 // it does talk to missiveclone, so we don't want random callers

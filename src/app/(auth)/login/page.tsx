@@ -84,7 +84,7 @@ function LoginForm() {
         </div>
         <div>
           <h1 className="text-xl font-semibold text-ink">Welcome back</h1>
-          <p className="text-xs text-ink/60">DelegationDoer</p>
+          <p className="text-xs text-ink/60">Scaled Operations</p>
         </div>
       </div>
 

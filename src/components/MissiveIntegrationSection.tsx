@@ -43,7 +43,7 @@ export async function MissiveIntegrationSection() {
               <StatusPill status={status} />
             </div>
             <div className="text-xs text-muted mt-0.5">
-              Email threads + assignments live over there. DelegationDoer reads them through this connection.
+              Email threads + assignments live over there. Scaled Operations reads them through this connection.
             </div>
           </div>
         </div>
@@ -90,7 +90,7 @@ export async function MissiveIntegrationSection() {
             <ol className="list-decimal pl-5 mt-1 space-y-0.5">
               <li>Open the Missive UI and log in</li>
               <li>DevTools → Application → Local Storage → copy <code>missive_clone_token</code></li>
-              <li>Paste into Railway → DelegationDoer service → Variables → <code>MISSIVE_API_TOKEN</code></li>
+              <li>Paste into Railway → Scaled Operations service → Variables → <code>MISSIVE_API_TOKEN</code></li>
               <li>Redeploy</li>
             </ol>
           </details>
@@ -164,7 +164,7 @@ function SetupInstructions() {
           value of <code className="bg-indigo-50 px-1 py-0.5 rounded">missive_clone_token</code>.
         </li>
         <li>
-          On the DelegationDoer Railway service → Variables, add{" "}
+          On the Scaled Operations Railway service → Variables, add{" "}
           <code className="bg-indigo-50 px-1 py-0.5 rounded">MISSIVE_API_URL</code> (your missive URL)
           and <code className="bg-indigo-50 px-1 py-0.5 rounded">MISSIVE_API_TOKEN</code> (the token).
           Redeploy.

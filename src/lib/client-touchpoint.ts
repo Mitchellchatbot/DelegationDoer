@@ -8,7 +8,7 @@
 //   red    -> more than 10 days, or no outbound email on record
 //
 // Data source for "auto" reading is the email_drafts table — every
-// outbound email composed inside DelegationDoer lands there with
+// outbound email composed inside Scaled Operations lands there with
 // status='sent' once missiveclone confirms delivery. Email sent
 // straight from Missive without going through DD won't show up here;
 // that's an accepted limitation since the team is moving all outbound
@@ -125,7 +125,7 @@ export interface TouchpointInfo {
 }
 
 // Two-source lookup: pulls the MAX(sent_at) per client from
-// email_drafts (mail composed inside DelegationDoer) AND the synced
+// email_drafts (mail composed inside Scaled Operations) AND the synced
 // `last_outbound_email_at_external` column on clients (populated by
 // lib/touchpoint-sync.ts from missiveclone's SENT folder). Returns
 // the *more recent* of the two so the dashboard reflects "last email
@@ -140,7 +140,7 @@ export async function getLatestTouchpointsByClient(
   if (clientIds.length === 0) return out;
 
   const supabase = getSupabaseAdmin();
-  // Round 1: DelegationDoer-originated sends.
+  // Round 1: Scaled Operations-originated sends.
   const draftsP = supabase
     .from("email_drafts")
     .select("client_id, subject, sent_at")

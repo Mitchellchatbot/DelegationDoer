@@ -1,4 +1,4 @@
-// Prisma schema for DelegationDoer.
+// Prisma schema for Scaled Operations.
 // Run: npx prisma generate && npx prisma db push (after setting DATABASE_URL).
 
 generator client {

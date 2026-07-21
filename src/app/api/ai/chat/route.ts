@@ -52,7 +52,7 @@ export async function POST(req: NextRequest) {
     // (caller identity, today's date, optional client scoping) and is
     // left uncached — it changes per user/client so caching it would
     // never hit anyway.
-    const staticSystemPrompt = `You are an AI assistant inside DelegationDoer, an internal task-management tool for a digital agency (scaledai.org). The departments are SEO, Website, Software, and Marketing.
+    const staticSystemPrompt = `You are an AI assistant inside Scaled Operations, an internal task-management tool for a digital agency (scaledai.org). The departments are SEO, Website, Software, and Marketing.
 
 You have access to tools that read live data from the workspace's database. Use them whenever a question depends on real data (tasks, people, projects, clients, client meetings/briefs, calendar, kudos, incidents, EOD notes, recommendations, SOPs). Don't invent task titles, project names, or people.
 

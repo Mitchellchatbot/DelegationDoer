@@ -40,7 +40,7 @@ import type { Priority, User } from "@/lib/types";
 // each website consistently routes to the same owner while the set of sites
 // divides ~evenly — this keeps any one person from being buried under every
 // alert. EVERY name is still notified (Slack DM + widget alarm). The
-// DelegationDoer `tasks` schema carries a single `assignee_id`, so the roster
+// Scaled Operations `tasks` schema carries a single `assignee_id`, so the roster
 // is modeled as one per-domain primary-owner + the rest co-notified. Elaine
 // and Leizel are on the Website team (see 20260528000001_seed_org_structure.sql).
 // Edit this list to change who owns / is alerted on site-health tasks.

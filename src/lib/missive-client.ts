@@ -48,7 +48,7 @@ export interface MissiveThread {
   last_from?: string | null;
   last_snippet?: string | null;
   // True when this thread's latest OUTBOUND message was sent as an
-  // automated/templated blast (DelegationDoer's bulk-email tool). The clone
+  // automated/templated blast (Scaled Operations's bulk-email tool). The clone
   // derives it from the newest outbound message's is_automated flag;
   // touchpoint-sync skips these so a mass send doesn't reset "last contacted".
   automated?: boolean;

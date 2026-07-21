@@ -12,7 +12,7 @@ export const dynamic = "force-dynamic";
 
 // GET /api/calendar/meetings?days=7
 //   The signed-in user's upcoming Google Calendar meetings, matched
-//   against DelegationDoer client records and filtered to client-facing
+//   against Scaled Operations client records and filtered to client-facing
 //   ones. Powers the /home "Upcoming meetings" card.
 //
 //   Matching (most precise first): an attendee email exactly in a client's

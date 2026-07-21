@@ -3,7 +3,7 @@
 // `clients.last_outbound_email_at_external`. This is the dataset the
 // touchpoint dashboard reads to know "when did we last email this
 // client", regardless of whether the email originated inside
-// DelegationDoer or straight from Missive.
+// Scaled Operations or straight from Missive.
 //
 // Runs on three triggers:
 //   1. Admin/leader manual via POST /api/clients/sync-touchpoints

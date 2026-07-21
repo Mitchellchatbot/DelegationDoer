@@ -2,7 +2,7 @@ import "./globals.css";
 import type { Metadata, Viewport } from "next";
 
 export const metadata: Metadata = {
-  title: "DelegationDoer",
+  title: "Scaled Operations",
   description: "Intelligent task management & delegation for digital agencies."
 };
 

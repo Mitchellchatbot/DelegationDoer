@@ -102,7 +102,7 @@ export async function GET() {
     for (const c of atRisk) {
       const emoji = LABEL_EMOJI[c.effective!];
       const link = baseUrl
-        ? `<${baseUrl}/clients/${c.id}|Open in DelegationDoer>`
+        ? `<${baseUrl}/clients/${c.id}|Open in Scaled Operations>`
         : `\`/clients/${c.id}\``;
       const summary = c.health_summary
         ? `\n_${c.health_summary.slice(0, 280)}_`

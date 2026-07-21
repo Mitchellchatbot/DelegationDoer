@@ -781,7 +781,7 @@ function BubbleIcon({
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
         src={iconUrl || "/widget-icon.png"}
-        alt="DelegationDoer"
+        alt="Scaled Operations"
         draggable={false}
         style={{
           width: 64,
@@ -891,7 +891,7 @@ function Bubble({ onExpand, unackedCount, crowned = false, iconUrl, }: { onExpan
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerCancel}
         title="Click to open · drag to move"
-        aria-label="Open DelegationDoer"
+        aria-label="Open Scaled Operations"
         className="wg-bubble-btn anim-scale-in"
         style={{
           padding: 0, margin: 0, border: "none",
@@ -1031,7 +1031,7 @@ function SignInPanel({ onCollapse }: { onCollapse: () => void }) {
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src="/widget-icon.png" alt="" className="w-full h-full object-cover" draggable={false} />
             </div>
-            <span className="font-semibold text-ink">DelegationDoer</span>
+            <span className="font-semibold text-ink">Scaled Operations</span>
           </div>
           <div className="flex items-center gap-0.5" style={{ WebkitAppRegion: "no-drag" } as any}>
             <button title="Collapse" className="p-1.5 rounded-lg text-slate-500 hover:text-ink hover:bg-slate-100 transition-colors" onClick={onCollapse}>
@@ -1051,7 +1051,7 @@ function SignInPanel({ onCollapse }: { onCollapse: () => void }) {
             <Sparkles className="w-7 h-7 text-accent" />
           </div>
           <div className="text-lg font-bold text-ink leading-tight tracking-tight">
-            Sign in to <span className="text-accent">DelegationDoer</span>
+            Sign in to <span className="text-accent">Scaled Operations</span>
           </div>
           <div className="text-[12px] text-ink/60 mt-1.5 max-w-[260px] leading-relaxed">
             Sign in right here in the widget — it keeps its own login, separate from your browser.
@@ -2193,7 +2193,7 @@ function Panel({
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src={widgetIconUrl || "/widget-icon.png"} alt="" className="w-full h-full object-cover" draggable={false} />
             </div>
-            <span className="font-semibold text-ink">DelegationDoer</span>
+            <span className="font-semibold text-ink">Scaled Operations</span>
           </div>
           <div className="flex items-center gap-0.5" style={{ WebkitAppRegion: "no-drag" } as any}>
             <button

@@ -188,7 +188,7 @@ export function HomeEmailNotifications({ onboarded: initialOnboarded }: Props) {
               document.visibilityState !== "visible"
             ) {
               new Notification("New email", {
-                body: "Open DelegationDoer to read it.",
+                body: "Open Scaled Operations to read it.",
                 tag: "dd-email" // collapse repeat pings into one banner
               });
             }

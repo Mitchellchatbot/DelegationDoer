@@ -313,7 +313,7 @@ export async function POST(req: NextRequest) {
               type: "actions",
               elements: [{
                 type: "button",
-                text: { type: "plain_text", text: "Open in DelegationDoer", emoji: true },
+                text: { type: "plain_text", text: "Open in Scaled Operations", emoji: true },
                 url: taskUrl
               }]
             }

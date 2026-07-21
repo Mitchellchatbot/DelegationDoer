@@ -90,7 +90,7 @@ export function ConnectInboxDialog({ trigger }: { trigger: React.ReactNode }) {
                   </a>
 
                   <p className="text-[11px] text-ink/50 leading-relaxed px-1">
-                    You&apos;ll be redirected to Microsoft to authorize DelegationDoer.
+                    You&apos;ll be redirected to Microsoft to authorize Scaled Operations.
                     We only request mailbox read + send scopes; you can disconnect
                     anytime from the Your Inboxes section.
                   </p>

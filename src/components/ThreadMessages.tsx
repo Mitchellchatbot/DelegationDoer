@@ -14,7 +14,7 @@ import { EmailBody } from "@/components/EmailBody";
 // latest message expanded and collapse the rest into one-line clickable stubs.
 // The body iframe is not mounted while a message is collapsed, which also speeds
 // up opening long threads. Mirrors missiveclone's ThreadView behaviour, in
-// DelegationDoer's Tailwind style.
+// Scaled Operations's Tailwind style.
 
 function fmtDate(iso: string): string {
   return new Date(iso).toLocaleString(undefined, {

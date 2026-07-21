@@ -1,4 +1,4 @@
-# DelegationDoer
+# Scaled Operations
 
 Internal task-management & delegation tool for digital agencies. Next.js 14 (App Router) + Tailwind + Prisma/Postgres + Electron widget.
 
@@ -47,8 +47,9 @@ To ship a real tray icon, drop a 16×16 (or 22×22 retina) `iconTemplate.png` in
 The packaged macOS build is an unsigned `.dmg` (arm64 / Apple Silicon) hosted in the Supabase
 `desktop-app` bucket and linked from **Settings → Desktop widget**.
 
-1. **Download** — in DelegationDoer, go to **Settings → Desktop widget → Mac (.dmg)**.
-2. **Install** — open the `.dmg` and drag **DelegationDoer** into **Applications**.
+1. **Download** — in Scaled Operations, go to **Settings → Desktop widget → Mac (.dmg)**.
+2. **Install** — open the `.dmg` and drag **DelegationDoer** into **Applications**. <!-- the packaged app bundle is still named DelegationDoer (productName unchanged) -->
+   The app bundle still installs as **DelegationDoer** until the desktop build is re-cut.
 3. **First launch (unsigned)** — open it from Applications; macOS blocks it. Right-click the app →
    **Open → Open**. If still blocked: **System Settings → Privacy & Security → Open Anyway**. One-time.
 4. **Sign in** — the widget keeps its own session. On the Sign-in card click **"Sign in here →"**,

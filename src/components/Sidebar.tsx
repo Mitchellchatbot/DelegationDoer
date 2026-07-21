@@ -368,7 +368,7 @@ export function Sidebar({ user }: { user: User }) {
               <img src="/widget-icon.png" alt="" className="w-full h-full object-cover" />
             </div>
             <div className="leading-tight">
-              <div className="text-base font-semibold text-white">DelegationDoer</div>
+              <div className="text-base font-semibold text-white">Scaled Operations</div>
               <div className="text-[12px] text-blue-100/80">scaledai.org</div>
             </div>
           </div>

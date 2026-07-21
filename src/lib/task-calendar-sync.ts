@@ -3,7 +3,7 @@ import {
   createUserEvent, patchUserEvent, deleteUserEvent
 } from "@/lib/google-calendar";
 
-// Mirror a DelegationDoer task to its assignee's Google Calendar.
+// Mirror a Scaled Operations task to its assignee's Google Calendar.
 // Fire-and-forget from the perspective of the calling route — errors
 // are logged but don't fail the underlying task write.
 //

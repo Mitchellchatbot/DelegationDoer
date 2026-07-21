@@ -89,7 +89,7 @@ export async function POST() {
 
     // Step 3 — refresh per-client "last outbound email at" from
     // missiveclone's SENT folder. Without this, the touchpoint
-    // dashboard only sees emails composed inside DelegationDoer and
+    // dashboard only sees emails composed inside Scaled Operations and
     // shows every other client as "Never emailed". Best-effort: a
     // failure here doesn't fail the rescan.
     let touchpointsUpdated = 0;

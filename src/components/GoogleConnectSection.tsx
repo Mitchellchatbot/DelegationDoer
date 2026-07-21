@@ -175,7 +175,7 @@ function GoogleCard() {
               )}
             </div>
             <p className="text-xs text-ink/60 mt-1 max-w-prose">
-              Connect your Google account so DelegationDoer can read your
+              Connect your Google account so Scaled Operations can read your
               upcoming events and schedule meetings on your behalf when
               tasks need them.
             </p>

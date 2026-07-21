@@ -111,7 +111,7 @@ export default function SchedulePage() {
       <PageHero
         eyebrow="Schedule"
         headline={["Your ", { accent: "week" }]}
-        subtitle="Google Calendar events + any DelegationDoer task you're on the hook for. Tasks land here automatically once you connect Google in Settings."
+        subtitle="Google Calendar events + any Scaled Operations task you're on the hook for. Tasks land here automatically once you connect Google in Settings."
         icon={<CalendarDays />}
         iconTone="indigo"
         trailing={

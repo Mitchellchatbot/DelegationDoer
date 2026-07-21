@@ -1,6 +1,6 @@
 // Email-notification pull-mode poller.
 //
-// Replaces the missiveclone → DelegationDoer webhook fan-out path.
+// Replaces the missiveclone → Scaled Operations webhook fan-out path.
 // Instead of relying on missiveclone to push us notifications (fragile:
 // env drift, signature mismatches, URL typos that fail silently), this
 // runs on DD's cron, polls missiveclone's REST API for new inbound

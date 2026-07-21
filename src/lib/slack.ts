@@ -45,7 +45,7 @@ interface SlackResponse {
   [key: string]: unknown;
 }
 
-// Map a DelegationDoer presence state to the Slack status equivalent.
+// Map a Scaled Operations presence state to the Slack status equivalent.
 // `null` (Available) clears the status entirely.
 export const PRESENCE_TO_SLACK: Record<string, { text: string; emoji: string }> = {
   focus:     { text: "In focus",   emoji: ":brain:"          },
@@ -531,7 +531,7 @@ export async function notifyAssignment(args: {
       elements: [
         {
           type: "button",
-          text: { type: "plain_text", text: "Open in DelegationDoer", emoji: true },
+          text: { type: "plain_text", text: "Open in Scaled Operations", emoji: true },
           url: taskUrl,
           style: "primary"
         }
@@ -606,7 +606,7 @@ async function postCompletionBlocks(args: {
       elements: [
         {
           type: "button",
-          text: { type: "plain_text", text: "Open in DelegationDoer", emoji: true },
+          text: { type: "plain_text", text: "Open in Scaled Operations", emoji: true },
           url: taskUrl,
           style: "primary"
         }
@@ -718,7 +718,7 @@ export async function broadcastNewMoment(args: {
       type: "actions",
       elements: [{
         type: "button",
-        text: { type: "plain_text", text: "View in DelegationDoer", emoji: true },
+        text: { type: "plain_text", text: "View in Scaled Operations", emoji: true },
         url: args.momentsUrl
       }]
     }
@@ -790,7 +790,7 @@ export async function broadcastNewRecommendation(args: {
       type: "actions",
       elements: [{
         type: "button",
-        text: { type: "plain_text", text: "See in DelegationDoer", emoji: true },
+        text: { type: "plain_text", text: "See in Scaled Operations", emoji: true },
         url: args.recsUrl
       }]
     }
@@ -839,7 +839,7 @@ export async function notifyTeamFyiAsUser(args: {
       type: "actions",
       elements: [{
         type: "button",
-        text: { type: "plain_text", text: "Open in DelegationDoer", emoji: true },
+        text: { type: "plain_text", text: "Open in Scaled Operations", emoji: true },
         url: taskUrl
       }]
     }
@@ -961,7 +961,7 @@ export async function notifyTeamFyi(args: {
       type: "actions",
       elements: [{
         type: "button",
-        text: { type: "plain_text", text: "Open in DelegationDoer", emoji: true },
+        text: { type: "plain_text", text: "Open in Scaled Operations", emoji: true },
         url: taskUrl
       }]
     }

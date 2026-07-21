@@ -112,7 +112,7 @@ export async function GET(req: NextRequest) {
       elements: [
         {
           type: "button",
-          text: { type: "plain_text", text: "Open in DelegationDoer", emoji: true },
+          text: { type: "plain_text", text: "Open in Scaled Operations", emoji: true },
           url: taskUrl,
           style: "primary"
         }

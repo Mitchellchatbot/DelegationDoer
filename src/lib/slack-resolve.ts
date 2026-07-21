@@ -1,4 +1,4 @@
-// Resolve a DelegationDoer user → Slack user_id, preferring (in order):
+// Resolve a Scaled Operations user → Slack user_id, preferring (in order):
 //   1) users.slack_user_id  — cached result from a previous lookup, so
 //      we skip the rate-limited users.lookupByEmail call entirely
 //   2) users.slack_email    — manual override the leader set on /admin/slack

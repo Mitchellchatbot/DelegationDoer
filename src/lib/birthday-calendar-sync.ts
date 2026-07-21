@@ -90,7 +90,7 @@ export async function syncBirthdaysForOwner(ownerId: string): Promise<{
         const ev = await createAllDayYearlyEvent({
           userId: ownerId,
           summary: `🎂 ${c.name}'s birthday`,
-          description: `Auto-synced from DelegationDoer onboarding.`,
+          description: `Auto-synced from Scaled Operations onboarding.`,
           monthDay: md
         });
         await supabase.from("birthday_calendar_events").insert({

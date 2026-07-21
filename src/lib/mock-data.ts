@@ -97,7 +97,7 @@ export const projects: Project[] = [
   { id: "p_1", name: "Acme Insurance Site Refresh", description: "End-to-end rebuild of acme-insurance.com on Next.js with location pages.", departmentId: "dep_web" },
   { id: "p_2", name: "Q3 SEO Push — Lawsmith Group", description: "Programmatic location pages and authority backlinks.", departmentId: "dep_seo" },
   { id: "p_3", name: "Spring Lifecycle Campaign", description: "Activation + retention email arc.", departmentId: "dep_mkt" },
-  { id: "p_4", name: "DelegationDoer (internal)", description: "This very tool. Built by Software.", departmentId: "dep_software" }
+  { id: "p_4", name: "Scaled Operations (internal)", description: "This very tool. Built by Software.", departmentId: "dep_software" }
 ];
 
 export const milestones: Milestone[] = [
@@ -190,7 +190,7 @@ export const tasks: Task[] = [
     lastActivityAt: hoursAgo(48), createdAt: hoursAgo(240), blocksTaskIds: []
   },
   {
-    id: "t_11", title: "Ship DelegationDoer v1",
+    id: "t_11", title: "Ship Scaled Operations v1",
     description: "Internal release of the org's task tool. Auth, tasks, board, focus mode.",
     status: "in_progress", priority: "high", estimatedHours: 16, actualHours: 8,
     tags: ["story", "internal"], departmentId: "dep_software", assigneeId: "u_8", creatorId: "u_5",

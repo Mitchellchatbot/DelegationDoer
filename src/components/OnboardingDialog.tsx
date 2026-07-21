@@ -279,7 +279,7 @@ export function OnboardingDialog() {
                 >
                   <div className="inline-flex items-center gap-1.5 text-[11px] uppercase tracking-wide font-semibold text-accent">
                     <Sparkles className="w-3.5 h-3.5" />
-                    Welcome to DelegationDoer
+                    Welcome to Scaled Operations
                   </div>
                   <Dialog.Title className="text-xl font-bold text-ink mt-1.5">
                     Hi {me.name.split(" ")[0]} — let&apos;s set you up

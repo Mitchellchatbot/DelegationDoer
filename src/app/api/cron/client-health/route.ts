@@ -124,7 +124,7 @@ export async function GET(req: NextRequest) {
 
   // Refresh per-client last-outbound timestamps from missiveclone's
   // SENT folder so the touchpoint dashboard picks up emails sent
-  // outside DelegationDoer. Cheap enough to run every night — capped
+  // outside Scaled Operations. Cheap enough to run every night — capped
   // at 6 months of history internally.
   let touchpointsUpdated = 0;
   try {

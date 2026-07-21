@@ -6,7 +6,7 @@ import type { MetricsResult, ProjectMetricsRow } from "./website-builder-metrics
 //
 // Reads the `project_metrics` view from the standalone Website Builder
 // Supabase project. That project is owned by the website-generation
-// pipeline, not by DelegationDoer's main Supabase — so we hold its URL
+// pipeline, not by Scaled Operations's main Supabase — so we hold its URL
 // + service role key in dedicated env vars
 // (WEBSITE_BUILDER_METRICS_SUPABASE_*) instead of reusing the
 // SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY pair the rest of the app

@@ -71,7 +71,7 @@ export async function POST(
         const channel = await openDm(slackId);
         await postMessage(
           channel,
-          `${target.name}, you have a sign-in link for DelegationDoer.`,
+          `${target.name}, you have a sign-in link for Scaled Operations.`,
           [
             {
               type: "section",
@@ -79,7 +79,7 @@ export async function POST(
                 type: "mrkdwn",
                 text:
                   `👋 *${target.name}* — ${actor?.name ?? "the leader"} just sent ` +
-                  `you a sign-in link for *DelegationDoer*. ` +
+                  `you a sign-in link for *Scaled Operations*. ` +
                   `Click the button when you're ready — the link is single-use.`
               }
             },

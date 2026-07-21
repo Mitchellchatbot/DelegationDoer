@@ -1,7 +1,7 @@
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { setSlackUserStatus, PRESENCE_TO_SLACK, toSlackEmojiShortcode } from "@/lib/slack";
 
-// Mirror a user's DelegationDoer presence + emoji to their connected
+// Mirror a user's Scaled Operations presence + emoji to their connected
 // Slack account. Best-effort — failures are swallowed and logged so a
 // dead Slack token never breaks the underlying presence write.
 //

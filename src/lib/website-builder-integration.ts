@@ -2,7 +2,7 @@ import "server-only";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { recordEvent, type WebsiteBuildStatus } from "@/lib/outbound-leads";
 
-// Glue between DelegationDoer's outbound funnel and the standalone
+// Glue between Scaled Operations's outbound funnel and the standalone
 // Website-Builder pipeline (FastAPI + its own Supabase project).
 //
 // Flow:

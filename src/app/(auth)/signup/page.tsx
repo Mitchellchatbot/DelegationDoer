@@ -53,7 +53,7 @@ export default function SignupPage() {
         </div>
         <div>
           <h1 className="text-xl font-semibold text-ink">Create account</h1>
-          <p className="text-xs text-ink/60">DelegationDoer</p>
+          <p className="text-xs text-ink/60">Scaled Operations</p>
         </div>
       </div>
 

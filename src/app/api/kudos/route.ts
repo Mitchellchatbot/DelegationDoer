@@ -100,7 +100,7 @@ export async function POST(req: NextRequest) {
               {
                 type: "context",
                 elements: [
-                  { type: "mrkdwn", text: "_sent via DelegationDoer_" }
+                  { type: "mrkdwn", text: "_sent via Scaled Operations_" }
                 ]
               }
             ]

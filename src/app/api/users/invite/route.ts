@@ -176,14 +176,14 @@ export async function POST(req: NextRequest) {
           const channel = await openDm(slackId);
           await postMessage(
             channel,
-            `${name}, you've been added to DelegationDoer.`,
+            `${name}, you've been added to Scaled Operations.`,
             [
               {
                 type: "section",
                 text: {
                   type: "mrkdwn",
                   text:
-                    `👋 *${name}* — you've been added to *DelegationDoer*.\n` +
+                    `👋 *${name}* — you've been added to *Scaled Operations*.\n` +
                     `Click below to sign in. Single-use; ask the leader to resend if it expires.`
                 }
               },

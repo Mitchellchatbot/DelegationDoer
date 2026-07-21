@@ -80,7 +80,7 @@ export default async function ManageInboxesPage() {
             <div>
               <h1 className="text-xl font-semibold">Connected inboxes</h1>
               <p className="text-sm text-ink/60 mt-0.5 max-w-2xl">
-                Mailboxes linked to DelegationDoer. Each worker can self-connect their own from the Inboxes page; this view is the master list for leaders to audit + remove.
+                Mailboxes linked to Scaled Operations. Each worker can self-connect their own from the Inboxes page; this view is the master list for leaders to audit + remove.
               </p>
             </div>
           </div>

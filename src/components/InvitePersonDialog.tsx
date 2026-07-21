@@ -171,7 +171,7 @@ export function InvitePersonDialog({ trigger }: { trigger: React.ReactNode }) {
                       <UserPlus className="w-4 h-4 text-accent" />
                     </div>
                     <div>
-                      <Dialog.Title className="text-sm font-semibold">Invite to DelegationDoer</Dialog.Title>
+                      <Dialog.Title className="text-sm font-semibold">Invite to Scaled Operations</Dialog.Title>
                       <div className="text-[11px] text-ink/55">
                         We'll email them a magic link. Once they sign in they're in the org chart.
                       </div>

@@ -121,7 +121,7 @@ export function ClientFollowUpWidget({
                     </div>
                     <div className="text-[10px] text-ink/55 truncate">
                       {c.days === null
-                        ? "Never emailed via DelegationDoer"
+                        ? "Never emailed via Scaled Operations"
                         : c.days === 0
                           ? "Last email today"
                           : c.days === 1

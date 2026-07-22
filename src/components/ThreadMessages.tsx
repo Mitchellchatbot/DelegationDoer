@@ -3,11 +3,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Send, Inbox, Paperclip, SendHorizontal, Reply, Loader2 } from "lucide-react";
 import type { MissiveMessage } from "@/lib/missive-client";
-import { shortName, rawEmail, formatBytes, messageSnippet } from "@/lib/email-format";
+import { shortName, rawEmail, messageSnippet } from "@/lib/email-format";
 import { fetchDeferredBody, prefetchThreadBodies, getCachedBody } from "@/lib/message-body-cache";
 import { Avatar } from "@/components/Avatar";
 import { ForwardButton } from "@/components/ForwardButton";
 import { EmailBody } from "@/components/EmailBody";
+import { AttachmentChip } from "@/components/AttachmentChip";
 
 // Gmail-style thread collapse. A thread can hold many messages; rendering every
 // one fully expanded turns it into a wall of email. Instead we show only the
@@ -237,20 +238,12 @@ export function ThreadMessages({
                 {hasAttachments && (
                   <div className="px-5 pb-5 -mt-1 flex flex-wrap gap-2">
                     {(m.attachments ?? []).map((a) => (
-                      <a
+                      <AttachmentChip
                         key={a.id}
-                        href={`/api/inboxes/attachments/${encodeURIComponent(a.id)}?account=${encodeURIComponent(accountId)}&thread=${encodeURIComponent(threadId)}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-2 px-3 py-2 rounded-xl border border-border/60 bg-white/70 hover:border-accent/40 hover:text-accent transition-all hover:-translate-y-0.5 shadow-sm max-w-full"
-                        title={`Download ${a.filename}`}
-                      >
-                        <Paperclip className="w-3.5 h-3.5 shrink-0" />
-                        <span className="text-xs font-medium truncate max-w-[200px]">{a.filename}</span>
-                        {a.size_bytes > 0 && (
-                          <span className="text-[10px] text-muted shrink-0 tabular-nums">{formatBytes(a.size_bytes)}</span>
-                        )}
-                      </a>
+                        attachment={a}
+                        accountId={accountId}
+                        threadId={threadId}
+                      />
                     ))}
                   </div>
                 )}

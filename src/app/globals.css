@@ -183,6 +183,104 @@ body {
 }
 .card-hover:hover { transform: translateY(-1px); }
 
+/* ============ UI polish micro-interactions ============ */
+/* Added for: sidebar badge bump, approval status chip entrance, approve-button
+   shine + burst, reject/revise icon tilt, reply guardrail entrance, draft row
+   hover, thread-list skeleton shimmer, and the Sonner toast status icon. All
+   reuse the existing HSL token system above instead of new colors. */
+
+/* Hover shine sweep for high-emphasis pill buttons (e.g. Approve & Send). */
+.btn-shine { position: relative; overflow: hidden; }
+.btn-shine::after {
+  content: "";
+  position: absolute; top: 0; left: -60%; width: 40%; height: 100%;
+  background: linear-gradient(115deg, transparent, rgba(255,255,255,.55), transparent);
+  transform: skewX(-20deg);
+  transition: left 550ms ease;
+  pointer-events: none;
+}
+.btn-shine:hover::after { left: 130%; }
+
+/* Small particle burst fired on click (e.g. Approve & Send confirmation). */
+@keyframes ddBurstOut {
+  0%   { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  100% { opacity: 0; transform: translate(calc(-50% + var(--tx, 0px)), calc(-50% + var(--ty, 0px))) scale(0); }
+}
+.btn-burst { position: absolute; inset: 0; pointer-events: none; }
+.btn-burst span {
+  position: absolute; top: 50%; left: 50%; width: 6px; height: 6px; border-radius: 999px;
+  background: #fff; opacity: 0;
+  animation: ddBurstOut 500ms ease-out forwards;
+}
+
+/* Icon micro-rotate on hover — pair `.btn-icon-tilt` on the button with
+   `.icon-tilt` + `.tilt-neg`/`.tilt-pos` on the icon inside it. */
+.btn-icon-tilt .icon-tilt { display: inline-block; transition: transform 180ms ease; }
+.btn-icon-tilt:hover .icon-tilt.tilt-neg { transform: rotate(-10deg); }
+.btn-icon-tilt:hover .icon-tilt.tilt-pos { transform: rotate(14deg); }
+
+/* Reply-recipient guardrail entrance: slide down + a small icon shake. */
+@keyframes ddGuardIn {
+  0%   { opacity: 0; transform: translateY(-6px) scale(0.98); }
+  60%  { opacity: 1; transform: translateY(0) scale(1.01); }
+  100% { transform: translateY(0) scale(1); }
+}
+.anim-guard-in { animation: ddGuardIn 450ms cubic-bezier(0.2, 0.8, 0.3, 1) both; }
+@keyframes ddGuardShake {
+  0%, 100% { transform: rotate(0); }
+  20% { transform: rotate(-12deg); }
+  40% { transform: rotate(10deg); }
+  60% { transform: rotate(-6deg); }
+  80% { transform: rotate(4deg); }
+}
+.anim-guard-shake { animation: ddGuardShake 500ms ease 100ms both; display: inline-block; }
+
+/* Thread-row loading skeleton with a shimmer sweep. */
+.dd-skeleton {
+  background: hsl(var(--surface-2));
+  position: relative;
+  overflow: hidden;
+}
+.dd-skeleton::after {
+  content: "";
+  position: absolute; inset: 0; transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,.6), transparent);
+  animation: ddShimmer 1.4s infinite;
+}
+@keyframes ddShimmer { 100% { transform: translateX(100%); } }
+
+/* Sonner toast status icon: a ring that drains over the toast's lifetime,
+   with the glyph inside drawing itself in on mount. Passed globally via
+   <Toaster icons={{...}} /> in (main)/layout.tsx — no per-call-site changes. */
+.dd-toast-icon { position: relative; display: inline-flex; width: 22px; height: 22px; flex-shrink: 0; }
+.dd-toast-ring { position: absolute; inset: 0; transform: rotate(-90deg); }
+.dd-toast-ring-track { fill: none; stroke: hsl(var(--border)); stroke-width: 2; }
+.dd-toast-ring-progress {
+  fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round;
+  stroke-dasharray: 69.1; stroke-dashoffset: 0;
+  animation: ddToastRingDrain 4s linear forwards;
+}
+@keyframes ddToastRingDrain { to { stroke-dashoffset: 69.1; } }
+.dd-toast-glyph { position: absolute; inset: 0; margin: auto; width: 11px; height: 11px; }
+.dd-toast-glyph path {
+  fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round;
+  stroke-dasharray: 16; stroke-dashoffset: 16;
+  animation: ddToastDraw 350ms ease 550ms forwards;
+}
+.dd-toast-glyph .dd-toast-dot {
+  fill: currentColor; stroke: none; opacity: 0;
+  animation: ddToastDotIn 200ms ease 650ms forwards;
+}
+@keyframes ddToastDraw { to { stroke-dashoffset: 0; } }
+@keyframes ddToastDotIn { to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .dd-toast-ring-progress { animation: none; }
+  .dd-toast-glyph path { animation: none; stroke-dashoffset: 0; }
+  .dd-toast-glyph .dd-toast-dot { animation: none; opacity: 1; }
+  .anim-guard-in, .anim-guard-shake, .btn-burst span { animation: none; }
+  .dd-skeleton::after { animation: none; }
+}
+
 .scroll-shadow {
   background:
     linear-gradient(#F8FAFC 30%, rgba(248,250,252,0)) center top,

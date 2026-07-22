@@ -1,5 +1,5 @@
-import { PageLoader } from "@/components/Spinner";
+import { ThreadListSkeleton } from "@/components/Spinner";
 
 export default function Loading() {
-  return <PageLoader label="Loading threads…" />;
+  return <ThreadListSkeleton />;
 }

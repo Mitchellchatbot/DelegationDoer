@@ -495,6 +495,8 @@ function DraftCard({
   const [expanded, setExpanded] = useState(isPending || isNeedsRevision);
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState<"approve" | "reject" | "save" | "feedback" | "revision" | "resubmit" | "archive" | null>(null);
+  // Bumped on every Approve & Send click to key-remount the burst particles below.
+  const [burstKey, setBurstKey] = useState(0);
   const [rejectNote, setRejectNote] = useState("");
   const [showRejectBox, setShowRejectBox] = useState(false);
   const [feedbackNote, setFeedbackNote] = useState("");
@@ -851,32 +853,32 @@ function DraftCard({
                 />
               )}
               {isSent && (
-                <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700 border border-emerald-200/70">
+                <span className="anim-scale-in inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700 border border-emerald-200/70">
                   <CheckCircle2 className="w-3 h-3" /> Sent
                 </span>
               )}
               {isApproved && (
-                <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700 border border-blue-200/70">
+                <span className="anim-scale-in inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700 border border-blue-200/70">
                   <CheckCircle2 className="w-3 h-3" /> Approved
                 </span>
               )}
               {isRejected && (
-                <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full bg-rose-100 text-rose-700 border border-rose-200/70">
+                <span className="anim-scale-in inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full bg-rose-100 text-rose-700 border border-rose-200/70">
                   <XCircle className="w-3 h-3" /> Rejected
                 </span>
               )}
               {isFailed && (
-                <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-200/70">
+                <span className="anim-scale-in inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-200/70">
                   <AlertTriangle className="w-3 h-3" /> Send failed
                 </span>
               )}
               {isNeedsRevision && (
-                <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full bg-orange-100 text-orange-700 border border-orange-200/70">
+                <span className="anim-scale-in inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full bg-orange-100 text-orange-700 border border-orange-200/70">
                   <RotateCcw className="w-3 h-3" /> Needs revision
                 </span>
               )}
               {isDismissed && (
-                <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200/70">
+                <span className="anim-scale-in inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200/70">
                   <Archive className="w-3 h-3" /> Archived
                 </span>
               )}
@@ -1158,32 +1160,42 @@ function DraftCard({
                     <button
                       type="button"
                       onClick={() => setShowRevisionBox(true)}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium text-orange-700 bg-white border border-orange-200/70 hover:bg-orange-50 transition-colors"
+                      className="btn-icon-tilt inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium text-orange-700 bg-white border border-orange-200/70 hover:bg-orange-50 transition-colors active:scale-95"
                     >
-                      <RotateCcw className="w-3 h-3" /> Request revision
+                      <RotateCcw className="w-3 h-3 icon-tilt tilt-pos" /> Request revision
                     </button>
                     <button
                       type="button"
                       onClick={() => setShowRejectBox(true)}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium text-rose-700 bg-white border border-rose-200/70 hover:bg-rose-50 transition-colors"
+                      className="btn-icon-tilt inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium text-rose-700 bg-white border border-rose-200/70 hover:bg-rose-50 transition-colors active:scale-95"
                     >
-                      <XCircle className="w-3 h-3" /> Reject…
+                      <XCircle className="w-3 h-3 icon-tilt tilt-neg" /> Reject…
                     </button>
                   </>
                 )}
                 {canApproveThisDraft && (isPending || isFailed) && (
                   <button
                     type="button"
-                    onClick={approve}
+                    onClick={() => { setBurstKey((k) => k + 1); void approve(); }}
                     disabled={busy === "approve"}
                     className={cn(
-                      "inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs font-semibold text-white shadow-sm transition-all hover:-translate-y-0.5 active:scale-95",
+                      "btn-shine relative inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs font-semibold text-white shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-lift active:scale-95",
                       busy === "approve" && "opacity-60 cursor-not-allowed hover:translate-y-0"
                     )}
                     style={{ background: "linear-gradient(135deg, #10b981 0%, #059669 100%)" }}
                   >
                     {busy === "approve" ? <Loader2 className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
                     {isFailed ? "Retry send" : "Approve & Send"}
+                    {burstKey > 0 && (
+                      <span key={burstKey} className="btn-burst" aria-hidden>
+                        <span style={{ "--tx": "-28px", "--ty": "-14px" } as React.CSSProperties} />
+                        <span style={{ "--tx": "28px", "--ty": "-16px" } as React.CSSProperties} />
+                        <span style={{ "--tx": "-20px", "--ty": "16px" } as React.CSSProperties} />
+                        <span style={{ "--tx": "22px", "--ty": "18px" } as React.CSSProperties} />
+                        <span style={{ "--tx": "0px", "--ty": "-26px" } as React.CSSProperties} />
+                        <span style={{ "--tx": "0px", "--ty": "26px" } as React.CSSProperties} />
+                      </span>
+                    )}
                   </button>
                 )}
                 {isNeedsRevision && isAuthor && (

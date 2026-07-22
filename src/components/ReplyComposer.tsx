@@ -681,9 +681,9 @@ export function ReplyComposer({
               {/* Mis-recipient guardrail — surfaces the moment a "To" entry isn't
                   part of this thread, with an explicit "Send anyway" to override. */}
               {strangerRecipients.length > 0 && (
-                <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 px-3 py-2.5 rounded-xl border border-amber-300/80 bg-amber-50 text-amber-900">
+                <div className="anim-guard-in flex flex-wrap items-center gap-x-2 gap-y-1.5 px-3 py-2.5 rounded-xl border border-amber-300/80 bg-amber-50 text-amber-900">
                   <span className="inline-flex items-start gap-1.5 text-[12.5px] leading-snug">
-                    <span aria-hidden className="mt-px">⚠️</span>
+                    <span aria-hidden className="anim-guard-shake mt-px">⚠️</span>
                     <span>
                       <strong className="break-all">{strangerRecipients.join(", ")}</strong>{" "}
                       {strangerRecipients.length === 1 ? "isn't" : "aren't"} part of this

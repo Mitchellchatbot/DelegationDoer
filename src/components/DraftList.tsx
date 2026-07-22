@@ -131,7 +131,7 @@ function DraftRow({
       ) : href ? (
         <Link
           href={href}
-          className="relative flex items-center gap-3 px-3 py-2.5 border-b border-slate-100/80 bg-white hover:bg-slate-50/70 transition-colors duration-150"
+          className="relative flex items-center gap-3 px-3 py-2.5 border-b border-slate-100/80 bg-white hover:bg-slate-50/70 hover:translate-x-0.5 transition-[background-color,transform] duration-150"
         >
           {body}
         </Link>
@@ -139,7 +139,7 @@ function DraftRow({
         <button
           type="button"
           onClick={() => onOpenCompose(draft.id)}
-          className="w-full text-left relative flex items-center gap-3 px-3 py-2.5 border-b border-slate-100/80 bg-white hover:bg-slate-50/70 transition-colors duration-150"
+          className="w-full text-left relative flex items-center gap-3 px-3 py-2.5 border-b border-slate-100/80 bg-white hover:bg-slate-50/70 hover:translate-x-0.5 transition-[background-color,transform] duration-150"
         >
           {body}
         </button>
@@ -151,7 +151,7 @@ function DraftRow({
           onClick={() => onDiscard(draft)}
           aria-label="Discard draft"
           title="Discard draft"
-          className="absolute top-1/2 -translate-y-1/2 right-3 z-10 opacity-0 group-hover:opacity-100 transition-opacity p-1.5 rounded-lg bg-white border border-slate-200 text-ink/55 hover:text-rose-600 hover:border-rose-200 shadow-sm"
+          className="absolute top-1/2 -translate-y-1/2 right-3 z-10 opacity-0 translate-x-1 group-hover:opacity-100 group-hover:translate-x-0 transition-[opacity,transform] duration-150 p-1.5 rounded-lg bg-white border border-slate-200 text-ink/55 hover:text-rose-600 hover:border-rose-200 shadow-sm"
         >
           <Trash2 className="w-3.5 h-3.5" />
         </button>

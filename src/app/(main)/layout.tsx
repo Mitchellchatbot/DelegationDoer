@@ -13,6 +13,7 @@ import { OnboardingDialog } from "@/components/OnboardingDialog";
 import { SodGate } from "@/components/SodGate";
 import { TooltipRoot } from "@/components/Tooltip";
 import { NavDrawerProvider } from "@/components/NavDrawerProvider";
+import { ToastSuccessIcon, ToastErrorIcon, ToastWarningIcon } from "@/components/ToastIcons";
 import { primaryDepartment } from "@/lib/departments";
 
 export default async function MainLayout({ children }: { children: React.ReactNode }) {
@@ -73,7 +74,16 @@ export default async function MainLayout({ children }: { children: React.ReactNo
         </div>
       </div>
       </NavDrawerProvider>
-      <Toaster position="bottom-right" richColors closeButton />
+      <Toaster
+        position="bottom-right"
+        richColors
+        closeButton
+        icons={{
+          success: <ToastSuccessIcon />,
+          error: <ToastErrorIcon />,
+          warning: <ToastWarningIcon />
+        }}
+      />
       <OnboardingDialog />
       <SodGate />
       </TooltipRoot>

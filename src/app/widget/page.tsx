@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback, useMemo, createContext, useContext } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, useCallback, useMemo, createContext, useContext } from "react";
 import { Check, Clock, Minus, X, AlertTriangle, Plus, Bell, ArrowLeft, Focus, Coffee, Moon, Smile, Sparkles, Play, Square, Crown, Settings as SettingsIcon, LogOut, Camera, Mail, ScanText, LifeBuoy } from "lucide-react";
 import { toast } from "sonner";
 import { AvatarCropper } from "@/components/AvatarCropper";
@@ -702,6 +702,33 @@ export default function WidgetPage() {
     setState(unacked.length > 0 ? "alert" : "bubble");
   }
 
+  // Fit the Electron alert window to the actual notification card so the whole
+  // thing pops complete on both macOS and Windows. The old shell used a FIXED
+  // window height and center-aligned the card, so any card taller than that
+  // window got its top + bottom clipped once mentions/emails stacked up. We
+  // measure the rendered card (.anim-pop-bubble) and report its height; the
+  // shell resizes the window to fit (+ the 20px shadow padding each side). A
+  // ResizeObserver keeps it correct as rows are added/acked. Old widget shells
+  // without setAlertSize simply keep the fixed ALERT size — no-op, no crash.
+  const lastAlertH = useRef(0);
+  useLayoutEffect(() => {
+    const api = (window as any).widgetAPI;
+    if (state !== "alert" || !api?.setAlertSize) { lastAlertH.current = 0; return; }
+    const card = document.querySelector(".anim-pop-bubble") as HTMLElement | null;
+    if (!card) return;
+    const report = () => {
+      const h = Math.ceil(card.getBoundingClientRect().height) + 40; // + 20px shadow padding × 2
+      if (Math.abs(h - lastAlertH.current) > 2) {
+        lastAlertH.current = h;
+        api.setAlertSize({ h });
+      }
+    };
+    report();
+    const ro = new ResizeObserver(report);
+    ro.observe(card);
+    return () => ro.disconnect();
+  }, [state, unacked.length, notifications.length, emails.length, support.length, kudos.length, eodReminderDue]);
+
   // Signed-out state takes priority. Bubble shows a generic icon (no
   // notif badge), panel shows the sign-in prompt. We don't want to show
   // task alerts or kudos banners when we have no session at all.
@@ -1262,17 +1289,19 @@ function EmailAlert({
       <div
         // @ts-ignore
         style={{ WebkitAppRegion: "no-drag" } as any}
-        className="relative flex-1 anim-pop-bubble"
+        className="relative flex-1 min-w-0 max-w-lg anim-pop-bubble"
       >
         <div
           className="flex flex-col bg-gradient-to-br from-sky-50 to-cyan-50 rounded-2xl border border-sky-300 shadow-[0_8px_24px_rgba(2,132,199,0.25)] overflow-hidden"
-          // The alert window is a FIXED ~140px tall (electron/main.js ALERT.h),
-          // leaving a ~100px content band after the 20px shadow padding. Cap the
-          // card and make ONLY the list scroll so the header (count + Mark all
-          // seen), the newest row, and the footer stay on-screen — otherwise the
-          // whole card overflows and gets center-clipped. Preview text is dropped
-          // here (it's shown in the panel) to keep each row compact.
-          style={{ maxHeight: 100 }}
+          // Keep the card COMPACT — the classic single-glance design: header
+          // (count + Mark all seen), the newest row visible, the rest reachable
+          // by scrolling the list, then the footer. Cap keeps it small so it
+          // doesn't grow into a tall panel. The shell now measures THIS card and
+          // fits the window snugly around it (see the measuring effect +
+          // widget:set-alert-size), so the compact card always displays
+          // complete — header, row, and footer — never center-clipped. Preview
+          // text is dropped here (shown in the panel) to keep each row compact.
+          style={{ maxHeight: 112 }}
         >
           <div className="shrink-0 flex items-center gap-1.5 px-3 pt-2.5 pb-1.5 text-[10px] uppercase tracking-wide text-sky-700 font-semibold">
             <Mail className="w-3 h-3" />

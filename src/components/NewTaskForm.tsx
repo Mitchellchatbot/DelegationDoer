@@ -13,6 +13,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { Sparkles, Wand2, Crown, ShieldCheck, ChevronDown, ChevronRight, Mail, FolderOpen, Server, Link as LinkIcon, KeyRound, MessageSquare, Zap, ScanText, AlertTriangle, Clock } from "lucide-react";
 import { PersonAvatar } from "@/components/PersonAvatar";
 import { MediaPicker } from "@/components/MediaPicker";
+import { DeadlinePicker } from "@/components/DeadlinePicker";
 import { toast } from "sonner";
 import type { CustomField, TaskMedia } from "@/lib/types";
 
@@ -627,13 +628,7 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel, initialValues }: 
                 )}
               </div>
             </div>
-            <input
-              type="datetime-local"
-              className="input"
-              value={dueDateOverride}
-              onChange={(e) => setDueDateOverride(e.target.value)}
-              placeholder=""
-            />
+            <DeadlinePicker value={dueDateOverride} onChange={setDueDateOverride} />
           </div>
           <div>
             <label className="label">Tags</label>

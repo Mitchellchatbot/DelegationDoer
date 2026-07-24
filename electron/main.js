@@ -24,13 +24,15 @@ const WIDGET_URL = `${APP_URL}/widget`;
 // ALERT/PANEL: ~20px shadow margin per side on top of the card's natural
 //   width/height.
 const BUBBLE = { w: 96, h: 96 };
-// Bigger than the historical 420 — the aggregate mentions card
-// production now serves ("Mark all seen" / "See all in widget") is
-// wider than the classic single-alert cards and was clipping on the
-// left. h=240 (up from 140) gives room for the taller aggregate card
-// too. Feel free to nudge these dimensions per operator preference —
-// they only affect the widget window bounds, not the card CSS.
-const ALERT  = { w: 900, h: 240 };
+// Notification window. Width is fixed and generous so the card (right-
+// aligned toward the bubble) never clips horizontally. Height here is only
+// the pre-measurement default/fallback — the renderer measures the actual
+// (compact) card once it mounts and calls widget:set-alert-size to fit the
+// window snugly around it (see the handler below). Kept a touch taller than
+// the compact card so it's fully visible even for the one frame before the
+// measured height lands, and so old renderer shells that never call
+// set-alert-size still show the card complete (compact card < this height).
+const ALERT  = { w: 900, h: 220 };
 const PANEL  = { w: 420, h: 560 };
 const MARGIN = 16;
 
@@ -309,6 +311,20 @@ app.whenReady().then(() => {
 ipcMain.handle("widget:expand", () => setSize(PANEL));
 ipcMain.handle("widget:collapse", () => setSize(BUBBLE));
 ipcMain.handle("widget:set-state", (_e, state) => setSize(sizeForState(state)));
+
+// Fit the notification window to the exact card height the renderer measured,
+// so the whole alert pops complete — no center-clipping — no matter how many
+// mentions/emails stack up. Width stays at the ALERT default; only height is
+// content-driven, clamped to the current display's work area. This is pure
+// BrowserWindow bounds math, so the behaviour is identical on macOS and
+// Windows. Ignored (harmless) if called in any non-alert state.
+ipcMain.handle("widget:set-alert-size", (_e, size) => {
+  if (!widget) return;
+  const wa = currentDisplay().workArea;
+  const h = Math.max(BUBBLE.h, Math.min(Math.round((size && size.h) || ALERT.h), wa.height - MARGIN * 2));
+  const a = getAnchors({ w: ALERT.w, h })[currentAnchor] || getAnchors({ w: ALERT.w, h }).br;
+  widget.setBounds({ x: a.x, y: a.y, width: ALERT.w, height: h }, false);
+});
 ipcMain.handle("widget:hide", () => widget?.hide());
 ipcMain.handle("widget:openMain", () => shell.openExternal(APP_URL));
 ipcMain.handle("widget:openMainWindow", (_e, path) => {

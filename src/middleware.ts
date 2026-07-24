@@ -56,7 +56,10 @@ const PUBLIC_PREFIXES = [
   // widget to render its own "Sign in" state rather than redirect to
   // /login (which doesn't fit in a 380px window). The /api/widget/*
   // endpoints stay protected; the widget UI handles their 401s.
-  "/widget"
+  "/widget",
+  // Internal design-showcase page (UI concept gallery for the team) —
+  // static/demo content only, no user data, safe to leave unauthenticated.
+  "/showcase"
 ];
 
 function isPublic(pathname: string): boolean {

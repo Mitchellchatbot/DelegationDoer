@@ -14,6 +14,12 @@ const config: Config = {
         ink: "#0F172A",
         muted: "#64748B",
         accent: "#063270",
+        // Indigo/violet accents — already defined as CSS vars in globals.css
+        // (--accent-2/--brand-2/--brand-3) but not yet exposed as Tailwind
+        // tokens. Adding them here so `text-accent-2` etc. work.
+        "accent-2": "hsl(var(--accent-2))",
+        "brand-2": "hsl(var(--brand-2))",
+        "brand-3": "hsl(var(--brand-3))",
         warn: "#D97706",
         urgent: "#DC2626",
         ok: "#16A34A",

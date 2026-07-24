@@ -500,7 +500,11 @@ export function Sidebar({ user }: { user: User }) {
                 </span>
                 <span className="relative">{item.label}</span>
                 {badge && (
-                  <span
+                  <motion.span
+                    key={badge.count}
+                    initial={{ scale: 1.35 }}
+                    animate={{ scale: 1 }}
+                    transition={{ type: "spring", stiffness: 500, damping: 15 }}
                     className={cn(
                       "ml-auto inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full text-[10px] font-bold tabular-nums text-white shadow-sm relative",
                       badge.tone === "rose" ? "bg-rose-500" : "bg-amber-500"
@@ -508,7 +512,7 @@ export function Sidebar({ user }: { user: User }) {
                     title={badge.title}
                   >
                     {badge.count}
-                  </span>
+                  </motion.span>
                 )}
                 {/* Active-indicator dot. Bumped to 2x2 and a bouncier
                     spring so the slide between tabs reads as a real

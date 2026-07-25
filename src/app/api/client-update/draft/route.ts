@@ -5,6 +5,7 @@ import { getClient } from "@/lib/clients-data";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { isLeader } from "@/lib/auth";
 import { getAnthropic, MODELS } from "@/lib/anthropic-client";
+import { clientWorkMatchOr } from "@/lib/eod-client-work";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -13,7 +14,7 @@ export const maxDuration = 60;
 //   body: {
 //     clientId: string,
 //     clientName?: string,        // display only; clientId is the source of truth
-//     from?: string,              // ISO — window start (default: 7 days ago)
+//     from?: string,              // ISO — window start (default: 14 days ago)
 //     to?: string,                // ISO — window end (default: now)
 //     entryIds?: string[]         // operator's selected EOD work entries.
 //                                 // Omit = every entry in the window.
@@ -63,7 +64,9 @@ interface WorkRow {
 }
 
 const NO_DEPT = "__no_dept__";
-const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+// Fallback window when the caller sends no from/to. Matches the composer's
+// DEFAULT_DAYS (the UI always sends an explicit window; this is a safety net).
+const DEFAULT_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
 
 export async function POST(req: NextRequest) {
   try {
@@ -92,12 +95,12 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "not allowed" }, { status: 403 });
     }
 
-    // Window. Default = last 7 days. Bad/missing inputs fall back.
+    // Window. Default = last 14 days. Bad/missing inputs fall back.
     const now = Date.now();
     const toMs = body.to ? Date.parse(body.to) : now;
-    const fromMs = body.from ? Date.parse(body.from) : now - WEEK_MS;
+    const fromMs = body.from ? Date.parse(body.from) : now - DEFAULT_WINDOW_MS;
     const toIso = new Date(Number.isFinite(toMs) ? toMs : now).toISOString();
-    const fromIso = new Date(Number.isFinite(fromMs) ? fromMs : now - WEEK_MS).toISOString();
+    const fromIso = new Date(Number.isFinite(fromMs) ? fromMs : now - DEFAULT_WINDOW_MS).toISOString();
     const fromDateStr = fromIso.slice(0, 10);
     const toDateStr = toIso.slice(0, 10);
 
@@ -122,7 +125,9 @@ export async function POST(req: NextRequest) {
     let workQuery = supabase
       .from("eod_client_work")
       .select("id, user_id, note_date, worked_on, results")
-      .eq("client_name", clientName)
+      // Match by the client_id FK OR the frozen client_name copy so a renamed
+      // client doesn't orphan its EOD entries (mirrors the preview route).
+      .or(clientWorkMatchOr(clientId, clientName))
       .is("reported_to_client_at", null)
       .is("dismissed_at", null)
       .gte("note_date", fromDateStr)

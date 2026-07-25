@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUserId } from "@/lib/session";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
+import { clientWorkMatchOr } from "@/lib/eod-client-work";
 
 export const dynamic = "force-dynamic";
 
@@ -45,6 +46,7 @@ export async function GET(req: NextRequest) {
     await requireCurrentUserId();
     const url = new URL(req.url);
     const clientName = (url.searchParams.get("clientName") ?? "").trim();
+    const clientId = (url.searchParams.get("clientId") ?? "").trim();
     const fromRaw = url.searchParams.get("from") ?? "";
     const toRaw = url.searchParams.get("to") ?? "";
     if (!clientName || !fromRaw || !toRaw) {
@@ -64,16 +66,22 @@ export async function GET(req: NextRequest) {
 
     // EOD client-work entries for this client in the window that haven't
     // already been reported in an earlier email.
-    const { data: workRes } = await supabase
+    let workQuery = supabase
       .from("eod_client_work")
       .select("id, user_id, note_date, worked_on, results")
-      .eq("client_name", clientName)
       .is("reported_to_client_at", null)
       .is("dismissed_at", null)
       .gte("note_date", fromDateStr)
       .lte("note_date", toDateStr)
       .order("note_date", { ascending: false })
       .limit(200);
+    // Match by the client_id FK OR the frozen client_name copy so a renamed
+    // client doesn't orphan its EOD entries. Name-only fallback when the caller
+    // sent no clientId (defensive — the composer always passes one).
+    workQuery = clientId
+      ? workQuery.or(clientWorkMatchOr(clientId, clientName))
+      : workQuery.eq("client_name", clientName);
+    const { data: workRes } = await workQuery;
     const work = (workRes ?? []) as WorkRow[];
 
     // Resolve each contributor's name + department (SEO vs Website). A

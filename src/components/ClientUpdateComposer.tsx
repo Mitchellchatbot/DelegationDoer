@@ -14,8 +14,9 @@ import { RecipientAutocomplete, type ClientSuggestion } from "@/components/Recip
 import type { TaskMedia } from "@/lib/types";
 
 // Client Update composer, rendered as a per-client section on /clients/[id].
-// The window is fixed by `presetDays` (set upstream by the tab that opened
-// it; defaults to 7). The source is the team's EOD client-work entries for
+// The lookback window seeds from `presetDays` (set upstream by the tab that
+// opened it; defaults to DEFAULT_DAYS) and is adjustable in-place via the range
+// selector in the preview header. The source is the team's EOD client-work entries for
 // this client (what each person logged they did + results in their daily
 // end-of-day form). The operator picks which entries to include (checkboxes
 // in the preview, grouped by the contributor's department), hits Generate
@@ -34,7 +35,12 @@ interface LockedClient {
   contactEmails: string[];
 }
 
-const DEFAULT_DAYS = 7;
+const DEFAULT_DAYS = 14;
+
+// Lookback windows offered by the composer's range selector. The operator can
+// widen this to reach older un-reported EOD work (nothing is permanently
+// hidden — sending stamps reported_to_client_at, which drops entries off).
+const DAY_OPTIONS = [7, 14, 30, 90];
 
 // A connected sending mailbox (from GET /api/inboxes).
 interface MailAccount {
@@ -137,12 +143,11 @@ export function ClientUpdateComposer({
   // undefined and the composer just resets to "compose" as before.
   onSubmitted?: () => void;
 }) {
-  // Window is fixed for the lifetime of this composer instance —
-  // picked upstream (the /approvals tab the user is on; falls back
-  // to DEFAULT_DAYS when rendered standalone on the client page).
-  // The user already chose the window before opening this; we don't
-  // re-ask here.
-  const days = presetDays && presetDays > 0 ? presetDays : DEFAULT_DAYS;
+  // Lookback window. Seeded from presetDays (the /approvals deep-link) or
+  // DEFAULT_DAYS on the client page, then adjustable in-place via the range
+  // selector in the preview header. State (not a const) so the selector, the
+  // preview refetch, and the Generate POST all read the same value.
+  const [days, setDays] = useState<number>(presetDays && presetDays > 0 ? presetDays : DEFAULT_DAYS);
 
   const me = useCurrentUser();
   // Heuristic gate for the "Send now" (bypass-approval) button. The
@@ -609,8 +614,10 @@ export function ClientUpdateComposer({
       {step === "compose" ? (
         <div className="p-4 space-y-3">
           <ComposerPreview
+            clientId={lockedClient.id}
             clientName={lockedClient.name}
             days={days}
+            onDaysChange={setDays}
             selected={selectedIds}
             onToggle={toggleTask}
             onLoadedIds={(ids) => setSelectedIds(new Set(ids))}
@@ -1163,10 +1170,12 @@ interface PreviewData {
 // feeds the draft(s). Refetches whenever the window (days) changes; on
 // (re)load every entry starts selected.
 function ComposerPreview({
-  clientName, days, selected, onToggle, onLoadedIds, onDiscard
+  clientId, clientName, days, onDaysChange, selected, onToggle, onLoadedIds, onDiscard
 }: {
+  clientId: string;
   clientName: string;
   days: number;
+  onDaysChange: (days: number) => void;
   selected: Set<string>;
   onToggle: (id: string) => void;
   onLoadedIds: (ids: string[]) => void;
@@ -1203,6 +1212,7 @@ function ComposerPreview({
     setLoading(true);
     setError(null);
     const qs = new URLSearchParams({
+      clientId,
       clientName,
       from: window.from,
       to: window.to
@@ -1229,7 +1239,7 @@ function ComposerPreview({
     // Re-run only when the window (days) or client changes. onLoadedIds is
     // a stable setter-wrapper from the parent and intentionally omitted.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [clientName, days]);
+  }, [clientId, clientName, days]);
 
   // Group entries by department for display (and so the operator sees
   // which per-department email each will route to).
@@ -1254,8 +1264,20 @@ function ComposerPreview({
   return (
     <div className="rounded-xl border border-slate-200/70 bg-white p-3 space-y-3">
       <div className="flex items-center justify-between gap-2">
-        <div className="text-[10px] uppercase tracking-wide font-semibold text-ink/55">
-          Pick the EOD work the AI will summarize
+        <div className="flex items-center gap-2 min-w-0">
+          <div className="text-[10px] uppercase tracking-wide font-semibold text-ink/55">
+            Pick the EOD work the AI will summarize
+          </div>
+          <select
+            value={days}
+            onChange={(e) => onDaysChange(Number(e.target.value))}
+            title="How far back to pull EOD work"
+            className="shrink-0 text-[10px] font-semibold text-ink/60 bg-slate-50 border border-slate-200 rounded-md px-1.5 py-0.5 hover:border-slate-300 focus:outline-none focus:ring-1 focus:ring-sky-400/40 cursor-pointer"
+          >
+            {(DAY_OPTIONS.includes(days) ? DAY_OPTIONS : [days, ...DAY_OPTIONS]).map((d) => (
+              <option key={d} value={d}>Last {d} days</option>
+            ))}
+          </select>
         </div>
         {unselectedIds.length > 0 && (
           <button

@@ -21,10 +21,13 @@ import type { TaskMedia } from "@/lib/types";
 // single-inbox call site keeps passing accountId + accountEmail and
 // gets the original flow.
 export function ComposeButton({
-  accountId, accountEmail, accounts
+  accountId, accountEmail, accountSyncError, accounts
 }: {
   accountId?: string;
   accountEmail?: string;
+  // Single-inbox call site only: that path builds its own one-entry From list,
+  // so the mailbox's health has to arrive separately from `accounts`.
+  accountSyncError?: string | null;
   accounts?: {
     id: string;
     email: string;
@@ -85,7 +88,9 @@ export function ComposeButton({
     [clients, teamSuggestions]
   );
 
-  const fromOptions = accounts ?? (accountId ? [{ id: accountId, email: accountEmail ?? "", display_name: null }] : []);
+  const fromOptions = accounts ?? (accountId
+    ? [{ id: accountId, email: accountEmail ?? "", display_name: null, last_sync_error: accountSyncError ?? null }]
+    : []);
   const fromMeta = fromOptions.find((a) => a.id === fromAccountId) ?? fromOptions[0];
   const effectiveAccountId = fromMeta?.id ?? "";
   const effectiveFromLabel = fromMeta?.display_name || fromMeta?.email || "";

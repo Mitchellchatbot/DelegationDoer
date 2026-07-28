@@ -44,6 +44,9 @@ export default async function InboxThreadsPage({
   let hasMore = false;
   let inboxLabel = "Inbox";
   let inboxEmail = "";
+  // Carried into ComposeButton so the single-inbox case warns too — that path
+  // synthesizes its own From option and would otherwise have no health data.
+  let inboxSyncError: string | null = null;
   let fetchError: string | null = null;
   try {
     // SSR a small first page — the client component handles infinite scroll
@@ -60,6 +63,7 @@ export default async function InboxThreadsPage({
     if (!account) notFound();
     inboxLabel = account.display_name || account.email;
     inboxEmail = account.email;
+    inboxSyncError = account.last_sync_error ?? null;
     threads = firstPage.threads;
     hasMore = firstPage.hasMore;
   } catch (err) {
@@ -103,7 +107,11 @@ export default async function InboxThreadsPage({
               </div>
             </div>
           </div>
-          <ComposeButton accountId={params.accountId} accountEmail={inboxEmail} />
+          <ComposeButton
+            accountId={params.accountId}
+            accountEmail={inboxEmail}
+            accountSyncError={inboxSyncError}
+          />
         </div>
         <div
           aria-hidden

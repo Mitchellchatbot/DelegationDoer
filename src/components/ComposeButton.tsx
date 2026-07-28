@@ -4,7 +4,8 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
-import { PenSquare, Send, X, Loader2, Clock, Check, Maximize2, Minimize2 } from "lucide-react";
+import { PenSquare, Send, X, Loader2, Clock, Check, Maximize2, Minimize2, AlertTriangle } from "lucide-react";
+import { isReauthFailure, REAUTH_PICKER_HINT } from "@/lib/missive-reauth";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { MediaPicker } from "@/components/MediaPicker";
@@ -24,7 +25,13 @@ export function ComposeButton({
 }: {
   accountId?: string;
   accountEmail?: string;
-  accounts?: { id: string; email: string; display_name?: string | null }[];
+  accounts?: {
+    id: string;
+    email: string;
+    display_name?: string | null;
+    // Carried straight off MissiveAccount.last_sync_error by the host page.
+    last_sync_error?: string | null;
+  }[];
 }) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -82,6 +89,9 @@ export function ComposeButton({
   const fromMeta = fromOptions.find((a) => a.id === fromAccountId) ?? fromOptions[0];
   const effectiveAccountId = fromMeta?.id ?? "";
   const effectiveFromLabel = fromMeta?.display_name || fromMeta?.email || "";
+  // Flag the mailbox actually selected — sending from a revoked one always
+  // fails, and finding that out after writing the email is the whole problem.
+  const fromNeedsReauth = isReauthFailure(fromMeta?.last_sync_error);
 
   function reset() {
     setTo("");
@@ -373,6 +383,7 @@ export function ComposeButton({
                           {fromOptions.map((a) => (
                             <option key={a.id} value={a.id}>
                               {a.display_name ? `${a.display_name} <${a.email}>` : a.email}
+                              {isReauthFailure(a.last_sync_error) ? " — reconnect needed" : ""}
                             </option>
                           ))}
                         </select>
@@ -406,6 +417,12 @@ export function ComposeButton({
                 </header>
 
                 <div className={cn("p-4 space-y-2.5", maximized && "flex-1 flex flex-col min-h-0 overflow-y-auto")}>
+                  {fromNeedsReauth && (
+                    <div className="flex items-start gap-2 px-3 py-2 rounded-xl border border-amber-300 bg-amber-50 text-[11px] text-amber-800">
+                      <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-px" />
+                      <span>{REAUTH_PICKER_HINT}</span>
+                    </div>
+                  )}
                   <FieldRow label="To">
                     <RecipientAutocomplete
                       value={to}

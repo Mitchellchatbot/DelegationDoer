@@ -9,6 +9,12 @@
 
 import { cache } from "@/lib/safe-cache";
 import { unstable_cache } from "next/cache";
+import { isReauthFailure, MissiveReauthError } from "@/lib/missive-reauth";
+
+// Re-exported so existing server-side importers keep working; client
+// components must import from "@/lib/missive-reauth" directly (this module
+// pulls in next/cache).
+export { isReauthFailure, MissiveReauthError };
 
 export interface MissiveAccount {
   id: string;
@@ -124,52 +130,6 @@ function token(): string {
   const t = process.env.MISSIVE_API_TOKEN;
   if (!t) throw new Error("MISSIVE_API_TOKEN not set");
   return t;
-}
-
-// Microsoft Entra refuses to mint a Graph access token once a mailbox's refresh
-// token has been revoked — a password reset, an admin "revoke sessions", or an
-// MFA/conditional-access change all do it. The clone relays Entra's raw error
-// text in its 5xx body, which is how strings like
-//   AADSTS50173: The provided grant has expired due to it being revoked ...
-// ended up verbatim in send toasts, complete with a Microsoft trace id and no
-// hint of what to actually do. Detect that class of failure here — the one
-// choke point every clone call passes through — so every composer (reply,
-// compose, forward, approvals, bulk email, the scheduled-send cron) reports the
-// same actionable message without each having to know about Entra.
-const REAUTH_SIGNATURES = [
-  "AADSTS50173",   // grant revoked — password change moved TokensValidFrom
-  "AADSTS50076",   // MFA required before a new token will be issued
-  "AADSTS50078",   // stale MFA claim
-  "AADSTS50079",   // MFA enrolment required
-  "AADSTS700082",  // refresh token expired through inactivity
-  "AADSTS7000215", // invalid client secret / consent withdrawn
-  "invalid_grant"  // the generic OAuth code the above all carry
-];
-
-export class MissiveReauthError extends Error {
-  // Lets callers branch without importing the class (e.g. across the
-  // client/server boundary where only the shape survives).
-  readonly needsReauth = true as const;
-  readonly mailbox: string | null;
-  // Entra's original text, kept for logs/debugging but deliberately NOT the
-  // user-facing message.
-  readonly detail: string;
-
-  constructor(detail: string, mailbox: string | null = null) {
-    super(
-      `${mailbox ?? "This mailbox"} needs to be reconnected — its Microsoft sign-in was revoked (usually a password change). Open Inboxes → Connect inbox, sign in again, then resend.`
-    );
-    this.name = "MissiveReauthError";
-    this.mailbox = mailbox;
-    this.detail = detail;
-  }
-}
-
-// Exported so the inbox UI can classify a stored `last_sync_error` with the
-// exact same rules the live send path uses — one definition, no drift.
-export function isReauthFailure(text: string | null | undefined): boolean {
-  if (!text) return false;
-  return REAUTH_SIGNATURES.some((sig) => text.includes(sig));
 }
 
 // A reauth failure is always about one specific mailbox, but missiveFetch only

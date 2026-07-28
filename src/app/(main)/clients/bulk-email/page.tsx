@@ -5,6 +5,7 @@ import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { isApprover } from "@/lib/email-approvers";
 import { listAccounts } from "@/lib/missive-client";
+import { isReauthFailure } from "@/lib/missive-reauth";
 import { visibleAccountIdsFor } from "@/lib/inbox-access";
 import { getBulkRoster } from "@/lib/bulk-email";
 import { BulkEmailComposer } from "@/components/BulkEmailComposer";
@@ -30,7 +31,12 @@ export default async function BulkEmailPage() {
   // combined-inbox view). Guarded: the Missive API can 401 on an expired
   // service token, so a hiccup degrades to the "no sending inbox" notice
   // instead of 500-ing the whole page.
-  let fromOptions: { id: string; email: string; display_name: string | null }[] = [];
+  let fromOptions: {
+    id: string;
+    email: string;
+    display_name: string | null;
+    needsReauth: boolean;
+  }[] = [];
   try {
     const [allAccounts, visibleIds] = await Promise.all([
       listAccounts(),
@@ -39,7 +45,12 @@ export default async function BulkEmailPage() {
     fromOptions = (visibleIds === null
       ? allAccounts
       : allAccounts.filter((a) => visibleIds.has(a.id))
-    ).map((a) => ({ id: a.id, email: a.email, display_name: a.display_name ?? null }));
+    ).map((a) => ({
+      id: a.id,
+      email: a.email,
+      display_name: a.display_name ?? null,
+      needsReauth: isReauthFailure(a.last_sync_error)
+    }));
   } catch {
     // Leave fromOptions empty; the notice below blocks sending cleanly.
   }

@@ -3,6 +3,7 @@ import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { listAccounts } from "@/lib/missive-client";
+import { isReauthFailure } from "@/lib/missive-reauth";
 import { canApproveDraft } from "@/lib/email-approvers";
 
 export const dynamic = "force-dynamic";
@@ -69,7 +70,15 @@ export async function GET(
     // Sort: author-assigned first, then approver-assigned, then the
     // rest of the workspace. Within each tier alphabetize by display
     // name (falling back to email) so the dropdown order is stable.
-    type Option = { id: string; email: string; displayName: string | null; source: "author" | "approver" | "workspace" };
+    // `needsReauth` lets the approvals picker flag a mailbox whose Microsoft
+    // grant is revoked — approving onto one of those always fails the send.
+    type Option = {
+      id: string;
+      email: string;
+      displayName: string | null;
+      source: "author" | "approver" | "workspace";
+      needsReauth: boolean;
+    };
     const buckets: Record<Option["source"], Option[]> = {
       author: [],
       approver: [],
@@ -82,7 +91,8 @@ export async function GET(
         displayName: a.display_name ?? null,
         source: authorIds.has(a.id) ? "author"
               : approverIds.has(a.id) ? "approver"
-              : "workspace"
+              : "workspace",
+        needsReauth: isReauthFailure(a.last_sync_error)
       };
       buckets[opt.source].push(opt);
     }

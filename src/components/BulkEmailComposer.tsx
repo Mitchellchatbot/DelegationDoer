@@ -37,6 +37,9 @@ interface FromOption {
   id: string;
   email: string;
   display_name: string | null;
+  // A revoked Microsoft grant fails every send. That matters most here: a
+  // bulk run is one thread per client, so it would fail for all of them.
+  needsReauth?: boolean;
 }
 
 interface SendResult {
@@ -196,6 +199,7 @@ export function BulkEmailComposer({
                 {fromOptions.map((a) => (
                   <option key={a.id} value={a.id}>
                     {a.display_name ? `${a.display_name} <${a.email}>` : a.email}
+                    {a.needsReauth ? " — reconnect needed" : ""}
                   </option>
                 ))}
               </select>

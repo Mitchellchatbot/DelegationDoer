@@ -2,6 +2,7 @@ import "server-only";
 import { getThread, listAccountsCached } from "@/lib/missive-client";
 import type { MissiveMessage } from "@/lib/missive-client";
 import { visibleAccountIdsFor } from "@/lib/inbox-access";
+import { isReauthFailure } from "@/lib/missive-reauth";
 import { getUserById } from "@/lib/server-data";
 import { rawEmail } from "@/lib/email-format";
 import type { ThreadDetailData } from "@/components/ThreadConversation";
@@ -116,7 +117,14 @@ export async function loadThreadDetail(
   const fromAccounts = (visibleIds === null
     ? allAccounts
     : allAccounts.filter((a) => visibleIds.has(a.id))
-  ).map((a) => ({ id: a.id, email: a.email, display_name: a.display_name }));
+    // `needsReauth` rides along so the From picker can warn BEFORE the user
+    // writes a reply, instead of only blowing up on Send.
+  ).map((a) => ({
+    id: a.id,
+    email: a.email,
+    display_name: a.display_name,
+    needsReauth: isReauthFailure(a.last_sync_error)
+  }));
 
   // Reply-all recipient sets, derived from the last inbound message. Drop the
   // current inbox's own address so replying-all doesn't loop back to yourself.

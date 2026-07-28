@@ -12,6 +12,7 @@ import { renderBlueEmail, type BrandedEmailContent } from "@/lib/email-template"
 import { MediaPicker } from "@/components/MediaPicker";
 import { RecipientAutocomplete, type ClientSuggestion } from "@/components/RecipientAutocomplete";
 import type { TaskMedia } from "@/lib/types";
+import { isReauthFailure } from "@/lib/missive-reauth";
 
 // Client Update composer, rendered as a per-client section on /clients/[id].
 // The lookback window seeds from `presetDays` (set upstream by the tab that
@@ -47,6 +48,9 @@ interface MailAccount {
   id: string;
   email: string;
   display_name?: string | null;
+  // Entra's stored sync failure. A revoked grant here means every send from
+  // this mailbox fails, so the picker flags it up front.
+  last_sync_error?: string | null;
 }
 
 // AI editor action presets surfaced as a toolbar above each draft body.
@@ -756,6 +760,7 @@ export function ClientUpdateComposer({
                       {accounts.map((a) => (
                         <option key={a.id} value={a.id}>
                           {a.display_name ? `${a.display_name} · ${a.email}` : a.email}
+                          {isReauthFailure(a.last_sync_error) ? " — reconnect needed" : ""}
                         </option>
                       ))}
                     </select>

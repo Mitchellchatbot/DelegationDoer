@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import { ShieldAlert, ExternalLink, Layers, Plug } from "lucide-react";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById, getAllUsersLight } from "@/lib/server-data";
-import { listAccounts, type MissiveAccount } from "@/lib/missive-client";
+import { listAccounts, isReauthFailure, type MissiveAccount } from "@/lib/missive-client";
 import { canManageAssignments } from "@/lib/inbox-access";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { AutoIntakeToggleSection } from "@/components/AutoIntakeToggleSection";
@@ -23,7 +23,17 @@ export const dynamic = "force-dynamic";
 // per-person assignment — overkill once every worker self-connects
 // via the Microsoft OAuth flow. Now it's just: list of connected
 // inboxes + Connect/Disconnect buttons + auto-intake toggles.
-export default async function ManageInboxesPage() {
+export default async function ManageInboxesPage({
+  searchParams
+}: {
+  // The clone's OAuth callback lands here as
+  // ?oauth=microsoft_ok&connectedAccount=<id>. Both params used to be dropped
+  // on the floor, so a reconnect that picked the WRONG account (the picker is
+  // prompt=select_account) looked identical to one that worked — which is how
+  // a revoked mailbox stayed broken for eight days while everyone believed it
+  // had been fixed.
+  searchParams?: { oauth?: string; connectedAccount?: string };
+}) {
   const userId = await requireCurrentUserId();
   const me = await getUserById(userId);
   if (!me) redirect("/login");
@@ -65,6 +75,24 @@ export default async function ManageInboxesPage() {
   for (const [accountId, ownerId] of privateOwners) {
     if (ownerId) initialPrivate[accountId] = ownerId;
   }
+
+  // Mailboxes whose Microsoft grant has been revoked. They still appear
+  // connected everywhere else, so without this the first symptom a leader sees
+  // is a worker reporting that a send blew up with a raw Entra error.
+  const staleAuth = inboxes.filter((a) => isReauthFailure(a.last_sync_error));
+
+  // Outcome of a just-completed OAuth round-trip. This page uses the
+  // request-scoped listAccounts() (not the 60s-cached variant), so the health
+  // read below is always fresh — no cache busting needed.
+  const justConnectedId = searchParams?.connectedAccount ?? null;
+  const cameFromOAuth = searchParams?.oauth === "microsoft_ok";
+  const justConnected = justConnectedId
+    ? inboxes.find((a) => a.id === justConnectedId) ?? null
+    : null;
+  // The case that actually bit us: consent succeeded, but for a DIFFERENT
+  // mailbox than the broken one. Decidable purely from the returned id, so
+  // unlike the error text it doesn't depend on when the next sync runs.
+  const stillBrokenElsewhere = staleAuth.filter((a) => a.id !== justConnectedId);
 
   const missiveAppUrl = (process.env.MISSIVE_API_URL ?? "").replace(/\/$/, "");
 
@@ -123,6 +151,76 @@ export default async function ManageInboxesPage() {
             Most often: <code>MISSIVE_API_TOKEN</code> expired or the missiveclone backend is down. Hit{" "}
             <code>/api/status</code> on the clone to diagnose.
           </div>
+        </div>
+      )}
+
+      {cameFromOAuth && (
+        <div
+          className={`card p-4 text-sm ${
+            stillBrokenElsewhere.length > 0
+              ? "border-amber-300 bg-amber-50"
+              : "border-emerald-300 bg-emerald-50"
+          }`}
+        >
+          <div
+            className={`font-medium mb-1 ${
+              stillBrokenElsewhere.length > 0 ? "text-amber-800" : "text-emerald-800"
+            }`}
+          >
+            {justConnected
+              ? `Connected ${justConnected.email}`
+              : "Mailbox connected"}
+          </div>
+
+          {stillBrokenElsewhere.length > 0 ? (
+            <div className="text-ink/75">
+              …but{" "}
+              <span className="font-medium text-ink/90">
+                {stillBrokenElsewhere.map((a) => a.email).join(", ")}
+              </span>{" "}
+              {stillBrokenElsewhere.length === 1 ? "is" : "are"} still disconnected.
+              If that&rsquo;s the mailbox you meant to fix, run &ldquo;Connect
+              inbox&rdquo; again and pick{" "}
+              <span className="font-medium">that</span> account at the Microsoft
+              prompt — it defaults to whichever account you&rsquo;re already
+              signed in as.
+            </div>
+          ) : justConnected && isReauthFailure(justConnected.last_sync_error) ? (
+            <div className="text-ink/75">
+              It&rsquo;s still showing the previous sign-in error. That normally
+              clears once the first sync runs — re-check the list below in a few
+              minutes. If it persists, run &ldquo;Connect inbox&rdquo; again and
+              make sure you complete the whole Microsoft prompt.
+            </div>
+          ) : (
+            <div className="text-ink/75">
+              Sign-in refreshed — this mailbox can send and sync again.
+            </div>
+          )}
+        </div>
+      )}
+
+      {staleAuth.length > 0 && (
+        <div className="card p-4 border-amber-300 bg-amber-50 text-sm">
+          <div className="font-medium text-amber-800 mb-1">
+            {staleAuth.length === 1
+              ? "1 mailbox needs reconnecting"
+              : `${staleAuth.length} mailboxes need reconnecting`}
+          </div>
+          <div className="text-ink/70">
+            Microsoft revoked the sign-in for these mailboxes — usually after a
+            password change. Until the owner signs in again via &ldquo;Connect
+            inbox&rdquo;, they stop syncing new mail and every send from them
+            fails.
+          </div>
+          {staleAuth.map((a) => (
+            <div key={a.id} className="text-xs text-muted mt-1.5">
+              <span className="font-medium text-ink/80">{a.email}</span>
+              {a.last_sync_error_at
+                ? ` — failing since ${new Date(a.last_sync_error_at).toLocaleString()}`
+                : ""}
+            </div>
+          ))}
         </div>
       )}
 

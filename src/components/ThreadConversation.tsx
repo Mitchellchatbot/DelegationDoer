@@ -24,7 +24,14 @@ export interface ThreadDetailData {
   defaultTo: string | null;
   missiveThreadUrl: string | null;
   // Connected accounts (access-scoped) the user may send replies FROM.
-  fromAccounts: { id: string; email: string; display_name: string | null }[];
+  fromAccounts: {
+    id: string;
+    email: string;
+    display_name: string | null;
+    // Set when the mailbox's Microsoft grant is revoked — the From picker
+    // flags it so a reply isn't written against a mailbox that can't send.
+    needsReauth?: boolean;
+  }[];
 }
 
 // The conversation UI for a single thread. Extracted verbatim from the thread

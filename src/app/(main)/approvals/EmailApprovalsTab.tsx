@@ -11,6 +11,7 @@ import { toast } from "sonner";
 import { PersonAvatar } from "@/components/PersonAvatar";
 import { useCurrentUser } from "@/lib/user-context";
 import { isApprover } from "@/lib/email-approvers";
+import { REAUTH_PICKER_HINT } from "@/lib/missive-reauth";
 import { getDepartmentMeta } from "@/lib/departments";
 import { SuggestedDigestsCard } from "@/components/SuggestedDigestsCard";
 import { cn } from "@/lib/utils";
@@ -538,7 +539,7 @@ function DraftCard({
   // dropdown surfaces in the edit form so the author can pick the
   // sending mailbox up front, and in the approve action bar so the
   // approver can override before send.
-  const [sendFromOptions, setSendFromOptions] = useState<Array<{ id: string; email: string; displayName: string | null; source: string }>>([]);
+  const [sendFromOptions, setSendFromOptions] = useState<Array<{ id: string; email: string; displayName: string | null; source: string; needsReauth?: boolean }>>([]);
   const [sendFromId, setSendFromId] = useState<string>("");
   const [sendFromLoaded, setSendFromLoaded] = useState(false);
 
@@ -1119,10 +1120,20 @@ function DraftCard({
                       {sendFromOptions.map((o) => (
                         <option key={o.id} value={o.id}>
                           {o.displayName || o.email} · {o.source === "author" ? "author" : "you"}
+                          {o.needsReauth ? " — reconnect needed" : ""}
                         </option>
                       ))}
                     </select>
                   )}
+                </div>
+              )}
+              {/* Approving onto a revoked mailbox always fails the send, and
+                  the draft flips to 'failed' — warn before the click. */}
+              {canApproveThisDraft && (isPending || isFailed)
+                && sendFromOptions.find((o) => o.id === sendFromId)?.needsReauth && (
+                <div className="flex items-start gap-2 px-2 py-1.5 mx-1 rounded-lg border border-amber-300 bg-amber-50 text-[11px] text-amber-800">
+                  <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-px" />
+                  <span>{REAUTH_PICKER_HINT}</span>
                 </div>
               )}
               <div className="flex items-center justify-end gap-2 flex-wrap">

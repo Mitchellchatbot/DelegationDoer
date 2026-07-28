@@ -3,7 +3,8 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
-import { Reply, Send, Loader2, X, CalendarClock, Sparkles, Check, Maximize2, Minimize2 } from "lucide-react";
+import { Reply, Send, Loader2, X, CalendarClock, Sparkles, Check, Maximize2, Minimize2, AlertTriangle } from "lucide-react";
+import { REAUTH_PICKER_HINT } from "@/lib/missive-reauth";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { MediaPicker } from "@/components/MediaPicker";
@@ -98,7 +99,15 @@ export function ReplyComposer({
   quoteSource?: MissiveMessage | null;
   // Connected accounts (access-scoped) the user may send FROM. Powers the
   // "From" selector; defaults to the thread's inbox (`accountId`).
-  accounts?: { id: string; email: string; display_name: string | null }[];
+  accounts?: {
+    id: string;
+    email: string;
+    display_name: string | null;
+    // True when this mailbox's Microsoft grant has been revoked. Sending from
+    // it is guaranteed to fail, so we say so next to the picker rather than
+    // letting the user write a whole reply first.
+    needsReauth?: boolean;
+  }[];
   // Every email address that appears anywhere in this thread (lower-cased,
   // display-names stripped). Powers the pre-send guardrail that warns when a
   // reply's "To" contains someone who isn't part of the conversation. When
@@ -130,6 +139,9 @@ export function ReplyComposer({
   // thread switch. The options are the user's access-scoped accounts.
   const fromOptions = accounts ?? [];
   const [fromAccountId, setFromAccountId] = useState(accountId);
+  // Warn on the mailbox actually selected, not merely because some broken
+  // mailbox exists in the list.
+  const fromNeedsReauth = !!fromOptions.find((a) => a.id === fromAccountId)?.needsReauth;
   const [subject, setSubject] = useState(prefixRe(defaultSubject ?? ""));
   const [bodyText, setBodyText] = useState("");
   // Whether the Cc row is shown. Auto-revealed in reply-all mode or when
@@ -627,6 +639,7 @@ export function ReplyComposer({
                     {fromOptions.map((a) => (
                       <option key={a.id} value={a.id}>
                         {a.display_name ? `${a.display_name} <${a.email}>` : a.email}
+                        {a.needsReauth ? " — reconnect needed" : ""}
                       </option>
                     ))}
                   </select>
@@ -641,6 +654,13 @@ export function ReplyComposer({
                   </span>
                 </div>
               ) : null}
+
+              {fromNeedsReauth && (
+                <div className="flex items-start gap-2 px-3 py-2 rounded-xl border border-amber-300 bg-amber-50 text-[11px] text-amber-800">
+                  <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-px" />
+                  <span>{REAUTH_PICKER_HINT}</span>
+                </div>
+              )}
 
               <div className="flex items-center gap-2 px-3 py-2 rounded-xl border border-slate-200/70 bg-white/60 focus-within:ring-2 focus-within:ring-accent/30 focus-within:border-accent/40 transition-all">
                 <span className="text-[11px] uppercase tracking-wide font-semibold text-ink/45 w-14 shrink-0">

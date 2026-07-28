@@ -9,6 +9,12 @@
 
 import { cache } from "@/lib/safe-cache";
 import { unstable_cache } from "next/cache";
+import { isReauthFailure, MissiveReauthError } from "@/lib/missive-reauth";
+
+// Re-exported so existing server-side importers keep working; client
+// components must import from "@/lib/missive-reauth" directly (this module
+// pulls in next/cache).
+export { isReauthFailure, MissiveReauthError };
 
 export interface MissiveAccount {
   id: string;
@@ -19,6 +25,13 @@ export interface MissiveAccount {
   // pre-existing connections in the assignment graph.
   user_id: string | null;
   last_synced_at: string | null;
+  // Set by the clone when a background sync fails, cleared when one succeeds.
+  // For Microsoft mailboxes a revoked OAuth grant lands here (AADSTS50173 and
+  // friends) and stays until the user re-consents — it is the only signal DD
+  // gets that a mailbox can no longer send or receive. Optional so an older
+  // clone build that doesn't return them still type-checks.
+  last_sync_error?: string | null;
+  last_sync_error_at?: string | null;
   provider: string | null;
 }
 
@@ -119,6 +132,19 @@ function token(): string {
   return t;
 }
 
+// A reauth failure is always about one specific mailbox, but missiveFetch only
+// sees the HTTP body. The send helpers know the from-account, so they name it:
+// "steve@scaledai.org needs to be reconnected" is actionable in a way that
+// "this mailbox" is not. Best-effort — if the lookup itself fails we keep the
+// generic message rather than masking the original error.
+async function nameReauthMailbox(err: unknown, accountId: string): Promise<unknown> {
+  if (!(err instanceof MissiveReauthError) || err.mailbox) return err;
+  const email = await listAccounts()
+    .then((list) => list.find((a) => a.id === accountId)?.email ?? null)
+    .catch(() => null);
+  return email ? new MissiveReauthError(err.detail, email) : err;
+}
+
 async function missiveFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
   // FormData bodies set their own Content-Type with a boundary param —
   // forcing application/json would corrupt the multipart parse on the
@@ -136,6 +162,9 @@ async function missiveFetch<T>(path: string, init: RequestInit = {}): Promise<T>
   });
   if (!res.ok) {
     const body = await res.text().catch(() => "");
+    // A dead OAuth grant is a user-fixable state, not a bug — surface it as
+    // one instead of pasting Entra's trace id into a toast.
+    if (isReauthFailure(body)) throw new MissiveReauthError(body.slice(0, 400));
     throw new Error(`missive ${path} → ${res.status} ${body.slice(0, 200)}`);
   }
   return (await res.json()) as T;
@@ -155,7 +184,9 @@ async function fetchAccounts(): Promise<MissiveAccount[]> {
   const data = await missiveFetch<{ accounts: MissiveAccount[] }>("/api/accounts");
   return (data.accounts ?? []).map((a) => ({
     ...a,
-    last_synced_at: a.last_synced_at ? toIsoString(a.last_synced_at) : null
+    last_synced_at: a.last_synced_at ? toIsoString(a.last_synced_at) : null,
+    last_sync_error: a.last_sync_error ?? null,
+    last_sync_error_at: a.last_sync_error_at ? toIsoString(a.last_sync_error_at) : null
   }));
 }
 
@@ -560,7 +591,9 @@ export async function sendReply(args: ReplyArgs): Promise<{ messageId: string }>
   const data = await missiveFetch<{ message_id: string }>(
     `/api/threads/${encodeURIComponent(args.threadId)}/reply`,
     { method: "POST", body: form }
-  );
+  ).catch(async (err) => {
+    throw await nameReauthMailbox(err, args.fromAccountId);
+  });
   return { messageId: data.message_id };
 }
 
@@ -629,7 +662,9 @@ export async function composeNewThread(args: ComposeArgs): Promise<{
     thread_id?: string;
     message_id?: string;
     scheduled_id?: string;
-  }>("/api/compose", { method: "POST", body: form });
+  }>("/api/compose", { method: "POST", body: form }).catch(async (err) => {
+    throw await nameReauthMailbox(err, args.fromAccountId);
+  });
   return {
     threadId: data.thread_id ?? "",
     messageId: data.message_id ?? data.scheduled_id ?? ""

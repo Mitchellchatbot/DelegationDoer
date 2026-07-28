@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import { ShieldAlert, ExternalLink, Layers, Plug } from "lucide-react";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById, getAllUsersLight } from "@/lib/server-data";
-import { listAccounts, type MissiveAccount } from "@/lib/missive-client";
+import { listAccounts, isReauthFailure, type MissiveAccount } from "@/lib/missive-client";
 import { canManageAssignments } from "@/lib/inbox-access";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { AutoIntakeToggleSection } from "@/components/AutoIntakeToggleSection";
@@ -66,6 +66,11 @@ export default async function ManageInboxesPage() {
     if (ownerId) initialPrivate[accountId] = ownerId;
   }
 
+  // Mailboxes whose Microsoft grant has been revoked. They still appear
+  // connected everywhere else, so without this the first symptom a leader sees
+  // is a worker reporting that a send blew up with a raw Entra error.
+  const staleAuth = inboxes.filter((a) => isReauthFailure(a.last_sync_error));
+
   const missiveAppUrl = (process.env.MISSIVE_API_URL ?? "").replace(/\/$/, "");
 
   return (
@@ -123,6 +128,30 @@ export default async function ManageInboxesPage() {
             Most often: <code>MISSIVE_API_TOKEN</code> expired or the missiveclone backend is down. Hit{" "}
             <code>/api/status</code> on the clone to diagnose.
           </div>
+        </div>
+      )}
+
+      {staleAuth.length > 0 && (
+        <div className="card p-4 border-amber-300 bg-amber-50 text-sm">
+          <div className="font-medium text-amber-800 mb-1">
+            {staleAuth.length === 1
+              ? "1 mailbox needs reconnecting"
+              : `${staleAuth.length} mailboxes need reconnecting`}
+          </div>
+          <div className="text-ink/70">
+            Microsoft revoked the sign-in for these mailboxes — usually after a
+            password change. Until the owner signs in again via &ldquo;Connect
+            inbox&rdquo;, they stop syncing new mail and every send from them
+            fails.
+          </div>
+          {staleAuth.map((a) => (
+            <div key={a.id} className="text-xs text-muted mt-1.5">
+              <span className="font-medium text-ink/80">{a.email}</span>
+              {a.last_sync_error_at
+                ? ` — failing since ${new Date(a.last_sync_error_at).toLocaleString()}`
+                : ""}
+            </div>
+          ))}
         </div>
       )}
 

@@ -19,6 +19,13 @@ export interface MissiveAccount {
   // pre-existing connections in the assignment graph.
   user_id: string | null;
   last_synced_at: string | null;
+  // Set by the clone when a background sync fails, cleared when one succeeds.
+  // For Microsoft mailboxes a revoked OAuth grant lands here (AADSTS50173 and
+  // friends) and stays until the user re-consents — it is the only signal DD
+  // gets that a mailbox can no longer send or receive. Optional so an older
+  // clone build that doesn't return them still type-checks.
+  last_sync_error?: string | null;
+  last_sync_error_at?: string | null;
   provider: string | null;
 }
 
@@ -119,6 +126,65 @@ function token(): string {
   return t;
 }
 
+// Microsoft Entra refuses to mint a Graph access token once a mailbox's refresh
+// token has been revoked — a password reset, an admin "revoke sessions", or an
+// MFA/conditional-access change all do it. The clone relays Entra's raw error
+// text in its 5xx body, which is how strings like
+//   AADSTS50173: The provided grant has expired due to it being revoked ...
+// ended up verbatim in send toasts, complete with a Microsoft trace id and no
+// hint of what to actually do. Detect that class of failure here — the one
+// choke point every clone call passes through — so every composer (reply,
+// compose, forward, approvals, bulk email, the scheduled-send cron) reports the
+// same actionable message without each having to know about Entra.
+const REAUTH_SIGNATURES = [
+  "AADSTS50173",   // grant revoked — password change moved TokensValidFrom
+  "AADSTS50076",   // MFA required before a new token will be issued
+  "AADSTS50078",   // stale MFA claim
+  "AADSTS50079",   // MFA enrolment required
+  "AADSTS700082",  // refresh token expired through inactivity
+  "AADSTS7000215", // invalid client secret / consent withdrawn
+  "invalid_grant"  // the generic OAuth code the above all carry
+];
+
+export class MissiveReauthError extends Error {
+  // Lets callers branch without importing the class (e.g. across the
+  // client/server boundary where only the shape survives).
+  readonly needsReauth = true as const;
+  readonly mailbox: string | null;
+  // Entra's original text, kept for logs/debugging but deliberately NOT the
+  // user-facing message.
+  readonly detail: string;
+
+  constructor(detail: string, mailbox: string | null = null) {
+    super(
+      `${mailbox ?? "This mailbox"} needs to be reconnected — its Microsoft sign-in was revoked (usually a password change). Open Inboxes → Connect inbox, sign in again, then resend.`
+    );
+    this.name = "MissiveReauthError";
+    this.mailbox = mailbox;
+    this.detail = detail;
+  }
+}
+
+// Exported so the inbox UI can classify a stored `last_sync_error` with the
+// exact same rules the live send path uses — one definition, no drift.
+export function isReauthFailure(text: string | null | undefined): boolean {
+  if (!text) return false;
+  return REAUTH_SIGNATURES.some((sig) => text.includes(sig));
+}
+
+// A reauth failure is always about one specific mailbox, but missiveFetch only
+// sees the HTTP body. The send helpers know the from-account, so they name it:
+// "steve@scaledai.org needs to be reconnected" is actionable in a way that
+// "this mailbox" is not. Best-effort — if the lookup itself fails we keep the
+// generic message rather than masking the original error.
+async function nameReauthMailbox(err: unknown, accountId: string): Promise<unknown> {
+  if (!(err instanceof MissiveReauthError) || err.mailbox) return err;
+  const email = await listAccounts()
+    .then((list) => list.find((a) => a.id === accountId)?.email ?? null)
+    .catch(() => null);
+  return email ? new MissiveReauthError(err.detail, email) : err;
+}
+
 async function missiveFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
   // FormData bodies set their own Content-Type with a boundary param —
   // forcing application/json would corrupt the multipart parse on the
@@ -136,6 +202,9 @@ async function missiveFetch<T>(path: string, init: RequestInit = {}): Promise<T>
   });
   if (!res.ok) {
     const body = await res.text().catch(() => "");
+    // A dead OAuth grant is a user-fixable state, not a bug — surface it as
+    // one instead of pasting Entra's trace id into a toast.
+    if (isReauthFailure(body)) throw new MissiveReauthError(body.slice(0, 400));
     throw new Error(`missive ${path} → ${res.status} ${body.slice(0, 200)}`);
   }
   return (await res.json()) as T;
@@ -155,7 +224,9 @@ async function fetchAccounts(): Promise<MissiveAccount[]> {
   const data = await missiveFetch<{ accounts: MissiveAccount[] }>("/api/accounts");
   return (data.accounts ?? []).map((a) => ({
     ...a,
-    last_synced_at: a.last_synced_at ? toIsoString(a.last_synced_at) : null
+    last_synced_at: a.last_synced_at ? toIsoString(a.last_synced_at) : null,
+    last_sync_error: a.last_sync_error ?? null,
+    last_sync_error_at: a.last_sync_error_at ? toIsoString(a.last_sync_error_at) : null
   }));
 }
 
@@ -560,7 +631,9 @@ export async function sendReply(args: ReplyArgs): Promise<{ messageId: string }>
   const data = await missiveFetch<{ message_id: string }>(
     `/api/threads/${encodeURIComponent(args.threadId)}/reply`,
     { method: "POST", body: form }
-  );
+  ).catch(async (err) => {
+    throw await nameReauthMailbox(err, args.fromAccountId);
+  });
   return { messageId: data.message_id };
 }
 
@@ -629,7 +702,9 @@ export async function composeNewThread(args: ComposeArgs): Promise<{
     thread_id?: string;
     message_id?: string;
     scheduled_id?: string;
-  }>("/api/compose", { method: "POST", body: form });
+  }>("/api/compose", { method: "POST", body: form }).catch(async (err) => {
+    throw await nameReauthMailbox(err, args.fromAccountId);
+  });
   return {
     threadId: data.thread_id ?? "",
     messageId: data.message_id ?? data.scheduled_id ?? ""

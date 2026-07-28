@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
-import { listAccounts } from "@/lib/missive-client";
+import { listAccounts, isReauthFailure } from "@/lib/missive-client";
 import { visibleAccountIdsFor } from "@/lib/inbox-access";
 
 export const dynamic = "force-dynamic";
@@ -26,7 +26,13 @@ export async function GET() {
       : accounts.filter((a) => visibleIds.has(a.id));
 
     return NextResponse.json({
-      inboxes: filtered,
+      // `needsReauth` is derived server-side so the classification rules live
+      // in exactly one place (missive-client) and the client bundle doesn't
+      // have to import a server-only module to read them.
+      inboxes: filtered.map((a) => ({
+        ...a,
+        needsReauth: isReauthFailure(a.last_sync_error)
+      })),
       canManage: me.role === "leader" || !!me.isAdmin
     });
   } catch (err) {

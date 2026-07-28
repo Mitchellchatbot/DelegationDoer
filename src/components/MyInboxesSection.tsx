@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Mail, Plus, Loader2, ExternalLink, CheckCircle2, Unplug } from "lucide-react";
+import { Mail, Plus, Loader2, ExternalLink, CheckCircle2, Unplug, AlertTriangle, Plug } from "lucide-react";
 import { toast } from "sonner";
 import { ConnectInboxDialog } from "./ConnectInboxDialog";
 
@@ -9,6 +9,12 @@ interface InboxRow {
   id: string;
   email: string;
   display_name: string | null;
+  // Set by /api/inboxes when the clone's last sync failed with a revoked
+  // Microsoft grant. Such a mailbox looks fine here but can neither receive
+  // new mail nor send — every compose/reply from it fails until the owner
+  // signs in again, so we say so before they hit Send.
+  needsReauth?: boolean;
+  last_sync_error_at?: string | null;
 }
 
 // Self-serve inbox connection. Anyone signed in can connect their own
@@ -98,9 +104,17 @@ export function MyInboxesSection() {
           {inboxes.map((b) => (
             <li
               key={b.id}
-              className="flex items-center gap-2.5 px-3 py-2 rounded-xl bg-white border border-slate-200/70 hover:border-blue-200 transition-colors"
+              className={`flex items-center gap-2.5 px-3 py-2 rounded-xl border transition-colors ${
+                b.needsReauth
+                  ? "bg-amber-50 border-amber-300"
+                  : "bg-white border-slate-200/70 hover:border-blue-200"
+              }`}
             >
-              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+              {b.needsReauth ? (
+                <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+              ) : (
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+              )}
               <div className="min-w-0 flex-1">
                 <div className="text-sm font-medium truncate">
                   {b.display_name || b.email}
@@ -108,7 +122,27 @@ export function MyInboxesSection() {
                 {b.display_name && (
                   <div className="text-[11px] text-ink/55 truncate">{b.email}</div>
                 )}
+                {b.needsReauth && (
+                  <div className="text-[11px] text-amber-700 mt-0.5">
+                    Sign-in expired{b.last_sync_error_at
+                      ? ` on ${new Date(b.last_sync_error_at).toLocaleDateString()}`
+                      : ""}{" "}
+                    — not syncing, and sending from it will fail. Reconnect to fix.
+                  </div>
+                )}
               </div>
+              {b.needsReauth && (
+                <ConnectInboxDialog
+                  trigger={
+                    <button
+                      type="button"
+                      className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-1 rounded-md bg-amber-500 text-white hover:bg-amber-600 transition-colors shrink-0"
+                    >
+                      <Plug className="w-3 h-3" /> Reconnect
+                    </button>
+                  }
+                />
+              )}
               <a
                 href={`/inboxes/${encodeURIComponent(b.id)}`}
                 className="inline-flex items-center gap-1 text-[11px] text-accent hover:underline"

@@ -2,6 +2,7 @@ import "server-only";
 import { getThread, listAccountsCached } from "@/lib/missive-client";
 import type { MissiveMessage } from "@/lib/missive-client";
 import { visibleAccountIdsFor } from "@/lib/inbox-access";
+import { restrictionsFor } from "@/lib/restricted-senders";
 import { getUserById } from "@/lib/server-data";
 import { rawEmail } from "@/lib/email-format";
 import type { ThreadDetailData } from "@/components/ThreadConversation";
@@ -90,6 +91,21 @@ export async function loadThreadDetail(
     visibleIds === null ||
     [...threadAccountIds].some((id) => visibleIds.has(id));
   if (!touchesVisible) {
+    return { ok: false, status: 403, error: "Access denied" };
+  }
+
+  // 3. Sender-scoped privacy (see src/lib/restricted-senders.ts): seeing the
+  //    inbox isn't enough if the conversation itself is restricted. This is
+  //    the choke point for the reading pane, GET /api/inboxes/threads/[id]
+  //    and any future caller, so it's also the anti-guessing gate — the list
+  //    filters are cosmetic without it.
+  //    Check messages AND the thread: per-message from/to/cc is authoritative,
+  //    thread participants are the backstop for when bodies are deferred.
+  const restrict = await restrictionsFor(me);
+  if (
+    restrict &&
+    (restrict.blocksMessages(detail.messages) || restrict.blocksThread(detail.thread))
+  ) {
     return { ok: false, status: 403, error: "Access denied" };
   }
 

@@ -6,6 +6,7 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { listAccounts, listThreads, getThread } from "@/lib/missive-client";
 import { runEmailIntake } from "@/lib/email-intake";
 import { looksAutomated } from "@/lib/email-intake-filters";
+import { getRestrictedSenderRules, messagesMatch } from "@/lib/restricted-senders";
 import {
   extractEmail,
   missiveThreadUrl,
@@ -104,6 +105,36 @@ export async function processThreadForAutoIntake(input: {
       accountId,
       result: "skipped",
       error: `auto-filtered:${auto.reason ?? "unknown"}`
+    };
+  }
+
+  // Sender-scoped privacy (see src/lib/restricted-senders.ts). Restricted mail
+  // must never become a team task, and — because we return BEFORE
+  // runEmailIntake — never reaches writeRoutingDecision either, so no
+  // classifier summary of it is persisted where leaders can read it.
+  //
+  // Deliberately redundant with the SENDER_PATTERNS entry in
+  // email-intake-filters.ts: that list is hand-edited often, this is the
+  // durable rule. If the two ever disagree, this catches it.
+  const restricted = messagesMatch(detail.messages, await getRestrictedSenderRules());
+  if (restricted) {
+    const supabase = getSupabaseAdmin();
+    await supabase.from("email_intake_log").upsert(
+      {
+        thread_id: threadId,
+        account_id: accountId,
+        task_id: null,
+        routed_via: "restricted-sender",
+        routed_to_user_id: null,
+        processed_at: new Date().toISOString()
+      },
+      { onConflict: "thread_id" }
+    );
+    return {
+      threadId,
+      accountId,
+      result: "skipped",
+      error: `restricted-sender:${restricted.label}`
     };
   }
 

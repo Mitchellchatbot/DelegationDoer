@@ -4,6 +4,7 @@ import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { getThread } from "@/lib/missive-client";
 import { visibleAccountIdsFor } from "@/lib/inbox-access";
+import { restrictionsFor } from "@/lib/restricted-senders";
 import { runEmailIntake } from "@/lib/email-intake";
 import { extractEmail, missiveThreadUrl, threadBodyFromMessages } from "@/lib/email-intake-utils";
 
@@ -41,6 +42,19 @@ export async function POST(req: NextRequest) {
     }
 
     const detail = await getThread(threadId);
+
+    // Sender-scoped privacy (see src/lib/restricted-senders.ts). This route
+    // passes source: "manual", which deliberately bypasses looksAutomated —
+    // so the SENDER_PATTERNS entry does NOT cover it and this guard is the
+    // only thing stopping restricted mail becoming a team task by hand.
+    const restrict = await restrictionsFor(me);
+    if (
+      restrict &&
+      (restrict.blocksMessages(detail.messages) || restrict.blocksThread(detail.thread))
+    ) {
+      return NextResponse.json({ error: "forbidden" }, { status: 403 });
+    }
+
     const inbound = detail.messages.find((m) => m.direction === "inbound") ?? detail.messages[0];
     const fromEmail = inbound ? extractEmail(inbound.from_addr) : null;
 

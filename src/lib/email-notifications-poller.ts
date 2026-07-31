@@ -21,6 +21,7 @@
 
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { getThread, listThreads, type MissiveMessage } from "@/lib/missive-client";
+import { viewerIdsForAddresses } from "@/lib/restricted-senders";
 
 // Absolute cap on how far back we'll go on first-run for any account
 // (24h). Above this is "ancient", and the user opted in long enough
@@ -154,16 +155,33 @@ export async function pollEmailNotifications(): Promise<PollResult> {
       const inboundToWrite: Array<{
         msg: MissiveMessage;
         threadSubject: string | null;
+        // Sender-scoped privacy (see src/lib/restricted-senders.ts): the users
+        // still allowed to be notified about this thread, or null when the
+        // thread matches no rule (the common case — don't filter at all).
+        allowedViewers: Set<string> | null;
       }> = [];
 
       for (const thread of candidateThreads) {
         result.threadsExamined += 1;
         const detail = await getThread(thread.id).catch(() => null);
         if (!detail) continue;
+        // Resolved once per thread, from the whole correspondent set, so a
+        // restricted thread can't ping the team via any of its messages.
+        const allowedViewers = await viewerIdsForAddresses(
+          (detail.messages ?? []).flatMap((m) => [
+            m.from_addr,
+            ...(m.to_addrs ?? []),
+            ...(m.cc_addrs ?? [])
+          ])
+        );
         for (const msg of detail.messages ?? []) {
           if (msg.direction !== "inbound") continue;
           if (new Date(msg.sent_at).getTime() <= floor.getTime()) continue;
-          inboundToWrite.push({ msg, threadSubject: detail.thread.subject ?? null });
+          inboundToWrite.push({
+            msg,
+            threadSubject: detail.thread.subject ?? null,
+            allowedViewers
+          });
         }
       }
       if (inboundToWrite.length === 0) continue;
@@ -192,12 +210,16 @@ export async function pollEmailNotifications(): Promise<PollResult> {
       }
 
       const rows: Array<Record<string, unknown>> = [];
-      for (const { msg, threadSubject } of inboundToWrite) {
+      for (const { msg, threadSubject, allowedViewers } of inboundToWrite) {
         const { name, email } = splitAddress(msg.from_addr);
         const subject = msg.subject ?? threadSubject ?? null;
         const preview = previewFrom(msg);
         const msgSentAt = new Date(msg.sent_at);
         for (const userId of userIds) {
+          // Sender-scoped privacy: drop users who aren't viewers on the rule
+          // this thread matched. Their pref row is untouched, so they keep
+          // getting notified about everything else in the same inbox.
+          if (allowedViewers && !allowedViewers.has(userId)) continue;
           const optedAt = perUserOptIn.get(userId);
           if (optedAt && msgSentAt < optedAt) continue;
           const key = `${userId}::${msg.id}`;

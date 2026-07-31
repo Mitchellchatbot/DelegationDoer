@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { visibleAccountIdsFor } from "@/lib/inbox-access";
+import { restrictionsFor } from "@/lib/restricted-senders";
 import {
   composeNewThread,
   getThread,
@@ -84,6 +85,17 @@ export async function POST(
         { error: "message not found in thread" },
         { status: 404 }
       );
+    }
+
+    // Sender-scoped privacy (see src/lib/restricted-senders.ts). The most
+    // dangerous write on a restricted thread: forwarding re-sends the body
+    // AND re-attaches the original files to an arbitrary recipient.
+    const restrict = await restrictionsFor(me);
+    if (
+      restrict &&
+      (restrict.blocksMessages(detail.messages) || restrict.blocksThread(detail.thread))
+    ) {
+      return NextResponse.json({ error: "forbidden" }, { status: 403 });
     }
 
     const subject = explicitSubject ?? fwdSubject(src.subject || detail.thread.subject || "");

@@ -4,6 +4,7 @@ import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { listAccountsCached, listThreadsPaged, INBOX_SSR_PAGE, type MissiveThread } from "@/lib/missive-client";
 import { visibleAccountIdsFor } from "@/lib/inbox-access";
+import { restrictionsFor } from "@/lib/restricted-senders";
 import { readStateForThreads, isThreadUnread } from "@/lib/thread-read-state";
 import { InboxThreadsClient } from "@/components/InboxThreadsClient";
 import { ComposeButton } from "@/components/ComposeButton";
@@ -60,7 +61,15 @@ export default async function InboxThreadsPage({
     if (!account) notFound();
     inboxLabel = account.display_name || account.email;
     inboxEmail = account.email;
-    threads = firstPage.threads;
+    // Sender-scoped privacy (see src/lib/restricted-senders.ts). This is the
+    // view that matters most: a shared-but-private mailbox is exactly where
+    // restricted mail hides. hasMore stays the backend's raw answer so paging
+    // can't truncate — the client pages by number, so a filtered page is just
+    // short. Same contract as /api/inboxes/threads.
+    const restrict = await restrictionsFor(me);
+    threads = restrict
+      ? firstPage.threads.filter((t) => !restrict.blocksThread(t))
+      : firstPage.threads;
     hasMore = firstPage.hasMore;
   } catch (err) {
     fetchError = err instanceof Error ? err.message : "unknown error";

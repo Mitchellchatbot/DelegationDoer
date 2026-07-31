@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { visibleAccountIdsFor } from "@/lib/inbox-access";
+import { restrictionsFor } from "@/lib/restricted-senders";
 import { getThread, fetchAttachment } from "@/lib/missive-client";
 import type { MissiveMessageAttachment } from "@/lib/missive-client";
 import { canRenderDoc, renderDocToHtml } from "@/lib/attachment-render";
@@ -53,6 +54,10 @@ export async function GET(
   // Capture the attachment row itself (not just a boolean): its filename +
   // content-type drive the document-preview converter below.
   let attachment: MissiveMessageAttachment | null = null;
+  // Sender-scoped privacy (see src/lib/restricted-senders.ts) — this is the
+  // route that streams the actual file, so hiding the thread from the list
+  // without guarding here would leave the bytes reachable by id.
+  let restricted = false;
   try {
     const detail = await getThread(threadId);
     const threadAccountIds = new Set(detail.messages.map((m) => m.account_id));
@@ -62,13 +67,17 @@ export async function GET(
       const found = (m.attachments ?? []).find((a) => a.id === params.id);
       if (found) { attachment = found; break; }
     }
+    const restrict = await restrictionsFor(me);
+    restricted =
+      !!restrict &&
+      (restrict.blocksMessages(detail.messages) || restrict.blocksThread(detail.thread));
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "thread lookup failed" },
       { status: 502 }
     );
   }
-  if (!touchesVisible || !attachment) {
+  if (!touchesVisible || !attachment || restricted) {
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
 

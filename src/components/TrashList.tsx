@@ -18,6 +18,10 @@ export interface TrashItem {
   accountIds: string[];
   accountEmails: string[];
   deletedAt: string;
+  // Null for a delete by a since-off-boarded user — the row just omits the
+  // attribution in that case rather than showing a dangling id.
+  deletedById?: string | null;
+  deletedByName?: string | null;
   snapshot: {
     subject: string | null;
     from: string | null;
@@ -125,8 +129,25 @@ export function TrashList({ items, onRestore }: Props) {
             </div>
 
             <div className="shrink-0 flex items-center gap-2 pl-2">
-              <span className="text-[11px] text-ink/45 tabular-nums whitespace-nowrap">
-                {relativeDeleted(item.deletedAt)}
+              {/* Who binned it, not just when. A delete out of a shared inbox
+                  hides the thread from the whole team, so "Priya · 2h ago" is
+                  the difference between an accident someone can chase and an
+                  anonymous disappearance. */}
+              <span
+                className="text-[11px] text-ink/45 whitespace-nowrap"
+                title={
+                  item.deletedByName
+                    ? `Deleted by ${item.deletedByName}`
+                    : "Deleted"
+                }
+              >
+                {item.deletedByName && (
+                  <>
+                    <span className="text-ink/55">{item.deletedByName}</span>
+                    <span className="text-ink/30">{" · "}</span>
+                  </>
+                )}
+                <span className="tabular-nums">{relativeDeleted(item.deletedAt)}</span>
               </span>
               <button
                 type="button"

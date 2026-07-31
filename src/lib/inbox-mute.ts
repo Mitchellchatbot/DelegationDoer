@@ -7,6 +7,7 @@
 //
 // Everything here is server-side. Lists filter muted threads out in the API /
 // SSR layer, so the client never needs the rules or the matcher.
+import { createHash } from "crypto";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import type { MissiveThread } from "@/lib/missive-client";
 import {
@@ -112,9 +113,20 @@ export async function createMuteRule(input: {
   const value = normalizeRuleValue(input.matchType, input.value);
   if (!value) throw new Error("value required");
   const supabase = getSupabaseAdmin();
-  // Deterministic-ish id in the style the rest of the schema uses. The unique
-  // (match_type, value) constraint is what actually makes re-muting a no-op.
-  const id = `mute_${input.matchType}_${value}`.replace(/[^a-z0-9_]+/g, "_").slice(0, 120);
+  // Deterministic id, hashed rather than slugged. Slugging the value (collapse
+  // punctuation to "_", truncate) is LOSSY, and two different values that slug
+  // the same — no-reply@acme.com and no.reply@acme.com both become
+  // mute_sender_exact_no_reply_acme_com — collide on this primary key while
+  // staying distinct under the (match_type, value) unique constraint. The
+  // upsert therefore sees no conflict, attempts an INSERT, and dies on a
+  // duplicate-key error, so muting the second address fails permanently.
+  // Hashing is fixed-length and collision-free in practice, and staying
+  // deterministic keeps re-muting an existing rule a genuine no-op rather than
+  // rewriting its primary key. Same shape as inbox-drafts' draftId.
+  const id = "mute_" + createHash("sha1")
+    .update(`${input.matchType}:${value}`)
+    .digest("hex")
+    .slice(0, 24);
   const { data, error } = await supabase
     .from("inbox_mute_rules")
     .upsert(
@@ -142,10 +154,17 @@ export async function deleteMuteRule(id: string): Promise<void> {
   if (error) throw new Error(error.message);
 }
 
-// How many of the recent notifications a candidate rule would have caught.
-// Surfaced in the rule editor so an over-broad domain rule ("*@clientsite.com")
-// is visibly about to swallow real mail BEFORE it's saved, rather than after
-// someone notices they stopped hearing from a client.
+// How many recent messages a candidate rule would have caught. Surfaced in the
+// rule editor so an over-broad domain rule ("*@clientsite.com") is visibly
+// about to swallow real mail BEFORE it's saved, rather than after someone
+// notices they stopped hearing from a client.
+//
+// KNOWN BLIND SPOT: the sample comes from email_notifications, so it only sees
+// mail that actually pinged somebody. An inbox where nobody enabled
+// notifications contributes nothing, and a rule that would gut it still reads
+// "0 of the last N" — reassuring and wrong. Callers must present the number as
+// "of the last N notified messages", never as a clean bill of health. Fixing it
+// properly means sampling the mail source itself rather than the ping log.
 export async function countRecentMatches(
   matchType: MuteMatchType,
   rawValue: string,
@@ -153,20 +172,38 @@ export async function countRecentMatches(
 ): Promise<{ matched: number; sampled: number }> {
   const value = normalizeRuleValue(matchType, rawValue);
   if (!value) return { matched: 0, sampled: 0 };
+  // Over-fetch rows to reach ~sampleSize distinct MESSAGES. email_notifications
+  // holds one row per (user, message), so on an account with eight opted-in
+  // people a single message occupies eight rows: counting rows would multiply
+  // both numbers by the size of the team and shrink the window the sample
+  // actually covers to an eighth of what "the last 500" implies.
   const { data, error } = await getSupabaseAdmin()
     .from("email_notifications")
-    .select("from_email, subject")
+    .select("message_id, from_email, subject")
     .order("received_at", { ascending: false })
-    .limit(sampleSize);
+    .limit(sampleSize * 4);
   if (error) return { matched: 0, sampled: 0 };
-  const rows = (data ?? []) as { from_email: string | null; subject: string | null }[];
+  const rows = (data ?? []) as {
+    message_id: string | null;
+    from_email: string | null;
+    subject: string | null;
+  }[];
   const matcher = compileMuteRules([{
     id: "preview", matchType, value, note: null, enabled: true,
     createdBy: null, createdAt: ""
   }]);
+  const seen = new Set<string>();
   let matched = 0;
+  let sampled = 0;
   for (const r of rows) {
+    // message_id is nullable; sender+subject is a good enough stand-in for
+    // collapsing the fan-out when it's missing.
+    const key = r.message_id ?? `${r.from_email ?? ""}|${r.subject ?? ""}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    sampled += 1;
     if (matcher.match({ from: r.from_email, subject: r.subject })) matched += 1;
+    if (sampled >= sampleSize) break;
   }
-  return { matched, sampled: rows.length };
+  return { matched, sampled };
 }

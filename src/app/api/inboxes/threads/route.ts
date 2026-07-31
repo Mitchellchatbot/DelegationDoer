@@ -145,7 +145,19 @@ export async function GET(req: NextRequest) {
       : scope.mailboxIds
         ? new Set(scope.mailboxIds)
         : null;
-    const deletions = await deletionsForThreads(inScope.map((t) => t.id));
+    // Both lookups are independent of each other, so pay for one round-trip
+    // rather than two. (readStateForThreads below genuinely can't join them —
+    // it needs the post-filter thread list.)
+    const wantMuted = sp.get("muted") === "only";
+    // Muting is an INBOX concern: it's about what keeps arriving and pinging.
+    // Applying it to SENT/SPAM would drop mail from the only view that lists
+    // it — the Muted view is INBOX-only — so a subject rule could silently
+    // swallow your own sent mail with nowhere left to find it.
+    const muteApplies = folder === "INBOX";
+    const [deletions, muteMatcher] = await Promise.all([
+      deletionsForThreads(inScope.map((t) => t.id)),
+      muteApplies ? getMuteMatcher() : null
+    ]);
     const live = deletions.size === 0
       ? inScope
       : inScope.filter((t) =>
@@ -156,9 +168,9 @@ export async function GET(req: NextRequest) {
     // `muted=only` (the Muted view) keeps exactly those, each tagged with the
     // rule that caught it so the UI can explain itself. Same page-shrink
     // caveat as the deletion filter above.
-    const muteMatcher = await getMuteMatcher();
-    const split = partitionMuted(live, muteMatcher);
-    const wantMuted = sp.get("muted") === "only";
+    const split: ReturnType<typeof partitionMuted> = muteMatcher
+      ? partitionMuted(live, muteMatcher)
+      : { live, muted: [] };
     const shown = wantMuted ? split.muted.map((m) => m.thread) : split.live;
     const ruleByThread = new Map(split.muted.map((m) => [m.thread.id, m.rule]));
 

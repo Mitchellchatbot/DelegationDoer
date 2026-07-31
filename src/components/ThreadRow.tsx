@@ -39,7 +39,9 @@ export interface ThreadRowProps {
   // Mute wiring. When supplied, the row gets a "mute this sender" action
   // alongside delete — the fast path for the plugin/vendor noise that would
   // otherwise keep filling the list and pinging.
-  onMute?: (rule: { matchType: MuteMatchType; value: string }) => void | Promise<void>;
+  onMute?: (
+    rule: { id: string | null; matchType: MuteMatchType; value: string }
+  ) => void | Promise<void>;
   // In the Muted view, the rule that caught this thread.
   mutedBy?: { id: string; matchType: MuteMatchType; value: string };
 }

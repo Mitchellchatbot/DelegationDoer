@@ -5,6 +5,7 @@ import { visibleAccountIdsFor } from "@/lib/inbox-access";
 import { listAccountsCached } from "@/lib/missive-client";
 import {
   deleteThreadFromAccounts,
+  markThreadNotificationsSeen,
   restoreThread,
   sanitizeSnapshot
 } from "@/lib/thread-deletions";
@@ -76,6 +77,13 @@ export async function POST(
       userId,
       sanitizeSnapshot(body.snapshot)
     );
+
+    // Binning a conversation should also clear any bell notification it left
+    // behind — otherwise the ping outlives the mail it points at, and clicking
+    // it lands on a thread that's no longer in any list. Not reversed on undo:
+    // an already-read ping is the harmless side, and un-seeing it would be a
+    // strange thing to restore.
+    await markThreadNotificationsSeen(params.threadId, allowed);
 
     // Bust the sidebar badge cache and refresh any concurrently-mounted list.
     for (const accountId of allowed) {

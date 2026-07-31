@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUserId } from "@/lib/session";
-import { getUserById } from "@/lib/server-data";
+import { getUserById, getAllUsersLight } from "@/lib/server-data";
 import { visibleAccountIdsFor } from "@/lib/inbox-access";
 import { listAccountsCached } from "@/lib/missive-client";
 import { listDeletedThreads, type ThreadSnapshot } from "@/lib/thread-deletions";
@@ -15,6 +15,11 @@ export interface TrashItem {
   accountIds: string[];
   accountEmails: string[];
   deletedAt: string;
+  // Who binned it. Deletion is per-inbox and applies to the whole team, so
+  // Trash names the person rather than leaving it anonymous. Null when the
+  // user has since been off-boarded (deleted_by is ON DELETE SET NULL).
+  deletedById: string | null;
+  deletedByName: string | null;
   snapshot: ThreadSnapshot | null;
 }
 
@@ -84,12 +89,32 @@ export async function GET(req: NextRequest) {
           accountIds: [r.accountId],
           accountEmails: email ? [email] : [],
           deletedAt: r.deletedAt,
+          deletedById: r.deletedBy,
+          deletedByName: null,
           snapshot: r.snapshot
         });
       }
     }
 
-    return NextResponse.json({ items: [...byThread.values()] });
+    // Resolve "deleted by" names. Deletion is workspace-visible — binning a
+    // thread out of support@ hides it from everyone who can see support@ — so
+    // "who did this?" is the first question anyone opening Trash will have.
+    // One users read, joined in memory, rather than N lookups.
+    const items = [...byThread.values()];
+    const needNames = new Set(
+      items.map((i) => i.deletedById).filter((id): id is string => !!id)
+    );
+    if (needNames.size > 0) {
+      const users = await getAllUsersLight().catch(() => []);
+      const nameById = new Map(users.map((u) => [u.id, u.name]));
+      for (const item of items) {
+        if (item.deletedById) {
+          item.deletedByName = nameById.get(item.deletedById) ?? null;
+        }
+      }
+    }
+
+    return NextResponse.json({ items });
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "unknown error" },

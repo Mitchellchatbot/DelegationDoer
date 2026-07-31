@@ -5,6 +5,8 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { visibleAccountIdsFor } from "@/lib/inbox-access";
 import { listAccounts, listThreadsPaged } from "@/lib/missive-client";
 import { readStateForThreads, isThreadUnread } from "@/lib/thread-read-state";
+import { filterDeletedThreads } from "@/lib/thread-deletions";
+import { filterMutedThreads } from "@/lib/inbox-mute";
 import { onCacheBust } from "@/lib/inbox-event-bus";
 import { isApprover } from "@/lib/email-approvers";
 
@@ -261,8 +263,18 @@ export async function GET() {
           offset: 0,
           mailboxIds: visibleIds === null ? undefined : visibleAccounts.map((a) => a.id)
         });
-        const readBy = await readStateForThreads(userId, page.threads.map((t) => t.id));
-        inboxesUnread = page.threads.filter((t) =>
+        // Apply the SAME two filters the inbox lists do, or the badge counts
+        // mail the user can no longer see. That's worst for deletes: a binned
+        // thread is in no list and Trash has no "open", so there is no way
+        // left to read it — the count would simply never come down again.
+        // Both degrade to no-ops when their migration hasn't been applied.
+        const scopeIds: Set<string> | null = visibleIds === null
+          ? null
+          : new Set(visibleAccounts.map((a) => a.id));
+        const undeleted = await filterDeletedThreads(page.threads, accounts, scopeIds);
+        const countable = await filterMutedThreads(undeleted);
+        const readBy = await readStateForThreads(userId, countable.map((t) => t.id));
+        inboxesUnread = countable.filter((t) =>
           isThreadUnread(t.last_message_at, readBy.get(t.id))
         ).length;
       }

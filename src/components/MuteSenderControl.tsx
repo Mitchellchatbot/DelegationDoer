@@ -30,7 +30,12 @@ interface Props {
   from: string | null;
   subject: string | null;
   // Called after a rule is saved so the list can drop the thread optimistically.
-  onMuted: (rule: { matchType: MuteMatchType; value: string }) => void | Promise<void>;
+  // `id` is the id the SERVER assigned, passed back rather than re-derived, so
+  // Undo deletes the row that was actually created. Null if the response didn't
+  // carry one — the mute still stands, it just can't offer an undo.
+  onMuted: (
+    rule: { id: string | null; matchType: MuteMatchType; value: string }
+  ) => void | Promise<void>;
   onOpenChange?: (open: boolean) => void;
   className?: string;
 }
@@ -158,8 +163,13 @@ export function MuteSenderControl({ from, subject, onMuted, onOpenChange, classN
         return;
       }
       if (!res.ok) throw new Error();
+      // Carry the server's id back out. Not fatal if it's missing — the rule
+      // saved either way, so don't report a failure that didn't happen.
+      const saved = await res.json().catch(() => null);
+      const id: string | null =
+        typeof saved?.rule?.id === "string" ? saved.rule.id : null;
       setOpen(false);
-      await onMuted({ matchType: current.matchType, value: current.value });
+      await onMuted({ id, matchType: current.matchType, value: current.value });
     } catch {
       setError("Couldn't save that rule. Try again.");
     } finally {
@@ -239,18 +249,31 @@ export function MuteSenderControl({ from, subject, onMuted, onOpenChange, classN
                       {s.hint}
                     </span>
                     {/* The guardrail: a broad rule that would have caught a lot
-                        of recent mail says so, in place, before it's saved. */}
-                    {p && p.sampled > 0 && (
+                        of recent mail says so, in place, before it's saved.
+                        Worded as "notified messages" on purpose — the sample is
+                        the ping log, so it can't see inboxes where nobody
+                        enabled notifications, and a bare "0 of 500" would read
+                        as an all-clear it hasn't earned. */}
+                    {p && (p.sampled > 0 ? (
                       <span
                         className={cn(
-                          "inline-flex items-center gap-1 mt-1 text-[10px] tabular-nums",
+                          "inline-flex items-center gap-1 mt-1 text-[10px]",
                           s.broad && p.matched > 0 ? "text-warn font-medium" : "text-ink/45"
                         )}
+                        title="Counted against recent messages that triggered a notification. Mail in inboxes where nobody has notifications switched on isn't included."
                       >
-                        {s.broad && p.matched > 0 && <AlertTriangle className="w-2.5 h-2.5" />}
-                        Would have muted {p.matched} of the last {p.sampled}
+                        {s.broad && p.matched > 0 && <AlertTriangle className="w-2.5 h-2.5 shrink-0" />}
+                        <span>
+                          Would have muted <span className="tabular-nums">{p.matched}</span>
+                          {" of the last "}
+                          <span className="tabular-nums">{p.sampled}</span> notified messages
+                        </span>
                       </span>
-                    )}
+                    ) : (
+                      <span className="inline-flex items-center gap-1 mt-1 text-[10px] text-ink/45">
+                        No recent notified mail to check this against.
+                      </span>
+                    ))}
                   </span>
                 </label>
               );

@@ -49,7 +49,7 @@ interface Props {
   onDeleteThread?: (threadId: string, accountIds: string[]) => void | Promise<void>;
   onMuteThread?: (
     threadId: string,
-    rule: { matchType: MuteMatchType; value: string }
+    rule: { id: string | null; matchType: MuteMatchType; value: string }
   ) => void | Promise<void>;
 }
 

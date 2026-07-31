@@ -342,7 +342,7 @@ export function InboxThreadsClient({
   // user how wide the rule reaches.
   const handleMuteThread = useCallback(async (
     threadId: string,
-    rule: { matchType: MuteMatchType; value: string }
+    rule: { id: string | null; matchType: MuteMatchType; value: string }
   ) => {
     const index = threads.findIndex((d) => d.thread.id === threadId);
     if (index === -1) return;
@@ -352,30 +352,44 @@ export function InboxThreadsClient({
     pageCacheRef.current.delete(pageRef.current);
     setMuteRulesVersion((v) => v + 1);
 
-    toast.success("Muted — it won't ping or show in the inbox", {
-      action: {
-        label: "Undo",
-        onClick: () => {
-          setThreads((prev) => {
-            if (prev.some((d) => d.thread.id === threadId)) return prev;
-            const next = [...prev];
-            next.splice(Math.min(index, next.length), 0, item);
-            return next;
-          });
-          void fetch(
-            `/api/inboxes/mute-rules?id=${encodeURIComponent(
-              `mute_${rule.matchType}_${rule.value}`.replace(/[^a-z0-9_]+/g, "_").slice(0, 120)
-            )}`,
-            { method: "DELETE" }
-          )
-            .then((r) => { if (!r.ok) throw new Error(); })
-            .then(() => setMuteRulesVersion((v) => v + 1))
-            .catch(() => {
-              toast.error("Couldn't undo — remove the rule from the Muted tab.");
-            });
-        }
-      }
-    });
+    const reinsert = () => {
+      setThreads((prev) => {
+        if (prev.some((d) => d.thread.id === threadId)) return prev;
+        const next = [...prev];
+        next.splice(Math.min(index, next.length), 0, item);
+        return next;
+      });
+    };
+
+    // Undo deletes by the id the SERVER returned. This used to re-derive the id
+    // from (matchType, value) with a copy of the server's slug rule — two
+    // implementations of one scheme, and a DELETE for an id that doesn't exist
+    // succeeds silently, so any drift showed up as an undo that claimed to work
+    // and left the rule in place. No id (older server) → no Undo button, rather
+    // than one that lies.
+    const ruleId = rule.id;
+    toast.success(
+      "Muted — it won't ping or show in the inbox",
+      ruleId
+        ? {
+            action: {
+              label: "Undo",
+              onClick: () => {
+                reinsert();
+                void fetch(
+                  `/api/inboxes/mute-rules?id=${encodeURIComponent(ruleId)}`,
+                  { method: "DELETE" }
+                )
+                  .then((r) => { if (!r.ok) throw new Error(); })
+                  .then(() => setMuteRulesVersion((v) => v + 1))
+                  .catch(() => {
+                    toast.error("Couldn't undo — remove the rule from the Muted tab.");
+                  });
+              }
+            }
+          }
+        : undefined
+    );
   }, [threads]);
 
   // Debounce search input — fires once 350ms after the user stops typing.

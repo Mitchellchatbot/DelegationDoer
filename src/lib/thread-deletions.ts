@@ -175,6 +175,33 @@ export async function deleteThreadFromAccounts(
   if (error) throw new Error(error.message);
 }
 
+// Deleting a thread should also stop it nagging from the notification bell —
+// the ping is for mail the user has now explicitly binned.
+//
+// Rows are marked SEEN rather than deleted, on purpose: email_notifications is
+// also what the poller reads to work out how far back it has already notified
+// (max received_at per account) and to dedup on (user, message_id). Deleting
+// rows would lower that watermark and re-notify the very mail just binned.
+//
+// Best-effort — a failure here must not fail the delete itself, and the table
+// is absent on a deploy that hasn't run the notifications migration.
+export async function markThreadNotificationsSeen(
+  threadId: string,
+  accountIds: string[]
+): Promise<void> {
+  if (accountIds.length === 0) return;
+  // Deletion is per (thread, account) and applies to everyone who can see the
+  // inbox, so clear the ping for every user — not just whoever deleted it.
+  // Result deliberately unread: an error here (missing table, transient blip)
+  // must not turn a successful delete into a 500.
+  await getSupabaseAdmin()
+    .from("email_notifications")
+    .update({ seen_at: new Date().toISOString() })
+    .eq("thread_id", threadId)
+    .in("missive_account_id", accountIds)
+    .is("seen_at", null);
+}
+
 // Restore a thread into the given inboxes (undo / Trash → Restore). Omitting
 // accountIds restores it everywhere it was deleted from.
 export async function restoreThread(
@@ -195,17 +222,51 @@ export async function restoreThread(
 // Trash contents for a set of inboxes, newest deletion first. One row per
 // (thread, account); the UI groups by thread so a delete-from-all reads as a
 // single trashed conversation.
+//
+// Two queries, deliberately. Rows are per (thread, account), so a single LIMIT
+// over rows can slice one thread's rows in half — and a Trash entry built from
+// half a thread's rows restores it into only SOME of the inboxes it was deleted
+// from, silently leaving it binned in the rest. Step 1 picks the newest `limit`
+// DISTINCT threads; step 2 re-reads every in-scope row for exactly those
+// threads, so each entry always carries its complete account set.
 export async function listDeletedThreads(
   accountIds: string[],
   limit = 100
 ): Promise<DeletedThread[]> {
   if (accountIds.length === 0) return [];
-  const { data, error } = await getSupabaseAdmin()
+  const supabase = getSupabaseAdmin();
+
+  // Step 1 — newest distinct thread ids. Scan 4 rows per thread wanted: a
+  // thread deleted from every inbox at once costs one row per inbox, so
+  // scanning row-for-thread would let a couple of delete-from-all
+  // conversations fill the whole page. Coming back with fewer than `limit`
+  // threads is fine; the list is newest-first, so what's missing is only ever
+  // the oldest.
+  const { data: idRows, error: idErr } = await supabase
     .from("inbox_thread_deletions")
-    .select("thread_id, account_id, deleted_at, deleted_by, thread_snapshot")
+    .select("thread_id, deleted_at")
     .in("account_id", accountIds)
     .order("deleted_at", { ascending: false })
-    .limit(limit);
+    .limit(limit * 4);
+  if (idErr) return [];
+  const threadIds: string[] = [];
+  const seenThread = new Set<string>();
+  for (const r of ((idRows ?? []) as { thread_id: string }[])) {
+    if (seenThread.has(r.thread_id)) continue;
+    seenThread.add(r.thread_id);
+    threadIds.push(r.thread_id);
+    if (threadIds.length >= limit) break;
+  }
+  if (threadIds.length === 0) return [];
+
+  // Step 2 — every in-scope row for those threads, so the caller's grouped
+  // accountIds is complete and Restore puts the thread back everywhere.
+  const { data, error } = await supabase
+    .from("inbox_thread_deletions")
+    .select("thread_id, account_id, deleted_at, deleted_by, thread_snapshot")
+    .in("thread_id", threadIds)
+    .in("account_id", accountIds)
+    .order("deleted_at", { ascending: false });
   if (error) return [];
   return (data ?? []).map((r) => ({
     threadId: r.thread_id as string,

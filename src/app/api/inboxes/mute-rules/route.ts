@@ -36,6 +36,16 @@ export async function GET(req: NextRequest) {
 
     const sp = req.nextUrl.searchParams;
     if (sp.get("preview")) {
+      // Same gate as creating a rule. The preview samples notifications across
+      // the WHOLE workspace — it has to, since rules are workspace-wide — so
+      // without this it answers questions about inboxes the caller can't see:
+      // "how many recent messages come from @competitor.com", or any subject
+      // substring you care to guess. Counts, not content, but still an oracle,
+      // and every other inbox read in DD is scoped. Gate it to the people who
+      // could act on the answer anyway.
+      if (!canManageAssignments(me)) {
+        return NextResponse.json({ error: "forbidden" }, { status: 403 });
+      }
       const matchType = parseMatchType(sp.get("matchType"));
       const value = sp.get("value") ?? "";
       if (!matchType || !value.trim()) {

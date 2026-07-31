@@ -8,6 +8,8 @@ import { InboxThreadsClient } from "@/components/InboxThreadsClient";
 import { ComposeButton } from "@/components/ComposeButton";
 import { InboxSplit } from "@/components/InboxSplit";
 import { readStateForThreads, isThreadUnread } from "@/lib/thread-read-state";
+import { filterDeletedThreads } from "@/lib/thread-deletions";
+import { filterMutedThreads } from "@/lib/inbox-mute";
 
 export const dynamic = "force-dynamic";
 
@@ -77,6 +79,17 @@ export default async function AllInboxesPage({
           )
         );
       }
+      // Hide threads soft-deleted from every inbox in this view (see
+      // lib/thread-deletions). Deleting out of one inbox leaves the thread here
+      // as long as another visible inbox still has it.
+      threads = await filterDeletedThreads(
+        threads,
+        inboxes,
+        visibleIds === null ? null : new Set(inboxes.map((a) => a.id))
+      );
+      // Drop workspace-muted noise (plugin/vendor mail) — it stays reachable
+      // under the Muted view. See lib/inbox-mute.
+      threads = await filterMutedThreads(threads);
       hasMore = firstPage.hasMore;
     }
   } catch (err) {
@@ -146,6 +159,9 @@ export default async function AllInboxesPage({
           linkAccountId={inboxes[0]?.id ?? "all"}
           accountIdByEmail={Object.fromEntries(
             inboxes.map((a) => [a.email.toLowerCase(), a.id])
+          )}
+          accountLabelById={Object.fromEntries(
+            inboxes.map((a) => [a.id, a.email])
           )}
           missiveAppUrl={missiveAppUrl || undefined}
         />

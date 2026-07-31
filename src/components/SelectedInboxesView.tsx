@@ -21,6 +21,7 @@ export function SelectedInboxesView({
   initialThreads,
   initialHasMore,
   accountIdByEmail,
+  accountLabelById,
   missiveAppUrl
 }: {
   candidates: PickerInbox[];
@@ -28,6 +29,7 @@ export function SelectedInboxesView({
   initialThreads: ThreadListItem[];
   initialHasMore: boolean;
   accountIdByEmail?: Record<string, string>;
+  accountLabelById?: Record<string, string>;
   missiveAppUrl?: string;
 }) {
   const [ids, setIds] = useState<string[]>(initialSelectedIds);
@@ -64,6 +66,7 @@ export function SelectedInboxesView({
           initialHasMore={matchesInitial ? initialHasMore : false}
           linkAccountId={ids[0] ?? "all"}
           accountIdByEmail={accountIdByEmail}
+          accountLabelById={accountLabelById}
           missiveAppUrl={missiveAppUrl}
           mailboxIds={ids}
           initialScopeKey={initialScopeKey}

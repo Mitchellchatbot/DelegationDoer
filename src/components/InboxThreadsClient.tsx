@@ -5,9 +5,12 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import {
   Search, Loader2, X, Users, KeyRound, BellRing, Receipt, Calendar, AlertTriangle,
-  Inbox, Send, ShieldAlert, FileText, ChevronLeft, ChevronRight
+  Inbox, Send, ShieldAlert, FileText, ChevronLeft, ChevronRight, Trash2, BellOff
 } from "lucide-react";
 import { ThreadList, type ThreadListItem } from "./ThreadList";
+import { TrashList, type TrashItem } from "./TrashList";
+import { MuteRulesPanel } from "./MuteRulesPanel";
+import type { MuteMatchType } from "@/lib/inbox-mute-shared";
 import { useInboxSplit } from "@/components/InboxSplit";
 import { DraftList } from "./DraftList";
 import type { InboxDraft } from "@/lib/inbox-drafts";
@@ -21,13 +24,26 @@ type Category = "all" | "people" | "codes" | "newsletters" | "receipts" | "calen
 // visibility filter, so no inbox the user can't already see is exposed).
 // DRAFTS is DD-local (the inbox_drafts table), not a missive folder — it's
 // fetched from /api/inboxes/drafts and rendered with <DraftList>.
-type Folder = "INBOX" | "SENT" | "SPAM" | "DRAFTS";
+// TRASH is DD-local too (inbox_thread_deletions): the clone never deletes
+// anything, so "deleted" mail is just mail we've been told to hide. It's
+// fetched from /api/inboxes/trash and rendered with <TrashList>.
+// MUTED is the noise view — real INBOX threads that a workspace mute rule
+// caught. It goes through /api/inboxes/threads like any other thread list, just
+// with the filter inverted (`muted=only`), so search and paging work normally.
+type Folder = "INBOX" | "SENT" | "SPAM" | "DRAFTS" | "TRASH" | "MUTED";
+
+// The two DD-local views. Neither hits /api/inboxes/threads, so the paging,
+// search and prefetch machinery below sits them out. MUTED is deliberately NOT
+// in here — it's a normal thread list.
+const LOCAL_FOLDERS = new Set<Folder>(["DRAFTS", "TRASH"]);
 
 const MAILBOXES: Array<{ id: Folder; label: string; icon: typeof Inbox }> = [
   { id: "INBOX",  label: "Inbox",  icon: Inbox },
   { id: "SENT",   label: "Sent",   icon: Send },
   { id: "DRAFTS", label: "Drafts", icon: FileText },
-  { id: "SPAM",   label: "Spam",   icon: ShieldAlert }
+  { id: "SPAM",   label: "Spam",   icon: ShieldAlert },
+  { id: "MUTED",  label: "Muted",  icon: BellOff },
+  { id: "TRASH",  label: "Trash",  icon: Trash2 }
 ];
 
 const CATEGORIES: Array<{ id: Category; label: string; icon: typeof Users; tone: string }> = [
@@ -59,6 +75,9 @@ interface Props {
   // "default filters but the live selection changed" so the latter refetches
   // instead of snapping back to a stale SSR page. Undefined for single/all views.
   initialScopeKey?: string;
+  // account id → inbox address. Labels the delete picker's checkboxes and the
+  // Trash list's "deleted from" chips.
+  accountLabelById?: Record<string, string>;
 }
 
 const PAGE_SIZE = 50;
@@ -94,7 +113,7 @@ function pageWindow(current: number, maxKnown: number): Array<number | "…"> {
 // reverts to the initial SSR'd page.
 export function InboxThreadsClient({
   initialThreads, initialHasMore, linkAccountId, accountIdByEmail, missiveAppUrl,
-  mailboxId, mailboxIds, initialScopeKey
+  mailboxId, mailboxIds, initialScopeKey, accountLabelById
 }: Props) {
   const [threads, setThreads] = useState<ThreadListItem[]>(initialThreads);
   const [hasMore, setHasMore] = useState(initialHasMore);
@@ -109,6 +128,11 @@ export function InboxThreadsClient({
   const [folder, setFolder] = useState<Folder>("INBOX");
   const [drafts, setDrafts] = useState<InboxDraft[]>([]);
   const [draftsLoading, setDraftsLoading] = useState(false);
+  const [trash, setTrash] = useState<TrashItem[]>([]);
+  const [trashLoading, setTrashLoading] = useState(false);
+  // Bumped whenever a rule is added or removed, so the Muted view's rule panel
+  // refetches without threading a callback through it.
+  const [muteRulesVersion, setMuteRulesVersion] = useState(0);
   // The viewer's own id — lets DraftList tell own drafts from others' (in the
   // leader/stealth-admin see-all view). Sourced from the drafts response.
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
@@ -185,6 +209,174 @@ export function InboxThreadsClient({
       toast.error("Couldn't discard the draft — refresh and try again.");
     }
   }, []);
+
+  // Load Trash whenever that view is opened (and after a restore empties a row
+  // out of it). Like Drafts this is DD-local — the clone has no trash concept.
+  const loadTrash = useCallback(async () => {
+    setTrashLoading(true);
+    try {
+      const params = new URLSearchParams();
+      if (mailboxId) params.set("mailboxId", mailboxId);
+      else if (mailboxIdsKey) params.set("mailboxIds", mailboxIdsKey);
+      const res = await fetch(`/api/inboxes/trash?${params}`, { cache: "no-store" });
+      const data = await res.json();
+      setTrash(data.items ?? []);
+    } catch {
+      setTrash([]);
+    } finally {
+      setTrashLoading(false);
+    }
+  }, [mailboxId, mailboxIdsKey]);
+
+  useEffect(() => {
+    if (folder !== "TRASH") return;
+    void loadTrash();
+  }, [folder, loadTrash]);
+
+  // Soft-delete a thread out of the chosen inboxes.
+  //
+  // The row disappears immediately (with its index remembered) and the request
+  // goes out behind it: a delete that only lands after a round-trip feels
+  // broken in a mail client. A failure puts the row back exactly where it was
+  // and says so; a success offers Undo, which restores the same rows server-side
+  // and slots the item back into place.
+  const handleDeleteThread = useCallback(async (threadId: string, accountIds: string[]) => {
+    const index = threads.findIndex((d) => d.thread.id === threadId);
+    if (index === -1) return;
+    const item = threads[index];
+
+    const reinsert = () => {
+      setThreads((prev) => {
+        if (prev.some((d) => d.thread.id === threadId)) return prev;
+        const next = [...prev];
+        next.splice(Math.min(index, next.length), 0, item);
+        return next;
+      });
+    };
+    const drop = () => {
+      setThreads((prev) => prev.filter((d) => d.thread.id !== threadId));
+    };
+
+    drop();
+    // Keep the page cache in step so paging away and back doesn't resurrect it.
+    pageCacheRef.current.delete(pageRef.current);
+
+    try {
+      const res = await fetch(`/api/inboxes/threads/${encodeURIComponent(threadId)}/delete`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          accountIds,
+          // Display-only metadata so Trash can render without re-fetching the
+          // thread. Sanitized server-side.
+          snapshot: {
+            subject: item.thread.subject,
+            from: item.thread.last_from ?? item.thread.participants?.[0] ?? null,
+            snippet: item.thread.last_snippet ?? null,
+            last_message_at: item.thread.last_message_at,
+            account_emails: (item.thread.account_emails ?? []).map((a) => a.email)
+          }
+        })
+      });
+      if (!res.ok) throw new Error();
+      const data = await res.json();
+      const deletedFrom: string[] = data.accountIds ?? accountIds;
+
+      toast.success(
+        deletedFrom.length > 1
+          ? `Deleted from ${deletedFrom.length} inboxes`
+          : "Conversation deleted",
+        {
+          action: {
+            label: "Undo",
+            onClick: () => {
+              reinsert();
+              void fetch(`/api/inboxes/threads/${encodeURIComponent(threadId)}/delete`, {
+                method: "DELETE",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ accountIds: deletedFrom })
+              })
+                .then((r) => { if (!r.ok) throw new Error(); })
+                .catch(() => {
+                  drop();
+                  toast.error("Couldn't undo — the conversation is still in Trash.");
+                });
+            }
+          }
+        }
+      );
+    } catch {
+      reinsert();
+      toast.error("Couldn't delete that conversation — try again.");
+    }
+  }, [threads]);
+
+  // Restore from the Trash view. Optimistic like the delete: the row leaves
+  // Trash straight away and comes back if the request fails.
+  const handleRestore = useCallback(async (item: TrashItem) => {
+    setTrash((prev) => prev.filter((t) => t.threadId !== item.threadId));
+    try {
+      const res = await fetch(`/api/inboxes/threads/${encodeURIComponent(item.threadId)}/delete`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ accountIds: item.accountIds })
+      });
+      if (!res.ok) throw new Error();
+      toast.success("Conversation restored");
+      // It's back in the live list now — drop the cached pages so the next
+      // visit to Inbox re-fetches instead of serving a list without it.
+      pageCacheRef.current = new Map();
+    } catch {
+      setTrash((prev) => (prev.some((t) => t.threadId === item.threadId) ? prev : [item, ...prev]));
+      toast.error("Couldn't restore that conversation — try again.");
+    }
+  }, []);
+
+  // Mute a thread's sender. The rule is already saved by the time this runs
+  // (MuteSenderControl owns that call), so this is purely the list's reaction:
+  // drop the row, and offer an undo that deletes the rule again.
+  //
+  // Only the clicked thread is removed, not every thread the new rule matches —
+  // the rest disappear on the next fetch. Yanking several rows at once on a
+  // single click reads as a bug, and the count in the popover already told the
+  // user how wide the rule reaches.
+  const handleMuteThread = useCallback(async (
+    threadId: string,
+    rule: { matchType: MuteMatchType; value: string }
+  ) => {
+    const index = threads.findIndex((d) => d.thread.id === threadId);
+    if (index === -1) return;
+    const item = threads[index];
+
+    setThreads((prev) => prev.filter((d) => d.thread.id !== threadId));
+    pageCacheRef.current.delete(pageRef.current);
+    setMuteRulesVersion((v) => v + 1);
+
+    toast.success("Muted — it won't ping or show in the inbox", {
+      action: {
+        label: "Undo",
+        onClick: () => {
+          setThreads((prev) => {
+            if (prev.some((d) => d.thread.id === threadId)) return prev;
+            const next = [...prev];
+            next.splice(Math.min(index, next.length), 0, item);
+            return next;
+          });
+          void fetch(
+            `/api/inboxes/mute-rules?id=${encodeURIComponent(
+              `mute_${rule.matchType}_${rule.value}`.replace(/[^a-z0-9_]+/g, "_").slice(0, 120)
+            )}`,
+            { method: "DELETE" }
+          )
+            .then((r) => { if (!r.ok) throw new Error(); })
+            .then(() => setMuteRulesVersion((v) => v + 1))
+            .catch(() => {
+              toast.error("Couldn't undo — remove the rule from the Muted tab.");
+            });
+        }
+      }
+    });
+  }, [threads]);
 
   // Debounce search input — fires once 350ms after the user stops typing.
   useEffect(() => {
@@ -264,7 +456,10 @@ export function InboxThreadsClient({
     if (mailboxId) params.set("mailboxId", mailboxId);
     else if (mailboxIdsKey) params.set("mailboxIds", mailboxIdsKey);
     if (category !== "all") params.set("category", category);
-    if (folder !== "INBOX") params.set("folder", folder);
+    // MUTED isn't a provider folder — it's the INBOX with the mute filter
+    // inverted, so send folder=INBOX and flip the filter instead.
+    if (folder === "MUTED") params.set("muted", "only");
+    else if (folder !== "INBOX") params.set("folder", folder);
     return params;
   }, [debouncedQ, mailboxId, mailboxIdsKey, category, folder]);
 
@@ -272,7 +467,7 @@ export function InboxThreadsClient({
   // (and the current page's neighbours) resolve instantly. Also grows
   // maxKnownPage as it discovers further pages exist.
   const prefetchPage = useCallback(async (pageNum: number) => {
-    if (pageNum < 1 || folder === "DRAFTS") return;
+    if (pageNum < 1 || LOCAL_FOLDERS.has(folder)) return;
     if (pageCacheRef.current.has(pageNum)) return;
     try {
       const res = await fetch(`/api/inboxes/threads?${buildParams(pageNum)}`, { cache: "no-store" });
@@ -289,7 +484,7 @@ export function InboxThreadsClient({
   // Navigate to a page: serve from cache instantly when we have it, else fetch.
   // Warms the neighbours afterward and returns the list to the top.
   const goToPage = useCallback(async (pageNum: number) => {
-    if (pageNum < 1 || folder === "DRAFTS") return;
+    if (pageNum < 1 || LOCAL_FOLDERS.has(folder)) return;
     const cached = pageCacheRef.current.get(pageNum);
     if (cached) {
       setThreads(cached.items);
@@ -328,7 +523,7 @@ export function InboxThreadsClient({
   const scopeKey = `${debouncedQ}|${category}|${folder}|${mailboxId ?? ""}|${mailboxIdsKey}`;
   const scopeKeyRef = useRef<string | null>(null);
   useEffect(() => {
-    if (folder === "DRAFTS") return;
+    if (LOCAL_FOLDERS.has(folder)) return;
     if (scopeKeyRef.current === scopeKey) return;
     scopeKeyRef.current = scopeKey;
     pageCacheRef.current = new Map();
@@ -367,7 +562,9 @@ export function InboxThreadsClient({
       ? "No sent messages in this view yet."
       : folder === "SPAM"
         ? "No spam — your junk folder is clean."
-        : undefined;
+        : folder === "MUTED"
+          ? "Nothing muted in this view. Mute a noisy sender from any row's bell icon."
+          : undefined;
 
   return (
     <div className="space-y-2" ref={rootRef}>
@@ -413,6 +610,18 @@ export function InboxThreadsClient({
             onOpenCompose={openComposeDraft}
             onDiscard={discardDraft}
           />
+        </div>
+      ) : folder === "TRASH" ? (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between text-[11px] text-ink/55">
+            <span>Deleted conversations are hidden from the inbox, never removed from the mail server.</span>
+            <span className="tabular-nums shrink-0 pl-3">
+              {trashLoading
+                ? <span className="inline-flex items-center gap-1"><Loader2 className="w-3 h-3 animate-spin" /> Loading…</span>
+                : <><span className="font-medium">{trash.length}</span> item{trash.length === 1 ? "" : "s"}</>}
+            </span>
+          </div>
+          <TrashList items={trash} onRestore={handleRestore} />
         </div>
       ) : (
       <>
@@ -483,12 +692,33 @@ export function InboxThreadsClient({
         </div>
       </div>
 
+      {/* The Muted view leads with the rules themselves — the list below is the
+          consequence, and someone arriving here usually wants to know (or
+          change) WHY things are being filtered. */}
+      {folder === "MUTED" && (
+        <MuteRulesPanel
+          version={muteRulesVersion}
+          onChanged={() => {
+            setMuteRulesVersion((v) => v + 1);
+            pageCacheRef.current = new Map();
+            void goToPage(1);
+          }}
+        />
+      )}
+
       <ThreadList
         threads={visibleThreads}
         linkAccountId={linkAccountId}
         accountIdByEmail={accountIdByEmail}
         missiveAppUrl={missiveAppUrl}
         emptyMessage={emptyMessage}
+        // Single-inbox view: delete always targets this inbox, so no picker.
+        // Combined views leave it unset and derive the options per thread.
+        deleteScopeAccountId={mailboxId}
+        accountLabelById={accountLabelById}
+        onDeleteThread={handleDeleteThread}
+        // No mute action inside the Muted view — it's already muted there.
+        onMuteThread={folder === "MUTED" ? undefined : handleMuteThread}
       />
 
       {/* Numbered pagination. The threads API returns "has more" (not a total),

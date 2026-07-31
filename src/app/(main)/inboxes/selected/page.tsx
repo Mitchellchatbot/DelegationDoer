@@ -4,6 +4,7 @@ import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { listAccountsCached, listThreadsPaged, INBOX_SSR_PAGE, type MissiveThread } from "@/lib/missive-client";
 import { visibleAccountIdsFor } from "@/lib/inbox-access";
+import { restrictionsFor } from "@/lib/restricted-senders";
 import { getSelectedInboxIds } from "@/lib/selected-inboxes";
 import { ComposeButton } from "@/components/ComposeButton";
 import { InboxSplit } from "@/components/InboxSplit";
@@ -54,9 +55,13 @@ export default async function SelectedInboxesPage() {
       // selected inboxes' emails so a stale backend that ignores mailbox_ids
       // can't surface a non-selected inbox into the SSR'd first page.
       const selectedEmails = new Set(selectedAccounts.map((a) => a.email.toLowerCase()));
-      threads = firstPage.threads.filter((t) =>
+      const inScope = firstPage.threads.filter((t) =>
         (t.account_emails ?? []).some((ae) => selectedEmails.has(ae.email.toLowerCase()))
       );
+      // Sender-scoped privacy (see src/lib/restricted-senders.ts). hasMore
+      // stays the backend's raw answer — same contract as the API route.
+      const restrict = await restrictionsFor(me);
+      threads = restrict ? inScope.filter((t) => !restrict.blocksThread(t)) : inScope;
       hasMore = firstPage.hasMore;
     }
   } catch (err) {

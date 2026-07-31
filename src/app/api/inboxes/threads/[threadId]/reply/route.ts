@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { visibleAccountIdsFor } from "@/lib/inbox-access";
+import { restrictionsFor } from "@/lib/restricted-senders";
 import { sendReply, getThread } from "@/lib/missive-client";
 import { sanitizeMediaUrls, fetchMediaAsAttachments } from "@/lib/media";
 import { deleteReplyDraft } from "@/lib/inbox-drafts";
@@ -66,8 +67,21 @@ export async function POST(
     let inReplyTo: string | undefined =
       typeof body.inReplyTo === "string" && body.inReplyTo ? body.inReplyTo : undefined;
 
+    // Sender-scoped privacy (see src/lib/restricted-senders.ts). The thread
+    // fetch below used to be conditional (only when we had to derive the
+    // recipient or subject); replying into a restricted thread must be
+    // impossible either way, so it's unconditional now — one extra clone
+    // round-trip per reply, which is cheap next to the send itself.
+    const detail = await getThread(params.threadId);
+    const restrict = await restrictionsFor(me);
+    if (
+      restrict &&
+      (restrict.blocksMessages(detail.messages) || restrict.blocksThread(detail.thread))
+    ) {
+      return NextResponse.json({ error: "forbidden" }, { status: 403 });
+    }
+
     if (to.length === 0 || !subject) {
-      const detail = await getThread(params.threadId);
       if (to.length === 0) {
         const lastInbound = [...detail.messages]
           .reverse()

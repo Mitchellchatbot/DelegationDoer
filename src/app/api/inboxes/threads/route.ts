@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { visibleAccountIdsFor } from "@/lib/inbox-access";
+import { restrictionsFor } from "@/lib/restricted-senders";
 import { listAccountsCached, listThreadsPaged } from "@/lib/missive-client";
 import { readStateForThreads, isThreadUnread } from "@/lib/thread-read-state";
 
@@ -129,8 +130,23 @@ export async function GET(req: NextRequest) {
           (t.account_emails ?? []).some((ae) => visibleEmails.has(ae.email.toLowerCase()))
         );
 
-    const readByThread = await readStateForThreads(userId, inScope.map((t) => t.id));
-    const decorated = inScope.map((t) => ({
+    // Sender-scoped privacy (Deel payroll mail etc.): drop threads this user
+    // isn't a viewer of. UNLIKE the account-visibility filter above — which
+    // had to move server-side because it cut a whole-workspace fetch down to
+    // a tiny subset — post-filtering is safe here, because the client derives
+    // offset from the PAGE NUMBER ((page-1)*50 in InboxThreadsClient), never
+    // from rows received. Page N always requests backend rows [50(N-1), 50N),
+    // so dropping rows can only SHORTEN a page; it can't skip, duplicate or
+    // stall. `offset`/`hasMore` are therefore passed through untouched —
+    // recomputing hasMore from the filtered length would truncate the list at
+    // the first fully-restricted page and hide everything beyond it.
+    const restrict = await restrictionsFor(me);
+    const permitted = restrict
+      ? inScope.filter((t) => !restrict.blocksThread(t))
+      : inScope;
+
+    const readByThread = await readStateForThreads(userId, permitted.map((t) => t.id));
+    const decorated = permitted.map((t) => ({
       thread: t,
       unread: isThreadUnread(t.last_message_at, readByThread.get(t.id))
     }));

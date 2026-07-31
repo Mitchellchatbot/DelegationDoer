@@ -4,6 +4,7 @@ import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { listAccountsCached, listThreadsPaged, INBOX_SSR_PAGE, type MissiveThread } from "@/lib/missive-client";
 import { visibleAccountIdsFor } from "@/lib/inbox-access";
+import { restrictionsFor } from "@/lib/restricted-senders";
 import { InboxThreadsClient } from "@/components/InboxThreadsClient";
 import { ComposeButton } from "@/components/ComposeButton";
 import { InboxSplit } from "@/components/InboxSplit";
@@ -67,16 +68,23 @@ export default async function AllInboxesPage({
       // mailbox_ids): only matters if a stale backend ignores the scope, so
       // a non-leader can never be served inboxes they can't see. Mirrors the
       // /api/inboxes/threads guard so SSR and infinite-scroll agree.
+      let inScope: MissiveThread[];
       if (visibleIds === null) {
-        threads = firstPage.threads;
+        inScope = firstPage.threads;
       } else {
         const visibleEmails = new Set(inboxes.map((a) => a.email.toLowerCase()));
-        threads = firstPage.threads.filter((t) =>
+        inScope = firstPage.threads.filter((t) =>
           (t.account_emails ?? []).some((ae) =>
             visibleEmails.has(ae.email.toLowerCase())
           )
         );
       }
+      // Sender-scoped privacy (see src/lib/restricted-senders.ts). Applied to
+      // BOTH branches on purpose: a leader who isn't a viewer on the rule is
+      // restricted too, exactly like a private inbox. hasMore stays the
+      // backend's raw answer — same contract as /api/inboxes/threads.
+      const restrict = await restrictionsFor(me);
+      threads = restrict ? inScope.filter((t) => !restrict.blocksThread(t)) : inScope;
       hasMore = firstPage.hasMore;
     }
   } catch (err) {

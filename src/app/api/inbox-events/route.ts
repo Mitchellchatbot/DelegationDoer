@@ -46,6 +46,15 @@ export async function GET(req: NextRequest) {
   // null means "leader / admin / sees everything"; we let every event
   // through. For everyone else we filter to their assigned + space-
   // granted account set.
+  //
+  // Sender-scoped privacy (src/lib/restricted-senders.ts) is deliberately NOT
+  // applied here, and this comment exists so it doesn't get "fixed". An
+  // InboxEvent carries ids and a timestamp only — no sender, subject or body.
+  // Subscribers react by refetching /api/inboxes/threads and
+  // /api/notifications/badges, both of which DO filter, so a restricted thread
+  // never renders. Filtering here would mean a getThread() per inbound message
+  // on the hottest push path in the app, to hide the fact that a fetch
+  // happened. Not worth it.
 
   const stream = new ReadableStream({
     start(controller) {

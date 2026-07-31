@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { visibleAccountIdsFor } from "@/lib/inbox-access";
+import { restrictionsFor } from "@/lib/restricted-senders";
 import { getThread, listAccounts } from "@/lib/missive-client";
 import { getAnthropic, MODELS } from "@/lib/anthropic-client";
 
@@ -53,6 +54,17 @@ export async function POST(
     if (visibleIds !== null) {
       const hasAccess = Array.from(threadAccountIds).some((id) => visibleIds.has(id));
       if (!hasAccess) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+    }
+
+    // Sender-scoped privacy (see src/lib/restricted-senders.ts) — this route
+    // returns a Claude draft written FROM the thread body, so it leaks the
+    // content just as surely as the reading pane does.
+    const restrict = await restrictionsFor(me);
+    if (
+      restrict &&
+      (restrict.blocksMessages(thread.messages) || restrict.blocksThread(thread.thread))
+    ) {
+      return NextResponse.json({ error: "forbidden" }, { status: 403 });
     }
 
     // Last ~6 messages; oldest first so Claude reads the conversation in

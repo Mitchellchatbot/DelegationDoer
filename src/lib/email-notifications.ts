@@ -13,6 +13,7 @@
 
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { getThread } from "@/lib/missive-client";
+import { viewerIdsForAddresses } from "@/lib/restricted-senders";
 import type { InboxEvent } from "@/lib/inbox-event-bus";
 
 interface EnrichedMessage {
@@ -21,6 +22,10 @@ interface EnrichedMessage {
   fromEmail: string | null;
   preview: string | null;
   receivedAt: string | null;
+  // Every correspondent on the thread (from/to/cc across all messages), used
+  // to apply sender-scoped privacy to the fan-out. Collected here because
+  // enrich() already has the thread in hand — no extra clone round-trip.
+  addresses: string[];
 }
 
 // Pull out a "Name <email@x>" address pair. Missive returns from_addr
@@ -65,17 +70,25 @@ async function enrich(event: InboxEvent): Promise<EnrichedMessage> {
       messages.find((m) => m.id === event.message_id) ??
       messages.filter((m) => m.direction === "inbound").slice(-1)[0] ??
       messages.slice(-1)[0];
-    if (!target) return { subject: null, fromName: null, fromEmail: null, preview: null, receivedAt: null };
+    const addresses = messages.flatMap((m) => [
+      m.from_addr,
+      ...(m.to_addrs ?? []),
+      ...(m.cc_addrs ?? [])
+    ]);
+    if (!target) {
+      return { subject: null, fromName: null, fromEmail: null, preview: null, receivedAt: null, addresses };
+    }
     const { name, email } = splitAddress(target.from_addr);
     return {
       subject: target.subject ?? detail.thread.subject ?? null,
       fromName: name,
       fromEmail: email,
       preview: previewFrom(target),
-      receivedAt: target.sent_at ?? null
+      receivedAt: target.sent_at ?? null,
+      addresses
     };
   } catch {
-    return { subject: null, fromName: null, fromEmail: null, preview: null, receivedAt: null };
+    return { subject: null, fromName: null, fromEmail: null, preview: null, receivedAt: null, addresses: [] };
   }
 }
 
@@ -93,10 +106,20 @@ export async function fanOutInboxEvent(event: InboxEvent): Promise<number> {
     .select("user_id")
     .eq("missive_account_id", event.account_id)
     .eq("enabled", true);
-  const userIds = ((prefRows ?? []) as { user_id: string }[]).map((r) => r.user_id);
+  let userIds = ((prefRows ?? []) as { user_id: string }[]).map((r) => r.user_id);
   if (userIds.length === 0) return 0;
 
   const enriched = await enrich(event);
+
+  // Sender-scoped privacy (see src/lib/restricted-senders.ts). Filter the USER
+  // LIST, not the row: a viewer on the rule still gets their ping, everyone
+  // else silently drops out — and nobody's notification pref row is touched,
+  // so their subscription to the rest of that inbox is unaffected.
+  const allowedViewers = await viewerIdsForAddresses(enriched.addresses);
+  if (allowedViewers) {
+    userIds = userIds.filter((uid) => allowedViewers.has(uid));
+    if (userIds.length === 0) return 0;
+  }
 
   // Only ping for inbound messages. If enrichment failed (no message
   // body), default to "treat as inbound" so the user still gets the

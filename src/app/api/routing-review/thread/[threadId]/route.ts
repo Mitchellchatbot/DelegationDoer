@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { getThread } from "@/lib/missive-client";
+import { restrictionsFor } from "@/lib/restricted-senders";
 
 export const dynamic = "force-dynamic";
 
@@ -25,6 +26,21 @@ export async function GET(
 
   try {
     const detail = await getThread(params.threadId);
+
+    // Sender-scoped privacy (see src/lib/restricted-senders.ts). Note this
+    // route gates on ROLE only — it never checks visibleAccountIdsFor, so it
+    // will happily hand a leader/dept-head 5000 chars per message of any
+    // thread whose id they can name, private inbox included. That broader
+    // inbox_privacy bypass predates this change and is tracked separately;
+    // this guard closes it for restricted senders specifically.
+    const restrict = await restrictionsFor(me);
+    if (
+      restrict &&
+      (restrict.blocksMessages(detail.messages) || restrict.blocksThread(detail.thread))
+    ) {
+      return NextResponse.json({ error: "forbidden" }, { status: 403 });
+    }
+
     const messages = detail.messages.map((m) => ({
       ...m,
       body_text: m.body_text ? m.body_text.slice(0, 5000) : null

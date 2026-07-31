@@ -3,6 +3,7 @@ import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { visibleAccountIdsFor } from "@/lib/inbox-access";
+import { restrictionsFor } from "@/lib/restricted-senders";
 import { listAccounts, listThreadsPaged } from "@/lib/missive-client";
 import { readStateForThreads, isThreadUnread } from "@/lib/thread-read-state";
 import { onCacheBust } from "@/lib/inbox-event-bus";
@@ -261,8 +262,15 @@ export async function GET() {
           offset: 0,
           mailboxIds: visibleIds === null ? undefined : visibleAccounts.map((a) => a.id)
         });
-        const readBy = await readStateForThreads(userId, page.threads.map((t) => t.id));
-        inboxesUnread = page.threads.filter((t) =>
+        // Sender-scoped privacy (see src/lib/restricted-senders.ts). Without
+        // this the badge counts threads the user can't open, so it never
+        // clears — and the phantom count is itself a tell that mail is hidden.
+        const restrict = await restrictionsFor(me);
+        const countable = restrict
+          ? page.threads.filter((t) => !restrict.blocksThread(t))
+          : page.threads;
+        const readBy = await readStateForThreads(userId, countable.map((t) => t.id));
+        inboxesUnread = countable.filter((t) =>
           isThreadUnread(t.last_message_at, readBy.get(t.id))
         ).length;
       }

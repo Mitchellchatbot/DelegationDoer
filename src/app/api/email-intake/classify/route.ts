@@ -3,6 +3,7 @@ import { requireCurrentUserId } from "@/lib/session";
 import { getUserById, getAllTasks, getAllUsersLight, getDepartments } from "@/lib/server-data";
 import { getThread } from "@/lib/missive-client";
 import { visibleAccountIdsFor } from "@/lib/inbox-access";
+import { restrictionsFor } from "@/lib/restricted-senders";
 import { classifyEmailThread } from "@/lib/email-classifier";
 import { matchRoutingRule, rowToRule } from "@/lib/routing-match";
 import { rankCandidates, buildLoadSignals } from "@/lib/skill-rank";
@@ -43,6 +44,18 @@ export async function POST(req: NextRequest) {
 
     // Pull the thread + assemble the body the classifier reads.
     const detail = await getThread(threadId);
+
+    // Sender-scoped privacy (see src/lib/restricted-senders.ts): the response
+    // is an AI summary of the email, so this leaks content and would seed a
+    // team task from mail the caller isn't allowed to read.
+    const restrict = await restrictionsFor(me);
+    if (
+      restrict &&
+      (restrict.blocksMessages(detail.messages) || restrict.blocksThread(detail.thread))
+    ) {
+      return NextResponse.json({ error: "forbidden" }, { status: 403 });
+    }
+
     const inbound = detail.messages.find((m) => m.direction === "inbound") ?? detail.messages[0];
     const fromEmail = inbound ? extractEmail(inbound.from_addr) : null;
     const bodyText = detail.messages

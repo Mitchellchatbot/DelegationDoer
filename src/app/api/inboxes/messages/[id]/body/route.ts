@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { visibleAccountIdsFor } from "@/lib/inbox-access";
+import { restrictionsFor } from "@/lib/restricted-senders";
 import { getThread, fetchMessageBody } from "@/lib/missive-client";
 
 export const dynamic = "force-dynamic";
@@ -44,19 +45,26 @@ export async function GET(
   // need message metadata here, so fetch with bodies deferred.
   let touchesVisible = false;
   let messageInThread = false;
+  // Sender-scoped privacy (see src/lib/restricted-senders.ts) — this route
+  // returns the body itself, so it needs the same gate as the reading pane.
+  let restricted = false;
   try {
     const detail = await getThread(threadId, { deferBodies: true });
     const threadAccountIds = new Set(detail.messages.map((m) => m.account_id));
     touchesVisible =
       visible === null || [...threadAccountIds].some((id) => visible.has(id));
     messageInThread = detail.messages.some((m) => m.id === params.id);
+    const restrict = await restrictionsFor(me);
+    restricted =
+      !!restrict &&
+      (restrict.blocksMessages(detail.messages) || restrict.blocksThread(detail.thread));
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "thread lookup failed" },
       { status: 502 }
     );
   }
-  if (!touchesVisible || !messageInThread) {
+  if (!touchesVisible || !messageInThread || restricted) {
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
 

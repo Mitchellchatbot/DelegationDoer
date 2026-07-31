@@ -51,6 +51,13 @@ const SENDER_PATTERNS: Array<{ re: RegExp; label: string }> = [
   // whose inbound mail is essentially always automated (no humans
   // emailing us FROM these). Add new ones as we observe leaks.
   { re: /@(anthropic|claude)\./i, label: "anthropic/claude" },
+  // Deel (payroll/contractor platform). Belt to the braces of the
+  // restricted_senders DB rule enforced in email-intake-runner: payroll mail
+  // must never become a team task. Covers deel.com + subdomains
+  // (hello.deel.com) and deel.support. Only "no-reply@deel.support" matched
+  // the generic rules above, so payments@/its-payday@/deelteam@ used to reach
+  // the classifier and were stopped by nothing but its judgement.
+  { re: /@(.*\.)?deel\.(com|support)$/i, label: "deel payroll platform" },
   { re: /@(amazon|amazonses)\./i, label: "amazon" },
   { re: /@vercel\./i, label: "vercel" },
   {

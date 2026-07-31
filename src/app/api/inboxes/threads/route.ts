@@ -4,6 +4,8 @@ import { getUserById } from "@/lib/server-data";
 import { visibleAccountIdsFor } from "@/lib/inbox-access";
 import { listAccountsCached, listThreadsPaged } from "@/lib/missive-client";
 import { readStateForThreads, isThreadUnread } from "@/lib/thread-read-state";
+import { deletionsForThreads, isThreadDeletedInScope } from "@/lib/thread-deletions";
+import { getMuteMatcher, partitionMuted } from "@/lib/inbox-mute";
 
 export const dynamic = "force-dynamic";
 
@@ -129,10 +131,48 @@ export async function GET(req: NextRequest) {
           (t.account_emails ?? []).some((ae) => visibleEmails.has(ae.email.toLowerCase()))
         );
 
-    const readByThread = await readStateForThreads(userId, inScope.map((t) => t.id));
-    const decorated = inScope.map((t) => ({
+    // Drop soft-deleted threads. A thread is hidden only when it's deleted from
+    // every in-scope inbox it belongs to, so deleting out of support@ leaves it
+    // visible in billing@ and in any combined view that includes billing@.
+    // Filtering here (rather than in the clone query) means a page can come back
+    // slightly short — acceptable, and identical to the visibility backstop
+    // above; deletions are rare relative to page size.
+    const emailToAccountId = new Map(
+      accounts.map((a) => [a.email.toLowerCase(), a.id])
+    );
+    const deletionScope = mailboxId
+      ? new Set([mailboxId])
+      : scope.mailboxIds
+        ? new Set(scope.mailboxIds)
+        : null;
+    const deletions = await deletionsForThreads(inScope.map((t) => t.id));
+    const live = deletions.size === 0
+      ? inScope
+      : inScope.filter((t) =>
+          !isThreadDeletedInScope(t, emailToAccountId, deletionScope, deletions.get(t.id))
+        );
+
+    // Apply the workspace mute rules. The default views drop muted threads;
+    // `muted=only` (the Muted view) keeps exactly those, each tagged with the
+    // rule that caught it so the UI can explain itself. Same page-shrink
+    // caveat as the deletion filter above.
+    const muteMatcher = await getMuteMatcher();
+    const split = partitionMuted(live, muteMatcher);
+    const wantMuted = sp.get("muted") === "only";
+    const shown = wantMuted ? split.muted.map((m) => m.thread) : split.live;
+    const ruleByThread = new Map(split.muted.map((m) => [m.thread.id, m.rule]));
+
+    const readByThread = await readStateForThreads(userId, shown.map((t) => t.id));
+    const decorated = shown.map((t) => ({
       thread: t,
-      unread: isThreadUnread(t.last_message_at, readByThread.get(t.id))
+      unread: isThreadUnread(t.last_message_at, readByThread.get(t.id)),
+      mutedBy: ruleByThread.get(t.id)
+        ? {
+            id: ruleByThread.get(t.id)!.id,
+            matchType: ruleByThread.get(t.id)!.matchType,
+            value: ruleByThread.get(t.id)!.value
+          }
+        : undefined
     }));
 
     return NextResponse.json({

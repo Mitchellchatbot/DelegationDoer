@@ -21,6 +21,7 @@
 
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { getThread, listThreads, type MissiveMessage } from "@/lib/missive-client";
+import { getMuteMatcher } from "@/lib/inbox-mute";
 
 // Absolute cap on how far back we'll go on first-run for any account
 // (24h). Above this is "ancient", and the user opted in long enough
@@ -37,6 +38,9 @@ export interface PollResult {
   accountsScanned: number;
   threadsExamined: number;
   rowsWritten: number;
+  // Inbound messages a workspace mute rule caught, so a quiet pass is
+  // distinguishable from a broken one in the cron logs.
+  rowsMuted: number;
   errors: Array<{ accountId: string; message: string }>;
 }
 
@@ -71,8 +75,13 @@ export async function pollEmailNotifications(): Promise<PollResult> {
     accountsScanned: 0,
     threadsExamined: 0,
     rowsWritten: 0,
+    rowsMuted: 0,
     errors: []
   };
+
+  // Compiled once for the whole pass — the rule set is workspace-wide and
+  // small, and re-reading it per account would be pure overhead.
+  const muteMatcher = await getMuteMatcher();
 
   // Group opted-in users by account so we only call missiveclone once
   // per account per pass. Also track the EARLIEST opt-in time per
@@ -163,6 +172,16 @@ export async function pollEmailNotifications(): Promise<PollResult> {
         for (const msg of detail.messages ?? []) {
           if (msg.direction !== "inbound") continue;
           if (new Date(msg.sent_at).getTime() <= floor.getTime()) continue;
+          // Muted senders never become notification rows. Dropped here rather
+          // than at insert time so the message also never counts toward the
+          // per-account floor bookkeeping below.
+          if (muteMatcher.match({
+            from: msg.from_addr,
+            subject: msg.subject ?? detail.thread.subject ?? null
+          })) {
+            result.rowsMuted += 1;
+            continue;
+          }
           inboundToWrite.push({ msg, threadSubject: detail.thread.subject ?? null });
         }
       }

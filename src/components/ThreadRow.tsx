@@ -2,13 +2,16 @@
 
 import Link from "next/link";
 import { motion } from "framer-motion";
-import { useEffect, useMemo, useRef } from "react";
-import { Inbox, MessageSquare, ExternalLink } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Inbox, MessageSquare, ExternalLink, BellOff } from "lucide-react";
 import { cn, initials as nameInitials } from "@/lib/utils";
 import { useInboxSplit } from "@/components/InboxSplit";
 import { prefetchThread, prefetchThreadChain } from "@/lib/thread-cache";
 import type { MissiveThread } from "@/lib/missive-client";
 import { InboxFavicon } from "./InboxFavicon";
+import { DeleteThreadControl, type DeleteInboxOption } from "./DeleteThreadControl";
+import { MuteSenderControl } from "./MuteSenderControl";
+import { describeRule, type MuteMatchType } from "@/lib/inbox-mute-shared";
 
 // Email-row visualization for an inbox thread. Lays out like Gmail /
 // Front / Mail.app:
@@ -28,6 +31,17 @@ export interface ThreadRowProps {
   threadId: string;
   // Optional "Open in Missive" deep-link rendered as a sibling chip.
   missiveUrl?: string;
+  // Inboxes this thread can be deleted from, within the current view's scope.
+  // One option → the hover trash button deletes straight away; several → it
+  // opens the per-inbox checkbox popover. Omitted/empty hides the control.
+  deleteOptions?: DeleteInboxOption[];
+  onDelete?: (accountIds: string[]) => void | Promise<void>;
+  // Mute wiring. When supplied, the row gets a "mute this sender" action
+  // alongside delete — the fast path for the plugin/vendor noise that would
+  // otherwise keep filling the list and pinging.
+  onMute?: (rule: { matchType: MuteMatchType; value: string }) => void | Promise<void>;
+  // In the Muted view, the rule that caught this thread.
+  mutedBy?: { id: string; matchType: MuteMatchType; value: string };
 }
 
 // Tone palette indexed by hash of the address, so a given sender always
@@ -82,9 +96,19 @@ function relativeMail(iso: string | null | undefined): string {
   );
 }
 
-export function ThreadRow({ thread, href, unread, index, accountId, threadId, missiveUrl }: ThreadRowProps) {
+export function ThreadRow({
+  thread, href, unread, index, accountId, threadId, missiveUrl, deleteOptions, onDelete, onMute,
+  mutedBy
+}: ThreadRowProps) {
   const { select, isSelected } = useInboxSplit();
   const selected = isSelected(threadId);
+  // Keeps the (hover-revealed) actions pinned while either popover is open, so
+  // the cursor can travel to the panel without the row hiding what it's using.
+  const [deleteMenuOpen, setDeleteMenuOpen] = useState(false);
+  const [muteMenuOpen, setMuteMenuOpen] = useState(false);
+  const menuOpen = deleteMenuOpen || muteMenuOpen;
+  const hasDelete = !!onDelete && !!deleteOptions && deleteOptions.length > 0;
+  const hasMute = !!onMute;
 
   // Show whoever sent the most recent message (the "last person who emailed"),
   // falling back to the thread originator when the backend doesn't supply it.
@@ -267,6 +291,17 @@ export function ThreadRow({ thread, href, unread, index, accountId, threadId, mi
               <span className="font-normal text-ink/45">{" — "}{thread.last_snippet}</span>
             )}
           </div>
+          {/* Muted view only: name the rule doing the filtering, so "why is
+              this hidden" is answerable from the row itself. */}
+          {mutedBy && (
+            <span
+              className="inline-flex items-center gap-1 mt-1 px-1.5 py-0.5 rounded-full bg-warn/10 text-warn text-[10px] font-medium max-w-full truncate"
+              title={`Muted by rule: ${describeRule(mutedBy.matchType, mutedBy.value)}`}
+            >
+              <BellOff className="w-2.5 h-2.5 shrink-0" />
+              {describeRule(mutedBy.matchType, mutedBy.value)}
+            </span>
+          )}
         </div>
 
         {/* Right rail: time, then small meta below. Status only shows
@@ -291,16 +326,47 @@ export function ThreadRow({ thread, href, unread, index, accountId, threadId, mi
         </div>
       </Link>
 
-      {missiveUrl && (
-        <a
-          href={missiveUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="absolute top-1/2 -translate-y-1/2 right-[88px] z-10 opacity-0 group-hover:opacity-100 transition-opacity inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-white border border-slate-200 text-ink/70 hover:text-accent hover:border-accent/30 shadow-sm"
-          title="Open in Missive"
+      {/* Hover actions float just left of the time/meta rail (the idiom the
+          "Open in Missive" chip already used), so they never cover the
+          timestamp. One flex row rather than three hand-tuned offsets, so
+          adding an action can't collide with the others. */}
+      {(hasDelete || hasMute || missiveUrl) && (
+        <div
+          className={cn(
+            "absolute top-1/2 -translate-y-1/2 right-[88px] z-20 flex items-center gap-1.5 transition-opacity",
+            menuOpen
+              ? "opacity-100"
+              : "opacity-0 group-hover:opacity-100 focus-within:opacity-100"
+          )}
         >
-          <ExternalLink className="w-3 h-3" />
-        </a>
+          {missiveUrl && (
+            <a
+              href={missiveUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(e) => e.stopPropagation()}
+              className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-white border border-slate-200 text-ink/70 hover:text-accent hover:border-accent/30 shadow-sm"
+              title="Open in Missive"
+            >
+              <ExternalLink className="w-3 h-3" />
+            </a>
+          )}
+          {hasMute && (
+            <MuteSenderControl
+              from={senderRaw}
+              subject={thread.subject}
+              onMuted={onMute!}
+              onOpenChange={setMuteMenuOpen}
+            />
+          )}
+          {hasDelete && (
+            <DeleteThreadControl
+              options={deleteOptions!}
+              onDelete={onDelete!}
+              onOpenChange={setDeleteMenuOpen}
+            />
+          )}
+        </div>
       )}
     </motion.div>
   );

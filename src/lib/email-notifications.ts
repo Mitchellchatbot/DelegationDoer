@@ -13,6 +13,7 @@
 
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { getThread } from "@/lib/missive-client";
+import { getMuteMatcher } from "@/lib/inbox-mute";
 import type { InboxEvent } from "@/lib/inbox-event-bus";
 
 interface EnrichedMessage {
@@ -97,6 +98,17 @@ export async function fanOutInboxEvent(event: InboxEvent): Promise<number> {
   if (userIds.length === 0) return 0;
 
   const enriched = await enrich(event);
+
+  // Muted senders don't ping. Checked after enrichment because that's where
+  // the sender + subject come from, and before the insert so no row is ever
+  // written for noise. Enrichment failure leaves both fields null, which
+  // matches nothing — an unidentifiable message still pings, which is the
+  // right way to fail for a notification.
+  const muted = (await getMuteMatcher()).match({
+    from: enriched.fromEmail,
+    subject: enriched.subject
+  });
+  if (muted) return 0;
 
   // Only ping for inbound messages. If enrichment failed (no message
   // body), default to "treat as inbound" so the user still gets the

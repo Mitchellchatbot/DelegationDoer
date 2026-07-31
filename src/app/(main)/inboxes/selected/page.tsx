@@ -9,6 +9,8 @@ import { ComposeButton } from "@/components/ComposeButton";
 import { InboxSplit } from "@/components/InboxSplit";
 import { SelectedInboxesView } from "@/components/SelectedInboxesView";
 import { readStateForThreads, isThreadUnread } from "@/lib/thread-read-state";
+import { filterDeletedThreads } from "@/lib/thread-deletions";
+import { filterMutedThreads } from "@/lib/inbox-mute";
 
 export const dynamic = "force-dynamic";
 
@@ -57,6 +59,15 @@ export default async function SelectedInboxesPage() {
       threads = firstPage.threads.filter((t) =>
         (t.account_emails ?? []).some((ae) => selectedEmails.has(ae.email.toLowerCase()))
       );
+      // Hide threads soft-deleted from every selected inbox (see
+      // lib/thread-deletions) — one still-live inbox in the selection keeps the
+      // thread on screen.
+      threads = await filterDeletedThreads(
+        threads,
+        inboxes,
+        new Set(selectedAccounts.map((a) => a.id))
+      );
+      threads = await filterMutedThreads(threads);
       hasMore = firstPage.hasMore;
     }
   } catch (err) {
@@ -77,6 +88,8 @@ export default async function SelectedInboxesPage() {
   const accountIdByEmail = Object.fromEntries(
     inboxes.map((a) => [a.email.toLowerCase(), a.id])
   );
+  // Reverse map for the delete picker's checkbox labels + Trash chips.
+  const accountLabelById = Object.fromEntries(inboxes.map((a) => [a.id, a.email]));
 
   return (
     <InboxSplit>
@@ -125,6 +138,7 @@ export default async function SelectedInboxesPage() {
           initialThreads={decoratedThreads}
           initialHasMore={hasMore}
           accountIdByEmail={accountIdByEmail}
+          accountLabelById={accountLabelById}
           missiveAppUrl={missiveAppUrl || undefined}
         />
       )}

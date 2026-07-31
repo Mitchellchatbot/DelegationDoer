@@ -5,6 +5,8 @@ import { getUserById } from "@/lib/server-data";
 import { listAccountsCached, listThreadsPaged, INBOX_SSR_PAGE, type MissiveThread } from "@/lib/missive-client";
 import { visibleAccountIdsFor } from "@/lib/inbox-access";
 import { readStateForThreads, isThreadUnread } from "@/lib/thread-read-state";
+import { filterDeletedThreads } from "@/lib/thread-deletions";
+import { filterMutedThreads } from "@/lib/inbox-mute";
 import { InboxThreadsClient } from "@/components/InboxThreadsClient";
 import { ComposeButton } from "@/components/ComposeButton";
 import { InboxSplit } from "@/components/InboxSplit";
@@ -60,7 +62,15 @@ export default async function InboxThreadsPage({
     if (!account) notFound();
     inboxLabel = account.display_name || account.email;
     inboxEmail = account.email;
-    threads = firstPage.threads;
+    // Hide threads soft-deleted from THIS inbox. A thread deleted only from
+    // another inbox it also landed in still belongs here (see
+    // lib/thread-deletions).
+    threads = await filterDeletedThreads(
+      firstPage.threads,
+      allAccounts,
+      new Set([params.accountId])
+    );
+    threads = await filterMutedThreads(threads);
     hasMore = firstPage.hasMore;
   } catch (err) {
     fetchError = err instanceof Error ? err.message : "unknown error";
@@ -124,6 +134,7 @@ export default async function InboxThreadsPage({
           initialHasMore={hasMore}
           linkAccountId={params.accountId}
           mailboxId={params.accountId}
+          accountLabelById={{ [params.accountId]: inboxEmail || inboxLabel }}
           missiveAppUrl={missiveAppUrl || undefined}
         />
       )}

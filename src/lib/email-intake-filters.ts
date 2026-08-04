@@ -58,6 +58,16 @@ const SENDER_PATTERNS: Array<{ re: RegExp; label: string }> = [
   // the generic rules above, so payments@/its-payday@/deelteam@ used to reach
   // the classifier and were stopped by nothing but its judgement.
   { re: /@(.*\.)?deel\.(com|support)$/i, label: "deel payroll platform" },
+  // Stripe (payments/billing platform). Same shape and same reasoning as the
+  // Deel entry above: belt to the braces of the restricted_senders DB rule
+  // seeded in 20260808000000_restricted_senders_stripe.sql. Covers stripe.com
+  // + subdomains (e.stripe.com, mail.stripe.com, notifications.stripe.com)
+  // and stripe.dev. Not decorative: of the generic rules above only
+  // "no-reply@stripe.com" matched — "receipts@stripe.com" did not, because the
+  // transactional rule above spells "orders?" with an optional s but "receipt"
+  // without one, so Stripe receipts reached the classifier and were stopped by
+  // nothing but its judgement.
+  { re: /@(.*\.)?stripe\.(com|dev)$/i, label: "stripe billing platform" },
   { re: /@(amazon|amazonses)\./i, label: "amazon" },
   { re: /@vercel\./i, label: "vercel" },
   {

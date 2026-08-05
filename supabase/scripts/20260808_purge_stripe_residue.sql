@@ -9,6 +9,17 @@
 -- rows carrying sender + subject + preview. None of those are sender-filtered
 -- at read time. This script removes them.
 --
+-- IT DELIBERATELY STOPS SHORT OF DESTROYING HUMAN WORK. Two carve-outs, both
+-- counted separately in the preview so you can see what was spared:
+--   * email_drafts is scoped to kind = 'auto_reply'. Drafts a person composed
+--     on a Stripe thread are their words, not Stripe's mail (step 4).
+--   * tasks is scoped to is_draft. An APPROVED intake task may have been
+--     assigned and worked, and the hard delete cascades its activity_logs with
+--     no task_deletions row to recover from. Opt in explicitly if you want
+--     those gone too (step 5).
+-- Both carve-outs leave some Stripe-derived text in DD. That is the safer
+-- default; widening it is one un-comment away, narrowing a bad delete is not.
+--
 -- This is data cleanup, NOT a schema migration — run it manually once against
 -- your Supabase project (SQL editor or psql), inside the transaction below so
 -- you can inspect the preview counts and ROLLBACK if anything looks off.
@@ -163,7 +174,14 @@ select t.id
 -- ---------------------------------------------------------------------------
 select 'stripe threads identified' as what, count(*) as n from stripe_threads
 union all
-select 'tasks (hard delete)',          count(*) from stripe_tasks
+select 'tasks: drafts (DELETED below)', count(*) from public.tasks
+ where id in (select id from stripe_tasks) and is_draft
+union all
+-- Not deleted by default. These are intake tasks somebody APPROVED, and
+-- possibly assigned and worked; hard-deleting them cascades their
+-- activity_logs, i.e. their work history. See step 5.
+select 'tasks: approved/worked (KEPT — opt in at step 5)', count(*) from public.tasks
+ where id in (select id from stripe_tasks) and not is_draft
 union all
 select 'email_notifications',          count(*) from public.email_notifications
  where thread_id in (select thread_id from stripe_threads)
@@ -172,8 +190,15 @@ select 'routing_decisions',            count(*) from public.routing_decisions
  where thread_id in (select thread_id from stripe_threads)
     or task_id in (select id from stripe_tasks)
 union all
-select 'email_drafts',                 count(*) from public.email_drafts
+select 'email_drafts: auto_reply (DELETED below)', count(*) from public.email_drafts
  where source_thread_id in (select thread_id from stripe_threads)
+   and kind = 'auto_reply'
+union all
+-- Not deleted. A human composed these; they are the team's own words, not
+-- residue of Stripe's mail. See step 4.
+select 'email_drafts: human-authored (KEPT)', count(*) from public.email_drafts
+ where source_thread_id in (select thread_id from stripe_threads)
+   and (kind is distinct from 'auto_reply')
 union all
 select 'thread_read_state',            count(*) from public.thread_read_state
  where thread_id in (select thread_id from stripe_threads)
@@ -181,11 +206,13 @@ union all
 select 'email_intake_log (KEPT, not deleted)', count(*) from public.email_intake_log
  where thread_id in (select thread_id from stripe_threads);
 
--- Eyeball what is about to be destroyed. Comment out once you trust it.
-select id, status, is_draft, client_email, left(title, 80) as title
+-- Eyeball it. "DELETE" rows go in step 5; "KEEP" rows survive unless you
+-- un-comment the opt-in there.
+select case when is_draft then 'DELETE' else 'KEEP' end as fate,
+       id, status, is_draft, client_email, left(title, 80) as title
   from public.tasks
  where id in (select id from stripe_tasks)
- order by created_at desc;
+ order by is_draft, created_at desc;
 
 -- ---------------------------------------------------------------------------
 -- 2) email_notifications — carries from_email, subject and a body preview.
@@ -205,20 +232,48 @@ delete from public.routing_decisions
     or task_id in (select id from stripe_tasks);
 
 -- ---------------------------------------------------------------------------
--- 4) email_drafts — unsent auto-replies addressed back to Stripe, sitting in
---    /approvals. email_draft_tasks cascades.
+-- 4) email_drafts — machine-generated auto-replies addressed back to Stripe,
+--    sitting unsent in /approvals. email_draft_tasks cascades.
+--
+--    SCOPED TO kind = 'auto_reply' ON PURPOSE. This table also holds drafts a
+--    HUMAN composed. If someone has written an unsent reply on a Stripe thread
+--    (disputing a charge, say), that is their work, not residue of Stripe's
+--    mail, and deleting it would destroy it silently. The preview above counts
+--    them separately so you can see whether any exist; deal with those by hand.
 -- ---------------------------------------------------------------------------
 delete from public.email_drafts
- where source_thread_id in (select thread_id from stripe_threads);
+ where source_thread_id in (select thread_id from stripe_threads)
+   and kind = 'auto_reply';
 
 -- ---------------------------------------------------------------------------
 -- 5) tasks — hard delete, no task_deletions snapshot (see header).
 --    Cascades activity_logs / task_handoffs / task_messages /
 --    task_notifications; NULLs email_intake_log.task_id, which is exactly the
 --    shape a restricted-sender log row has anyway.
+--
+--    DRAFTS ONLY BY DEFAULT. An intake task starts life as is_draft = true,
+--    sitting in the routing-review queue — for an automated biller like Stripe
+--    that is where essentially all of them still are, and deleting one destroys
+--    nothing a person did. A task somebody APPROVED is different: it may have
+--    been assigned, commented on and worked, and the hard delete cascades its
+--    activity_logs, i.e. its whole history — with no task_deletions row to
+--    recover from, since we deliberately skip that snapshot (see header). That
+--    is not a thing to do silently as a side effect of a privacy cleanup.
+--
+--    The trade-off, stated plainly: a surviving approved task still carries the
+--    classifier's description and a "_From: <stripe address>_" line, so it is
+--    still Stripe-derived content living in DD. Read the two task counts in the
+--    preview. If the approved ones should go too, un-comment the second
+--    statement — the preview's detail query lists exactly what it would remove.
 -- ---------------------------------------------------------------------------
 delete from public.tasks
- where id in (select id from stripe_tasks);
+ where id in (select id from stripe_tasks)
+   and is_draft;
+
+-- OPT-IN: also remove approved/worked intake tasks derived from Stripe mail.
+-- delete from public.tasks
+--  where id in (select id from stripe_tasks)
+--    and not is_draft;
 
 -- ---------------------------------------------------------------------------
 -- 6) thread_read_state — per-user read markers. No content (user, thread,

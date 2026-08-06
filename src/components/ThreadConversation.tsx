@@ -6,6 +6,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import type { MissiveThread, MissiveMessage } from "@/lib/missive-client";
 import { rawEmail } from "@/lib/email-format";
 import { CreateTaskFromThreadButton } from "@/components/CreateTaskFromThreadButton";
+import { EmailPrintButtons } from "@/components/EmailPrintButtons";
 import { ReplyComposer } from "@/components/ReplyComposer";
 import { ThreadAutoMarkRead } from "@/components/ThreadAutoMarkRead";
 import { ScrollToLatestMessage } from "@/components/ScrollToLatestMessage";
@@ -97,6 +98,13 @@ export function ThreadConversation({
       <div className="flex items-center justify-end gap-2 flex-wrap">
         <div className="flex items-center gap-2">
           <CreateTaskFromThreadButton accountId={accountId} threadId={threadId} />
+          {/* Print / save the whole conversation — HTML and a multipart/digest
+              .eml bundling every message. */}
+          <EmailPrintButtons
+            messages={messages}
+            context={{ accountId, threadId, threadSubject: thread.subject || "" }}
+            size="md"
+          />
           {missiveThreadUrl && (
             <a
               href={missiveThreadUrl}

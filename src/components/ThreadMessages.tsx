@@ -7,6 +7,7 @@ import { shortName, rawEmail, messageSnippet } from "@/lib/email-format";
 import { fetchDeferredBody, prefetchThreadBodies, getCachedBody } from "@/lib/message-body-cache";
 import { Avatar } from "@/components/Avatar";
 import { ForwardButton } from "@/components/ForwardButton";
+import { EmailPrintButtons } from "@/components/EmailPrintButtons";
 import { EmailBody } from "@/components/EmailBody";
 import { AttachmentChip } from "@/components/AttachmentChip";
 
@@ -204,6 +205,12 @@ export function ThreadMessages({
                         sourceFrom={m.from_addr}
                         sourceDate={fmtDate(m.sent_at)}
                         attachmentCount={(m.attachments ?? []).length}
+                      />
+                      {/* Print / download just this message. */}
+                      <EmailPrintButtons
+                        messages={[m]}
+                        context={{ accountId, threadId, threadSubject: m.subject || threadSubject }}
+                        size="sm"
                       />
                     </div>
                   </div>

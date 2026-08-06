@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Mail, Loader2, AlertCircle, ChevronLeft } from "lucide-react";
 import { ThreadConversation, type ThreadDetailData } from "@/components/ThreadConversation";
 import { useInboxSplit, type ThreadPreview } from "@/components/InboxSplit";
@@ -23,6 +23,11 @@ export function ThreadReadingPane() {
   const threadId = selected?.threadId ?? null;
   const accountId = selected?.accountId ?? null;
   const [state, setState] = useState<State>({ status: "idle" });
+  // Bumped to force a re-fetch of the SAME thread without changing threadId
+  // (e.g. after sending a reply). threadId/accountId alone can't trigger it —
+  // they don't change — and router.refresh() doesn't reach this client-cached
+  // pane, so a just-sent reply would otherwise never appear until re-open.
+  const [reloadNonce, setReloadNonce] = useState(0);
 
   useEffect(() => {
     if (!threadId || !accountId) {
@@ -59,7 +64,12 @@ export function ThreadReadingPane() {
         });
       });
     return () => ac.abort();
-  }, [threadId, accountId, markRead]);
+  }, [threadId, accountId, markRead, reloadNonce]);
+
+  // Re-fetch the open thread in place. fetchThread always hits the network, so
+  // bumping the nonce re-runs the effect and swaps in fresh data (incl. a
+  // just-sent reply) while the cached copy stays on screen — no spinner flash.
+  const reload = useCallback(() => setReloadNonce((n) => n + 1), []);
 
   return (
     <div className="flex-1 min-w-0 sticky top-3 self-start max-h-[calc(100vh-1.5rem)] overflow-y-auto">
@@ -105,6 +115,7 @@ export function ThreadReadingPane() {
           {...state.data}
           accountId={accountId}
           threadId={threadId}
+          onSent={reload}
         />
       )}
     </div>

@@ -39,8 +39,16 @@ export function ThreadConversation({
   replyAllCc,
   defaultTo,
   missiveThreadUrl,
-  fromAccounts
-}: ThreadDetailData & { accountId: string; threadId: string }) {
+  fromAccounts,
+  onSent
+}: ThreadDetailData & {
+  accountId: string;
+  threadId: string;
+  // Fired after a reply/schedule succeeds so the host (the reading pane) can
+  // re-fetch and show the new message. Optional: a caller that renders its own
+  // way to refresh can omit it.
+  onSent?: () => void;
+}) {
   // Which message the user is replying to. null = the default bottom composer,
   // which threads under the latest message. Picking a message from the list
   // (its per-message Reply button) pins the reply to that specific email.
@@ -164,6 +172,7 @@ export function ThreadConversation({
         quoteSource={replyTarget ?? messages.at(-1) ?? null}
         accounts={fromAccounts}
         threadAddresses={threadAddresses}
+        onSent={onSent}
       />
 
       {/* Mark-as-read upsert fires on mount — silent. refresh={false}: the

@@ -17,8 +17,10 @@ import { rawEmail, shortName } from "@/lib/email-format";
 
 // Inline reply panel that sits at the bottom of a thread detail. Folded
 // into a "Reply" pill by default; expands into a Gmail-style composer
-// on click. Submitting hits /api/inboxes/threads/[threadId]/reply and
-// refreshes the thread so the new message appears in the list.
+// on click. Submitting hits /api/inboxes/threads/[threadId]/reply, then
+// calls onSent so the host reading pane re-fetches and the new message
+// appears in the open thread (router.refresh alone can't — the pane is
+// client-cached and router-independent).
 
 function escapeHtml(s: string): string {
   return String(s || "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] as string));
@@ -72,7 +74,7 @@ function buildQuoteDoc(quoteHtml: string): string {
 
 export function ReplyComposer({
   threadId, accountId, defaultTo, defaultSubject, replyAllTo, replyAllCc,
-  replyTarget, onClearReplyTarget, quoteSource, accounts, threadAddresses
+  replyTarget, onClearReplyTarget, quoteSource, accounts, threadAddresses, onSent
 }: {
   threadId: string;
   accountId: string;
@@ -104,6 +106,10 @@ export function ReplyComposer({
   // reply's "To" contains someone who isn't part of the conversation. When
   // absent/empty the guardrail stays silent (fails open).
   threadAddresses?: string[];
+  // Called after a reply is sent (or scheduled) successfully. The reading pane
+  // passes a re-fetch here so the just-sent message shows up in the open thread;
+  // router.refresh() can't do it because the pane is client-cached.
+  onSent?: () => void;
 }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -497,6 +503,12 @@ export function ReplyComposer({
       setFromAccountId(accountId);
       onClearReplyTarget?.();
       setOpen(false);
+      // Re-fetch the open thread so the just-sent message appears in place.
+      // The reading pane is client-cached and router-independent, so this — not
+      // router.refresh() — is what actually surfaces the reply in the thread.
+      onSent?.();
+      // Still refresh the server tree so the inbox list reflects the new
+      // last-message/preview and ordering.
       router.refresh();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "network error");

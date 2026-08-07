@@ -35,12 +35,12 @@ interface LockedClient {
   contactEmails: string[];
 }
 
-const DEFAULT_DAYS = 14;
+const DEFAULT_DAYS = 20;
 
 // Lookback windows offered by the composer's range selector. The operator can
 // widen this to reach older un-reported EOD work (nothing is permanently
 // hidden — sending stamps reported_to_client_at, which drops entries off).
-const DAY_OPTIONS = [7, 14, 30, 90];
+const DAY_OPTIONS = [7, 14, 20, 30, 90];
 
 // A connected sending mailbox (from GET /api/inboxes).
 interface MailAccount {

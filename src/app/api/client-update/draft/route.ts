@@ -14,7 +14,7 @@ export const maxDuration = 60;
 //   body: {
 //     clientId: string,
 //     clientName?: string,        // display only; clientId is the source of truth
-//     from?: string,              // ISO — window start (default: 14 days ago)
+//     from?: string,              // ISO — window start (default: 20 days ago)
 //     to?: string,                // ISO — window end (default: now)
 //     entryIds?: string[]         // operator's selected EOD work entries.
 //                                 // Omit = every entry in the window.
@@ -66,7 +66,7 @@ interface WorkRow {
 const NO_DEPT = "__no_dept__";
 // Fallback window when the caller sends no from/to. Matches the composer's
 // DEFAULT_DAYS (the UI always sends an explicit window; this is a safety net).
-const DEFAULT_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
+const DEFAULT_WINDOW_MS = 20 * 24 * 60 * 60 * 1000;
 
 export async function POST(req: NextRequest) {
   try {
@@ -95,7 +95,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "not allowed" }, { status: 403 });
     }
 
-    // Window. Default = last 14 days. Bad/missing inputs fall back.
+    // Window. Default = last 20 days. Bad/missing inputs fall back.
     const now = Date.now();
     const toMs = body.to ? Date.parse(body.to) : now;
     const fromMs = body.from ? Date.parse(body.from) : now - DEFAULT_WINDOW_MS;

@@ -81,6 +81,12 @@ interface DeptDraft {
 // work is included. UTC-aligned to match the /approvals recommendations
 // endpoint (which uses the same UTC-midnight floor) so the per-row count
 // there matches what the composer pulls in for the preview + draft.
+//
+// That count only lines up when the windows do. Since the composer floors its
+// window at DEFAULT_DAYS, opening a narrow tab (Daily/Weekly) legitimately
+// loads MORE entries than that row advertised. The surplus is un-reported,
+// un-dismissed work by definition, so widening can surface forgotten work but
+// can never double-report anything already sent.
 function windowFor(days: number): { from: string; to: string } {
   const to = new Date();
   const from = new Date(to.getTime() - days * 86_400_000);
@@ -143,11 +149,24 @@ export function ClientUpdateComposer({
   // undefined and the composer just resets to "compose" as before.
   onSubmitted?: () => void;
 }) {
-  // Lookback window. Seeded from presetDays (the /approvals deep-link) or
-  // DEFAULT_DAYS on the client page, then adjustable in-place via the range
-  // selector in the preview header. State (not a const) so the selector, the
-  // preview refetch, and the Generate POST all read the same value.
-  const [days, setDays] = useState<number>(presetDays && presetDays > 0 ? presetDays : DEFAULT_DAYS);
+  // Lookback window. Seeded from presetDays (the /approvals card passes its
+  // selected tab: 1/7/14/30) or DEFAULT_DAYS on the client page, then
+  // adjustable in-place via the range selector in the preview header. State
+  // (not a const) so the selector, the preview refetch, and the Generate POST
+  // all read the same value.
+  //
+  // DEFAULT_DAYS is a FLOOR, not merely a fallback. A narrow tab (Daily = 1
+  // day) would otherwise re-impose the very limit this default exists to
+  // remove, hiding older un-reported work whenever the composer is opened from
+  // the card rather than the client page. Wider presets (Monthly = 30) win on
+  // their own and are passed through untouched.
+  //
+  // Guard order matters: a non-numeric ?days= yields NaN, and `NaN > 0` is
+  // false, so it falls through to DEFAULT_DAYS instead of reaching Math.max
+  // (which would propagate the NaN into every window calculation).
+  const [days, setDays] = useState<number>(
+    presetDays && presetDays > 0 ? Math.max(presetDays, DEFAULT_DAYS) : DEFAULT_DAYS
+  );
 
   const me = useCurrentUser();
   // Heuristic gate for the "Send now" (bypass-approval) button. The

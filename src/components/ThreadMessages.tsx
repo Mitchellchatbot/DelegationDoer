@@ -10,6 +10,7 @@ import { ForwardButton } from "@/components/ForwardButton";
 import { EmailPrintButtons } from "@/components/EmailPrintButtons";
 import { EmailBody } from "@/components/EmailBody";
 import { AttachmentChip } from "@/components/AttachmentChip";
+import { rewriteInlineCids, referencedInlineIds } from "@/lib/inline-cid";
 
 // Gmail-style thread collapse. A thread can hold many messages; rendering every
 // one fully expanded turns it into a wall of email. Instead we show only the
@@ -89,7 +90,16 @@ export function ThreadMessages({
         const outbound = m.direction === "outbound";
         const isLatest = i === messages.length - 1;
         const expanded = effectiveExpanded.has(m.id);
-        const hasAttachments = (m.attachments ?? []).length > 0;
+        const atts = m.attachments ?? [];
+        // Paperclip indicator on the collapsed stub — unchanged: true when the
+        // message carries ANY attachment (inline images included).
+        const hasAttachments = atts.length > 0;
+        // Chip row only: inline images already rendered into the body (via
+        // rewriteInlineCids) are dropped so they don't appear twice. Only
+        // computable when the body html is present (the non-deferred, latest
+        // message); deferred bodies keep every chip until expanded.
+        const inlinedIds = m.body_html ? referencedInlineIds(m.body_html, atts) : null;
+        const chipAtts = inlinedIds ? atts.filter((a) => !inlinedIds.has(a.id)) : atts;
 
         // Anchor wrapper keeps the scroll-to-latest target stable regardless of
         // whether the latest message is expanded or collapsed.
@@ -222,12 +232,24 @@ export function ThreadMessages({
                     fetched on expand — this card only mounts when expanded. */}
                 <div className="p-5">
                   {m.body_html ? (
-                    <EmailBody html={m.body_html} />
+                    // Inline images are referenced as `cid:<content-id>`, which
+                    // resolves nowhere inside the sandboxed iframe. Rewrite them
+                    // to the authenticated attachment proxy so received inline
+                    // images render instead of showing as broken "image.png".
+                    <EmailBody
+                      html={rewriteInlineCids(
+                        m.body_html,
+                        m.attachments ?? [],
+                        accountId,
+                        threadId
+                      )}
+                    />
                   ) : m.body_deferred ? (
                     <DeferredMessageBody
                       messageId={m.id}
                       accountId={accountId}
                       threadId={threadId}
+                      attachments={m.attachments ?? []}
                       fallbackText={m.body_text}
                     />
                   ) : (
@@ -237,14 +259,15 @@ export function ThreadMessages({
                   )}
                 </div>
 
-                {/* Attachments — one chip per file. We deliberately do NOT
-                    filter out "inline" (cid) images: the sandboxed iframe can't
-                    resolve cid: refs, so hiding them would make real attachments
-                    vanish. Each chip links to the proxy that streams bytes from
-                    the clone with an access check. */}
-                {hasAttachments && (
+                {/* Attachments — one chip per file. Inline images that we just
+                    rendered into the body (their cid: was rewritten to the
+                    proxy) are dropped here so they aren't shown twice; a
+                    content_id image that no cid references still gets a chip, so
+                    real attachments never vanish. Each chip links to the proxy
+                    that streams bytes from the clone with an access check. */}
+                {chipAtts.length > 0 && (
                   <div className="px-5 pb-5 -mt-1 flex flex-wrap gap-2">
-                    {(m.attachments ?? []).map((a) => (
+                    {chipAtts.map((a) => (
                       <AttachmentChip
                         key={a.id}
                         attachment={a}
@@ -271,11 +294,15 @@ function DeferredMessageBody({
   messageId,
   accountId,
   threadId,
+  attachments,
   fallbackText
 }: {
   messageId: string;
   accountId: string;
   threadId: string;
+  // The message's attachments, needed to resolve inline-image cid: refs in the
+  // fetched body (same rewrite the non-deferred path applies above).
+  attachments: MissiveMessage["attachments"];
   fallbackText: string | null;
 }) {
   const [state, setState] = useState<
@@ -324,7 +351,13 @@ function DeferredMessageBody({
       </pre>
     );
   }
-  if (state.html) return <EmailBody html={state.html} />;
+  if (state.html) {
+    return (
+      <EmailBody
+        html={rewriteInlineCids(state.html, attachments ?? [], accountId, threadId)}
+      />
+    );
+  }
   return (
     <pre className="text-sm whitespace-pre-wrap font-sans leading-relaxed">
       {state.text || fallbackText || "(empty)"}

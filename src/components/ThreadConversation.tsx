@@ -96,7 +96,7 @@ export function ThreadConversation({
   const body = (
     <div className="space-y-5">
       <div className="flex items-center justify-end gap-2 flex-wrap">
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center justify-end gap-2">
           <CreateTaskFromThreadButton accountId={accountId} threadId={threadId} />
           {/* Print / save the whole conversation — HTML and a multipart/digest
               .eml bundling every message. */}

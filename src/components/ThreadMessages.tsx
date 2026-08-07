@@ -186,13 +186,13 @@ export function ThreadMessages({
                     </div>
                   </div>
                   <div
-                    className="shrink-0 text-right flex flex-col items-end gap-2"
+                    className="min-w-0 text-right flex flex-col items-end gap-2"
                     onClick={(e) => e.stopPropagation()}
                   >
                     <div className="inline-flex items-center px-2.5 py-1 rounded-full text-[11px] bg-white/70 border border-border/60 text-ink/70 tabular-nums">
                       {fmtDate(m.sent_at)}
                     </div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center justify-end gap-2">
                       {/* Reply to THIS specific message. Pins the bottom
                           composer so the reply threads under this email (and
                           pre-fills its sender), instead of always the latest. */}

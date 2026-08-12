@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Mail, Loader2, AlertCircle, ChevronLeft } from "lucide-react";
 import { ThreadConversation, type ThreadDetailData } from "@/components/ThreadConversation";
 import { useInboxSplit, type ThreadPreview } from "@/components/InboxSplit";
@@ -71,13 +71,20 @@ export function ThreadReadingPane() {
   // just-sent reply) while the cached copy stays on screen — no spinner flash.
   const reload = useCallback(() => setReloadNonce((n) => n + 1), []);
 
+  // Which thread the live subscription below should react to. Held in a ref, not
+  // a dependency: the subscription is opened ONCE for the pane's lifetime and
+  // reads the current value when an event lands. Keying the effect on threadId
+  // instead would tear down and re-open the stream on every thread click, and
+  // the server's keepalive path doesn't always unsubscribe on disconnect — so
+  // that churn can leak one bus listener per thread the user opens.
+  const threadIdRef = useRef<string | null>(threadId);
+  threadIdRef.current = threadId;
+
   // Live-update the OPEN thread. Until now only the list reacted to the inbox
   // stream (InboxThreadsClient refreshes page 1), so a reply that arrived from
   // Outlook while you were reading the conversation never appeared — you had to
-  // switch away and back. The SSE payload carries the thread id, so this
-  // reloads only when the event is about the thread actually on screen.
+  // switch away and back.
   useEffect(() => {
-    if (!threadId) return;
     if (typeof window === "undefined" || typeof EventSource === "undefined") return;
     let es: EventSource | null = null;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -90,8 +97,17 @@ export function ThreadReadingPane() {
         es = new EventSource("/api/inbox-events");
         es.addEventListener("inbox", (ev) => {
           try {
-            const data = JSON.parse((ev as MessageEvent<string>).data) as { thread_id?: string };
-            if (data?.thread_id === threadId) reload();
+            const data = JSON.parse((ev as MessageEvent<string>).data) as {
+              thread_id?: string;
+              event?: string;
+            };
+            if (!data?.thread_id || data.thread_id !== threadIdRef.current) return;
+            // Only NEW mail is worth a refetch. "thread:updated" also fires for
+            // status changes — including the one our own mark-as-read upsert
+            // publishes on open, which would make every thread open cost an
+            // extra full thread fetch for nothing.
+            if (data.event && data.event !== "message:new") return;
+            reload();
           } catch { /* malformed frame — ignore */ }
         });
         es.onopen = () => { attempt = 0; };
@@ -110,7 +126,7 @@ export function ThreadReadingPane() {
       if (retryTimer) clearTimeout(retryTimer);
       es?.close();
     };
-  }, [threadId, reload]);
+  }, [reload]);
 
   return (
     <div className="flex-1 min-w-0 sticky top-3 self-start max-h-[calc(100vh-1.5rem)] overflow-y-auto">

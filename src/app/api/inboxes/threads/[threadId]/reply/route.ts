@@ -95,26 +95,17 @@ export async function POST(
           ? detail.thread.subject
           : `Re: ${detail.thread.subject ?? ""}`;
       }
-    }
-
-    // Pin the parent message explicitly, always — not only when we also had to
-    // derive the recipient/subject. The composer always sends `to` and
-    // `subject`, so nesting this in the branch above meant every ordinary reply
-    // went out with no In-Reply-To from us and relied on the clone guessing the
-    // parent. Threading is too important to leave to a fallback: an outbound
-    // copy with no In-Reply-To is exactly what gets filed as its own thread.
-    if (!inReplyTo) {
-      // Newest message that actually has an RFC Message-ID to thread under.
-      // Picked by timestamp rather than array position so a backend that hands
-      // messages back in ingest order can't make us reply to the wrong one.
-      let newest: { at: number; id: string } | null = null;
-      for (const m of detail.messages) {
-        if (!m.message_id) continue;
-        const at = Date.parse(m.sent_at);
-        const when = Number.isNaN(at) ? -Infinity : at;
-        if (!newest || when >= newest.at) newest = { at: when, id: m.message_id };
-      }
-      inReplyTo = newest?.id ?? undefined;
+      // Deliberately NOT hoisted out of this branch. It's tempting to always
+      // send an explicit In-Reply-To "for safety", but the clone already
+      // defaults to the thread's newest message (ORDER BY sent_at DESC) and
+      // builds the References chain from it, and an id it can't resolve degrades
+      // to that same default. So pinning one here changes nothing in the normal
+      // case — and in the case where the newest message has no Message-ID it
+      // picks an OLDER parent, which makes the clone truncate References to
+      // `sent_at <= that message`. Strictly worse. Leave the default to the
+      // backend; `inReplyTo` above is only set when the user explicitly replied
+      // to a specific message.
+      if (!inReplyTo) inReplyTo = detail.messages.at(-1)?.message_id ?? undefined;
     }
 
     if (to.length === 0) {

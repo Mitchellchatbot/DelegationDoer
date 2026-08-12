@@ -185,11 +185,16 @@ export function ThreadConversation({
 
       {/* Mark-as-read upsert fires on mount — silent. refresh={false}: the
           reading pane updates the list's unread badge locally, so we skip the
-          router.refresh that would re-run the (mounted) list's SSR. */}
+          router.refresh that would re-run the (mounted) list's SSR.
+
+          `|| null`, not `?? null`: an unparseable sent_at normalizes to the
+          empty STRING, and ?? would pass that straight through to a timestamptz
+          column, failing the upsert and leaving the thread unread for good.
+          Empty means "no watermark". */}
       <ThreadAutoMarkRead
         threadId={threadId}
         accountId={accountId}
-        readThroughAt={messages.at(-1)?.sent_at ?? null}
+        readThroughAt={messages.at(-1)?.sent_at || null}
         refresh={false}
       />
 

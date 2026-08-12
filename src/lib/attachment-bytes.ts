@@ -21,14 +21,36 @@ import { attachmentProxyUrl, effectiveMime } from "@/lib/attachment-kind";
 const resolved = new Map<string, ArrayBuffer>();
 const inFlight = new Map<string, Promise<ArrayBuffer>>();
 
-// Ceiling on how many bytes one print/save may embed. Six PDFs is fine; a thread
-// carrying a 200 MB video is not — base64 inflates by ~33% and the whole
-// document is held in memory as a string before it is written out. Files that
-// don't fit are reported to the caller so it can tell the user, instead of
-// silently producing a printout that looks complete.
-export const MAX_EMBED_BYTES = 40 * 1024 * 1024;
+// Ceiling on how many bytes one print/save may embed. Base64 inflates by ~33%,
+// the whole document is assembled as a single string, and rasterized PDF pages
+// land on top of that — so the real memory cost is several times this number.
+// 12 MB of source comfortably covers the realistic case (a handful of PDFs or
+// images) while staying survivable in a browser tab.
+export const MAX_EMBED_BYTES = 12 * 1024 * 1024;
+
+// Nothing bigger than this is worth pulling for a printout even if the budget
+// has room — it's almost certainly a video or an archive, which we can't render
+// anyway. Applies to the DECLARED size, so it's a cheap pre-filter.
+const MAX_SINGLE_FILE_BYTES = 8 * 1024 * 1024;
 
 const MAX_CONCURRENT = 4;
+
+// Cap on what the module-level byte cache retains between operations. Without
+// this, printing several threads in one session pins every attachment's bytes
+// for the life of the tab — unlike message-body-cache, which this mirrors, the
+// values here are megabytes of binary rather than short strings.
+const MAX_CACHE_BYTES = 24 * 1024 * 1024;
+let cachedBytes = 0;
+
+// Drop oldest-first until the cache is back under its ceiling. Map preserves
+// insertion order, so its key order is already the eviction order.
+function evictTo(limit: number): void {
+  for (const [id, buf] of resolved) {
+    if (cachedBytes <= limit) return;
+    resolved.delete(id);
+    cachedBytes -= buf.byteLength;
+  }
+}
 
 export function getCachedAttachment(attachmentId: string): ArrayBuffer | undefined {
   return resolved.get(attachmentId);
@@ -52,6 +74,16 @@ export function fetchAttachmentBytes(
     })
     .then((buf) => {
       resolved.set(attachmentId, buf);
+      cachedBytes += buf.byteLength;
+      // Keep the newly-stored entry: evict down to the ceiling minus this
+      // file, so we never immediately drop what we just fetched.
+      if (cachedBytes > MAX_CACHE_BYTES) {
+        resolved.delete(attachmentId);
+        cachedBytes -= buf.byteLength;
+        evictTo(Math.max(0, MAX_CACHE_BYTES - buf.byteLength));
+        resolved.set(attachmentId, buf);
+        cachedBytes += buf.byteLength;
+      }
       return buf;
     })
     .finally(() => {
@@ -71,9 +103,14 @@ export interface AttachmentBytesResult {
 }
 
 // Download every attachment on `attachments`, concurrency-capped, tolerating
-// per-file failure. Files are taken largest-budget-first in the order given, and
-// anything that would push the running total past MAX_EMBED_BYTES is skipped
-// rather than truncated.
+// per-file failure.
+//
+// The budget is charged against bytes we ACTUALLY received, not against the
+// declared `size_bytes`. The clone reports 0 (or omits the field) often enough
+// that a declared-size-only budget is no budget at all: every unknown-size file
+// reserves nothing, so an arbitrarily large download proceeds and the cap is
+// silently infinite. Declared size is still used as a cheap pre-filter, but it
+// is never trusted as the accounting.
 export async function loadAttachments(
   attachments: MissiveMessageAttachment[],
   accountId: string,
@@ -82,26 +119,41 @@ export async function loadAttachments(
   const bytes = new Map<string, ArrayBuffer>();
   const skipped: AttachmentBytesResult["skipped"] = [];
 
-  // Reserve against the declared size before fetching, so an oversized file is
-  // never pulled over the wire just to be thrown away.
   const queue: MissiveMessageAttachment[] = [];
-  let budget = MAX_EMBED_BYTES;
   for (const a of attachments) {
-    const declared = a.size_bytes > 0 ? a.size_bytes : 0;
-    if (declared > budget) {
+    // Pre-filter on the declared size only when it's present AND obviously too
+    // big — saves pulling a 200 MB file over the wire to throw it away.
+    if (a.size_bytes > MAX_SINGLE_FILE_BYTES) {
       skipped.push({ filename: a.filename, reason: "too-large" });
       continue;
     }
-    budget -= declared;
     queue.push(a);
   }
 
+  // Shared across workers, so the running total reflects every completed
+  // download regardless of which worker fetched it.
+  let spent = 0;
   let idx = 0;
   async function worker(): Promise<void> {
     while (idx < queue.length) {
       const a = queue[idx++];
+      // Re-check before each fetch: earlier downloads may have exhausted the
+      // budget while this one was queued.
+      if (spent >= MAX_EMBED_BYTES) {
+        skipped.push({ filename: a.filename, reason: "too-large" });
+        continue;
+      }
       try {
-        bytes.set(a.id, await fetchAttachmentBytes(a.id, accountId, threadId));
+        const buf = await fetchAttachmentBytes(a.id, accountId, threadId);
+        // The authoritative check. A file whose real size overruns the budget
+        // is dropped even though it's already in hand — embedding it is what
+        // costs, not fetching it.
+        if (buf.byteLength > MAX_SINGLE_FILE_BYTES || spent + buf.byteLength > MAX_EMBED_BYTES) {
+          skipped.push({ filename: a.filename, reason: "too-large" });
+          continue;
+        }
+        spent += buf.byteLength;
+        bytes.set(a.id, buf);
       } catch {
         skipped.push({ filename: a.filename, reason: "failed" });
       }

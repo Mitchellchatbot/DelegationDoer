@@ -38,15 +38,25 @@ function dedupeByMessageId(messages: MissiveMessage[]): MissiveMessage[] {
 // this normally changes nothing — but the whole reading pane treats position as
 // truth (the last element is "the latest": it's the one auto-expanded, the one
 // the reply quotes, and the one that sets the read watermark), and nothing was
-// enforcing that. Ties keep their arrival order, and a message with an
-// unparseable sent_at sorts last rather than jumping to 1970.
+// enforcing that. Ties keep their arrival order.
+//
+// A message with an unparseable sent_at sorts FIRST, not last. `toIsoString`
+// yields "" for a bad timestamp, and the three consumers above all read
+// `messages.at(-1)` — so letting such a message land last makes it "the latest",
+// which then feeds "" to the mark-read upsert. read_through_at is a timestamptz
+// and Postgres rejects "", the route 500s, ThreadAutoMarkRead swallows it by
+// design, and the thread stays unread forever. Sorting unknowns to the front
+// makes every one of those degrade harmlessly instead.
 function sortBySentAt(messages: MissiveMessage[]): MissiveMessage[] {
   return messages
     .map((m, i) => {
       const t = Date.parse(m.sent_at);
-      return { m, i, t: Number.isNaN(t) ? Number.POSITIVE_INFINITY : t };
+      return { m, i, t: Number.isNaN(t) ? Number.NEGATIVE_INFINITY : t };
     })
-    .sort((a, b) => a.t - b.t || a.i - b.i)
+    // NEGATIVE_INFINITY - NEGATIVE_INFINITY is NaN, which is a broken comparator
+    // return; compare explicitly so equal-unknown pairs fall through to the
+    // stable index tiebreak.
+    .sort((a, b) => (a.t === b.t ? a.i - b.i : a.t - b.t))
     .map((x) => x.m);
 }
 

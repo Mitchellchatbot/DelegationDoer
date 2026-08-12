@@ -10,13 +10,17 @@
 // out of the main bundle and is only paid for when someone actually prints an
 // email carrying a PDF — the same trick sop-ingest.ts uses for pdf-parse.
 
-// Print at roughly 150 DPI (PDF user units are 72/inch), which is sharp on
-// paper without producing enormous images.
-const RENDER_SCALE = 2;
+// ~110 DPI (PDF user units are 72/inch). Legible on paper, and deliberately
+// below the 150 DPI this started at: each page becomes a decoded bitmap held
+// live in the print document, and at scale 2 a Letter page is ~1.9 megapixels
+// ≈ 7.8 MB of bitmap. Six two-page PDFs at that scale pinned ~94 MB.
+const RENDER_SCALE = 1.5;
 
-// Runaway guard. A 400-page report attached to an email would otherwise lock the
-// tab up rasterizing; past this we stop and tell the caller so it can say so.
-const MAX_PAGES = 50;
+// Runaway guard. A long report attached to an email would otherwise lock the tab
+// up rasterizing; past this we stop and tell the caller so it can say so. Kept
+// low for the same memory reason as RENDER_SCALE — 50 pages per file across
+// several files was enough to kill a tab.
+const MAX_PAGES = 15;
 
 export interface RasterResult {
   // One data: URI per rendered page, in order.
@@ -56,10 +60,26 @@ async function loadPdfjs(): Promise<typeof import("pdfjs-dist")> {
 export async function rasterizePdf(buf: ArrayBuffer): Promise<RasterResult> {
   const pdfjs = await loadPdfjs();
 
-  // pdf.js takes ownership of the buffer it's handed and detaches it, which
-  // would leave the caller's copy unusable for the .eml base64 pass. Give it a
-  // private copy.
-  const doc = await pdfjs.getDocument({ data: new Uint8Array(buf.slice(0)) }).promise;
+  const doc = await pdfjs.getDocument({
+    // pdf.js takes ownership of the buffer it's handed and detaches it, which
+    // would leave the caller's copy unusable for the .eml base64 pass. Give it
+    // a private copy.
+    data: new Uint8Array(buf.slice(0)),
+    // SECURITY. These PDFs are attachments from arbitrary external senders and
+    // we parse them in the app's own origin, with the user's session.
+    //
+    // pdfjs-dist 3.x is affected by CVE-2024-4367 (GHSA-wgrm-67xf-hhpq),
+    // "arbitrary JavaScript execution upon opening a malicious PDF", which is
+    // only patched in >= 4.2.67 — a line we can't move to yet (see the version
+    // note above). `isEvalSupported: false` is Mozilla's documented mitigation:
+    // it stops the font / PostScript-function paths from compiling attacker
+    // content into executable code. Do NOT remove this while pinned to 3.x.
+    isEvalSupported: false,
+    // Don't hand embedded font programs to the platform font engine either;
+    // render with the built-in rasterizer instead. Costs a little fidelity on
+    // exotic fonts, removes a whole class of font-parsing surface.
+    disableFontFace: true
+  }).promise;
 
   try {
     const totalPages = doc.numPages;

@@ -75,6 +75,23 @@ function safeFileBase(subject: string): string {
   return base || "email";
 }
 
+// The server's ?render=html conversion returns a COMPLETE html document — its
+// own <head>, and its own <style> setting `body`, `table`, `td`, `pre`… A
+// <style> applies to the whole document no matter how deeply it's nested, so
+// dropping that markup into a <div> lets one attached .docx silently restyle the
+// email body and every other attachment on the page. Take the <body> contents
+// and leave the styling to .dd-att-doc.
+function documentBodyOnly(html: string): string {
+  const body = html.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+  const inner = body ? body[1] : html;
+  // Belt and braces: strip any <style>/<script> that lived outside <body> is
+  // already handled by taking the body, but converted documents occasionally
+  // inline a <style> within it too.
+  return inner
+    .replace(/<style[\s\S]*?<\/style>/gi, "")
+    .replace(/<script[\s\S]*?<\/script>/gi, "");
+}
+
 function bodyHtmlOf(m: MissiveMessage): string | null {
   return m.body_html ?? getCachedBody(m.id)?.body_html ?? null;
 }
@@ -158,9 +175,11 @@ async function prepareAttachments(
         const buf = bytes.get(att.id);
         const inline = inlineIds.has(att.id);
         if (!buf) {
-          // Already recorded in `skipped` above; still list it so the reader
-          // knows the email carried it.
-          return { att, href: null, inline, note: "not included" };
+          // Already recorded in `skipped` above. Force it into the manifest
+          // even when it's an inline image: its cid: can't be rewritten, so the
+          // body will show a broken-image box, and an unexplained broken box is
+          // worse than a listed "not included" line.
+          return { att, href: null, inline: false, note: "not included" };
         }
         const href = dataUri(att, buf);
         if (inline) return { att, href, inline: true };
@@ -185,7 +204,7 @@ async function prepareAttachments(
           try {
             const res = await fetch(attachmentContentUrl(att, ctx.accountId, ctx.threadId));
             if (!res.ok) throw new Error(String(res.status));
-            return { att, href, inline: false, docHtml: await res.text() };
+            return { att, href, inline: false, docHtml: documentBodyOnly(await res.text()) };
           } catch {
             skipped.push({ filename: att.filename, reason: "couldn't be rendered" });
             return { att, href, inline: false, note: "preview unavailable" };
@@ -294,14 +313,23 @@ function messageBodyFragment(m: MissiveMessage, items: PreparedAttachment[]): st
 }
 
 // The "Attachments (N)" manifest — every file the email carried, including ones
-// we couldn't render, each with an offline-usable download link.
-function attachmentManifest(items: PreparedAttachment[]): string {
+// we couldn't render.
+//
+// `withDownloadLinks` is false for the print path, on purpose. The link's href
+// is the file's ENTIRE base64, so emitting it doubles that attachment's cost in
+// the document — and on paper a download link is worthless, while inside the
+// print iframe's sandbox (no allow-downloads) it wouldn't even fire. It earns
+// its place only in the saved .html, where it's how you get the file back out.
+function attachmentManifest(
+  items: PreparedAttachment[],
+  withDownloadLinks: boolean
+): string {
   const listed = items.filter((i) => !i.inline);
   if (listed.length === 0) return "";
   const rows = listed.map((i) => {
     const size = i.att.size_bytes > 0 ? formatBytes(i.att.size_bytes) : "";
     const name = escapeHtml(i.att.filename);
-    const label = i.href
+    const label = withDownloadLinks && i.href
       ? `<a href="${i.href}" download="${name}">${name}</a>`
       : name;
     return (
@@ -346,7 +374,8 @@ function attachmentSections(items: PreparedAttachment[]): string {
 function messageBlock(
   m: MissiveMessage,
   showSubject: boolean,
-  items: PreparedAttachment[]
+  items: PreparedAttachment[],
+  withDownloadLinks: boolean
 ): string {
   const rows: string[] = [];
   const to = m.to_addrs?.filter(Boolean) ?? [];
@@ -376,7 +405,7 @@ function messageBlock(
       <div class="dd-meta">${rows.join("")}</div>
     </header>
     ${messageBodyFragment(m, items)}
-    ${attachmentManifest(items)}
+    ${attachmentManifest(items, withDownloadLinks)}
     ${attachmentSections(items)}
   </article>`;
 }
@@ -387,7 +416,8 @@ function messageBlock(
 function buildDocument(
   messages: MissiveMessage[],
   ctx: EmailPrintContext,
-  prepared: PreparedByMessage
+  prepared: PreparedByMessage,
+  withDownloadLinks: boolean
 ): string {
   const threadSubject =
     ctx.threadSubject || messages[0]?.subject || "(no subject)";
@@ -400,7 +430,8 @@ function buildDocument(
       messageBlock(
         m,
         !multi || (m.subject || "") !== threadSubject,
-        prepared.get(m.id) ?? []
+        prepared.get(m.id) ?? [],
+        withDownloadLinks
       )
     )
     .join("\n");
@@ -433,7 +464,8 @@ export async function printEmails(
   if (!messages.length) return { skipped: [] };
   await ensureBodies(messages, ctx);
   const { prepared, skipped } = await prepareAttachments(messages, ctx);
-  const doc = buildDocument(messages, ctx, prepared);
+  // No download links in the print document: see attachmentManifest.
+  const doc = buildDocument(messages, ctx, prepared, false);
 
   const iframe = document.createElement("iframe");
   iframe.setAttribute("aria-hidden", "true");
@@ -459,52 +491,72 @@ export async function printEmails(
     setTimeout(() => iframe.remove(), 1000);
   };
 
-  iframe.addEventListener("load", () => {
-    const win = iframe.contentWindow;
-    if (!win) {
-      cleanup();
-      return;
-    }
-    win.addEventListener("afterprint", cleanup);
-    // Wait for every image to actually decode before printing. A fixed timeout
-    // was fine when the document was text; it is not once each page of six PDFs
-    // is a rasterized image that has to be laid out first.
-    void imagesReady(win).then(() => {
-      try {
-        win.focus();
-        win.print();
-      } catch {
-        /* ignore — user can still download */
+  // Resolves once the dialog has been asked for, so the caller's "some
+  // attachments were left out" toast lands alongside the dialog rather than
+  // while the user is still looking at an unchanged page.
+  const printed = new Promise<void>((resolve) => {
+    iframe.addEventListener("load", () => {
+      const win = iframe.contentWindow;
+      if (!win) {
+        cleanup();
+        resolve();
+        return;
       }
-      // Fallback cleanup in case afterprint never fires (e.g. dialog cancelled).
-      setTimeout(cleanup, 60_000);
+      win.addEventListener("afterprint", cleanup);
+      void documentReady(win).then(() => {
+        try {
+          win.focus();
+          win.print();
+        } catch {
+          /* ignore — user can still download */
+        }
+        // Fallback cleanup in case afterprint never fires (e.g. dialog cancelled).
+        setTimeout(cleanup, 60_000);
+        resolve();
+      });
     });
   });
 
   document.body.appendChild(iframe);
+  await printed;
   return { skipped };
 }
 
-// Resolve once every <img> in the print document has decoded (or failed). Capped
-// so a single stuck image can't hang the print behind it forever.
-function imagesReady(win: Window): Promise<void> {
-  const doc = win.document;
-  const imgs = Array.from(doc.images ?? []);
-  const settled = Promise.all(
-    imgs.map((img) =>
-      img.complete
-        ? Promise.resolve()
-        : img.decode().catch(
-            () =>
-              new Promise<void>((resolve) => {
-                img.addEventListener("load", () => resolve(), { once: true });
-                img.addEventListener("error", () => resolve(), { once: true });
-              })
-          )
-    )
-  ).then(() => undefined);
-  const cap = new Promise<void>((resolve) => setTimeout(resolve, 15_000));
-  return Promise.race([settled, cap]);
+// Resolve when the print document is actually ready to be laid out.
+//
+// This runs from the iframe's `load` handler, and the document load event
+// already blocks on every <img> — so waiting on images here would be a no-op
+// dressed up as a safeguard. What load does NOT wait for is fonts: an email's
+// own @font-face is still loading at this point, and printing immediately
+// renders it in the fallback face. `document.fonts.ready` covers that, and a
+// short settle frame after it lets the resulting reflow finish.
+//
+// Everything is capped, because a print that never opens is worse than one that
+// opens slightly early.
+function documentReady(win: Window): Promise<void> {
+  const fonts = (win.document as Document & { fonts?: FontFaceSet }).fonts;
+  const ready: Promise<unknown> = fonts?.ready ?? Promise.resolve();
+
+  const settle = ready.then(
+    () =>
+      new Promise<void>((resolve) => {
+        // Two frames: one for the font swap to apply, one for the reflow.
+        win.requestAnimationFrame(() => win.requestAnimationFrame(() => resolve()));
+      })
+  );
+
+  return new Promise<void>((resolve) => {
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      resolve();
+    };
+    // Cleared by finish(), so a fast print doesn't leave a stray timer alive.
+    const timer = setTimeout(finish, 5_000);
+    void settle.then(finish, finish);
+  });
 }
 
 // Download the given message(s) as a self-contained .html file.
@@ -515,7 +567,9 @@ export async function downloadEmails(
   if (!messages.length) return { skipped: [] };
   await ensureBodies(messages, ctx);
   const { prepared, skipped } = await prepareAttachments(messages, ctx);
-  const doc = buildDocument(messages, ctx, prepared);
+  // Download links DO earn their place here — this file is how you get the
+  // attachments back out, and it has to work offline from disk.
+  const doc = buildDocument(messages, ctx, prepared, true);
   const subject = ctx.threadSubject || messages[0]?.subject || "email";
 
   triggerDownload(
@@ -716,7 +770,14 @@ function attachmentEntity(
     "Content-Transfer-Encoding: base64",
     `Content-Disposition: ${inline ? "inline" : "attachment"}; ${mimeParam("filename", a.filename)}`
   ];
-  if (inline && a.content_id) headers.push(`Content-ID: ${ensureAngle(a.content_id)}`);
+  // Strip CR/LF before it reaches a header value — an attachment content_id is
+  // remote-supplied, and a newline in it would inject arbitrary headers into
+  // the .eml. mimeParam already refuses control characters in filenames; this
+  // is the same guard for the one raw header value left.
+  if (inline && a.content_id) {
+    const cid = a.content_id.replace(/[\r\n]+/g, "");
+    if (cid) headers.push(`Content-ID: ${ensureAngle(cid)}`);
+  }
   return { headers, body: wrapBase64(bufferToBase64(buf)) };
 }
 
@@ -762,11 +823,18 @@ function buildEml(m: MissiveMessage, bytes: Map<string, ArrayBuffer>): string {
   // a plain message serializes exactly as it did before.
   let entity = bodyEntity(m);
   if (inlineAtts.length) {
+    // RFC 2387 §3.1: `type` must be the media type of the ROOT part. When the
+    // message has both html and text the root is the multipart/alternative we
+    // just built, not text/html — mislabelling it can stop a strict client
+    // resolving the cid: references this wrapper exists to make work.
+    const rootType = entity.headers[0]?.toLowerCase().includes("multipart/alternative")
+      ? "multipart/alternative"
+      : "text/html";
     entity = multipart(
       "related",
       [entity, ...inlineAtts.map((a) => attachmentEntity(a, bytes.get(a.id)!, true))],
       m.id,
-      '; type="text/html"'
+      `; type="${rootType}"`
     );
   }
   if (fileAtts.length) {

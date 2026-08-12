@@ -11,6 +11,7 @@
 // Both reuse cidPattern() so the matching logic stays in one place.
 
 import type { MissiveMessageAttachment } from "@/lib/missive-client";
+import { attachmentProxyUrl } from "@/lib/attachment-kind";
 
 // Build a global, case-insensitive regex matching a `cid:` reference for one
 // content-id. Content-ids routinely contain `@` and `.`, so they're
@@ -21,26 +22,43 @@ export function cidPattern(contentId: string): RegExp {
   return new RegExp(`cid:<?${escaped}>?`, "gi");
 }
 
-// Rewrite each inline-image `cid:` reference in `html` to DD's authenticated
-// attachment proxy — the same URL shape the download chips already use. Only
-// attachments with a content_id are inline images; ordinary files are skipped.
-// Returns `html` untouched when there's nothing to rewrite.
+// Rewrite each inline-image `cid:` reference in `html` to whatever `resolve`
+// returns for that attachment. Only attachments with a content_id are inline
+// images; ordinary files are skipped, as is any attachment `resolve` declines
+// (returns null for) — its `cid:` is left alone rather than replaced with a
+// broken URL. Returns `html` untouched when there's nothing to rewrite.
+//
+// The resolver exists because the two consumers need different targets: the
+// thread view points at the authenticated proxy (same-origin, cookies flow),
+// while the print/save document needs a self-contained `data:` URI that still
+// works in a downloaded file opened from disk.
+export function rewriteInlineCidsWith(
+  html: string,
+  attachments: MissiveMessageAttachment[],
+  resolve: (a: MissiveMessageAttachment) => string | null
+): string {
+  if (!html) return html;
+  let out = html;
+  for (const a of attachments) {
+    if (!a.content_id) continue;
+    const url = resolve(a);
+    if (!url) continue;
+    out = out.replace(cidPattern(a.content_id), url);
+  }
+  return out;
+}
+
+// Rewrite inline `cid:` refs to DD's authenticated attachment proxy — the same
+// URL shape the download chips already use. The thread-view default.
 export function rewriteInlineCids(
   html: string,
   attachments: MissiveMessageAttachment[],
   accountId: string,
   threadId: string
 ): string {
-  if (!html) return html;
-  let out = html;
-  for (const a of attachments) {
-    if (!a.content_id) continue;
-    const url =
-      `/api/inboxes/attachments/${encodeURIComponent(a.id)}` +
-      `?account=${encodeURIComponent(accountId)}&thread=${encodeURIComponent(threadId)}`;
-    out = out.replace(cidPattern(a.content_id), url);
-  }
-  return out;
+  return rewriteInlineCidsWith(html, attachments, (a) =>
+    attachmentProxyUrl(a.id, accountId, threadId)
+  );
 }
 
 // The subset of `attachments` that are inline images ACTUALLY referenced by a

@@ -8,6 +8,10 @@ import {
 } from "lucide-react";
 import { formatBytes } from "@/lib/email-format";
 import type { MissiveMessageAttachment } from "@/lib/missive-client";
+import {
+  bareType, previewKind, attachmentProxyUrl, attachmentContentUrl,
+  IMAGE_RE, PDF_RE, type PreviewKind
+} from "@/lib/attachment-kind";
 
 // One attachment on an email message, shown Gmail-style: an inline card with a
 // live preview visible WITHOUT a click. Images show a real thumbnail; PDFs and
@@ -21,45 +25,9 @@ import type { MissiveMessageAttachment } from "@/lib/missive-client";
 // (?inline=1 for pdf/image, ?render=html for documents) — both allowlisted
 // server-side, so neither can serve inline HTML from an untrusted file.
 
-type PreviewKind = "image" | "pdf" | "doc";
-
-const PDF_RE = /\.pdf$/i;
-const IMAGE_RE = /\.(png|jpe?g|gif|webp|bmp)$/i;
-const DOC_RE = /\.(docx|xlsx|xlsm|xlsb|xls|csv|tsv|txt|log|md|json|xml|yml|yaml)$/i;
+// previewKind / previewMime / bareType now live in @/lib/attachment-kind so the
+// print + .eml builders classify files identically to this card.
 const SHEET_RE = /\.(xlsx|xlsm|xlsb|xls|csv|tsv)$/i;
-
-function bareType(contentType: string | null | undefined): string {
-  return (contentType || "").toLowerCase().split(";")[0].trim();
-}
-
-// What kind of preview (if any) this file supports. SVG is excluded from image
-// preview (inline SVG is an XSS vector). Kept in sync with the server's
-// canRenderDoc so the card only offers previews the route can serve.
-function previewKind(a: MissiveMessageAttachment): PreviewKind | null {
-  const ct = bareType(a.content_type);
-  if (ct === "application/pdf" || PDF_RE.test(a.filename)) return "pdf";
-  if ((ct.startsWith("image/") && ct !== "image/svg+xml") || IMAGE_RE.test(a.filename)) return "image";
-  if (
-    DOC_RE.test(a.filename) ||
-    ct.includes("wordprocessingml") ||
-    ct.includes("spreadsheetml") ||
-    ct === "application/vnd.ms-excel" ||
-    ct === "text/csv" ||
-    ct.startsWith("text/")
-  ) return "doc";
-  return null;
-}
-
-// Canonical, allowlist-safe mime handed to the proxy so it can serve inline
-// even when the clone typed the file as octet-stream.
-function previewMime(a: MissiveMessageAttachment, kind: PreviewKind): string {
-  if (kind === "pdf") return "application/pdf";
-  const ct = bareType(a.content_type);
-  if (ct.startsWith("image/") && ct !== "image/svg+xml") return ct;
-  const m = a.filename.toLowerCase().match(/\.(png|jpe?g|gif|webp|bmp)$/);
-  if (!m) return "";
-  return m[1] === "jpg" || m[1] === "jpeg" ? "image/jpeg" : `image/${m[1]}`;
-}
 
 // Footer icon + tone by file family, so the card reads at a glance even before
 // its thumbnail paints (and carries the whole card for non-previewable types).
@@ -92,15 +60,8 @@ export function AttachmentChip({
   const kind = previewKind(a);
   const { Icon, tone } = fileIcon(a);
 
-  const base = `/api/inboxes/attachments/${encodeURIComponent(a.id)}?account=${encodeURIComponent(
-    accountId
-  )}&thread=${encodeURIComponent(threadId)}`;
-  const contentUrl =
-    kind === "doc"
-      ? `${base}&render=html`
-      : kind
-        ? `${base}&inline=1&mime=${encodeURIComponent(previewMime(a, kind))}`
-        : base;
+  const base = attachmentProxyUrl(a.id, accountId, threadId);
+  const contentUrl = attachmentContentUrl(a, accountId, threadId);
 
   const footer = (
     <div className="flex items-center gap-2 px-2.5 py-2 border-t border-border/50 bg-white/60">

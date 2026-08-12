@@ -3,13 +3,15 @@
 import { useState } from "react";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { Printer, Download, FileCode, ChevronDown, Loader2 } from "lucide-react";
+import { toast } from "sonner";
 import type { MissiveMessage } from "@/lib/missive-client";
 import {
   printEmails,
   downloadEmails,
   downloadEml,
   downloadThreadEml,
-  type EmailPrintContext
+  type EmailPrintContext,
+  type PrintOutcome
 } from "@/lib/email-print";
 
 // Print / Save actions for one email or a whole thread. Reused on each message
@@ -44,14 +46,26 @@ export function EmailPrintButtons({
     if (busy) return;
     setBusy(kind);
     try {
-      if (kind === "print") await printEmails(messages, context);
-      else if (kind === "html") await downloadEmails(messages, context);
-      else if (kind === "eml") {
-        if (messages.length === 1) await downloadEml(messages[0], context);
-        else await downloadThreadEml(messages, context);
+      let outcome: PrintOutcome;
+      if (kind === "print") outcome = await printEmails(messages, context);
+      else if (kind === "html") outcome = await downloadEmails(messages, context);
+      else if (messages.length === 1) outcome = await downloadEml(messages[0], context);
+      else outcome = await downloadThreadEml(messages, context);
+
+      // An attachment that didn't make it in has to be said out loud — a
+      // printout missing a document looks exactly like a complete one.
+      if (outcome.skipped.length) {
+        const shown = outcome.skipped.slice(0, 3)
+          .map((s) => `${s.filename} (${s.reason})`)
+          .join(", ");
+        const more = outcome.skipped.length - Math.min(3, outcome.skipped.length);
+        toast.warning(
+          `${outcome.skipped.length} attachment${outcome.skipped.length === 1 ? "" : "s"} not included: ` +
+          shown + (more > 0 ? ` and ${more} more` : "")
+        );
       }
-    } catch {
-      /* best-effort; nothing to surface for a print/download */
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Couldn't prepare this email");
     } finally {
       setBusy(null);
     }

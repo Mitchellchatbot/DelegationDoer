@@ -34,6 +34,22 @@ function dedupeByMessageId(messages: MissiveMessage[]): MissiveMessage[] {
   return out;
 }
 
+// Chronological order, oldest first. The clone sorts by sent_at ASC already, so
+// this normally changes nothing — but the whole reading pane treats position as
+// truth (the last element is "the latest": it's the one auto-expanded, the one
+// the reply quotes, and the one that sets the read watermark), and nothing was
+// enforcing that. Ties keep their arrival order, and a message with an
+// unparseable sent_at sorts last rather than jumping to 1970.
+function sortBySentAt(messages: MissiveMessage[]): MissiveMessage[] {
+  return messages
+    .map((m, i) => {
+      const t = Date.parse(m.sent_at);
+      return { m, i, t: Number.isNaN(t) ? Number.POSITIVE_INFINITY : t };
+    })
+    .sort((a, b) => a.t - b.t || a.i - b.i)
+    .map((x) => x.m);
+}
+
 export type LoadThreadOutcome =
   | { ok: true; data: ThreadDetailData }
   | { ok: false; status: number; error: string };
@@ -117,9 +133,11 @@ export async function loadThreadDetail(
     : [...threadAccountIds].find((id) => visibleIds === null || visibleIds.has(id)) ?? accountId;
 
   const { thread } = detail;
+  // Settle the order BEFORE deduping — dedupe keeps the first copy it sees, so
+  // it has to run over a chronologically-ordered list to keep the right one.
   // Collapse the per-inbox copies of each email so a thread visible across
   // multiple inboxes doesn't render the same message two or three times.
-  const messages = dedupeByMessageId(detail.messages);
+  const messages = dedupeByMessageId(sortBySentAt(detail.messages));
 
   const missiveAppUrl = (process.env.MISSIVE_API_URL ?? "").replace(/\/$/, "");
   const missiveThreadUrl = missiveAppUrl

@@ -10,15 +10,38 @@
 // Deferred bodies (older messages whose body_html was withheld on thread open)
 // are resolved through the same client cache the reading pane uses, fetching any
 // that haven't been warmed yet — so printing a thread never prints blank cards.
+//
+// ATTACHMENTS ARE PART OF THE DOCUMENT. A printed email that silently drops the
+// six PDFs it was carrying isn't a copy of that email. Every attachment is
+// downloaded through the access-checked proxy and embedded as a `data:` URI:
+//   - inline (cid:) images  → rewritten into the body, so they actually render
+//   - image attachments     → shown full-width in their own section
+//   - PDFs                  → rasterized page-by-page (browsers won't print an
+//                             embedded PDF) so the pages land in the printout
+//   - docx/xlsx/csv/txt     → rendered via the server's existing ?render=html
+//   - anything else         → listed in the manifest with a download link
+// `data:` (rather than proxy URLs) is what makes a saved .html still work when
+// it's opened from disk later, with no session and no network.
 
-import type { MissiveMessage } from "@/lib/missive-client";
+import type { MissiveMessage, MissiveMessageAttachment } from "@/lib/missive-client";
 import { getCachedBody, fetchDeferredBody } from "@/lib/message-body-cache";
+import { loadAttachments, dataUri, bufferToBase64 } from "@/lib/attachment-bytes";
+import { previewKind, effectiveMime, attachmentContentUrl } from "@/lib/attachment-kind";
+import { rewriteInlineCidsWith, referencedInlineIds } from "@/lib/inline-cid";
+import { rasterizePdf } from "@/lib/pdf-raster";
+import { formatBytes } from "@/lib/email-format";
 
 export interface EmailPrintContext {
   accountId: string;
   threadId: string;
   // Falls back to the first message's subject when omitted.
   threadSubject?: string;
+}
+
+// What a print/save run left out. Surfaced to the user — a printout that quietly
+// dropped an attachment reads as complete when it isn't.
+export interface PrintOutcome {
+  skipped: { filename: string; reason: string }[];
 }
 
 function escapeHtml(s: string): string {
@@ -52,14 +75,12 @@ function safeFileBase(subject: string): string {
   return base || "email";
 }
 
-// The email's own HTML if we have it (inline or cached), else the plaintext
-// wrapped so it keeps its line breaks. Returns a body fragment, already escaped
-// where it's plaintext; HTML bodies pass through as the app renders them.
-function messageBodyFragment(m: MissiveMessage): string {
-  const html = m.body_html ?? getCachedBody(m.id)?.body_html ?? null;
-  if (html) return `<div class="dd-body">${html}</div>`;
-  const text = m.body_text ?? getCachedBody(m.id)?.body_text ?? null;
-  return `<pre class="dd-body-text">${escapeHtml(text || "(empty)")}</pre>`;
+function bodyHtmlOf(m: MissiveMessage): string | null {
+  return m.body_html ?? getCachedBody(m.id)?.body_html ?? null;
+}
+
+function bodyTextOf(m: MissiveMessage): string | null {
+  return m.body_text ?? getCachedBody(m.id)?.body_text ?? null;
 }
 
 // Ensure every message we're about to print has a body available, fetching any
@@ -82,6 +103,101 @@ async function ensureBodies(
       }
     })
   );
+}
+
+// --- attachment preparation --------------------------------------------------
+
+// How one attachment will appear in the document. `href` is always the original
+// file as a data: URI (so the manifest's download link works offline); the extra
+// fields carry the rendered representation when we have one.
+interface PreparedAttachment {
+  att: MissiveMessageAttachment;
+  href: string | null;
+  // Set when this attachment is an inline image the body references — it gets
+  // rewritten into the body and no separate section.
+  inline: boolean;
+  image?: string;
+  pdfPages?: string[];
+  pdfTotalPages?: number;
+  docHtml?: string;
+  // Why we couldn't render it (still listed in the manifest).
+  note?: string;
+}
+
+type PreparedByMessage = Map<string, PreparedAttachment[]>;
+
+async function prepareAttachments(
+  messages: MissiveMessage[],
+  ctx: EmailPrintContext
+): Promise<{ prepared: PreparedByMessage; skipped: PrintOutcome["skipped"] }> {
+  const all = messages.flatMap((m) => m.attachments ?? []);
+  const prepared: PreparedByMessage = new Map();
+  const skipped: PrintOutcome["skipped"] = [];
+  if (all.length === 0) return { prepared, skipped };
+
+  const { bytes, skipped: fetchSkipped } = await loadAttachments(
+    all,
+    ctx.accountId,
+    ctx.threadId
+  );
+  for (const s of fetchSkipped) {
+    skipped.push({
+      filename: s.filename,
+      reason: s.reason === "too-large" ? "too large to embed" : "couldn't be downloaded"
+    });
+  }
+
+  for (const m of messages) {
+    const atts = m.attachments ?? [];
+    if (atts.length === 0) continue;
+    const html = bodyHtmlOf(m);
+    const inlineIds = html ? referencedInlineIds(html, atts) : new Set<string>();
+
+    const items = await Promise.all(
+      atts.map(async (att): Promise<PreparedAttachment> => {
+        const buf = bytes.get(att.id);
+        const inline = inlineIds.has(att.id);
+        if (!buf) {
+          // Already recorded in `skipped` above; still list it so the reader
+          // knows the email carried it.
+          return { att, href: null, inline, note: "not included" };
+        }
+        const href = dataUri(att, buf);
+        if (inline) return { att, href, inline: true };
+
+        const kind = previewKind(att);
+        if (kind === "image") return { att, href, inline: false, image: href };
+        if (kind === "pdf") {
+          try {
+            const { pages, totalPages } = await rasterizePdf(buf);
+            return {
+              att, href, inline: false, pdfPages: pages, pdfTotalPages: totalPages,
+              note: totalPages > pages.length
+                ? `showing first ${pages.length} of ${totalPages} pages`
+                : undefined
+            };
+          } catch {
+            skipped.push({ filename: att.filename, reason: "couldn't be rendered" });
+            return { att, href, inline: false, note: "preview unavailable" };
+          }
+        }
+        if (kind === "doc") {
+          try {
+            const res = await fetch(attachmentContentUrl(att, ctx.accountId, ctx.threadId));
+            if (!res.ok) throw new Error(String(res.status));
+            return { att, href, inline: false, docHtml: await res.text() };
+          } catch {
+            skipped.push({ filename: att.filename, reason: "couldn't be rendered" });
+            return { att, href, inline: false, note: "preview unavailable" };
+          }
+        }
+        return { att, href, inline: false };
+      })
+    );
+    prepared.set(m.id, items);
+  }
+
+  return { prepared, skipped };
 }
 
 const DOC_CSS = `
@@ -127,13 +243,111 @@ const DOC_CSS = `
     white-space: pre-wrap; font-family: inherit; font-size: 14px;
     line-height: 1.55; margin: 0;
   }
+  .dd-atts { margin-top: 16px; border-top: 1px solid #e5e7eb; padding-top: 10px; }
+  .dd-atts h2 {
+    font-size: 12px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: .04em; color: #667085; margin: 0 0 6px;
+  }
+  .dd-att-row { font-size: 12px; color: #344054; padding: 2px 0; }
+  .dd-att-row .dd-att-size { color: #98a2b3; }
+  .dd-att-row .dd-att-note { color: #b42318; }
+  .dd-att-row a { color: #063270; text-decoration: none; }
+  .dd-att-sec { margin-top: 22px; padding-top: 14px; border-top: 1px dashed #d0d5dd; }
+  .dd-att-sec h3 {
+    font-size: 13px; font-weight: 600; margin: 0 0 10px; color: #101828;
+  }
+  .dd-att-sec h3 .dd-att-size { font-weight: 400; color: #98a2b3; }
+  .dd-att-page { display: block; width: 100%; height: auto; margin: 0 0 10px; }
+  .dd-att-img { display: block; max-width: 100%; height: auto; }
+  .dd-att-doc {
+    font-size: 13px; border: 1px solid #e5e7eb; border-radius: 6px; padding: 12px;
+    overflow-wrap: anywhere;
+  }
+  .dd-att-doc table { border-collapse: collapse; max-width: 100%; }
+  .dd-att-doc td, .dd-att-doc th { border: 1px solid #e5e7eb; padding: 3px 6px; }
   @media print {
     .dd-doc { max-width: none; padding: 0; }
     .dd-msg { page-break-inside: avoid; }
+    /* Each attached document starts its own page, the way a printed packet
+       separates the cover letter from its enclosures. */
+    .dd-att-sec { page-break-before: always; page-break-inside: auto; }
+    .dd-att-page, .dd-att-img { page-break-inside: avoid; }
   }
 `;
 
-function messageBlock(m: MissiveMessage, showSubject: boolean): string {
+// The email's own HTML if we have it (inline or cached), else the plaintext
+// wrapped so it keeps its line breaks. Inline `cid:` images are rewritten to
+// data: URIs so they render both in the print dialog and in a saved file.
+function messageBodyFragment(m: MissiveMessage, items: PreparedAttachment[]): string {
+  const html = bodyHtmlOf(m);
+  if (html) {
+    const byId = new Map(items.map((i) => [i.att.id, i]));
+    const resolved = rewriteInlineCidsWith(
+      html,
+      m.attachments ?? [],
+      (a) => byId.get(a.id)?.href ?? null
+    );
+    return `<div class="dd-body">${resolved}</div>`;
+  }
+  const text = bodyTextOf(m);
+  return `<pre class="dd-body-text">${escapeHtml(text || "(empty)")}</pre>`;
+}
+
+// The "Attachments (N)" manifest — every file the email carried, including ones
+// we couldn't render, each with an offline-usable download link.
+function attachmentManifest(items: PreparedAttachment[]): string {
+  const listed = items.filter((i) => !i.inline);
+  if (listed.length === 0) return "";
+  const rows = listed.map((i) => {
+    const size = i.att.size_bytes > 0 ? formatBytes(i.att.size_bytes) : "";
+    const name = escapeHtml(i.att.filename);
+    const label = i.href
+      ? `<a href="${i.href}" download="${name}">${name}</a>`
+      : name;
+    return (
+      `<div class="dd-att-row">${label}` +
+      (size ? ` <span class="dd-att-size">${escapeHtml(size)}</span>` : "") +
+      (i.note ? ` <span class="dd-att-note">— ${escapeHtml(i.note)}</span>` : "") +
+      `</div>`
+    );
+  });
+  return `<section class="dd-atts">
+    <h2>Attachments (${listed.length})</h2>
+    ${rows.join("")}
+  </section>`;
+}
+
+// The rendered contents of each attachment, appended after the message body.
+function attachmentSections(items: PreparedAttachment[]): string {
+  const out: string[] = [];
+  for (const i of items) {
+    if (i.inline) continue;
+    let inner = "";
+    if (i.image) {
+      inner = `<img class="dd-att-img" src="${i.image}" alt="${escapeHtml(i.att.filename)}" />`;
+    } else if (i.pdfPages?.length) {
+      inner = i.pdfPages
+        .map((p, n) => `<img class="dd-att-page" src="${p}" alt="Page ${n + 1}" />`)
+        .join("");
+    } else if (i.docHtml) {
+      inner = `<div class="dd-att-doc">${i.docHtml}</div>`;
+    } else {
+      continue; // nothing renderable — the manifest row already covers it
+    }
+    const size = i.att.size_bytes > 0 ? formatBytes(i.att.size_bytes) : "";
+    out.push(`<section class="dd-att-sec">
+      <h3>${escapeHtml(i.att.filename)}${size ? ` <span class="dd-att-size">${escapeHtml(size)}</span>` : ""}</h3>
+      ${inner}
+    </section>`);
+  }
+  return out.join("\n");
+}
+
+function messageBlock(
+  m: MissiveMessage,
+  showSubject: boolean,
+  items: PreparedAttachment[]
+): string {
   const rows: string[] = [];
   const to = m.to_addrs?.filter(Boolean) ?? [];
   const cc = m.cc_addrs?.filter(Boolean) ?? [];
@@ -161,14 +375,20 @@ function messageBlock(m: MissiveMessage, showSubject: boolean): string {
       <div class="dd-from">${escapeHtml(m.from_addr)}</div>
       <div class="dd-meta">${rows.join("")}</div>
     </header>
-    ${messageBodyFragment(m)}
+    ${messageBodyFragment(m, items)}
+    ${attachmentManifest(items)}
+    ${attachmentSections(items)}
   </article>`;
 }
 
 // Assemble the full standalone HTML document. When more than one message is
 // printed we show the shared subject once as a heading and omit the per-message
 // Subject row (unless a message's own subject differs).
-function buildDocument(messages: MissiveMessage[], ctx: EmailPrintContext): string {
+function buildDocument(
+  messages: MissiveMessage[],
+  ctx: EmailPrintContext,
+  prepared: PreparedByMessage
+): string {
   const threadSubject =
     ctx.threadSubject || messages[0]?.subject || "(no subject)";
   const multi = messages.length > 1;
@@ -176,7 +396,13 @@ function buildDocument(messages: MissiveMessage[], ctx: EmailPrintContext): stri
     ? `<h1 class="dd-thread-subject">${escapeHtml(threadSubject)}</h1>`
     : "";
   const blocks = messages
-    .map((m) => messageBlock(m, !multi || (m.subject || "") !== threadSubject))
+    .map((m) =>
+      messageBlock(
+        m,
+        !multi || (m.subject || "") !== threadSubject,
+        prepared.get(m.id) ?? []
+      )
+    )
     .join("\n");
 
   return `<!doctype html>
@@ -203,13 +429,19 @@ function buildDocument(messages: MissiveMessage[], ctx: EmailPrintContext): stri
 export async function printEmails(
   messages: MissiveMessage[],
   ctx: EmailPrintContext
-): Promise<void> {
-  if (!messages.length) return;
+): Promise<PrintOutcome> {
+  if (!messages.length) return { skipped: [] };
   await ensureBodies(messages, ctx);
-  const doc = buildDocument(messages, ctx);
+  const { prepared, skipped } = await prepareAttachments(messages, ctx);
+  const doc = buildDocument(messages, ctx, prepared);
 
   const iframe = document.createElement("iframe");
   iframe.setAttribute("aria-hidden", "true");
+  // Same sandbox posture as EmailBody: same-origin so we can drive print() from
+  // here, but NO allow-scripts — the document embeds email-authored HTML and
+  // server-converted document HTML, neither of which should ever execute.
+  // allow-modals is what permits the print dialog itself.
+  iframe.setAttribute("sandbox", "allow-same-origin allow-modals");
   iframe.style.position = "fixed";
   iframe.style.right = "0";
   iframe.style.bottom = "0";
@@ -234,8 +466,10 @@ export async function printEmails(
       return;
     }
     win.addEventListener("afterprint", cleanup);
-    // Give late-loading images a moment so they aren't cut from the printout.
-    setTimeout(() => {
+    // Wait for every image to actually decode before printing. A fixed timeout
+    // was fine when the document was text; it is not once each page of six PDFs
+    // is a rasterized image that has to be laid out first.
+    void imagesReady(win).then(() => {
       try {
         win.focus();
         win.print();
@@ -244,45 +478,72 @@ export async function printEmails(
       }
       // Fallback cleanup in case afterprint never fires (e.g. dialog cancelled).
       setTimeout(cleanup, 60_000);
-    }, 350);
+    });
   });
 
   document.body.appendChild(iframe);
+  return { skipped };
+}
+
+// Resolve once every <img> in the print document has decoded (or failed). Capped
+// so a single stuck image can't hang the print behind it forever.
+function imagesReady(win: Window): Promise<void> {
+  const doc = win.document;
+  const imgs = Array.from(doc.images ?? []);
+  const settled = Promise.all(
+    imgs.map((img) =>
+      img.complete
+        ? Promise.resolve()
+        : img.decode().catch(
+            () =>
+              new Promise<void>((resolve) => {
+                img.addEventListener("load", () => resolve(), { once: true });
+                img.addEventListener("error", () => resolve(), { once: true });
+              })
+          )
+    )
+  ).then(() => undefined);
+  const cap = new Promise<void>((resolve) => setTimeout(resolve, 15_000));
+  return Promise.race([settled, cap]);
 }
 
 // Download the given message(s) as a self-contained .html file.
 export async function downloadEmails(
   messages: MissiveMessage[],
   ctx: EmailPrintContext
-): Promise<void> {
-  if (!messages.length) return;
+): Promise<PrintOutcome> {
+  if (!messages.length) return { skipped: [] };
   await ensureBodies(messages, ctx);
-  const doc = buildDocument(messages, ctx);
+  const { prepared, skipped } = await prepareAttachments(messages, ctx);
+  const doc = buildDocument(messages, ctx, prepared);
   const subject = ctx.threadSubject || messages[0]?.subject || "email";
 
   triggerDownload(
     new Blob([doc], { type: "text/html;charset=utf-8" }),
     `${safeFileBase(subject)}.html`
   );
+  return { skipped };
 }
 
 // Download a single message as an RFC-5322 .eml file — the standard email
 // interchange format, so the saved message re-opens in Outlook / Apple Mail /
-// Thunderbird with its headers and body intact (what "download message" does in
-// a real mail client). Single-message only: .eml has no concept of a thread.
-// Attachments are NOT embedded yet — the body (html + text) and headers are.
+// Thunderbird with its headers, body and attachments intact (what "download
+// message" does in a real mail client). Single-message only: .eml has no concept
+// of a thread.
 export async function downloadEml(
   message: MissiveMessage,
   ctx: EmailPrintContext
-): Promise<void> {
+): Promise<PrintOutcome> {
   await ensureBodies([message], ctx);
-  const eml = buildEml(message);
+  const { bytes, skipped } = await loadAttachmentBytesFor([message], ctx);
+  const eml = buildEml(message, bytes);
   triggerDownload(
     // message/rfc822 is the correct type; the .eml extension is what desktop
     // mail clients register a file association against.
     new Blob([eml], { type: "message/rfc822" }),
     `${safeFileBase(message.subject || ctx.threadSubject || "email")}.eml`
   );
+  return { skipped };
 }
 
 // Download a whole thread as a single .eml. An .eml holds one message, so a
@@ -293,17 +554,41 @@ export async function downloadEml(
 export async function downloadThreadEml(
   messages: MissiveMessage[],
   ctx: EmailPrintContext
-): Promise<void> {
-  if (!messages.length) return;
+): Promise<PrintOutcome> {
+  if (!messages.length) return { skipped: [] };
   await ensureBodies(messages, ctx);
+  const { bytes, skipped } = await loadAttachmentBytesFor(messages, ctx);
   const subject = ctx.threadSubject || messages[0]?.subject || "conversation";
   triggerDownload(
-    new Blob([buildThreadEml(messages, subject)], { type: "message/rfc822" }),
+    new Blob([buildThreadEml(messages, subject, bytes)], { type: "message/rfc822" }),
     `${safeFileBase(subject)}.eml`
   );
+  return { skipped };
 }
 
-function buildThreadEml(messages: MissiveMessage[], subject: string): string {
+// Bytes for the .eml paths, which need the original files but none of the
+// rendering the printable document does.
+async function loadAttachmentBytesFor(
+  messages: MissiveMessage[],
+  ctx: EmailPrintContext
+): Promise<{ bytes: Map<string, ArrayBuffer>; skipped: PrintOutcome["skipped"] }> {
+  const all = messages.flatMap((m) => m.attachments ?? []);
+  if (all.length === 0) return { bytes: new Map(), skipped: [] };
+  const { bytes, skipped } = await loadAttachments(all, ctx.accountId, ctx.threadId);
+  return {
+    bytes,
+    skipped: skipped.map((s) => ({
+      filename: s.filename,
+      reason: s.reason === "too-large" ? "too large to embed" : "couldn't be downloaded"
+    }))
+  };
+}
+
+function buildThreadEml(
+  messages: MissiveMessage[],
+  subject: string,
+  bytes: Map<string, ArrayBuffer>
+): string {
   const last = messages[messages.length - 1];
   const boundary = `----=_ddthread_${messages[0]?.id ?? "t"}`;
   const headers = [
@@ -316,7 +601,7 @@ function buildThreadEml(messages: MissiveMessage[], subject: string): string {
   let out = headers.join(CRLF) + CRLF + CRLF;
   for (const m of messages) {
     out += `--${boundary}${CRLF}Content-Type: message/rfc822${CRLF}${CRLF}`;
-    out += buildEml(m) + CRLF;
+    out += buildEml(m, bytes) + CRLF;
   }
   out += `--${boundary}--${CRLF}`;
   return out;
@@ -358,6 +643,24 @@ function encodeHeaderValue(s: string): string {
   return `=?UTF-8?B?${utf8ToBase64(s)}?=`;
 }
 
+// A MIME parameter such as `filename=`. Plain-ASCII values use the ordinary
+// quoted form; anything else uses RFC 2231's charset-tagged extended form, which
+// is what mail clients expect for non-Latin filenames.
+function mimeParam(name: string, value: string): string {
+  if (/^[\x20-\x7E]*$/.test(value) && !/["\\]/.test(value)) {
+    return `${name}="${value}"`;
+  }
+  const pct = Array.from(new TextEncoder().encode(value))
+    .map((b) =>
+      (b >= 0x30 && b <= 0x39) || (b >= 0x41 && b <= 0x5a) ||
+      (b >= 0x61 && b <= 0x7a) || b === 0x2d || b === 0x2e || b === 0x5f
+        ? String.fromCharCode(b)
+        : `%${b.toString(16).toUpperCase().padStart(2, "0")}`
+    )
+    .join("");
+  return `${name}*=UTF-8''${pct}`;
+}
+
 function ensureAngle(id: string): string {
   const t = id.trim();
   return t.startsWith("<") ? t : `<${t}>`;
@@ -371,10 +674,69 @@ function rfc5322Date(iso: string): string {
   return base.toUTCString().replace(/GMT$/, "+0000");
 }
 
-function buildEml(m: MissiveMessage): string {
-  const html = m.body_html ?? getCachedBody(m.id)?.body_html ?? null;
-  const text = m.body_text ?? getCachedBody(m.id)?.body_text ?? null;
+// A MIME entity: its Content-* headers plus its body. Kept separate from the
+// message headers so entities can nest (mixed → related → alternative), which is
+// what carrying both inline images and file attachments requires.
+interface MimeEntity {
+  headers: string[];
+  body: string;
+}
 
+function serializeEntity(e: MimeEntity): string {
+  return e.headers.join(CRLF) + CRLF + CRLF + e.body;
+}
+
+function multipart(subtype: string, parts: MimeEntity[], seed: string, extra = ""): MimeEntity {
+  const boundary = `----=_dd_${subtype}_${seed}`;
+  let body = "";
+  for (const p of parts) {
+    body += `--${boundary}${CRLF}${serializeEntity(p)}${CRLF}`;
+  }
+  body += `--${boundary}--${CRLF}`;
+  return {
+    headers: [`Content-Type: multipart/${subtype}; boundary="${boundary}"${extra}`],
+    body
+  };
+}
+
+function textEntity(contentType: string, payload: string): MimeEntity {
+  return {
+    headers: [`Content-Type: ${contentType}`, "Content-Transfer-Encoding: base64"],
+    body: wrapBase64(utf8ToBase64(payload))
+  };
+}
+
+function attachmentEntity(
+  a: MissiveMessageAttachment,
+  buf: ArrayBuffer,
+  inline: boolean
+): MimeEntity {
+  const headers = [
+    `Content-Type: ${effectiveMime(a)}; ${mimeParam("name", a.filename)}`,
+    "Content-Transfer-Encoding: base64",
+    `Content-Disposition: ${inline ? "inline" : "attachment"}; ${mimeParam("filename", a.filename)}`
+  ];
+  if (inline && a.content_id) headers.push(`Content-ID: ${ensureAngle(a.content_id)}`);
+  return { headers, body: wrapBase64(bufferToBase64(buf)) };
+}
+
+// The message's own content, before attachments: multipart/alternative when we
+// have both html and text, otherwise a single text/html or text/plain part.
+function bodyEntity(m: MissiveMessage): MimeEntity {
+  const html = bodyHtmlOf(m);
+  const text = bodyTextOf(m);
+  if (html && text) {
+    return multipart(
+      "alternative",
+      [textEntity('text/plain; charset="utf-8"', text), textEntity('text/html; charset="utf-8"', html)],
+      m.id
+    );
+  }
+  if (html) return textEntity('text/html; charset="utf-8"', html);
+  return textEntity('text/plain; charset="utf-8"', text || "(empty)");
+}
+
+function buildEml(m: MissiveMessage, bytes: Map<string, ArrayBuffer>): string {
   const headers: string[] = [`From: ${m.from_addr}`];
   const to = m.to_addrs?.filter(Boolean) ?? [];
   const cc = m.cc_addrs?.filter(Boolean) ?? [];
@@ -386,33 +748,34 @@ function buildEml(m: MissiveMessage): string {
   if (m.in_reply_to) headers.push(`In-Reply-To: ${ensureAngle(m.in_reply_to)}`);
   headers.push("MIME-Version: 1.0");
 
-  const part = (contentType: string, payload: string) =>
-    `Content-Type: ${contentType}${CRLF}` +
-    `Content-Transfer-Encoding: base64${CRLF}${CRLF}` +
-    wrapBase64(utf8ToBase64(payload));
+  // Split the files we actually have bytes for into the inline images the body
+  // references by cid: and the ordinary attachments.
+  const atts = (m.attachments ?? []).filter((a) => bytes.has(a.id));
+  const html = bodyHtmlOf(m);
+  const inlineIds = html ? referencedInlineIds(html, atts) : new Set<string>();
+  const inlineAtts = atts.filter((a) => inlineIds.has(a.id));
+  const fileAtts = atts.filter((a) => !inlineIds.has(a.id));
 
-  let body: string;
-  if (html && text) {
-    // multipart/alternative — clients pick html, fall back to text.
-    const boundary = `----=_dd_${m.id}`;
-    headers.push(
-      `Content-Type: multipart/alternative; boundary="${boundary}"`
+  // multipart/related keeps each inline image next to the body that references
+  // it, so Outlook can resolve the cid:. Ordinary files hang off an outer
+  // multipart/mixed. Neither wrapper is emitted when it has nothing to hold, so
+  // a plain message serializes exactly as it did before.
+  let entity = bodyEntity(m);
+  if (inlineAtts.length) {
+    entity = multipart(
+      "related",
+      [entity, ...inlineAtts.map((a) => attachmentEntity(a, bytes.get(a.id)!, true))],
+      m.id,
+      '; type="text/html"'
     );
-    body =
-      `--${boundary}${CRLF}` +
-      part('text/plain; charset="utf-8"', text) +
-      `${CRLF}--${boundary}${CRLF}` +
-      part('text/html; charset="utf-8"', html) +
-      `${CRLF}--${boundary}--${CRLF}`;
-  } else if (html) {
-    headers.push('Content-Type: text/html; charset="utf-8"');
-    headers.push("Content-Transfer-Encoding: base64");
-    body = wrapBase64(utf8ToBase64(html)) + CRLF;
-  } else {
-    headers.push('Content-Type: text/plain; charset="utf-8"');
-    headers.push("Content-Transfer-Encoding: base64");
-    body = wrapBase64(utf8ToBase64(text || "(empty)")) + CRLF;
+  }
+  if (fileAtts.length) {
+    entity = multipart(
+      "mixed",
+      [entity, ...fileAtts.map((a) => attachmentEntity(a, bytes.get(a.id)!, false))],
+      m.id
+    );
   }
 
-  return headers.join(CRLF) + CRLF + CRLF + body;
+  return headers.concat(entity.headers).join(CRLF) + CRLF + CRLF + entity.body;
 }

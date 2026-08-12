@@ -71,6 +71,47 @@ export function ThreadReadingPane() {
   // just-sent reply) while the cached copy stays on screen — no spinner flash.
   const reload = useCallback(() => setReloadNonce((n) => n + 1), []);
 
+  // Live-update the OPEN thread. Until now only the list reacted to the inbox
+  // stream (InboxThreadsClient refreshes page 1), so a reply that arrived from
+  // Outlook while you were reading the conversation never appeared — you had to
+  // switch away and back. The SSE payload carries the thread id, so this
+  // reloads only when the event is about the thread actually on screen.
+  useEffect(() => {
+    if (!threadId) return;
+    if (typeof window === "undefined" || typeof EventSource === "undefined") return;
+    let es: EventSource | null = null;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let attempt = 0;
+    let stopped = false;
+
+    function open() {
+      if (stopped) return;
+      try {
+        es = new EventSource("/api/inbox-events");
+        es.addEventListener("inbox", (ev) => {
+          try {
+            const data = JSON.parse((ev as MessageEvent<string>).data) as { thread_id?: string };
+            if (data?.thread_id === threadId) reload();
+          } catch { /* malformed frame — ignore */ }
+        });
+        es.onopen = () => { attempt = 0; };
+        es.onerror = () => {
+          es?.close();
+          es = null;
+          attempt += 1;
+          retryTimer = setTimeout(open, Math.min(60_000, 1000 * 2 ** Math.min(attempt, 6)));
+        };
+      } catch { /* SSE unavailable — the thread still loads on open */ }
+    }
+    open();
+
+    return () => {
+      stopped = true;
+      if (retryTimer) clearTimeout(retryTimer);
+      es?.close();
+    };
+  }, [threadId, reload]);
+
   return (
     <div className="flex-1 min-w-0 sticky top-3 self-start max-h-[calc(100vh-1.5rem)] overflow-y-auto">
       {/* Mobile master-detail back affordance: returns to the full-width list

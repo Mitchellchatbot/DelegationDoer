@@ -95,7 +95,26 @@ export async function POST(
           ? detail.thread.subject
           : `Re: ${detail.thread.subject ?? ""}`;
       }
-      if (!inReplyTo) inReplyTo = detail.messages.at(-1)?.message_id ?? undefined;
+    }
+
+    // Pin the parent message explicitly, always — not only when we also had to
+    // derive the recipient/subject. The composer always sends `to` and
+    // `subject`, so nesting this in the branch above meant every ordinary reply
+    // went out with no In-Reply-To from us and relied on the clone guessing the
+    // parent. Threading is too important to leave to a fallback: an outbound
+    // copy with no In-Reply-To is exactly what gets filed as its own thread.
+    if (!inReplyTo) {
+      // Newest message that actually has an RFC Message-ID to thread under.
+      // Picked by timestamp rather than array position so a backend that hands
+      // messages back in ingest order can't make us reply to the wrong one.
+      let newest: { at: number; id: string } | null = null;
+      for (const m of detail.messages) {
+        if (!m.message_id) continue;
+        const at = Date.parse(m.sent_at);
+        const when = Number.isNaN(at) ? -Infinity : at;
+        if (!newest || when >= newest.at) newest = { at: when, id: m.message_id };
+      }
+      inReplyTo = newest?.id ?? undefined;
     }
 
     if (to.length === 0) {

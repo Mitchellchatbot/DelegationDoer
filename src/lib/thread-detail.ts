@@ -34,6 +34,32 @@ function dedupeByMessageId(messages: MissiveMessage[]): MissiveMessage[] {
   return out;
 }
 
+// Chronological order, oldest first. The clone sorts by sent_at ASC already, so
+// this normally changes nothing — but the whole reading pane treats position as
+// truth (the last element is "the latest": it's the one auto-expanded, the one
+// the reply quotes, and the one that sets the read watermark), and nothing was
+// enforcing that. Ties keep their arrival order.
+//
+// A message with an unparseable sent_at sorts FIRST, not last. `toIsoString`
+// yields "" for a bad timestamp, and the three consumers above all read
+// `messages.at(-1)` — so letting such a message land last makes it "the latest",
+// which then feeds "" to the mark-read upsert. read_through_at is a timestamptz
+// and Postgres rejects "", the route 500s, ThreadAutoMarkRead swallows it by
+// design, and the thread stays unread forever. Sorting unknowns to the front
+// makes every one of those degrade harmlessly instead.
+function sortBySentAt(messages: MissiveMessage[]): MissiveMessage[] {
+  return messages
+    .map((m, i) => {
+      const t = Date.parse(m.sent_at);
+      return { m, i, t: Number.isNaN(t) ? Number.NEGATIVE_INFINITY : t };
+    })
+    // NEGATIVE_INFINITY - NEGATIVE_INFINITY is NaN, which is a broken comparator
+    // return; compare explicitly so equal-unknown pairs fall through to the
+    // stable index tiebreak.
+    .sort((a, b) => (a.t === b.t ? a.i - b.i : a.t - b.t))
+    .map((x) => x.m);
+}
+
 export type LoadThreadOutcome =
   | { ok: true; data: ThreadDetailData }
   | { ok: false; status: number; error: string };
@@ -117,9 +143,11 @@ export async function loadThreadDetail(
     : [...threadAccountIds].find((id) => visibleIds === null || visibleIds.has(id)) ?? accountId;
 
   const { thread } = detail;
+  // Settle the order BEFORE deduping — dedupe keeps the first copy it sees, so
+  // it has to run over a chronologically-ordered list to keep the right one.
   // Collapse the per-inbox copies of each email so a thread visible across
   // multiple inboxes doesn't render the same message two or three times.
-  const messages = dedupeByMessageId(detail.messages);
+  const messages = dedupeByMessageId(sortBySentAt(detail.messages));
 
   const missiveAppUrl = (process.env.MISSIVE_API_URL ?? "").replace(/\/$/, "");
   const missiveThreadUrl = missiveAppUrl

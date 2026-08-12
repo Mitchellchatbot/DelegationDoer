@@ -95,6 +95,16 @@ export async function POST(
           ? detail.thread.subject
           : `Re: ${detail.thread.subject ?? ""}`;
       }
+      // Deliberately NOT hoisted out of this branch. It's tempting to always
+      // send an explicit In-Reply-To "for safety", but the clone already
+      // defaults to the thread's newest message (ORDER BY sent_at DESC) and
+      // builds the References chain from it, and an id it can't resolve degrades
+      // to that same default. So pinning one here changes nothing in the normal
+      // case — and in the case where the newest message has no Message-ID it
+      // picks an OLDER parent, which makes the clone truncate References to
+      // `sent_at <= that message`. Strictly worse. Leave the default to the
+      // backend; `inReplyTo` above is only set when the user explicitly replied
+      // to a specific message.
       if (!inReplyTo) inReplyTo = detail.messages.at(-1)?.message_id ?? undefined;
     }
 

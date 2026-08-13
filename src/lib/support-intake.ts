@@ -8,6 +8,7 @@ import {
   getConversation, getConversationByChatId, listMessages, normalizeConversation,
   type ConversationRow, type SupportConversation
 } from "@/lib/support-data";
+import { isBlooioInboundEnabled } from "@/lib/blooio";
 import { findLeadByPhone, getLeadById, createLeadManual } from "@/lib/outbound-leads";
 import { notifyFormSubmitted } from "@/lib/outbound-slack";
 import { fanOutSupportMessage } from "@/lib/support-notifications";
@@ -50,6 +51,19 @@ export interface InboundMessageInput {
 }
 
 export async function ingestInboundMessage(input: InboundMessageInput): Promise<IngestResult> {
+  // Last line of defence for the inbound kill switch (lib/blooio.ts
+  // isBlooioInboundEnabled). The webhook and the poller each bail earlier; this
+  // catches anything that reaches the shared funnel by another route. First
+  // statement in the function so it can't be pre-empted by client construction.
+  //
+  // Scoped to inbound ON PURPOSE. recordOutboundMessage() funnels through here
+  // too, and operator-composed threads must keep working while capture is off —
+  // guarding unconditionally would break replying from the CS tab. "duplicate"
+  // is the existing no-op outcome, so callers already handle it.
+  if (input.direction === "inbound" && !isBlooioInboundEnabled()) {
+    return { conversationId: "", outcome: "duplicate" };
+  }
+
   const supabase = getSupabaseAdmin();
   const { chatId, phone, contactName, blooioMessageId, body, sentAt, direction } = input;
 

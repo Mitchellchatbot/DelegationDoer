@@ -447,6 +447,31 @@ export function getBlooioSendingLine(): string {
   return (process.env.BLOOIO_LINE_NUMBER ?? "+15126672513").trim();
 }
 
+// Master switch for inbound SMS capture — OFF unless explicitly enabled.
+//
+// DD shares a Blooio ORGANIZATION (and its single number) with the New Life
+// CRM, which runs out of a separate codebase + Supabase project and owns its
+// own `blooio-inbound` edge function. Blooio scopes webhooks to the org, not to
+// the API key that sent the outbound, and GET /chats likewise returns every
+// chat on the account — so both of our inbound paths (the realtime webhook and
+// the polling backstop) see the CRM's conversations as well as ours. There is
+// no Blooio-side setting that separates them and, with one number in the org,
+// nothing to filter on either.
+//
+// So inbound is disabled wholesale rather than filtered. Default-off is
+// deliberate: it holds with no env configured and survives a service being
+// recreated, which a Railway variable would not.
+//
+// To re-enable: give DD its own Blooio line, then gate ingest on
+// BlooioMessage.internalId (already parsed, currently discarded by both ingest
+// paths) instead of switching this back on unconditionally.
+//
+// OUTBOUND is unaffected — sendBlooioMessage, the sequence runner, the outbound
+// dashboard and operator replies from the CS tab all keep working.
+export function isBlooioInboundEnabled(): boolean {
+  return process.env.BLOOIO_INBOUND_ENABLED === "true";
+}
+
 // ---- READ HELPERS (for the customer-support inbox + poller) ----
 //
 // getBlooioSummary() above keeps its read paths private because it caps the

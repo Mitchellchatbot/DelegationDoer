@@ -175,12 +175,19 @@ const JOBS: CronJob[] = [
     // Backstop for the real-time Blooio inbound-SMS webhook. Sweeps the Blooio
     // API for inbound texts a missed webhook dropped; idempotent via the
     // support_messages UNIQUE constraint, so it never double-processes.
+    //
+    // Inert while inbound capture is off (lib/blooio.ts isBlooioInboundEnabled),
+    // which is the current state — the runner returns immediately and this logs
+    // skipped=inbound-disabled each tick. Setting
+    // SUPPORT_INBOX_POLL_INTERNAL_CRON=false stops the tick entirely; it is
+    // belt-and-braces, since the runner guard already holds without it.
     name: "support-inbox-poll",
     intervalMs: MINUTE,
     bootCatchupDelayMs: 35_000,
     disableEnv: "SUPPORT_INBOX_POLL_INTERNAL_CRON",
     run: async () => {
       const r = await runSupportInboxPoll();
+      if (r.skipped) return `skipped=${r.skipped}`;
       return `scanned=${r.scanned} ingested=${r.ingested} classified=${r.classified} reconciled=${r.reconciled}`;
     }
   }

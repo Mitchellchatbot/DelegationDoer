@@ -1,5 +1,7 @@
 import "server-only";
-import { listBlooioChats, getBlooioChatMessages } from "@/lib/blooio";
+import {
+  listBlooioChats, getBlooioChatMessages, isBlooioInboundEnabled
+} from "@/lib/blooio";
 import {
   ingestInboundMessage, reconcileUnlinkedLeadConversations
 } from "@/lib/support-intake";
@@ -40,6 +42,11 @@ export interface SupportPollResult {
   ingested: number;   // new (non-duplicate) inbound messages persisted
   classified: number; // conversations classified + routed this run
   reconciled: number; // half-routed lead conversations re-linked this run
+  // Set when the sweep did no work because inbound capture is switched off.
+  // Distinguishes "nothing to do" from "not running" — an all-zero result is
+  // otherwise indistinguishable from a healthy quiet minute, and the ?days=N
+  // backfill would look like it ran and found nothing.
+  skipped?: "inbound-disabled";
 }
 
 // `lookbackMs` widens the scan horizon for a one-time historical backfill (the
@@ -49,6 +56,16 @@ export interface SupportPollResult {
 export async function runSupportInboxPoll(
   opts?: { lookbackMs?: number }
 ): Promise<SupportPollResult> {
+  // Inbound capture is off (see isBlooioInboundEnabled) — bail before
+  // listBlooioChats(), which walks the WHOLE Blooio account and would otherwise
+  // pull the New Life CRM's conversations into our inbox once a minute. This
+  // guard lives in the runner rather than the cron entry so it covers the
+  // scheduler, the manual /api/cron/support-inbox-poll route (including its
+  // ?days=N backfill), and any future caller.
+  if (!isBlooioInboundEnabled()) {
+    return { scanned: 0, ingested: 0, classified: 0, reconciled: 0, skipped: "inbound-disabled" };
+  }
+
   const watermarkMs = Date.now() - (opts?.lookbackMs ?? POLL_LOOKBACK_MS);
   const chats = await listBlooioChats(); // sorted by lastMessageTime desc
 

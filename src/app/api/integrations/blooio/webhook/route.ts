@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
-import { getBlooioMessage } from "@/lib/blooio";
+import { getBlooioMessage, isBlooioInboundEnabled } from "@/lib/blooio";
 import { ingestInboundMessage } from "@/lib/support-intake";
 
 export const dynamic = "force-dynamic";
@@ -76,6 +76,17 @@ function parseEvent(payload: Record<string, unknown>): BlooioWebhookEvent | null
 }
 
 export async function POST(req: NextRequest) {
+  // Inbound capture is off (see isBlooioInboundEnabled) — the Blooio org is
+  // shared with the New Life CRM, so every delivery here is as likely to be
+  // theirs as ours. Ack and drop before reading the body or verifying the
+  // signature: 200 rather than 401/404 so Blooio neither retries nor marks the
+  // endpoint failing, and no HMAC means no 401 log noise if the secret is unset.
+  // The registration should also be deleted Blooio-side; this is the guard that
+  // holds if it's ever re-added.
+  if (!isBlooioInboundEnabled()) {
+    return NextResponse.json({ ok: true, skipped: "inbound-disabled" });
+  }
+
   const rawBody = await req.text();
   const sig = req.headers.get("x-blooio-signature");
   if (!verify(rawBody, sig)) {

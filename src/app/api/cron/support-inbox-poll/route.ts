@@ -21,6 +21,11 @@ export const maxDuration = 60;
 // The per-run caps (MAX_CHATS/MAX_CLASSIFY in the poller) mean a large backlog
 // may need the route re-run to drain; each run is a cheap no-op on already-seen
 // messages.
+//
+// While inbound capture is disabled (lib/blooio.ts isBlooioInboundEnabled) the
+// runner does nothing and the response carries skipped:"inbound-disabled" — a
+// backfill included. That is deliberate, not a bug: the Blooio org is shared
+// with the New Life CRM, so a sweep would ingest their conversations too.
 export async function GET(req: Request) {
   try {
     const days = Number(new URL(req.url).searchParams.get("days")) || 0;

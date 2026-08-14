@@ -13,9 +13,15 @@ export const dynamic = "force-dynamic";
 export async function GET() {
   try {
     await requireCurrentUserId();
+    // `*` rather than an explicit column list, on purpose: this route
+    // discards the error and falls back to defaults, so naming a column that
+    // doesn't exist yet fails the WHOLE query and the card would render the
+    // already-configured Scaled Team / EOD channels as blank during any
+    // window where code is deployed ahead of its migration. With `*` a
+    // not-yet-migrated column is simply absent.
     const { data } = await getSupabaseAdmin()
       .from("workspace_settings")
-      .select("scaled_team_channel_id, eod_recap_channel_id, client_email_channel_id, last_eod_recap_at, low_site_score_threshold, overdue_archive_days")
+      .select("*")
       .eq("id", "workspace")
       .maybeSingle();
     return NextResponse.json({

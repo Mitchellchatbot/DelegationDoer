@@ -123,6 +123,12 @@ function clamp(s: string, max: number): string {
   return s.length > max ? s.slice(0, max - 1) + "…" : s;
 }
 
+// Only complain about a broken channel lookup once per process. The usual
+// cause is the code being deployed ahead of its migration, and this runs on
+// every inbound message — logging per-email would bury whatever real error
+// someone is actually reading the logs for.
+let channelLookupErrorLogged = false;
+
 async function resolveChannel(): Promise<string | null> {
   const { data, error } = await getSupabaseAdmin()
     .from("workspace_settings")
@@ -130,9 +136,13 @@ async function resolveChannel(): Promise<string | null> {
     .eq("id", "workspace")
     .maybeSingle();
   if (error) {
-    // Column missing = code deployed ahead of the migration. Log once per
-    // call rather than throwing; the feature is simply off until it lands.
-    console.error("[client-email-slack] channel lookup failed", error.message);
+    // Missing column = migration hasn't landed yet. Never throw: the feature
+    // is simply off until it does, and the caller is a fire-and-forget bus
+    // subscriber shared with the live inbox.
+    if (!channelLookupErrorLogged) {
+      channelLookupErrorLogged = true;
+      console.error("[client-email-slack] channel lookup failed", error.message);
+    }
     return null;
   }
   return (data as { client_email_channel_id: string | null } | null)?.client_email_channel_id ?? null;

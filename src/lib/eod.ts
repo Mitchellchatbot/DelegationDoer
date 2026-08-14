@@ -4,6 +4,7 @@
 
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { postMessage } from "@/lib/slack";
+import { eodDayRange, eodToday } from "@/lib/shift";
 
 export interface EodPersonSummary {
   userId: string;
@@ -44,25 +45,19 @@ export interface EodDepartmentSummary {
   people: EodPersonSummary[];
 }
 
-// Range = today (00:00 → 23:59:59) in UTC. Good enough for now — if we
-// ever want per-user timezones we'd push the range computation into the
-// query, but a single UTC day matches the existing date-bigint pattern
-// in time_entries.
-function utcDayRange(date: Date): { startIso: string; endIso: string; isoDate: string } {
-  const start = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
-  const end = new Date(start.getTime() + 24 * 3_600_000);
-  const isoDate = start.toISOString().slice(0, 10); // YYYY-MM-DD
-  return { startIso: start.toISOString(), endIso: end.toISOString(), isoDate };
-}
-
-// Build one department's EOD summary. Pass `date` as a Date inside the
-// target calendar day; we expand to a full UTC range from there.
+// Build one department's EOD summary for the ET calendar day `isoDate`
+// (YYYY-MM-DD). Takes a string, not a Date, so it lands on exactly the
+// same day as the note_date the writers stamp — see eodToday() in
+// @/lib/shift. eodDayRange expands it to the UTC instants that bound
+// the timestamptz columns (completed_at, started_at); those have to
+// move with note_date or the join below becomes a 4-hour-skewed union
+// of two different days.
 export async function buildEodForDepartment(
   departmentId: string,
-  date: Date = new Date()
+  isoDate: string = eodToday()
 ): Promise<EodDepartmentSummary | null> {
   const supabase = getSupabaseAdmin();
-  const { startIso, endIso, isoDate } = utcDayRange(date);
+  const { startIso, endIso } = eodDayRange(isoDate);
 
   // 1) Resolve department + members.
   const { data: dept } = await supabase
@@ -246,7 +241,7 @@ export async function buildEodForDepartment(
 
 // Build EOD summaries for every department that has a Slack channel
 // configured. Used by the cron path and the "send all" UI affordance.
-export async function buildEodForAllDepartments(date: Date = new Date()): Promise<EodDepartmentSummary[]> {
+export async function buildEodForAllDepartments(isoDate: string = eodToday()): Promise<EodDepartmentSummary[]> {
   const supabase = getSupabaseAdmin();
   const { data } = await supabase
     .from("departments")
@@ -255,7 +250,7 @@ export async function buildEodForAllDepartments(date: Date = new Date()): Promis
   const ids = (data ?? []).map((r) => r.id as string);
   const out: EodDepartmentSummary[] = [];
   for (const id of ids) {
-    const summary = await buildEodForDepartment(id, date);
+    const summary = await buildEodForDepartment(id, isoDate);
     if (summary) out.push(summary);
   }
   return out;
@@ -268,6 +263,11 @@ const PRIORITY_EMOJI: Record<string, string> = {
   low: "·"
 };
 
+// Renders a YYYY-MM-DD *label* for humans. Parsing as UTC and
+// formatting in UTC is deliberate — it round-trips the label. Do NOT
+// "fix" this to America/New_York to match the EOD day boundary: ET is
+// behind UTC, so midnight-UTC rendered in ET is the previous evening
+// and every date would display a day early.
 function prettyDate(iso: string): string {
   const d = new Date(`${iso}T00:00:00Z`);
   return d.toLocaleDateString("en-US", {

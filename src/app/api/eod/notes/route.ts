@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUserId } from "@/lib/session";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
+import { eodToday } from "@/lib/shift";
 
 export const dynamic = "force-dynamic";
 
@@ -28,10 +29,16 @@ export async function PUT(req: NextRequest) {
   try {
     const userId = await requireCurrentUserId();
     const body = await req.json();
-    const dateStr =
+    // Same clamp as POST /api/eod/submit — the client's date is a hint,
+    // the ET day is the authority. Autosave is the higher-volume writer
+    // of the two, so a stale tab would otherwise seed a future row here
+    // before the user ever hits Submit.
+    const today = eodToday();
+    const requested =
       typeof body.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(body.date)
         ? body.date
-        : new Date().toISOString().slice(0, 10);
+        : today;
+    const dateStr = requested > today ? today : requested;
 
     const supabase = getSupabaseAdmin();
     const id = `eod_${userId}_${dateStr}`;

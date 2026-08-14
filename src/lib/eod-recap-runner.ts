@@ -11,6 +11,7 @@
 //      skip, so two ticks inside the 7pm hour can't double-post.
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { postMessage } from "@/lib/slack";
+import { EOD_TZ, eodToday, ymdInTz } from "@/lib/shift";
 
 // Discriminated outcome so the route can echo the same JSON it always has
 // and the scheduler can log a one-line summary. A hard failure (Slack post,
@@ -47,11 +48,18 @@ export async function runEodRecap(): Promise<EodRecapOutcome> {
     return { ok: false, reason: "no recap channel configured" };
   }
 
-  // De-dupe: if the last successful recap landed in the same UTC day, bail.
+  // De-dupe: if the last successful recap landed on the same ET day, bail.
+  //
+  // This compared UTC days until the EOD boundary moved. That broke once
+  // a year, on spring-forward: the previous evening's recap fires at
+  // 19:00 EST = 00:00 UTC the NEXT day, and tonight's fires at 19:00 EDT
+  // = 23:00 UTC the SAME day — so both stamp the same UTC date and the
+  // spring-forward recap was silently skipped. The ET day is the one
+  // that actually matches "we already sent tonight's recap".
   const last = settings?.last_eod_recap_at as string | null;
   if (last) {
-    const lastDay = new Date(last).toISOString().slice(0, 10);
-    const today = new Date().toISOString().slice(0, 10);
+    const lastDay = ymdInTz(new Date(last), EOD_TZ);
+    const today = eodToday();
     if (lastDay === today) {
       return { ok: true, skipped: "already-sent-today" };
     }
@@ -64,8 +72,9 @@ export async function runEodRecap(): Promise<EodRecapOutcome> {
   // recap fires at 7pm NY and EOD work is filed against the worker's local
   // date.
   const now = new Date();
-  const nyFmt = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }); // -> YYYY-MM-DD
-  const nyDateStr = nyFmt.format(now);
+  // Same helper every EOD writer stamps note_date with, so the recap and
+  // the rows it reads can't disagree about which day "today" is.
+  const nyDateStr = eodToday(now);
   // Wide completed_at lower bound (30h), then narrowed to NY-today below so
   // we don't depend on TZ-midnight arithmetic.
   const sinceIso = new Date(now.getTime() - 30 * 3_600_000).toISOString();
@@ -89,7 +98,7 @@ export async function runEodRecap(): Promise<EodRecapOutcome> {
   interface TaskRow { id: string; title: string; client_name: string | null; assignee_id: string | null; completed_at: string | null; is_draft: boolean | null }
   interface WorkRow { client_name: string; user_id: string; worked_on: string; results: string | null }
   const tasks = ((taskRes.data ?? []) as TaskRow[])
-    .filter((t) => !t.is_draft && t.completed_at && nyFmt.format(new Date(t.completed_at)) === nyDateStr);
+    .filter((t) => !t.is_draft && t.completed_at && ymdInTz(new Date(t.completed_at), EOD_TZ) === nyDateStr);
   const work = (workRes.data ?? []) as WorkRow[];
 
   if (tasks.length === 0 && work.length === 0) {

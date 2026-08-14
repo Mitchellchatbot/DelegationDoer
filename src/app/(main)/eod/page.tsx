@@ -15,6 +15,7 @@ import { PersonAvatar } from "@/components/PersonAvatar";
 import { EodTypeform } from "@/components/EodTypeform";
 import { UpdateFeedback, type ReactionSummary, type ReplyEntry } from "@/components/UpdateFeedback";
 import { useCurrentUser } from "@/lib/user-context";
+import { eodToday } from "@/lib/shift";
 
 interface PersonSummary {
   userId: string;
@@ -59,16 +60,33 @@ export default function EodPage() {
   const [reactionsById, setReactionsById] = useState<Record<string, ReactionSummary[]>>({});
   const [repliesById, setRepliesById] = useState<Record<string, ReplyEntry[]>>({});
 
-  // Today's date in YYYY-MM-DD (used as the upper bound on the picker
-  // — viewing future dates makes no sense, and is when newly-submitted
-  // rows would otherwise land if the clock drifts).
-  const todayIso = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  // Today's date in YYYY-MM-DD on the workspace clock — midnight ET,
+  // matching eodToday() on the server. NOT the UTC date (which rolls at
+  // 8pm ET and used to flip this whole page to tomorrow mid-evening)
+  // and not the viewer's local date. Used as the upper bound on the
+  // picker and as the `date` sent with every write on this page.
+  //
+  // Re-checked every 60s rather than memoized once, so a tab left open
+  // across midnight ET rolls over instead of writing to a stale day.
+  const [todayIso, setTodayIso] = useState<string>(() => eodToday());
   // Currently-viewed date. Defaults to today; the picker can rewind
   // to any past day. The page is read-only when not viewing today —
   // we don't let people back-date EOD submissions.
   const [viewDate, setViewDate] = useState<string>(todayIso);
   const today = viewDate; // alias preserved so save/submit/review callsites stay readable
   const isToday = viewDate === todayIso;
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      const next = eodToday();
+      if (next === todayIso) return;
+      setTodayIso(next);
+      // Carry the view along only if they were parked on "today" —
+      // someone who deliberately rewound the picker keeps their date.
+      setViewDate((v) => (v === todayIso ? next : v));
+    }, 60_000);
+    return () => clearInterval(id);
+  }, [todayIso]);
 
   const load = useCallback(async () => {
     setLoading(true);

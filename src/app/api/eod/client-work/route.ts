@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUserId } from "@/lib/session";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
+import { eodToday } from "@/lib/shift";
 
 export const dynamic = "force-dynamic";
 
@@ -54,7 +55,7 @@ export async function POST(req: NextRequest) {
     const dateStr =
       typeof body.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(body.date)
         ? body.date
-        : new Date().toISOString().slice(0, 10);
+        : eodToday();
     const clientId = typeof body.clientId === "string" && body.clientId ? body.clientId : null;
     const clientName = typeof body.clientName === "string" ? body.clientName.trim() : "";
     const workedOn = typeof body.workedOn === "string" ? body.workedOn.trim() : "";
@@ -101,7 +102,7 @@ export async function GET(req: NextRequest) {
     const dateStr =
       dateParam && /^\d{4}-\d{2}-\d{2}$/.test(dateParam)
         ? dateParam
-        : new Date().toISOString().slice(0, 10);
+        : eodToday();
 
     const { data, error } = await supabase
       .from("eod_client_work")

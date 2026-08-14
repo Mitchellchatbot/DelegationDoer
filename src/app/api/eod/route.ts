@@ -3,6 +3,7 @@ import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { buildEodForDepartment } from "@/lib/eod";
+import { eodToday } from "@/lib/shift";
 
 export const dynamic = "force-dynamic";
 
@@ -36,14 +37,18 @@ export async function GET(req: Request) {
 
     const url = new URL(req.url);
     const dateParam = url.searchParams.get("date");
-    const date = dateParam ? new Date(dateParam) : new Date();
-    if (Number.isNaN(date.getTime())) {
+    // Pass the YYYY-MM-DD through as a string. The old `new Date(param)`
+    // parsed it as midnight UTC, whose ET date is the day *before* — so
+    // every explicit ?date= read was off by one against the note_date
+    // it was asking for.
+    if (dateParam !== null && !/^\d{4}-\d{2}-\d{2}$/.test(dateParam)) {
       return NextResponse.json({ error: "invalid date" }, { status: 400 });
     }
+    const isoDate = dateParam ?? eodToday();
 
     const summaries = [];
     for (const id of allowedDeptIds) {
-      const s = await buildEodForDepartment(id, date);
+      const s = await buildEodForDepartment(id, isoDate);
       if (s) summaries.push(s);
     }
 

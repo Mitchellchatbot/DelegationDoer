@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUserId } from "@/lib/session";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
+import { eodToday } from "@/lib/shift";
 import { getUserById } from "@/lib/server-data";
 
 export const dynamic = "force-dynamic";
@@ -24,7 +25,7 @@ export async function POST(req: NextRequest) {
     const dateStr =
       typeof body.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(body.date)
         ? body.date
-        : new Date().toISOString().slice(0, 10);
+        : eodToday();
     const undo = body.undo === true;
 
     // Permission gate: leaders/admins always, dept heads only for

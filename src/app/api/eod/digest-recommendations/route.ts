@@ -4,6 +4,7 @@ import { getUserById } from "@/lib/server-data";
 import { canViewEmailApprovals } from "@/lib/email-approvers";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import type { UpdateCadence } from "@/lib/eod-digest";
+import { addDaysToYmd, eodDayRange, eodToday } from "@/lib/shift";
 
 export const dynamic = "force-dynamic";
 
@@ -103,13 +104,14 @@ function isDigestWindow(s: string): s is DigestWindow {
   return (WINDOWS as readonly string[]).includes(s);
 }
 
-function windowStart(w: DigestWindow): Date {
-  const d = new Date();
-  d.setUTCHours(0, 0, 0, 0);
-  if (w === "daily") return d;
-  const past = new Date(d.getTime() - WINDOW_DAYS[w] * 86_400_000);
-  past.setUTCHours(0, 0, 0, 0);
-  return past;
+// Inclusive lower bound (YYYY-MM-DD) for the window, on the same ET
+// calendar the eod_client_work rows are stamped with. This used to
+// floor a UTC midnight: after ~8pm ET that floor was ET-*tomorrow*, so
+// every entry logged that evening sorted below it and the daily card
+// went empty exactly when the work had just been logged.
+function windowStartDate(w: DigestWindow): string {
+  const today = eodToday();
+  return w === "daily" ? today : addDaysToYmd(today, -WINDOW_DAYS[w]);
 }
 
 export async function GET(req: NextRequest) {
@@ -126,8 +128,11 @@ export async function GET(req: NextRequest) {
     const url = new URL(req.url);
     const raw = (url.searchParams.get("window") ?? "daily").toLowerCase();
     const window: DigestWindow = isDigestWindow(raw) ? raw : "daily";
-    const start = windowStart(window);
-    const startDateStr = start.toISOString().slice(0, 10);
+    const startDateStr = windowStartDate(window);
+    // Same window boundary, as an instant, for the timestamptz columns
+    // (email_drafts.sent_at) so they line up with the note_date filter
+    // instead of drifting 4-5 hours from it.
+    const windowStartInstant = eodDayRange(startDateStr).startIso;
 
     const supabase = getSupabaseAdmin();
 
@@ -176,7 +181,7 @@ export async function GET(req: NextRequest) {
         .in("client_name", clientNames)
         .eq("status", "sent")
         .in("kind", CLIENT_UPDATE_KINDS)
-        .gte("sent_at", start.toISOString())
+        .gte("sent_at", windowStartInstant)
         .not("sent_at", "is", null)
         .order("sent_at", { ascending: false })
         .limit(1000)

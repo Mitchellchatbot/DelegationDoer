@@ -5,6 +5,7 @@ import {
   type TouchpointLabel
 } from "@/lib/client-touchpoint";
 import { healthRank, type HealthLabel } from "@/lib/client-health";
+import { eodToday } from "@/lib/shift";
 
 // Server-side queries for the /home landing surface. Each function
 // returns plain JSON-shaped data so server components can pass it
@@ -125,7 +126,7 @@ export async function getTodayTasksForUser(userId: string, limit = 8): Promise<H
 // note_date. Returns null on error so the page still renders.
 export async function getEodSubmittedTodayForUser(userId: string): Promise<boolean | null> {
   const supabase = getSupabaseAdmin();
-  const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+  const today = eodToday();
   try {
     const { data, error } = await supabase
       .from("eod_notes")
@@ -153,15 +154,28 @@ export interface DayBookendStatus {
 
 export async function getDayBookendStatus(userId: string): Promise<DayBookendStatus> {
   const supabase = getSupabaseAdmin();
-  const today = new Date().toISOString().slice(0, 10);
+  // The two tables do NOT share a calendar, so they can't share a date.
+  // EOD rows are stamped with the workspace ET day (eodToday); SOD rows
+  // are stamped with the user's OWN timezone via sodSignalFor().shiftDate.
+  //
+  // Only the EOD half moved here. The SOD read is left byte-identical
+  // on the UTC date — it does NOT match how sod_notes is written, but
+  // that mismatch predates the EOD boundary work and fixing it means
+  // loading the user's work_timezone on this path. Left for a follow-up
+  // rather than folded in silently.
+  const eodDate = eodToday();
+  const sodDate = new Date().toISOString().slice(0, 10);
 
-  async function readOne(table: "sod_notes" | "eod_notes"): Promise<{ submittedAt: string | null; submitted: boolean }> {
+  async function readOne(
+    table: "sod_notes" | "eod_notes",
+    noteDate: string
+  ): Promise<{ submittedAt: string | null; submitted: boolean }> {
     try {
       const { data, error } = await supabase
         .from(table)
         .select("submitted_at")
         .eq("user_id", userId)
-        .eq("note_date", today)
+        .eq("note_date", noteDate)
         .maybeSingle();
       if (error) return { submittedAt: null, submitted: false };
       const submittedAt = (data?.submitted_at as string | null) ?? null;
@@ -171,7 +185,10 @@ export async function getDayBookendStatus(userId: string): Promise<DayBookendSta
     }
   }
 
-  const [sod, eod] = await Promise.all([readOne("sod_notes"), readOne("eod_notes")]);
+  const [sod, eod] = await Promise.all([
+    readOne("sod_notes", sodDate),
+    readOne("eod_notes", eodDate)
+  ]);
   return { sod, eod };
 }
 
@@ -223,7 +240,7 @@ export async function getTeamStatusToday(
 
   // 2) Live signals — clock segments still open, EOD notes submitted
   //    today, overdue tasks per user. All batched.
-  const today = new Date().toISOString().slice(0, 10);
+  const today = eodToday();
   void todayIso; // kept for readability of the older block; unused now
   const [clockRes, eodRes, overdueRes] = await Promise.all([
     // Time-clock state lives in `time_entries` (one row per shift
@@ -256,7 +273,7 @@ export async function getTeamStatusToday(
   const clockedIn = new Set<string>(
     ((clockRes.data ?? []) as { user_id: string }[]).map((r) => r.user_id)
   );
-  const eodToday = new Set<string>(
+  const eodSubmittedIds = new Set<string>(
     ((eodRes.data ?? []) as { user_id: string }[]).map((r) => r.user_id)
   );
   const overdueByUser = new Map<string, number>();
@@ -273,7 +290,7 @@ export async function getTeamStatusToday(
       avatarUrl: u.avatar_url,
       role: u.role,
       clockedIn: clockedIn.has(u.id),
-      eodSubmitted: eodToday.has(u.id),
+      eodSubmitted: eodSubmittedIds.has(u.id),
       overdueCount: overdueByUser.get(u.id) ?? 0,
       // Default true matches the column default — only the rows that
       // got explicitly flipped off (heads, salaried) report false.
@@ -1053,7 +1070,7 @@ export async function getNeedsYouCounts(args: {
           ((members ?? []) as { user_id: string }[]).map((r) => r.user_id)
         ));
         if (memberIds.length > 0) {
-          const today = new Date().toISOString().slice(0, 10);
+          const today = eodToday();
           const { data: submitted } = await supabase
             .from("eod_notes")
             .select("user_id")

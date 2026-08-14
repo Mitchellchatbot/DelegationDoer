@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUserId } from "@/lib/session";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
+import { eodToday } from "@/lib/shift";
 import { requiresClockIn } from "@/lib/access";
 import { hasOpenSegment } from "@/lib/time-tracking";
 import { openDm, postMessage } from "@/lib/slack";
@@ -40,10 +41,18 @@ export async function POST(req: NextRequest) {
     const supabase = getSupabaseAdmin();
 
     const body = await req.json().catch(() => ({}));
-    const dateStr =
+    // The client's date is a hint; the ET day is the authority. Clamping
+    // to eodToday() stops a skewed clock or a tab left open across the
+    // boundary from filing against a future row — which is exactly how
+    // an evening EOD used to land on tomorrow and get overwritten the
+    // next morning. This rejects nothing: late submissions are still
+    // accepted at any hour, they just land on the right day.
+    const today = eodToday();
+    const requested =
       typeof body.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(body.date)
         ? body.date
-        : new Date().toISOString().slice(0, 10);
+        : today;
+    const dateStr = requested > today ? today : requested;
 
     // Fields can be passed in-line so the typeform doesn't depend on
     // autosave landing first — if the user clicks Submit before the
@@ -242,6 +251,10 @@ export async function POST(req: NextRequest) {
       sections.push(`_Notes:_\n${quote(noteRow.note)}`);
     }
 
+    // Renders the YYYY-MM-DD *label*, so parse-as-UTC + format-in-UTC is
+    // correct and deliberate — it round-trips. Do NOT switch this to
+    // America/New_York to match the EOD day boundary; ET is behind UTC,
+    // so it would print every date a day early.
     const friendlyDate = new Date(dateStr + "T00:00:00Z").toLocaleDateString("en-US", {
       weekday: "long", month: "short", day: "numeric", timeZone: "UTC"
     });

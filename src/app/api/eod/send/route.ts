@@ -3,6 +3,7 @@ import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { buildEodForDepartment, sendEodToSlack, type EodSendResult } from "@/lib/eod";
+import { eodToday } from "@/lib/shift";
 
 export const dynamic = "force-dynamic";
 
@@ -23,8 +24,7 @@ export async function POST(req: NextRequest) {
     const dateStr =
       typeof body.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(body.date)
         ? body.date
-        : new Date().toISOString().slice(0, 10);
-    const date = new Date(`${dateStr}T12:00:00Z`); // midday utc → safely inside the day
+        : eodToday();
 
     const supabase = getSupabaseAdmin();
 
@@ -57,7 +57,7 @@ export async function POST(req: NextRequest) {
 
     const results: EodSendResult[] = [];
     for (const id of targetIds) {
-      const summary = await buildEodForDepartment(id, date);
+      const summary = await buildEodForDepartment(id, dateStr);
       if (!summary) {
         results.push({
           departmentId: id,

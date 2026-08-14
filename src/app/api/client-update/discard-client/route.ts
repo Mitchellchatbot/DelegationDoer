@@ -3,6 +3,7 @@ import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { isApprover } from "@/lib/email-approvers";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
+import { addDaysToYmd, eodToday } from "@/lib/shift";
 
 export const dynamic = "force-dynamic";
 
@@ -45,13 +46,13 @@ function isDigestWindow(s: unknown): s is DigestWindow {
   return typeof s === "string" && (WINDOWS as readonly string[]).includes(s);
 }
 
-function windowStart(w: DigestWindow): Date {
-  const d = new Date();
-  d.setUTCHours(0, 0, 0, 0);
-  if (w === "daily") return d;
-  const past = new Date(d.getTime() - WINDOW_DAYS[w] * 86_400_000);
-  past.setUTCHours(0, 0, 0, 0);
-  return past;
+// Must stay identical to windowStartDate() in
+// /api/eod/digest-recommendations — this dismisses exactly the rows
+// that card listed, so a drift between the two would silently discard
+// a day the approver never saw.
+function windowStartDate(w: DigestWindow): string {
+  const today = eodToday();
+  return w === "daily" ? today : addDaysToYmd(today, -WINDOW_DAYS[w]);
 }
 
 export async function POST(req: NextRequest) {
@@ -72,7 +73,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "window must be daily|weekly|biweekly|monthly" }, { status: 400 });
     }
 
-    const startDateStr = windowStart(body.window).toISOString().slice(0, 10);
+    const startDateStr = windowStartDate(body.window);
 
     const supabase = getSupabaseAdmin();
     const now = new Date().toISOString();

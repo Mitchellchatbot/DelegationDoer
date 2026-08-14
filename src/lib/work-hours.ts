@@ -4,11 +4,11 @@
 // date-fns-tz or any other dep.
 
 // Get the UTC offset (in minutes) for a given IANA timezone at a
-// specific moment. Handles DST automatically because it asks Intl
-// what the offset is *at that instant*. e.g. "America/New_York"
-// returns -300 in summer (EDT) and -240 isn't right — wait, -300 in
-// winter, -240 in summer. Correct.
-function tzOffsetMinutes(date: Date, tz: string): number {
+// specific moment, signed as (local - UTC). Handles DST automatically
+// because it asks Intl what the offset is *at that instant*:
+// "America/New_York" returns -240 in summer (EDT) and -300 in winter
+// (EST). Exported for the EOD day-boundary math in @/lib/shift.
+export function tzOffsetMinutes(date: Date, tz: string): number {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: tz,
     year: "numeric", month: "2-digit", day: "2-digit",

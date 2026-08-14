@@ -8,6 +8,7 @@
 // is the office default per the SOD spec.
 
 import type { User } from "@/lib/types";
+import { tzOffsetMinutes } from "@/lib/work-hours";
 
 const DAY_KEYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"] as const;
 export type DayKey = typeof DAY_KEYS[number];
@@ -132,5 +133,92 @@ export function sodSignalFor(
     shiftStart: win.start,
     shiftEnd: win.end,
     reason: within ? "in shift" : "pre-shift"
+  };
+}
+
+// ── The EOD calendar day ────────────────────────────────────────────
+//
+// The EOD day boundary is midnight America/New_York for EVERY user,
+// regardless of where they work. Deliberately NOT per-user tz (the way
+// SOD is above): an EOD filed at 11:30pm ET by a worker in Karachi and
+// the leader's digest that reads it have to agree on which day it was,
+// and a shared Slack recap can only have one "today".
+//
+// Before this existed, every EOD read and write derived its date from
+// new Date().toISOString().slice(0, 10) — the UTC date. 00:00 UTC is
+// 8pm EDT / 7pm EST, so from ~8pm ET the /eod page flipped to
+// tomorrow, "submitted today" reset to false, and that evening's
+// submission landed on TOMORROW's row — silently overwriting it the
+// next morning, since the row id and the (user_id, note_date) key
+// moved together and no duplicate-key error ever fired. Workers read
+// that as "EOD closes at 9pm". There was never a cutoff.
+export const EOD_TZ = DEFAULT_TZ; // "America/New_York"
+
+// YYYY-MM-DD for an instant as observed in `tz`. Assembled from
+// formatToParts rather than a locale that happens to emit ISO order,
+// so it can't drift with the runtime's ICU data.
+export function ymdInTz(at: Date, tz: string): string {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: tz,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit"
+    })
+      .formatToParts(at)
+      .map((p) => [p.type, p.value])
+  );
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
+// Today's EOD calendar date. THE single source of truth for "which day
+// is this EOD for" — used on both the server and the client so the two
+// can't disagree.
+export function eodToday(at: Date = new Date()): string {
+  return ymdInTz(at, EOD_TZ);
+}
+
+// Absolute UTC instant of 00:00 wall-clock on `ymd` in `tz`.
+// DST-correct: New York midnight is 04:00Z (EDT) or 05:00Z (EST)
+// depending on the date, and both US transitions happen at 2am, so
+// midnight itself is never the skipped/repeated hour. Guess with the
+// naive offset, then re-resolve at the candidate instant — the second
+// pass is what makes it right across a transition, where the naive
+// guess (which lands in the *previous* evening) can read the other
+// side's offset.
+function zonedDayStart(ymd: string, tz: string): Date {
+  const [y, m, d] = ymd.split("-").map(Number);
+  const naive = Date.UTC(y, m - 1, d, 0, 0, 0);
+  const pass1 = naive - tzOffsetMinutes(new Date(naive), tz) * 60_000;
+  const pass2 = naive - tzOffsetMinutes(new Date(pass1), tz) * 60_000;
+  return new Date(pass2);
+}
+
+// YYYY-MM-DD + n days as pure calendar arithmetic (no timezone
+// involved). Use this to walk EOD dates — going through Date/ms
+// arithmetic instead re-introduces the offset bugs this module exists
+// to avoid, and silently skips or repeats a day across a DST change.
+export function addDaysToYmd(ymd: string, n: number): string {
+  const [y, m, d] = ymd.split("-").map(Number);
+  const t = new Date(Date.UTC(y, m - 1, d + n));
+  const pad = (v: number) => String(v).padStart(2, "0");
+  return `${t.getUTCFullYear()}-${pad(t.getUTCMonth() + 1)}-${pad(t.getUTCDate())}`;
+}
+
+// Half-open [start, end) UTC instants covering the ET calendar day
+// `ymd`. Bounds the timestamptz range queries (tasks.completed_at,
+// time_entries.started_at) so they agree with the note_date equality
+// lookups they're joined against.
+//
+// Takes a ymd STRING, never a Date, on purpose: new Date("2026-08-14")
+// is midnight *UTC*, whose ET date is Aug 13 — passing Dates around is
+// exactly how the off-by-one this fixes got in.
+//
+// Spans 23h on spring-forward and 25h on fall-back. That's correct —
+// those days really are that long.
+export function eodDayRange(ymd: string): { startIso: string; endIso: string } {
+  return {
+    startIso: zonedDayStart(ymd, EOD_TZ).toISOString(),
+    endIso: zonedDayStart(addDaysToYmd(ymd, 1), EOD_TZ).toISOString()
   };
 }

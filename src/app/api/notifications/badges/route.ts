@@ -8,6 +8,7 @@ import { listAccounts, listThreadsPaged } from "@/lib/missive-client";
 import { readStateForThreads, isThreadUnread } from "@/lib/thread-read-state";
 import { onCacheBust } from "@/lib/inbox-event-bus";
 import { isApprover } from "@/lib/email-approvers";
+import { eodToday } from "@/lib/shift";
 
 export const dynamic = "force-dynamic";
 
@@ -79,12 +80,6 @@ function currentHourInTz(tz: string): number {
   return parseInt(parts.hour ?? "0", 10);
 }
 
-function todayInTz(tz: string): string {
-  const fmt = new Intl.DateTimeFormat("en-CA", {
-    timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit"
-  });
-  return fmt.format(new Date());
-}
 
 export async function GET() {
   try {
@@ -186,7 +181,9 @@ export async function GET() {
         ));
 
         if (memberIds.length > 0) {
-          const isoDate = todayInTz(SCALED_TZ);
+          // Shared with every EOD writer — this is the ET day the rows
+          // are actually stamped with, not a private copy of it.
+          const isoDate = eodToday();
           const { data: submittedRows } = await supabase
             .from("eod_notes")
             .select("user_id")

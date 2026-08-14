@@ -43,14 +43,22 @@ export async function getDdOwnedChatIds(): Promise<BlooioScopeResult> {
   const supabase = getSupabaseAdmin();
 
   // 1a. Leads the inbound router minted from CRM texts — excluded below.
+  //
+  // The source lives in a jsonb payload, but we filter it in JS rather than with
+  // a PostgREST path filter (.eq("payload->>source", ...)). That syntax is used
+  // nowhere else in this codebase, and its failure mode here is silent and
+  // wrong: a path filter that matches nothing returns an empty set WITHOUT an
+  // error, which would leave every CRM-minted lead in the allowlist and quietly
+  // restore the leak. One row per lead — the payload is cheap to read.
   const { data: crmEvents, error: crmErr } = await supabase
     .from("outbound_lead_events")
-    .select("lead_id")
-    .eq("kind", "form_submitted")
-    .eq("payload->>source", "blooio_inbound");
+    .select("lead_id, payload")
+    .eq("kind", "form_submitted");
   if (crmErr) return { ok: false, error: `lead provenance read failed: ${crmErr.message}` };
   const crmLeadIds = new Set(
-    (crmEvents ?? []).map((r) => (r as { lead_id: string }).lead_id)
+    ((crmEvents ?? []) as Array<{ lead_id: string; payload: { source?: string } | null }>)
+      .filter((r) => r.payload?.source === "blooio_inbound")
+      .map((r) => r.lead_id)
   );
 
   // 1b. Every lead with a phone. Default-include: a lead is DD's unless it is
@@ -71,13 +79,16 @@ export async function getDdOwnedChatIds(): Promise<BlooioScopeResult> {
     chatIds.add(row.phone.trim());
   }
 
-  // 2. Operator-composed support threads.
+  // 2. Operator-composed support threads. Same JS-side filter, same reason.
   const { data: convos, error: convoErr } = await supabase
     .from("support_conversations")
-    .select("blooio_chat_id")
-    .eq("classifier_output->>source", "operator_compose");
+    .select("blooio_chat_id, classifier_output");
   if (convoErr) return { ok: false, error: `support conversation read failed: ${convoErr.message}` };
-  for (const row of (convos ?? []) as Array<{ blooio_chat_id: string | null }>) {
+  for (const row of (convos ?? []) as Array<{
+    blooio_chat_id: string | null;
+    classifier_output: { source?: string } | null;
+  }>) {
+    if (row.classifier_output?.source !== "operator_compose") continue;
     if (row.blooio_chat_id) chatIds.add(row.blooio_chat_id.trim());
   }
 

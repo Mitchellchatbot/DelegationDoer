@@ -177,3 +177,59 @@ export function looksAutomated(
   }
   return { filtered: false, reason: null };
 }
+
+// ---------------------------------------------------------------------------
+// Narrow variant: "no human is on the other end of this"
+// ---------------------------------------------------------------------------
+// looksAutomated above is tuned for the intake cron, where the cost of a
+// false positive is low (the thread can be re-processed by hand) and the cost
+// of a false negative is a Claude call plus a routing-review draft. That makes
+// it deliberately aggressive — billing@, updates@, "webinar invitation", and
+// so on.
+//
+// The #email-notifs Slack ping has the opposite economics. It already gates on
+// "the sender matches a known client", which removes essentially all of the
+// junk those broad patterns exist for, and its whole purpose is that a client
+// email never goes unanswered — so a false positive silently loses the very
+// thing we built it for. A client writing from billing@theirdomain.com is a
+// person you reply to.
+//
+// So this matches only senders/subjects where replying is meaningless: bot
+// mailboxes, bounces, and out-of-office autoresponders. Kept here rather than
+// in the Slack module so there is exactly one place patterns like these live.
+
+const UNREPLYABLE_SENDER_PATTERNS: Array<{ re: RegExp; label: string }> = [
+  { re: /^(no-?reply|donotreply|do-?not-?reply)([._+-]|@)/i, label: "no-reply sender" },
+  { re: /[._+-](no-?reply|donotreply)@/i, label: "no-reply sender (compound)" },
+  { re: /^(mailer-daemon|postmaster|automated)([._+-]|@)/i, label: "system sender" }
+];
+
+const UNREPLYABLE_SUBJECT_PATTERNS: Array<{ re: RegExp; label: string }> = [
+  {
+    re: /\b(out\s+of\s+office|auto[-\s]?reply|automatic reply)\b/i,
+    label: "auto-reply"
+  },
+  {
+    re: /\b(delivery (failed|status notification)|undeliverable|returned mail|mail delivery)\b/i,
+    label: "delivery failure"
+  }
+];
+
+export function looksUnreplyable(
+  fromEmail: string | null,
+  subject: string | null
+): FilterResult {
+  const from = (fromEmail ?? "").trim();
+  if (from) {
+    for (const p of UNREPLYABLE_SENDER_PATTERNS) {
+      if (p.re.test(from)) return { filtered: true, reason: p.label };
+    }
+  }
+  const subj = (subject ?? "").trim();
+  if (subj) {
+    for (const p of UNREPLYABLE_SUBJECT_PATTERNS) {
+      if (p.re.test(subj)) return { filtered: true, reason: p.label };
+    }
+  }
+  return { filtered: false, reason: null };
+}

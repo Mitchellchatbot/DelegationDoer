@@ -14,6 +14,7 @@
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { getThread } from "@/lib/missive-client";
 import { viewerIdsForAddresses } from "@/lib/restricted-senders";
+import { splitAddress, bodyPreview } from "@/lib/email-format";
 import type { InboxEvent } from "@/lib/inbox-event-bus";
 
 interface EnrichedMessage {
@@ -28,35 +29,9 @@ interface EnrichedMessage {
   addresses: string[];
 }
 
-// Pull out a "Name <email@x>" address pair. Missive returns from_addr
-// like that in most cases; some senders just give the bare email.
-function splitAddress(raw: string | null): { name: string | null; email: string | null } {
-  if (!raw) return { name: null, email: null };
-  const m = raw.match(/^\s*"?([^"<]+?)"?\s*<([^>]+)>\s*$/);
-  if (m) return { name: m[1].trim() || null, email: m[2].trim() || null };
-  // Bare address (no display name).
-  if (raw.includes("@")) return { name: null, email: raw.trim() };
-  return { name: raw.trim(), email: null };
-}
-
-// One-line preview from the email body. Strip HTML tags + collapse
-// whitespace, cap at 220 chars so the card row stays compact.
-function previewFrom(message: { body_text: string | null; body_html: string | null }): string | null {
-  const raw = message.body_text ?? message.body_html;
-  if (!raw) return null;
-  const text = raw
-    .replace(/<style[\s\S]*?<\/style>/gi, " ")
-    .replace(/<script[\s\S]*?<\/script>/gi, " ")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/\s+/g, " ")
-    .trim();
-  if (!text) return null;
-  return text.length > 220 ? text.slice(0, 220) + "…" : text;
-}
+// splitAddress + bodyPreview live in @/lib/email-format — the Slack
+// #email-notifs poster and the pull-mode poller render the same fields, and
+// three private copies had already started to drift.
 
 // Fetch the thread + locate the specific message by id. If we can't
 // resolve the message (deleted? id mismatch?), fall back to the most
@@ -83,7 +58,7 @@ async function enrich(event: InboxEvent): Promise<EnrichedMessage> {
       subject: target.subject ?? detail.thread.subject ?? null,
       fromName: name,
       fromEmail: email,
-      preview: previewFrom(target),
+      preview: bodyPreview(target),
       receivedAt: target.sent_at ?? null,
       addresses
     };

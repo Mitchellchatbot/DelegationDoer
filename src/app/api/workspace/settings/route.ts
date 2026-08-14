@@ -15,12 +15,13 @@ export async function GET() {
     await requireCurrentUserId();
     const { data } = await getSupabaseAdmin()
       .from("workspace_settings")
-      .select("scaled_team_channel_id, eod_recap_channel_id, last_eod_recap_at, low_site_score_threshold, overdue_archive_days")
+      .select("scaled_team_channel_id, eod_recap_channel_id, client_email_channel_id, last_eod_recap_at, low_site_score_threshold, overdue_archive_days")
       .eq("id", "workspace")
       .maybeSingle();
     return NextResponse.json({
       scaledTeamChannelId: (data?.scaled_team_channel_id as string | null) ?? null,
       eodRecapChannelId: (data?.eod_recap_channel_id as string | null) ?? null,
+      clientEmailChannelId: (data?.client_email_channel_id as string | null) ?? null,
       lastEodRecapAt: (data?.last_eod_recap_at as string | null) ?? null,
       lowSiteScoreThreshold: (data?.low_site_score_threshold as number | null) ?? 70,
       overdueArchiveDays: (data?.overdue_archive_days as number | null) ?? 10
@@ -50,6 +51,13 @@ export async function PUT(req: NextRequest) {
         ? String(body.eodRecapChannelId).trim() || null
         : null;
     }
+    // Channel that gets a ping whenever a known client emails one of our
+    // inboxes (#email-notifs). Clearing it turns the notifier off.
+    if (body.clientEmailChannelId === null || typeof body.clientEmailChannelId === "string") {
+      update.client_email_channel_id = body.clientEmailChannelId
+        ? String(body.clientEmailChannelId).trim() || null
+        : null;
+    }
     // Site-health alert threshold (0–100). Below this score a Website-team
     // task is auto-created from the Scaled Team channel alert.
     if (body.lowSiteScoreThreshold !== undefined && body.lowSiteScoreThreshold !== null) {
@@ -76,6 +84,7 @@ export async function PUT(req: NextRequest) {
     return NextResponse.json({
       scaledTeamChannelId: (data.scaled_team_channel_id as string | null) ?? null,
       eodRecapChannelId: (data.eod_recap_channel_id as string | null) ?? null,
+      clientEmailChannelId: (data.client_email_channel_id as string | null) ?? null,
       lowSiteScoreThreshold: (data.low_site_score_threshold as number | null) ?? 70,
       overdueArchiveDays: (data.overdue_archive_days as number | null) ?? 10
     });

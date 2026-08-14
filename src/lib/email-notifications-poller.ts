@@ -22,6 +22,7 @@
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { getThread, listThreads, type MissiveMessage } from "@/lib/missive-client";
 import { viewerIdsForAddresses } from "@/lib/restricted-senders";
+import { splitAddress, bodyPreview } from "@/lib/email-format";
 
 // Absolute cap on how far back we'll go on first-run for any account
 // (24h). Above this is "ancient", and the user opted in long enough
@@ -39,31 +40,6 @@ export interface PollResult {
   threadsExamined: number;
   rowsWritten: number;
   errors: Array<{ accountId: string; message: string }>;
-}
-
-function splitAddress(raw: string | null): { name: string | null; email: string | null } {
-  if (!raw) return { name: null, email: null };
-  const m = raw.match(/^\s*"?([^"<]+?)"?\s*<([^>]+)>\s*$/);
-  if (m) return { name: m[1].trim() || null, email: m[2].trim() || null };
-  if (raw.includes("@")) return { name: null, email: raw.trim() };
-  return { name: raw.trim(), email: null };
-}
-
-function previewFrom(m: { body_text: string | null; body_html: string | null }): string | null {
-  const raw = m.body_text ?? m.body_html;
-  if (!raw) return null;
-  const text = raw
-    .replace(/<style[\s\S]*?<\/style>/gi, " ")
-    .replace(/<script[\s\S]*?<\/script>/gi, " ")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/\s+/g, " ")
-    .trim();
-  if (!text) return null;
-  return text.length > 220 ? text.slice(0, 220) + "…" : text;
 }
 
 export async function pollEmailNotifications(): Promise<PollResult> {
@@ -213,7 +189,7 @@ export async function pollEmailNotifications(): Promise<PollResult> {
       for (const { msg, threadSubject, allowedViewers } of inboundToWrite) {
         const { name, email } = splitAddress(msg.from_addr);
         const subject = msg.subject ?? threadSubject ?? null;
-        const preview = previewFrom(msg);
+        const preview = bodyPreview(msg);
         const msgSentAt = new Date(msg.sent_at);
         for (const userId of userIds) {
           // Sender-scoped privacy: drop users who aren't viewers on the rule

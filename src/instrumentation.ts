@@ -27,6 +27,12 @@ export async function register() {
     console.error("[instrumentation] email-notifications bootstrap failed to load:", err);
   }
   try {
+    const { bootstrapClientEmailSlack } = await import("@/lib/client-email-slack-bootstrap");
+    bootstrapClientEmailSlack();
+  } catch (err) {
+    console.error("[instrumentation] client-email-slack bootstrap failed to load:", err);
+  }
+  try {
     const { bootstrapScheduledCrons } = await import("@/lib/cron-bootstrap");
     bootstrapScheduledCrons();
   } catch (err) {

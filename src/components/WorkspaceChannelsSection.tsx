@@ -8,10 +8,13 @@ import { toast } from "sonner";
 //   - Scaled Team: the org-wide announcement channel.
 //   - EOD recap (7pm EST): receives the daily roll-up combining every
 //     department. Defaults to the Scaled Team channel if left blank.
+//   - Client emails: pinged whenever a known client emails one of our
+//     inboxes. Blank turns the notifier off entirely.
 
 interface WorkspaceSettings {
   scaledTeamChannelId: string | null;
   eodRecapChannelId: string | null;
+  clientEmailChannelId: string | null;
   lastEodRecapAt: string | null;
   lowSiteScoreThreshold: number;
 }
@@ -21,6 +24,7 @@ export function WorkspaceChannelsSection({ canEdit }: { canEdit: boolean }) {
   const [loading, setLoading] = useState(true);
   const [scaledDraft, setScaledDraft] = useState("");
   const [recapDraft, setRecapDraft] = useState("");
+  const [clientEmailDraft, setClientEmailDraft] = useState("");
   const [thresholdDraft, setThresholdDraft] = useState("70");
   const [saving, setSaving] = useState(false);
 
@@ -33,6 +37,7 @@ export function WorkspaceChannelsSection({ canEdit }: { canEdit: boolean }) {
       setSettings(data);
       setScaledDraft(data.scaledTeamChannelId ?? "");
       setRecapDraft(data.eodRecapChannelId ?? "");
+      setClientEmailDraft(data.clientEmailChannelId ?? "");
       setThresholdDraft(String(data.lowSiteScoreThreshold ?? 70));
     } catch (err) {
       toast.error(`Couldn't load workspace channels: ${err instanceof Error ? err.message : "unknown"}`);
@@ -46,6 +51,7 @@ export function WorkspaceChannelsSection({ canEdit }: { canEdit: boolean }) {
   const dirty =
     scaledDraft.trim() !== (settings?.scaledTeamChannelId ?? "") ||
     recapDraft.trim() !== (settings?.eodRecapChannelId ?? "") ||
+    clientEmailDraft.trim() !== (settings?.clientEmailChannelId ?? "") ||
     thresholdDraft.trim() !== String(settings?.lowSiteScoreThreshold ?? 70);
 
   async function save() {
@@ -59,6 +65,7 @@ export function WorkspaceChannelsSection({ canEdit }: { canEdit: boolean }) {
         body: JSON.stringify({
           scaledTeamChannelId: scaledDraft.trim() || null,
           eodRecapChannelId: recapDraft.trim() || null,
+          clientEmailChannelId: clientEmailDraft.trim() || null,
           lowSiteScoreThreshold: Number.isFinite(parsedThreshold) ? parsedThreshold : 70
         })
       });
@@ -67,6 +74,7 @@ export function WorkspaceChannelsSection({ canEdit }: { canEdit: boolean }) {
       setSettings((cur) => ({
         scaledTeamChannelId: data.scaledTeamChannelId ?? null,
         eodRecapChannelId: data.eodRecapChannelId ?? null,
+        clientEmailChannelId: data.clientEmailChannelId ?? null,
         lastEodRecapAt: cur?.lastEodRecapAt ?? null,
         lowSiteScoreThreshold: data.lowSiteScoreThreshold ?? 70
       }));
@@ -115,6 +123,16 @@ export function WorkspaceChannelsSection({ canEdit }: { canEdit: boolean }) {
             placeholder="leave blank to use Scaled Team"
             canEdit={canEdit}
           />
+          <ChannelRow
+            label="Client emails"
+            value={clientEmailDraft}
+            onChange={setClientEmailDraft}
+            placeholder="blank to disable"
+            canEdit={canEdit}
+          />
+          <div className="text-[11px] text-muted pl-[98px] -mt-1">
+            Pinged when a known client emails one of our inboxes.
+          </div>
           <div className="flex items-center gap-2 pt-1">
             <div className="text-[10px] uppercase tracking-wide text-ink/55 font-semibold w-[90px] shrink-0">
               Site score

@@ -75,6 +75,15 @@ export interface BlooioSummary {
   orgName: string | null;
   ownerLabel: string | null;
   fetchedAt: string;
+
+  // Set when the summary was filtered to DD's own conversations (see
+  // lib/blooio-scope.ts). Surfaced in the UI so the filtering is visible and
+  // auditable rather than an invisible discrepancy against Blooio's own
+  // dashboard — these numbers deliberately do NOT match that account-wide view.
+  scope: {
+    ddOwnedChats: number;   // account chats that matched DD's allowlist
+    totalAccountChats: number; // chats on the whole Blooio org, pre-filter
+  } | null;
 }
 
 export type BlooioResult =
@@ -293,7 +302,15 @@ async function listChatMessages(
 }
 
 // Public entry. Defaults to a 30-day window.
-export async function getBlooioSummary({ days = 30 }: { days?: number } = {}): Promise<BlooioResult> {
+//
+// `chatIds` restricts the summary to a specific set of chats — the Blooio
+// account is shared with the New Life CRM, so /outbound-dashboard/messaging
+// passes DD's own conversations via lib/blooio-scope.ts getScopedBlooioSummary().
+// Omit it only for a genuinely account-wide view; every metric below is derived
+// AFTER the filter, so nothing downstream needs to know about it.
+export async function getBlooioSummary(
+  { days = 30, chatIds }: { days?: number; chatIds?: ReadonlySet<string> } = {}
+): Promise<BlooioResult> {
   const now = new Date();
   const rangeStart = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
 
@@ -304,7 +321,19 @@ export async function getBlooioSummary({ days = 30 }: { days?: number } = {}): P
 
   const chatsRes = await listAllChats();
   if (!chatsRes.ok) return chatsRes;
-  const rawChats = chatsRes.data;
+  const allAccountChats = chatsRes.data;
+
+  // Scope filter. A chat is DD's if either the chat id or the contact
+  // identifier matches the allowlist — normalizeChat treats them as
+  // interchangeable (contactNumber falls back to id), and Blooio populates both.
+  const rawChats = chatIds
+    ? allAccountChats.filter(
+        (c) => chatIds.has(c.id) || (!!c.contact?.identifier && chatIds.has(c.contact.identifier))
+      )
+    : allAccountChats;
+  const scope = chatIds
+    ? { ddOwnedChats: rawChats.length, totalAccountChats: allAccountChats.length }
+    : null;
 
   // Pre-aggregated headline counts straight from /chats. Saves us from
   // having to fetch every message just to count.
@@ -398,7 +427,8 @@ export async function getBlooioSummary({ days = 30 }: { days?: number } = {}): P
       topChats,
       orgName,
       ownerLabel,
-      fetchedAt: new Date().toISOString()
+      fetchedAt: new Date().toISOString(),
+      scope
     }
   };
 }

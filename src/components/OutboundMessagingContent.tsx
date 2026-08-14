@@ -16,6 +16,17 @@ import {
 export function OutboundMessagingContent({ result }: { result: BlooioResult }) {
   if (!result.ok) return <ErrorPanel error={result.error} />;
   const d = result.data;
+  // Scoped to DD's own contacts but nothing matched — show why, rather than a
+  // grid of zeros the operator has to interpret. Every metric below would read
+  // 0 and look like an outage instead of an empty (correct) result set.
+  if (d.scope && d.scope.ddOwnedChats === 0) {
+    return (
+      <div className="space-y-4">
+        <SyncedBadge data={d} />
+        <NoOwnedChatsNotice data={d} />
+      </div>
+    );
+  }
   return (
     <div className="space-y-4">
       <SyncedBadge data={d} />
@@ -30,6 +41,25 @@ export function OutboundMessagingContent({ result }: { result: BlooioResult }) {
   );
 }
 
+function NoOwnedChatsNotice({ data }: { data: BlooioSummary }) {
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white shadow-soft p-6">
+      <h2 className="text-[18px] font-semibold text-ink">No DelegationDoer conversations yet</h2>
+      <p className="mt-2 text-[13px] text-ink/65 leading-relaxed">
+        The Blooio account holds{" "}
+        <span className="font-semibold text-ink">{data.scope?.totalAccountChats ?? 0}</span>{" "}
+        conversations, but none of them are DelegationDoer&apos;s — they belong to the
+        other system sharing this Blooio organisation and number.
+      </p>
+      <p className="mt-2 text-[13px] text-ink/65 leading-relaxed">
+        This page counts a conversation as ours when the contact is a lead in the
+        outbound funnel, or when someone here started the thread from the Customer
+        Support tab. Numbers will appear as soon as the funnel texts someone.
+      </p>
+    </div>
+  );
+}
+
 function SyncedBadge({ data }: { data: BlooioSummary }) {
   const when = new Date(data.fetchedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   const ownerTag = [data.orgName, data.ownerLabel].filter(Boolean).join(" · ");
@@ -40,15 +70,32 @@ function SyncedBadge({ data }: { data: BlooioSummary }) {
         Live from Blooio · synced {when}
       </span>
       <span>Window: last {data.windowDays} days</span>
+      {data.scope && (
+        <span
+          className="inline-flex items-center gap-1.5 px-2.5 h-7 rounded-full bg-slate-100 border border-slate-200 text-ink/70"
+          title={
+            `This Blooio organisation is shared with another system, so the account holds ` +
+            `${data.scope.totalAccountChats} conversations in total. Only the ` +
+            `${data.scope.ddOwnedChats} belonging to DelegationDoer are counted here, which ` +
+            `is why these figures are lower than Blooio's own dashboard.`
+          }
+        >
+          DelegationDoer only · {data.scope.ddOwnedChats} of {data.scope.totalAccountChats} conversations
+        </span>
+      )}
       {ownerTag && <span className="ml-auto text-ink/45">{ownerTag}</span>}
     </div>
   );
 }
 
 function KpiGrid({ data }: { data: BlooioSummary }) {
-  // Top row mirrors the operator's own Blooio dashboard exactly — same
-  // labels (Total Sent / Total Received / Active Lines / Avg/Day /
-  // Outbound Convos) so the two surfaces read as one source of truth.
+  // Top row keeps the label vocabulary of the operator's own Blooio dashboard
+  // (Total Sent / Total Received / Active Lines / Avg/Day / Outbound Convos) so
+  // the two surfaces read alike — but the VALUES deliberately no longer match.
+  // Blooio counts the whole organisation, which DD shares with the New Life CRM;
+  // these are filtered to DD's own conversations (lib/blooio-scope.ts). The
+  // "DelegationDoer only" chip in SyncedBadge is what makes that gap legible —
+  // don't remove it to make the numbers "agree".
   return (
     <div className="space-y-3">
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">

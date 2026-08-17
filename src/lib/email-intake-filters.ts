@@ -233,3 +233,64 @@ export function looksUnreplyable(
   }
   return { filtered: false, reason: null };
 }
+
+// ---------------------------------------------------------------------------
+// Role / shared-mailbox addresses
+// ---------------------------------------------------------------------------
+// "Is this local-part a function rather than a person?"
+//
+// Used by the #email-notifs Slack ping, and ONLY for senders that matched a
+// client on the WEBSITE DOMAIN alone — meaning nobody ever listed this address
+// in that client's contact_emails and we're inferring the relationship purely
+// from the host. That inference is what puts wordfence@<clientdomain> and
+// support@<clientdomain> in the channel: both are the client's own automated
+// systems, not the client writing to us, and neither trips looksUnreplyable
+// (which only knows no-reply/mailer-daemon/postmaster).
+//
+// This list is deliberately broader than looksUnreplyable BECAUSE of that
+// narrow application. An address listed in contact_emails skips the check
+// entirely, so the escape hatch for any false positive is to add the address
+// to the client in DD — no code change, no deploy. That also means shared
+// mailboxes a client genuinely writes from (info@, hello@) are safe to screen
+// here: if the client really uses one, it belongs in contact_emails anyway.
+//
+// Longest-first so that a compound term wins over a prefix of itself
+// (mailer@ must not be reported as mail@).
+const ROLE_LOCAL_PARTS = [
+  "wordfence", "wordpress", "wpengine", "wp",
+  "notifications", "notification", "notify", "alerts", "alert",
+  "billing", "invoices", "invoicing", "invoice", "receipts", "receipt",
+  "accounting", "accounts", "payments", "payment",
+  "servicedesk", "helpdesk", "support", "service", "help",
+  "enquiries", "inquiries", "contact", "hello", "info",
+  "administrator", "webmaster", "hostmaster", "postmaster", "admin",
+  "newsletter", "marketing", "campaigns", "updates", "update", "digest", "news",
+  "monitoring", "security", "monitor",
+  "sysadmin", "system", "daemon", "mailer", "robot", "bot", "mail",
+  "backups", "backup", "cron",
+  "recruitment", "recruiting", "careers", "jobs", "hr",
+  "appointments", "scheduling", "calendar"
+].sort((a, b) => b.length - a.length);
+
+// Anchored at the local-part start, ending at a separator or the end of the
+// local-part. Matches billing@, billing-team@, wordfence.alerts@ — but not
+// billingsley@, which is a surname.
+const ROLE_LOCAL_PART_RE = new RegExp(
+  `^(${ROLE_LOCAL_PARTS.join("|")})([._+-]|$)`,
+  "i"
+);
+
+export function looksRoleAddress(fromEmail: string | null): FilterResult {
+  const addr = (fromEmail ?? "").trim();
+  const at = addr.lastIndexOf("@");
+  // No local part to inspect (bare domain, or an empty/garbage address).
+  if (at <= 0) return { filtered: false, reason: null };
+
+  // `reason` is the matched role token alone ("support@"). The Slack caller
+  // wraps it in its own skip-reason vocabulary; keeping the two separate
+  // avoids a doubled-up "role-address: role address (...)" string.
+  const m = addr.slice(0, at).match(ROLE_LOCAL_PART_RE);
+  return m
+    ? { filtered: true, reason: `${m[1].toLowerCase()}@` }
+    : { filtered: false, reason: null };
+}

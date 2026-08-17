@@ -31,12 +31,13 @@ import {
   getThread,
   listAccounts,
   listThreads,
+  type MissiveAccount,
   type MissiveMessage,
   type MissiveThreadDetail
 } from "@/lib/missive-client";
 import { postMessage } from "@/lib/slack";
 import { loadClientMatcher } from "@/lib/client-thread-match";
-import { looksUnreplyable } from "@/lib/email-intake-filters";
+import { looksUnreplyable, looksRoleAddress } from "@/lib/email-intake-filters";
 import { getRestrictedSenderRules, messagesMatch } from "@/lib/restricted-senders";
 import { getPrivateInboxOwners } from "@/lib/inbox-access";
 import { splitAddress, bodyPreview } from "@/lib/email-format";
@@ -84,6 +85,8 @@ export type SkipReason =
   | "restricted-sender"
   | "private-inbox"
   | "not-a-client"
+  | "internal-sender"
+  | "role-address"
   | "already-posted";
 
 export interface NotifyOutcome {
@@ -138,16 +141,53 @@ async function resolveChannel(): Promise<string | null> {
   return (data as { client_email_channel_id: string | null } | null)?.client_email_channel_id ?? null;
 }
 
+// One clone round-trip serving BOTH the internal-sender screen and the "Inbox"
+// label. listAccounts() is request-memoized inside an RSC render, but this
+// module runs from the instrumentation bootstrap where the safe-cache wrapper
+// degrades to a pass-through — so two calls here would be two real round-trips.
+//
+// Returns [] on failure, which makes both consumers fail OPEN: the label falls
+// back to the raw account id and the internal-sender screen never fires.
+// Losing a client notification because the account list blipped would be a far
+// worse outcome than letting one internal note through.
+async function loadAccounts(): Promise<MissiveAccount[]> {
+  try {
+    return await listAccounts();
+  } catch (err) {
+    console.error("[client-email-slack] account list failed", err);
+    return [];
+  }
+}
+
 // account_id -> display label for the "Inbox" field. Falls back to the raw
 // id so a newly-connected account still renders something meaningful.
-async function accountLabel(accountId: string): Promise<string> {
-  try {
-    const accounts = await listAccounts();
-    const hit = accounts.find((a) => a.id === accountId);
-    return hit?.email ?? accountId;
-  } catch {
-    return accountId;
+function accountLabel(accounts: MissiveAccount[], accountId: string): string {
+  return accounts.find((a) => a.id === accountId)?.email ?? accountId;
+}
+
+// Our own connected mailboxes, as addresses and as domains.
+//
+// message.direction already drops what WE send, but mail from one of our
+// inboxes to another arrives as "inbound" on the receiving side — and it can
+// match a client outright: the seed data in 20260518000000_clients_table.sql
+// lists team@scaledai.org as the contact_emails for three Outpatient clients,
+// so an internal note from that address posts as "New client email — Miami
+// Outpatient". That is exactly the "not directly from the client" mail this
+// screen exists to stop.
+function ownAddressSignals(accounts: MissiveAccount[]): {
+  addresses: Set<string>;
+  domains: Set<string>;
+} {
+  const addresses = new Set<string>();
+  const domains = new Set<string>();
+  for (const a of accounts) {
+    const addr = (a.email ?? "").trim().toLowerCase();
+    const at = addr.lastIndexOf("@");
+    if (at <= 0) continue;
+    addresses.add(addr);
+    domains.add(addr.slice(at + 1));
   }
+  return { addresses, domains };
 }
 
 function newestInbound(messages: MissiveMessage[]): MissiveMessage | null {
@@ -248,9 +288,14 @@ function buildPost(args: {
 }
 
 /**
- * Evaluate one inbound message and, if it's mail from a known client, post it
- * to the #email-notifs channel. Safe to call concurrently for the same
+ * Evaluate one inbound message and, if it's mail written by a known client,
+ * post it to the #email-notifs channel. Safe to call concurrently for the same
  * message from any number of processes — exactly one post wins.
+ *
+ * "Written by a client" is stricter than "matches a client": an address listed
+ * in the client's contact_emails always qualifies, but one that matches only
+ * the client's website domain must also clear looksRoleAddress, and mail from
+ * our own mailboxes never qualifies at all. See those two gates below.
  */
 export async function notifyClientEmailToSlack(
   event: InboxEvent,
@@ -325,13 +370,50 @@ export async function notifyClientEmailToSlack(
   }
 
   // The whole point of the feature: only mail from someone we recognise as
-  // a client. `match` (first hit) not `matchAll` — one post per email even
-  // when several clients share a contact address.
+  // a client. One post per email even when several clients share a contact
+  // address, so take a single hit rather than fanning out over matchAll.
   const matcher = await loadClientMatcher();
-  const client = matcher.match(fromEmail);
-  if (!client) return skip(event, "not-a-client");
+  const hits = matcher.matchAllDetailed(fromEmail);
+  if (hits.length === 0) return skip(event, "not-a-client");
+  // Exact hits sort ahead of domain hits, so [0] is the strongest verdict.
+  const client = hits[0];
 
-  const inbox = await accountLabel(event.account_id);
+  const accounts = await loadAccounts();
+
+  // Internal mail (see ownAddressSignals). The domain arm carves out any
+  // domain a client claims as its website: if we ever connect a mailbox on a
+  // client's own domain, that client's real mail must not read as internal.
+  // A domain hit in `hits` is exactly that condition, already computed.
+  //
+  // splitAddress trims but does NOT lowercase, and From headers arrive cased
+  // however the sender's client felt like ("Team@ScaledAI.org"), so normalise
+  // before comparing against the lowercased account sets.
+  const own = ownAddressSignals(accounts);
+  const senderAddr = (fromEmail ?? "").trim().toLowerCase();
+  const at = senderAddr.lastIndexOf("@");
+  const senderDomain = at > 0 ? senderAddr.slice(at + 1) : "";
+  const senderIsOurs =
+    own.addresses.has(senderAddr) ||
+    (!!senderDomain &&
+      own.domains.has(senderDomain) &&
+      !hits.some((h) => h.via === "domain"));
+  if (senderIsOurs) return skip(event, "internal-sender");
+
+  // Domain-only match: nobody listed this address on the client, so the
+  // relationship is inferred from the website host alone. That inference is
+  // how the client's own WordPress install (wordfence@theirdomain.com) and
+  // helpdesk reach the channel, so screen role/shared mailboxes here.
+  //
+  // Addresses in contact_emails are never screened — if this drops something
+  // real, adding it to the client in DD is the fix, no deploy needed.
+  if (client.via === "domain") {
+    const role = looksRoleAddress(fromEmail);
+    // Reason keeps the "role-address" prefix so the poll can surface it (see
+    // the outcome filter there) while still naming the token that matched.
+    if (role.filtered) return skip(event, `role-address (${role.reason})`);
+  }
+
+  const inbox = accountLabel(accounts, event.account_id);
   const post = buildPost({
     clientName: client.name,
     fromName,
@@ -524,10 +606,19 @@ export async function pollClientEmailSlack(
 
     // Only the interesting outcomes are worth returning — "not-a-client"
     // is the overwhelming majority and would bury everything else.
+    //
+    // internal-sender and role-address ARE worth returning: that is mail which
+    // matched a client and would have posted before these gates existed, so a
+    // dry run listing it is how you confirm the channel got quieter for the
+    // right reasons rather than by going dark.
     if (outcome.status === "posted") result.posted += 1;
     else if (outcome.status === "error") result.errors += 1;
     else result.skipped += 1;
-    if (outcome.status !== "skipped" || outcome.reason === "already-posted") {
+    const notable =
+      outcome.reason === "already-posted" ||
+      outcome.reason === "internal-sender" ||
+      outcome.reason?.startsWith("role-address") === true;
+    if (outcome.status !== "skipped" || notable) {
       result.outcomes.push(outcome);
     }
   }

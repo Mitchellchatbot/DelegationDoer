@@ -72,6 +72,22 @@ export function assignableDepartments(actor: User, pool: Department[]): Departme
   );
 }
 
+// Which department should a new-task form open on? Prefer the actor's own
+// membership (or a department they've been delegated) even when they're a
+// leader/admin: a stealth admin who heads SEO should land on SEO, not on
+// whatever department happens to sort first. Only actors with no membership
+// at all — true leaders — fall back to the first department in the org.
+// Shared by the browser NewTaskForm and the widget's create view so the two
+// can't drift.
+export function defaultDepartmentId(
+  actor: User,
+  departments: Department[]
+): string | undefined {
+  const own = [...actor.departmentIds, ...(actor.delegateDepartmentIds ?? [])];
+  if (own.length > 0) return own[0];
+  return isLeader(actor) ? departments[0]?.id : undefined;
+}
+
 // Can the actor pick a different department, or are they locked to their
 // own? Leaders/admins + department heads may change it; so can scoped
 // delegates (they need to target the department they manage). Plain

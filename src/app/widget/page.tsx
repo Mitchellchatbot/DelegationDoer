@@ -7,7 +7,7 @@ import { AvatarCropper } from "@/components/AvatarCropper";
 import { Countdown } from "@/components/Countdown";
 import { PersonAvatar } from "@/components/PersonAvatar";
 import { MediaPicker } from "@/components/MediaPicker";
-import { assignableTargets, assignableDepartments, canChooseDepartment, isLeader, isHead } from "@/lib/auth";
+import { assignableTargets, assignableDepartments, canChooseDepartment, canCreateTasksForOthers, defaultDepartmentId, isLeader } from "@/lib/auth";
 import { TAG_PRESETS } from "@/lib/mock-data";
 import { findFirstImage, requestAttachmentAnalysis, buildAnalyzeNotice } from "@/lib/attachment-analysis";
 import type { TaskMedia, User, Department } from "@/lib/types";
@@ -2716,6 +2716,10 @@ interface WidgetUser {
   role: "leader" | "department_head" | "worker";
   isAdmin?: boolean;
   departmentIds: string[];
+  // Department-scoped delegate grant. /api/users returns it for everyone;
+  // the department clamp below needs it or a delegate gets snapped off the
+  // department they were granted.
+  delegateDepartmentIds?: string[];
   managerId?: string | null;
 }
 
@@ -2874,8 +2878,12 @@ function CreateTaskView({ onClose, onCreated }: { onClose: () => void; onCreated
   // Department scoping mirrors NewTaskForm (and the /api/tasks server gate):
   //   - leaders/admins may target any department,
   //   - department heads may switch among the departments they lead,
-  //   - workers are locked to their own department and self-assign only.
-  const canDelegate = me ? (isLeader(me as unknown as User) || isHead(me as unknown as User)) : false;
+  //   - workers are locked to their own department, and self-assign unless
+  //     they hold a delegate grant.
+  // canCreateTasksForOthers (not isLeader || isHead): a worker holding a
+  // department delegate grant may delegate in the browser form, and this
+  // view is meant to mirror it.
+  const canDelegate = me ? canCreateTasksForOthers(me as unknown as User) : false;
   const canPickDept = me ? canChooseDepartment(me as unknown as User) : false;
   const selectableDepartments = useMemo(
     () => (me ? assignableDepartments(me as unknown as User, departments as unknown as Department[]) : []),
@@ -2884,26 +2892,49 @@ function CreateTaskView({ onClose, onCreated }: { onClose: () => void; onCreated
   const hasNoDepartment = !!me && !isLeader(me as unknown as User) && me.departmentIds.length === 0;
 
   // Auto-pick the caller's home department on open, clamped to what they're
-  // allowed to choose (mirrors NewTaskForm's effect).
+  // allowed to choose (mirrors NewTaskForm's effect). The seed prefers their
+  // own membership even for leaders/admins — a stealth admin who heads a
+  // department should not open on whatever department sorts first — while
+  // the clamp stays leader-exempt.
   useEffect(() => {
     if (!me) return;
-    if (isLeader(me as unknown as User)) {
-      if (!departmentId && departments.length > 0) setDepartmentId(departments[0].id);
+    if (!departmentId) {
+      const seed = defaultDepartmentId(
+        me as unknown as User,
+        departments as unknown as Department[]
+      );
+      if (seed) setDepartmentId(seed); // else the hasNoDepartment banner handles it
       return;
     }
-    const ownIds = me.departmentIds;
-    if (ownIds.length === 0) return; // hasNoDepartment banner handles this
-    if (!departmentId || !ownIds.includes(departmentId)) setDepartmentId(ownIds[0]);
+    if (isLeader(me as unknown as User)) return;
+    const allowed = [...me.departmentIds, ...(me.delegateDepartmentIds ?? [])];
+    if (allowed.length > 0 && !allowed.includes(departmentId)) setDepartmentId(allowed[0]);
   }, [me, departments, departmentId]);
 
-  // Assignee options: people the caller may delegate to, narrowed to the
-  // selected department — only show assignees from that team.
+  // Assignee options: everyone the caller may legally delegate to (mirrors
+  // canAssignTaskTo on the server), ORDERED with the routed department
+  // first. It used to be a filter, which hid the whole org from a
+  // leader/admin whenever the form landed on a one-person department. This
+  // view has no ranker, so the ordering carries the department signal that
+  // the browser form gets from its suggestion cards.
   const assigneeOptions = useMemo(() => {
     if (!me) return [] as WidgetUser[];
     const targets = assignableTargets(me as unknown as User, users as unknown as User[]) as unknown as WidgetUser[];
     if (!departmentId) return targets;
-    return targets.filter((u) => u.departmentIds.includes(departmentId));
+    return [
+      ...targets.filter((u) => u.departmentIds.includes(departmentId)),
+      ...targets.filter((u) => !u.departmentIds.includes(departmentId))
+    ];
   }, [me, users, departmentId]);
+
+  // Label for someone outside the routed department, so a cross-team pick in
+  // this flat list is never silent (the task still files under the
+  // department picked above).
+  function outsideDeptNote(u: WidgetUser): string | undefined {
+    if (!departmentId || u.departmentIds.includes(departmentId)) return undefined;
+    const home = departments.find((d) => d.id === u.departmentIds[0])?.name;
+    return home ? `Outside this department · ${home}` : "Outside this department";
+  }
 
   // Keep the selection coherent with role + department:
   //   - workers are always forced onto themselves (no picker),
@@ -3275,13 +3306,14 @@ function CreateTaskView({ onClose, onCreated }: { onClose: () => void; onCreated
                     name={u.name}
                     email={u.email}
                     avatarUrl={u.avatarUrl ?? null}
+                    note={outsideDeptNote(u)}
                     selected={assigneeId === u.id}
                     onPick={() => setAssigneeId(u.id)}
                   />
                 ))}
                 {assigneeOptions.length === 0 && (
                   <div className="px-2 py-2 text-[11px] text-slate-500">
-                    No one in this department to assign to — pick another department or leave it unassigned.
+                    No one you can delegate to — leave it unassigned.
                   </div>
                 )}
               </div>
@@ -3339,12 +3371,15 @@ function CreateTaskView({ onClose, onCreated }: { onClose: () => void; onCreated
 }
 
 function AssigneeRow({
-  userId, name, email, avatarUrl, selected, onPick
+  userId, name, email, avatarUrl, note, selected, onPick
 }: {
   userId: string;
   name: string;
   email: string;
   avatarUrl?: string | null;
+  // Shown instead of the email when this person sits outside the routed
+  // department — the pick is allowed, it just shouldn't be silent.
+  note?: string | null;
   selected: boolean;
   onPick: () => void;
 }) {
@@ -3378,7 +3413,11 @@ function AssigneeRow({
       )}
       <div className="flex-1 min-w-0">
         <div className="text-[12px] font-medium truncate">{name}</div>
-        {email && <div className="text-[10px] text-slate-500 truncate">{email}</div>}
+        {note ? (
+          <div className="text-[10px] text-amber-600 truncate">{note}</div>
+        ) : email ? (
+          <div className="text-[10px] text-slate-500 truncate">{email}</div>
+        ) : null}
       </div>
       {selected && <Check className="w-3.5 h-3.5 text-accent shrink-0" />}
     </button>

@@ -2,7 +2,7 @@
 
 import { TAG_PRESETS } from "@/lib/mock-data";
 import { userCapacity, etaDays, deadlineFromEstimate } from "@/lib/capacity";
-import { assignableTargets, assignableDepartments, canChooseDepartment, canCreateTasksForOthers, isLeader, ROLE_LABELS } from "@/lib/auth";
+import { assignableTargets, assignableDepartments, canChooseDepartment, canCreateTasksForOthers, defaultDepartmentId, isLeader, ROLE_LABELS } from "@/lib/auth";
 import { useCurrentUser } from "@/lib/user-context";
 import { useTeam } from "@/lib/team-context";
 import { rankCandidates, buildLoadSignals, type RankedCandidate } from "@/lib/skill-rank";
@@ -88,27 +88,51 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel, initialValues }: 
   // the form and show a clear message instead of letting them try.
   const hasNoDepartment = !isLeader(currentUser) && currentUser.departmentIds.length === 0;
 
-  // Auto-select the caller's own department when the form opens, and keep
-  // the selection inside what they're allowed to pick. Leaders, who have
-  // no home department, fall back to the first department in the org.
+  // Open on the caller's own department, then keep the selection inside
+  // what they're allowed to pick.
+  //
+  // The SEED can't key off isLeader(): a stealth admin (is_admin on a head
+  // or worker row) is a leader for permission purposes but still has a home
+  // team, and seeding departments[0] dropped them on whatever department
+  // sorts first instead of their own. defaultDepartmentId prefers their
+  // membership and only falls back to the org list for true leaders, who
+  // have none.
+  //
+  // The CLAMP stays leader-exempt: leaders/admins may hold any department;
+  // everyone else is pulled back into the ones they belong to or manage.
   useEffect(() => {
-    const ownIds = currentUser.departmentIds;
-    if (isLeader(currentUser)) {
-      if (!departmentId && departments.length > 0) setDepartmentId(departments[0].id);
+    if (!departmentId) {
+      const seed = defaultDepartmentId(currentUser, departments);
+      if (seed) setDepartmentId(seed); // else the hasNoDepartment banner covers it
       return;
     }
-    if (ownIds.length === 0) return; // handled by the hasNoDepartment banner
-    // Clamp into the caller's own departments — covers both the empty
-    // initial state and a pre-filled value (e.g. create-from-thread) that
-    // points at a department they don't belong to.
-    if (!departmentId || !ownIds.includes(departmentId)) {
-      setDepartmentId(ownIds[0]);
+    if (isLeader(currentUser)) return;
+    // Delegated departments count here too — assignableDepartments offers
+    // them in the picker, so clamping to home-only would snap the selection
+    // straight back whenever a delegate chose the department they manage.
+    const allowed = [
+      ...currentUser.departmentIds,
+      ...(currentUser.delegateDepartmentIds ?? [])
+    ];
+    if (allowed.length > 0 && !allowed.includes(departmentId)) {
+      setDepartmentId(allowed[0]);
     }
   }, [departmentId, departments, currentUser]);
   const [priority, setPriority] = useState(initialValues?.priority ?? "medium");
   const [estimate, setEstimate] = useState(initialValues?.estimatedHours ?? 2);
   const [tags, setTags] = useState<string[]>(initialValues?.tags ?? []);
   const [assigneeId, setAssigneeId] = useState<string>(initialValues?.assigneeId ?? "");
+  // Did a human choose this assignee, or did the ranker fill it in? A
+  // deliberate pick survives a department switch (that is how you assign
+  // across teams); an auto-filled one is re-derived whenever the routed
+  // department changes.
+  const [assigneePickedByUser, setAssigneePickedByUser] = useState(
+    Boolean(initialValues?.assigneeId)
+  );
+  function chooseAssignee(id: string) {
+    setAssigneePickedByUser(true);
+    setAssigneeId(id);
+  }
   const [aiReason, setAiReason] = useState<string | null>(null);
   const [aiThinking, setAiThinking] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -248,20 +272,55 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel, initialValues }: 
     if (knownSite && !website.trim()) setWebsite(knownSite);
   }
 
-  // assignableTargets used to default to the mock users array; pass
-  // the live pool explicitly.
-  const targets = useMemo(() => {
-    const pool = assignableTargets(currentUser, users);
-    // HoDs & leaders: once a department is chosen, only that department's
-    // members are assignable here (mirrors the routing-review dropdown and
-    // the ranker's in-dept rule). Workers can't switch departments, so their
-    // pool (self + direct reports) is left intact.
-    if (canPickDepartment && departmentId) {
-      return pool.filter((u) => u.departmentIds.includes(departmentId));
-    }
-    return pool;
-  }, [currentUser, users, canPickDepartment, departmentId]);
+  // Everyone this caller may legally assign to. Deliberately NOT narrowed
+  // by the department being routed to — that narrowing used to hide the
+  // whole org from a leader/admin whenever the form landed on a one-person
+  // department. This mirrors canAssignTaskTo in access.ts, the gate the
+  // /api/tasks POST actually enforces: leaders/admins reach anyone, a head
+  // reaches any member of the departments they lead, a worker reaches
+  // themselves + direct reports (+ any delegated department) — regardless
+  // of which department the task itself is filed under.
+  const targets = useMemo(
+    () => assignableTargets(currentUser, users),
+    [currentUser, users]
+  );
   const targetIds = useMemo(() => new Set(targets.map((u) => u.id)), [targets]);
+
+  // The slice of that roster living in the department this task is routed
+  // to. Only these are ranked, so the auto-routed pick and the runner-up
+  // cards stay in-team (matching the ranker's "In the routed department"
+  // factor); reaching across teams is a deliberate act via the full list.
+  const deptTargets = useMemo(
+    () =>
+      departmentId
+        ? targets.filter((u) => u.departmentIds.includes(departmentId))
+        : targets,
+    [targets, departmentId]
+  );
+  const deptTargetIds = useMemo(() => new Set(deptTargets.map((u) => u.id)), [deptTargets]);
+  const selectedDeptName =
+    departments.find((d) => d.id === departmentId)?.name ?? "this department";
+
+  // "Show all ..." roster: routed department first, everyone else after, so
+  // the department stays a visible signal without being a hard gate.
+  const rosterGroups = useMemo(() => {
+    if (!departmentId) return [{ key: "all", label: "Everyone", people: targets }];
+    return [
+      { key: "in", label: selectedDeptName, people: deptTargets },
+      {
+        key: "out",
+        label: "Elsewhere in the org",
+        people: targets.filter((u) => !deptTargetIds.has(u.id))
+      }
+    ].filter((g) => g.people.length > 0);
+  }, [departmentId, targets, deptTargets, deptTargetIds, selectedDeptName]);
+
+  // Home department of an out-of-department candidate, for the row label.
+  function deptLabel(u: { departmentIds: string[] }): string | null {
+    const first = u.departmentIds[0];
+    if (!first) return null;
+    return departments.find((d) => d.id === first)?.name ?? null;
+  }
 
   // Build skill rank: combine the manual+auto skill matrix with the
   // current task draft. Re-runs whenever the user types anything that
@@ -274,7 +333,7 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel, initialValues }: 
       skillsByUser.set(s.userId, arr);
     }
     const capacityByUser = new Map<string, number>();
-    for (const u of targets) {
+    for (const u of deptTargets) {
       capacityByUser.set(u.id, userCapacity(u, tasks).pct);
     }
     // Active-workload + client-familiarity signals from the live task
@@ -283,13 +342,13 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel, initialValues }: 
     const { activeTasksByUser, clientHistoryByUser } = buildLoadSignals(tasks, clientName);
     return rankCandidates({
       task: { title, description, departmentId, tags },
-      candidates: targets,
+      candidates: deptTargets,
       skillsByUser,
       capacityByUser,
       activeTasksByUser,
       clientHistoryByUser
     });
-  }, [skillMatrix, targets, title, description, departmentId, tags, tasks, clientName]);
+  }, [skillMatrix, deptTargets, title, description, departmentId, tags, tasks, clientName]);
 
   const topPick = ranked[0] ?? null;
   const restRanked = ranked.slice(1, 5);
@@ -301,8 +360,15 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel, initialValues }: 
   // an explicit pick only while it's still a valid target; otherwise re-pick
   // the new top suggestion (or clear, so submit stays gated).
   useEffect(() => {
-    if (assigneeId && targetIds.has(assigneeId)) return;
-    if (topPick) { setAssigneeId(topPick.userId); return; }
+    // A deliberate pick is honored as long as they are still someone we may
+    // assign to at all — including a teammate from another department.
+    if (assigneePickedByUser && assigneeId && targetIds.has(assigneeId)) return;
+    // An auto-filled pick only holds while it is still in the routed
+    // department, so switching departments re-runs the suggestion.
+    if (!assigneePickedByUser && assigneeId && deptTargetIds.has(assigneeId)) return;
+    // Auto-fill from the ranker — and mark it as such, so a later
+    // department switch is free to re-route it.
+    if (topPick) { setAssigneePickedByUser(false); setAssigneeId(topPick.userId); return; }
     // Workers always own the tasks they create; if the ranker surfaced
     // nobody (e.g. they're over capacity and filtered out), still default
     // to themselves so the task is created assigned — mirrors the backend.
@@ -311,7 +377,7 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel, initialValues }: 
     // stale cross-dept pick so submit stays disabled until they choose again.
     if (assigneeId) setAssigneeId("");
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [topPick?.userId, targetIds]);
+  }, [topPick?.userId, targetIds, deptTargetIds, assigneePickedByUser]);
 
   const eta = useMemo(() => {
     const u = users.find((x) => x.id === (assigneeId || topPick?.userId));
@@ -508,7 +574,11 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel, initialValues }: 
   }
 
   const delegateBlurb = (() => {
-    if (currentUser.role === "leader") return "As Leader you can assign to anyone in the org.";
+    // isLeader(), not role === "leader": a stealth admin (is_admin on a head
+    // or worker row) has org-wide reach and used to be told they were scoped
+    // to their own department. Worded without naming a role — the flag is
+    // deliberately invisible in the UI.
+    if (isLeader(currentUser)) return "You can assign to anyone in the org.";
     if (currentUser.role === "department_head") {
       const deptNames = currentUser.departmentIds
         .map((d) => departments.find((x) => x.id === d)?.name)
@@ -836,7 +906,7 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel, initialValues }: 
               >
                 <button
                   type="button"
-                  onClick={() => setAssigneeId(u.id)}
+                  onClick={() => chooseAssignee(u.id)}
                   className={
                     "w-full text-left flex items-center gap-3 p-3.5 rounded-2xl border-2 transition-all relative overflow-hidden " +
                     (isPicked
@@ -928,7 +998,7 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel, initialValues }: 
                 >
                   <button
                     type="button"
-                    onClick={() => setAssigneeId(u.id)}
+                    onClick={() => chooseAssignee(u.id)}
                     className={
                       "w-full text-left flex items-center gap-3 p-3 rounded-xl border transition-colors " +
                       (isPicked
@@ -960,24 +1030,44 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel, initialValues }: 
           </AnimatePresence>
           {ranked.length === 0 && (
             <div className="text-sm text-muted">
-              No one available from your role + selected department. Pick a different department or ask the Leader to widen your scope.
+              No one in {selectedDeptName} is free right now — pick someone from the full list below, or switch departments.
             </div>
           )}
         </ul>
 
+        {/* Assigning outside the routed department is allowed (the API
+            agrees), but it should never be silent — the task still files
+            under the department picked above. */}
+        {assigneeId && departmentId && !deptTargetIds.has(assigneeId) && (
+          <div className="mt-3 flex items-start gap-1.5 text-[11px] text-amber-600">
+            <AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" />
+            <span>
+              {users.find((u) => u.id === assigneeId)?.name ?? "This person"} is not in{" "}
+              {selectedDeptName} — the task still files under {selectedDeptName}.
+            </span>
+          </div>
+        )}
+
         {targets.length > 0 && (
           <details className="mt-3">
             <summary className="text-xs text-muted cursor-pointer hover:text-ink">Show all {targets.length} people I can delegate to</summary>
-            <div className="mt-2 grid grid-cols-2 gap-2">
-              {targets.map((u) => (
-                <label key={u.id} className="flex items-center gap-2 p-2 rounded-lg border border-border bg-surface2 cursor-pointer">
-                  <input type="radio" name="assignee" checked={assigneeId === u.id} onChange={() => setAssigneeId(u.id)} />
-                  <PersonAvatar userId={u.id} name={u.name} imageUrl={u.avatarUrl} size={20} />
-                  <span className="text-sm">{u.name}</span>
-                  <span className="text-[10px] text-muted ml-auto">{ROLE_LABELS[u.role]}</span>
-                </label>
-              ))}
-            </div>
+            {rosterGroups.map((g) => (
+              <div key={g.key} className="mt-2">
+                <div className="text-[10px] uppercase tracking-[0.14em] text-muted mb-1.5">{g.label}</div>
+                <div className="grid grid-cols-2 gap-2">
+                  {g.people.map((u) => (
+                    <label key={u.id} className="flex items-center gap-2 p-2 rounded-lg border border-border bg-surface2 cursor-pointer">
+                      <input type="radio" name="assignee" checked={assigneeId === u.id} onChange={() => chooseAssignee(u.id)} />
+                      <PersonAvatar userId={u.id} name={u.name} imageUrl={u.avatarUrl} size={20} />
+                      <span className="text-sm truncate">{u.name}</span>
+                      <span className="text-[10px] text-muted ml-auto shrink-0">
+                        {(g.key === "out" ? deptLabel(u) : null) ?? ROLE_LABELS[u.role]}
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            ))}
           </details>
         )}
 

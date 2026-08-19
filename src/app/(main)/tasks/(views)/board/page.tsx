@@ -5,18 +5,21 @@ import Link from "next/link";
 import { useTeam } from "@/lib/team-context";
 import { createPortal } from "react-dom";
 import { useSearchParams, useRouter } from "next/navigation";
+import * as Dialog from "@radix-ui/react-dialog";
 import { DragDropContext, Droppable, Draggable, type DropResult } from "@hello-pangea/dnd";
 import { PriorityBadge, StalledBadge, Tag } from "@/components/Badges";
 import { Avatar } from "@/components/Avatar";
 import { PersonAvatar } from "@/components/PersonAvatar";
 import { Countdown } from "@/components/Countdown";
+import { NewTaskForm } from "@/components/NewTaskForm";
+import { canAssignTaskTo, canCreateTaskInDepartment } from "@/lib/access";
 import { useCurrentUser } from "@/lib/user-context";
 import { cn, formatDate } from "@/lib/utils";
 import { useHorizontalDragAutoScroll } from "@/lib/useHorizontalDragAutoScroll";
 import type { Task, TaskStatus, User } from "@/lib/types";
 import {
   Clock, Globe2, Building2, Users as UsersIcon, FolderKanban,
-  Layers, Briefcase, Layout, CheckCircle2, CheckSquare, Square, Trash2, Archive
+  Layers, Briefcase, Layout, CheckCircle2, CheckSquare, Square, Trash2, Archive, Plus, X
 } from "lucide-react";
 import { toast } from "sonner";
 import { ClockGate } from "@/components/ClockGate";
@@ -78,6 +81,14 @@ export default function BoardPage() {
     useHorizontalDragAutoScroll();
   const [tasks, setTasks] = useState<Task[]>([]);
   const [, setLoading] = useState(true);
+  // Bumped after an inline create so the tasks fetch below re-runs. The
+  // board owns its own /api/tasks state, so neither router.refresh() nor
+  // team.refresh() would bring the new card in.
+  const [refreshKey, setRefreshKey] = useState(0);
+  // Which person the "Add task" dialog is open for. One dialog for the
+  // whole board rather than one per column — person mode routinely renders
+  // 10+ columns and each NewTaskForm ranks the entire roster on mount.
+  const [addFor, setAddFor] = useState<User | null>(null);
 
   // View / filter state. `selectedDepts` is the set of department ids
   // currently visible; an empty set is the "All departments" view.
@@ -228,7 +239,7 @@ export default function BoardPage() {
         setLoading(false);
       });
     return () => { cancelled = true; };
-  }, [scope]);
+  }, [scope, refreshKey]);
 
   function toggleDept(deptId: string) {
     setSelectedDepts((cur) => {
@@ -450,6 +461,22 @@ export default function BoardPage() {
 
   const allDeptsSelected = selectedDepts.size === 0;
 
+  // Which department a task created from this person's column should land in.
+  // Prefer one the chip row is currently showing: `visible` filters tasks by
+  // selectedDepts, so seeding a department that's filtered out means the card
+  // never appears on the board that just created it (and POST /api/tasks
+  // announces it in that other department's Slack channel). Only bites people
+  // who belong to several departments — for everyone else both passes agree.
+  // Falls back to any department the caller may create in; undefined when the
+  // target has none (leaders), where NewTaskForm's own default takes over.
+  function deptHintFor(u: User): string | undefined {
+    return (
+      u.departmentIds.find(
+        (d) => (selectedDepts.size === 0 || selectedDepts.has(d)) && canCreateTaskInDepartment(currentUser, d)
+      ) ?? u.departmentIds.find((d) => canCreateTaskInDepartment(currentUser, d))
+    );
+  }
+
   return (
     <ClockGate fallbackSubtitle="The board unlocks once you've clocked in. Tap below to start your shift.">
     <div className="space-y-4">
@@ -612,7 +639,24 @@ export default function BoardPage() {
                     )}
                     <div className="text-sm font-medium truncate">{col.label}</div>
                   </div>
-                  <div className="text-xs text-muted shrink-0 tabular-nums">{grouped[col.id]?.length ?? 0}</div>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <div className="text-xs text-muted tabular-nums">{grouped[col.id]?.length ?? 0}</div>
+                    {/* Per-person quick-add. `col.user` is set only in person
+                        mode, so this never appears on status/client columns
+                        nor on the Unassigned / Completed buckets (a task has
+                        to have an assignee). canAssignTaskTo is the same
+                        predicate POST /api/tasks applies to the assignee, so
+                        the button never offers a person you'd be refused.
+                        It does NOT cover that route's separate clock-in gate,
+                        which exempts only leaders/admins while ClockGate also
+                        exempts clock_enabled=false users — so those users can
+                        still be refused on submit, exactly as they are from
+                        the Topbar's "New task". */}
+                    {col.user && !selecting && scope !== "archived" &&
+                     canAssignTaskTo(currentUser, col.user) && (
+                      <AddTaskButton user={col.user} onOpen={setAddFor} />
+                    )}
+                  </div>
                 </div>
                 <Droppable droppableId={col.id}>
                   {(prov, snap) => (
@@ -766,6 +810,23 @@ export default function BoardPage() {
         </div>
       </DragDropContext>
 
+      {/* Inline "add task for this person" — a single dialog for the whole
+          board, driven by whichever column's "+" was clicked. */}
+      <AddTaskForPersonDialog
+        user={addFor}
+        deptHint={addFor ? deptHintFor(addFor) : undefined}
+        onClose={() => setAddFor(null)}
+        onCreated={(taskId) => {
+          setAddFor(null);
+          setRefreshKey((k) => k + 1);
+          // NewTaskForm already raises its own success toast; this one
+          // exists for the "Open" action, same as the Topbar dialog.
+          toast.message("Task created", {
+            action: { label: "Open", onClick: () => router.push(`/tasks/${taskId}`) }
+          });
+        }}
+      />
+
       {/* Bulk action bar — floats above the board while selecting. */}
       {selecting && (
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 lg:translate-x-[calc(-50%+132px)] z-50 flex items-center gap-3 px-4 py-2.5 rounded-2xl bg-ink text-white shadow-lift">
@@ -792,6 +853,93 @@ export default function BoardPage() {
       )}
     </div>
     </ClockGate>
+  );
+}
+
+// Per-person quick-add trigger. A component rather than inline JSX so the
+// `col.user` narrowing survives into the click handler — TypeScript drops
+// narrowing on property accesses inside closures.
+function AddTaskButton({ user, onOpen }: { user: User; onOpen: (u: User) => void }) {
+  return (
+    <button
+      type="button"
+      onClick={() => onOpen(user)}
+      title={`Add a task for ${user.name}`}
+      aria-label={`Add a task for ${user.name}`}
+      className="w-6 h-6 rounded-lg grid place-items-center text-muted hover:text-accent hover:bg-white transition-colors"
+    >
+      <Plus className="w-3.5 h-3.5" />
+    </button>
+  );
+}
+
+// Hosts NewTaskForm pinned to one person. Mounted once by the board and
+// driven by `user`: null = closed. Dialog.Portal is what lets the card
+// escape both the board's overflow-x-auto scroller and the sticky Topbar's
+// stacking context; the lg:pl-[264px] offset centers it over the content
+// panel rather than under the sidebar (same trick as the Topbar dialog).
+function AddTaskForPersonDialog({ user, deptHint, onClose, onCreated }: {
+  user: User | null;
+  deptHint?: string;
+  onClose: () => void;
+  onCreated: (taskId: string) => void;
+}) {
+  return (
+    <Dialog.Root open={user !== null} onOpenChange={(o) => { if (!o) onClose(); }}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="fixed inset-0 bg-black/30 backdrop-blur-sm z-40 anim-fade-in" />
+        {/* No aria-describedby={undefined} here: Radix spreads content props
+            AFTER its own computed a11y attributes, so passing it explicitly
+            would override the id of the Dialog.Description below and drop the
+            one sentence explaining that the assignee is already pinned. That
+            escape hatch is only for dialogs that render no Description. */}
+        <Dialog.Content
+          className="fixed inset-0 z-50 outline-none pointer-events-none flex items-start justify-center pt-20 px-4 lg:pl-[264px]"
+        >
+          <div className="pointer-events-auto w-full max-w-[900px] max-h-[calc(100vh-6rem)] overflow-y-auto rounded-3xl border border-white/60 bg-gradient-to-br from-blue-50/90 via-white/95 to-indigo-50/85 backdrop-blur-md shadow-[0_24px_72px_-24px_rgba(60,60,120,0.45)] anim-fade-in-up">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-white/60 sticky top-0 bg-white/70 backdrop-blur-sm z-10">
+              <div className="flex items-center gap-2.5 min-w-0">
+                {user && <PersonAvatar userId={user.id} name={user.name} imageUrl={user.avatarUrl} size={32} />}
+                <div className="min-w-0">
+                  <Dialog.Title className="text-base font-semibold truncate">
+                    New task for {user?.name}
+                  </Dialog.Title>
+                  <Dialog.Description className="text-xs text-muted mt-0.5">
+                    Already assigned to them — fill it in and it lands in their column.
+                  </Dialog.Description>
+                </div>
+              </div>
+              <Dialog.Close asChild>
+                <button
+                  className="w-8 h-8 rounded-full grid place-items-center text-muted hover:text-ink hover:bg-white/70 transition-colors shrink-0"
+                  aria-label="Close"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </Dialog.Close>
+            </div>
+            <div className="p-6">
+              {user && (
+                // NewTaskForm seeds its state from initialValues in useState
+                // initializers only, so it has to remount when the person
+                // changes — hence the key.
+                <NewTaskForm
+                  key={user.id}
+                  initialValues={{
+                    assigneeId: user.id,
+                    ...(deptHint ? { departmentId: deptHint } : {})
+                  }}
+                  lockAssignee
+                  onCreated={onCreated}
+                  onCancel={onClose}
+                  hideCancel
+                />
+              )}
+            </div>
+          </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
   );
 }
 

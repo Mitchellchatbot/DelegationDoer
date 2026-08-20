@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useTeam } from "@/lib/team-context";
 import { createPortal } from "react-dom";
@@ -89,6 +89,15 @@ export default function BoardPage() {
   // whole board rather than one per column — person mode routinely renders
   // 10+ columns and each NewTaskForm ranks the entire roster on mount.
   const [addFor, setAddFor] = useState<User | null>(null);
+  // The "+" that opened the dialog. Radix restores focus to its own
+  // Dialog.Trigger on close, but the board opens this from a plain button in
+  // the column header instead, so that ref is null and focus would be dropped
+  // on <body> — see the onCloseAutoFocus handler on Dialog.Content.
+  const addTriggerRef = useRef<HTMLButtonElement | null>(null);
+  function openAddFor(u: User, trigger: HTMLButtonElement) {
+    addTriggerRef.current = trigger;
+    setAddFor(u);
+  }
 
   // View / filter state. `selectedDepts` is the set of department ids
   // currently visible; an empty set is the "All departments" view.
@@ -654,7 +663,7 @@ export default function BoardPage() {
                         the Topbar's "New task". */}
                     {col.user && !selecting && scope !== "archived" &&
                      canAssignTaskTo(currentUser, col.user) && (
-                      <AddTaskButton user={col.user} onOpen={setAddFor} />
+                      <AddTaskButton user={col.user} onOpen={openAddFor} />
                     )}
                   </div>
                 </div>
@@ -815,6 +824,7 @@ export default function BoardPage() {
       <AddTaskForPersonDialog
         user={addFor}
         deptHint={addFor ? deptHintFor(addFor) : undefined}
+        triggerRef={addTriggerRef}
         onClose={() => setAddFor(null)}
         onCreated={(taskId) => {
           setAddFor(null);
@@ -859,11 +869,14 @@ export default function BoardPage() {
 // Per-person quick-add trigger. A component rather than inline JSX so the
 // `col.user` narrowing survives into the click handler — TypeScript drops
 // narrowing on property accesses inside closures.
-function AddTaskButton({ user, onOpen }: { user: User; onOpen: (u: User) => void }) {
+function AddTaskButton({ user, onOpen }: {
+  user: User;
+  onOpen: (u: User, trigger: HTMLButtonElement) => void;
+}) {
   return (
     <button
       type="button"
-      onClick={() => onOpen(user)}
+      onClick={(e) => onOpen(user, e.currentTarget)}
       title={`Add a task for ${user.name}`}
       aria-label={`Add a task for ${user.name}`}
       className="w-6 h-6 rounded-lg grid place-items-center text-muted hover:text-accent hover:bg-white transition-colors"
@@ -878,9 +891,10 @@ function AddTaskButton({ user, onOpen }: { user: User; onOpen: (u: User) => void
 // escape both the board's overflow-x-auto scroller and the sticky Topbar's
 // stacking context; the lg:pl-[264px] offset centers it over the content
 // panel rather than under the sidebar (same trick as the Topbar dialog).
-function AddTaskForPersonDialog({ user, deptHint, onClose, onCreated }: {
+function AddTaskForPersonDialog({ user, deptHint, triggerRef, onClose, onCreated }: {
   user: User | null;
   deptHint?: string;
+  triggerRef: React.RefObject<HTMLButtonElement | null>;
   onClose: () => void;
   onCreated: (taskId: string) => void;
 }) {
@@ -894,6 +908,17 @@ function AddTaskForPersonDialog({ user, deptHint, onClose, onCreated }: {
             one sentence explaining that the assignee is already pinned. That
             escape hatch is only for dialogs that render no Description. */}
         <Dialog.Content
+          // Radix's built-in close handler preventDefaults and then focuses
+          // its own Dialog.Trigger — which doesn't exist here, since the board
+          // opens this from a plain button in the column header. FocusScope
+          // sees defaultPrevented and skips its fallback, so focus would land
+          // on <body> and the next Tab would restart at the top of the page.
+          // Run first (composeEventHandlers skips Radix's once we prevent) and
+          // put focus back on the "+" that opened us.
+          onCloseAutoFocus={(e) => {
+            e.preventDefault();
+            triggerRef.current?.focus();
+          }}
           className="fixed inset-0 z-50 outline-none pointer-events-none flex items-start justify-center pt-20 px-4 lg:pl-[264px]"
         >
           <div className="pointer-events-auto w-full max-w-[900px] max-h-[calc(100vh-6rem)] overflow-y-auto rounded-3xl border border-white/60 bg-gradient-to-br from-blue-50/90 via-white/95 to-indigo-50/85 backdrop-blur-md shadow-[0_24px_72px_-24px_rgba(60,60,120,0.45)] anim-fade-in-up">

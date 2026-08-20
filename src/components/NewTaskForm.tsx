@@ -54,6 +54,19 @@ interface Props {
   hideCancel?: boolean;
   // Pre-fill the form (used by Create-task-from-thread).
   initialValues?: NewTaskInitialValues;
+  // The host already decided who this task is for — e.g. the Board's
+  // per-person "+", where you clicked a specific person's column. Without
+  // this the suggestion-sync effect below silently replaces the pre-filled
+  // assignee with the AI top pick whenever they fall outside the currently
+  // scoped target pool, and you'd create the task for the wrong person.
+  //
+  // The pin is released ONLY by picking someone from the suggestions, which
+  // always names a valid replacement. There is deliberately no bare "unlock"
+  // control: clearing the flag without also choosing somebody leaves a stale
+  // assignee that no card renders as selected, and the next `targets` rebuild
+  // then reassigns the task to whoever the ranker likes. See the banner in
+  // the "Suggested assignees" section for the full reasoning.
+  lockAssignee?: boolean;
 }
 
 // Helper for datetime-local input: convert ISO → "YYYY-MM-DDTHH:mm"
@@ -66,7 +79,7 @@ function isoToLocalInput(iso: string | null | undefined): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-export function NewTaskForm({ onCreated, onCancel, hideCancel, initialValues }: Props) {
+export function NewTaskForm({ onCreated, onCancel, hideCancel, initialValues, lockAssignee }: Props) {
   const currentUser = useCurrentUser();
   // Live workspace data — replaces every former mock-data import.
   const team = useTeam();
@@ -109,6 +122,21 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel, initialValues }: 
   const [estimate, setEstimate] = useState(initialValues?.estimatedHours ?? 2);
   const [tags, setTags] = useState<string[]>(initialValues?.tags ?? []);
   const [assigneeId, setAssigneeId] = useState<string>(initialValues?.assigneeId ?? "");
+  // Whether the host's pre-filled assignee is still pinned. Starts on only
+  // when the host both asked for the lock AND gave us someone to lock to.
+  //
+  // chooseAssignee is deliberately the ONLY thing that clears it, and every
+  // one of its call sites picks out of `targets` — so the lock can never be
+  // released without a valid in-pool replacement selected in the same tick.
+  // That invariant is what keeps the sync effect below from finding a stale
+  // pin it would "correct" to somebody nobody chose.
+  const [assigneeLocked, setAssigneeLocked] = useState(
+    Boolean(lockAssignee && initialValues?.assigneeId)
+  );
+  function chooseAssignee(id: string) {
+    setAssigneeLocked(false);
+    setAssigneeId(id);
+  }
   const [aiReason, setAiReason] = useState<string | null>(null);
   const [aiThinking, setAiThinking] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -294,6 +322,16 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel, initialValues }: 
   const topPick = ranked[0] ?? null;
   const restRanked = ranked.slice(1, 5);
 
+  // The person the host pinned, resolved from the full roster rather than
+  // `targets` — a locked assignee is routinely OUTSIDE the scoped pool
+  // (that is the whole reason the lock exists), so looking them up in
+  // `targets` would render an empty banner for exactly the cases that
+  // matter.
+  const lockedUser = useMemo(
+    () => (assigneeLocked ? users.find((u) => u.id === assigneeId) ?? null : null),
+    [assigneeLocked, users, assigneeId]
+  );
+
   // Keep the assignee in sync with the suggestions. Normally we only fill
   // the empty initial state with the AI top-pick and never override a
   // manual choice — but a department switch can drop the current assignee
@@ -301,6 +339,11 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel, initialValues }: 
   // an explicit pick only while it's still a valid target; otherwise re-pick
   // the new top suggestion (or clear, so submit stays gated).
   useEffect(() => {
+    // Host pinned the assignee (Board's per-person "+"). Their pick outranks
+    // the ranker even when it sits outside the scoped pool — which is the
+    // normal case, since the person you clicked often isn't in the
+    // department the form defaulted to.
+    if (assigneeLocked) return;
     if (assigneeId && targetIds.has(assigneeId)) return;
     if (topPick) { setAssigneeId(topPick.userId); return; }
     // Workers always own the tasks they create; if the ranker surfaced
@@ -310,8 +353,12 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel, initialValues }: 
     // Leader/HoD whose narrowed department has no eligible members: drop the
     // stale cross-dept pick so submit stays disabled until they choose again.
     if (assigneeId) setAssigneeId("");
+    // `assigneeLocked` belongs here even though the only path that clears it
+    // (chooseAssignee) already sets a valid target in the same tick — leaving
+    // it out is how a future "unlock without picking" control would silently
+    // reintroduce a stale pin that no card reflects.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [topPick?.userId, targetIds]);
+  }, [topPick?.userId, targetIds, assigneeLocked]);
 
   const eta = useMemo(() => {
     const u = users.find((x) => x.id === (assigneeId || topPick?.userId));
@@ -818,6 +865,46 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel, initialValues }: 
           <div className="text-xs text-muted">— ranked live by skills + capacity as you type</div>
         </div>
 
+        {/* Pinned assignee — the host (Board per-person "+") already chose who
+            this is for. The ranked suggestions below stay visible and clickable
+            the whole time, so this banner is the only thing that needs to exist:
+            clicking any suggestion goes through chooseAssignee(), which releases
+            the lock and selects that person in the same tick.
+
+            Deliberately NO "dismiss"/"Change" affordance. Un-pinning without
+            picking someone leaves assigneeId pointing at the host's person while
+            nothing in the list renders as selected (they are routinely outside
+            `targets`) — and TeamProvider's 60s refresh then rebuilds `targets`,
+            re-running the sync effect below, which would silently hand the task
+            to whoever the ranker likes. So the pin holds until a human names a
+            replacement. */}
+        {lockedUser && (
+          <div className="mb-3 flex items-center gap-3 p-3.5 rounded-2xl border-2 border-accent bg-accent/5">
+            <PersonAvatar userId={lockedUser.id} name={lockedUser.name} imageUrl={lockedUser.avatarUrl} size={32} />
+            <div className="flex-1 min-w-0">
+              <div className="text-[10px] uppercase tracking-[0.18em] font-semibold text-accent">
+                Assigning to
+              </div>
+              <div className="text-sm font-semibold text-ink truncate flex items-center gap-1.5">
+                {lockedUser.name}
+                <span className="text-[10px] text-muted font-normal">{ROLE_LABELS[lockedUser.role]}</span>
+                {lockedUser.role === "department_head" && <Crown className="w-3 h-3 text-amber-500" />}
+              </div>
+            </div>
+            {/* Only promise a swap when there is actually something to click:
+                rankCandidates drops anyone at/over capacity, so `ranked` can be
+                empty, and the "Show all N" fallback needs a non-empty `targets`.
+                With both empty the section below collapses to its own empty
+                state and this hint would be telling the user to do something
+                impossible. */}
+            {(ranked.length > 0 || targets.length > 0) && (
+            <span className="text-[11px] text-muted shrink-0 text-right leading-tight">
+              Pick anyone below<br />to change
+            </span>
+            )}
+          </div>
+        )}
+
         {/* AI top-pick hero card. Highlights when it changes — a subtle
             sparkle animation + glow draws attention without nagging. */}
         <AnimatePresence mode="wait">
@@ -836,7 +923,7 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel, initialValues }: 
               >
                 <button
                   type="button"
-                  onClick={() => setAssigneeId(u.id)}
+                  onClick={() => chooseAssignee(u.id)}
                   className={
                     "w-full text-left flex items-center gap-3 p-3.5 rounded-2xl border-2 transition-all relative overflow-hidden " +
                     (isPicked
@@ -928,7 +1015,7 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel, initialValues }: 
                 >
                   <button
                     type="button"
-                    onClick={() => setAssigneeId(u.id)}
+                    onClick={() => chooseAssignee(u.id)}
                     className={
                       "w-full text-left flex items-center gap-3 p-3 rounded-xl border transition-colors " +
                       (isPicked
@@ -971,7 +1058,7 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel, initialValues }: 
             <div className="mt-2 grid grid-cols-2 gap-2">
               {targets.map((u) => (
                 <label key={u.id} className="flex items-center gap-2 p-2 rounded-lg border border-border bg-surface2 cursor-pointer">
-                  <input type="radio" name="assignee" checked={assigneeId === u.id} onChange={() => setAssigneeId(u.id)} />
+                  <input type="radio" name="assignee" checked={assigneeId === u.id} onChange={() => chooseAssignee(u.id)} />
                   <PersonAvatar userId={u.id} name={u.name} imageUrl={u.avatarUrl} size={20} />
                   <span className="text-sm">{u.name}</span>
                   <span className="text-[10px] text-muted ml-auto">{ROLE_LABELS[u.role]}</span>

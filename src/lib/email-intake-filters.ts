@@ -68,6 +68,32 @@ const SENDER_PATTERNS: Array<{ re: RegExp; label: string }> = [
   // without one, so Stripe receipts reached the classifier and were stopped by
   // nothing but its judgement.
   { re: /@(.*\.)?stripe\.(com|dev)$/i, label: "stripe billing platform" },
+  // R M Reyes Tax Services. Belt to the braces of the restricted_senders
+  // rule `rs_rmreyes_gmail`, seeded in
+  // 20260826000000_restricted_senders_rm_reyes.sql and enforced in
+  // email-intake-runner. Two things make it unlike every other entry above,
+  // and both are deliberate:
+  //
+  //   1. It is anchored to a WHOLE ADDRESS, not a local-part shape or a
+  //      domain. The domain here is gmail.com, so there is nothing broader
+  //      that could safely be written — /@gmail\.com$/ would swallow a large
+  //      share of the real mail this pipeline exists to route.
+  //   2. The sender is a HUMAN (an accountant), not an automated biller like
+  //      Deel or Stripe. Nothing else in this list would ever match them, so
+  //      this line is not catching a leak the generic rules miss — it exists
+  //      solely because getRestrictedSenderRules() FAILS OPEN: on a Supabase
+  //      hiccup the DB rule evaporates, and without this line the mail would
+  //      reach the classifier and land in the leader-visible routing-review
+  //      queue, which is precisely what the rule is there to prevent.
+  //
+  // `label` names the rule id rather than describing automation, because it
+  // is persisted verbatim as the audit reason in email_intake_log and
+  // filing a person under "automated sender" would be wrong.
+  //
+  // If rs_rmreyes_gmail is ever lifted (viewer added, or enabled = false),
+  // DELETE THIS LINE TOO — otherwise intake stays suppressed for this sender
+  // with no row in restricted_senders to explain why.
+  { re: /^rmreyestaxservices@gmail\.com$/i, label: "restricted sender (rs_rmreyes_gmail)" },
   { re: /@(amazon|amazonses)\./i, label: "amazon" },
   { re: /@vercel\./i, label: "vercel" },
   {

@@ -7,6 +7,9 @@ import {
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { Tooltip } from "@/components/Tooltip";
+import { MediaPicker } from "@/components/MediaPicker";
+import { formatBytes } from "@/lib/email-format";
+import type { TaskMedia } from "@/lib/types";
 
 // Bulk "monthly SEO update" composer. Write one email, pick the clients to
 // exclude, send to everyone else in a single action (one Missive thread
@@ -66,6 +69,13 @@ function renderPreview(template: string, c: RosterClient): string {
     .replace(/\{\{\s*website\s*\}\}/gi, c.website ?? "");
 }
 
+// Attachment budget. Deliberately far stricter than /api/upload's own 150 MB
+// cap: a blast re-sends the same bytes once per client, and most receiving
+// servers bounce a message past ~25 MB. Mirrored server-side in the bulk
+// route (this is the advisory half — the route is the real gate).
+const WARN_TOTAL_BYTES = 10 * 1024 * 1024;
+const MAX_TOTAL_BYTES = 25 * 1024 * 1024;
+
 export function BulkEmailComposer({
   fromOptions,
   clients
@@ -82,6 +92,9 @@ export function BulkEmailComposer({
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [sendAtLocal, setSendAtLocal] = useState("");
   const [busy, setBusy] = useState(false);
+  // Uploaded files (already in the bucket) forwarded as real attachments on
+  // every message in the blast — same shape every other composer uses.
+  const [attachments, setAttachments] = useState<TaskMedia[]>([]);
   // Excluded client ids. Empty = everyone included (the default).
   const [excluded, setExcluded] = useState<Set<string>>(new Set());
   const [response, setResponse] = useState<SendResponse | null>(null);
@@ -104,6 +117,14 @@ export function BulkEmailComposer({
     [clients, excluded]
   );
 
+  // Size of one message's attachments — the same payload each client receives,
+  // so this is what a receiving server sees, not the total egress.
+  const attachedBytes = useMemo(
+    () => attachments.reduce((n, a) => n + (a.size ?? 0), 0),
+    [attachments]
+  );
+  const tooLarge = attachedBytes > MAX_TOTAL_BYTES;
+
   function toggle(clientId: string) {
     setExcluded((prev) => {
       const next = new Set(prev);
@@ -120,6 +141,12 @@ export function BulkEmailComposer({
     if (!subject.trim()) { toast.error("Add a subject"); return; }
     if (!bodyText.trim()) { toast.error("Write the email body"); return; }
     if (includedCount === 0) { toast.error("Every client is excluded — nothing to send"); return; }
+    if (tooLarge) {
+      toast.error(
+        `Attachments total ${formatBytes(attachedBytes)} — too large to send to every client. Remove a file or link to it instead.`
+      );
+      return;
+    }
 
     // Resolve schedule the same way ComposeButton does: datetime-local is
     // local time; convert to a UTC ISO string the backend can compare.
@@ -135,8 +162,11 @@ export function BulkEmailComposer({
     }
 
     const verb = sendAtISO ? "Schedule" : "Send";
+    const withFiles = attachments.length > 0
+      ? ` (with ${attachments.length} attachment${attachments.length === 1 ? "" : "s"})`
+      : "";
     if (!window.confirm(
-      `${verb} this email to ${includedCount} client${includedCount === 1 ? "" : "s"}?`
+      `${verb} this email${withFiles} to ${includedCount} client${includedCount === 1 ? "" : "s"}?`
     )) return;
 
     setBusy(true);
@@ -150,7 +180,8 @@ export function BulkEmailComposer({
           subject: subject.trim(),
           bodyText,
           excludedClientIds: Array.from(excluded),
-          ...(sendAtISO ? { sendAt: sendAtISO } : {})
+          ...(sendAtISO ? { sendAt: sendAtISO } : {}),
+          ...(attachments.length > 0 ? { attachmentUrls: attachments } : {})
         })
       });
       const data = await res.json().catch(() => ({}));
@@ -228,6 +259,35 @@ export function BulkEmailComposer({
             rows={10}
             className="w-full text-sm bg-white/60 border border-slate-200/70 rounded-xl px-3 py-2.5 outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent/40 resize-y transition-all"
           />
+
+          {/* Attachments. Every included client gets the same files on their
+              own message, so the size budget below is per-message, not total. */}
+          <MediaPicker
+            value={attachments}
+            onChange={setAttachments}
+            label="Attach files"
+            compact
+          />
+
+          {attachedBytes > WARN_TOTAL_BYTES && (
+            <div
+              className={cn(
+                "flex items-start gap-1.5 text-[11px] rounded-lg border px-2.5 py-2 leading-relaxed",
+                tooLarge
+                  ? "bg-rose-50 text-rose-700 border-rose-200/70"
+                  : "bg-amber-50 text-amber-700 border-amber-200/70"
+              )}
+            >
+              <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-px" />
+              <span>
+                <span className="font-semibold tabular-nums">{formatBytes(attachedBytes)}</span>{" "}
+                attached —{" "}
+                {tooLarge
+                  ? "too large to blast. Remove a file or link to it instead."
+                  : "large files can bounce for some recipients."}
+              </span>
+            </div>
+          )}
 
           <div className="text-[11px] text-ink/55 leading-relaxed">
             Placeholders:{" "}
@@ -378,10 +438,10 @@ export function BulkEmailComposer({
           <button
             type="button"
             onClick={submit}
-            disabled={busy || includedCount === 0}
+            disabled={busy || includedCount === 0 || tooLarge}
             className={cn(
               "inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs font-semibold text-white shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-lift active:scale-95",
-              (busy || includedCount === 0) && "opacity-60 cursor-not-allowed hover:translate-y-0"
+              (busy || includedCount === 0 || tooLarge) && "opacity-60 cursor-not-allowed hover:translate-y-0"
             )}
             style={{ background: "linear-gradient(135deg, #0a4099 0%, #063270 100%)" }}
           >

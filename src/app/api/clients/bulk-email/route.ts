@@ -19,6 +19,12 @@ export const maxDuration = 300;
 // in well under the maxDuration ceiling.
 const SEND_CONCURRENCY = 4;
 
+// Per-message attachment ceiling for a blast. Every included client receives
+// the same bytes on their own message, so this is what a receiving server
+// sees — and most bounce past ~25 MB. Kept in step with WARN/MAX_TOTAL_BYTES
+// in BulkEmailComposer, which is the advisory half of the same limit.
+const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
+
 // GET /api/clients/bulk-email
 //   → { clients: BulkRecipientClient[] } — the roster + shared-recipient
 //     flags the exclusion UI renders. Approver-only.
@@ -58,7 +64,9 @@ interface SendResult {
 //     bodyHtml?: string,
 //     excludedClientIds?: string[],
 //     sendAt?: string,            // ISO; >= now + 30s for a scheduled blast
-//     attachmentUrls?: MediaItem[]
+//     attachmentUrls?: MediaItem[] // uploaded via /api/upload; sent on every
+//                                  // message. Fails closed (400, zero sends)
+//                                  // if one can't be read or the set is > 25 MB.
 //   }
 //
 // Sends the same (placeholder-rendered) email to every client that has a
@@ -122,10 +130,35 @@ export async function POST(req: NextRequest) {
     }
 
     // Resolve attachments ONCE; the same buffers are reused for every send.
+    // Two blast-specific guards the single-send routes deliberately don't have:
+    //
+    //  1. fetchMediaAsAttachments SKIPS a URL it can't read. On a single send
+    //     that degrades one message; here it would mean every client gets a body
+    //     saying "I attached a screenshot" with nothing attached. Fail closed
+    //     before a single email goes out.
+    //  2. Cap the payload. /api/upload allows 150 MB — fine for a task
+    //     attachment, reckless to fan out to every client (most receiving
+    //     servers bounce past ~25 MB). Measured on the resolved buffers, not
+    //     the caller-supplied `size`, so it can't be spoofed.
     const attachmentItems = sanitizeMediaUrls(body.attachmentUrls);
-    const attachments = attachmentItems.length > 0
-      ? await fetchMediaAsAttachments(attachmentItems)
-      : undefined;
+    let attachments: Awaited<ReturnType<typeof fetchMediaAsAttachments>> | undefined;
+    if (attachmentItems.length > 0) {
+      const resolved = await fetchMediaAsAttachments(attachmentItems);
+      if (resolved.length < attachmentItems.length) {
+        return NextResponse.json(
+          { error: "an attachment couldn't be read — nothing was sent. Re-upload it and try again." },
+          { status: 400 }
+        );
+      }
+      const totalBytes = resolved.reduce((n, a) => n + a.content.length, 0);
+      if (totalBytes > MAX_ATTACHMENT_BYTES) {
+        return NextResponse.json(
+          { error: `attachments total ${Math.round(totalBytes / (1024 * 1024))} MB — too large to send to every client` },
+          { status: 400 }
+        );
+      }
+      attachments = resolved;
+    }
 
     // Server re-derives the eligible roster so the client can't inject
     // arbitrary recipients — it only gets to EXCLUDE from this set. canEmail

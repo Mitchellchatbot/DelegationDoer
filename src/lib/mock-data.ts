@@ -31,6 +31,12 @@ export const departments: Department[] = [
     name: "Marketing",
     description: "Paid ads, email, content strategy, social.",
     taskTypes: ["ad campaign setup", "email sequence", "blog post", "social calendar", "landing page copy"]
+  },
+  {
+    id: "dep_facebook",
+    name: "Facebook",
+    description: "Facebook and Instagram (Meta) - paid campaigns plus organic page and community management.",
+    taskTypes: ["ad campaign setup", "ad creative", "audience build", "pixel/conversions setup", "budget adjustment", "ads reporting", "page post", "content calendar", "community management", "comment/DM response"]
   }
 ];
 

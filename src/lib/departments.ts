@@ -53,6 +53,16 @@ const META: Record<string, DepartmentMeta> = {
     ring: "ring-fuchsia-200",
     hairline: "bg-gradient-to-r from-fuchsia-400/60 via-fuchsia-300/25 to-transparent",
     brand: "from-fuchsia-500 to-pink-600"
+  },
+  // Violet rather than Facebook-blue: sky (Website) and indigo (SEO) already
+  // sit in the blues, and at chip size a third one is indistinguishable.
+  dep_facebook: {
+    id: "dep_facebook",
+    label: "Facebook",
+    chip: "bg-violet-50 text-violet-700 border-violet-200",
+    ring: "ring-violet-200",
+    hairline: "bg-gradient-to-r from-violet-400/60 via-violet-300/25 to-transparent",
+    brand: "from-violet-500 to-purple-600"
   }
 };
 

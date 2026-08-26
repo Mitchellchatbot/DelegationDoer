@@ -103,6 +103,31 @@ const SENDER_PATTERNS: Array<{ re: RegExp; label: string }> = [
   // restricted_senders to explain why.
   { re: /^rmreyestaxservices@gmail\.com$/i, label: "restricted sender (rs_rmreyes_gmail)" },
   { re: /@(.*\.)?rmreyestaxservices\.com$/i, label: "restricted sender (rs_rmreyes_com)" },
+  // Bill.com (AP/AR platform). Belt to the braces of the restricted_senders
+  // rule `rs_bill_com`, seeded in 20260826000200_restricted_senders_bill_com.sql
+  // and enforced in email-intake-runner. Covers bill.com + subdomains, which is
+  // both senders actually observed (account-services@inform.bill.com and
+  // account-services@legal.bill.com).
+  //
+  // Not decorative: `account-services@` matches NONE of the generic rules
+  // above — the transactional rule spells out billing/receipt/invoice/orders
+  // but not account-services — so Bill.com mail reached the classifier and was
+  // stopped by nothing but its judgement.
+  //
+  // Descriptive label, NOT the "restricted sender (rs_…)" form the two
+  // rmreyestaxservices lines above use. That form exists because R M Reyes is
+  // a HUMAN and this string is persisted verbatim as the audit reason in
+  // email_intake_log, where filing a person under an automation label would be
+  // wrong. Bill.com is an automated billing platform exactly like Stripe, so
+  // it takes Stripe's descriptive style.
+  //
+  // `bill` is a common word, so the domain anchor matters more here than for
+  // deel or stripe: this must not match notbill.com or mybill.com.
+  //
+  // If rs_bill_com is ever lifted (viewer added, or enabled = false), DELETE
+  // THIS LINE TOO — otherwise intake stays suppressed with no row in
+  // restricted_senders to explain why.
+  { re: /@(.*\.)?bill\.com$/i, label: "bill.com billing platform" },
   { re: /@(amazon|amazonses)\./i, label: "amazon" },
   { re: /@vercel\./i, label: "vercel" },
   {

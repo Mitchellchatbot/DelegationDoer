@@ -22,8 +22,9 @@ import { useCurrentUser } from "@/lib/user-context";
 //   - SEO team (dep_seo): comms-oriented links
 //   - Software team (dep_software): all technical links
 //   - Marketing (dep_mkt): treat like SEO (comms-facing)
+//   - Facebook (dep_facebook): treat like Marketing (comms-facing)
 // "all" is a sentinel — every dept can see it.
-type DeptId = "dep_seo" | "dep_web" | "dep_software" | "dep_mkt";
+type DeptId = "dep_seo" | "dep_web" | "dep_software" | "dep_mkt" | "dep_facebook";
 type Visibility = "all" | DeptId[];
 
 const BUILTIN_FIELDS: {
@@ -34,7 +35,7 @@ const BUILTIN_FIELDS: {
   type: "text" | "email" | "url";
   visibleTo: Visibility;
 }[] = [
-  { key: "clientEmail",       body: "clientEmail",       label: "Client email",   icon: Mail,          type: "email", visibleTo: ["dep_seo", "dep_mkt", "dep_web"] },
+  { key: "clientEmail",       body: "clientEmail",       label: "Client email",   icon: Mail,          type: "email", visibleTo: ["dep_seo", "dep_mkt", "dep_web", "dep_facebook"] },
   { key: "clientFolderUrl",   body: "clientFolderUrl",   label: "Client folder",  icon: FolderOpen,    type: "url",   visibleTo: "all" },
   { key: "stagingServer",     body: "stagingServer",     label: "Staging server", icon: Server,        type: "text",  visibleTo: ["dep_web", "dep_software"] },
   { key: "markupLink",        body: "markupLink",        label: "Markup link",    icon: LinkIcon,      type: "url",   visibleTo: ["dep_web", "dep_software"] },

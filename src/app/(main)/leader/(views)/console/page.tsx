@@ -771,14 +771,30 @@ function DepartmentsTab({
 }: { departments: Department[]; setDepartments: (d: Department[]) => void; people: User[]; tasks: Task[] }) {
   const [draftName, setDraftName] = useState("");
   const [draftDesc, setDraftDesc] = useState("");
+  const [creating, setCreating] = useState(false);
 
-  function addDept() {
+  // POST /api/departments, then append the row the SERVER returned — the id
+  // is derived server-side, so trusting a locally-guessed one would drift.
+  // On failure the drafts are left intact so the input isn't lost.
+  async function addDept() {
     const name = draftName.trim();
-    if (!name) return;
-    const id = "dep_" + name.toLowerCase().replace(/[^a-z0-9]+/g, "_").slice(0, 24);
-    if (departments.some((d) => d.id === id)) return;
-    setDepartments([...departments, { id, name, description: draftDesc.trim() || "—", taskTypes: [] }]);
-    setDraftName(""); setDraftDesc("");
+    if (!name || creating) return;
+    setCreating(true);
+    try {
+      const res = await fetch("/api/departments", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, description: draftDesc.trim() || undefined })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+      setDepartments([...departments, data.department as Department]);
+      setDraftName(""); setDraftDesc("");
+    } catch (err) {
+      toast.error(`Couldn't create — ${err instanceof Error ? err.message : "unknown error"}`);
+    } finally {
+      setCreating(false);
+    }
   }
 
   const currentUser = useCurrentUser();
@@ -863,8 +879,12 @@ function DepartmentsTab({
           </div>
         </div>
         <div className="mt-3 flex justify-end">
-          <button onClick={addDept} className="btn-primary">
-            <Plus className="w-4 h-4" /> Create
+          <button
+            onClick={() => void addDept()}
+            disabled={creating || !draftName.trim()}
+            className="btn-primary disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <Plus className="w-4 h-4" /> {creating ? "Creating…" : "Create"}
           </button>
         </div>
       </div>

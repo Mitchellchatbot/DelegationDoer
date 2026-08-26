@@ -68,32 +68,41 @@ const SENDER_PATTERNS: Array<{ re: RegExp; label: string }> = [
   // without one, so Stripe receipts reached the classifier and were stopped by
   // nothing but its judgement.
   { re: /@(.*\.)?stripe\.(com|dev)$/i, label: "stripe billing platform" },
-  // R M Reyes Tax Services. Belt to the braces of the restricted_senders
-  // rule `rs_rmreyes_gmail`, seeded in
-  // 20260826000000_restricted_senders_rm_reyes.sql and enforced in
-  // email-intake-runner. Two things make it unlike every other entry above,
-  // and both are deliberate:
+  // R M Reyes Tax Services — TWO entries, mirroring TWO restricted_senders
+  // rules. Belt to the braces of `rs_rmreyes_gmail`
+  // (20260826000000_restricted_senders_rm_reyes.sql) and `rs_rmreyes_com`
+  // (20260826000100_restricted_senders_rm_reyes_domain.sql), both enforced in
+  // email-intake-runner.
   //
-  //   1. It is anchored to a WHOLE ADDRESS, not a local-part shape or a
-  //      domain. The domain here is gmail.com, so there is nothing broader
-  //      that could safely be written — /@gmail\.com$/ would swallow a large
-  //      share of the real mail this pipeline exists to route.
-  //   2. The sender is a HUMAN (an accountant), not an automated biller like
-  //      Deel or Stripe. Nothing else in this list would ever match them, so
-  //      this line is not catching a leak the generic rules miss — it exists
-  //      solely because getRestrictedSenderRules() FAILS OPEN: on a Supabase
-  //      hiccup the DB rule evaporates, and without this line the mail would
-  //      reach the classifier and land in the leader-visible routing-review
-  //      queue, which is precisely what the rule is there to prevent.
+  // WHY A PAIR, when Deel and Stripe each need only a domain line: this firm
+  // writes from both a personal Gmail address and their own domain, and the
+  // two cannot be expressed as one pattern.
+  //   * The Gmail address must be matched as a WHOLE ADDRESS. Its domain is
+  //     gmail.com, so there is nothing broader that could safely be written —
+  //     /@gmail\.com$/ would swallow a large share of the real mail this
+  //     pipeline exists to route. The cost is that it covers exactly one
+  //     address: another Gmail address from the same firm needs its own line
+  //     and its own rule row.
+  //   * The company domain takes the ordinary domain shape used by Deel,
+  //     Stripe and LinkedIn above, so subdomains come free.
+  //
+  // Neither line is catching a leak the generic rules miss — the sender is a
+  // HUMAN (an accountant), not an automated biller, and wordpress@ is already
+  // matched by the wordpress notifier rule above. They exist solely because
+  // getRestrictedSenderRules() FAILS OPEN: on a Supabase hiccup the DB rules
+  // evaporate, and without these the mail would reach the classifier and land
+  // in the leader-visible routing-review queue, which is precisely what the
+  // rules are there to prevent.
   //
   // `label` names the rule id rather than describing automation, because it
-  // is persisted verbatim as the audit reason in email_intake_log and
-  // filing a person under "automated sender" would be wrong.
+  // is persisted verbatim as the audit reason in email_intake_log and filing
+  // a person under "automated sender" would be wrong.
   //
-  // If rs_rmreyes_gmail is ever lifted (viewer added, or enabled = false),
-  // DELETE THIS LINE TOO — otherwise intake stays suppressed for this sender
-  // with no row in restricted_senders to explain why.
+  // If either rule is lifted (viewer added, or enabled = false), DELETE ITS
+  // LINE TOO — otherwise intake stays suppressed with no row in
+  // restricted_senders to explain why.
   { re: /^rmreyestaxservices@gmail\.com$/i, label: "restricted sender (rs_rmreyes_gmail)" },
+  { re: /@(.*\.)?rmreyestaxservices\.com$/i, label: "restricted sender (rs_rmreyes_com)" },
   { re: /@(amazon|amazonses)\./i, label: "amazon" },
   { re: /@vercel\./i, label: "vercel" },
   {

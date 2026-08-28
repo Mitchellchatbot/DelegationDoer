@@ -24,7 +24,11 @@
 export const AGENCY = {
   websiteEmail: "Website@scaledai.org",
   seoWebsiteEmail: "websites@scaledai.org",
-  googleEmail: "marketingscaledai@gmail.com"
+  googleEmail: "marketingscaledai@gmail.com",
+  // Call tracking goes to Sam directly rather than to a shared inbox: he owns
+  // SEO, and a call-tracking grant is the one on this form that lands with a
+  // named person rather than a team address.
+  callTrackingEmail: "Sam@scaledai.org"
 } as const;
 
 /** The Typeform tells clients to watch a video before picking a plan. The video
@@ -553,28 +557,42 @@ const SEO_STEPS: Step[] = [
   },
 
   {
+    // The step id stays "google-accounts" even though the step is no longer only
+    // about Google. It is part of every stored answer's primary key
+    // (link:step:field) and of the progress rows in client_onboarding_steps, so
+    // renaming it would orphan the answers and the ticks of anyone part-way
+    // through a form right now. Display text is free to change; the id is not.
     id: "google-accounts",
     n: 3,
-    title: "Your Google accounts",
-    short: "Google",
-    doneLabel: "Sent Google access",
-    minutes: 5,
+    title: "Your Google accounts and call tracking",
+    short: "Accounts",
+    doneLabel: "Sent account access",
+    minutes: 6,
     why:
       "Search Console shows what you already rank for, Analytics shows what visitors do next, and your "
-      + "Business Profile is most of local search. Without them we are optimising blind and cannot show "
-      + "you what changed.",
+      + "Business Profile is most of local search. Call tracking matters for the same reason: if your "
+      + "leads arrive by phone, those calls are conversions we would otherwise be blind to, and we would "
+      + "end up optimising for form fills while the phone is where the work actually comes from.",
     whoCanDo:
-      "Whoever set these up — often the person who built the site, or whoever manages your Google "
-      + "account.",
+      "Whoever set these up — often the person who built the site, whoever manages your Google "
+      + "account, or whoever answers the phone bill.",
     substeps: [
       {
-        text: `In each of the three, add ${AGENCY.googleEmail} as a user.`,
+        text: `In your three Google accounts, add ${AGENCY.googleEmail} as a user.`,
         click: "Add user",
         warn:
           "If you are not sure whether an account exists, pick \"I Need help\" rather than \"No\" — a "
           + "duplicate Business Profile is a genuine problem to unpick, and we would rather check first."
       },
-      { text: "Answer the three questions below so we know which ones to expect." }
+      {
+        // A different address from the three above, so it gets its own
+        // instruction rather than being folded into "add us to all four" -- the
+        // one way this step can go wrong is somebody adding the Google address
+        // to their call tracking and telling us they are done.
+        text: `If you use call tracking, add ${AGENCY.callTrackingEmail} as a user there — note that this is a different address from the Google one above.`,
+        click: "Add user"
+      },
+      { text: "Answer the four questions below so we know which ones to expect." }
     ],
     collect: [
       {
@@ -597,6 +615,13 @@ const SEO_STEPS: Step[] = [
         kind: "choice",
         choices: YES_NO_HELP,
         hint: `If yes, please add ${AGENCY.googleEmail} as user`
+      },
+      {
+        key: "call_tracking",
+        label: "Do you have call tracking set up?",
+        kind: "choice",
+        choices: YES_NO_HELP,
+        hint: `If yes, please add ${AGENCY.callTrackingEmail} as a user in your call tracking account (e.g. CallTrackingMetrics).`
       }
     ],
     verify: "Each account lists us as a user, and we confirm we can see your data."

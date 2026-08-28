@@ -155,7 +155,21 @@ export function PageHero({
           )}
         </div>
         {trailing && (
-          <div className="shrink-0 w-full lg:w-auto flex flex-wrap items-center gap-2 lg:justify-end">
+          // NO shrink-0 here, and min-w-0 is load-bearing.
+          //
+          // This row is flex-wrap, and shrink-0 made that wrapping dead code:
+          // at lg the container is w-auto, so it sizes to every action on one
+          // line, and shrink-0 then refused to let it be narrowed to the space
+          // actually available. A wrap only happens when the container is
+          // constrained, and this one never was -- so with enough buttons the
+          // row laid out at its full natural width and spilled past the card
+          // edge, taking the page's horizontal scroll with it. Six actions fit
+          // by luck; the seventh made it visible on /clients.
+          //
+          // min-w-0 closes the other route to the same floor: a flex item
+          // defaults to min-width:auto, which would re-impose a content-sized
+          // minimum even without shrink-0.
+          <div className="w-full lg:w-auto min-w-0 flex flex-wrap items-center gap-2 lg:justify-end">
             {trailing}
           </div>
         )}

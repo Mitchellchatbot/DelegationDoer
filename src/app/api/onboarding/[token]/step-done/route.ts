@@ -9,6 +9,7 @@ import {
 } from "@/lib/client-onboarding";
 import { getStep, workingSteps } from "@/lib/client-onboarding-forms";
 import { announceCompleted, announceStepDone } from "@/lib/client-onboarding-slack";
+import { sendOnboardingCompleteEmail } from "@/lib/client-onboarding-email";
 
 export const dynamic = "force-dynamic";
 
@@ -72,6 +73,11 @@ export async function POST(req: NextRequest, { params }: { params: { token: stri
         console.warn("[onboarding] applyAnswersToClient failed:", err)
       );
       await announceCompleted({ link, skipped: skipped.map((s) => s.title) });
+      // The client's own confirmation, last. It never throws and guards itself
+      // against sending twice, so it cannot turn a finished onboarding into a
+      // failed request -- and it goes after the team notice so a slow mail send
+      // never delays the channel hearing about it.
+      await sendOnboardingCompleteEmail(link);
     }
 
     return NextResponse.json({ ok: true, finished });

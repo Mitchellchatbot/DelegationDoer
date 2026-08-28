@@ -7,8 +7,11 @@ import { getUserById } from "@/lib/server-data";
 import { canManageAssignments } from "@/lib/inbox-access";
 import { isApprover } from "@/lib/email-approvers";
 import { getClients, getOpenTaskCountsByClient } from "@/lib/clients-data";
+import { manageableForms } from "@/lib/client-onboarding-access";
+import { FORMS } from "@/lib/client-onboarding-forms";
 import { getAllUsers } from "@/lib/server-data";
 import { NewClientDialog } from "@/components/NewClientDialog";
+import { NewOnboardingLinkButton } from "@/components/NewOnboardingLinkButton";
 import { ClientPriorityList } from "@/components/ClientPriorityList";
 import { RescanClientMailButton } from "@/components/RescanClientMailButton";
 
@@ -46,6 +49,11 @@ export default async function ClientsPage() {
     }));
 
   const canEdit = canManageAssignments(me);
+
+  // Deliberately NOT canEdit. canManageAssignments is leader-or-admin, which
+  // would hide this from the two department heads the onboarding forms exist
+  // for — Sam sends the SEO one, Mujtaba the Website one.
+  const onboardingForms = manageableForms(me).map((k) => ({ key: k, label: FORMS[k].label }));
   const canBulkEmail = isApprover({ name: me.name, role: me.role, isAdmin: me.isAdmin });
 
   return (
@@ -100,6 +108,7 @@ export default async function ClientsPage() {
               </Link>
             )}
             {canEdit && <RescanClientMailButton />}
+            <NewOnboardingLinkButton forms={onboardingForms} />
             <NewClientDialog />
           </div>
         }

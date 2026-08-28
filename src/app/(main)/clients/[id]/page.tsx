@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { headers } from "next/headers";
 import {
   Briefcase, Globe2, Calendar, FileText, Lightbulb, ExternalLink,
   Mail, User as UserIcon, Server, KeyRound, MessageSquare,
@@ -19,12 +20,15 @@ import { ClientUpdateComposerCollapsible } from "@/components/ClientUpdateCompos
 import { ClientEmailLog } from "@/components/ClientEmailLog";
 import { listEmailDrafts } from "@/lib/email-drafts-data";
 import { isLeader } from "@/lib/auth";
+import { listOnboardingForClient } from "@/lib/client-onboarding";
+import { canManageOnboardingLinks, canRevealOnboardingSecret } from "@/lib/client-onboarding-access";
 import { AddResourceForm, DeleteResourceButton } from "@/components/AddResourceForm";
 import { ClientKnowledgeBase, type CompletedTaskRow } from "@/components/ClientKnowledgeBase";
 import { ClientMeetingsSection, type ClientMeetingView } from "@/components/ClientMeetingsSection";
 import { ClientEmailsCombined } from "@/components/ClientEmailsCombined";
 import { ClientOpenTasksList } from "@/components/ClientOpenTasksList";
 import { ClientContactInfoCard } from "@/components/ClientContactInfoCard";
+import { ClientOnboardingCard } from "@/components/ClientOnboardingCard";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { visibleAccountIdsFor } from "@/lib/inbox-access";
@@ -56,6 +60,28 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
     contactEmails: client.contactEmails
   });
   const canMatchByEmail = signals.emailSet.size > 0 || signals.domainSet.size > 0;
+
+  // Onboarding forms sent to this client, with progress and answers. Wrapped
+  // so the page still renders if the migration has not been applied yet —
+  // migrations in this repo are applied by hand, so "the table isn't there
+  // yet" is a normal state on a fresh deploy rather than a bug.
+  const onboarding = await listOnboardingForClient(client.id).catch(() => ({
+    links: [],
+    answers: [],
+    files: []
+  }));
+
+  // The address this deployment is served on, for the copy-link button. Read
+  // from the proxy headers rather than NEXT_PUBLIC_APP_URL because the app
+  // answers on more than one hostname behind Railway, and a link minted with
+  // the wrong one looks right and 404s for the client.
+  const onboardingOrigin = (() => {
+    const h = headers();
+    const host = h.get("x-forwarded-host") ?? h.get("host");
+    if (!host) return process.env.NEXT_PUBLIC_APP_URL ?? "";
+    const proto = h.get("x-forwarded-proto") ?? (host.startsWith("localhost") ? "http" : "https");
+    return `${proto}://${host}`;
+  })();
 
   const supabase = getSupabaseAdmin();
   const [resources, meetingsRaw, openTasksRes, doneTasksRes, visibleIds, recentScoresRes] = await Promise.all([
@@ -391,6 +417,44 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
         businessInformation={client.businessInformation}
         updateCadence={client.updateCadence}
         canEdit={!!(me && (me.role === "leader" || me.role === "department_head" || me.isAdmin))}
+      />
+
+      {/* Onboarding — only rendered once a form has actually been sent, so a
+          client onboarded before this existed shows no empty shell. The copy
+          link is withheld from anyone who could not have sent that form
+          themselves; see the url field in listOnboardingForClient's caller. */}
+      <ClientOnboardingCard
+        links={onboarding.links.map((l) => ({
+          id: l.id,
+          formKey: l.formKey,
+          formLabel: l.formKey === "seo" ? "SEO Onboarding" : "Custom Website Onboarding",
+          createdAt: l.createdAt,
+          firstOpenedAt: l.firstOpenedAt,
+          completedAt: l.completedAt,
+          revokedAt: l.revokedAt,
+          doneCount: l.doneCount,
+          total: l.total,
+          canManage: canManageOnboardingLinks(me, l.formKey),
+          url: canManageOnboardingLinks(me, l.formKey)
+            ? `${onboardingOrigin}/onboarding/${l.token}`
+            : null
+        }))}
+        answers={onboarding.answers.map((a) => ({
+          id: a.id,
+          linkId: a.linkId,
+          stepTitle: a.stepTitle,
+          label: a.label,
+          hint: a.hint,
+          isSecret: a.isSecret
+        }))}
+        files={onboarding.files.map((f) => ({
+          id: f.id,
+          linkId: f.linkId,
+          fileName: f.fileName,
+          url: f.url,
+          sizeBytes: f.sizeBytes
+        }))}
+        canReveal={canRevealOnboardingSecret(me)}
       />
 
       <ClientHealthCard

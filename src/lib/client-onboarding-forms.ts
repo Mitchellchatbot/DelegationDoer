@@ -66,6 +66,23 @@ export type CollectField = {
   required?: boolean;
 };
 
+/** A screenshot of the real screen, from the provider's own product.
+ *
+ *  These beat any description we could write, because the client is matching a
+ *  picture to the window in front of them rather than translating a sentence.
+ *  The rule that comes with them: a shot must be of the screen the instruction
+ *  is actually about. A nearly-right picture sends people to the wrong page
+ *  MORE confidently than no picture at all, so no shot is better than an
+ *  approximate one. */
+export type Shot = {
+  /** Lives under public/onboarding/<provider>/. */
+  src: string;
+  alt: string;
+  /** Only worth writing when the picture and the instruction could be read as
+   *  disagreeing -- otherwise it is a caption restating the obvious. */
+  caption?: string;
+};
+
 export type Substep = {
   text: string;
   /** Verbatim UI label to look for, rendered as a chip. */
@@ -73,6 +90,7 @@ export type Substep = {
   /** How people get this one wrong. Folded into the questions panel rather than
    *  shouted next to the instruction. */
   warn?: string;
+  shot?: Shot;
 };
 
 export type Step = {

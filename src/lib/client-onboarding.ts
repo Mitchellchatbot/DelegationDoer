@@ -654,3 +654,68 @@ export async function listOnboardingForClient(clientId: string): Promise<ClientO
     files: parts.flatMap((p) => p.files)
   };
 }
+
+// ---------------------------------------------------------------------------
+// Every link, for the board
+// ---------------------------------------------------------------------------
+
+export interface OnboardingBoardRow extends OnboardingLink {
+  doneCount: number;
+  total: number;
+  /** Ranks how badly this one needs chasing. Lower sorts first. */
+  attention: number;
+}
+
+/**
+ * Every onboarding link, ordered by who needs chasing rather than by date.
+ *
+ * Sorted deliberately: a link sent a week ago and never opened is the one that
+ * needs a message today, and a date sort buries it under everything sent since.
+ * The order is sent-but-never-opened, then started-and-stalled, then in
+ * progress, then finished — and revoked last, since it is history rather than
+ * work.
+ */
+export async function listAllOnboardingLinks(): Promise<OnboardingBoardRow[]> {
+  const supabase = getSupabaseAdmin();
+  const { data, error } = await supabase
+    .from("client_onboarding_links")
+    .select(`${LINK_COLS}, clients(name)`)
+    .order("created_at", { ascending: false });
+  if (error) throw new Error(error.message);
+
+  const links = ((data ?? []) as LinkRow[]).map(toLink);
+  if (!links.length) return [];
+
+  // One query for every link's ticked steps, then grouped in memory — a
+  // per-link query would be one round trip per row on a page that exists to
+  // show all of them at once.
+  const { data: steps, error: sErr } = await supabase
+    .from("client_onboarding_steps")
+    .select("link_id, step_id")
+    .in("link_id", links.map((l) => l.id));
+  if (sErr) throw new Error(sErr.message);
+
+  const byLink = new Map<string, string[]>();
+  for (const r of steps ?? []) {
+    const id = r.link_id as string;
+    byLink.set(id, [...(byLink.get(id) ?? []), r.step_id as string]);
+  }
+
+  const rows = links.map((l) => {
+    const { done, total } = progressOf(l.formKey, byLink.get(l.id) ?? []);
+    const attention = l.revokedAt ? 5
+      : l.completedAt ? 4
+      : !l.firstOpenedAt ? 0
+      : done === 0 ? 1
+      : 2;
+    return { ...l, doneCount: done, total, attention };
+  });
+
+  rows.sort((a, b) =>
+    a.attention !== b.attention
+      ? a.attention - b.attention
+      // Within a band, oldest first: the one that has been waiting longest is
+      // the one to chase.
+      : a.createdAt.localeCompare(b.createdAt));
+  return rows;
+}

@@ -1,11 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import type {
   CollectField,
   OnboardingForm,
+  Shot as ShotT,
   Step
 } from "@/lib/client-onboarding-forms";
 
@@ -55,6 +56,21 @@ interface UploadedFile {
   uploadedAt: string;
 }
 
+/**
+ * Preview mode, for Sam and Mujtaba walking the form themselves.
+ *
+ * A context rather than a prop threaded through six components: the flag is
+ * read at four scattered call sites (answers, note, upload, step-done) and
+ * nowhere else, and passing it down by hand would mean every component in
+ * between carrying a prop it does not use.
+ *
+ * What it guarantees: nothing is written and nobody is notified. Each of those
+ * four calls returns a simulated success instead of going to the server, so the
+ * walkthrough behaves exactly as a client would see it -- ticks, saved states
+ * and all -- against nothing at all.
+ */
+const PreviewCtx = createContext(false);
+
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 const DONE_KEY = (t: string) => `dd-onboarding:${t}:done`;
@@ -71,21 +87,24 @@ const PRIMARY = "linear-gradient(135deg, #0a4099 0%, #063270 100%)";
 /** Notes are kept locally only. They are a scratchpad — "which email did I
  *  use", "why I couldn't finish this" — and the half of one that matters to us
  *  is the half the client chooses to send. */
-function useNotes(token: string) {
+function useNotes(token: string, preview: boolean) {
   const [notes, setNotes] = useState<Record<string, string>>({});
   useEffect(() => {
+    // Preview keeps nothing. A preview that reopens where the last person
+    // stopped is a preview of the wrong thing.
+    if (preview) return;
     try {
       const raw = localStorage.getItem(NOTES_KEY(token));
       if (raw) setNotes(JSON.parse(raw) as Record<string, string>);
     } catch {
       /* private mode, or a corrupt value — start clean */
     }
-  }, [token]);
+  }, [token, preview]);
   const set = (id: string, text: string) =>
     setNotes((prev) => {
       const next = { ...prev, [id]: text };
       try {
-        localStorage.setItem(NOTES_KEY(token), JSON.stringify(next));
+        if (!preview) localStorage.setItem(NOTES_KEY(token), JSON.stringify(next));
       } catch {
         /* nothing to do */
       }
@@ -100,9 +119,10 @@ function useNotes(token: string) {
  *  and is the one that decides whether the form is finished; the local copy is
  *  what makes reopening the link instant, and what keeps the ticks right if a
  *  save is in flight when someone closes the tab. */
-function useDone(token: string, initial: string[]) {
+function useDone(token: string, initial: string[], preview: boolean) {
   const [done, setDone] = useState<Set<string>>(() => new Set(initial));
   useEffect(() => {
+    if (preview) return;
     try {
       const raw = localStorage.getItem(DONE_KEY(token));
       if (raw) {
@@ -115,14 +135,14 @@ function useDone(token: string, initial: string[]) {
     } catch {
       /* start from the server's view */
     }
-  }, [token]);
+  }, [token, preview]);
 
   const mark = (id: string) =>
     setDone((prev) => {
       const next = new Set(prev);
       next.add(id);
       try {
-        localStorage.setItem(DONE_KEY(token), JSON.stringify([...next]));
+        if (!preview) localStorage.setItem(DONE_KEY(token), JSON.stringify([...next]));
       } catch {
         /* nothing to do */
       }
@@ -244,11 +264,17 @@ function FileField({
   files: UploadedFile[];
   onUploaded: (f: UploadedFile) => void;
 }) {
+  const preview = useContext(PreviewCtx);
   const [busy, setBusy] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const send = async (list: FileList | null) => {
     if (!list || !list.length) return;
+    if (preview) {
+      toast.info("Preview — files aren't uploaded here.");
+      if (inputRef.current) inputRef.current.value = "";
+      return;
+    }
     setBusy(true);
     for (const file of Array.from(list)) {
       const body = new FormData();
@@ -318,6 +344,39 @@ function FileField({
   );
 }
 
+/**
+ * A screenshot of the real screen, inline.
+ *
+ * Inline and not behind a "view screenshot" link, because the entire reason it
+ * helps is that the eye can flick between the picture and the actual browser
+ * window -- and a click to open one breaks exactly that. Height-capped so a tall
+ * shot cannot bury the instruction it belongs to, and clicking opens the full
+ * image for anyone who wants a closer look.
+ */
+function Shot({ shot }: { shot: ShotT }) {
+  return (
+    <span className="block pt-2.5">
+      <a
+        href={shot.src}
+        target="_blank"
+        rel="noreferrer"
+        className="block rounded-xl border border-border overflow-hidden bg-white transition-shadow hover:shadow-soft"
+      >
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={shot.src}
+          alt={shot.alt}
+          loading="lazy"
+          className="w-full h-auto max-h-[280px] object-contain object-left-top"
+        />
+      </a>
+      {shot.caption && (
+        <span className="block text-[11.5px] text-ink/60 leading-snug pt-1.5">{shot.caption}</span>
+      )}
+    </span>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // The questions on a step
 // ---------------------------------------------------------------------------
@@ -344,6 +403,7 @@ function CollectForm({
   onUploaded: (f: UploadedFile) => void;
   registerSave: (fn: (() => Promise<void>) | null) => void;
 }) {
+  const preview = useContext(PreviewCtx);
   const fields = step.collect ?? [];
   const [vals, setVals] = useState<Record<string, string>>({});
   const [state, setState] = useState<"idle" | "saving" | "saved" | "failed">("idle");
@@ -378,6 +438,14 @@ function CollectForm({
       .filter((v) => v.value.trim());
     if (!values.length) return;
 
+    if (preview) {
+      // Behaves exactly as a real save does, so the walkthrough being previewed
+      // is the walkthrough clients get -- it just never leaves the browser.
+      if (mounted.current) setState("saved");
+      onSaved(step.id, Object.fromEntries(values.map((v) => [v.key, v.value])));
+      return;
+    }
+
     if (mounted.current) setState("saving");
     try {
       const res = await fetch(`/api/onboarding/${encodeURIComponent(token)}/answers`, {
@@ -396,7 +464,7 @@ function CollectForm({
       setState("failed");
       setError(err instanceof Error ? err.message : "unknown");
     }
-  }, [fields, step.id, token, onSaved]);
+  }, [fields, step.id, token, onSaved, preview]);
 
   // Re-registered each render so the parent always holds a saver bound to the
   // step actually on screen; cleared on unmount so it cannot flush a step the
@@ -543,10 +611,12 @@ function StepNote({
   onNote: (t: string) => void;
   onSkip: () => void;
 }) {
+  const preview = useContext(PreviewCtx);
   const [open, setOpen] = useState(false);
   const [state, setState] = useState<"idle" | "sending" | "sent">("idle");
 
   const send = async (message: string): Promise<boolean> => {
+    if (preview) { setState("sent"); return true; }
     setState("sending");
     try {
       const res = await fetch(`/api/onboarding/${encodeURIComponent(token)}/note`, {
@@ -725,6 +795,7 @@ function StepCard({
                     {sub.click}
                   </span>
                 )}
+                {sub.shot && <Shot shot={sub.shot} />}
               </span>
             </li>
           ))}
@@ -890,8 +961,26 @@ function Finish({ clientName, form }: { clientName: string; form: OnboardingForm
 
 // ---------------------------------------------------------------------------
 
+/** Says plainly that this is not real, and stays on screen. A preview that
+ *  looked identical to the live form is one somebody eventually mistakes for
+ *  it -- and then wonders why the client never appeared in DD. */
+function PreviewBanner() {
+  return (
+    <div className="sticky top-0 z-40 bg-amber-50 border-b border-amber-200 px-5 py-2">
+      <div className="max-w-[860px] mx-auto text-[12.5px] text-amber-900 flex items-center gap-2 flex-wrap">
+        <span className="font-semibold">Preview</span>
+        <span className="text-amber-800">
+          This is what a client sees. Nothing you type is saved, no files upload, and nobody is
+          notified. Reload to start over.
+        </span>
+      </div>
+    </div>
+  );
+}
+
 export function OnboardingFlow({
-  token, clientName, form, initialAnswers, initialDoneSteps, initialFiles, alreadyCompleted
+  token, clientName, form, initialAnswers, initialDoneSteps, initialFiles, alreadyCompleted,
+  preview = false
 }: {
   token: string;
   clientName: string;
@@ -900,10 +989,12 @@ export function OnboardingFlow({
   initialDoneSteps: string[];
   initialFiles: UploadedFile[];
   alreadyCompleted: boolean;
+  /** Walk the form without writing anything or notifying anyone. See PreviewCtx. */
+  preview?: boolean;
 }) {
   const steps = form.steps;
-  const { done, mark } = useDone(token, initialDoneSteps);
-  const { notes, set: setNote } = useNotes(token);
+  const { done, mark } = useDone(token, initialDoneSteps, preview);
+  const { notes, set: setNote } = useNotes(token, preview);
   const [answers, setAnswers] = useState<AnswerState>(initialAnswers);
   const [files, setFiles] = useState<UploadedFile[]>(initialFiles);
   const [finished, setFinished] = useState(alreadyCompleted);
@@ -959,6 +1050,7 @@ export function OnboardingFlow({
       } catch {
         /* saved on blur already, most likely */
       }
+      if (preview) return;
       try {
         const res = await fetch(`/api/onboarding/${encodeURIComponent(token)}/step-done`, {
           method: "POST",
@@ -975,12 +1067,21 @@ export function OnboardingFlow({
     const next = at + 1;
     if (next < steps.length && !steps[next].final) go(next);
     else setFinished(true);
-  }, [at, go, mark, step, steps, token]);
+  }, [at, go, mark, preview, step, steps, token]);
 
-  if (finished) return <Finish clientName={clientName} form={form} />;
+  if (finished) {
+    return (
+      <PreviewCtx.Provider value={preview}>
+        {preview && <PreviewBanner />}
+        <Finish clientName={clientName} form={form} />
+      </PreviewCtx.Provider>
+    );
+  }
 
   if (step.gate) {
     return (
+      <PreviewCtx.Provider value={preview}>
+        {preview && <PreviewBanner />}
       <Gate
         step={step}
         form={form}
@@ -988,15 +1089,22 @@ export function OnboardingFlow({
         token={token}
         saved={answers[step.id] ?? {}}
         onSaved={onSaved}
-        onContinue={() => { mark(step.id); void finishStepQuietly(token, step.id); go(at + 1); }}
+        onContinue={() => {
+          mark(step.id);
+          if (!preview) void finishStepQuietly(token, step.id);
+          go(at + 1);
+        }}
         registerSave={registerSave}
       />
+      </PreviewCtx.Provider>
     );
   }
 
   const doneCount = working.filter((s) => done.has(s.id)).length;
 
   return (
+    <PreviewCtx.Provider value={preview}>
+    {preview && <PreviewBanner />}
     <div className="min-h-screen">
       {/* The progress rail. One segment per step, filled for what is done — a
           count of nine that visibly shortens is most of what keeps somebody
@@ -1074,6 +1182,7 @@ export function OnboardingFlow({
         </div>
       </div>
     </div>
+    </PreviewCtx.Provider>
   );
 }
 

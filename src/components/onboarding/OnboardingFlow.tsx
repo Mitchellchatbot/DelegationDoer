@@ -961,23 +961,6 @@ function Finish({ clientName, form }: { clientName: string; form: OnboardingForm
 
 // ---------------------------------------------------------------------------
 
-/** Says plainly that this is not real, and stays on screen. A preview that
- *  looked identical to the live form is one somebody eventually mistakes for
- *  it -- and then wonders why the client never appeared in DD. */
-function PreviewBanner() {
-  return (
-    <div className="sticky top-0 z-40 bg-amber-50 border-b border-amber-200 px-5 py-2">
-      <div className="max-w-[860px] mx-auto text-[12.5px] text-amber-900 flex items-center gap-2 flex-wrap">
-        <span className="font-semibold">Preview</span>
-        <span className="text-amber-800">
-          This is what a client sees. Nothing you type is saved, no files upload, and nobody is
-          notified. Reload to start over.
-        </span>
-      </div>
-    </div>
-  );
-}
-
 export function OnboardingFlow({
   token, clientName, form, initialAnswers, initialDoneSteps, initialFiles, alreadyCompleted,
   preview = false
@@ -1072,7 +1055,6 @@ export function OnboardingFlow({
   if (finished) {
     return (
       <PreviewCtx.Provider value={preview}>
-        {preview && <PreviewBanner />}
         <Finish clientName={clientName} form={form} />
       </PreviewCtx.Provider>
     );
@@ -1081,7 +1063,6 @@ export function OnboardingFlow({
   if (step.gate) {
     return (
       <PreviewCtx.Provider value={preview}>
-        {preview && <PreviewBanner />}
       <Gate
         step={step}
         form={form}
@@ -1104,7 +1085,6 @@ export function OnboardingFlow({
 
   return (
     <PreviewCtx.Provider value={preview}>
-    {preview && <PreviewBanner />}
     <div className="min-h-screen">
       {/* The progress rail. One segment per step, filled for what is done — a
           count of nine that visibly shortens is most of what keeps somebody

@@ -76,17 +76,23 @@ async function releaseClaim(link: OnboardingLink): Promise<void> {
     .eq("id", link.id);
 }
 
-function body(clientName: string, formLabel: string) {
+/** The email itself, as text + HTML.
+ *
+ *  Exported so it can be looked at without making a client finish a form first
+ *  -- see /api/clients/onboarding-email-preview. A preview that rebuilt the copy
+ *  separately would drift from what actually sends, which is the one thing a
+ *  preview must never do. */
+export function renderCompletionEmail(clientName: string, formLabel: string) {
   const text = [
     `Hi,`,
     ``,
-    `Thanks for filling in the ${formLabel.toLowerCase()} form for ${clientName} -- we have everything we need to get started.`,
+    `Thanks for filling in the ${formLabel.toLowerCase()} form for ${clientName} — we have everything we need to get started.`,
     ``,
     `What happens next:`,
     `1. We check over the access you sent and tell you if anything did not come through.`,
     `2. We come back to you with the plan for your first month.`,
     ``,
-    `If anything changes, or you left something out, just reply to this email -- it reaches our team directly.`,
+    `If anything changes, or you left something out, just reply to this email — it reaches our team directly.`,
     ``,
     `Thanks,`,
     `Scaled AI`
@@ -147,7 +153,7 @@ export async function sendOnboardingCompleteEmail(link: OnboardingLink): Promise
     if (!(await claim(link))) return; // already sent
 
     const formLabel = getForm(link.formKey).label;
-    const { text, html } = body(link.clientName, formLabel);
+    const { text, html } = renderCompletionEmail(link.clientName, formLabel);
 
     try {
       await composeNewThread({

@@ -3,11 +3,12 @@ import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { canManageOnboardingLinks } from "@/lib/client-onboarding-access";
 import { getForm, isFormKey } from "@/lib/client-onboarding-forms";
-import { OnboardingFlow } from "@/components/onboarding/OnboardingFlow";
+import { OnboardingPreview } from "@/components/OnboardingPreview";
 
 export const dynamic = "force-dynamic";
 
-// The form as a client sees it, with nothing switched on behind it.
+// Everything a client goes through, in one page: the form, and the email they
+// get for finishing it.
 //
 // Deliberately under /clients and NOT under /onboarding/… — that prefix is on
 // the middleware's public allowlist, so a preview route placed there would be
@@ -18,9 +19,11 @@ export const dynamic = "force-dynamic";
 // by pointing it at a throwaway client: a fake client row would show up in the
 // list, in search, and in every client picker in the app.
 export default async function OnboardingPreviewPage({
-  params
+  params,
+  searchParams
 }: {
   params: { formKey: string };
+  searchParams: { view?: string };
 }) {
   const userId = await requireCurrentUserId();
   const me = await getUserById(userId);
@@ -31,15 +34,9 @@ export default async function OnboardingPreviewPage({
   if (!canManageOnboardingLinks(me, params.formKey)) redirect("/clients");
 
   return (
-    <OnboardingFlow
-      preview
-      token={`preview:${params.formKey}`}
-      clientName="Your client"
+    <OnboardingPreview
       form={getForm(params.formKey)}
-      initialAnswers={{}}
-      initialDoneSteps={[]}
-      initialFiles={[]}
-      alreadyCompleted={false}
+      initialView={searchParams.view === "email" ? "email" : "form"}
     />
   );
 }

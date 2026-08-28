@@ -132,7 +132,9 @@ export function OnboardingBoard({ rows, mailboxes, fromAccountId, previewForms }
 
       {previewForms.length > 0 && (
         <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-[11.5px] text-ink/55">See what a client sees:</span>
+          <span className="text-[11.5px] text-ink/55">
+            See what a client sees — the form and the email they get:
+          </span>
           {previewForms.map((f) => (
             <Link
               key={f.key}

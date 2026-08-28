@@ -120,10 +120,14 @@ export async function createOnboardingLink(input: {
   name?: string;
   clientId?: string;
   createdBy: string | null;
-}): Promise<OnboardingLink> {
+}): Promise<OnboardingLink & { reusedExisting: boolean }> {
   const supabase = getSupabaseAdmin();
   let clientId = input.clientId ?? "";
   let clientName = "";
+  // Whether the name they typed turned out to be a client we already had. The
+  // caller says so on screen — silently attaching to an existing record would
+  // look like a new client had been created when it had not.
+  let reusedExisting = false;
 
   if (clientId) {
     const { data, error } = await supabase
@@ -137,15 +141,57 @@ export async function createOnboardingLink(input: {
   } else {
     const name = (input.name ?? "").trim();
     if (!name) throw new Error("give the client a name first");
-    clientId = clientIdFromName(name);
-    const { data, error } = await supabase
+
+    // clients.name is UNIQUE, and typing the name of a client we already have
+    // is the obvious thing to do when you want to send THEM a form. Reuse that
+    // client rather than failing: a duplicate row would split their tasks,
+    // emails and history across two records, and the raw unique-violation this
+    // would otherwise surface tells the operator nothing about what to do next.
+    // limit(1) rather than maybeSingle(): the UNIQUE index on clients.name is
+    // case-SENSITIVE, so "Acme" and "acme" can both exist, and a case-insensitive
+    // lookup that insisted on exactly one row would error out on precisely the
+    // messy data this is here to cope with.
+    const { data: hits, error: findErr } = await supabase
       .from("clients")
-      .insert({ id: clientId, name })
       .select("id, name")
-      .single();
-    if (error) throw new Error(error.message);
-    clientId = data.id as string;
-    clientName = data.name as string;
+      .ilike("name", name)
+      .limit(1);
+    if (findErr) throw new Error(findErr.message);
+    const hit = (hits ?? [])[0];
+
+    if (hit) {
+      clientId = hit.id as string;
+      clientName = hit.name as string;
+      reusedExisting = true;
+    } else {
+      clientId = clientIdFromName(name);
+      const { data, error } = await supabase
+        .from("clients")
+        .insert({ id: clientId, name })
+        .select("id, name")
+        .single();
+      // A racing create between the lookup above and this insert lands here.
+      // Rare, but the recovery is the same as the branch above: use theirs.
+      if (error) {
+        if (error.code === "23505") {
+          const { data: racedRows } = await supabase
+            .from("clients")
+            .select("id, name")
+            .ilike("name", name)
+            .limit(1);
+          const raced = (racedRows ?? [])[0];
+          if (!raced) throw new Error(error.message);
+          clientId = raced.id as string;
+          clientName = raced.name as string;
+          reusedExisting = true;
+        } else {
+          throw new Error(error.message);
+        }
+      } else {
+        clientId = data.id as string;
+        clientName = data.name as string;
+      }
+    }
   }
 
   // 32 bytes of randomness, base64url. This IS the credential for the form, so
@@ -168,7 +214,7 @@ export async function createOnboardingLink(input: {
     .single();
   if (error) throw new Error(error.message);
 
-  return { ...toLink(data as LinkRow), clientName };
+  return { ...toLink(data as LinkRow), clientName, reusedExisting };
 }
 
 // ---------------------------------------------------------------------------

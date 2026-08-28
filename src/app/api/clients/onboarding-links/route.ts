@@ -67,7 +67,11 @@ export async function POST(req: NextRequest) {
           formKey: link.formKey,
           clientId: link.clientId,
           clientName: link.clientName,
-          createdAt: link.createdAt
+          createdAt: link.createdAt,
+          // True when the name matched a client we already had. The dialog
+          // says so, because "created" would be a lie and the operator needs
+          // to know the link points at the existing record.
+          reusedExisting: link.reusedExisting
         },
         url: `${origin()}/onboarding/${link.token}`
       },

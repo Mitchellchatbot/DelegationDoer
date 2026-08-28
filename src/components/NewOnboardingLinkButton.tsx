@@ -29,6 +29,7 @@ export function NewOnboardingLinkButton({ forms }: Props) {
   const [formKey, setFormKey] = useState(forms[0]?.key ?? "");
   const [submitting, setSubmitting] = useState(false);
   const [url, setUrl] = useState<string | null>(null);
+  const [reused, setReused] = useState(false);
   const [copied, setCopied] = useState(false);
 
   if (!forms.length) return null;
@@ -37,6 +38,7 @@ export function NewOnboardingLinkButton({ forms }: Props) {
     setName("");
     setFormKey(forms[0]?.key ?? "");
     setUrl(null);
+    setReused(false);
     setCopied(false);
   }
 
@@ -60,7 +62,12 @@ export function NewOnboardingLinkButton({ forms }: Props) {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error ?? "failed");
       setUrl(data.url as string);
-      toast.success(`${data.link.clientName} created — send them the link`);
+      setReused(!!data.link.reusedExisting);
+      toast.success(
+        data.link.reusedExisting
+          ? `${data.link.clientName} already existed — this link is for them`
+          : `${data.link.clientName} created — send them the link`
+      );
     } catch (err) {
       toast.error(`Couldn't create that: ${err instanceof Error ? err.message : "unknown"}`);
     } finally {
@@ -110,6 +117,12 @@ export function NewOnboardingLinkButton({ forms }: Props) {
               // and how, is the head's call — some go by email, some get pasted
               // into a WhatsApp thread the client already replies in.
               <div className="px-5 pb-5 space-y-3">
+                {reused && (
+                  <p className="text-[12px] leading-relaxed rounded-lg px-3 py-2 bg-amber-50 border border-amber-200 text-amber-800">
+                    That name matched a client you already had, so no new record was made — this link
+                    is for the existing one.
+                  </p>
+                )}
                 <p className="text-[12.5px] text-ink/65 leading-relaxed">
                   Send this to your client. It needs no login and saves as they go, so they can stop
                   and come back to it.

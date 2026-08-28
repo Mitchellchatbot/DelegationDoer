@@ -59,7 +59,14 @@ const PUBLIC_PREFIXES = [
   "/widget",
   // Internal design-showcase page (UI concept gallery for the team) —
   // static/demo content only, no user data, safe to leave unauthenticated.
-  "/showcase"
+  "/showcase",
+  // Client onboarding forms. The people who fill these in are the client's
+  // practice manager or web developer — they have no DD account and never
+  // will, so the signed link IS the identity. Both the page and its API
+  // resolve the token themselves and 404 on an unknown or revoked one; see
+  // lib/client-onboarding.getLinkByToken.
+  "/onboarding",
+  "/api/onboarding"
 ];
 
 function isPublic(pathname: string): boolean {

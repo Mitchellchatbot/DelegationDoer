@@ -122,3 +122,28 @@ create index if not exists client_onboarding_files_link_idx
   on public.client_onboarding_files (link_id);
 create index if not exists client_onboarding_files_client_idx
   on public.client_onboarding_files (client_id);
+
+-- ---------------------------------------------------------------------------
+-- Row level security.
+-- ---------------------------------------------------------------------------
+-- Enabled with NO policies, which is the point: that denies anon and
+-- authenticated everything, while service_role -- the key every server-side
+-- read and write in this app uses (see lib/supabase-admin) -- bypasses RLS
+-- entirely. So the app is unaffected and nothing else can get in.
+--
+-- This is not boilerplate. NEXT_PUBLIC_SUPABASE_ANON_KEY is shipped to every
+-- browser, and PostgREST exposes public schema tables to it. Left without RLS,
+-- these four tables would be world-readable to anyone who opened devtools:
+--
+--   · client_onboarding_links.token IS the credential for a client's form.
+--     Readable tokens would let a stranger open, read and answer any client's
+--     onboarding -- the whole no-login model rests on that column being secret.
+--   · client_onboarding_answers.hint carries a readable preview of every
+--     answer, and .sealed the ciphertext of the credential fields.
+--
+-- Some older tables in this schema grant `read_all` to anon. Deliberately NOT
+-- copied here: that convention predates this table holding anything sensitive.
+alter table public.client_onboarding_links   enable row level security;
+alter table public.client_onboarding_answers enable row level security;
+alter table public.client_onboarding_steps   enable row level security;
+alter table public.client_onboarding_files   enable row level security;

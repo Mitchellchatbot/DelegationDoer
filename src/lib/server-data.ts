@@ -34,6 +34,9 @@ interface DepartmentRow {
   name: string;
   description: string | null;
   task_types: string[];
+  // Optional because the pre-migration read path (see DEPT_COLS_BASE below)
+  // selects without it.
+  head_user_id?: string | null;
 }
 interface TaskRow {
   id: string;
@@ -153,12 +156,24 @@ function userFromRow(row: UserRow, departmentIds: string[]): User {
   };
 }
 
+// head_user_id ships in 20260901000100. Migrations here are applied BY HAND, so
+// this build can be live against a database that hasn't had it yet -- hence the
+// two column lists and the isMissingColumnError retry below.
+//
+// Carrying headUserId matters more than it looks: Department.headUserId is
+// OPTIONAL, so dropping it here type-checks silently and every consumer just
+// sees undefined. That is exactly how the org chart ended up still deciding
+// headship from the global users.role long after the column existed.
+const DEPT_COLS_BASE = "id,name,description,task_types";
+const DEPT_COLS = `${DEPT_COLS_BASE},head_user_id`;
+
 function departmentFromRow(row: DepartmentRow): Department {
   return {
     id: row.id,
     name: row.name,
     description: row.description ?? "",
-    taskTypes: row.task_types
+    taskTypes: row.task_types,
+    headUserId: row.head_user_id ?? null
   };
 }
 
@@ -236,21 +251,22 @@ async function _getUserById(id: string | null | undefined): Promise<User | null>
 export const getDepartments = cache(_getDepartments);
 
 async function _getDepartments(): Promise<Department[]> {
-  const { data } = await getSupabaseAdmin()
-    .from("departments")
-    .select("id,name,description,task_types")
-    .order("name");
-  return (data ?? []).map((r) => departmentFromRow(r as DepartmentRow));
+  const sb = getSupabaseAdmin();
+  const full = await sb.from("departments").select(DEPT_COLS).order("name");
+  const res = isMissingColumnError(full.error)
+    ? await sb.from("departments").select(DEPT_COLS_BASE).order("name")
+    : full;
+  return (res.data ?? []).map((r) => departmentFromRow(r as DepartmentRow));
 }
 
 export async function getDepartmentById(id: string | null | undefined): Promise<Department | null> {
   if (!id) return null;
-  const { data } = await getSupabaseAdmin()
-    .from("departments")
-    .select("id,name,description,task_types")
-    .eq("id", id)
-    .maybeSingle();
-  return data ? departmentFromRow(data as DepartmentRow) : null;
+  const sb = getSupabaseAdmin();
+  const full = await sb.from("departments").select(DEPT_COLS).eq("id", id).maybeSingle();
+  const res = isMissingColumnError(full.error)
+    ? await sb.from("departments").select(DEPT_COLS_BASE).eq("id", id).maybeSingle()
+    : full;
+  return res.data ? departmentFromRow(res.data as DepartmentRow) : null;
 }
 
 const TICKET_COLS =

@@ -182,22 +182,35 @@ export function canViewDepartmentConsole(
 // every /api/tasks/[id]/* endpoint. Leader-owned (assigned-to-leader or
 // created-by-leader) tasks are invisible to non-leaders unless they
 // happen to be the assignee themselves.
-export function canViewTask(
+// WHY a viewer can see a task, not just whether. Callers that gate a WRITE
+// need this: "team" means the viewer can only see this task because of the
+// team-task escape below, and should therefore be held to a stricter standard
+// than someone who could already see it. Everything else predates this
+// feature and keeps its existing (permissive) treatment.
+export type TaskViewReason = "privileged" | "own" | "open" | "team";
+
+export function taskViewReason(
   actor: User | null | undefined,
   task: Pick<Task, "creatorId" | "assigneeId" | "departmentId" | "tags"> | null | undefined,
   leaderIds: Set<string>
-): boolean {
-  if (!actor || !task) return false;
-  if (isLeader(actor)) return true;
+): TaskViewReason | null {
+  if (!actor || !task) return null;
+  if (isLeader(actor)) return "privileged";
   // The viewer's own work is always visible to themselves, regardless of
   // whether a leader created it.
-  if (task.assigneeId === actor.id) return true;
-  if (task.creatorId === actor.id) return true;
-  // TEAM TASKS. Work explicitly queued for a department belongs to that
-  // department, so its members see it even when a leader created it. Without
-  // this, the whole feature is dead on arrival: a task Mitchell (a leader)
-  // files for the Software team has no assignee, so neither "own work" escape
-  // above fires, and the creator-is-a-leader rule below hides it from exactly
+  if (task.assigneeId === actor.id) return "own";
+  if (task.creatorId === actor.id) return "own";
+  // Anything touched by a leader (assignee or creator) is hidden from
+  // non-leaders...
+  const leaderOwned =
+    (!!task.assigneeId && leaderIds.has(task.assigneeId)) ||
+    (!!task.creatorId && leaderIds.has(task.creatorId));
+  if (!leaderOwned) return "open";
+  // ...EXCEPT team tasks. Work explicitly queued for a department belongs to
+  // that department, so its members see it even when a leader created it.
+  // Without this the whole feature is dead on arrival: a task Mitchell (a
+  // leader) files for the Software team has no assignee, so neither "own
+  // work" escape above fires, and the rule right above hides it from exactly
   // the team it was written for.
   //
   // Deliberately narrow — it needs BOTH the explicit TEAM_TAG marker (a
@@ -206,17 +219,25 @@ export function canViewTask(
   // to or has been delegated. Leader-owned *assigned* work and
   // department-less leader notes stay private exactly as before.
   //
+  // Checked only on the leader-owned branch on purpose: a team task nobody
+  // privileged touched was already visible as "open", and reporting it as
+  // "team" would subject it to a write gate it never had.
+  //
   // Note this does NOT require the task to still be unclaimed: once Shaheer
   // claims it, the rest of the Software team keeps seeing it. Stripping
   // visibility on claim would make the task vanish from teammates and from
   // the head's team dashboard mid-meeting, which is when they most need to
   // see who took what.
-  if (isTeamTask(task) && inDepartment(actor, task.departmentId)) return true;
-  // Anything touched by a leader (assignee or creator) is hidden from
-  // non-leaders.
-  if (task.assigneeId && leaderIds.has(task.assigneeId)) return false;
-  if (task.creatorId && leaderIds.has(task.creatorId)) return false;
-  return true;
+  if (isTeamTask(task) && inDepartment(actor, task.departmentId)) return "team";
+  return null;
+}
+
+export function canViewTask(
+  actor: User | null | undefined,
+  task: Pick<Task, "creatorId" | "assigneeId" | "departmentId" | "tags"> | null | undefined,
+  leaderIds: Set<string>
+): boolean {
+  return taskViewReason(actor, task, leaderIds) !== null;
 }
 
 // Stricter task visibility used by Ask AI. Layers DEPARTMENT SCOPING on

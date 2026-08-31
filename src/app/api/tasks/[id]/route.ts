@@ -181,18 +181,25 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       update.media_urls = [...prior, ...mediaAppend].slice(-50);
     }
 
-    // OWNERSHIP GATE. This route is otherwise guarded only by
-    // loadTaskForViewer, which is a READ gate — anyone who can see a task can
-    // edit it. That was survivable while "can see" meant "it's yours or a
-    // teammate's", but team tasks deliberately widen visibility to a whole
-    // department, so who-can-move-it now needs its own check.
+    // OWNERSHIP GATE — for the NEWLY visible case only.
     //
-    // Scoped to the two ownership fields on purpose. Clamping the whole route
-    // would break status updates, comments and attachments for exactly the
-    // people the feature exists for — and the head handing work out at the
-    // meeting. The rest of the route's permissiveness is pre-existing and
-    // out of scope here.
-    if ("assignee_id" in update || "department_id" in update) {
+    // This route is otherwise guarded solely by loadTaskForViewer, a READ
+    // gate: anyone who can see a task can edit it, including reassigning it
+    // by dragging on the board (which has no client-side gating either).
+    // That is pre-existing and stays pre-existing. Tightening it wholesale
+    // here would 403 people who reassign every day — the SEO team leads are
+    // deliberately role="worker" (see SEO_LEAD_DELETER_EMAILS in access.ts),
+    // so canManageTask is false for them on a teammate's task.
+    //
+    // What this change DOES owe a gate is the visibility it just added:
+    // `via === "team"` means the viewer could not have seen this task at all
+    // before team tasks existed. For them, and only them, an ownership write
+    // has to be earned.
+    //
+    // Scoped to the two ownership fields on purpose — clamping the whole
+    // route would break status updates and comments for exactly the people
+    // the feature exists for.
+    if (access.via === "team" && ("assignee_id" in update || "department_id" in update)) {
       const beforeShape = {
         creatorId: (before.creator_id as string) ?? "",
         assigneeId: (before.assignee_id as string | null) ?? null,

@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { getUserById, getLeaderIds } from "@/lib/server-data";
 import { requireCurrentUserId } from "@/lib/session";
-import { canViewTask } from "@/lib/access";
+import { taskViewReason, type TaskViewReason } from "@/lib/access";
 import type { Task, User } from "@/lib/types";
 
 // The slice of a task this helper reads. Enough to answer canViewTask and
@@ -26,6 +26,7 @@ export async function loadTaskForViewer(
       isLeader: boolean;
       viewer: User | null;
       task: TaskAccessShape;
+      via: TaskViewReason;
     }
   | { ok: false; response: NextResponse }
 > {
@@ -62,7 +63,8 @@ export async function loadTaskForViewer(
     status: row.status as Task["status"]
   };
 
-  if (!canViewTask(viewer, task, leaderIds)) {
+  const via = taskViewReason(viewer, task, leaderIds);
+  if (!via) {
     // 404 instead of 403 so we don't confirm the task exists.
     return { ok: false, response: NextResponse.json({ error: "not found" }, { status: 404 }) };
   }
@@ -76,6 +78,9 @@ export async function loadTaskForViewer(
     // to re-fetch the row or the user. This helper is a read gate; routes
     // that mutate ownership must still apply their own check on top.
     viewer,
-    task
+    task,
+    // WHY they can see it. "team" means they'd have been blocked before the
+    // team-task feature existed, so a write gate applies. See taskViewReason.
+    via
   };
 }

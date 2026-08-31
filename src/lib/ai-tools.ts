@@ -1671,9 +1671,11 @@ async function createTask(
     typeof input.estimatedHours === "number" && input.estimatedHours > 0
       ? input.estimatedHours
       : 2;
-  const tags = Array.isArray(input.tags)
-    ? input.tags.filter((t: unknown): t is string => typeof t === "string")
-    : [];
+  // stripTeamTag for the same reason the team branch below applies it: the
+  // marker is server-owned, and this path has none of the canQueueTaskToTeam
+  // gating. Without it a worker could ask the assistant to add an "auto-team"
+  // tag to a task they self-assign, then release it into a department pool.
+  const tags = stripTeamTag(input.tags);
   const clientName = typeof input.clientName === "string" ? input.clientName.trim() || null : null;
   const departmentId =
     typeof input.departmentId === "string" && input.departmentId

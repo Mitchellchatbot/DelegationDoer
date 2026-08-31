@@ -162,6 +162,24 @@ export async function DELETE(_req: NextRequest, { params }: { params: { id: stri
         { status: 400 }
       );
     }
+    // Already in the pool. Caught explicitly because the conditional update
+    // below matches on the current holder, and a leader releasing an
+    // already-unclaimed task would otherwise fall through to `.eq(..., null)`
+    // and come back as a confusing "this task already moved on".
+    if (!task.assigneeId) {
+      return NextResponse.json({ ok: true, alreadyUnclaimed: true });
+    }
+    // Finished work keeps its owner. isTeamTask is deliberately durable, so
+    // it stays true after completion — but un-assigning a done task would
+    // strip it out of the completion leaderboards, the client-update
+    // contributor list and the skill credit the completer earned, with no way
+    // to attribute it back. Reopen it first if that's really the intent.
+    if (task.status === "done") {
+      return NextResponse.json(
+        { error: "This one's already finished — reopen it first if it needs to go back to the team." },
+        { status: 400 }
+      );
+    }
     if (task.assigneeId !== viewerId && !access.isLeader) {
       return NextResponse.json(
         { error: "Only the person holding this task can put it back." },

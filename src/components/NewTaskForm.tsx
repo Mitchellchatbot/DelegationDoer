@@ -157,13 +157,16 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel, initialValues, lo
     setAssigneeLocked(false);
     setAssigneeId("");
   }
-  // Toggling back out of team mode clears the selection and lets the sync
-  // effect re-fill the ranker's top pick (it re-runs on assignMode), which
-  // is the same state the form opens in.
+  // Toggling back out of team mode restores whatever the host pinned (the
+  // Board's per-person "+"), so a leader who taps "the whole team" and
+  // changes their mind lands back on the person they clicked rather than on
+  // whoever the ranker happens to like. With no pin, clear the selection and
+  // let the sync effect re-fill the top pick — the state the form opens in.
   function choosePerson() {
     setAssignMode("person");
-    setAssigneeLocked(false);
-    setAssigneeId("");
+    const pinned = lockAssignee ? initialValues?.assigneeId ?? "" : "";
+    setAssigneeLocked(Boolean(pinned));
+    setAssigneeId(pinned);
   }
   const [aiReason, setAiReason] = useState<string | null>(null);
   const [aiThinking, setAiThinking] = useState(false);

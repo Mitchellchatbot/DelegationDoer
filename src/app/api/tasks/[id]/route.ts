@@ -126,8 +126,13 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     // sitting in the pool, record that they did it rather than leaving it
     // ownerless. This is not a convenience: an unassigned completion is
     // invisible to the client-update draft (lib/eod-digest.ts aborts when it
-    // finds no contributors), earns nobody skill points (the extractor below
-    // is gated on before.assignee_id), and lands in no leaderboard.
+    // finds no contributors), earns nobody skill points, and lands in no
+    // leaderboard.
+    //
+    // Everything downstream of the write reads the row fresh and so sees the
+    // new owner. The two consumers that run in THIS request off the `before`
+    // snapshot — the skill extractor and the completion Slack — go through
+    // effectiveAssigneeId below instead, or they'd credit the work to nobody.
     if (
       update.status === "done" &&
       !before.assignee_id &&
@@ -199,7 +204,15 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     // Scoped to the two ownership fields on purpose — clamping the whole
     // route would break status updates and comments for exactly the people
     // the feature exists for.
-    if (access.via === "team" && ("assignee_id" in update || "department_id" in update)) {
+    // Gated on an ACTUAL CHANGE, not on the field being present. The edit
+    // dialog (TaskActions) always sends departmentId, unchanged or not, so
+    // keying on presence would 403 a department member for editing a title.
+    const reassigning =
+      "assignee_id" in update && update.assignee_id !== before.assignee_id;
+    const movingDepartment =
+      "department_id" in update && update.department_id !== before.department_id;
+
+    if (access.via === "team" && (reassigning || movingDepartment)) {
       const beforeShape = {
         creatorId: (before.creator_id as string) ?? "",
         assigneeId: (before.assignee_id as string | null) ?? null,
@@ -210,8 +223,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       // Claiming is the one write a plain department member may make: it can
       // only ever point the task at themselves, and only while it is still
       // unclaimed.
-      const claimingForSelf =
-        update.assignee_id === userId && !("department_id" in update);
+      const claimingForSelf = update.assignee_id === userId && !movingDepartment;
       const allowed =
         canManageTask(access.viewer, beforeShape) ||
         (claimingForSelf && canClaimTask(access.viewer, beforeShape));
@@ -311,11 +323,19 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     // If status flipped to "done", DM the creator and (if configured) post
     // to the team channel. Failures are folded into the response so the UI
     // can surface them via toast — they don't block the PATCH itself.
+    // Who owns the task AFTER this write. Differs from before.assignee_id on
+    // exactly the auto-claim path above, where the completer becomes the
+    // assignee in the same request. Reading the stale value there credited
+    // the completion to "Someone" and awarded the skill points to nobody.
+    const effectiveAssigneeId =
+      (typeof update.assignee_id === "string" ? update.assignee_id : null) ??
+      (before.assignee_id as string | null);
+
     let slack: CompletionResult | null = null;
     if (statusChanged && update.status === "done") {
       const [creator, assignee] = await Promise.all([
         getUserById(before.creator_id),
-        before.assignee_id ? getUserById(before.assignee_id) : Promise.resolve(null)
+        effectiveAssigneeId ? getUserById(effectiveAssigneeId) : Promise.resolve(null)
       ]);
       // Don't ping the creator if they completed their own task.
       const creatorEmail =
@@ -338,7 +358,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     // completions earn full credit and overruns earn proportionally less
     // (but never zero — they still demonstrate capability with the tag).
     let skillGains: { tag: string; gain: number; total: number }[] = [];
-    if (statusChanged && update.status === "done" && before.assignee_id) {
+    if (statusChanged && update.status === "done" && effectiveAssigneeId) {
       const tags: string[] = Array.isArray(before.tags) ? before.tags : [];
       // Filter the routing/system tags out — they don't reflect skill.
       const skillTags = tags.filter(
@@ -354,7 +374,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
         const { data: existing } = await supabase
           .from("user_skills")
           .select("id, tag, auto_score, task_count")
-          .eq("user_id", before.assignee_id)
+          .eq("user_id", effectiveAssigneeId)
           .in("tag", skillTags);
         const byTag = new Map(
           (existing ?? []).map((r) => [r.tag, r])
@@ -367,7 +387,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
           skillGains.push({ tag, gain: gainPerTag, total: +nextScore.toFixed(2) });
           return {
             id: prev?.id ?? `us_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}_${tag.slice(0, 8)}`,
-            user_id: before.assignee_id as string,
+            user_id: effectiveAssigneeId,
             tag,
             auto_score: nextScore,
             task_count: nextCount,

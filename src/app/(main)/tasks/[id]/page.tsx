@@ -286,8 +286,10 @@ export default async function TaskDetailPage({ params }: { params: { id: string 
             {assignee ? (
               <div className="space-y-2">
                 <div className="flex items-center gap-2"><PersonAvatar userId={assignee.id} name={assignee.name} imageUrl={assignee.avatarUrl} size={22} /> {assignee.name}</div>
-                {/* Team task someone already took — let them hand it back. */}
-                {isTeamTask(task) && assignee.id === currentUserId && (
+                {/* Team task someone already took — let them hand it back,
+                    unless it's finished (the route rejects that, and
+                    un-attributing completed work would lose their credit). */}
+                {isTeamTask(task) && assignee.id === currentUserId && task.status !== "done" && (
                   <ClaimTaskButton taskId={task.id} mode="release" departmentName={dept?.name ?? null} />
                 )}
               </div>

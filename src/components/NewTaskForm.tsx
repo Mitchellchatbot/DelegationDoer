@@ -598,7 +598,27 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel, initialValues, lo
       }
 
       const slack = data.slack as { delivery: "sent" | "skipped" | "failed"; error?: string } | undefined;
-      if (slack?.delivery === "sent") {
+      const announcement = data.announcement as
+        | { delivery: "sent" | "skipped_no_channel" | "failed"; error?: string }
+        | undefined;
+
+      if (assignMode === "team") {
+        // A team task has no assignee to DM, so the department channel post is
+        // the ONLY thing that tells anyone the work exists. Say plainly when
+        // it didn't go out — otherwise the creator sees "Task created" and
+        // assumes the team was notified when nobody was.
+        if (announcement?.delivery === "sent") {
+          toast.success(`Task created — the ${selectedDepartmentName} channel has been told.`);
+        } else if (announcement?.delivery === "failed") {
+          toast.warning(
+            `Task created, but the ${selectedDepartmentName} channel post failed: ${announcement.error ?? "unknown"}. Nobody has been notified — share the link directly.`
+          );
+        } else {
+          toast.warning(
+            `Task created, but ${selectedDepartmentName} has no Slack task channel set, so nobody was notified. A leader can set one in Leader Console → Departments.`
+          );
+        }
+      } else if (slack?.delivery === "sent") {
         toast.success("Task created — Slack DM sent to assignee.");
       } else if (slack?.delivery === "failed") {
         toast.warning(`Task created, but Slack DM failed: ${slack.error ?? "unknown"}`);
@@ -969,8 +989,11 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel, initialValues, lo
             {/* A department with no members has nobody who can claim the
                 task. It still saves — the head can add members later — but
                 silently queueing work to an empty room is the failure mode
-                worth naming. dep_software and dep_facebook have no members
-                seeded by any migration. */}
+                worth naming. dep_software and dep_facebook have no SURVIVING
+                migration-seeded members (init seeds u_5/u_8/u_10 into
+                dep_software; 20260516200000 then purges every u_N row), so in
+                practice membership there is whatever the Leader Console
+                holds. */}
             {assignMode === "team" && deptMembers.length === 0 && (
               <div className="mt-2 flex items-start gap-2 p-2.5 rounded-xl border border-amber-300 bg-amber-50 text-[12px] text-amber-900">
                 <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />

@@ -54,12 +54,36 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
     if (!access.ok) return access.response;
     const { viewerId, viewer, task } = access;
 
+    // "Somebody already took it" is checked FIRST, ahead of canClaimTask.
+    // Two people clicking Claim in the same meeting is the expected path, not
+    // an edge case — and canClaimTask fails on an already-held task for the
+    // same reason it fails for a non-member, so letting it answer first told
+    // the loser "you're not on this team", which is both wrong and sends them
+    // off to ask a leader to add them to a department they're already in.
+    // The conditional update below still guards the true sub-second overlap.
+    if (isTeamTask(task) && task.assigneeId && task.assigneeId !== viewerId) {
+      const holder = await getUserById(task.assigneeId);
+      return NextResponse.json(
+        {
+          error: holder
+            ? `${holder.name} just claimed this one.`
+            : "Someone just claimed this one."
+        },
+        { status: 409 }
+      );
+    }
+    if (isTeamTask(task) && task.assigneeId === viewerId) {
+      // Already theirs — treat a double-click as success rather than an error.
+      return NextResponse.json({ ok: true, assigneeId: viewerId, alreadyMine: true });
+    }
+
     if (!canClaimTask(viewer, task)) {
-      // Name the actual cause. The overwhelmingly likely reason someone hits
-      // this is that they aren't in department_members for the team the task
-      // was queued to — dep_software and dep_facebook in particular have no
-      // members seeded by any migration, so "you can't do that" would send
-      // people hunting for a bug that is really a config gap.
+      // Past the checks above, a team task can only fail here on membership.
+      // Say so specifically: dep_software and dep_facebook have no surviving
+      // migration-seeded members (init seeds u_5/u_8/u_10 into dep_software,
+      // then 20260516000000's purge deletes every u_N row), so a bare "you
+      // can't do that" would send people hunting for a bug that is really a
+      // config gap.
       return NextResponse.json(
         {
           error: isTeamTask(task)

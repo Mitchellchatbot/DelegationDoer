@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSupabaseAdmin, fetchAllRows } from "@/lib/supabase-admin";
+import { isTeamTask } from "@/lib/task-team";
 
 export const dynamic = "force-dynamic";
 
@@ -27,6 +28,11 @@ interface TaskRow {
   actual_hours: number;
   status: string;
   completed_at: string | null;
+  // department_id + tags identify a team task, so the unattributed bucket
+  // below counts work that genuinely has no owner rather than every row that
+  // happens to be unassigned.
+  department_id: string | null;
+  tags: string[] | null;
 }
 
 // GET /api/analytics/bottlenecks — aggregates that drive the bottleneck
@@ -50,7 +56,7 @@ export async function GET() {
     fetchAllRows<TaskRow>(() =>
       supabase
         .from("tasks")
-        .select("id, title, assignee_id, estimated_hours, actual_hours, status, completed_at")
+        .select("id, title, assignee_id, estimated_hours, actual_hours, status, completed_at, department_id, tags")
         .eq("is_draft", false)
         .is("deleted_at", null)
     )
@@ -221,9 +227,19 @@ export async function GET() {
   // disagree on the same screen. Counted separately rather than folded into
   // someone's row so the tile totals reconcile with the chart without
   // inventing an owner.
+  //
+  // Gated on isTeamTask, not on a bare null assignee. Plenty of rows are
+  // unassigned without being team work — clients/import inserts up to 1000 at
+  // a time with a nullable assignee and completed_at stamped, and rejected AI
+  // drafts look the same. Counting those would make the leader's "Completed
+  // this week" tile jump on a workspace that has no team tasks at all.
+  const isUnowned = (t: TaskRow) =>
+    !t.assignee_id &&
+    isTeamTask({ departmentId: t.department_id, tags: t.tags ?? [] });
+
   const unattributed = { weekCount: 0, totalCount: 0 };
   for (const t of tasks) {
-    if (t.status !== "done" || t.assignee_id) continue;
+    if (t.status !== "done" || !isUnowned(t)) continue;
     unattributed.totalCount += 1;
     if (t.completed_at && new Date(t.completed_at).getTime() >= weekAgo) {
       unattributed.weekCount += 1;
@@ -233,9 +249,11 @@ export async function GET() {
   // 6. Recently completed: latest 8 done tasks for the "you just shipped
   //    this!" reassurance feed.
   //    Unclaimed team completions belong here too — the assigneeName fallback
-  //    below already renders "Unassigned", it was just unreachable.
+  //    below already renders "Unassigned", it was just unreachable. Other
+  //    unassigned rows (bulk imports, rejected drafts) stay out, or a single
+  //    import would fill all 8 slots with ownerless history.
   const recentCompletions = tasks
-    .filter((t) => t.status === "done" && t.completed_at)
+    .filter((t) => t.status === "done" && t.completed_at && (t.assignee_id || isUnowned(t)))
     .sort((a, b) => +new Date(b.completed_at!) - +new Date(a.completed_at!))
     .slice(0, 8)
     .map((t) => {

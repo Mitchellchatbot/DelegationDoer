@@ -133,6 +133,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     // new owner. The two consumers that run in THIS request off the `before`
     // snapshot — the skill extractor and the completion Slack — go through
     // effectiveAssigneeId below instead, or they'd credit the work to nobody.
+    let autoClaimed = false;
     if (
       update.status === "done" &&
       !before.assignee_id &&
@@ -143,6 +144,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       update.assignee_id === undefined
     ) {
       update.assignee_id = userId;
+      autoClaimed = true;
     }
 
     // Department reassignment — used when a task was filed under the
@@ -323,13 +325,18 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     // If status flipped to "done", DM the creator and (if configured) post
     // to the team channel. Failures are folded into the response so the UI
     // can surface them via toast — they don't block the PATCH itself.
-    // Who owns the task AFTER this write. Differs from before.assignee_id on
-    // exactly the auto-claim path above, where the completer becomes the
-    // assignee in the same request. Reading the stale value there credited
-    // the completion to "Someone" and awarded the skill points to nobody.
-    const effectiveAssigneeId =
-      (typeof update.assignee_id === "string" ? update.assignee_id : null) ??
-      (before.assignee_id as string | null);
+    // Who owns the task AFTER this write. Scoped to the auto-claim path
+    // above, where the completer becomes the assignee in the same request —
+    // reading the stale value there credited the completion to "Someone" and
+    // awarded the skill points to nobody.
+    //
+    // Deliberately NOT applied to every reassignment. A normal PATCH that
+    // sets assigneeId and status:"done" together should still credit the
+    // person who did the work, not whoever it was just handed to; changing
+    // that is a behavior change unrelated to team tasks.
+    const effectiveAssigneeId = autoClaimed
+      ? userId
+      : (before.assignee_id as string | null);
 
     let slack: CompletionResult | null = null;
     if (statusChanged && update.status === "done") {

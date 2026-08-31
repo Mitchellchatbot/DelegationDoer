@@ -12,7 +12,7 @@
 //   2. OPEN (not-done) & due_date older than the overdue-window, which is
 //      configurable via workspace_settings.overdue_archive_days.
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
-import { TEAM_TAG } from "@/lib/task-team";
+import { isTeamTask } from "@/lib/task-team";
 import {
   ARCHIVE_AFTER_DAYS,
   OVERDUE_ARCHIVE_DAYS,
@@ -94,7 +94,7 @@ export async function runArchiveSweep(opts: { dryRun?: boolean } = {}): Promise<
   // rules separately, so they have to move together.
   const { data: overdueRowsRaw, error: overdueErr } = await supabase
     .from("tasks")
-    .select("id, title, completed_at, due_date, assignee_id, tags")
+    .select("id, title, completed_at, due_date, assignee_id, tags, department_id")
     .neq("status", "done")
     .eq("is_draft", false)
     .is("archived_at", null)
@@ -105,8 +105,17 @@ export async function runArchiveSweep(opts: { dryRun?: boolean } = {}): Promise<
   // Filtered here rather than in the query: expressing "not (unassigned AND
   // tagged)" as a PostgREST `or` string is doable but unreadable, and this set
   // is already bounded by the due-date cutoff.
+  //
+  // Goes through isTeamTask rather than checking the tag inline so this can't
+  // drift from lib/task-team.ts — an inline tag check silently disagreed with
+  // it on a tagged row that has no department_id.
   const overdueRows = (overdueRowsRaw ?? []).filter(
-    (r) => r.assignee_id != null || !((r.tags as string[] | null) ?? []).includes(TEAM_TAG)
+    (r) =>
+      r.assignee_id != null ||
+      !isTeamTask({
+        departmentId: (r.department_id as string | null) ?? null,
+        tags: (r.tags as string[] | null) ?? []
+      })
   );
 
   // Merge, de-duping by id defensively (the status filters already make the

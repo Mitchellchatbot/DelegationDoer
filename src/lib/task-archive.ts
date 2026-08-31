@@ -75,6 +75,11 @@ export function shouldAutoArchive(
   // the single worst outcome for a feature whose whole point is that work
   // sits in a pool waiting for someone. It stays visible and overdue until
   // a human claims, reassigns or deletes it.
+  //
+  // NB: this function currently has no callers — lib/task-archive-runner.ts
+  // re-implements both rules against raw rows. The carve-out is mirrored
+  // there (via the same isTeamTask helper, so the two can't disagree). Kept
+  // here so the pure rule stays the readable statement of the policy.
   if (!task.assigneeId && isTeamTask({
     departmentId: task.departmentId ?? null,
     tags: task.tags ?? []

@@ -1,6 +1,5 @@
 import type { Task, User } from "./types";
 import { dayKeyInTz, hoursForDay } from "./work-hours";
-import { isTeamTask } from "./task-team";
 
 export interface CapacityInfo {
   user: User;
@@ -31,10 +30,6 @@ export interface CapacityInfo {
   // person can't realistically finish all assigned work today even if they
   // stop everything else; positive ⇒ slack.
   realAvailable: number;
-  // Unclaimed hours sitting in the pool of a department this user belongs
-  // to. Reported alongside the personal numbers, never inside them — see
-  // userCapacity for why folding it in would break the delegation ranker.
-  teamPoolHours: number;
 }
 
 // userCapacity — `hoursOnShiftToday` is optional so legacy callers keep
@@ -68,19 +63,14 @@ export function userCapacity(
   const mine = openTasks.filter(
     (t) => t.assigneeId === user.id && t.status !== "done" && t.status !== "waiting_on_client"
   );
-  // Unclaimed work queued to a department this user belongs to. Reported as
-  // its OWN number and deliberately NOT folded into usedHours/pct: nobody has
-  // started it, so counting it as personal load would push every member of a
-  // busy team past overBuffer at once — and the delegation ranker filters out
-  // anyone over that line, which would stop it routing anything to the very
-  // team that has a backlog. Callers that want to show "your team also has N
-  // hours waiting" read teamPoolHours; the load bars stay personal.
-  const teamPoolHours = openTasks.reduce((s, t) => {
-    if (t.assigneeId || t.status === "done" || t.status === "waiting_on_client") return s;
-    if (!isTeamTask(t)) return s;
-    if (!t.departmentId || !user.departmentIds.includes(t.departmentId)) return s;
-    return s + Math.max(0, t.estimatedHours - t.actualHours);
-  }, 0);
+  // NOTE: unclaimed work queued to this user's department is deliberately NOT
+  // counted here. Nobody has started it, so folding it into personal load
+  // would push every member of a busy team past overBuffer at once — and
+  // lib/delegation.ts filters out anyone over that line, so the ranker would
+  // stop routing work to the very team that has a backlog. A surface that
+  // wants to show "your team also has N hours waiting" should compute it
+  // there, against a task list and a roster that actually carry department
+  // membership (getAllUsersLight, which feeds the routing paths, does not).
   // Today's hours, schedule-aware. The pct/load bars now shrink when
   // a teammate is on a short day, so a 3h Wednesday with 3h of work
   // reads as 100% even though the flat dailyCapacity column is 8h.
@@ -103,8 +93,7 @@ export function userCapacity(
     overBuffer: pct >= 0.85,
     hoursOnShiftToday: Math.max(0, hoursOnShiftToday),
     workdayRemaining,
-    realAvailable: workdayRemaining - rawUsedHours,
-    teamPoolHours
+    realAvailable: workdayRemaining - rawUsedHours
   };
 }
 

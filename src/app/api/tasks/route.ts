@@ -317,17 +317,22 @@ export async function POST(req: NextRequest) {
     // Website team's #website-to-do channel mirrors what they had in
     // Notion).
     //
-    // Awaited rather than fire-and-forget, for the same reason the DM above
-    // is: Railway tears the request down before the outbound fetch flushes.
-    // It also lets us report back whether the announcement actually went
-    // out — for a team task this channel post IS the notification, and an
-    // unset task_channel_id used to fail completely silently, leaving the
-    // creator looking at "Task created" while nobody was told.
+    // Awaited ONLY for a team task. There the channel post is the sole
+    // outbound notification — there's no assignee to DM — so it's worth the
+    // same round-trip notifyAssignment already costs on the person path, and
+    // the result is worth reporting back (an unset task_channel_id otherwise
+    // fails silently and nobody learns the work exists).
+    //
+    // For every other task this stays fire-and-forget, as it always was.
+    // slackCall issues its fetch with no AbortSignal and this route sets no
+    // maxDuration, so awaiting it unconditionally would let a slow Slack hang
+    // task creation — and since the row is already inserted above, a user
+    // retrying after that hang would create a duplicate.
     let announcement: { delivery: "sent" | "skipped_no_channel" | "failed"; error?: string } = {
       delivery: "skipped_no_channel"
     };
     if (row.department_id) {
-      await (async () => {
+      const announce = (async () => {
         try {
           const { data: dept } = await supabase
             .from("departments")
@@ -377,6 +382,8 @@ export async function POST(req: NextRequest) {
           };
         }
       })();
+      if (queueToTeam) await announce;
+      else void announce;
     }
 
     return NextResponse.json({ task: data, slack, announcement });

@@ -38,9 +38,11 @@
 -- That is why 20260901000100 must be applied BEFORE this file. With
 -- departments.head_user_id in place, "who leads Facebook" is answered by that
 -- column, which is deliberately NULL: intake routes to the ranker / routing
--- review and start-of-day updates notify only leaders. The one leftover is
--- cosmetic and known -- the org chart still lists all three under Facebook,
--- because it reads the global role. This file changes no roles either way.
+-- review and start-of-day updates notify only leaders. The org chart initially
+-- still crowned all three, because it read the global role -- that was fixed
+-- separately, and it now reads head_user_id like everything else, so Facebook
+-- renders with no head and all eight as members. This file changes no roles
+-- either way.
 
 -- RESOLUTION IS TIERED: exact email first, display name as a fallback.
 --

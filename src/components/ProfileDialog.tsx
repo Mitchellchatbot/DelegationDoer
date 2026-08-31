@@ -140,9 +140,13 @@ function ProfileBody({ userId }: { userId: string }) {
   }
 
   const avatarUrl = live?.avatarUrl ?? user.avatarUrl ?? null;
+  // Keep headUserId so the list below can say WHICH department this person
+  // heads. Without that the dialog reads "Department Head" for someone whose
+  // card, one click earlier, called them a Member -- true of both (they lead
+  // one team and merely belong to another) but flatly contradictory on screen.
   const userDepts = user.departmentIds
     .map((id) => team.deptById(id))
-    .filter(Boolean) as { id: string; name: string }[];
+    .filter(Boolean) as { id: string; name: string; headUserId?: string | null }[];
   const cap = userCapacity(user, team.tasks);
   const myTasks = team.tasks.filter((t) => t.assigneeId === user.id);
 
@@ -256,7 +260,11 @@ function ProfileBody({ userId }: { userId: string }) {
             <div className="text-sm text-ink/70 mt-1 inline-flex items-center gap-1.5 flex-wrap">
               <span>{ROLE_LABELS[user.role]}</span>
               {userDepts.length > 0 && (
-                <span className="text-ink/45">· {userDepts.map((d) => d.name).join(" · ")}</span>
+                <span className="text-ink/45">
+                  · {userDepts
+                      .map((d) => (d.headUserId === user.id ? `${d.name} (head)` : d.name))
+                      .join(" · ")}
+                </span>
               )}
               {profile?.location && (
                 <span className="inline-flex items-center gap-1 text-ink/55">

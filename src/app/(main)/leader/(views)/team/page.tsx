@@ -48,12 +48,22 @@ export default function TeamOverviewPage() {
       .then(([uRes, dRes, tRes]) => {
         if (cancelled) return;
         if (Array.isArray(uRes?.users)) {
+          // managerId / secondaryManagerId are what OrgChart builds the
+          // reporting tree from. Dropping them used to be merely cosmetic --
+          // every member fell back to the role-derived head anyway -- but a
+          // department can now legitimately have no head, and then a member
+          // with no manager has nothing to hang from and lands in the flat
+          // orphan row. Without these, EVERY member of a headless department
+          // renders flat on this page, on precisely the screen where the
+          // head-vs-member distinction is the point.
           setUsers(uRes.users.map((u: any) => ({
             id: u.id,
             name: u.name,
             email: u.email,
             role: u.role,
             departmentIds: u.departmentIds ?? [],
+            managerId: u.managerId ?? null,
+            secondaryManagerId: u.secondaryManagerId ?? null,
             skills: [],
             dailyCapacity: u.dailyCapacity ?? 8,
             throughput: {},

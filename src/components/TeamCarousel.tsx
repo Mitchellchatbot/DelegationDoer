@@ -72,6 +72,17 @@ export function TeamCarousel({ users, departments }: Props) {
   // The segmented control at the top toggles between these.
   const [filter, setFilter] = useState<string>("all");
 
+  // When the carousel is narrowed to one department, label people by their role
+  // IN THAT DEPARTMENT. users.role is global -- whoever leads Website carries
+  // role='department_head' inside every department they belong to -- so without
+  // this the carousel captions three people "Department Head" under a Facebook
+  // filter while the roster directly below it calls them Members, on the same
+  // screen. Unfiltered this is a whole-org view, so the global role is right.
+  const activeDept =
+    filter === "all" ? null : (departments ?? []).find((d) => d.id === filter) ?? null;
+  const roleLabelFor = (u: User) =>
+    activeDept ? (activeDept.headUserId === u.id ? "Department Head" : "Member") : ROLE_LABELS[u.role];
+
   // Live presence + emoji per user, fetched + polled. We keep this
   // separate from the static `users` prop (which only carries layout data
   // like role, dept, avatar) so optimistic updates can land here without
@@ -381,7 +392,7 @@ export function TeamCarousel({ users, departments }: Props) {
                     : "0 20px 40px -16px rgba(15,23,42,0.18)"
                 }}
               >
-                <CardFace user={u} isCenter={cls === "center"} />
+                <CardFace user={u} isCenter={cls === "center"} roleLabel={roleLabelFor(u)} />
 
                 {/* Presence pill — top-left. Lives outside the grayscale-able
                     card content so the dot stays vivid even on side cards. */}
@@ -444,7 +455,7 @@ export function TeamCarousel({ users, departments }: Props) {
               <span className="absolute top-1/2 -translate-y-1/2 -right-32 w-24 h-0.5 bg-accent/70" aria-hidden />
             </h3>
             <p className="mt-2 text-sm md:text-base text-muted uppercase tracking-[0.2em] font-medium">
-              {ROLE_LABELS[current.role]}{deptNames ? ` · ${deptNames}` : ""}
+              {roleLabelFor(current)}{deptNames ? ` · ${deptNames}` : ""}
             </p>
             <div className="mt-4 inline-flex items-center gap-3">
               <ProfileDialog
@@ -711,7 +722,7 @@ function SlackCustomEmojiPalette({
 
 /* ============================ CARD FACE ============================ */
 
-function CardFace({ user, isCenter }: { user: User; isCenter: boolean }) {
+function CardFace({ user, isCenter, roleLabel }: { user: User; isCenter: boolean; roleLabel: string }) {
   // The mock-data User passed in here may not have the latest
   // avatarUrl — settings uploads land in the DB, which the
   // PresenceProvider hydrates. Fall through to the live cache when the
@@ -743,7 +754,7 @@ function CardFace({ user, isCenter }: { user: User; isCenter: boolean }) {
             {user.name}
           </div>
           <div className="text-[11px] uppercase tracking-wide opacity-80 truncate">
-            {ROLE_LABELS[user.role]}
+            {roleLabel}
           </div>
         </div>
       </>
@@ -767,7 +778,7 @@ function CardFace({ user, isCenter }: { user: User; isCenter: boolean }) {
         {user.name}
       </div>
       <div className="text-[11px] uppercase tracking-wide text-ink/55 mt-2">
-        {ROLE_LABELS[user.role]}
+        {roleLabel}
       </div>
     </div>
   );

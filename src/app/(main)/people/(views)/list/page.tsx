@@ -40,8 +40,19 @@ export default async function TeamPage() {
   // role==='worker', which omitted anyone who is neither head nor worker. They
   // would have vanished from the section entirely once the head rule changed.
   // Leaders stay out; they are shown in their own row above.
+  // Membership and role are both re-checked here, not just at the write path:
+  // head_user_id is not cleared when someone's memberships are edited, and a
+  // leader named as head would appear both in the CEO hero above and as a
+  // department head card. See the fuller note in OrgChart.buildSubtrees.
   const headOf = (d: Department) =>
-    (d.headUserId ? users.find((u) => u.id === d.headUserId) : null) ?? null;
+    (d.headUserId
+      ? users.find(
+          (u) =>
+            u.id === d.headUserId &&
+            u.departmentIds.includes(d.id) &&
+            u.role !== "leader"
+        )
+      : null) ?? null;
   const membersOf = (deptId: string, head: User | null) =>
     users.filter(
       (u) => u.departmentIds.includes(deptId) && u.id !== head?.id && u.role !== "leader"

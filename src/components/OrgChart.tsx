@@ -12,9 +12,11 @@ import type { Department, Task, User } from "@/lib/types";
 
 // Org chart visualization. Each person is a small circular avatar with
 // their name underneath; full details (capacity, stats, open tasks)
-// live in a popover that opens on hover or click. Curved SVG strokes
-// connect Leader → dept header → head → workers, anchored to the
-// avatar centers.
+// live in a popover that opens on hover or click. Orthogonal elbow strokes
+// connect the leader tier to each department header, and then each person to
+// their direct reports, anchored to the avatar centers. A department with no
+// head (departments.head_user_id is null) draws its members flat, with no
+// strokes below the header.
 //
 // Filtering is the caller's job — pass in the slice of users/depts/tasks
 // you want visualized. Leader console passes everything; dept-head Team
@@ -331,10 +333,12 @@ export function OrgChart({ users, departments, tasks, ceo }: Props) {
                           )}
                         </div>
 
-                        {/* Orphan row: workers whose explicit managerId
-                            points outside the dept and there's no dept
-                            head to fall back on. Rare, but render them
-                            flat so they're not silently dropped. */}
+                        {/* Flat row for members with no parent inside this
+                            dept: their manager is in another department, or
+                            the department has no head to fall back on, or
+                            they were only reachable through a manager cycle.
+                            Routine now that a department can be headless —
+                            for one, this row IS the column. */}
                         {orphanIds.length > 0 && (
                           <div className="grid grid-cols-2 gap-x-3 gap-y-4 w-full place-items-center">
                             {orphanIds.map((wid) => {
@@ -399,15 +403,41 @@ interface DeptSubtree {
 // filter happened to return first.
 //
 // Membership is likewise no longer role-filtered. The old split was
-// role==='department_head' vs role==='worker', which silently omitted anyone
-// who is neither -- so switching only the head rule would have made those three
-// disappear from Facebook altogether rather than showing them as members.
+// role==='department_head' vs role==='worker'. Had the head rule changed while
+// members stayed role==='worker', the three people who lead other teams would
+// have been neither head nor member here and would have vanished from Facebook
+// entirely -- so both halves had to move together.
 // Leaders stay excluded: they render in the top tier, and listing them again
 // inside a column would duplicate them.
 function buildSubtrees(users: User[], departments: Department[]): DeptSubtree[] {
   return departments.map((d) => {
+    // Both predicates matter, and neither is redundant with the write path.
+    //
+    // MEMBERSHIP: PUT /api/departments/[id]/head refuses a non-member, but
+    // nothing keeps that true afterwards -- PATCH /api/users/[id] replaces a
+    // user's memberships wholesale and never touches head_user_id, and the FK
+    // is "on delete set null" on the USER row, not on a membership row. So
+    // dropping the SEO head out of SEO leaves dep_seo.head_user_id pointing at
+    // them. Without this check they would still crown the column, every
+    // remaining member would nest under someone who left, and their tasks would
+    // count toward the department's pills. The old role scan required
+    // membership, so omitting it here would be a straight regression.
+    //
+    // ROLE: leaders render in the top tier, so a leader named as head would be
+    // drawn twice -- once up there, once as this column's root. That is not
+    // hypothetical: Mitchell is role='leader' AND a dep_facebook member, so he
+    // is offered in Facebook's head picker today. (Shaheer is NOT an example --
+    // 20260516400000 made him a leader but 20260520000000 put him back to
+    // role='worker' with is_admin=true, the stealth-admin shape.)
     const head =
-      (d.headUserId ? users.find((u) => u.id === d.headUserId) : null) ?? null;
+      (d.headUserId
+        ? users.find(
+            (u) =>
+              u.id === d.headUserId &&
+              u.departmentIds.includes(d.id) &&
+              u.role !== "leader"
+          )
+        : null) ?? null;
     const members = users.filter(
       (u) =>
         u.departmentIds.includes(d.id) &&
@@ -470,13 +500,27 @@ function buildSubtrees(users: User[], departments: Department[]): DeptSubtree[] 
         for (const child of parentToChildren.get(id) ?? []) stack.push(child);
       }
     };
+    // Retract first. Step 1 can put someone in orphanIds (no usable primary
+    // manager, no head to fall back on) AND still hand them to a secondary
+    // manager, so they would render once flat in the orphan grid and once
+    // nested under that manager. Anyone who is somebody's child has a home in
+    // the tree and does not belong in the flat row.
+    const hasParent = new Set<string>();
+    for (const kids of parentToChildren.values()) for (const k of kids) hasParent.add(k);
+    for (let i = orphanIds.length - 1; i >= 0; i--) {
+      if (hasParent.has(orphanIds[i])) orphanIds.splice(i, 1);
+    }
+
     for (const r of headId ? [headId] : [...orphanIds]) markFrom(r);
 
-    // Promote stragglers ONE AT A TIME, marking everything each one reaches
-    // before considering the next. Promoting them all in a single pass would
-    // surface every member of a cycle as its own root while they simultaneously
-    // render nested under each other -- the same people drawn twice. This way a
-    // cycle is surfaced once, through whichever member comes first.
+    // Then promote stragglers ONE AT A TIME, marking everything each one
+    // reaches before considering the next. Promoting them all in a single pass
+    // would surface every member of a cycle as its own root while they
+    // simultaneously render nested under each other -- the same people drawn
+    // twice. This way a cycle is surfaced once, through whichever member comes
+    // first. Retraction above cannot strand anyone: a member is only removed
+    // because someone else is drawing them, and if that someone is themselves
+    // unreachable this loop promotes them and the child comes along.
     for (const m of members) {
       if (reachable.has(m.id)) continue;
       orphanIds.push(m.id);
@@ -517,9 +561,10 @@ function Subtree({
   nodeRefs: React.MutableRefObject<Map<string, HTMLDivElement | null>>;
   depth?: number;
 }) {
-  // Defense against accidental cycles (shouldn't happen with the DB
-  // check constraint, but in case a future schema change loosens that
-  // — never recurse past a sane depth).
+  // Last-resort depth stop. Note there is NO database constraint preventing
+  // manager cycles — users has only manager_not_self, secondary_not_self and
+  // secondary_not_primary, none of which stops A→B→A. The ancestor guard just
+  // below is the real defence; this is the backstop if that is ever removed.
   const d = depth ?? 0;
   if (d > 12) return null;
   const myPath = parentPath ? `${parentPath}>${user.id}` : user.id;

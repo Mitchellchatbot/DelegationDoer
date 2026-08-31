@@ -40,17 +40,30 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
     // among members; SOD resolves it from the submitter's departments), so a
     // non-member head would be set here and then be invisible everywhere else.
     // The FK only guarantees the user exists, not that they're on the team.
+    // A leader is also rejected. Leaders render in the org chart's top tier, so
+    // one named as a department's head would be drawn twice — once up there,
+    // once as that column's root. Reachable today: Mitchell is role='leader'
+    // and a dep_facebook member. The readers re-check this too, since a role
+    // can change after the head is set.
     if (value) {
-      const { data: membership, error: mErr } = await supabase
+      const { data: candidate, error: mErr } = await supabase
         .from("department_members")
-        .select("user_id")
+        .select("user_id, users!inner(role)")
         .eq("department_id", params.id)
         .eq("user_id", value)
         .maybeSingle();
       if (mErr) return NextResponse.json({ error: mErr.message }, { status: 500 });
-      if (!membership) {
+      if (!candidate) {
         return NextResponse.json(
           { error: "That person isn't a member of this department — add them to it first." },
+          { status: 400 }
+        );
+      }
+      const cu = candidate as unknown as { users: { role: string } | { role: string }[] | null };
+      const candidateRole = (Array.isArray(cu.users) ? cu.users[0] : cu.users)?.role;
+      if (candidateRole === "leader") {
+        return NextResponse.json(
+          { error: "Leaders can't head a department — they already sit above every team in the org chart." },
           { status: 400 }
         );
       }

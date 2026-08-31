@@ -903,7 +903,10 @@ function DepartmentsTab({
                     onChange={(e) => void setHead(d.id, e.target.value || null)}
                   >
                     <option value="">— no head —</option>
-                    {members.map((m) => (
+                    {/* Leaders excluded: they render in the org chart's top
+                        tier, so one set as a department head would appear
+                        twice. The PUT route rejects them too. */}
+                    {members.filter((m) => m.role !== "leader").map((m) => (
                       <option key={m.id} value={m.id}>{m.name}</option>
                     ))}
                   </select>

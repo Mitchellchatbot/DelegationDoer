@@ -26,14 +26,18 @@
 -- data, and the user_id foreign key would reject a bad id outright.
 --
 -- KNOWN CONSEQUENCE, recorded because it is not obvious: Mujtaba, Talha Ali and
--- Hasan Reza already have role='department_head' (Website, Marketing, Software).
--- Role in DD is GLOBAL, not per-department, so once they are Facebook members
--- they also render as Facebook heads in the org chart, and each starts
--- receiving the SOD-submission DM that api/sod/submit fans out to every
--- department_head of the submitter's departments. That is pre-existing
--- behaviour meeting new membership -- this file changes no roles. The
--- companion code change makes the "who is the head" lookup deterministic so
--- Facebook intake at least stops picking a different head between runs.
+-- Hasan Reza already have role='department_head' (Website, Marketing, Software),
+-- and role in DD is GLOBAL rather than per-department. Before 20260901000100
+-- that would have made all three de-facto Facebook heads -- each fielding the
+-- start-of-day DM that api/sod/submit fans out, and each a candidate for
+-- Facebook intake -- for a team none of them runs.
+--
+-- That is why 20260901000100 must be applied BEFORE this file. With
+-- departments.head_user_id in place, "who leads Facebook" is answered by that
+-- column, which is deliberately NULL: intake routes to the ranker / routing
+-- review and start-of-day updates notify only leaders. The one leftover is
+-- cosmetic and known -- the org chart still lists all three under Facebook,
+-- because it reads the global role. This file changes no roles either way.
 
 -- drop-then-create, not a bare create: the guard below can raise, and under psql
 -- autocommit the create has already committed by then, so a bare create would

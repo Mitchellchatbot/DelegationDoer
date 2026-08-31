@@ -7,7 +7,6 @@ import { Crown } from "lucide-react";
 import { Countdown } from "./Countdown";
 import { usePresence } from "@/lib/presence-context";
 import { cn, initials } from "@/lib/utils";
-import { ROLE_LABELS } from "@/lib/auth";
 import { userCapacity } from "@/lib/capacity";
 import type { Department, Task, User } from "@/lib/types";
 
@@ -37,9 +36,32 @@ const PRIORITY_RANK: Record<string, number> = {
   critical: 0, high: 1, medium: 2, low: 3
 };
 
-const ROLE_RING: Record<User["role"], string> = {
+// What a node IS in the column being drawn: the org's leader tier, the
+// department's head, or one of its members.
+type NodeTone = "leader" | "head" | "worker";
+
+// Caption and ring are POSITIONAL -- keyed on the node's role IN THE COLUMN
+// being drawn, not on users.role.
+//
+// users.role is global: whoever leads Website carries role='department_head'
+// everywhere, so a role-keyed caption printed "Department Head" under them in
+// every department they merely belong to. That is precisely what made Facebook
+// look like it had three heads while departments.head_user_id said it had none.
+// It also cut the other way -- a head whose global role is 'worker' would have
+// rendered at head size with a worker caption and a blue ring.
+//
+// "Member" rather than "Worker": inside a department column the meaningful
+// distinction is head vs everyone else, and the global role is already visible
+// on the person's own profile.
+const TONE_LABELS: Record<NodeTone, string> = {
+  leader: "Leader",
+  head: "Department Head",
+  worker: "Member"
+};
+
+const TONE_RING: Record<NodeTone, string> = {
   leader: "ring-amber-300",
-  department_head: "ring-indigo-300",
+  head: "ring-indigo-300",
   worker: "ring-blue-200"
 };
 
@@ -231,13 +253,15 @@ export function OrgChart({ users, departments, tasks, ceo }: Props) {
               with no way to reach it. */}
           <div className="flex items-start justify-start gap-6 min-w-fit px-1">
             {departments.map((d) => {
-              const heads = users.filter(
-                (u) => u.role === "department_head" && u.departmentIds.includes(d.id)
-              );
-              const workers = users.filter(
-                (u) => u.role === "worker" && u.departmentIds.includes(d.id)
-              );
-              const memberIds = new Set([...heads, ...workers].map((u) => u.id));
+              // Head and membership both come from the subtree, which resolves
+              // them from departments.head_user_id. This used to be a second,
+              // independent role scan living alongside buildSubtrees' -- two
+              // definitions of "head" that could disagree.
+              const tree = subtreeByDept.find((t) => t.deptId === d.id);
+              const headId = tree?.rootIds[0] ?? null;
+              const head = headId ? tree?.userById.get(headId) ?? null : null;
+              const memberIds = tree?.memberIds ?? new Set<string>();
+              const memberCount = memberIds.size;
               const completedThisWeek = tasks.filter((t) =>
                 t.assigneeId &&
                 memberIds.has(t.assigneeId) &&
@@ -274,9 +298,8 @@ export function OrgChart({ users, departments, tasks, ceo }: Props) {
                   </div>
 
                   {(() => {
-                    const tree = subtreeByDept.find((t) => t.deptId === d.id);
                     const orphanIds = tree?.orphanIds ?? [];
-                    if (heads.length === 0 && workers.length === 0) {
+                    if (memberCount === 0) {
                       return (
                         <div className="badge badge-tag self-center text-[10px] opacity-70">
                           No members
@@ -286,12 +309,12 @@ export function OrgChart({ users, departments, tasks, ceo }: Props) {
                     return (
                       <>
                         <div className="flex flex-col items-center gap-4 w-full">
-                          {heads.length === 0 ? (
+                          {!head ? (
                             <div className="badge badge-tag self-center text-[10px] opacity-70">
                               No head
                             </div>
                           ) : (
-                            heads.map((h) => (
+                            [head].map((h) => (
                               <Subtree
                                 key={h.id}
                                 deptId={d.id}
@@ -351,33 +374,54 @@ export function OrgChart({ users, departments, tasks, ceo }: Props) {
 
 interface DeptSubtree {
   deptId: string;
-  // All non-leader members of this dept (heads + workers), keyed by id.
+  // All non-leader members of this dept (the head + everyone else), keyed by id.
   userById: Map<string, User>;
-  // Direct reports of each parent (head or worker) inside this dept.
+  // Direct reports of each parent inside this dept.
   parentToChildren: Map<string, string[]>;
-  // Heads of this dept — natural roots of the tree.
+  // The department's head, from departments.head_user_id — at most one, and
+  // null when nobody has been named. Empty means the column renders its
+  // "No head" badge and every member falls into orphanIds.
   rootIds: string[];
-  // Workers whose explicit managerId points outside the dept and there's
-  // no head to fall back on. Rendered flat at the bottom of the column.
+  // Members with no reachable parent inside this dept: their managerId points
+  // outside it, or there is no head to fall back on, or they are only
+  // reachable through a manager cycle. Rendered flat so they can't vanish.
   orphanIds: string[];
+  // Every non-leader member, head included — the set the department's task
+  // pills count over.
+  memberIds: Set<string>;
 }
 
+// Who heads a department comes from departments.head_user_id -- NOT from
+// users.role. Role in DD is GLOBAL: whoever leads Website carries
+// role='department_head' inside every department they merely belong to, so a
+// role scan crowned three separate "heads" of Facebook, a team none of them
+// runs, and nested every Facebook member under whichever one the unordered
+// filter happened to return first.
+//
+// Membership is likewise no longer role-filtered. The old split was
+// role==='department_head' vs role==='worker', which silently omitted anyone
+// who is neither -- so switching only the head rule would have made those three
+// disappear from Facebook altogether rather than showing them as members.
+// Leaders stay excluded: they render in the top tier, and listing them again
+// inside a column would duplicate them.
 function buildSubtrees(users: User[], departments: Department[]): DeptSubtree[] {
   return departments.map((d) => {
-    const heads = users.filter(
-      (u) => u.role === "department_head" && u.departmentIds.includes(d.id)
-    );
-    const workers = users.filter(
-      (u) => u.role === "worker" && u.departmentIds.includes(d.id)
+    const head =
+      (d.headUserId ? users.find((u) => u.id === d.headUserId) : null) ?? null;
+    const members = users.filter(
+      (u) =>
+        u.departmentIds.includes(d.id) &&
+        u.id !== head?.id &&
+        u.role !== "leader"
     );
     const userById = new Map<string, User>();
-    for (const u of [...heads, ...workers]) userById.set(u.id, u);
+    for (const u of head ? [head, ...members] : members) userById.set(u.id, u);
 
     const parentToChildren = new Map<string, string[]>();
-    const headId = heads[0]?.id ?? null;
+    const headId = head?.id ?? null;
     const orphanIds: string[] = [];
 
-    for (const w of workers) {
+    for (const w of members) {
       // Use the explicit managerId only when it points to another member
       // of THIS dept (head or worker). Cross-dept managerIds are ignored
       // here — that user shows up as a child in their own dept's column,
@@ -410,12 +454,42 @@ function buildSubtrees(users: User[], departments: Department[]): DeptSubtree[] 
       }
     }
 
+    // Reachability sweep. orphanIds used to be unreachable in practice -- a
+    // head always existed, so every member fell back to it. With head_user_id
+    // a department can legitimately have none, which makes this the primary
+    // path and exposes a hole: two members naming each other as managerId are
+    // reachable only from each other, so neither is a root and neither would
+    // ever render. Anything not reachable from a root becomes an orphan.
+    const reachable = new Set<string>();
+    const markFrom = (start: string) => {
+      const stack = [start];
+      while (stack.length > 0) {
+        const id = stack.pop() as string;
+        if (reachable.has(id)) continue;   // also breaks manager cycles
+        reachable.add(id);
+        for (const child of parentToChildren.get(id) ?? []) stack.push(child);
+      }
+    };
+    for (const r of headId ? [headId] : [...orphanIds]) markFrom(r);
+
+    // Promote stragglers ONE AT A TIME, marking everything each one reaches
+    // before considering the next. Promoting them all in a single pass would
+    // surface every member of a cycle as its own root while they simultaneously
+    // render nested under each other -- the same people drawn twice. This way a
+    // cycle is surfaced once, through whichever member comes first.
+    for (const m of members) {
+      if (reachable.has(m.id)) continue;
+      orphanIds.push(m.id);
+      markFrom(m.id);
+    }
+
     return {
       deptId: d.id,
       userById,
       parentToChildren,
-      rootIds: heads.map((h) => h.id),
-      orphanIds
+      rootIds: headId ? [headId] : [],
+      orphanIds,
+      memberIds: new Set(userById.keys())
     };
   });
 }
@@ -435,7 +509,7 @@ function Subtree({
   deptId: string;
   user: User;
   parentPath: string;
-  tone: "head" | "worker";
+  tone: Exclude<NodeTone, "leader">;
   childrenByParent: Map<string, string[]>;
   userById: Map<string, User>;
   tasks: Task[];
@@ -450,7 +524,17 @@ function Subtree({
   if (d > 12) return null;
   const myPath = parentPath ? `${parentPath}>${user.id}` : user.id;
   const kidIds = childrenByParent.get(user.id) ?? [];
-  const kids = kidIds.map((k) => userById.get(k)).filter((u): u is User => !!u);
+  // Ancestor guard. A manager cycle (A reports to B, B reports to A) would
+  // otherwise redraw the same people over and over until the depth cap above
+  // caught it. That state used to be unreachable -- with a head, cycle members
+  // were simply never rendered at all -- but head_user_id lets a department
+  // legitimately have no head, which makes it reachable. Nobody is lost by
+  // skipping the repeat: buildSubtrees' reachability sweep guarantees each
+  // cycle already surfaces once as an orphan root.
+  const ancestors = new Set(myPath.split(">"));
+  const kids = kidIds
+    .map((k) => userById.get(k))
+    .filter((u): u is User => !!u && !ancestors.has(u.id));
   return (
     <div className="flex flex-col items-center gap-4 shrink-0">
       <div ref={(el) => { nodeRefs.current.set(`${deptId}:${myPath}`, el); }}>
@@ -514,7 +598,7 @@ function PersonNode({
   user, tone, tasks, allUserTasks, departments
 }: {
   user: User;
-  tone: "leader" | "head" | "worker";
+  tone: NodeTone;
   tasks: Task[];
   allUserTasks: Task[];
   departments: Department[];
@@ -528,7 +612,7 @@ function PersonNode({
   const emoji = rawEmoji && /^:[^:\s]+:$/.test(rawEmoji) ? null : rawEmoji;
 
   const size = tone === "leader" ? 96 : tone === "head" ? 84 : 72;
-  const ringClass = ROLE_RING[user.role];
+  const ringClass = TONE_RING[tone];
 
   const deptNames = user.departmentIds
     .map((id) => departments.find((d) => d.id === id)?.name)
@@ -611,7 +695,7 @@ function PersonNode({
               {user.name}
             </div>
             <div className="text-[9.5px] uppercase tracking-wide text-ink/55 truncate">
-              {ROLE_LABELS[user.role]}
+              {TONE_LABELS[tone]}
             </div>
           </div>
         </button>
@@ -641,7 +725,7 @@ function NodePopoverContent({
   user, tone, openTasks, allUserTasks, avatarUrl, departmentNames
 }: {
   user: User;
-  tone: "leader" | "head" | "worker";
+  tone: NodeTone;
   openTasks: Task[];
   allUserTasks: Task[];
   avatarUrl: string | null;
@@ -701,7 +785,7 @@ function NodePopoverContent({
               {tone === "leader" && <Crown className="w-3.5 h-3.5 text-amber-200 shrink-0" />}
             </div>
             <div className="text-[10px] uppercase tracking-wide text-white/75">
-              {ROLE_LABELS[user.role]}
+              {TONE_LABELS[tone]}
             </div>
           </div>
         </div>

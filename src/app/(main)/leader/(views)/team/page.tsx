@@ -61,8 +61,16 @@ export default function TeamOverviewPage() {
           })));
         }
         if (Array.isArray(dRes?.departments)) {
+          // Carry the real fields through. headUserId is what OrgChart uses to
+          // decide who heads each department (users.role is global, so a role
+          // scan credits anyone who leads another team). description/taskTypes
+          // were being blanked for no reason.
           setDepartments(dRes.departments.map((d: any) => ({
-            id: d.id, name: d.name, description: "", taskTypes: []
+            id: d.id,
+            name: d.name,
+            description: d.description ?? "",
+            taskTypes: d.taskTypes ?? [],
+            headUserId: d.headUserId ?? null
           })));
         }
         if (Array.isArray(tRes?.tasks)) {

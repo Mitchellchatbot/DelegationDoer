@@ -1,13 +1,12 @@
 import { PersonAvatar } from "@/components/PersonAvatar";
 import { CapacityBar } from "@/components/CapacityBar";
 import { userCapacity } from "@/lib/capacity";
-import { ROLE_LABELS } from "@/lib/auth";
 import { Crown, Users as UsersIcon, ListChecks, CheckCircle2, Flame } from "lucide-react";
 import { PageHero } from "@/components/PageHero";
 import { TeamCarousel } from "@/components/TeamCarousel";
 import { ProfileDialog } from "@/components/ProfileDialog";
 import { getAllUsers, getAllTasks, getDepartments } from "@/lib/server-data";
-import type { User, Task } from "@/lib/types";
+import type { User, Task, Department } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
@@ -31,10 +30,22 @@ export default async function TeamPage() {
     getAllTasks()
   ]);
   const ceo = users.find((u) => u.role === "leader");
-  const headsOf = (deptId: string) =>
-    users.filter((u) => u.role === "department_head" && u.departmentIds.includes(deptId));
-  const workersOf = (deptId: string) =>
-    users.filter((u) => u.role === "worker" && u.departmentIds.includes(deptId));
+  // Head comes from departments.head_user_id, not users.role. Role is GLOBAL in
+  // DD -- whoever leads Website reads as a "department_head" inside every
+  // department they merely belong to -- so a role scan here crowned three
+  // separate heads of Facebook, a team none of them runs, and disagreed with
+  // both the org chart and the Leader Console.
+  //
+  // Members are likewise no longer role-filtered: the old split was
+  // role==='worker', which omitted anyone who is neither head nor worker. They
+  // would have vanished from the section entirely once the head rule changed.
+  // Leaders stay out; they are shown in their own row above.
+  const headOf = (d: Department) =>
+    (d.headUserId ? users.find((u) => u.id === d.headUserId) : null) ?? null;
+  const membersOf = (deptId: string, head: User | null) =>
+    users.filter(
+      (u) => u.departmentIds.includes(deptId) && u.id !== head?.id && u.role !== "leader"
+    );
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
@@ -74,9 +85,9 @@ export default async function TeamPage() {
       )}
 
       {departments.map((d) => {
-        const heads = headsOf(d.id);
-        const workers = workersOf(d.id);
-        const memberIds = new Set([...heads, ...workers].map((u) => u.id));
+        const head = headOf(d);
+        const members = membersOf(d.id, head);
+        const memberIds = new Set((head ? [head, ...members] : members).map((u) => u.id));
         const deptOpen = tasks.filter((t) => t.assigneeId && memberIds.has(t.assigneeId) && t.status !== "done").length;
         const deptDone = tasks.filter((t) => t.assigneeId && memberIds.has(t.assigneeId) && t.status === "done").length;
         return (
@@ -103,12 +114,12 @@ export default async function TeamPage() {
               </div>
             </div>
 
-            {heads.length === 0 && workers.length === 0 ? (
+            {memberIds.size === 0 ? (
               <div className="card p-4 text-sm text-muted">No members yet.</div>
             ) : (
               <div className="grid grid-cols-3 gap-3">
-                {heads.map((u) => <PersonCard key={u.id} user={u} tasks={tasks} accent />)}
-                {workers.map((u) => <PersonCard key={u.id} user={u} tasks={tasks} />)}
+                {head && <PersonCard key={head.id} user={head} tasks={tasks} accent isHead />}
+                {members.map((u) => <PersonCard key={u.id} user={u} tasks={tasks} />)}
               </div>
             )}
           </section>
@@ -118,7 +129,7 @@ export default async function TeamPage() {
   );
 }
 
-function PersonCard({ user, tasks, accent }: { user: User; tasks: Task[]; accent?: boolean }) {
+function PersonCard({ user, tasks, accent, isHead }: { user: User; tasks: Task[]; accent?: boolean; isHead?: boolean }) {
   const cap = userCapacity(user, tasks);
   // Live /api/skills is fetched per profile dialog; the inline chip
   // row here uses the User.skills text array we already have so the
@@ -150,11 +161,14 @@ function PersonCard({ user, tasks, accent }: { user: User; tasks: Task[]; accent
         <div className="flex-1 min-w-0">
           <div className="text-sm font-semibold truncate flex items-center gap-1.5">
             {user.name}
-            {user.role === "department_head" && (
+            {/* Crown means "heads THIS department", not "is a head somewhere". */}
+            {isHead && (
               <Crown className="w-3.5 h-3.5 text-amber-500 shrink-0" />
             )}
           </div>
-          <div className="text-xs text-ink/60">{ROLE_LABELS[user.role]} · {user.dailyCapacity}h/day</div>
+          <div className="text-xs text-ink/60">
+            {isHead ? "Department Head" : "Member"} · {user.dailyCapacity}h/day
+          </div>
         </div>
       </div>
 

@@ -76,7 +76,12 @@ export function TeamProvider({ children }: { children: React.ReactNode }) {
               id: d.id as string,
               name: d.name as string,
               description: (d.description as string) ?? "",
-              taskTypes: (d.taskTypes as string[]) ?? []
+              taskTypes: (d.taskTypes as string[]) ?? [],
+              // Same trap as managerId above: Department.headUserId is optional,
+              // so omitting it here type-checks and every consumer silently sees
+              // undefined -- which is how the org chart kept deciding headship
+              // from the global users.role after the column already existed.
+              headUserId: (d.headUserId as string | null) ?? null
             }))
           : [],
         tasks: Array.isArray(tRes?.tasks) ? (tRes.tasks as Task[]) : [],

@@ -32,6 +32,7 @@
 // Returns a structured outcome — { skipped: "already-logged" } if dedupe
 // fired, otherwise the created task id + how it was routed + decisionId.
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
+import { departmentHead } from "@/lib/department-head";
 import { getAllTasks, getDepartments, getAllUsersLight } from "@/lib/server-data";
 import { classifyEmailThread, type ClassifiedEmail } from "@/lib/email-classifier";
 import { matchRoutingRule, rowToRule, type RoutingRule } from "@/lib/routing-match";
@@ -583,25 +584,6 @@ async function resolveRuleAssignee(
   return null;
 }
 
-async function departmentHead(
-  departmentId: string,
-  supabase: SbClient
-): Promise<{ id: string; name: string } | null> {
-  const { data: members } = await supabase
-    .from("department_members")
-    .select("user_id")
-    .eq("department_id", departmentId);
-  const memberIds = (members ?? []).map((r: { user_id: string }) => r.user_id);
-  if (memberIds.length === 0) return null;
-  const { data: users } = await supabase
-    .from("users")
-    .select("id, name, role")
-    .in("id", memberIds);
-  const head =
-    (users ?? []).find((u: { role: string }) => u.role === "department_head") ??
-    (users ?? [])[0];
-  return head ? { id: head.id, name: head.name } : null;
-}
 
 // Runs the ranker and returns the full ranked list (not just the top
 // pick) so callers can store the top-N reasoning blob into

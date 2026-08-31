@@ -47,3 +47,25 @@ export async function fetchAllRows<T>(
   }
   return { data: out, error: null };
 }
+
+// True only for PostgREST's "column does not exist" (SQLSTATE 42703).
+//
+// Several readers select a column added by a migration that, in this project,
+// is applied BY HAND — merging a PR runs nothing — so there can be a window
+// where deployed code asks for a column the database doesn't have yet. Those
+// readers fall back to a pre-migration query.
+//
+// The fallback must be gated on THIS error and nothing else. Falling back on
+// any error means a transient 5xx, a statement timeout or a dropped connection
+// silently re-enables the legacy behaviour the migration existed to remove —
+// which reads as "the feature works most of the time". Mirrors the existing
+// convention in /api/users: "Only fall through on 'column does not exist'.
+// Anything else is a real failure and shouldn't be papered over."
+export function isMissingColumnError(
+  error: { code?: string | null; message?: string | null } | null | undefined
+): boolean {
+  if (!error) return false;
+  if (error.code === "42703") return true;
+  // Older/proxied responses don't always carry the code.
+  return /column .* does not exist/i.test(error.message ?? "");
+}

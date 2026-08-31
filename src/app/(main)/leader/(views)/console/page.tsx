@@ -72,7 +72,8 @@ export default function LeaderConsolePage() {
               id: d.id,
               name: d.name,
               description: d.description ?? "",
-              taskTypes: d.taskTypes ?? []
+              taskTypes: d.taskTypes ?? [],
+              headUserId: d.headUserId ?? null
             }))
           );
         }
@@ -772,6 +773,30 @@ function DepartmentsTab({
   const [draftName, setDraftName] = useState("");
   const [draftDesc, setDraftDesc] = useState("");
   const [creating, setCreating] = useState(false);
+  const [savingHead, setSavingHead] = useState<string | null>(null);
+
+  // PUT /api/departments/[id]/head. Optimistic, reverting on failure — same
+  // shape as persistUser in the People tab. Passing null clears the head, which
+  // is a supported state rather than an error.
+  async function setHead(departmentId: string, headUserId: string | null) {
+    const prev = departments;
+    setSavingHead(departmentId);
+    setDepartments(departments.map((d) => d.id === departmentId ? { ...d, headUserId } : d));
+    try {
+      const res = await fetch(`/api/departments/${encodeURIComponent(departmentId)}/head`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ headUserId })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+    } catch (err) {
+      setDepartments(prev);
+      toast.error(`Couldn't set the head — ${err instanceof Error ? err.message : "unknown error"}`);
+    } finally {
+      setSavingHead(null);
+    }
+  }
 
   // POST /api/departments, then append the row the SERVER returned — the id
   // is derived server-side, so trusting a locally-guessed one would drift.
@@ -807,10 +832,21 @@ function DepartmentsTab({
 
       <div className="grid grid-cols-2 gap-3">
         {departments.map((d) => {
-          const heads = people.filter((u) => u.role === "department_head" && u.departmentIds.includes(d.id));
-          const workers = people.filter((u) => u.role === "worker" && u.departmentIds.includes(d.id));
+          // The head is whoever departments.head_user_id names — NOT everyone
+          // carrying role='department_head'. Role is global, so a Website head
+          // who also joins Facebook would otherwise render as a Facebook head
+          // too, contradicting what intake and the SOD notifier actually do.
+          const head = d.headUserId ? people.find((u) => u.id === d.headUserId) ?? null : null;
+          // Everyone else on the team, whatever their global role.
+          const members = people.filter((u) => u.departmentIds.includes(d.id));
+          const workers = members.filter((u) => u.id !== head?.id);
           // Open task count for the "View tasks" deep link.
           const openTaskCount = tasks.filter((t) => t.departmentId === d.id && t.status !== "done").length;
+          // Literal 'pending', not "not done", so the number matches exactly what
+          // the board renders under ?status=pending. Labelled by department_id —
+          // the same signal the board's dept chips use — so a department task
+          // assigned outside the team still counts.
+          const pendingCount = tasks.filter((t) => t.departmentId === d.id && t.status === "pending").length;
           return (
             <div key={d.id} className="card p-4">
               <div className="flex items-start justify-between gap-3">
@@ -822,7 +858,7 @@ function DepartmentsTab({
                   <div className="text-xs text-muted mt-0.5 max-w-md">{d.description}</div>
                 </div>
                 <div className="flex flex-col items-end gap-1.5 shrink-0">
-                  <span className="text-[11px] text-muted">{workers.length + heads.length} member{workers.length + heads.length === 1 ? "" : "s"}</span>
+                  <span className="text-[11px] text-muted">{members.length} member{members.length === 1 ? "" : "s"}</span>
                   <Link
                     href={`/tasks/board?dept=${encodeURIComponent(d.id)}`}
                     className="inline-flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-full bg-gradient-to-r from-blue-100 to-indigo-100 text-indigo-700 border border-indigo-200/60 hover:shadow-sm hover:-translate-y-0.5 transition-all"
@@ -830,19 +866,54 @@ function DepartmentsTab({
                     View {openTaskCount} task{openTaskCount === 1 ? "" : "s"}
                     <ArrowRight className="w-3 h-3" />
                   </Link>
+                  {/* Pending-only slice. groupBy=status pairs with the status
+                      filter so the board renders a single "Pending" column —
+                      and, unlike person mode, never drops a task whose assignee
+                      isn't a member of the department. */}
+                  <Link
+                    href={`/tasks/board?dept=${encodeURIComponent(d.id)}&status=pending&groupBy=status`}
+                    className={
+                      "inline-flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-full border transition-all hover:shadow-sm hover:-translate-y-0.5 " +
+                      (pendingCount > 0
+                        ? "bg-amber-50 text-amber-700 border-amber-200/70"
+                        : "bg-surface2 text-muted border-border")
+                    }
+                  >
+                    <Clock className="w-3 h-3" />
+                    {pendingCount} pending
+                    <ArrowRight className="w-3 h-3" />
+                  </Link>
                 </div>
               </div>
 
               <div className="mt-3">
-                <div className="text-[11px] uppercase tracking-wide text-muted mb-1.5">Heads</div>
-                <div className="flex flex-wrap gap-2">
-                  {heads.length === 0 && <span className="text-xs text-muted">— no head assigned —</span>}
-                  {heads.map((h) => (
-                    <span key={h.id} className="inline-flex items-center gap-1.5 px-2 py-1 rounded-full bg-accent/10 border border-accent/30 text-accent text-xs">
-                      <PersonAvatar userId={h.id} name={h.name} imageUrl={h.avatarUrl} size={16} /> {h.name}
+                <div className="text-[11px] uppercase tracking-wide text-muted mb-1.5">Head</div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  {head && (
+                    <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-full bg-accent/10 border border-accent/30 text-accent text-xs">
+                      <PersonAvatar userId={head.id} name={head.name} imageUrl={head.avatarUrl} size={16} /> {head.name}
                     </span>
-                  ))}
+                  )}
+                  {/* Only members can lead — the API enforces this too, so the
+                      picker never offers a choice the server would reject. */}
+                  <select
+                    className="input py-1 w-auto text-xs"
+                    value={d.headUserId ?? ""}
+                    disabled={savingHead === d.id}
+                    onChange={(e) => void setHead(d.id, e.target.value || null)}
+                  >
+                    <option value="">— no head —</option>
+                    {members.map((m) => (
+                      <option key={m.id} value={m.id}>{m.name}</option>
+                    ))}
+                  </select>
+                  {savingHead === d.id && <span className="text-[11px] text-muted">saving…</span>}
                 </div>
+                {!head && (
+                  <div className="text-[11px] text-muted mt-1">
+                    No head: work auto-routed here goes to the ranker or routing review, and start-of-day updates notify only leaders.
+                  </div>
+                )}
               </div>
 
               <div className="mt-3">

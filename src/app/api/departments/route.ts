@@ -6,7 +6,7 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 
 export const dynamic = "force-dynamic";
 
-const DEPT_COLS = "id, name, description, task_types, slack_channel_id, task_channel_id";
+const DEPT_COLS = "id, name, description, task_types, slack_channel_id, task_channel_id, head_user_id";
 
 type DepartmentRow = {
   id: string;
@@ -15,6 +15,7 @@ type DepartmentRow = {
   task_types: string[] | null;
   slack_channel_id: string | null;
   task_channel_id: string | null;
+  head_user_id: string | null;
 };
 
 function toDepartment(d: DepartmentRow) {
@@ -24,7 +25,8 @@ function toDepartment(d: DepartmentRow) {
     description: d.description ?? "",
     taskTypes: d.task_types ?? [],
     slackChannelId: d.slack_channel_id ?? null,
-    taskChannelId: d.task_channel_id ?? null
+    taskChannelId: d.task_channel_id ?? null,
+    headUserId: d.head_user_id ?? null
   };
 }
 

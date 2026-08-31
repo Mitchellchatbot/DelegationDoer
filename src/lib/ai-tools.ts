@@ -1,6 +1,7 @@
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { getAllTasks, getAllUsersLight, getUserById, getDepartments, getLeaderIds } from "@/lib/server-data";
 import { canViewTaskScopedToDepartment } from "@/lib/access";
+import { TEAM_TAG, stripTeamTag } from "@/lib/task-team";
 import { userCapacity } from "@/lib/capacity";
 import { listUserEvents } from "@/lib/google-calendar";
 import { embedQuery } from "@/lib/sop-ingest";
@@ -332,7 +333,8 @@ export const AI_TOOLS = [
     name: "create_task",
     description:
       "Create a new task and assign it. Use this when the user says something like 'make a task for X to do Y' or 'add a task'. " +
-      "Required: title + assigneeId (resolve names to ids with find_user_by_name first). " +
+      "Required: title, plus EITHER assigneeId (resolve names to ids with find_user_by_name first) OR assignToDepartment:true with a departmentId. " +
+      "Use assignToDepartment when the user names a team rather than a person — 'make a task for the software team', 'the Facebook team should handle this', 'let the team divide it up'. The task goes into that department's pool with nobody assigned and any member can claim it. Only leaders and department heads can do this. " +
       "Optional: description (Markdown is fine), priority (low/medium/high/critical, default medium), departmentId, estimatedHours (default 2), dueDateISO, tags, clientName. " +
       "Returns { taskId, url }. " +
       "Permissions: leaders/admins can assign to anyone; department heads can assign to anyone in their departments; workers can only create tasks for themselves. Trying to assign outside scope returns an error.",
@@ -342,6 +344,11 @@ export const AI_TOOLS = [
         title: { type: "string" },
         description: { type: "string" },
         assigneeId: { type: "string" },
+        assignToDepartment: {
+          type: "boolean",
+          description:
+            "Hand the task to a whole department instead of a person. Requires departmentId and no assigneeId."
+        },
         priority: { type: "string", enum: ["low", "medium", "high", "critical"] },
         departmentId: { type: "string" },
         estimatedHours: { type: "number" },
@@ -349,7 +356,7 @@ export const AI_TOOLS = [
         tags: { type: "array", items: { type: "string" } },
         clientName: { type: "string" }
       },
-      required: ["title", "assigneeId"]
+      required: ["title"]
     }
   }
 ] as const;
@@ -1596,7 +1603,34 @@ async function createTask(
   const title = typeof input.title === "string" ? input.title.trim() : "";
   const assigneeId = typeof input.assigneeId === "string" ? input.assigneeId.trim() : "";
   if (!title) return { error: "title required" };
-  if (!assigneeId) return { error: "assigneeId required (use find_user_by_name first if you only have a name)" };
+
+  const actor = ctx.actor;
+  const actorIsLeader = actor.role === "leader" || actor.isAdmin === true;
+
+  // Team task — "make a task for the software team". Mirrors the same gate
+  // POST /api/tasks applies (canQueueTaskToTeam): leaders + department heads
+  // only, department required, no assignee.
+  const wantsTeam = input.assignToDepartment === true && !assigneeId;
+  if (wantsTeam) {
+    if (!actorIsLeader && actor.role !== "department_head") {
+      return { error: "Only leaders and department heads can hand work to a whole team." };
+    }
+    const teamDeptId = typeof input.departmentId === "string" ? input.departmentId.trim() : "";
+    if (!teamDeptId) {
+      return { error: "departmentId is required when assigning to a whole team (use list_departments)." };
+    }
+    if (!actorIsLeader && !(actor.departmentIds ?? []).includes(teamDeptId)) {
+      return { error: "Department heads can only queue work to their own departments." };
+    }
+    return createTeamTask({ ...input, title, departmentId: teamDeptId }, ctx);
+  }
+
+  if (!assigneeId) {
+    return {
+      error:
+        "assigneeId required (use find_user_by_name first if you only have a name), or pass assignToDepartment:true with a departmentId to hand it to a whole team"
+    };
+  }
 
   const supabase = getSupabaseAdmin();
 
@@ -1608,8 +1642,6 @@ async function createTask(
   ]);
   if (!assignee) return { error: "assigneeId not found" };
 
-  const actor = ctx.actor;
-  const actorIsLeader = actor.role === "leader" || actor.isAdmin === true;
   if (!actorIsLeader) {
     if (actor.role === "department_head") {
       const overlap = (assignee.departmentIds ?? []).some((d) =>
@@ -1697,6 +1729,99 @@ async function createTask(
     taskId: id,
     url: baseUrl ? `${baseUrl}/tasks/${id}` : `/tasks/${id}`,
     assignedTo: assignee.name,
+    dueDate
+  };
+}
+
+// Team-task branch of create_task: department pool, nobody assigned. Split
+// out rather than threaded through the person path because almost nothing is
+// shared — no assignee to permission-check, no assignee schedule to derive a
+// deadline from, and the marker tag has to be applied.
+async function createTeamTask(
+  input: Record<string, unknown>,
+  ctx: ToolContext
+): Promise<unknown> {
+  const supabase = getSupabaseAdmin();
+  const actor = ctx.actor;
+  const title = input.title as string;
+  const departmentId = input.departmentId as string;
+
+  const { data: dept } = await supabase
+    .from("departments")
+    .select("id, name")
+    .eq("id", departmentId)
+    .maybeSingle();
+  if (!dept) return { error: `No department with id ${departmentId} (use list_departments).` };
+
+  const description = typeof input.description === "string" ? input.description : "";
+  const priority = (() => {
+    const p = typeof input.priority === "string" ? input.priority : "medium";
+    return ["low", "medium", "high", "critical"].includes(p) ? p : "medium";
+  })();
+  const estimatedHours =
+    typeof input.estimatedHours === "number" && input.estimatedHours > 0 ? input.estimatedHours : 2;
+  const clientName = typeof input.clientName === "string" ? input.clientName.trim() || null : null;
+  // stripTeamTag first so the model can't hand-roll the marker into `tags`
+  // and bypass the gate above.
+  const tags = [
+    ...stripTeamTag(Array.isArray(input.tags) ? input.tags : []),
+    TEAM_TAG
+  ];
+
+  // No assignee means no schedule to walk, so fall back to a standard 8h
+  // weekday. A team task with no due date would never be overdue, never
+  // surface on an overdue tile, and never age out — see NewTaskForm for the
+  // same reasoning.
+  const { deadlineFromEstimate } = await import("@/lib/capacity");
+  const dueDate =
+    typeof input.dueDateISO === "string" && input.dueDateISO
+      ? new Date(input.dueDateISO).toISOString()
+      : deadlineFromEstimate(estimatedHours, {
+          dailyCapacity: 8,
+          weeklySchedule: undefined,
+          workTimezone: actor.workTimezone ?? null
+        });
+
+  const id = `t_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+  const now = new Date().toISOString();
+  const { error } = await supabase.from("tasks").insert({
+    id,
+    title,
+    description: description.trim() || null,
+    status: "pending",
+    priority,
+    estimated_hours: estimatedHours,
+    actual_hours: 0,
+    tags,
+    department_id: departmentId,
+    assignee_id: null,
+    creator_id: actor.id,
+    project_id: null,
+    due_date: dueDate,
+    inactive_flag: false,
+    last_activity_at: now,
+    created_at: now,
+    blocks_task_ids: [],
+    client_name: clientName,
+    website: null,
+    custom: {}
+  });
+  if (error) return { error: error.message };
+
+  await supabase.from("activity_logs").insert({
+    id: `a_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
+    task_id: id,
+    user_id: actor.id,
+    action: "created",
+    detail: `Created by Ask AI → queued for the ${dept.name as string} team`
+  });
+
+  const baseUrl = (process.env.NEXT_PUBLIC_APP_URL ?? "").replace(/\/$/, "");
+  return {
+    taskId: id,
+    url: baseUrl ? `${baseUrl}/tasks/${id}` : `/tasks/${id}`,
+    queuedFor: `${dept.name as string} team`,
+    note: "Nobody is assigned — any member of that department can claim it.",
     dueDate
   };
 }

@@ -126,7 +126,12 @@ export async function buildEodForDepartment(
   ]);
 
   const users = (usersRes.data ?? []) as { id: string; name: string; avatar_url: string | null }[];
-  const tasks = (tasksRes.data ?? []) as { id: string; title: string; priority: string; assignee_id: string; status: string; completed_at: string }[];
+  // assignee_id is `string | null` in the schema. It used to be typed as a
+  // bare `string` here — a lie that only held because the query above filters
+  // `.in("assignee_id", memberIds)`, and one that would have turned every
+  // unattributed completion into a single phantom bucket the moment anyone
+  // widened that filter.
+  const tasks = (tasksRes.data ?? []) as { id: string; title: string; priority: string; assignee_id: string | null; status: string; completed_at: string }[];
   const entries = (entriesRes.data ?? []) as { user_id: string; started_at: string; ended_at: string | null }[];
   const notes = (notesRes.data ?? []) as Array<{
     user_id: string;
@@ -159,8 +164,15 @@ export async function buildEodForDepartment(
   }
 
   // 3) Roll up per user.
+  // This digest is a per-PERSON rollup, so a task with no assignee has
+  // nobody to roll up to. That's survivable rather than lossy: finishing an
+  // unclaimed team task auto-assigns the completer (PATCH /api/tasks/[id]),
+  // so a done task reaching here without an assignee means someone wrote to
+  // the row directly. Skip it explicitly instead of bucketing it under a
+  // null key.
   const tasksByUser = new Map<string, typeof tasks>();
   for (const t of tasks) {
+    if (!t.assignee_id) continue;
     const arr = tasksByUser.get(t.assignee_id) ?? [];
     arr.push(t);
     tasksByUser.set(t.assignee_id, arr);

@@ -12,6 +12,7 @@
 //   2. OPEN (not-done) & due_date older than the overdue-window, which is
 //      configurable via workspace_settings.overdue_archive_days.
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
+import { TEAM_TAG } from "@/lib/task-team";
 import {
   ARCHIVE_AFTER_DAYS,
   OVERDUE_ARCHIVE_DAYS,
@@ -83,9 +84,17 @@ export async function runArchiveSweep(opts: { dryRun?: boolean } = {}): Promise<
   // Rule 2 — open & overdue. Any non-done status with a due date more than the
   // (configurable) overdue window in the past. Done tasks are excluded — rule 1
   // governs them — so the two result sets never overlap.
-  const { data: overdueRows, error: overdueErr } = await supabase
+  //
+  // assignee_id + tags are selected so unclaimed TEAM tasks can be filtered
+  // out below. The sweep writes archived_by: null and no activity_logs row,
+  // so archiving work nobody has picked up yet would remove it from the board
+  // with no owner to notice and no audit trail. It stays visible and overdue
+  // until a human claims, reassigns or deletes it. This mirrors the carve-out
+  // in shouldAutoArchive (lib/task-archive.ts) — the two implement the same
+  // rules separately, so they have to move together.
+  const { data: overdueRowsRaw, error: overdueErr } = await supabase
     .from("tasks")
-    .select("id, title, completed_at, due_date")
+    .select("id, title, completed_at, due_date, assignee_id, tags")
     .neq("status", "done")
     .eq("is_draft", false)
     .is("archived_at", null)
@@ -93,6 +102,12 @@ export async function runArchiveSweep(opts: { dryRun?: boolean } = {}): Promise<
     .not("due_date", "is", null)
     .lte("due_date", overdueCutoff);
   if (overdueErr) throw new Error(overdueErr.message);
+  // Filtered here rather than in the query: expressing "not (unassigned AND
+  // tagged)" as a PostgREST `or` string is doable but unreadable, and this set
+  // is already bounded by the due-date cutoff.
+  const overdueRows = (overdueRowsRaw ?? []).filter(
+    (r) => r.assignee_id != null || !((r.tags as string[] | null) ?? []).includes(TEAM_TAG)
+  );
 
   // Merge, de-duping by id defensively (the status filters already make the
   // sets disjoint). First-seen reason wins.

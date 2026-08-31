@@ -17,6 +17,7 @@
 
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { getAnthropic, MODELS } from "@/lib/anthropic-client";
+import { TEAM_TAG } from "@/lib/task-team";
 
 // How far back to look for already-completed work. Per spec: tasks
 // closed in the last 7 days that haven't been reported yet. Sent
@@ -107,12 +108,13 @@ export async function buildDigestForClient(
   const lookbackIsoVal = lookbackIso();
 
   const [contribsTasksRes, eodNotesRes, tasksForReportRes, lastSentRes] = await Promise.all([
+    // department_id + tags come along so an unclaimed team task can still
+    // yield contributors — see the fallback below.
     supabase
       .from("tasks")
-      .select("assignee_id")
+      .select("assignee_id, department_id, tags")
       .eq("client_name", clientName)
       .eq("status", "done")
-      .not("assignee_id", "is", null)
       .gte("completed_at", todayIso),
     // Fetched separately by user after we know contributors.
     Promise.resolve({ data: null }),
@@ -138,11 +140,37 @@ export async function buildDigestForClient(
       .maybeSingle()
   ]);
 
+  const completedToday = (contribsTasksRes.data ?? []) as {
+    assignee_id: string | null;
+    department_id: string | null;
+    tags: string[] | null;
+  }[];
   const contributorIds = Array.from(new Set(
-    ((contribsTasksRes.data ?? []) as { assignee_id: string | null }[])
-      .map((r) => r.assignee_id)
-      .filter((v): v is string => !!v)
+    completedToday.map((r) => r.assignee_id).filter((v): v is string => !!v)
   ));
+
+  // Fallback for unclaimed team work. Finishing a team task normally
+  // auto-claims it (see PATCH /api/tasks/[id]), so this is the belt to that
+  // braces — but the failure it guards against is severe and silent: with no
+  // contributors this function returns false and NO client update email is
+  // drafted at all, with no error and no log. Better to credit the
+  // department than to skip the client's update.
+  if (contributorIds.length === 0) {
+    const teamDeptIds = Array.from(new Set(
+      completedToday
+        .filter((r) => !r.assignee_id && (r.tags ?? []).includes(TEAM_TAG) && r.department_id)
+        .map((r) => r.department_id as string)
+    ));
+    if (teamDeptIds.length > 0) {
+      const { data: members } = await supabase
+        .from("department_members")
+        .select("user_id")
+        .in("department_id", teamDeptIds);
+      for (const m of (members ?? []) as { user_id: string }[]) {
+        if (!contributorIds.includes(m.user_id)) contributorIds.push(m.user_id);
+      }
+    }
+  }
   if (contributorIds.length === 0) return false;
 
   // Fetch contributor user rows + their EOD notes for today in parallel.

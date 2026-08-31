@@ -22,6 +22,7 @@ import { userCapacity } from "@/lib/capacity";
 import { ROLE_LABELS } from "@/lib/auth";
 import { useCurrentUser } from "@/lib/user-context";
 import type { Role, User, Department } from "@/lib/types";
+import { isTeamTask } from "@/lib/task-team";
 import Link from "next/link";
 import { toast } from "sonner";
 import {
@@ -1000,13 +1001,26 @@ function AllTasksTab({ people, departments, tasks }: { people: User[]; departmen
           cap: userCapacity(u, tasks)
         };
       });
-      return { dept: d, rows };
+      // Unclaimed team work belongs to the department, not to any person, so
+      // it has no row above. Counted separately so this tab reconciles with
+      // the Departments tab, which counts by department_id — the two used to
+      // report different totals for the same department.
+      const poolTasks = tasks.filter(
+        (t) => !t.assigneeId && isTeamTask(t) && t.departmentId === d.id
+      );
+      const pool = {
+        open: poolTasks.filter((t) => t.status !== "done").length,
+        inProgress: poolTasks.filter((t) => t.status === "in_progress").length,
+        urgent: poolTasks.filter((t) => t.status === "urgent" || t.priority === "critical").length,
+        stalled: poolTasks.filter((t) => t.inactiveFlag).length
+      };
+      return { dept: d, rows, pool };
     });
   }, [people, departments, tasks]);
 
   return (
     <div className="space-y-5">
-      {grouped.map(({ dept, rows }) => (
+      {grouped.map(({ dept, rows, pool }) => (
         <section key={dept.id} className="card overflow-hidden">
           <div className="px-4 py-3 border-b border-border bg-surface2/60 flex items-center gap-2">
             <Building2 className="w-4 h-4 text-muted" />
@@ -1043,7 +1057,25 @@ function AllTasksTab({ people, departments, tasks }: { people: User[]; departmen
                   <td className="px-4 py-2.5"><CapacityBar pct={cap.pct} overSoft={cap.overSoft} overBuffer={cap.overBuffer} /></td>
                 </tr>
               ))}
-              {rows.length === 0 && (
+              {pool.open > 0 && (
+                <tr className="border-t border-border/60 bg-surface2/40">
+                  <td className="px-4 py-2.5">
+                    <div className="flex items-center gap-2">
+                      <div className="w-[22px] h-[22px] rounded-full bg-accent/10 grid place-items-center">
+                        <UsersIcon className="w-3 h-3 text-accent" />
+                      </div>
+                      <span className="italic text-muted">Unclaimed &mdash; up for grabs</span>
+                    </div>
+                  </td>
+                  <td className="px-4 py-2.5">{pool.open}</td>
+                  <td className="px-4 py-2.5">{pool.inProgress}</td>
+                  <td className={"px-4 py-2.5 " + (pool.urgent > 0 ? "text-urgent" : "")}>{pool.urgent}</td>
+                  <td className={"px-4 py-2.5 " + (pool.stalled > 0 ? "text-stalled" : "")}>{pool.stalled}</td>
+                  <td className="px-4 py-2.5 text-muted">—</td>
+                  <td className="px-4 py-2.5 text-muted text-xs">nobody's load</td>
+                </tr>
+              )}
+              {rows.length === 0 && pool.open === 0 && (
                 <tr><td colSpan={7} className="px-4 py-3 text-sm text-muted">No members in this department.</td></tr>
               )}
             </tbody>

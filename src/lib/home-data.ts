@@ -6,6 +6,7 @@ import {
 } from "@/lib/client-touchpoint";
 import { healthRank, type HealthLabel } from "@/lib/client-health";
 import { eodToday } from "@/lib/shift";
+import { TEAM_TAG } from "@/lib/task-team";
 
 // Server-side queries for the /home landing surface. Each function
 // returns plain JSON-shaped data so server components can pass it
@@ -393,15 +394,26 @@ export interface ClientHealthRow {
 export async function getStalledTaskCount(): Promise<number> {
   const supabase = getSupabaseAdmin();
   const cutoff = new Date(Date.now() - 7 * 86_400_000).toISOString();
-  const { count } = await supabase
-    .from("tasks")
-    .select("id", { count: "exact", head: true })
-    .neq("status", "done")
-    .eq("is_draft", false)
-    .is("deleted_at", null)
-    .lt("last_activity_at", cutoff)
-    .not("assignee_id", "is", null);
-  return count ?? 0;
+  const base = () =>
+    supabase
+      .from("tasks")
+      .select("id", { count: "exact", head: true })
+      .neq("status", "done")
+      .eq("is_draft", false)
+      .is("deleted_at", null)
+      .lt("last_activity_at", cutoff);
+  // Assigned work PLUS the unclaimed team pool. Excluding the second arm made
+  // this tile blind to exactly the work with no owner to chase it. Two
+  // disjoint queries summed rather than one `or` — a task can't be both
+  // assigned and unassigned, so there's nothing to double-count.
+  //
+  // The pool arm is keyed on the marker tag, so project stage placeholders
+  // and rejected drafts (also unassigned) don't inflate it.
+  const [assigned, pool] = await Promise.all([
+    base().not("assignee_id", "is", null),
+    base().is("assignee_id", null).contains("tags", [TEAM_TAG])
+  ]);
+  return (assigned.count ?? 0) + (pool.count ?? 0);
 }
 
 // Leader's own open task list for the Apple-style reminder card.
@@ -576,17 +588,29 @@ export async function getLeaderPulse(opts: {
 
   // 3) Stalled tasks — assigned, in-flight, no activity in 7d
   try {
-    const { data } = await supabase
-      .from("tasks")
-      .select("id, title, client_name, assignee_id, last_activity_at, status")
-      .neq("status", "done")
-      .eq("is_draft", false)
-      .is("deleted_at", null)
-      .lt("last_activity_at", stalledCutoffIso)
-      .not("assignee_id", "is", null)
-      .order("last_activity_at", { ascending: true })
-      .limit(6);
-    const rows = (data ?? []) as Array<{ id: string; title: string | null; client_name: string | null; assignee_id: string | null; last_activity_at: string }>;
+    // Assigned work plus the unclaimed team pool. Two disjoint queries merged
+    // rather than one `or`: the "Unassigned" label a few lines down was
+    // unreachable dead code while this excluded pool work, and a task nobody
+    // owns is the one most likely to go quiet. Each side takes the limit, then
+    // the merge re-sorts and trims — so a flood on one side can't crowd the
+    // other out entirely.
+    const stalledBase = () =>
+      supabase
+        .from("tasks")
+        .select("id, title, client_name, assignee_id, last_activity_at, status")
+        .neq("status", "done")
+        .eq("is_draft", false)
+        .is("deleted_at", null)
+        .lt("last_activity_at", stalledCutoffIso)
+        .order("last_activity_at", { ascending: true })
+        .limit(6);
+    const [assignedRes, poolRes] = await Promise.all([
+      stalledBase().not("assignee_id", "is", null),
+      stalledBase().is("assignee_id", null).contains("tags", [TEAM_TAG])
+    ]);
+    const rows = ([...(assignedRes.data ?? []), ...(poolRes.data ?? [])] as Array<{ id: string; title: string | null; client_name: string | null; assignee_id: string | null; last_activity_at: string }>)
+      .sort((a, b) => +new Date(a.last_activity_at) - +new Date(b.last_activity_at))
+      .slice(0, 6);
     const userIds = new Set<string>();
     for (const r of rows) if (r.assignee_id) userIds.add(r.assignee_id);
     const { data: users } = userIds.size > 0
@@ -1114,7 +1138,8 @@ export interface TodaysFocus {
 // days counts once (`total` is a single OR-count, not overdue+stalled).
 // The individual tallies are returned too (they overlap) for the tooltip.
 // Scoped to the caller's team via department membership for heads; leaders
-// see all. Three head-count queries, no rows transferred.
+// see all. Six head-count queries (assigned work + the unclaimed team pool,
+// which are disjoint and summed), no rows transferred.
 async function getOverdueStalledBreakdown(
   scopedDepartmentIds: string[] | null
 ): Promise<{ overdue: number; stalled: number; total: number }> {
@@ -1131,32 +1156,73 @@ async function getOverdueStalledBreakdown(
     assigneeFilter = Array.from(new Set(
       ((members ?? []) as { user_id: string }[]).map((m) => m.user_id)
     ));
-    if (assigneeFilter.length === 0) return { overdue: 0, stalled: 0, total: 0 };
+    // NOT an early return any more. A department with no members still has a
+    // team pool — that's precisely the department whose unclaimed work is
+    // most likely to rot — and heads of empty departments used to see a flat
+    // zero here.
   }
 
-  // Shared base predicate: open, non-draft, assigned tasks.
-  const base = () => {
-    const q = supabase
+  // "Belongs to this scope" is two things, not one: work ASSIGNED to someone
+  // in scope, plus unclaimed TEAM tasks queued to a department in scope. The
+  // old `.not("assignee_id","is",null)` dropped the second arm entirely, so
+  // an unclaimed team task could be 30 days overdue and still read as zero on
+  // the "needs a push" tile — exactly the task most likely to be forgotten.
+  //
+  // The two arms are counted as SEPARATE queries and summed rather than
+  // combined into one `or(...)`. They're mutually exclusive by construction
+  // (one requires a non-null assignee, the other a null one), so summing
+  // cannot double-count — and the union query below already spends this
+  // builder's single `.or()` on the overdue-or-stalled dedup. Stacking a
+  // second `.or()` on the same query would depend on how PostgREST folds
+  // repeated `or` params, which isn't worth betting a leader's dashboard on.
+  //
+  // The team arm is keyed on the marker tag, not on a null assignee:
+  // project stage placeholders and rejected drafts are also unassigned and
+  // must NOT inflate these counts. See lib/task-team.ts.
+  const openBase = () =>
+    supabase
       .from("tasks")
       .select("id", { count: "exact", head: true })
       .eq("is_draft", false)
       .is("deleted_at", null)
-      .neq("status", "done")
-      .not("assignee_id", "is", null);
+      .neq("status", "done");
+
+  // Arm 1 — assigned work. Skipped entirely when a head's department has no
+  // members (an empty `in.()` matches nothing anyway).
+  const assignedBase = () => {
+    const q = openBase().not("assignee_id", "is", null);
     return assigneeFilter ? q.in("assignee_id", assigneeFilter) : q;
   };
+  const assignedApplies = !assigneeFilter || assigneeFilter.length > 0;
 
-  const [overdueRes, stalledRes, unionRes] = await Promise.all([
-    base().lt("due_date", now),
-    base().lt("last_activity_at", cutoff),
+  // Arm 2 — the unclaimed team pool.
+  const poolBase = () => {
+    const q = openBase().is("assignee_id", null).contains("tags", [TEAM_TAG]);
+    return scopedDepartmentIds && scopedDepartmentIds.length > 0
+      ? q.in("department_id", scopedDepartmentIds)
+      : q;
+  };
+
+  const zero = Promise.resolve({ count: 0 });
+  const [
+    assignedOverdue, assignedStalled, assignedUnion,
+    poolOverdue, poolStalled, poolUnion
+  ] = await Promise.all([
+    assignedApplies ? assignedBase().lt("due_date", now) : zero,
+    assignedApplies ? assignedBase().lt("last_activity_at", cutoff) : zero,
     // The OR makes this the deduped union — Postgres counts each row once.
-    base().or(`due_date.lt.${now},last_activity_at.lt.${cutoff}`)
+    assignedApplies
+      ? assignedBase().or(`due_date.lt.${now},last_activity_at.lt.${cutoff}`)
+      : zero,
+    poolBase().lt("due_date", now),
+    poolBase().lt("last_activity_at", cutoff),
+    poolBase().or(`due_date.lt.${now},last_activity_at.lt.${cutoff}`)
   ]);
 
   return {
-    overdue: overdueRes.count ?? 0,
-    stalled: stalledRes.count ?? 0,
-    total: unionRes.count ?? 0
+    overdue: (assignedOverdue.count ?? 0) + (poolOverdue.count ?? 0),
+    stalled: (assignedStalled.count ?? 0) + (poolStalled.count ?? 0),
+    total: (assignedUnion.count ?? 0) + (poolUnion.count ?? 0)
   };
 }
 

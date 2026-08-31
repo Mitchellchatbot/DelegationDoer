@@ -214,10 +214,28 @@ export async function GET() {
     (a, b) => b.weekCount - a.weekCount || b.totalCount - a.totalCount
   );
 
+  // Completions with nobody to attribute them to. The per-user aggregates
+  // above all skip these, but completionsByDay and statusDistribution below
+  // count them — which is how the "Completed this week" tile and the
+  // "Completions · last 30 days" chart, rendered one above the other, could
+  // disagree on the same screen. Counted separately rather than folded into
+  // someone's row so the tile totals reconcile with the chart without
+  // inventing an owner.
+  const unattributed = { weekCount: 0, totalCount: 0 };
+  for (const t of tasks) {
+    if (t.status !== "done" || t.assignee_id) continue;
+    unattributed.totalCount += 1;
+    if (t.completed_at && new Date(t.completed_at).getTime() >= weekAgo) {
+      unattributed.weekCount += 1;
+    }
+  }
+
   // 6. Recently completed: latest 8 done tasks for the "you just shipped
   //    this!" reassurance feed.
+  //    Unclaimed team completions belong here too — the assigneeName fallback
+  //    below already renders "Unassigned", it was just unreachable.
   const recentCompletions = tasks
-    .filter((t) => t.status === "done" && t.assignee_id && t.completed_at)
+    .filter((t) => t.status === "done" && t.completed_at)
     .sort((a, b) => +new Date(b.completed_at!) - +new Date(a.completed_at!))
     .slice(0, 8)
     .map((t) => {
@@ -276,8 +294,11 @@ export async function GET() {
     recentCompletions,
     completionsByDay,
     statusDistribution,
-    totalCompletedThisWeek: completionsByUserArr.reduce((s, u) => s + u.weekCount, 0),
-    totalCompletedAllTime: completionsByUserArr.reduce((s, u) => s + u.totalCount, 0)
+    unattributedCompletions: unattributed,
+    totalCompletedThisWeek:
+      completionsByUserArr.reduce((s, u) => s + u.weekCount, 0) + unattributed.weekCount,
+    totalCompletedAllTime:
+      completionsByUserArr.reduce((s, u) => s + u.totalCount, 0) + unattributed.totalCount
   });
 }
 

@@ -95,6 +95,12 @@ export interface Department {
   name: string;
   description: string;
   taskTypes: string[];
+  // Who actually runs this department. NOT users.role — role is global, so
+  // whoever leads Website also reads as a "department_head" inside every other
+  // department they belong to. This is the per-department answer, and null
+  // legitimately means "nobody runs this yet". Optional because /api/users and
+  // mock-data build Departments without it.
+  headUserId?: string | null;
 }
 
 export interface Task {

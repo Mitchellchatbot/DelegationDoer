@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
-import { getSupabaseAdmin } from "@/lib/supabase-admin";
+import { getSupabaseAdmin, isMissingColumnError } from "@/lib/supabase-admin";
 import { requiresClockIn } from "@/lib/access";
 import { hasOpenSegment } from "@/lib/time-tracking";
 import { sodSignalFor } from "@/lib/shift";
@@ -101,26 +101,49 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Recipients = every leader + every department_head who's a member
-    // of the submitter's department(s). So when a worker in dep_web
-    // submits, every leader + every dep_web head gets a DM; their
-    // dep_seo head does NOT (out of scope). Author is always excluded.
+    // Recipients = every leader + the designated head of each department the
+    // submitter belongs to. So when a worker in dep_web submits, every leader
+    // + the Website head gets a DM; the SEO head does NOT (out of scope).
+    // Author is always excluded.
     const myDeptIds = me.departmentIds ?? [];
 
-    // Step 1: dept heads who are members of the submitter's departments.
+    // Step 1: departments.head_user_id for the submitter's departments.
+    //
+    // This used to scan department_members for anyone with
+    // role='department_head'. Role in DD is GLOBAL, not per-department, so
+    // that treated whoever leads Website as a head of every department they
+    // merely belong to — and DM'd them every morning on behalf of a team they
+    // don't run. A department with no designated head now notifies nobody
+    // beyond the leaders below, which is the correct answer rather than a
+    // silent guess.
     let deptHeadIds: string[] = [];
     if (myDeptIds.length > 0) {
-      const { data: deptHeadRows } = await supabase
-        .from("department_members")
-        .select("user_id, users!inner(role)")
-        .in("department_id", myDeptIds);
-      type Row = { user_id: string; users: { role: string } | { role: string }[] | null };
-      deptHeadIds = ((deptHeadRows ?? []) as Row[])
-        .filter((r) => {
-          const u = Array.isArray(r.users) ? r.users[0] : r.users;
-          return u?.role === "department_head";
-        })
-        .map((r) => r.user_id);
+      const headsRes = await supabase
+        .from("departments")
+        .select("head_user_id")
+        .in("id", myDeptIds);
+      if (isMissingColumnError(headsRes.error)) {
+        // head_user_id ships in 20260901000100 and migrations here are applied
+        // by hand — fall back to the old member scan so a database that hasn't
+        // had it applied keeps notifying, rather than going quiet. Gated on
+        // that specific error: falling back on a transient blip would DM every
+        // globally-titled head again, which is the bug this replaced.
+        const { data: deptHeadRows } = await supabase
+          .from("department_members")
+          .select("user_id, users!inner(role)")
+          .in("department_id", myDeptIds);
+        type Row = { user_id: string; users: { role: string } | { role: string }[] | null };
+        deptHeadIds = ((deptHeadRows ?? []) as Row[])
+          .filter((r) => {
+            const u = Array.isArray(r.users) ? r.users[0] : r.users;
+            return u?.role === "department_head";
+          })
+          .map((r) => r.user_id);
+      } else {
+        deptHeadIds = ((headsRes.data ?? []) as { head_user_id: string | null }[])
+          .map((d) => d.head_user_id)
+          .filter((id): id is string => !!id);
+      }
     }
 
     // Step 2: fetch leaders + the dept-head IDs above in one round-trip.

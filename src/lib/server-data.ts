@@ -5,7 +5,7 @@
 // server.
 
 import { cache } from "@/lib/safe-cache";
-import { getSupabaseAdmin } from "@/lib/supabase-admin";
+import { getSupabaseAdmin, isMissingColumnError } from "@/lib/supabase-admin";
 import type { Department, Task, User } from "@/lib/types";
 
 // Row shapes mirror the snake_case columns in the migrations.
@@ -70,12 +70,57 @@ interface TaskRow {
   archived_by: string | null;
 }
 
+// Ordered by (created_at, department_id) — see
+// 20260901000000_department_members_created_at.sql. The array's FIRST entry is
+// treated as the user's primary department by ~10 call sites (default dept on
+// task create, Topbar/Sidebar chip, client-update grouping), and department ids
+// sort in creation-independent alphabetical order, so an unordered read lets a
+// newly-added department jump to the front. created_at keeps the membership
+// someone has held longest first.
+//
+// The .order() is retried without created_at ONLY when the column genuinely
+// doesn't exist yet (migrations here are applied by hand), so an unapplied
+// migration degrades to the old unordered behaviour instead of dropping every
+// membership. Any other error is left to fail — falling back on a transient
+// blip would silently restore the ordering bug this exists to fix. Same guard
+// /api/users applies to its optional columns.
 async function userDepartmentIds(userId: string): Promise<string[]> {
-  const { data } = await getSupabaseAdmin()
+  const sb = getSupabaseAdmin();
+  const ordered = await sb
     .from("department_members")
-    .select("department_id")
-    .eq("user_id", userId);
-  return (data ?? []).map((r: { department_id: string }) => r.department_id);
+    .select("department_id, created_at")
+    .eq("user_id", userId)
+    .order("created_at", { ascending: true })
+    .order("department_id", { ascending: true });
+  const res = isMissingColumnError(ordered.error)
+    ? await sb.from("department_members").select("department_id").eq("user_id", userId)
+    : ordered;
+  return (res.data ?? []).map((r) => (r as { department_id: string }).department_id);
+}
+
+// Every membership, grouped by user, in the same stable order as
+// userDepartmentIds(). Shared with /api/users, which builds its own User
+// objects but must agree with the server mapper on department order.
+export async function departmentMembershipsByUser(): Promise<Map<string, string[]>> {
+  const sb = getSupabaseAdmin();
+  const ordered = await sb
+    .from("department_members")
+    .select("user_id, department_id, created_at")
+    .order("created_at", { ascending: true })
+    .order("department_id", { ascending: true });
+  const res = isMissingColumnError(ordered.error)
+    ? await sb.from("department_members").select("user_id, department_id")
+    : ordered;
+  if (res.error) {
+    console.warn("[departmentMembershipsByUser] select failed:", res.error.message);
+  }
+  const byUser = new Map<string, string[]>();
+  for (const m of (res.data ?? []) as { user_id: string; department_id: string }[]) {
+    const arr = byUser.get(m.user_id) ?? [];
+    arr.push(m.department_id);
+    byUser.set(m.user_id, arr);
+  }
+  return byUser;
 }
 
 function userFromRow(row: UserRow, departmentIds: string[]): User {
@@ -281,28 +326,17 @@ export async function getAllUsersLight(): Promise<User[]> {
 // rather than throwing so a missing table can't 500 the whole page.
 export async function getAllUsers(): Promise<User[]> {
   const supabase = getSupabaseAdmin();
-  const [usersRes, membersRes] = await Promise.all([
+  const [usersRes, byUser] = await Promise.all([
     supabase
       .from("users")
       .select("id,name,email,role,daily_capacity,throughput,skills,avatar_url,is_admin,work_timezone,weekly_schedule,manager_user_id,secondary_manager_user_id,delegate_department_ids,email_notifications_onboarded,daily_prompts_enabled,daily_prompts_required,clock_enabled")
       .order("name"),
-    supabase
-      .from("department_members")
-      .select("user_id, department_id")
+    // Members are optional — the helper logs and returns an empty map on failure.
+    departmentMembershipsByUser()
   ]);
   if (usersRes.error) {
     console.error("[getAllUsers] users select failed:", usersRes.error.message);
     return [];
-  }
-  if (membersRes.error) {
-    // Members are optional — log + continue with empty membership.
-    console.warn("[getAllUsers] department_members select failed:", membersRes.error.message);
-  }
-  const byUser = new Map<string, string[]>();
-  for (const m of (membersRes.data ?? []) as { user_id: string; department_id: string }[]) {
-    const arr = byUser.get(m.user_id) ?? [];
-    arr.push(m.department_id);
-    byUser.set(m.user_id, arr);
   }
   return ((usersRes.data ?? []) as UserRow[]).map((r) =>
     userFromRow(r, byUser.get(r.id) ?? [])

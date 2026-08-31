@@ -79,11 +79,10 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
 
     if (!canClaimTask(viewer, task)) {
       // Past the checks above, a team task can only fail here on membership.
-      // Say so specifically: dep_software and dep_facebook have no surviving
-      // migration-seeded members (init seeds u_5/u_8/u_10 into dep_software,
-      // then 20260516000000's purge deletes every u_N row), so a bare "you
-      // can't do that" would send people hunting for a bug that is really a
-      // config gap.
+      // Name that specifically rather than saying "you can't do that":
+      // department_members is edited in the Leader Console, so a missing row
+      // is a config gap, and a generic refusal sends people hunting for a bug
+      // that isn't there.
       return NextResponse.json(
         {
           error: isTeamTask(task)

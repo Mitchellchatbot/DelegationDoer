@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { requireCurrentUserId } from "@/lib/session";
+import { departmentMembershipsByUser } from "@/lib/server-data";
 
 export const dynamic = "force-dynamic";
 
@@ -63,15 +64,9 @@ export async function GET() {
   // Department memberships join — used by the notify-teammates picker
   // and any other surface that wants to group people by team. Failures
   // here degrade to empty arrays rather than 500ing.
-  const departmentsByUser = new Map<string, string[]>();
-  const { data: memberRows } = await supabase
-    .from("department_members")
-    .select("user_id, department_id");
-  for (const r of memberRows ?? []) {
-    const arr = departmentsByUser.get(r.user_id as string) ?? [];
-    arr.push(r.department_id as string);
-    departmentsByUser.set(r.user_id as string, arr);
-  }
+  // Shared with server-data's mapper so both agree on department ORDER —
+  // departmentIds[0] is treated as the primary department in several places.
+  const departmentsByUser = await departmentMembershipsByUser();
 
   return NextResponse.json({
     users: rows.map((u) => ({

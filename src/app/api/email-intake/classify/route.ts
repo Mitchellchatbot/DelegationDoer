@@ -10,6 +10,7 @@ import { rankCandidates, buildLoadSignals } from "@/lib/skill-rank";
 import { userCapacity } from "@/lib/capacity";
 import { loadClientMatcher } from "@/lib/client-thread-match";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
+import { departmentHead } from "@/lib/department-head";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -187,23 +188,6 @@ export async function POST(req: NextRequest) {
   }
 }
 
-async function departmentHead(departmentId: string): Promise<{ id: string; name: string } | null> {
-  const supabase = getSupabaseAdmin();
-  const { data: members } = await supabase
-    .from("department_members")
-    .select("user_id")
-    .eq("department_id", departmentId);
-  const memberIds = (members ?? []).map((r: { user_id: string }) => r.user_id);
-  if (memberIds.length === 0) return null;
-  const { data: users } = await supabase
-    .from("users")
-    .select("id, name, role")
-    .in("id", memberIds);
-  const head =
-    (users ?? []).find((u: { role: string }) => u.role === "department_head") ??
-    (users ?? [])[0];
-  return head ? { id: head.id as string, name: head.name as string } : null;
-}
 
 function extractEmail(addr: string): string | null {
   const m = addr.match(/<([^>]+)>/);

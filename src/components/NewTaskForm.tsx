@@ -989,11 +989,8 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel, initialValues, lo
             {/* A department with no members has nobody who can claim the
                 task. It still saves — the head can add members later — but
                 silently queueing work to an empty room is the failure mode
-                worth naming. dep_software and dep_facebook have no SURVIVING
-                migration-seeded members (init seeds u_5/u_8/u_10 into
-                dep_software; 20260516200000 then purges every u_N row), so in
-                practice membership there is whatever the Leader Console
-                holds. */}
+                worth naming. Membership is edited in the Leader Console, so a
+                newly created department starts empty by default. */}
             {assignMode === "team" && deptMembers.length === 0 && (
               <div className="mt-2 flex items-start gap-2 p-2.5 rounded-xl border border-amber-300 bg-amber-50 text-[12px] text-amber-900">
                 <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />

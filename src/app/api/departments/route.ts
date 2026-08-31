@@ -2,11 +2,23 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { canAddDepartments } from "@/lib/auth";
-import { getSupabaseAdmin } from "@/lib/supabase-admin";
+import { getSupabaseAdmin, isMissingColumnError } from "@/lib/supabase-admin";
 
 export const dynamic = "force-dynamic";
 
-const DEPT_COLS = "id, name, description, task_types, slack_channel_id, task_channel_id, head_user_id";
+// head_user_id ships in 20260901000100, and migrations in this project are
+// applied BY HAND — merging a PR runs nothing. So this route has to survive a
+// build that is live against a database which hasn't had that migration yet.
+//
+// It cannot just 500 on the way through: /api/departments is read by useTeam(),
+// which does `r.ok ? r.json() : null` and degrades to an EMPTY department list.
+// A hard failure here would silently blank the board's department chips, the
+// New-task department picker (which then blocks task creation for non-leaders),
+// the Leader Console Departments tab, Settings and the EOD page — quietly, with
+// no error anywhere. Hence the fallback column list, same progressive-select
+// convention /api/users uses for its optional columns.
+const DEPT_COLS_BASE = "id, name, description, task_types, slack_channel_id, task_channel_id";
+const DEPT_COLS = `${DEPT_COLS_BASE}, head_user_id`;
 
 type DepartmentRow = {
   id: string;
@@ -15,7 +27,8 @@ type DepartmentRow = {
   task_types: string[] | null;
   slack_channel_id: string | null;
   task_channel_id: string | null;
-  head_user_id: string | null;
+  // Absent entirely on the pre-migration fallback path.
+  head_user_id?: string | null;
 };
 
 function toDepartment(d: DepartmentRow) {
@@ -49,13 +62,20 @@ function departmentIdFromName(name: string): string {
 // Console's Departments tab renders both.
 export async function GET() {
   await requireCurrentUserId();
-  const { data, error } = await getSupabaseAdmin()
-    .from("departments")
-    .select(DEPT_COLS)
-    .order("name");
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  const supabase = getSupabaseAdmin();
+
+  const full = await supabase.from("departments").select(DEPT_COLS).order("name");
+  // Retry without head_user_id ONLY when that column genuinely doesn't exist
+  // yet. Any other error is a real failure and must surface — degrading to an
+  // empty department list on a transient blip would be worse than a 500,
+  // because callers treat it as "there are no departments".
+  const res = isMissingColumnError(full.error)
+    ? await supabase.from("departments").select(DEPT_COLS_BASE).order("name")
+    : full;
+
+  if (res.error) return NextResponse.json({ error: res.error.message }, { status: 500 });
   return NextResponse.json({
-    departments: (data ?? []).map((d) => toDepartment(d as DepartmentRow))
+    departments: (res.data ?? []).map((d) => toDepartment(d as DepartmentRow))
   });
 }
 
@@ -91,11 +111,24 @@ export async function POST(req: NextRequest) {
         ? body.description.trim()
         : null;
 
-    const { data, error } = await getSupabaseAdmin()
+    const supabase = getSupabaseAdmin();
+    const inserted = await supabase
       .from("departments")
       .insert({ id, name, description })
       .select(DEPT_COLS)
       .single();
+    // Same pre-migration fallback as GET, but it has to REDO the insert, not
+    // just re-read: PostgREST compiles this to INSERT ... RETURNING <cols>, so
+    // an unknown column in the select list fails the whole statement and no row
+    // is written. Retrying is safe precisely because the first attempt was
+    // atomic — there is nothing to duplicate.
+    const { data, error } = isMissingColumnError(inserted.error)
+      ? await supabase
+          .from("departments")
+          .insert({ id, name, description })
+          .select(DEPT_COLS_BASE)
+          .single()
+      : inserted;
 
     // departments.name is UNIQUE and id is the PK, so either can collide.
     // Surface that as a readable 409 instead of a raw Postgres 500.

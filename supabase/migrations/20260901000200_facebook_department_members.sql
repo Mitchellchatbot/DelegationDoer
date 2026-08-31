@@ -152,7 +152,7 @@ begin
    where dm.department_id = 'dep_facebook' and u.role = 'department_head';
 
   if n_heads > 1 then
-    raise warning 'dep_facebook now has % members with role=department_head. Expected -- they lead other teams and role is global, not per-department. Effects: the org chart renders each as a Facebook head, and each now receives the SOD-submission DM from every other Facebook member. No role was changed by this migration.', n_heads;
+    raise notice 'FYI: % of these members carry role=department_head because they lead OTHER teams (role is global, not per-department). They are NOT treated as Facebook heads: departments.head_user_id decides that, and Facebook has none, so intake routes to the ranker / routing review and start-of-day updates notify only leaders. The org chart still lists them under Facebook -- cosmetic, and known. No role was changed by this migration.', n_heads;
   end if;
 end $$;
 

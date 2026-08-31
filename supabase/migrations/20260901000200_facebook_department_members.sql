@@ -16,14 +16,17 @@
 --
 -- Hamza is deliberately NOT in this list -- he has left the company.
 --
--- Keyed by EMAIL, never by display name. users.email is UNIQUE, and DD display
--- names have drifted before -- 20260720000000_seo_org_structure_email_keyed.sql
--- exists precisely because a name-keyed seed silently mis-targeted after
--- emily@scaledai.org started rendering as "Komal". Note DD emails are aliases
--- that do not resemble the person's name (Altamash = austin@, Talha = james@,
--- Mujtaba = mike@), which is exactly why guessing is not an option here. A
--- wrong or absent email matches zero rows and is REPORTED; it never writes bad
--- data, and the user_id foreign key would reject a bad id outright.
+-- EMAIL IS PREFERRED, display name is the fallback. users.email is UNIQUE, so
+-- an email match is exact; display names have drifted before, which is why
+-- 20260720000000_seo_org_structure_email_keyed.sql had to re-do a name-keyed
+-- seed after emily@scaledai.org started rendering as "Komal". But DD emails are
+-- ALIASES that do not resemble the person (Altamash = austin@, Talha = james@,
+-- Mujtaba = mike@), so a configured address going stale is routine -- and an
+-- email-only match then drops that person with no way to see which one, because
+-- the SQL editor eats the RAISE that would have named them. Hence the tier:
+-- email wins where it matches, the name pattern catches the rest, and anything
+-- matching two people is skipped rather than guessed. Nothing bad can be
+-- written either way -- the user_id foreign key rejects a bad id outright.
 --
 -- KNOWN CONSEQUENCE, recorded because it is not obvious: Mujtaba, Talha Ali and
 -- Hasan Reza already have role='department_head' (Website, Marketing, Software),
@@ -39,32 +42,71 @@
 -- cosmetic and known -- the org chart still lists all three under Facebook,
 -- because it reads the global role. This file changes no roles either way.
 
--- drop-then-create, not a bare create: the guard below can raise, and under psql
--- autocommit the create has already committed by then, so a bare create would
--- make every retry die with "relation _fb_targets already exists" -- in exactly
--- the situation the guard exists to catch.
-drop table if exists _fb_targets;
-create temp table _fb_targets (email text primary key, label text);
--- All eight, confirmed against Leader Console -> People. Two of them are also
--- corroborated by earlier migrations, which is a useful cross-check that these
--- are the right rows: henry@scaledai.org is the address 20260618000000_
--- promote_hasan_admin.sql pins Hasan to, and mechael@scaledai.org satisfies the
--- '%mechael%@scaledai.org' arm of 20260527000000_promote_mecheal_admin.sql
--- (which hedged across Mecheal/Mechael/Michael because the spelling was unknown).
-insert into _fb_targets (email, label) values
-  ('austin@scaledai.org',      'Altamash Rajpoot'),
-  ('henry@scaledai.org',       'Hasan Reza'),
-  ('james@scaledai.org',       'Talha Ali'),
-  ('mazzaj609@gmail.com',      'Joe Mazza (Slack "JM")'),
-  ('mechael@scaledai.org',     'Mechael Syed'),
-  ('mike@scaledai.org',        'Mujtaba'),
-  ('mitchell@scaledai.org',    'Mitchell'),
-  ('shaheerkhosa6@gmail.com',  'Shaheer Khosa');
+-- RESOLUTION IS TIERED: exact email first, display name as a fallback.
+--
+-- An earlier revision keyed on email alone and aborted when one of the eight
+-- addresses didn't match a users row. That is the right instinct -- a wrong
+-- email must never silently omit somebody -- but it dead-ends the operator,
+-- because the Supabase SQL editor does not surface the RAISE that names the
+-- offending address. DD emails are aliases (Altamash = austin@, Talha = james@,
+-- Mujtaba = mike@) and they drift, so "the configured email is stale" is a
+-- routine state, not an exceptional one.
+--
+-- So: match on email OR display name, prefer whichever is more reliable
+-- (email = rank 1, name = rank 2), and only consider candidates at the winning
+-- rank -- a good email match can never be dragged into ambiguity by a loose
+-- name match. A label matching MORE than one user at its winning rank is
+-- SKIPPED, never guessed.
+--
+-- REPORTING IS VIA RESULT GRIDS, not RAISE NOTICE. Same reason: the SQL editor
+-- swallows notices, so a migration that reports only through them is, in this
+-- environment, a migration that reports nothing. Run the preview block at the
+-- bottom of this comment FIRST to see exactly who resolves and how; the file
+-- ends with a SELECT of the resulting roster so the outcome is always visible.
+--
+-- PREVIEW (read-only -- run this on its own before the file below):
+--
+--   with targets(email, name_pat, label) as (values
+--     ('austin@scaledai.org',     'altamash|rajpoot',              'Altamash Rajpoot'),
+--     ('henry@scaledai.org',      'hasan',                         'Hasan Reza'),
+--     ('james@scaledai.org',      'talha',                         'Talha Ali'),
+--     ('mazzaj609@gmail.com',     'mazza',                         'Joe Mazza (Slack "JM")'),
+--     ('mechael@scaledai.org',    'mecheal|mechael|michael.*syed', 'Mechael Syed'),
+--     ('mike@scaledai.org',       'mujtaba',                       'Mujtaba'),
+--     ('mitchell@scaledai.org',   'mitchell',                      'Mitchell'),
+--     ('shaheerkhosa6@gmail.com', 'shaheer',                       'Shaheer Khosa')
+--   ), hits as (
+--     select t.label, u.id, u.name, u.email, u.role,
+--            case when lower(u.email) = lower(t.email) then 1 else 2 end as rk
+--       from targets t join public.users u
+--         on lower(u.email) = lower(t.email) or u.name ~* t.name_pat
+--   ), best as (select label, min(rk) rk from hits group by label),
+--   winners as (
+--     select h.*, count(*) over (partition by h.label) n
+--       from hits h join best b on b.label = h.label and b.rk = h.rk)
+--   select t.label, t.email as configured_email, coalesce(w.n,0) as candidates,
+--          w.name as matched_name, w.email as matched_email, w.role
+--     from targets t left join winners w on w.label = t.label
+--    order by (w.id is not null), t.label, w.name;
 
--- ============================================================
--- STEP 1 -- Guard. Migrations in this project are applied BY HAND; merging a
--- PR runs nothing, so dep_facebook may not exist in this database yet.
--- ============================================================
+drop table if exists _fb_targets;
+create temp table _fb_targets (email text, name_pat text, label text);
+
+-- email        -- the address we believe they use. May be stale; that is fine.
+-- name_pat     -- case-insensitive regex fallback on users.name.
+-- label        -- who this row is meant to be, for the report.
+insert into _fb_targets (email, name_pat, label) values
+  ('austin@scaledai.org',     'altamash|rajpoot',              'Altamash Rajpoot'),
+  ('henry@scaledai.org',      'hasan',                         'Hasan Reza'),
+  ('james@scaledai.org',      'talha',                         'Talha Ali'),
+  ('mazzaj609@gmail.com',     'mazza',                         'Joe Mazza (Slack "JM")'),
+  ('mechael@scaledai.org',    'mecheal|mechael|michael.*syed', 'Mechael Syed'),
+  ('mike@scaledai.org',       'mujtaba',                       'Mujtaba'),
+  ('mitchell@scaledai.org',   'mitchell',                      'Mitchell'),
+  ('shaheerkhosa6@gmail.com', 'shaheer',                       'Shaheer Khosa');
+
+-- Guard: dep_facebook must exist. Migrations here are applied BY HAND; merging
+-- a PR runs nothing, so it may not be in this database yet.
 do $$
 begin
   if not exists (select 1 from public.departments where id = 'dep_facebook') then
@@ -73,91 +115,69 @@ begin
   end if;
 end $$;
 
--- ============================================================
--- STEP 2 -- Preview every target, insert, then report the real post-state.
--- Both halves read the single list above, so the preview and the write
--- cannot drift apart.
--- ============================================================
-do $$
-declare
-  rec     record;
-  n_want  int;
-  n_found int;
-  n_added int;
-  n_heads int;
-begin
-  select count(*) into n_want from _fb_targets;
-  raise notice '=== Facebook members :: PREVIEW (% target emails) ===', n_want;
-
-  for rec in
-    select t.label, t.email, u.id, u.name, u.role, u.is_admin,
-           (select string_agg(d.name, ' + ' order by d.name)
-              from public.department_members dm
-              join public.departments d on d.id = dm.department_id
-             where dm.user_id = u.id) as depts
-      from _fb_targets t
-      left join public.users u on lower(u.email) = lower(t.email)
-     order by t.label
-  loop
-    if rec.id is null then
-      raise warning '  NOT FOUND  % <%>  -- skipped. Fix the email and re-run.',
-        rec.label, rec.email;
-    else
-      raise notice '  ok  % <%>  role=% admin=% depts=[%]',
-        rec.label, rec.email, rec.role, rec.is_admin, coalesce(rec.depts, 'none');
-    end if;
-  end loop;
-
-  insert into public.department_members (user_id, department_id)
-  select u.id, 'dep_facebook'
+-- Resolve, then insert only labels that landed on exactly ONE user at their
+-- winning rank. Ambiguous and unresolved labels are left out and shown in the
+-- report below -- skipping is always safe, guessing is not.
+with hits as (
+  select t.label, u.id,
+         case when lower(u.email) = lower(t.email) then 1 else 2 end as rk
     from _fb_targets t
-    join public.users u on lower(u.email) = lower(t.email)
-  on conflict do nothing;
-  get diagnostics n_added = row_count;
+    join public.users u
+      on lower(u.email) = lower(t.email)
+      or u.name ~* t.name_pat
+),
+best as (select label, min(rk) as rk from hits group by label),
+winners as (
+  select h.label, h.id, count(*) over (partition by h.label) as n
+    from hits h
+    join best b on b.label = h.label and b.rk = h.rk
+)
+insert into public.department_members (user_id, department_id)
+select distinct w.id, 'dep_facebook'
+  from winners w
+ where w.n = 1
+on conflict do nothing;
 
-  -- count(distinct t.email), not count(*): users.email is UNIQUE on the RAW
-  -- value, not on lower(email), so two accounts differing only in case both
-  -- match one target. With count(*) a missing person plus a case-duplicate
-  -- would cancel out to n_found = n_want and the check below would never fire.
-  select count(distinct t.email) into n_found
+-- THE REPORT. A result grid, because RAISE NOTICE is invisible here. One row
+-- per target: whether it resolved, how, and whether they are now a member.
+-- Anything that is not 'ok' needs a human -- fix the email or the name pattern
+-- and re-run; this file is idempotent.
+with hits as (
+  select t.label, t.email as configured_email, u.id, u.name, u.email, u.role,
+         case when lower(u.email) = lower(t.email) then 1 else 2 end as rk
     from _fb_targets t
-    join public.users u on lower(u.email) = lower(t.email);
+    join public.users u
+      on lower(u.email) = lower(t.email)
+      or u.name ~* t.name_pat
+),
+best as (select label, min(rk) as rk from hits group by label),
+winners as (
+  select h.*, count(*) over (partition by h.label) as n
+    from hits h
+    join best b on b.label = h.label and b.rk = h.rk
+)
+select
+  case
+    when w.id is null then 'NOT FOUND -- fix email or name_pat, re-run'
+    when w.n > 1      then 'AMBIGUOUS -- skipped, ' || w.n || ' candidates'
+    when w.rk = 1     then 'ok (matched on email)'
+    else                   'ok (matched on NAME -- configured email is stale)'
+  end                                        as status,
+  t.label,
+  t.email                                    as configured_email,
+  w.name                                     as matched_name,
+  w.email                                    as matched_email,
+  w.role,
+  exists (
+    select 1 from public.department_members dm
+     where dm.user_id = w.id and dm.department_id = 'dep_facebook'
+  )                                          as now_a_member
+from _fb_targets t
+left join winners w on w.label = t.label
+order by (w.id is not null and w.n = 1), t.label, w.name;
 
-  raise notice '=== RESULT ===';
-  raise notice 'emails resolved : % of %', n_found, n_want;
-  raise notice 'rows added      : %   (any remainder were already members)', n_added;
-  raise notice 'dep_facebook roster is now:';
-
-  for rec in
-    select u.name, u.email, u.role
-      from public.department_members dm
-      join public.users u on u.id = dm.user_id
-     where dm.department_id = 'dep_facebook'
-     order by u.name
-  loop
-    raise notice '   . % <%> role=%', rec.name, rec.email, rec.role;
-  end loop;
-
-  -- Exception, not warning. The Supabase SQL editor does not reliably surface
-  -- NOTICE/WARNING output and this project applies migrations by hand, so a
-  -- typo would otherwise leave someone quietly missing from the department with
-  -- nobody the wiser. Raising rolls the insert back; fix the address (or delete
-  -- that row from _fb_targets if you really do mean to proceed short-handed)
-  -- and re-run.
-  if n_found <> n_want then
-    raise exception
-      'Only % of % target emails resolved to a DD user -- see the NOT FOUND lines above. Fix the address(es) and re-run; this file is idempotent.',
-      n_found, n_want;
-  end if;
-
-  select count(*) into n_heads
-    from public.department_members dm
-    join public.users u on u.id = dm.user_id
-   where dm.department_id = 'dep_facebook' and u.role = 'department_head';
-
-  if n_heads > 1 then
-    raise notice 'FYI: % of these members carry role=department_head because they lead OTHER teams (role is global, not per-department). They are NOT treated as Facebook heads: departments.head_user_id decides that, and Facebook has none, so intake routes to the ranker / routing review and start-of-day updates notify only leaders. The org chart still lists them under Facebook -- cosmetic, and known. No role was changed by this migration.', n_heads;
-  end if;
-end $$;
-
-drop table if exists _fb_targets;
+-- NOTE: _fb_targets is deliberately NOT dropped here. A temp table dies with
+-- the session anyway, and the leading "drop table if exists" already makes a
+-- re-run clean -- whereas a trailing DROP would be the LAST statement in the
+-- file, and the Supabase SQL editor shows the LAST result set. Ending on a
+-- DROP would hide the report above, which is the whole point of this file.

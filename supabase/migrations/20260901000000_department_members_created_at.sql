@@ -28,11 +28,15 @@
 -- deletes and reinserts a user's whole membership set on every chip toggle, so
 -- the table churns and autovacuum can reuse slots in any order.
 --
--- created_at fixes it by construction. Existing rows are stamped with a
--- sentinel that pre-dates every real timestamp, so a membership someone
--- ALREADY HAS always sorts ahead of one they gain later. Readers order by
--- (created_at, department_id): the tie-break makes the order total and stable
--- rather than merely usually-right.
+-- created_at fixes it by construction. Rows that pre-date this column are
+-- backfilled from their DEPARTMENT's created_at, not from a single flat
+-- sentinel. A membership cannot predate the department it points at, so that is
+-- both truthful and the best proxy available -- and it is what makes the result
+-- correct rather than merely deterministic: dep_facebook was created
+-- 2026-08-26, long after the four originals were seeded in 20260505000000, so
+-- Facebook memberships sort AFTER everyone's older ones and can never win the
+-- tie-break. Readers order by (created_at, department_id); the tie-break covers
+-- departments created in the same statement.
 --
 -- Note the default is clock_timestamp(), NOT now(). now() is the TRANSACTION
 -- timestamp, so every row written by one statement would share it -- and
@@ -45,17 +49,19 @@
 --
 -- Limit of the guarantee, stated so nobody leans on it too hard: PATCH
 -- /api/users/[id] deletes and reinserts a user's ENTIRE membership set on every
--- chip toggle, so the sentinel on their long-held rows is discarded and all of
--- their memberships get fresh clock_timestamp() values. Order then reflects the
+-- chip toggle, so the backfilled timestamps on their long-held rows are
+-- discarded and all of their memberships get fresh clock_timestamp() values. Order then reflects the
 -- order the client sent. That happens to be correct today -- the People tab
 -- appends a newly-ticked department to the end of the array -- but it is the
 -- client preserving the order, not the schema enforcing it.
 --
--- Side effect worth knowing: users who ALREADY belong to two or more
--- departments all tie on the sentinel and fall to the department_id
--- tie-break, so their "primary" may settle on a different one of their
+-- Side effect worth knowing: the four original departments were all created by
+-- the same insert in 20260505000000, so they share a created_at. Anyone who
+-- already belongs to two or more of THOSE still falls to the department_id
+-- tie-break, and their "primary" may settle on a different one of their
 -- existing departments than it happened to show before. That order was
 -- undefined until now; after this it is fixed and will not drift again.
+-- Facebook is unaffected by that tie -- it is strictly newer.
 --
 -- Purely additive and backwards-compatible -- code that does not select the
 -- column is unaffected. SAFE TO APPLY BEFORE the matching code deploys, and it
@@ -80,22 +86,14 @@
 -- write. Same shape as 20260512300000_rename_ceo_to_leader.sql.
 begin;
 
--- Tripwire. This file MUST run before the dep_facebook member seed
--- (20260901000200). If the seed went first, its rows are already present and
--- the backfill below would stamp them with the SAME sentinel as everyone's
--- long-held memberships -- every one of the eight would tie, fall to the
--- department_id tie-break, and 'dep_facebook' sorts ahead of every other
--- department id. Facebook would silently become their primary department:
--- retagging new tasks, relabelling the Topbar/Sidebar, and regrouping their EOD
--- work under "Facebook" in a CLIENT-FACING email. Fail loudly instead.
-do $$
-begin
-  if exists (select 1 from public.department_members where department_id = 'dep_facebook') then
-    raise exception
-      'dep_facebook already has members -- the seed (20260901000200) ran BEFORE this file. Stamping those rows with the pre-existing sentinel would make Facebook everyone''s primary department. Reconcile first: give the dep_facebook rows a created_at of now() by hand, then re-run.';
-  end if;
-end $$;
-
+-- No ordering tripwire here, deliberately. An earlier revision refused to run
+-- if dep_facebook already had members, assuming that could only mean the seed
+-- had run first. That was wrong twice over: people can be -- and were -- added
+-- to Facebook by hand from Leader Console -> People, and the flat sentinel it
+-- was protecting no longer exists. Backfilling from departments.created_at
+-- makes the outcome correct whatever order these files run in, because
+-- Facebook's memberships are stamped with its own 2026-08-26 creation time,
+-- behind every department seeded in 20260505000000.
 alter table public.department_members
   add column if not exists created_at timestamptz;
 
@@ -104,12 +102,17 @@ alter table public.department_members
 alter table public.department_members
   alter column created_at set default clock_timestamp();
 
--- Existing memberships pre-date tracking. A fixed sentinel (rather than now())
--- guarantees they sort before every row inserted from here on, even if this
--- migration and a later seed run inside the same transaction.
-update public.department_members
-   set created_at = timestamptz '2000-01-01 00:00:00+00'
- where created_at is null;
+-- Backfill from the department's own creation time. A membership cannot predate
+-- its department, so this is truthful, and it orders the pre-tracking rows the
+-- way reality did: whoever joined an older department outranks a newer one.
+-- Crucially it is order-independent -- run this before or after the Facebook
+-- seed and Facebook's rows still land at 2026-08-26, behind everything seeded in
+-- 20260505000000. departments.created_at is NOT NULL, so every row is covered.
+update public.department_members dm
+   set created_at = d.created_at
+  from public.departments d
+ where d.id = dm.department_id
+   and dm.created_at is null;
 
 alter table public.department_members
   alter column created_at set not null;
@@ -119,17 +122,19 @@ commit;
 do $$
 declare
   n_rows int;
-  n_sentinel int;
+  n_backfilled int;
   multi text;
 begin
   select count(*) into n_rows from public.department_members;
-  select count(*) into n_sentinel from public.department_members
-   where created_at = timestamptz '2000-01-01 00:00:00+00';
-  raise notice 'department_members.created_at ready: % row(s), % stamped as pre-existing.',
-    n_rows, n_sentinel;
+  select count(*) into n_backfilled
+    from public.department_members dm
+    join public.departments d on d.id = dm.department_id
+   where dm.created_at = d.created_at;
+  raise notice 'department_members.created_at ready: % row(s), % backfilled from their department''s creation time.',
+    n_rows, n_backfilled;
 
-  -- Everyone who already belongs to more than one department ties on the
-  -- sentinel and therefore falls to the department_id tie-break. Their
+  -- Anyone who already belongs to two or more departments created in the SAME
+  -- statement still ties, and falls to the department_id tie-break. Their
   -- "primary" department is now FIXED, but it may settle on a different one of
   -- their existing departments than it happened to show before -- which changes
   -- their Topbar chip and, via api/client-update/{preview,draft}, the team

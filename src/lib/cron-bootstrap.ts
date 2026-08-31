@@ -33,6 +33,7 @@
 
 import { runInactivitySweep } from "@/lib/inactivity-runner";
 import { runEodRecap } from "@/lib/eod-recap-runner";
+import { runDailyBriefing } from "@/lib/daily-briefing-runner";
 import { runClientsEmailedPush } from "@/lib/clients-emailed-push-runner";
 import { runScheduledEmails } from "@/lib/scheduled-emails-runner";
 import { syncBirthdaysForAllOwners } from "@/lib/birthday-calendar-sync";
@@ -102,6 +103,21 @@ const JOBS: CronJob[] = [
       const o = await runEodRecap();
       if (!o.ok) return `reason=${o.reason}`;
       return "posted" in o ? `posted=${o.posted}` : `skipped=${o.skipped}`;
+    }
+  },
+  {
+    name: "daily-briefing",
+    // vercel.json fires at 13:00 + 14:00 UTC to straddle DST; the runner's
+    // 9am-NY-hour guard means only the tick that lands in the 9am NY hour DMs
+    // Mitchell, so an hourly cadence hits that window exactly once a day.
+    intervalMs: HOUR,
+    bootCatchupDelayMs: 55_000,
+    disableEnv: "DAILY_BRIEFING_INTERNAL_CRON",
+    run: async () => {
+      const o = await runDailyBriefing();
+      if (!o.ok) return `reason=${o.reason}`;
+      if ("delivered" in o) return `delivered brief=${o.briefId} msgs=${o.messages} tasks=${o.activeTasks} inbox=${o.inboxThreads}`;
+      return "skipped" in o ? `skipped=${o.skipped}` : "dry-run";
     }
   },
   {

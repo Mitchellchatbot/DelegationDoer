@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
-import { openView } from "@/lib/slack";
+import { openView, openDmAsUser, postMessageAsUser } from "@/lib/slack";
+import { resolveSlackId } from "@/lib/slack-resolve";
+import { buildBriefingBlocks, type DailyBriefingRow, type BriefingMessage } from "@/lib/daily-briefing-runner";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs"; // crypto needs Node runtime, not Edge
@@ -38,6 +40,7 @@ interface BlockAction {
 interface InteractionPayload {
   type?: string;
   trigger_id?: string;
+  response_url?: string;
   actions?: BlockAction[];
 }
 
@@ -75,25 +78,99 @@ export async function POST(req: NextRequest) {
   }
 
   const action = payload.actions?.[0];
-  if (
-    payload.type !== "block_actions" ||
-    action?.action_id !== "eod_recap_show_more" ||
-    !payload.trigger_id
-  ) {
+  if (payload.type !== "block_actions" || !action?.action_id) {
     return NextResponse.json({});
   }
 
+  // Dispatch by action_id. Each handler is wrapped: a retry from Slack can't
+  // help (trigger_ids expire, response_urls are one-shot-ish), so we log + ack.
   try {
-    const { client, date } = JSON.parse(action.value ?? "{}") as { client?: string; date?: string };
-    if (client && date && /^\d{4}-\d{2}-\d{2}$/.test(date)) {
-      await openFullListModal(payload.trigger_id, client, date);
+    if (action.action_id === "eod_recap_show_more" && payload.trigger_id) {
+      const { client, date } = JSON.parse(action.value ?? "{}") as { client?: string; date?: string };
+      if (client && date && /^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        await openFullListModal(payload.trigger_id, client, date);
+      }
+    } else if (action.action_id === "daily_brief_send" && payload.response_url) {
+      const { b, m } = JSON.parse(action.value ?? "{}") as { b?: string; m?: string };
+      if (b && m) await sendBriefingMessage(b, m, payload.response_url);
     }
   } catch (err) {
-    // Log and ack: a retry from Slack couldn't help (the trigger_id is
-    // already spent/expired by the time it retried anyway).
-    console.error("[slack/interactions] eod_recap_show_more failed:", err);
+    console.error(`[slack/interactions] ${action.action_id} failed:`, err);
   }
   return NextResponse.json({});
+}
+
+// Daily-brief "Send" button: send one drafted team check-in AS Mitchell, mark
+// it sent in the daily_briefings row, and re-render the DM so that button flips
+// to "✅ Sent". Idempotent — a second click on an already-sent message just
+// re-renders. Sends via Mitchell's user token (so it lands as a personal DM
+// from him); falls back to the bot if no user token is available.
+async function sendBriefingMessage(briefId: string, msgId: string, responseUrl: string): Promise<void> {
+  const supabase = getSupabaseAdmin();
+  const { data } = await supabase
+    .from("daily_briefings")
+    .select("id, brief_date, update_text, needle_mover, messages, meta")
+    .eq("id", briefId)
+    .maybeSingle();
+  if (!data) return;
+
+  const row = data as unknown as DailyBriefingRow;
+  const messages: BriefingMessage[] = Array.isArray(row.messages) ? row.messages : [];
+  const idx = messages.findIndex((x) => x.id === msgId);
+  if (idx === -1) return;
+  const msg = messages[idx];
+
+  // Already sent → just re-render (covers a double-click / Slack retry).
+  if (msg.status !== "sent") {
+    try {
+      // Always send AS Mitchell (his personal Slack user token) so the teammate
+      // gets a genuine founder→you DM. No bot fallback by design — if the token
+      // is missing we fail visibly rather than sending from the workspace bot.
+      const { data: owner } = await supabase
+        .from("users")
+        .select("slack_user_token")
+        .eq("email", "mitchell@scaledai.org")
+        .maybeSingle();
+      const userToken =
+        (owner?.slack_user_token as string | null) || process.env.SLACK_USER_TOKEN || null;
+      if (!userToken) {
+        throw new Error("No personal Slack token on file — reconnect Slack to send as yourself.");
+      }
+
+      // Resolve the teammate's Slack id. msg.slackId is often null when draft-
+      // time resolution got rate-limited, so fall back to their real user row
+      // (email + any cached slack fields) — resolveSlackId caches the result
+      // back to users.slack_user_id for next time.
+      let slackId = msg.slackId;
+      if (!slackId) {
+        const { data: teammate } = await supabase
+          .from("users")
+          .select("id, email, slack_user_id, slack_email")
+          .eq("id", msg.userId)
+          .maybeSingle();
+        slackId = await resolveSlackId(
+          teammate
+            ? { id: teammate.id, email: teammate.email, slack_user_id: teammate.slack_user_id, slack_email: teammate.slack_email }
+            : { id: msg.userId }
+        );
+      }
+
+      const dm = await openDmAsUser(userToken, slackId);
+      await postMessageAsUser({ userToken, channel: dm, text: msg.text });
+      messages[idx] = { ...msg, status: "sent", sentAt: new Date().toISOString(), error: null };
+    } catch (err) {
+      messages[idx] = { ...msg, status: "failed", error: err instanceof Error ? err.message.slice(0, 140) : "send failed" };
+    }
+    await supabase.from("daily_briefings").update({ messages }).eq("id", briefId);
+  }
+
+  // Re-render the original DM in place via the interaction's response_url.
+  const { blocks, text } = buildBriefingBlocks({ ...row, messages });
+  await fetch(responseUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ replace_original: true, text, blocks })
+  }).catch((err) => console.error("[slack/interactions] response_url update failed:", err));
 }
 
 // Full, uncapped version of one client's Daily Recap entry, shown in a

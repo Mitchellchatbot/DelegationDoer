@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-  Mic, MicOff, X, Loader2, Sparkles, Trash2, Check, ChevronLeft, Wand2
+  Mic, MicOff, X, Loader2, Sparkles, Trash2, Check, ChevronLeft, Wand2, User as UserIcon, Clock
 } from "lucide-react";
 import { toast } from "sonner";
 import { useDictation } from "./useDictation";
@@ -24,10 +24,16 @@ interface Draft {
   id: string;
   title: string;
   description: string;
+  outline: string[];
   priority: Priority;
+  estimatedHours: number;
   clientName: string | null;
   dueDate: string | null;
   tags: string[];
+  // Explicit routing the founder spoke (null when nothing was named).
+  namedAssignee: { userId: string; name: string } | null;
+  namedDepartment: { id: string; name: string } | null;
+  // Ranker recommendations (always present).
   suggestedAssignees: SuggestedAssignee[];
 }
 interface Person { id: string; name: string; departmentIds: string[] }
@@ -46,9 +52,14 @@ const PRIORITY_OPTIONS: { value: Priority; label: string }[] = [
   { value: "critical", label: "Critical" }
 ];
 
-// Speak a brain-dump → Claude drafts structured, delegatable tasks →
-// founder edits/approves → each approved task is created + delegated via
-// the audited POST /api/tasks path (assign + Slack DM + calendar sync).
+function initials(name: string): string {
+  const parts = name.trim().split(/\s+/);
+  return ((parts[0]?.[0] ?? "") + (parts[1]?.[0] ?? "")).toUpperCase() || "?";
+}
+
+// Speak a brain-dump → Claude breaks each task down, routes it to whoever you
+// named (or recommends an owner) → you review outline/time/priority/assignee →
+// each approved task is created + delegated via the audited POST /api/tasks.
 export function VoiceTaskDialog() {
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -78,10 +89,7 @@ export function VoiceTaskDialog() {
 
   function onOpenChange(next: boolean) {
     setOpen(next);
-    if (!next) {
-      // Defer so the close animation isn't interrupted by a state wipe.
-      setTimeout(reset, 200);
-    }
+    if (!next) setTimeout(reset, 200);
   }
 
   const peopleById = new Map(people.map((p) => [p.id, p]));
@@ -109,16 +117,17 @@ export function VoiceTaskDialog() {
         toast.message(typeof data.note === "string" ? data.note : "No tasks found in that recording.");
         return;
       }
-      setPeople(Array.isArray(data.people) ? data.people : []);
+      const pplRaw: Person[] = Array.isArray(data.people) ? data.people : [];
+      setPeople(pplRaw);
       setDepartments(Array.isArray(data.departments) ? data.departments : []);
-      const pplById = new Map<string, Person>(
-        (Array.isArray(data.people) ? data.people : []).map((p: Person) => [p.id, p])
-      );
+      const pplById = new Map<string, Person>(pplRaw.map((p) => [p.id, p]));
       setDrafts(
         rawDrafts.map((d) => {
-          const topId = d.suggestedAssignees[0]?.userId ?? "";
-          const dept = pplById.get(topId)?.departmentIds?.[0] ?? null;
-          return { ...d, assigneeId: topId, departmentId: dept };
+          // Default owner: whoever you named, else the top recommendation.
+          const assigneeId = d.namedAssignee?.userId ?? d.suggestedAssignees[0]?.userId ?? "";
+          const departmentId =
+            d.namedDepartment?.id ?? pplById.get(assigneeId)?.departmentIds?.[0] ?? null;
+          return { ...d, assigneeId, departmentId };
         })
       );
       setPhase("review");
@@ -137,7 +146,9 @@ export function VoiceTaskDialog() {
   }
   function chooseAssignee(id: string, assigneeId: string) {
     const dept = peopleById.get(assigneeId)?.departmentIds?.[0] ?? null;
-    patchDraft(id, { assigneeId, departmentId: dept });
+    // Only auto-set department when picking a person; keep an explicit dept if
+    // the user cleared the assignee.
+    patchDraft(id, assigneeId ? { assigneeId, departmentId: dept } : { assigneeId });
   }
 
   async function approveAll() {
@@ -149,17 +160,22 @@ export function VoiceTaskDialog() {
     setCreating(true);
     let created = 0;
     const failures: string[] = [];
-    // Sequential so Slack DMs / activity logs land in a predictable order and
-    // one bad row doesn't abort the rest.
     for (const d of ready) {
+      // Fold the breakdown into the description so the steps live on the task.
+      const steps = d.outline.map((s) => s.trim()).filter(Boolean);
+      const description = [
+        d.description.trim(),
+        steps.length ? "Breakdown:\n" + steps.map((s) => `- ${s}`).join("\n") : ""
+      ].filter(Boolean).join("\n\n");
       try {
         const res = await fetch("/api/tasks", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             title: d.title.trim(),
-            description: d.description.trim() || undefined,
+            description: description || undefined,
             priority: d.priority,
+            estimatedHours: d.estimatedHours > 0 ? d.estimatedHours : undefined,
             assigneeId: d.assigneeId || undefined,
             departmentId: d.departmentId || undefined,
             dueDate: d.dueDate || undefined,
@@ -183,12 +199,8 @@ export function VoiceTaskDialog() {
       toast.success(`${created} task${created === 1 ? "" : "s"} created and delegated.`);
       router.refresh();
     }
-    if (failures.length > 0) {
-      toast.error(`${failures.length} failed — ${failures[0]}`);
-    }
-    if (failures.length === 0) {
-      onOpenChange(false);
-    }
+    if (failures.length > 0) toast.error(`${failures.length} failed — ${failures[0]}`);
+    if (failures.length === 0) onOpenChange(false);
   }
 
   const readyCount = drafts.filter((d) => d.title.trim()).length;
@@ -231,7 +243,7 @@ export function VoiceTaskDialog() {
                   </Dialog.Title>
                   <Dialog.Description className="text-xs text-muted mt-0.5">
                     {phase === "capture"
-                      ? "Speak your to-dos — AI drafts the tasks, you approve."
+                      ? "Talk through what's on your mind — name who should own each thing. AI breaks it down, you approve."
                       : `${readyCount} task${readyCount === 1 ? "" : "s"} drafted. Edit anything, then delegate.`}
                   </Dialog.Description>
                 </div>
@@ -383,14 +395,17 @@ function CaptureView({
       </div>
 
       <div>
-        <label className="label mb-1 block">Transcript</label>
+        <label className="label mb-1 block">What's on your mind</label>
         <textarea
           value={transcript}
           onChange={(e) => setTranscript(e.target.value)}
           rows={5}
-          placeholder="e.g. “Get the new hero design done for ACME by Friday, it's urgent. Also someone needs to write three blog posts for the SEO push and set up the analytics tracking on the pricing page.”"
+          placeholder="e.g. “Vishwa needs to redesign the ACME pricing hero by Friday, it's urgent. Have the SEO team write three blog posts for the Q4 push. And someone should set up analytics tracking on the pricing page, maybe half a day.”"
           className="input w-full resize-y"
         />
+        <div className="mt-1 text-[11px] text-muted">
+          Tip: say a teammate's name or a department and it'll route there automatically.
+        </div>
       </div>
 
       <div className="flex justify-end">
@@ -405,9 +420,9 @@ function CaptureView({
           )}
         >
           {drafting ? (
-            <><Loader2 className="w-4 h-4 animate-spin" /> Drafting tasks…</>
+            <><Loader2 className="w-4 h-4 animate-spin" /> Breaking it down…</>
           ) : (
-            <><Wand2 className="w-4 h-4" /> Draft tasks</>
+            <><Wand2 className="w-4 h-4" /> Draft & route tasks</>
           )}
         </button>
       </div>
@@ -425,10 +440,15 @@ function DraftCard({
   onChooseAssignee: (userId: string) => void;
   onRemove: () => void;
 }) {
+  const assigneeName = draft.assigneeId
+    ? (people.find((p) => p.id === draft.assigneeId)?.name ?? "Selected")
+    : null;
   const selectedSuggestion = draft.suggestedAssignees.find((s) => s.userId === draft.assigneeId);
+  const wasNamed = !!draft.namedAssignee && draft.namedAssignee.userId === draft.assigneeId;
 
   return (
     <div className="rounded-2xl border border-white/70 bg-white/80 backdrop-blur-sm shadow-sm p-4 space-y-3">
+      {/* Title + remove */}
       <div className="flex items-start gap-2">
         <input
           value={draft.title}
@@ -446,15 +466,99 @@ function DraftCard({
         </button>
       </div>
 
+      {/* Team member square — who owns this */}
+      <div className={cn(
+        "flex items-center gap-3 rounded-xl border p-2.5",
+        assigneeName ? "border-accent/25 bg-accent/[0.04]" : "border-amber-300/50 bg-amber-50/60"
+      )}>
+        <div className={cn(
+          "w-10 h-10 shrink-0 rounded-lg grid place-items-center text-sm font-bold",
+          assigneeName ? "bg-accent/15 text-accent" : "bg-amber-100 text-amber-700"
+        )}>
+          {assigneeName ? initials(assigneeName) : <UserIcon className="w-5 h-5" />}
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-1.5">
+            <span className="text-sm font-semibold text-ink truncate">
+              {assigneeName ?? "Unassigned — pick an owner"}
+            </span>
+            {wasNamed && (
+              <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700">
+                You said
+              </span>
+            )}
+            {!wasNamed && selectedSuggestion && (
+              <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-accent/10 text-accent inline-flex items-center gap-0.5">
+                <Sparkles className="w-2.5 h-2.5" /> AI pick
+              </span>
+            )}
+          </div>
+          <div className="text-[11px] text-muted truncate">
+            {wasNamed
+              ? "Routed to who you named"
+              : selectedSuggestion
+                ? `${selectedSuggestion.reason} · ${selectedSuggestion.capacityPct}% capacity used`
+                : "No owner yet"}
+          </div>
+        </div>
+        <select
+          value={draft.assigneeId}
+          onChange={(e) => onChooseAssignee(e.target.value)}
+          className="input !w-auto max-w-[45%] shrink-0 text-sm"
+          aria-label="Delegate to"
+        >
+          <option value="">Unassigned</option>
+          {people.map((p) => (
+            <option key={p.id} value={p.id}>{p.name}</option>
+          ))}
+        </select>
+      </div>
+
+      {/* Recommendation chips (alternatives) */}
+      {draft.suggestedAssignees.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1 text-[11px] text-muted">
+          <span>Recommended:</span>
+          {draft.suggestedAssignees.map((s) => (
+            <button
+              key={s.userId}
+              onClick={() => onChooseAssignee(s.userId)}
+              className={cn(
+                "px-1.5 py-0.5 rounded-full transition-colors",
+                s.userId === draft.assigneeId
+                  ? "bg-accent text-white"
+                  : "bg-accent/10 text-accent hover:bg-accent/20"
+              )}
+              title={`${s.reason} · ${s.capacityPct}% capacity used`}
+            >
+              {s.name}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Summary */}
       <textarea
         value={draft.description}
         onChange={(e) => onPatch({ description: e.target.value })}
         rows={2}
-        placeholder="Description"
+        placeholder="Summary — what to do and what 'done' looks like"
         className="input w-full resize-y text-sm"
       />
 
-      <div className="grid grid-cols-2 gap-3">
+      {/* Breakdown outline */}
+      <div>
+        <label className="label mb-1 block">Breakdown <span className="font-normal text-muted">(one step per line)</span></label>
+        <textarea
+          value={draft.outline.join("\n")}
+          onChange={(e) => onPatch({ outline: e.target.value.split("\n") })}
+          rows={Math.max(2, Math.min(draft.outline.length + 1, 7))}
+          placeholder={"Step 1\nStep 2\nStep 3"}
+          className="input w-full resize-y text-sm font-mono"
+        />
+      </div>
+
+      {/* Priority / time / due */}
+      <div className="grid grid-cols-3 gap-3">
         <div>
           <label className="label mb-1 block">Priority</label>
           <select
@@ -468,6 +572,17 @@ function DraftCard({
           </select>
         </div>
         <div>
+          <label className="label mb-1 flex items-center gap-1"><Clock className="w-3 h-3" /> Est. hrs</label>
+          <input
+            type="number"
+            min={0.5}
+            step={0.5}
+            value={draft.estimatedHours}
+            onChange={(e) => onPatch({ estimatedHours: Number(e.target.value) || 0 })}
+            className="input w-full"
+          />
+        </div>
+        <div>
           <label className="label mb-1 block">Due date</label>
           <input
             type="date"
@@ -478,6 +593,7 @@ function DraftCard({
         </div>
       </div>
 
+      {/* Client / department */}
       <div className="grid grid-cols-2 gap-3">
         <div>
           <label className="label mb-1 block">Client</label>
@@ -489,7 +605,12 @@ function DraftCard({
           />
         </div>
         <div>
-          <label className="label mb-1 block">Department</label>
+          <label className="label mb-1 block">
+            Department
+            {draft.namedDepartment && draft.namedDepartment.id === draft.departmentId && (
+              <span className="ml-1 text-[10px] font-semibold text-emerald-700">· you said</span>
+            )}
+          </label>
           <select
             value={draft.departmentId ?? ""}
             onChange={(e) => onPatch({ departmentId: e.target.value || null })}
@@ -501,40 +622,6 @@ function DraftCard({
             ))}
           </select>
         </div>
-      </div>
-
-      <div>
-        <label className="label mb-1 block">Delegate to</label>
-        <select
-          value={draft.assigneeId}
-          onChange={(e) => onChooseAssignee(e.target.value)}
-          className="input w-full"
-        >
-          <option value="">Unassigned (routing review)</option>
-          {people.map((p) => (
-            <option key={p.id} value={p.id}>{p.name}</option>
-          ))}
-        </select>
-        {selectedSuggestion ? (
-          <div className="mt-1.5 text-[11px] text-emerald-700 flex items-center gap-1">
-            <Sparkles className="w-3 h-3" />
-            AI pick · {selectedSuggestion.reason} · {selectedSuggestion.capacityPct}% capacity used
-          </div>
-        ) : draft.suggestedAssignees.length > 0 ? (
-          <div className="mt-1.5 flex flex-wrap items-center gap-1 text-[11px] text-muted">
-            <span>Suggested:</span>
-            {draft.suggestedAssignees.map((s) => (
-              <button
-                key={s.userId}
-                onClick={() => onChooseAssignee(s.userId)}
-                className="px-1.5 py-0.5 rounded-full bg-accent/10 text-accent hover:bg-accent/20 transition-colors"
-                title={`${s.reason} · ${s.capacityPct}% capacity used`}
-              >
-                {s.name}
-              </button>
-            ))}
-          </div>
-        ) : null}
       </div>
     </div>
   );

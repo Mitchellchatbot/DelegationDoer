@@ -10,6 +10,7 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { PersonAvatar } from "./PersonAvatar";
 import { NewTaskForm } from "./NewTaskForm";
+import { VoiceTaskDialog } from "./VoiceTaskDialog";
 import { useNavDrawer } from "./NavDrawerProvider";
 // EomPill + NotificationsBell removed from the topbar — they were
 // crowding the right side and squeezing the user pill. EOM crowning
@@ -340,6 +341,7 @@ export function Topbar({ user }: { user: User }) {
             the operator cohort. Sits leftmost in the controls cluster so
             it's adjacent to the search but doesn't crowd the user pill. */}
         {canSeeOutbound(user) && <EnterOutboundDashboardButton iconOnly />}
+        <VoiceTaskDialog />
         <Dialog.Root open={newTaskOpen} onOpenChange={setNewTaskOpen}>
           <NewTaskTrigger />
           <Dialog.Portal>

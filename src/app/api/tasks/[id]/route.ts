@@ -2,7 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { getUserById } from "@/lib/server-data";
 import { loadTaskForViewer } from "@/lib/task-access";
-import { canDeleteTask } from "@/lib/access";
+import { canDeleteTask, canManageTask, canClaimTask } from "@/lib/access";
+import { TEAM_TAG, isTeamTask, stripTeamTag } from "@/lib/task-team";
+import type { Task } from "@/lib/types";
 import { notifyCompletion, type CompletionResult } from "@/lib/slack";
 import { onTaskDone } from "@/lib/project-flow";
 import { syncTaskToCalendar } from "@/lib/task-calendar-sync";
@@ -29,7 +31,9 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     // have the creator/assignee/title for the completion notification.
     const { data: before, error: beErr } = await supabase
       .from("tasks")
-      .select("status, creator_id, assignee_id, title, estimated_hours, actual_hours, client_name, created_at, tags")
+      // department_id is here for the ownership gate + the team-task checks
+      // below; without it a team task can't be recognised on this path.
+      .select("status, creator_id, assignee_id, title, estimated_hours, actual_hours, client_name, created_at, tags, department_id")
       .eq("id", params.id)
       .maybeSingle();
     if (beErr) return NextResponse.json({ error: beErr.message }, { status: 500 });
@@ -65,7 +69,15 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       update.actual_hours_override = body.actualHoursOverride;
     }
     if (body.dueDate === null || typeof body.dueDate === "string") update.due_date = body.dueDate || null;
-    if (Array.isArray(body.tags)) update.tags = body.tags.filter((t: unknown) => typeof t === "string");
+    // The team marker is server-owned: a client editing tags must not be able
+    // to publish a task to a department's pool, nor quietly pull one out of
+    // it. Strip whatever they sent and re-add the tag iff the row already
+    // carried it. (See lib/task-team.ts.)
+    if (Array.isArray(body.tags)) {
+      const next = stripTeamTag(body.tags);
+      const beforeTags: string[] = Array.isArray(before.tags) ? before.tags : [];
+      update.tags = beforeTags.includes(TEAM_TAG) ? [...next, TEAM_TAG] : next;
+    }
     if (body.clientName === null) update.client_name = null;
     else if (typeof body.clientName === "string") update.client_name = body.clientName.trim() || null;
     if (body.website === null) update.website = null;
@@ -110,6 +122,24 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     if (body.assigneeId === null) update.assignee_id = null;
     else if (typeof body.assigneeId === "string") update.assignee_id = body.assigneeId;
 
+    // Auto-claim on completion. If someone finishes a team task that is still
+    // sitting in the pool, record that they did it rather than leaving it
+    // ownerless. This is not a convenience: an unassigned completion is
+    // invisible to the client-update draft (lib/eod-digest.ts aborts when it
+    // finds no contributors), earns nobody skill points (the extractor below
+    // is gated on before.assignee_id), and lands in no leaderboard.
+    if (
+      update.status === "done" &&
+      !before.assignee_id &&
+      isTeamTask({
+        departmentId: (before.department_id as string | null) ?? null,
+        tags: (before.tags as string[] | null) ?? []
+      }) &&
+      update.assignee_id === undefined
+    ) {
+      update.assignee_id = userId;
+    }
+
     // Department reassignment — used when a task was filed under the
     // wrong department (e.g. picked Marketing when they meant Software).
     // null clears it; a string moves the task into that department.
@@ -149,6 +179,41 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
         ? (existingMedia!.media_urls as typeof mediaAppend)
         : [];
       update.media_urls = [...prior, ...mediaAppend].slice(-50);
+    }
+
+    // OWNERSHIP GATE. This route is otherwise guarded only by
+    // loadTaskForViewer, which is a READ gate — anyone who can see a task can
+    // edit it. That was survivable while "can see" meant "it's yours or a
+    // teammate's", but team tasks deliberately widen visibility to a whole
+    // department, so who-can-move-it now needs its own check.
+    //
+    // Scoped to the two ownership fields on purpose. Clamping the whole route
+    // would break status updates, comments and attachments for exactly the
+    // people the feature exists for — and the head handing work out at the
+    // meeting. The rest of the route's permissiveness is pre-existing and
+    // out of scope here.
+    if ("assignee_id" in update || "department_id" in update) {
+      const beforeShape = {
+        creatorId: (before.creator_id as string) ?? "",
+        assigneeId: (before.assignee_id as string | null) ?? null,
+        departmentId: (before.department_id as string | null) ?? null,
+        status: before.status as Task["status"],
+        tags: (before.tags as string[] | null) ?? []
+      };
+      // Claiming is the one write a plain department member may make: it can
+      // only ever point the task at themselves, and only while it is still
+      // unclaimed.
+      const claimingForSelf =
+        update.assignee_id === userId && !("department_id" in update);
+      const allowed =
+        canManageTask(access.viewer, beforeShape) ||
+        (claimingForSelf && canClaimTask(access.viewer, beforeShape));
+      if (!allowed) {
+        return NextResponse.json(
+          { error: "You don't have permission to reassign this task" },
+          { status: 403 }
+        );
+      }
     }
 
     const { data, error } = await supabase

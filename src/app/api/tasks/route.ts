@@ -2,7 +2,15 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { requireCurrentUserId } from "@/lib/session";
 import { getAllTasks, getDeletedTasks, getArchivedTasks, getUserById } from "@/lib/server-data";
-import { isLeader, isWorker, canCreateTaskInDepartment, canAssignTaskTo } from "@/lib/access";
+import {
+  isLeader,
+  isWorker,
+  canCreateTaskInDepartment,
+  canAssignTaskTo,
+  canQueueTaskToTeam,
+  canViewTask
+} from "@/lib/access";
+import { TEAM_TAG, stripTeamTag } from "@/lib/task-team";
 import { formatDueBothZones, notifyAssignment, postMessage } from "@/lib/slack";
 import { syncTaskToCalendar } from "@/lib/task-calendar-sync";
 import { sanitizeMediaUrls } from "@/lib/media";
@@ -62,17 +70,13 @@ export async function GET(req: NextRequest) {
       .eq("role", "leader");
     const leaderIds = new Set((leaderRows ?? []).map((u) => u.id as string));
 
-    const filtered = tasks.filter((t) => {
-      // Always show the viewer's own tasks (covers an edge case where
-      // a worker is somehow assigned a task by a leader — they still
-      // need to see what they're on the hook for).
-      if (t.assigneeId === viewerId) return true;
-      if (t.creatorId === viewerId) return true;
-      // Hide tasks owned or created by leaders from non-leaders.
-      if (t.assigneeId && leaderIds.has(t.assigneeId)) return false;
-      if (t.creatorId && leaderIds.has(t.creatorId)) return false;
-      return true;
-    });
+    // Delegated to the shared gate rather than re-implemented here. This
+    // used to be an inlined copy of canViewTask's leader-privacy rules,
+    // which meant a change to the real gate silently skipped the list that
+    // feeds the board. It also carries the team-task escape for free, which
+    // is what makes department-queued work show up in the Unassigned column
+    // for the team it was written for.
+    const filtered = viewer ? tasks.filter((t) => canViewTask(viewer, t, leaderIds)) : [];
     return NextResponse.json({ tasks: filtered });
   } catch (err) {
     const message = err instanceof Error ? err.message : "unknown error";
@@ -172,12 +176,37 @@ export async function POST(req: NextRequest) {
         );
       }
     }
+    // TEAM TASKS — "assign it to the whole Software team and we'll divide it
+    // up when we meet". The client asks for this explicitly rather than it
+    // being inferred from a missing assignee, because plenty of rows are
+    // legitimately unassigned without being up for grabs (project stage
+    // placeholders, rejected drafts). See lib/task-team.ts.
+    //
+    // The marker tag is applied HERE and only here on create: a client must
+    // not be able to publish work to a team just by typing "auto-team" into
+    // the tag field, so the tag is stripped from whatever they sent and
+    // re-added only when the request genuinely qualifies.
+    const wantsTeamTask =
+      body.assignToDepartment === true && !requestedAssigneeId && !!departmentId;
+    const queueToTeam = wantsTeamTask && canQueueTaskToTeam(caller);
+    if (wantsTeamTask && !queueToTeam) {
+      return NextResponse.json(
+        { error: "Only leaders and department heads can queue work to a whole team." },
+        { status: 403 }
+      );
+    }
+
     // Default an unspecified assignee to the creator themselves for workers,
     // who can only ever assign to themselves (mirrors the department default
     // above). Department heads + leaders may leave a task unassigned for the
-    // routing-review queue, so they're exempt.
+    // routing-review queue, so they're exempt. A deliberate team task is
+    // exempt too — otherwise a head queuing work to their own team would
+    // silently end up holding it themselves.
     const assigneeId =
-      requestedAssigneeId ?? (!privileged && isWorker(caller) ? userId : null);
+      requestedAssigneeId ?? (!privileged && isWorker(caller) && !queueToTeam ? userId : null);
+
+    const cleanTags = stripTeamTag(body.tags);
+    const tags = queueToTeam ? [...cleanTags, TEAM_TAG] : cleanTags;
 
     const id = `t_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
     const now = new Date().toISOString();
@@ -190,7 +219,7 @@ export async function POST(req: NextRequest) {
       priority,
       estimated_hours: Number(body.estimatedHours) > 0 ? Number(body.estimatedHours) : 2,
       actual_hours: 0,
-      tags: Array.isArray(body.tags) ? body.tags.filter((t: unknown) => typeof t === "string") : [],
+      tags,
       department_id: departmentId,
       assignee_id: assigneeId,
       creator_id: userId,
@@ -245,7 +274,9 @@ export async function POST(req: NextRequest) {
       action: "created",
       detail: row.assignee_id
         ? `Assigned to ${assigneeName ?? row.assignee_id}`
-        : "Created (unassigned)"
+        : queueToTeam
+          ? "Queued for the team"
+          : "Created (unassigned)"
     });
 
     // Awaited Slack DM (was fire-and-forget but Railway was occasionally
@@ -284,9 +315,19 @@ export async function POST(req: NextRequest) {
 
     // Announce the new task in the department's task_channel (e.g. the
     // Website team's #website-to-do channel mirrors what they had in
-    // Notion). Fire-and-forget; never blocks the response.
+    // Notion).
+    //
+    // Awaited rather than fire-and-forget, for the same reason the DM above
+    // is: Railway tears the request down before the outbound fetch flushes.
+    // It also lets us report back whether the announcement actually went
+    // out — for a team task this channel post IS the notification, and an
+    // unset task_channel_id used to fail completely silently, leaving the
+    // creator looking at "Task created" while nobody was told.
+    let announcement: { delivery: "sent" | "skipped_no_channel" | "failed"; error?: string } = {
+      delivery: "skipped_no_channel"
+    };
     if (row.department_id) {
-      void (async () => {
+      await (async () => {
         try {
           const { data: dept } = await supabase
             .from("departments")
@@ -298,8 +339,17 @@ export async function POST(req: NextRequest) {
           const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? "";
           const taskUrl = baseUrl ? `${baseUrl}/tasks/${id}` : `/tasks/${id}`;
           const assigner = await getUserById(userId);
-          const headline = `🆕 New ${(dept?.name as string) ?? "department"} task`;
-          const assigneeLine = assigneeName ? `*Assigned to:* ${assigneeName}` : "*Unassigned*";
+          const deptName = (dept?.name as string) ?? "department";
+          // A team task is an invitation, not an FYI — lead with that so the
+          // channel reads as a pickup queue rather than a firehose.
+          const headline = queueToTeam
+            ? `🙌 Up for grabs — ${deptName} team`
+            : `🆕 New ${deptName} task`;
+          const assigneeLine = assigneeName
+            ? `*Assigned to:* ${assigneeName}`
+            : queueToTeam
+              ? `*Up for grabs* — anyone on the ${deptName} team can claim it`
+              : "*Unassigned*";
           const clientLine = row.client_name ? `\n*Client:* ${row.client_name}` : "";
           const dueLine = row.due_date
             ? `\n*Due:* ${formatDueBothZones(row.due_date)}`
@@ -318,13 +368,18 @@ export async function POST(req: NextRequest) {
               }]
             }
           ]);
+          announcement = { delivery: "sent" };
         } catch (err) {
           console.error("[tasks/POST] task_channel announcement failed:", err);
+          announcement = {
+            delivery: "failed",
+            error: err instanceof Error ? err.message : String(err)
+          };
         }
       })();
     }
 
-    return NextResponse.json({ task: data, slack });
+    return NextResponse.json({ task: data, slack, announcement });
   } catch (err) {
     const message = err instanceof Error ? err.message : "unknown error";
     return NextResponse.json({ error: message }, { status: 500 });

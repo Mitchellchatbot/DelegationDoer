@@ -11,6 +11,7 @@
 //     helpers also work client-side via the same shape.
 
 import type { Task, User } from "@/lib/types";
+import { inDepartment, isTeamTask, isUnclaimedTeamTask } from "@/lib/task-team";
 
 // Stealth admin: a user whose public role is anything (typically
 // worker) but who has been flagged in the DB as having leader-level
@@ -72,6 +73,42 @@ export function canManageTask(
   if (actor.id === task.assigneeId) return true;
   if (actor.id === task.creatorId) return true;
   return false;
+}
+
+// Can `actor` take an unclaimed team task for themselves? This is the
+// "divide them amongst ourselves" affordance: anyone in the department the
+// task was queued for may claim it.
+//
+// Deliberately NOT folded into canManageTask. That gate has no
+// department-member path on purpose (a worker can't administer a task just
+// because a teammate owns it), and claiming is a much narrower act: it only
+// ever sets assignee_id to the actor's own id, and only while the task is
+// still sitting in the pool. Once claimed, normal canManageTask rules apply.
+export function canClaimTask(
+  actor: User | null | undefined,
+  task:
+    | Pick<Task, "assigneeId" | "departmentId" | "status" | "tags">
+    | null
+    | undefined
+): boolean {
+  if (!actor || !task) return false;
+  if (!isUnclaimedTeamTask(task)) return false;
+  if (isLeader(actor)) return true;
+  return inDepartment(actor, task.departmentId);
+}
+
+// Who may queue work to a whole department instead of a person?
+//
+// Leaders and department heads only — this mirrors what POST /api/tasks
+// actually does. That route defaults an unspecified assignee to the caller
+// for anyone failing `isWorker`-style checks, and a scoped delegate's role
+// is still "worker", so a delegate choosing "the whole team" would silently
+// end up assigned to themselves. Note this is NARROWER than
+// canCreateTasksForOthers / canChooseDepartment in auth.ts, both of which
+// include delegates.
+export function canQueueTaskToTeam(actor: User | null | undefined): boolean {
+  if (!actor) return false;
+  return isLeader(actor) || isDepartmentHead(actor);
 }
 
 // SEO team leads (Bismah, Saifullah, Samir G) can delete tasks in their own
@@ -147,7 +184,7 @@ export function canViewDepartmentConsole(
 // happen to be the assignee themselves.
 export function canViewTask(
   actor: User | null | undefined,
-  task: Pick<Task, "creatorId" | "assigneeId" | "departmentId"> | null | undefined,
+  task: Pick<Task, "creatorId" | "assigneeId" | "departmentId" | "tags"> | null | undefined,
   leaderIds: Set<string>
 ): boolean {
   if (!actor || !task) return false;
@@ -156,6 +193,25 @@ export function canViewTask(
   // whether a leader created it.
   if (task.assigneeId === actor.id) return true;
   if (task.creatorId === actor.id) return true;
+  // TEAM TASKS. Work explicitly queued for a department belongs to that
+  // department, so its members see it even when a leader created it. Without
+  // this, the whole feature is dead on arrival: a task Mitchell (a leader)
+  // files for the Software team has no assignee, so neither "own work" escape
+  // above fires, and the creator-is-a-leader rule below hides it from exactly
+  // the team it was written for.
+  //
+  // Deliberately narrow — it needs BOTH the explicit TEAM_TAG marker (a
+  // leader/head chose "the whole team"; see lib/task-team.ts for why an
+  // unassigned task alone is not enough) AND a department the viewer belongs
+  // to or has been delegated. Leader-owned *assigned* work and
+  // department-less leader notes stay private exactly as before.
+  //
+  // Note this does NOT require the task to still be unclaimed: once Shaheer
+  // claims it, the rest of the Software team keeps seeing it. Stripping
+  // visibility on claim would make the task vanish from teammates and from
+  // the head's team dashboard mid-meeting, which is when they most need to
+  // see who took what.
+  if (isTeamTask(task) && inDepartment(actor, task.departmentId)) return true;
   // Anything touched by a leader (assignee or creator) is hidden from
   // non-leaders.
   if (task.assigneeId && leaderIds.has(task.assigneeId)) return false;
@@ -178,7 +234,7 @@ export function canViewTask(
 // team's work. Pass the same leaderIds set canViewTask expects.
 export function canViewTaskScopedToDepartment(
   actor: User | null | undefined,
-  task: Pick<Task, "creatorId" | "assigneeId" | "departmentId"> | null | undefined,
+  task: Pick<Task, "creatorId" | "assigneeId" | "departmentId" | "tags"> | null | undefined,
   leaderIds: Set<string>
 ): boolean {
   if (!actor || !task) return false;
@@ -187,6 +243,12 @@ export function canViewTaskScopedToDepartment(
   // department or who created it (mirrors canViewTask).
   if (task.assigneeId === actor.id) return true;
   if (task.creatorId === actor.id) return true;
+  // Team tasks — same escape as canViewTask, and it has to be here too or
+  // Ask AI answers "nothing" to "what's unclaimed on my team?" while the
+  // board shows the work. Note this asserts the same department membership
+  // the tail of this function already requires, so it is a short-circuit
+  // past the leader-privacy lines rather than new policy.
+  if (isTeamTask(task) && inDepartment(actor, task.departmentId)) return true;
   // Leader-owned work (assignee or creator) stays private to leaders.
   if (task.assigneeId && leaderIds.has(task.assigneeId)) return false;
   if (task.creatorId && leaderIds.has(task.creatorId)) return false;

@@ -512,7 +512,8 @@ async function getTask(input: Record<string, unknown>, ctx: ToolContext) {
     {
       assigneeId: (row.assignee_id as string | null) ?? null,
       creatorId: (row.creator_id as string) ?? "",
-      departmentId: (row.department_id as string | null) ?? null
+      departmentId: (row.department_id as string | null) ?? null,
+      tags: (row.tags as string[] | null) ?? []
     },
     leaderIds
   );
@@ -670,27 +671,33 @@ async function getClient(input: Record<string, unknown>, ctx: ToolContext) {
   const [{ data: openTasks }, { data: doneTasks }, leaderIds] = await Promise.all([
     supabase
       .from("tasks")
-      .select("id, title, status, priority, due_date, assignee_id, creator_id, department_id")
+      .select("id, title, status, priority, due_date, assignee_id, creator_id, department_id, tags")
       .eq("client_name", client.name)
       .neq("status", "done")
       .order("due_date", { ascending: true })
       .limit(15),
     supabase
       .from("tasks")
-      .select("id, title, last_activity_at, assignee_id, creator_id, department_id")
+      .select("id, title, last_activity_at, assignee_id, creator_id, department_id, tags")
       .eq("client_name", client.name)
       .eq("status", "done")
       .order("last_activity_at", { ascending: false })
       .limit(10),
     getLeaderIds()
   ]);
-  const canSee = (r: { assignee_id: unknown; creator_id: unknown; department_id: unknown }) =>
+  const canSee = (r: {
+    assignee_id: unknown;
+    creator_id: unknown;
+    department_id: unknown;
+    tags: unknown;
+  }) =>
     canViewTaskScopedToDepartment(
       ctx.actor,
       {
         assigneeId: (r.assignee_id as string | null) ?? null,
         creatorId: (r.creator_id as string) ?? "",
-        departmentId: (r.department_id as string | null) ?? null
+        departmentId: (r.department_id as string | null) ?? null,
+        tags: (r.tags as string[] | null) ?? []
       },
       leaderIds
     );
@@ -784,7 +791,12 @@ export async function listClientCompletedTasks(input: Record<string, unknown>, c
   }>).filter((r) =>
     canViewTaskScopedToDepartment(
       ctx.actor,
-      { assigneeId: r.assignee_id, creatorId: r.creator_id ?? "", departmentId: r.department_id },
+      {
+        assigneeId: r.assignee_id,
+        creatorId: r.creator_id ?? "",
+        departmentId: r.department_id,
+        tags: r.tags ?? []
+      },
       leaderIds
     )
   );
@@ -1378,7 +1390,7 @@ async function getProject(input: Record<string, unknown>, ctx: ToolContext) {
       .order("position"),
     supabase
       .from("tasks")
-      .select("id, title, status, priority, due_date, stage_id, assignee_id, creator_id, department_id")
+      .select("id, title, status, priority, due_date, stage_id, assignee_id, creator_id, department_id, tags")
       .eq("project_id", id),
     getLeaderIds()
   ]);
@@ -1393,7 +1405,8 @@ async function getProject(input: Record<string, unknown>, ctx: ToolContext) {
       {
         assigneeId: (t.assignee_id as string | null) ?? null,
         creatorId: (t.creator_id as string) ?? "",
-        departmentId: (t.department_id as string | null) ?? projectDeptId
+        departmentId: (t.department_id as string | null) ?? projectDeptId,
+        tags: (t.tags as string[] | null) ?? []
       },
       leaderIds
     )

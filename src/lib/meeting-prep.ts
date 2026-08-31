@@ -113,7 +113,7 @@ async function gatherOpenTasks(clientName: string, ctx: ToolContext): Promise<Pr
     supabase
       .from("tasks")
       .select(
-        "id, title, status, priority, due_date, blocks_task_ids, assignee_id, creator_id, department_id"
+        "id, title, status, priority, due_date, blocks_task_ids, assignee_id, creator_id, department_id, tags"
       )
       .eq("client_name", clientName)
       .neq("status", "done")
@@ -133,6 +133,7 @@ async function gatherOpenTasks(clientName: string, ctx: ToolContext): Promise<Pr
     assignee_id: string | null;
     creator_id: string | null;
     department_id: string | null;
+    tags: string[] | null;
   }>)
     .filter((r) =>
       canViewTaskScopedToDepartment(
@@ -140,7 +141,8 @@ async function gatherOpenTasks(clientName: string, ctx: ToolContext): Promise<Pr
         {
           assigneeId: r.assignee_id ?? null,
           creatorId: r.creator_id ?? "",
-          departmentId: r.department_id ?? null
+          departmentId: r.department_id ?? null,
+          tags: r.tags ?? []
         },
         leaderIds
       )

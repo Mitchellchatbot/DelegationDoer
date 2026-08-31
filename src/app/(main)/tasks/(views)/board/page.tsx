@@ -62,6 +62,13 @@ const STATUS_COLS: Column[] = [
   { id: "done",               label: "Done",               tone: "border-ok/30" }
 ];
 
+// Status-filter values the board accepts, derived from the columns it can
+// actually render rather than from the TaskStatus union. That is load-bearing:
+// 'rejected' is the soft-delete state for denied drafts and has NO column, so
+// allowing it would narrow the board to zero columns. Keying off STATUS_COLS
+// guarantees filterStatus always names a column that exists.
+const STATUS_FILTER_IDS = new Set(STATUS_COLS.map((c) => c.id));
+
 const PRIORITY_RANK: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
 
 const SORTS: Record<string, (a: Task, b: Task) => number> = {
@@ -121,6 +128,16 @@ export default function BoardPage() {
   const [filterUser, setFilterUser] = useState("all");
   const [filterClient, setFilterClient] = useState("all");
   const [filterWebsite, setFilterWebsite] = useState("all");
+  // Status filter. "all" = any status (the default). `?status=<id>` deep-links a
+  // single status — used by the Leader Console's "N pending" pill, which pairs it
+  // with ?groupBy=status so the board renders exactly one column. Unknown values
+  // (a typo, 'rejected', a stale link) fall back to "all" rather than emptying
+  // the board. Typed as plain string to match the sibling filters.
+  const initialStatus = ((): string => {
+    const s = searchParams.get("status");
+    return s && STATUS_FILTER_IDS.has(s) ? s : "all";
+  })();
+  const [filterStatus, setFilterStatus] = useState(initialStatus);
   const [sort, setSort] = useState("priority");
 
   // Column-axis state. Default to "person" — the Leader asked to see the
@@ -133,7 +150,10 @@ export default function BoardPage() {
     return g === "client" || g === "status" || g === "person" ? g : "person";
   })();
   const [groupBy, setGroupBy] = useState<GroupBy>(initialGroupBy);
-  const [moreFiltersOpen, setMoreFiltersOpen] = useState(false);
+  // Auto-open when a `?status=` deep link narrowed the board, so the user can see
+  // WHY they're looking at one column — and clear it in one click. Only opens when
+  // the param resolved to a real status.
+  const [moreFiltersOpen, setMoreFiltersOpen] = useState(initialStatus !== "all");
 
   // Active / Archived / All slice. `?scope=archived|all` deep-links the view;
   // defaults to the live (active) board.
@@ -198,7 +218,7 @@ export default function BoardPage() {
   const STORAGE_KEY = "board:state:v1";
   useEffect(() => {
     // Only restore if the URL didn't explicitly set state.
-    if (initialDept || searchParams.get("groupBy")) return;
+    if (initialDept || searchParams.get("groupBy") || searchParams.get("status")) return;
     try {
       const raw = window.sessionStorage.getItem(STORAGE_KEY);
       if (!raw) return;
@@ -208,6 +228,7 @@ export default function BoardPage() {
         filterUser?: string;
         filterClient?: string;
         filterWebsite?: string;
+        filterStatus?: string;
         sort?: string;
       };
       if (Array.isArray(s.deptIds)) setSelectedDepts(new Set(s.deptIds));
@@ -215,6 +236,17 @@ export default function BoardPage() {
       if (typeof s.filterUser === "string") setFilterUser(s.filterUser);
       if (typeof s.filterClient === "string") setFilterClient(s.filterClient);
       if (typeof s.filterWebsite === "string") setFilterWebsite(s.filterWebsite);
+      // Payloads written before this filter shipped have no filterStatus —
+      // undefined fails both checks, so it degrades to the "all" default. The
+      // membership test also stops a stale value narrowing the board to zero
+      // columns (same validated shape as the groupBy restore above).
+      if (s.filterStatus === "all" || (typeof s.filterStatus === "string" && STATUS_FILTER_IDS.has(s.filterStatus))) {
+        setFilterStatus(s.filterStatus);
+        // A restored status filter narrows the board to a single column. The
+        // panel must come with it, or the user lands on one column with no
+        // visible cause and no way to find the control that did it.
+        if (s.filterStatus !== "all") setMoreFiltersOpen(true);
+      }
       if (typeof s.sort === "string") setSort(s.sort);
     } catch { /* ignore */ }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -224,10 +256,10 @@ export default function BoardPage() {
     try {
       window.sessionStorage.setItem(STORAGE_KEY, JSON.stringify({
         deptIds: Array.from(selectedDepts),
-        groupBy, filterUser, filterClient, filterWebsite, sort
+        groupBy, filterUser, filterClient, filterWebsite, filterStatus, sort
       }));
     } catch { /* ignore quota etc */ }
-  }, [selectedDepts, groupBy, filterUser, filterClient, filterWebsite, sort]);
+  }, [selectedDepts, groupBy, filterUser, filterClient, filterWebsite, filterStatus, sort]);
 
   useEffect(() => {
     let cancelled = false;
@@ -274,13 +306,31 @@ export default function BoardPage() {
   const visible = useMemo(() => tasks.filter((t) =>
     (selectedDepts.size === 0 || (t.departmentId !== null && selectedDepts.has(t.departmentId))) &&
     (filterUser === "all" || t.assigneeId === filterUser) &&
+    (filterStatus === "all" || t.status === filterStatus) &&
     (filterClient === "all" || (filterClient === "__internal" ? !t.clientName : t.clientName === filterClient)) &&
     (filterWebsite === "all" || (filterWebsite === "__internal" ? !t.website : t.website === filterWebsite))
-  ), [tasks, selectedDepts, filterUser, filterClient, filterWebsite]);
+  ), [tasks, selectedDepts, filterUser, filterStatus, filterClient, filterWebsite]);
+
+  // How many of the collapsible filters are actually doing something. Shown on
+  // the "More filters" button so a filter left on — by a deep link, or restored
+  // from a previous visit — can never silently narrow the board.
+  const activeFilterCount = useMemo(
+    () => [filterUser, filterStatus, filterClient, filterWebsite].filter((v) => v !== "all").length,
+    [filterUser, filterStatus, filterClient, filterWebsite]
+  );
 
   // Build columns from the current groupBy + visible tasks.
   const columns: Column[] = useMemo(() => {
-    if (groupBy === "status") return STATUS_COLS;
+    // With a status filter on, the other four columns render empty and the board
+    // reads as broken. Narrow to the one column the filter allows, so
+    // ?status=pending&groupBy=status is literally "the Pending list". filterStatus
+    // is validated against STATUS_COLS everywhere it can be set (URL, Select,
+    // sessionStorage restore), so this never returns []. Drag-and-drop degrades
+    // cleanly: with one column every drop has dest === before.status, which
+    // onDragEnd short-circuits before any mutation or PATCH.
+    if (groupBy === "status") {
+      return filterStatus === "all" ? STATUS_COLS : STATUS_COLS.filter((c) => c.id === filterStatus);
+    }
 
     if (groupBy === "client") {
       const seen = new Set<string>();
@@ -317,7 +367,7 @@ export default function BoardPage() {
     // here to mark done; drag out onto a person to reopen + reassign.
     cols.push({ id: "__completed", label: "Completed", tone: "border-emerald-300/50" });
     return cols;
-  }, [groupBy, visible, users, selectedDepts]);
+  }, [groupBy, visible, users, selectedDepts, filterStatus]);
 
   // Group visible tasks by the column they belong to.
   const grouped: Record<string, Task[]> = useMemo(() => {
@@ -604,9 +654,19 @@ export default function BoardPage() {
         <button
           type="button"
           onClick={() => setMoreFiltersOpen((v) => !v)}
-          className="ml-auto inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border border-border text-muted hover:text-ink hover:bg-surface2 transition-colors"
+          className={cn(
+            "ml-auto inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border transition-colors",
+            activeFilterCount > 0
+              ? "border-accent/40 bg-accent/10 text-accent"
+              : "border-border text-muted hover:text-ink hover:bg-surface2"
+          )}
         >
           {moreFiltersOpen ? "Hide filters" : "More filters"}
+          {activeFilterCount > 0 && (
+            <span className="inline-flex items-center justify-center min-w-[1.1rem] h-[1.1rem] px-1 rounded-full bg-accent text-white text-[10px] font-medium">
+              {activeFilterCount}
+            </span>
+          )}
         </button>
       </div>
 
@@ -614,6 +674,10 @@ export default function BoardPage() {
         <div className="card p-3 flex items-center gap-2 flex-wrap">
           <Select label="Assignee" value={filterUser} onChange={setFilterUser} options={[
             ["all", "Anyone"], ...users.map((u) => [u.id, u.name] as [string, string])
+          ]} />
+          <Select label="Status" value={filterStatus} onChange={setFilterStatus} options={[
+            ["all", "Any status"],
+            ...STATUS_COLS.map((c) => [c.id, c.label] as [string, string])
           ]} />
           <Select label="Client" value={filterClient} onChange={setFilterClient} options={[
             ["all", "All clients"], ["__internal", "Internal (none)"],

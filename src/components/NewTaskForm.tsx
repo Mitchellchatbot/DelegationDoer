@@ -10,7 +10,7 @@ import { findFirstImage, requestAttachmentAnalysis, buildAnalyzeNotice } from "@
 import { shiftEndInstant } from "@/lib/work-hours";
 import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Sparkles, Wand2, Crown, ShieldCheck, ChevronDown, ChevronRight, Mail, FolderOpen, Server, Link as LinkIcon, KeyRound, MessageSquare, Zap, ScanText, AlertTriangle, Clock } from "lucide-react";
+import { Sparkles, Wand2, Crown, ShieldCheck, ChevronDown, ChevronRight, Mail, FolderOpen, Server, Link as LinkIcon, KeyRound, MessageSquare, Zap, ScanText, AlertTriangle, Clock, Users as UsersIcon } from "lucide-react";
 import { PersonAvatar } from "@/components/PersonAvatar";
 import { MediaPicker } from "@/components/MediaPicker";
 import { DeadlinePicker } from "@/components/DeadlinePicker";
@@ -133,9 +133,40 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel, initialValues, lo
   const [assigneeLocked, setAssigneeLocked] = useState(
     Boolean(lockAssignee && initialValues?.assigneeId)
   );
+
+  // Person vs. whole-team. Held as its own flag rather than a sentinel value
+  // in `assigneeId`: several memos below resolve a User from
+  // `assigneeId || topPick?.userId`, so a sentinel would quietly fall through
+  // to the AI's top pick and derive a deadline from somebody who isn't
+  // getting the task.
+  const [assignMode, setAssignMode] = useState<"person" | "team">("person");
+  // Only leaders and department heads may queue work to a team — narrower
+  // than canChooseDepartment/canCreateTasksForOthers, both of which include
+  // scoped delegates. /api/tasks rejects a delegate here, so offering them
+  // the control would just produce a 403. Mirrors canQueueTaskToTeam in
+  // lib/access.ts.
+  const canQueueToTeam = isLeader(currentUser) || currentUser.role === "department_head";
+
   function chooseAssignee(id: string) {
+    setAssignMode("person");
     setAssigneeLocked(false);
     setAssigneeId(id);
+  }
+  function chooseTeam() {
+    setAssignMode("team");
+    setAssigneeLocked(false);
+    setAssigneeId("");
+  }
+  // Toggling back out of team mode restores whatever the host pinned (the
+  // Board's per-person "+"), so a leader who taps "the whole team" and
+  // changes their mind lands back on the person they clicked rather than on
+  // whoever the ranker happens to like. With no pin, clear the selection and
+  // let the sync effect re-fill the top pick — the state the form opens in.
+  function choosePerson() {
+    setAssignMode("person");
+    const pinned = lockAssignee ? initialValues?.assigneeId ?? "" : "";
+    setAssigneeLocked(Boolean(pinned));
+    setAssigneeId(pinned);
   }
   const [aiReason, setAiReason] = useState<string | null>(null);
   const [aiThinking, setAiThinking] = useState(false);
@@ -339,6 +370,11 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel, initialValues, lo
   // an explicit pick only while it's still a valid target; otherwise re-pick
   // the new top suggestion (or clear, so submit stays gated).
   useEffect(() => {
+    // The user asked for the whole team. Nothing below should re-fill a
+    // person — this has to come first, before the lock check, or a
+    // department switch would silently hand the task back to the ranker's
+    // top pick.
+    if (assignMode === "team") return;
     // Host pinned the assignee (Board's per-person "+"). Their pick outranks
     // the ranker even when it sits outside the scoped pool — which is the
     // normal case, since the person you clicked often isn't in the
@@ -358,19 +394,45 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel, initialValues, lo
     // it out is how a future "unlock without picking" control would silently
     // reintroduce a stale pin that no card reflects.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [topPick?.userId, targetIds, assigneeLocked]);
+  }, [topPick?.userId, targetIds, assigneeLocked, assignMode]);
+
+  // Members of the department currently targeted — drives the team-mode copy
+  // and the "nobody can claim this yet" warning.
+  const deptMembers = useMemo(
+    () => (departmentId ? users.filter((u) => u.departmentIds.includes(departmentId)) : []),
+    [users, departmentId]
+  );
+  const selectedDepartmentName =
+    departments.find((d) => d.id === departmentId)?.name ?? "department";
+
+  // Schedule basis for a team task's auto-deadline. Nobody owns it yet, so we
+  // can't use an assignee's shift; a standard 8h weekday in the team's own
+  // timezone is the honest stand-in. This matters more than it looks: a team
+  // task with no due date is never overdue, never surfaces on any overdue
+  // tile, and is never aged out by the archive sweep — an immortal invisible
+  // task sitting in the pool.
+  const teamDeadlineBasis = useMemo(
+    () => ({
+      dailyCapacity: 8,
+      weeklySchedule: undefined,
+      workTimezone: deptMembers[0]?.workTimezone ?? currentUser.workTimezone ?? null
+    }),
+    [deptMembers, currentUser.workTimezone]
+  );
 
   const eta = useMemo(() => {
+    if (assignMode === "team") return null;
     const u = users.find((x) => x.id === (assigneeId || topPick?.userId));
     if (!u) return null;
     return etaDays(estimate, userCapacity(u, tasks));
-  }, [assigneeId, topPick?.userId, estimate]);
+  }, [assigneeId, topPick?.userId, estimate, assignMode]);
 
   const computedDueDate = useMemo(() => {
+    if (assignMode === "team") return deadlineFromEstimate(estimate, teamDeadlineBasis);
     const u = users.find((x) => x.id === (assigneeId || topPick?.userId));
     if (!u) return null;
     return deadlineFromEstimate(estimate, u);
-  }, [assigneeId, topPick?.userId, estimate]);
+  }, [assigneeId, topPick?.userId, estimate, assignMode, teamDeadlineBasis]);
 
   // "Default EOD" — set the deadline to the assignee's end of day. Resolves
   // their actual shift end (weekly_schedule or flat "Same every weekday" hours),
@@ -489,8 +551,8 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel, initialValues, lo
       setSubmitError("Pick a department.");
       return;
     }
-    if (!assigneeId) {
-      setSubmitError("Pick an assignee from the suggestions.");
+    if (assignMode === "person" && !assigneeId) {
+      setSubmitError("Pick an assignee from the suggestions, or hand it to the whole team.");
       return;
     }
     setSubmitting(true);
@@ -505,7 +567,10 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel, initialValues, lo
           priority,
           estimatedHours: estimate,
           tags,
-          assigneeId,
+          assigneeId: assignMode === "team" ? null : assigneeId,
+          // Explicit rather than inferred from a null assignee — the server
+          // won't treat a task as team work without it (see lib/task-team.ts).
+          assignToDepartment: assignMode === "team",
           // Manual override wins; otherwise fall back to the
           // capacity-derived auto deadline.
           dueDate: dueDateOverride
@@ -533,7 +598,27 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel, initialValues, lo
       }
 
       const slack = data.slack as { delivery: "sent" | "skipped" | "failed"; error?: string } | undefined;
-      if (slack?.delivery === "sent") {
+      const announcement = data.announcement as
+        | { delivery: "sent" | "skipped_no_channel" | "failed"; error?: string }
+        | undefined;
+
+      if (assignMode === "team") {
+        // A team task has no assignee to DM, so the department channel post is
+        // the ONLY thing that tells anyone the work exists. Say plainly when
+        // it didn't go out — otherwise the creator sees "Task created" and
+        // assumes the team was notified when nobody was.
+        if (announcement?.delivery === "sent") {
+          toast.success(`Task created — the ${selectedDepartmentName} channel has been told.`);
+        } else if (announcement?.delivery === "failed") {
+          toast.warning(
+            `Task created, but the ${selectedDepartmentName} channel post failed: ${announcement.error ?? "unknown"}. Nobody has been notified — share the link directly.`
+          );
+        } else {
+          toast.warning(
+            `Task created, but ${selectedDepartmentName} has no Slack task channel set, so nobody was notified. A leader can set one in Leader Console → Departments.`
+          );
+        }
+      } else if (slack?.delivery === "sent") {
         toast.success("Task created — Slack DM sent to assignee.");
       } else if (slack?.delivery === "failed") {
         toast.warning(`Task created, but Slack DM failed: ${slack.error ?? "unknown"}`);
@@ -865,6 +950,59 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel, initialValues, lo
           <div className="text-xs text-muted">— ranked live by skills + capacity as you type</div>
         </div>
 
+        {/* Hand it to the whole team instead of a person. Sits above the
+            ranked people so "the Software team" is a peer of "Shaheer", not a
+            fallback buried under them — the whole point is that this is a
+            first-class way to delegate.
+
+            Leaders + department heads only: /api/tasks rejects anyone else,
+            and a scoped delegate choosing this would come back 403. */}
+        {canQueueToTeam && departmentId && (
+          <div className="mb-3">
+            <button
+              type="button"
+              onClick={() => (assignMode === "team" ? choosePerson() : chooseTeam())}
+              aria-pressed={assignMode === "team"}
+              className={
+                "w-full text-left flex items-center gap-3 p-3.5 rounded-2xl border-2 transition-all " +
+                (assignMode === "team"
+                  ? "border-accent bg-gradient-to-r from-accent/10 via-blue-50 to-indigo-50 shadow-lift"
+                  : "border-border bg-surface2 hover:border-accent/60 hover:-translate-y-0.5 hover:shadow-soft")
+              }
+            >
+              <div className="w-8 h-8 rounded-full bg-accent/10 flex items-center justify-center shrink-0">
+                <UsersIcon className="w-4 h-4 text-accent" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-semibold text-ink truncate">
+                  The whole {selectedDepartmentName} team
+                </div>
+                <div className="text-xs text-muted">
+                  Nobody assigned — anyone on the team can claim it
+                </div>
+              </div>
+              {assignMode === "team" && (
+                <span className="text-[11px] font-semibold text-accent shrink-0">Selected</span>
+              )}
+            </button>
+
+            {/* A department with no members has nobody who can claim the
+                task. It still saves — the head can add members later — but
+                silently queueing work to an empty room is the failure mode
+                worth naming. Membership is edited in the Leader Console, so a
+                newly created department starts empty by default. */}
+            {assignMode === "team" && deptMembers.length === 0 && (
+              <div className="mt-2 flex items-start gap-2 p-2.5 rounded-xl border border-amber-300 bg-amber-50 text-[12px] text-amber-900">
+                <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                <span>
+                  Nobody is in the {selectedDepartmentName} department yet, so no one can claim
+                  this. A leader can add members in Leader Console → People.
+                </span>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Pinned assignee — the host (Board per-person "+") already chose who
             this is for. The ranked suggestions below stay visible and clickable
             the whole time, so this banner is the only thing that needs to exist:
@@ -1104,7 +1242,12 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel, initialValues, lo
         )}
         <button
           onClick={submit}
-          disabled={submitting || !title.trim() || !assigneeId || hasNoDepartment}
+          disabled={
+            submitting ||
+            !title.trim() ||
+            (assignMode === "person" && !assigneeId) ||
+            hasNoDepartment
+          }
           className="btn-primary disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {submitting ? "Creating…" : "Create task"}

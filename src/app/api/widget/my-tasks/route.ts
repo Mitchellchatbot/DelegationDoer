@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById, getLeaderIds } from "@/lib/server-data";
+import { canViewTask } from "@/lib/access";
 
 // Returns the current user's open tasks and which ones still need to be
 // acknowledged (no row in assignment_acknowledgements yet).
@@ -12,7 +13,9 @@ import { getUserById, getLeaderIds } from "@/lib/server-data";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-const SELECT_COLS = "id, title, priority, status, due_date, estimated_hours, actual_hours, actual_hours_override, inactive_flag, created_at, description, tags, client_name, website, creator_id, assignee_id";
+// department_id is selected only so the shared canViewTask gate below can
+// evaluate its team-task escape — the widget itself doesn't render it.
+const SELECT_COLS = "id, title, priority, status, due_date, estimated_hours, actual_hours, actual_hours_override, inactive_flag, created_at, description, tags, client_name, website, creator_id, assignee_id, department_id";
 
 export async function GET() {
   try {
@@ -57,7 +60,7 @@ export async function GET() {
       .is("seen_at", null)
       .order("created_at", { ascending: false });
     const notifTaskIds = Array.from(new Set((rawNotifs ?? []).map((n) => n.task_id as string)));
-    let notifTasksById = new Map<string, { title: string; priority: string; status: string; due_date: string | null; assignee_id: string | null; creator_id: string | null }>();
+    let notifTasksById = new Map<string, { title: string; priority: string; status: string; due_date: string | null; assignee_id: string | null; creator_id: string | null; department_id: string | null; tags: string[] }>();
     let fromById = new Map<string, { name: string; avatar_url: string | null }>();
     if (notifTaskIds.length > 0) {
       const fromIds = Array.from(new Set((rawNotifs ?? [])
@@ -66,7 +69,8 @@ export async function GET() {
       const [{ data: notifTasks }, { data: fromUsers }] = await Promise.all([
         supabase
           .from("tasks")
-          .select("id, title, priority, status, due_date, assignee_id, creator_id")
+          // department_id + tags feed the shared canViewTask gate below.
+          .select("id, title, priority, status, due_date, assignee_id, creator_id, department_id, tags")
           .in("id", notifTaskIds)
           .eq("is_draft", false),
         fromIds.length > 0
@@ -82,7 +86,9 @@ export async function GET() {
             status: (t.status as string) ?? "pending",
             due_date: (t.due_date as string | null) ?? null,
             assignee_id: (t.assignee_id as string | null) ?? null,
-            creator_id: (t.creator_id as string | null) ?? null
+            creator_id: (t.creator_id as string | null) ?? null,
+            department_id: (t.department_id as string | null) ?? null,
+            tags: (t.tags as string[] | null) ?? []
           }
         ])
       );
@@ -103,16 +109,26 @@ export async function GET() {
     // Leader-privacy filter — non-leaders never see incident tasks
     // (or anything else) touched by a leader, unless they themselves
     // are the assignee. Leaders always see their full slice.
+    //
+    // Delegated to the shared canViewTask so this stays in lockstep with
+    // /api/tasks and the detail page. It used to be an inlined copy of the
+    // same predicate, which is how gates drift: `rg "leaderIds.has" src`
+    // should only ever match lib/access.ts.
     const viewer = await getUserById(userId);
     if (!(viewer?.role === "leader" || viewer?.isAdmin)) {
       const leaderIds = await getLeaderIds();
-      merged = merged.filter((t) => {
-        if (t.assignee_id === userId) return true;
-        if (t.creator_id === userId) return true;
-        if (t.assignee_id && leaderIds.has(t.assignee_id)) return false;
-        if (t.creator_id && leaderIds.has(t.creator_id)) return false;
-        return true;
-      });
+      merged = merged.filter((t) =>
+        canViewTask(
+          viewer,
+          {
+            creatorId: (t.creator_id as string) ?? "",
+            assigneeId: (t.assignee_id as string | null) ?? null,
+            departmentId: (t.department_id as string | null) ?? null,
+            tags: (t.tags as string[] | null) ?? []
+          },
+          leaderIds
+        )
+      );
     }
 
     const acked = new Set((acks ?? []).map((a) => a.task_id));
@@ -149,11 +165,16 @@ export async function GET() {
       const leaderIds = await getLeaderIds();
       visibleNotifs = visibleNotifs.filter((n) => {
         const t = notifTasksById.get(n.task_id as string)!;
-        if (t.assignee_id === userId) return true;
-        if (t.creator_id === userId) return true;
-        if (t.assignee_id && leaderIds.has(t.assignee_id)) return false;
-        if (t.creator_id && leaderIds.has(t.creator_id)) return false;
-        return true;
+        return canViewTask(
+          viewer,
+          {
+            creatorId: t.creator_id ?? "",
+            assigneeId: t.assignee_id,
+            departmentId: t.department_id,
+            tags: t.tags
+          },
+          leaderIds
+        );
       });
     }
 

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
+import { stripTeamTag } from "@/lib/task-team";
 
 export const dynamic = "force-dynamic";
 
@@ -55,9 +56,12 @@ export async function POST(req: NextRequest) {
       ? (body.priority as (typeof allowedPriorities)[number])
       : "medium";
     const estimatedHours = Number(body.estimatedHours) > 0 ? Number(body.estimatedHours) : 2;
-    const tags = Array.isArray(body.tags)
-      ? body.tags.filter((t: unknown): t is string => typeof t === "string")
-      : [];
+    // stripTeamTag, not a bare string filter: the team marker is server-owned
+    // (see lib/task-team.ts). This route always self-assigns, so it can never
+    // legitimately mint a team task — without the strip, a hand-crafted POST
+    // could plant the tag and then release the task into another
+    // department's pool via DELETE /api/tasks/[id]/claim.
+    const tags = stripTeamTag(body.tags);
     // Caller-chosen department wins; otherwise the user's primary dept.
     const departmentId =
       typeof body.departmentId === "string" && body.departmentId.length > 0

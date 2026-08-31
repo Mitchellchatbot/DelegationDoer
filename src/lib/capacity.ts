@@ -63,6 +63,14 @@ export function userCapacity(
   const mine = openTasks.filter(
     (t) => t.assigneeId === user.id && t.status !== "done" && t.status !== "waiting_on_client"
   );
+  // NOTE: unclaimed work queued to this user's department is deliberately NOT
+  // counted here. Nobody has started it, so folding it into personal load
+  // would push every member of a busy team past overBuffer at once — and
+  // lib/delegation.ts filters out anyone over that line, so the ranker would
+  // stop routing work to the very team that has a backlog. A surface that
+  // wants to show "your team also has N hours waiting" should compute it
+  // there, against a task list and a roster that actually carry department
+  // membership (getAllUsersLight, which feeds the routing paths, does not).
   // Today's hours, schedule-aware. The pct/load bars now shrink when
   // a teammate is on a short day, so a 3h Wednesday with 3h of work
   // reads as 100% even though the flat dailyCapacity column is 8h.

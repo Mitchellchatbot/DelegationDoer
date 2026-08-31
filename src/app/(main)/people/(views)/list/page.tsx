@@ -8,6 +8,7 @@ import { TeamCarousel } from "@/components/TeamCarousel";
 import { ProfileDialog } from "@/components/ProfileDialog";
 import { getAllUsers, getAllTasks, getDepartments } from "@/lib/server-data";
 import type { User, Task } from "@/lib/types";
+import { isTeamTask } from "@/lib/task-team";
 
 export const dynamic = "force-dynamic";
 
@@ -77,8 +78,12 @@ export default async function TeamPage() {
         const heads = headsOf(d.id);
         const workers = workersOf(d.id);
         const memberIds = new Set([...heads, ...workers].map((u) => u.id));
-        const deptOpen = tasks.filter((t) => t.assigneeId && memberIds.has(t.assigneeId) && t.status !== "done").length;
-        const deptDone = tasks.filter((t) => t.assigneeId && memberIds.has(t.assigneeId) && t.status === "done").length;
+        // Owned by a member OR queued to the department and unclaimed —
+        // otherwise a team's pool is invisible in its own header count.
+        const inThisDept = (t: Task) =>
+          t.assigneeId ? memberIds.has(t.assigneeId) : isTeamTask(t) && t.departmentId === d.id;
+        const deptOpen = tasks.filter((t) => inThisDept(t) && t.status !== "done").length;
+        const deptDone = tasks.filter((t) => inThisDept(t) && t.status === "done").length;
         return (
           <section
             key={d.id}

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUserId } from "@/lib/session";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
+import { stripTeamTag } from "@/lib/task-team";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -90,7 +91,7 @@ export async function POST(req: NextRequest) {
         priority,
         estimated_hours: 2, // Notion didn't track this; use default
         actual_hours: 0,
-        tags: Array.isArray(r.tags) ? r.tags.filter((t) => typeof t === "string").slice(0, 10) : [],
+        tags: stripTeamTag(r.tags).slice(0, 10),
         department_id: null,
         assignee_id: s(r.assigneeId),
         creator_id: userId,

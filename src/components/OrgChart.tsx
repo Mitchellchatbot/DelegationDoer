@@ -10,6 +10,7 @@ import { cn, initials } from "@/lib/utils";
 import { ROLE_LABELS } from "@/lib/auth";
 import { userCapacity } from "@/lib/capacity";
 import type { Department, Task, User } from "@/lib/types";
+import { isTeamTask } from "@/lib/task-team";
 
 // Org chart visualization. Each person is a small circular avatar with
 // their name underneath; full details (capacity, stats, open tasks)
@@ -238,15 +239,23 @@ export function OrgChart({ users, departments, tasks, ceo }: Props) {
                 (u) => u.role === "worker" && u.departmentIds.includes(d.id)
               );
               const memberIds = new Set([...heads, ...workers].map((u) => u.id));
+              // Department totals count work owned by a member OR queued to
+              // the department and not yet claimed. Scoping only through
+              // people made a team's unclaimed backlog read as zero.
+              const inThisDept = (t: Task) =>
+                t.assigneeId
+                  ? memberIds.has(t.assigneeId)
+                  : isTeamTask(t) && t.departmentId === d.id;
+              // completed_at, not last_activity_at: last_activity_at bumps on
+              // any edit (comment, timer, extension), so a task finished weeks
+              // ago re-entered "this week" the moment somebody touched it.
               const completedThisWeek = tasks.filter((t) =>
-                t.assigneeId &&
-                memberIds.has(t.assigneeId) &&
+                inThisDept(t) &&
                 t.status === "done" &&
-                new Date(t.lastActivityAt).getTime() > Date.now() - 7 * 86_400_000
+                t.completedAt != null &&
+                new Date(t.completedAt).getTime() > Date.now() - 7 * 86_400_000
               ).length;
-              const openCount = tasks.filter((t) =>
-                t.assigneeId && memberIds.has(t.assigneeId) && t.status !== "done"
-              ).length;
+              const openCount = tasks.filter((t) => inThisDept(t) && t.status !== "done").length;
 
               return (
                 <div key={d.id} className="flex flex-col items-center gap-5 min-w-[160px] shrink-0">
@@ -650,9 +659,12 @@ function NodePopoverContent({
   const cap = userCapacity(user, openTasks);
   const capPct = Math.min(100, Math.round(cap.pct * 100));
 
+  // completed_at, not last_activity_at — see the department badge above.
+  // This node was the last surface still keying "completed this week" off
+  // activity, which counted any old done task that someone commented on.
   const weekAgoMs = Date.now() - 7 * 86_400_000;
   const completedThisWeek = allUserTasks.filter(
-    (t) => t.status === "done" && new Date(t.lastActivityAt).getTime() >= weekAgoMs
+    (t) => t.status === "done" && t.completedAt != null && new Date(t.completedAt).getTime() >= weekAgoMs
   ).length;
 
   const nowMs = Date.now();

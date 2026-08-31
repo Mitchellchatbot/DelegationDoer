@@ -2,7 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { getUserById } from "@/lib/server-data";
 import { loadTaskForViewer } from "@/lib/task-access";
-import { canDeleteTask } from "@/lib/access";
+import { canDeleteTask, canManageTask, canClaimTask } from "@/lib/access";
+import { TEAM_TAG, isTeamTask, stripTeamTag } from "@/lib/task-team";
+import type { Task } from "@/lib/types";
 import { notifyCompletion, type CompletionResult } from "@/lib/slack";
 import { onTaskDone } from "@/lib/project-flow";
 import { syncTaskToCalendar } from "@/lib/task-calendar-sync";
@@ -29,7 +31,9 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     // have the creator/assignee/title for the completion notification.
     const { data: before, error: beErr } = await supabase
       .from("tasks")
-      .select("status, creator_id, assignee_id, title, estimated_hours, actual_hours, client_name, created_at, tags")
+      // department_id is here for the ownership gate + the team-task checks
+      // below; without it a team task can't be recognised on this path.
+      .select("status, creator_id, assignee_id, title, estimated_hours, actual_hours, client_name, created_at, tags, department_id")
       .eq("id", params.id)
       .maybeSingle();
     if (beErr) return NextResponse.json({ error: beErr.message }, { status: 500 });
@@ -65,7 +69,15 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       update.actual_hours_override = body.actualHoursOverride;
     }
     if (body.dueDate === null || typeof body.dueDate === "string") update.due_date = body.dueDate || null;
-    if (Array.isArray(body.tags)) update.tags = body.tags.filter((t: unknown) => typeof t === "string");
+    // The team marker is server-owned: a client editing tags must not be able
+    // to publish a task to a department's pool, nor quietly pull one out of
+    // it. Strip whatever they sent and re-add the tag iff the row already
+    // carried it. (See lib/task-team.ts.)
+    if (Array.isArray(body.tags)) {
+      const next = stripTeamTag(body.tags);
+      const beforeTags: string[] = Array.isArray(before.tags) ? before.tags : [];
+      update.tags = beforeTags.includes(TEAM_TAG) ? [...next, TEAM_TAG] : next;
+    }
     if (body.clientName === null) update.client_name = null;
     else if (typeof body.clientName === "string") update.client_name = body.clientName.trim() || null;
     if (body.website === null) update.website = null;
@@ -110,6 +122,31 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     if (body.assigneeId === null) update.assignee_id = null;
     else if (typeof body.assigneeId === "string") update.assignee_id = body.assigneeId;
 
+    // Auto-claim on completion. If someone finishes a team task that is still
+    // sitting in the pool, record that they did it rather than leaving it
+    // ownerless. This is not a convenience: an unassigned completion is
+    // invisible to the client-update draft (lib/eod-digest.ts aborts when it
+    // finds no contributors), earns nobody skill points, and lands in no
+    // leaderboard.
+    //
+    // Everything downstream of the write reads the row fresh and so sees the
+    // new owner. The two consumers that run in THIS request off the `before`
+    // snapshot — the skill extractor and the completion Slack — go through
+    // effectiveAssigneeId below instead, or they'd credit the work to nobody.
+    let autoClaimed = false;
+    if (
+      update.status === "done" &&
+      !before.assignee_id &&
+      isTeamTask({
+        departmentId: (before.department_id as string | null) ?? null,
+        tags: (before.tags as string[] | null) ?? []
+      }) &&
+      update.assignee_id === undefined
+    ) {
+      update.assignee_id = userId;
+      autoClaimed = true;
+    }
+
     // Department reassignment — used when a task was filed under the
     // wrong department (e.g. picked Marketing when they meant Software).
     // null clears it; a string moves the task into that department.
@@ -149,6 +186,55 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
         ? (existingMedia!.media_urls as typeof mediaAppend)
         : [];
       update.media_urls = [...prior, ...mediaAppend].slice(-50);
+    }
+
+    // OWNERSHIP GATE — for the NEWLY visible case only.
+    //
+    // This route is otherwise guarded solely by loadTaskForViewer, a READ
+    // gate: anyone who can see a task can edit it, including reassigning it
+    // by dragging on the board (which has no client-side gating either).
+    // That is pre-existing and stays pre-existing. Tightening it wholesale
+    // here would 403 people who reassign every day — the SEO team leads are
+    // deliberately role="worker" (see SEO_LEAD_DELETER_EMAILS in access.ts),
+    // so canManageTask is false for them on a teammate's task.
+    //
+    // What this change DOES owe a gate is the visibility it just added:
+    // `via === "team"` means the viewer could not have seen this task at all
+    // before team tasks existed. For them, and only them, an ownership write
+    // has to be earned.
+    //
+    // Scoped to the two ownership fields on purpose — clamping the whole
+    // route would break status updates and comments for exactly the people
+    // the feature exists for.
+    // Gated on an ACTUAL CHANGE, not on the field being present. The edit
+    // dialog (TaskActions) always sends departmentId, unchanged or not, so
+    // keying on presence would 403 a department member for editing a title.
+    const reassigning =
+      "assignee_id" in update && update.assignee_id !== before.assignee_id;
+    const movingDepartment =
+      "department_id" in update && update.department_id !== before.department_id;
+
+    if (access.via === "team" && (reassigning || movingDepartment)) {
+      const beforeShape = {
+        creatorId: (before.creator_id as string) ?? "",
+        assigneeId: (before.assignee_id as string | null) ?? null,
+        departmentId: (before.department_id as string | null) ?? null,
+        status: before.status as Task["status"],
+        tags: (before.tags as string[] | null) ?? []
+      };
+      // Claiming is the one write a plain department member may make: it can
+      // only ever point the task at themselves, and only while it is still
+      // unclaimed.
+      const claimingForSelf = update.assignee_id === userId && !movingDepartment;
+      const allowed =
+        canManageTask(access.viewer, beforeShape) ||
+        (claimingForSelf && canClaimTask(access.viewer, beforeShape));
+      if (!allowed) {
+        return NextResponse.json(
+          { error: "You don't have permission to reassign this task" },
+          { status: 403 }
+        );
+      }
     }
 
     const { data, error } = await supabase
@@ -239,11 +325,24 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     // If status flipped to "done", DM the creator and (if configured) post
     // to the team channel. Failures are folded into the response so the UI
     // can surface them via toast — they don't block the PATCH itself.
+    // Who owns the task AFTER this write. Scoped to the auto-claim path
+    // above, where the completer becomes the assignee in the same request —
+    // reading the stale value there credited the completion to "Someone" and
+    // awarded the skill points to nobody.
+    //
+    // Deliberately NOT applied to every reassignment. A normal PATCH that
+    // sets assigneeId and status:"done" together should still credit the
+    // person who did the work, not whoever it was just handed to; changing
+    // that is a behavior change unrelated to team tasks.
+    const effectiveAssigneeId = autoClaimed
+      ? userId
+      : (before.assignee_id as string | null);
+
     let slack: CompletionResult | null = null;
     if (statusChanged && update.status === "done") {
       const [creator, assignee] = await Promise.all([
         getUserById(before.creator_id),
-        before.assignee_id ? getUserById(before.assignee_id) : Promise.resolve(null)
+        effectiveAssigneeId ? getUserById(effectiveAssigneeId) : Promise.resolve(null)
       ]);
       // Don't ping the creator if they completed their own task.
       const creatorEmail =
@@ -266,7 +365,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     // completions earn full credit and overruns earn proportionally less
     // (but never zero — they still demonstrate capability with the tag).
     let skillGains: { tag: string; gain: number; total: number }[] = [];
-    if (statusChanged && update.status === "done" && before.assignee_id) {
+    if (statusChanged && update.status === "done" && effectiveAssigneeId) {
       const tags: string[] = Array.isArray(before.tags) ? before.tags : [];
       // Filter the routing/system tags out — they don't reflect skill.
       const skillTags = tags.filter(
@@ -282,7 +381,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
         const { data: existing } = await supabase
           .from("user_skills")
           .select("id, tag, auto_score, task_count")
-          .eq("user_id", before.assignee_id)
+          .eq("user_id", effectiveAssigneeId)
           .in("tag", skillTags);
         const byTag = new Map(
           (existing ?? []).map((r) => [r.tag, r])
@@ -295,7 +394,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
           skillGains.push({ tag, gain: gainPerTag, total: +nextScore.toFixed(2) });
           return {
             id: prev?.id ?? `us_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}_${tag.slice(0, 8)}`,
-            user_id: before.assignee_id as string,
+            user_id: effectiveAssigneeId,
             tag,
             auto_score: nextScore,
             task_count: nextCount,

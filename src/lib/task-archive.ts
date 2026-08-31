@@ -17,6 +17,8 @@ export const ARCHIVE_AFTER_DAYS = 7;
 
 // Default for how many days past its due date an OPEN task may sit before it
 // auto-archives as stale. Overridable per-workspace via Settings.
+import { isTeamTask } from "./task-team";
+
 export const OVERDUE_ARCHIVE_DAYS = 10;
 
 const DAY_MS = 86_400_000;
@@ -28,6 +30,11 @@ export interface ArchivableTask {
   dueDate?: string | null;
   archivedAt?: string | null;
   deletedAt?: string | null;
+  // Needed to spot an unclaimed team task — see Rule 2 below. Optional so
+  // callers passing a raw row without them keep the old behaviour.
+  assigneeId?: string | null;
+  departmentId?: string | null;
+  tags?: string[] | null;
 }
 
 export interface ArchiveWindows {
@@ -60,6 +67,26 @@ export function shouldAutoArchive(
   }
 
   // Rule 2 — open & overdue. Only non-done tasks reach here.
+  //
+  // Carve-out: an unclaimed team task is never auto-archived. The sweep
+  // writes archived_by: null and deliberately writes NO activity_logs row
+  // (that table's user_id is NOT NULL), so work nobody picked up would
+  // disappear off the board with no owner to notice and no audit trail —
+  // the single worst outcome for a feature whose whole point is that work
+  // sits in a pool waiting for someone. It stays visible and overdue until
+  // a human claims, reassigns or deletes it.
+  //
+  // NB: this function currently has no callers — lib/task-archive-runner.ts
+  // re-implements both rules against raw rows. The carve-out is mirrored
+  // there (via the same isTeamTask helper, so the two can't disagree). Kept
+  // here so the pure rule stays the readable statement of the policy.
+  if (!task.assigneeId && isTeamTask({
+    departmentId: task.departmentId ?? null,
+    tags: task.tags ?? []
+  })) {
+    return false;
+  }
+
   if (!task.dueDate) return false;                // no due date → nothing to overrun
   const dueMs = new Date(task.dueDate).getTime();
   if (Number.isNaN(dueMs)) return false;          // unparseable → skip, don't guess

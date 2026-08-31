@@ -6,12 +6,14 @@ import { PersonAvatar } from "@/components/PersonAvatar";
 import { TaskActions } from "@/components/TaskActions";
 import { TaskTimerButton } from "@/components/TaskTimerButton";
 import { NotifyTeammatesDialog } from "@/components/NotifyTeammatesDialog";
-import { canNotifyOnTask, canViewTask, canManageTask, canDeleteTask } from "@/lib/access";
+import { canNotifyOnTask, canViewTask, canManageTask, canDeleteTask, canClaimTask } from "@/lib/access";
+import { isTeamTask } from "@/lib/task-team";
+import { ClaimTaskButton } from "@/components/ClaimTaskButton";
 import { DeleteTaskButton } from "@/components/DeleteTaskButton";
 import { ArchiveTaskButton } from "@/components/ArchiveTaskButton";
 import { UnarchiveTaskButton } from "@/components/UnarchiveTaskButton";
 import { getUserById, getAllUsersLight, getDepartments, getLeaderIds } from "@/lib/server-data";
-import { Megaphone, Clock, History, Archive } from "lucide-react";
+import { Megaphone, Clock, History, Archive, Users } from "lucide-react";
 import { HandoffButton, HandoffTimeline } from "@/components/HandoffPanel";
 import { TaskConversation } from "@/components/TaskConversation";
 import { DueDateInline } from "@/components/DueDateInline";
@@ -282,8 +284,30 @@ export default async function TaskDetailPage({ params }: { params: { id: string 
         <aside className="card p-4 space-y-4 h-fit">
           <Field label="Assignee">
             {assignee ? (
-              <div className="flex items-center gap-2"><PersonAvatar userId={assignee.id} name={assignee.name} imageUrl={assignee.avatarUrl} size={22} /> {assignee.name}</div>
-            ) : <span className="text-muted">Unassigned</span>}
+              <div className="space-y-2">
+                <div className="flex items-center gap-2"><PersonAvatar userId={assignee.id} name={assignee.name} imageUrl={assignee.avatarUrl} size={22} /> {assignee.name}</div>
+                {/* Team task someone already took — let them hand it back,
+                    unless it's finished (the route rejects that, and
+                    un-attributing completed work would lose their credit). */}
+                {isTeamTask(task) && assignee.id === currentUserId && task.status !== "done" && (
+                  <ClaimTaskButton taskId={task.id} mode="release" departmentName={dept?.name ?? null} />
+                )}
+              </div>
+            ) : isTeamTask(task) ? (
+              // Up for grabs. This page is the entry point the Slack
+              // announcement links to, and unlike /tasks/mine it isn't behind
+              // ClockGate — so it's where the claim has to work.
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <Users className="w-4 h-4 text-accent" />
+                  <span className="font-medium">The {dept?.name ?? "department"} team</span>
+                </div>
+                <div className="text-xs text-muted">Up for grabs — nobody has taken it yet.</div>
+                {canClaimTask(me, task) && <ClaimTaskButton taskId={task.id} mode="claim" />}
+              </div>
+            ) : (
+              <span className="text-muted">Unassigned</span>
+            )}
           </Field>
           <Field label="Department">
             <DepartmentEditor

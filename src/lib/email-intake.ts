@@ -32,6 +32,7 @@
 // Returns a structured outcome — { skipped: "already-logged" } if dedupe
 // fired, otherwise the created task id + how it was routed + decisionId.
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
+import { stripTeamTag } from "@/lib/task-team";
 import { departmentHead } from "@/lib/department-head";
 import { getAllTasks, getDepartments, getAllUsersLight } from "@/lib/server-data";
 import { classifyEmailThread, type ClassifiedEmail } from "@/lib/email-classifier";
@@ -331,7 +332,7 @@ export async function runEmailIntake(input: IntakeInput): Promise<IntakeOutcome>
     priority: classified.priority,
     estimated_hours: estimateHours,
     actual_hours: 0,
-    tags: Array.from(new Set(["email-intake", ...classified.tags])),
+    tags: Array.from(new Set(["email-intake", ...stripTeamTag(classified.tags)])),
     department_id: departmentId,
     assignee_id: assigneeId,
     // Creator: assignee themself for cron-created tasks (no user

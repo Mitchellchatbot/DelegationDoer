@@ -9,6 +9,7 @@ import { PageHero } from "@/components/PageHero";
 import { Countdown } from "@/components/Countdown";
 import { Users as UsersIcon, ShieldAlert, ListChecks, CheckCircle2, AlertTriangle, Flame, Sparkles, ClipboardCheck, ArrowRight } from "lucide-react";
 import type { User, Department, Task } from "@/lib/types";
+import { isTeamTask } from "@/lib/task-team";
 
 // Department-head console. Pulls live users/departments/tasks (falls
 // back to mock seed during initial paint), scopes everything to the
@@ -107,9 +108,18 @@ export default function TeamOverviewPage() {
     () => new Set(scopedUsers.map((u) => u.id)),
     [scopedUsers]
   );
+  // Scoped through PEOPLE for assigned work, and through the DEPARTMENT for
+  // unclaimed team tasks. Without the second arm the head running the meeting
+  // where work gets divided sees zero of the pool they're supposed to be
+  // dividing — every tile and panel on this page derives from this list.
   const scopedTasks = useMemo(
-    () => tasks.filter((t) => t.assigneeId && scopedUserIds.has(t.assigneeId)),
-    [tasks, scopedUserIds]
+    () =>
+      tasks.filter((t) =>
+        t.assigneeId
+          ? scopedUserIds.has(t.assigneeId)
+          : isTeamTask(t) && !!t.departmentId && myDeptIds.includes(t.departmentId)
+      ),
+    [tasks, scopedUserIds, myDeptIds]
   );
 
   // --- aggregates for the stat strip + side panels ---

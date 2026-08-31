@@ -23,6 +23,7 @@
 // Returns a structured outcome: { skipped: "already-logged" } if dedupe
 // fired, otherwise summary + per-item routing decisions.
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
+import { stripTeamTag } from "@/lib/task-team";
 import { departmentHead } from "@/lib/department-head";
 import {
   getAllTasks, getDepartments, getAllUsersLight
@@ -216,7 +217,7 @@ export async function runTldvIntake(input: TldvIntakeInput): Promise<TldvIntakeO
       priority: item.priority,
       estimated_hours: estimateHours,
       actual_hours: 0,
-      tags: Array.from(new Set(["tldv-intake", ...item.tags])),
+      tags: Array.from(new Set(["tldv-intake", ...stripTeamTag(item.tags)])),
       department_id: departmentId,
       assignee_id: routing.userId,
       creator_id: routing.userId,

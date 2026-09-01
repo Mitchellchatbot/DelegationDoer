@@ -372,6 +372,19 @@ export async function runDailyBriefing(
   const tasks = allTasks.filter((t) => IN_FLIGHT.includes(t.status));
   const nameById = new Map(roster.map((u) => [u.id, u.name]));
 
+  // Cached Slack fields for the roster (getAllUsersLight omits them). Using the
+  // cached slack_user_id lets resolveSlackId return instantly without a rate-
+  // limited users.lookupByEmail call per teammate.
+  const { data: slackRows } = await supabase
+    .from("users")
+    .select("id, slack_user_id, slack_email");
+  const slackById = new Map(
+    (slackRows ?? []).map((r) => [
+      r.id as string,
+      { slack_user_id: (r.slack_user_id as string | null) ?? null, slack_email: (r.slack_email as string | null) ?? null }
+    ])
+  );
+
   const prompts = buildPrompts({ tasks, roster, inbox: inbox.items, inboxNote: inbox.note, nameById });
 
   let drafted: DraftedContent;
@@ -398,9 +411,15 @@ export async function runDailyBriefing(
     const text = typeof em.text === "string" ? em.text.trim() : "";
     if (!text) continue;
     seen.add(u.id);
+    const cached = slackById.get(u.id);
     let slackId: string | null = null;
     try {
-      slackId = await resolveSlackId({ id: u.id, email: u.email, slack_user_id: null, slack_email: null });
+      slackId = await resolveSlackId({
+        id: u.id,
+        email: u.email,
+        slack_user_id: cached?.slack_user_id ?? null,
+        slack_email: cached?.slack_email ?? null
+      });
     } catch { /* resolve again at send time */ }
     messages.push({
       id: `m${messages.length + 1}`,

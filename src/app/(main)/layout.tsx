@@ -11,6 +11,7 @@ import { TeamProvider } from "@/lib/team-context";
 import { ClockProvider } from "@/components/ClockContext";
 import { OnboardingDialog } from "@/components/OnboardingDialog";
 import { SodGate } from "@/components/SodGate";
+import { AIAssistantFab } from "@/components/AIAssistantFab";
 import { TooltipRoot } from "@/components/Tooltip";
 import { NavDrawerProvider } from "@/components/NavDrawerProvider";
 import { ToastSuccessIcon, ToastErrorIcon, ToastWarningIcon } from "@/components/ToastIcons";
@@ -78,12 +79,16 @@ export default async function MainLayout({ children }: { children: React.ReactNo
         position="bottom-right"
         richColors
         closeButton
+        // Lift the toast stack above the bottom-right "Ask AI" launcher so
+        // they don't sit on top of it.
+        offset={{ bottom: 92, right: 24 }}
         icons={{
           success: <ToastSuccessIcon />,
           error: <ToastErrorIcon />,
           warning: <ToastWarningIcon />
         }}
       />
+      <AIAssistantFab />
       <OnboardingDialog />
       <SodGate />
       </TooltipRoot>

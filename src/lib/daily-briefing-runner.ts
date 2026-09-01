@@ -29,11 +29,15 @@ import { listAccounts, listThreads } from "@/lib/missive-client";
 import { getAnthropic, resetAnthropic, MODELS } from "@/lib/anthropic-client";
 import { openDm, postMessage } from "@/lib/slack";
 import { resolveSlackId } from "@/lib/slack-resolve";
-import { DEFAULT_TZ, nowInTz } from "@/lib/shift";
+import { DEFAULT_TZ, nowInTz, ymdInTz } from "@/lib/shift";
 import type { Task, User } from "@/lib/types";
 
 const OWNER_EMAIL = "mitchell@scaledai.org";
 const TARGET_HOUR = 9; // 9am America/New_York
+const TARGET_MESSAGES = 6; // teammates checked in with per day
+// Rotation window: teammates checked in within this many days are deprioritized
+// so coverage cycles across the whole team instead of hitting the same people.
+const RECENCY_WINDOW_DAYS = 5;
 
 // In-flight = on someone's plate right now (excludes done + rejected).
 const IN_FLIGHT: Task["status"][] = ["pending", "in_progress", "urgent", "waiting_on_client"];
@@ -138,8 +142,11 @@ function buildPrompts(args: {
   inbox: InboxItem[];
   inboxNote: string | null;
   nameById: Map<string, string>;
+  // Teammates checked in with recently (name + how many days ago), so the model
+  // rotates coverage instead of messaging the same people every day.
+  recentlyMessaged: { name: string; daysAgo: number }[];
 }): { system: string; user: string } {
-  const { tasks, roster, inbox, inboxNote, nameById } = args;
+  const { tasks, roster, inbox, inboxNote, nameById, recentlyMessaged } = args;
 
   // Teammates Mitchell can be prompted to check in on: everyone but him and
   // other leaders (the engagement DMs are founder→team).
@@ -176,26 +183,37 @@ function buildPrompts(args: {
     "",
     "Return STRICT JSON only (no code fences, no prose around it) with exactly this shape:",
     "{",
-    '  "daily_update": string,        // his briefing, plain text with short line breaks. Cover: the state of active work, anything he specifically should note or decide AS THE OWNER, and the inbox items that need his attention. Be concise and specific — reference real task titles, people, and clients. Lead with what matters most.',
-    '  "needle_mover": string,        // ONE specific, high-leverage action he can take today that moves the business forward. Concrete, not generic.',
-    '  "engagement_messages": [       // EXACTLY 5 items, each to a DIFFERENT teammate',
+    '  "daily_update": string,        // a REPORT, written in clear labeled sections with short line breaks. Use these section headers, each on its own line, in this order (skip a section only if there is genuinely nothing for it): "SNAPSHOT:" (1-2 line headline of the day, e.g. counts + the single biggest thing), "NEEDS YOUR CALL:" (decisions/items only the owner can resolve, as bullet lines starting with "- "), "AT RISK:" (overdue/blocked/overloaded, bullet lines), "MOMENTUM:" (what is going well or just shipped, bullet lines), "INBOX:" (email items needing his attention, or a one-line note if unavailable). Reference real task titles, people, and clients. Be specific, skimmable, and honest.',
+    `  "needle_mover": string,        // ONE specific, high-leverage action he can take today that moves the business forward. Concrete, not generic.`,
+    `  "engagement_messages": [       // EXACTLY ${TARGET_MESSAGES} items, each to a DIFFERENT teammate`,
     '    { "userId": string,          // must be one of the teammate ids listed below',
-    '      "text": string }           // a short, warm, specific Slack DM FROM Mitchell TO that teammate to keep them engaged — reference their actual work. 1-3 sentences, first person, no greeting line like "Hi" needed, sounds like a busy founder who genuinely noticed. No emojis unless natural.',
+    '      "text": string }           // a casual, personable Slack DM FROM Mitchell TO that teammate. This is a MORALE-BOOSTING check-in, not a status interrogation. Warm and human: appreciate their work, encourage them, ask how they are doing or if they need anything, celebrate a win. Reference their actual work naturally where it fits, but the goal is connection, not accountability. 1-2 short sentences, first person, sounds like a founder who genuinely cares about his people. A friendly opener like "Hey <name>" is welcome. Vary the vibe across the messages (appreciation, encouragement, a genuine how-are-you, a specific shout-out). No corporate tone. Light emoji is fine if it feels natural.',
     "  ]",
     "}",
     "",
     "Rules:",
-    "- Pick the 5 teammates most worth a personal check-in today (overloaded, stalled/blocked, just shipped something notable, or gone quiet). All 5 userIds must be distinct and from the list.",
+    `- Pick ${TARGET_MESSAGES} teammates to check in on. ROTATE COVERAGE: strongly prefer teammates NOT in the "recently checked in" list below, so over a week everyone hears from Mitchell. Only repeat someone from that list if they genuinely need it today (blocked, overloaded, or a big win). All ${TARGET_MESSAGES} userIds must be distinct and from the roster.`,
+    "- The check-ins are about people, not tasks: keep them upbeat and supportive even for someone who is behind (encourage, offer help; do not scold).",
     "- Never invent tasks, clients, or facts not present in the data.",
     "- Plain text only. Do not use em-dashes; use commas or periods.",
     "- These are DRAFTS Mitchell approves before anything sends. Write them ready-to-send."
   ].join("\n");
+
+  const recentBlock = recentlyMessaged.length
+    ? recentlyMessaged
+        .sort((a, b) => a.daysAgo - b.daysAgo)
+        .map((r) => `- ${r.name} (${r.daysAgo === 0 ? "today" : r.daysAgo === 1 ? "yesterday" : `${r.daysAgo} days ago`})`)
+        .join("\n")
+    : "(no one checked in with recently — you can pick anyone)";
 
   const user = [
     `Date: ${prettyDate()} (America/New_York).`,
     "",
     "## Teammates (choose engagement_messages recipients from these ids)",
     rosterBlock,
+    "",
+    `## Recently checked in — AVOID these unless they genuinely need it today (rotate to others)`,
+    recentBlock,
     "",
     `## Active work across the team (${tasks.length} in-flight tasks)`,
     workBlock,
@@ -212,8 +230,8 @@ async function draftContent(prompts: { system: string; user: string }): Promise<
     const client = await getAnthropic();
     return client.messages.create({
       model: MODELS.chat,
-      max_tokens: 2600,
-      temperature: 0.5,
+      max_tokens: 3400,
+      temperature: 0.6,
       system: prompts.system,
       messages: [{ role: "user", content: prompts.user }]
     });
@@ -334,6 +352,47 @@ export function buildBriefingBlocks(row: DailyBriefingRow): { blocks: unknown[];
   return { blocks: blocks.slice(0, 50), text };
 }
 
+// Whole-day difference between two YYYY-MM-DD strings (a is the later date).
+function dayDiff(a: string, b: string): number {
+  const da = Date.parse(`${a}T00:00:00Z`);
+  const db = Date.parse(`${b}T00:00:00Z`);
+  if (Number.isNaN(da) || Number.isNaN(db)) return 0;
+  return Math.max(0, Math.round((da - db) / 86_400_000));
+}
+
+// Who Mitchell has already checked in with in the last RECENCY_WINDOW_DAYS, so
+// the model rotates to fresh teammates. Reads past daily_briefings rows.
+async function gatherRecentlyMessaged(
+  supabase: ReturnType<typeof getSupabaseAdmin>,
+  todayYmd: string,
+  nameById: Map<string, string>
+): Promise<{ name: string; daysAgo: number }[]> {
+  const since = ymdInTz(new Date(Date.now() - RECENCY_WINDOW_DAYS * 86_400_000), DEFAULT_TZ);
+  const { data } = await supabase
+    .from("daily_briefings")
+    .select("brief_date, messages")
+    .gte("brief_date", since)
+    .neq("id", `brief_${todayYmd}`); // ignore today's own row on a re-run
+
+  const lastByUser = new Map<string, string>(); // userId -> most recent brief_date
+  for (const row of (data ?? []) as { brief_date: string; messages: unknown }[]) {
+    const bd = row.brief_date;
+    const msgs = Array.isArray(row.messages) ? row.messages : [];
+    for (const m of msgs as { userId?: string }[]) {
+      if (!m?.userId) continue;
+      const prev = lastByUser.get(m.userId);
+      if (!prev || bd > prev) lastByUser.set(m.userId, bd);
+    }
+  }
+
+  const out: { name: string; daysAgo: number }[] = [];
+  for (const [uid, bd] of lastByUser) {
+    const name = nameById.get(uid);
+    if (name) out.push({ name, daysAgo: dayDiff(todayYmd, bd) });
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------------------
 // Runner
 // ---------------------------------------------------------------------------
@@ -385,7 +444,10 @@ export async function runDailyBriefing(
     ])
   );
 
-  const prompts = buildPrompts({ tasks, roster, inbox: inbox.items, inboxNote: inbox.note, nameById });
+  const recentlyMessaged = await gatherRecentlyMessaged(supabase, now.ymd, nameById);
+  const prompts = buildPrompts({
+    tasks, roster, inbox: inbox.items, inboxNote: inbox.note, nameById, recentlyMessaged
+  });
 
   let drafted: DraftedContent;
   try {
@@ -398,12 +460,12 @@ export async function runDailyBriefing(
   }
 
   // Validate + resolve engagement messages against the real roster. Keep the
-  // first message per distinct, non-leader teammate; cap at 5.
+  // first message per distinct, non-leader teammate; cap at TARGET_MESSAGES.
   const userById = new Map(roster.map((u) => [u.id, u]));
   const seen = new Set<string>();
   const messages: BriefingMessage[] = [];
   for (const em of drafted.engagement_messages) {
-    if (messages.length >= 5) break;
+    if (messages.length >= TARGET_MESSAGES) break;
     const u = userById.get(em.userId);
     if (!u || u.role === "leader") continue;
     if ((u.email ?? "").toLowerCase() === OWNER_EMAIL) continue;

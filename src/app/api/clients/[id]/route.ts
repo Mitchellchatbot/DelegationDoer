@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUserId } from "@/lib/session";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
-import { isValidTeamId, TEAM_DEPARTMENT, type TeamId } from "@/lib/client-teams";
+import { isValidTeamId, isSeoTeamId, TEAM_DEPARTMENT, type TeamId } from "@/lib/client-teams";
+import { canEditClientTeams } from "@/lib/access";
 
 export const dynamic = "force-dynamic";
 
@@ -32,7 +33,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
 
     const { data: me } = await supabase
       .from("users")
-      .select("role, is_admin")
+      .select("role, is_admin, email")
       .eq("id", userId)
       .maybeSingle();
     if (!(me?.role === "leader" || me?.role === "department_head" || me?.is_admin === true)) {
@@ -50,6 +51,32 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
         update.team_id = raw;
       } else {
         return NextResponse.json({ error: "teamId must be a known team or null" }, { status: 400 });
+      }
+
+      // Who owns which SEO client is restricted to four people
+      // (canEditClientTeams). Enforced HERE rather than only on the
+      // /client-teams board, because the board's `canEdit` prop just hides
+      // affordances — this route is the actual boundary, and the team picker
+      // on /clients reaches the same field.
+      //
+      // The check fires when the change touches an SEO bucket in EITHER
+      // direction: moving a client INTO an SEO team, and equally moving one
+      // OUT of it (to Websites, Software, or unassigned). Only testing the
+      // target would leave a hole where a head could quietly strip a client
+      // off an SEO lead's plate.
+      const target = update.team_id as string | null;
+      const { data: cur } = await supabase
+        .from("clients").select("team_id").eq("id", params.id).maybeSingle();
+      const current = (cur?.team_id as string | null) ?? null;
+      if (
+        (isSeoTeamId(target) || isSeoTeamId(current)) &&
+        target !== current &&
+        !canEditClientTeams({ email: me?.email ?? null })
+      ) {
+        return NextResponse.json(
+          { error: "Only Mitch, Sam, Tabrez and Farez can change the SEO client split." },
+          { status: 403 }
+        );
       }
     }
 

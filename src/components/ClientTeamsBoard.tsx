@@ -151,7 +151,7 @@ export function ClientTeamsBoard({
             ? q
               ? "Clear the filter to drag — reordering a filtered list would move the wrong card."
               : "Drag a client between leads to reassign them."
-            : "Read-only. Ask a leader to reassign a client."}
+            : "Read-only — only Mitch, Sam, Tabrez and Farez can change the split."}
         </span>
       </div>
 

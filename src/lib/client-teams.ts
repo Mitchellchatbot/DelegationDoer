@@ -101,6 +101,13 @@ export function isValidTeamId(id: unknown): id is TeamId {
   return typeof id === "string" && TEAM_IDS.has(id);
 }
 
+// "Is this one of the SEO lead buckets?" Used to decide whether a teamId
+// change falls under the restricted /client-teams grant (lib/access.ts:
+// canEditClientTeams) or under the ordinary leader/head client-edit rights.
+export function isSeoTeamId(id: string | null | undefined): boolean {
+  return !!id && TEAM_DEPARTMENT[id as TeamId] === "dep_seo";
+}
+
 export function teamMeta(id: string | null | undefined): TeamMeta | null {
   if (!id) return null;
   return TEAMS.find((t) => t.id === id) ?? null;

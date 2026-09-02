@@ -134,6 +134,35 @@ function isSeoLeadDeleter(u: Pick<User, "email"> | null | undefined): boolean {
   return SEO_LEAD_DELETER_EMAILS.includes(u.email.trim().toLowerCase());
 }
 
+// Who may change which SEO lead owns a client (the /client-teams board, and
+// any teamId edit that touches an SEO bucket). Requested explicitly: Mitch,
+// Sam, Tabrez, Farez — nobody else, including other leaders and the SEO leads
+// themselves, who can see the split but not rewrite it.
+//
+// Deliberately NOT expressed as role/isAdmin. That would be a near-miss:
+// Sam/Tabrez/Farez happen to be admins today, but so are others, and the ask
+// was for these four specifically. Pinning it to identity means the grant
+// doesn't silently widen the next time someone is made an admin.
+//
+// Keyed by EXACT email, like SEO_LEAD_DELETER_EMAILS above. A name list is
+// actively dangerous here: "sam" also matches "Samir G" (a different person,
+// samir@scaledai.org), which is the same trap SUPER_APPROVER_NAME_PATTERNS in
+// lib/email-approvers.ts documents. Farez's login is a gmail address — that's
+// correct, not a typo.
+//
+// To add/remove an editor, change this list and only this list.
+const CLIENT_TEAM_EDITOR_EMAILS = [
+  "mitchell@scaledai.org",     // Mitchell (leader)
+  "sam@scaledai.org",          // Sam
+  "tabrez@scaledai.org",       // Tabrez Khan
+  "farezomair1996@gmail.com"   // Farez Khan
+];
+
+export function canEditClientTeams(u: Pick<User, "email"> | null | undefined): boolean {
+  if (!u?.email) return false;
+  return CLIENT_TEAM_EDITOR_EMAILS.includes(u.email.trim().toLowerCase());
+}
+
 // "Can delete" is deliberately STRICTER than canManageTask. Deletion is
 // destructive and outside the normal task lifecycle, so it's restricted to
 // admins/leaders (any task), department heads (tasks in a department they

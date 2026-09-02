@@ -5,7 +5,7 @@ import { PageHero } from "@/components/PageHero";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById, getAllUsers } from "@/lib/server-data";
 import { getClients } from "@/lib/clients-data";
-import { canManageAssignments } from "@/lib/inbox-access";
+import { canEditClientTeams } from "@/lib/access";
 import { TEAMS, teamsForDepartment, type TeamId } from "@/lib/client-teams";
 import {
   ClientTeamsBoard,
@@ -89,7 +89,10 @@ export default async function ClientTeamsPage() {
     avatarUrl: u.avatarUrl ?? null
   }));
 
-  const canEdit = canManageAssignments(me);
+  // Mitch / Sam / Tabrez / Farez only. Mirrors the check in
+  // PATCH /api/clients/[id], which is where it's actually enforced — this
+  // only decides whether to render the drag affordances.
+  const canEdit = canEditClientTeams(me);
   const assigned = boardClients.filter((c) => c.teamId !== null).length;
 
   return (

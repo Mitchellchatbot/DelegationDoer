@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { ArrowUpDown, Briefcase, LayoutGrid, FileSpreadsheet, Activity, Mail, ClipboardList } from "lucide-react";
+import { ArrowUpDown, Briefcase, LayoutGrid, FileSpreadsheet, Activity, Mail, ClipboardList, Users2 } from "lucide-react";
 import { PageHero } from "@/components/PageHero";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
@@ -81,6 +81,13 @@ export default async function ClientsPage() {
             >
               <Activity className="w-3.5 h-3.5" />
               Health dashboard
+            </Link>
+            <Link
+              href="/client-teams"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-white border border-slate-200 text-ink/75 hover:text-accent hover:border-accent/40 transition-colors"
+            >
+              <Users2 className="w-3.5 h-3.5" />
+              SEO client split
             </Link>
             <Link
               href="/tasks/board?groupBy=client"

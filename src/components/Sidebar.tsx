@@ -6,7 +6,8 @@ import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
 import {
   ListTodo, Users, Sparkles, Crown, Mail, Home as HomeIcon, Sunrise, Moon, Briefcase,
-  CalendarDays, FolderKanban, ClipboardCheck, BookOpen, Settings, LifeBuoy, LayoutGrid
+  CalendarDays, FolderKanban, ClipboardCheck, BookOpen, Settings, LifeBuoy, LayoutGrid,
+  Users2
 } from "lucide-react";
 // Sparkles is reused for both Ask AI and Updates — same icon, different context.
 import { useEffect, useState } from "react";
@@ -43,6 +44,7 @@ const INBOXES_ITEM: NavItem = { href: "/inboxes", label: "Inboxes", icon: Mail, 
 const APPROVALS_ITEM: NavItem = { href: "/approvals", label: "Approvals", icon: ClipboardCheck, tone: "emerald" };
 const CUSTOMER_SUPPORT_ITEM: NavItem = { href: "/customer-support", label: "Customer Support", icon: LifeBuoy, tone: "teal" };
 const CLIENTS_ITEM: NavItem = { href: "/clients", label: "Clients", icon: Briefcase, tone: "amber" };
+const CLIENT_TEAMS_ITEM: NavItem = { href: "/client-teams", label: "Client split", icon: Users2, tone: "emerald" };
 const UPDATES_ITEM: NavItem = { href: "/updates", label: "Updates", icon: Sparkles, tone: "fuchsia" };
 const SOPS_ITEM: NavItem = { href: "/sops", label: "SOPs", icon: BookOpen, tone: "teal" };
 const PEOPLE_ITEM: NavItem = { href: "/people", label: "People", icon: Users, tone: "indigo"   };
@@ -314,6 +316,7 @@ export function Sidebar({ user }: { user: User }) {
     ...(canApprove || canSeeRoutingReview || canViewApprovalsReadOnly ? [APPROVALS_ITEM] : []),
     ...(canSeeSupport ? [CUSTOMER_SUPPORT_ITEM] : []),
     CLIENTS_ITEM,
+    CLIENT_TEAMS_ITEM,
     UPDATES_ITEM,
     SOPS_ITEM,
     manageOrPeople,
@@ -327,7 +330,7 @@ export function Sidebar({ user }: { user: User }) {
     { label: "Today", hrefs: ["/sod", "/eod"] },
     { label: "Work", hrefs: ["/tasks", "/schedule", "/projects"] },
     { label: "Communication", hrefs: ["/inboxes", "/approvals", "/customer-support"] },
-    { label: "Knowledge", hrefs: ["/clients", "/updates", "/sops"] },
+    { label: "Knowledge", hrefs: ["/clients", "/client-teams", "/updates", "/sops"] },
     { label: "Account", hrefs: ["/people", "/leader", "/settings"] }
   ];
   function groupFor(href: string): string | null {

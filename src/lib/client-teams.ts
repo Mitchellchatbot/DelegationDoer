@@ -22,6 +22,13 @@ export interface TeamMeta {
   // so a "Websites" client visually pairs with the Website dept.
   chip: string;         // bg + text + border classes
   dot: string;          // tiny color dot for compact UI
+  // The team lead's login email, when the team is led by one person.
+  // Keyed by email rather than name for the same reason EMAIL_VIEWER_EMAILS
+  // is (lib/email-approvers.ts): display names drift — emily@ renders as
+  // "Komal", bella@ as "Bismah" — and name substrings collide ("Sam" vs
+  // "Samir"). Used by /client-teams to show the lead's avatar on the column
+  // header. Null when nobody specific owns the bucket.
+  leadEmail?: string;
 }
 
 export const TEAMS: readonly TeamMeta[] = [
@@ -43,17 +50,20 @@ export const TEAMS: readonly TeamMeta[] = [
   {
     id: "team_seo_bismah", label: "SEO · Bismah", group: "seo",
     chip: "bg-emerald-100 text-emerald-700 border-emerald-200/70",
-    dot: "bg-emerald-500"
+    dot: "bg-emerald-500",
+    leadEmail: "bella@scaledai.org"
   },
   {
     id: "team_seo_samir", label: "SEO · Samir", group: "seo",
     chip: "bg-emerald-100 text-emerald-700 border-emerald-200/70",
-    dot: "bg-emerald-500"
+    dot: "bg-emerald-500",
+    leadEmail: "samir@scaledai.org"
   },
   {
     id: "team_seo_saif", label: "SEO · Saif", group: "seo",
     chip: "bg-emerald-100 text-emerald-700 border-emerald-200/70",
-    dot: "bg-emerald-500"
+    dot: "bg-emerald-500",
+    leadEmail: "steve@scaledai.org"
   }
 ] as const;
 

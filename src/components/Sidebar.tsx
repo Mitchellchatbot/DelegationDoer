@@ -6,7 +6,7 @@ import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
 import {
   ListTodo, Users, Sparkles, Crown, Mail, Home as HomeIcon, Sunrise, Moon, Briefcase,
-  CalendarDays, FolderKanban, ClipboardCheck, BookOpen, Settings, LifeBuoy
+  CalendarDays, FolderKanban, ClipboardCheck, BookOpen, Settings, LifeBuoy, LayoutGrid
 } from "lucide-react";
 // Sparkles is reused for both Ask AI and Updates — same icon, different context.
 import { useEffect, useState } from "react";
@@ -545,6 +545,16 @@ export function Sidebar({ user }: { user: User }) {
           >
             <Sparkles className="w-4 h-4 text-fuchsia-300" />
             Ask AI <span className="ml-auto px-1.5 py-0.5 rounded border border-white/20 bg-white/10 text-[11px] font-mono text-white/80">⌘K</span>
+          </button>
+          {/* Summons the floating multitask bubbles. Fires a window event
+              rather than lifting the overlay's state — the overlay is mounted
+              in the layout, a sibling of this sidebar. */}
+          <button
+            onClick={() => window.dispatchEvent(new Event("multitask:toggle"))}
+            className="w-full inline-flex items-center justify-center gap-2 px-3 py-2 rounded-xl text-sm border border-white/20 bg-white/10 text-white hover:bg-white/20 transition-colors"
+          >
+            <LayoutGrid className="w-4 h-4 text-sky-300" />
+            Multitask <span className="ml-auto px-1.5 py-0.5 rounded border border-white/20 bg-white/10 text-[11px] font-mono text-white/80">⌥M</span>
           </button>
         </div>
       </div>

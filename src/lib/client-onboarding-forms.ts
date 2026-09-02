@@ -1,28 +1,55 @@
 // The two client onboarding questionnaires, as data.
 //
 // Recreated from the Typeforms the team has been sending out:
-//   Website — form.typeform.com/to/TsUodIXn (31 questions)
+//   Website — form.typeform.com/to/TsUodIXn (31 questions; the Website script
+//             below has since been edited and no longer matches it)
 //   SEO     — form.typeform.com/to/SoEDY9xp (25 questions)
 //
-// Questions are kept VERBATIM, including their original hint text and their
-// original punctuation and capitalisation quirks. That is deliberate: these are
-// the words clients have already been answering, the team knows what the
-// answers to them look like, and quietly "improving" the wording would make old
-// Typeform exports and new DD answers stop lining up.
+// The SEO questions are kept VERBATIM, including their original hint text and
+// their original punctuation and capitalisation quirks. That is deliberate:
+// these are the words clients have already been answering, the team knows what
+// the answers to them look like, and quietly "improving" the wording would make
+// old Typeform exports and new DD answers stop lining up. Nothing under the SEO
+// heading gets tidied without the team asking for it.
 //
-// What is new is the SHAPE. A Typeform asks 31 questions one at a time with no
-// sense of how much is left; this groups them into steps that each fill one
-// screen, so a client can see that "your business" is five boxes and finish it
-// in a sitting. The grouping is the only editorial decision taken here.
+// The WEBSITE questions no longer hold to that, because in September 2026 the
+// team asked for the opposite: correct the punctuation and grammar, and drop the
+// questions they had stopped using. So that script has deliberately drifted from
+// the Typeform it came from — two address labels shortened, the current-site
+// instructions rewritten around the domain registrar, five questions gone
+// (company personality, elevator pitch, content readiness, post-launch support,
+// and the free-text location the address boxes above it already answered), the
+// branding-materials question turned from a Yes/No into the form's upload box,
+// the hosting-and-domain question moved onto the current-site step, and the
+// separate logo-and-images step removed now that the upload sits on the brand
+// step. A Website answer exported from Typeform and one collected here will NOT
+// read identically any more, and anything that lines the two up by question text
+// has to expect that.
+//
+// What did NOT change is the storage keys. "state" and "zip" still carry the
+// answers to the two relabelled questions, and "branding_materials" still
+// carries the upload where it used to carry a Yes/No: a key is part of an answer
+// row's primary key, so renaming one orphans every answer already stored under
+// it. See CollectField.key.
+//
+// What was new from the start is the SHAPE. A Typeform asks its questions one at
+// a time with no sense of how much is left; this groups them into steps that
+// each fill one screen, so a client can see that "your business" is five boxes
+// and finish it in a sitting.
 //
 // Structure mirrors the meta-ads dashboard's onboarding script (awfmp
 // src/components/onboarding/steps.ts) so the ported walkthrough renders this
 // without reshaping.
 
 /** Where we ask people to send access, rather than passwords. Named once so a
- *  change of inbox is one edit and not a hunt through 56 questions. */
+ *  change of inbox is one edit and not a hunt through every question on both
+ *  forms. */
 export const AGENCY = {
-  websiteEmail: "Website@scaledai.org",
+  // websiteEmail and seoWebsiteEmail hold the same address today. Kept as two
+  // names rather than collapsed into one because they are two teams' inboxes
+  // that happen to agree: the day one of them moves, that should be one edit
+  // here and not a silent rewrite of the other form's instructions as well.
+  websiteEmail: "websites@scaledai.org",
   seoWebsiteEmail: "websites@scaledai.org",
   googleEmail: "marketingscaledai@gmail.com",
   // Call tracking goes to Sam directly rather than to a shared inbox: he owns
@@ -55,7 +82,9 @@ export type CollectField = {
   label: string;
   kind: FieldKind;
   placeholder?: string;
-  /** The Typeform's own description line, shown under the label. */
+  /** The description line shown under the label. On the SEO form it is always
+   *  the Typeform's own; on the Website form some are ours, written where the
+   *  original said nothing useful — the upload box's guidance, for instance. */
   hint?: string;
   choices?: string[];
   /** Encrypted at rest and never shown in Slack. See lib/onboarding-vault. */
@@ -170,15 +199,17 @@ const WEBSITE_STEPS: Step[] = [
       "Everything on the site — the pages we write, the areas we target, the hours on your contact "
       + "page — starts from these answers. Getting them down once here saves the back-and-forth later.",
     collect: [
-      { key: "business_name", label: "What is Your Business Name?", kind: "long" },
-      { key: "address_line1", label: "Address", kind: "text" },
+      { key: "business_name", label: "What is your business name?", kind: "long" },
+      { key: "address_line1", label: "Address line 1", kind: "text" },
       { key: "address_line2", label: "Address line 2", kind: "text" },
       { key: "city", label: "City/Town", kind: "text" },
-      { key: "state", label: "State/Region/Province", kind: "text" },
-      { key: "zip", label: "Zip/Post Code", kind: "text" },
+      // The labels moved, the keys did not: "state" and "zip" are half of an
+      // answer row's primary key, so renaming either would orphan the answers
+      // already stored under it.
+      { key: "state", label: "State/Region", kind: "text" },
+      { key: "zip", label: "Post Code", kind: "text" },
       { key: "country", label: "Country", kind: "text" },
-      { key: "business_location", label: "Where is your business located?", kind: "long" },
-      { key: "working_hours", label: "What is your businesses working days and hours?", kind: "long" },
+      { key: "working_hours", label: "What are your business's working days and hours?", kind: "long" },
       {
         key: "service_areas",
         label: "What locations does your business serve?",
@@ -193,24 +224,34 @@ const WEBSITE_STEPS: Step[] = [
   {
     id: "current-site",
     n: 3,
-    title: "Your current website",
+    title: "Your current website and domain",
     short: "Current site",
-    doneLabel: "Sent website access",
-    minutes: 5,
+    doneLabel: "Sent website and domain access",
+    minutes: 6,
     why:
       "If you already have a site, it is carrying search rankings we do not want to throw away. "
       + "Access lets us move the content that earned those rankings across to the new build instead "
-      + "of starting from zero.",
+      + "of starting from zero. The domain matters even if there is no site yet: it is what we point "
+      + "at the new build on launch day, and only the service it is registered with can let us do it.",
     whoCanDo:
-      "Whoever manages your current website — often your previous web developer or agency. Not sure? "
-      + "Check who gets the hosting bill.",
+      "Whoever manages your current website, and whoever bought the domain — often your previous web "
+      + "developer or agency, but not always the same person. Not sure? Check who gets the hosting "
+      + "bill, and who gets the domain renewal notice.",
     substeps: [
-      { text: "Open the account where your current website is managed." },
       {
-        text: `Find the users or access section and invite ${AGENCY.websiteEmail}.`,
-        click: "Invite",
+        text:
+          "Open the service (GoDaddy, Cloudflare, SiteGround, etc.) where the domain for the website "
+          + "lives."
+      },
+      {
+        // No `click` chip on this one, deliberately. The chip is a verbatim UI
+        // label to go looking for, and every registrar names this control
+        // something different — GoDaddy invites a delegate, Cloudflare invites a
+        // member, SiteGround adds a user. A chip quoting one of them sends the
+        // other two hunting for a button that is not on their screen.
+        text: `Assign access to ${AGENCY.websiteEmail}.`,
         warn:
-          "Invite us as a user rather than sending a password. A shared login is hard to turn off "
+          "Add us as a user rather than sending a password. A shared login is hard to turn off "
           + "cleanly later, and impossible to trace when something changes."
       },
       {
@@ -228,14 +269,24 @@ const WEBSITE_STEPS: Step[] = [
         kind: "long"
       },
       {
+        // Moved here from the technical step. It asks about the very account the
+        // instructions above have just walked them into, and asking it again five
+        // screens later read as us not having listened the first time.
+        key: "hosting_domain",
+        label: "Do you already have a hosting provider and domain name? If yes, please share the details.",
+        kind: "long"
+      },
+      {
         key: "old_site_access",
-        label: `Can you send ${AGENCY.websiteEmail} access to your old website?`,
+        label: `Can you send ${AGENCY.websiteEmail} access to your old website and your domain?`,
         kind: "choice",
         choices: ["Yes", "I need help with this"],
-        hint: "This is to transfer over any content we need to maintain SEO rankings"
+        hint: "This is to transfer over any content we need to maintain SEO rankings."
       }
     ],
-    verify: `Your website admin lists ${AGENCY.websiteEmail} as a user, and we confirm we can see it.`,
+    verify:
+      `The account where your domain lives lists ${AGENCY.websiteEmail} as a user, and we confirm `
+      + "we can see it.",
     troubleshoot: [
       {
         problem: "Your old agency will not add us.",
@@ -259,14 +310,14 @@ const WEBSITE_STEPS: Step[] = [
     collect: [
       {
         key: "services",
-        label: "What Services Does Your Business Do, specifically. Please list them.",
+        label: "What services does your business offer, specifically? Please list them.",
         kind: "long"
       },
       {
         key: "priority_services",
         label:
-          "Do you have any services you would like us to prioritize, or make them stand out more on "
-          + "the website? ",
+          "Do you have any services you would like us to prioritize or make stand out more on "
+          + "the website?",
         kind: "long"
       }
     ]
@@ -281,26 +332,26 @@ const WEBSITE_STEPS: Step[] = [
     minutes: 3,
     why:
       "A site built to book appointments looks different from one built to sell online. Tell us what "
-      + "a good outcome is and the layout follows from it.",
+      + "a good outcome is, and the layout follows from it.",
     collect: [
       {
         key: "website_goals",
         label:
           "What are the primary goals of your website? (e.g., lead generation, e-commerce, brand "
-          + "awareness, information sharing).",
+          + "awareness, information sharing)",
         kind: "long"
       },
       {
         key: "average_customer",
-        label: "Who is your average customer? ",
+        label: "Who is your average customer?",
         kind: "long",
-        hint: "Demographic/age group"
+        hint: "Demographic/age group."
       },
       {
         key: "desired_actions",
         label:
-          "What specific actions do you want visitors to take on your website (e.g., booking an "
-          + "appointment, signing up, purchasing)?",
+          "What specific actions do you want visitors to take on your website? (e.g., booking an "
+          + "appointment, signing up, purchasing)",
         kind: "long"
       }
     ]
@@ -311,32 +362,27 @@ const WEBSITE_STEPS: Step[] = [
     n: 6,
     title: "Brand and design",
     short: "Brand",
-    doneLabel: "Saved brand notes",
-    minutes: 4,
+    doneLabel: "Saved brand notes and files",
+    minutes: 3,
     why:
       "This is the part that decides whether the first draft feels like you. Examples of sites you "
-      + "like tell us more in one link than a paragraph of adjectives can.",
+      + "like tell us more in one link than a paragraph of adjectives can. Send whatever you already "
+      + "have while you are here — a logo, photos of your team or your premises, an old brochure. "
+      + "Real pictures of your own business beat stock every time, even imperfect ones.",
     collect: [
       {
-        key: "company_personality",
-        label:
-          "How would you describe your company's personality? (e.g., professional, modern, fun, "
-          + "innovative)",
-        kind: "long"
-      },
-      {
-        key: "elevator_pitch",
-        label:
-          "Give me a brief description of what you would tell someone who you've just met what your "
-          + "business does and it's backstory.",
-        kind: "long"
-      },
-      {
+        // The form's one upload box, and the only field on either form whose KIND
+        // has changed since it went live. It keeps the key it carried as a Yes/No
+        // question on purpose: the key is half of an answer row's primary key, the
+        // old "Yes"/"No" answers live in client_onboarding_answers while uploads
+        // live in client_onboarding_files, so the two cannot collide — whereas
+        // renaming the key would orphan every answer already given under it.
         key: "branding_materials",
         label: "Do you have branding materials such as a logo, color palette, or font guidelines?",
-        kind: "choice",
-        choices: ["Yes", "No"],
-        hint: "We will share a Google Drive With You After You Complete The Form."
+        kind: "files",
+        hint:
+          "Your logo, brand colors, fonts and any photos you have. Images, PDFs or a zip. Up to "
+          + "25 MB each — send the highest quality you have. Anything else, pop it in a zip."
       },
       {
         key: "admired_sites",
@@ -357,32 +403,25 @@ const WEBSITE_STEPS: Step[] = [
     title: "Content and pages",
     short: "Content",
     doneLabel: "Saved content plan",
-    minutes: 5,
+    minutes: 4,
     why:
       "Content is the thing that most often holds a launch up. Knowing now what you have and what you "
       + "need us to write is what keeps the date you pick on the next step realistic.",
     collect: [
       {
-        key: "content_ready",
-        label:
-          "Do you have finalized content (text, images, videos) ready for your website? If not, when "
-          + "will it be available?",
-        kind: "long"
-      },
-      {
         key: "key_pages",
         label:
-          "do you have any specific key pages or sections you envision for your website? (e.g., About "
+          "Do you have any specific key pages or sections you envision for your website? (e.g., About "
           + "Us, Services, Portfolio, Blog)",
         kind: "long"
       },
       {
         key: "company_bio",
-        label: "Please provide a company bio and story for the about us section",
+        label: "Please provide a company bio and story for the About Us section.",
         kind: "long",
         hint:
           "How long have you been in business? What made you start this business? What are your "
-          + "vision, mission, and core values? Tell us about the founders ext. "
+          + "vision, mission, and core values? Tell us about the founders, etc."
       },
       {
         key: "photography",
@@ -402,81 +441,62 @@ const WEBSITE_STEPS: Step[] = [
   },
 
   {
+    // The step id stays "technical" even though nothing technical is left on it
+    // once the hosting-and-domain question moves to step 3. It is part of every
+    // stored answer's primary key (link:step:field) and of the progress rows in
+    // client_onboarding_steps, so renaming it would orphan the answers and the
+    // ticks of anyone part-way through a form right now. Display text is free to
+    // change; the id is not.
     id: "technical",
     n: 8,
-    title: "Technical, launch and contact details",
-    short: "Technical",
-    doneLabel: "Saved technical details",
-    minutes: 5,
+    title: "Launch and contact details",
+    short: "Launch",
+    doneLabel: "Saved launch and contact details",
+    minutes: 4,
     why:
-      "The details that go live on the site itself, plus where your enquiries should land. Worth "
+      "The details that go live on the site itself, plus where your inquiries should land. Worth "
       + "double-checking the contact-form address — it is the one mistake nobody notices until a lead "
       + "goes missing.",
     collect: [
-      {
-        key: "hosting_domain",
-        label: "Do you already have a hosting provider and domain name? If so, please share the details.",
-        kind: "long"
-      },
       {
         key: "launch_date",
         label: "Do you have a specific launch date or deadline for your website project?",
         kind: "date"
       },
-      { key: "site_phone", label: "What Phone Number Would You Like On Your Website", kind: "phone" },
-      { key: "site_email", label: "What Email Would You Like On Your Website", kind: "email" },
+      { key: "site_phone", label: "What phone number would you like on your website?", kind: "phone" },
+      { key: "site_email", label: "What email address would you like on your website?", kind: "email" },
       {
         key: "contact_form_email",
         label: "Which email address should we use to send the messages from your website's contact form?",
         kind: "email",
         hint:
           "This is where you'll receive any inquiries or messages submitted through your site's "
-          + "contact form"
-      },
-      {
-        key: "post_launch_support",
-        label: "Will you require post-launch support, such as website updates or maintenance?",
-        kind: "long"
+          + "contact form."
       },
       {
         key: "other_services",
-        label: "Are there other services you may need assistance with, such as marketing or lead-generation?",
+        label: "Are there other services you may need assistance with, such as marketing or lead generation?",
         kind: "long"
       }
     ]
   },
 
-  {
-    id: "files",
-    n: 9,
-    title: "Your logo and images",
-    short: "Files",
-    doneLabel: "Sent files",
-    minutes: 2,
-    why:
-      "Anything you have already — a logo, photos of your team or your premises, an old brochure. "
-      + "Real pictures of your own business beat stock every time, even imperfect ones.",
-    collect: [
-      {
-        key: "attachments",
-        label: "Please Attach Any Images & Your Logo",
-        kind: "files",
-        hint: "Images, PDFs or a zip. Up to 25 MB each — send the highest quality you have."
-      }
-    ]
-  },
-
+  // There is no separate logo-and-images step any more: its one upload box is
+  // the branding_materials field on the brand step above, which is where a
+  // client is already thinking about how the site should look. Files uploaded
+  // under the old step id survive in client_onboarding_files and still show on
+  // the client card, which filters by link rather than by step.
   {
     id: "done",
-    n: 10,
+    n: 9,
     title: "That's everything",
     short: "Done",
     doneLabel: "Finish",
     minutes: 0,
     final: true,
     why:
-      "Everything we need to start building is in. From here it is on us: structure, design, copy and "
-      + "the pages that bring you work."
+      "Everything we need to start building is in. From here it is on us: structure, design, copy, "
+      + "and the pages that bring you work."
   }
 ];
 
@@ -968,9 +988,14 @@ export function getField(key: FormKey, stepId: string, fieldKey: string): Collec
   return getStep(key, stepId)?.collect?.find((f) => f.key === fieldKey) ?? null;
 }
 
-/** Steps that count towards "5 of 9" — the closing celebration is not work the
- *  client has to do, so counting it would leave the rail permanently one short
- *  of full. */
+/** Steps that count towards the "n of N done" line on the rail — the closing
+ *  celebration is not work the client has to do, so counting it would leave the
+ *  rail permanently one short of full.
+ *
+ *  N differs per form (the Website script is eight working steps, the SEO one
+ *  nine) and moves whenever a questionnaire does, which is why every caller —
+ *  the rail, the Slack notices, the client card — asks this rather than writing
+ *  a number down. */
 export function workingSteps(key: FormKey): Step[] {
   return FORMS[key].steps.filter((s) => !s.final);
 }
@@ -978,8 +1003,14 @@ export function workingSteps(key: FormKey): Step[] {
 // ---------------------------------------------------------------------------
 // Which answers backfill the client record when a form is completed.
 // ---------------------------------------------------------------------------
-// Field keys are unique within a form, so a flat key is enough. Only ever
-// written into columns that are still empty — see applyAnswersToClient.
+// Field keys are unique within a form, so a flat key is enough. Careful: that
+// holds for the DEFINITION, not necessarily for the rows already stored. A field
+// moved between steps leaves its old row behind under the old step id —
+// hosting_domain went from "technical" to "current-site", and a link answered
+// before that move carries both — so one link can hold two rows for one key.
+// None of the keys mapped below have ever moved; the day one does, this lookup
+// has to become step-aware.
+// Only ever written into columns that are still empty — see applyAnswersToClient.
 // There is deliberately no entry for the client's NAME. A head typed that to
 // mint the link, it is the label the account carries everywhere, and the form's
 // name question is free text — see applyAnswersToClient for why overwriting it

@@ -9,7 +9,7 @@ import type { OnboardingLink } from "@/lib/client-onboarding";
 // finish.
 //
 // Until now a client pressed the last button, saw a thank-you screen, and heard
-// nothing ever again. The afternoon somebody finishes a thirty-question form is
+// nothing ever again. The afternoon somebody finishes a form this long is
 // the one afternoon they are thinking about it -- a reply asking "actually, use
 // this address instead" costs them nothing right then, and a fortnight later
 // costs a phone call.

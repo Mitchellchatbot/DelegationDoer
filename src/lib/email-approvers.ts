@@ -89,7 +89,11 @@ export function isApprover(caller: { name?: string | null; role: string; isAdmin
 const EMAIL_VIEWER_EMAILS = [
   "bella@scaledai.org",
   "steve@scaledai.org",
-  "samir@scaledai.org"
+  "samir@scaledai.org",
+  // Komal — covering the emails side while Bismah (bella@) is unavailable.
+  // Same read-only tier as the leads above: she can see the EOD-digest /
+  // client-update queue and the send schedule, but cannot approve or edit.
+  "emily@scaledai.org"
 ];
 
 function isEmailViewerEmail(email: string | null | undefined): boolean {

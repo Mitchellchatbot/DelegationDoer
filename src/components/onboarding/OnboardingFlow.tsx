@@ -18,15 +18,16 @@ import type {
 // plumbing (server actions became /api routes), the palette, and a file field
 // their onboarding never needed.
 //
-// The shape of the problem: a client answering thirty questions about their own
-// business is doing unpaid homework, at whatever hour they finally sit down to
-// it, in a form nobody is standing next to them to explain. Every decision here
-// follows from that:
+// The shape of the problem: a client answering several dozen questions about
+// their own business is doing unpaid homework, at whatever hour they finally sit
+// down to it, in a form nobody is standing next to them to explain. Every
+// decision here follows from that:
 //
 //   ONE STEP FILLS THE SCREEN. The first version of this showed the why, the
 //   instructions and the questions all at once and read as a wall. A person
-//   doing a nine-part form needs to believe each part is small. Everything past
-//   the current step is deliberately out of sight.
+//   working through a form this long needs to believe each part is small — how
+//   many parts there are is the script's business, not this component's.
+//   Everything past the current step is deliberately out of sight.
 //
 //   THE SECONDARY MATERIAL IS FOLDED AWAY. "Who can do this", "how you'll know
 //   it worked", and the ways people get it wrong all matter enormously — and
@@ -312,8 +313,8 @@ function FileField({
         disabled={busy}
         onChange={(e) => void send(e.target.files)}
         className="block w-full text-[12.5px] text-ink/70 file:mr-3 file:rounded-full file:border-0
-          file:px-4 file:py-2 file:text-[12.5px] file:font-semibold file:text-white
-          file:cursor-pointer disabled:opacity-50"
+          file:px-4 file:py-2 file:text-[12.5px] file:font-semibold file:bg-accent/10
+          file:text-accent hover:file:bg-accent/15 file:cursor-pointer disabled:opacity-50"
         style={{ colorScheme: "light" }}
       />
       {busy && <div className="text-[11.5px] text-ink/55 pt-2">Uploading…</div>}
@@ -987,7 +988,21 @@ export function OnboardingFlow({
   const [at, setAt] = useState(() => {
     const doneSet = new Set(initialDoneSteps);
     const next = steps.findIndex((s) => !s.final && !doneSet.has(s.id));
-    return next === -1 ? 0 : next;
+    if (next !== -1) return next;
+
+    // Every working step is ticked and the link STILL is not completed. That is
+    // what a form looks like to somebody who had finished everything else when a
+    // step was removed from the script under them: completion is only ever
+    // decided inside a step-done POST, so nothing re-evaluates it on a read.
+    //
+    // Open the LAST working step rather than the first. Their next press
+    // completes the link and shows the finish screen. Landing them on the gate
+    // instead reads as the form restarting from question one, silently completes
+    // it behind them on Continue (finishStepQuietly discards the response), and
+    // then 409s every save for the rest of the walk -- losing whatever they type.
+    let lastWorking = -1;
+    for (let i = 0; i < steps.length; i++) if (!steps[i].final) lastWorking = i;
+    return lastWorking === -1 ? 0 : lastWorking;
   });
 
   const saveRef = useRef<(() => Promise<void>) | null>(null);
@@ -1087,8 +1102,9 @@ export function OnboardingFlow({
     <PreviewCtx.Provider value={preview}>
     <div className="min-h-screen">
       {/* The progress rail. One segment per step, filled for what is done — a
-          count of nine that visibly shortens is most of what keeps somebody
-          going through a long form. */}
+          count that visibly shortens is most of what keeps somebody going through
+          a long form. How many segments there are is the script's business:
+          eight on the Website form, nine on the SEO one. */}
       <div className="sticky top-0 z-30 bg-bg/90 backdrop-blur border-b border-border/60">
         <div className="max-w-[860px] mx-auto px-5 sm:px-8 py-3">
           <div className="flex items-center gap-1.5">

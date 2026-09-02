@@ -11,7 +11,7 @@ import type { OnboardingForm } from "@/lib/client-onboarding-forms";
 // email they get for finishing it.
 //
 // The two live together on purpose. They are one sequence from the client's
-// side — nine screens and then a message — and reviewing the copy of one
+// side — a run of screens and then a message — and reviewing the copy of one
 // without the other is how the form ends up saying "we'll be in touch" while
 // the email says something different. Kept behind tabs rather than stacked so
 // the form still gets the full width it was designed for.
@@ -48,8 +48,8 @@ export function OnboardingPreview({
   return (
     <div className="min-h-screen bg-bg">
       {/* One bar, carrying both the warning and the switch. Sticky, because the
-          form below is nine screens long and somebody who scrolled into the
-          middle of it should never be in any doubt that this is a preview. */}
+          form below runs to eight or nine screens and somebody who scrolled into
+          the middle of it should never be in any doubt that this is a preview. */}
       <div className="sticky top-0 z-40 bg-amber-50 border-b border-amber-200">
         <div className="max-w-[900px] mx-auto px-5 py-2.5 flex items-center gap-3 flex-wrap">
           <Link

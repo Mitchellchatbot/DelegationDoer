@@ -303,6 +303,14 @@ export async function saveAnswers(input: {
     const field = getField(input.link.formKey, input.stepId, v.key);
     if (!field) continue;
 
+    // Uploads live in client_onboarding_files and never here. A text answer for
+    // a file field can only come from a browser still running a bundle from
+    // before that field changed kind -- branding_materials was a Yes/No question
+    // until the Website form's upload box moved onto it -- and storing one would
+    // leave a stray "Yes" in the answers table under a key that now means a pile
+    // of images.
+    if (field.kind === "files") continue;
+
     const base = {
       id: `${input.link.id}:${input.stepId}:${v.key}`,
       link_id: input.link.id,

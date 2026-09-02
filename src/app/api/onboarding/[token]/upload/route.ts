@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
 
 // POST /api/onboarding/[token]/upload — multipart: file, stepId, fieldKey
 //
-// The Website form's "Please Attach Any Images & Your Logo" step.
+// The Website form's branding-materials upload, on the "Brand and design" step.
 //
 // This is the one UNAUTHENTICATED write path in the feature, so it is
 // deliberately stricter than the app's own /api/upload — which allows any

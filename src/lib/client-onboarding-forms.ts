@@ -682,14 +682,14 @@ const SEO_STEPS: Step[] = [
         label: "Who is your target audience and consumer (age)?",
         kind: "multi",
         choices: ["Under 18", "18–24", "25–34", "35–44", "45–54", "55–64", "65+"],
-        hint: "(Please select all options that apply)"
+        hint: "(Please select all options that apply.)"
       },
       {
         key: "audience_gender",
         label: "Who is your target audience and consumer (gender)?",
         kind: "multi",
         choices: ["Male", "Female", "Non-binary"],
-        hint: "(Please select all options that apply)"
+        hint: "(Please select all options that apply.)"
       },
       {
         key: "audience_type",
@@ -702,7 +702,7 @@ const SEO_STEPS: Step[] = [
           "Not Sure",
           "Other (Please write in the next Optional Question in detail)"
         ],
-        hint: "(Please select all options that apply)"
+        hint: "(Please select all options that apply.)"
       },
       {
         key: "audience_notes",
@@ -729,7 +729,7 @@ const SEO_STEPS: Step[] = [
         key: "programs_addiction",
         label: "What programs do you offer (Addiction Treatment Programs)?",
         kind: "multi",
-        hint: "(Please select all options that apply)",
+        hint: "(Please select all options that apply.)",
         choices: [
           "Medical Detox Program",
           "Inpatient Rehab Program",
@@ -752,7 +752,7 @@ const SEO_STEPS: Step[] = [
         key: "programs_mental_health",
         label: "What programs do you offer (Mental Health Programs)?",
         kind: "multi",
-        hint: "(Please select all options that apply)",
+        hint: "(Please select all options that apply.)",
         choices: [
           "Inpatient (hospital-based care)",
           "Residential treatment",
@@ -785,7 +785,7 @@ const SEO_STEPS: Step[] = [
         key: "services_substance",
         label: "What services do you offer (Substance-Specific Treatment)?",
         kind: "multi",
-        hint: "(Please select all options that apply)",
+        hint: "(Please select all options that apply.)",
         choices: [
           "Alcohol addiction treatment",
           "Opioid addiction (heroin, fentanyl, prescription opioids)",
@@ -804,7 +804,7 @@ const SEO_STEPS: Step[] = [
         key: "services_clinical_addiction",
         label: "What services do you offer (Clinical Services — Addiction)?",
         kind: "multi",
-        hint: "(Please select all options that apply)",
+        hint: "(Please select all options that apply.)",
         choices: [
           "Medical detox",
           "Withdrawal management",
@@ -823,7 +823,7 @@ const SEO_STEPS: Step[] = [
         key: "services_clinical_mental_health",
         label: "What services do you offer (Clinical Services — Mental Health)?",
         kind: "multi",
-        hint: "(Please select all options that apply)",
+        hint: "(Please select all options that apply.)",
         choices: [
           "Psychiatric evaluation",
           "Medication management",

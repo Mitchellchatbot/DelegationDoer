@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { ExternalLink, ShieldAlert, X } from "lucide-react";
+import { Columns3, ExternalLink, ShieldAlert, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   BUBBLE_PADDING_TOP,
@@ -32,13 +32,35 @@ const DISMISS_MAGNET_RADIUS = 96;
 /** Movement under this many px is a tap, not a drag. */
 const TAP_SLOP = 8;
 
+/**
+ * Height of the strip at the top of a docked panel that the bubble row sits in.
+ * Floating, the row gets its own space above the panel; docked there's no
+ * vertical room to spare, so the bubbles shrink and move inside the panel where
+ * they read as tabs.
+ */
+const DOCK_BAND = 56;
+const DOCKED_BUBBLE_SCALE = 0.55;
+
+/** Column widths offered by the snap picker, as a fraction of the viewport. */
+const SNAP_FRACTIONS = [1 / 2, 1 / 3, 2 / 3] as const;
+/** A docked column never gets narrower than this, however small the window. */
+const MIN_SNAP_WIDTH = 260;
+
 type Mode = "collapsed" | "expanded" | "hidden";
+
+/**
+ * Where the panel is docked. `null` means floating — the full-bleed panel that
+ * covers the app, which is the right shape for glancing at another app rather
+ * than working across two.
+ */
+type Snap = { side: "left" | "right"; fraction: number } | null;
 
 type Persisted = {
   x: number;
   y: number;
   activeId: string;
   mode: "collapsed" | "hidden";
+  snap: Snap;
 };
 
 /** Per-bubble physics state. Lives in a ref — never in React state. */
@@ -55,6 +77,16 @@ export function MultitaskBubbles() {
   const [dragging, setDragging] = useState(false);
   const [overDismiss, setOverDismiss] = useState(false);
   const [hydrated, setHydrated] = useState(false);
+  const [snap, setSnap] = useState<Snap>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  /**
+   * Bumped on resize purely to force a re-render. The bubbles don't need it —
+   * the rAF loop recomputes their targets every frame — but the panel's
+   * left/top/width/height are React-rendered style props, so without this the
+   * docked column keeps its old size after a window resize while the app's
+   * padding beside it updates. They'd disagree.
+   */
+  const [, setViewportTick] = useState(0);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const bubbleEls = useRef<Map<string, HTMLElement>>(new Map());
@@ -95,6 +127,19 @@ export function MultitaskBubbles() {
   modeRef.current = mode;
   const activeIdRef = useRef(activeId);
   activeIdRef.current = activeId;
+  const snapRef = useRef<Snap>(snap);
+  snapRef.current = snap;
+  const pickerOpenRef = useRef(pickerOpen);
+  pickerOpenRef.current = pickerOpen;
+  /**
+   * Last inset written to <body>. The rAF loop is the only writer, so a resize
+   * re-flows the app without needing its own listener — but that means we must
+   * not touch the DOM unless the value actually changed.
+   */
+  const lastInset = useRef<{ px: number; side: "left" | "right" | null }>({
+    px: 0,
+    side: null,
+  });
 
   /**
    * Collapsed: active app first, since in Android the most recent bubble leads
@@ -155,22 +200,58 @@ export function MultitaskBubbles() {
   }, []);
 
   /**
-   * The expanded panel is full-bleed: it claims everything except the strip at
-   * the top that the bubble row occupies, plus a hairline margin on the other
-   * three sides so it still reads as a floating surface rather than a page.
+   * Two shapes, chosen by `snap`.
    *
-   * It deliberately does NOT follow the stack to the left or right edge the way
-   * a phone-sized panel would — at this width there is no "side" left to be on,
+   * Floating (snap === null): full-bleed. Claims everything except the strip at
+   * the top that the bubble row occupies, plus a hairline margin on the other
+   * three sides so it still reads as a surface rather than a page. It
+   * deliberately does NOT follow the stack to the left or right edge the way a
+   * phone-sized panel would — at this width there is no "side" left to be on,
    * so anchoring it would only make the expand animation lurch sideways.
+   *
+   * Docked (snap set): a full-height column on one edge. `reserved` is how much
+   * horizontal space the app must give up, which includes the gutter between
+   * the two so they don't touch.
    */
   const panelGeometry = useCallback(() => {
     const { vw, vh } = bounds();
+    const s = snapRef.current;
+
+    if (s) {
+      // Clamp before subtracting the margins, so a narrow window degrades to a
+      // usable column instead of a negative one.
+      const raw = Math.round(vw * s.fraction) - 2 * EDGE_MARGIN;
+      const width = Math.max(Math.min(MIN_SNAP_WIDTH, vw - 2 * EDGE_MARGIN), raw);
+      const left =
+        s.side === "right"
+          ? Math.max(EDGE_MARGIN, vw - width - EDGE_MARGIN)
+          : EDGE_MARGIN;
+      return {
+        width,
+        height: Math.max(0, vh - 2 * EDGE_MARGIN),
+        left,
+        top: EDGE_MARGIN,
+        // Centre the shrunken bubbles vertically in the dock band.
+        rowY: EDGE_MARGIN + (DOCK_BAND - BUBBLE_SIZE) / 2,
+        docked: true,
+        bubbleScale: DOCKED_BUBBLE_SCALE,
+        reserved: width + 2 * EDGE_MARGIN,
+      };
+    }
+
     const rowY = BUBBLE_PADDING_TOP + 44;
     // Everything above this belongs to the bubble row.
     const top = rowY + BUBBLE_SIZE + BUBBLE_PADDING_TOP;
-    const width = Math.max(0, vw - 2 * EDGE_MARGIN);
-    const height = Math.max(0, vh - top - EDGE_MARGIN);
-    return { width, height, left: EDGE_MARGIN, top, rowY };
+    return {
+      width: Math.max(0, vw - 2 * EDGE_MARGIN),
+      height: Math.max(0, vh - top - EDGE_MARGIN),
+      left: EDGE_MARGIN,
+      top,
+      rowY,
+      docked: false,
+      bubbleScale: 1,
+      reserved: 0,
+    };
   }, [bounds]);
 
   // -------------------------------------------------------------------------
@@ -190,18 +271,26 @@ export function MultitaskBubbles() {
     const b = bounds();
 
     if (modeRef.current === "expanded") {
-      const { rowY, left, width } = panelGeometry();
+      const { rowY, left, width, bubbleScale } = panelGeometry();
       const count = orderedRef.current.length;
-      const rowWidth = count * BUBBLE_SIZE + (count - 1) * BUBBLE_SPACING;
-      const startX = left + Math.max(0, (width - rowWidth) / 2);
+      const drawn = BUBBLE_SIZE * bubbleScale;
+      const pitch = drawn + BUBBLE_SPACING;
+      const rowWidth = count * drawn + (count - 1) * BUBBLE_SPACING;
+      // x targets the box's top-left, but the box scales about its centre — at
+      // scale < 1 the visible circle sits `shrink` px inside the box, so back
+      // that out or the docked row drifts right. y needs no such correction:
+      // scaling about the centre leaves the box's centre line where it is, and
+      // rowY already centres a full-size box in the dock band.
+      const shrink = (BUBBLE_SIZE - drawn) / 2;
+      const startX = left + Math.max(0, (width - rowWidth) / 2) - shrink;
       orderedRef.current.forEach((app, i) => {
         const body = list.find((x) => x.id === app.id);
         if (!body) return;
         body.x.setConfig(SPRING_EXPANDED_ROW);
         body.y.setConfig(SPRING_EXPANDED_ROW);
-        body.x.target = startX + i * (BUBBLE_SIZE + BUBBLE_SPACING);
+        body.x.target = startX + i * pitch;
         body.y.target = rowY;
-        body.scale.target = 1;
+        body.scale.target = bubbleScale;
       });
       return;
     }
@@ -277,8 +366,31 @@ export function MultitaskBubbles() {
         el.style.zIndex = String(count - i);
         el.style.opacity = body.scale.value < 0.02 ? "0" : "1";
       });
+
+      // Reserve the docked column out of <body>, so the app lays out in what's
+      // left instead of hiding under the panel. Driven from here rather than an
+      // effect so it tracks viewport resizes without a second listener — but
+      // only written when it actually changes.
+      const s = modeRef.current === "expanded" ? snapRef.current : null;
+      const px = s ? panelGeometry().reserved : 0;
+      const side = s ? s.side : null;
+      if (px !== lastInset.current.px || side !== lastInset.current.side) {
+        lastInset.current = { px, side };
+        const style = document.body.style;
+        style.setProperty("--mt-snap-left", side === "left" ? `${px}px` : "0px");
+        style.setProperty("--mt-snap-right", side === "right" ? `${px}px` : "0px");
+      }
     },
-    [applyTargets]
+    [applyTargets, panelGeometry]
+  );
+
+  // Never leave the app padded if this unmounts while docked.
+  useEffect(
+    () => () => {
+      document.body.style.removeProperty("--mt-snap-left");
+      document.body.style.removeProperty("--mt-snap-right");
+    },
+    []
   );
 
   useEffect(() => {
@@ -338,6 +450,7 @@ export function MultitaskBubbles() {
       y: Math.round(b.vh * 0.55),
       activeId: MULTITASK_APPS[0].id,
       mode: "hidden",
+      snap: null,
     };
     // If the viewport isn't sized yet, the default above is meaningless —
     // flag it so the first real resize re-seeds the position.
@@ -356,6 +469,15 @@ export function MultitaskBubbles() {
             ? (parsed.activeId as string)
             : start.activeId,
           mode: parsed.mode === "collapsed" ? "collapsed" : "hidden",
+          // Validate rather than trust: a fraction from a future/older build
+          // that isn't in SNAP_FRACTIONS would give a column no picker button
+          // maps to, so the UI would show nothing as selected.
+          snap:
+            parsed.snap &&
+            (parsed.snap.side === "left" || parsed.snap.side === "right") &&
+            SNAP_FRACTIONS.some((f) => Math.abs(f - parsed.snap!.fraction) < 0.01)
+              ? { side: parsed.snap.side, fraction: parsed.snap.fraction }
+              : null,
         };
       }
     } catch {
@@ -370,6 +492,7 @@ export function MultitaskBubbles() {
     }));
     setActiveId(start.activeId);
     setMode(start.mode);
+    setSnap(start.snap);
     setHydrated(true);
     // Intentionally mount-only: this seeds physics state, and re-running it
     // would teleport live bubbles back to their persisted position.
@@ -393,6 +516,7 @@ export function MultitaskBubbles() {
           y: Math.round(rest.y),
           activeId: activeIdRef.current,
           mode: modeRef.current === "hidden" ? "hidden" : "collapsed",
+          snap: snapRef.current,
         } satisfies Persisted)
       );
     } catch {
@@ -405,6 +529,7 @@ export function MultitaskBubbles() {
     const onResize = () => {
       const b = bounds();
       if (!b.real) return;
+      setViewportTick((t) => t + 1);
       if (needsReseed.current) {
         // First time we've seen a real viewport — park the stack on the
         // right edge as if we'd known the size all along.
@@ -584,8 +709,32 @@ export function MultitaskBubbles() {
           toggle();
         }
       }
+      // Option+arrows mirror Windows' Win+arrows. Repeating the same side
+      // cycles the column width instead of doing nothing, which is how you get
+      // from a half to a third without opening the picker.
+      if (
+        e.altKey &&
+        !e.metaKey &&
+        !e.ctrlKey &&
+        modeRef.current === "expanded" &&
+        (e.code === "ArrowLeft" || e.code === "ArrowRight" || e.code === "ArrowUp")
+      ) {
+        e.preventDefault();
+        if (e.code === "ArrowUp") {
+          setSnap(null);
+        } else {
+          const side = e.code === "ArrowLeft" ? "left" : "right";
+          setSnap((cur) => {
+            if (!cur || cur.side !== side) return { side, fraction: SNAP_FRACTIONS[0] };
+            const i = SNAP_FRACTIONS.findIndex((f) => Math.abs(f - cur.fraction) < 0.01);
+            return { side, fraction: SNAP_FRACTIONS[(i + 1) % SNAP_FRACTIONS.length] };
+          });
+        }
+      }
+
       if (e.key === "Escape" && modeRef.current === "expanded") {
-        setMode("collapsed");
+        if (pickerOpenRef.current) setPickerOpen(false);
+        else setMode("collapsed");
       }
     };
     // Lets any other component (e.g. the sidebar launcher) summon the stack
@@ -601,7 +750,7 @@ export function MultitaskBubbles() {
 
   useEffect(() => {
     if (hydrated) persist();
-  }, [mode, activeId, hydrated, persist]);
+  }, [mode, activeId, snap, hydrated, persist]);
 
   // When collapsing, hand the springs back to the settle config so the stack
   // eases to the edge instead of staying on the loose expanded-row spring.
@@ -631,9 +780,11 @@ export function MultitaskBubbles() {
       className="pointer-events-none fixed inset-0 z-[999]"
       aria-hidden={mode === "hidden"}
     >
-      {/* Scrim: only in expanded mode, and only to catch outside-clicks. */}
+      {/* Scrim: floating only. Docked, the app beside the panel is meant to be
+          usable — dimming it and swallowing the first click would defeat the
+          entire point of snapping. */}
       <AnimatePresence>
-        {expanded && (
+        {expanded && !panel.docked && (
           <motion.button
             type="button"
             aria-label="Collapse multitask panel"
@@ -647,32 +798,57 @@ export function MultitaskBubbles() {
         )}
       </AnimatePresence>
 
+      {/* Paints the column the app just gave up. `html`/`body` are
+          deliberately transparent so the Electron widget route can float, so
+          without this the reserved strip shows bare page background around the
+          panel's rounded corners and margins. */}
+      {expanded && panel.docked && (
+        <div
+          aria-hidden
+          className="absolute top-0 bottom-0 bg-[#F8FAFC]"
+          style={{
+            width: panel.reserved,
+            left: panel.left > EDGE_MARGIN ? undefined : 0,
+            right: panel.left > EDGE_MARGIN ? 0 : undefined,
+          }}
+        />
+      )}
+
       {/* Expanded view. Duration + emphasized easing here, springs on the
           bubbles — matching how AOSP splits the two. */}
       <AnimatePresence>
         {expanded && (
           <motion.div
             key="panel"
-            className="pointer-events-auto absolute overflow-hidden rounded-2xl border border-slate-200/70 bg-white shadow-lift"
+            className="pointer-events-auto absolute flex flex-col overflow-hidden rounded-2xl border border-slate-200/70 bg-white shadow-lift"
             style={{
               left: panel.left,
               top: panel.top,
               width: panel.width,
               height: panel.height,
-              transformOrigin: "top center",
+              // Docked, the panel grows out of the edge it's pinned to;
+              // floating, out of the bubble row above it.
+              transformOrigin: panel.docked
+                ? panel.left > EDGE_MARGIN
+                  ? "right center"
+                  : "left center"
+                : "top center",
             }}
-            // Scale delta is small on purpose. 0.9 read fine on a 540px card,
-            // but on a full-bleed panel the same ratio throws the edges ~70px
-            // across the screen and looks like a lurch rather than a grow.
-            initial={{ opacity: 0, scale: 0.98, y: -10 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.98, y: -10 }}
+            // Geometry is applied, not animated. Tweening left/width would
+            // re-layout the framed app on every frame; only the enter/exit
+            // fade is animated. Re-snapping is therefore instant.
+            initial={{ opacity: 0, scale: 0.98 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.98 }}
             transition={{
               duration: EXPAND_COLLAPSE_DURATION,
               ease: expanded ? EMPHASIZED_DECELERATE : EMPHASIZED_ACCELERATE,
             }}
           >
-            <div className="flex items-center justify-between gap-2 border-b border-slate-200/70 px-3 py-2">
+            {/* Docked: reserve the strip the shrunken bubble row flies into. */}
+            {panel.docked && <div style={{ height: DOCK_BAND }} aria-hidden />}
+
+            <div className="flex shrink-0 items-center justify-between gap-2 border-b border-slate-200/70 px-3 py-2">
               <div className="flex items-center gap-2 min-w-0">
                 <activeApp.icon className="h-4 w-4 shrink-0 text-accent" />
                 <span className="truncate text-[13px] font-medium text-ink">
@@ -680,7 +856,29 @@ export function MultitaskBubbles() {
                 </span>
                 <span className="truncate text-[11px] text-muted">{activeApp.url}</span>
               </div>
-              <div className="flex items-center gap-1">
+              <div className="relative flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => setPickerOpen((o) => !o)}
+                  aria-expanded={pickerOpen}
+                  aria-label="Choose layout"
+                  className={cn(
+                    "rounded-lg p-1.5 transition-colors hover:bg-surface2 hover:text-ink",
+                    panel.docked ? "text-accent" : "text-muted"
+                  )}
+                  title="Layout (⌥← / ⌥→ to snap, ⌥↑ for full)"
+                >
+                  <Columns3 className="h-4 w-4" />
+                </button>
+                {pickerOpen && (
+                  <SnapPicker
+                    snap={snap}
+                    onPick={(next) => {
+                      setSnap(next);
+                      setPickerOpen(false);
+                    }}
+                  />
+                )}
                 <a
                   href={activeApp.url}
                   target="_blank"
@@ -701,7 +899,9 @@ export function MultitaskBubbles() {
               </div>
             </div>
 
-            <div className="relative h-[calc(100%-41px)] w-full bg-surface2">
+            {/* flex-1 + min-h-0 rather than a calc() on the header height —
+                the header is not a fixed 41px once the dock band is in play. */}
+            <div className="relative min-h-0 w-full flex-1 bg-surface2">
               {activeApp.embeddable ? (
                 <div className="flex h-full w-full flex-col">
                   {crossSite && <CrossSiteNotice app={activeApp} />}
@@ -794,6 +994,108 @@ export function MultitaskBubbles() {
         );
       })}
     </div>
+  );
+}
+
+/**
+ * Windows' snap-layout flyout, reduced to the cases that mean something for a
+ * single panel beside one app: which side it takes, and how much.
+ *
+ * Each option draws the actual split to scale rather than labelling it, because
+ * "1/3 left" is slower to parse than a picture of a third on the left. The
+ * accent block is the panel; the pale block is what DelegationDoer keeps.
+ */
+function SnapPicker({
+  snap,
+  onPick,
+}: {
+  snap: Snap;
+  onPick: (next: Snap) => void;
+}) {
+  // Rows read as "left options / right options / full", and each row runs
+  // narrow -> wide. SNAP_FRACTIONS is ordered for keyboard cycling (half
+  // first, since it's the common case), which is the wrong order to look at.
+  const byWidth = [...SNAP_FRACTIONS].sort((a, b) => a - b);
+  const options: { label: string; value: Snap }[] = (["left", "right"] as const).flatMap(
+    (side) =>
+      byWidth.map((fraction) => ({
+        label: `${fraction === 0.5 ? "Half" : fraction < 0.5 ? "Third" : "Two thirds"} ${side}`,
+        value: { side, fraction } as Snap,
+      }))
+  );
+
+  const isCurrent = (v: Snap) =>
+    v === null
+      ? snap === null
+      : snap !== null &&
+        snap.side === v.side &&
+        Math.abs(snap.fraction - v.fraction) < 0.01;
+
+  return (
+    <div
+      role="menu"
+      aria-label="Panel layout"
+      className="absolute right-0 top-full z-10 mt-1 grid w-[188px] grid-cols-3 gap-1 rounded-xl border border-slate-200 bg-white p-1.5 shadow-lift"
+    >
+      {options.map((opt) => {
+        const pct = opt.value!.fraction * 100;
+        const onLeft = opt.value!.side === "left";
+        return (
+          <button
+            key={opt.label}
+            type="button"
+            role="menuitemradio"
+            aria-checked={isCurrent(opt.value)}
+            onClick={() => onPick(opt.value)}
+            title={opt.label}
+            className={cn(
+              "flex h-9 items-stretch gap-[2px] rounded-lg border p-1 transition-colors",
+              isCurrent(opt.value)
+                ? "border-accent bg-accent/10"
+                : "border-slate-200 hover:bg-surface2"
+            )}
+          >
+            {onLeft ? (
+              <>
+                <Panes pct={pct} accent />
+                <Panes pct={100 - pct} />
+              </>
+            ) : (
+              <>
+                <Panes pct={100 - pct} />
+                <Panes pct={pct} accent />
+              </>
+            )}
+          </button>
+        );
+      })}
+      <button
+        type="button"
+        role="menuitemradio"
+        aria-checked={isCurrent(null)}
+        onClick={() => onPick(null)}
+        title="Full — cover the app"
+        className={cn(
+          "col-span-3 flex h-8 items-center justify-center gap-1.5 rounded-lg border text-[11px] font-medium transition-colors",
+          isCurrent(null)
+            ? "border-accent bg-accent/10 text-accent"
+            : "border-slate-200 text-muted hover:bg-surface2"
+        )}
+      >
+        <span aria-hidden className="h-3.5 w-6 rounded-[3px] bg-current opacity-70" />
+        Full
+      </button>
+    </div>
+  );
+}
+
+function Panes({ pct, accent }: { pct: number; accent?: boolean }) {
+  return (
+    <span
+      aria-hidden
+      className={cn("rounded-[3px]", accent ? "bg-accent" : "bg-slate-200")}
+      style={{ flexBasis: `${pct}%` }}
+    />
   );
 }
 

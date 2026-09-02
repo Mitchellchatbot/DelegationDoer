@@ -43,6 +43,29 @@ body {
   line-height: 1.55;
 }
 
+/* Windows-style snap for the multitask panel. When it's docked to an edge the
+   app reflows into the remaining strip rather than being covered by it —
+   that's the whole point of snapping vs. an overlay.
+
+   Applied to <body> rather than .app-shell for two reasons: it reflows every
+   route's shell (main, outbound, auth) without touching their markup, and it
+   collides with none of the Tailwind padding utilities already on those
+   wrappers. MultitaskBubbles sets the vars from its rAF loop, so they track
+   viewport resizes for free.
+
+   Caveat: `position: fixed` descendants — dialogs, the toast stack — are
+   positioned against the viewport and so ignore this padding. They'll overlap
+   the docked panel. Same as a real window manager, and they're transient.
+
+   Snapping is deliberately instant, not animated. Tweening this padding
+   re-lays-out the entire app on every frame, and the panel beside it contains
+   an iframe that would re-layout in lockstep — 60x/sec of reflow in two
+   documents to save 180ms. Tiling window managers snap instantly too. */
+body {
+  padding-left: var(--mt-snap-left, 0px);
+  padding-right: var(--mt-snap-right, 0px);
+}
+
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-thumb { background: #E2E8F0; border-radius: 6px; }
 ::-webkit-scrollbar-thumb:hover { background: #CBD5E1; }

@@ -1,5 +1,5 @@
 import type { LucideIcon } from "lucide-react";
-import { BarChart3, Mail, Users } from "lucide-react";
+import { BarChart3, Users } from "lucide-react";
 
 export type MultitaskApp = {
   id: string;
@@ -76,13 +76,5 @@ export const MULTITASK_APPS: MultitaskApp[] = [
     embeddable: false,
     blockedReason:
       "crm.scaledai.org sends `frame-ancestors 'none'` and `X-Frame-Options: SAMEORIGIN`, so browsers refuse to frame it. Fix on the CRM side: set `frame-ancestors 'self' https://operations.scaledai.org` and drop the X-Frame-Options header. Session cookies already work — the two hosts are same-site.",
-  },
-  {
-    id: "inboxes",
-    name: "Inboxes",
-    url: "/inboxes/all",
-    icon: Mail,
-    tone: "bg-gradient-to-br from-pink-500 to-rose-600",
-    embeddable: true,
   },
 ];

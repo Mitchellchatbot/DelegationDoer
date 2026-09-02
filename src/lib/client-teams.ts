@@ -1,6 +1,15 @@
 // Catalog of teams a client can be assigned to. Two flavours: the
-// Websites team (single bucket) and four SEO sub-teams (one per lead).
+// Websites team (single bucket) and three SEO sub-teams (one per lead).
 // Stored on clients.team_id as a text id; null = unassigned.
+//
+// `team_seo_sam` was removed 2026-09-02. The SEO org is three leads (Saif,
+// Samir, Bismah) per the Teams & Sites sheet; Sam heads the department rather
+// than carrying his own client pod. Its one remaining client (Chimney Guard
+// USA) moved to Saif, so the bucket was empty and only showed up as a
+// permanently-zero column on /client-teams. Removing it from TEAMS also makes
+// isValidTeamId reject the id, which is what we want — nothing should write it
+// again. The string may still appear in old migration comments; that's history,
+// not a live reference.
 //
 // Add a team here + run a migration ONLY if you want to expose it in
 // the UI dropdown. The set is small enough to keep inline; if it
@@ -9,7 +18,6 @@
 export type TeamId =
   | "team_web"
   | "team_software"
-  | "team_seo_sam"
   | "team_seo_bismah"
   | "team_seo_samir"
   | "team_seo_saif";
@@ -43,11 +51,6 @@ export const TEAMS: readonly TeamMeta[] = [
     dot: "bg-violet-500"
   },
   {
-    id: "team_seo_sam", label: "SEO · Sam", group: "seo",
-    chip: "bg-emerald-100 text-emerald-700 border-emerald-200/70",
-    dot: "bg-emerald-500"
-  },
-  {
     id: "team_seo_bismah", label: "SEO · Bismah", group: "seo",
     chip: "bg-emerald-100 text-emerald-700 border-emerald-200/70",
     dot: "bg-emerald-500",
@@ -77,7 +80,6 @@ export const TEAMS: readonly TeamMeta[] = [
 export const TEAM_DEPARTMENT: Record<TeamId, string> = {
   team_web:        "dep_web",
   team_software:   "dep_software",
-  team_seo_sam:    "dep_seo",
   team_seo_bismah: "dep_seo",
   team_seo_samir:  "dep_seo",
   team_seo_saif:   "dep_seo"

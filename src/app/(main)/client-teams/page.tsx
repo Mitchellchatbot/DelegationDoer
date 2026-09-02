@@ -40,13 +40,33 @@ export default async function ClientTeamsPage() {
   // Only SEO buckets get a column, plus a trailing Unassigned column. A
   // Websites/Software client has no column here and is filtered out
   // entirely — this page is scoped to the SEO split.
+  // Team membership comes from the LIVE org chart (users.manager_user_id),
+  // not from the spreadsheet. The sheet is a snapshot that goes stale the
+  // moment someone moves teams; the org chart is what the rest of DD already
+  // renders (People, the org tree), so this stays consistent with it for free.
+  // Secondary managers count too — the SEO pod co-leads people.
+  const byEmail = new Map(
+    allUsers.filter((u) => u.email).map((u) => [u.email!.trim().toLowerCase(), u])
+  );
+
   const columns: BoardColumn[] = [
-    ...TEAMS.filter((t) => seoTeamIds.has(t.id)).map((t) => ({
-      teamId: t.id as TeamId,
-      label: t.label.replace(/^SEO · /, ""),
-      leadEmail: t.leadEmail
-    })),
-    { teamId: null, label: "Unassigned" }
+    ...TEAMS.filter((t) => seoTeamIds.has(t.id)).map((t) => {
+      const lead = t.leadEmail ? byEmail.get(t.leadEmail) : undefined;
+      const members = lead
+        ? allUsers
+            .filter((u) => u.id !== lead.id &&
+              (u.managerId === lead.id || u.secondaryManagerId === lead.id))
+            .map((u) => u.name)
+            .sort((a, b) => a.localeCompare(b))
+        : [];
+      return {
+        teamId: t.id as TeamId,
+        label: t.label.replace(/^SEO · /, ""),
+        leadEmail: t.leadEmail,
+        members
+      };
+    }),
+    { teamId: null, label: "Unassigned", members: [] }
   ];
 
   // Narrow projection — see BoardClient. Unassigned clients are included

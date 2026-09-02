@@ -6,6 +6,7 @@ import Link from "next/link";
 import { DragDropContext, Droppable, Draggable, type DropResult } from "@hello-pangea/dnd";
 import { toast } from "sonner";
 import { Avatar } from "@/components/Avatar";
+import { Tooltip } from "@/components/Tooltip";
 import { cn } from "@/lib/utils";
 import { teamMeta, type TeamId } from "@/lib/client-teams";
 
@@ -35,6 +36,8 @@ export interface BoardColumn {
   teamId: TeamId | null;
   label: string;
   leadEmail?: string;
+  /** Direct reports of the lead, from the org chart. Shown on hover. */
+  members: string[];
 }
 
 const UNASSIGNED = "__unassigned__";
@@ -167,6 +170,7 @@ export function ClientTeamsBoard({
                 droppableId={key}
                 label={col.label}
                 lead={lead}
+                members={col.members}
                 clients={list}
                 usersById={usersById}
                 dragEnabled={dragEnabled}
@@ -182,17 +186,26 @@ export function ClientTeamsBoard({
 }
 
 function Column({
-  droppableId, label, lead, clients, usersById, dragEnabled, activeDrag, unassigned
+  droppableId, label, lead, members, clients, usersById, dragEnabled, activeDrag, unassigned
 }: {
   droppableId: string;
   label: string;
   lead?: BoardUser;
+  members: string[];
   clients: BoardClient[];
   usersById: Map<string, BoardUser>;
   dragEnabled: boolean;
   activeDrag: string | null;
   unassigned: boolean;
 }) {
+  // Tooltip copy. Empty members is a real signal, not a blank — it means the
+  // org chart has nobody reporting to this lead, which is worth saying out
+  // loud rather than showing an empty bubble.
+  const tip = unassigned
+    ? "Clients with no SEO lead yet."
+    : members.length
+      ? `${label}'s team: ${members.join(", ")}`
+      : `No one reports to ${label} in the org chart.`;
   return (
     // Plain div, no `transform` — a transform here would create a
     // containing block for position:fixed and strand @hello-pangea/dnd's
@@ -204,12 +217,19 @@ function Column({
       )}
     >
       <div className="px-3.5 pt-3 pb-2 flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2 min-w-0">
-          {lead
-            ? <Avatar name={lead.name} imageUrl={lead.avatarUrl} size={22} />
-            : <span className={cn("w-2 h-2 rounded-full shrink-0", unassigned ? "bg-slate-300" : "bg-emerald-500")} />}
-          <span className="text-[13px] font-semibold text-ink truncate">{label}</span>
-        </div>
+        <Tooltip label={tip}>
+          <span className="flex items-center gap-2 min-w-0 cursor-default">
+            {lead
+              ? <Avatar name={lead.name} imageUrl={lead.avatarUrl} size={22} />
+              : <span className={cn("w-2 h-2 rounded-full shrink-0", unassigned ? "bg-slate-300" : "bg-emerald-500")} />}
+            <span className="text-[13px] font-semibold text-ink truncate">{label}</span>
+            {members.length > 0 && (
+              <span className="text-[10.5px] text-muted tabular-nums shrink-0">
+                +{members.length}
+              </span>
+            )}
+          </span>
+        </Tooltip>
         <span
           className={cn(
             "inline-flex items-center justify-center min-w-[24px] h-[22px] px-2 rounded-full text-[11px] font-semibold tabular-nums",
@@ -305,14 +325,16 @@ function ClientCard({
         </Link>
       </div>
       {people.length > 0 && (
-        <div className="flex items-center gap-1 mt-1.5 pl-7">
-          {people.slice(0, 4).map((u) => (
-            <Avatar key={u.id} name={u.name} imageUrl={u.avatarUrl} size={16} />
-          ))}
-          {people.length > 4 && (
-            <span className="text-[10px] text-muted">+{people.length - 4}</span>
-          )}
-        </div>
+        <Tooltip label={`Point ${people.length === 1 ? "person" : "people"}: ${people.map((u) => u.name).join(", ")}`}>
+          <span className="flex items-center gap-1 mt-1.5 pl-7 cursor-default">
+            {people.slice(0, 4).map((u) => (
+              <Avatar key={u.id} name={u.name} imageUrl={u.avatarUrl} size={16} />
+            ))}
+            {people.length > 4 && (
+              <span className="text-[10px] text-muted">+{people.length - 4}</span>
+            )}
+          </span>
+        </Tooltip>
       )}
     </div>
   );

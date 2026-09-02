@@ -4,9 +4,11 @@ import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from "node:
 // Encryption for the handful of onboarding answers that are genuinely secret.
 //
 // The SEO onboarding form asks "Do you have access to your website's
-// backend/admin panel?", hinting "If yes, please provide login credentials or
-// add websites@scaledai.org as a user." Some clients will read that and type a
-// real password.
+// backend/admin panel?", hinting that if so they should provide login
+// credentials or add AGENCY.seoWebsiteEmail as a user -- the constant in
+// lib/client-onboarding-forms, not spelled out here, because AGENCY says
+// outright that it and websiteEmail only happen to agree today. Some clients
+// will read that question and type a real password.
 //
 // That question is staying, and note that its wording is no longer the excuse it
 // once was: both onboarding scripts have since had their punctuation and grammar

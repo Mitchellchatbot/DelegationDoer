@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { headers } from "next/headers";
+import { appOrigin } from "@/lib/app-origin";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { canManageOnboardingLinks } from "@/lib/client-onboarding-access";
@@ -13,19 +13,10 @@ import {
 
 export const dynamic = "force-dynamic";
 
-/** The address this deployment is actually being served on.
- *
- *  Read from the proxy headers first, because NEXT_PUBLIC_APP_URL is a single
- *  configured value and this app runs behind Railway on more than one hostname.
- *  A link minted with the wrong host is worse than no link — it looks right and
- *  404s for the client. */
-function origin(): string {
-  const h = headers();
-  const host = h.get("x-forwarded-host") ?? h.get("host");
-  if (!host) return process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
-  const proto = h.get("x-forwarded-proto") ?? (host.startsWith("localhost") ? "http" : "https");
-  return `${proto}://${host}`;
-}
+// The address for a link we hand to a client. See lib/app-origin: it is
+// canonical rather than a reflection of which of Railway's two hostnames the
+// employee minting the link happens to be browsing.
+const origin = appOrigin;
 
 // POST /api/clients/onboarding-links — { formKey, name } or { formKey, clientId }
 //

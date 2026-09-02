@@ -1,6 +1,6 @@
 import Link from "next/link";
+import { appOrigin } from "@/lib/app-origin";
 import { notFound } from "next/navigation";
-import { headers } from "next/headers";
 import {
   Briefcase, Globe2, Calendar, FileText, Lightbulb, ExternalLink,
   Mail, User as UserIcon, Server, KeyRound, MessageSquare,
@@ -71,17 +71,9 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
     files: []
   }));
 
-  // The address this deployment is served on, for the copy-link button. Read
-  // from the proxy headers rather than NEXT_PUBLIC_APP_URL because the app
-  // answers on more than one hostname behind Railway, and a link minted with
-  // the wrong one looks right and 404s for the client.
-  const onboardingOrigin = (() => {
-    const h = headers();
-    const host = h.get("x-forwarded-host") ?? h.get("host");
-    if (!host) return process.env.NEXT_PUBLIC_APP_URL ?? "";
-    const proto = h.get("x-forwarded-proto") ?? (host.startsWith("localhost") ? "http" : "https");
-    return `${proto}://${host}`;
-  })();
+  // The address for the copy-link button. Canonical, not whichever of Railway's
+  // two hostnames this employee is browsing — see lib/app-origin.
+  const onboardingOrigin = appOrigin();
 
   const supabase = getSupabaseAdmin();
   const [resources, meetingsRaw, openTasksRes, doneTasksRes, visibleIds, recentScoresRes] = await Promise.all([

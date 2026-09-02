@@ -3,28 +3,28 @@
 // Recreated from the Typeforms the team has been sending out:
 //   Website — form.typeform.com/to/TsUodIXn (31 questions; the Website script
 //             below has since been edited and no longer matches it)
-//   SEO     — form.typeform.com/to/SoEDY9xp (25 questions)
+//   SEO     — form.typeform.com/to/SoEDY9xp (25 questions; the SEO script below
+//             has since been edited and no longer matches it either)
 //
-// The SEO questions are kept VERBATIM, including their original hint text and
-// their original punctuation and capitalisation quirks. That is deliberate:
-// these are the words clients have already been answering, the team knows what
-// the answers to them look like, and quietly "improving" the wording would make
-// old Typeform exports and new DD answers stop lining up. Nothing under the SEO
-// heading gets tidied without the team asking for it.
+// NEITHER script is verbatim from its Typeform any more. Both were, deliberately
+// — these are the words clients have already been answering, and the team knows
+// what the answers to them look like. What overrode that was the team asking for
+// the opposite, in September 2026 for the Website script and immediately after
+// for the SEO one: correct the punctuation and grammar.
 //
-// The WEBSITE questions no longer hold to that, because in September 2026 the
-// team asked for the opposite: correct the punctuation and grammar, and drop the
-// questions they had stopped using. So that script has deliberately drifted from
-// the Typeform it came from — two address labels shortened, the current-site
-// instructions rewritten around the domain registrar, five questions gone
-// (company personality, elevator pitch, content readiness, post-launch support,
-// and the free-text location the address boxes above it already answered), the
-// branding-materials question turned from a Yes/No into the form's upload box,
-// the hosting-and-domain question moved onto the current-site step, and the
-// separate logo-and-images step removed now that the upload sits on the brand
-// step. A Website answer exported from Typeform and one collected here will NOT
-// read identically any more, and anything that lines the two up by question text
-// has to expect that.
+// The Website script also lost questions the team had stopped using — five of
+// them (company personality, elevator pitch, content readiness, post-launch
+// support, and the free-text location the address boxes above it already
+// answered) — plus its separate logo-and-images step, whose upload now sits on
+// the brand step, and its hosting-and-domain question, which moved onto the
+// current-site step. The SEO script kept every question it had; only the wording
+// changed there.
+//
+// The cost is real and was accepted rather than avoided: an answer exported from
+// either Typeform and one collected here will NOT read identically any more, so
+// anything that lines the two up by question text has to expect that. The rule
+// that survives is the one that licensed both passes — neither script gets
+// tidied without the team asking for it.
 //
 // What did NOT change is the storage keys. "state" and "zip" still carry the
 // answers to the two relabelled questions, and "branding_materials" still
@@ -82,9 +82,10 @@ export type CollectField = {
   label: string;
   kind: FieldKind;
   placeholder?: string;
-  /** The description line shown under the label. On the SEO form it is always
-   *  the Typeform's own; on the Website form some are ours, written where the
-   *  original said nothing useful — the upload box's guidance, for instance. */
+  /** The description line shown under the label. Most began as the Typeform's
+   *  own; some are ours, written where the original said nothing useful — the
+   *  upload box's guidance, for instance — and the rest have been corrected in
+   *  place. Do not assume any of them still matches a Typeform export. */
   hint?: string;
   choices?: string[];
   /** Encrypted at rest and never shown in Slack. See lib/onboarding-vault. */
@@ -540,7 +541,7 @@ const SEO_STEPS: Step[] = [
     minutes: 5,
     why:
       "SEO work happens on your own site and your own domain — we publish pages, fix technical "
-      + "issues and set records. Being added as a user is what lets us do that without booking a call "
+      + "issues, and set records. Being added as a user is what lets us do that without booking a call "
       + "every time.",
     whoCanDo: "Whoever manages your website or its hosting — often your web developer.",
     substeps: [
@@ -565,7 +566,7 @@ const SEO_STEPS: Step[] = [
         label: "Do you have access to your website's backend/admin panel?",
         kind: "choice",
         choices: YES_NO_HELP,
-        hint: `If yes, please provide login credentials or add ${AGENCY.seoWebsiteEmail}.`
+        hint: `If yes, please provide login credentials or add ${AGENCY.seoWebsiteEmail} as a user.`
       },
       {
         key: "backend_credentials",
@@ -578,10 +579,10 @@ const SEO_STEPS: Step[] = [
       },
       {
         key: "domain_access",
-        label: "Do you have access to your website domain",
+        label: "Do you have access to your website's domain?",
         kind: "choice",
         choices: YES_NO_HELP,
-        hint: `If yes, please provide login credentials to ${AGENCY.seoWebsiteEmail}.`
+        hint: `If yes, please provide login credentials or add ${AGENCY.seoWebsiteEmail} as a user.`
       },
       {
         key: "domain_credentials",
@@ -610,10 +611,10 @@ const SEO_STEPS: Step[] = [
       "Search Console shows what you already rank for, Analytics shows what visitors do next, and your "
       + "Business Profile is most of local search. Call tracking matters for the same reason: if your "
       + "leads arrive by phone, those calls are conversions we would otherwise be blind to, and we would "
-      + "end up optimising for form fills while the phone is where the work actually comes from.",
+      + "end up optimizing for form fills while the phone is where the work actually comes from.",
     whoCanDo:
       "Whoever set these up — often the person who built the site, whoever manages your Google "
-      + "account, or whoever answers the phone bill.",
+      + "account, or whoever pays the phone bill.",
     substeps: [
       {
         text: `In your three Google accounts, add ${AGENCY.googleEmail} as a user.`,
@@ -635,31 +636,31 @@ const SEO_STEPS: Step[] = [
     collect: [
       {
         key: "search_console",
-        label: "Do you have a Google Search Console account set up? ",
+        label: "Do you have a Google Search Console account set up?",
         kind: "choice",
         choices: YES_NO_HELP,
-        hint: `If yes, please add ${AGENCY.googleEmail} as a user`
+        hint: `If yes, please add ${AGENCY.googleEmail} as a user.`
       },
       {
         key: "analytics",
-        label: "Do you have a Google Analytics account set up? ",
+        label: "Do you have a Google Analytics account set up?",
         kind: "choice",
         choices: YES_NO_HELP,
-        hint: `If yes, please add ${AGENCY.googleEmail} a user`
+        hint: `If yes, please add ${AGENCY.googleEmail} as a user.`
       },
       {
         key: "business_profile",
         label: "Do you have a Google Business Profile set up?",
         kind: "choice",
         choices: YES_NO_HELP,
-        hint: `If yes, please add ${AGENCY.googleEmail} as user`
+        hint: `If yes, please add ${AGENCY.googleEmail} as a user.`
       },
       {
         key: "call_tracking",
         label: "Do you have call tracking set up?",
         kind: "choice",
         choices: YES_NO_HELP,
-        hint: `If yes, please add ${AGENCY.callTrackingEmail} as a user in your call tracking account (e.g. CallTrackingMetrics).`
+        hint: `If yes, please add ${AGENCY.callTrackingEmail} as a user in your call-tracking account (e.g., CallTrackingMetrics).`
       }
     ],
     verify: "Each account lists us as a user, and we confirm we can see your data."
@@ -692,7 +693,7 @@ const SEO_STEPS: Step[] = [
       },
       {
         key: "audience_type",
-        label: "Who is your target audience and consumer?",
+        label: "Who is your target audience and consumer (type)?",
         kind: "multi",
         choices: [
           "People with mental health concerns",
@@ -705,9 +706,9 @@ const SEO_STEPS: Step[] = [
       },
       {
         key: "audience_notes",
-        label: "Who is your target audience and consumer?",
+        label: "Anything else about your target audience and consumer?",
         kind: "long",
-        hint: "(Optional / In case you'd like to add something from the previous question)"
+        hint: "(Optional — in case you'd like to add anything to the previous question.)"
       }
     ]
   },
@@ -721,7 +722,8 @@ const SEO_STEPS: Step[] = [
     minutes: 4,
     why:
       "Every program you tick becomes something we can build a page around and rank for. Ticking one "
-      + "you do not actually run is worse than leaving it blank — it brings in enquiries you cannot help.",
+      + "you do not actually run is worse than leaving it blank — it brings in inquiries from people "
+      + "you cannot help.",
     collect: [
       {
         key: "programs_addiction",
@@ -781,7 +783,7 @@ const SEO_STEPS: Step[] = [
     collect: [
       {
         key: "services_substance",
-        label: "What services do you offer (Substance Specific Treatment)?",
+        label: "What services do you offer (Substance-Specific Treatment)?",
         kind: "multi",
         hint: "(Please select all options that apply)",
         choices: [
@@ -800,7 +802,7 @@ const SEO_STEPS: Step[] = [
       },
       {
         key: "services_clinical_addiction",
-        label: "What services do you offer (Clinical Services - Addiction)?",
+        label: "What services do you offer (Clinical Services — Addiction)?",
         kind: "multi",
         hint: "(Please select all options that apply)",
         choices: [
@@ -819,7 +821,7 @@ const SEO_STEPS: Step[] = [
       },
       {
         key: "services_clinical_mental_health",
-        label: "What services do you offer (Clinical Services - Mental Health)?",
+        label: "What services do you offer (Clinical Services — Mental Health)?",
         kind: "multi",
         hint: "(Please select all options that apply)",
         choices: [
@@ -845,9 +847,9 @@ const SEO_STEPS: Step[] = [
       },
       {
         key: "services_other",
-        label: "What services do you offer?",
+        label: "What other services do you offer?",
         kind: "long",
-        hint: "(If any that weren't mentioned in the lists previously, please input here)"
+        hint: "(If there are any that weren't mentioned in the lists above, please add them here.)"
       }
     ]
   },
@@ -865,19 +867,19 @@ const SEO_STEPS: Step[] = [
     collect: [
       {
         key: "target_areas",
-        label: "What  areas do you serve or target?",
-        kind: "long",
-        hint:
-          "(Please be as specific as possible about demographics, locations, behaviors, etc. \n"
-          + "Whatever is mentioned here will be the ones that we target.)"
-      },
-      {
-        key: "priority_location_service",
-        label: "What location and service would you like us to prioritize first",
+        label: "What areas do you serve or target?",
         kind: "long",
         hint:
           "(Please be as specific as possible about demographics, locations, behaviors, etc.\n"
-          + "Whatever is mentioned here will be the ones that we target.)"
+          + "Whatever you mention here is what we will target.)"
+      },
+      {
+        key: "priority_location_service",
+        label: "What location and service would you like us to prioritize first?",
+        kind: "long",
+        hint:
+          "(Please be as specific as possible about demographics, locations, behaviors, etc.\n"
+          + "Whatever you mention here is what we will target.)"
       },
       {
         key: "content_priorities",
@@ -925,10 +927,10 @@ const SEO_STEPS: Step[] = [
     collect: [
       {
         key: "plan_level",
-        label: "Please Confirm Your Plan Level",
+        label: "Please confirm your plan level.",
         kind: "choice",
         choices: ["Starter Plan", "Growth Plan", "Gold Plan", "Platinum Plan"],
-        hint: PLAN_VIDEO_URL ? "Please watch this video before choosing your plan" : undefined
+        hint: PLAN_VIDEO_URL ? "Please watch this video before choosing your plan." : undefined
       }
     ]
   },
@@ -964,7 +966,7 @@ export const FORMS: Record<FormKey, OnboardingForm> = {
     label: "SEO Onboarding",
     departmentId: "dep_seo",
     intro:
-      "A few questions about your business, your services and where you want to grow. It saves as you "
+      "A few questions about your business, your services, and where you want to grow. It saves as you "
       + "go, so you can stop and come back to it.",
     steps: SEO_STEPS
   }

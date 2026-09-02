@@ -3,14 +3,16 @@ import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from "node:
 
 // Encryption for the handful of onboarding answers that are genuinely secret.
 //
-// The SEO onboarding form asks "do you have access to your website's backend?
-// If yes, please provide login credentials or add websites@scaledai.org". Some
-// clients will read that and type a real password. That question is staying —
-// the SEO script is kept verbatim from the Typeform the team has been sending
-// out for months — and rewording it would not help anyway: the Website form's
-// questions HAVE since been rewritten, and a politer question still gets a
-// password typed into it. So the storage is built for the worst case rather than
-// the polite one.
+// The SEO onboarding form asks "Do you have access to your website's
+// backend/admin panel?", hinting "If yes, please provide login credentials or
+// add websites@scaledai.org as a user." Some clients will read that and type a
+// real password.
+//
+// That question is staying, and note that its wording is no longer the excuse it
+// once was: both onboarding scripts have since had their punctuation and grammar
+// corrected, this hint included, and it changed nothing about the behaviour this
+// module exists for. A politer question still gets a password typed into it. So
+// the storage is built for the worst case rather than the polite one.
 //
 // The bargain this makes, and its limits:
 //

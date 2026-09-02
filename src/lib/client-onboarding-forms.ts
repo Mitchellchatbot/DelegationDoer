@@ -453,7 +453,7 @@ const WEBSITE_STEPS: Step[] = [
     title: "Launch and contact details",
     short: "Launch",
     doneLabel: "Saved launch and contact details",
-    minutes: 4,
+    minutes: 3,
     why:
       "The details that go live on the site itself, plus where your inquiries should land. Worth "
       + "double-checking the contact-form address — it is the one mistake nobody notices until a lead "
@@ -473,11 +473,6 @@ const WEBSITE_STEPS: Step[] = [
         hint:
           "This is where you'll receive any inquiries or messages submitted through your site's "
           + "contact form."
-      },
-      {
-        key: "other_services",
-        label: "Are there other services you may need assistance with, such as marketing or lead generation?",
-        kind: "long"
       }
     ]
   },

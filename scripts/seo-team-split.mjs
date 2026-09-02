@@ -140,7 +140,14 @@ async function sb(pathname, init = {}) {
     }
   });
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}: ${await res.text()}`);
-  return res.status === 204 ? null : res.json();
+  // `Prefer: return=minimal` yields an EMPTY body — 204 on PATCH but 201 on
+  // POST — so status alone isn't enough to decide whether to parse. Read the
+  // text and only parse when there's something there. (Parsing an empty body
+  // threw "Unexpected end of JSON input" *after* the write had already
+  // succeeded, which is the worst kind of failure: it looks like nothing
+  // happened when in fact it did.)
+  const text = await res.text();
+  return text.trim() ? JSON.parse(text) : null;
 }
 
 const TEAM_LABEL = {

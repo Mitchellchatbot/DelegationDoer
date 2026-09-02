@@ -988,7 +988,21 @@ export function OnboardingFlow({
   const [at, setAt] = useState(() => {
     const doneSet = new Set(initialDoneSteps);
     const next = steps.findIndex((s) => !s.final && !doneSet.has(s.id));
-    return next === -1 ? 0 : next;
+    if (next !== -1) return next;
+
+    // Every working step is ticked and the link STILL is not completed. That is
+    // what a form looks like to somebody who had finished everything else when a
+    // step was removed from the script under them: completion is only ever
+    // decided inside a step-done POST, so nothing re-evaluates it on a read.
+    //
+    // Open the LAST working step rather than the first. Their next press
+    // completes the link and shows the finish screen. Landing them on the gate
+    // instead reads as the form restarting from question one, silently completes
+    // it behind them on Continue (finishStepQuietly discards the response), and
+    // then 409s every save for the rest of the walk -- losing whatever they type.
+    let lastWorking = -1;
+    for (let i = 0; i < steps.length; i++) if (!steps[i].final) lastWorking = i;
+    return lastWorking === -1 ? 0 : lastWorking;
   });
 
   const saveRef = useRef<(() => Promise<void>) | null>(null);

@@ -15,6 +15,7 @@ import { AIAssistantFab } from "@/components/AIAssistantFab";
 import { TooltipRoot } from "@/components/Tooltip";
 import { NavDrawerProvider } from "@/components/NavDrawerProvider";
 import { ToastSuccessIcon, ToastErrorIcon, ToastWarningIcon } from "@/components/ToastIcons";
+import { MultitaskBubbles } from "@/components/multitask/MultitaskBubbles";
 import { primaryDepartment } from "@/lib/departments";
 
 export default async function MainLayout({ children }: { children: React.ReactNode }) {
@@ -89,6 +90,10 @@ export default async function MainLayout({ children }: { children: React.ReactNo
         }}
       />
       <AIAssistantFab />
+      {/* Floats above the shell; hidden until toggled with Option+M or the
+          "Multitask" button in the sidebar. (Cmd/Ctrl+Shift+M is unusable —
+          Chrome on macOS reserves it for the profile switcher.) */}
+      <MultitaskBubbles />
       <OnboardingDialog />
       <SodGate />
       </TooltipRoot>

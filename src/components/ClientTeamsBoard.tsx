@@ -258,8 +258,10 @@ export function ClientTeamsBoard({
   }
 
   // Save a client's inline notes (the "jot without leaving" affordance).
-  // Optimistic with rollback, same posture as the other mutations here.
-  async function saveNotes(id: string, notes: string) {
+  // Optimistic with rollback, same posture as the other mutations here. When
+  // `notify` is set, also DM the client's SEO team lead (best-effort — a Slack
+  // failure doesn't undo the saved note).
+  async function saveNotes(id: string, notes: string, notify?: boolean) {
     const value = notes.trim() ? notes : null;
     const before = clients;
     setClients((cur) => cur.map((c) => (c.id === id ? { ...c, notes: value } : c)));
@@ -270,11 +272,28 @@ export function ClientTeamsBoard({
         body: JSON.stringify({ notes: value })
       });
       if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? `HTTP ${r.status}`);
-      toast.success("Notes saved");
     } catch (e) {
       setClients(before);
       toast.error(`Couldn't save notes: ${e instanceof Error ? e.message : "unknown error"}`);
       throw e;
+    }
+
+    if (notify && value) {
+      try {
+        const r = await fetch(`/api/clients/${id}/note-alert`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ note: value })
+        });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(data.error ?? `HTTP ${r.status}`);
+        toast.success(data.skipped ? "Note saved (no lead to notify)" : `Note saved · pinged ${data.notified ?? "lead"}`);
+      } catch (e) {
+        // Note is already saved; just report the ping failure.
+        toast.error(`Note saved, but couldn't ping the lead: ${e instanceof Error ? e.message : "unknown"}`);
+      }
+    } else {
+      toast.success("Notes saved");
     }
   }
 
@@ -366,7 +385,7 @@ function Column({
   rankById: Map<string, number>;
   dragEnabled: boolean;
   canEdit: boolean;
-  onSaveNotes: (id: string, notes: string) => Promise<void>;
+  onSaveNotes: (id: string, notes: string, notify?: boolean) => Promise<void>;
   activeDrag: string | null;
   unassigned: boolean;
 }) {
@@ -434,6 +453,7 @@ function Column({
                       rank={rankById.get(c.id)}
                       canEdit={canEdit}
                       onSaveNotes={onSaveNotes}
+                      lead={lead}
                     />
                   );
                   // Portal while dragging so the card escapes every ancestor
@@ -463,7 +483,7 @@ function PortalToBody({ children }: { children: React.ReactNode }) {
 }
 
 function ClientCard({
-  client, provided: p, isDragging, usersById, rank, canEdit, onSaveNotes
+  client, provided: p, isDragging, usersById, rank, canEdit, onSaveNotes, lead
 }: {
   client: BoardClient;
   provided: any;
@@ -471,7 +491,8 @@ function ClientCard({
   usersById: Map<string, BoardUser>;
   rank?: number;
   canEdit: boolean;
-  onSaveNotes: (id: string, notes: string) => Promise<void>;
+  onSaveNotes: (id: string, notes: string, notify?: boolean) => Promise<void>;
+  lead?: BoardUser;
 }) {
   const people = client.assignedUserIds
     .map((id) => usersById.get(id))
@@ -485,10 +506,10 @@ function ClientCard({
   const hasNotes = !!(client.notes && client.notes.trim());
   useEffect(() => { if (!open) setDraft(client.notes ?? ""); }, [client.notes, open]);
 
-  async function save() {
+  async function save(notify: boolean) {
     setSaving(true);
     try {
-      await onSaveNotes(client.id, draft);
+      await onSaveNotes(client.id, draft, notify);
       setOpen(false);
     } catch {
       /* parent surfaces the error toast; keep the editor open to retry */
@@ -603,7 +624,7 @@ function ClientCard({
             placeholder={`Notes on ${client.name}…`}
             className="w-full resize-y rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-[12px] text-ink outline-none focus:border-accent/50"
           />
-          <div className="mt-1.5 flex items-center justify-end gap-2">
+          <div className="mt-1.5 flex flex-wrap items-center justify-end gap-2">
             <button
               type="button"
               onClick={() => { setDraft(client.notes ?? ""); setOpen(false); }}
@@ -613,15 +634,29 @@ function ClientCard({
             </button>
             <button
               type="button"
-              onClick={save}
+              onClick={() => save(false)}
               disabled={saving}
               className={cn(
-                "inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-semibold text-white transition-colors",
-                saving ? "bg-slate-300 cursor-not-allowed" : "bg-accent hover:bg-accent/90"
+                "inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-semibold transition-colors",
+                saving ? "bg-slate-200 text-slate-400 cursor-not-allowed" : "bg-slate-100 text-ink hover:bg-slate-200"
               )}
             >
-              {saving ? "Saving…" : "Save notes"}
+              {saving ? "Saving…" : "Save"}
             </button>
+            {lead && (
+              <button
+                type="button"
+                onClick={() => save(true)}
+                disabled={saving}
+                title={`Save and DM ${lead.name} on Slack`}
+                className={cn(
+                  "inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-semibold text-white transition-colors",
+                  saving ? "bg-slate-300 cursor-not-allowed" : "bg-accent hover:bg-accent/90"
+                )}
+              >
+                {saving ? "Saving…" : `Save & notify ${lead.name.split(/\s+/)[0]}`}
+              </button>
+            )}
           </div>
         </div>
       )}

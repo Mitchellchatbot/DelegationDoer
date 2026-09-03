@@ -3,7 +3,7 @@ import crypto from "crypto";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { openView, openDmAsUser, postMessageAsUser } from "@/lib/slack";
 import { resolveSlackId } from "@/lib/slack-resolve";
-import { buildBriefingBlocks, type DailyBriefingRow, type BriefingMessage } from "@/lib/daily-briefing-runner";
+import { buildBriefingBlocks, rewriteEngagementText, type DailyBriefingRow, type BriefingMessage } from "@/lib/daily-briefing-runner";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs"; // crypto needs Node runtime, not Edge
@@ -93,6 +93,9 @@ export async function POST(req: NextRequest) {
     } else if (action.action_id === "daily_brief_send" && payload.response_url) {
       const { b, m } = JSON.parse(action.value ?? "{}") as { b?: string; m?: string };
       if (b && m) await sendBriefingMessage(b, m, payload.response_url);
+    } else if (action.action_id === "daily_brief_rewrite" && payload.response_url) {
+      const { b, m } = JSON.parse(action.value ?? "{}") as { b?: string; m?: string };
+      if (b && m) await rewriteBriefingMessage(b, m, payload.response_url);
     }
   } catch (err) {
     console.error(`[slack/interactions] ${action.action_id} failed:`, err);
@@ -165,6 +168,42 @@ async function sendBriefingMessage(briefId: string, msgId: string, responseUrl: 
   }
 
   // Re-render the original DM in place via the interaction's response_url.
+  const { blocks, text } = buildBriefingBlocks({ ...row, messages });
+  await fetch(responseUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ replace_original: true, text, blocks })
+  }).catch((err) => console.error("[slack/interactions] response_url update failed:", err));
+}
+
+// Daily-brief "Rewrite" button: regenerate one pending check-in in a fresh
+// phrasing (AI) and re-render the DM so Mitchell can cycle to a version he
+// likes before sending. A sent message is left as-is.
+async function rewriteBriefingMessage(briefId: string, msgId: string, responseUrl: string): Promise<void> {
+  const supabase = getSupabaseAdmin();
+  const { data } = await supabase
+    .from("daily_briefings")
+    .select("id, brief_date, update_text, needle_mover, messages, meta")
+    .eq("id", briefId)
+    .maybeSingle();
+  if (!data) return;
+
+  const row = data as unknown as DailyBriefingRow;
+  const messages: BriefingMessage[] = Array.isArray(row.messages) ? row.messages : [];
+  const idx = messages.findIndex((x) => x.id === msgId);
+  if (idx === -1) return;
+  const msg = messages[idx];
+  if (msg.status === "sent") return; // don't rewrite something already sent
+
+  try {
+    const fresh = await rewriteEngagementText(msg.name, msg.text);
+    messages[idx] = { ...msg, text: fresh };
+    await supabase.from("daily_briefings").update({ messages }).eq("id", briefId);
+  } catch (err) {
+    console.error("[slack/interactions] rewrite failed:", err);
+    // fall through and re-render the unchanged message
+  }
+
   const { blocks, text } = buildBriefingBlocks({ ...row, messages });
   await fetch(responseUrl, {
     method: "POST",

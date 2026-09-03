@@ -85,7 +85,8 @@ export default async function ClientTeamsPage() {
       displayOrder: c.displayOrder,
       priorityRank: c.priorityRank,
       health: c.healthOverrideLabel ?? c.healthLabel,
-      lastOutboundEmailAt: c.lastOutboundEmailAt
+      lastOutboundEmailAt: c.lastOutboundEmailAt,
+      notes: c.notes
     }));
 
   const users: BoardUser[] = allUsers.map((u) => ({

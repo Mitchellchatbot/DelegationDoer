@@ -49,6 +49,15 @@ function importanceCmp(a: BoardClient, b: BoardClient): number {
   if (ar !== br) return ar - br;
   return a.name.localeCompare(b.name);
 }
+// Colour the rank badge by importance tier: 1-3 green (top), 4-6 amber, the
+// rest a darker muted slate — so the most important clients pop and the long
+// tail recedes.
+function rankBadgeClass(rank: number): string {
+  if (rank <= 3) return "bg-emerald-100 text-emerald-700 ring-1 ring-emerald-300";
+  if (rank <= 6) return "bg-amber-100 text-amber-700 ring-1 ring-amber-300";
+  return "bg-slate-300 text-slate-700";
+}
+
 function comparatorFor(mode: ClientSortMode): (a: BoardClient, b: BoardClient) => number {
   if (mode === "name") return (a, b) => a.name.localeCompare(b.name);
   if (mode === "health") {
@@ -539,7 +548,7 @@ function ClientCard({
             title={rank === 1 ? "Most important in this list" : `Importance rank #${rank} in this list`}
             className={cn(
               "shrink-0 inline-flex items-center justify-center min-w-[24px] h-[20px] px-1.5 rounded-full text-[11px] font-semibold tabular-nums",
-              rank === 1 ? "bg-amber-100 text-amber-700 ring-1 ring-amber-300" : "bg-slate-100 text-ink/60"
+              rankBadgeClass(rank)
             )}
           >
             {rank}

@@ -936,6 +936,152 @@ function Gate({
   );
 }
 
+// ---------------------------------------------------------------------------
+// The welcome screen
+// ---------------------------------------------------------------------------
+
+/**
+ * The welcome screen.
+ *
+ * Not a step, and deliberately not in `form.steps`. Every "n of N" in the
+ * product counts workingSteps(), which filters only `final` — the rail, the
+ * client card, both Slack notices, the links API — so a new entry in that array
+ * would move all of them at once. And it would throw every client who is
+ * currently mid-form back to the beginning: the `at` initializer opens the first
+ * step that is not in initialDoneSteps, and a step that did not exist last week
+ * is in nobody's done list.
+ *
+ * So this is a screen the browser shows once, before anything, and never writes
+ * down. Nothing to tick, nothing to POST, nothing that can drift out of step
+ * with what the server thinks the form is.
+ *
+ * It is also the only screen here that is fully brand-coloured. The rest of the
+ * form is deliberately quiet — the client is doing unpaid homework and the
+ * chrome should get out of the way — but the first thing they see should look
+ * like it came from the agency they hired, with their own name on it. That
+ * inverts the button: a PRIMARY pill on a PRIMARY slab is invisible, so the
+ * action is white and the gradient sits behind it.
+ *
+ * Text is blue-100 rather than white at low alpha. 135deg puts the lighter stop
+ * (#0a4099) at the top left, exactly under this copy, where white at 50% comes
+ * out around 3.4:1 — under AA for small text. blue-100/85 is the value the
+ * sidebar already proved on this navy.
+ *
+ * No entrance animation. globals.css's prefers-reduced-motion block does not
+ * cover .anim-fade-in-up, and this is the one screen in the product whose
+ * viewer is a stranger who never opted into anything.
+ */
+function Welcome({
+  clientName, clientIconUrl, form, sections, minutes, onStart
+}: {
+  clientName: string;
+  clientIconUrl: string | null;
+  form: OnboardingForm;
+  sections: number;
+  minutes: number;
+  onStart: () => void;
+}) {
+  // clientNameOf returns "" when the join comes back empty. On the old opening
+  // screen that degraded to a 12px "Setting up "; here it would be a blank hero,
+  // so the greeting drops the name rather than trailing off after the comma.
+  const name = clientName.trim();
+
+  // A logo whose storage object went away should leave nothing behind, rather
+  // than a broken-image glyph on the one screen a client judges us by.
+  const [logoOk, setLogoOk] = useState(true);
+  const clientLogo = clientIconUrl && logoOk ? clientIconUrl : null;
+
+  return (
+    <div
+      className="min-h-screen flex flex-col px-5 sm:px-8 py-9 sm:py-12 text-white"
+      // minHeight wins over the class where the browser understands it and is
+      // dropped where it does not. svh is the viewport with the address bar
+      // showing, which is the one the client is actually looking at — 100vh on
+      // iOS is the retracted-bar height, and it puts the button under the chrome.
+      style={{ background: PRIMARY, minHeight: "100svh" }}
+    >
+      {/* Who is asking. The wordmark only — the mark itself belongs to the
+          lockup below, and when a client has no logo on file that lockup falls
+          back to the Scaled AI mark alone, which would otherwise put the same
+          mark on screen twice at two different sizes. */}
+      <div className="leading-tight">
+        <div className="text-[14px] font-semibold text-white">Scaled Operations</div>
+        <div className="text-[12px] text-blue-100/85">scaledai.org</div>
+      </div>
+
+      <div className="flex-1 flex flex-col justify-start sm:justify-center pt-10 sm:pt-0">
+        <div className="max-w-[620px] w-full">
+          {/* The lockup: us and them, the same shape and the same weight. Fixed
+              height, so a client with no logo on file — or one whose image fails
+              to load — moves nothing else on the screen.
+
+              object-contain rather than object-cover on their half: a real logo
+              is whatever aspect ratio its designer chose, and letterboxing one is
+              a great deal kinder than cropping it. Both marks are alt="" — the
+              heading names the client, the words name us. */}
+          <div className="flex items-center gap-3.5 h-[64px]">
+            <span className="shrink-0 w-16 h-16 rounded-2xl bg-white shadow-lift grid place-items-center overflow-hidden ring-1 ring-white/60">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src="/widget-icon.png"
+                alt=""
+                width={64}
+                height={64}
+                decoding="async"
+                className="w-full h-full object-contain p-1.5"
+              />
+            </span>
+            {clientLogo && (
+              <>
+                <span aria-hidden className="text-[17px] font-light text-blue-100/70">
+                  ×
+                </span>
+                <span className="shrink-0 w-16 h-16 rounded-2xl bg-white shadow-lift grid place-items-center overflow-hidden ring-1 ring-white/60">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={clientLogo}
+                    alt=""
+                    decoding="async"
+                    onError={() => setLogoOk(false)}
+                    className="w-full h-full object-contain p-2"
+                  />
+                </span>
+              </>
+            )}
+          </div>
+
+          <h1 className="text-[32px] sm:text-[44px] font-semibold tracking-tight leading-[1.05] pt-7 break-words">
+            <span className="block text-[12.5px] font-semibold uppercase tracking-[0.16em] text-blue-100/85 pb-2.5">
+              Welcome
+            </span>
+            {name || "Let's get you set up"}
+          </h1>
+
+          <p className="text-[15px] sm:text-[16px] text-blue-100/85 leading-relaxed pt-4 max-w-[52ch]">
+            {form.welcome}
+          </p>
+
+          <p className="text-[13px] text-blue-100/85 pt-5">
+            {sections} sections · about {minutes} minutes · it saves as you go
+          </p>
+
+          <div className="pt-9">
+            <button
+              type="button"
+              onClick={onStart}
+              className="text-[14px] font-semibold px-6 py-3 rounded-full bg-white text-accent shadow-lift transition-all active:scale-[0.98] inline-flex items-center gap-2"
+            >
+              Let&apos;s get started <span style={{ opacity: 0.55 }}>→</span>
+            </button>
+          </div>
+
+          <p className="text-[12px] text-blue-100/75 pt-9">{form.label}</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /** The end. Not a step — a receipt. */
 function Finish({ clientName, form }: { clientName: string; form: OnboardingForm }) {
   return (
@@ -963,11 +1109,15 @@ function Finish({ clientName, form }: { clientName: string; form: OnboardingForm
 // ---------------------------------------------------------------------------
 
 export function OnboardingFlow({
-  token, clientName, form, initialAnswers, initialDoneSteps, initialFiles, alreadyCompleted,
-  preview = false
+  token, clientName, clientIconUrl, form, initialAnswers, initialDoneSteps, initialFiles,
+  alreadyCompleted, preview = false
 }: {
   token: string;
   clientName: string;
+  /** The client's own logo, for the welcome screen's lockup. Null is ordinary —
+   *  most clients have never had one uploaded — and the screen falls back to the
+   *  Scaled AI mark on its own. */
+  clientIconUrl: string | null;
   form: OnboardingForm;
   initialAnswers: AnswerState;
   initialDoneSteps: string[];
@@ -982,6 +1132,25 @@ export function OnboardingFlow({
   const [answers, setAnswers] = useState<AnswerState>(initialAnswers);
   const [files, setFiles] = useState<UploadedFile[]>(initialFiles);
   const [finished, setFinished] = useState(alreadyCompleted);
+
+  // The welcome screen: shown once, at the very start, and never written down.
+  //
+  // Seeded from the server's view alone. The localStorage union in useDone lands
+  // in an effect after mount, so reading it here would paint the welcome and then
+  // snatch it away — and it would put this out of step with `at` below, which
+  // does not read it either.
+  //
+  // Two server signals, not one. A gate tick only exists once the client presses
+  // Continue, and that POST is fire-and-forget; their answers, meanwhile, save
+  // themselves on blur. So somebody who typed their email and came back tomorrow
+  // has plainly begun even though nothing is ticked, and a welcome screen over a
+  // form that is about to fill in their address reads as the form having reset.
+  const [showWelcome, setShowWelcome] = useState(() => {
+    if (alreadyCompleted) return false;
+    const gate = steps.find((s) => s.gate);
+    if (!gate || initialDoneSteps.includes(gate.id)) return false;
+    return Object.keys(initialAnswers[gate.id] ?? {}).length === 0;
+  });
 
   // Open on the first step they have not finished, so returning to a
   // half-done form carries on rather than restarting.
@@ -1071,6 +1240,32 @@ export function OnboardingFlow({
     return (
       <PreviewCtx.Provider value={preview}>
         <Finish clientName={clientName} form={form} />
+      </PreviewCtx.Provider>
+    );
+  }
+
+  if (showWelcome) {
+    return (
+      <PreviewCtx.Provider value={preview}>
+        <Welcome
+          clientName={clientName}
+          clientIconUrl={clientIconUrl}
+          form={form}
+          sections={working.length}
+          // Rounded up to five: "about 27 minutes" reads as a promise, "about 30"
+          // reads as the estimate it is. Summed off the steps themselves so a
+          // rewritten script carries the number with it. Computed here rather
+          // than in Welcome so the forms module stays a type-only import — it is
+          // 39 KB of both questionnaires, and this page is public and phone-first.
+          minutes={Math.ceil(working.reduce((n, s) => n + s.minutes, 0) / 5) * 5}
+          onStart={() => {
+            setShowWelcome(false);
+            // Every other screen change here goes through go(), which scrolls for
+            // exactly this reason: these are full-screen swaps, and landing
+            // halfway down the next one is disorienting.
+            if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "auto" });
+          }}
+        />
       </PreviewCtx.Provider>
     );
   }

@@ -62,7 +62,8 @@ export function OnboardingPreview({
 
           <span className="text-[12.5px] font-semibold text-amber-900">Preview</span>
           <span className="text-[12px] text-amber-800 hidden sm:inline">
-            {form.label} — nothing is saved, no files upload, nobody is notified
+            {form.label} — nothing is saved, no files upload, nobody is notified. &ldquo;Acme
+            Recovery&rdquo; is a stand-in for the client&apos;s own name and logo.
           </span>
 
           <div className="ml-auto flex items-center gap-1">
@@ -76,7 +77,13 @@ export function OnboardingPreview({
         <OnboardingFlow
           preview
           token={`preview:${form.key}`}
-          clientName="Your client"
+          // The same stand-in the email tab below is built around, so the two
+          // halves of one sequence stop describing two different clients — and
+          // so the welcome screen's personalization is visible at all, which
+          // "Your client" would have hidden. No logo: preview has no client, and
+          // the fallback to the Scaled AI mark alone is what most clients see.
+          clientName="Acme Recovery"
+          clientIconUrl={null}
           form={form}
           initialAnswers={{}}
           initialDoneSteps={[]}

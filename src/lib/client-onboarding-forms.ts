@@ -156,6 +156,12 @@ export type OnboardingForm = {
   departmentId: string;
   /** Shown on the opening screen, under the client's name. */
   intro: string;
+  /** The welcome screen's one line, under "Welcome, <client>". Deliberately not
+   *  `intro`: that one sits on the contact step and is about the questions, this
+   *  one is about why we are asking. Keep "it saves as you go" out of it — the
+   *  welcome screen prints that in its own meta line, and both of them saying it
+   *  twenty pixels apart is exactly the kind of thing that screen exists to fix. */
+  welcome: string;
   steps: Step[];
 };
 
@@ -954,6 +960,9 @@ export const FORMS: Record<FormKey, OnboardingForm> = {
     intro:
       "A few questions about your business so we can build you a site that brings in work. It saves as "
       + "you go, so you can stop and come back to it.",
+    welcome:
+      "We are building your new website. Before we start, a few questions about your business, so what "
+      + "we build sounds like you and brings in the work you actually want.",
     steps: WEBSITE_STEPS
   },
   seo: {
@@ -963,6 +972,9 @@ export const FORMS: Record<FormKey, OnboardingForm> = {
     intro:
       "A few questions about your business, your services, and where you want to grow. It saves as you "
       + "go, so you can stop and come back to it.",
+    welcome:
+      "We are getting you found on Google. Before we start, a few questions about your services and "
+      + "where you want to grow, so we go after the searches that are worth winning.",
     steps: SEO_STEPS
   }
 };

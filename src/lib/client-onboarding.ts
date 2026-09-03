@@ -238,6 +238,33 @@ export async function getLinkByToken(token: string): Promise<OnboardingLink | nu
   return data ? toLink(data as LinkRow) : null;
 }
 
+/**
+ * The client's own logo, for the welcome screen.
+ *
+ * Its own read rather than a wider embed on getLinkByToken. That query renders
+ * the entire public form and throws on any PostgREST error, migrations here are
+ * applied by hand, and a decorative logo is not worth 500ing a client's
+ * onboarding over. So this one swallows everything and returns null.
+ *
+ * Null means "we could not tell", which renders identically to "this client has
+ * no logo" — the welcome screen falls back to the Scaled AI mark either way, so
+ * there is nothing for a caller to distinguish.
+ */
+export async function getClientLogoUrl(clientId: string): Promise<string | null> {
+  if (!clientId) return null;
+  try {
+    const supabase = getSupabaseAdmin();
+    const { data } = await supabase
+      .from("clients")
+      .select("icon_url")
+      .eq("id", clientId)
+      .maybeSingle();
+    return (data?.icon_url as string | null) ?? null;
+  } catch {
+    return null;
+  }
+}
+
 /** Stamped once, the first time somebody opens the link. The gap between
  *  "sent" and "opened" is the most actionable thing on the client card — it is
  *  the difference between chasing the client and chasing the email. */

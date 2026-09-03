@@ -11,6 +11,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { useCurrentUser } from "@/lib/user-context";
 
 // Mirrors the ProposedAction discriminated union in src/lib/ai-tools.ts.
 // Redeclared here so the drawer (a client component) doesn't pull in
@@ -43,13 +44,25 @@ interface Message {
   actions?: ProposedAction[];
 }
 
-// Founder-operational starters shown on the assistant's empty state. Tapping
-// one sends it immediately (onPick={send}). Edit this list to change the chips.
-const SUGGESTED = [
+// Starters shown on the assistant's empty state. Tapping one sends it
+// immediately (onPick={send}). Scoped by role: leaders/admins (the founder)
+// get operational, whole-org prompts; everyone else gets self-focused ones.
+// Edit either list to change the chips.
+// Shown to everyone (both roles).
+const DRAFT_CLIENT_UPDATE = "Draft a client update";
+const LEADER_STARTERS = [
   "What needs my attention today?",
-  "Who has capacity for new work right now?",
-  "What's overdue across the org and who owns each?",
-  "Who's overloaded and what could be reassigned?"
+  "What should I delegate right now?",
+  "Which clients are at risk or have gone quiet?",
+  "Who's overloaded and what can be reassigned?",
+  DRAFT_CLIENT_UPDATE
+];
+const WORKER_STARTERS = [
+  "What's on my plate today?",
+  "What's overdue that I own?",
+  "Who can help me with a task?",
+  "What did I ship this week?",
+  DRAFT_CLIENT_UPDATE
 ];
 
 // Optional client context passed by the per-client entry point on a
@@ -87,6 +100,11 @@ export function AIAssistantDrawer({
   // its answers + tool calls to this client (see /api/ai/chat).
   client?: ClientContext;
 }) {
+  const me = useCurrentUser();
+  // Founder/leaders get org-wide operational starters; everyone else gets
+  // self-focused ones. A client-scoped drawer overrides both with client
+  // starters (below).
+  const roleStarters = me.role === "leader" || me.isAdmin ? LEADER_STARTERS : WORKER_STARTERS;
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -244,7 +262,7 @@ export function AIAssistantDrawer({
                   {messages.length === 0 && (
                     <EmptyState
                       onPick={send}
-                      starters={client ? clientStarters(client.name) : SUGGESTED}
+                      starters={client ? clientStarters(client.name) : roleStarters}
                       client={client}
                     />
                   )}

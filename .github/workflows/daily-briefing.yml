@@ -1,0 +1,37 @@
+name: Daily Briefing
+
+# Reliable external trigger for the 8 AM ET founder brief.
+#
+# Why this exists: on Railway the app's in-process cron (setInterval) only runs
+# while the container is awake, so the morning brief was getting missed. GitHub
+# Actions runs this on its own infrastructure and simply pings the (public,
+# auth-exempt) cron endpoint, which generates + DMs the brief. The endpoint
+# dedupes to one delivery per day, so firing twice is safe — the second run is
+# a no-op ("already-sent-today"), acting as a safety net if the first is delayed.
+
+on:
+  schedule:
+    # 8 AM America/New_York, straddling DST: 12:00 UTC in EDT, 13:00 UTC in EST.
+    - cron: "0 12 * * *"
+    - cron: "0 13 * * *"
+  workflow_dispatch: {} # allow a manual run from the Actions tab
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping daily-briefing endpoint
+        run: |
+          URL="https://delegationdoer-production.up.railway.app/api/cron/daily-briefing"
+          # Retry a few times in case Railway is cold-starting.
+          for attempt in 1 2 3 4 5; do
+            echo "Attempt $attempt: POST $URL"
+            body="$(curl -sS -m 120 "$URL" || true)"
+            echo "Response: $body"
+            case "$body" in
+              *'"ok":true'*) echo "Brief endpoint responded ok."; exit 0 ;;
+            esac
+            sleep 20
+          done
+          echo "daily-briefing endpoint did not return ok after retries"
+          exit 1

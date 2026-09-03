@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import Link from "next/link";
 import { DragDropContext, Droppable, Draggable, type DropResult } from "@hello-pangea/dnd";
+import { StickyNote, ExternalLink } from "lucide-react";
 import { toast } from "sonner";
 import { Avatar } from "@/components/Avatar";
 import { Tooltip } from "@/components/Tooltip";
@@ -27,6 +28,8 @@ export interface BoardClient {
   priorityRank: number | null;
   health: HealthLabel;
   lastOutboundEmailAt: string | null;
+  // Mitch's quick notes, edited inline on this board.
+  notes: string | null;
 }
 
 // How the client cards within each column are ordered.
@@ -98,13 +101,23 @@ export function ClientTeamsBoard({
   const [query, setQuery] = useState("");
   const [sortMode, setSortMode] = useState<ClientSortMode>("importance");
 
-  // Global importance rank (1 = most important) across ALL board clients,
-  // by the leader's manual order. This is the number shown on each card — it
-  // reflects the drag ranking regardless of which sort is active.
+  // Per-column importance rank (1 = most important in THAT lead's list), by the
+  // leader's manual drag order. Each lead's column ranks 1..N on its own — so
+  // the client dragged to the top of Bismah's list reads #1 there, independent
+  // of other columns. Shown on every card regardless of the active sort.
   const rankById = useMemo(() => {
-    const ordered = [...clients].sort(importanceCmp);
     const m = new Map<string, number>();
-    ordered.forEach((c, i) => m.set(c.id, i + 1));
+    const groups = new Map<string, BoardClient[]>();
+    for (const c of clients) {
+      const key = c.teamId ?? UNASSIGNED;
+      const arr = groups.get(key);
+      if (arr) arr.push(c);
+      else groups.set(key, [c]);
+    }
+    for (const arr of groups.values()) {
+      arr.sort(importanceCmp);
+      arr.forEach((c, i) => m.set(c.id, i + 1));
+    }
     return m;
   }, [clients]);
 
@@ -233,6 +246,27 @@ export function ClientTeamsBoard({
     }
   }
 
+  // Save a client's inline notes (the "jot without leaving" affordance).
+  // Optimistic with rollback, same posture as the other mutations here.
+  async function saveNotes(id: string, notes: string) {
+    const value = notes.trim() ? notes : null;
+    const before = clients;
+    setClients((cur) => cur.map((c) => (c.id === id ? { ...c, notes: value } : c)));
+    try {
+      const r = await fetch(`/api/clients/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ notes: value })
+      });
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? `HTTP ${r.status}`);
+      toast.success("Notes saved");
+    } catch (e) {
+      setClients(before);
+      toast.error(`Couldn't save notes: ${e instanceof Error ? e.message : "unknown error"}`);
+      throw e;
+    }
+  }
+
   const dragEnabled = canEdit && !q;
 
   return (
@@ -296,6 +330,8 @@ export function ClientTeamsBoard({
                 usersById={usersById}
                 rankById={rankById}
                 dragEnabled={dragEnabled}
+                canEdit={canEdit}
+                onSaveNotes={saveNotes}
                 activeDrag={activeDrag}
                 unassigned={col.teamId === null}
               />
@@ -308,7 +344,7 @@ export function ClientTeamsBoard({
 }
 
 function Column({
-  droppableId, label, lead, members, clients, usersById, rankById, dragEnabled, activeDrag, unassigned
+  droppableId, label, lead, members, clients, usersById, rankById, dragEnabled, canEdit, onSaveNotes, activeDrag, unassigned
 }: {
   droppableId: string;
   label: string;
@@ -318,6 +354,8 @@ function Column({
   usersById: Map<string, BoardUser>;
   rankById: Map<string, number>;
   dragEnabled: boolean;
+  canEdit: boolean;
+  onSaveNotes: (id: string, notes: string) => Promise<void>;
   activeDrag: string | null;
   unassigned: boolean;
 }) {
@@ -383,6 +421,8 @@ function Column({
                       isDragging={s.isDragging}
                       usersById={usersById}
                       rank={rankById.get(c.id)}
+                      canEdit={canEdit}
+                      onSaveNotes={onSaveNotes}
                     />
                   );
                   // Portal while dragging so the card escapes every ancestor
@@ -412,17 +452,39 @@ function PortalToBody({ children }: { children: React.ReactNode }) {
 }
 
 function ClientCard({
-  client, provided: p, isDragging, usersById, rank
+  client, provided: p, isDragging, usersById, rank, canEdit, onSaveNotes
 }: {
   client: BoardClient;
   provided: any;
   isDragging: boolean;
   usersById: Map<string, BoardUser>;
   rank?: number;
+  canEdit: boolean;
+  onSaveNotes: (id: string, notes: string) => Promise<void>;
 }) {
   const people = client.assignedUserIds
     .map((id) => usersById.get(id))
     .filter((u): u is BoardUser => !!u);
+
+  // Inline notes: clicking the name opens a jot box IN PLACE (no navigation to
+  // the full client profile). A separate ↗ icon still opens the full view.
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState(client.notes ?? "");
+  const [saving, setSaving] = useState(false);
+  const hasNotes = !!(client.notes && client.notes.trim());
+  useEffect(() => { if (!open) setDraft(client.notes ?? ""); }, [client.notes, open]);
+
+  async function save() {
+    setSaving(true);
+    try {
+      await onSaveNotes(client.id, draft);
+      setOpen(false);
+    } catch {
+      /* parent surfaces the error toast; keep the editor open to retry */
+    } finally {
+      setSaving(false);
+    }
+  }
 
   return (
     <div
@@ -440,23 +502,49 @@ function ClientCard({
           ? // eslint-disable-next-line @next/next/no-img-element
             <img src={client.iconUrl} alt="" className="w-5 h-5 rounded object-cover shrink-0" />
           : <span className="w-5 h-5 rounded bg-slate-100 shrink-0" />}
+        {canEdit ? (
+          <button
+            type="button"
+            onClick={() => setOpen((o) => !o)}
+            title="Click to add a note (stays on this tab)"
+            className="flex-1 min-w-0 text-left text-[12.5px] font-medium text-ink hover:text-accent truncate inline-flex items-center gap-1"
+          >
+            <span className="truncate">{client.name}</span>
+            {hasNotes && <StickyNote className="w-3 h-3 text-amber-500 shrink-0" />}
+          </button>
+        ) : (
+          <Link
+            href={`/clients/${client.id}`}
+            className="flex-1 min-w-0 text-[12.5px] font-medium text-ink hover:text-accent truncate"
+            onDragStart={(e) => e.preventDefault()}
+          >
+            {client.name}
+          </Link>
+        )}
+        {/* Full profile — still reachable, just not on a plain name click. */}
         <Link
           href={`/clients/${client.id}`}
-          className="flex-1 min-w-0 text-[12.5px] font-medium text-ink hover:text-accent truncate"
-          // Otherwise the pointerdown that starts a drag also fires the link.
+          onClick={(e) => e.stopPropagation()}
           onDragStart={(e) => e.preventDefault()}
+          title="Open full profile"
+          aria-label="Open full profile"
+          className="shrink-0 text-muted hover:text-accent"
         >
-          {client.name}
+          <ExternalLink className="w-3.5 h-3.5" />
         </Link>
         {rank != null && (
           <span
-            title={`Importance rank #${rank}`}
-            className="shrink-0 inline-flex items-center justify-center min-w-[24px] h-[20px] px-1.5 rounded-full bg-slate-100 text-ink/60 text-[11px] font-semibold tabular-nums"
+            title={rank === 1 ? "Most important in this list" : `Importance rank #${rank} in this list`}
+            className={cn(
+              "shrink-0 inline-flex items-center justify-center min-w-[24px] h-[20px] px-1.5 rounded-full text-[11px] font-semibold tabular-nums",
+              rank === 1 ? "bg-amber-100 text-amber-700 ring-1 ring-amber-300" : "bg-slate-100 text-ink/60"
+            )}
           >
             {rank}
           </span>
         )}
       </div>
+
       {people.length > 0 && (
         <Tooltip label={`Point ${people.length === 1 ? "person" : "people"}: ${people.map((u) => u.name).join(", ")}`}>
           <span className="flex items-center gap-1 mt-1.5 pl-7 cursor-default">
@@ -468,6 +556,41 @@ function ClientCard({
             )}
           </span>
         </Tooltip>
+      )}
+
+      {open && (
+        // stopPropagation so typing / selecting text in the box never starts a
+        // card drag or bubbles a click up to the drag handle.
+        <div className="mt-2" onPointerDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}>
+          <textarea
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            rows={3}
+            autoFocus
+            placeholder={`Notes on ${client.name}…`}
+            className="w-full resize-y rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-[12px] text-ink outline-none focus:border-accent/50"
+          />
+          <div className="mt-1.5 flex items-center justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => { setDraft(client.notes ?? ""); setOpen(false); }}
+              className="text-[11px] text-muted hover:text-ink"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={save}
+              disabled={saving}
+              className={cn(
+                "inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-semibold text-white transition-colors",
+                saving ? "bg-slate-300 cursor-not-allowed" : "bg-accent hover:bg-accent/90"
+              )}
+            >
+              {saving ? "Saving…" : "Save notes"}
+            </button>
+          </div>
+        </div>
       )}
     </div>
   );

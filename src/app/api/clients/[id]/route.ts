@@ -267,6 +267,17 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       }
     }
 
+    if ("notes" in body) {
+      const raw = body.notes;
+      if (raw === null || raw === "" || raw === undefined) {
+        update.notes = null;
+      } else if (typeof raw === "string") {
+        update.notes = raw.slice(0, 8000);
+      } else {
+        return NextResponse.json({ error: "notes must be a string or null" }, { status: 400 });
+      }
+    }
+
     if ("updateCadence" in body) {
       const raw = body.updateCadence;
       const allowed = ["daily", "biweekly", "weekly", "monthly", "none"];

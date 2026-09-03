@@ -16,9 +16,16 @@ const nextConfig = {
     // without this, printing an email with a PDF attachment fails in dev with
     // the exact "Can't resolve 'canvas'" the alias exists to prevent — while
     // production builds, which use webpack, are fine.
+    //
+    // Unconditional (bare string), NOT `{ browser: ... }`: pdfjs-dist's
+    // `require('canvas')` also runs on the NODE path (e.g. sop-ingest.ts server
+    // side), where a browser-only condition wouldn't match and the build fails
+    // with "Can't resolve 'canvas'". Aliasing it for every condition mirrors
+    // webpack's unconditional `canvas: false` and is safe — the browser renders
+    // to a real DOM <canvas> and never touches the npm package.
     turbo: {
       resolveAlias: {
-        canvas: { browser: "./src/lib/empty-module.js" }
+        canvas: "./src/lib/empty-module.js"
       }
     }
   },

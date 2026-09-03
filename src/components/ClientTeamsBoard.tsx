@@ -101,10 +101,11 @@ export function ClientTeamsBoard({
   const [query, setQuery] = useState("");
   const [sortMode, setSortMode] = useState<ClientSortMode>("importance");
 
-  // Per-column importance rank (1 = most important in THAT lead's list), by the
-  // leader's manual drag order. Each lead's column ranks 1..N on its own — so
-  // the client dragged to the top of Bismah's list reads #1 there, independent
-  // of other columns. Shown on every card regardless of the active sort.
+  // Per-column rank that EXACTLY matches the visual order of the cards in each
+  // lead's column: top card = 1, next = 2, ... down to N (the column count).
+  // It uses the same comparator as the rendered list, so under the Importance
+  // sort the number IS the drag ranking, and it always reads top-to-bottom.
+  // Each column numbers 1..N on its own (Bismah's #1 is unrelated to Samir's).
   const rankById = useMemo(() => {
     const m = new Map<string, number>();
     const groups = new Map<string, BoardClient[]>();
@@ -114,12 +115,13 @@ export function ClientTeamsBoard({
       if (arr) arr.push(c);
       else groups.set(key, [c]);
     }
+    const cmp = comparatorFor(sortMode);
     for (const arr of groups.values()) {
-      arr.sort(importanceCmp);
+      arr.sort(cmp);
       arr.forEach((c, i) => m.set(c.id, i + 1));
     }
     return m;
-  }, [clients]);
+  }, [clients, sortMode]);
 
   // Re-sync when the server re-renders (e.g. after a client is created
   // elsewhere and the user navigates back). Without this the board would

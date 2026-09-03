@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { OnboardingFlow } from "@/components/onboarding/OnboardingFlow";
 import {
   getAnswerState,
+  getClientLogoUrl,
   getLinkByToken,
   listDoneSteps,
   listFiles,
@@ -27,10 +28,11 @@ export default async function OnboardingPage({ params }: { params: { token: stri
   const link = await getLinkByToken(params.token);
   if (!link) notFound();
 
-  const [answers, doneSteps, files] = await Promise.all([
+  const [answers, doneSteps, files, clientIconUrl] = await Promise.all([
     getAnswerState(link.id),
     listDoneSteps(link.id),
-    listFiles(link.id)
+    listFiles(link.id),
+    getClientLogoUrl(link.clientId)
   ]);
 
   // Awaited, despite being bookkeeping. A floating promise in a server
@@ -47,6 +49,7 @@ export default async function OnboardingPage({ params }: { params: { token: stri
     <OnboardingFlow
       token={link.token}
       clientName={link.clientName}
+      clientIconUrl={clientIconUrl}
       form={form}
       initialAnswers={answers}
       initialDoneSteps={doneSteps}

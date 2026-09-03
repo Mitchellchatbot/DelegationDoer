@@ -13,6 +13,8 @@ import { teamMeta, type TeamId } from "@/lib/client-teams";
 // One client as this board needs it — deliberately a narrow projection of
 // lib/clients-data.ts:Client so the server doesn't ship 40 unused columns
 // (health, touchpoints, WP counts, ...) into the browser on every load.
+export type HealthLabel = "thriving" | "steady" | "shaky" | "at_risk" | null;
+
 export interface BoardClient {
   id: string;
   name: string;
@@ -20,6 +22,44 @@ export interface BoardClient {
   iconUrl: string | null;
   teamId: string | null;
   assignedUserIds: string[];
+  // Ranking inputs.
+  displayOrder: number;
+  priorityRank: number | null;
+  health: HealthLabel;
+  lastOutboundEmailAt: string | null;
+}
+
+// How the client cards within each column are ordered.
+export type ClientSortMode = "importance" | "health" | "time" | "name";
+
+// Worst-first health order (at-risk clients surface first).
+const HEALTH_ORDER: Record<string, number> = { at_risk: 0, shaky: 1, steady: 2, thriving: 3 };
+function healthRankOf(h: HealthLabel): number {
+  return h && h in HEALTH_ORDER ? HEALTH_ORDER[h] : 99;
+}
+// Importance = the leader's manual drag order (display_order), then the sheet's
+// priorityRank, then name. This is the same ordering /clients uses.
+function importanceCmp(a: BoardClient, b: BoardClient): number {
+  if (a.displayOrder !== b.displayOrder) return a.displayOrder - b.displayOrder;
+  const ar = a.priorityRank ?? Number.POSITIVE_INFINITY;
+  const br = b.priorityRank ?? Number.POSITIVE_INFINITY;
+  if (ar !== br) return ar - br;
+  return a.name.localeCompare(b.name);
+}
+function comparatorFor(mode: ClientSortMode): (a: BoardClient, b: BoardClient) => number {
+  if (mode === "name") return (a, b) => a.name.localeCompare(b.name);
+  if (mode === "health") {
+    return (a, b) => healthRankOf(a.health) - healthRankOf(b.health) || a.name.localeCompare(b.name);
+  }
+  if (mode === "time") {
+    // Stalest first: oldest (or never-contacted) last-outbound at the top.
+    return (a, b) => {
+      const at = a.lastOutboundEmailAt ? Date.parse(a.lastOutboundEmailAt) : -Infinity;
+      const bt = b.lastOutboundEmailAt ? Date.parse(b.lastOutboundEmailAt) : -Infinity;
+      return at - bt || a.name.localeCompare(b.name);
+    };
+  }
+  return importanceCmp;
 }
 
 export interface BoardUser {
@@ -56,6 +96,17 @@ export function ClientTeamsBoard({
   const [clients, setClients] = useState(initial);
   const [activeDrag, setActiveDrag] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+  const [sortMode, setSortMode] = useState<ClientSortMode>("importance");
+
+  // Global importance rank (1 = most important) across ALL board clients,
+  // by the leader's manual order. This is the number shown on each card — it
+  // reflects the drag ranking regardless of which sort is active.
+  const rankById = useMemo(() => {
+    const ordered = [...clients].sort(importanceCmp);
+    const m = new Map<string, number>();
+    ordered.forEach((c, i) => m.set(c.id, i + 1));
+    return m;
+  }, [clients]);
 
   // Re-sync when the server re-renders (e.g. after a client is created
   // elsewhere and the user navigates back). Without this the board would
@@ -96,14 +147,23 @@ export function ClientTeamsBoard({
       const bucket = m.get(key);
       if (bucket) bucket.push(c);
     }
-    for (const bucket of m.values()) bucket.sort((a, b) => a.name.localeCompare(b.name));
+    const cmp = comparatorFor(sortMode);
+    for (const bucket of m.values()) bucket.sort(cmp);
     return m;
-  }, [visible, columns]);
+  }, [visible, columns, sortMode]);
 
   async function onDragEnd(res: DropResult) {
     setActiveDrag(null);
     const { draggableId, source, destination } = res;
-    if (!destination || destination.droppableId === source.droppableId) return;
+    if (!destination) return;
+
+    // Same column → this is a RANK reorder (only under the Importance sort,
+    // for editors, with no active filter). Persists the global display_order.
+    if (destination.droppableId === source.droppableId) {
+      if (sortMode !== "importance" || !canEdit || q || source.index === destination.index) return;
+      await reorderWithinColumn(source.droppableId, source.index, destination.index, draggableId);
+      return;
+    }
 
     const nextTeam = destination.droppableId === UNASSIGNED
       ? null
@@ -135,6 +195,44 @@ export function ClientTeamsBoard({
     }
   }
 
+  // Reorder a client within its column to change its importance rank. The
+  // rank is a GLOBAL order (display_order), so we splice the moved client into
+  // the global importance order just ahead of its new in-column neighbour, then
+  // persist the whole order. Optimistic with rollback (mirrors /clients).
+  async function reorderWithinColumn(colKey: string, fromIdx: number, toIdx: number, movedId: string) {
+    const colList = byColumn.get(colKey) ?? [];
+    const moved = colList[fromIdx];
+    if (!moved || moved.id !== movedId) return;
+
+    const newCol = [...colList];
+    newCol.splice(fromIdx, 1);
+    newCol.splice(toIdx, 0, moved);
+    const nextNeighbour = newCol[toIdx + 1];
+
+    const globalSorted = [...clients].sort(importanceCmp).filter((c) => c.id !== moved.id);
+    let insertAt = nextNeighbour ? globalSorted.findIndex((c) => c.id === nextNeighbour.id) : globalSorted.length;
+    if (insertAt < 0) insertAt = globalSorted.length;
+    globalSorted.splice(insertAt, 0, moved);
+
+    const orderById = new Map(globalSorted.map((c, i) => [c.id, (i + 1) * 100]));
+    const newRank = globalSorted.findIndex((c) => c.id === moved.id) + 1;
+    const before = clients;
+    setClients((cur) => cur.map((c) => ({ ...c, displayOrder: orderById.get(c.id) ?? c.displayOrder })));
+
+    try {
+      const r = await fetch("/api/clients/reorder", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: globalSorted.map((c) => c.id) })
+      });
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? `HTTP ${r.status}`);
+      toast.success(`Ranked ${moved.name} #${newRank}`);
+    } catch (e) {
+      setClients(before);
+      toast.error(`Couldn't save ranking: ${e instanceof Error ? e.message : "unknown error"}`);
+    }
+  }
+
   const dragEnabled = canEdit && !q;
 
   return (
@@ -146,12 +244,35 @@ export function ClientTeamsBoard({
           placeholder="Filter clients…"
           className="px-3 py-1.5 rounded-full text-xs bg-white border border-slate-200 text-ink placeholder:text-muted focus:outline-none focus:border-accent/50 w-56"
         />
+        <div className="inline-flex items-center gap-0.5 rounded-full bg-white border border-slate-200 p-0.5 shadow-sm">
+          <span className="pl-2 pr-1 text-[10px] uppercase tracking-wide text-ink/40 font-semibold">Rank</span>
+          {([
+            ["importance", "Importance"],
+            ["health", "Health"],
+            ["time", "Time since contact"],
+            ["name", "A–Z"]
+          ] as [ClientSortMode, string][]).map(([mode, label]) => (
+            <button
+              key={mode}
+              type="button"
+              onClick={() => setSortMode(mode)}
+              className={cn(
+                "px-2.5 py-1 rounded-full text-[11px] font-medium transition-colors",
+                sortMode === mode ? "bg-accent/10 text-accent" : "text-ink/55 hover:text-ink"
+              )}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
         <span className="text-[11px] text-muted">
-          {canEdit
-            ? q
-              ? "Clear the filter to drag — reordering a filtered list would move the wrong card."
-              : "Drag a client between leads to reassign them."
-            : "Read-only — only Mitch, Sam, Tabrez and Farez can change the split."}
+          {!canEdit
+            ? "Read-only — only Mitch, Sam, Tabrez and Farez can change this."
+            : q
+              ? "Clear the filter to drag."
+              : sortMode === "importance"
+                ? "Drag to rank (top = #1) · drag between leads to reassign."
+                : "Drag between leads to reassign · switch to Importance to drag-rank."}
         </span>
       </div>
 
@@ -173,6 +294,7 @@ export function ClientTeamsBoard({
                 members={col.members}
                 clients={list}
                 usersById={usersById}
+                rankById={rankById}
                 dragEnabled={dragEnabled}
                 activeDrag={activeDrag}
                 unassigned={col.teamId === null}
@@ -186,7 +308,7 @@ export function ClientTeamsBoard({
 }
 
 function Column({
-  droppableId, label, lead, members, clients, usersById, dragEnabled, activeDrag, unassigned
+  droppableId, label, lead, members, clients, usersById, rankById, dragEnabled, activeDrag, unassigned
 }: {
   droppableId: string;
   label: string;
@@ -194,6 +316,7 @@ function Column({
   members: string[];
   clients: BoardClient[];
   usersById: Map<string, BoardUser>;
+  rankById: Map<string, number>;
   dragEnabled: boolean;
   activeDrag: string | null;
   unassigned: boolean;
@@ -259,6 +382,7 @@ function Column({
                       provided={p}
                       isDragging={s.isDragging}
                       usersById={usersById}
+                      rank={rankById.get(c.id)}
                     />
                   );
                   // Portal while dragging so the card escapes every ancestor
@@ -288,12 +412,13 @@ function PortalToBody({ children }: { children: React.ReactNode }) {
 }
 
 function ClientCard({
-  client, provided: p, isDragging, usersById
+  client, provided: p, isDragging, usersById, rank
 }: {
   client: BoardClient;
   provided: any;
   isDragging: boolean;
   usersById: Map<string, BoardUser>;
+  rank?: number;
 }) {
   const people = client.assignedUserIds
     .map((id) => usersById.get(id))
@@ -317,12 +442,20 @@ function ClientCard({
           : <span className="w-5 h-5 rounded bg-slate-100 shrink-0" />}
         <Link
           href={`/clients/${client.id}`}
-          className="text-[12.5px] font-medium text-ink hover:text-accent truncate"
+          className="flex-1 min-w-0 text-[12.5px] font-medium text-ink hover:text-accent truncate"
           // Otherwise the pointerdown that starts a drag also fires the link.
           onDragStart={(e) => e.preventDefault()}
         >
           {client.name}
         </Link>
+        {rank != null && (
+          <span
+            title={`Importance rank #${rank}`}
+            className="shrink-0 inline-flex items-center justify-center min-w-[24px] h-[20px] px-1.5 rounded-full bg-slate-100 text-ink/60 text-[11px] font-semibold tabular-nums"
+          >
+            {rank}
+          </span>
+        )}
       </div>
       {people.length > 0 && (
         <Tooltip label={`Point ${people.length === 1 ? "person" : "people"}: ${people.map((u) => u.name).join(", ")}`}>

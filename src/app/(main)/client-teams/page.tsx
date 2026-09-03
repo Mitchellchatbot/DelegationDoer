@@ -79,7 +79,13 @@ export default async function ClientTeamsPage() {
       website: c.website,
       iconUrl: c.iconUrl,
       teamId: c.teamId,
-      assignedUserIds: c.assignedUserIds ?? []
+      assignedUserIds: c.assignedUserIds ?? [],
+      // Ranking inputs: importance (leader's manual display_order / priorityRank),
+      // health (override wins), and time-since-contact (last outbound email).
+      displayOrder: c.displayOrder,
+      priorityRank: c.priorityRank,
+      health: c.healthOverrideLabel ?? c.healthLabel,
+      lastOutboundEmailAt: c.lastOutboundEmailAt
     }));
 
   const users: BoardUser[] = allUsers.map((u) => ({

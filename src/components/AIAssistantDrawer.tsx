@@ -52,6 +52,7 @@ interface Message {
 const DRAFT_CLIENT_UPDATE = "Draft a client update";
 const LEADER_STARTERS = [
   "What needs my attention today?",
+  "Scan my inbox and flag what needs a reply",
   "What should I delegate right now?",
   "Which clients are at risk or have gone quiet?",
   "Who's overloaded and what can be reassigned?",

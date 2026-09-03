@@ -107,9 +107,9 @@ const JOBS: CronJob[] = [
   },
   {
     name: "daily-briefing",
-    // vercel.json fires at 13:00 + 14:00 UTC to straddle DST; the runner's
-    // 9am-NY-hour guard means only the tick that lands in the 9am NY hour DMs
-    // Mitchell, so an hourly cadence hits that window exactly once a day.
+    // vercel.json fires at 12:00 + 13:00 UTC to straddle DST; the runner
+    // delivers at the first hourly tick from 8am NY onward and dedupes to one
+    // send per day, so a missed/late tick or a deploy restart never skips a day.
     intervalMs: HOUR,
     bootCatchupDelayMs: 55_000,
     disableEnv: "DAILY_BRIEFING_INTERNAL_CRON",

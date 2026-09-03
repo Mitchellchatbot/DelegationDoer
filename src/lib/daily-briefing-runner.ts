@@ -1,6 +1,6 @@
-// Daily 9 AM founder briefing, DM'd privately to Mitchell.
+// Daily 8 AM founder briefing, DM'd privately to Mitchell.
 //
-// Every morning at 9am America/New_York this:
+// Every morning at 8am America/New_York this:
 //   1. pulls all in-flight work across the team,
 //   2. pulls the latest threads from Mitchell's Missive inbox (fail-soft —
 //      an expired MISSIVE token just yields an empty inbox section),
@@ -17,7 +17,8 @@
 //      AS Mitchell only when he taps it.
 //
 // Idempotency mirrors eod-recap / clients-emailed-push exactly:
-//   - 9am NY-hour guard: no-op unless the current America/New_York hour is 9.
+//   - target-hour guard: no-op until the current America/New_York hour reaches
+//     TARGET_HOUR (delivers at the first tick from then on, once per day).
 //   - same-day dedupe: a `daily_briefings` row for today's ET date with
 //     delivered_at set means we already ran; skip.
 // opts.force bypasses both (for manual /api/cron/daily-briefing?force=1 runs);
@@ -33,7 +34,7 @@ import { DEFAULT_TZ, nowInTz, ymdInTz } from "@/lib/shift";
 import type { Task, User } from "@/lib/types";
 
 const OWNER_EMAIL = "mitchell@scaledai.org";
-const TARGET_HOUR = 9; // 9am America/New_York
+const TARGET_HOUR = 8; // 8am America/New_York
 const TARGET_MESSAGES = 6; // teammates checked in with per day
 // Rotation window: teammates checked in within this many days are deprioritized
 // so coverage cycles across the whole team instead of hitting the same people.
@@ -179,7 +180,7 @@ function buildPrompts(args: {
 
   const system = [
     "You are the chief of staff to Mitchell, founder of Scaled AI (a digital agency).",
-    "Write his private 9 AM daily brief. You have the full team's in-flight work and the latest threads in Mitchell's email inbox.",
+    "Write his private morning daily brief. You have the full team's in-flight work and the latest threads in Mitchell's email inbox.",
     "",
     "Return STRICT JSON only (no code fences, no prose around it) with exactly this shape:",
     "{",
@@ -187,13 +188,13 @@ function buildPrompts(args: {
     `  "needle_mover": string,        // ONE specific, high-leverage action he can take today that moves the business forward. Concrete, not generic.`,
     `  "engagement_messages": [       // EXACTLY ${TARGET_MESSAGES} items, each to a DIFFERENT teammate`,
     '    { "userId": string,          // must be one of the teammate ids listed below',
-    '      "text": string }           // a casual, personable Slack DM FROM Mitchell TO that teammate. This is a MORALE-BOOSTING check-in, not a status interrogation. Warm and human: appreciate their work, encourage them, ask how they are doing or if they need anything, celebrate a win. Reference their actual work naturally where it fits, but the goal is connection, not accountability. 1-2 short sentences, first person, sounds like a founder who genuinely cares about his people. A friendly opener like "Hey <name>" is welcome. Vary the vibe across the messages (appreciation, encouragement, a genuine how-are-you, a specific shout-out). No corporate tone. Light emoji is fine if it feels natural.',
+    '      "text": string }           // a SHORT, casual Slack DM FROM Mitchell TO that teammate, like a quick personal text. Keep it SIMPLE and low-key: plain everyday words, one or two short sentences max. A quick "Hey <name>" opener, maybe mention what they are working on in passing, then ask how it is going or if they need anything. Do NOT gush, flatter, over-praise, or use motivational-speaker or corporate language. Sound like a normal person who cares, not a hype coach. Vary them so they do not all read the same. No emojis unless it is genuinely natural.',
     "  ]",
     "}",
     "",
     "Rules:",
     `- Pick ${TARGET_MESSAGES} teammates to check in on. ROTATE COVERAGE: strongly prefer teammates NOT in the "recently checked in" list below, so over a week everyone hears from Mitchell. Only repeat someone from that list if they genuinely need it today (blocked, overloaded, or a big win). All ${TARGET_MESSAGES} userIds must be distinct and from the roster.`,
-    "- The check-ins are about people, not tasks: keep them upbeat and supportive even for someone who is behind (encourage, offer help; do not scold).",
+    "- The check-ins are about people, not tasks: keep them relaxed and supportive even for someone who is behind (offer help, do not scold). Simple and genuine beats enthusiastic.",
     "- Never invent tasks, clients, or facts not present in the data.",
     "- Plain text only. Do not use em-dashes; use commas or periods.",
     "- These are DRAFTS Mitchell approves before anything sends. Write them ready-to-send."
@@ -401,8 +402,12 @@ export async function runDailyBriefing(
   opts: { force?: boolean; dryRun?: boolean } = {}
 ): Promise<DailyBriefingOutcome> {
   const now = nowInTz(DEFAULT_TZ);
-  if (!opts.force && now.hh !== TARGET_HOUR) {
-    return { ok: true, skipped: "not-9am-ny", nyHour: now.hh };
+  // Deliver at the FIRST tick from the target hour onward (not only exactly at
+  // it), so a missed/late tick or a deploy restart during the target hour
+  // doesn't skip the whole day. The same-day dedupe below guarantees one send.
+  // Skip only when it's still before the target hour that day.
+  if (!opts.force && now.hh < TARGET_HOUR) {
+    return { ok: true, skipped: "before-target-hour", nyHour: now.hh };
   }
 
   const briefId = `brief_${now.ymd}`;
@@ -535,7 +540,7 @@ export async function runDailyBriefing(
   }
 
   // Stamp delivered only after a successful post, so a failed post retries on
-  // the next tick within the 9am hour.
+  // the next tick.
   await supabase
     .from("daily_briefings")
     .update({ delivered_at: new Date().toISOString(), slack_channel: dmChannel, slack_ts: slackTs })

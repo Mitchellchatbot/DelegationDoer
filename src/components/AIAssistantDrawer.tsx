@@ -43,11 +43,13 @@ interface Message {
   actions?: ProposedAction[];
 }
 
+// Founder-operational starters shown on the assistant's empty state. Tapping
+// one sends it immediately (onPick={send}). Edit this list to change the chips.
 const SUGGESTED = [
-  "What's on my plate today?",
-  "Who has capacity on the website team this week?",
+  "What needs my attention today?",
+  "Who has capacity for new work right now?",
   "What's overdue across the org and who owns each?",
-  "Summarise what shipped this week"
+  "Who's overloaded and what could be reassigned?"
 ];
 
 // Optional client context passed by the per-client entry point on a

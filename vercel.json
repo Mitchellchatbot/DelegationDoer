@@ -50,11 +50,11 @@
     },
     {
       "path": "/api/cron/daily-briefing",
-      "schedule": "0 13 * * *"
+      "schedule": "0 12 * * *"
     },
     {
       "path": "/api/cron/daily-briefing",
-      "schedule": "0 14 * * *"
+      "schedule": "0 13 * * *"
     },
     {
       "path": "/api/cron/outbound-sequences",

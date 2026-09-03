@@ -518,10 +518,9 @@ function ClientCard({
             type="button"
             onClick={() => setOpen((o) => !o)}
             title="Click to add a note (stays on this tab)"
-            className="flex-1 min-w-0 text-left text-[12.5px] font-medium text-ink hover:text-accent truncate inline-flex items-center gap-1"
+            className="flex-1 min-w-0 text-left text-[12.5px] font-medium text-ink hover:text-accent truncate"
           >
             <span className="truncate">{client.name}</span>
-            {hasNotes && <StickyNote className="w-3 h-3 text-amber-500 shrink-0" />}
           </button>
         ) : (
           <Link
@@ -532,9 +531,32 @@ function ClientCard({
             {client.name}
           </Link>
         )}
+        {/* Dedicated note button — the obvious, reliable way to jot a note
+            without leaving the board. stopPropagation so the click never turns
+            into a card drag. */}
+        {canEdit && (
+          <button
+            type="button"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
+            title={hasNotes ? "Edit note" : "Add a note (stays here)"}
+            aria-label="Add or edit note"
+            className={cn(
+              "shrink-0 grid place-items-center w-6 h-6 rounded-md transition-colors",
+              open
+                ? "text-accent bg-accent/10"
+                : hasNotes
+                  ? "text-amber-600 bg-amber-50 hover:bg-amber-100"
+                  : "text-muted hover:text-accent hover:bg-accent/5"
+            )}
+          >
+            <StickyNote className="w-3.5 h-3.5" />
+          </button>
+        )}
         {/* Full profile — still reachable, just not on a plain name click. */}
         <Link
           href={`/clients/${client.id}`}
+          onPointerDown={(e) => e.stopPropagation()}
           onClick={(e) => e.stopPropagation()}
           onDragStart={(e) => e.preventDefault()}
           title="Open full profile"

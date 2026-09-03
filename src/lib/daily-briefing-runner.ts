@@ -184,11 +184,11 @@ function buildPrompts(args: {
     "",
     "Return STRICT JSON only (no code fences, no prose around it) with exactly this shape:",
     "{",
-    '  "daily_update": string,        // a REPORT, written in clear labeled sections with short line breaks. Use these section headers, each on its own line, in this order (skip a section only if there is genuinely nothing for it): "SNAPSHOT:" (1-2 line headline of the day, e.g. counts + the single biggest thing), "NEEDS YOUR CALL:" (decisions/items only the owner can resolve, as bullet lines starting with "- "), "AT RISK:" (overdue/blocked/overloaded, bullet lines), "MOMENTUM:" (what is going well or just shipped, bullet lines), "INBOX:" (email items needing his attention, or a one-line note if unavailable). Reference real task titles, people, and clients. Be specific, skimmable, and honest.',
+    '  "daily_update": string,        // a REPORT in clear labeled sections, each header on its own line, in THIS order (skip a section only if there is genuinely nothing for it): "SNAPSHOT:" (1-2 line headline: key counts + the single biggest thing today), "INBOX:" (SORT THROUGH the inbox threads listed below and triage them into sub-groups, each as bullet lines "- ": "Reply needed:" the ones Mitchell personally must answer (name the sender + subject + why in a few words), "Waiting on others:", and "FYI:". Lead with anything urgent or client-facing. If the inbox is unavailable, put a single line saying so.), "NEEDS YOUR CALL:" (decisions only the owner can resolve, bullet lines "- "), "AT RISK:" (overdue/blocked/overloaded, bullet lines), "MOMENTUM:" (going well or just shipped, bullet lines). Reference real task titles, people, clients, and email senders/subjects. Be specific, skimmable, and honest.',
     `  "needle_mover": string,        // ONE specific, high-leverage action he can take today that moves the business forward. Concrete, not generic.`,
     `  "engagement_messages": [       // EXACTLY ${TARGET_MESSAGES} items, each to a DIFFERENT teammate`,
     '    { "userId": string,          // must be one of the teammate ids listed below',
-    '      "text": string }           // a SHORT, casual Slack DM FROM Mitchell TO that teammate, like a quick personal text. Keep it SIMPLE and low-key: plain everyday words, one or two short sentences max. A quick "Hey <name>" opener, maybe mention what they are working on in passing, then ask how it is going or if they need anything. Do NOT gush, flatter, over-praise, or use motivational-speaker or corporate language. Sound like a normal person who cares, not a hype coach. Vary them so they do not all read the same. No emojis unless it is genuinely natural.',
+    '      "text": string }           // a SHORT Slack DM FROM Mitchell TO that teammate that reads like a REAL person typed it in five seconds. Organic and natural: plain everyday words, contractions, one or two short sentences, a little loose or imperfect is good. VARY how they open (do not start every one with "Hey"). You can mention what they are working on in passing, then a genuine "how is it going / anything you need". Do NOT gush, flatter, over-praise, or sound like a coach, HR, or corporate. It should read like a text, not a memo. No emojis unless it is truly natural.',
     "  ]",
     "}",
     "",
@@ -264,6 +264,30 @@ async function draftContent(prompts: { system: string; user: string }): Promise<
   };
 }
 
+// Regenerate one team check-in in a fresh phrasing (the Slack "Rewrite"
+// button). Called from the interactions handler. Higher temperature for real
+// variety; returns the current text unchanged if the model gives nothing.
+export async function rewriteEngagementText(name: string, current: string): Promise<string> {
+  const client = await getAnthropic();
+  const res = await client.messages.create({
+    model: MODELS.chat,
+    max_tokens: 220,
+    temperature: 0.9,
+    system:
+      "You rewrite a short Slack check-in that Mitchell (a founder) is about to send a teammate. " +
+      "Keep it a genuine, organic, casual text: plain everyday words, contractions, one or two short sentences, " +
+      "natural and a little loose. Do not gush, flatter, or sound corporate or like a coach. Give a NOTICEABLY " +
+      "different phrasing from the current one. Return ONLY the rewritten message text — no quotes, no preamble.",
+    messages: [{
+      role: "user",
+      content: `Teammate: ${name}\nCurrent message: ${current}\n\nRewrite it differently, same friendly intent.`
+    }]
+  });
+  const txt = res.content.map((b) => (b.type === "text" ? b.text : "")).join("").trim();
+  const cleaned = txt.replace(/^["']+|["']+$/g, "").trim().slice(0, 600);
+  return cleaned || current;
+}
+
 // ---------------------------------------------------------------------------
 // Slack blocks (shared with the interactions handler so re-renders match)
 // ---------------------------------------------------------------------------
@@ -337,13 +361,22 @@ export function buildBriefingBlocks(row: DailyBriefingRow): { blocks: unknown[];
       } else {
         blocks.push({
           type: "actions",
-          elements: [{
-            type: "button",
-            style: "primary",
-            text: { type: "plain_text", text: `Send to ${firstName(m.name)}`, emoji: true },
-            action_id: "daily_brief_send",
-            value: JSON.stringify({ b: row.id, m: m.id })
-          }]
+          elements: [
+            {
+              type: "button",
+              style: "primary",
+              text: { type: "plain_text", text: `Send to ${firstName(m.name)}`, emoji: true },
+              action_id: "daily_brief_send",
+              value: JSON.stringify({ b: row.id, m: m.id })
+            },
+            {
+              // Regenerate this check-in in a fresh phrasing before sending.
+              type: "button",
+              text: { type: "plain_text", text: "✍️ Rewrite", emoji: true },
+              action_id: "daily_brief_rewrite",
+              value: JSON.stringify({ b: row.id, m: m.id })
+            }
+          ]
         });
       }
     }

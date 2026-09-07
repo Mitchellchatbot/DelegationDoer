@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUserId } from "@/lib/session";
 import { cookies } from "next/headers";
 import { randomBytes } from "crypto";
-import { publicOrigin } from "@/lib/public-origin";
 
 export const dynamic = "force-dynamic";
 
@@ -20,7 +19,10 @@ export async function GET(_req: NextRequest) {
       { status: 500 }
     );
   }
-  const baseUrl = publicOrigin();
+  const baseUrl = (
+    process.env.NEXT_PUBLIC_APP_URL ||
+    "https://delegationdoer-production.up.railway.app"
+  ).replace(/\/$/, "");
   const redirectUri = `${baseUrl}/api/integrations/slack/callback`;
 
   const state = randomBytes(24).toString("hex");

@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUserId } from "@/lib/session";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { cookies } from "next/headers";
-import { publicOrigin } from "@/lib/public-origin";
 
 export const dynamic = "force-dynamic";
 
@@ -33,7 +32,10 @@ export async function GET(req: NextRequest) {
     return errorRedirect(req, "GOOGLE_CLIENT_ID / SECRET missing on server");
   }
 
-  const baseUrl = publicOrigin();
+  const baseUrl = (
+    process.env.NEXT_PUBLIC_APP_URL ||
+    "https://delegationdoer-production.up.railway.app"
+  ).replace(/\/$/, "");
   const redirectUri = `${baseUrl}/api/integrations/google/callback`;
 
   const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
@@ -107,11 +109,12 @@ export async function GET(req: NextRequest) {
   return NextResponse.redirect(back.toString(), { status: 302 });
 }
 
-function errorRedirect(_req: NextRequest, message: string) {
-  // publicOrigin(), not NEXT_PUBLIC_APP_URL: an error on operations.scaledai.org
-  // used to bounce the user to /settings on the Railway host, where they have a
-  // different session — so the failure looked like a logout.
-  const url = new URL("/settings", publicOrigin());
+function errorRedirect(req: NextRequest, message: string) {
+  const baseUrl = (
+    process.env.NEXT_PUBLIC_APP_URL ||
+    new URL(req.url).origin
+  ).replace(/\/$/, "");
+  const url = new URL("/settings", baseUrl);
   url.searchParams.set("google_error", message);
   return NextResponse.redirect(url.toString(), { status: 302 });
 }

@@ -56,16 +56,8 @@ function LoginForm() {
     setSendingReset(true);
     try {
       const supabase = getSupabaseBrowser();
-      // window.location.origin FIRST. NEXT_PUBLIC_APP_URL is a single configured
-      // value baked in at build time, and this app answers on more than one
-      // hostname — so preferring it mailed a recovery link for the OTHER host,
-      // where the session cookie you're about to create doesn't exist. You'd
-      // click the link, land signed in somewhere else, and the tab you started
-      // from would still be signed out.
       const origin =
-        (typeof window !== "undefined" ? window.location.origin : "") ||
-        process.env.NEXT_PUBLIC_APP_URL ||
-        "";
+        process.env.NEXT_PUBLIC_APP_URL || (typeof window !== "undefined" ? window.location.origin : "");
       const { error } = await supabase.auth.resetPasswordForEmail(email, {
         redirectTo: `${origin}/api/auth/callback?next=/settings`,
       });

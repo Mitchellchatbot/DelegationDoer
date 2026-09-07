@@ -11,7 +11,14 @@ const path = require("path");
 
 // Production deploy by default. `DD_APP_URL=http://localhost:3000 npm run electron`
 // for local dev against the Next.js dev server.
-const APP_URL = process.env.DD_APP_URL || "https://delegationdoer-production.up.railway.app";
+//
+// operations.scaledai.org, NOT the delegationdoer-production.up.railway.app
+// alias that also serves this app. The two are the same deployment, but not the
+// same SITE: `up.railway.app` is on the Public Suffix List, so from the Railway
+// host the multitask panel's CRM tab is refused by crm.scaledai.org's
+// `frame-ancestors` (which names only the operations origin) and its
+// SameSite=Lax session cookies would be dropped even if it weren't.
+const APP_URL = process.env.DD_APP_URL || "https://operations.scaledai.org";
 const WIDGET_URL = `${APP_URL}/widget`;
 
 // Each window is sized larger than its visible content so the rounded

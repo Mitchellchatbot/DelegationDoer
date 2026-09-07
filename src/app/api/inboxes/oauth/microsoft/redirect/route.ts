@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUserId } from "@/lib/session";
+import { publicOrigin } from "@/lib/public-origin";
 
 export const dynamic = "force-dynamic";
 
@@ -31,16 +32,18 @@ export async function GET(req: NextRequest) {
   // We bounce them straight back to /inboxes/manage so the new tab is
   // visible without any extra navigation.
   //
-  // PREFER NEXT_PUBLIC_APP_URL over req.nextUrl.origin. Why: behind
-  // Railway / desktop widget / proxies, the request's origin can
-  // resolve to an internal or localhost hostname even in production,
-  // and we don't want Microsoft → Missive callback → "localhost
-  // refused to connect" after a successful consent. The env var is
-  // the canonical public URL of the DD deployment.
-  const fallbackOrigin = req.nextUrl.origin;
-  const publicOrigin =
-    process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, "") || fallbackOrigin;
-  const returnTo = `${publicOrigin}/inboxes/manage`;
+  // NOT req.nextUrl.origin. Behind Railway / the desktop widget / proxies that
+  // can resolve to an internal or localhost hostname even in production, and we
+  // don't want Microsoft → Missive callback → "localhost refused to connect"
+  // after a successful consent. That warning is why this used to prefer
+  // NEXT_PUBLIC_APP_URL outright.
+  //
+  // publicOrigin() keeps that guarantee and drops the cost: it reads
+  // x-forwarded-host — the public host the browser actually asked for, not the
+  // internal one — and only trusts it if it is one of ours, falling back to the
+  // configured URL otherwise. So consent started on operations.scaledai.org now
+  // returns there instead of to the Railway host and its separate session.
+  const returnTo = `${publicOrigin()}/inboxes/manage`;
   const startUrl =
     `${missiveBase}/api/oauth/microsoft/start?return_to=${encodeURIComponent(returnTo)}`;
 

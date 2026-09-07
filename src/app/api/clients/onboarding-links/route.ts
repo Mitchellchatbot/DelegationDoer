@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { headers } from "next/headers";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { canManageOnboardingLinks } from "@/lib/client-onboarding-access";
@@ -10,22 +9,10 @@ import {
   listLinksForClient,
   progressOf
 } from "@/lib/client-onboarding";
+import { publicOrigin } from "@/lib/public-origin";
 
 export const dynamic = "force-dynamic";
 
-/** The address this deployment is actually being served on.
- *
- *  Read from the proxy headers first, because NEXT_PUBLIC_APP_URL is a single
- *  configured value and this app runs behind Railway on more than one hostname.
- *  A link minted with the wrong host is worse than no link — it looks right and
- *  404s for the client. */
-function origin(): string {
-  const h = headers();
-  const host = h.get("x-forwarded-host") ?? h.get("host");
-  if (!host) return process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
-  const proto = h.get("x-forwarded-proto") ?? (host.startsWith("localhost") ? "http" : "https");
-  return `${proto}://${host}`;
-}
 
 // POST /api/clients/onboarding-links — { formKey, name } or { formKey, clientId }
 //
@@ -73,7 +60,7 @@ export async function POST(req: NextRequest) {
           // to know the link points at the existing record.
           reusedExisting: link.reusedExisting
         },
-        url: `${origin()}/onboarding/${link.token}`
+        url: `${publicOrigin()}/onboarding/${link.token}`
       },
       { status: 201 }
     );
@@ -98,7 +85,7 @@ export async function GET(req: NextRequest) {
     if (!clientId) return NextResponse.json({ error: "clientId required" }, { status: 400 });
 
     const links = await listLinksForClient(clientId);
-    const base = origin();
+    const base = publicOrigin();
 
     const out = await Promise.all(
       links.map(async (l) => {

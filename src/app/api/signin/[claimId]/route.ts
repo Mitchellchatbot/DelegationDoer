@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
+import { publicOrigin } from "@/lib/public-origin";
 
 export const dynamic = "force-dynamic";
 
@@ -30,10 +31,7 @@ export async function POST(
     return signinErrorRedirect(req, "This link expired. Ask for a new one.");
   }
 
-  const baseUrl = (
-    process.env.NEXT_PUBLIC_APP_URL ||
-    "https://delegationdoer-production.up.railway.app"
-  ).replace(/\/$/, "");
+  const baseUrl = publicOrigin();
 
   const { data: linkData, error: linkErr } = await supabase.auth.admin.generateLink({
     type: "magiclink",

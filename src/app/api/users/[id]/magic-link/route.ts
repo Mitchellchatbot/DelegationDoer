@@ -4,6 +4,7 @@ import { getUserById } from "@/lib/server-data";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { isLeader } from "@/lib/access";
 import { lookupUserByEmail, openDm, postMessage } from "@/lib/slack";
+import { publicOrigin } from "@/lib/public-origin";
 
 export const dynamic = "force-dynamic";
 
@@ -38,10 +39,7 @@ export async function POST(
       );
     }
 
-    const baseUrl = (
-      process.env.NEXT_PUBLIC_APP_URL ||
-      "https://delegationdoer-production.up.railway.app"
-    ).replace(/\/$/, "");
+    const baseUrl = publicOrigin();
 
     const supabase = getSupabaseAdmin();
 

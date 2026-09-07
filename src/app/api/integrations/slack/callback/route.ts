@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUserId } from "@/lib/session";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { cookies } from "next/headers";
+import { CANONICAL_ORIGIN } from "@/lib/canonical-origin";
 
 export const dynamic = "force-dynamic";
 
@@ -82,10 +83,14 @@ export async function GET(req: NextRequest) {
   return NextResponse.redirect(back.toString(), { status: 302 });
 }
 
-function errorRedirect(req: NextRequest, message: string) {
+function errorRedirect(_req: NextRequest, message: string) {
+  // CANONICAL_ORIGIN, not new URL(req.url).origin: behind Railway that is the
+  // internal listen address (http://0.0.0.0:8080/...), so the fallback would
+  // bounce a failed connect to localhost — the same footgun api/auth/callback
+  // documents at its top. Unreachable while NEXT_PUBLIC_APP_URL is set, which
+  // is exactly how long it stays unnoticed.
   const baseUrl = (
-    process.env.NEXT_PUBLIC_APP_URL ||
-    new URL(req.url).origin
+    process.env.NEXT_PUBLIC_APP_URL || CANONICAL_ORIGIN
   ).replace(/\/$/, "");
   const url = new URL("/settings", baseUrl);
   url.searchParams.set("slack_error", message);

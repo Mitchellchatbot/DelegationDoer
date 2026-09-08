@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
+import { CANONICAL_ORIGIN, LEGACY_HOST } from "@/lib/canonical-origin";
 
 // Auth gate. Anything not in PUBLIC_ROUTES requires a Supabase session.
 // Also refreshes the session cookie so it doesn't drop mid-tab.
@@ -74,7 +75,48 @@ function isPublic(pathname: string): boolean {
   return PUBLIC_PREFIXES.some((p) => pathname.startsWith(p));
 }
 
+/**
+ * Send browsers on the Railway-generated domain to the canonical one.
+ *
+ * Both domains point at this same service, but a session on one is not a session
+ * on the other, OAuth's redirect_uri is built from NEXT_PUBLIC_APP_URL (which
+ * names the canonical host) while its CSRF state cookie is written on whichever
+ * host you are browsing, and crm.scaledai.org refuses to be framed by anything
+ * but the canonical host. See lib/canonical-origin.ts.
+ *
+ * ONLY top-level document navigations, and that is the safety property, not a
+ * detail. Ten webhook prefixes in PUBLIC_PREFIXES plus /api/cron are addressed to
+ * this host by services that do not follow redirects — Typeform's registered URL
+ * is hardcoded to it (OutboundTypeformFormsDrawer.tsx), and the daily-briefing
+ * workflow curls /api/cron without -L. An exclusion list would have to be kept in
+ * step with those forever; `sec-fetch-dest: document` cannot drift, because none
+ * of them is a document request. A browser too old to send the header simply
+ * stays put, which is today's behaviour.
+ *
+ * NOT the desktop app. electron/main.js pins a will-navigate guard to its own
+ * APP_URL and preventDefault()s anything else, so redirecting an already-shipped
+ * build would let the widget load and then silently refuse to navigate to /login
+ * — an unrecoverable sign-in. Already-installed copies keep using this host until
+ * a build defaulting to the canonical one is distributed; then drop this clause.
+ */
+function canonicalRedirect(req: NextRequest): NextResponse | null {
+  const host = req.headers.get("x-forwarded-host") ?? req.headers.get("host");
+  if (host?.split(",")[0]?.trim().toLowerCase() !== LEGACY_HOST) return null;
+  if (req.headers.get("sec-fetch-dest") !== "document") return null;
+  if (/electron/i.test(req.headers.get("user-agent") ?? "")) return null;
+
+  const to = new URL(req.nextUrl.pathname + req.nextUrl.search, CANONICAL_ORIGIN);
+  // 307, not 308: both domains stay attached to the service, and a permanent
+  // redirect would be cached by browsers long after we wanted it back.
+  return NextResponse.redirect(to, 307);
+}
+
 export async function middleware(req: NextRequest) {
+  // Before the session work: there is no point refreshing a cookie on a host we
+  // are about to leave, and the cookie for the canonical host is a different one.
+  const redirected = canonicalRedirect(req);
+  if (redirected) return redirected;
+
   const res = NextResponse.next({ request: { headers: req.headers } });
 
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;

@@ -24,7 +24,12 @@ import {
   Spring1D,
   flingDistance,
 } from "@/lib/bubble-physics";
-import { MULTITASK_APPS, isSameSite } from "./multitask-apps";
+import {
+  MULTITASK_APPS,
+  isSameSite,
+  isFrameable,
+  frameAllow,
+} from "./multitask-apps";
 
 const STORAGE_KEY = "multitask:bubbles:v1";
 const EDGE_MARGIN = 12;
@@ -158,15 +163,36 @@ export function MultitaskBubbles() {
   const activeApp = MULTITASK_APPS.find((a) => a.id === activeId) ?? MULTITASK_APPS[0];
 
   /**
-   * True when this page can't share cookies with the framed app. Computed
-   * after hydration since it depends on window.location.
+   * Where this page is itself served from. Both framing questions below turn on
+   * it, and neither is answerable on the server.
+   *
+   * Read once on mount rather than per app: window.location cannot change under
+   * us. The panel never renders before hydration (the `hydrated` guard returns
+   * null, and the persisted mode is narrowed to "collapsed" | "hidden"), so the
+   * null window is unobservable and no doomed frame is ever loaded.
    */
-  const [crossSite, setCrossSite] = useState(false);
+  const [parent, setParent] = useState<{ origin: string; host: string } | null>(
+    null
+  );
   useEffect(() => {
-    setCrossSite(
-      activeApp.embeddable && !isSameSite(activeApp.url, window.location.hostname)
-    );
-  }, [activeApp]);
+    setParent({ origin: window.location.origin, host: window.location.hostname });
+  }, []);
+
+  /**
+   * The remote's own CSP refuses to be framed by this host, so the browser
+   * blocks the load before the app runs. Nothing to detect after the fact —
+   * hence the registry mirror in multitask-apps.ts.
+   */
+  const frameable = parent === null || isFrameable(activeApp, parent.origin);
+  /**
+   * The frame loads, but its SameSite=Lax session cookie won't ride in.
+   *
+   * Guarded on `frameable` for the same reason the old code guarded on
+   * `embeddable`: without it, a host that is BOTH cross-site and refused would
+   * stack a warning about cookies on top of a frame the browser never loaded.
+   */
+  const crossSite =
+    frameable && parent !== null && !isSameSite(activeApp.url, parent.host);
 
   // -------------------------------------------------------------------------
   // Geometry
@@ -902,13 +928,20 @@ export function MultitaskBubbles() {
             {/* flex-1 + min-h-0 rather than a calc() on the header height —
                 the header is not a fixed 41px once the dock band is in play. */}
             <div className="relative min-h-0 w-full flex-1 bg-surface2">
-              {activeApp.embeddable ? (
+              {frameable ? (
                 <div className="flex h-full w-full flex-col">
                   {crossSite && <CrossSiteNotice app={activeApp} />}
                   <iframe
+                    // Load-bearing beyond reconciliation. A frame's container
+                    // policy is computed when the element is INSERTED, so a
+                    // reused iframe that merely swapped src would keep the
+                    // PREVIOUS app's `allow`. Don't drop this key to avoid a
+                    // reload: the CRM would inherit Meta's empty policy and
+                    // lose its microphone, silently.
                     key={activeApp.id}
                     src={activeApp.url}
                     title={activeApp.name}
+                    allow={frameAllow(activeApp)}
                     className={cn(
                       "w-full flex-1 border-0 bg-white",
                       dragging && "pointer-events-none"
@@ -916,12 +949,17 @@ export function MultitaskBubbles() {
                     // No `sandbox` attribute on purpose. These are first-party
                     // apps we control, so it bought little, and every sandbox
                     // token that touches storage or navigation is a way for a
-                    // login flow to break with no visible error.
+                    // login flow to break with no visible error. It would also
+                    // void the `allow` grant above, kill the CRM's
+                    // target="_blank" dial link and attachment downloads, and
+                    // suppress window.confirm() in its destructive actions.
                     referrerPolicy="strict-origin-when-cross-origin"
                   />
                 </div>
               ) : (
-                <BlockedCard app={activeApp} />
+                // parent is non-null whenever frameable is false, so the
+                // fallback below is unreachable.
+                <BlockedCard app={activeApp} parentOrigin={parent?.origin ?? ""} />
               )}
             </div>
           </motion.div>
@@ -1128,17 +1166,40 @@ function CrossSiteNotice({ app }: { app: (typeof MULTITASK_APPS)[number] }) {
   );
 }
 
-function BlockedCard({ app }: { app: (typeof MULTITASK_APPS)[number] }) {
+/**
+ * Shown when the framed app's own `frame-ancestors` doesn't name the origin this
+ * page is served from, so the browser refuses the frame before the app runs.
+ *
+ * The copy is composed from the two origins rather than stored as prose. The
+ * string this replaced asserted what headers the CRM was sending, went out of
+ * date within two hours of being written, and spent the next five days telling
+ * readers to go make a change that was already merged. Everything below is
+ * something this page can see for itself.
+ */
+function BlockedCard({
+  app,
+  parentOrigin,
+}: {
+  app: (typeof MULTITASK_APPS)[number];
+  parentOrigin: string;
+}) {
+  const allowed = app.frameAncestors?.join(", ") ?? "";
   return (
     <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
       <div className="flex h-12 w-12 items-center justify-center rounded-full bg-warn/10 text-warn">
         <ShieldAlert className="h-6 w-6" />
       </div>
       <div className="text-[14px] font-medium text-ink">
-        {app.name} can&apos;t be embedded
+        {app.name} can&apos;t be embedded here
       </div>
       <p className="max-w-[380px] text-[12px] leading-relaxed text-muted">
-        {app.blockedReason}
+        {app.name} only allows framing from{" "}
+        <span className="font-medium text-ink">{allowed}</span>, and this page is
+        served from <span className="font-medium text-ink">{parentOrigin}</span>.
+        The browser refuses the frame before {app.name} runs, so there&apos;s
+        nothing to show — the app itself is fine. Open DelegationDoer at{" "}
+        <span className="font-medium text-ink">{allowed}</span>, or use{" "}
+        {app.name} in its own tab.
       </p>
       <a
         href={app.url}

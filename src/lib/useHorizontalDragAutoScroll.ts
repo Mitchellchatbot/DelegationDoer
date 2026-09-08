@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { DragStart } from "@hello-pangea/dnd";
 
 // Horizontal auto-scroll for @hello-pangea/dnd boards.
 //
@@ -73,6 +74,15 @@ export function useHorizontalDragAutoScroll() {
       return;
     }
 
+    // Don't drive the board until a real pointer sample has landed this drag.
+    // The refs persist across drags, so acting on them before the first
+    // mousemove would scroll from the PREVIOUS drag's position — which
+    // typically ended at an edge, exactly where the scroll math fires.
+    if (!sawPointerRef.current) {
+      rafRef.current = requestAnimationFrame(tick);
+      return;
+    }
+
     const rect = el.getBoundingClientRect();
     const x = pointerXRef.current;
     const fromLeft = x - rect.left;
@@ -104,11 +114,24 @@ export function useHorizontalDragAutoScroll() {
     rafRef.current = requestAnimationFrame(tick);
   }, [hitTestDroppableId]);
 
-  const onDragStart = useCallback(() => {
+  const onDragStart = useCallback((start?: DragStart) => {
     if (draggingRef.current) return;
-    draggingRef.current = true;
+    // Clear pointer state before the keyboard bail-out below: resolveDroppableId
+    // and activeDroppableId both key off sawPointer, so a keyboard drag must
+    // never inherit a `true` left behind by the previous mouse drag.
     sawPointerRef.current = false;
     setActiveDroppableId(null);
+
+    // Keyboard drags ('SNAP') never involve a pointer, and the library does NOT
+    // cancel them on mousemove — getDraggingBindings cancels on mousedown /
+    // mouseup / click / touchstart / resize / wheel only. So without this gate a
+    // stray mouse nudge mid-drag would flip sawPointer and hand the drop target
+    // to whatever column the idle cursor happens to rest over, which on the
+    // tasks board means a silent reassign. Leave keyboard drags entirely to the
+    // library: no pointer listeners, and no scroll loop.
+    if (start?.mode === "SNAP") return;
+
+    draggingRef.current = true;
     // Passive listeners — the library owns gesture suppression; we never
     // preventDefault (doing so would fight its touch sensor).
     window.addEventListener("mousemove", onPointerMove, { passive: true });

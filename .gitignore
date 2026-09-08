@@ -17,3 +17,6 @@ supabase/.branches/
 
 # electron-builder output
 dist-electron/
+
+# TypeScript incremental build cache (was committed by mistake)
+*.tsbuildinfo

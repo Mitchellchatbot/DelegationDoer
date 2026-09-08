@@ -15,7 +15,13 @@ const PUBLIC_PREFIXES = [
   "/signin",
   "/api/auth",
   "/api/signin",
-  "/api/debug",
+  // /api/debug is deliberately NOT public. It used to be, which left the
+  // dev seeders (seed-avatars / seed-eod / seed-moments) and cleanup-tasks
+  // reachable anonymously while holding the service-role client: an
+  // unauthenticated caller could wipe Moments, overwrite every avatar, or
+  // delete any task whose title matched /test|ping|debug|diag/. Those
+  // routes are deleted. client-email-slack is the only one left and
+  // enforces leader/admin in-handler, so it is fine behind the session gate.
   // Cron routes carry their own CRON_SECRET check inside the handler.
   // Don't gate on a Supabase session — Vercel cron has no cookies.
   "/api/cron",

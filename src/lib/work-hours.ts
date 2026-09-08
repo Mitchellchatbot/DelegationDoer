@@ -99,6 +99,39 @@ export function detectTimezone(): string {
   }
 }
 
+// work_timezone is unvalidated free text (the profile dialog takes it as a
+// plain input), and Intl throws RangeError on a zone name it doesn't know —
+// which takes down whatever is rendering rather than degrading. Probe it once
+// and fall back to the viewer's own zone: for a bare "17:00" with no zone on
+// file that reads far better than the UTC callers used to default to. /home
+// learned the same lesson the hard way (its resolveWorkTz guard).
+export function safeTimezone(tz: string | null | undefined, fallback?: string): string {
+  const alt = fallback ?? detectTimezone();
+  if (!tz) return alt;
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: tz });
+    return tz;
+  } catch {
+    return alt;
+  }
+}
+
+// A calendar UI has no timezone: "Sep 8" in the deadline picker means Sep 8
+// where the assignee is, not "whatever instant local Sep 8, 3:00 am maps to".
+// Turn the picked date into midday in THEIR zone so a schedule lookup can't
+// slip to the neighbouring day — noon in New York is already midnight in
+// Manila, so an instant-based anchor silently resolves the wrong weekday and
+// then reports "no shift that day". Only the local Y/M/D of `picked` is read.
+//
+// Two passes like zonedDayStart in @/lib/shift: a single pass can resolve the
+// offset on the wrong side of a DST transition.
+export function dayAnchorInTz(picked: Date, tz: string): Date {
+  const naive = Date.UTC(picked.getFullYear(), picked.getMonth(), picked.getDate(), 12, 0, 0);
+  const pass1 = naive - tzOffsetMinutes(new Date(naive), tz) * 60_000;
+  const pass2 = naive - tzOffsetMinutes(new Date(pass1), tz) * 60_000;
+  return new Date(pass2);
+}
+
 // Three-letter day key used by user.weeklySchedule.
 export type DayKey = "mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun";
 

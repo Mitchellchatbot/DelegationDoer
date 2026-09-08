@@ -15,14 +15,28 @@ const MONTHS = ["January", "February", "March", "April", "May", "June", "July", 
 const SHORT_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const DOW = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
 
-// "End of day" shortcut — 3:00 am, matching the original picker design.
-// (The form's separate, shift-aware "Default EOD" button is a different
-// thing; this one is the fixed in-panel convenience the design shipped with.)
-const EOD_HOUR = 3, EOD_MIN = 0;
+// Where "EOD" lands when the host doesn't say whose day it is (no resolveEod
+// prop). 18:00 is the office default — the same number DEFAULT_SHIFT_END
+// carries in @/lib/shift, kept as a local literal so this file stays free of
+// app imports.
+//
+// This was a hardcoded 3:00 am with no resolver at all, ported in from the
+// standalone mockup, so the button ignored the assignee's real shift entirely:
+// someone whose day ends at 5pm clicked EOD and the dropdowns jumped to
+// 03 : 00 am. The form's shift-aware "Default EOD" button had it right the
+// whole time; this one now shares that single implementation.
+const EOD_FALLBACK_HOUR = 18, EOD_FALLBACK_MIN = 0;
 
 const pad = (n: number) => String(n).padStart(2, "0");
 const sameDay = (a: Date | null, b: Date | null) =>
   !!a && !!b && a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+
+// "5:00 pm" — shared by the field label and the EOD tooltip so the two can't
+// describe the same instant two different ways.
+function clockLabel(d: Date): string {
+  const h = d.getHours() % 12 || 12;
+  return `${h}:${pad(d.getMinutes())} ${d.getHours() >= 12 ? "pm" : "am"}`;
+}
 
 function parseValue(value: string): Date | null {
   if (!value) return null;
@@ -117,13 +131,30 @@ function Dropdown({
   );
 }
 
+// What EOD resolves to for the date the panel is showing, plus one line of
+// explanation for the tooltip. `at` can land on a DIFFERENT calendar day than
+// the anchor — a 7pm–3am shift ends at 3am tomorrow — so setEod() moves the
+// calendar with it.
+export interface EodTarget {
+  at: Date;
+  hint?: string;
+}
+
 export interface DeadlinePickerProps {
   value: string;
   onChange: (value: string) => void;
   placeholder?: string;
+  // Resolves "end of day" for the date in the panel. Supplied by the host
+  // because the host is the only layer that knows WHOSE day it is — here the
+  // New task form's assignee. A callback rather than the raw user/schedule
+  // fields on purpose: this component stays presentational (react + lucide, no
+  // app imports, no User type), and a test can pin the button with
+  // `() => ({ at: new Date(…) })`. Without it the button falls back to the
+  // office default below.
+  resolveEod?: (anchor: Date) => EodTarget | null;
 }
 
-export function DeadlinePicker({ value, onChange, placeholder = "Set a deadline" }: DeadlinePickerProps) {
+export function DeadlinePicker({ value, onChange, placeholder = "Set a deadline", resolveEod }: DeadlinePickerProps) {
   const propDate = useMemo(() => parseValue(value), [value]);
 
   const [open, setOpen] = useState(false);
@@ -164,6 +195,30 @@ export function DeadlinePicker({ value, onChange, placeholder = "Set a deadline"
   }, [open]);
 
   const working = draft ?? defaultDate();
+
+  // What the EOD button will apply, for the date currently in the panel.
+  // Keyed on the working TIMESTAMP, not the Date object: `working` is a fresh
+  // object on every render while nothing is picked, and resolveEod builds Intl
+  // formatters — keying on identity would re-resolve on every keystroke in the
+  // host form. (Hosts should pass a useCallback'd resolver for the same
+  // reason; an inline arrow only degrades this to a per-render recompute.)
+  const workingMs = working.getTime();
+  const eod = useMemo<EodTarget>(() => {
+    const resolved = resolveEod?.(new Date(workingMs));
+    if (resolved && !Number.isNaN(resolved.at.getTime())) return resolved;
+    const d = new Date(workingMs);
+    d.setHours(EOD_FALLBACK_HOUR, EOD_FALLBACK_MIN, 0, 0);
+    return { at: d };
+  }, [workingMs, resolveEod]);
+
+  // Read off the same value the click commits, so it can't drift the way the
+  // old hardcoded "End of day — 3:00 am" title did. Name the date too when the
+  // shift ends on another day, or "3:00 am" reads as today.
+  const eodTitle =
+    (sameDay(eod.at, working)
+      ? `End of day — ${clockLabel(eod.at)}`
+      : `End of day — ${SHORT_MONTHS[eod.at.getMonth()]} ${eod.at.getDate()}, ${clockLabel(eod.at)}`) +
+    (eod.hint ? ` · ${eod.hint}` : "");
 
   function commit(d: Date | null) {
     const next = d ? new Date(d) : null;
@@ -326,9 +381,7 @@ export function DeadlinePicker({ value, onChange, placeholder = "Set a deadline"
   // ---------- field display ----------
   const fieldLabel = useMemo(() => {
     if (!propDate) return null;
-    let h = propDate.getHours() % 12; if (h === 0) h = 12;
-    const p = propDate.getHours() >= 12 ? "pm" : "am";
-    return `${SHORT_MONTHS[propDate.getMonth()]} ${propDate.getDate()}, ${propDate.getFullYear()}, ${h}:${pad(propDate.getMinutes())} ${p}`;
+    return `${SHORT_MONTHS[propDate.getMonth()]} ${propDate.getDate()}, ${propDate.getFullYear()}, ${clockLabel(propDate)}`;
   }, [propDate]);
 
   function togglePanel(next: boolean) {
@@ -342,11 +395,13 @@ export function DeadlinePicker({ value, onChange, placeholder = "Set a deadline"
     }
   }
 
-  // EOD: set the time to 3:00 am on the working date, keeping the panel open
-  // so the change is visible and adjustable. Closes only via Done / outside.
+  // EOD: jump to the resolved end of day, keeping the panel open so the change
+  // is visible and adjustable. Closes only via Done / outside. setView is not
+  // cosmetic here: an overnight shift resolves to the NEXT day, which can be
+  // the next month, and the calendar has to follow or the selected pill
+  // disappears off-screen.
   function setEod() {
-    const d = new Date(working);
-    d.setHours(EOD_HOUR, EOD_MIN, 0, 0);
+    const d = new Date(eod.at);
     setView(startOfMonth(d));
     commit(d);
   }
@@ -462,7 +517,12 @@ export function DeadlinePicker({ value, onChange, placeholder = "Set a deadline"
               Clear
             </button>
             <span className="flex-1" />
-            <button type="button" onClick={setEod} title="End of day — 3:00 am"
+            {/* Title comes from `eod` — the exact value the click commits — so
+                it can't drift the way the old hardcoded "End of day — 3:00 am"
+                string did. No aria-label: replacing the accessible name with a
+                string that doesn't contain "EOD" trips WCAG 2.5.3 (Label in
+                Name) for voice control. */}
+            <button type="button" onClick={setEod} title={eodTitle}
               className="rounded-full px-2.5 py-1.5 text-[13px] font-medium text-muted hover:bg-surface2 hover:text-ink transition-colors">
               EOD
             </button>

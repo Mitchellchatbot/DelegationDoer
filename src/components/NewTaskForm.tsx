@@ -7,13 +7,13 @@ import { useCurrentUser } from "@/lib/user-context";
 import { useTeam } from "@/lib/team-context";
 import { rankCandidates, buildLoadSignals, type RankedCandidate } from "@/lib/skill-rank";
 import { findFirstImage, requestAttachmentAnalysis, buildAnalyzeNotice } from "@/lib/attachment-analysis";
-import { shiftEndInstant } from "@/lib/work-hours";
-import { useEffect, useMemo, useState } from "react";
+import { dayAnchorInTz, safeTimezone, shiftEndInstant, tzShortLabel } from "@/lib/work-hours";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Sparkles, Wand2, Crown, ShieldCheck, ChevronDown, ChevronRight, Mail, FolderOpen, Server, Link as LinkIcon, KeyRound, MessageSquare, Zap, ScanText, AlertTriangle, Clock, Users as UsersIcon } from "lucide-react";
 import { PersonAvatar } from "@/components/PersonAvatar";
 import { MediaPicker } from "@/components/MediaPicker";
-import { DeadlinePicker } from "@/components/DeadlinePicker";
+import { DeadlinePicker, type EodTarget } from "@/components/DeadlinePicker";
 import { toast } from "sonner";
 import type { CustomField, TaskMedia } from "@/lib/types";
 
@@ -434,36 +434,101 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel, initialValues, lo
     return deadlineFromEstimate(estimate, u);
   }, [assigneeId, topPick?.userId, estimate, assignMode, teamDeadlineBasis]);
 
-  // "Default EOD" — set the deadline to the assignee's end of day. Resolves
-  // their actual shift end (weekly_schedule or flat "Same every weekday" hours),
-  // timezone-correct and overnight-aware (e.g. a 7pm–3am Karachi shift lands at
-  // 3am the next day). Anchors to any date already picked, else the auto-computed
-  // deadline's date, else now. Falls back to 18:00 on a day off / unknown assignee.
+  // The ONE place that answers "when does this task's owner stop working on
+  // `anchor`'s day?". Both EOD affordances call it — the "Default EOD" button
+  // in the label row and the deadline picker's in-panel "EOD" — so they can't
+  // drift apart. They already had: the picker shipped with its own hardcoded
+  // 3:00 am and silently overrode this logic for everyone who set the deadline
+  // from inside the panel instead of from the button.
+  //
+  // Resolves the owner's actual shift end (weekly_schedule, else the flat
+  // "Same every weekday" hours), timezone-correct and overnight-aware, so a
+  // 7pm–3am Karachi shift returns 3am the NEXT day. Returns an absolute
+  // instant plus a line for the tooltip — the honest answer is sometimes
+  // "nobody told us their hours", and a silent 6pm is precisely how the 3am
+  // went unreported for so long.
+  //
+  // `users` belongs in the deps and is not optional: TeamProvider starts empty
+  // and only fills in once /api/users lands, and that route's mapper is the
+  // only thing in the app exposing workHoursStart/End (server-data's
+  // userFromRow omits them). A resolver frozen at mount would find no user
+  // forever and hand every assignee the office default — the same class of bug
+  // in a different disguise.
+  const resolveEodInstant = useCallback(
+    (anchor: Date): EodTarget | null => {
+      if (Number.isNaN(anchor.getTime())) return null;
+      const officeDefault = (why: string): EodTarget => {
+        // 6pm on the anchor date, in the VIEWER's zone — pre-existing
+        // behaviour, kept so this fix doesn't quietly move the deadline for
+        // everyone who has no hours on file.
+        const d = new Date(anchor);
+        d.setHours(18, 0, 0, 0);
+        return { at: d, hint: `${why} — using the 6:00 pm office default` };
+      };
+
+      // A team task has no owner yet. teamDeadlineBasis above makes the same
+      // call for the auto-deadline: don't borrow one member's shift to speak
+      // for a pool nobody has claimed.
+      if (assignMode === "team") return officeDefault("Team task — nobody owns it yet");
+
+      const owner =
+        users.find((x) => x.id === (assigneeId || topPick?.userId)) ??
+        // Nobody picked yet (a leader whose scoped department has no eligible
+        // members, or the roster still loading) — your own day is a better
+        // guess than a flat 6pm.
+        users.find((x) => x.id === currentUser.id) ??
+        null;
+      if (!owner) return officeDefault("No assignee picked yet");
+
+      const who = owner.name.split(" ")[0];
+      const tz = safeTimezone(owner.workTimezone);
+      // Anchor on the picked CALENDAR date in their zone, not on the raw
+      // instant: the picker's draft time-of-day plus a 12h offset is enough to
+      // land on the neighbouring weekday and wrongly report a day off.
+      const instant = shiftEndInstant({
+        anchor: dayAnchorInTz(anchor, tz),
+        tz,
+        weeklySchedule: owner.weeklySchedule,
+        flatStart: owner.workHoursStart,
+        flatEnd: owner.workHoursEnd
+      });
+      if (instant) {
+        // State it in THEIR clock: the picker renders the instant in the
+        // creator's zone, so a cross-timezone deadline that reads "3:00 am" is
+        // self-explaining instead of looking like this very bug.
+        const local = instant.toLocaleTimeString("en-US", {
+          timeZone: tz,
+          hour: "numeric",
+          minute: "2-digit"
+        });
+        return { at: instant, hint: `${who}'s shift ends ${local} ${tzShortLabel(tz)}` };
+      }
+      // "Day off" and "we were never told" both land on the office default but
+      // need different fixes, so say which one it was.
+      const hasHours =
+        Object.keys(owner.weeklySchedule ?? {}).length > 0 ||
+        Boolean(owner.workHoursStart && owner.workHoursEnd);
+      return officeDefault(
+        hasHours ? `${who} isn't scheduled that day` : `No work hours on file for ${who}`
+      );
+    },
+    [users, assigneeId, topPick?.userId, assignMode, currentUser.id]
+  );
+
+  // "Default EOD" — one click without opening the picker, anchored to the
+  // deadline the task would ship with right now: the manual override, else the
+  // capacity-derived suggestion, else today. (The picker's in-panel EOD anchors
+  // to the date you're LOOKING at instead — that difference is why both exist,
+  // and it's the only one left between them.)
   function setDeadlineToEod() {
-    const u = users.find((x) => x.id === (assigneeId || topPick?.userId));
     const anchor = dueDateOverride
       ? new Date(dueDateOverride)
       : computedDueDate
         ? new Date(computedDueDate)
         : new Date();
-    if (Number.isNaN(anchor.getTime())) return;
-    const instant = u
-      ? shiftEndInstant({
-          anchor,
-          tz: u.workTimezone,
-          weeklySchedule: u.weeklySchedule,
-          flatStart: u.workHoursStart,
-          flatEnd: u.workHoursEnd
-        })
-      : null;
-    if (instant) {
-      setDueDateOverride(isoToLocalInput(instant.toISOString()));
-    } else {
-      // No shift that day / unknown assignee — office default 6pm on the anchor date.
-      const d = new Date(anchor);
-      d.setHours(18, 0, 0, 0);
-      setDueDateOverride(isoToLocalInput(d.toISOString()));
-    }
+    const target = resolveEodInstant(anchor);
+    if (!target) return;
+    setDueDateOverride(isoToLocalInput(target.at.toISOString()));
   }
 
   async function askAI() {
@@ -739,7 +804,7 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel, initialValues, lo
                   type="button"
                   onClick={setDeadlineToEod}
                   className="btn px-2.5 py-1 text-[11px]"
-                  title="Set the deadline to the assignee's end of day (shift end, in their timezone)"
+                  title="Snap the deadline to the assignee's end of day — their shift end, in their timezone, on the date the deadline already carries"
                 >
                   <Clock className="w-3 h-3 text-accent" />
                   Default EOD
@@ -760,7 +825,11 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel, initialValues, lo
                 )}
               </div>
             </div>
-            <DeadlinePicker value={dueDateOverride} onChange={setDueDateOverride} />
+            <DeadlinePicker
+              value={dueDateOverride}
+              onChange={setDueDateOverride}
+              resolveEod={resolveEodInstant}
+            />
           </div>
           <div>
             <label className="label">Tags</label>

@@ -93,14 +93,26 @@ export function canAddDepartments(actor: User): boolean {
 // than role-gated, because growth metrics are sensitive and only a few
 // people own the spend story.
 //
-// Matches against the lowercased display name so a rename in the DB
-// doesn't break the gate. Mirrors the same substring-matching pattern
-// used by SUPER_APPROVER_NAME_PATTERNS in lib/email-approvers.ts —
-// keep the two in sync if the access model evolves.
+// Two ways in, the same belt-and-braces pairing canSeeCustomerSupport
+// uses below:
+//
+//   1. exact email — stable, and the only safe way to admit someone
+//      whose first name is too common to use as a substring
+//   2. display-name substring — survives a rename in the DB
+//
+// Prefer the email list for new grants. A name pattern matches EVERY
+// user whose name contains it, so a common name silently admits people
+// who were never meant to see spend. The name list mirrors the
+// substring-matching pattern used by SUPER_APPROVER_NAME_PATTERNS in
+// lib/email-approvers.ts — keep the two in sync if the access model
+// evolves.
+const OUTBOUND_EMAILS = ["shaheerkhosa6@gmail.com"];
 const OUTBOUND_NAME_PATTERNS = ["mitchell", "hasan", "mujtaba", "henry", "hamza", "sofyan"];
 
 export function canSeeOutbound(u: User | null | undefined): boolean {
-  if (!u || !u.name) return false;
+  if (!u) return false;
+  if (u.email && OUTBOUND_EMAILS.includes(u.email.toLowerCase().trim())) return true;
+  if (!u.name) return false;
   const lower = u.name.toLowerCase();
   return OUTBOUND_NAME_PATTERNS.some((p) => lower.includes(p));
 }

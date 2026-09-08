@@ -84,7 +84,7 @@ export default function BoardPage() {
   const { users, departments, userById } = useTeam();
   const searchParams = useSearchParams();
   const router = useRouter();
-  const { containerRef, onDragStart, onDragEnd: stopAutoScroll } =
+  const { containerRef, onDragStart, onDragEnd: stopAutoScroll, resolveDroppableId, activeDroppableId } =
     useHorizontalDragAutoScroll();
   const [tasks, setTasks] = useState<Task[]>([]);
   const [, setLoading] = useState(true);
@@ -393,7 +393,10 @@ export default function BoardPage() {
 
   async function onDragEnd(result: DropResult) {
     if (!result.destination) return;
-    const dest = result.destination.droppableId;
+    // Re-resolve against the live DOM so a drop after horizontal auto-scroll
+    // lands in the column actually under the cursor (not the library's
+    // pre-scroll destination).
+    const dest = resolveDroppableId(result.destination.droppableId);
     const id = result.draggableId;
     const before = tasks.find((t) => t.id === id);
     if (!before) return;
@@ -732,7 +735,13 @@ export default function BoardPage() {
                   </div>
                 </div>
                 <Droppable droppableId={col.id}>
-                  {(prov, snap) => (
+                  {(prov, snap) => {
+                    // Prefer the live hit-tested column (correct during horizontal
+                    // auto-scroll); fall back to the library snapshot for keyboard drags.
+                    const over = activeDroppableId !== null
+                      ? activeDroppableId === col.id
+                      : snap.isDraggingOver;
+                    return (
                     <div
                       ref={prov.innerRef}
                       {...prov.droppableProps}
@@ -744,7 +753,7 @@ export default function BoardPage() {
                       // the viewport's lower edge regardless of column size.
                       className={cn(
                         "p-2 space-y-2 min-h-[300px] max-h-[70vh] overflow-y-auto transition-colors",
-                        snap.isDraggingOver && "bg-surface2/50"
+                        over && "bg-surface2/50"
                       )}
                     >
                       {(grouped[col.id] ?? []).map((t, i) => (
@@ -869,7 +878,8 @@ export default function BoardPage() {
                         <div className="text-[11px] text-muted italic text-center py-4">No tasks</div>
                       )}
                     </div>
-                  )}
+                    );
+                  }}
                 </Droppable>
               </div>
             ))}

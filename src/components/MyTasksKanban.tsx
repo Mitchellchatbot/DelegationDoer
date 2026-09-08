@@ -76,7 +76,7 @@ const COLUMNS: ColumnDef[] = [
 
 export function MyTasksKanban({ initialTasks }: { initialTasks: Task[] }) {
   const router = useRouter();
-  const { containerRef, onDragStart, onDragEnd: stopAutoScroll } =
+  const { containerRef, onDragStart, onDragEnd: stopAutoScroll, resolveDroppableId, activeDroppableId } =
     useHorizontalDragAutoScroll();
   const [tasks, setTasks] = useState<Task[]>(initialTasks);
 
@@ -109,7 +109,10 @@ export function MyTasksKanban({ initialTasks }: { initialTasks: Task[] }) {
 
   async function onDragEnd(result: DropResult) {
     if (!result.destination) return;
-    const dest = result.destination.droppableId as TaskStatus;
+    // Re-resolve against the live DOM so a drop after horizontal auto-scroll
+    // lands in the column actually under the cursor (not the library's
+    // pre-scroll destination).
+    const dest = resolveDroppableId(result.destination.droppableId) as TaskStatus;
     const id = result.draggableId;
     const before = tasks.find((t) => t.id === id);
     if (!before || before.status === dest) return;
@@ -162,6 +165,7 @@ export function MyTasksKanban({ initialTasks }: { initialTasks: Task[] }) {
               col={col}
               tasks={grouped[col.id] ?? []}
               animationDelay={colIdx * 40}
+              activeDroppableId={activeDroppableId}
             />
           ))}
         </div>
@@ -171,11 +175,12 @@ export function MyTasksKanban({ initialTasks }: { initialTasks: Task[] }) {
 }
 
 function Column({
-  col, tasks, animationDelay
+  col, tasks, animationDelay, activeDroppableId
 }: {
   col: ColumnDef;
   tasks: Task[];
   animationDelay: number;
+  activeDroppableId: string | null;
 }) {
   const router = useRouter();
   return (
@@ -205,13 +210,19 @@ function Column({
         </span>
       </div>
       <Droppable droppableId={col.id}>
-        {(prov, snap) => (
+        {(prov, snap) => {
+          // Prefer the live hit-tested column (correct during horizontal
+          // auto-scroll); fall back to the library snapshot for keyboard drags.
+          const over = activeDroppableId !== null
+            ? activeDroppableId === col.id
+            : snap.isDraggingOver;
+          return (
           <div
             ref={prov.innerRef}
             {...prov.droppableProps}
             className={cn(
               "flex-1 px-2 pb-2 pt-1 space-y-2 min-h-[180px] max-h-[calc(100vh-340px)] overflow-y-auto transition-colors rounded-b-2xl",
-              snap.isDraggingOver && "bg-accent/5 ring-2 ring-accent/20"
+              over && "bg-accent/5 ring-2 ring-accent/20"
             )}
           >
             {tasks.map((t, i) => (
@@ -236,13 +247,14 @@ function Column({
                 </Draggable>
               ))}
             {prov.placeholder}
-            {tasks.length === 0 && !snap.isDraggingOver && (
+            {tasks.length === 0 && !over && (
               <div className="text-[11px] text-muted italic text-center py-6">
                 {col.emptyHint}
               </div>
             )}
           </div>
-        )}
+          );
+        }}
       </Droppable>
     </div>
   );

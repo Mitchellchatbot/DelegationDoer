@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { headers } from "next/headers";
+import { appOrigin } from "@/lib/app-origin";
 import { ClipboardList } from "lucide-react";
 import { PageHero } from "@/components/PageHero";
 import { requireCurrentUserId } from "@/lib/session";
@@ -31,13 +31,7 @@ export default async function OnboardingBoardPage() {
   // anyone has sent a single link.
   const rows = await listAllOnboardingLinks().catch(() => []);
 
-  const origin = (() => {
-    const h = headers();
-    const host = h.get("x-forwarded-host") ?? h.get("host");
-    if (!host) return process.env.NEXT_PUBLIC_APP_URL ?? "";
-    const proto = h.get("x-forwarded-proto") ?? (host.startsWith("localhost") ? "http" : "https");
-    return `${proto}://${host}`;
-  })();
+  const origin = appOrigin();
 
   // Both of these are optional decoration on this page, so neither is allowed
   // to take it down: a clone that is briefly unreachable, or a workspace_settings

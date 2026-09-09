@@ -84,19 +84,30 @@ function LoginForm() {
         //
         // getSupabaseBrowser() is createBrowserClient, i.e. PKCE, so this stores
         // an sb-<ref>-auth-token-code-verifier cookie now and the recovery link
-        // comes back as ?code=. Landing that on the client page loses it: the
-        // middleware runs first, its getUser() fails against whatever stale
-        // auth-token cookie is lying around, and @supabase/ssr's cleanup expires
-        // the whole sb-<ref>-auth-token* family — the verifier with it. Measured
-        // against production, on a request carrying a junk auth-token:
+        // comes back as ?code=. Landing that on the client page loses it, for two
+        // independent reasons — either alone is enough.
+        //
+        // (a) The middleware runs first and its getUser() fails against whatever
+        // stale auth-token cookie is lying around, which tears the session down.
+        // _removeSession deletes the verifier BY NAME (GoTrueClient.js:4019,
+        // `${storageKey}-code-verifier`) — NOT, as an earlier version of this
+        // comment claimed, because the name shares a prefix. @supabase/ssr's
+        // chunk matcher is /^(.*)[.](0|[1-9][0-9]*)$/ and would never sweep it.
+        // Measured against production, on a request carrying a junk auth-token:
         //
         //   Set-Cookie: sb-<ref>-auth-token=; Max-Age=0
         //   Set-Cookie: sb-<ref>-auth-token-code-verifier=; Max-Age=0
         //
-        // By the time AuthFinishClient calls exchangeCodeForSession the browser
-        // has applied those, and it fails with "PKCE code verifier not found in
-        // storage". The server route wins the same race every time: it reads the
-        // verifier off the INCOMING request, before the response is applied.
+        // By the time AuthFinishClient runs the browser has applied those.
+        //
+        // (b) The one that actually fires. createBrowserClient sets
+        // detectSessionInUrl and the client auto-initializes, so auth-js exchanges
+        // the code and deletes the verifier on its own; AuthFinishClient's manual
+        // call awaits the same initializePromise and so always runs second, then
+        // reports failure for a sign-in that just succeeded.
+        //
+        // The server route sidesteps both: it reads the verifier off the INCOMING
+        // request, and nothing auto-exchanges on a route handler.
         //
         // /auth/finish is right for the ADMIN magic links (generateLink is
         // implicit — tokens in the fragment, no verifier, and a server route

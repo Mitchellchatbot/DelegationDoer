@@ -56,10 +56,33 @@ function LoginForm() {
     setSendingReset(true);
     try {
       const supabase = getSupabaseBrowser();
+      // The browser's own origin FIRST. This app answers on two hostnames, and
+      // NEXT_PUBLIC_APP_URL is one value baked in at build time, so preferring it
+      // mailed everyone a recovery link for the OTHER host: you would click it,
+      // get signed in somewhere you weren't, and the tab you started from would
+      // still be signed out. window.location.origin is the only value that cannot
+      // be wrong about where the user actually is, and being a client component
+      // it is the real browser origin, not a forgeable header.
+      //
+      // #295 is right that links we hand to OUTSIDERS should be canonical. This
+      // one goes to the person who just typed their address into this page, to
+      // send them back exactly where they were.
+      //
+      // REQUIRES both origins in Supabase Auth -> URL Configuration -> Redirect
+      // URLs. GoTrue does not error on an unlisted redirectTo; it substitutes
+      // Site URL wholesale and the tokens arrive somewhere else entirely.
       const origin =
-        process.env.NEXT_PUBLIC_APP_URL || (typeof window !== "undefined" ? window.location.origin : "");
+        (typeof window !== "undefined" ? window.location.origin : "") ||
+        process.env.NEXT_PUBLIC_APP_URL ||
+        "";
       const { error } = await supabase.auth.resetPasswordForEmail(email, {
-        redirectTo: `${origin}/api/auth/callback?next=/settings`,
+        // /auth/finish, not /api/auth/callback. The callback is a server route
+        // and can only read ?code=; a recovery link that arrives in implicit form
+        // puts the tokens in the URL FRAGMENT, which never reaches the server, so
+        // it lands signed-out at /settings with no explanation. AuthFinishClient
+        // is a client page and handles both shapes — it is what the admin
+        // magic-link flow already uses. /auth is in PUBLIC_PREFIXES.
+        redirectTo: `${origin}/auth/finish?next=/settings`,
       });
       if (error) {
         setError(error.message);

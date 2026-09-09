@@ -158,6 +158,15 @@ export async function middleware(req: NextRequest) {
         res.cookies.set({ name, value, ...options });
       },
       remove(name: string, options) {
+        // Never expire the PKCE verifier here. When getUser() fails against a
+        // stale auth-token cookie, @supabase/ssr asks us to clear the whole
+        // sb-<ref>-auth-token* family, and the verifier is named as a suffix of
+        // that same key — so a dead session silently takes the in-flight
+        // password-reset / OAuth handshake down with it. That is not a session
+        // credential and it is not what "sign this person out" should mean.
+        // It is single-use and short-lived, and the next PKCE start overwrites
+        // it, so leaving it is harmless.
+        if (name.endsWith("-code-verifier")) return;
         res.cookies.set({ name, value: "", ...options });
       }
     }

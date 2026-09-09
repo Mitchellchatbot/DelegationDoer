@@ -13,16 +13,25 @@ export async function GET(req: NextRequest) {
   const code = url.searchParams.get("code");
   const next = url.searchParams.get("next") || "/";
 
-  if (code) {
-    const supabase = getSupabaseServer();
-    await supabase.auth.exchangeCodeForSession(code);
-  }
-
   const forwardedHost = req.headers.get("x-forwarded-host");
   const forwardedProto = req.headers.get("x-forwarded-proto");
   const publicOrigin = forwardedHost
     ? `${forwardedProto || "https"}://${forwardedHost}`
     : process.env.NEXT_PUBLIC_APP_URL || url.origin;
+
+  if (code) {
+    const supabase = getSupabaseServer();
+    const { error } = await supabase.auth.exchangeCodeForSession(code);
+    if (error) {
+      // Do NOT redirect to `next` on failure. This used to ignore the result
+      // entirely, so a dead exchange sent the user to /settings with no session,
+      // middleware bounced them to /login, and nothing anywhere said why — the
+      // reset just appeared not to work. Send them somewhere that can explain.
+      const back = new URL("/login", publicOrigin);
+      back.searchParams.set("error", error.message);
+      return NextResponse.redirect(back);
+    }
+  }
 
   return NextResponse.redirect(new URL(next, publicOrigin));
 }

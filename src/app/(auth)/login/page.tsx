@@ -23,7 +23,11 @@ function LoginForm() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // Seeded from ?error=, so a failed exchange in /api/auth/callback actually says
+  // something instead of dumping the user on a blank login form. Without this the
+  // callback's redirect would drop the reason on the floor — the same silent
+  // failure this whole change exists to remove.
+  const [error, setError] = useState<string | null>(search.get("error"));
   const [resetSent, setResetSent] = useState(false);
   const [sendingReset, setSendingReset] = useState(false);
 
@@ -76,13 +80,28 @@ function LoginForm() {
         process.env.NEXT_PUBLIC_APP_URL ||
         "";
       const { error } = await supabase.auth.resetPasswordForEmail(email, {
-        // /auth/finish, not /api/auth/callback. The callback is a server route
-        // and can only read ?code=; a recovery link that arrives in implicit form
-        // puts the tokens in the URL FRAGMENT, which never reaches the server, so
-        // it lands signed-out at /settings with no explanation. AuthFinishClient
-        // is a client page and handles both shapes — it is what the admin
-        // magic-link flow already uses. /auth is in PUBLIC_PREFIXES.
-        redirectTo: `${origin}/auth/finish?next=/settings`,
+        // /api/auth/callback, NOT /auth/finish, and the difference is a race.
+        //
+        // getSupabaseBrowser() is createBrowserClient, i.e. PKCE, so this stores
+        // an sb-<ref>-auth-token-code-verifier cookie now and the recovery link
+        // comes back as ?code=. Landing that on the client page loses it: the
+        // middleware runs first, its getUser() fails against whatever stale
+        // auth-token cookie is lying around, and @supabase/ssr's cleanup expires
+        // the whole sb-<ref>-auth-token* family — the verifier with it. Measured
+        // against production, on a request carrying a junk auth-token:
+        //
+        //   Set-Cookie: sb-<ref>-auth-token=; Max-Age=0
+        //   Set-Cookie: sb-<ref>-auth-token-code-verifier=; Max-Age=0
+        //
+        // By the time AuthFinishClient calls exchangeCodeForSession the browser
+        // has applied those, and it fails with "PKCE code verifier not found in
+        // storage". The server route wins the same race every time: it reads the
+        // verifier off the INCOMING request, before the response is applied.
+        //
+        // /auth/finish is right for the ADMIN magic links (generateLink is
+        // implicit — tokens in the fragment, no verifier, and a server route
+        // cannot see a fragment at all). It is wrong here. Two flows, two routes.
+        redirectTo: `${origin}/api/auth/callback?next=/settings`,
       });
       if (error) {
         setError(error.message);

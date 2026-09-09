@@ -14,6 +14,22 @@ import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { getSupabaseBrowser } from "@/lib/supabase-browser";
 
+/**
+ * Reduce a caller-supplied `next` to a path on THIS origin, or "/" if it points
+ * anywhere else. Resolving through the URL parser normalises the encodings and
+ * backslash tricks that defeat a startsWith("/") check.
+ */
+function safeNext(raw: string | null): string {
+  if (!raw) return "/";
+  try {
+    const url = new URL(raw, window.location.origin);
+    if (url.origin !== window.location.origin) return "/";
+    return `${url.pathname}${url.search}${url.hash}`;
+  } catch {
+    return "/";
+  }
+}
+
 export function AuthFinishClient() {
   const router = useRouter();
   const params = useSearchParams();
@@ -21,7 +37,17 @@ export function AuthFinishClient() {
 
   useEffect(() => {
     const supabase = getSupabaseBrowser();
-    const next = params.get("next") || "/";
+    // Same-origin only. `next` is attacker-supplied and goes to router.replace(),
+    // which follows an absolute URL quite happily — and /auth is public, so
+    // /auth/finish?next=https://evil.com would hand a freshly-signed-in user
+    // straight off the site.
+    //
+    // Resolved through the URL parser rather than checked with startsWith("/"),
+    // because the string tests miss cases the parser does not. Measured:
+    //   new URL("/\evil.com", origin).href === "https://evil.com/"
+    // A leading-slash check passes that, and the browser still leaves the site.
+    // Parsing against our own origin and comparing origins is the whole test.
+    const next = safeNext(params.get("next"));
 
     async function run() {
       const hash = window.location.hash.startsWith("#")
@@ -49,10 +75,27 @@ export function AuthFinishClient() {
           return;
         }
       } else if (code) {
-        const { error } = await supabase.auth.exchangeCodeForSession(code);
-        if (error) {
-          setError(error.message);
-          return;
+        // Do NOT exchange blindly. getSupabaseBrowser() is createBrowserClient,
+        // which hardcodes flowType:"pkce" and defaults detectSessionInUrl to
+        // isBrowser() (createBrowserClient.js:38-40), and the GoTrueClient
+        // constructor auto-runs initialize(). So on a ?code= landing auth-js has
+        // ALREADY exchanged the code and deleted the verifier by name
+        // (GoTrueClient.js:1483) before this line runs — exchangeCodeForSession
+        // opens with `await this.initializePromise` (GoTrueClient.js:1123), so
+        // ours is deterministically second and fails with "PKCE code verifier not
+        // found in storage" while the user is, at that exact moment, signed in.
+        // That is what PR #316 shipped to production.
+        //
+        // getSession() awaits the same initializePromise, so once it resolves the
+        // auto-exchange has finished. Only exchange by hand if it produced nothing
+        // — which is the case this branch was actually written for.
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session) {
+          const { error } = await supabase.auth.exchangeCodeForSession(code);
+          if (error) {
+            setError(error.message);
+            return;
+          }
         }
       } else {
         setError("No sign-in token found in URL.");

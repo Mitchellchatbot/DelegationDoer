@@ -112,10 +112,36 @@ function canonicalRedirect(req: NextRequest): NextResponse | null {
 }
 
 export async function middleware(req: NextRequest) {
+  // OFF BY DEFAULT, and the default is the point.
+  //
+  // This shipped enabled in #311 and signed the entire team out in one deploy.
+  // Everyone was on the Railway host; the 307 moved them to a host where their
+  // cookie does not exist, and Supabase cookies are host-only, so nothing came
+  // over. The commit predicted exactly that ("CONSEQUENCE TO ANNOUNCE: anyone
+  // whose session lives on the Railway host ... has to sign in once") — the
+  // mistake was flipping it for everyone at once, with no warning and no way to
+  // turn it off without a deploy, rather than the redirect itself.
+  //
+  // Re-enable only once (a) password reset actually delivers mail, (b) Supabase
+  // Auth's Redirect URLs list the canonical origin, and (c) a desktop build
+  // defaulting to it has gone out — electron/main.js still opens the Railway URL
+  // in the system browser, whose UA is not "Electron" and so is not exempt below.
+  // Announce it first, and let people sign in on the canonical host while this
+  // one still works.
+  //
+  // A genuine runtime lookup, not a build-time inline: `next build` emits
+  //   if("1"===process.env.CANONICAL_HOST_REDIRECT)
+  // verbatim into .next/server/src/middleware.js, with the redirect body intact
+  // (checked, because Next inlines NEXT_PUBLIC_* and could have folded this to a
+  // constant and dropped the branch). So flipping the Railway variable is enough
+  // to turn this back on — no code change, no rebuild.
+  //
   // Before the session work: there is no point refreshing a cookie on a host we
   // are about to leave, and the cookie for the canonical host is a different one.
-  const redirected = canonicalRedirect(req);
-  if (redirected) return redirected;
+  if (process.env.CANONICAL_HOST_REDIRECT === "1") {
+    const redirected = canonicalRedirect(req);
+    if (redirected) return redirected;
+  }
 
   const res = NextResponse.next({ request: { headers: req.headers } });
 

@@ -27,14 +27,22 @@ export default async function MainLayout({ children }: { children: React.ReactNo
   //      to /login here, middleware sees the auth cookie and bounces back
   //      to /, infinite loop. Sign out server-side first to drop the cookie,
   //      THEN redirect.
+  //
+  // scope: "local" is load-bearing. signOut() defaults to scope: "global",
+  // which revokes the user's refresh tokens on EVERY device. All this needs is
+  // to drop the cookie on THIS one so middleware stops bouncing — and case (3)
+  // is a server-side data problem, not evidence the session is compromised.
+  // With the default, one unreadable users row logs somebody out of their phone
+  // and desktop app too, and a transient read failure does it to the whole team
+  // at once.
   const userId = await getCurrentUserId();
   if (!userId) {
-    await getSupabaseServer().auth.signOut();
+    await getSupabaseServer().auth.signOut({ scope: "local" });
     redirect("/login");
   }
   const user = await getUserById(userId);
   if (!user) {
-    await getSupabaseServer().auth.signOut();
+    await getSupabaseServer().auth.signOut({ scope: "local" });
     redirect("/login");
   }
 

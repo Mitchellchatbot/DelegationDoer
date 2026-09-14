@@ -89,6 +89,7 @@ export default async function ClientTeamsPage() {
       health: c.healthOverrideLabel ?? c.healthLabel,
       lastOutboundEmailAt: c.lastOutboundEmailAt,
       outreachEmailedAt: c.outreachEmailedAt,
+      outreachHiddenSites: c.outreachHiddenSites,
       notes: c.notes
     }));
 

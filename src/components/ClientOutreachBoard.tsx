@@ -81,26 +81,26 @@ export function ClientOutreachBoard({
     return { fresh, due, overdue };
   }, [clients]);
 
-  // Remove a site from a client's list. Updates websites[] (and the primary
-  // `website` if that's the one removed). Optimistic with rollback.
-  async function removeSite(id: string, site: string) {
+  // Hide a site from THIS board only — adds it to outreach_hidden_sites. The
+  // client's real websites[] (task form, profile, etc.) is left untouched.
+  // Optimistic with rollback.
+  async function hideSite(id: string, site: string) {
     const c = clients.find((x) => x.id === id);
     if (!c) return;
-    const newWebsites = (c.websites ?? []).filter((w) => w !== site);
-    const newPrimary = c.website === site ? (newWebsites[0] ?? null) : c.website;
+    const hidden = Array.from(new Set([...(c.outreachHiddenSites ?? []), site]));
     const before = clients;
-    setClients((cur) => cur.map((x) => (x.id === id ? { ...x, websites: newWebsites, website: newPrimary } : x)));
+    setClients((cur) => cur.map((x) => (x.id === id ? { ...x, outreachHiddenSites: hidden } : x)));
     try {
       const r = await fetch(`/api/clients/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ websites: newWebsites, website: newPrimary })
+        body: JSON.stringify({ outreachHiddenSites: hidden })
       });
       if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? `HTTP ${r.status}`);
-      toast.success("Site removed");
+      toast.success("Hidden from this board");
     } catch (e) {
       setClients(before);
-      toast.error(`Couldn't remove site: ${e instanceof Error ? e.message : "unknown error"}`);
+      toast.error(`Couldn't hide site: ${e instanceof Error ? e.message : "unknown error"}`);
     }
   }
 
@@ -162,7 +162,7 @@ export function ClientOutreachBoard({
             </div>
             <div className="rounded-2xl border border-slate-200 bg-white shadow-soft overflow-hidden">
               {list.map((c, i) => (
-                <OutreachRow key={c.id} client={c} rank={i + 1} canEdit={canEdit} onSetEmailed={setEmailed} onRemoveSite={removeSite} />
+                <OutreachRow key={c.id} client={c} rank={i + 1} canEdit={canEdit} onSetEmailed={setEmailed} onHideSite={hideSite} />
               ))}
             </div>
           </div>
@@ -173,13 +173,13 @@ export function ClientOutreachBoard({
 }
 
 function OutreachRow({
-  client: c, rank, canEdit, onSetEmailed, onRemoveSite
+  client: c, rank, canEdit, onSetEmailed, onHideSite
 }: {
   client: BoardClient;
   rank: number;
   canEdit: boolean;
   onSetEmailed: (id: string, mark: boolean) => Promise<void>;
-  onRemoveSite: (id: string, site: string) => Promise<void>;
+  onHideSite: (id: string, site: string) => Promise<void>;
 }) {
   const [busy, setBusy] = useState(false);
   const d = daysSince(effectiveMs(c));
@@ -187,7 +187,11 @@ function OutreachRow({
   const done = status !== "overdue";
   const manual = !!c.outreachEmailedAt;
 
-  const sites = c.websites.length ? c.websites : c.website ? [c.website] : [];
+  // Sites shown on THIS board = the client's sites minus any hidden from the
+  // outreach board (websites[] itself is never modified here).
+  const hidden = new Set(c.outreachHiddenSites ?? []);
+  const sites = (c.websites.length ? c.websites : c.website ? [c.website] : [])
+    .filter((s) => !hidden.has(s));
 
   const pill =
     status === "fresh"
@@ -235,13 +239,9 @@ function OutreachRow({
               {canEdit && (
                 <button
                   type="button"
-                  onClick={() => {
-                    if (window.confirm(`Remove ${siteLabel(s)} from ${c.name}'s site list?`)) {
-                      void onRemoveSite(c.id, s);
-                    }
-                  }}
-                  title="Remove this site"
-                  aria-label={`Remove ${siteLabel(s)}`}
+                  onClick={() => void onHideSite(c.id, s)}
+                  title="Hide from this board (keeps it on the client)"
+                  aria-label={`Hide ${siteLabel(s)} from this board`}
                   className="shrink-0 grid place-items-center w-4 h-4 rounded text-muted hover:text-rose-600 hover:bg-rose-50"
                 >
                   <X className="w-3 h-3" />

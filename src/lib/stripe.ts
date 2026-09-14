@@ -225,14 +225,15 @@ export interface ClientRevenue {
   subCount: number;
   since: string;
   matched: boolean;
+  paused: boolean; // carries a Stripe pause flag (still counted in MRR)
 }
 export interface RevenueSummary {
-  mrr: number; // live (collecting) only — excludes paused
-  activeCount: number; // live subscriptions
-  clientCount: number; // live clients
+  mrr: number; // total recurring book (includes paused-flagged subs)
+  activeCount: number; // all active subscriptions
+  clientCount: number;
   clients: ClientRevenue[];
-  paused: { name: string; email: string; mrr: number; product: string }[];
-  pausedMrr: number;
+  pausedMrr: number; // portion of MRR whose subs carry a pause flag (informational)
+  pausedCount: number;
   newThisMonth: { name: string; email: string; mrr: number; since: string }[];
   newMrr: number;
   churnedThisMonth: { name: string; email: string; mrr: number }[];
@@ -261,35 +262,37 @@ export async function getStripeRevenue(): Promise<RevenueSummary | null> {
   const monthStart = Math.floor(new Date(now.getFullYear(), now.getMonth(), 1).getTime() / 1000);
 
   const isPaused = (s: StripeSub) => !!s.pause_collection;
+  // Active includes paused-flagged subs — they're still recurring revenue, the
+  // pause flag in Stripe is often stale. We count them and just tag them.
   const activeAll = subs.filter((s) => s.status === "active" || s.status === "trialing");
-  const live = activeAll.filter((s) => !isPaused(s));
-  const pausedSubs = activeAll.filter(isPaused);
 
-  // Live clients grouped by resolved company.
-  const byClient = new Map<string, ClientRevenue>();
-  for (const s of live) {
+  // Clients grouped by resolved company.
+  const byClient = new Map<string, ClientRevenue & { pausedSubs: number }>();
+  let pausedMrr = 0;
+  let pausedCount = 0;
+  for (const s of activeAll) {
     const r = resolve(s, board);
     const c = cust(s);
     const m = subMrr(s);
+    const paused = isPaused(s);
+    if (paused) { pausedMrr += m; pausedCount += 1; }
     const since = new Date(s.created * 1000).toISOString().slice(0, 10);
     const cur = byClient.get(r.key);
     if (cur) {
       cur.mrr += m;
       cur.subCount += 1;
+      if (paused) cur.pausedSubs += 1;
       if (since < cur.since) cur.since = since;
     } else {
-      byClient.set(r.key, { key: r.key, name: r.name, email: c.email, mrr: m, subCount: 1, since, matched: r.matched });
+      byClient.set(r.key, { key: r.key, name: r.name, email: c.email, mrr: m, subCount: 1, since, matched: r.matched, paused, pausedSubs: paused ? 1 : 0 });
     }
   }
-  const clients = [...byClient.values()].sort((a, b) => b.mrr - a.mrr);
+  const clients = [...byClient.values()]
+    .map(({ pausedSubs, ...c }) => ({ ...c, paused: pausedSubs > 0 && pausedSubs === c.subCount }))
+    .sort((a, b) => b.mrr - a.mrr);
   const mrr = clients.reduce((s, c) => s + c.mrr, 0);
 
-  const paused = pausedSubs
-    .map((s) => ({ name: resolve(s, board).name, email: cust(s).email, mrr: subMrr(s), product: productName(s) }))
-    .sort((a, b) => b.mrr - a.mrr);
-  const pausedMrr = paused.reduce((s, c) => s + c.mrr, 0);
-
-  const newThisMonth = live
+  const newThisMonth = activeAll
     .filter((s) => s.created >= monthStart)
     .map((s) => ({ name: resolve(s, board).name, email: cust(s).email, mrr: subMrr(s), since: new Date(s.created * 1000).toISOString().slice(0, 10) }))
     .sort((a, b) => b.mrr - a.mrr);
@@ -309,11 +312,11 @@ export async function getStripeRevenue(): Promise<RevenueSummary | null> {
 
   return {
     mrr,
-    activeCount: live.length,
+    activeCount: activeAll.length,
     clientCount: clients.length,
     clients,
-    paused,
     pausedMrr,
+    pausedCount,
     newThisMonth,
     newMrr,
     churnedThisMonth,

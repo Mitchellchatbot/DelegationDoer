@@ -4,8 +4,8 @@ import { getAnthropic, MODELS } from "@/lib/anthropic-client";
 
 // Senders that never warrant a personal reply — receipts, no-reply, marketing,
 // automated notifications. Dropped before the AI classifier even runs.
-const AUTOMATED_FROM = /(no-?reply|do-?not-?reply|notifications?@|mailer|newsletter|statements?@|invoice\+|billing@|receipts?@|updates?@|auto-?confirm|order-?confirm|orders?@|support@wpdeveloper|wordpress@|@wpenginepowered|@wpengine|@amazon\.|@shopify|@stripe\.com|@e\.|@.*mailing|postmaster|via .*mail)/i;
-const AUTOMATED_SUBJECT = /(receipt|invoice|statement|out of usage credits|vulnerability notification|weekly .* summary|unsubscribe|newsletter|password reset|verify your email|security alert|new user registration|ordered \d+ item|your order|has shipped|shipping confirmation|registration)/i;
+const AUTOMATED_FROM = /(no-?reply|do-?not-?reply|notifications?@|mailer|newsletter|statements?@|invoice\+|billing@|receipts?@|updates?@|auto-?confirm|order-?confirm|orders?@|support@wpdeveloper|support@wpremote|@wpremote|wordpress@|@wpenginepowered|@wpengine|@amazon\.|@shopify|@stripe\.com|@e\.|@.*mailing|postmaster|via .*mail)/i;
+const AUTOMATED_SUBJECT = /(receipt|invoice|statement|out of usage credits|vulnerability notification|weekly .* summary|unsubscribe|newsletter|password reset|verify your email|security alert|new user registration|ordered \d+ item|your order|has shipped|shipping confirmation|registration|\(auto\)|auto update|site update|sync completed|first sync|backup (completed|failed)|update (completed|failed))/i;
 
 export interface InboxThreadLite { id: string; subject: string; from: string; snippet: string; lastAt?: string }
 

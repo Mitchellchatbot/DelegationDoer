@@ -2,6 +2,7 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { getAllTasks, getAllUsersLight, getUserById, getDepartments, getLeaderIds } from "@/lib/server-data";
 import { canViewTaskScopedToDepartment, isOwner } from "@/lib/access";
 import { getStripeRevenue } from "@/lib/stripe";
+import { addMemory, forgetMemory } from "@/lib/brain-memory";
 import type { ParsedPnl } from "@/lib/pnl-parse";
 import { TEAM_TAG, stripTeamTag } from "@/lib/task-team";
 import { userCapacity } from "@/lib/capacity";
@@ -362,6 +363,29 @@ export const AI_TOOLS = [
     }
   },
   {
+    name: "remember",
+    description:
+      "OWNER-ONLY. Save a durable fact the brain should carry across every future chat and the daily brief. Call this whenever Mitchell states a standing priority ('getting more clients is the top priority'), a decision ('we're cutting LinkedIn ads'), a company fact ('Talha owns outbound'), or a preference ('keep team messages casual'). Don't save one-off questions, transient status, or anything already obvious from the data. Pick the closest category. Returns the saved memory. Non-owner callers get access-denied — never save memory for them.",
+    input_schema: {
+      type: "object",
+      properties: {
+        content: { type: "string", description: "The fact to remember, phrased so it stands on its own later." },
+        category: { type: "string", enum: ["priority", "decision", "fact", "preference"] }
+      },
+      required: ["content"]
+    }
+  },
+  {
+    name: "forget",
+    description:
+      "OWNER-ONLY. Deactivate a memory that is no longer true or relevant. Pass the memory id (the [mem_...] shown in the 'What you know' context block). Use when Mitchell says a priority changed, a decision was reversed, or a fact is stale.",
+    input_schema: {
+      type: "object",
+      properties: { id: { type: "string", description: "The mem_... id from the memory context block." } },
+      required: ["id"]
+    }
+  },
+  {
     name: "get_finances",
     description:
       "OWNER-ONLY. Returns the full financial picture: manual MRR (the owner's source-of-truth sheet), live Stripe revenue (MRR, new/churned/past-due), and the P&L (monthly revenue/expenses/net/margin) with a full expense breakdown down to individual line items / vendors (per-month values included). Use this for ANY money question — 'what's my MRR', 'what should I cut', 'what's my burn', 'biggest expense', 'what's rising', 'margin', 'who's my biggest client'. Returns { error } for any non-owner caller — if that happens, tell the user finance data is private to the owner and do not answer the finance question from memory.",
@@ -405,6 +429,8 @@ export async function runTool(
       case "search_sops": return searchSops(input);
       case "create_task": return createTask(input, ctx);
       case "get_finances": return getFinances(ctx);
+      case "remember": return rememberFact(input, ctx);
+      case "forget": return forgetFact(input, ctx);
       default:
         return { error: `unknown tool: ${name}` };
     }
@@ -2031,4 +2057,26 @@ async function getFinances(ctx: ToolContext) {
 function money(n: number | null | undefined): string {
   if (n === null || n === undefined) return "$0";
   return `$${Math.round(n).toLocaleString("en-US")}`;
+}
+
+// OWNER-ONLY memory writes. Reads are injected into the system prompt by the
+// chat route / daily brief, so there's no read tool here.
+async function rememberFact(input: Record<string, unknown>, ctx: ToolContext) {
+  if (!isOwner(ctx.actor)) {
+    return { error: "access denied — memory is owner-only" };
+  }
+  const content = typeof input.content === "string" ? input.content.trim() : "";
+  if (!content) return { error: "content required" };
+  const mem = await addMemory(content, input.category, ctx.actor.id);
+  return { saved: true, id: mem.id, category: mem.category, content: mem.content };
+}
+
+async function forgetFact(input: Record<string, unknown>, ctx: ToolContext) {
+  if (!isOwner(ctx.actor)) {
+    return { error: "access denied — memory is owner-only" };
+  }
+  const id = typeof input.id === "string" ? input.id : "";
+  if (!id) return { error: "id required" };
+  const ok = await forgetMemory(id);
+  return ok ? { forgotten: true, id } : { error: "could not forget (bad id?)" };
 }

@@ -4,8 +4,8 @@ import { getAnthropic, MODELS } from "@/lib/anthropic-client";
 
 // Senders that never warrant a personal reply — receipts, no-reply, marketing,
 // automated notifications. Dropped before the AI classifier even runs.
-const AUTOMATED_FROM = /(no-?reply|do-?not-?reply|notifications?@|mailer|newsletter|statements?@|invoice\+|billing@|receipts?@|updates?@|auto-?confirm|order-?confirm|orders?@|support@wpdeveloper|support@wpremote|@wpremote|wordpress@|@wpenginepowered|@wpengine|@amazon\.|@shopify|@stripe\.com|@e\.|@.*mailing|postmaster|via .*mail)/i;
-const AUTOMATED_SUBJECT = /(receipt|invoice|statement|out of usage credits|vulnerability notification|weekly .* summary|unsubscribe|newsletter|password reset|verify your email|security alert|new user registration|ordered \d+ item|your order|has shipped|shipping confirmation|registration|\(auto\)|auto update|site update|sync completed|first sync|backup (completed|failed)|update (completed|failed))/i;
+const AUTOMATED_FROM = /(no-?reply|do-?not-?reply|notifications?@|mailer|newsletter|statements?@|invoice\+|billing@|receipts?@|updates?@|auto-?confirm|order-?confirm|orders?@|alerts?@|member(ship)?@|marketing@|events?@|news@|digest@|support@wpdeveloper|support@wpremote|@wpremote|wordpress@|@wpenginepowered|@wpengine|@amazon\.|@shopify|@stripe\.com|americanexpress|@aexp|@apple\.com|@meta\.com|facebookmail|@linkedin\.com|@e\.|@.*mailing|@.*eventbrite|@.*mailchimp|postmaster|via .*mail)/i;
+const AUTOMATED_SUBJECT = /(receipt|invoice|statement|out of usage credits|vulnerability notification|weekly .* summary|unsubscribe|newsletter|password reset|verify your email|security alert|new user registration|ordered \d+ item|your order|has shipped|shipping confirmation|registration|\(auto\)|auto update|site update|sync completed|first sync|backup (completed|failed)|update (completed|failed)|card was reactivated|reactivated in apple pay|transaction (declined|approved)|payment (received|failed|declined)|keynote speaker|webinar|register now|save the date|this year'?s|join us|you'?re invited|reminder:|is now available|has been (added|updated|created))/i;
 
 export interface InboxThreadLite { id: string; subject: string; from: string; snippet: string; lastAt?: string }
 
@@ -26,15 +26,30 @@ export async function filterReplyNeeded<T extends InboxThreadLite>(threads: T[])
     const res = await client.messages.create({
       model: MODELS.classify,
       max_tokens: 300,
-      system:
-        "You triage a founder's email inbox. Given a numbered list of threads, return STRICT JSON { \"reply\": [indices] } listing ONLY the threads that need a personal reply FROM the founder — real people asking questions, client conversations, sales/prospect threads, anything awaiting his answer. EXCLUDE automated notifications, receipts, newsletters, marketing, calendar/system auto-messages, and FYI-only mail that needs no response. When unsure, lean toward excluding.",
+      system: [
+        "You triage a founder's (Mitchell, agency owner) email inbox. For each numbered thread decide if it needs a PERSONAL reply from him.",
+        "Return STRICT JSON only: { \"reply\": [indices] } — the indices that need his personal reply.",
+        "",
+        "INCLUDE only when a real human is genuinely waiting on Mitchell:",
+        "- a client, prospect, partner, vendor, or teammate who asked a question, made a request, or needs a decision/answer",
+        "- a sales or business conversation where the ball is in his court",
+        "- a real person following up or expecting a response",
+        "",
+        "EXCLUDE everything else, including:",
+        "- automated notifications & alerts (bank/Amex/Apple Pay/card, platform notices from Meta/Google/LinkedIn, site/plugin/backup/sync, calendar auto-messages)",
+        "- receipts, invoices, statements, order/shipping confirmations",
+        "- newsletters, marketing, event/webinar/keynote invites, 'save the date', digests, product announcements",
+        "- pure FYI / confirmations that need no response, cold sales pitches TO him",
+        "",
+        "Be STRICT: when in doubt, EXCLUDE. It is much better to hide a borderline email than to clutter his list. A clean list of only truly must-reply threads is the goal."
+      ].join("\n"),
       messages: [{ role: "user", content: list }]
     });
     const text = res.content.filter((b): b is Extract<typeof b, { type: "text" }> => b.type === "text").map((b) => b.text).join("").trim();
     const json = JSON.parse(text.replace(/^```json?\s*/i, "").replace(/```$/, "").trim());
-    const keep = new Set<number>((json.reply ?? []).map((n: unknown) => Number(n)));
-    const picked = candidates.filter((_, i) => keep.has(i));
-    return picked.length ? picked : candidates; // fall back to heuristic set if the model returned nothing usable
+    if (!json || !Array.isArray(json.reply)) return candidates; // unparseable — heuristic set
+    const keep = new Set<number>(json.reply.map((n: unknown) => Number(n)));
+    return candidates.filter((_, i) => keep.has(i)); // trust the strict classifier, even if that's zero
   } catch {
     return candidates; // AI unavailable — heuristic filter is still better than the raw inbox
   }

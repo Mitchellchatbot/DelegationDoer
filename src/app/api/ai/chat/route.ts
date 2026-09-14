@@ -3,6 +3,8 @@ import { getAnthropic, MODELS } from "@/lib/anthropic-client";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById, getDepartments } from "@/lib/server-data";
 import { AI_TOOLS, runTool, type ProposedAction } from "@/lib/ai-tools";
+import { isOwner } from "@/lib/access";
+import { listMemories, formatMemoriesBlock } from "@/lib/brain-memory";
 
 interface ChatMessage { role: "user" | "assistant"; content: string }
 
@@ -66,6 +68,7 @@ Guidelines:
 - When suggesting an assignee for new work, rank by capacity + role/department fit and explain the top pick in one line.
 - ACTION CARDS: whenever a tool result reveals a clear action item (an email asking for follow-up, a "next step" the user just discussed, an obvious task the user hinted at), call \`propose_task\` to stage a "Create task" button under your reply. The tool returns the top-ranked assignees — your text answer should call out the top pick by name with a one-line rationale. Do NOT fabricate a task when the user is just asking for information; only stage one when there's a real action to commit to.
 - CLIENT MEETINGS: when a question, an email you're drafting, or a brief/task you're proposing concerns a specific client, call list_client_meetings to ground it in what was actually said and decided in their tl;dv meetings (summaries, key decisions, client requests, risks, next steps). Prefer this over guessing about prior conversations; cite the meeting date when you lean on it.
+- MEMORY (owner only): you have persistent memory shown under "What you know about the company". Treat it as current truth and build on it. When Mitchell states a durable priority, decision, company fact, or preference, call remember to save it (don't save one-off questions or transient status). When something he told you before is no longer true, call forget with its [mem_...] id. If asked "what do you know / remember", summarize the memory block.
 - FINANCES ARE OWNER-ONLY: money questions (MRR, revenue, expenses, burn, margin, "what should I cut", biggest cost/client, profit) are answered ONLY via the get_finances tool, which is gated to the owner (Mitchell) server-side. If it returns an access-denied error, tell the user finances are private to the owner and do NOT answer from memory or any other tool. When it succeeds, ground every number in what it returns (manual MRR is the source of truth; the P&L expenseCategories/items are where cuts live) and be specific — name the category, vendor, and amount, and call out what's rising month over month.
 - For "how do I…" / procedural / new-hire questions, call search_sops and base the answer on the matched chunks. ALWAYS cite the SOP title. If any matching chunk carries an imageUrl (a captioned screenshot or diagram), embed it inline in your reply using markdown image syntax: ![brief caption](imageUrl) on its own line, BEFORE the related step. Show the actual picture rather than just describing it — users learn faster from screenshots than prose. If multiple chunks have images, include each one near the step it illustrates. If search_sops returns no relevant chunks (or all distances are high — anything above ~0.6 is loose), say so directly rather than guessing.`;
 
@@ -73,11 +76,27 @@ Guidelines:
       ? `\n\nThe user is viewing client ${clientContext.name} (clientId "${clientContext.id}"). Unless they clearly ask about something else, scope every answer to this client — pass clientId: "${clientContext.id}" to client tools (get_client, list_client_completed_tasks, list_client_recent_emails, list_client_eod_updates, list_client_meetings) and frame summaries around this client.`
       : "";
 
+    // Persistent brain memory — owner-only. Injected so the assistant carries
+    // Mitchell's standing priorities/decisions/facts across every chat, and can
+    // update them via the remember/forget tools.
+    let memoryBlock = "";
+    if (isOwner(actor)) {
+      try {
+        const block = formatMemoriesBlock(await listMemories());
+        if (block) {
+          memoryBlock =
+            `\n\nWhat you know about the company (persistent memory — treat as current truth, build on it, and cite/update it via remember/forget when Mitchell tells you something durable):\n${block}`;
+        }
+      } catch {
+        /* memory unavailable — proceed without it */
+      }
+    }
+
     const dynamicSystemPrompt = `Caller:
 - Name: ${actor.name}
 - Role: ${actor.role}
 - Department(s): ${deptLabels}
-- Today: ${new Date().toLocaleString()}${clientScoping}`;
+- Today: ${new Date().toLocaleString()}${clientScoping}${memoryBlock}`;
 
     // Build the message list we'll feed Anthropic. We mutate this as
     // tool rounds progress (appending each assistant tool_use + the

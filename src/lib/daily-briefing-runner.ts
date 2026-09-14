@@ -32,6 +32,7 @@ import { openDm, postMessage } from "@/lib/slack";
 import { resolveSlackId } from "@/lib/slack-resolve";
 import { DEFAULT_TZ, nowInTz, ymdInTz } from "@/lib/shift";
 import { getStripeRevenue, type RevenueSummary } from "@/lib/stripe";
+import { listMemories, formatMemoriesBlock } from "@/lib/brain-memory";
 import type { Task, User } from "@/lib/types";
 
 const OWNER_EMAIL = "mitchell@scaledai.org";
@@ -152,8 +153,10 @@ function buildPrompts(args: {
   shipped: Task[];
   // Live Stripe revenue snapshot (owner-only), or null if unavailable.
   revenue?: RevenueSummary | null;
+  // Persistent brain memory block (priorities/decisions/facts), or "".
+  memoryBlock?: string;
 }): { system: string; user: string } {
-  const { tasks, roster, inbox, inboxNote, nameById, recentlyMessaged, shipped, revenue } = args;
+  const { tasks, roster, inbox, inboxNote, nameById, recentlyMessaged, shipped, revenue, memoryBlock } = args;
 
   // Teammates Mitchell can be prompted to check in on: everyone but him and
   // other leaders (the engagement DMs are founder→team).
@@ -251,6 +254,9 @@ function buildPrompts(args: {
 
   const user = [
     `Date: ${prettyDate()} (America/New_York).`,
+    ...(memoryBlock
+      ? ["", "## What you know about the company (Mitchell's standing priorities/decisions — weight the brief and the needle-mover toward these)", memoryBlock]
+      : []),
     "",
     "## Teammates (choose engagement_messages recipients from these ids)",
     rosterBlock,
@@ -510,12 +516,14 @@ export async function runDailyBriefing(
 
   // Gather in parallel. Stripe revenue fails soft (null) so a bad key or
   // outage never blocks the briefing.
-  const [allTasks, roster, inbox, revenue] = await Promise.all([
+  const [allTasks, roster, inbox, revenue, memories] = await Promise.all([
     getAllTasks(),
     getAllUsersLight(),
     pullInbox(),
-    getStripeRevenue().catch(() => null)
+    getStripeRevenue().catch(() => null),
+    listMemories().catch(() => [])
   ]);
+  const memoryBlock = formatMemoriesBlock(memories);
   const tasks = allTasks.filter((t) => IN_FLIGHT.includes(t.status));
   // Recent wins (last 7 days) — material for personal check-ins.
   const shippedCutoff = Date.now() - 7 * 86_400_000;
@@ -539,7 +547,7 @@ export async function runDailyBriefing(
 
   const recentlyMessaged = await gatherRecentlyMessaged(supabase, now.ymd, nameById);
   const prompts = buildPrompts({
-    tasks, roster, inbox: inbox.items, inboxNote: inbox.note, nameById, recentlyMessaged, shipped, revenue
+    tasks, roster, inbox: inbox.items, inboxNote: inbox.note, nameById, recentlyMessaged, shipped, revenue, memoryBlock
   });
 
   let drafted: DraftedContent;

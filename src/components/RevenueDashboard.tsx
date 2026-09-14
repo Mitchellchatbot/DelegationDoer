@@ -1,4 +1,4 @@
-import { TrendingUp, TrendingDown, AlertTriangle } from "lucide-react";
+import { TrendingUp, TrendingDown, AlertTriangle, PauseCircle } from "lucide-react";
 import type { RevenueSummary } from "@/lib/stripe";
 
 // Live revenue view from Stripe (owner-only). Shows MRR, net movement this
@@ -27,14 +27,16 @@ export function RevenueDashboard({ rev }: { rev: RevenueSummary | null | undefin
       {/* Stat cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-soft">
-          <div className="text-[11px] font-medium text-muted">MRR</div>
+          <div className="text-[11px] font-medium text-muted">MRR · collecting</div>
           <div className="mt-1 text-2xl font-bold tabular-nums text-ink">{money(rev.mrr)}</div>
-          <div className="mt-0.5 text-[11px] text-muted">~{money(rev.mrr * 12)}/yr run-rate</div>
+          <div className="mt-0.5 text-[11px] text-muted">
+            ~{money(rev.mrr * 12)}/yr{rev.pausedMrr > 0 && <> · <span className="text-slate-400">{money(rev.pausedMrr)} paused</span></>}
+          </div>
         </div>
         <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-soft">
           <div className="text-[11px] font-medium text-muted">Paying clients</div>
           <div className="mt-1 text-2xl font-bold tabular-nums text-ink">{rev.clientCount}</div>
-          <div className="mt-0.5 text-[11px] text-muted">{rev.activeCount} active subs</div>
+          <div className="mt-0.5 text-[11px] text-muted">{rev.activeCount} live subs{rev.paused.length > 0 && ` · ${rev.paused.length} paused`}</div>
         </div>
         <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-soft">
           <div className="text-[11px] font-medium text-muted">Net new · this mo</div>
@@ -95,7 +97,7 @@ export function RevenueDashboard({ rev }: { rev: RevenueSummary | null | undefin
             const w = (c.mrr / maxClient) * 100;
             const pct = rev.mrr ? (c.mrr / rev.mrr) * 100 : 0;
             return (
-              <div key={c.customerId} className="group">
+              <div key={c.key} className="group">
                 <div className="flex items-baseline gap-2 text-[12px]">
                   <span className="w-5 text-right text-muted tabular-nums shrink-0">{i + 1}</span>
                   <span className="text-ink truncate flex-1 min-w-0">
@@ -112,6 +114,31 @@ export function RevenueDashboard({ rev }: { rev: RevenueSummary | null | undefin
           })}
         </div>
       </div>
+
+      {/* Paused — not billing right now */}
+      {rev.paused.length > 0 && (
+        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+          <div className="flex items-baseline justify-between mb-2">
+            <div className="text-[12px] font-semibold text-slate-600 flex items-center gap-1.5">
+              <PauseCircle className="w-3.5 h-3.5 text-slate-400" />
+              Paused · not collecting
+            </div>
+            <div className="text-[11px] text-muted tabular-nums">{rev.paused.length} subs · {money(rev.pausedMrr)}/mo not billed</div>
+          </div>
+          <div className="space-y-1">
+            {rev.paused.map((p, i) => (
+              <div key={i} className="flex items-baseline justify-between gap-2 text-[12px]">
+                <span className="text-slate-500 truncate">
+                  {p.name}
+                  {p.product && <span className="text-slate-400"> · {p.product}</span>}
+                </span>
+                <span className="tabular-nums shrink-0 text-slate-400">{money(p.mrr)}/mo</span>
+              </div>
+            ))}
+          </div>
+          <div className="mt-2 text-[11px] text-muted">Excluded from MRR. Resume in Stripe if any of these should be billing.</div>
+        </div>
+      )}
     </div>
   );
 }

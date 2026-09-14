@@ -300,6 +300,13 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       update.outreach_hidden_sites = raw.map((s) => String(s).trim()).filter(Boolean);
     }
 
+    if ("outreachHidden" in body) {
+      if (typeof body.outreachHidden !== "boolean") {
+        return NextResponse.json({ error: "outreachHidden must be a boolean" }, { status: 400 });
+      }
+      update.outreach_hidden = body.outreachHidden;
+    }
+
     if ("updateCadence" in body) {
       const raw = body.updateCadence;
       const allowed = ["daily", "biweekly", "weekly", "monthly", "none"];

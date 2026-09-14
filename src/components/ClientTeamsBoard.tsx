@@ -36,6 +36,8 @@ export interface BoardClient {
   outreachEmailedAt: string | null;
   // Sites hidden from the outreach board only (websites[] stays intact).
   outreachHiddenSites: string[];
+  // Whole client removed from the outreach board only.
+  outreachHidden: boolean;
   // Mitch's quick notes, edited inline on this board.
   notes: string | null;
 }

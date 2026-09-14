@@ -56,23 +56,30 @@ export function ClientOutreachBoard({
   canEdit: boolean;
 }) {
   const [clients, setClients] = useState(initial);
+  const [showHidden, setShowHidden] = useState(false);
   useEffect(() => { setClients(initial); }, [initial]);
 
-  // Group by team column, ranked the same way as the split.
+  const hiddenCount = useMemo(() => clients.filter((c) => c.outreachHidden).length, [clients]);
+
+  // Group by team column, ranked the same way as the split. Removed clients are
+  // dropped from the board unless "show removed" is on.
   const byColumn = useMemo(() => {
     const m = new Map<string, BoardClient[]>();
     for (const col of columns) m.set(col.teamId ?? UNASSIGNED, []);
     for (const c of clients) {
+      if (c.outreachHidden && !showHidden) continue;
       const bucket = m.get(c.teamId ?? UNASSIGNED);
       if (bucket) bucket.push(c);
     }
     for (const arr of m.values()) arr.sort(importanceCmp);
     return m;
-  }, [clients, columns]);
+  }, [clients, columns, showHidden]);
 
+  // Cadence counts reflect only the clients actually on the board (not removed).
   const totals = useMemo(() => {
     let fresh = 0, due = 0, overdue = 0;
     for (const c of clients) {
+      if (c.outreachHidden) continue;
       const s = statusOf(daysSince(effectiveMs(c)));
       if (s === "fresh") fresh++;
       else if (s === "due") due++;
@@ -80,6 +87,23 @@ export function ClientOutreachBoard({
     }
     return { fresh, due, overdue };
   }, [clients]);
+
+  async function setHidden(id: string, hidden: boolean) {
+    const before = clients;
+    setClients((cur) => cur.map((c) => (c.id === id ? { ...c, outreachHidden: hidden } : c)));
+    try {
+      const r = await fetch(`/api/clients/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ outreachHidden: hidden })
+      });
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? `HTTP ${r.status}`);
+      toast.success(hidden ? "Removed from email board" : "Restored to email board");
+    } catch (e) {
+      setClients(before);
+      toast.error(`Couldn't ${hidden ? "remove" : "restore"}: ${e instanceof Error ? e.message : "unknown error"}`);
+    }
+  }
 
   // Hide a site from THIS board only — adds it to outreach_hidden_sites. The
   // client's real websites[] (task form, profile, etc.) is left untouched.
@@ -146,6 +170,15 @@ export function ClientOutreachBoard({
           <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 text-emerald-700 px-2.5 py-1 tabular-nums">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" /> {totals.fresh} emailed
           </span>
+          {hiddenCount > 0 && (
+            <button
+              type="button"
+              onClick={() => setShowHidden((v) => !v)}
+              className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 text-ink/60 hover:text-ink px-2.5 py-1 tabular-nums transition-colors"
+            >
+              {showHidden ? "Hide removed" : `${hiddenCount} removed · Show`}
+            </button>
+          )}
         </div>
       </div>
 
@@ -162,7 +195,7 @@ export function ClientOutreachBoard({
             </div>
             <div className="rounded-2xl border border-slate-200 bg-white shadow-soft overflow-hidden">
               {list.map((c, i) => (
-                <OutreachRow key={c.id} client={c} rank={i + 1} canEdit={canEdit} onSetEmailed={setEmailed} onHideSite={hideSite} />
+                <OutreachRow key={c.id} client={c} rank={i + 1} canEdit={canEdit} onSetEmailed={setEmailed} onHideSite={hideSite} onSetHidden={setHidden} />
               ))}
             </div>
           </div>
@@ -173,13 +206,14 @@ export function ClientOutreachBoard({
 }
 
 function OutreachRow({
-  client: c, rank, canEdit, onSetEmailed, onHideSite
+  client: c, rank, canEdit, onSetEmailed, onHideSite, onSetHidden
 }: {
   client: BoardClient;
   rank: number;
   canEdit: boolean;
   onSetEmailed: (id: string, mark: boolean) => Promise<void>;
   onHideSite: (id: string, site: string) => Promise<void>;
+  onSetHidden: (id: string, hidden: boolean) => Promise<void>;
 }) {
   const [busy, setBusy] = useState(false);
   const d = daysSince(effectiveMs(c));
@@ -208,7 +242,8 @@ function OutreachRow({
   return (
     <div className={cn(
       "grid grid-cols-[32px_1fr_auto] items-center gap-3 px-4 py-3 border-t border-slate-100 first:border-t-0",
-      done && "bg-emerald-50/40"
+      done && !c.outreachHidden && "bg-emerald-50/40",
+      c.outreachHidden && "opacity-55"
     )}>
       <span className={cn(
         "w-6 h-[22px] rounded-full grid place-items-center text-[12px] font-semibold tabular-nums",
@@ -218,7 +253,31 @@ function OutreachRow({
       </span>
 
       <div className="min-w-0">
-        <div className="text-[14px] font-semibold text-ink truncate">{c.name}</div>
+        <div className="flex items-center gap-1.5 min-w-0">
+          {canEdit && (
+            c.outreachHidden ? (
+              <button
+                type="button"
+                onClick={() => void onSetHidden(c.id, false)}
+                title="Restore to email board"
+                className="shrink-0 text-[11px] font-semibold text-accent hover:underline"
+              >
+                Restore
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => void onSetHidden(c.id, true)}
+                title="Remove this client from the email board"
+                aria-label={`Remove ${c.name} from the email board`}
+                className="shrink-0 grid place-items-center w-5 h-5 rounded-md text-muted hover:text-rose-600 hover:bg-rose-50 transition-colors"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )
+          )}
+          <div className="text-[14px] font-semibold text-ink truncate">{c.name}</div>
+        </div>
         <div className="mt-1 flex flex-wrap items-center gap-1.5">
           {sites.length === 0 && <span className="text-[11px] text-muted italic">No site on file</span>}
           {sites.map((s) => (

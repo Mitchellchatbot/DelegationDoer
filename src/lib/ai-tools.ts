@@ -1,6 +1,8 @@
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { getAllTasks, getAllUsersLight, getUserById, getDepartments, getLeaderIds } from "@/lib/server-data";
-import { canViewTaskScopedToDepartment } from "@/lib/access";
+import { canViewTaskScopedToDepartment, isOwner } from "@/lib/access";
+import { getStripeRevenue } from "@/lib/stripe";
+import type { ParsedPnl } from "@/lib/pnl-parse";
 import { TEAM_TAG, stripTeamTag } from "@/lib/task-team";
 import { userCapacity } from "@/lib/capacity";
 import { listUserEvents } from "@/lib/google-calendar";
@@ -358,6 +360,12 @@ export const AI_TOOLS = [
       },
       required: ["title"]
     }
+  },
+  {
+    name: "get_finances",
+    description:
+      "OWNER-ONLY. Returns the full financial picture: manual MRR (the owner's source-of-truth sheet), live Stripe revenue (MRR, new/churned/past-due), and the P&L (monthly revenue/expenses/net/margin) with a full expense breakdown down to individual line items / vendors (per-month values included). Use this for ANY money question — 'what's my MRR', 'what should I cut', 'what's my burn', 'biggest expense', 'what's rising', 'margin', 'who's my biggest client'. Returns { error } for any non-owner caller — if that happens, tell the user finance data is private to the owner and do not answer the finance question from memory.",
+    input_schema: { type: "object", properties: {} }
   }
 ] as const;
 
@@ -396,6 +404,7 @@ export async function runTool(
       case "list_recommendations": return listRecommendations(input);
       case "search_sops": return searchSops(input);
       case "create_task": return createTask(input, ctx);
+      case "get_finances": return getFinances(ctx);
       default:
         return { error: `unknown tool: ${name}` };
     }
@@ -1883,3 +1892,121 @@ async function searchSops(input: Record<string, unknown>) {
 }
 
 
+
+// OWNER-ONLY financial snapshot for the Ask AI widget. Combines the manual MRR
+// sheet, live Stripe revenue, and the P&L expense breakdown so the brain can
+// answer money / cut questions grounded in real data. Every non-owner caller
+// gets an access-denied object — the model is instructed not to answer from
+// memory when it sees that.
+async function getFinances(ctx: ToolContext) {
+  if (!isOwner(ctx.actor)) {
+    return { error: "access denied — financial data is private to the owner (Mitchell) only" };
+  }
+  const supabase = getSupabaseAdmin();
+
+  // 1. Manual MRR sheet (source of truth).
+  const { data: mrrRows } = await supabase
+    .from("mrr_entries")
+    .select("company, mrr, status, note")
+    .order("mrr", { ascending: false });
+  const rows = (mrrRows ?? []) as { company: string; mrr: number; status: string; note: string | null }[];
+  const manualMrr = rows.filter((r) => r.status === "active" || r.status === "paused").reduce((s, r) => s + Number(r.mrr), 0);
+  const manual = {
+    totalMrr: Math.round(manualMrr),
+    annualRunRate: Math.round(manualMrr * 12),
+    activeClients: rows.filter((r) => r.status === "active" || r.status === "paused").length,
+    churned: rows.filter((r) => r.status === "churned").length,
+    pending: rows.filter((r) => r.status === "pending").map((r) => `${r.company} ${money(r.mrr)}`),
+    clients: rows
+      .filter((r) => r.status === "active" || r.status === "paused")
+      .map((r) => ({ company: r.company, mrr: Math.round(Number(r.mrr)), status: r.status, note: r.note || undefined }))
+  };
+
+  // 2. Live Stripe revenue (fail-soft).
+  const stripe = await getStripeRevenue().catch(() => null);
+  const stripeSummary = stripe
+    ? {
+        mrr: Math.round(stripe.mrr),
+        clients: stripe.clientCount,
+        newThisMonth: stripe.newThisMonth.map((c) => `${c.name} ${money(c.mrr)}`),
+        churnedThisMonth: stripe.churnedThisMonth.map((c) => `${c.name} ${money(c.mrr)}`),
+        pastDue: stripe.pastDue.map((c) => `${c.name} (${c.email}) ${money(c.mrr)}`),
+        note: "Stripe undercounts vs the manual sheet (manual invoices, bundled facilities). Prefer the manual MRR for the headline number."
+      }
+    : "Stripe unavailable";
+
+  // 3. P&L + expense breakdown from the latest parsed upload.
+  const { data: finDocs } = await supabase
+    .from("finance_documents")
+    .select("parsed, uploaded_at")
+    .order("uploaded_at", { ascending: false })
+    .limit(5);
+  const parsed = ((finDocs ?? []) as { parsed: ParsedPnl | null }[]).find((d) => d.parsed)?.parsed ?? null;
+
+  let pnl: unknown = "No P&L uploaded";
+  if (parsed && parsed.periods.length) {
+    const periods = parsed.periods;
+    const hasTotal = periods[periods.length - 1]?.toLowerCase() === "total";
+    const totalIdx = periods.length - 1;
+    const months = hasTotal ? periods.slice(0, -1) : periods;
+    const at = (arr: (number | null)[], i: number) => Math.round(arr[i] ?? 0);
+
+    // Expense categories with leaf items (from parsed.rows).
+    const startI = parsed.rows.findIndex((r) => r.account.toUpperCase() === "EXPENSES");
+    const endI = parsed.rows.findIndex((r) => r.account.toLowerCase() === "total expenses");
+    const categories: { category: string; total: number; monthly: number[]; items: { name: string; total: number }[] }[] = [];
+    if (startI >= 0 && endI > startI) {
+      for (let i = startI + 1; i < endI; i++) {
+        const r = parsed.rows[i];
+        if (r.level !== 1) continue;
+        const items: { name: string; total: number }[] = [];
+        let totalChild: number | null = null;
+        let totalChildVals: (number | null)[] | null = null;
+        let j = i + 1;
+        for (; j < endI && parsed.rows[j].level > 1; j++) {
+          const c = parsed.rows[j];
+          if (c.account.toLowerCase() === `total ${r.account.toLowerCase()}`) {
+            totalChild = c.values[totalIdx] ?? null;
+            totalChildVals = c.values;
+            continue;
+          }
+          items.push({ name: c.account, total: at(c.values, totalIdx) });
+        }
+        let total = r.values[totalIdx] ?? 0;
+        if (!total && totalChild != null) total = totalChild;
+        if (!total && items.length) total = items.reduce((s, x) => s + x.total, 0);
+        const rowVals = months.some((_, mi) => (r.values[mi] ?? 0) !== 0) ? r.values : totalChildVals ?? r.values;
+        categories.push({
+          category: r.account,
+          total: Math.round(total),
+          monthly: months.map((_, mi) => at(rowVals, mi)),
+          items: items.filter((x) => x.total).sort((a, b) => b.total - a.total)
+        });
+      }
+    }
+    categories.sort((a, b) => b.total - a.total);
+
+    pnl = {
+      months,
+      revenueByMonth: months.map((_, i) => at(parsed.summary.income, i)),
+      expensesByMonth: months.map((_, i) => at(parsed.summary.expenses, i)),
+      netByMonth: months.map((_, i) => at(parsed.summary.net, i)),
+      periodTotals: hasTotal
+        ? { revenue: at(parsed.summary.income, totalIdx), expenses: at(parsed.summary.expenses, totalIdx), net: at(parsed.summary.net, totalIdx) }
+        : undefined,
+      expenseCategories: categories
+    };
+  }
+
+  return {
+    note: "Owner-only finances. Manual MRR is the source of truth; Stripe is a cross-check; the P&L expense breakdown is where to find cuts.",
+    manualMrr: manual,
+    stripe: stripeSummary,
+    pnl
+  };
+}
+
+function money(n: number | null | undefined): string {
+  if (n === null || n === undefined) return "$0";
+  return `$${Math.round(n).toLocaleString("en-US")}`;
+}

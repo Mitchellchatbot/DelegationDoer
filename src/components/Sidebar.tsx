@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 import {
   ListTodo, Users, Sparkles, Crown, Mail, Home as HomeIcon, Sunrise, Moon, Briefcase,
   CalendarDays, FolderKanban, ClipboardCheck, BookOpen, Settings, LifeBuoy, LayoutGrid,
-  Users2, Lock, Rocket
+  Users2, Lock, Rocket, Inbox
 } from "lucide-react";
 // Sparkles is reused for both Ask AI and Updates — same icon, different context.
 import { useEffect, useState } from "react";
@@ -54,6 +54,7 @@ const MANAGE_HEAD_ITEM: NavItem = { href: "/leader", label: "Manage", icon: User
 const SETTINGS_ITEM: NavItem = { href: "/settings", label: "Settings", icon: Settings, tone: "indigo" };
 const FINANCE_ITEM: NavItem = { href: "/finance", label: "Finance", icon: Lock, tone: "emerald" };
 const SCALE_ITEM: NavItem = { href: "/scale", label: "Scale Room", icon: Rocket, tone: "indigo" };
+const MY_INBOX_ITEM: NavItem = { href: "/my-inbox", label: "My Inbox", icon: Inbox, tone: "fuchsia" };
 
 // Sidebar lives on a soft slate-blue panel now. Per-row tones drive:
 //   - idle: a low-saturation glyph that reads on the dark background
@@ -323,7 +324,7 @@ export function Sidebar({ user }: { user: User }) {
     UPDATES_ITEM,
     SOPS_ITEM,
     manageOrPeople,
-    ...(isOwner(user) ? [SCALE_ITEM, FINANCE_ITEM] : []),
+    ...(isOwner(user) ? [SCALE_ITEM, MY_INBOX_ITEM, FINANCE_ITEM] : []),
     SETTINGS_ITEM
   ];
   // Section partition. Each entry pairs a label with the hrefs that
@@ -335,7 +336,7 @@ export function Sidebar({ user }: { user: User }) {
     { label: "Work", hrefs: ["/tasks", "/schedule", "/projects"] },
     { label: "Communication", hrefs: ["/inboxes", "/approvals", "/customer-support"] },
     { label: "Knowledge", hrefs: ["/clients", "/client-teams", "/updates", "/sops"] },
-    { label: "Account", hrefs: ["/people", "/leader", "/scale", "/finance", "/settings"] }
+    { label: "Account", hrefs: ["/people", "/leader", "/scale", "/my-inbox", "/finance", "/settings"] }
   ];
   function groupFor(href: string): string | null {
     const g = NAV_GROUPS.find((g) => g.hrefs.includes(href));

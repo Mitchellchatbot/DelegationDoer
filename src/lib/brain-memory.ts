@@ -43,6 +43,14 @@ export async function addMemory(content: string, category: unknown, createdBy: s
   return { id, content: row.content, category: row.category, createdAt: new Date().toISOString() };
 }
 
+export async function updateMemory(id: string, fields: { content?: string; category?: unknown }): Promise<boolean> {
+  const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
+  if (typeof fields.content === "string") patch.content = fields.content.trim();
+  if (fields.category !== undefined) patch.category = coerceCategory(fields.category);
+  const { error } = await getSupabaseAdmin().from("brain_memories").update(patch).eq("id", id);
+  return !error;
+}
+
 export async function forgetMemory(id: string): Promise<boolean> {
   const { error } = await getSupabaseAdmin()
     .from("brain_memories")

@@ -7,7 +7,8 @@ import { isOwner } from "@/lib/access";
 import { FinancePanel, type FinanceDoc } from "@/components/FinancePanel";
 import { FinanceDashboard } from "@/components/FinanceDashboard";
 import { ExpenseBreakdown } from "@/components/ExpenseBreakdown";
-import { RevenueDashboard } from "@/components/RevenueDashboard";
+import { StripeMissing } from "@/components/StripeMissing";
+import { MrrManual, type MrrEntry } from "@/components/MrrManual";
 import { getStripeRevenue } from "@/lib/stripe";
 import type { ParsedPnl } from "@/lib/pnl-parse";
 
@@ -33,6 +34,12 @@ export default async function FinancePage() {
   // Live revenue from Stripe (owner-only). Never blocks the page if it fails.
   const revenue = await getStripeRevenue().catch(() => null);
 
+  // Manual MRR list (owner's source of truth, seeded from the MRR Mastersheet).
+  const { data: mrrRows } = await getSupabaseAdmin()
+    .from("mrr_entries")
+    .select("id, company, mrr, status, subscription_day, satisfaction, note, rank")
+    .order("rank", { ascending: true });
+
   return (
     <div className="space-y-5 max-w-3xl mx-auto">
       <div className="flex items-start gap-3">
@@ -48,7 +55,9 @@ export default async function FinancePage() {
         </div>
       </div>
 
-      <RevenueDashboard rev={revenue} />
+      <MrrManual initial={(mrrRows ?? []) as MrrEntry[]} />
+
+      <StripeMissing rev={revenue} sheetNames={(mrrRows ?? []).map((r) => r.company as string)} />
 
       <FinanceDashboard parsed={latestParsed} />
 

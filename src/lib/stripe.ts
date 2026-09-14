@@ -40,6 +40,7 @@ interface StripeSub {
   status: string;
   created: number;
   canceled_at?: number | null;
+  current_period_end?: number | null;
   pause_collection?: { behavior?: string } | null;
   customer: StripeCustomer | string;
   plan?: { product?: { name?: string | null } | string | null; nickname?: string | null } | null;
@@ -262,9 +263,14 @@ export async function getStripeRevenue(): Promise<RevenueSummary | null> {
   const monthStart = Math.floor(new Date(now.getFullYear(), now.getMonth(), 1).getTime() / 1000);
 
   const isPaused = (s: StripeSub) => !!s.pause_collection;
-  // Active includes paused-flagged subs — they're still recurring revenue, the
-  // pause flag in Stripe is often stale. We count them and just tag them.
-  const activeAll = subs.filter((s) => s.status === "active" || s.status === "trialing");
+  // A sub paused for a long time is dead weight — never show a paused sub older
+  // than 6 months. Recently-paused ones still count (the flag is often stale).
+  const sixMonthsAgo = Math.floor((Date.now() - 182 * 86_400_000) / 1000);
+  const activeAll = subs.filter(
+    (s) =>
+      (s.status === "active" || s.status === "trialing") &&
+      !(isPaused(s) && s.created < sixMonthsAgo)
+  );
 
   // Clients grouped by resolved company.
   const byClient = new Map<string, ClientRevenue & { pausedSubs: number }>();
@@ -304,8 +310,12 @@ export async function getStripeRevenue(): Promise<RevenueSummary | null> {
     .sort((a, b) => b.mrr - a.mrr);
   const churnedMrr = churnedThisMonth.reduce((s, c) => s + c.mrr, 0);
 
+  // Past due, but drop anything past due for more than ~2 months — that's a
+  // dead account, not something to chase. (current_period_end is when billing
+  // last lapsed.)
+  const twoMonthsAgo = Math.floor((Date.now() - 61 * 86_400_000) / 1000);
   const pastDue = subs
-    .filter((s) => s.status === "past_due" || s.status === "unpaid")
+    .filter((s) => (s.status === "past_due" || s.status === "unpaid") && (s.current_period_end ?? 0) >= twoMonthsAgo)
     .map((s) => ({ name: resolve(s, board).name, email: cust(s).email, mrr: subMrr(s) }))
     .sort((a, b) => b.mrr - a.mrr);
   const pastDueMrr = pastDue.reduce((s, c) => s + c.mrr, 0);

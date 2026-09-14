@@ -13,6 +13,7 @@ import {
   type BoardColumn,
   type BoardUser
 } from "@/components/ClientTeamsBoard";
+import { ClientOutreachBoard } from "@/components/ClientOutreachBoard";
 
 export const dynamic = "force-dynamic";
 
@@ -77,6 +78,7 @@ export default async function ClientTeamsPage() {
       id: c.id,
       name: c.name,
       website: c.website,
+      websites: c.websites ?? [],
       iconUrl: c.iconUrl,
       teamId: c.teamId,
       assignedUserIds: c.assignedUserIds ?? [],
@@ -86,6 +88,7 @@ export default async function ClientTeamsPage() {
       priorityRank: c.priorityRank,
       health: c.healthOverrideLabel ?? c.healthLabel,
       lastOutboundEmailAt: c.lastOutboundEmailAt,
+      outreachEmailedAt: c.outreachEmailedAt,
       notes: c.notes
     }));
 
@@ -131,6 +134,14 @@ export default async function ClientTeamsPage() {
       <ClientTeamsBoard
         clients={boardClients}
         users={users}
+        columns={columns}
+        canEdit={canEdit}
+      />
+
+      <div className="h-px bg-slate-200/70 my-1" />
+
+      <ClientOutreachBoard
+        clients={boardClients}
         columns={columns}
         canEdit={canEdit}
       />

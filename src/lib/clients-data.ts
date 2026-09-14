@@ -121,6 +121,9 @@ export interface Client {
   // Auto-derived from email_drafts on read; not stored on the row.
   lastOutboundEmailAt: string | null;
   lastOutboundSubject: string | null;
+  // Manual "personal email sent" check-off for the outreach board. The board's
+  // effective 2-week status is the later of this and lastOutboundEmailAt.
+  outreachEmailedAt: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -206,6 +209,7 @@ interface ClientRow {
   seo_brief: string | null;
   seo_brief_at: string | null;
   seo_brief_by: string | null;
+  outreach_emailed_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -281,6 +285,7 @@ function rowToClient(r: ClientRow, touchpoint?: {
     seoBriefAt: r.seo_brief_at ?? null,
     seoBriefBy: r.seo_brief_by ?? null,
     lastOutboundEmailAt: touchpoint?.lastOutboundEmailAt ?? null,
+    outreachEmailedAt: (r.outreach_emailed_at as string | null) ?? null,
     lastOutboundSubject: touchpoint?.lastOutboundSubject ?? null,
     createdAt: r.created_at,
     updatedAt: r.updated_at

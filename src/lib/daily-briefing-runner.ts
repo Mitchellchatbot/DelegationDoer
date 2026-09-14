@@ -94,6 +94,28 @@ function taskLine(t: Task, nameById: Map<string, string>): string {
   return `- [${t.status}/${t.priority}] "${t.title}" — ${who}${client}${due}${tags}`;
 }
 
+// Compact expense/burn summary from the latest parsed P&L, for the brief's
+// cut/scale reasoning. Returns "" if no P&L is available.
+function buildExpenseBlock(finDocs: { parsed: unknown }[]): string {
+  const parsed = finDocs.find((d) => d.parsed)?.parsed as
+    | { periods: string[]; summary: { income: (number | null)[]; expenses: (number | null)[]; net: (number | null)[] }; expenseBreakdown: { account: string; total: number }[] }
+    | undefined;
+  if (!parsed || !parsed.periods?.length) return "";
+  const money = (n: number | null | undefined) => (n == null ? "—" : `$${Math.round(n).toLocaleString("en-US")}`);
+  const hasTotal = parsed.periods[parsed.periods.length - 1]?.toLowerCase() === "total";
+  const months = hasTotal ? parsed.periods.slice(0, -1) : parsed.periods;
+  const li = months.length - 1;
+  const rev = parsed.summary.income[li] ?? null;
+  const exp = parsed.summary.expenses[li] ?? null;
+  const net = parsed.summary.net[li] ?? null;
+  const margin = rev && net != null ? Math.round((net / rev) * 100) : null;
+  const top = (parsed.expenseBreakdown ?? []).slice(0, 6).map((b) => `${b.account} ${money(b.total)}`).join(", ");
+  return [
+    `Latest month (${months[li] ?? "latest"}): expenses ${money(exp)}, net ${money(net)}${margin != null ? `, margin ${margin}%` : ""}.`,
+    top ? `Biggest expense categories (period): ${top}.` : ""
+  ].filter(Boolean).join("\n");
+}
+
 interface InboxItem { from: string; subject: string; snippet: string; at: string }
 
 // Pull the latest open threads from Mitchell's inbox. Fail-soft: any Missive
@@ -155,8 +177,10 @@ function buildPrompts(args: {
   revenue?: RevenueSummary | null;
   // Persistent brain memory block (priorities/decisions/facts), or "".
   memoryBlock?: string;
+  // Compact expense/burn context (from the P&L), or "".
+  expenseBlock?: string;
 }): { system: string; user: string } {
-  const { tasks, roster, inbox, inboxNote, nameById, recentlyMessaged, shipped, revenue, memoryBlock } = args;
+  const { tasks, roster, inbox, inboxNote, nameById, recentlyMessaged, shipped, revenue, memoryBlock, expenseBlock } = args;
 
   // Teammates Mitchell can be prompted to check in on: everyone but him and
   // other leaders (the engagement DMs are founder→team).
@@ -229,8 +253,8 @@ function buildPrompts(args: {
     "",
     "Return STRICT JSON only (no code fences, no prose around it) with exactly this shape:",
     "{",
-    '  "daily_update": string,        // a REPORT in clear labeled sections, each header on its own line, in THIS order (skip a section only if there is genuinely nothing for it): "SNAPSHOT:" (1-2 line headline: key counts + MRR + the single biggest thing today), "REVENUE:" (from the Stripe data below, as bullet lines "- ": MRR + net-new this month, then call out any PAST DUE clients to chase by name/amount, and any new or churned this month. Keep it to what needs his attention, not a full client dump. Skip only if revenue is unavailable.), "INBOX:" (SORT THROUGH the inbox threads listed below and triage them into sub-groups, each as bullet lines "- ": "Reply needed:" the ones Mitchell personally must answer (name the sender + subject + why in a few words), "Waiting on others:", and "FYI:". Lead with anything urgent or client-facing. If the inbox is unavailable, put a single line saying so.), "NEEDS YOUR CALL:" (decisions only the owner can resolve, bullet lines "- "), "AT RISK:" (overdue/blocked/overloaded work AND past-due revenue, bullet lines), "MOMENTUM:" (going well or just shipped, bullet lines). Reference real task titles, people, clients, and email senders/subjects. Be specific, skimmable, and honest.',
-    `  "needle_mover": string,        // ONE specific, high-leverage action he can take today that moves the business forward. Concrete, not generic.`,
+    '  "daily_update": string,        // a REPORT in clear labeled sections, each header on its own line, in THIS order (skip a section only if there is genuinely nothing for it): "SNAPSHOT:" (1-2 line headline: key counts + MRR + the single biggest thing today), "REVENUE:" (from the Stripe data below, as bullet lines "- ": MRR + net-new this month, then call out any PAST DUE clients to chase by name/amount, and any new or churned this month. Keep it to what needs his attention, not a full client dump. Skip only if revenue is unavailable.), "INBOX:" (SORT THROUGH the inbox threads listed below and triage them into sub-groups, each as bullet lines "- ": "Reply needed:" the ones Mitchell personally must answer (name the sender + subject + why in a few words), "Waiting on others:", and "FYI:". Lead with anything urgent or client-facing. If the inbox is unavailable, put a single line saying so.), "NEEDS YOUR CALL:" (decisions only the owner can resolve, bullet lines "- "), "AT RISK:" (overdue/blocked/overloaded work AND past-due revenue, bullet lines), "MOMENTUM:" (going well or just shipped, bullet lines), "MOVES TO SCALE:" (2-4 prioritized strategic recommendations to grow / cut / scale the business, each a bullet "- " = the specific move + a short "why" grounded in the real numbers. This is decision support: what should Mitchell actually DO to run and scale, not vague themes. Weight HEAVILY toward his standing priorities in the memory block above — e.g. if "getting more clients" is the #1 priority, lead with concrete client-acquisition moves (specific channels, who should own it, a number to hit); factor in revenue concentration risk, margin, rising costs, and team capacity. Rank most-impactful first). Reference real task titles, people, clients, numbers, and email senders/subjects. Be specific, skimmable, and honest.',
+    `  "needle_mover": string,        // THE single highest-leverage action for TODAY, drawn from MOVES TO SCALE and aligned with his top standing priority. Concrete and specific (name the action, and ideally who/what), not generic.`,
     `  "engagement_messages": [       // EXACTLY ${TARGET_MESSAGES} items, each to a DIFFERENT teammate`,
     '    { "userId": string,          // must be one of the teammate ids listed below',
     '      "text": string }           // a SHORT Slack DM FROM Mitchell TO that teammate that reads like a REAL person who KNOWS them typed it in five seconds. Make it about the PERSON, not a task-status check. Draw on their real picture below — a specific thing they just SHIPPED (name it and give real credit), the LOAD they are carrying, or a genuine "how are you doing / holding up". Only mention an open task if it is natural, and never make the whole message "is X done yet". VARY the angle across the six (a specific shout-out for a win / a genuine how-are-you / noticing someone is stretched thin / an offer to unblock) and vary the opener (do not start every one with "Hey"). Plain everyday words, contractions, 1-2 short sentences, a little loose is good. Do NOT gush, flatter, over-praise, or sound like a coach, HR, or corporate. It should read like a text from someone who actually notices them, not a status report.',
@@ -272,6 +296,7 @@ function buildPrompts(args: {
     "",
     "## Revenue — live from Stripe (owner-only, where the money comes from)",
     revenueBlock,
+    ...(expenseBlock ? ["", "## Expenses / burn (owner-only, from the P&L — use for cut/scale moves)", expenseBlock] : []),
     "",
     "## Mitchell's inbox — latest threads",
     inboxBlock
@@ -516,14 +541,16 @@ export async function runDailyBriefing(
 
   // Gather in parallel. Stripe revenue fails soft (null) so a bad key or
   // outage never blocks the briefing.
-  const [allTasks, roster, inbox, revenue, memories] = await Promise.all([
+  const [allTasks, roster, inbox, revenue, memories, finDocs] = await Promise.all([
     getAllTasks(),
     getAllUsersLight(),
     pullInbox(),
     getStripeRevenue().catch(() => null),
-    listMemories().catch(() => [])
+    listMemories().catch(() => []),
+    supabase.from("finance_documents").select("parsed").order("uploaded_at", { ascending: false }).limit(5)
   ]);
   const memoryBlock = formatMemoriesBlock(memories);
+  const expenseBlock = buildExpenseBlock((finDocs.data ?? []) as { parsed: unknown }[]);
   const tasks = allTasks.filter((t) => IN_FLIGHT.includes(t.status));
   // Recent wins (last 7 days) — material for personal check-ins.
   const shippedCutoff = Date.now() - 7 * 86_400_000;
@@ -547,7 +574,7 @@ export async function runDailyBriefing(
 
   const recentlyMessaged = await gatherRecentlyMessaged(supabase, now.ymd, nameById);
   const prompts = buildPrompts({
-    tasks, roster, inbox: inbox.items, inboxNote: inbox.note, nameById, recentlyMessaged, shipped, revenue, memoryBlock
+    tasks, roster, inbox: inbox.items, inboxNote: inbox.note, nameById, recentlyMessaged, shipped, revenue, memoryBlock, expenseBlock
   });
 
   let drafted: DraftedContent;

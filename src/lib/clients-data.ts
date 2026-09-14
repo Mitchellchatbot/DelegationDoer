@@ -126,6 +126,8 @@ export interface Client {
   outreachEmailedAt: string | null;
   // Sites hidden from the outreach board only (does not touch websites[]).
   outreachHiddenSites: string[];
+  // Whole client removed from the outreach board only (still a normal client).
+  outreachHidden: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -213,6 +215,7 @@ interface ClientRow {
   seo_brief_by: string | null;
   outreach_emailed_at: string | null;
   outreach_hidden_sites: string[] | null;
+  outreach_hidden: boolean | null;
   created_at: string;
   updated_at: string;
 }
@@ -290,6 +293,7 @@ function rowToClient(r: ClientRow, touchpoint?: {
     lastOutboundEmailAt: touchpoint?.lastOutboundEmailAt ?? null,
     outreachEmailedAt: (r.outreach_emailed_at as string | null) ?? null,
     outreachHiddenSites: r.outreach_hidden_sites ?? [],
+    outreachHidden: r.outreach_hidden ?? false,
     lastOutboundSubject: touchpoint?.lastOutboundSubject ?? null,
     createdAt: r.created_at,
     updatedAt: r.updated_at

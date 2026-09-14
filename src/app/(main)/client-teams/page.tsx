@@ -90,6 +90,7 @@ export default async function ClientTeamsPage() {
       lastOutboundEmailAt: c.lastOutboundEmailAt,
       outreachEmailedAt: c.outreachEmailedAt,
       outreachHiddenSites: c.outreachHiddenSites,
+      outreachHidden: c.outreachHidden,
       notes: c.notes
     }));
 

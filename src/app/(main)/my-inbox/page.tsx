@@ -3,8 +3,11 @@ import { Inbox } from "lucide-react";
 import { getCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { isOwner, OWNER_EMAIL } from "@/lib/access";
+import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { listAccounts, listThreads } from "@/lib/missive-client";
+import { filterReplyNeeded } from "@/lib/owner-inbox";
 import { InboxCopilot, type InboxThread } from "@/components/InboxCopilot";
+import { MovesPanel, type Move } from "@/components/MovesPanel";
 
 export const dynamic = "force-dynamic";
 
@@ -24,18 +27,30 @@ export default async function MyInboxPage() {
     if (!acct) {
       note = `No Missive inbox found for ${OWNER_EMAIL}.`;
     } else {
-      const raw = await listThreads({ mailboxId: acct.id, folder: "INBOX", status: "open", limit: 25 });
-      threads = raw.map((t) => ({
+      const raw = await listThreads({ mailboxId: acct.id, folder: "INBOX", status: "open", limit: 40 });
+      const mapped = raw.map((t) => ({
         id: t.id,
         subject: t.subject || "(no subject)",
         from: t.last_from ?? (t.participants?.[0] ?? "unknown"),
         snippet: t.last_snippet ?? "",
         lastAt: t.last_message_at
       }));
+      // Only surface threads that actually need a reply — no receipts, no-reply,
+      // notifications, or marketing clutter.
+      threads = await filterReplyNeeded(mapped);
+      if (threads.length === 0) note = "Nothing needs a reply right now.";
     }
   } catch (err) {
     note = err instanceof Error ? err.message : "Inbox unavailable.";
   }
+
+  // Latest "moves to scale" so what-to-do sits next to what-to-answer.
+  const { data: movesRow } = await getSupabaseAdmin()
+    .from("brain_moves")
+    .select("moves, headline, generated_at")
+    .order("generated_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
 
   return (
     <div className="space-y-5 max-w-3xl mx-auto">
@@ -47,12 +62,21 @@ export default async function MyInboxPage() {
           <div className="text-[11px] font-semibold uppercase tracking-wide text-indigo-700">Private · you only</div>
           <h1 className="text-2xl font-bold text-ink leading-tight">My Inbox</h1>
           <p className="text-sm text-muted mt-0.5 max-w-prose">
-            Work through your inbox with the brain. It drafts each reply grounded in your priorities and the client history; you edit and send as yourself in one click.
+            Just what needs you: emails to reply to (the brain drafts each one, you edit and send in one click) and the moves to scale — nothing else.
           </p>
         </div>
       </div>
 
-      <InboxCopilot threads={threads} note={note} />
+      <MovesPanel
+        initialMoves={(movesRow?.moves as Move[]) ?? []}
+        initialHeadline={movesRow?.headline ?? null}
+        initialGeneratedAt={movesRow?.generated_at ?? null}
+      />
+
+      <div>
+        <div className="text-[13px] font-semibold text-ink mb-2 px-1">Emails to reply to{threads.length ? ` (${threads.length})` : ""}</div>
+        <InboxCopilot threads={threads} note={note} />
+      </div>
     </div>
   );
 }

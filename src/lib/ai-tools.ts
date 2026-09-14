@@ -1922,6 +1922,27 @@ async function getFinances(ctx: ToolContext) {
       .map((r) => ({ company: r.company, mrr: Math.round(Number(r.mrr)), status: r.status, note: r.note || undefined }))
   };
 
+  // 1b. Software/Subscriptions vendor breakdown (the P&L's software lump,
+  // itemized) — so the brain can name exact tools to cut.
+  const { data: swRows } = await supabase
+    .from("software_subscriptions")
+    .select("vendor, month, amount");
+  const swByVendor = new Map<string, Record<string, number>>();
+  const swMonths = new Set<string>();
+  for (const r of (swRows ?? []) as { vendor: string; month: string; amount: number }[]) {
+    swMonths.add(r.month);
+    const v = swByVendor.get(r.vendor) ?? {};
+    v[r.month] = (v[r.month] ?? 0) + Number(r.amount);
+    swByVendor.set(r.vendor, v);
+  }
+  const softwareByVendor = [...swByVendor.entries()]
+    .map(([vendor, m]) => ({ vendor, monthly: m, latest: m["Aug"] ?? Math.max(0, ...Object.values(m)) }))
+    .sort((a, b) => b.latest - a.latest)
+    .map((v) => ({ vendor: v.vendor, monthly: v.monthly }));
+  const software = softwareByVendor.length
+    ? { note: "Software/Subscriptions itemized by vendor, per month. Biggest / rising ones are the cut candidates.", months: [...swMonths], byVendor: softwareByVendor }
+    : "No software vendor breakdown uploaded";
+
   // 2. Live Stripe revenue (fail-soft).
   const stripe = await getStripeRevenue().catch(() => null);
   const stripeSummary = stripe
@@ -2002,7 +2023,8 @@ async function getFinances(ctx: ToolContext) {
     note: "Owner-only finances. Manual MRR is the source of truth; Stripe is a cross-check; the P&L expense breakdown is where to find cuts.",
     manualMrr: manual,
     stripe: stripeSummary,
-    pnl
+    pnl,
+    software
   };
 }
 

@@ -7,6 +7,7 @@ import { isOwner } from "@/lib/access";
 import { FinancePanel, type FinanceDoc } from "@/components/FinancePanel";
 import { FinanceDashboard } from "@/components/FinanceDashboard";
 import { ExpenseBreakdown } from "@/components/ExpenseBreakdown";
+import { SoftwareBreakdown, type SoftwareRow } from "@/components/SoftwareBreakdown";
 import { StripeMissing } from "@/components/StripeMissing";
 import { MrrManual, type MrrEntry } from "@/components/MrrManual";
 import { getStripeRevenue } from "@/lib/stripe";
@@ -40,6 +41,11 @@ export default async function FinancePage() {
     .select("id, company, mrr, status, subscription_day, satisfaction, note, rank")
     .order("rank", { ascending: true });
 
+  // Vendor-level breakdown of the Software/Subscriptions expense lump.
+  const { data: softwareRows } = await getSupabaseAdmin()
+    .from("software_subscriptions")
+    .select("vendor, month, amount");
+
   return (
     <div className="space-y-5 max-w-3xl mx-auto">
       <div className="flex items-start gap-3">
@@ -62,6 +68,8 @@ export default async function FinancePage() {
       <FinanceDashboard parsed={latestParsed} />
 
       <ExpenseBreakdown parsed={latestParsed} />
+
+      <SoftwareBreakdown rows={(softwareRows ?? []) as SoftwareRow[]} />
 
       <FinancePanel initialDocuments={rows.map(({ parsed, ...d }) => d)} />
     </div>

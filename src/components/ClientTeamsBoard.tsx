@@ -20,6 +20,9 @@ export interface BoardClient {
   id: string;
   name: string;
   website: string | null;
+  // Every site the client runs (primary + additional brands). Used by the
+  // outreach board's site chips.
+  websites: string[];
   iconUrl: string | null;
   teamId: string | null;
   assignedUserIds: string[];
@@ -28,6 +31,9 @@ export interface BoardClient {
   priorityRank: number | null;
   health: HealthLabel;
   lastOutboundEmailAt: string | null;
+  // Manual "personal email sent" check-off (outreach board). Effective 2-week
+  // status uses the later of this and lastOutboundEmailAt.
+  outreachEmailedAt: string | null;
   // Mitch's quick notes, edited inline on this board.
   notes: string | null;
 }
@@ -41,8 +47,9 @@ function healthRankOf(h: HealthLabel): number {
   return h && h in HEALTH_ORDER ? HEALTH_ORDER[h] : 99;
 }
 // Importance = the leader's manual drag order (display_order), then the sheet's
-// priorityRank, then name. This is the same ordering /clients uses.
-function importanceCmp(a: BoardClient, b: BoardClient): number {
+// priorityRank, then name. This is the same ordering /clients uses. Exported so
+// the outreach board ranks each column identically.
+export function importanceCmp(a: BoardClient, b: BoardClient): number {
   if (a.displayOrder !== b.displayOrder) return a.displayOrder - b.displayOrder;
   const ar = a.priorityRank ?? Number.POSITIVE_INFINITY;
   const br = b.priorityRank ?? Number.POSITIVE_INFINITY;
@@ -52,7 +59,7 @@ function importanceCmp(a: BoardClient, b: BoardClient): number {
 // Colour the rank badge by importance tier: 1-3 green (top), 4-6 amber, the
 // rest a darker muted slate — so the most important clients pop and the long
 // tail recedes.
-function rankBadgeClass(rank: number): string {
+export function rankBadgeClass(rank: number): string {
   if (rank <= 3) return "bg-emerald-100 text-emerald-700 ring-1 ring-emerald-300";
   if (rank <= 6) return "bg-amber-100 text-amber-700 ring-1 ring-amber-300";
   return "bg-slate-300 text-slate-700";

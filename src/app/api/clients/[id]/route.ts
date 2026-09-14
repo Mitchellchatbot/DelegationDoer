@@ -278,6 +278,20 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       }
     }
 
+    if ("outreachEmailedAt" in body) {
+      const raw = body.outreachEmailedAt;
+      if (raw === null || raw === "" || raw === undefined) {
+        update.outreach_emailed_at = null;
+      } else if (typeof raw === "string" && !Number.isNaN(Date.parse(raw))) {
+        update.outreach_emailed_at = new Date(raw).toISOString();
+      } else {
+        return NextResponse.json(
+          { error: "outreachEmailedAt must be an ISO date string or null" },
+          { status: 400 }
+        );
+      }
+    }
+
     if ("updateCadence" in body) {
       const raw = body.updateCadence;
       const allowed = ["daily", "biweekly", "weekly", "monthly", "none"];

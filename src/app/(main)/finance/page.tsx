@@ -5,6 +5,8 @@ import { getUserById } from "@/lib/server-data";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { isOwner } from "@/lib/access";
 import { FinancePanel, type FinanceDoc } from "@/components/FinancePanel";
+import { FinanceDashboard } from "@/components/FinanceDashboard";
+import type { ParsedPnl } from "@/lib/pnl-parse";
 
 export const dynamic = "force-dynamic";
 
@@ -19,8 +21,11 @@ export default async function FinancePage() {
 
   const { data } = await getSupabaseAdmin()
     .from("finance_documents")
-    .select("id, label, filename, content_type, size_bytes, uploaded_at")
+    .select("id, label, filename, content_type, size_bytes, uploaded_at, parsed")
     .order("uploaded_at", { ascending: false });
+
+  const rows = (data ?? []) as (FinanceDoc & { parsed: ParsedPnl | null })[];
+  const latestParsed = rows.find((r) => r.parsed)?.parsed ?? null;
 
   return (
     <div className="space-y-5 max-w-3xl mx-auto">
@@ -37,7 +42,9 @@ export default async function FinancePage() {
         </div>
       </div>
 
-      <FinancePanel initialDocuments={(data ?? []) as FinanceDoc[]} />
+      <FinanceDashboard parsed={latestParsed} />
+
+      <FinancePanel initialDocuments={rows.map(({ parsed, ...d }) => d)} />
     </div>
   );
 }

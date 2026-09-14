@@ -3,6 +3,7 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { isOwner } from "@/lib/access";
+import { parsePnl } from "@/lib/pnl-parse";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -70,6 +71,8 @@ export async function POST(req: NextRequest) {
   const label = typeof form?.get("label") === "string" ? (form.get("label") as string).trim() : "";
 
   const bytes = Buffer.from(await file.arrayBuffer());
+  // Parse spreadsheets into a dashboard-ready shape (best-effort; PDFs skip).
+  const parsed = contentType === "application/pdf" ? null : parsePnl(bytes);
   const ext = filename.includes(".") ? filename.split(".").pop() : "bin";
   const ts = Date.now();
   const key = `pnl/${ts}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
@@ -89,9 +92,10 @@ export async function POST(req: NextRequest) {
       filename,
       storage_key: key,
       content_type: contentType,
-      size_bytes: file.size
+      size_bytes: file.size,
+      parsed
     })
-    .select("id, label, filename, content_type, size_bytes, uploaded_at")
+    .select("id, label, filename, content_type, size_bytes, uploaded_at, parsed")
     .single();
   if (insErr) {
     // Roll back the orphaned file if the row didn't persist.

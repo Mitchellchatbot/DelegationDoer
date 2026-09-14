@@ -7,6 +7,8 @@ import { isOwner } from "@/lib/access";
 import { FinancePanel, type FinanceDoc } from "@/components/FinancePanel";
 import { FinanceDashboard } from "@/components/FinanceDashboard";
 import { ExpenseBreakdown } from "@/components/ExpenseBreakdown";
+import { RevenueDashboard } from "@/components/RevenueDashboard";
+import { getStripeRevenue } from "@/lib/stripe";
 import type { ParsedPnl } from "@/lib/pnl-parse";
 
 export const dynamic = "force-dynamic";
@@ -28,6 +30,9 @@ export default async function FinancePage() {
   const rows = (data ?? []) as (FinanceDoc & { parsed: ParsedPnl | null })[];
   const latestParsed = rows.find((r) => r.parsed)?.parsed ?? null;
 
+  // Live revenue from Stripe (owner-only). Never blocks the page if it fails.
+  const revenue = await getStripeRevenue().catch(() => null);
+
   return (
     <div className="space-y-5 max-w-3xl mx-auto">
       <div className="flex items-start gap-3">
@@ -42,6 +47,8 @@ export default async function FinancePage() {
           </p>
         </div>
       </div>
+
+      <RevenueDashboard rev={revenue} />
 
       <FinanceDashboard parsed={latestParsed} />
 

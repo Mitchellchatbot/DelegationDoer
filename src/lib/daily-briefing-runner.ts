@@ -31,6 +31,7 @@ import { getAnthropic, resetAnthropic, MODELS } from "@/lib/anthropic-client";
 import { openDm, postMessage } from "@/lib/slack";
 import { resolveSlackId } from "@/lib/slack-resolve";
 import { DEFAULT_TZ, nowInTz, ymdInTz } from "@/lib/shift";
+import { getStripeRevenue, type RevenueSummary } from "@/lib/stripe";
 import type { Task, User } from "@/lib/types";
 
 const OWNER_EMAIL = "mitchell@scaledai.org";
@@ -149,8 +150,10 @@ function buildPrompts(args: {
   // Tasks each person finished in the last ~7 days — the raw material for a
   // personal, specific check-in (acknowledge a real win, not just a to-do).
   shipped: Task[];
+  // Live Stripe revenue snapshot (owner-only), or null if unavailable.
+  revenue?: RevenueSummary | null;
 }): { system: string; user: string } {
-  const { tasks, roster, inbox, inboxNote, nameById, recentlyMessaged, shipped } = args;
+  const { tasks, roster, inbox, inboxNote, nameById, recentlyMessaged, shipped, revenue } = args;
 
   // Teammates Mitchell can be prompted to check in on: everyone but him and
   // other leaders (the engagement DMs are founder→team).
@@ -197,13 +200,33 @@ function buildPrompts(args: {
     ? inbox.map((m) => `- from ${m.from} — "${m.subject}" — ${m.snippet}`).join("\n")
     : (inboxNote ?? "(inbox empty)");
 
+  // Live revenue snapshot from Stripe (owner-only). Give the model the numbers
+  // that matter for the day: MRR, net movement, at-risk (past-due), top clients.
+  const m = (n: number) => `$${Math.round(n).toLocaleString("en-US")}`;
+  const revenueBlock = revenue
+    ? [
+        `MRR: ${m(revenue.mrr)} (${revenue.clientCount} paying clients, ${m(revenue.mrr * 12)}/yr run-rate)`,
+        `Net new this month: ${m(revenue.newMrr - revenue.churnedMrr)} (new +${m(revenue.newMrr)}, churned -${m(revenue.churnedMrr)})`,
+        revenue.newThisMonth.length
+          ? `New: ${revenue.newThisMonth.map((c) => `${c.name} ${m(c.mrr)}/mo`).join(", ")}`
+          : "New: none yet this month",
+        revenue.churnedThisMonth.length
+          ? `Churned: ${revenue.churnedThisMonth.map((c) => `${c.name} -${m(c.mrr)}/mo`).join(", ")}`
+          : "Churned: none this month",
+        revenue.pastDue.length
+          ? `PAST DUE (chase — ${m(revenue.pastDueMrr)} at risk): ${revenue.pastDue.map((c) => `${c.name} (${c.email}) ${m(c.mrr)}/mo`).join(", ")}`
+          : "Past due: none",
+        `Top clients: ${revenue.clients.slice(0, 8).map((c) => `${c.name} ${m(c.mrr)}/mo`).join(", ")}`
+      ].join("\n")
+    : "(Stripe revenue unavailable)";
+
   const system = [
     "You are the chief of staff to Mitchell, founder of Scaled AI (a digital agency).",
     "Write his private morning daily brief. You have the full team's in-flight work and the latest threads in Mitchell's email inbox.",
     "",
     "Return STRICT JSON only (no code fences, no prose around it) with exactly this shape:",
     "{",
-    '  "daily_update": string,        // a REPORT in clear labeled sections, each header on its own line, in THIS order (skip a section only if there is genuinely nothing for it): "SNAPSHOT:" (1-2 line headline: key counts + the single biggest thing today), "INBOX:" (SORT THROUGH the inbox threads listed below and triage them into sub-groups, each as bullet lines "- ": "Reply needed:" the ones Mitchell personally must answer (name the sender + subject + why in a few words), "Waiting on others:", and "FYI:". Lead with anything urgent or client-facing. If the inbox is unavailable, put a single line saying so.), "NEEDS YOUR CALL:" (decisions only the owner can resolve, bullet lines "- "), "AT RISK:" (overdue/blocked/overloaded, bullet lines), "MOMENTUM:" (going well or just shipped, bullet lines). Reference real task titles, people, clients, and email senders/subjects. Be specific, skimmable, and honest.',
+    '  "daily_update": string,        // a REPORT in clear labeled sections, each header on its own line, in THIS order (skip a section only if there is genuinely nothing for it): "SNAPSHOT:" (1-2 line headline: key counts + MRR + the single biggest thing today), "REVENUE:" (from the Stripe data below, as bullet lines "- ": MRR + net-new this month, then call out any PAST DUE clients to chase by name/amount, and any new or churned this month. Keep it to what needs his attention, not a full client dump. Skip only if revenue is unavailable.), "INBOX:" (SORT THROUGH the inbox threads listed below and triage them into sub-groups, each as bullet lines "- ": "Reply needed:" the ones Mitchell personally must answer (name the sender + subject + why in a few words), "Waiting on others:", and "FYI:". Lead with anything urgent or client-facing. If the inbox is unavailable, put a single line saying so.), "NEEDS YOUR CALL:" (decisions only the owner can resolve, bullet lines "- "), "AT RISK:" (overdue/blocked/overloaded work AND past-due revenue, bullet lines), "MOMENTUM:" (going well or just shipped, bullet lines). Reference real task titles, people, clients, and email senders/subjects. Be specific, skimmable, and honest.',
     `  "needle_mover": string,        // ONE specific, high-leverage action he can take today that moves the business forward. Concrete, not generic.`,
     `  "engagement_messages": [       // EXACTLY ${TARGET_MESSAGES} items, each to a DIFFERENT teammate`,
     '    { "userId": string,          // must be one of the teammate ids listed below',
@@ -240,6 +263,9 @@ function buildPrompts(args: {
     "",
     "## Recently shipped by teammate (last 7 days — use these for personal, specific check-ins)",
     shippedBlock,
+    "",
+    "## Revenue — live from Stripe (owner-only, where the money comes from)",
+    revenueBlock,
     "",
     "## Mitchell's inbox — latest threads",
     inboxBlock
@@ -482,11 +508,13 @@ export async function runDailyBriefing(
     return { ok: false, reason: "SLACK_BOT_TOKEN missing" };
   }
 
-  // Gather in parallel.
-  const [allTasks, roster, inbox] = await Promise.all([
+  // Gather in parallel. Stripe revenue fails soft (null) so a bad key or
+  // outage never blocks the briefing.
+  const [allTasks, roster, inbox, revenue] = await Promise.all([
     getAllTasks(),
     getAllUsersLight(),
-    pullInbox()
+    pullInbox(),
+    getStripeRevenue().catch(() => null)
   ]);
   const tasks = allTasks.filter((t) => IN_FLIGHT.includes(t.status));
   // Recent wins (last 7 days) — material for personal check-ins.
@@ -511,7 +539,7 @@ export async function runDailyBriefing(
 
   const recentlyMessaged = await gatherRecentlyMessaged(supabase, now.ymd, nameById);
   const prompts = buildPrompts({
-    tasks, roster, inbox: inbox.items, inboxNote: inbox.note, nameById, recentlyMessaged, shipped
+    tasks, roster, inbox: inbox.items, inboxNote: inbox.note, nameById, recentlyMessaged, shipped, revenue
   });
 
   let drafted: DraftedContent;

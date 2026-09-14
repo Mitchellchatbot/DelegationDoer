@@ -146,8 +146,11 @@ function buildPrompts(args: {
   // Teammates checked in with recently (name + how many days ago), so the model
   // rotates coverage instead of messaging the same people every day.
   recentlyMessaged: { name: string; daysAgo: number }[];
+  // Tasks each person finished in the last ~7 days — the raw material for a
+  // personal, specific check-in (acknowledge a real win, not just a to-do).
+  shipped: Task[];
 }): { system: string; user: string } {
-  const { tasks, roster, inbox, inboxNote, nameById, recentlyMessaged } = args;
+  const { tasks, roster, inbox, inboxNote, nameById, recentlyMessaged, shipped } = args;
 
   // Teammates Mitchell can be prompted to check in on: everyone but him and
   // other leaders (the engagement DMs are founder→team).
@@ -174,6 +177,22 @@ function buildPrompts(args: {
     })
     .join("\n\n") || "(no active tasks)";
 
+  // Recent wins per assignee — so a check-in can name something they actually
+  // finished, not just what's still open.
+  const shippedByAssignee = new Map<string, Task[]>();
+  for (const t of shipped) {
+    if (!t.assigneeId) continue;
+    const arr = shippedByAssignee.get(t.assigneeId) ?? [];
+    arr.push(t);
+    shippedByAssignee.set(t.assigneeId, arr);
+  }
+  const shippedBlock = Array.from(shippedByAssignee.entries())
+    .map(([uid, ts]) => {
+      const header = nameById.get(uid) ?? uid;
+      return `### ${header} (${ts.length} shipped)\n${ts.slice(0, 8).map((t) => `- "${t.title}"${t.clientName ? ` · ${t.clientName}` : ""}`).join("\n")}`;
+    })
+    .join("\n\n") || "(nothing shipped in the last 7 days)";
+
   const inboxBlock = inbox.length
     ? inbox.map((m) => `- from ${m.from} — "${m.subject}" — ${m.snippet}`).join("\n")
     : (inboxNote ?? "(inbox empty)");
@@ -188,13 +207,13 @@ function buildPrompts(args: {
     `  "needle_mover": string,        // ONE specific, high-leverage action he can take today that moves the business forward. Concrete, not generic.`,
     `  "engagement_messages": [       // EXACTLY ${TARGET_MESSAGES} items, each to a DIFFERENT teammate`,
     '    { "userId": string,          // must be one of the teammate ids listed below',
-    '      "text": string }           // a SHORT Slack DM FROM Mitchell TO that teammate that reads like a REAL person typed it in five seconds. Organic and natural: plain everyday words, contractions, one or two short sentences, a little loose or imperfect is good. VARY how they open (do not start every one with "Hey"). You can mention what they are working on in passing, then a genuine "how is it going / anything you need". Do NOT gush, flatter, over-praise, or sound like a coach, HR, or corporate. It should read like a text, not a memo. No emojis unless it is truly natural.',
+    '      "text": string }           // a SHORT Slack DM FROM Mitchell TO that teammate that reads like a REAL person who KNOWS them typed it in five seconds. Make it about the PERSON, not a task-status check. Draw on their real picture below — a specific thing they just SHIPPED (name it and give real credit), the LOAD they are carrying, or a genuine "how are you doing / holding up". Only mention an open task if it is natural, and never make the whole message "is X done yet". VARY the angle across the six (a specific shout-out for a win / a genuine how-are-you / noticing someone is stretched thin / an offer to unblock) and vary the opener (do not start every one with "Hey"). Plain everyday words, contractions, 1-2 short sentences, a little loose is good. Do NOT gush, flatter, over-praise, or sound like a coach, HR, or corporate. It should read like a text from someone who actually notices them, not a status report.',
     "  ]",
     "}",
     "",
     "Rules:",
     `- Pick ${TARGET_MESSAGES} teammates to check in on. ROTATE COVERAGE: strongly prefer teammates NOT in the "recently checked in" list below, so over a week everyone hears from Mitchell. Only repeat someone from that list if they genuinely need it today (blocked, overloaded, or a big win). All ${TARGET_MESSAGES} userIds must be distinct and from the roster.`,
-    "- The check-ins are about people, not tasks: keep them relaxed and supportive even for someone who is behind (offer help, do not scold). Simple and genuine beats enthusiastic.",
+    "- The check-ins are about PEOPLE, not tasks. Personalize each to that specific person using the work + recently-shipped data below (credit a real win, notice their load, or genuinely ask how they are). Relaxed and supportive even for someone who is behind (offer help, do not scold). Simple and genuine beats enthusiastic, and never a generic 'status of your task' template.",
     "- Never invent tasks, clients, or facts not present in the data.",
     "- Plain text only. Do not use em-dashes; use commas or periods.",
     "- These are DRAFTS Mitchell approves before anything sends. Write them ready-to-send."
@@ -218,6 +237,9 @@ function buildPrompts(args: {
     "",
     `## Active work across the team (${tasks.length} in-flight tasks)`,
     workBlock,
+    "",
+    "## Recently shipped by teammate (last 7 days — use these for personal, specific check-ins)",
+    shippedBlock,
     "",
     "## Mitchell's inbox — latest threads",
     inboxBlock
@@ -467,6 +489,11 @@ export async function runDailyBriefing(
     pullInbox()
   ]);
   const tasks = allTasks.filter((t) => IN_FLIGHT.includes(t.status));
+  // Recent wins (last 7 days) — material for personal check-ins.
+  const shippedCutoff = Date.now() - 7 * 86_400_000;
+  const shipped = allTasks.filter(
+    (t) => t.status === "done" && t.completedAt && Date.parse(t.completedAt) >= shippedCutoff
+  );
   const nameById = new Map(roster.map((u) => [u.id, u.name]));
 
   // Cached Slack fields for the roster (getAllUsersLight omits them). Using the
@@ -484,7 +511,7 @@ export async function runDailyBriefing(
 
   const recentlyMessaged = await gatherRecentlyMessaged(supabase, now.ymd, nameById);
   const prompts = buildPrompts({
-    tasks, roster, inbox: inbox.items, inboxNote: inbox.note, nameById, recentlyMessaged
+    tasks, roster, inbox: inbox.items, inboxNote: inbox.note, nameById, recentlyMessaged, shipped
   });
 
   let drafted: DraftedContent;

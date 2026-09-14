@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 import {
   ListTodo, Users, Sparkles, Crown, Mail, Home as HomeIcon, Sunrise, Moon, Briefcase,
   CalendarDays, FolderKanban, ClipboardCheck, BookOpen, Settings, LifeBuoy, LayoutGrid,
-  Users2
+  Users2, Lock
 } from "lucide-react";
 // Sparkles is reused for both Ask AI and Updates — same icon, different context.
 import { useEffect, useState } from "react";
@@ -15,6 +15,7 @@ import { AIAssistantDrawer } from "./AIAssistantDrawer";
 import { useNavDrawer } from "./NavDrawerProvider";
 import { RaiseLink } from "./RaiseLink";
 import { isLeader, isHead, canSeeCustomerSupport } from "@/lib/auth";
+import { isOwner } from "@/lib/access";
 import { isEmailApprovalsViewer } from "@/lib/email-approvers";
 import { primaryDepartment } from "@/lib/departments";
 import type { User } from "@/lib/types";
@@ -51,6 +52,7 @@ const PEOPLE_ITEM: NavItem = { href: "/people", label: "People", icon: Users, to
 const MANAGE_CEO_ITEM: NavItem = { href: "/leader", label: "Manage", icon: Crown, tone: "amber" };
 const MANAGE_HEAD_ITEM: NavItem = { href: "/leader", label: "Manage", icon: Users, tone: "emerald" };
 const SETTINGS_ITEM: NavItem = { href: "/settings", label: "Settings", icon: Settings, tone: "indigo" };
+const FINANCE_ITEM: NavItem = { href: "/finance", label: "Finance", icon: Lock, tone: "emerald" };
 
 // Sidebar lives on a soft slate-blue panel now. Per-row tones drive:
 //   - idle: a low-saturation glyph that reads on the dark background
@@ -320,6 +322,7 @@ export function Sidebar({ user }: { user: User }) {
     UPDATES_ITEM,
     SOPS_ITEM,
     manageOrPeople,
+    ...(isOwner(user) ? [FINANCE_ITEM] : []),
     SETTINGS_ITEM
   ];
   // Section partition. Each entry pairs a label with the hrefs that
@@ -331,7 +334,7 @@ export function Sidebar({ user }: { user: User }) {
     { label: "Work", hrefs: ["/tasks", "/schedule", "/projects"] },
     { label: "Communication", hrefs: ["/inboxes", "/approvals", "/customer-support"] },
     { label: "Knowledge", hrefs: ["/clients", "/client-teams", "/updates", "/sops"] },
-    { label: "Account", hrefs: ["/people", "/leader", "/settings"] }
+    { label: "Account", hrefs: ["/people", "/leader", "/finance", "/settings"] }
   ];
   function groupFor(href: string): string | null {
     const g = NAV_GROUPS.find((g) => g.hrefs.includes(href));

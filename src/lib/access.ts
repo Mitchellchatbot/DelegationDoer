@@ -21,6 +21,15 @@ export function isAdmin(u: Pick<User, "isAdmin"> | null | undefined): boolean {
   return !!u && u.isAdmin === true;
 }
 
+// The founder/owner. Deliberately NOT role/isAdmin — this is the single
+// person allowed to see owner-private surfaces like the P&L / financials,
+// stricter than "leader" (other leaders and stealth admins do NOT qualify).
+// Matched by email so it stays correct regardless of role/flag changes.
+export const OWNER_EMAIL = "mitchell@scaledai.org";
+export function isOwner(u: Pick<User, "email"> | null | undefined): boolean {
+  return !!u && (u.email ?? "").trim().toLowerCase() === OWNER_EMAIL;
+}
+
 // "Leader for permission purposes." Returns true for both real
 // leaders and stealth admins. UI code that wants to render the role
 // label / crown should check `u.role === "leader"` directly instead.

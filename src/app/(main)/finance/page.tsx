@@ -6,6 +6,7 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { isOwner } from "@/lib/access";
 import { FinancePanel, type FinanceDoc } from "@/components/FinancePanel";
 import { FinanceDashboard } from "@/components/FinanceDashboard";
+import { ExpenseBreakdown } from "@/components/ExpenseBreakdown";
 import type { ParsedPnl } from "@/lib/pnl-parse";
 
 export const dynamic = "force-dynamic";
@@ -43,6 +44,8 @@ export default async function FinancePage() {
       </div>
 
       <FinanceDashboard parsed={latestParsed} />
+
+      <ExpenseBreakdown parsed={latestParsed} />
 
       <FinancePanel initialDocuments={rows.map(({ parsed, ...d }) => d)} />
     </div>

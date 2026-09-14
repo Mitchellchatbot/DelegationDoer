@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { Check, ExternalLink } from "lucide-react";
+import { Check, ExternalLink, X } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { importanceCmp, rankBadgeClass, type BoardClient, type BoardColumn } from "./ClientTeamsBoard";
@@ -81,6 +81,29 @@ export function ClientOutreachBoard({
     return { fresh, due, overdue };
   }, [clients]);
 
+  // Remove a site from a client's list. Updates websites[] (and the primary
+  // `website` if that's the one removed). Optimistic with rollback.
+  async function removeSite(id: string, site: string) {
+    const c = clients.find((x) => x.id === id);
+    if (!c) return;
+    const newWebsites = (c.websites ?? []).filter((w) => w !== site);
+    const newPrimary = c.website === site ? (newWebsites[0] ?? null) : c.website;
+    const before = clients;
+    setClients((cur) => cur.map((x) => (x.id === id ? { ...x, websites: newWebsites, website: newPrimary } : x)));
+    try {
+      const r = await fetch(`/api/clients/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ websites: newWebsites, website: newPrimary })
+      });
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? `HTTP ${r.status}`);
+      toast.success("Site removed");
+    } catch (e) {
+      setClients(before);
+      toast.error(`Couldn't remove site: ${e instanceof Error ? e.message : "unknown error"}`);
+    }
+  }
+
   async function setEmailed(id: string, mark: boolean) {
     const iso = mark ? new Date().toISOString() : null;
     const before = clients;
@@ -139,7 +162,7 @@ export function ClientOutreachBoard({
             </div>
             <div className="rounded-2xl border border-slate-200 bg-white shadow-soft overflow-hidden">
               {list.map((c, i) => (
-                <OutreachRow key={c.id} client={c} rank={i + 1} canEdit={canEdit} onSetEmailed={setEmailed} />
+                <OutreachRow key={c.id} client={c} rank={i + 1} canEdit={canEdit} onSetEmailed={setEmailed} onRemoveSite={removeSite} />
               ))}
             </div>
           </div>
@@ -150,12 +173,13 @@ export function ClientOutreachBoard({
 }
 
 function OutreachRow({
-  client: c, rank, canEdit, onSetEmailed
+  client: c, rank, canEdit, onSetEmailed, onRemoveSite
 }: {
   client: BoardClient;
   rank: number;
   canEdit: boolean;
   onSetEmailed: (id: string, mark: boolean) => Promise<void>;
+  onRemoveSite: (id: string, site: string) => Promise<void>;
 }) {
   const [busy, setBusy] = useState(false);
   const d = daysSince(effectiveMs(c));
@@ -193,20 +217,38 @@ function OutreachRow({
         <div className="text-[14px] font-semibold text-ink truncate">{c.name}</div>
         <div className="mt-1 flex flex-wrap items-center gap-1.5">
           {sites.length === 0 && <span className="text-[11px] text-muted italic">No site on file</span>}
-          {sites.slice(0, 4).map((s) => (
-            <a
+          {sites.map((s) => (
+            <span
               key={s}
-              href={/^https?:\/\//.test(s) ? s : `https://${s}`}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex items-center gap-1 text-[11px] text-ink/70 bg-slate-50 border border-slate-200 rounded-md px-1.5 py-0.5 hover:border-accent/40 hover:text-accent max-w-[220px] truncate"
-              title={s}
+              className="inline-flex items-center gap-1 text-[11px] text-ink/70 bg-slate-50 border border-slate-200 rounded-md pl-1.5 pr-1 py-0.5 max-w-[240px]"
             >
-              <span className="truncate">{siteLabel(s)}</span>
-              <ExternalLink className="w-2.5 h-2.5 shrink-0 opacity-60" />
-            </a>
+              <a
+                href={/^https?:\/\//.test(s) ? s : `https://${s}`}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1 min-w-0 hover:text-accent"
+                title={s}
+              >
+                <span className="truncate">{siteLabel(s)}</span>
+                <ExternalLink className="w-2.5 h-2.5 shrink-0 opacity-60" />
+              </a>
+              {canEdit && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (window.confirm(`Remove ${siteLabel(s)} from ${c.name}'s site list?`)) {
+                      void onRemoveSite(c.id, s);
+                    }
+                  }}
+                  title="Remove this site"
+                  aria-label={`Remove ${siteLabel(s)}`}
+                  className="shrink-0 grid place-items-center w-4 h-4 rounded text-muted hover:text-rose-600 hover:bg-rose-50"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              )}
+            </span>
           ))}
-          {sites.length > 4 && <span className="text-[11px] text-muted">+{sites.length - 4}</span>}
         </div>
         <div className="mt-1 text-[11px] text-muted">{agoLabel(d)}</div>
       </div>

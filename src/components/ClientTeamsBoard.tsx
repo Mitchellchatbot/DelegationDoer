@@ -34,6 +34,8 @@ export interface BoardClient {
   // Manual "personal email sent" check-off (outreach board). Effective 2-week
   // status uses the later of this and lastOutboundEmailAt.
   outreachEmailedAt: string | null;
+  // Sites hidden from the outreach board only (websites[] stays intact).
+  outreachHiddenSites: string[];
   // Mitch's quick notes, edited inline on this board.
   notes: string | null;
 }

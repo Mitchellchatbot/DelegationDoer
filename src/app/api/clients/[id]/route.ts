@@ -292,6 +292,14 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       }
     }
 
+    if ("outreachHiddenSites" in body) {
+      const raw = body.outreachHiddenSites;
+      if (!Array.isArray(raw) || raw.some((x) => typeof x !== "string")) {
+        return NextResponse.json({ error: "outreachHiddenSites must be a string[]" }, { status: 400 });
+      }
+      update.outreach_hidden_sites = raw.map((s) => String(s).trim()).filter(Boolean);
+    }
+
     if ("updateCadence" in body) {
       const raw = body.updateCadence;
       const allowed = ["daily", "biweekly", "weekly", "monthly", "none"];

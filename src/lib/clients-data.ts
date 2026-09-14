@@ -124,6 +124,8 @@ export interface Client {
   // Manual "personal email sent" check-off for the outreach board. The board's
   // effective 2-week status is the later of this and lastOutboundEmailAt.
   outreachEmailedAt: string | null;
+  // Sites hidden from the outreach board only (does not touch websites[]).
+  outreachHiddenSites: string[];
   createdAt: string;
   updatedAt: string;
 }
@@ -210,6 +212,7 @@ interface ClientRow {
   seo_brief_at: string | null;
   seo_brief_by: string | null;
   outreach_emailed_at: string | null;
+  outreach_hidden_sites: string[] | null;
   created_at: string;
   updated_at: string;
 }
@@ -286,6 +289,7 @@ function rowToClient(r: ClientRow, touchpoint?: {
     seoBriefBy: r.seo_brief_by ?? null,
     lastOutboundEmailAt: touchpoint?.lastOutboundEmailAt ?? null,
     outreachEmailedAt: (r.outreach_emailed_at as string | null) ?? null,
+    outreachHiddenSites: r.outreach_hidden_sites ?? [],
     lastOutboundSubject: touchpoint?.lastOutboundSubject ?? null,
     createdAt: r.created_at,
     updatedAt: r.updated_at

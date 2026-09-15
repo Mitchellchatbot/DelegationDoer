@@ -11,16 +11,17 @@ export interface PayrollEntry {
   id: string;
   name: string;
   role: string | null;
-  status: "active" | "inactive" | "onboarding" | "invited";
+  status: "active" | "inactive" | "onboarding" | "invited" | "owner-draw";
   scale: "monthly" | "annual";
   rate: number;
   note: string | null;
   rank: number | null;
 }
 
-const STATUS_OPTS: PayrollEntry["status"][] = ["active", "onboarding", "invited", "inactive"];
+const STATUS_OPTS: PayrollEntry["status"][] = ["active", "owner-draw", "onboarding", "invited", "inactive"];
 const STATUS_STYLE: Record<PayrollEntry["status"], string> = {
   active: "bg-emerald-100 text-emerald-700",
+  "owner-draw": "bg-violet-100 text-violet-700",
   onboarding: "bg-amber-100 text-amber-700",
   invited: "bg-indigo-100 text-indigo-700",
   inactive: "bg-slate-200 text-slate-500"
@@ -32,14 +33,18 @@ function money(n: number): string { return `$${Math.round(n).toLocaleString("en-
 export function PayrollManual({ initial }: { initial: PayrollEntry[] }) {
   const [rows, setRows] = useState<PayrollEntry[]>(initial);
   const [adding, setAdding] = useState(false);
+  // Rows added in this session — pinned to the top so a new $0 hire is visible
+  // to fill in, instead of sinking to the bottom of the pay-sorted list.
+  const [newIds, setNewIds] = useState<string[]>([]);
 
   const totals = useMemo(() => {
-    let activeMo = 0, activeCount = 0, otherCount = 0;
+    let activeMo = 0, activeCount = 0, otherCount = 0, drawMo = 0;
     for (const r of rows) {
       if (r.status === "active") { activeMo += monthlyOf(r); activeCount++; }
+      else if (r.status === "owner-draw") { drawMo += monthlyOf(r); }
       else otherCount++;
     }
-    return { activeMo, activeCount, otherCount };
+    return { activeMo, activeCount, otherCount, drawMo };
   }, [rows]);
 
   async function patch(id: string, field: Partial<PayrollEntry>) {
@@ -60,11 +65,18 @@ export function PayrollManual({ initial }: { initial: PayrollEntry[] }) {
         body: JSON.stringify({ name: "New hire", role: "", status: "active", scale: "monthly", rate: 0 })
       });
       const j = await res.json();
-      if (j.entry) setRows((rs) => [j.entry, ...rs]);
+      if (j.entry) { setRows((rs) => [j.entry, ...rs]); setNewIds((ids) => [j.entry.id, ...ids]); }
     } finally { setAdding(false); }
   }
 
   const sorted = [...rows].sort((a, b) => {
+    // Session-added rows first (newest first) so they're visible to edit.
+    const an = newIds.indexOf(a.id), bn = newIds.indexOf(b.id);
+    if (an !== -1 || bn !== -1) {
+      if (an === -1) return 1;
+      if (bn === -1) return -1;
+      return an - bn;
+    }
     const act = (a.status === "active" ? 0 : 1) - (b.status === "active" ? 0 : 1);
     if (act) return act;
     return monthlyOf(b) - monthlyOf(a);
@@ -82,7 +94,10 @@ export function PayrollManual({ initial }: { initial: PayrollEntry[] }) {
         <div className="flex items-baseline gap-3">
           <div className="text-right">
             <div className="text-2xl font-bold tabular-nums text-ink leading-none">{money(totals.activeMo)}<span className="text-[12px] font-medium text-muted">/mo</span></div>
-            <div className="text-[10px] text-muted mt-0.5">{totals.activeCount} active · {money(totals.activeMo * 12)}/yr{totals.otherCount ? ` · ${totals.otherCount} inactive/pending` : ""}</div>
+            <div className="text-[10px] text-muted mt-0.5">
+              {totals.activeCount} active · {money(totals.activeMo * 12)}/yr{totals.otherCount ? ` · ${totals.otherCount} inactive/pending` : ""}
+              {totals.drawMo > 0 && <> · <span className="text-violet-600">+{money(totals.drawMo)}/mo owner draw</span></>}
+            </div>
           </div>
           <button type="button" onClick={add} disabled={adding} className="flex items-center gap-1 text-[12px] font-medium text-white bg-ink rounded-lg px-2.5 py-1.5 hover:opacity-90 disabled:opacity-50">
             <Plus className="w-3.5 h-3.5" /> Add
@@ -105,7 +120,7 @@ export function PayrollManual({ initial }: { initial: PayrollEntry[] }) {
           </thead>
           <tbody>
             {sorted.map((r) => {
-              const dim = r.status !== "active";
+              const dim = r.status !== "active" && r.status !== "owner-draw";
               return (
                 <tr key={r.id} className={"border-b border-slate-100 group " + (dim ? "opacity-55" : "")}>
                   <td className="py-1 pr-2">
@@ -148,7 +163,7 @@ export function PayrollManual({ initial }: { initial: PayrollEntry[] }) {
           </tbody>
         </table>
       </div>
-      <div className="mt-2 text-[11px] text-muted">Total counts monthly-equivalent of ACTIVE people (annual salaries ÷ 12). Set someone to inactive to drop them from the total without deleting the record.</div>
+      <div className="mt-2 text-[11px] text-muted">Total counts monthly-equivalent of ACTIVE people (annual ÷ 12). &quot;Owner draw&quot; (your own pay) is tracked but excluded — it&apos;s a distribution of profit, not a business cost. Set someone inactive to drop them without deleting.</div>
     </div>
   );
 }

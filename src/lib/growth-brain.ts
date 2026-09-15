@@ -98,8 +98,9 @@ async function assembleSnapshot(): Promise<string> {
     .map((p) => ({ name: p.name, role: p.role || "—", status: p.status, monthly: p.scale === "annual" ? Number(p.rate) / 12 : Number(p.rate) }));
   const activePay = pay.filter((p) => p.status === "active").sort((a, b) => b.monthly - a.monthly);
   const payrollMonthly = activePay.reduce((s, p) => s + p.monthly, 0);
+  const ownerDraw = pay.filter((p) => p.status === "owner-draw").reduce((s, p) => s + p.monthly, 0);
   const payrollLine = activePay.length
-    ? `Payroll/contractors: ${money(payrollMonthly)}/mo across ${activePay.length} active. By person: ${activePay.slice(0, 15).map((p) => `${p.name} (${p.role}) ${money(p.monthly)}`).join(", ")}. Payroll-to-MRR ratio: ${mrr ? Math.round((payrollMonthly / mrr) * 100) : "?"}%.`
+    ? `Operating payroll/contractors: ${money(payrollMonthly)}/mo across ${activePay.length} active (excludes owner draw). By person: ${activePay.slice(0, 15).map((p) => `${p.name} (${p.role}) ${money(p.monthly)}`).join(", ")}. Payroll-to-MRR ratio: ${mrr ? Math.round((payrollMonthly / mrr) * 100) : "?"}%.${ownerDraw ? ` Owner draw (Mitchell, distribution of profit — not a business cost): ${money(ownerDraw)}/mo.` : ""}`
     : "No payroll data.";
 
   // Clients: name, priority, health, notes, MRR.

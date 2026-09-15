@@ -2003,12 +2003,14 @@ async function getFinances(ctx: ToolContext) {
     .map((p) => ({ ...p, monthly: p.scale === "annual" ? Number(p.rate) / 12 : Number(p.rate) }));
   const activePay = payPeople.filter((p) => p.status === "active");
   const payrollMonthly = activePay.reduce((s, p) => s + p.monthly, 0);
+  const ownerDraw = payPeople.filter((p) => p.status === "owner-draw").reduce((s, p) => s + p.monthly, 0);
   const payroll = payPeople.length
     ? {
-        note: "Active people counted at monthly-equivalent. This is the Contractor Payments + payroll line, itemized.",
+        note: "Operating payroll = active people at monthly-equivalent (the Contractor Payments + payroll line). Owner draw is Mitchell's own pay — a distribution of profit, NOT a business cost; exclude it from margin/cost analysis and treat it as coming out of net profit.",
         totalMonthly: Math.round(payrollMonthly),
         totalAnnual: Math.round(payrollMonthly * 12),
         activeCount: activePay.length,
+        ownerDrawMonthly: Math.round(ownerDraw),
         people: activePay.sort((a, b) => b.monthly - a.monthly).map((p) => ({ name: p.name, role: p.role || "—", monthly: Math.round(p.monthly) }))
       }
     : "No payroll uploaded";

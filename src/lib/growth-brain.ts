@@ -80,9 +80,11 @@ function facebookSideSection(fb: FacebookRevenueResult): string {
   if (!p) {
     lines.push("Facebook-side costs/margin: not sent by the Finance app (unknown — not $0).");
   } else if (p.noExpensesRecorded) {
-    lines.push(`Facebook-side P&L: NO expenses entered in the Finance app for ${d.period} yet, so there is no real Facebook-side net profit or margin (do NOT read as $0 costs). Top-payer concentration ${pct(p.concentrationPct)} of Facebook-side revenue.`);
+    lines.push(`Facebook-side P&L: NO expenses entered in the Finance app for ${d.period} yet, so there is no real Facebook-side net profit or margin (do NOT read as $0 costs).${d.provisional ? " Costs are still arriving for this month." : ""} Top-payer concentration ${pct(p.concentrationPct)} of Facebook-side revenue.`);
   } else {
-    lines.push(`Facebook-side P&L: expenses ${usd(p.expensesTotal)} (${p.expenseLines} ledger lines), Facebook-side net profit ${usd(p.netProfit)}, Facebook-side net margin ${pct(p.netMarginPct)}, software ${usd(p.softwareCosts)} (${pct(p.softwarePctOfRevenue)} of revenue), top-payer concentration ${pct(p.concentrationPct)} of Facebook-side revenue.${d.provisional ? " Costs are still arriving for this month (they land whole and are still being entered), so treat the net and margin as incomplete." : ""}`);
+    // Software at 0 is "nothing entered" on Finance's own card, not a real $0.
+    const software = p.softwareCosts ? `${usd(p.softwareCosts)} (${pct(p.softwarePctOfRevenue)} of revenue)` : "none entered";
+    lines.push(`Facebook-side P&L: expenses ${usd(p.expensesTotal)} (${p.expenseLines} ledger line${p.expenseLines === 1 ? "" : "s"}), Facebook-side net profit ${usd(p.netProfit)}, Facebook-side net margin ${pct(p.netMarginPct)}, software ${software}, top-payer concentration ${pct(p.concentrationPct)} of Facebook-side revenue.${d.provisional ? " Costs are still arriving for this month (they land whole and are still being entered), so treat the net and margin as incomplete." : ""}`);
   }
   return lines.join("\n");
 }
@@ -98,10 +100,12 @@ function outboundSection(ob: OutboundSummaryResult): string {
   const ratio = (n: number | null) => (n === null ? "—" : usd(n, 2));
   if (!ads.ok) {
     lines.push(`Ad spend unavailable: ${ads.error} (do NOT treat as zero)`);
-  } else if (!ads.months.length) {
-    lines.push("No ad spend or ad-form prospects recorded yet.");
   } else {
-    lines.push(`By month, newest first (spend = Finance's ledger for ${ads.accountLabel}; prospects = ad-form leads created that month; booked = those now at a booked stage):`);
+    if (!ads.months.length) {
+      lines.push("No ad spend or ad-form prospects recorded yet.");
+    } else {
+      lines.push(`By month, newest first (spend = Finance's ledger for ${ads.accountLabel}; prospects = ad-form leads created that month; booked = those now at a booked stage):`);
+    }
     for (const m of ads.months.slice(0, 4)) {
       const spend = m.spend === null
         ? `spend: no ledger row${m.beforeTracking ? " (before Finance tracked the account)" : ""}`
@@ -110,6 +114,7 @@ function outboundSection(ob: OutboundSummaryResult): string {
       const camps = m.campaigns.slice(0, 3).map((x) => `${x.campaignName} ${usd(x.spend)}`).join(", ");
       lines.push(`- ${m.period}: ${spend}${estimate} · ${m.prospects} prospects · ${m.booked} booked · ${ratio(m.costPerLead)}/lead · ${ratio(m.costPerBooked)}/booked${camps ? ` · top campaigns: ${camps}` : ""}`);
     }
+    // A failed read matters most when it's why there are no months at all.
     if (ads.lastError) {
       lines.push(`Ad account sync: last read from Meta by Finance ${ads.lastSyncedAt ? `${ads.lastSyncedAt} UTC` : "never"}, and the last read FAILED: ${ads.lastError} — recent spend may be stale.`);
     }

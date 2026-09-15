@@ -172,6 +172,25 @@ export function MultitaskBubbles({ user }: { user?: User }) {
   const orderedRef = useRef(ordered);
   orderedRef.current = ordered;
 
+  /**
+   * The body the rest of the stack chains behind. NOT `bodies.current[0]`:
+   * bodies are seeded in `apps` order, while the collapsed leader is the active
+   * app (see `ordered`, and the same lookup in applyTargets). Taking index 0
+   * wrote the rest position and fling target to a follower whenever the active
+   * app wasn't first — which applyTargets overwrites next frame — so the stack
+   * stayed parked at its expanded-row slot on collapse and never settled a
+   * fling to the edge.
+   *
+   * Every caller runs while orderedRef holds the collapsed/hidden order: pointer
+   * handlers only act on a collapsed stack, and the collapse and persist effects
+   * run in the commit that rendered it. Stable identity on purpose — `persist`
+   * depends on it, and the resize observer re-subscribes whenever that changes.
+   */
+  const leaderBody = useCallback(
+    () => bodies.current.find((b) => b.id === orderedRef.current[0]?.id),
+    []
+  );
+
   const activeApp = apps.find((a) => a.id === activeId) ?? apps[0];
 
   /**
@@ -541,7 +560,7 @@ export function MultitaskBubbles({ user }: { user?: User }) {
   }, []);
 
   const persist = useCallback(() => {
-    const leader = bodies.current[0];
+    const leader = leaderBody();
     if (!leader) return;
     // Don't write a position derived from an unlaid-out viewport — that would
     // poison storage for every future session.
@@ -563,7 +582,7 @@ export function MultitaskBubbles({ user }: { user?: User }) {
     } catch {
       /* quota / private mode */
     }
-  }, []);
+  }, [leaderBody]);
 
   // Keep bubbles on-screen when the viewport changes.
   useEffect(() => {
@@ -667,7 +686,7 @@ export function MultitaskBubbles({ user }: { user?: User }) {
       setDragging(false);
       setOverDismiss(false);
 
-      const leader = bodies.current[0];
+      const leader = leaderBody();
       if (!leader) return;
 
       // Velocity in px/s from the sample window.
@@ -721,7 +740,7 @@ export function MultitaskBubbles({ user }: { user?: User }) {
       persist();
       e.currentTarget.releasePointerCapture?.(e.pointerId);
     },
-    [bounds, persist]
+    [bounds, persist, leaderBody]
   );
 
   // -------------------------------------------------------------------------
@@ -798,7 +817,7 @@ export function MultitaskBubbles({ user }: { user?: User }) {
   useEffect(() => {
     if (mode !== "collapsed") return;
     const b = bounds();
-    const leader = bodies.current[0];
+    const leader = leaderBody();
     if (!leader) return;
     leader.x.setConfig(SPRING_STACK_SETTLE);
     leader.y.setConfig(SPRING_STACK_SETTLE);
@@ -808,7 +827,7 @@ export function MultitaskBubbles({ user }: { user?: User }) {
     restPos.current = null;
     leader.x.target = clamp(rest ? rest.x : leader.x.target, b.minX, b.maxX);
     leader.y.target = clamp(rest ? rest.y : leader.y.target, b.minY, b.maxY);
-  }, [mode, bounds]);
+  }, [mode, bounds, leaderBody]);
 
   if (!hydrated) return null;
 

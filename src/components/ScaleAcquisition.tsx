@@ -33,11 +33,6 @@ function cents(n: number | null | undefined): string {
   return `${r < 0 ? "-" : ""}$${Math.abs(r).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
-// The Finance app's percents are PERCENT already (18.7 = 18.7%).
-function pct(n: number | null): string {
-  return n === null ? "—" : `${n.toFixed(1)}%`;
-}
-
 type Tone = "ink" | "rose" | "muted";
 
 function Card({ label, value, hint, tone = "ink" }: { label: string; value: string; hint?: string | null; tone?: Tone }) {
@@ -107,46 +102,22 @@ export function ScaleAcquisition({ revenue, outbound }: { revenue: FacebookReven
   );
 }
 
-// Revenue and managed spend from the Finance app, plus its own net and margin
-// when it sends them. "Facebook side" on every figure that could be mistaken
-// for the Margin card above, which comes from the uploaded QuickBooks P&L.
+// Revenue and managed spend from the Finance app — revenue only, the same
+// figures /finance shows. "Facebook side" so it's never read as MRR.
 function FacebookSide({ data }: { data: FacebookRevenueData }) {
-  const { current, pnl, provisional } = data;
-  const empty = pnl?.noExpensesRecorded ?? false;
+  const { current, provisional } = data;
   const top = data.payers[0];
 
   return (
     <>
       <Heading title={FACEBOOK_TITLE} period={`${monthLabel(data.period)}${provisional ? " so far" : ""}`} pill={provisional ? "provisional" : null} />
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 gap-3">
         <Card label="Revenue · Facebook side" value={money(current.revenue)} hint="separate from MRR" />
-        {pnl && (
-          // An empty ledger means revenue with nothing taken off it — not a
-          // net. "—", never the revenue figure dressed up as profit.
-          <Card
-            label="Net profit · Facebook side"
-            value={empty ? "—" : money(pnl.netProfit)}
-            tone={empty ? "muted" : pnl.netProfit < 0 ? "rose" : "ink"}
-            hint={
-              empty
-                ? "no expenses entered yet"
-                : `after ${money(pnl.expensesTotal)} expenses${provisional ? " · costs still arriving" : ""}`
-            }
-          />
-        )}
-        {pnl && (
-          <Card
-            label="Margin · Facebook side"
-            value={empty ? "—" : pct(pnl.netMarginPct)}
-            tone={empty ? "muted" : "ink"}
-            hint={empty ? "no expenses entered yet" : provisional ? "costs still arriving" : null}
-          />
-        )}
         <Card label="Managed ad spend" value={money(current.managedSpend)} hint="client Meta spend we run" />
       </div>
       <div className="text-[11px] text-muted mt-2 px-1">
         {top
-          ? `Top client: ${top.name}${pnl && pnl.concentrationPct !== null ? ` — ${pct(pnl.concentrationPct)} of Facebook-side revenue` : ""}`
+          ? `Top client: ${top.name} — ${money(top.revenue)} of Facebook-side revenue`
           : "No clients billing this month yet."}
       </div>
     </>

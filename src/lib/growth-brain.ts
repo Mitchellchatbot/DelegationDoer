@@ -56,13 +56,8 @@ const usd = (n: number, digits = 0) => {
   const r = Math.round(n * 10 ** digits) / 10 ** digits;
   return `${r < 0 ? "-" : ""}$${Math.abs(r).toLocaleString("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits })}`;
 };
-// The Finance app's percents are PERCENT already (18.7 = 18.7%).
-const pct = (n: number | null) => (n === null ? "—" : `${n.toFixed(1)}%`);
-
 // Facebook-side revenue, as the Finance app computes it. Narrated, never
-// recomputed, and never summed into MRR — the brain is told the same. Its net
-// and margin are the Facebook side's only, not the uploaded QuickBooks P&L's
-// under ## Finance.
+// recomputed, and never summed into MRR — the brain is told the same.
 function facebookSideSection(fb: FacebookRevenueResult): string {
   const head = "## Facebook-side revenue (Finance app — a SEPARATE revenue stream from MRR; never add the two)";
   if (!fb.ok) return `${head}\nFacebook-side revenue unavailable: ${fb.error} (do NOT treat as $0)`;
@@ -76,16 +71,6 @@ function facebookSideSection(fb: FacebookRevenueResult): string {
       : "No clients billing this month yet.",
     `Facebook-side revenue trend (oldest→newest): ${d.months.slice(-6).map((m) => `${m.period} ${usd(m.revenue)}`).join(", ")}.`
   ];
-  const p = d.pnl;
-  if (!p) {
-    lines.push("Facebook-side costs/margin: not sent by the Finance app (unknown — not $0).");
-  } else if (p.noExpensesRecorded) {
-    lines.push(`Facebook-side P&L: NO expenses entered in the Finance app for ${d.period} yet, so there is no real Facebook-side net profit or margin (do NOT read as $0 costs).${d.provisional ? " Costs are still arriving for this month." : ""} Top-payer concentration ${pct(p.concentrationPct)} of Facebook-side revenue.`);
-  } else {
-    // Software at 0 is "nothing entered" on Finance's own card, not a real $0.
-    const software = p.softwareCosts ? `${usd(p.softwareCosts)} (${pct(p.softwarePctOfRevenue)} of revenue)` : "none entered";
-    lines.push(`Facebook-side P&L: expenses ${usd(p.expensesTotal)} (${p.expenseLines} ledger line${p.expenseLines === 1 ? "" : "s"}), Facebook-side net profit ${usd(p.netProfit)}, Facebook-side net margin ${pct(p.netMarginPct)}, software ${software}, top-payer concentration ${pct(p.concentrationPct)} of Facebook-side revenue.${d.provisional ? " Costs are still arriving for this month (they land whole and are still being entered), so treat the net and margin as incomplete." : ""}`);
-  }
   return lines.join("\n");
 }
 
@@ -326,7 +311,7 @@ const GROWTH_SYSTEM = [
   "- IGNORE automated system noise. Security/Wordfence/plugin/vulnerability/backup/uptime/SSL alerts are ops noise, NOT churn signals or client sentiment — never surface them as risks. A client is only 'at risk' when there's a REAL human signal: a person expressed frustration/dissatisfaction, an unmet request or broken promise, a payment/past-due problem, or explicit churn intent.",
   "- Do NOT surface internal team task-status ('X has 3 overdue tasks', 'stuck with the team') as a PROTECT item on its own. Team load only matters as a capacity constraint or when it's directly causing a client-facing failure a human has reacted to.",
   "- Weigh recency. Client health/notes carry an 'as of Nd ago' stamp, and recent client calls (tl;dv) are dated — LEAD with the freshest signals. A risk raised on a call this week outranks a 2-week-old note; a request made on a call is a live expansion opening (turn it into a GROW item). When you flag a client risk, state how recent it is, and discount anything older than ~3 weeks unless corroborated.",
-  "- Facebook-side revenue (from the Finance app: management + setup fees on the client Meta spend we manage) is a SEPARATE stream from MRR. Never sum the two or double count a client across them. Its Facebook-side net profit and margin are that stream only — never confuse them with the uploaded QuickBooks P&L's margin under ## Finance. If it's unavailable, say so; never treat it as $0.",
+  "- Facebook-side revenue (from the Finance app: management + setup fees on the client Meta spend we manage) is a SEPARATE stream from MRR. Never sum the two or double count a client across them. If it's unavailable, say so; never treat it as $0.",
   "- Outbound spend / prospects / booked / cost per booked are our own acquisition funnel. When judging whether leads or sales is the constraint, use the cost-per-lead and cost-per-booked trend and the texting backlog vs the reps' daily caps as evidence. An estimate month is partial (leads include today, spend stops at yesterday) — never compare it to a full month as if it were complete.",
   "",
   "Return STRICT JSON only, no prose or code fences, with this exact shape:",

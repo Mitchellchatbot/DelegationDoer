@@ -43,6 +43,16 @@ export type ProposedAction =
         topReasons: string[];            // ranker factor labels (top 2)
         capacityPct: number;
       }[];
+    }
+  | {
+      // Owner-only: a drafted NEW email staged for one-click send. Nothing
+      // sends until Mitchell clicks Send on the card.
+      kind: "send_email";
+      id: string;
+      to: string;
+      subject: string;
+      body: string;
+      purpose?: string | null; // one-line why, shown on the card
     };
 
 export interface ToolContext {
@@ -363,6 +373,21 @@ export const AI_TOOLS = [
     }
   },
   {
+    name: "propose_email",
+    description:
+      "OWNER-ONLY. Draft a NEW outgoing email and stage a 'Send email' card under your reply for Mitchell to review, edit, and send with one click. Use this whenever Mitchell asks you to email/draft/reach out to someone (e.g. 'email Deel asking if they raised my payroll'). YOU write the full body in his voice (warm, direct, no em-dashes) and a clear subject. NEVER sends automatically — Mitchell clicks Send. If you don't know the recipient's exact address, put your best guess or a [placeholder] in `to` and say so in your reply. Returns { staged: true }. Non-owner callers get access-denied.",
+    input_schema: {
+      type: "object",
+      properties: {
+        to: { type: "string", description: "Recipient email address (or a [placeholder] if unknown)." },
+        subject: { type: "string" },
+        body: { type: "string", description: "Full email body, ready to send, in Mitchell's voice." },
+        purpose: { type: "string", description: "One-line reason for the email, shown on the card." }
+      },
+      required: ["to", "subject", "body"]
+    }
+  },
+  {
     name: "remember",
     description:
       "OWNER-ONLY. Save a durable fact the brain should carry across every future chat and the daily brief. Call this whenever Mitchell states a standing priority ('getting more clients is the top priority'), a decision ('we're cutting LinkedIn ads'), a company fact ('Talha owns outbound'), or a preference ('keep team messages casual'). Don't save one-off questions, transient status, or anything already obvious from the data. Pick the closest category. Returns the saved memory. Non-owner callers get access-denied — never save memory for them.",
@@ -429,6 +454,7 @@ export async function runTool(
       case "search_sops": return searchSops(input);
       case "create_task": return createTask(input, ctx);
       case "get_finances": return getFinances(ctx);
+      case "propose_email": return proposeEmail(input, ctx);
       case "remember": return rememberFact(input, ctx);
       case "forget": return forgetFact(input, ctx);
       default:
@@ -1969,6 +1995,24 @@ async function getFinances(ctx: ToolContext) {
     ? { note: "Software/Subscriptions itemized by vendor, per month. Biggest / rising ones are the cut candidates.", months: [...swMonths], byVendor: softwareByVendor }
     : "No software vendor breakdown uploaded";
 
+  // 1c. Payroll / contractors by person (the Contractor Payments line).
+  const { data: payRows } = await supabase
+    .from("payroll_entries")
+    .select("name, role, status, scale, rate");
+  const payPeople = ((payRows ?? []) as { name: string; role: string | null; status: string; scale: string; rate: number }[])
+    .map((p) => ({ ...p, monthly: p.scale === "annual" ? Number(p.rate) / 12 : Number(p.rate) }));
+  const activePay = payPeople.filter((p) => p.status === "active");
+  const payrollMonthly = activePay.reduce((s, p) => s + p.monthly, 0);
+  const payroll = payPeople.length
+    ? {
+        note: "Active people counted at monthly-equivalent. This is the Contractor Payments + payroll line, itemized.",
+        totalMonthly: Math.round(payrollMonthly),
+        totalAnnual: Math.round(payrollMonthly * 12),
+        activeCount: activePay.length,
+        people: activePay.sort((a, b) => b.monthly - a.monthly).map((p) => ({ name: p.name, role: p.role || "—", monthly: Math.round(p.monthly) }))
+      }
+    : "No payroll uploaded";
+
   // 2. Live Stripe revenue (fail-soft).
   const stripe = await getStripeRevenue().catch(() => null);
   const stripeSummary = stripe
@@ -2050,7 +2094,8 @@ async function getFinances(ctx: ToolContext) {
     manualMrr: manual,
     stripe: stripeSummary,
     pnl,
-    software
+    software,
+    payroll
   };
 }
 
@@ -2079,4 +2124,25 @@ async function forgetFact(input: Record<string, unknown>, ctx: ToolContext) {
   if (!id) return { error: "id required" };
   const ok = await forgetMemory(id);
   return ok ? { forgotten: true, id } : { error: "could not forget (bad id?)" };
+}
+
+// OWNER-ONLY: stage a drafted new email as a "Send email" action card. The
+// send itself happens only when Mitchell clicks Send (see /api/brain/compose).
+function proposeEmail(input: Record<string, unknown>, ctx: ToolContext) {
+  if (!isOwner(ctx.actor)) {
+    return { error: "access denied — sending email is owner-only" };
+  }
+  const to = typeof input.to === "string" ? input.to.trim() : "";
+  const subject = typeof input.subject === "string" ? input.subject.trim() : "";
+  const body = typeof input.body === "string" ? input.body.trim() : "";
+  if (!to || !subject || !body) return { error: "to, subject, and body are required" };
+  ctx.proposals.push({
+    kind: "send_email",
+    id: `email_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`,
+    to,
+    subject,
+    body,
+    purpose: typeof input.purpose === "string" ? input.purpose : null
+  });
+  return { staged: true, to, subject };
 }

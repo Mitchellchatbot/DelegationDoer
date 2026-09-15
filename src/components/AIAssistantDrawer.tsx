@@ -4,7 +4,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Sparkles, Send, X, ArrowUp, Loader2, RefreshCw, Mic, MicOff,
-  ClipboardPlus, CheckCircle2, Users, ExternalLink
+  ClipboardPlus, CheckCircle2, Users, ExternalLink, Mail
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
@@ -36,6 +36,14 @@ type ProposedAction =
       sourceLabel?: string | null;
       sourceUrl?: string | null;
       suggestedAssignees: SuggestedAssignee[];
+    }
+  | {
+      kind: "send_email";
+      id: string;
+      to: string;
+      subject: string;
+      body: string;
+      purpose?: string | null;
     };
 
 interface Message {
@@ -358,7 +366,8 @@ function MessageBubble({ message }: { message: Message }) {
       {!isUser && message.actions && message.actions.length > 0 && (
         <div className="w-full max-w-[90%] space-y-2 mt-1">
           {message.actions.map((a) =>
-            a.kind === "create_task" ? <CreateTaskCard key={a.id} action={a} /> : null
+            a.kind === "create_task" ? <CreateTaskCard key={a.id} action={a} />
+            : a.kind === "send_email" ? <SendEmailCard key={a.id} action={a} /> : null
           )}
         </div>
       )}
@@ -369,6 +378,79 @@ function MessageBubble({ message }: { message: Message }) {
 // Inline "Create task" card the assistant emits when it spots an action
 // item. Defaults to the top-ranked assignee but the user can switch
 // to any of the suggested alternates with a click before committing.
+// Inline "Send email" card: the brain drafts a new email, Mitchell reviews /
+// edits the body, then sends it as himself with one click. Nothing sends until
+// he clicks Send.
+function SendEmailCard({
+  action
+}: {
+  action: Extract<ProposedAction, { kind: "send_email" }>;
+}) {
+  const [to, setTo] = useState(action.to);
+  const [subject, setSubject] = useState(action.subject);
+  const [body, setBody] = useState(action.body);
+  const [sending, setSending] = useState(false);
+  const [sent, setSent] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function send() {
+    if (sending || sent) return;
+    setSending(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/brain/compose", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ to, subject, bodyText: body })
+      });
+      const j = await res.json();
+      if (j.ok) setSent(true);
+      else setError(j.error || "send failed");
+    } catch {
+      setError("send failed");
+    } finally {
+      setSending(false);
+    }
+  }
+
+  return (
+    <div className="rounded-xl border border-indigo-200 bg-indigo-50/50 p-3 text-[13px]">
+      <div className="flex items-center gap-1.5 text-[12px] font-semibold text-indigo-700 mb-2">
+        <Mail className="w-3.5 h-3.5" /> Draft email{action.purpose ? ` · ${action.purpose}` : ""}
+      </div>
+      {sent ? (
+        <div className="flex items-center gap-1.5 text-[13px] text-emerald-700">
+          <CheckCircle2 className="w-4 h-4" /> Sent to {to}.
+        </div>
+      ) : (
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <span className="text-[11px] text-muted w-12 shrink-0">To</span>
+            <input value={to} onChange={(e) => setTo(e.target.value)}
+              className="flex-1 text-[12px] rounded-lg border border-slate-200 px-2 py-1 bg-white focus:outline-none focus:border-indigo-300" />
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-[11px] text-muted w-12 shrink-0">Subject</span>
+            <input value={subject} onChange={(e) => setSubject(e.target.value)}
+              className="flex-1 text-[12px] rounded-lg border border-slate-200 px-2 py-1 bg-white focus:outline-none focus:border-indigo-300" />
+          </div>
+          <textarea value={body} onChange={(e) => setBody(e.target.value)}
+            rows={Math.min(16, Math.max(6, body.split("\n").length + 1))}
+            className="w-full text-[13px] leading-relaxed rounded-lg border border-slate-200 p-2.5 bg-white focus:outline-none focus:border-indigo-300 resize-y" />
+          <div className="flex items-center gap-2">
+            <button type="button" onClick={send} disabled={sending}
+              className="flex items-center gap-1.5 text-[12px] font-medium text-white bg-ink rounded-lg px-3 py-1.5 hover:opacity-90 disabled:opacity-50">
+              {sending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
+              {sending ? "Sending…" : "Send as me"}
+            </button>
+            {error && <span className="text-[12px] text-rose-600">{error}</span>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function CreateTaskCard({
   action
 }: {

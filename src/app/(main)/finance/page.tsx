@@ -8,6 +8,7 @@ import { FinancePanel, type FinanceDoc } from "@/components/FinancePanel";
 import { FinanceDashboard } from "@/components/FinanceDashboard";
 import { ExpenseBreakdown } from "@/components/ExpenseBreakdown";
 import { SoftwareBreakdown, type SoftwareRow } from "@/components/SoftwareBreakdown";
+import { PayrollManual, type PayrollEntry } from "@/components/PayrollManual";
 import { StripeMissing } from "@/components/StripeMissing";
 import { MrrManual, type MrrEntry } from "@/components/MrrManual";
 import { getStripeRevenue } from "@/lib/stripe";
@@ -46,6 +47,12 @@ export default async function FinancePage() {
     .from("software_subscriptions")
     .select("vendor, month, amount");
 
+  // Payroll / contractors, by person (the Contractor Payments line).
+  const { data: payrollRows } = await getSupabaseAdmin()
+    .from("payroll_entries")
+    .select("id, name, role, status, scale, rate, note, rank")
+    .order("rank", { ascending: true });
+
   return (
     <div className="space-y-5 max-w-3xl mx-auto">
       <div className="flex items-start gap-3">
@@ -68,6 +75,8 @@ export default async function FinancePage() {
       <FinanceDashboard parsed={latestParsed} />
 
       <ExpenseBreakdown parsed={latestParsed} />
+
+      <PayrollManual initial={(payrollRows ?? []) as PayrollEntry[]} />
 
       <SoftwareBreakdown rows={(softwareRows ?? []) as SoftwareRow[]} />
 

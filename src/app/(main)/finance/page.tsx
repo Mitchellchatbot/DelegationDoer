@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { notFound, redirect } from "next/navigation";
 import { Lock } from "lucide-react";
 import { getCurrentUserId } from "@/lib/session";
@@ -11,7 +12,9 @@ import { SoftwareBreakdown, type SoftwareRow } from "@/components/SoftwareBreakd
 import { PayrollManual, type PayrollEntry } from "@/components/PayrollManual";
 import { StripeMissing } from "@/components/StripeMissing";
 import { MrrManual, type MrrEntry } from "@/components/MrrManual";
+import { FacebookRevenue, FacebookRevenueLoading } from "@/components/FacebookRevenue";
 import { getStripeRevenue } from "@/lib/stripe";
+import { getFacebookRevenue } from "@/lib/facebook-revenue";
 import type { ParsedPnl } from "@/lib/pnl-parse";
 
 export const dynamic = "force-dynamic";
@@ -72,6 +75,12 @@ export default async function FinancePage() {
 
       <StripeMissing rev={revenue} sheetNames={(mrrRows ?? []).map((r) => r.company as string)} />
 
+      {/* Facebook-side revenue from the Finance app. Streams in on its own, so a
+          slow Finance app never holds up the figures above or below it. */}
+      <Suspense fallback={<FacebookRevenueLoading />}>
+        <FacebookRevenueSection />
+      </Suspense>
+
       <FinanceDashboard parsed={latestParsed} />
 
       <ExpenseBreakdown parsed={latestParsed} />
@@ -83,4 +92,9 @@ export default async function FinancePage() {
       <FinancePanel initialDocuments={rows.map(({ parsed, ...d }) => d)} />
     </div>
   );
+}
+
+// Only ever rendered below the owner gate above.
+async function FacebookRevenueSection() {
+  return <FacebookRevenue result={await getFacebookRevenue()} />;
 }

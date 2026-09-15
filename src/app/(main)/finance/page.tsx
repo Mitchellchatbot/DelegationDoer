@@ -8,7 +8,7 @@ import { isOwner } from "@/lib/access";
 import { FinancePanel, type FinanceDoc } from "@/components/FinancePanel";
 import { FinanceDashboard } from "@/components/FinanceDashboard";
 import { ExpenseBreakdown } from "@/components/ExpenseBreakdown";
-import { SoftwareBreakdown, type SoftwareRow } from "@/components/SoftwareBreakdown";
+import { ExpenseVendors, type ExpenseRow } from "@/components/ExpenseVendors";
 import { PayrollManual, type PayrollEntry } from "@/components/PayrollManual";
 import { StripeMissing } from "@/components/StripeMissing";
 import { MrrManual, type MrrEntry } from "@/components/MrrManual";
@@ -45,10 +45,10 @@ export default async function FinancePage() {
     .select("id, company, mrr, status, subscription_day, satisfaction, note, rank")
     .order("rank", { ascending: true });
 
-  // Vendor-level breakdown of the Software/Subscriptions expense lump.
-  const { data: softwareRows } = await getSupabaseAdmin()
-    .from("software_subscriptions")
-    .select("vendor, month, amount");
+  // Every expense account itemized by vendor (from QuickBooks).
+  const { data: expenseRows } = await getSupabaseAdmin()
+    .from("expense_line_items")
+    .select("account, vendor, month, amount");
 
   // Payroll / contractors, by person (the Contractor Payments line).
   const { data: payrollRows } = await getSupabaseAdmin()
@@ -87,7 +87,7 @@ export default async function FinancePage() {
 
       <PayrollManual initial={(payrollRows ?? []) as PayrollEntry[]} />
 
-      <SoftwareBreakdown rows={(softwareRows ?? []) as SoftwareRow[]} />
+      <ExpenseVendors rows={(expenseRows ?? []) as ExpenseRow[]} />
 
       <FinancePanel initialDocuments={rows.map(({ parsed, ...d }) => d)} />
     </div>

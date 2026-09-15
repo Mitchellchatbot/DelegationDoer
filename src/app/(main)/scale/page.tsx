@@ -16,6 +16,9 @@ import { InboxCopilot, type InboxThread } from "@/components/InboxCopilot";
 import { ScaleAcquisition, ScaleAcquisitionLoading } from "@/components/ScaleAcquisition";
 import { getFacebookRevenue } from "@/lib/facebook-revenue";
 import { getOutboundSummary } from "@/lib/outbound-summary";
+import { getScaleSources } from "@/lib/scale-sources";
+import type { ScaleSourceFlags } from "@/lib/scale-sources-types";
+import { ScaleSourceSwitches } from "@/components/ScaleSourceSwitches";
 import type { ParsedPnl } from "@/lib/pnl-parse";
 
 export const dynamic = "force-dynamic";
@@ -36,13 +39,16 @@ export default async function ScalePage() {
   if (!isOwner(user)) notFound();
 
   const supabase = getSupabaseAdmin();
-  const [revenue, memories, mrrRes, finRes, growthBrief] = await Promise.all([
+  const [revenue, memories, mrrRes, finRes, growthBrief, sources] = await Promise.all([
     getStripeRevenue().catch(() => null),
     listMemories().catch(() => []),
     supabase.from("mrr_entries").select("company, mrr, status"),
     supabase.from("finance_documents").select("parsed").order("uploaded_at", { ascending: false }).limit(5),
-    getLatestGrowthBrief().catch(() => null)
+    getLatestGrowthBrief().catch(() => null),
+    // Never throws; a failed read comes back as both off with the reason.
+    getScaleSources()
   ]);
+  const sourceFlags: ScaleSourceFlags = { facebook: sources.facebook, outbound: sources.outbound };
 
   // Snapshot: manual MRR (source of truth) + concentration + margin.
   const mrrRows = (mrrRes.data ?? []) as { company: string; mrr: number; status: string }[];
@@ -108,6 +114,9 @@ export default async function ScalePage() {
         </div>
       </div>
 
+      {/* Which outside apps the room (and the brain) reads */}
+      <ScaleSourceSwitches initial={sources} />
+
       {/* Snapshot */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         {cards.map((c) => (
@@ -122,13 +131,16 @@ export default async function ScalePage() {
 
       {/* Acquisition: the Facebook side from the Finance app and our own Outbound
           funnel from the ads dashboard. Streams in on its own, so a slow app
-          never holds up the board or the emails below it. */}
-      <Suspense fallback={<ScaleAcquisitionLoading />}>
-        <ScaleAcquisitionSection />
-      </Suspense>
+          never holds up the board or the emails below it. Only the sources
+          switched on are fetched; with both off there's no section at all. */}
+      {(sourceFlags.facebook || sourceFlags.outbound) && (
+        <Suspense fallback={<ScaleAcquisitionLoading {...sourceFlags} />}>
+          <ScaleAcquisitionSection sources={sourceFlags} />
+        </Suspense>
+      )}
 
       {/* The CEO board: constraint + Protect / Grow */}
-      <GrowthBoard initial={growthBrief as GrowthBrief | null} />
+      <GrowthBoard initial={growthBrief as GrowthBrief | null} currentSources={sourceFlags} />
 
       {/* Emails to reply to */}
       <div>
@@ -144,8 +156,12 @@ export default async function ScalePage() {
   );
 }
 
-// Only ever rendered below the owner gate above. Neither fetch throws.
-async function ScaleAcquisitionSection() {
-  const [revenue, outbound] = await Promise.all([getFacebookRevenue(), getOutboundSummary()]);
+// Only ever rendered below the owner gate above. Neither fetch throws. A source
+// switched off is never called — not fetched and discarded, not called at all.
+async function ScaleAcquisitionSection({ sources }: { sources: ScaleSourceFlags }) {
+  const [revenue, outbound] = await Promise.all([
+    sources.facebook ? getFacebookRevenue() : undefined,
+    sources.outbound ? getOutboundSummary() : undefined
+  ]);
   return <ScaleAcquisition revenue={revenue} outbound={outbound} />;
 }

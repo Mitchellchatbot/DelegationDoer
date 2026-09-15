@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { RefreshCw, Target, ShieldAlert, Rocket } from "lucide-react";
+import { SCALE_SOURCE_LABELS, staleBriefSources, type ScaleSourceFlags } from "@/lib/scale-sources-types";
 
 // The CEO screen: the soul question + #1 growth constraint up top, then two
 // columns — PROTECT (defend the business) and GROW (Scale Opportunities).
@@ -9,7 +10,7 @@ import { RefreshCw, Target, ShieldAlert, Rocket } from "lucide-react";
 export interface GrowthConstraint { title: string; why: string; evidence: string; impact: string; solution: string; owner: string; }
 export interface ProtectItem { type: string; title: string; detail: string; severity: "high" | "medium"; }
 export interface GrowItem { type: string; title: string; detail: string; estValue?: string; action: string; owner?: string; confidence?: "high" | "medium" | "low"; }
-export interface GrowthBrief { constraint: GrowthConstraint | null; protect: ProtectItem[]; grow: GrowItem[]; generatedAt: string; }
+export interface GrowthBrief { constraint: GrowthConstraint | null; protect: ProtectItem[]; grow: GrowItem[]; generatedAt: string; sources?: ScaleSourceFlags; }
 
 const PROTECT_ICON: Record<string, string> = {
   "clients-at-risk": "🔥", performance: "⚠️", "missed-commitment": "⏰", bottleneck: "🚧", "margin-leak": "💰", capacity: "👥"
@@ -18,9 +19,12 @@ const GROW_ICON: Record<string, string> = {
   expansion: "📈", upsell: "💵", "sales-push": "🎯", "replicate-win": "🔁", automation: "🤖", delegation: "👤", hiring: "🧑‍💼", experiment: "💡"
 };
 
-export function GrowthBoard({ initial }: { initial: GrowthBrief | null }) {
+export function GrowthBoard({ initial, currentSources }: { initial: GrowthBrief | null; currentSources?: ScaleSourceFlags }) {
   const [brief, setBrief] = useState<GrowthBrief | null>(initial);
   const [loading, setLoading] = useState(false);
+  // Sources this brief was built from that are switched off now. Only a
+  // notice — regenerating costs a model call, so it's the owner's click.
+  const stale = brief && currentSources ? staleBriefSources(brief.sources, currentSources) : [];
 
   async function generate() {
     setLoading(true);
@@ -53,6 +57,20 @@ export function GrowthBoard({ initial }: { initial: GrowthBrief | null }) {
             {loading ? "Thinking…" : brief ? "Re-run" : "Ask the brain"}
           </button>
         </div>
+        {stale.length > 0 && !loading && (
+          <div className="mt-2 flex flex-wrap items-center gap-2 rounded-lg bg-amber-100 text-amber-900 px-3 py-2 text-[12px]">
+            <span>
+              This brief {brief?.sources ? "used" : "may have used"} {stale.map((k) => SCALE_SOURCE_LABELS[k]).join(" and ")}, now switched off.
+            </span>
+            <button
+              type="button"
+              onClick={generate}
+              className="font-semibold underline underline-offset-2 hover:text-amber-700"
+            >
+              Regenerate
+            </button>
+          </div>
+        )}
         {c ? (
           <div className="mt-2">
             <div className="text-lg font-bold leading-snug">{c.title}</div>

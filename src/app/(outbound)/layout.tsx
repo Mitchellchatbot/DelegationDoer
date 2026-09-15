@@ -1,4 +1,5 @@
 import { notFound, redirect } from "next/navigation";
+import { headers } from "next/headers";
 import { Toaster } from "sonner";
 import { getCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
@@ -23,10 +24,15 @@ export default async function OutboundLayout({ children }: { children: React.Rea
   if (!user) redirect("/login");
   if (!canSeeOutbound(user)) notFound();
 
+  // This dashboard is also framed by the Multitask panel on the main app.
+  // Browsers mark a frame's document request `sec-fetch-dest: iframe`, which
+  // lets the sidebar know on its very first paint rather than after hydration.
+  const framed = headers().get("sec-fetch-dest") === "iframe";
+
   return (
     <NavDrawerProvider>
     <div className="app-shell flex gap-3 p-3 min-h-screen">
-      <OutboundSidebar user={user} />
+      <OutboundSidebar user={user} initiallyFramed={framed} />
       <div className="flex-1 min-w-0 flex flex-col">
         {/* Intro flourish — a brief purple radial flash from the center
             when the dashboard first mounts. Pairs with the wipe

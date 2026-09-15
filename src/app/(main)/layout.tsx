@@ -101,7 +101,7 @@ export default async function MainLayout({ children }: { children: React.ReactNo
       {/* Floats above the shell; hidden until toggled with Option+M or the
           "Multitask" button in the sidebar. (Cmd/Ctrl+Shift+M is unusable —
           Chrome on macOS reserves it for the profile switcher.) */}
-      <MultitaskBubbles />
+      <MultitaskBubbles user={user} />
       <OnboardingDialog />
       <SodGate />
       </TooltipRoot>

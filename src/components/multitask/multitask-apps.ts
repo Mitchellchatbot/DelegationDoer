@@ -1,5 +1,7 @@
 import type { LucideIcon } from "lucide-react";
-import { BarChart3, Users } from "lucide-react";
+import { BarChart3, Rocket, Users } from "lucide-react";
+import type { User } from "@/lib/types";
+import { canSeeOutbound } from "@/lib/auth";
 
 export type MultitaskApp = {
   id: string;
@@ -47,6 +49,17 @@ export type MultitaskApp = {
    * grant cannot drift from NEXT_PUBLIC_*_URL the way a literal string would.
    */
   allowFeatures?: readonly string[];
+  /**
+   * Who gets this bubble; omitted means everyone.
+   *
+   * A mirror of the gate the framed route already enforces on the server, in
+   * the same spirit as `frameAncestors` mirroring a remote's CSP. It is a UX
+   * filter, not the security boundary — the route refuses the request either
+   * way. What it prevents is a bubble that opens onto that refusal: a
+   * server-side notFound() renders Next's bare 404 inside the panel, with no
+   * sidebar and nothing to click.
+   */
+  visibleTo?: (user: User | null | undefined) => boolean;
 };
 
 /**
@@ -118,6 +131,14 @@ export function frameAllow(app: MultitaskApp): string | undefined {
   return app.allowFeatures.map((f) => `${f} ${origin}`).join("; ");
 }
 
+/**
+ * The bubbles `user` should see, in registry order. The order matters: the
+ * expanded row lays bubbles out in exactly this sequence.
+ */
+export function appsFor(user: User | null | undefined): MultitaskApp[] {
+  return MULTITASK_APPS.filter((a) => !a.visibleTo || a.visibleTo(user));
+}
+
 export const MULTITASK_APPS: MultitaskApp[] = [
   {
     id: "meta",
@@ -149,5 +170,30 @@ export const MULTITASK_APPS: MultitaskApp[] = [
     // cross-origin frame. Both measured with a CDP-driven Chrome; the numbers
     // are in Scaled-Sync lib/ctm/callMode.ts.
     allowFeatures: ["microphone", "clipboard-write"],
+  },
+  {
+    id: "outbound",
+    name: "Outbound",
+    // One of our own routes, so the frame is same-origin on every host
+    // DelegationDoer is served from — nothing for frameAncestors to mirror, and
+    // DelegationDoer sends no X-Frame-Options or CSP (checked 2026-09-15). No
+    // allowFeatures: the dashboard uses confirm() and clipboard.writeText, which
+    // a same-origin frame already has.
+    //
+    // Not the nested copy that dropped the Inboxes bubble (ab33d67): the
+    // (outbound) route group has its own layout, with no main sidebar, topbar or
+    // multitask stack. OutboundSidebar hides its "Exit dashboard" button when
+    // framed, since that is the one link that would load the main app in here.
+    //
+    // A concrete route rather than bare /outbound-dashboard, which redirects
+    // elsewhere — and the frame reloads on every expand, so that redirect would
+    // be paid every time.
+    url: "/outbound-dashboard/leads",
+    // Same icon and gradient (#6d28d9 -> #4c1d95) as EnterOutboundDashboardButton.
+    icon: Rocket,
+    tone: "bg-gradient-to-br from-violet-700 to-violet-900",
+    // The (outbound) layout notFound()s everyone else; the Topbar rocket uses
+    // the same check.
+    visibleTo: canSeeOutbound,
   },
 ];

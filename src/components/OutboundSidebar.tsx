@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { motion, useMotionValue, useSpring, useMotionTemplate } from "framer-motion";
-import { useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   BarChart3, CalendarClock, Globe, Linkedin, Users as UsersIcon, ArrowLeft,
   MessageSquare, Flame
@@ -20,7 +20,10 @@ import type { User } from "@/lib/types";
 // active row's chip picks up the brand accent.
 //
 // "Exit dashboard" sits in the footer and routes back to the standard
-// blue-sidebar home — same surface the user came from.
+// blue-sidebar home — same surface the user came from. It is hidden when
+// the dashboard is framed inside the main app's Multitask panel: there it
+// would load the whole main app into the frame, and the panel has its own
+// close button.
 
 interface NavItem { href: string; label: string; icon: typeof BarChart3 }
 
@@ -35,12 +38,27 @@ const NAV: NavItem[] = [
   { href: "/outbound-dashboard/people",          label: "Team",               icon: UsersIcon     }
 ];
 
-export function OutboundSidebar({ user }: { user: User }) {
+export function OutboundSidebar({
+  user,
+  initiallyFramed = false
+}: {
+  user: User;
+  /** The layout's read of `sec-fetch-dest`, so the first paint is already right. */
+  initiallyFramed?: boolean;
+}) {
   const path = usePathname();
   const router = useRouter();
   const ref = useRef<HTMLElement>(null);
   // Off-canvas drawer state (mobile only; `md:static` on desktop).
   const { open: navOpen } = useNavDrawer();
+
+  // Seeded from the server hint and never cleared: router.refresh() re-renders
+  // the layout with `sec-fetch-dest: empty`, which must not bring Exit back.
+  // The effect covers browsers that don't send the header.
+  const [framed, setFramed] = useState(initiallyFramed);
+  useEffect(() => {
+    if (window.self !== window.top) setFramed(true);
+  }, []);
 
   // Mouse-tracking halo — captures cursor pos relative to the sidebar and
   // spring-smooths it so the highlight glides behind the cursor instead of
@@ -147,16 +165,20 @@ export function OutboundSidebar({ user }: { user: User }) {
       </div>
 
       {/* Exit button — leaves the outbound dashboard mode and drops the
-          user back on /home inside the main (blue-sidebar) shell. */}
+          user back on /home inside the main (blue-sidebar) shell. Not
+          rendered when framed: in the Multitask panel it would navigate the
+          frame, nesting a second copy of the main app inside the first. */}
       <div className="relative p-3 border-t border-slate-100">
-        <button
-          onClick={() => router.push("/home")}
-          className="w-full inline-flex items-center justify-center gap-2 px-3 py-2 rounded-xl text-sm border border-slate-200 bg-white/80 text-ink/70 hover:bg-white hover:text-ink transition-colors backdrop-blur-sm"
-        >
-          <ArrowLeft className="w-4 h-4" />
-          Exit dashboard
-        </button>
-        <div className="text-[11px] text-ink/45 text-center mt-2">
+        {!framed && (
+          <button
+            onClick={() => router.push("/home")}
+            className="w-full inline-flex items-center justify-center gap-2 px-3 py-2 rounded-xl text-sm border border-slate-200 bg-white/80 text-ink/70 hover:bg-white hover:text-ink transition-colors backdrop-blur-sm"
+          >
+            <ArrowLeft className="w-4 h-4" />
+            Exit dashboard
+          </button>
+        )}
+        <div className={cn("text-[11px] text-ink/45 text-center", !framed && "mt-2")}>
           signed in as <span className="text-ink/70">{user.name}</span>
         </div>
       </div>

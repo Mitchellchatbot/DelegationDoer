@@ -24,11 +24,13 @@ import {
   Spring1D,
   flingDistance,
 } from "@/lib/bubble-physics";
+import type { User } from "@/lib/types";
 import {
-  MULTITASK_APPS,
+  appsFor,
   isSameSite,
   isFrameable,
   frameAllow,
+  type MultitaskApp,
 } from "./multitask-apps";
 
 const STORAGE_KEY = "multitask:bubbles:v1";
@@ -76,9 +78,19 @@ type BubbleBody = {
   scale: Spring1D;
 };
 
-export function MultitaskBubbles() {
+export function MultitaskBubbles({ user }: { user?: User }) {
+  /**
+   * The bubbles this user may open, resolved once on mount and never again.
+   *
+   * Frozen on purpose. The physics bodies are seeded from this list in a
+   * mount-only effect, so a list that later gained an app would render a
+   * bubble with no body to position it. The cost is that someone who loses
+   * access mid-session keeps the bubble until they reload — and the framed
+   * route's own server gate still refuses them.
+   */
+  const [apps] = useState(() => appsFor(user));
   const [mode, setMode] = useState<Mode>("hidden");
-  const [activeId, setActiveId] = useState<string>(MULTITASK_APPS[0].id);
+  const [activeId, setActiveId] = useState<string>(apps[0].id);
   const [dragging, setDragging] = useState(false);
   const [overDismiss, setOverDismiss] = useState(false);
   const [hydrated, setHydrated] = useState(false);
@@ -152,15 +164,34 @@ export function MultitaskBubbles() {
    * user's finger when they switch between apps.
    */
   const ordered = useMemo(() => {
-    if (mode === "expanded") return MULTITASK_APPS;
-    const active = MULTITASK_APPS.filter((a) => a.id === activeId);
-    const rest = MULTITASK_APPS.filter((a) => a.id !== activeId);
+    if (mode === "expanded") return apps;
+    const active = apps.filter((a) => a.id === activeId);
+    const rest = apps.filter((a) => a.id !== activeId);
     return [...active, ...rest];
-  }, [activeId, mode]);
+  }, [apps, activeId, mode]);
   const orderedRef = useRef(ordered);
   orderedRef.current = ordered;
 
-  const activeApp = MULTITASK_APPS.find((a) => a.id === activeId) ?? MULTITASK_APPS[0];
+  /**
+   * The body the rest of the stack chains behind. NOT `bodies.current[0]`:
+   * bodies are seeded in `apps` order, while the collapsed leader is the active
+   * app (see `ordered`, and the same lookup in applyTargets). Taking index 0
+   * wrote the rest position and fling target to a follower whenever the active
+   * app wasn't first — which applyTargets overwrites next frame — so the stack
+   * stayed parked at its expanded-row slot on collapse and never settled a
+   * fling to the edge.
+   *
+   * Every caller runs while orderedRef holds the collapsed/hidden order: pointer
+   * handlers only act on a collapsed stack, and the collapse and persist effects
+   * run in the commit that rendered it. Stable identity on purpose — `persist`
+   * depends on it, and the resize observer re-subscribes whenever that changes.
+   */
+  const leaderBody = useCallback(
+    () => bodies.current.find((b) => b.id === orderedRef.current[0]?.id),
+    []
+  );
+
+  const activeApp = apps.find((a) => a.id === activeId) ?? apps[0];
 
   /**
    * Where this page is itself served from. Both framing questions below turn on
@@ -474,7 +505,7 @@ export function MultitaskBubbles() {
     let start: Persisted = {
       x: b.maxX,
       y: Math.round(b.vh * 0.55),
-      activeId: MULTITASK_APPS[0].id,
+      activeId: apps[0].id,
       mode: "hidden",
       snap: null,
     };
@@ -491,7 +522,10 @@ export function MultitaskBubbles() {
         start = {
           x: typeof parsed.x === "number" ? clamp(parsed.x, b.minX, b.maxX) : start.x,
           y: typeof parsed.y === "number" ? clamp(parsed.y, b.minY, b.maxY) : start.y,
-          activeId: MULTITASK_APPS.some((a) => a.id === parsed.activeId)
+          // Against this user's list, not the registry: a stored id for an app
+          // they can't see (say, from another account in this browser) falls
+          // back instead of resolving to a bubble that isn't rendered.
+          activeId: apps.some((a) => a.id === parsed.activeId)
             ? (parsed.activeId as string)
             : start.activeId,
           mode: parsed.mode === "collapsed" ? "collapsed" : "hidden",
@@ -510,7 +544,7 @@ export function MultitaskBubbles() {
       /* corrupt JSON or storage disabled — fall back to defaults */
     }
 
-    bodies.current = MULTITASK_APPS.map((app) => ({
+    bodies.current = apps.map((app) => ({
       id: app.id,
       x: new Spring1D(start.x, SPRING_STACK_SETTLE),
       y: new Spring1D(start.y, SPRING_STACK_SETTLE),
@@ -526,7 +560,7 @@ export function MultitaskBubbles() {
   }, []);
 
   const persist = useCallback(() => {
-    const leader = bodies.current[0];
+    const leader = leaderBody();
     if (!leader) return;
     // Don't write a position derived from an unlaid-out viewport — that would
     // poison storage for every future session.
@@ -548,7 +582,7 @@ export function MultitaskBubbles() {
     } catch {
       /* quota / private mode */
     }
-  }, []);
+  }, [leaderBody]);
 
   // Keep bubbles on-screen when the viewport changes.
   useEffect(() => {
@@ -652,7 +686,7 @@ export function MultitaskBubbles() {
       setDragging(false);
       setOverDismiss(false);
 
-      const leader = bodies.current[0];
+      const leader = leaderBody();
       if (!leader) return;
 
       // Velocity in px/s from the sample window.
@@ -706,7 +740,7 @@ export function MultitaskBubbles() {
       persist();
       e.currentTarget.releasePointerCapture?.(e.pointerId);
     },
-    [bounds, persist]
+    [bounds, persist, leaderBody]
   );
 
   // -------------------------------------------------------------------------
@@ -783,7 +817,7 @@ export function MultitaskBubbles() {
   useEffect(() => {
     if (mode !== "collapsed") return;
     const b = bounds();
-    const leader = bodies.current[0];
+    const leader = leaderBody();
     if (!leader) return;
     leader.x.setConfig(SPRING_STACK_SETTLE);
     leader.y.setConfig(SPRING_STACK_SETTLE);
@@ -793,7 +827,7 @@ export function MultitaskBubbles() {
     restPos.current = null;
     leader.x.target = clamp(rest ? rest.x : leader.x.target, b.minX, b.maxX);
     leader.y.target = clamp(rest ? rest.y : leader.y.target, b.minY, b.maxY);
-  }, [mode, bounds]);
+  }, [mode, bounds, leaderBody]);
 
   if (!hydrated) return null;
 
@@ -1142,7 +1176,7 @@ function Panes({ pct, accent }: { pct: number; accent?: boolean }) {
  * a sign-in inside the frame just spins forever with nothing in the UI to
  * explain why.
  */
-function CrossSiteNotice({ app }: { app: (typeof MULTITASK_APPS)[number] }) {
+function CrossSiteNotice({ app }: { app: MultitaskApp }) {
   const host = (() => {
     try {
       return new URL(app.url).hostname;
@@ -1180,7 +1214,7 @@ function BlockedCard({
   app,
   parentOrigin,
 }: {
-  app: (typeof MULTITASK_APPS)[number];
+  app: MultitaskApp;
   parentOrigin: string;
 }) {
   const allowed = app.frameAncestors?.join(", ") ?? "";

@@ -2,13 +2,14 @@ import "server-only";
 
 import type { FacebookRevenueData, FacebookRevenueResult } from "./facebook-revenue-types";
 
-// Facebook-side revenue for the owner-only /finance page.
+// Facebook-side revenue for the owner-only /finance page, the Scale Room and
+// the Growth Brain.
 //
 // Read from the Finance app (scaledai-finance — the "Finance" tab in the
 // Meta ads dashboard), which prices Meta ad spend against each client's
 // contract. Its GET /api/revenue returns the same figures its own P&L page
-// renders, so this card can't drift from that one. Shown beside MRR, never
-// added to it.
+// renders — revenue, plus that month's cost and margin totals in `pnl` — so
+// this card can't drift from that one. Shown beside MRR, never added to it.
 //
 // FINANCE_URL is the Finance app's public origin (the same name the ads
 // dashboard uses for it). FINANCE_REVENUE_SECRET must equal the value set
@@ -106,6 +107,10 @@ export async function getFacebookRevenue(timeoutMs = TIMEOUT_MS): Promise<Facebo
     if (!isRevenue(json)) {
       return { ok: false, error: "Unexpected response shape from the Finance app" };
     }
+    // The pnl block is optional and newer than everything above it. A malformed
+    // one is dropped, not fatal: a bad costs block should cost the card its
+    // costs row, not the revenue figures that did validate.
+    if ("pnl" in json && !isPnl(json.pnl)) delete json.pnl;
     return { ok: true, data: json };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : "Facebook revenue failed" };
@@ -136,6 +141,16 @@ function isPayer(v: unknown): boolean {
     isNum(p.revenue) && isNum(p.feeBillable) && isNum(p.oneOffTotal) && isNum(p.managedSpend) &&
     (p.closingRate === null || isNum(p.closingRate)) &&
     isDay(p.lastDay) && isNum(p.gapDays) && isNum(p.unpricedSpend)
+  );
+}
+
+function isPnl(v: unknown): boolean {
+  const p = v as Record<string, unknown> | null;
+  const isPct = (x: unknown) => x === null || isNum(x);
+  return (
+    !!p && isNum(p.expensesTotal) && isNum(p.expenseLines) && typeof p.noExpensesRecorded === "boolean" &&
+    isNum(p.netProfit) && isPct(p.netMarginPct) &&
+    isNum(p.softwareCosts) && isPct(p.softwarePctOfRevenue) && isPct(p.concentrationPct)
   );
 }
 

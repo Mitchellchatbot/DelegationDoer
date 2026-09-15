@@ -1,6 +1,7 @@
 import type {
   FacebookRevenueData,
   FacebookRevenuePayer,
+  FacebookRevenuePnl,
   FacebookRevenueResult
 } from "@/lib/facebook-revenue-types";
 
@@ -103,6 +104,8 @@ function RevenueCard({ data }: { data: FacebookRevenueData }) {
         </div>
       </div>
 
+      {data.pnl && <PnlRow pnl={data.pnl} provisional={data.provisional} month={month} />}
+
       {data.payers.length === 0 ? (
         <div className="text-[12px] text-muted">No clients billing this month yet.</div>
       ) : (
@@ -150,6 +153,44 @@ function RevenueCard({ data }: { data: FacebookRevenueData }) {
       {asOf && asOf < data.monthEnd && (
         <div className="mt-2 text-[11px] text-muted">
           Spend runs through {dayLabel(asOf)} — {month} is still filling in.
+        </div>
+      )}
+    </div>
+  );
+}
+
+// The Finance app's Expenses / Net profit cards for the same month, compact.
+// "Facebook side" on purpose: the P&L further down this page is the uploaded
+// QuickBooks one, a different margin. Finance's own rules, not ours — an empty
+// ledger is "—", never $0 of expenses, and with nothing entered there is no
+// real net or margin yet. Its percents arrive as PERCENT (18.7 = 18.7%),
+// unlike closingRate above.
+function PnlRow({ pnl, provisional, month }: { pnl: FacebookRevenuePnl; provisional: boolean; month: string }) {
+  const empty = pnl.noExpensesRecorded;
+  return (
+    <div className="mb-3 pb-2 border-b border-slate-100">
+      <div className="text-[10px] uppercase tracking-wide text-muted mb-1">
+        Facebook side — costs &amp; margin{provisional ? " · costs still arriving" : ""}
+      </div>
+      <div className="flex flex-wrap gap-x-4 gap-y-1 text-[12px] tabular-nums">
+        <div>
+          <span className="text-muted">Expenses</span>{" "}
+          <span className="text-ink">{empty ? "—" : usd(pnl.expensesTotal)}</span>
+        </div>
+        <div>
+          <span className="text-muted">Net profit</span>{" "}
+          <span className={empty ? "text-muted" : pnl.netProfit < 0 ? "text-rose-600" : "text-ink"}>
+            {empty ? "—" : usd(pnl.netProfit)}
+          </span>
+        </div>
+        <div>
+          <span className="text-muted">Margin</span>{" "}
+          <span className="text-ink">{empty || pnl.netMarginPct === null ? "—" : `${pnl.netMarginPct.toFixed(1)}%`}</span>
+        </div>
+      </div>
+      {empty && (
+        <div className="text-[11px] text-amber-600 mt-1">
+          No expenses entered in the Finance app for {month} yet — not a real net.
         </div>
       )}
     </div>

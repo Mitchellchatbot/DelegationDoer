@@ -33,6 +33,21 @@ export interface FacebookRevenueDelta {
   tone: "up" | "down" | "flat";
 }
 
+// The Facebook side's own P&L totals for the same month as `current` — the
+// Finance app's Expenses / Net profit / Software / Top client cards. NOT the
+// QuickBooks P&L uploaded on /finance: a different figure, always labelled
+// "Facebook side". Mirrors RevenueApiPnl.
+export interface FacebookRevenuePnl {
+  expensesTotal: number;
+  expenseLines: number;                // how many ledger lines make up expensesTotal
+  noExpensesRecorded: boolean;         // nothing entered for the month — show "—", never $0
+  netProfit: number;
+  netMarginPct: number | null;         // a PERCENT — 18.7 is 18.7% (unlike closingRate); null = no revenue
+  softwareCosts: number;
+  softwarePctOfRevenue: number | null; // a PERCENT
+  concentrationPct: number | null;     // a PERCENT — the top payer's share of revenue
+}
+
 export interface FacebookRevenueData {
   period: string;
   provisional: boolean;
@@ -43,6 +58,9 @@ export interface FacebookRevenueData {
   months: FacebookRevenueMonth[];  // oldest first; last === current
   delta: FacebookRevenueDelta | null;
   generatedAt: string;
+  // Optional: the Finance app deploys separately, and one without the block
+  // (or with a malformed one) still yields a valid revenue card.
+  pnl?: FacebookRevenuePnl;
 }
 
 export type FacebookRevenueResult =

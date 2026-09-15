@@ -49,7 +49,7 @@ const IN_FLIGHT = ["todo", "in_progress", "blocked", "review"];
 // Assemble everything the Growth Brain reasons over into one snapshot string.
 async function assembleSnapshot(): Promise<string> {
   const supabase = getSupabaseAdmin();
-  const [revenue, clients, allTasks, roster, memories, mrrRes, finRes, swRes, payRes] = await Promise.all([
+  const [revenue, clients, allTasks, roster, memories, mrrRes, finRes, swRes, payRes, cliMetaRes] = await Promise.all([
     getStripeRevenue().catch(() => null),
     getClients().catch(() => []),
     getAllTasks().catch(() => [] as Task[]),
@@ -58,8 +58,17 @@ async function assembleSnapshot(): Promise<string> {
     supabase.from("mrr_entries").select("company, mrr, status"),
     supabase.from("finance_documents").select("parsed").order("uploaded_at", { ascending: false }).limit(5),
     supabase.from("software_subscriptions").select("vendor, month, amount"),
-    supabase.from("payroll_entries").select("name, role, status, scale, rate")
+    supabase.from("payroll_entries").select("name, role, status, scale, rate"),
+    supabase.from("clients").select("id, updated_at")
   ]);
+  const clientUpdatedAt = new Map<string, string>();
+  for (const r of (cliMetaRes.data ?? []) as { id: string; updated_at: string }[]) clientUpdatedAt.set(r.id, r.updated_at);
+  const asOf = (id: string): string => {
+    const u = clientUpdatedAt.get(id);
+    if (!u) return "";
+    const days = Math.round((Date.now() - Date.parse(u)) / 86_400_000);
+    return days <= 1 ? "today" : `${days}d ago`;
+  };
 
   // Revenue / MRR.
   const mrrRows = (mrrRes.data ?? []) as { company: string; mrr: number; status: string }[];
@@ -103,7 +112,18 @@ async function assembleSnapshot(): Promise<string> {
     ? `Operating payroll/contractors: ${money(payrollMonthly)}/mo across ${activePay.length} active (excludes owner draw). By person: ${activePay.slice(0, 15).map((p) => `${p.name} (${p.role}) ${money(p.monthly)}`).join(", ")}. Payroll-to-MRR ratio: ${mrr ? Math.round((payrollMonthly / mrr) * 100) : "?"}%.${ownerDraw ? ` Owner draw (Mitchell, distribution of profit — not a business cost): ${money(ownerDraw)}/mo.` : ""}`
     : "No payroll data.";
 
-  // Clients: name, priority, health, notes, MRR.
+  // Ops/automated noise that is NOT a business or client-sentiment signal —
+  // stripped from health/notes so the brain doesn't treat a Wordfence email as
+  // churn risk.
+  const OPS_NOISE = /security alert|wordfence|vulnerabilit|malware|firewall|lockout|brute.?force|\bssl\b|\bplugin\b|backup (completed|failed)|sync (completed|failed)|update (completed|failed|available)|uptime|patch|automated (security|alert|notification)/i;
+  const clean = (s: string | null): string => {
+    if (!s) return "";
+    // Drop sentences that are just automated-alert noise; keep real signal.
+    const kept = s.split(/(?<=[.!?])\s+/).filter((sent) => sent.trim() && !OPS_NOISE.test(sent));
+    return kept.join(" ").trim();
+  };
+
+  // Clients: name, priority, health, notes, MRR — with ops noise removed.
   const mrrByName = new Map<string, number>();
   for (const r of activeMrr) mrrByName.set(r.company.toLowerCase().replace(/[^a-z0-9]/g, ""), Number(r.mrr));
   const clientLines = clients.slice(0, 40).map((c) => {
@@ -113,8 +133,11 @@ async function assembleSnapshot(): Promise<string> {
     const bits = [c.name];
     if (c.priority) bits.push(`priority:${c.priority}`);
     if (m) bits.push(`${money(m)}/mo`);
-    if (c.healthSummary) bits.push(`health: ${c.healthSummary.slice(0, 120)}`);
-    if (c.notes) bits.push(`notes: ${c.notes.slice(0, 120)}`);
+    const health = clean(c.healthSummary);
+    const notes = clean(c.notes);
+    const stamp = asOf(c.id);
+    if (health) bits.push(`health${stamp ? ` (as of ${stamp})` : ""}: ${health.slice(0, 140)}`);
+    if (notes) bits.push(`notes: ${notes.slice(0, 140)}`);
     return `- ${bits.join(" · ")}`;
   }).join("\n");
 
@@ -185,6 +208,9 @@ const GROWTH_SYSTEM = [
   "- Think in outcomes, not activity. Not 'X sent 5 texts' — think funnel and throughput, and how to increase it without losing quality.",
   "- Controlled aggression: push hard when evidence shows capacity to scale, but protect quality, client outcomes, cash flow, and margins. Never recommend growth merely for activity's sake.",
   "- Be specific and grounded in the real data below: name clients, people, numbers, dollar estimates, and owners. No vague themes.",
+  "- IGNORE automated system noise. Security/Wordfence/plugin/vulnerability/backup/uptime/SSL alerts are ops noise, NOT churn signals or client sentiment — never surface them as risks. A client is only 'at risk' when there's a REAL human signal: a person expressed frustration/dissatisfaction, an unmet request or broken promise, a payment/past-due problem, or explicit churn intent.",
+  "- Do NOT surface internal team task-status ('X has 3 overdue tasks', 'stuck with the team') as a PROTECT item on its own. Team load only matters as a capacity constraint or when it's directly causing a client-facing failure a human has reacted to.",
+  "- Weigh recency. Client health/notes carry an 'as of Nd ago' stamp — lead with fresh signals, and when you flag a client risk, state how recent it is. Discount anything older than ~3 weeks unless corroborated by other data.",
   "",
   "Return STRICT JSON only, no prose or code fences, with this exact shape:",
   "{",

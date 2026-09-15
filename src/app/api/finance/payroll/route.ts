@@ -17,7 +17,7 @@ async function requireOwner(): Promise<{ ok: true } | { ok: false; res: NextResp
   }
 }
 
-const STATUSES = new Set(["active", "inactive", "onboarding", "invited"]);
+const STATUSES = new Set(["active", "inactive", "onboarding", "invited", "owner-draw"]);
 const SCALES = new Set(["monthly", "annual"]);
 
 // GET /api/finance/payroll — list payroll entries (owner only).

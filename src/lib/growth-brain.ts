@@ -49,7 +49,7 @@ const IN_FLIGHT = ["todo", "in_progress", "blocked", "review"];
 // Assemble everything the Growth Brain reasons over into one snapshot string.
 async function assembleSnapshot(): Promise<string> {
   const supabase = getSupabaseAdmin();
-  const [revenue, clients, allTasks, roster, memories, mrrRes, finRes, swRes] = await Promise.all([
+  const [revenue, clients, allTasks, roster, memories, mrrRes, finRes, swRes, payRes] = await Promise.all([
     getStripeRevenue().catch(() => null),
     getClients().catch(() => []),
     getAllTasks().catch(() => [] as Task[]),
@@ -57,7 +57,8 @@ async function assembleSnapshot(): Promise<string> {
     listMemories().catch(() => []),
     supabase.from("mrr_entries").select("company, mrr, status"),
     supabase.from("finance_documents").select("parsed").order("uploaded_at", { ascending: false }).limit(5),
-    supabase.from("software_subscriptions").select("vendor, month, amount")
+    supabase.from("software_subscriptions").select("vendor, month, amount"),
+    supabase.from("payroll_entries").select("name, role, status, scale, rate")
   ]);
 
   // Revenue / MRR.
@@ -91,6 +92,15 @@ async function assembleSnapshot(): Promise<string> {
     .sort((a, b) => (b.aug - b.jul) - (a.aug - a.jul))
     .slice(0, 6)
     .map((v) => `${v.vendor} ${money(v.jul)}→${money(v.aug)}`);
+
+  // Payroll / contractors by person — for margin, cost-per-head, and capacity.
+  const pay = ((payRes.data ?? []) as { name: string; role: string | null; status: string; scale: string; rate: number }[])
+    .map((p) => ({ name: p.name, role: p.role || "—", status: p.status, monthly: p.scale === "annual" ? Number(p.rate) / 12 : Number(p.rate) }));
+  const activePay = pay.filter((p) => p.status === "active").sort((a, b) => b.monthly - a.monthly);
+  const payrollMonthly = activePay.reduce((s, p) => s + p.monthly, 0);
+  const payrollLine = activePay.length
+    ? `Payroll/contractors: ${money(payrollMonthly)}/mo across ${activePay.length} active. By person: ${activePay.slice(0, 15).map((p) => `${p.name} (${p.role}) ${money(p.monthly)}`).join(", ")}. Payroll-to-MRR ratio: ${mrr ? Math.round((payrollMonthly / mrr) * 100) : "?"}%.`
+    : "No payroll data.";
 
   // Clients: name, priority, health, notes, MRR.
   const mrrByName = new Map<string, number>();
@@ -144,6 +154,7 @@ async function assembleSnapshot(): Promise<string> {
     ``,
     `## Finance`,
     financeLine,
+    payrollLine,
     rising.length ? `Rising software spend (margin-leak candidates): ${rising.join(", ")}.` : "",
     ``,
     `## Clients (name · priority · MRR · health/notes)`,

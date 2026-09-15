@@ -60,44 +60,56 @@ function Heading({ title, period, pill }: { title: string; period?: string; pill
 const FACEBOOK_TITLE = "Facebook side · Finance app";
 const OUTBOUND_TITLE = "Outbound · our Meta ads";
 
-export function ScaleAcquisitionLoading() {
+// Placeholders only for the sources that are switched on — a source that's off
+// is never fetched, so it gets no loading line either.
+export function ScaleAcquisitionLoading({ facebook, outbound }: { facebook: boolean; outbound: boolean }) {
   return (
     <div className="space-y-4">
-      <div>
-        <Heading title={FACEBOOK_TITLE} />
-        <div className="text-[12px] text-muted px-1">Loading from the Finance app…</div>
-      </div>
-      <div>
-        <Heading title={OUTBOUND_TITLE} />
-        <div className="text-[12px] text-muted px-1">Loading from the ads dashboard…</div>
-      </div>
+      {facebook && (
+        <div>
+          <Heading title={FACEBOOK_TITLE} />
+          <div className="text-[12px] text-muted px-1">Loading from the Finance app…</div>
+        </div>
+      )}
+      {outbound && (
+        <div>
+          <Heading title={OUTBOUND_TITLE} />
+          <div className="text-[12px] text-muted px-1">Loading from the ads dashboard…</div>
+        </div>
+      )}
     </div>
   );
 }
 
-export function ScaleAcquisition({ revenue, outbound }: { revenue: FacebookRevenueResult; outbound: OutboundSummaryResult }) {
+// A result that's undefined means that source is switched off: no block, no
+// heading, no error — as if it weren't wired in at all.
+export function ScaleAcquisition({ revenue, outbound }: { revenue?: FacebookRevenueResult; outbound?: OutboundSummaryResult }) {
   return (
     <div className="space-y-4">
-      <div>
-        {revenue.ok ? (
-          <FacebookSide data={revenue.data} />
-        ) : (
-          <>
-            <Heading title={FACEBOOK_TITLE} />
-            <div className="text-[12px] text-muted px-1">Facebook-side revenue unavailable — {revenue.error}</div>
-          </>
-        )}
-      </div>
-      <div>
-        {outbound.ok ? (
-          <Outbound data={outbound.data} />
-        ) : (
-          <>
-            <Heading title={OUTBOUND_TITLE} />
-            <div className="text-[12px] text-muted px-1">Outbound unavailable — {outbound.error}</div>
-          </>
-        )}
-      </div>
+      {revenue && (
+        <div>
+          {revenue.ok ? (
+            <FacebookSide data={revenue.data} />
+          ) : (
+            <>
+              <Heading title={FACEBOOK_TITLE} />
+              <div className="text-[12px] text-muted px-1">Facebook-side revenue unavailable — {revenue.error}</div>
+            </>
+          )}
+        </div>
+      )}
+      {outbound && (
+        <div>
+          {outbound.ok ? (
+            <Outbound data={outbound.data} />
+          ) : (
+            <>
+              <Heading title={OUTBOUND_TITLE} />
+              <div className="text-[12px] text-muted px-1">Outbound unavailable — {outbound.error}</div>
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }

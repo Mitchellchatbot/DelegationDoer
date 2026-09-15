@@ -4,11 +4,13 @@ import { getClients } from "@/lib/clients-data";
 import { getStripeRevenue } from "@/lib/stripe";
 import { getFacebookRevenue } from "@/lib/facebook-revenue";
 import { getOutboundSummary } from "@/lib/outbound-summary";
+import { getScaleSources } from "@/lib/scale-sources";
 import { listMemories, formatMemoriesBlock } from "@/lib/brain-memory";
 import { getAnthropic, MODELS } from "@/lib/anthropic-client";
 import type { Task } from "@/lib/types";
 import type { FacebookRevenueResult } from "@/lib/facebook-revenue-types";
 import type { OutboundSummaryResult } from "@/lib/outbound-summary-types";
+import type { ScaleSourceFlags } from "@/lib/scale-sources-types";
 
 // The Growth Brain: an aggressive-but-disciplined COO + Chief Growth Officer.
 // It reads the whole business and answers one question — "what should we do next
@@ -44,6 +46,9 @@ export interface GrowthBrief {
   protect: ProtectItem[];
   grow: GrowItem[];
   generatedAt: string;
+  // Which outside sources were switched on when this brief was built. Absent on
+  // briefs saved before the switches existed.
+  sources?: ScaleSourceFlags;
 }
 
 const money = (n: number | null | undefined) => (n == null ? "$0" : `$${Math.round(n).toLocaleString("en-US")}`);
@@ -115,8 +120,13 @@ function outboundSection(ob: OutboundSummaryResult): string {
 }
 
 // Assemble everything the Growth Brain reasons over into one snapshot string.
-async function assembleSnapshot(): Promise<string> {
+// The source switches are read once here and handed back, so the snapshot, the
+// system prompt, and the brief's stamp all follow the same read.
+async function assembleSnapshot(): Promise<{ text: string; sources: ScaleSourceFlags }> {
   const supabase = getSupabaseAdmin();
+  // Never throws; a failed read is both off.
+  const scale = await getScaleSources();
+  const sources: ScaleSourceFlags = { facebook: scale.facebook, outbound: scale.outbound };
   const [revenue, clients, allTasks, roster, memories, mrrRes, finRes, swRes, payRes, cliMetaRes, mtgRes, fbRevenue, outbound] = await Promise.all([
     getStripeRevenue().catch(() => null),
     getClients().catch(() => []),
@@ -135,9 +145,9 @@ async function assembleSnapshot(): Promise<string> {
       .order("meeting_date", { ascending: false })
       .limit(20),
     // Neither throws; a tighter bound than the pages use, so a slow app can't
-    // eat the brief's time budget.
-    getFacebookRevenue(20_000),
-    getOutboundSummary(20_000)
+    // eat the brief's time budget. A source switched off isn't called at all.
+    sources.facebook ? getFacebookRevenue(20_000) : null,
+    sources.outbound ? getOutboundSummary(20_000) : null
   ]);
   const clientUpdatedAt = new Map<string, string>();
   for (const r of (cliMetaRes.data ?? []) as { id: string; updated_at: string }[]) clientUpdatedAt.set(r.id, r.updated_at);
@@ -263,7 +273,7 @@ async function assembleSnapshot(): Promise<string> {
       return parts.join("\n");
     }).join("\n");
 
-  return [
+  const text = [
     `## Revenue`,
     `MRR (source of truth): ${money(mrr)}/mo. Top clients: ${top.map((c) => `${c.company} ${money(c.mrr)}`).join(", ")}.`,
     `Concentration: top 3 = ${top3Share}% of MRR.`,
@@ -274,10 +284,9 @@ async function assembleSnapshot(): Promise<string> {
     payrollLine,
     rising.length ? `Rising software spend (margin-leak candidates): ${rising.join(", ")}.` : "",
     ``,
-    facebookSideSection(fbRevenue),
-    ``,
-    outboundSection(outbound),
-    ``,
+    // A source switched off leaves no section — not even an "unavailable" line.
+    ...(fbRevenue ? [facebookSideSection(fbRevenue), ``] : []),
+    ...(outbound ? [outboundSection(outbound), ``] : []),
     `## Clients (name · priority · MRR · health/notes)`,
     clientLines || "(none)",
     ``,
@@ -292,9 +301,13 @@ async function assembleSnapshot(): Promise<string> {
     ``,
     memories.length ? `## Mitchell's standing priorities & decisions (weight everything toward these)\n${formatMemoriesBlock(memories)}` : ""
   ].filter(Boolean).join("\n");
+  return { text, sources };
 }
 
-const GROWTH_SYSTEM = [
+// The system prompt. The Facebook-side and Outbound rules are there only when
+// their source is switched on — a rule about data the brain wasn't given would
+// invite it to reason about numbers it doesn't have.
+const growthSystem = (sources: ScaleSourceFlags) => [
   "You are the AI Brain for Scaled AI, a digital agency for addiction-treatment / behavioral-health clients. You operate like an aggressive but disciplined COO + Chief Growth Officer for the founder, Mitchell.",
   "",
   "Your mandate has two sides, always active at once:",
@@ -311,8 +324,8 @@ const GROWTH_SYSTEM = [
   "- IGNORE automated system noise. Security/Wordfence/plugin/vulnerability/backup/uptime/SSL alerts are ops noise, NOT churn signals or client sentiment — never surface them as risks. A client is only 'at risk' when there's a REAL human signal: a person expressed frustration/dissatisfaction, an unmet request or broken promise, a payment/past-due problem, or explicit churn intent.",
   "- Do NOT surface internal team task-status ('X has 3 overdue tasks', 'stuck with the team') as a PROTECT item on its own. Team load only matters as a capacity constraint or when it's directly causing a client-facing failure a human has reacted to.",
   "- Weigh recency. Client health/notes carry an 'as of Nd ago' stamp, and recent client calls (tl;dv) are dated — LEAD with the freshest signals. A risk raised on a call this week outranks a 2-week-old note; a request made on a call is a live expansion opening (turn it into a GROW item). When you flag a client risk, state how recent it is, and discount anything older than ~3 weeks unless corroborated.",
-  "- Facebook-side revenue (from the Finance app: management + setup fees on the client Meta spend we manage) is a SEPARATE stream from MRR. Never sum the two or double count a client across them. If it's unavailable, say so; never treat it as $0.",
-  "- Outbound spend / prospects / booked / cost per booked are our own acquisition funnel. When judging whether leads or sales is the constraint, use the cost-per-lead and cost-per-booked trend and the texting backlog vs the reps' daily caps as evidence. An estimate month is partial (leads include today, spend stops at yesterday) — never compare it to a full month as if it were complete.",
+  ...(sources.facebook ? ["- Facebook-side revenue (from the Finance app: management + setup fees on the client Meta spend we manage) is a SEPARATE stream from MRR. Never sum the two or double count a client across them. If it's unavailable, say so; never treat it as $0."] : []),
+  ...(sources.outbound ? ["- Outbound spend / prospects / booked / cost per booked are our own acquisition funnel. When judging whether leads or sales is the constraint, use the cost-per-lead and cost-per-booked trend and the texting backlog vs the reps' daily caps as evidence. An estimate month is partial (leads include today, spend stops at yesterday) — never compare it to a full month as if it were complete."] : []),
   "",
   "Return STRICT JSON only, no prose or code fences, with this exact shape:",
   "{",
@@ -325,13 +338,13 @@ const GROWTH_SYSTEM = [
 
 // Generate a fresh Growth Brief, persist it, and return it.
 export async function generateGrowthBrief(): Promise<GrowthBrief> {
-  const snapshot = await assembleSnapshot();
+  const { text: snapshot, sources } = await assembleSnapshot();
   const client = await getAnthropic();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const result: any = await client.messages.create({
     model: MODELS.chat,
     max_tokens: 5000,
-    system: GROWTH_SYSTEM,
+    system: growthSystem(sources),
     messages: [{ role: "user", content: `Here is the current state of Scaled AI:\n\n${snapshot}\n\nGiven everything above, what should we do next to make the company bigger, better, and more profitable? Return the JSON brief.` }]
   });
   const text = (result.content ?? []).filter((b: { type: string }) => b.type === "text").map((b: { text: string }) => b.text).join("").trim();
@@ -350,7 +363,9 @@ export async function generateGrowthBrief(): Promise<GrowthBrief> {
     constraint: json.constraint ?? null,
     protect: Array.isArray(json.protect) ? json.protect.slice(0, 8) : [],
     grow: Array.isArray(json.grow) ? json.grow.slice(0, 10) : [],
-    generatedAt: new Date().toISOString()
+    generatedAt: new Date().toISOString(),
+    // So /scale can tell when a source this brief used has since been switched off.
+    sources
   };
 
   const id = `gb_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;

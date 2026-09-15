@@ -8,7 +8,8 @@ import { getStripeRevenue } from "@/lib/stripe";
 import { listMemories } from "@/lib/brain-memory";
 import { listAccounts, listThreads } from "@/lib/missive-client";
 import { filterReplyNeeded } from "@/lib/owner-inbox";
-import { MovesPanel, type Move } from "@/components/MovesPanel";
+import { GrowthBoard, type GrowthBrief } from "@/components/GrowthBoard";
+import { getLatestGrowthBrief } from "@/lib/growth-brain";
 import { MemoryEditor, type ScaleMemory } from "@/components/MemoryEditor";
 import { InboxCopilot, type InboxThread } from "@/components/InboxCopilot";
 import type { ParsedPnl } from "@/lib/pnl-parse";
@@ -31,12 +32,12 @@ export default async function ScalePage() {
   if (!isOwner(user)) notFound();
 
   const supabase = getSupabaseAdmin();
-  const [revenue, memories, mrrRes, finRes, movesRes] = await Promise.all([
+  const [revenue, memories, mrrRes, finRes, growthBrief] = await Promise.all([
     getStripeRevenue().catch(() => null),
     listMemories().catch(() => []),
     supabase.from("mrr_entries").select("company, mrr, status"),
     supabase.from("finance_documents").select("parsed").order("uploaded_at", { ascending: false }).limit(5),
-    supabase.from("brain_moves").select("moves, headline, generated_at").order("generated_at", { ascending: false }).limit(1).maybeSingle()
+    getLatestGrowthBrief().catch(() => null)
   ]);
 
   // Snapshot: manual MRR (source of truth) + concentration + margin.
@@ -115,12 +116,8 @@ export default async function ScalePage() {
         ))}
       </div>
 
-      {/* What to do to scale */}
-      <MovesPanel
-        initialMoves={(movesRes.data?.moves as Move[]) ?? []}
-        initialHeadline={movesRes.data?.headline ?? null}
-        initialGeneratedAt={movesRes.data?.generated_at ?? null}
-      />
+      {/* The CEO board: constraint + Protect / Grow */}
+      <GrowthBoard initial={growthBrief as GrowthBrief | null} />
 
       {/* Emails to reply to */}
       <div>

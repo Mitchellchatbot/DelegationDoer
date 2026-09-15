@@ -4,7 +4,7 @@ import { getUserById } from "@/lib/server-data";
 import { isOwner } from "@/lib/access";
 import { getAnthropic, MODELS } from "@/lib/anthropic-client";
 import { listMemories, formatMemoriesBlock } from "@/lib/brain-memory";
-import { deriveReply, transcriptFor } from "@/lib/owner-inbox";
+import { deriveReply, transcriptFor, clientContextForEmail } from "@/lib/owner-inbox";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 45;
@@ -35,7 +35,10 @@ export async function POST(req: NextRequest) {
   const routing = await deriveReply(threadId);
   if (!routing) return NextResponse.json({ error: "thread not found" }, { status: 404 });
 
-  const memories = await listMemories().catch(() => []);
+  const [memories, clientContext] = await Promise.all([
+    listMemories().catch(() => []),
+    clientContextForEmail(routing.to[0] ?? "").catch(() => "")
+  ]);
   const memoryBlock = formatMemoriesBlock(memories);
   const transcript = transcriptFor(routing.messages);
 
@@ -43,6 +46,7 @@ export async function POST(req: NextRequest) {
     "You are drafting an email reply on behalf of Mitchell, founder of Scaled AI (a digital agency for addiction-treatment / behavioral-health clients).",
     "Write in his voice: warm, direct, human, no corporate stiffness, no em-dashes.",
     memoryBlock ? `What you know about the company / his standing priorities & decisions (let these inform the reply where relevant):\n${memoryBlock}` : "",
+    clientContext ? `Who this client is and your recent history with them (use it — reference real decisions, next steps, and what they pay/care about where natural; do NOT restate it verbatim):\n${clientContext}` : "",
     "Output rules:",
     "- Plain text only. Start with the greeting line, end with a natural sign-off.",
     "- No subject/To/From headers, no 'Here is your reply' preamble.",

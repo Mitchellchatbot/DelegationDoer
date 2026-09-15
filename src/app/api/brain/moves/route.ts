@@ -6,6 +6,7 @@ import { isOwner } from "@/lib/access";
 import { getAnthropic, MODELS } from "@/lib/anthropic-client";
 import { getStripeRevenue } from "@/lib/stripe";
 import { listMemories, formatMemoriesBlock } from "@/lib/brain-memory";
+import { getClients } from "@/lib/clients-data";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -53,10 +54,11 @@ export async function POST() {
   if (!gate.ok) return gate.res;
 
   const supabase = getSupabaseAdmin();
-  const [revenue, memories, allTasks, mrrRes, finRes] = await Promise.all([
+  const [revenue, memories, allTasks, clients, mrrRes, finRes] = await Promise.all([
     getStripeRevenue().catch(() => null),
     listMemories().catch(() => []),
     getAllTasks().catch(() => []),
+    getClients().catch(() => []),
     supabase.from("mrr_entries").select("company, mrr, status"),
     supabase.from("finance_documents").select("parsed").order("uploaded_at", { ascending: false }).limit(5)
   ]);
@@ -91,10 +93,25 @@ export async function POST() {
   const open = allTasks.filter((t) => IN_FLIGHT.includes(t.status));
   const criticalUnassigned = open.filter((t) => t.priority === "critical" && !t.assigneeId).length;
 
+  // Client book: count, high-priority names, and anyone flagged risky in their
+  // health summary / notes (early churn signal).
+  const highPriority = clients.filter((c) => c.priority === "high").map((c) => c.name).slice(0, 8);
+  const riskyClients = clients
+    .filter((c) => /risk|churn|unhappy|behind|escalat|cancel|frustrat|not happy|complain/i.test(`${c.healthSummary ?? ""} ${c.notes ?? ""}`))
+    .map((c) => c.name)
+    .slice(0, 8);
+  const clientsLine = clients.length
+    ? [
+        `Client book: ${clients.length} clients${highPriority.length ? `; high-priority: ${highPriority.join(", ")}` : ""}.`,
+        riskyClients.length ? `Flagged at-risk (health/notes): ${riskyClients.join(", ")}.` : ""
+      ].filter(Boolean).join(" ")
+    : "No client board data.";
+
   const snapshot = [
     `MRR (manual, source of truth): ${money(manualMrr)}/mo · ${topClients.length ? `top clients: ${topClients.map((c) => `${c.company} ${money(c.mrr)}`).join(", ")}` : ""}`,
     `Revenue concentration: top 3 clients = ${top3Share}% of MRR.`,
     revenue ? `Stripe: ${money(revenue.mrr)} MRR, net-new this month ${money(revenue.newMrr - revenue.churnedMrr)}, past-due ${money(revenue.pastDueMrr)} (${revenue.pastDue.length} accounts).` : "Stripe unavailable.",
+    clientsLine,
     expenseLine,
     `Work: ${open.length} in-flight tasks, ${criticalUnassigned} critical + unassigned.`,
     memories.length ? `\nStanding priorities & decisions (weight moves HEAVILY toward these):\n${formatMemoriesBlock(memories)}` : ""

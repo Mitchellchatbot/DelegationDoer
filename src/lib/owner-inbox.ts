@@ -1,6 +1,8 @@
 import { listAccounts, getThread, type MissiveAccount, type MissiveMessage } from "@/lib/missive-client";
 import { OWNER_EMAIL } from "@/lib/access";
 import { getAnthropic, MODELS } from "@/lib/anthropic-client";
+import { getClients, getMeetingsForClient, type Client } from "@/lib/clients-data";
+import { getSupabaseAdmin } from "@/lib/supabase-admin";
 
 // Senders that never warrant a personal reply — receipts, no-reply, marketing,
 // automated notifications. Dropped before the AI classifier even runs.
@@ -115,4 +117,75 @@ export function transcriptFor(messages: MissiveMessage[], limit = 6): string {
     const capped = raw.length > 2000 ? raw.slice(0, 2000) + " […truncated…]" : raw;
     return `[#${idx + 1} ${direction}] From: ${m.from_addr || "(unknown)"}\nSubject: ${m.subject || "(no subject)"}\n\n${capped}`;
   }).join("\n\n---\n\n");
+}
+
+// Match an email address to a client on the board (by contact email, then by
+// website domain, then by a distinctive name token) so a draft can be grounded
+// in who they actually are.
+function matchClient(email: string, clients: Client[]): Client | null {
+  const e = email.toLowerCase();
+  const domain = e.includes("@") ? e.split("@")[1] : "";
+  const dnorm = (u: string | null | undefined) => {
+    if (!u) return "";
+    try { return new URL(u.startsWith("http") ? u : `https://${u}`).hostname.replace(/^www\./, "").toLowerCase(); }
+    catch { return u.replace(/^www\./, "").toLowerCase(); }
+  };
+  // 1. exact contact email
+  for (const c of clients) if ((c.contactEmails ?? []).some((x) => x.toLowerCase() === e)) return c;
+  // 2. website domain match
+  if (domain && !FREE_EMAIL.has(domain)) {
+    for (const c of clients) {
+      const doms = [c.website, ...(c.websites ?? [])].map(dnorm).filter(Boolean);
+      if (doms.includes(domain)) return c;
+    }
+  }
+  return null;
+}
+
+const FREE_EMAIL = new Set(["gmail.com", "yahoo.com", "hotmail.com", "outlook.com", "icloud.com", "aol.com", "proton.me", "protonmail.com"]);
+
+// Build a rich context block about the client on the other end of a thread:
+// who they are, what they pay, their notes/health, and what was said/decided in
+// recent meetings — so a drafted reply reflects the real relationship.
+export async function clientContextForEmail(email: string): Promise<string> {
+  if (!email) return "";
+  let clients: Client[];
+  try { clients = await getClients(); } catch { return ""; }
+  const client = matchClient(email, clients);
+  if (!client) return "";
+
+  // MRR from the manual sheet (best-effort name match).
+  let mrrLine = "";
+  try {
+    const { data } = await getSupabaseAdmin().from("mrr_entries").select("company, mrr, status");
+    const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+    const cn = norm(client.name);
+    const row = ((data ?? []) as { company: string; mrr: number; status: string }[])
+      .find((r) => { const rc = norm(r.company); return rc && (rc.includes(cn) || cn.includes(rc)); });
+    if (row) mrrLine = `Pays: $${Math.round(Number(row.mrr)).toLocaleString("en-US")}/mo (${row.status}).`;
+  } catch { /* ignore */ }
+
+  // Recent meetings (summary + decisions/next steps).
+  let meetingsBlock = "";
+  try {
+    const meetings = await getMeetingsForClient(client.id);
+    const recent = meetings.slice(0, 2);
+    meetingsBlock = recent.map((m) => {
+      const parts = [`Meeting ${m.meetingDate?.slice(0, 10) ?? ""}: ${m.summary ?? m.title ?? ""}`.trim()];
+      if (m.brief?.keyDecisions?.length) parts.push(`  Decisions: ${m.brief.keyDecisions.slice(0, 3).join("; ")}`);
+      if (m.brief?.nextSteps?.length) parts.push(`  Next steps: ${m.brief.nextSteps.slice(0, 3).join("; ")}`);
+      if (m.brief?.clientRequests?.length) parts.push(`  They asked for: ${m.brief.clientRequests.slice(0, 3).join("; ")}`);
+      return parts.join("\n");
+    }).join("\n");
+  } catch { /* ignore */ }
+
+  const lines = [
+    `Client: ${client.name}${client.priority ? ` (priority: ${client.priority})` : ""}.`,
+    mrrLine,
+    client.notes ? `Notes: ${client.notes.slice(0, 300)}` : "",
+    client.healthSummary ? `Health: ${client.healthSummary.slice(0, 300)}` : "",
+    client.businessInformation ? `About them: ${client.businessInformation.slice(0, 400)}` : "",
+    meetingsBlock ? `Recent meetings:\n${meetingsBlock}` : ""
+  ].filter(Boolean);
+  return lines.length ? lines.join("\n") : "";
 }

@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { notFound, redirect } from "next/navigation";
 import { Rocket } from "lucide-react";
 import { getCurrentUserId } from "@/lib/session";
@@ -12,6 +13,9 @@ import { GrowthBoard, type GrowthBrief } from "@/components/GrowthBoard";
 import { getLatestGrowthBrief } from "@/lib/growth-brain";
 import { MemoryEditor, type ScaleMemory } from "@/components/MemoryEditor";
 import { InboxCopilot, type InboxThread } from "@/components/InboxCopilot";
+import { ScaleAcquisition, ScaleAcquisitionLoading } from "@/components/ScaleAcquisition";
+import { getFacebookRevenue } from "@/lib/facebook-revenue";
+import { getOutboundSummary } from "@/lib/outbound-summary";
 import type { ParsedPnl } from "@/lib/pnl-parse";
 
 export const dynamic = "force-dynamic";
@@ -116,6 +120,13 @@ export default async function ScalePage() {
         ))}
       </div>
 
+      {/* Acquisition: the Facebook side from the Finance app and our own Outbound
+          funnel from the ads dashboard. Streams in on its own, so a slow app
+          never holds up the board or the emails below it. */}
+      <Suspense fallback={<ScaleAcquisitionLoading />}>
+        <ScaleAcquisitionSection />
+      </Suspense>
+
       {/* The CEO board: constraint + Protect / Grow */}
       <GrowthBoard initial={growthBrief as GrowthBrief | null} />
 
@@ -131,4 +142,10 @@ export default async function ScalePage() {
       <MemoryEditor initial={memories as ScaleMemory[]} />
     </div>
   );
+}
+
+// Only ever rendered below the owner gate above. Neither fetch throws.
+async function ScaleAcquisitionSection() {
+  const [revenue, outbound] = await Promise.all([getFacebookRevenue(), getOutboundSummary()]);
+  return <ScaleAcquisition revenue={revenue} outbound={outbound} />;
 }

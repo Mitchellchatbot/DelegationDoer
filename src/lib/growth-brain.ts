@@ -2,9 +2,13 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { getAllTasks, getAllUsersLight } from "@/lib/server-data";
 import { getClients } from "@/lib/clients-data";
 import { getStripeRevenue } from "@/lib/stripe";
+import { getFacebookRevenue } from "@/lib/facebook-revenue";
+import { getOutboundSummary } from "@/lib/outbound-summary";
 import { listMemories, formatMemoriesBlock } from "@/lib/brain-memory";
 import { getAnthropic, MODELS } from "@/lib/anthropic-client";
 import type { Task } from "@/lib/types";
+import type { FacebookRevenueResult } from "@/lib/facebook-revenue-types";
+import type { OutboundSummaryResult } from "@/lib/outbound-summary-types";
 
 // The Growth Brain: an aggressive-but-disciplined COO + Chief Growth Officer.
 // It reads the whole business and answers one question — "what should we do next
@@ -46,10 +50,74 @@ const money = (n: number | null | undefined) => (n == null ? "$0" : `$${Math.rou
 
 const IN_FLIGHT = ["todo", "in_progress", "blocked", "review"];
 
+// For the two sections below: signed, never null — a missing figure is spelled
+// out in words there, because `money` above would print it as $0.
+const usd = (n: number, digits = 0) => {
+  const r = Math.round(n * 10 ** digits) / 10 ** digits;
+  return `${r < 0 ? "-" : ""}$${Math.abs(r).toLocaleString("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits })}`;
+};
+// Facebook-side revenue, as the Finance app computes it. Narrated, never
+// recomputed, and never summed into MRR — the brain is told the same.
+function facebookSideSection(fb: FacebookRevenueResult): string {
+  const head = "## Facebook-side revenue (Finance app — a SEPARATE revenue stream from MRR; never add the two)";
+  if (!fb.ok) return `${head}\nFacebook-side revenue unavailable: ${fb.error} (do NOT treat as $0)`;
+  const d = fb.data;
+  const c = d.current;
+  const lines = [
+    head,
+    `${d.period}${d.provisional ? " (provisional — month still running, figures will change)" : ""}: Facebook-side revenue ${usd(c.revenue)} = management fees ${usd(c.managementFees)} + one-off/setup ${usd(c.oneOffRevenue)}, on ${usd(c.managedSpend)} of managed client Meta spend (${usd(c.feeBearingSpend)} of it fee-bearing).`,
+    d.payers.length
+      ? `Top payers: ${d.payers.slice(0, 5).map((p) => `${p.name} ${usd(p.revenue)} revenue on ${usd(p.managedSpend)} managed spend at ${p.closingRate === null ? "no rate" : `${(p.closingRate * 100).toFixed(0)}%`}`).join("; ")}.`
+      : "No clients billing this month yet.",
+    `Facebook-side revenue trend (oldest→newest): ${d.months.slice(-6).map((m) => `${m.period} ${usd(m.revenue)}`).join(", ")}.`
+  ];
+  return lines.join("\n");
+}
+
+// Our own acquisition funnel, as the Meta ads dashboard computes it: ad spend
+// from Finance's ledger, the ad-form prospects it brought in, how many booked,
+// and today's texting queues. Unknown is written as unknown, never as zero.
+function outboundSection(ob: OutboundSummaryResult): string {
+  const head = "## Outbound acquisition (our own Meta ads → Typeform prospects → booked calls)";
+  if (!ob.ok) return `${head}\nOutbound data unavailable: ${ob.error} (do NOT treat as zero)`;
+  const { ads, pipeline, queues } = ob.data;
+  const lines = [head];
+  const ratio = (n: number | null) => (n === null ? "—" : usd(n, 2));
+  if (!ads.ok) {
+    lines.push(`Ad spend unavailable: ${ads.error} (do NOT treat as zero)`);
+  } else {
+    if (!ads.months.length) {
+      lines.push("No ad spend or ad-form prospects recorded yet.");
+    } else {
+      lines.push(`By month, newest first (spend = Finance's ledger for ${ads.accountLabel}; prospects = ad-form leads created that month; booked = those now at a booked stage):`);
+    }
+    for (const m of ads.months.slice(0, 4)) {
+      const spend = m.spend === null
+        ? `spend: no ledger row${m.beforeTracking ? " (before Finance tracked the account)" : ""}`
+        : `spend ${usd(m.spend)}`;
+      const estimate = m.isEstimate ? " (estimate, month still running: leads include today, spend stops at yesterday (UTC))" : "";
+      const camps = m.campaigns.slice(0, 3).map((x) => `${x.campaignName} ${usd(x.spend)}`).join(", ");
+      lines.push(`- ${m.period}: ${spend}${estimate} · ${m.prospects} prospects · ${m.booked} booked · ${ratio(m.costPerLead)}/lead · ${ratio(m.costPerBooked)}/booked${camps ? ` · top campaigns: ${camps}` : ""}`);
+    }
+    // A failed read matters most when it's why there are no months at all.
+    if (ads.lastError) {
+      lines.push(`Ad account sync: last read from Meta by Finance ${ads.lastSyncedAt ? `${ads.lastSyncedAt} UTC` : "never"}, and the last read FAILED: ${ads.lastError} — recent spend may be stale.`);
+    }
+    if (ads.campaignsError) lines.push(`Campaign split unavailable: ${ads.campaignsError} (the spend totals still stand).`);
+  }
+  lines.push(`Pipeline now (every outbound prospect at its current stage): ${pipeline.total} total · ${pipeline.booked} booked · ${pipeline.notBooked} not booked.`);
+  lines.push(
+    queues.reps.length
+      ? `Texting queues today (leads each rep still has to text vs their daily cap): ${queues.reps.map((r) => `${r.owner} ${r.queued}/${r.dailyCap}`).join(", ")} (caps total ${queues.reps.reduce((s, r) => s + r.dailyCap, 0)}/day). Backlog: ${queues.backlog} queued leads not dealt to a rep yet — they wait for that daily capacity.`
+      : `Backlog: ${queues.backlog} queued leads not dealt to a rep yet.`
+  );
+  return lines.join("\n");
+}
+
 // Assemble everything the Growth Brain reasons over into one snapshot string.
 async function assembleSnapshot(): Promise<string> {
   const supabase = getSupabaseAdmin();
-  const [revenue, clients, allTasks, roster, memories, mrrRes, finRes, swRes, payRes, cliMetaRes, mtgRes] = await Promise.all([
+  const [revenue, clients, allTasks, roster, memories, mrrRes, finRes, swRes, payRes, cliMetaRes, mtgRes, fbRevenue, outbound] = await Promise.all([
     getStripeRevenue().catch(() => null),
     getClients().catch(() => []),
     getAllTasks().catch(() => [] as Task[]),
@@ -65,7 +133,11 @@ async function assembleSnapshot(): Promise<string> {
       .select("client_id, meeting_date, title, brief")
       .gte("meeting_date", new Date(Date.now() - 21 * 86_400_000).toISOString())
       .order("meeting_date", { ascending: false })
-      .limit(20)
+      .limit(20),
+    // Neither throws; a tighter bound than the pages use, so a slow app can't
+    // eat the brief's time budget.
+    getFacebookRevenue(20_000),
+    getOutboundSummary(20_000)
   ]);
   const clientUpdatedAt = new Map<string, string>();
   for (const r of (cliMetaRes.data ?? []) as { id: string; updated_at: string }[]) clientUpdatedAt.set(r.id, r.updated_at);
@@ -202,6 +274,10 @@ async function assembleSnapshot(): Promise<string> {
     payrollLine,
     rising.length ? `Rising software spend (margin-leak candidates): ${rising.join(", ")}.` : "",
     ``,
+    facebookSideSection(fbRevenue),
+    ``,
+    outboundSection(outbound),
+    ``,
     `## Clients (name · priority · MRR · health/notes)`,
     clientLines || "(none)",
     ``,
@@ -235,6 +311,8 @@ const GROWTH_SYSTEM = [
   "- IGNORE automated system noise. Security/Wordfence/plugin/vulnerability/backup/uptime/SSL alerts are ops noise, NOT churn signals or client sentiment — never surface them as risks. A client is only 'at risk' when there's a REAL human signal: a person expressed frustration/dissatisfaction, an unmet request or broken promise, a payment/past-due problem, or explicit churn intent.",
   "- Do NOT surface internal team task-status ('X has 3 overdue tasks', 'stuck with the team') as a PROTECT item on its own. Team load only matters as a capacity constraint or when it's directly causing a client-facing failure a human has reacted to.",
   "- Weigh recency. Client health/notes carry an 'as of Nd ago' stamp, and recent client calls (tl;dv) are dated — LEAD with the freshest signals. A risk raised on a call this week outranks a 2-week-old note; a request made on a call is a live expansion opening (turn it into a GROW item). When you flag a client risk, state how recent it is, and discount anything older than ~3 weeks unless corroborated.",
+  "- Facebook-side revenue (from the Finance app: management + setup fees on the client Meta spend we manage) is a SEPARATE stream from MRR. Never sum the two or double count a client across them. If it's unavailable, say so; never treat it as $0.",
+  "- Outbound spend / prospects / booked / cost per booked are our own acquisition funnel. When judging whether leads or sales is the constraint, use the cost-per-lead and cost-per-booked trend and the texting backlog vs the reps' daily caps as evidence. An estimate month is partial (leads include today, spend stops at yesterday) — never compare it to a full month as if it were complete.",
   "",
   "Return STRICT JSON only, no prose or code fences, with this exact shape:",
   "{",

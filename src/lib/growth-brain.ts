@@ -49,7 +49,7 @@ const IN_FLIGHT = ["todo", "in_progress", "blocked", "review"];
 // Assemble everything the Growth Brain reasons over into one snapshot string.
 async function assembleSnapshot(): Promise<string> {
   const supabase = getSupabaseAdmin();
-  const [revenue, clients, allTasks, roster, memories, mrrRes, finRes, swRes, payRes, cliMetaRes] = await Promise.all([
+  const [revenue, clients, allTasks, roster, memories, mrrRes, finRes, swRes, payRes, cliMetaRes, mtgRes] = await Promise.all([
     getStripeRevenue().catch(() => null),
     getClients().catch(() => []),
     getAllTasks().catch(() => [] as Task[]),
@@ -59,7 +59,13 @@ async function assembleSnapshot(): Promise<string> {
     supabase.from("finance_documents").select("parsed").order("uploaded_at", { ascending: false }).limit(5),
     supabase.from("software_subscriptions").select("vendor, month, amount"),
     supabase.from("payroll_entries").select("name, role, status, scale, rate"),
-    supabase.from("clients").select("id, updated_at")
+    supabase.from("clients").select("id, updated_at"),
+    supabase
+      .from("client_meetings")
+      .select("client_id, meeting_date, title, brief")
+      .gte("meeting_date", new Date(Date.now() - 21 * 86_400_000).toISOString())
+      .order("meeting_date", { ascending: false })
+      .limit(20)
   ]);
   const clientUpdatedAt = new Map<string, string>();
   for (const r of (cliMetaRes.data ?? []) as { id: string; updated_at: string }[]) clientUpdatedAt.set(r.id, r.updated_at);
@@ -170,6 +176,21 @@ async function assembleSnapshot(): Promise<string> {
     .map((t) => `- "${t.title}"${t.clientName ? ` · ${t.clientName}` : ""}`)
     .join("\n");
 
+  // Recent client calls (tl;dv) — the freshest, dated client voice.
+  const nameByClientId = new Map(clients.map((c) => [c.id, c.name]));
+  const meetingLines = ((mtgRes.data ?? []) as { client_id: string; meeting_date: string; title: string | null; brief: { risks?: string[]; clientRequests?: string[]; nextSteps?: string[]; keyDecisions?: string[] } | null }[])
+    .map((mtg) => {
+      const cname = nameByClientId.get(mtg.client_id) ?? "client";
+      const days = Math.round((Date.now() - Date.parse(mtg.meeting_date)) / 86_400_000);
+      const when = days <= 0 ? "today" : days === 1 ? "yesterday" : `${days}d ago`;
+      const b = mtg.brief ?? {};
+      const parts = [`- ${cname} — call ${when}${mtg.title ? ` (${mtg.title})` : ""}`];
+      if (b.risks?.length) parts.push(`    risks: ${b.risks.slice(0, 2).join("; ")}`);
+      if (b.clientRequests?.length) parts.push(`    they asked for: ${b.clientRequests.slice(0, 2).join("; ")}`);
+      if (b.nextSteps?.length) parts.push(`    next steps: ${b.nextSteps.slice(0, 2).join("; ")}`);
+      return parts.join("\n");
+    }).join("\n");
+
   return [
     `## Revenue`,
     `MRR (source of truth): ${money(mrr)}/mo. Top clients: ${top.map((c) => `${c.company} ${money(c.mrr)}`).join(", ")}.`,
@@ -186,6 +207,9 @@ async function assembleSnapshot(): Promise<string> {
     ``,
     `## Team load (open tasks by person — for capacity/bottleneck)`,
     loadLines || "(none)",
+    ``,
+    `## Recent client calls (tl;dv — the FRESHEST, dated client voice; a risk here outranks an old note, a request here is an expansion opening)`,
+    meetingLines || "(no recent calls)",
     ``,
     `## Recent wins (last 14d — replication candidates)`,
     wins || "(none)",
@@ -210,7 +234,7 @@ const GROWTH_SYSTEM = [
   "- Be specific and grounded in the real data below: name clients, people, numbers, dollar estimates, and owners. No vague themes.",
   "- IGNORE automated system noise. Security/Wordfence/plugin/vulnerability/backup/uptime/SSL alerts are ops noise, NOT churn signals or client sentiment — never surface them as risks. A client is only 'at risk' when there's a REAL human signal: a person expressed frustration/dissatisfaction, an unmet request or broken promise, a payment/past-due problem, or explicit churn intent.",
   "- Do NOT surface internal team task-status ('X has 3 overdue tasks', 'stuck with the team') as a PROTECT item on its own. Team load only matters as a capacity constraint or when it's directly causing a client-facing failure a human has reacted to.",
-  "- Weigh recency. Client health/notes carry an 'as of Nd ago' stamp — lead with fresh signals, and when you flag a client risk, state how recent it is. Discount anything older than ~3 weeks unless corroborated by other data.",
+  "- Weigh recency. Client health/notes carry an 'as of Nd ago' stamp, and recent client calls (tl;dv) are dated — LEAD with the freshest signals. A risk raised on a call this week outranks a 2-week-old note; a request made on a call is a live expansion opening (turn it into a GROW item). When you flag a client risk, state how recent it is, and discount anything older than ~3 weeks unless corroborated.",
   "",
   "Return STRICT JSON only, no prose or code fences, with this exact shape:",
   "{",
@@ -228,12 +252,21 @@ export async function generateGrowthBrief(): Promise<GrowthBrief> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const result: any = await client.messages.create({
     model: MODELS.chat,
-    max_tokens: 3500,
+    max_tokens: 5000,
     system: GROWTH_SYSTEM,
     messages: [{ role: "user", content: `Here is the current state of Scaled AI:\n\n${snapshot}\n\nGiven everything above, what should we do next to make the company bigger, better, and more profitable? Return the JSON brief.` }]
   });
   const text = (result.content ?? []).filter((b: { type: string }) => b.type === "text").map((b: { text: string }) => b.text).join("").trim();
-  const json = JSON.parse(text.replace(/^```json?\s*/i, "").replace(/```$/, "").trim());
+  // Robust extraction: strip fences, then take the outermost { ... } block.
+  let raw = text.replace(/^```json?\s*/i, "").replace(/```\s*$/, "").trim();
+  const s = raw.indexOf("{"), e = raw.lastIndexOf("}");
+  if (s >= 0 && e > s) raw = raw.slice(s, e + 1);
+  let json: { constraint?: GrowthConstraint | null; protect?: ProtectItem[]; grow?: GrowItem[] };
+  try {
+    json = JSON.parse(raw);
+  } catch {
+    throw new Error(`growth brief parse failed (stop=${result.stop_reason}, len=${text.length})`);
+  }
 
   const brief: GrowthBrief = {
     constraint: json.constraint ?? null,

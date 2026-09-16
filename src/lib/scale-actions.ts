@@ -7,6 +7,7 @@ import { listThreads } from "@/lib/missive-client";
 import { getOwnerAccount, AUTOMATED_SUBJECT } from "@/lib/owner-inbox";
 import { OWNER_EMAIL } from "@/lib/access";
 import { getAnthropic, MODELS } from "@/lib/anthropic-client";
+import { getFacebookRevenue } from "@/lib/facebook-revenue";
 
 // Two owner-only "Act now" modules for the Scale Room:
 //   Reach out  — paying clients who've gone quiet (no personal email in a while)
@@ -110,6 +111,15 @@ export async function getReactivatePitches(limit = 15): Promise<ReactivatePitch[
     const { data } = await getSupabaseAdmin().from("mrr_entries").select("company");
     mrrRows = (data ?? []) as { company: string }[];
   } catch { /* MRR sheet unavailable — board names still exclude clients */ }
+
+  // Facebook-side clients (Alter BH, Recovery Unplugged, etc.) live only in the
+  // Finance app's payer list, not the board or MRR sheet — pull them so they're
+  // excluded too. Fail-soft.
+  let fbPayerNames: string[] = [];
+  try {
+    const fb = await getFacebookRevenue();
+    if (fb.ok) fbPayerNames = fb.data.payers.map((p) => p.name);
+  } catch { /* Finance app unavailable — other lists still exclude clients */ }
   const ownerEmail = (owner?.email ?? OWNER_EMAIL).toLowerCase();
   const now = Date.now();
 
@@ -131,7 +141,7 @@ export async function getReactivatePitches(limit = 15): Promise<ReactivatePitch[
   const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
   // "Client" spans the board AND the manual MRR sheet (Facebook-side clients like
   // Alter BH, Ojai, Recovery Unplugged live there, not the board).
-  const clientNameTokens = [...(clients ?? []).map((c) => c.name), ...mrrRows.map((r) => r.company)]
+  const clientNameTokens = [...(clients ?? []).map((c) => c.name), ...mrrRows.map((r) => r.company), ...fbPayerNames]
     .map(norm)
     .filter((n) => n.length >= 5);
   const domainOf = (addr: string) => {

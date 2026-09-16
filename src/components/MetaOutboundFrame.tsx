@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { ExternalLink, ShieldAlert } from "lucide-react";
+import { ExternalLink, ShieldAlert, Maximize2, Minimize2, RefreshCw } from "lucide-react";
 import { META_OUTBOUND_APP, frameAllow, isSameSite } from "@/components/multitask/multitask-apps";
 
 // The Scale Room's Outbound tab, Live board view: the Meta ads dashboard's own
@@ -26,10 +26,14 @@ const MIN_HEIGHT = 560;
 export function MetaOutboundFrame() {
   const app = META_OUTBOUND_APP;
   const box = useRef<HTMLDivElement>(null);
+  const frame = useRef<HTMLIFrameElement>(null);
   // All three are browser facts, decided after mount; null until then so a
   // phone never starts loading a frame it will immediately drop.
   const [wide, setWide] = useState<boolean | null>(null);
   const [height, setHeight] = useState<number | null>(null);
+  // Full-screen: fill the viewport so the board is a real workspace, not a
+  // letterbox. Esc exits.
+  const [full, setFull] = useState(false);
   // The dashboard's session cookie is SameSite=Lax, so it only rides into the
   // frame when this page is same-site with it (operations.scaledai.org). From
   // the Railway alias signing in inside the frame would hang, so say so.
@@ -69,6 +73,25 @@ export function MetaOutboundFrame() {
     return () => document.body.classList.remove("hide-ai-fab");
   }, []);
 
+  // Full-screen: lock the page behind it and let Esc exit.
+  useEffect(() => {
+    if (!full) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setFull(false);
+    document.addEventListener("keydown", onKey);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prev;
+    };
+  }, [full]);
+
+  // Reload the board without reloading DD (re-poke the iframe's src).
+  const reload = () => {
+    const el = frame.current;
+    if (el) el.src = app.url;
+  };
+
   if (wide === false) {
     return (
       <div className="rounded-2xl border border-slate-200 bg-white p-4 text-[12.5px] text-muted shadow-soft">
@@ -84,9 +107,28 @@ export function MetaOutboundFrame() {
   return (
     <div
       ref={box}
-      className="flex flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-soft"
-      style={{ height: height ?? MIN_HEIGHT }}
+      className={
+        full
+          ? "fixed inset-0 z-[60] flex flex-col overflow-hidden bg-white"
+          : "flex flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-soft"
+      }
+      style={full ? undefined : { height: height ?? MIN_HEIGHT }}
     >
+      {/* Toolbar: reload, full-screen toggle, open in own tab. */}
+      <div className="flex items-center justify-between gap-2 border-b border-slate-200 bg-slate-50/70 px-3 py-1.5">
+        <span className="text-[11px] font-medium text-muted truncate">Live board · Meta ads dashboard</span>
+        <div className="flex items-center gap-1">
+          <button type="button" onClick={reload} title="Reload board" className="rounded-md p-1.5 text-muted hover:bg-slate-200/60 hover:text-ink transition-colors">
+            <RefreshCw className="h-3.5 w-3.5" />
+          </button>
+          <button type="button" onClick={() => setFull((f) => !f)} title={full ? "Exit full screen (Esc)" : "Full screen"} className="rounded-md p-1.5 text-muted hover:bg-slate-200/60 hover:text-ink transition-colors">
+            {full ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
+          </button>
+          <a href={app.url} target="_blank" rel="noreferrer" title="Open in own tab" className="rounded-md p-1.5 text-muted hover:bg-slate-200/60 hover:text-ink transition-colors">
+            <ExternalLink className="h-3.5 w-3.5" />
+          </a>
+        </div>
+      </div>
       {crossSite && (
         <div className="flex items-start gap-2 border-b border-amber-200 bg-amber-50 px-3 py-2">
           <ShieldAlert className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600" />
@@ -102,6 +144,7 @@ export function MetaOutboundFrame() {
       )}
       {wide && (
         <iframe
+          ref={frame}
           src={app.url}
           title="Outbound · Meta ads dashboard"
           allow={frameAllow(app)}

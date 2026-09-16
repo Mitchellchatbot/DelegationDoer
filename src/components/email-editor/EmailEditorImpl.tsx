@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
 import { EditorContent, useEditor, type UseEditorOptions } from "@tiptap/react";
 import { Fragment, Slice } from "@tiptap/pm/model";
+import { TextSelection } from "@tiptap/pm/state";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { bodyFromDoc, plainTextToDoc, type EmailDocNode } from "@/lib/email-doc";
@@ -120,7 +121,17 @@ export default function EmailEditorImpl(props: EmailEditorProps) {
     const api: EmailEditorApi = {
       getBody: read,
       load(seed) {
-        editor.chain().setMeta("addToHistory", false).setContent(seedContent(seed), { emitUpdate: false }).run();
+        editor
+          .chain()
+          .setMeta("addToHistory", false)
+          .setContent(seedContent(seed), { emitUpdate: false })
+          // A select-all from before would otherwise still span the new
+          // content, and the next keystroke would replace all of it.
+          .command(({ tr }) => {
+            tr.setSelection(TextSelection.atEnd(tr.doc));
+            return true;
+          })
+          .run();
         propsRef.current.onLoad(read());
       },
       replace(seed) {

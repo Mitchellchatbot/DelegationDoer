@@ -19,9 +19,18 @@ const SECRET_KEY = /secret|token|password|authorization|api[-_]?key|bearer/i;
 const MAX_STRING = 4_000;
 const MAX_JSON = 20_000;
 
+// Cut on a UTF-16 boundary: a lone half of a surrogate pair (an emoji split in
+// two) is invalid in Postgres jsonb, and the insert would then fail — refusing an
+// edit over a truncation.
+function cut(s: string, n: number): string {
+  if (s.length <= n) return s;
+  const code = s.charCodeAt(n - 1);
+  return s.slice(0, code >= 0xd800 && code <= 0xdbff ? n - 1 : n);
+}
+
 function redact(value: unknown, depth = 0): unknown {
   if (depth > 6) return "[truncated]";
-  if (typeof value === "string") return value.length > MAX_STRING ? `${value.slice(0, MAX_STRING)}…[truncated]` : value;
+  if (typeof value === "string") return value.length > MAX_STRING ? `${cut(value, MAX_STRING)}…[truncated]` : value;
   if (Array.isArray(value)) return value.slice(0, 200).map((v) => redact(v, depth + 1));
   if (value && typeof value === "object") {
     const out: Record<string, unknown> = {};
@@ -38,7 +47,7 @@ function redact(value: unknown, depth = 0): unknown {
 function bounded(value: unknown): unknown {
   const safe = redact(value);
   const json = JSON.stringify(safe ?? null);
-  return json.length <= MAX_JSON ? safe : { truncated: true, preview: json.slice(0, MAX_JSON) };
+  return json.length <= MAX_JSON ? safe : { truncated: true, preview: cut(json, MAX_JSON) };
 }
 
 /** Record an edit BEFORE it runs. Throws when the row can't be written. */

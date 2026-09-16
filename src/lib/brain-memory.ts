@@ -39,7 +39,10 @@ export async function listMemories(): Promise<BrainMemory[]> {
 export async function addMemory(content: string, category: unknown, createdBy: string): Promise<BrainMemory> {
   const id = `mem_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
   const row = { id, content: content.trim(), category: coerceCategory(category), created_by: createdBy, active: true };
-  await getSupabaseAdmin().from("brain_memories").insert(row);
+  // Throw on a failed insert rather than returning a memory that was never
+  // saved — both the Ask AI "remember" tool and the agent connector report it.
+  const { error } = await getSupabaseAdmin().from("brain_memories").insert(row);
+  if (error) throw new Error(`Couldn't save the memory: ${error.message}`);
   return { id, content: row.content, category: row.category, createdAt: new Date().toISOString() };
 }
 

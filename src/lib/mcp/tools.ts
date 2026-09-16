@@ -52,6 +52,14 @@ async function requireOutbound(): Promise<void> {
   if (!s.outbound) throw new ToolError("The Outbound source is switched off in the Scale Room (/scale), so the ads dashboard isn't read. Switch it on first.");
 }
 
+// Supabase reports no error when an update matches no row, so a mistyped or
+// already-forgotten id would otherwise come back "ok" — and the agent would tell
+// Mitchell a memory is gone while the brain keeps weighing it.
+async function requireActiveMemory(id: string): Promise<void> {
+  const memories = await listMemories();
+  if (!memories.some((m) => m.id === id)) throw new ToolError(`No active memory with id ${id} — list them with brain_memories.`);
+}
+
 function unwrap<T>(r: AgentResult<T>): T {
   if (!r.ok) throw new ToolError(r.status ? `${r.error} (HTTP ${r.status})` : r.error);
   return r.data;
@@ -235,6 +243,7 @@ const TOOLS: ToolDef[] = [
       .strict()
       .refine((a) => a.content !== undefined || a.category !== undefined, "Pass content and/or category"),
     run: async (args: { id: string; content?: string; category?: string }) => {
+      await requireActiveMemory(args.id);
       if (!(await updateMemory(args.id, { content: args.content, category: args.category }))) throw new ToolError("Memory update failed.");
       return { ok: true, id: args.id };
     }
@@ -248,6 +257,7 @@ const TOOLS: ToolDef[] = [
     write: true,
     args: z.object({ id: z.string().min(1).max(200) }).strict(),
     run: async (args: { id: string }) => {
+      await requireActiveMemory(args.id);
       if (!(await forgetMemory(args.id))) throw new ToolError("Forget failed.");
       return { ok: true, id: args.id };
     }
@@ -377,7 +387,7 @@ export async function callMcpTool(name: string, rawArgs: Record<string, unknown>
       auditId = await startAgentAction(ctx.keyName, name, parsed.data);
     } catch (e) {
       console.warn(`[mcp] audit unavailable, refused ${name}:`, e instanceof Error ? e.message : e);
-      return fail("Audit log unavailable (run the agent_connector migration) — nothing was changed.");
+      return fail("Audit log unavailable — nothing was changed. If this persists, check that the agent_connector migration has been applied.");
     }
   }
 

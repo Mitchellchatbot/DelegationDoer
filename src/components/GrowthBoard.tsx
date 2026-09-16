@@ -1,15 +1,15 @@
 "use client";
 
 import { useState } from "react";
-import { RefreshCw, Target, ShieldAlert, Rocket } from "lucide-react";
+import { RefreshCw, Target, ShieldAlert, Rocket, ChevronDown } from "lucide-react";
 import { SCALE_SOURCE_LABELS, staleBriefSources, type ScaleSourceFlags } from "@/lib/scale-sources-types";
 
 // The CEO screen: the soul question + #1 growth constraint up top, then two
 // columns — PROTECT (defend the business) and GROW (Scale Opportunities).
 
 export interface GrowthConstraint { title: string; why: string; evidence: string; impact: string; solution: string; owner: string; }
-export interface ProtectItem { type: string; title: string; detail: string; severity: "high" | "medium"; }
-export interface GrowItem { type: string; title: string; detail: string; estValue?: string; action: string; owner?: string; confidence?: "high" | "medium" | "low"; }
+export interface ProtectItem { type: string; title: string; detail: string; severity: "high" | "medium"; source?: string; }
+export interface GrowItem { type: string; title: string; detail: string; estValue?: string; action: string; owner?: string; confidence?: "high" | "medium" | "low"; source?: string; }
 export interface GrowthBrief { constraint: GrowthConstraint | null; protect: ProtectItem[]; grow: GrowItem[]; generatedAt: string; sources?: ScaleSourceFlags; }
 
 const PROTECT_ICON: Record<string, string> = {
@@ -51,6 +51,11 @@ export function GrowthBoard({ initial, currentSources }: { initial: GrowthBrief 
   }
 
   const c = brief?.constraint ?? null;
+
+  // Items collapse to a one-liner; click to expand the detail. Keyed by
+  // section+index so Protect and Grow don't collide.
+  const [open, setOpen] = useState<Record<string, boolean>>({});
+  const toggle = (k: string) => setOpen((o) => ({ ...o, [k]: !o[k] }));
 
   return (
     <div className="space-y-4">
@@ -115,22 +120,27 @@ export function GrowthBoard({ initial, currentSources }: { initial: GrowthBrief 
             <div className="flex items-center gap-1.5 mb-3 text-[13px] font-semibold text-rose-700">
               <ShieldAlert className="w-4 h-4" /> Protect
             </div>
-            <div className="space-y-2.5">
+            <div className="space-y-1">
               {brief.protect.length === 0 && <div className="text-[12px] text-muted">Nothing flagged.</div>}
-              {brief.protect.map((p, i) => (
-                <div key={i} className="border-b border-slate-100 last:border-0 pb-2.5 last:pb-0">
-                  <div className="flex items-start gap-2">
-                    <span className="text-[15px] leading-none mt-0.5">{PROTECT_ICON[p.type] ?? "⚠️"}</span>
-                    <div className="min-w-0">
-                      <div className="text-[13px] font-medium text-ink flex items-center gap-1.5">
-                        {p.title}
-                        {p.severity === "high" && <span className="text-[9px] uppercase tracking-wide text-rose-600 bg-rose-100 rounded px-1 py-0.5">high</span>}
+              {brief.protect.map((p, i) => {
+                const k = `p${i}`; const isOpen = !!open[k];
+                return (
+                  <div key={k} className="border-b border-slate-100 last:border-0">
+                    <button type="button" onClick={() => toggle(k)} className="w-full text-left flex items-start gap-2 py-2 hover:bg-slate-50 rounded-lg transition-colors">
+                      <span className="text-[15px] leading-none mt-0.5">{PROTECT_ICON[p.type] ?? "⚠️"}</span>
+                      <div className="min-w-0 flex-1">
+                        <div className="text-[13px] font-medium text-ink flex items-center gap-1.5">
+                          <span className="flex-1">{p.title}</span>
+                          {p.severity === "high" && <span className="text-[9px] uppercase tracking-wide text-rose-600 bg-rose-100 rounded px-1 py-0.5 shrink-0">high</span>}
+                          <ChevronDown className={"w-3.5 h-3.5 text-muted shrink-0 transition-transform " + (isOpen ? "rotate-180" : "")} />
+                        </div>
+                        {p.source && <div className="text-[10px] text-slate-400 mt-0.5">from {p.source}</div>}
                       </div>
-                      <div className="text-[12px] text-muted mt-0.5">{p.detail}</div>
-                    </div>
+                    </button>
+                    {isOpen && <div className="pl-7 pb-2.5 text-[12px] text-muted">{p.detail}</div>}
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
 
@@ -139,26 +149,35 @@ export function GrowthBoard({ initial, currentSources }: { initial: GrowthBrief 
             <div className="flex items-center gap-1.5 mb-3 text-[13px] font-semibold text-emerald-700">
               <Rocket className="w-4 h-4" /> Grow · Scale Opportunities
             </div>
-            <div className="space-y-2.5">
+            <div className="space-y-1">
               {brief.grow.length === 0 && <div className="text-[12px] text-muted">Nothing surfaced.</div>}
-              {brief.grow.map((g, i) => (
-                <div key={i} className="border-b border-slate-100 last:border-0 pb-2.5 last:pb-0">
-                  <div className="flex items-start gap-2">
-                    <span className="text-[15px] leading-none mt-0.5">{GROW_ICON[g.type] ?? "🚀"}</span>
-                    <div className="min-w-0 flex-1">
-                      <div className="text-[13px] font-medium text-ink flex items-center gap-1.5 flex-wrap">
-                        {g.title}
-                        {g.estValue && <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-100 rounded px-1.5 py-0.5">{g.estValue}</span>}
+              {brief.grow.map((g, i) => {
+                const k = `g${i}`; const isOpen = !!open[k];
+                return (
+                  <div key={k} className="border-b border-slate-100 last:border-0">
+                    <button type="button" onClick={() => toggle(k)} className="w-full text-left flex items-start gap-2 py-2 hover:bg-slate-50 rounded-lg transition-colors">
+                      <span className="text-[15px] leading-none mt-0.5">{GROW_ICON[g.type] ?? "🚀"}</span>
+                      <div className="min-w-0 flex-1">
+                        <div className="text-[13px] font-medium text-ink flex items-center gap-1.5 flex-wrap">
+                          <span className="flex-1 min-w-0">{g.title}</span>
+                          {g.estValue && <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-100 rounded px-1.5 py-0.5 shrink-0">{g.estValue}</span>}
+                          <ChevronDown className={"w-3.5 h-3.5 text-muted shrink-0 transition-transform " + (isOpen ? "rotate-180" : "")} />
+                        </div>
+                        {g.source && <div className="text-[10px] text-slate-400 mt-0.5">from {g.source}</div>}
                       </div>
-                      <div className="text-[12px] text-muted mt-0.5">{g.detail}</div>
-                      <div className="text-[12px] text-emerald-800 mt-1">→ {g.action}</div>
-                      <div className="text-[10px] text-muted mt-0.5">
-                        {g.owner ? `Owner: ${g.owner}` : ""}{g.owner && g.confidence ? " · " : ""}{g.confidence ? `Confidence: ${g.confidence}` : ""}
+                    </button>
+                    {isOpen && (
+                      <div className="pl-7 pb-2.5">
+                        <div className="text-[12px] text-muted">{g.detail}</div>
+                        <div className="text-[12px] text-emerald-800 mt-1">→ {g.action}</div>
+                        <div className="text-[10px] text-muted mt-0.5">
+                          {g.owner ? `Owner: ${g.owner}` : ""}{g.owner && g.confidence ? " · " : ""}{g.confidence ? `Confidence: ${g.confidence}` : ""}
+                        </div>
                       </div>
-                    </div>
+                    )}
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         </div>

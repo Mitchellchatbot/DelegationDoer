@@ -35,6 +35,7 @@ export interface ProtectItem {
   title: string;
   detail: string;
   severity: "high" | "medium";
+  source?: string; // where this came from, e.g. "tl;dv call 2d ago" / "client health note" / "P&L"
 }
 export interface GrowItem {
   type: string; // expansion | upsell | sales-push | replicate-win | automation | delegation | hiring | experiment
@@ -44,6 +45,7 @@ export interface GrowItem {
   action: string;
   owner?: string;
   confidence?: "high" | "medium" | "low";
+  source?: string; // where this came from — see ProtectItem.source
 }
 export interface GrowthBrief {
   constraint: GrowthConstraint | null;
@@ -426,13 +428,15 @@ export async function getGrowthSnapshot(): Promise<{ text: string; sources: Scal
 const growthSystem = (sources: ScaleSourceFlags, rules: string) => [
   rules,
   ...(sources.facebook ? ["- Facebook-side revenue (from the Finance app: management + setup fees on the client Meta spend we manage) is a SEPARATE stream from MRR. Never sum the two or double count a client across them. If it's unavailable, say so; never treat it as $0."] : []),
-  ...(sources.outbound ? ["- Outbound spend / prospects / booked / cost per booked are our own acquisition funnel. When judging whether leads or sales is the constraint, use the cost-per-lead and cost-per-booked trend and the texting backlog vs the reps' daily caps as evidence. An estimate month is partial (leads include today, spend stops at yesterday) — never compare it to a full month as if it were complete.", "- The outbound pipeline and our Meta ads sections are LIVE. Use them lead by lead: name the booked/proposal facilities that need a push, the leads flagged NEEDS FOLLOW-UP, how stale the un-reached backlog is against the reps' daily capacity, which sources actually book, and — from the last 7 days of Meta delivery — whether CPL/CTR/frequency say the ads or the follow-up is the leak. When a lead is dealt to a rep, make that rep the owner."] : []),
+  ...(sources.outbound ? ["- Outbound spend / prospects / booked / cost per booked are our own acquisition funnel. When judging whether leads or sales is the constraint, use the cost-per-lead and cost-per-booked trend and the texting backlog vs the reps' daily caps as evidence. An estimate month is partial (leads include today, spend stops at yesterday) — never compare it to a full month as if it were complete.", "- The outbound pipeline and our Meta ads sections are LIVE. Use them lead by lead: name the booked/proposal facilities that need a push, the leads flagged NEEDS FOLLOW-UP, how stale the un-reached backlog is against the reps' daily capacity, which sources actually book, and — from the last 7 days of Meta delivery — whether CPL/CTR/frequency say the ads or the follow-up is the leak. When a lead is dealt to a rep, make that rep the owner.", "- CRITICAL: there are TWO SEPARATE pipelines, never conflate them or sum them. (1) COLD TEXTING pipeline: the ~300+ 'Treatment center list' leads the reps cold-text — high volume, ~0% book rate, its problem is throughput/backlog. (2) FACEBOOK BOOKED pipeline: 'Inbound form' + 'Typeform' leads from our Meta ads that convert to booked intro calls at a high rate — its problem is closing the booked calls. When you talk about backlog/texting capacity that's pipeline 1; when you talk about booked calls to close and cost-per-booked that's pipeline 2. Always say which pipeline an item is about."] : []),
+  "",
+  "PROVENANCE (required): every protect and grow item MUST include a \"source\" naming exactly where the claim comes from (which tl;dv call and how many days ago, which client health note, the P&L, the live pipeline, Meta delivery, etc.). If you cannot point to a source in the data below, do NOT include the item. Never state a specific fact (a cost-per-VOB, a missed report, a compliance risk) without its source.",
   "",
   "Return STRICT JSON only, no prose or code fences, with this exact shape:",
   "{",
   '  "constraint": { "title": string (the #1 thing currently stopping faster growth), "why": string, "evidence": string (cite real numbers/names), "impact": string (what removing it unlocks), "solution": string (concrete), "owner": string },',
-  '  "protect": [ { "type": "clients-at-risk"|"performance"|"missed-commitment"|"bottleneck"|"margin-leak"|"capacity", "title": string, "detail": string (grounded in real data), "severity": "high"|"medium" } ],',
-  '  "grow": [ { "type": "expansion"|"upsell"|"sales-push"|"replicate-win"|"automation"|"delegation"|"hiring"|"experiment", "title": string, "detail": string, "estValue": string (e.g. "+$2,000/mo" or "+2 accounts", omit if unknown), "action": string (the concrete next step), "owner": string, "confidence": "high"|"medium"|"low" } ]',
+  '  "protect": [ { "type": "clients-at-risk"|"performance"|"missed-commitment"|"bottleneck"|"margin-leak"|"capacity", "title": string, "detail": string (grounded in real data), "severity": "high"|"medium", "source": string (REQUIRED — where this came from, so Mitchell can trust it: e.g. "tl;dv call 2d ago", "client health note 13d ago", "P&L Aug", "live outbound pipeline", "Meta last 7d") } ],',
+  '  "grow": [ { "type": "expansion"|"upsell"|"sales-push"|"replicate-win"|"automation"|"delegation"|"hiring"|"experiment", "title": string, "detail": string, "estValue": string (e.g. "+$2,000/mo" or "+2 accounts", omit if unknown), "action": string (the concrete next step), "owner": string, "confidence": "high"|"medium"|"low", "source": string (REQUIRED — where this came from, same as protect) } ]',
   "}",
   "Aim for 3-6 PROTECT items and 4-8 GROW items (Scale Opportunities), each most-impactful first. Only include items the data actually supports."
 ].join("\n");

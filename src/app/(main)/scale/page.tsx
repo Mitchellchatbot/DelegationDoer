@@ -8,7 +8,7 @@ import { isOwner, OWNER_EMAIL } from "@/lib/access";
 import { getStripeRevenue } from "@/lib/stripe";
 import { listMemories } from "@/lib/brain-memory";
 import { listAccounts, listThreads } from "@/lib/missive-client";
-import { filterReplyNeeded } from "@/lib/owner-inbox";
+import { categorizeInbox } from "@/lib/owner-inbox";
 import { GrowthBoard, type GrowthBrief } from "@/components/GrowthBoard";
 import { getLatestGrowthBrief } from "@/lib/growth-brain";
 import { MemoryEditor, type ScaleMemory } from "@/components/MemoryEditor";
@@ -93,8 +93,8 @@ export default async function ScalePage() {
         snippet: t.last_snippet ?? "",
         lastAt: t.last_message_at
       }));
-      threads = await filterReplyNeeded(mapped);
-      if (threads.length === 0) inboxNote = "Nothing needs a reply right now.";
+      threads = await categorizeInbox(mapped);
+      if (threads.length === 0) inboxNote = "Nothing needs sorting right now.";
     }
   } catch (err) {
     inboxNote = err instanceof Error ? err.message : "Inbox unavailable.";
@@ -146,10 +146,10 @@ export default async function ScalePage() {
       {/* The CEO board: constraint + Protect / Grow */}
       <GrowthBoard initial={growthBrief as GrowthBrief | null} currentSources={sourceFlags} />
 
-      {/* Emails to reply to */}
+      {/* Inbox — sorted by clients / potential clients / sales, reply-needed flagged */}
       <div>
         <div className="text-[13px] font-semibold text-ink mb-2 px-1">
-          Emails to reply to{threads.length ? ` (${threads.length})` : ""}
+          Inbox · sorted{threads.length ? ` (${threads.length})` : ""}
         </div>
         <InboxCopilot threads={threads} note={inboxNote} />
       </div>

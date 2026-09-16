@@ -79,6 +79,7 @@ export function GrowthBoard({ initial, currentSources }: { initial: GrowthBrief 
   // Whole-section dropdowns — collapsed by default so the board stays compact.
   const [showProtect, setShowProtect] = useState(false);
   const [showGrow, setShowGrow] = useState(false);
+  const [showWhy, setShowWhy] = useState(false);
 
   return (
     <div className="space-y-4">
@@ -120,13 +121,22 @@ export function GrowthBoard({ initial, currentSources }: { initial: GrowthBrief 
         {c ? (
           <div className="mt-2">
             <div className="text-lg font-bold leading-snug">{c.title}</div>
-            <div className="grid sm:grid-cols-2 gap-x-6 gap-y-1.5 mt-3 text-[12.5px] text-indigo-50">
-              {c.why && <div><span className="text-indigo-300 font-medium">Why: </span>{c.why}</div>}
-              {c.evidence && <div><span className="text-indigo-300 font-medium">Evidence: </span>{c.evidence}</div>}
-              {c.impact && <div><span className="text-indigo-300 font-medium">Impact: </span>{c.impact}</div>}
-              {c.solution && <div><span className="text-indigo-300 font-medium">Fix: </span>{c.solution}</div>}
+            {c.solution && <div className="mt-2 text-[13px] text-indigo-50"><span className="text-indigo-300 font-medium">Fix: </span>{c.solution}</div>}
+            <div className="mt-2 flex items-center gap-3 flex-wrap">
+              {c.owner && <span className="text-[11px] text-indigo-200">Owner: {c.owner}</span>}
+              {(c.why || c.evidence || c.impact) && (
+                <button type="button" onClick={() => setShowWhy((v) => !v)} className="text-[11px] font-medium text-indigo-100 underline underline-offset-2 hover:text-white">
+                  {showWhy ? "Hide details" : "Why & evidence"}
+                </button>
+              )}
             </div>
-            {c.owner && <div className="mt-2 text-[11px] text-indigo-200">Owner: {c.owner}</div>}
+            {showWhy && (
+              <div className="grid sm:grid-cols-2 gap-x-6 gap-y-1.5 mt-3 text-[12.5px] text-indigo-50 border-t border-white/15 pt-3">
+                {c.why && <div><span className="text-indigo-300 font-medium">Why: </span>{c.why}</div>}
+                {c.evidence && <div><span className="text-indigo-300 font-medium">Evidence: </span>{c.evidence}</div>}
+                {c.impact && <div><span className="text-indigo-300 font-medium">Impact: </span>{c.impact}</div>}
+              </div>
+            )}
           </div>
         ) : (
           <div className="mt-2 text-[13px] text-indigo-100">

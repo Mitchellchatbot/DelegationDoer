@@ -53,13 +53,6 @@ export default async function ScalePage() {
   ]);
   const sourceFlags: ScaleSourceFlags = { facebook: sources.facebook, outbound: sources.outbound };
 
-  // "Act now" modules: clients gone quiet (retention) + pitches Mitchell sent
-  // that went cold (reactivation, from his Sent mail).
-  const [reachOut, reactivate] = await Promise.all([
-    getReachOutClients().catch(() => []),
-    getReactivatePitches().catch(() => [])
-  ]);
-
   // Snapshot: manual MRR (source of truth) + concentration + margin.
   const mrrRows = (mrrRes.data ?? []) as { company: string; mrr: number; status: string }[];
   const active = mrrRows.filter((r) => r.status === "active" || r.status === "paused");
@@ -86,29 +79,6 @@ export default async function ScalePage() {
     { label: "Top-3 concentration", value: `${top3Share}%`, tone: top3Share >= 50 ? "amber" : "ink" as const }
   ];
 
-  // Emails that actually need a reply.
-  let threads: InboxThread[] = [];
-  let inboxNote: string | null = null;
-  try {
-    const accounts = await listAccounts();
-    const acct = accounts.find((a) => (a.email ?? "").toLowerCase() === OWNER_EMAIL);
-    if (!acct) inboxNote = `No Missive inbox found for ${OWNER_EMAIL}.`;
-    else {
-      const raw = await listThreads({ mailboxId: acct.id, folder: "INBOX", status: "open", limit: 40 });
-      const mapped = raw.map((t) => ({
-        id: t.id,
-        subject: t.subject || "(no subject)",
-        from: t.last_from ?? (t.participants?.[0] ?? "unknown"),
-        snippet: t.last_snippet ?? "",
-        lastAt: t.last_message_at
-      }));
-      threads = await categorizeInbox(mapped);
-      if (threads.length === 0) inboxNote = "Nothing needs sorting right now.";
-    }
-  } catch (err) {
-    inboxNote = err instanceof Error ? err.message : "Inbox unavailable.";
-  }
-
   return (
     <div className="space-y-5 max-w-3xl mx-auto">
       <div className="flex items-start gap-3">
@@ -133,31 +103,14 @@ export default async function ScalePage() {
       {/* 1. The #1 constraint + collapsed Protect / Grow */}
       <GrowthBoard initial={growthBrief as GrowthBrief | null} currentSources={sourceFlags} />
 
-      {/* 2. ACT NOW — what needs Mitchell today, top of the page */}
+      {/* 2. ACT NOW — what needs Mitchell today, top of the page. Streamed so the
+          shell + constraint render instantly instead of the whole page blocking
+          on the inbox/reactivate AI sort. */}
       <div className="pt-1">
         <div className="text-[11px] font-semibold uppercase tracking-wide text-indigo-700 px-1 mb-2">Act now</div>
-        <div className="space-y-4">
-          {/* Reply — inbox sorted, reply-needed flagged */}
-          <div>
-            <div className="text-[13px] font-semibold text-ink mb-2 px-1">
-              Reply · inbox{threads.length ? ` (${threads.length})` : ""}
-            </div>
-            <InboxCopilot threads={threads} note={inboxNote} />
-          </div>
-
-          {/* Reactivate — cold prospect pitches */}
-          {reactivate.length > 0 && (
-            <div>
-              <div className="text-[13px] font-semibold text-ink mb-2 px-1">
-                Reactivate · pitches that went quiet ({reactivate.length})
-              </div>
-              <InboxCopilot flat threads={reactivate} note={null} />
-            </div>
-          )}
-
-          {/* Reach out — clients gone quiet */}
-          {reachOut.length > 0 && <ReachOutList clients={reachOut} />}
-        </div>
+        <Suspense fallback={<div className="rounded-2xl border border-slate-200 bg-white p-6 text-[13px] text-muted shadow-soft">Sorting your inbox, pitches and quiet clients…</div>}>
+          <ActNowSection />
+        </Suspense>
       </div>
 
       {/* 3. THE NUMBERS — reference, below the actions */}
@@ -186,6 +139,57 @@ export default async function ScalePage() {
       <MemoryEditor initial={memories as ScaleMemory[]} />
     </div>
   );
+}
+
+// The slow part of the page — inbox AI-sort, reactivate AI-sort, quiet clients —
+// streamed under a Suspense boundary so it never blocks the shell/constraint.
+// Rendered below the owner gate; every fetch fails soft.
+async function ActNowSection() {
+  const [reachOut, reactivate, inbox] = await Promise.all([
+    getReachOutClients().catch(() => []),
+    getReactivatePitches().catch(() => []),
+    loadSortedInbox()
+  ]);
+  const hasAny = inbox.threads.length > 0 || reactivate.length > 0 || reachOut.length > 0;
+  return (
+    <div className="space-y-4">
+      <div>
+        <div className="text-[13px] font-semibold text-ink mb-2 px-1">
+          Reply · inbox{inbox.threads.length ? ` (${inbox.threads.length})` : ""}
+        </div>
+        <InboxCopilot threads={inbox.threads} note={inbox.note} />
+      </div>
+      {reactivate.length > 0 && (
+        <div>
+          <div className="text-[13px] font-semibold text-ink mb-2 px-1">Reactivate · pitches that went quiet ({reactivate.length})</div>
+          <InboxCopilot flat threads={reactivate} note={null} />
+        </div>
+      )}
+      {reachOut.length > 0 && <ReachOutList clients={reachOut} />}
+      {!hasAny && <div className="rounded-2xl border border-slate-200 bg-white p-6 text-[13px] text-muted shadow-soft">Nothing needs you right now. 🎉</div>}
+    </div>
+  );
+}
+
+// Mitchell's inbox, sorted (owner-only, gated upstream). Fails soft to a note.
+async function loadSortedInbox(): Promise<{ threads: InboxThread[]; note: string | null }> {
+  try {
+    const accounts = await listAccounts();
+    const acct = accounts.find((a) => (a.email ?? "").toLowerCase() === OWNER_EMAIL);
+    if (!acct) return { threads: [], note: `No Missive inbox found for ${OWNER_EMAIL}.` };
+    const raw = await listThreads({ mailboxId: acct.id, folder: "INBOX", status: "open", limit: 40 });
+    const mapped = raw.map((t) => ({
+      id: t.id,
+      subject: t.subject || "(no subject)",
+      from: t.last_from ?? (t.participants?.[0] ?? "unknown"),
+      snippet: t.last_snippet ?? "",
+      lastAt: t.last_message_at
+    }));
+    const threads = await categorizeInbox(mapped);
+    return { threads, note: threads.length === 0 ? "Nothing needs a reply right now." : null };
+  } catch (err) {
+    return { threads: [], note: err instanceof Error ? err.message : "Inbox unavailable." };
+  }
 }
 
 // Only ever rendered below the owner gate above. Neither fetch throws. A source

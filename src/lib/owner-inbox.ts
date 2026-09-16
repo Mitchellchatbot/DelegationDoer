@@ -11,6 +11,77 @@ const AUTOMATED_SUBJECT = /(receipt|invoice|statement|out of usage credits|vulne
 
 export interface InboxThreadLite { id: string; subject: string; from: string; snippet: string; lastAt?: string }
 
+export type InboxCategory = "client" | "prospect" | "sales" | "other";
+export type CategorizedThread<T> = T & { category: InboxCategory; needsReply: boolean };
+
+// Sort the reply-worthy inbox into buckets: existing clients (matched to the
+// board by domain), potential clients (prospects/leads), sales pitches TO us,
+// and everything else — with a needsReply flag for what actually wants an
+// answer. Automated mail is dropped first, same as filterReplyNeeded.
+export async function categorizeInbox<T extends InboxThreadLite>(threads: T[]): Promise<CategorizedThread<T>[]> {
+  const candidates = threads.filter((t) => !(AUTOMATED_FROM.test(t.from) || AUTOMATED_SUBJECT.test(t.subject)));
+  if (candidates.length === 0) return [];
+
+  // Client domains from the board — a deterministic "client" signal.
+  let clientDomains = new Set<string>();
+  try {
+    const clients = await getClients();
+    const dnorm = (u: string | null | undefined) => {
+      if (!u) return "";
+      try { return new URL(u.startsWith("http") ? u : `https://${u}`).hostname.replace(/^www\./, "").toLowerCase(); }
+      catch { return u.replace(/^www\./, "").toLowerCase(); }
+    };
+    clientDomains = new Set(
+      clients.flatMap((c) => [c.website, ...(c.websites ?? [])]).map(dnorm).filter((d) => d && d.includes("."))
+    );
+  } catch { /* board unavailable — AI still categorizes */ }
+
+  const domainOf = (from: string) => {
+    const m = from.toLowerCase().match(/[\w.+-]+@([\w.-]+)/);
+    return m ? m[1].replace(/^www\./, "") : "";
+  };
+
+  // AI pass: category + needsReply for each surviving thread.
+  const byIdx = new Map<number, { category: InboxCategory; needsReply: boolean }>();
+  try {
+    const client = await getAnthropic();
+    const list = candidates.map((t, i) => `${i}. from: ${t.from} | subject: ${t.subject} | ${t.snippet.slice(0, 160)}`).join("\n");
+    const res = await client.messages.create({
+      model: MODELS.classify,
+      max_tokens: 900,
+      system: [
+        "You sort a founder's (Mitchell, owner of Scaled AI — a marketing agency for addiction-treatment / behavioral-health centers) inbox.",
+        "For each numbered thread return its category and whether it needs a personal reply from Mitchell.",
+        "Categories:",
+        "- \"client\": from someone at a company Scaled AI already serves (an existing paying client).",
+        "- \"prospect\": a POTENTIAL client — a treatment center / behavioral-health business or any company that could hire Scaled AI, including inbound leads and booked/interested prospects.",
+        "- \"sales\": someone selling TO Mitchell — cold pitches, vendor outreach, tools, agencies, recruiters.",
+        "- \"other\": anything else needing his attention — partners, team, personal, misc.",
+        "needsReply is true only when a real human is genuinely waiting on Mitchell's answer (a question, request, or decision). Cold sales pitches are almost never needsReply true.",
+        "Return STRICT JSON only: { \"items\": [ { \"i\": number, \"category\": \"client\"|\"prospect\"|\"sales\"|\"other\", \"needsReply\": boolean } ] } with one object per thread."
+      ].join("\n"),
+      messages: [{ role: "user", content: list }]
+    });
+    const text = res.content.filter((b): b is Extract<typeof b, { type: "text" }> => b.type === "text").map((b) => b.text).join("").trim();
+    const json = JSON.parse(text.replace(/^```json?\s*/i, "").replace(/```\s*$/, "").trim());
+    for (const it of json.items ?? []) {
+      const i = Number(it.i);
+      const category = (["client", "prospect", "sales", "other"] as const).includes(it.category) ? it.category : "other";
+      if (Number.isInteger(i)) byIdx.set(i, { category, needsReply: !!it.needsReply });
+    }
+  } catch { /* AI unavailable — fall back to domain-only below */ }
+
+  return candidates.map((t, i) => {
+    const ai = byIdx.get(i);
+    // Deterministic client match wins over the model.
+    const isClient = clientDomains.has(domainOf(t.from));
+    const category: InboxCategory = isClient ? "client" : (ai?.category ?? "other");
+    // No AI verdict → assume it needs a look (better shown than hidden).
+    const needsReply = ai ? ai.needsReply : true;
+    return { ...t, category, needsReply };
+  });
+}
+
 // Keep only threads that plausibly need a personal reply from Mitchell. A cheap
 // heuristic drops obvious automated mail, then Haiku classifies the rest so the
 // cockpit shows the emails that actually need answering — nothing else.

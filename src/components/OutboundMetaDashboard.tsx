@@ -102,18 +102,41 @@ const SPARK: Record<Tint, string> = {
   indigo: "#6366f1", emerald: "#3fae74", teal: "#0ea5a4", violet: "#8b5cf6", amber: "#f59e0b", rose: "#ec4899", sky: "#38bdf8"
 };
 
+// A day Meta actually delivered on. Our series are zero-filled calendar days,
+// while awfmp's meta_account_daily only has a row for a day Meta returned
+// delivery, so this stands in for "has a row" there: it decides the anchor
+// day and what the per-day averages divide by.
+const delivered = (d: MetaDay) => d.impressions > 0 || d.spend > 0;
+
+// YYYY-MM-DD minus n calendar days. A malformed date comes back as-is (the
+// validator only checks it's a string), so a bad row empties a span instead
+// of throwing mid-render.
+function minusDays(ymd: string, n: number): string {
+  const t = Date.parse(`${ymd.slice(0, 10)}T00:00:00Z`);
+  return Number.isFinite(t) ? new Date(t - n * 86_400_000).toISOString().slice(0, 10) : ymd;
+}
+
+// The n calendar days ending on `end` (inclusive), as far as the series reaches.
+function spanOf(series: MetaDay[], end: string, n: number): MetaDay[] {
+  const after = minusDays(end, n);
+  return series.filter((d) => d.date > after && d.date <= end);
+}
+
 // A window's figures the way the Meta ads dashboard aggregates them
 // (awfmp lib/metrics.ts): ratios from summed spend / clicks / impressions,
 // frequency as the average of the days that had one (it doesn't sum across
-// days), leads per day.
+// days), leads per day. Averages divide by the days with delivery, as awfmp's
+// divide by its rows, so a paused stretch doesn't dilute them. null = nothing
+// delivered in the span, shown as "—" rather than a row of zeros.
 type Agg = { spend: number; leads: number; clicks: number; impressions: number; frequency: number; cpl: number; ctr: number; cpc: number; cpm: number; avgLeads: number };
-function agg(days: MetaDay[]): Agg {
-  const n = Math.max(days.length, 1);
+function agg(days: MetaDay[]): Agg | null {
+  const live = days.filter(delivered);
+  if (!live.length) return null;
   const spend = days.reduce((a, d) => a + d.spend, 0);
   const leads = days.reduce((a, d) => a + d.leads, 0);
   const clicks = days.reduce((a, d) => a + d.clicks, 0);
   const impressions = days.reduce((a, d) => a + d.impressions, 0);
-  const fr = days.filter((d) => (d.frequency ?? 0) > 0);
+  const fr = live.filter((d) => (d.frequency ?? 0) > 0);
   return {
     spend, leads, clicks, impressions,
     frequency: fr.length ? fr.reduce((a, d) => a + (d.frequency ?? 0), 0) / fr.length : 0,
@@ -121,7 +144,7 @@ function agg(days: MetaDay[]): Agg {
     ctr: impressions ? (clicks / impressions) * 100 : 0,
     cpc: clicks ? spend / clicks : 0,
     cpm: impressions ? (spend / impressions) * 1000 : 0,
-    avgLeads: leads / n
+    avgLeads: leads / live.length
   };
 }
 
@@ -134,11 +157,30 @@ function classify(yesterday: Agg, last7: Agg): { status: Status; line: string } 
   if (leadsRatio < 0.7 || cplRatio > 1.3) return { status: "yellow", line: "Running a bit off the 7-day baseline" };
   return { status: "green", line: "Yesterday is in line with the 7-day baseline" };
 }
-const STATUS: Record<Status, { box: string; text: string; badge: string; emoji: string; label: string }> = {
+type Banner = { box: string; text: string; badge: string; emoji: string; label: string };
+const STATUS: Record<Status, Banner> = {
   green: { box: "bg-emerald-50/70 ring-emerald-200", text: "text-emerald-700", badge: "bg-emerald-100", emoji: "✅", label: "Holding steady" },
   yellow: { box: "bg-amber-50/80 ring-amber-200", text: "text-amber-700", badge: "bg-amber-100", emoji: "👀", label: "Off baseline · keep an eye on it" },
   red: { box: "bg-rose-50/70 ring-rose-200", text: "text-rose-700", badge: "bg-rose-100", emoji: "🚨", label: "Worth a closer look" }
 };
+// Nothing ran in the picked window: there's no day to judge, so no green
+// "holding steady" (nothing is holding) and no red alarm, just the fact.
+const NO_DELIVERY: Banner = { box: "bg-slate-50 ring-slate-200", text: "text-slate-600", badge: "bg-slate-100 text-slate-400", emoji: "—", label: "No delivery in this window" };
+
+// Meta's action_type ids as Ads Manager names them; anything else shows raw.
+const LEAD_EVENT = new Map<string, string>([
+  ["lead", "Lead"],
+  ["offsite_conversion.fb_pixel_lead", "Pixel Lead"],
+  ["onsite_conversion.lead_grouped", "On-Facebook lead form"],
+  ["offsite_conversion.fb_pixel_custom", "custom pixel event"]
+]);
+// undefined = an older deploy that doesn't say which event it counted.
+function leadsNote(type: string | null | undefined): string {
+  if (type === undefined) return "Leads are Meta-reported.";
+  if (type === null) return "Meta reported no lead events in this window.";
+  const name = LEAD_EVENT.get(type) ?? type;
+  return `Leads are Meta's ${/event$/i.test(name) ? `${name}s` : `${name} events`}.`;
+}
 
 const TONE = { good: "text-emerald-600", bad: "text-rose-600", warn: "text-amber-600", flat: "text-muted" } as const;
 
@@ -149,19 +191,31 @@ function Dashboard({ data, engagementDaily }: { data: OutboundMetaResponse; enga
   const spendSeries = daily.map((d) => d.spend);
   const leadSeries = daily.map((d) => d.leads);
 
-  // Engagement: the last full day, with 7d and 30d beside it (awfmp's snapshot).
-  const eng = engagementDaily.length ? engagementDaily : daily;
-  const lastDay = eng[eng.length - 1];
-  const yesterday = agg(lastDay ? [lastDay] : []);
-  const last7 = agg(eng.slice(-7));
-  const last30 = eng.length >= 30 ? agg(eng.slice(-30)) : null;
-  const asOf = lastDay?.date ?? data.range.to;
-  const when = asOf.slice(5); // MM-DD, as awfmp labels "CTR · 09-15"
-  const status = classify(yesterday, last7);
-  const st = STATUS[status.status];
-  const fatigue = last7.frequency > 2.5 ? { text: "fatigue risk", tone: "bad" as const } : last7.frequency > 2 ? { text: "watch", tone: "warn" as const } : { text: "healthy", tone: "good" as const };
-  const sub = (f: (a: Agg) => string) => `7d ${f(last7)}${last30 ? ` · 30d ${f(last30)}` : ""}`;
-  const leadsVs7 = last7.avgLeads ? ((yesterday.leads - last7.avgLeads) / last7.avgLeads) * 100 : null;
+  // Engagement: the last full day Meta delivered on, with the 7 and 30 days
+  // ending on it beside it. awfmp's getDailySnapshot anchors the same way, so
+  // paused ads show their last real day, never a blank "yesterday" of zeros.
+  // Prefer the 30-day read; the picked window stands in when it has no
+  // delivery (a 90-day window reaches further back) or wasn't read.
+  const eng = [engagementDaily, daily].find((s) => s.some(delivered)) ?? (engagementDaily.length ? engagementDaily : daily);
+  const anchorDay = [...eng].reverse().find(delivered) ?? null;
+  const anchor = anchorDay?.date ?? null;
+  const end = anchor ?? eng[eng.length - 1]?.date ?? data.range.to;
+  const yesterday = anchorDay ? agg([anchorDay]) : null;
+  const last7 = agg(spanOf(eng, end, 7));
+  // 30d only when the read reaches back all 30 days; a shorter fallback series
+  // would otherwise pass off a partial span as a month.
+  const has30 = eng.length > 0 && eng[0].date <= minusDays(end, 29);
+  const last30 = has30 ? agg(spanOf(eng, end, 30)) : null;
+  const when = anchor ? ` · ${anchor.slice(5)}` : ""; // MM-DD, as awfmp labels "CTR · 09-15"
+  const dayNote = { text: anchor ? "last full day" : "no delivery", tone: "flat" as const };
+  // The banner judges the picked window: with nothing delivered in it there's
+  // nothing to classify, whatever an older anchor day looked like.
+  const windowDelivered = daily.some(delivered);
+  const status = windowDelivered && yesterday && last7 ? classify(yesterday, last7) : null;
+  const st = status ? STATUS[status.status] : NO_DELIVERY;
+  const fatigue = !last7 ? dayNote : last7.frequency > 2.5 ? { text: "fatigue risk", tone: "bad" as const } : last7.frequency > 2 ? { text: "watch", tone: "warn" as const } : { text: "healthy", tone: "good" as const };
+  const sub = (f: (a: Agg) => string) => `7d ${last7 ? f(last7) : "—"}${has30 ? ` · 30d ${last30 ? f(last30) : "—"}` : ""}`;
+  const leadsVs7 = yesterday && last7?.avgLeads ? ((yesterday.leads - last7.avgLeads) / last7.avgLeads) * 100 : null;
 
   return (
     <div className="space-y-4">
@@ -192,15 +246,15 @@ function Dashboard({ data, engagementDaily }: { data: OutboundMetaResponse; enga
           Meta engagement <span className="font-semibold text-muted">· live</span>
         </h2>
         <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
-          <MetricCard label={`CTR · ${when}`} value={pct(yesterday.ctr)} sub={sub((a) => pct(a.ctr))} note={{ text: "last full day", tone: "flat" }} />
-          <MetricCard label="Frequency" value={yesterday.frequency.toFixed(2)} sub={sub((a) => a.frequency.toFixed(2))} note={fatigue} />
-          <MetricCard label={`CPC · ${when}`} value={usd(yesterday.cpc, 2)} sub={sub((a) => usd(a.cpc, 2))} note={{ text: "last full day", tone: "flat" }} />
-          <MetricCard label={`CPM · ${when}`} value={usd(yesterday.cpm, 2)} sub={sub((a) => usd(a.cpm, 2))} note={{ text: "last full day", tone: "flat" }} />
+          <MetricCard label={`CTR${when}`} value={yesterday ? pct(yesterday.ctr) : "—"} sub={sub((a) => pct(a.ctr))} note={dayNote} />
+          <MetricCard label="Frequency" value={yesterday ? yesterday.frequency.toFixed(2) : "—"} sub={sub((a) => a.frequency.toFixed(2))} note={fatigue} />
+          <MetricCard label={`CPC${when}`} value={yesterday ? usd(yesterday.cpc, 2) : "—"} sub={sub((a) => usd(a.cpc, 2))} note={dayNote} />
+          <MetricCard label={`CPM${when}`} value={yesterday ? usd(yesterday.cpm, 2) : "—"} sub={sub((a) => usd(a.cpm, 2))} note={dayNote} />
           <MetricCard
             label="Meta-reported leads"
-            value={int(yesterday.leads)}
+            value={yesterday ? int(yesterday.leads) : "—"}
             sub={`${sub((a) => a.avgLeads.toFixed(1))} · cross-check`}
-            note={leadsVs7 == null ? null : { text: `${leadsVs7 >= 0 ? "+" : ""}${leadsVs7.toFixed(0)}% vs 7d`, tone: "flat" }}
+            note={leadsVs7 == null ? (anchor ? null : dayNote) : { text: `${leadsVs7 >= 0 ? "+" : ""}${leadsVs7.toFixed(0)}% vs 7d`, tone: "flat" }}
           />
         </div>
       </section>
@@ -210,15 +264,17 @@ function Dashboard({ data, engagementDaily }: { data: OutboundMetaResponse; enga
           <span className={cn("grid h-[42px] w-[42px] shrink-0 place-items-center rounded-[14px] text-lg", st.badge)} aria-hidden>{st.emoji}</span>
           <div>
             <div className={cn("text-[15px] font-bold", st.text)}>{st.label}</div>
-            <div className="mt-0.5 text-[13px] text-muted">{status.line}</div>
+            <div className="mt-0.5 text-[13px] text-muted">
+              {status ? status.line : `Meta reported no impressions for ${data.range.from} → ${data.range.to}`}
+            </div>
           </div>
         </div>
-        <div className="text-xs tabular-nums text-muted">as of {asOf}</div>
+        {anchor && <div className="text-xs tabular-nums text-muted">{status ? "as of" : "last delivery"} {anchor}</div>}
       </div>
 
       <DailyChart data={data} />
 
-      <RowsTable title="Campaigns" rows={data.campaigns} empty="No campaign spent in this window." />
+      <RowsTable title="Campaigns" rows={data.campaigns} unattributedSpend={data.unattributedSpend} empty="No campaign spent in this window." />
       <RowsTable
         title="Ad sets"
         rows={data.adsets}
@@ -229,9 +285,9 @@ function Dashboard({ data, engagementDaily }: { data: OutboundMetaResponse; enga
 
       <p className="px-1 text-[11px] leading-relaxed text-muted">
         Read live from Meta by the Meta ads dashboard: {data.range.from} → {data.range.to} (full days, ending yesterday), compared
-        with {data.prior.from} → {data.prior.to}. Leads are Meta-reported. Prospects are Outbound leads that came in through the ad
-        form in that window; calls booked is how many of them are at a booked stage now. Engagement is the last full day with its
-        7- and 30-day figures, whatever range is picked.
+        with {data.prior.from} → {data.prior.to}. {leadsNote(data.leadActionType)} Prospects are Outbound leads that came in through
+        the ad form in that window; calls booked is how many of them are at a booked stage now. Engagement is the latest full day
+        Meta delivered on, with the 7 and 30 days ending on it (averaged over the days with delivery), whatever range is picked.
       </p>
     </div>
   );
@@ -308,10 +364,12 @@ function DailyChart({ data }: { data: OutboundMetaResponse }) {
   const W = 720;
   const H = 160;
   const pad = { l: 44, r: 30, t: 10, b: 22 };
-  const maxSpend = Math.max(...days.map((d) => d.spend), 1);
-  const maxLeads = Math.max(...days.map((d) => d.leads), 1);
+  // Axis labels are the real maxima, so a window where nothing ran reads $0 / 0
+  // rather than a made-up $1 / 1; only the scale guards against dividing by 0.
+  const maxSpend = Math.max(...days.map((d) => d.spend), 0);
+  const maxLeads = Math.max(...days.map((d) => d.leads), 0);
   const bw = (W - pad.l - pad.r) / days.length;
-  const y = (v: number, max: number) => pad.t + (H - pad.t - pad.b) * (1 - v / max);
+  const y = (v: number, max: number) => pad.t + (H - pad.t - pad.b) * (1 - (max > 0 ? v / max : 0));
   const labelEvery = Math.ceil(days.length / 10);
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-soft">
@@ -322,7 +380,7 @@ function DailyChart({ data }: { data: OutboundMetaResponse }) {
       </div>
       <div className="overflow-x-auto">
         <svg viewBox={`0 0 ${W} ${H}`} className="h-44 w-full min-w-[520px]" role="img" aria-label="Daily spend and leads">
-          <text x={pad.l - 6} y={pad.t + 8} textAnchor="end" className="fill-slate-400 text-[10px]">{usd(maxSpend)}</text>
+          <text x={pad.l - 6} y={pad.t + 8} textAnchor="end" className="fill-slate-400 text-[10px]">{usd(maxSpend, maxSpend > 0 && maxSpend < 10 ? 2 : 0)}</text>
           <text x={pad.l - 6} y={H - pad.b} textAnchor="end" className="fill-slate-400 text-[10px]">$0</text>
           <text x={W - pad.r + 6} y={pad.t + 8} className="fill-emerald-600 text-[10px]">{maxLeads}</text>
           <line x1={pad.l} x2={W - pad.r} y1={H - pad.b} y2={H - pad.b} stroke="#e2e8f0" />
@@ -384,7 +442,15 @@ function MetricCells({ r }: { r: MetaRow }) {
   );
 }
 
-function RowsTable({ title, rows, sub, empty }: { title: string; rows: MetaRow[]; sub?: (r: MetaRow) => string; empty: string }) {
+function RowsTable({
+  title, rows, sub, empty, unattributedSpend
+}: {
+  title: string; rows: MetaRow[]; sub?: (r: MetaRow) => string; empty: string;
+  // Totals spend no row covers (archived / deleted ads). Shown past a dollar so
+  // the rows visibly add up to Spend; below that it's rounding noise.
+  unattributedSpend?: number;
+}) {
+  const rest = unattributedSpend != null && unattributedSpend > 1 ? unattributedSpend : null;
   return (
     <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-soft">
       <div className="border-b border-slate-100 px-4 py-2.5 text-[12.5px] font-semibold text-ink">
@@ -399,7 +465,7 @@ function RowsTable({ title, rows, sub, empty }: { title: string; rows: MetaRow[]
             </tr>
           </thead>
           <tbody>
-            {rows.length === 0 ? (
+            {rows.length === 0 && rest == null ? (
               <tr><td colSpan={8} className="px-3 py-4 text-muted">{empty}</td></tr>
             ) : (
               rows.map((r, i) => (
@@ -414,6 +480,15 @@ function RowsTable({ title, rows, sub, empty }: { title: string; rows: MetaRow[]
                   <MetricCells r={r} />
                 </tr>
               ))
+            )}
+            {rest != null && (
+              <tr className="border-t border-slate-100 bg-slate-50/50 align-top text-muted">
+                <td className="px-3 py-2 italic">Not attributed to a campaign · archived or deleted ads</td>
+                <td className="px-3 py-2 text-right tabular-nums">{usd(rest, 2)}</td>
+                {[0, 1, 2, 3, 4, 5].map((k) => (
+                  <td key={k} className="px-3 py-2 text-right">—</td>
+                ))}
+              </tr>
             )}
           </tbody>
         </table>

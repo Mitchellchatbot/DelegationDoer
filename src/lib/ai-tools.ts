@@ -422,7 +422,7 @@ export const AI_TOOLS = [
   {
     name: "get_outbound_pipeline",
     description:
-      "OWNER-ONLY. LIVE outbound sales pipeline — the treatment centers WE are prospecting as potential new clients (not existing clients), from the Meta ads dashboard's Outbound board that the reps work every day (the same board as the Scale Room's Outbound tab and Live board). Returns stage counts (New, Contacted, No response, Call booked, Proposal, Won, Lost), booked vs not booked, today's texting queues per rep vs their daily cap plus the backlog, how stale the un-reached leads are, leads → bookings by source, new-lead velocity, month-by-month ad spend / ad-form prospects / booked / cost per lead / cost per booked, and the matching leads (facility, contact, role, location, stage, rep, source, budget, follow-up flag, next action, last contacted, age). Filter with stage / source / owner / followUp / search; leads are newest first. Use for ANY question about outbound, prospects, leads we're chasing, booked calls, proposals, the texting backlog, reps' queues, or 'how is the pipeline'. Returns { error } for non-owners or when the Outbound source is switched off.",
+      "OWNER-ONLY. LIVE outbound sales pipeline — the treatment centers WE are prospecting as potential new clients (not existing clients), from the Meta ads dashboard's Outbound board that the reps work every day (the same board as the Scale Room's Outbound tab and Live board). Returns stage counts (New, Contacted, No response, Call booked, Proposal, Won, Lost), booked vs not booked, today's texting queues per rep vs their daily cap plus the backlog, how stale the un-reached leads are, leads → bookings by source, new-lead velocity, month-by-month ad spend / ad-form prospects / booked / cost per lead / cost per booked, and the matching leads (facility, contact, role, location, stage, rep, source, budget, follow-up flag, next action, last contacted, age). Filter with stage / source / owner / followUp / search; leads are newest first. Use for ANY question about outbound, prospects, leads we're chasing, booked calls, proposals, the texting backlog, reps' queues, or 'how is the pipeline'. Returns { error } for non-owners, when the Outbound source is switched off, or when its switch can't be read.",
     input_schema: {
       type: "object",
       properties: {
@@ -431,18 +431,19 @@ export const AI_TOOLS = [
         owner: { type: "string", description: "Only leads dealt to this rep today (e.g. Mujtaba, Mitch, Joe)." },
         followUp: { type: "string", enum: ["needs", "longterm"], description: "Only leads flagged Needs follow-up or Long-term." },
         search: { type: "string", description: "Case-insensitive match on facility, contact, location or next action." },
-        limit: { type: "number", description: "Max leads returned (default 40, max 200). Counts and breakdowns always cover the whole pipeline." }
+        limit: { type: "number", description: "Max leads returned (default 25, max 100). Counts and breakdowns always cover the whole pipeline; narrow with the filters rather than raising this." }
       }
     }
   },
   {
     name: "get_meta_ads",
     description:
-      "OWNER-ONLY. LIVE performance of OUR OWN Meta (Facebook/Instagram) ad account — the ads that feed the outbound pipeline, not client accounts — read straight from Meta by the Meta ads dashboard. For the last N full days (ending yesterday) vs the N days before: spend, impressions, clicks, link clicks, Meta leads, reach, frequency, CTR, CPC, CPM, CPL; the day-by-day series; every campaign, ad set and ad with status, spend, clicks, CTR, CPC, leads and CPL; plus the ad-form prospects created in the window and how many are now booked (cost per booking). Use for ANY question about our ads, ad spend, cost per lead, which campaign/ad is working, CTR, frequency/fatigue. Returns { error } for non-owners or when the Outbound source is switched off.",
+      "OWNER-ONLY. LIVE performance of OUR OWN Meta (Facebook/Instagram) ad account — the ads that feed the outbound pipeline, not client accounts — read straight from Meta by the Meta ads dashboard. For the last N full days (ending yesterday) vs the N days before: spend, impressions, clicks, link clicks, Meta leads, reach, frequency, CTR, CPC, CPM, CPL; the day-by-day series (only with includeDaily: true); every campaign, ad set and ad with status, spend, clicks, CTR, CPC, leads and CPL; plus the ad-form prospects created in the window and how many are now booked (cost per booking). Use for ANY question about our ads, ad spend, cost per lead, which campaign/ad is working, CTR, frequency/fatigue. Returns { error } for non-owners, when the Outbound source is switched off, or when its switch can't be read.",
     input_schema: {
       type: "object",
       properties: {
-        days: { type: "number", enum: [7, 14, 30, 90], description: "Window length in full days ending yesterday (default 7)." }
+        days: { type: "number", enum: [7, 14, 30, 90], description: "Window length in full days ending yesterday (default 7)." },
+        includeDaily: { type: "boolean", description: "Also return the day-by-day series (default false). Only pass true when the question is about a specific day or a trend within the window — a 90-day series is long and crowds out the answer." }
       }
     }
   }
@@ -2149,7 +2150,13 @@ async function outboundGate(ctx: ToolContext): Promise<{ error: string } | null>
   if (!isOwner(ctx.actor)) {
     return { error: "access denied — the outbound pipeline and our ad account are private to the owner (Mitchell) only" };
   }
+  // Owner check above stays first so a non-owner never costs a settings read.
+  // A failed read comes back as outbound:false with a readError — say that,
+  // not "switched off", or the model tells Mitchell to flip a switch that's on.
   const sources = await getScaleSources();
+  if (sources.readError) {
+    return { error: `couldn't read the Scale Room's Outbound switch (${sources.readError}) — nothing was fetched; try again` };
+  }
   if (!sources.outbound) {
     return { error: "the Outbound source is switched off in the Scale Room, so nothing is read from the Meta ads dashboard — switch it on from /scale to use this" };
   }
@@ -2172,7 +2179,9 @@ async function getOutboundPipelineTool(input: Record<string, unknown>, ctx: Tool
   const owner = str(input.owner);
   const followUp = str(input.followUp);
   const search = str(input.search);
-  const limit = Math.min(Math.max(Math.floor(Number(input.limit) || 40), 1), 200);
+  // Small default: every lead row costs output-sized context, and a long list
+  // left the chat answer cut off. Counts above always cover the whole board.
+  const limit = Math.min(Math.max(Math.floor(Number(input.limit) || 25), 1), 100);
 
   const matches = b.prospects.filter((p) => {
     if (stage === "booked_or_beyond" ? !OUTBOUND_BOOKED.has(p.stage) : stage === "not_booked" ? !OUTBOUND_NOT_BOOKED.has(p.stage) : stage && p.stage !== stage) return false;
@@ -2248,15 +2257,23 @@ async function getMetaAdsTool(input: Record<string, unknown>, ctx: ToolContext) 
   const d = res.data;
   const costPerBooking = d.pipeline.booked > 0 ? Math.round((d.totals.spend / d.pipeline.booked) * 100) / 100 : null;
   const priorCostPerBooking = d.pipeline.priorBooked > 0 ? Math.round((d.priorTotals.spend / d.pipeline.priorBooked) * 100) / 100 : null;
+  // The day-by-day series is opt-in: up to 90 rows the model rarely needs for
+  // a totals/campaign question, and it pushed answers past the output limit.
+  // Strictly `true` — a stray truthy string shouldn't pull the whole series.
+  const includeDaily = input.includeDaily === true;
   return {
-    note: "LIVE from Meta for OUR OWN ad account (not a client's). ctr is a percent; cpm is per 1,000 impressions; frequency over the whole window grows with the window, so compare like with like. Leads are Meta-reported.",
+    note:
+      "LIVE from Meta for OUR OWN ad account (not a client's). ctr is a percent; cpm is per 1,000 impressions; frequency over the whole window grows with the window, so compare like with like. Leads are Meta-reported." +
+      (includeDaily ? "" : " The day-by-day series is omitted — call again with includeDaily: true if the question needs specific days or a trend within the window."),
     account: d.accountLabel,
     window: d.range,
     priorWindow: d.prior,
     totals: d.totals,
     priorTotals: d.priorTotals,
     adFormPipeline: { ...d.pipeline, costPerBooking, priorCostPerBooking },
-    daily: d.daily.map((x) => ({ date: x.date, spend: x.spend, leads: x.leads, clicks: x.clicks, impressions: x.impressions, ctr: x.ctr, frequency: x.frequency })),
+    ...(includeDaily
+      ? { daily: d.daily.map((x) => ({ date: x.date, spend: x.spend, leads: x.leads, clicks: x.clicks, impressions: x.impressions, ctr: x.ctr, frequency: x.frequency })) }
+      : {}),
     campaigns: d.campaigns,
     adsets: d.adsets.slice(0, 25),
     ads: d.ads.slice(0, 25).map(({ thumbnailUrl: _thumb, ...a }) => a),

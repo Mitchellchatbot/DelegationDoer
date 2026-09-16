@@ -61,6 +61,11 @@ function isMeta(raw: unknown): raw is OutboundMetaResponse {
   ) {
     return false;
   }
+  // Optional keys newer deploys add: absent passes (an older deploy), but a
+  // present one must have the right type, so a rename still lands as a shape
+  // error rather than a wrong footnote or a NaN row.
+  if (raw.leadActionType !== undefined && !isStrOrNull(raw.leadActionType)) return false;
+  if (raw.unattributedSpend !== undefined && !isNum(raw.unattributedSpend)) return false;
   const p = raw.pipeline;
   return isObj(p) && isNum(p.prospects) && isNum(p.booked) && isNum(p.priorProspects) && isNum(p.priorBooked);
 }

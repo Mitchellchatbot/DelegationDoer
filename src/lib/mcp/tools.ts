@@ -5,7 +5,7 @@ import type { User } from "@/lib/types";
 import { getOutboundPipelineTool, getMetaAdsTool } from "@/lib/ai-tools";
 import { listAgentProspects, updateAgentProspect, listAgentMetaObjects, updateAgentMetaObject } from "@/lib/outbound-agent";
 import { AGENT_PROSPECT_PATCH_FIELDS, type AgentResult } from "@/lib/outbound-agent-types";
-import { getGrowthSnapshot, generateGrowthBrief, getLatestGrowthBrief } from "@/lib/growth-brain";
+import { getGrowthSnapshot, getLatestGrowthBrief, startGrowthBriefGeneration } from "@/lib/growth-brain";
 import { listMemories, addMemory, updateMemory, forgetMemory } from "@/lib/brain-memory";
 import {
   DEFAULT_BRAIN_RULES,
@@ -266,12 +266,22 @@ const TOOLS: ToolDef[] = [
     name: "brain_regenerate",
     title: "Regenerate the Scale Room brief",
     description:
-      "Run the Scale Room brain now with the current snapshot, memory and instructions, save the new brief (it's what /scale shows) and return it. Slow — about a minute. Use after changing memory or instructions to see the effect. Audit-logged.",
+      "Kick off a Scale Room brain regeneration in the background with the current snapshot, memory and instructions; it saves the new brief (what /scale shows) when done. Returns immediately (generation takes 1-3 min, longer than a request can block). Use after changing memory or instructions, then read brain_latest_brief a minute or two later to see the effect. Audit-logged.",
     inputSchema: obj({}),
     annotations: EDIT,
     write: true,
     args: z.object({}).strict(),
-    run: async () => ({ brief: await generateGrowthBrief() })
+    run: async () => {
+      const { started, alreadyRunning } = startGrowthBriefGeneration();
+      return {
+        started,
+        alreadyRunning,
+        note: alreadyRunning
+          ? "A regeneration is already running — read brain_latest_brief shortly."
+          : "Regeneration started in the background — read brain_latest_brief in ~1-2 minutes for the new brief.",
+        previous: await getLatestGrowthBrief()
+      };
+    }
   },
   {
     name: "brain_instructions_update",

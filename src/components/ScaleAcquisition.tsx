@@ -1,3 +1,4 @@
+import Link from "next/link";
 import type { FacebookRevenueData, FacebookRevenueResult } from "@/lib/facebook-revenue-types";
 import type { OutboundSummaryMonth, OutboundSummaryResponse, OutboundSummaryResult } from "@/lib/outbound-summary-types";
 
@@ -47,18 +48,26 @@ function Card({ label, value, hint, tone = "ink" }: { label: string; value: stri
   );
 }
 
-function Heading({ title, period, pill }: { title: string; period?: string; pill?: string | null }) {
+function Heading({ title, period, pill, link }: { title: string; period?: string; pill?: string | null; link?: { href: string; label: string } }) {
   return (
     <div className="text-[13px] font-semibold text-ink mb-2 px-1 flex items-center gap-2 flex-wrap">
       {title}
       {period && <span className="text-[11px] font-normal text-muted">{period}</span>}
       {pill && <span className="text-[9px] uppercase tracking-wide text-amber-600 bg-amber-100 rounded px-1 py-0.5">{pill}</span>}
+      {link && (
+        <Link href={link.href} className="ml-auto text-[11px] font-medium text-indigo-700 hover:underline">
+          {link.label}
+        </Link>
+      )}
     </div>
   );
 }
 
 const FACEBOOK_TITLE = "Facebook side · Finance app";
 const OUTBOUND_TITLE = "Outbound · our Meta ads";
+// Every Outbound heading — loading, unavailable or loaded — points at the Scale
+// Room's Outbound tab, where the whole board and every ad month live.
+const OUTBOUND_LINK = { href: "/scale/outbound", label: "Full pipeline & ads →" };
 
 // Placeholders only for the sources that are switched on — a source that's off
 // is never fetched, so it gets no loading line either.
@@ -73,7 +82,7 @@ export function ScaleAcquisitionLoading({ facebook, outbound }: { facebook: bool
       )}
       {outbound && (
         <div>
-          <Heading title={OUTBOUND_TITLE} />
+          <Heading title={OUTBOUND_TITLE} link={OUTBOUND_LINK} />
           <div className="text-[12px] text-muted px-1">Loading from the ads dashboard…</div>
         </div>
       )}
@@ -104,7 +113,7 @@ export function ScaleAcquisition({ revenue, outbound }: { revenue?: FacebookReve
             <Outbound data={outbound.data} />
           ) : (
             <>
-              <Heading title={OUTBOUND_TITLE} />
+              <Heading title={OUTBOUND_TITLE} link={OUTBOUND_LINK} />
               <div className="text-[12px] text-muted px-1">Outbound unavailable — {outbound.error}</div>
             </>
           )}
@@ -149,6 +158,7 @@ function Outbound({ data }: { data: OutboundSummaryResponse }) {
         title={OUTBOUND_TITLE}
         period={m ? monthLabel(m.period) : undefined}
         pill={m?.isEstimate ? "estimate" : null}
+        link={OUTBOUND_LINK}
       />
       {!ads.ok ? (
         <div className="text-[12px] text-muted px-1">Ad numbers unavailable — {ads.error}</div>

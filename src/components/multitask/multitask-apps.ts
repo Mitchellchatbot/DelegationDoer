@@ -144,6 +144,61 @@ export function appsFor(user: User | null | undefined): MultitaskApp[] {
   return MULTITASK_APPS.filter((a) => !a.visibleTo || a.visibleTo(user));
 }
 
+/**
+ * The Meta ads dashboard's Outbound board. Its own export because two places
+ * frame it: the multitask bubble (MULTITASK_APPS below) and the Scale Room's
+ * Outbound tab (/scale/outbound). One entry, so the URL and the allow grant
+ * cannot drift between them.
+ */
+export const META_OUTBOUND_APP: MultitaskApp = {
+  id: "outbound",
+  name: "Outbound",
+  // The AGENCY's outbound board, which lives in the Meta ads dashboard: the
+  // prospect pipeline fed by the Typeform capture, the reps' daily texting
+  // queues, and the proposal decks. It is the board the team actually works.
+  //
+  // It is NOT DelegationDoer's own /outbound-dashboard, which this bubble
+  // opened between 73d463a and here. Those are two different pipelines over
+  // two different tables in two different databases, and nothing syncs them:
+  // ours is `outbound_leads` (Typeform → Calendly → Blooio, built June), the
+  // Meta dashboard's is `prospect` (stages new/contacted/no_response/booked/
+  // proposal/won/lost). Opening the wrong one looks like it worked. The Scale
+  // Room reads the same board this frames — lib/outbound-summary.ts.
+  //
+  // Its own bubble rather than "navigate the Meta one there": the panel mounts
+  // the iframe ONLY while it is open and keys it by app id, so every open
+  // reloads this `url`. A frame walked to the board by hand does not stay
+  // there past a collapse.
+  url: `${META_URL.replace(/\/+$/, "")}/admin/outbound`,
+  // The rocket reads as outbound and the violet keeps it apart from the Meta
+  // bubble's blue, though both now frame the same app. It no longer matches
+  // EnterOutboundDashboardButton, which still opens OUR dashboard.
+  icon: Rocket,
+  tone: "bg-gradient-to-br from-violet-700 to-violet-900",
+  // No frameAncestors, re-checked live on 2026-09-16 against /admin/outbound,
+  // /login and /: meta.scaledai.org still sends no CSP and no X-Frame-Options,
+  // so it may be framed from anywhere. Same origin as the Meta bubble, so the
+  // cross-site cookie warning already covers the Railway host for free.
+  //
+  // Signed out, /admin/outbound 307s to /login?next=%2Fadmin%2Foutbound, which
+  // comes back here afterwards — a redirect that survives being framed.
+  //
+  // The Texts board is tap-to-copy a phone number, and the async Clipboard API
+  // is denied by default in a cross-origin frame (measured for the CRM entry
+  // in MULTITASK_APPS). The dashboard's writeClipboard() falls back to execCommand, so
+  // without this the symptom is not a dead button but an intermittent one,
+  // announced by its own "the browser blocked clipboard access" toast. No
+  // microphone: this board has no call dock.
+  allowFeatures: ["clipboard-write"],
+  // Not a mirror of the framed route's gate, for the reason on the field:
+  // /admin/outbound is agency_admin in the Meta dashboard's database, which we
+  // cannot see. canSeeOutbound is the nearest cohort we can name — and the one
+  // that already had this bubble. Someone in it who is not an agency admin
+  // gets requireAgencyAdmin()'s redirect to their default client or /login,
+  // which is a page, not the dead end a notFound() would be.
+  visibleTo: canSeeOutbound,
+};
+
 export const MULTITASK_APPS: MultitaskApp[] = [
   {
     id: "meta",
@@ -176,52 +231,5 @@ export const MULTITASK_APPS: MultitaskApp[] = [
     // are in Scaled-Sync lib/ctm/callMode.ts.
     allowFeatures: ["microphone", "clipboard-write"],
   },
-  {
-    id: "outbound",
-    name: "Outbound",
-    // The AGENCY's outbound board, which lives in the Meta ads dashboard: the
-    // prospect pipeline fed by the Typeform capture, the reps' daily texting
-    // queues, and the proposal decks. It is the board the team actually works.
-    //
-    // It is NOT DelegationDoer's own /outbound-dashboard, which this bubble
-    // opened between 73d463a and here. Those are two different pipelines over
-    // two different tables in two different databases, and nothing syncs them:
-    // ours is `outbound_leads` (Typeform → Calendly → Blooio, built June), the
-    // Meta dashboard's is `prospect` (stages new/contacted/no_response/booked/
-    // proposal/won/lost). Opening the wrong one looks like it worked. The Scale
-    // Room reads the same board this frames — lib/outbound-summary.ts.
-    //
-    // Its own bubble rather than "navigate the Meta one there": the panel mounts
-    // the iframe ONLY while it is open and keys it by app id, so every open
-    // reloads this `url`. A frame walked to the board by hand does not stay
-    // there past a collapse.
-    url: `${META_URL.replace(/\/+$/, "")}/admin/outbound`,
-    // The rocket reads as outbound and the violet keeps it apart from the Meta
-    // bubble's blue, though both now frame the same app. It no longer matches
-    // EnterOutboundDashboardButton, which still opens OUR dashboard.
-    icon: Rocket,
-    tone: "bg-gradient-to-br from-violet-700 to-violet-900",
-    // No frameAncestors, re-checked live on 2026-09-16 against /admin/outbound,
-    // /login and /: meta.scaledai.org still sends no CSP and no X-Frame-Options,
-    // so it may be framed from anywhere. Same origin as the Meta bubble, so the
-    // cross-site cookie warning already covers the Railway host for free.
-    //
-    // Signed out, /admin/outbound 307s to /login?next=%2Fadmin%2Foutbound, which
-    // comes back here afterwards — a redirect that survives being framed.
-    //
-    // The Texts board is tap-to-copy a phone number, and the async Clipboard API
-    // is denied by default in a cross-origin frame (measured for the CRM entry
-    // above). The dashboard's writeClipboard() falls back to execCommand, so
-    // without this the symptom is not a dead button but an intermittent one,
-    // announced by its own "the browser blocked clipboard access" toast. No
-    // microphone: this board has no call dock.
-    allowFeatures: ["clipboard-write"],
-    // Not a mirror of the framed route's gate, for the reason on the field:
-    // /admin/outbound is agency_admin in the Meta dashboard's database, which we
-    // cannot see. canSeeOutbound is the nearest cohort we can name — and the one
-    // that already had this bubble. Someone in it who is not an agency admin
-    // gets requireAgencyAdmin()'s redirect to their default client or /login,
-    // which is a page, not the dead end a notFound() would be.
-    visibleTo: canSeeOutbound,
-  },
+  META_OUTBOUND_APP,
 ];

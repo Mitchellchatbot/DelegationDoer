@@ -3,7 +3,9 @@ import "server-only";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { getClients } from "@/lib/clients-data";
 import { getLatestTouchpointsByClient, computeTouchpointLabel, daysSince } from "@/lib/client-touchpoint";
-import { getOutboundBoard } from "@/lib/outbound-board";
+import { listThreads } from "@/lib/missive-client";
+import { getOwnerAccount } from "@/lib/owner-inbox";
+import { OWNER_EMAIL } from "@/lib/access";
 
 // Two owner-only "Act now" modules for the Scale Room:
 //   Reach out  — paying clients who've gone quiet (no personal email in a while)
@@ -63,52 +65,67 @@ export async function getReachOutClients(limit = 8): Promise<ReachOutClient[]> {
   return rows.slice(0, limit);
 }
 
-export interface ReactivateProspect {
-  facility: string;
-  stage: string;
-  value: number | null;   // estimated monthly value
-  days: number | null;    // days since last contact (or since it came in)
-  source: string | null;
-  reason: string;         // why it's worth reactivating now
+// A pitch/sales email Mitchell SENT that never got a reply — a thread in the
+// Sent folder whose last activity is his own outbound message, gone quiet.
+// Same shape the inbox uses so the Scale Room renders it with the identical
+// draft-follow-up-and-send flow (the reply routes to the recipient).
+export interface ReactivatePitch {
+  id: string;
+  subject: string;
+  from: string;        // the recipient he pitched (shown in the row)
+  snippet: string;
+  lastAt: string;
+  daysSilent: number;
 }
 
-export type ReactivateResult =
-  | { ok: true; prospects: ReactivateProspect[] }
-  | { ok: false; error: string };
-
-const STAGE_LABEL: Record<string, string> = {
-  booked: "Call booked", proposal: "Proposal", no_response: "No response", new: "New", contacted: "Contacted"
-};
-
-// Cold outbound pitches worth another push: booked/proposal leads that have gone
-// silent, and higher-value prospects that never got a response. Ranked by value,
-// then how long they've been cold.
-export async function getReactivateProspects(limit = 10): Promise<ReactivateResult> {
-  const board = await getOutboundBoard();
-  if (!board.ok) return { ok: false, error: board.error };
-
-  const now = Date.now();
-  const ageDays = (iso: string | null) => (iso ? Math.floor((now - Date.parse(iso)) / 86_400_000) : null);
-
-  const out: ReactivateProspect[] = [];
-  for (const p of board.data.prospects) {
-    if (p.stage === "won" || p.stage === "lost") continue;
-    const contactAge = ageDays(p.lastContactedAt);
-    const inAge = ageDays(p.createdAt);
-    const facility = p.facility || p.name || "(unnamed lead)";
-
-    let reason = "";
-    if ((p.stage === "booked" || p.stage === "proposal") && (contactAge == null || contactAge >= 7)) {
-      reason = `${STAGE_LABEL[p.stage] ?? p.stage} but silent ${contactAge == null ? "with no logged contact" : `${contactAge}d`}${p.value ? ` · $${p.value.toLocaleString("en-US")}/mo on the table` : ""}`;
-    } else if (p.stage === "no_response" && (contactAge == null || contactAge >= 10)) {
-      reason = `Went dark${contactAge != null ? ` ${contactAge}d ago` : ""} — worth another angle`;
-    } else if (p.value && p.value >= 10000 && (inAge ?? 0) >= 14 && p.stage !== "booked") {
-      reason = `$${p.value.toLocaleString("en-US")}/mo prospect sitting ${inAge}d with no booking`;
-    } else {
-      continue;
-    }
-    out.push({ facility, stage: p.stage, value: p.value ?? null, days: contactAge ?? inAge, source: p.source, reason });
+const INTERNAL = /@scaledai\.org\s*>?\s*$/i;
+function displayRecipient(participants: string[], ownerEmail: string): string | null {
+  for (const p of participants) {
+    if (!p) continue;
+    if (p.toLowerCase().includes(ownerEmail)) continue;
+    return p;
   }
-  out.sort((a, b) => (b.value ?? 0) - (a.value ?? 0) || (b.days ?? 0) - (a.days ?? 0));
-  return { ok: true, prospects: out.slice(0, limit) };
+  return null;
+}
+
+// Pitches/sales he sent that went silent: Sent-folder threads whose newest
+// message is his outbound, 4–60 days old, to an outside recipient (not internal).
+// Most-recently-cold first (warmest to revive). Fail-soft to [].
+export async function getReactivatePitches(limit = 8): Promise<ReactivatePitch[]> {
+  let threads;
+  let owner;
+  try {
+    [threads, owner] = await Promise.all([
+      listThreads({ folder: "SENT", status: "open", limit: 80 }),
+      getOwnerAccount()
+    ]);
+  } catch {
+    return [];
+  }
+  const ownerEmail = (owner?.email ?? OWNER_EMAIL).toLowerCase();
+  const now = Date.now();
+
+  const out: ReactivatePitch[] = [];
+  for (const t of threads) {
+    const lastFrom = (t.last_from ?? "").toLowerCase();
+    // Newest message must be HIS (i.e. no client reply after his send).
+    if (!lastFrom.includes(ownerEmail)) continue;
+    const sentAt = t.last_outbound_at ?? t.last_message_at;
+    if (!sentAt) continue;
+    const daysSilent = Math.floor((now - Date.parse(sentAt)) / 86_400_000);
+    if (daysSilent < 4 || daysSilent > 60) continue;
+    const recipient = displayRecipient(t.participants ?? [], ownerEmail);
+    if (!recipient || INTERNAL.test(recipient)) continue; // skip internal team threads
+    out.push({
+      id: t.id,
+      subject: t.subject || "(no subject)",
+      from: recipient,
+      snippet: t.last_snippet ?? "",
+      lastAt: sentAt,
+      daysSilent
+    });
+  }
+  // Most-recently-cold first — warmest to revive.
+  out.sort((a, b) => a.daysSilent - b.daysSilent);
+  return out.slice(0, limit);
 }

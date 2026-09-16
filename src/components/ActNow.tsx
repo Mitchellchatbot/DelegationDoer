@@ -1,9 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import Link from "next/link";
 import { Phone, RefreshCcw, Sparkles, Send, Check, ChevronDown } from "lucide-react";
-import type { ReachOutClient, ReactivateProspect } from "@/lib/scale-actions";
+import type { ReachOutClient } from "@/lib/scale-actions";
 
 function money(n: number): string {
   return `$${Math.round(n).toLocaleString("en-US")}`;
@@ -96,39 +95,6 @@ export function ReachOutList({ clients }: { clients: ReachOutClient[] }) {
           );
         })}
       </div>
-    </div>
-  );
-}
-
-// "Reactivate" — cold outbound pitches worth chasing again. Display + a jump to
-// the live board, where reps actually work the leads.
-export function ReactivateList({ prospects, error }: { prospects: ReactivateProspect[]; error?: string | null }) {
-  return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-soft">
-      <div className="flex items-baseline justify-between gap-2 mb-1">
-        <div className="flex items-center gap-1.5 text-[13px] font-semibold text-ink">
-          <RefreshCcw className="w-4 h-4 text-indigo-500" /> Reactivate · cold pitches worth chasing
-        </div>
-        <Link href="/scale/outbound" className="text-[11px] font-medium text-indigo-700 hover:underline">Open board →</Link>
-      </div>
-      <div className="text-[11px] text-muted mb-3">Booked/interested leads that went silent and high-value prospects that never got a response, biggest first.</div>
-      {error ? (
-        <div className="text-[12px] text-muted">Outbound unavailable — {error}</div>
-      ) : !prospects.length ? (
-        <div className="text-[12px] text-muted">Nothing cold worth reactivating right now.</div>
-      ) : (
-        <div className="space-y-1.5">
-          {prospects.map((p, i) => (
-            <div key={i} className="flex items-baseline justify-between gap-2 border-b border-slate-100 last:border-0 pb-1.5 text-[12px]">
-              <div className="min-w-0">
-                <span className="text-[13px] font-medium text-ink">{p.facility}</span>
-                <span className="text-muted"> · {p.reason}</span>
-              </div>
-              {p.value != null && <span className="tabular-nums text-emerald-700 font-medium shrink-0">{money(p.value)}/mo</span>}
-            </div>
-          ))}
-        </div>
-      )}
     </div>
   );
 }

@@ -36,7 +36,7 @@ const SECTIONS: { key: InboxCategory; label: string }[] = [
   { key: "other", label: "Other" }
 ];
 
-export function InboxCopilot({ threads, note }: { threads: InboxThread[]; note: string | null }) {
+export function InboxCopilot({ threads, note, flat = false }: { threads: InboxThread[]; note: string | null; flat?: boolean }) {
   const [rows, setRows] = useState<Row[]>(
     threads.map((t) => ({ ...t, open: false, draft: "", instruction: "", drafting: false, sending: false, sent: false, error: null }))
   );
@@ -145,6 +145,10 @@ export function InboxCopilot({ threads, note }: { threads: InboxThread[]; note: 
       )}
     </div>
   );
+
+  if (flat) {
+    return <div className="space-y-2">{[...rows].sort(order).map(renderRow)}</div>;
+  }
 
   return (
     <div className="space-y-5">

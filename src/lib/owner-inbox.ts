@@ -166,15 +166,27 @@ export async function deriveReply(threadId: string): Promise<ReplyRouting | null
   const thread = detail?.thread;
   if (!messages.length || !owner) return null;
 
-  const lastInbound = [...messages].reverse().find((m) => m.direction === "inbound") ?? messages[messages.length - 1];
-  const to = lastInbound.from_addr ? [lastInbound.from_addr] : [];
-  const baseSubject = lastInbound.subject || thread?.subject || "";
+  // Normal reply: to the latest INBOUND sender. But a sent-only thread (a pitch
+  // Mitchell sent that never got a reply) has no inbound message — a follow-up
+  // there goes to the RECIPIENTS of his last outbound message, not back to him.
+  const lastInbound = [...messages].reverse().find((m) => m.direction === "inbound");
+  let to: string[];
+  let anchor: MissiveMessage;
+  if (lastInbound) {
+    anchor = lastInbound;
+    to = lastInbound.from_addr ? [lastInbound.from_addr] : [];
+  } else {
+    const lastOutbound = [...messages].reverse().find((m) => m.direction === "outbound") ?? messages[messages.length - 1];
+    anchor = lastOutbound;
+    to = (lastOutbound.to_addrs ?? []).filter((a) => a && a.toLowerCase() !== OWNER_EMAIL);
+  }
+  const baseSubject = anchor.subject || thread?.subject || "";
   const subject = /^re:/i.test(baseSubject) ? baseSubject : `Re: ${baseSubject}`.trim();
 
   return {
     to,
     subject,
-    inReplyTo: lastInbound.message_id ?? undefined,
+    inReplyTo: anchor.message_id ?? undefined,
     fromAccountId: owner.id,
     messages
   };

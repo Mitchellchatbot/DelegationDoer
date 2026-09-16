@@ -6,7 +6,9 @@ import { Sparkles, Send, RefreshCw, Check, ChevronDown } from "lucide-react";
 // Owner Inbox cockpit: work through Mitchell's reply-needed threads with the
 // brain. Draft a grounded reply, edit it, and send AS Mitchell in one click.
 
-export type InboxCategory = "client" | "prospect" | "sales" | "other";
+// "noise" never reaches a section (categorizeInbox filters it out) but is part
+// of the union so categorized threads are assignable here.
+export type InboxCategory = "client" | "prospect" | "sales" | "other" | "noise";
 
 export interface InboxThread {
   id: string;

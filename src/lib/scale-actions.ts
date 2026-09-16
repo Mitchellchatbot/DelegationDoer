@@ -94,16 +94,34 @@ function displayRecipient(participants: string[], ownerEmail: string): string | 
 export async function getReactivatePitches(limit = 15): Promise<ReactivatePitch[]> {
   let threads;
   let owner;
+  let clients;
   try {
-    [threads, owner] = await Promise.all([
+    [threads, owner, clients] = await Promise.all([
       listThreads({ folder: "SENT", status: "open", limit: 200 }),
-      getOwnerAccount()
+      getOwnerAccount(),
+      getClients().catch(() => [])
     ]);
   } catch {
     return [];
   }
   const ownerEmail = (owner?.email ?? OWNER_EMAIL).toLowerCase();
   const now = Date.now();
+
+  // Existing-client domains — Reactivate is for PROSPECTS only, never someone
+  // we already serve (following up a client is not "reactivation").
+  const dnorm = (u: string | null | undefined) => {
+    if (!u) return "";
+    try { return new URL(u.startsWith("http") ? u : `https://${u}`).hostname.replace(/^www\./, "").toLowerCase(); }
+    catch { return u.replace(/^www\./, "").toLowerCase(); }
+  };
+  const clientDomains = new Set(
+    (clients ?? []).flatMap((c) => [c.website, ...(c.websites ?? [])]).map(dnorm).filter((d) => d && d.includes("."))
+  );
+  const clientEmails = new Set((clients ?? []).flatMap((c) => c.contactEmails ?? []).map((e) => e.toLowerCase()));
+  const domainOf = (addr: string) => {
+    const m = addr.toLowerCase().match(/[\w.+-]+@([\w.-]+)/);
+    return m ? m[1].replace(/^www\./, "") : "";
+  };
 
   const out: ReactivatePitch[] = [];
   for (const t of threads) {
@@ -116,6 +134,9 @@ export async function getReactivatePitches(limit = 15): Promise<ReactivatePitch[
     if (daysSilent < 4 || daysSilent > 300) continue; // pitches from the last ~300 days you never heard back on
     const recipient = displayRecipient(t.participants ?? [], ownerEmail);
     if (!recipient || INTERNAL.test(recipient)) continue; // skip internal team threads
+    // Skip existing clients — Reactivate is prospects only.
+    const rl = recipient.toLowerCase();
+    if (clientEmails.has(rl) || (domainOf(recipient) && clientDomains.has(domainOf(recipient)))) continue;
     out.push({
       id: t.id,
       subject: t.subject || "(no subject)",

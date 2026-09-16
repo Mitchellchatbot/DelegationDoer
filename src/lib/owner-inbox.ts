@@ -6,12 +6,12 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 
 // Senders that never warrant a personal reply — receipts, no-reply, marketing,
 // automated notifications. Dropped before the AI classifier even runs.
-const AUTOMATED_FROM = /(no-?reply|do-?not-?reply|notifications?@|mailer|newsletter|statements?@|invoice\+|billing@|receipts?@|updates?@|auto-?confirm|order-?confirm|orders?@|alerts?@|member(ship)?@|marketing@|events?@|news@|digest@|support@wpdeveloper|support@wpremote|@wpremote|wordpress@|@wpenginepowered|@wpengine|@amazon\.|@shopify|@stripe\.com|americanexpress|@aexp|@apple\.com|@meta\.com|facebookmail|@linkedin\.com|@e\.|@.*mailing|@.*eventbrite|@.*mailchimp|postmaster|via .*mail)/i;
-const AUTOMATED_SUBJECT = /(receipt|invoice|statement|out of usage credits|vulnerability notification|weekly .* summary|unsubscribe|newsletter|password reset|verify your email|security alert|new user registration|ordered \d+ item|your order|has shipped|shipping confirmation|registration|\(auto\)|auto update|site update|sync completed|first sync|backup (completed|failed)|update (completed|failed)|card was reactivated|reactivated in apple pay|transaction (declined|approved)|payment (received|failed|declined)|keynote speaker|webinar|register now|save the date|this year'?s|join us|you'?re invited|reminder:|is now available|has been (added|updated|created))/i;
+const AUTOMATED_FROM = /(no-?reply|do-?not-?reply|notifications?@|mailer|newsletter|statements?@|invoice\+|billing@|receipts?@|updates?@|auto-?confirm|order-?confirm|orders?@|alerts?@|member(ship)?@|marketing@|events?@|news@|digest@|support@wpdeveloper|support@wpremote|@wpremote|wordpress@|@wpenginepowered|@wpengine|@amazon\.|@shopify|@stripe\.com|americanexpress|@aexp|@apple\.com|@meta\.com|facebookmail|@linkedin\.com|pandadoc|docusign|notify\.railway|@railway\.app|calendly|@e\.|@.*mailing|@.*eventbrite|@.*mailchimp|postmaster|via .*mail)/i;
+const AUTOMATED_SUBJECT = /(receipt|invoice|statement|out of usage credits|vulnerability notification|weekly .* summary|unsubscribe|newsletter|password reset|verify your email|security alert|new user registration|ordered \d+ item|your order|has shipped|shipping confirmation|registration|\(auto\)|auto update|site update|sync completed|first sync|backup (completed|failed)|update (completed|failed)|card was reactivated|reactivated in apple pay|transaction (declined|approved)|payment (received|failed|declined)|keynote speaker|webinar|register now|save the date|this year'?s|join us|you'?re invited|reminder:|is now available|has been (added|updated|created)|^invitation:|^accepted:|^declined:|has (just )?(viewed|completed)|document has been completed|sent you instructions|deployment crashed|posted a (low )?(rating|review)|new review|contact form)/i;
 
 export interface InboxThreadLite { id: string; subject: string; from: string; snippet: string; lastAt?: string }
 
-export type InboxCategory = "client" | "prospect" | "sales" | "other";
+export type InboxCategory = "client" | "prospect" | "sales" | "other" | "noise";
 export type CategorizedThread<T> = T & { category: InboxCategory; needsReply: boolean };
 
 // Sort the reply-worthy inbox into buckets: existing clients (matched to the
@@ -19,7 +19,13 @@ export type CategorizedThread<T> = T & { category: InboxCategory; needsReply: bo
 // and everything else — with a needsReply flag for what actually wants an
 // answer. Automated mail is dropped first, same as filterReplyNeeded.
 export async function categorizeInbox<T extends InboxThreadLite>(threads: T[]): Promise<CategorizedThread<T>[]> {
-  const candidates = threads.filter((t) => !(AUTOMATED_FROM.test(t.from) || AUTOMATED_SUBJECT.test(t.subject)));
+  const candidates = threads.filter(
+    (t) =>
+      !(AUTOMATED_FROM.test(t.from) || AUTOMATED_SUBJECT.test(t.subject)) &&
+      // Drop threads whose newest message is Mitchell's own — he isn't waiting
+      // on himself; a pitch he sent belongs in Reactivate, not the reply list.
+      !t.from.toLowerCase().includes(OWNER_EMAIL)
+  );
   if (candidates.length === 0) return [];
 
   // Client domains from the board — a deterministic "client" signal.
@@ -50,15 +56,17 @@ export async function categorizeInbox<T extends InboxThreadLite>(threads: T[]): 
       model: MODELS.classify,
       max_tokens: 900,
       system: [
-        "You sort a founder's (Mitchell, owner of Scaled AI — a marketing agency for addiction-treatment / behavioral-health centers) inbox.",
-        "For each numbered thread return its category and whether it needs a personal reply from Mitchell.",
+        "You triage a founder's (Mitchell, owner of Scaled AI — a marketing agency for addiction-treatment / behavioral-health centers) inbox. Be STRICT and skeptical: most email is noise, not something he must act on.",
+        "For each numbered thread return a category and whether it truly needs a PERSONAL reply from Mitchell.",
         "Categories:",
-        "- \"client\": from someone at a company Scaled AI already serves (an existing paying client).",
-        "- \"prospect\": a POTENTIAL client — a treatment center / behavioral-health business or any company that could hire Scaled AI, including inbound leads and booked/interested prospects.",
-        "- \"sales\": someone selling TO Mitchell — cold pitches, vendor outreach, tools, agencies, recruiters.",
-        "- \"other\": anything else needing his attention — partners, team, personal, misc.",
-        "needsReply is true only when a real human is genuinely waiting on Mitchell's answer (a question, request, or decision). Cold sales pitches are almost never needsReply true.",
-        "Return STRICT JSON only: { \"items\": [ { \"i\": number, \"category\": \"client\"|\"prospect\"|\"sales\"|\"other\", \"needsReply\": boolean } ] } with one object per thread."
+        "- \"client\": a real person at a company Scaled AI already serves, writing something real.",
+        "- \"prospect\": a real person at a POTENTIAL client (a treatment center / business that could hire Scaled AI) — an inbound inquiry or an interested lead.",
+        "- \"sales\": a human selling TO Mitchell (cold pitch, vendor, agency, recruiter).",
+        "- \"other\": a real person (partner, teammate, personal) who needs his attention.",
+        "- \"noise\": anything that is NOT a person writing to him and does not deserve a spot in his action list. Put it here and it is hidden.",
+        "ALWAYS classify as \"noise\" (and needsReply=false): automated form/contact-form submissions and lead-form notifications (even from a client's own domain), calendar invites/acceptances/declines (Calendly, Google/Outlook invites, 'Accepted:'/'Invitation:'), review or rating notifications ('posted a low rating', 'new review'), document-view/e-sign notifications (PandaDoc 'viewed the document', DocuSign), receipts, reports, newsletters, product/marketing blasts, platform notifications.",
+        "needsReply=true ONLY when a specific human has asked Mitchell a question or made a request and is waiting on his answer. A notification, an FYI, an acceptance, a form, or a cold sales pitch is NEVER needsReply. When unsure, needsReply=false.",
+        "Return STRICT JSON only: { \"items\": [ { \"i\": number, \"category\": \"client\"|\"prospect\"|\"sales\"|\"other\"|\"noise\", \"needsReply\": boolean } ] } with one object per thread."
       ].join("\n"),
       messages: [{ role: "user", content: list }]
     });
@@ -71,15 +79,19 @@ export async function categorizeInbox<T extends InboxThreadLite>(threads: T[]): 
     }
   } catch { /* AI unavailable — fall back to domain-only below */ }
 
-  return candidates.map((t, i) => {
-    const ai = byIdx.get(i);
-    // Deterministic client match wins over the model.
-    const isClient = clientDomains.has(domainOf(t.from));
-    const category: InboxCategory = isClient ? "client" : (ai?.category ?? "other");
-    // No AI verdict → assume it needs a look (better shown than hidden).
-    const needsReply = ai ? ai.needsReply : true;
-    return { ...t, category, needsReply };
-  });
+  return candidates
+    .map((t, i) => {
+      const ai = byIdx.get(i);
+      // Noise wins over everything — a contact form from a client domain is
+      // still noise, not a "client" reply.
+      if (ai?.category === "noise") return { ...t, category: "noise" as InboxCategory, needsReply: false };
+      // Otherwise a deterministic client-domain match beats the model's guess.
+      const isClient = clientDomains.has(domainOf(t.from));
+      const category: InboxCategory = isClient ? "client" : (ai?.category ?? "other");
+      const needsReply = ai ? ai.needsReply : false; // no verdict → don't flag
+      return { ...t, category, needsReply };
+    })
+    .filter((t) => t.category !== "noise");
 }
 
 // Keep only threads that plausibly need a personal reply from Mitchell. A cheap

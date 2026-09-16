@@ -12,6 +12,8 @@ import { categorizeInbox } from "@/lib/owner-inbox";
 import { GrowthBoard, type GrowthBrief } from "@/components/GrowthBoard";
 import { getLatestGrowthBrief } from "@/lib/growth-brain";
 import { MemoryEditor, type ScaleMemory } from "@/components/MemoryEditor";
+import { ReachOutList, ReactivateList } from "@/components/ActNow";
+import { getReachOutClients, getReactivateProspects, type ReactivateProspect } from "@/lib/scale-actions";
 import { InboxCopilot, type InboxThread } from "@/components/InboxCopilot";
 import { ScaleAcquisition, ScaleAcquisitionLoading } from "@/components/ScaleAcquisition";
 import { getFacebookRevenue } from "@/lib/facebook-revenue";
@@ -50,6 +52,12 @@ export default async function ScalePage() {
     getScaleSources()
   ]);
   const sourceFlags: ScaleSourceFlags = { facebook: sources.facebook, outbound: sources.outbound };
+
+  // "Act now" modules: clients gone quiet (retention) + cold pitches to
+  // reactivate. Reach-out is local data; reactivate rides the outbound source.
+  const reachOut = await getReachOutClients().catch(() => []);
+  const reactivate: { ok: true; prospects: ReactivateProspect[] } | { ok: false; error: string } | null =
+    sourceFlags.outbound ? await getReactivateProspects().catch(() => ({ ok: false as const, error: "unavailable" })) : null;
 
   // Snapshot: manual MRR (source of truth) + concentration + margin.
   const mrrRows = (mrrRes.data ?? []) as { company: string; mrr: number; status: string }[];
@@ -145,6 +153,10 @@ export default async function ScalePage() {
 
       {/* The CEO board: constraint + Protect / Grow */}
       <GrowthBoard initial={growthBrief as GrowthBrief | null} currentSources={sourceFlags} />
+
+      {/* Act now — clients gone quiet + cold pitches to reactivate */}
+      {reachOut.length > 0 && <ReachOutList clients={reachOut} />}
+      {reactivate && <ReactivateList prospects={reactivate.ok ? reactivate.prospects : []} error={reactivate.ok ? null : reactivate.error} />}
 
       {/* Inbox — sorted by clients / potential clients / sales, reply-needed flagged */}
       <div>

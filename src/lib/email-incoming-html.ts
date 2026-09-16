@@ -6,6 +6,15 @@
 // Parses with DOMParser (inert: no handlers run, no images load).
 // Browser-only.
 
+import {
+  canonicalBackgroundColor,
+  canonicalTextColor,
+  cssLengthPx,
+  INDENT_STEP_PX,
+  isNearWhite,
+  legacyFontSizePx
+} from "./email-style";
+
 export type IncomingHtmlSource = "load" | "paste";
 
 const BLOCK_TAGS = new Set([
@@ -42,6 +51,71 @@ export function normalizeIncomingHtml(
   });
   removeComments(body);
 
+  // Gmail and the clone's composer write fonts, sizes and colors as <font>,
+  // alignment as align="…", and indent as a border-less blockquote. Turn them
+  // into the inline styles the editor's schema reads.
+  body.querySelectorAll("font").forEach((font) => {
+    const span = doc.createElement("span");
+    const styles: string[] = [];
+    const face = font.getAttribute("face");
+    if (face) styles.push(`font-family:${face}`);
+    const size = legacyFontSizePx(font.getAttribute("size"));
+    if (size) styles.push(`font-size:${size}px`);
+    const color = font.getAttribute("color");
+    if (color) styles.push(`color:${color}`);
+    const own = font.getAttribute("style");
+    if (own) styles.push(own);
+    if (styles.length) span.setAttribute("style", styles.join(";"));
+    span.append(...Array.from(font.childNodes));
+    font.replaceWith(span);
+  });
+  body.querySelectorAll("center").forEach((center) => {
+    const div = doc.createElement("div");
+    div.style.textAlign = "center";
+    div.append(...Array.from(center.childNodes));
+    center.replaceWith(div);
+  });
+  body.querySelectorAll("[align]").forEach((el) => {
+    const align = (el.getAttribute("align") || "").toLowerCase();
+    if (["left", "center", "right"].includes(align) && el instanceof HTMLElement && !el.style.textAlign) {
+      el.style.textAlign = align;
+    }
+    el.removeAttribute("align");
+  });
+  // The editor aligns lines, not containers: hand a container's alignment to
+  // the lines inside it.
+  body.querySelectorAll<HTMLElement>("[style]").forEach((el) => {
+    if (!el.style.textAlign || !hasBlockChild(el)) return;
+    lineTargets(el).forEach((line) => {
+      if (!line.style.textAlign) line.style.textAlign = el.style.textAlign;
+    });
+  });
+  // Deepest first, so nested indents add up. Outlook/Word quote bars are also
+  // written "border:none;border-left:solid …" — those stay quotes.
+  Array.from(body.querySelectorAll<HTMLElement>("blockquote"))
+    .reverse()
+    .forEach((quote) => {
+      const borderless = /border:none/i.test((quote.getAttribute("style") || "").replace(/\s+/g, ""));
+      const leftBar = quote.style.borderLeftStyle && quote.style.borderLeftStyle !== "none";
+      if ((!borderless || leftBar) && !/webkit-indent-blockquote/.test(quote.getAttribute("class") || "")) return;
+      unwrapIndent(doc, quote);
+    });
+  // A list item's alignment/indent is saved on the <li> (email-doc.ts), but the
+  // editor keeps it on the line inside: move it onto a <div> around the text.
+  body.querySelectorAll<HTMLElement>("li").forEach((li) => {
+    const { textAlign, marginLeft } = li.style;
+    if (!textAlign && !marginLeft) return;
+    const line = doc.createElement("div");
+    line.style.textAlign = textAlign;
+    line.style.marginLeft = marginLeft;
+    while (li.firstChild && !(li.firstChild instanceof HTMLElement && BLOCK_CHILD.test(li.firstChild.tagName))) {
+      line.append(li.firstChild);
+    }
+    li.style.removeProperty("text-align");
+    li.style.removeProperty("margin-left");
+    li.prepend(line);
+  });
+
   if (source === "paste") {
     // Spreadsheet ranges: one line per row, cells separated by " | " (the
     // schema has no tables, which would otherwise run every cell together; a
@@ -63,6 +137,13 @@ export function normalizeIncomingHtml(
       const blank = doc.createElement("div");
       blank.append(doc.createElement("br"));
       p.after(blank);
+    });
+    // White-on-white text would be invisible in the composer but still sent
+    // (e.g. hidden text a page adds to what's copied). Keep light text only
+    // where something gives it a background.
+    body.querySelectorAll<HTMLElement>("[style]").forEach((el) => {
+      const color = canonicalTextColor(el.style.color);
+      if (color && isNearWhite(color) && !hasBackground(el, body)) el.style.removeProperty("color");
     });
   }
 
@@ -91,6 +172,63 @@ export function normalizeIncomingHtml(
   }
 
   return { html: body.innerHTML, droppedImages };
+}
+
+// Replace an indent blockquote with its content shifted one step right: each
+// line inside gets +40px margin-left; runs of loose inline content are wrapped
+// in a shifted <div>.
+function unwrapIndent(doc: Document, quote: Element) {
+  const out: Node[] = [];
+  let inline: Node[] = [];
+  const flushInline = () => {
+    if (inline.some((n) => n.nodeType !== Node.TEXT_NODE || (n.nodeValue || "").trim())) {
+      const div = doc.createElement("div");
+      div.append(...inline);
+      shiftRight(div);
+      out.push(div);
+    }
+    inline = [];
+  };
+  for (const child of Array.from(quote.childNodes)) {
+    if (child instanceof HTMLElement && BLOCK_CHILD.test(child.tagName)) {
+      flushInline();
+      lineTargets(child).forEach(shiftRight);
+      out.push(child);
+    } else {
+      inline.push(child);
+    }
+  }
+  flushInline();
+  quote.replaceWith(...out);
+}
+
+function shiftRight(el: HTMLElement) {
+  el.style.marginLeft = `${(cssLengthPx(el.style.marginLeft) ?? 0) + INDENT_STEP_PX}px`;
+}
+
+// Mirrors the editor's line rule (extensions.ts EmailParagraph): an element
+// containing any of these is a container, not a line.
+const BLOCK_CHILD = /^(ADDRESS|ARTICLE|ASIDE|BLOCKQUOTE|CENTER|DIV|DL|FIELDSET|FIGURE|FOOTER|FORM|H[1-6]|HEADER|HR|LI|MAIN|NAV|OL|P|PRE|SECTION|TABLE|UL)$/;
+const LINE_TAGS = /^(DIV|P|LI|H[1-6]|PRE)$/;
+
+function hasBlockChild(el: Element): boolean {
+  return Array.from(el.children).some((c) => BLOCK_CHILD.test(c.tagName));
+}
+
+// The lines an element's alignment or indent applies to: itself if it is a
+// line, otherwise the lines inside it.
+function lineTargets(el: HTMLElement): HTMLElement[] {
+  if (LINE_TAGS.test(el.tagName) && !hasBlockChild(el)) return [el];
+  return Array.from(el.querySelectorAll<HTMLElement>("div, p, li, h1, h2, h3, h4, h5, h6, pre")).filter(
+    (d) => !hasBlockChild(d)
+  );
+}
+
+function hasBackground(el: HTMLElement, root: HTMLElement): boolean {
+  for (let node: HTMLElement | null = el; node && node !== root; node = node.parentElement) {
+    if (canonicalBackgroundColor(node.style.backgroundColor)) return true;
+  }
+  return false;
 }
 
 function isTightParagraph(el: Element): boolean {

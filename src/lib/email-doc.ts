@@ -9,6 +9,15 @@
 // history" rule in collapse-quoted-history.ts.
 
 import { displayHref, toSafeAbsoluteHref } from "./email-links";
+import {
+  canonicalBackgroundColor,
+  canonicalFontFamily,
+  canonicalFontSize,
+  canonicalTextColor,
+  INDENT_STEP_PX,
+  MAX_INDENT,
+  QUOTE_STYLE
+} from "./email-style";
 
 export interface EmailDocMark {
   type: string;
@@ -39,7 +48,7 @@ export const EMPTY_EMAIL_BODY: EmailBody = { doc: null, html: "", text: "", isEm
 const LIST_STYLE = "margin:0 0 0 25px;padding:0";
 
 // Outermost first, so one link can span runs that toggle bold etc.
-const MARK_ORDER = ["link", "bold", "italic", "underline", "strike"];
+const MARK_ORDER = ["link", "bold", "italic", "underline", "strike", "textStyle"];
 
 const MARK_TAGS: Record<string, string> = { bold: "b", italic: "i", underline: "u", strike: "strike" };
 
@@ -76,11 +85,12 @@ export function isDocEmpty(doc: EmailDocNode): boolean {
 }
 
 export function isDocPlain(doc: EmailDocNode): boolean {
-  return (doc.content ?? []).every(
+  return trimTrailingEmptyParagraphs(doc.content ?? []).every(
     (block) =>
       block.type === "paragraph" &&
+      !blockStyle(block) &&
       (block.content ?? []).every(
-        (n) => n.type === "hardBreak" || (n.type === "text" && !(n.marks ?? []).length)
+        (n) => n.type === "hardBreak" || (n.type === "text" && sortedMarks(n.marks).length === 0)
       )
   );
 }
@@ -96,7 +106,7 @@ export function docToEmailHtml(doc: EmailDocNode): string {
 function blockHtml(node: EmailDocNode): string {
   switch (node.type) {
     case "paragraph":
-      return `<div>${lineHtml(node.content ?? [])}</div>`;
+      return `<div${styleAttr(blockStyle(node))}>${lineHtml(node.content ?? [])}</div>`;
     case "bulletList":
       return `<ul style="${LIST_STYLE}">${(node.content ?? []).map(listItemHtml).join("")}</ul>`;
     case "orderedList": {
@@ -104,6 +114,8 @@ function blockHtml(node: EmailDocNode): string {
       const startAttr = Number.isInteger(start) && start !== 1 ? ` start="${start}"` : "";
       return `<ol style="${LIST_STYLE}"${startAttr}>${(node.content ?? []).map(listItemHtml).join("")}</ol>`;
     }
+    case "blockquote":
+      return `<blockquote style="${QUOTE_STYLE}">${(node.content ?? []).map(blockHtml).join("")}</blockquote>`;
     default:
       return (node.content ?? []).map(blockHtml).join("");
   }
@@ -113,8 +125,24 @@ function blockHtml(node: EmailDocNode): string {
 // spacing in classic Outlook.
 function listItemHtml(item: EmailDocNode): string {
   const [first, ...rest] = item.content ?? [];
-  const head = first?.type === "paragraph" ? lineHtml(first.content ?? []) : first ? blockHtml(first) : "<br>";
-  return `<li>${head}${rest.map(blockHtml).join("")}</li>`;
+  if (first?.type !== "paragraph") return `<li>${first ? blockHtml(first) : "<br>"}${rest.map(blockHtml).join("")}</li>`;
+  return `<li${styleAttr(blockStyle(first))}>${lineHtml(first.content ?? [])}${rest.map(blockHtml).join("")}</li>`;
+}
+
+// A line's alignment and indent as inline CSS ("" for a plain line). An empty
+// line shows neither, e.g. the blank lines Enter carries a style onto.
+function blockStyle(node: EmailDocNode): string {
+  if (!(node.content ?? []).length) return "";
+  const parts: string[] = [];
+  const align = node.attrs?.textAlign;
+  if (align === "center" || align === "right") parts.push(`text-align:${align}`);
+  const indent = Math.min(MAX_INDENT, Math.max(0, Math.round(Number(node.attrs?.indent ?? 0)) || 0));
+  if (indent > 0) parts.push(`margin-left:${indent * INDENT_STEP_PX}px`);
+  return parts.join(";");
+}
+
+function styleAttr(style: string): string {
+  return style ? ` style="${escapeAttr(style)}"` : "";
 }
 
 // A line's inline content. Empty → <br> so the line keeps its height; a
@@ -149,27 +177,56 @@ function inlineHtml(nodes: EmailDocNode[]): string {
   return out;
 }
 
+// The marks that change the output, outermost first. Unsafe links and text
+// styles that are all defaults are dropped.
 function sortedMarks(marks: EmailDocMark[] | undefined): EmailDocMark[] {
   return (marks ?? [])
-    .filter((m) => MARK_ORDER.includes(m.type) && (m.type !== "link" || toSafeAbsoluteHref(hrefOf(m))))
+    .filter(
+      (m) =>
+        MARK_ORDER.includes(m.type) &&
+        (m.type !== "link" || toSafeAbsoluteHref(hrefOf(m))) &&
+        (m.type !== "textStyle" || textStyleCss(m))
+    )
     .sort((a, b) => MARK_ORDER.indexOf(a.type) - MARK_ORDER.indexOf(b.type));
 }
 
 function sameMark(a: EmailDocMark, b: EmailDocMark): boolean {
-  return a.type === b.type && (a.type !== "link" || hrefOf(a) === hrefOf(b));
+  if (a.type !== b.type) return false;
+  if (a.type === "link") return hrefOf(a) === hrefOf(b);
+  if (a.type === "textStyle") return textStyleCss(a) === textStyleCss(b);
+  return true;
 }
 
 function hrefOf(mark: EmailDocMark): string {
   return typeof mark.attrs?.href === "string" ? mark.attrs.href : "";
 }
 
+// Font, size, color and highlight, in a fixed order, re-validated against
+// the composer's vocabulary.
+function textStyleCss(mark: EmailDocMark): string {
+  const str = (v: unknown) => (typeof v === "string" ? v : null);
+  const parts: string[] = [];
+  const font = canonicalFontFamily(str(mark.attrs?.fontFamily));
+  if (font) parts.push(`font-family:${font}`);
+  const size = canonicalFontSize(str(mark.attrs?.fontSize));
+  if (size) parts.push(`font-size:${size}`);
+  const color = canonicalTextColor(str(mark.attrs?.color));
+  if (color) parts.push(`color:${color}`);
+  const background = canonicalBackgroundColor(str(mark.attrs?.backgroundColor));
+  if (background) parts.push(`background-color:${background}`);
+  return parts.join(";");
+}
+
 function openTag(mark: EmailDocMark): string {
   if (mark.type === "link") return `<a href="${escapeAttr(toSafeAbsoluteHref(hrefOf(mark)) ?? "")}">`;
+  if (mark.type === "textStyle") return `<span style="${escapeAttr(textStyleCss(mark))}">`;
   return `<${MARK_TAGS[mark.type]}>`;
 }
 
 function closeTag(mark: EmailDocMark): string {
-  return mark.type === "link" ? "</a>" : `</${MARK_TAGS[mark.type]}>`;
+  if (mark.type === "link") return "</a>";
+  if (mark.type === "textStyle") return "</span>";
+  return `</${MARK_TAGS[mark.type]}>`;
 }
 
 // HTML collapses runs of spaces; keep what the user typed.
@@ -212,6 +269,8 @@ function blocksToLines(blocks: EmailDocNode[]): string[] {
         const indent = " ".repeat(marker.length);
         lines.push(marker + (itemLines[0] ?? ""), ...itemLines.slice(1).map((l) => (l ? indent + l : "")));
       }
+    } else if (block.type === "blockquote") {
+      lines.push(...blocksToLines(block.content ?? []).map((l) => (l ? `> ${l}` : ">")));
     } else {
       lines.push(...blocksToLines(block.content ?? []));
     }

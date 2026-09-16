@@ -45,14 +45,16 @@ export async function fetchAdsDashboard<T>(
 
     let url: URL;
     try {
+      // ADS_DASHBOARD_URL is an origin. A query or fragment on it would swallow
+      // the path we append and send the request somewhere else on that host.
+      // Checked on the base alone: `path` may carry its own query (?days=).
+      const origin = new URL(base);
+      if (origin.search || origin.hash) {
+        return { ok: false, error: "ADS_DASHBOARD_URL must be a plain origin, without ? or #" };
+      }
       url = new URL(`${base}${path}`);
     } catch {
       return { ok: false, error: "ADS_DASHBOARD_URL is not a valid URL" };
-    }
-    // ADS_DASHBOARD_URL is an origin. A query or fragment on it would swallow
-    // the path we append and send the request somewhere else on that host.
-    if (url.search || url.hash) {
-      return { ok: false, error: "ADS_DASHBOARD_URL must be a plain origin, without ? or #" };
     }
     // The secret rides in a header, so it must never go out in cleartext.
     // http is allowed only for an ads dashboard running locally.

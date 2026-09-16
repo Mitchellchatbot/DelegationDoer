@@ -9,6 +9,8 @@ import type {
   OutboundBoardResult
 } from "@/lib/outbound-board-types";
 import { MetaOutboundFrame } from "@/components/MetaOutboundFrame";
+import { OutboundMetaDashboard } from "@/components/OutboundMetaDashboard";
+import type { OutboundMetaResult } from "@/lib/outbound-meta-types";
 
 // The Scale Room's Outbound tab. Pipeline and Ads render the Meta ads
 // dashboard's own figures here in DD (GET /api/outbound/board — every count,
@@ -16,7 +18,8 @@ import { MetaOutboundFrame } from "@/components/MetaOutboundFrame";
 // page for actually working the leads (texting, moving stages), which this
 // read-only copy deliberately can't do.
 
-type View = "pipeline" | "ads" | "live";
+export type OutboundView = "meta" | "pipeline" | "ads" | "live";
+type View = OutboundView;
 type Layout = "board" | "table";
 type Filter = "all" | "notbooked" | "booked" | "needs" | "longterm";
 type Sort = "created" | "created_asc" | "contacted" | "value" | "name";
@@ -103,14 +106,29 @@ function siteHref(site: string | null): string | null {
   }
 }
 
-export function OutboundTab({ result, sourceOff }: { result: OutboundBoardResult | null; sourceOff: boolean }) {
+export function OutboundTab({
+  result,
+  sourceOff,
+  meta,
+  metaDays,
+  initialView
+}: {
+  result: OutboundBoardResult | null;
+  sourceOff: boolean;
+  meta: OutboundMetaResult | null;
+  metaDays: number;
+  initialView: View | null;
+}) {
   const data = result?.ok ? result.data : null;
-  // Nothing to show natively? Open on the Live board, which never needed the feed.
-  const [view, setView] = useState<View>(data ? "pipeline" : "live");
+  // Opens on Meta ads (our ad account, laid out like a client's Dashboard) —
+  // or wherever the URL says, so a date-range change keeps you there. Nothing
+  // to show natively at all? Open on the Live board, which never needed a feed.
+  const [view, setView] = useState<View>(initialView ?? (sourceOff || (!data && !meta?.ok) ? "live" : "meta"));
 
   const views: [View, string][] = [
+    ["meta", "Meta ads"],
     ["pipeline", "Pipeline"],
-    ["ads", "Ads"],
+    ["ads", "Monthly spend"],
     ["live", "Live board"]
   ];
 
@@ -148,6 +166,8 @@ export function OutboundTab({ result, sourceOff }: { result: OutboundBoardResult
           Outbound is switched off in the Scale Room&apos;s sources, so nothing is read from the Meta ads dashboard.
           Switch it back on from the Overview tab, or use the Live board.
         </Notice>
+      ) : view === "meta" ? (
+        <OutboundMetaDashboard result={meta} days={metaDays} />
       ) : !data ? (
         <Notice>
           Couldn&apos;t load from the Meta ads dashboard — {result && !result.ok ? result.error : "no response"}. The Live

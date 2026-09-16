@@ -56,6 +56,9 @@ export function GrowthBoard({ initial, currentSources }: { initial: GrowthBrief 
   // section+index so Protect and Grow don't collide.
   const [open, setOpen] = useState<Record<string, boolean>>({});
   const toggle = (k: string) => setOpen((o) => ({ ...o, [k]: !o[k] }));
+  // Whole-section dropdowns — collapsed by default so the board stays compact.
+  const [showProtect, setShowProtect] = useState(false);
+  const [showGrow, setShowGrow] = useState(false);
 
   return (
     <div className="space-y-4">
@@ -117,10 +120,12 @@ export function GrowthBoard({ initial, currentSources }: { initial: GrowthBrief 
         <div className="grid md:grid-cols-2 gap-3">
           {/* PROTECT */}
           <div className="rounded-2xl border border-rose-200 bg-white p-4 shadow-soft">
-            <div className="flex items-center gap-1.5 mb-3 text-[13px] font-semibold text-rose-700">
+            <button type="button" onClick={() => setShowProtect((v) => !v)} className="w-full flex items-center gap-1.5 text-[13px] font-semibold text-rose-700">
               <ShieldAlert className="w-4 h-4" /> Protect
-            </div>
-            <div className="space-y-1">
+              <span className="text-[11px] font-normal text-muted">({brief.protect.length})</span>
+              <ChevronDown className={"w-4 h-4 ml-auto transition-transform " + (showProtect ? "rotate-180" : "")} />
+            </button>
+            <div className={"space-y-1 " + (showProtect ? "mt-3" : "hidden")}>
               {brief.protect.length === 0 && <div className="text-[12px] text-muted">Nothing flagged.</div>}
               {brief.protect.map((p, i) => {
                 const k = `p${i}`; const isOpen = !!open[k];
@@ -146,10 +151,12 @@ export function GrowthBoard({ initial, currentSources }: { initial: GrowthBrief 
 
           {/* GROW */}
           <div className="rounded-2xl border border-emerald-200 bg-white p-4 shadow-soft">
-            <div className="flex items-center gap-1.5 mb-3 text-[13px] font-semibold text-emerald-700">
+            <button type="button" onClick={() => setShowGrow((v) => !v)} className="w-full flex items-center gap-1.5 text-[13px] font-semibold text-emerald-700">
               <Rocket className="w-4 h-4" /> Grow · Scale Opportunities
-            </div>
-            <div className="space-y-1">
+              <span className="text-[11px] font-normal text-muted">({brief.grow.length})</span>
+              <ChevronDown className={"w-4 h-4 ml-auto transition-transform " + (showGrow ? "rotate-180" : "")} />
+            </button>
+            <div className={"space-y-1 " + (showGrow ? "mt-3" : "hidden")}>
               {brief.grow.length === 0 && <div className="text-[12px] text-muted">Nothing surfaced.</div>}
               {brief.grow.map((g, i) => {
                 const k = `g${i}`; const isOpen = !!open[k];

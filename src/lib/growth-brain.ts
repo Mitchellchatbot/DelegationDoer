@@ -243,7 +243,7 @@ export async function getGrowthSnapshot(): Promise<{ text: string; sources: Scal
     supabase.from("finance_documents").select("parsed").order("uploaded_at", { ascending: false }).limit(5),
     supabase.from("software_subscriptions").select("vendor, month, amount"),
     supabase.from("payroll_entries").select("name, role, status, scale, rate"),
-    supabase.from("clients").select("id, updated_at"),
+    supabase.from("clients").select("id, updated_at, health_computed_at"),
     supabase
       .from("client_meetings")
       .select("client_id, meeting_date, title, brief")
@@ -258,14 +258,20 @@ export async function getGrowthSnapshot(): Promise<{ text: string; sources: Scal
     sources.outbound ? getOutboundMeta(7, 25_000) : null
   ]);
   const outbound = outboundBoard ? summaryFromBoard(outboundBoard) : null;
-  const clientUpdatedAt = new Map<string, string>();
-  for (const r of (cliMetaRes.data ?? []) as { id: string; updated_at: string }[]) clientUpdatedAt.set(r.id, r.updated_at);
-  const asOf = (id: string): string => {
-    const u = clientUpdatedAt.get(id);
-    if (!u) return "";
-    const days = Math.round((Date.now() - Date.parse(u)) / 86_400_000);
-    return days <= 1 ? "today" : `${days}d ago`;
+  // Health notes carry their OWN computed date — a client row's updated_at moves
+  // on any edit and is not when the health summary was scanned.
+  const healthComputedAt = new Map<string, string | null>();
+  for (const r of (cliMetaRes.data ?? []) as { id: string; updated_at: string; health_computed_at: string | null }[]) {
+    healthComputedAt.set(r.id, r.health_computed_at ?? null);
+  }
+  const HEALTH_MAX_AGE_DAYS = 45; // older AI health guesses are dropped, not shown as current risk
+  // Age of the health note in days, or null if there isn't a real computed date.
+  const healthAgeDays = (id: string): number | null => {
+    const h = healthComputedAt.get(id);
+    if (!h) return null;
+    return Math.round((Date.now() - Date.parse(h)) / 86_400_000);
   };
+  const asOf = (days: number | null): string => (days == null ? "" : days <= 1 ? "today" : `${days}d ago`);
 
   // Revenue / MRR.
   const mrrRows = (mrrRes.data ?? []) as { company: string; mrr: number; status: string }[];
@@ -330,10 +336,12 @@ export async function getGrowthSnapshot(): Promise<{ text: string; sources: Scal
     const bits = [c.name];
     if (c.priority) bits.push(`priority:${c.priority}`);
     if (m) bits.push(`${money(m)}/mo`);
-    const health = clean(c.healthSummary);
     const notes = clean(c.notes);
-    const stamp = asOf(c.id);
-    if (health) bits.push(`health${stamp ? ` (as of ${stamp})` : ""}: ${health.slice(0, 140)}`);
+    // Only surface a health note that was actually computed recently — a stale
+    // AI scan (Santa Barbara's was ~107d old) is not current risk.
+    const hAge = healthAgeDays(c.id);
+    const health = hAge != null && hAge <= HEALTH_MAX_AGE_DAYS ? clean(c.healthSummary) : "";
+    if (health) bits.push(`health (as of ${asOf(hAge)}): ${health.slice(0, 140)}`);
     if (notes) bits.push(`notes: ${notes.slice(0, 140)}`);
     return `- ${bits.join(" · ")}`;
   }).join("\n");

@@ -17,8 +17,25 @@ import type { OutboundSummaryResponse, OutboundSummaryResult } from "./outbound-
 const TIMEOUT_MS = 25_000;
 
 export async function getOutboundSummary(timeoutMs = TIMEOUT_MS): Promise<OutboundSummaryResult> {
-  // Never throws: the Scale Room and the Growth Brain both call this, and an
-  // ads dashboard outage should cost one block, not the page or the brief.
+  return fetchAdsDashboard("/api/outbound/summary", isSummary, timeoutMs, "Outbound summary failed");
+}
+
+/**
+ * GET one of the ads dashboard's secret-gated JSON routes and check its shape.
+ *
+ * Shared by the Scale Room's summary card and its Outbound tab
+ * (outbound-board.ts), so the checks below — plain https origin, secret only
+ * in a header, no redirect following, bounded wait — exist once.
+ *
+ * Never throws: the Scale Room and the Growth Brain both call this, and an
+ * ads dashboard outage should cost one block, not the page or the brief.
+ */
+export async function fetchAdsDashboard<T>(
+  path: string,
+  isShape: (raw: unknown) => raw is T,
+  timeoutMs: number,
+  fallbackError: string
+): Promise<{ ok: true; data: T } | { ok: false; error: string }> {
   try {
     const base = process.env.ADS_DASHBOARD_URL?.trim().replace(/\/+$/, "");
     const secret = process.env.OUTBOUND_SUMMARY_SECRET?.trim();
@@ -28,7 +45,7 @@ export async function getOutboundSummary(timeoutMs = TIMEOUT_MS): Promise<Outbou
 
     let url: URL;
     try {
-      url = new URL(`${base}/api/outbound/summary`);
+      url = new URL(`${base}${path}`);
     } catch {
       return { ok: false, error: "ADS_DASHBOARD_URL is not a valid URL" };
     }
@@ -69,7 +86,7 @@ export async function getOutboundSummary(timeoutMs = TIMEOUT_MS): Promise<Outbou
 
     if (res.status >= 300 && res.status < 400) {
       await res.body?.cancel();
-      return { ok: false, error: `Ads dashboard redirected (HTTP ${res.status}) — is /api/outbound/summary deployed there?` };
+      return { ok: false, error: `Ads dashboard redirected (HTTP ${res.status}) — is ${path} deployed there?` };
     }
 
     const ct = res.headers.get("content-type") ?? "";
@@ -104,12 +121,12 @@ export async function getOutboundSummary(timeoutMs = TIMEOUT_MS): Promise<Outbou
       }
       return { ok: false, error: "Ads dashboard returned invalid JSON" };
     }
-    if (!isSummary(json)) {
+    if (!isShape(json)) {
       return { ok: false, error: "Unexpected response shape from the ads dashboard" };
     }
     return { ok: true, data: json };
   } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : "Outbound summary failed" };
+    return { ok: false, error: e instanceof Error ? e.message : fallbackError };
   }
 }
 
@@ -118,13 +135,13 @@ export async function getOutboundSummary(timeoutMs = TIMEOUT_MS): Promise<Outbou
 // "unexpected shape" (one block) rather than as a TypeError mid-render — /scale
 // has no error boundary, and Suspense doesn't catch, so that would take the
 // whole page.
-const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
-const isStr = (v: unknown): v is string => typeof v === "string";
-const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+export const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+export const isStr = (v: unknown): v is string => typeof v === "string";
+export const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 // Null is a real answer on these ("no ledger row", "nothing to divide") — but
 // it has to be null, not missing or a string.
-const isNumOrNull = (v: unknown) => v === null || isNum(v);
-const isStrOrNull = (v: unknown) => v === null || isStr(v);
+export const isNumOrNull = (v: unknown) => v === null || isNum(v);
+export const isStrOrNull = (v: unknown) => v === null || isStr(v);
 
 function isCampaign(v: unknown): boolean {
   return isObj(v) && isStr(v.campaignName) && isNum(v.spend);
@@ -141,11 +158,11 @@ function isMonth(v: unknown): boolean {
   );
 }
 
-function isRep(v: unknown): boolean {
+export function isRep(v: unknown): boolean {
   return isObj(v) && isStr(v.owner) && isNum(v.queued) && isNum(v.dailyCap);
 }
 
-function isAds(v: unknown): boolean {
+export function isAds(v: unknown): boolean {
   if (!isObj(v)) return false;
   if (v.ok === false) return isStr(v.error);
   return (

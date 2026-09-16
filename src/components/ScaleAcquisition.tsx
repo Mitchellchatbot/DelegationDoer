@@ -123,24 +123,82 @@ export function ScaleAcquisition({ revenue, outbound }: { revenue?: FacebookReve
   );
 }
 
-// Revenue and managed spend from the Finance app — revenue only, the same
-// figures /finance shows. "Facebook side" so it's never read as MRR.
+// A closing rate is a fraction (0.2 = 20%); null means no rate set.
+function pct(n: number | null | undefined): string {
+  if (n == null) return "—";
+  return `${Math.round(n * 100)}%`;
+}
+
+// The full Facebook side as the Finance app computes it: the revenue split
+// (management fees vs one-offs), the spend we run and the fee-bearing part of
+// it, then every paying client and the six-month revenue trend. Revenue only,
+// the same figures /finance shows, and never read as MRR.
 function FacebookSide({ data }: { data: FacebookRevenueData }) {
-  const { current, provisional } = data;
-  const top = data.payers[0];
+  const { current, provisional, delta, payers } = data;
+  // Six-month revenue trend (oldest→newest); scale bars to the largest month.
+  const trend = data.months.slice(-6);
+  const maxRev = Math.max(1, ...trend.map((m) => m.revenue));
 
   return (
     <>
-      <Heading title={FACEBOOK_TITLE} period={`${monthLabel(data.period)}${provisional ? " so far" : ""}`} pill={provisional ? "provisional" : null} />
-      <div className="grid grid-cols-2 gap-3">
-        <Card label="Revenue · Facebook side" value={money(current.revenue)} hint="separate from MRR" />
+      <Heading title={FACEBOOK_TITLE} period={`${monthLabel(data.period)}${provisional ? " so far" : ""}`} pill={provisional ? "provisional" : null} link={{ href: "/finance", label: "Finance →" }} />
+
+      {/* Revenue + its split, then the spend we run and the fee-bearing part. */}
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+        <Card label="Revenue · Facebook side" value={money(current.revenue)} hint={delta ? delta.label : "separate from MRR"} tone={delta?.tone === "down" ? "rose" : "ink"} />
+        <Card label="Management fees" value={money(current.managementFees)} hint="recurring, on fee-bearing spend" />
+        <Card label="One-off / setup" value={money(current.oneOffRevenue)} hint="setup fees less credits" />
         <Card label="Managed ad spend" value={money(current.managedSpend)} hint="client Meta spend we run" />
+        <Card label="Fee-bearing spend" value={money(current.feeBearingSpend)} hint="the part we charge on" />
+        <Card label="Blended take rate" value={current.feeBearingSpend ? pct(current.managementFees / current.feeBearingSpend) : "—"} hint="fees ÷ fee-bearing spend" tone="muted" />
       </div>
-      <div className="text-[11px] text-muted mt-2 px-1">
-        {top
-          ? `Top client: ${top.name} — ${money(top.revenue)} of Facebook-side revenue`
-          : "No clients billing this month yet."}
-      </div>
+
+      {/* Every paying client this month, largest first. */}
+      {payers.length > 0 ? (
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-soft mt-3">
+          <div className="text-[12px] font-semibold text-ink mb-2">Paying clients · {monthLabel(data.period)}</div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-[12px] min-w-[420px]">
+              <thead>
+                <tr className="text-muted text-left text-[10px] uppercase tracking-wide border-b border-slate-200">
+                  <th className="font-medium pb-1.5 pr-2">Client</th>
+                  <th className="font-medium pb-1.5 px-2 text-right">Revenue</th>
+                  <th className="font-medium pb-1.5 px-2 text-right">Managed spend</th>
+                  <th className="font-medium pb-1.5 pl-2 text-right">Close rate</th>
+                </tr>
+              </thead>
+              <tbody>
+                {payers.slice(0, 8).map((p) => (
+                  <tr key={p.name} className="border-b border-slate-100 last:border-0">
+                    <td className="py-1.5 pr-2 text-ink truncate">{p.name}</td>
+                    <td className="py-1.5 px-2 text-right tabular-nums font-medium text-ink">{money(p.revenue)}</td>
+                    <td className="py-1.5 px-2 text-right tabular-nums text-slate-500">{money(p.managedSpend)}</td>
+                    <td className="py-1.5 pl-2 text-right tabular-nums text-slate-500">{pct(p.closingRate)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : (
+        <div className="text-[11px] text-muted mt-2 px-1">No clients billing this month yet.</div>
+      )}
+
+      {/* Six-month revenue trend. */}
+      {trend.length > 1 && (
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-soft mt-3">
+          <div className="text-[12px] font-semibold text-ink mb-2">Facebook-side revenue · last {trend.length} months</div>
+          <div className="flex items-end gap-2 h-20">
+            {trend.map((m) => (
+              <div key={m.period} className="flex-1 flex flex-col items-center gap-1 min-w-0">
+                <div className="w-full rounded-t bg-indigo-500/70" style={{ height: `${Math.max(4, (m.revenue / maxRev) * 100)}%` }} title={money(m.revenue)} />
+                <div className="text-[9px] text-muted tabular-nums truncate w-full text-center">{money(m.revenue)}</div>
+                <div className="text-[9px] text-muted truncate w-full text-center">{monthLabel(m.period).slice(0, 3)}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </>
   );
 }

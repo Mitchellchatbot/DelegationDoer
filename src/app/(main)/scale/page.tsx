@@ -130,51 +130,59 @@ export default async function ScalePage() {
       {/* Which outside apps the room (and the brain) reads */}
       <ScaleSourceSwitches initial={sources} />
 
-      {/* Snapshot */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        {cards.map((c) => (
-          <div key={c.label} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-soft">
-            <div className="text-[11px] font-medium text-muted">{c.label}</div>
-            <div className={"mt-1 text-2xl font-bold tabular-nums " + (c.tone === "emerald" ? "text-emerald-600" : c.tone === "rose" ? "text-rose-600" : c.tone === "amber" ? "text-amber-600" : "text-ink")}>
-              {c.value}
-            </div>
-          </div>
-        ))}
-      </div>
-
-      {/* Acquisition: the Facebook side from the Finance app and our own Outbound
-          funnel from the ads dashboard. Streams in on its own, so a slow app
-          never holds up the board or the emails below it. Only the sources
-          switched on are fetched; with both off there's no section at all. */}
-      {(sourceFlags.facebook || sourceFlags.outbound) && (
-        <Suspense fallback={<ScaleAcquisitionLoading {...sourceFlags} />}>
-          <ScaleAcquisitionSection sources={sourceFlags} />
-        </Suspense>
-      )}
-
-      {/* The CEO board: constraint + Protect / Grow */}
+      {/* 1. The #1 constraint + collapsed Protect / Grow */}
       <GrowthBoard initial={growthBrief as GrowthBrief | null} currentSources={sourceFlags} />
 
-      {/* Act now — clients gone quiet + pitches you sent that went cold */}
-      {reachOut.length > 0 && <ReachOutList clients={reachOut} />}
-      {reactivate.length > 0 && (
-        <div>
-          <div className="text-[13px] font-semibold text-ink mb-2 px-1">
-            Reactivate · pitches you sent that went quiet ({reactivate.length})
+      {/* 2. ACT NOW — what needs Mitchell today, top of the page */}
+      <div className="pt-1">
+        <div className="text-[11px] font-semibold uppercase tracking-wide text-indigo-700 px-1 mb-2">Act now</div>
+        <div className="space-y-4">
+          {/* Reply — inbox sorted, reply-needed flagged */}
+          <div>
+            <div className="text-[13px] font-semibold text-ink mb-2 px-1">
+              Reply · inbox{threads.length ? ` (${threads.length})` : ""}
+            </div>
+            <InboxCopilot threads={threads} note={inboxNote} />
           </div>
-          <InboxCopilot flat threads={reactivate} note={null} />
-        </div>
-      )}
 
-      {/* Inbox — sorted by clients / potential clients / sales, reply-needed flagged */}
-      <div>
-        <div className="text-[13px] font-semibold text-ink mb-2 px-1">
-          Inbox · sorted{threads.length ? ` (${threads.length})` : ""}
+          {/* Reactivate — cold prospect pitches */}
+          {reactivate.length > 0 && (
+            <div>
+              <div className="text-[13px] font-semibold text-ink mb-2 px-1">
+                Reactivate · pitches that went quiet ({reactivate.length})
+              </div>
+              <InboxCopilot flat threads={reactivate} note={null} />
+            </div>
+          )}
+
+          {/* Reach out — clients gone quiet */}
+          {reachOut.length > 0 && <ReachOutList clients={reachOut} />}
         </div>
-        <InboxCopilot threads={threads} note={inboxNote} />
       </div>
 
-      {/* Priorities / decisions */}
+      {/* 3. THE NUMBERS — reference, below the actions */}
+      <div className="pt-1">
+        <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500 px-1 mb-2">The numbers</div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          {cards.map((c) => (
+            <div key={c.label} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-soft">
+              <div className="text-[11px] font-medium text-muted">{c.label}</div>
+              <div className={"mt-1 text-2xl font-bold tabular-nums " + (c.tone === "emerald" ? "text-emerald-600" : c.tone === "rose" ? "text-rose-600" : c.tone === "amber" ? "text-amber-600" : "text-ink")}>
+                {c.value}
+              </div>
+            </div>
+          ))}
+        </div>
+        {(sourceFlags.facebook || sourceFlags.outbound) && (
+          <div className="mt-3">
+            <Suspense fallback={<ScaleAcquisitionLoading {...sourceFlags} />}>
+              <ScaleAcquisitionSection sources={sourceFlags} />
+            </Suspense>
+          </div>
+        )}
+      </div>
+
+      {/* 4. What we're optimizing for */}
       <MemoryEditor initial={memories as ScaleMemory[]} />
     </div>
   );

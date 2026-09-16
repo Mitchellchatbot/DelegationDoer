@@ -3,13 +3,16 @@ import { getAllTasks, getAllUsersLight } from "@/lib/server-data";
 import { getClients } from "@/lib/clients-data";
 import { getStripeRevenue } from "@/lib/stripe";
 import { getFacebookRevenue } from "@/lib/facebook-revenue";
-import { getOutboundSummary } from "@/lib/outbound-summary";
+import { getOutboundBoard } from "@/lib/outbound-board";
+import { getOutboundMeta } from "@/lib/outbound-meta";
 import { getScaleSources } from "@/lib/scale-sources";
 import { listMemories, formatMemoriesBlock } from "@/lib/brain-memory";
 import { getAnthropic, MODELS } from "@/lib/anthropic-client";
 import type { Task } from "@/lib/types";
 import type { FacebookRevenueResult } from "@/lib/facebook-revenue-types";
 import type { OutboundSummaryResult } from "@/lib/outbound-summary-types";
+import type { OutboundBoardResponse, OutboundBoardResult } from "@/lib/outbound-board-types";
+import type { OutboundMetaResult } from "@/lib/outbound-meta-types";
 import type { ScaleSourceFlags } from "@/lib/scale-sources-types";
 
 // The Growth Brain: an aggressive-but-disciplined COO + Chief Growth Officer.
@@ -119,6 +122,99 @@ function outboundSection(ob: OutboundSummaryResult): string {
   return lines.join("\n");
 }
 
+// The LIVE outbound pipeline, lead by lead where it matters — the same board
+// the reps work (Meta ads dashboard GET /api/outbound/board). Bounded: stage
+// counts and ages for everyone, named facilities only for the leads a decision
+// hangs on (booked / proposal / won, follow-ups, the newest arrivals). Contact
+// people are left out; the facility and the rep are what the brain acts on.
+const DAY_MS = 86_400_000;
+type BoardLead = OutboundBoardResponse["prospects"][number];
+function outboundPipelineSection(board: OutboundBoardResult, now: number): string {
+  const head = "## Outbound pipeline — LIVE, lead by lead (the board the reps work today)";
+  if (!board.ok) return `${head}\nLive pipeline unavailable: ${board.error} (do NOT treat as an empty pipeline)`;
+  const b = board.data;
+  const age = (iso: string | null) => (iso ? Math.max(0, Math.floor((now - Date.parse(iso)) / DAY_MS)) : null);
+  const label = (k: string) => b.stages.find((s) => s.key === k)?.label ?? k;
+  const isHot = (p: BoardLead) => p.stage === "booked" || p.stage === "proposal" || p.stage === "won";
+  const lead = (p: BoardLead) => {
+    const bits = [`${p.facility || p.name || "unnamed lead"}${p.location ? ` (${p.location})` : ""}`, label(p.stage)];
+    if (p.owner) bits.push(`dealt to ${p.owner}`);
+    if (p.source) bits.push(`source ${p.source}`);
+    if (p.value != null && p.value > 0) bits.push(`budget ${usd(p.value)}/mo`);
+    const a = age(p.createdAt);
+    if (a != null) bits.push(`came in ${a}d ago`);
+    if (p.lastContactedAt) bits.push(`last contacted ${p.lastContactedAt}${p.lastTextedBy ? ` by ${p.lastTextedBy}` : ""}`);
+    if (p.followUp) bits.push(p.followUp === "needs" ? "NEEDS FOLLOW-UP" : "long-term follow-up");
+    if (p.nextAction) bits.push(`next: ${p.nextAction.slice(0, 80)}${p.nextActionAt ? ` (due ${p.nextActionAt})` : ""}`);
+    return `- ${bits.join(" · ")}`;
+  };
+  const lines = [head, `By stage: ${b.stages.map((s) => `${s.label} ${s.count}`).join(" · ")} (total ${b.pipeline.total}).`];
+
+  const cold = b.prospects.filter((p) => p.stage === "new" || p.stage === "no_response");
+  const buckets = [0, 0, 0, 0];
+  for (const p of cold) {
+    const a = age(p.createdAt);
+    if (a == null) continue;
+    buckets[a <= 7 ? 0 : a <= 14 ? 1 : a <= 30 ? 2 : 3]++;
+  }
+  lines.push(`Not yet reached (New + No response, ${cold.length}) by age since they came in: ≤7d ${buckets[0]} · 8–14d ${buckets[1]} · 15–30d ${buckets[2]} · >30d ${buckets[3]}. Reps' daily caps total ${b.queues.reps.reduce((n, r) => n + r.dailyCap, 0)}/day; backlog ${b.queues.backlog}.`);
+
+  const bySource = new Map<string, { n: number; booked: number }>();
+  for (const p of b.prospects) {
+    const k = p.source || "(no source)";
+    const e = bySource.get(k) ?? { n: 0, booked: 0 };
+    e.n++;
+    if (isHot(p)) e.booked++;
+    bySource.set(k, e);
+  }
+  lines.push(`By source (leads → now booked or beyond): ${[...bySource.entries()].sort((x, y) => y[1].n - x[1].n).slice(0, 8).map(([k, v]) => `${k} ${v.n}→${v.booked}`).join(" · ")}.`);
+
+  const within = (d: number) => b.prospects.filter((p) => { const a = age(p.createdAt); return a != null && a <= d; }).length;
+  lines.push(`New leads: ${within(7)} in the last 7 days, ${within(30)} in the last 30.`);
+
+  const hot = b.prospects.filter(isHot);
+  if (hot.length) lines.push(`Booked / proposal / won (${hot.length}):`, ...hot.slice(0, 25).map(lead));
+  const follow = b.prospects.filter((p) => p.followUp === "needs" && !isHot(p));
+  if (follow.length) lines.push(`Flagged NEEDS FOLLOW-UP (${follow.length}):`, ...follow.slice(0, 15).map(lead));
+  const newest = b.prospects.filter((p) => !isHot(p) && p.followUp !== "needs").slice(0, 8);
+  if (newest.length) lines.push("Newest other leads:", ...newest.map(lead));
+  return lines.join("\n");
+}
+
+// Our Meta ad account's live delivery over the last 7 full days vs the 7 before,
+// read from Meta by the Meta ads dashboard (GET /api/outbound/meta) — the same
+// numbers the Scale Room's Outbound tab shows.
+function outboundMetaSection(meta: OutboundMetaResult): string {
+  const head = "## Our Meta ads — LIVE delivery (last 7 full days vs the prior 7)";
+  if (!meta.ok) return `${head}\nLive Meta read unavailable: ${meta.error} (do NOT treat as zero spend)`;
+  const d = meta.data;
+  const t = d.totals;
+  const p = d.priorTotals;
+  const n = (v: number | null, f: (x: number) => string) => (v == null ? "n/a" : f(v));
+  const pc = (v: number) => `${v.toFixed(2)}%`;
+  const lines = [
+    head,
+    `Window ${d.range.from}→${d.range.to} vs ${d.prior.from}→${d.prior.to}.`,
+    `Spend ${usd(t.spend)} (prior ${usd(p.spend)}) · Meta leads ${t.leads} (prior ${p.leads}) · CPL ${n(t.cpl, (x) => usd(x, 2))} (prior ${n(p.cpl, (x) => usd(x, 2))}) · CTR ${n(t.ctr, pc)} (prior ${n(p.ctr, pc)}) · CPC ${n(t.cpc, (x) => usd(x, 2))} · CPM ${n(t.cpm, (x) => usd(x, 2))} · frequency ${n(t.frequency, (x) => x.toFixed(2))} · reach ${n(t.reach, (x) => Math.round(x).toLocaleString("en-US"))}.`,
+    `Ad-form prospects created in the window: ${d.pipeline.prospects} (prior ${d.pipeline.priorProspects}); of those now booked: ${d.pipeline.booked} (prior ${d.pipeline.priorBooked}).`
+  ];
+  if (d.campaigns.length) {
+    lines.push("Campaigns (spend · leads · CPL · CTR · status):", ...d.campaigns.slice(0, 6).map((c) => `- ${c.name}: ${usd(c.spend)} · ${c.leads} leads · ${n(c.cpl, (x) => usd(x, 2))} · ${n(c.ctr, pc)} · ${c.status ?? "status unknown"}`));
+  }
+  if (d.ads.length) {
+    lines.push("Top ads by spend (spend · leads · CPL · CTR):", ...d.ads.slice(0, 6).map((a) => `- ${a.name} [${a.campaignName}]: ${usd(a.spend)} · ${a.leads} leads · ${n(a.cpl, (x) => usd(x, 2))} · ${n(a.ctr, pc)}`));
+  }
+  return lines.join("\n");
+}
+
+// The board carries everything the summary did (pipeline, queues, ad months),
+// so the brief reads the board once and narrates the summary from it.
+function summaryFromBoard(board: OutboundBoardResult): OutboundSummaryResult {
+  if (!board.ok) return board;
+  const { generatedAt, pipeline, queues, ads } = board.data;
+  return { ok: true, data: { generatedAt, pipeline, queues, ads } };
+}
+
 // Assemble everything the Growth Brain reasons over into one snapshot string.
 // The source switches are read once here and handed back, so the snapshot, the
 // system prompt, and the brief's stamp all follow the same read.
@@ -127,7 +223,7 @@ async function assembleSnapshot(): Promise<{ text: string; sources: ScaleSourceF
   // Never throws; a failed read is both off.
   const scale = await getScaleSources();
   const sources: ScaleSourceFlags = { facebook: scale.facebook, outbound: scale.outbound };
-  const [revenue, clients, allTasks, roster, memories, mrrRes, finRes, swRes, payRes, cliMetaRes, mtgRes, fbRevenue, outbound] = await Promise.all([
+  const [revenue, clients, allTasks, roster, memories, mrrRes, finRes, swRes, payRes, cliMetaRes, mtgRes, fbRevenue, outboundBoard, outboundMeta] = await Promise.all([
     getStripeRevenue().catch(() => null),
     getClients().catch(() => []),
     getAllTasks().catch(() => [] as Task[]),
@@ -147,8 +243,11 @@ async function assembleSnapshot(): Promise<{ text: string; sources: ScaleSourceF
     // Neither throws; a tighter bound than the pages use, so a slow app can't
     // eat the brief's time budget. A source switched off isn't called at all.
     sources.facebook ? getFacebookRevenue(20_000) : null,
-    sources.outbound ? getOutboundSummary(20_000) : null
+    sources.outbound ? getOutboundBoard(20_000) : null,
+    // Meta is read live on the other side (cached there a few minutes).
+    sources.outbound ? getOutboundMeta(7, 25_000) : null
   ]);
+  const outbound = outboundBoard ? summaryFromBoard(outboundBoard) : null;
   const clientUpdatedAt = new Map<string, string>();
   for (const r of (cliMetaRes.data ?? []) as { id: string; updated_at: string }[]) clientUpdatedAt.set(r.id, r.updated_at);
   const asOf = (id: string): string => {
@@ -287,6 +386,8 @@ async function assembleSnapshot(): Promise<{ text: string; sources: ScaleSourceF
     // A source switched off leaves no section — not even an "unavailable" line.
     ...(fbRevenue ? [facebookSideSection(fbRevenue), ``] : []),
     ...(outbound ? [outboundSection(outbound), ``] : []),
+    ...(outboundBoard ? [outboundPipelineSection(outboundBoard, Date.now()), ``] : []),
+    ...(outboundMeta ? [outboundMetaSection(outboundMeta), ``] : []),
     `## Clients (name · priority · MRR · health/notes)`,
     clientLines || "(none)",
     ``,
@@ -325,7 +426,7 @@ const growthSystem = (sources: ScaleSourceFlags) => [
   "- Do NOT surface internal team task-status ('X has 3 overdue tasks', 'stuck with the team') as a PROTECT item on its own. Team load only matters as a capacity constraint or when it's directly causing a client-facing failure a human has reacted to.",
   "- Weigh recency. Client health/notes carry an 'as of Nd ago' stamp, and recent client calls (tl;dv) are dated — LEAD with the freshest signals. A risk raised on a call this week outranks a 2-week-old note; a request made on a call is a live expansion opening (turn it into a GROW item). When you flag a client risk, state how recent it is, and discount anything older than ~3 weeks unless corroborated.",
   ...(sources.facebook ? ["- Facebook-side revenue (from the Finance app: management + setup fees on the client Meta spend we manage) is a SEPARATE stream from MRR. Never sum the two or double count a client across them. If it's unavailable, say so; never treat it as $0."] : []),
-  ...(sources.outbound ? ["- Outbound spend / prospects / booked / cost per booked are our own acquisition funnel. When judging whether leads or sales is the constraint, use the cost-per-lead and cost-per-booked trend and the texting backlog vs the reps' daily caps as evidence. An estimate month is partial (leads include today, spend stops at yesterday) — never compare it to a full month as if it were complete."] : []),
+  ...(sources.outbound ? ["- Outbound spend / prospects / booked / cost per booked are our own acquisition funnel. When judging whether leads or sales is the constraint, use the cost-per-lead and cost-per-booked trend and the texting backlog vs the reps' daily caps as evidence. An estimate month is partial (leads include today, spend stops at yesterday) — never compare it to a full month as if it were complete.", "- The outbound pipeline and our Meta ads sections are LIVE. Use them lead by lead: name the booked/proposal facilities that need a push, the leads flagged NEEDS FOLLOW-UP, how stale the un-reached backlog is against the reps' daily capacity, which sources actually book, and — from the last 7 days of Meta delivery — whether CPL/CTR/frequency say the ads or the follow-up is the leak. When a lead is dealt to a rep, make that rep the owner."] : []),
   "",
   "Return STRICT JSON only, no prose or code fences, with this exact shape:",
   "{",

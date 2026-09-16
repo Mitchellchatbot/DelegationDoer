@@ -15,6 +15,10 @@ import { sanitizeMediaUrls, fetchMediaAsAttachments } from "@/lib/media";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
+// A formatted note is a typed message, not a document; anything bigger is
+// almost certainly pasted content that would bloat every copy of the email.
+const MAX_NOTE_HTML_CHARS = 1_000_000;
+
 // POST /api/inboxes/threads/[threadId]/forward
 //   body: {
 //     accountId: string,            // mailbox to forward FROM (the inbox in view)
@@ -22,7 +26,8 @@ export const maxDuration = 60;
 //     to: string[],                 // forward recipients (required)
 //     cc?: string[],
 //     bcc?: string[],
-//     note?: string,                // optional message above the quoted original
+//     note?: string,                // optional message above the quoted original (plain text)
+//     noteHtml?: string,            // the same note with formatting, from the rich editor
 //     subject?: string,             // optional override; else derived "Fwd: …"
 //     includeAttachments?: boolean, // default true
 //     attachmentUrls?: MediaItem[]  // optional extra uploaded files
@@ -48,6 +53,11 @@ export async function POST(
     const accountId = typeof body.accountId === "string" ? body.accountId : "";
     const messageId = typeof body.messageId === "string" ? body.messageId : "";
     const note = typeof body.note === "string" ? body.note : "";
+    // A formatted note from the rich editor; `note` stays its plain text.
+    const noteHtml = typeof body.noteHtml === "string" ? body.noteHtml : "";
+    if (noteHtml.length > MAX_NOTE_HTML_CHARS) {
+      return NextResponse.json({ error: "This message is too long to send." }, { status: 413 });
+    }
     const explicitSubject =
       typeof body.subject === "string" && body.subject.trim().length > 0
         ? body.subject.trim()
@@ -99,7 +109,7 @@ export async function POST(
     }
 
     const subject = explicitSubject ?? fwdSubject(src.subject || detail.thread.subject || "");
-    const { bodyHtml, bodyText } = buildForwardBodies(src, note);
+    const { bodyHtml, bodyText } = buildForwardBodies(src, note, noteHtml);
 
     // Re-attach the original message's files. The bytes aren't inlined in
     // getThread; pull each one from the clone with the service token (the
@@ -180,7 +190,8 @@ function stripHtml(html: string): string {
 // mail looks consistent whether it originates in DD or the clone UI.
 function buildForwardBodies(
   src: MissiveMessage,
-  note: string
+  note: string,
+  noteHtml: string
 ): { bodyHtml: string; bodyText: string } {
   const sentDate = src.sent_at ? new Date(src.sent_at).toLocaleString() : "";
   const toLine = (src.to_addrs ?? []).join(", ");
@@ -196,10 +207,14 @@ function buildForwardBodies(
     `<br/>`;
   const originalHtml =
     src.body_html || escapeHtml(src.body_text || "").replace(/\n/g, "<br/>");
-  const noteHtml = note.trim()
-    ? `${escapeHtml(note.trim()).replace(/\n/g, "<br/>")}<br/><br/>`
-    : "";
-  const bodyHtml = `${noteHtml}${headerHtml}${originalHtml}`;
+  // The rich editor's note is a block (<div dir="ltr">…</div>), so one <br>
+  // after it gives the same blank line two do after plain inline text.
+  const noteBlock = noteHtml.trim()
+    ? `${noteHtml}<br/>`
+    : note.trim()
+      ? `${escapeHtml(note.trim()).replace(/\n/g, "<br/>")}<br/><br/>`
+      : "";
+  const bodyHtml = `${noteBlock}${headerHtml}${originalHtml}`;
 
   const headerText =
     `---------- Forwarded message ----------\n` +

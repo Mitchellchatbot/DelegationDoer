@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type MutableRefObject } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -46,10 +46,13 @@ export interface MediaPickerProps {
   // when multiple pickers are mounted (e.g. nested composers) and only
   // one should swallow Ctrl/Cmd+V. Defaults to true.
   capturePaste?: boolean;
+  // Receives this picker's upload function, so a host can attach files the
+  // picker didn't see itself (pasted or dropped into a rich email body).
+  uploadRef?: MutableRefObject<((files: File[]) => void) | null>;
 }
 
 export function MediaPicker({
-  value, onChange, taskId, label = "Add files", compact, hint, disabled, capturePaste = true
+  value, onChange, taskId, label = "Add files", compact, hint, disabled, capturePaste = true, uploadRef
 }: MediaPickerProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
@@ -92,6 +95,12 @@ export function MediaPicker({
       if (inputRef.current) inputRef.current.value = "";
     }
   }, [disabled, onChange, taskId, value]);
+
+  useEffect(() => {
+    if (!uploadRef) return;
+    uploadRef.current = (files) => void uploadFiles(files);
+    return () => { uploadRef.current = null; };
+  }, [uploadRef, uploadFiles]);
 
   // Document-level paste handler. Fires whenever the user pastes
   // anywhere on the page (Ctrl/Cmd+V). We only intercept if the

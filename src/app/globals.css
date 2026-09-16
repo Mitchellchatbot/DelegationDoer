@@ -157,6 +157,38 @@ body {
 
 .dim { opacity: 0.55; }
 
+/* ============ Email composer body (src/components/email-editor) ============
+   Tailwind's preflight strips list bullets, link and underline styling, so
+   the editor restores them. Line spacing matches how the mail renders
+   (one <div> per line, no paragraph margins). */
+.dd-email-content .ProseMirror {
+  outline: none;
+  font-size: 14px;
+  line-height: 1.55;
+  color: #101828;
+  overflow-wrap: anywhere;
+}
+.dd-email-content .ProseMirror div,
+.dd-email-content .ProseMirror p { margin: 0; }
+.dd-email-content .ProseMirror ul { list-style: disc; margin: 0 0 0 25px; padding: 0; }
+.dd-email-content .ProseMirror ol { list-style: decimal; margin: 0 0 0 25px; padding: 0; }
+.dd-email-content .ProseMirror ul ul { list-style: circle; }
+.dd-email-content .ProseMirror a { color: #063270; text-decoration: underline; cursor: text; }
+.dd-email-content .ProseMirror u { text-decoration: underline; }
+.dd-email-content .ProseMirror s,
+.dd-email-content .ProseMirror strike { text-decoration: line-through; }
+.dd-email-content .ProseMirror .is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  pointer-events: none;
+  color: rgb(15 23 42 / 0.4);
+}
+@media (max-width: 767px) {
+  /* Same iOS focus-zoom guard as the form controls above. */
+  .dd-email-content .ProseMirror { font-size: 16px; }
+}
+
 /* ============ App-wide animations ============ */
 
 @keyframes ddFadeInUp {

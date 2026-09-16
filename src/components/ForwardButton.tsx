@@ -1,13 +1,14 @@
 "use client";
 
 import * as Dialog from "@radix-ui/react-dialog";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import { Forward, Send, X, Loader2, Paperclip } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { MediaPicker } from "@/components/MediaPicker";
+import { EmailEditor, EmailFormatButtons, useEmailBody, useFormattingBar } from "@/components/email-editor";
 import type { TaskMedia } from "@/lib/types";
 
 // Per-message "Forward" affordance. Opens a Gmail-style modal pre-filled
@@ -19,7 +20,7 @@ import type { TaskMedia } from "@/lib/types";
 //
 // The original body + attachments are included by the server — we surface a
 // read-only summary here so the user knows what's being forwarded without
-// dumping raw HTML into an editable textarea (which would lose formatting).
+// putting someone else's raw HTML into an editable field.
 export function ForwardButton({
   accountId,
   threadId,
@@ -44,7 +45,11 @@ export function ForwardButton({
   const [cc, setCc] = useState("");
   const [showCc, setShowCc] = useState(false);
   const [subject, setSubject] = useState(fwdSubject(sourceSubject));
-  const [note, setNote] = useState("");
+  // The note above the forwarded email (rich editor).
+  const note = useEmailBody();
+  const [toolbarOpen, toggleToolbar] = useFormattingBar();
+  // Files pasted or dropped into the note are uploaded by the attachment picker.
+  const uploadRef = useRef<((files: File[]) => void) | null>(null);
   const [includeAttachments, setIncludeAttachments] = useState(true);
   // Extra files the user adds on top of the original attachments. Same wire
   // shape as compose/reply; the route fetches each URL and forwards it.
@@ -55,7 +60,7 @@ export function ForwardButton({
     setCc("");
     setShowCc(false);
     setSubject(fwdSubject(sourceSubject));
-    setNote("");
+    note.reset();
     setIncludeAttachments(true);
     setAttachments([]);
   }
@@ -72,6 +77,7 @@ export function ForwardButton({
       return;
     }
 
+    const message = note.current();
     setBusy(true);
     try {
       const res = await fetch(
@@ -85,7 +91,9 @@ export function ForwardButton({
             to: toList,
             cc: ccList,
             subject: subject.trim(),
-            note,
+            note: message.text,
+            // Only a formatted note needs HTML; plain ones are escaped server-side.
+            ...(message.isPlain ? {} : { noteHtml: message.html }),
             includeAttachments,
             attachmentUrls: attachments
           })
@@ -142,7 +150,7 @@ export function ForwardButton({
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 exit={{ opacity: 0, y: 24, scale: 0.96 }}
                 transition={{ duration: 0.22, ease: [0.2, 0.8, 0.2, 1] }}
-                className="pointer-events-auto w-[640px] max-w-full rounded-2xl border border-slate-200/70 bg-white shadow-[0_30px_60px_-20px_rgba(15,23,42,0.35)] overflow-hidden"
+                className="pointer-events-auto w-[640px] max-w-full max-h-[calc(100dvh-2rem)] flex flex-col rounded-2xl border border-slate-200/70 bg-white shadow-[0_30px_60px_-20px_rgba(15,23,42,0.35)] overflow-hidden"
               >
                 <header
                   className="px-5 py-3 flex items-center justify-between border-b border-slate-100"
@@ -162,7 +170,7 @@ export function ForwardButton({
                   </Dialog.Close>
                 </header>
 
-                <div className="p-4 space-y-2.5">
+                <div className="p-4 space-y-2.5 min-h-0 overflow-y-auto">
                   <FieldRow label="To">
                     <input
                       autoFocus
@@ -214,12 +222,13 @@ export function ForwardButton({
                     />
                   </FieldRow>
 
-                  <textarea
-                    value={note}
-                    onChange={(e) => setNote(e.target.value)}
+                  <EmailEditor
+                    {...note.editorProps}
                     placeholder="Add a message (optional) — it appears above the forwarded email…"
-                    rows={5}
-                    className="w-full text-sm bg-white/60 border border-slate-200/70 rounded-xl px-3 py-2.5 outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent/40 resize-none transition-all"
+                    ariaLabel="Message above the forwarded email"
+                    toolbarOpen={toolbarOpen}
+                    onAttachFiles={(files) => uploadRef.current?.(files)}
+                    contentClassName="min-h-[120px] max-h-[40vh]"
                   />
 
                   {/* Read-only summary of what's being forwarded. The original
@@ -251,10 +260,18 @@ export function ForwardButton({
                     onChange={setAttachments}
                     label="Attach more files"
                     compact
+                    uploadRef={uploadRef}
                   />
                 </div>
 
                 <footer className="px-4 py-3 border-t border-slate-100 flex items-center justify-end gap-2 bg-slate-50/60">
+                  <div className="mr-auto flex items-center gap-2">
+                    <EmailFormatButtons
+                      toolbarOpen={toolbarOpen}
+                      onToggleToolbar={toggleToolbar}
+                      onInsertLink={() => note.apiRef.current?.openLinkDialog()}
+                    />
+                  </div>
                   <Dialog.Close asChild>
                     <button
                       type="button"
@@ -266,7 +283,7 @@ export function ForwardButton({
                   <button
                     type="button"
                     onClick={submit}
-                    disabled={busy}
+                    disabled={busy || !note.ready}
                     className={cn(
                       "inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs font-semibold text-white shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-lift active:scale-95",
                       busy && "opacity-60 cursor-not-allowed hover:translate-y-0"

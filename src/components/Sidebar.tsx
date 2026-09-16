@@ -265,6 +265,9 @@ export function Sidebar({ user }: { user: User }) {
   // hijack the shortcut for text fields that legitimately want it).
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
+      // A focused editor that claims ⌘K itself (e.g. insert link) has
+      // already handled it.
+      if (e.defaultPrevented) return;
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
         setAiOpen((v) => !v);

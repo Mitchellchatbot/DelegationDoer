@@ -753,17 +753,17 @@ export function MultitaskBubbles({ user }: { user?: User }) {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement | null;
+      const typing =
+        !!el &&
+        (el.tagName === "INPUT" ||
+          el.tagName === "TEXTAREA" ||
+          el.isContentEditable);
       // Option+M, not Cmd+Shift+M — Chrome reserves Cmd+Shift+M for the
       // profile switcher and swallows it before the page ever sees it.
       // Matching on e.code keeps this working on non-QWERTY layouts, where
       // Option+M produces "µ" rather than "m".
       if (e.altKey && !e.metaKey && !e.ctrlKey && e.code === "KeyM") {
-        const el = e.target as HTMLElement | null;
-        const typing =
-          !!el &&
-          (el.tagName === "INPUT" ||
-            el.tagName === "TEXTAREA" ||
-            el.isContentEditable);
         if (!typing) {
           e.preventDefault();
           toggle();
@@ -771,8 +771,10 @@ export function MultitaskBubbles({ user }: { user?: User }) {
       }
       // Option+arrows mirror Windows' Win+arrows. Repeating the same side
       // cycles the column width instead of doing nothing, which is how you get
-      // from a half to a third without opening the picker.
+      // from a half to a third without opening the picker. Skipped while
+      // typing, where Option+arrow is macOS word-jump.
       if (
+        !typing &&
         e.altKey &&
         !e.metaKey &&
         !e.ctrlKey &&
@@ -792,7 +794,9 @@ export function MultitaskBubbles({ user }: { user?: User }) {
         }
       }
 
-      if (e.key === "Escape" && modeRef.current === "expanded") {
+      // An open dialog or popover consumes its own Escape (Radix calls
+      // preventDefault); don't also collapse the stack behind it.
+      if (e.key === "Escape" && !e.defaultPrevented && modeRef.current === "expanded") {
         if (pickerOpenRef.current) setPickerOpen(false);
         else setMode("collapsed");
       }

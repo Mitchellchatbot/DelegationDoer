@@ -14,6 +14,7 @@ import { fetchDeferredBody } from "@/lib/message-body-cache";
 import type { TaskMedia } from "@/lib/types";
 import type { MissiveMessage } from "@/lib/missive-client";
 import { rawEmail, shortName } from "@/lib/email-format";
+import { emailHtmlToText } from "@/lib/email-html-to-text";
 
 // Inline reply panel that sits at the bottom of a thread detail. Folded
 // into a "Reply" pill by default; expands into a Gmail-style composer
@@ -30,14 +31,6 @@ function escapeHtml(s: string): string {
 // the quote we append is HTML, so the whole body becomes HTML on send).
 function plainTextToHtml(t: string): string {
   return escapeHtml(t || "").replace(/\n/g, "<br/>");
-}
-
-// Browser-only HTML → text, for the plain-text MIME alternative. Called from
-// send() (a click handler), never during SSR/render.
-function htmlToText(html: string): string {
-  const div = document.createElement("div");
-  div.innerHTML = html || "";
-  return div.innerText;
 }
 
 // Gmail-style attribution date, e.g. "Fri, Jun 12, 2026 at 3:10 AM".
@@ -449,7 +442,7 @@ export function ReplyComposer({
       // its context — the same wire shape missiveclone sends (body_html =
       // userHtml + gmail_quote, body_text derived from the combined HTML).
       const fullHtml = plainTextToHtml(bodyText) + (quoteHtml || "");
-      const sendText = htmlToText(fullHtml);
+      const sendText = emailHtmlToText(fullHtml);
       const url = scheduling
         ? `/api/inboxes/threads/${encodeURIComponent(threadId)}/reply/schedule`
         : `/api/inboxes/threads/${encodeURIComponent(threadId)}/reply`;

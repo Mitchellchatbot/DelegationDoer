@@ -314,3 +314,7 @@ body {
   background-size: 100% 24px, 100% 24px, 100% 8px, 100% 8px;
   background-attachment: local, local, scroll, scroll;
 }
+
+/* Set by MetaOutboundFrame while the Meta ads dashboard is framed: that app has
+   its own bottom-right Ask AI launcher, and DD's would paint over it. */
+body.hide-ai-fab [data-ai-fab] { display: none; }

@@ -25,6 +25,9 @@ export function AIAssistantFab() {
         onClick={() => setOpen(true)}
         aria-label="Ask AI — operational assistant"
         title="Ask AI"
+        // A page framing another app with its own bottom-right launcher hides
+        // this one while the frame is up (body.hide-ai-fab, globals.css).
+        data-ai-fab
         className="fixed bottom-6 right-6 z-40 inline-flex items-center gap-2 rounded-full pl-4 pr-5 py-3 text-white text-sm font-semibold shadow-[0_10px_30px_-8px_rgba(10,64,153,0.6)] transition-all hover:-translate-y-0.5 hover:shadow-[0_16px_40px_-8px_rgba(10,64,153,0.7)] active:translate-y-0 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent motion-reduce:transition-none"
         style={{ background: "linear-gradient(135deg,#0a4099 0%,#063270 100%)" }}
       >

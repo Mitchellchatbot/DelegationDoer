@@ -1,0 +1,46 @@
+import "server-only";
+
+import type { OutboundBoardResponse, OutboundBoardResult } from "./outbound-board-types";
+import { fetchAdsDashboard, isAds, isNum, isNumOrNull, isObj, isRep, isStr, isStrOrNull } from "./outbound-summary";
+
+// The Scale Room's Outbound tab: the Meta ads dashboard's pipeline (every
+// prospect, by stage) and every month of our ad account, from its
+// GET /api/outbound/board. Same host, same secret and same fetch checks as the
+// summary card (ADS_DASHBOARD_URL + OUTBOUND_SUMMARY_SECRET, see
+// outbound-summary.ts).
+
+// Every prospect plus Finance's whole ledger — give it the summary's room.
+const TIMEOUT_MS = 25_000;
+
+export function getOutboundBoard(timeoutMs = TIMEOUT_MS): Promise<OutboundBoardResult> {
+  return fetchAdsDashboard("/api/outbound/board", isBoard, timeoutMs, "Outbound board failed");
+}
+
+// Every field the tab reads. The two apps deploy separately, so a renamed or
+// dropped field must land as "unexpected shape" (one message on the tab), not
+// a TypeError mid-render.
+function isProspect(v: unknown): boolean {
+  return (
+    isObj(v) && isStr(v.stage) &&
+    isStrOrNull(v.facility) && isStrOrNull(v.name) && isStrOrNull(v.role) &&
+    isStrOrNull(v.location) && isStrOrNull(v.website) && isStrOrNull(v.source) &&
+    isStrOrNull(v.owner) && isStrOrNull(v.lastTextedBy) && isNumOrNull(v.value) &&
+    isStrOrNull(v.followUp) && isStrOrNull(v.nextAction) && isStrOrNull(v.nextActionAt) &&
+    isStrOrNull(v.lastContactedAt) && isStrOrNull(v.createdAt)
+  );
+}
+
+function isStage(v: unknown): boolean {
+  return isObj(v) && isStr(v.key) && isStr(v.label) && isNum(v.count);
+}
+
+function isBoard(raw: unknown): raw is OutboundBoardResponse {
+  if (!isObj(raw) || !isStr(raw.generatedAt)) return false;
+  const p = raw.pipeline;
+  if (!isObj(p) || !isNum(p.total) || !isNum(p.booked) || !isNum(p.notBooked)) return false;
+  if (!Array.isArray(raw.stages) || !raw.stages.every(isStage)) return false;
+  const q = raw.queues;
+  if (!isObj(q) || !Array.isArray(q.reps) || !q.reps.every(isRep) || !isNum(q.backlog)) return false;
+  if (!Array.isArray(raw.prospects) || !raw.prospects.every(isProspect)) return false;
+  return isAds(raw.ads);
+}

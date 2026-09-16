@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { cn } from "@/lib/utils";
-import { META_DAYS, type MetaRow, type OutboundMetaResponse, type OutboundMetaResult } from "@/lib/outbound-meta-types";
+import { META_DAYS, type MetaDay, type MetaRow, type OutboundMetaResponse, type OutboundMetaResult } from "@/lib/outbound-meta-types";
 
 // Our own Meta ad account, laid out the way the Meta ads dashboard lays out a
 // client's (Villa's) Dashboard: the funnel row with week-over-week change and
@@ -27,12 +27,22 @@ function usd(n: number | null | undefined, digits = 0): string {
 function int(n: number | null | undefined): string {
   return n == null || !Number.isFinite(n) ? "—" : Math.round(n).toLocaleString("en-US");
 }
-function pct(n: number | null | undefined, digits = 2): string {
+function pct(n: number | null | undefined, digits = 1): string {
   return n == null || !Number.isFinite(n) ? "—" : `${n.toFixed(digits)}%`;
 }
 const div = (a: number, b: number) => (b > 0 ? a / b : null);
 
-export function OutboundMetaDashboard({ result, days }: { result: OutboundMetaResult | null; days: number }) {
+export function OutboundMetaDashboard({
+  result,
+  days,
+  engagementDaily
+}: {
+  result: OutboundMetaResult | null;
+  days: number;
+  // Up to 30 days ending yesterday, for the engagement row's 7d / 30d figures,
+  // which the Meta ads dashboard shows regardless of the picked range.
+  engagementDaily: MetaDay[] | null;
+}) {
   return (
     <div className="space-y-4">
       <RangeBar days={days} data={result?.ok ? result.data : null} />
@@ -41,7 +51,7 @@ export function OutboundMetaDashboard({ result, days }: { result: OutboundMetaRe
           Couldn&apos;t read our ad account from the Meta ads dashboard — {result.error}
         </div>
       ) : (
-        <Dashboard data={result.data} />
+        <Dashboard data={result.data} engagementDaily={engagementDaily ?? result.data.daily} />
       )}
     </div>
   );
@@ -92,41 +102,118 @@ const SPARK: Record<Tint, string> = {
   indigo: "#6366f1", emerald: "#3fae74", teal: "#0ea5a4", violet: "#8b5cf6", amber: "#f59e0b", rose: "#ec4899", sky: "#38bdf8"
 };
 
-function Dashboard({ data }: { data: OutboundMetaResponse }) {
-  const { totals: t, priorTotals: p, pipeline, daily } = data;
+// A window's figures the way the Meta ads dashboard aggregates them
+// (awfmp lib/metrics.ts): ratios from summed spend / clicks / impressions,
+// frequency as the average of the days that had one (it doesn't sum across
+// days), leads per day.
+type Agg = { spend: number; leads: number; clicks: number; impressions: number; frequency: number; cpl: number; ctr: number; cpc: number; cpm: number; avgLeads: number };
+function agg(days: MetaDay[]): Agg {
+  const n = Math.max(days.length, 1);
+  const spend = days.reduce((a, d) => a + d.spend, 0);
+  const leads = days.reduce((a, d) => a + d.leads, 0);
+  const clicks = days.reduce((a, d) => a + d.clicks, 0);
+  const impressions = days.reduce((a, d) => a + d.impressions, 0);
+  const fr = days.filter((d) => (d.frequency ?? 0) > 0);
+  return {
+    spend, leads, clicks, impressions,
+    frequency: fr.length ? fr.reduce((a, d) => a + (d.frequency ?? 0), 0) / fr.length : 0,
+    cpl: leads ? spend / leads : 0,
+    ctr: impressions ? (clicks / impressions) * 100 : 0,
+    cpc: clicks ? spend / clicks : 0,
+    cpm: impressions ? (spend / impressions) * 1000 : 0,
+    avgLeads: leads / n
+  };
+}
+
+// awfmp classify(): yesterday against the 7-day baseline.
+type Status = "green" | "yellow" | "red";
+function classify(yesterday: Agg, last7: Agg): { status: Status; line: string } {
+  const leadsRatio = last7.avgLeads ? yesterday.leads / last7.avgLeads : 1;
+  const cplRatio = last7.cpl ? yesterday.cpl / last7.cpl : 1;
+  if (leadsRatio < 0.5 || cplRatio > 2) return { status: "red", line: "Leads down or CPL up sharply vs the 7-day baseline" };
+  if (leadsRatio < 0.7 || cplRatio > 1.3) return { status: "yellow", line: "Running a bit off the 7-day baseline" };
+  return { status: "green", line: "Yesterday is in line with the 7-day baseline" };
+}
+const STATUS: Record<Status, { box: string; text: string; badge: string; emoji: string; label: string }> = {
+  green: { box: "bg-emerald-50/70 ring-emerald-200", text: "text-emerald-700", badge: "bg-emerald-100", emoji: "✅", label: "Holding steady" },
+  yellow: { box: "bg-amber-50/80 ring-amber-200", text: "text-amber-700", badge: "bg-amber-100", emoji: "👀", label: "Off baseline · keep an eye on it" },
+  red: { box: "bg-rose-50/70 ring-rose-200", text: "text-rose-700", badge: "bg-rose-100", emoji: "🚨", label: "Worth a closer look" }
+};
+
+const TONE = { good: "text-emerald-600", bad: "text-rose-600", warn: "text-amber-600", flat: "text-muted" } as const;
+
+function Dashboard({ data, engagementDaily }: { data: OutboundMetaResponse; engagementDaily: MetaDay[] }) {
+  const { totals: t, pipeline, daily } = data;
   const n = data.range.days;
+  const windowLabel = `Last ${RANGE_LABEL[n] ?? `${n} days`}`;
   const spendSeries = daily.map((d) => d.spend);
   const leadSeries = daily.map((d) => d.leads);
 
+  // Engagement: the last full day, with 7d and 30d beside it (awfmp's snapshot).
+  const eng = engagementDaily.length ? engagementDaily : daily;
+  const lastDay = eng[eng.length - 1];
+  const yesterday = agg(lastDay ? [lastDay] : []);
+  const last7 = agg(eng.slice(-7));
+  const last30 = eng.length >= 30 ? agg(eng.slice(-30)) : null;
+  const asOf = lastDay?.date ?? data.range.to;
+  const when = asOf.slice(5); // MM-DD, as awfmp labels "CTR · 09-15"
+  const status = classify(yesterday, last7);
+  const st = STATUS[status.status];
+  const fatigue = last7.frequency > 2.5 ? { text: "fatigue risk", tone: "bad" as const } : last7.frequency > 2 ? { text: "watch", tone: "warn" as const } : { text: "healthy", tone: "good" as const };
+  const sub = (f: (a: Agg) => string) => `7d ${f(last7)}${last30 ? ` · 30d ${f(last30)}` : ""}`;
+  const leadsVs7 = last7.avgLeads ? ((yesterday.leads - last7.avgLeads) / last7.avgLeads) * 100 : null;
+
   return (
     <div className="space-y-4">
-      {/* Funnel row */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-        <FunnelCell tint="indigo" label="Spend (Meta)" cur={t.spend} prior={p.spend} format={(v) => usd(v)} days={n} series={spendSeries} />
-        <FunnelCell tint="emerald" label="Leads · Meta" cur={t.leads} prior={p.leads} format={int} days={n} series={leadSeries} />
-        <FunnelCell tint="teal" label="Prospects · ad form" cur={pipeline.prospects} prior={pipeline.priorProspects} format={int} days={n} footer="created in window · Outbound" />
-        <FunnelCell tint="violet" label="Calls booked" cur={pipeline.booked} prior={pipeline.priorBooked} format={int} days={n} footer={`of those, now booked · ${pct(div(pipeline.booked * 100, pipeline.prospects), 0)} of prospects`} />
-      </div>
+      <section className="space-y-3">
+        <div className="flex items-baseline justify-between gap-3 flex-wrap">
+          <h2 className="text-lg font-semibold tracking-tight text-ink">
+            Funnel <span className="font-semibold text-muted">· Facebook · {windowLabel}</span>
+          </h2>
+          <div className="text-[11px] text-muted">{data.range.from} → {data.range.to}</div>
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+          <FunnelCell tint="indigo" label="Spend (Meta)" cur={t.spend} prior={data.priorTotals.spend} format={(v) => usd(v)} days={n} series={spendSeries} />
+          <FunnelCell tint="emerald" label="Leads · Meta" cur={t.leads} prior={data.priorTotals.leads} format={int} days={n} series={leadSeries} />
+          <FunnelCell tint="teal" label="Prospects · ad form" cur={pipeline.prospects} prior={pipeline.priorProspects} format={int} days={n} />
+          <FunnelCell tint="violet" label="Calls booked" cur={pipeline.booked} prior={pipeline.priorBooked} format={int} days={n} footer={`booked / lead ${pct(div(pipeline.booked * 100, t.leads))}`} />
+        </div>
 
-      {/* Cost row */}
-      <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
-        <CostCell tint="emerald" label="CPL (Cost / Lead)" value={t.cpl} prior={p.cpl} days={n} />
-        <CostCell tint="teal" label="Cost / Prospect" value={div(t.spend, pipeline.prospects)} prior={div(p.spend, pipeline.priorProspects)} days={n} />
-        <CostCell tint="violet" label="Cost / Booking" value={div(t.spend, pipeline.booked)} prior={div(p.spend, pipeline.priorBooked)} days={n} highlight />
-      </div>
+        <div className="pt-1 text-[11px] font-medium uppercase tracking-wider text-muted">Efficiency · {windowLabel}</div>
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+          <CostCell tint="emerald" label="CPL (Cost / Lead)" value={t.cpl} days={n} />
+          <CostCell tint="teal" label="Cost / prospect" value={div(t.spend, pipeline.prospects)} days={n} />
+          <CostCell tint="violet" label="Cost / booking" value={div(t.spend, pipeline.booked)} days={n} />
+        </div>
+      </section>
 
-      {/* Delivery cards */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
-        <MetricCard label="CTR" value={pct(t.ctr)} sub={`prior ${pct(p.ctr)}`} delta={change(t.ctr, p.ctr, false)} />
-        <MetricCard
-          label="Frequency"
-          value={t.frequency == null ? "—" : t.frequency.toFixed(2)}
-          sub={`prior ${p.frequency == null ? "—" : p.frequency.toFixed(2)}`}
-          note={t.frequency == null ? null : t.frequency > 2.5 ? { text: "fatigue risk", tone: "bad" } : t.frequency > 2 ? { text: "watch", tone: "warn" } : { text: "healthy", tone: "good" }}
-        />
-        <MetricCard label="CPC" value={usd(t.cpc, 2)} sub={`prior ${usd(p.cpc, 2)}`} delta={change(t.cpc, p.cpc, true)} />
-        <MetricCard label="CPM" value={usd(t.cpm, 2)} sub={`prior ${usd(p.cpm, 2)}`} delta={change(t.cpm, p.cpm, true)} />
-        <MetricCard label="Reach" value={int(t.reach)} sub={`${int(t.impressions)} impressions · ${int(t.linkClicks)} link clicks`} />
+      <section className="space-y-3">
+        <h2 className="text-lg font-semibold tracking-tight text-ink">
+          Meta engagement <span className="font-semibold text-muted">· live</span>
+        </h2>
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+          <MetricCard label={`CTR · ${when}`} value={pct(yesterday.ctr)} sub={sub((a) => pct(a.ctr))} note={{ text: "last full day", tone: "flat" }} />
+          <MetricCard label="Frequency" value={yesterday.frequency.toFixed(2)} sub={sub((a) => a.frequency.toFixed(2))} note={fatigue} />
+          <MetricCard label={`CPC · ${when}`} value={usd(yesterday.cpc, 2)} sub={sub((a) => usd(a.cpc, 2))} note={{ text: "last full day", tone: "flat" }} />
+          <MetricCard label={`CPM · ${when}`} value={usd(yesterday.cpm, 2)} sub={sub((a) => usd(a.cpm, 2))} note={{ text: "last full day", tone: "flat" }} />
+          <MetricCard
+            label="Meta-reported leads"
+            value={int(yesterday.leads)}
+            sub={`${sub((a) => a.avgLeads.toFixed(1))} · cross-check`}
+            note={leadsVs7 == null ? null : { text: `${leadsVs7 >= 0 ? "+" : ""}${leadsVs7.toFixed(0)}% vs 7d`, tone: "flat" }}
+          />
+        </div>
+      </section>
+
+      <div className={cn("flex items-center justify-between gap-4 flex-wrap rounded-2xl px-5 py-4 ring-1", st.box)}>
+        <div className="flex items-center gap-3.5">
+          <span className={cn("grid h-[42px] w-[42px] shrink-0 place-items-center rounded-[14px] text-lg", st.badge)} aria-hidden>{st.emoji}</span>
+          <div>
+            <div className={cn("text-[15px] font-bold", st.text)}>{st.label}</div>
+            <div className="mt-0.5 text-[13px] text-muted">{status.line}</div>
+          </div>
+        </div>
+        <div className="text-xs tabular-nums text-muted">as of {asOf}</div>
       </div>
 
       <DailyChart data={data} />
@@ -141,24 +228,14 @@ function Dashboard({ data }: { data: OutboundMetaResponse }) {
       <AdsTable ads={data.ads} />
 
       <p className="px-1 text-[11px] leading-relaxed text-muted">
-        Read live from Meta by the Meta ads dashboard for {day(data.range.from)} – {day(data.range.to)} (full days, ending
-        yesterday), compared with {day(data.prior.from)} – {day(data.prior.to)}. Leads are Meta-reported. Prospects are Outbound
-        leads that came in through the ad form in that window, and booked is how many of them are at a booked stage now.
-        Updated {new Date(data.generatedAt).toISOString().slice(11, 16)} UTC.
+        Read live from Meta by the Meta ads dashboard: {data.range.from} → {data.range.to} (full days, ending yesterday), compared
+        with {data.prior.from} → {data.prior.to}. Leads are Meta-reported. Prospects are Outbound leads that came in through the ad
+        form in that window; calls booked is how many of them are at a booked stage now. Engagement is the last full day with its
+        7- and 30-day figures, whatever range is picked.
       </p>
     </div>
   );
 }
-
-// Week-over-week style change, coloured by whether moving that way is good.
-function change(cur: number | null, prior: number | null, lowerBetter: boolean): { text: string; tone: "good" | "bad" | "flat" } | null {
-  if (cur == null || prior == null || prior === 0) return null;
-  const d = ((cur - prior) / prior) * 100;
-  const better = lowerBetter ? cur <= prior : cur >= prior;
-  return { text: `${d >= 0 ? "+" : ""}${d.toFixed(0)}% vs prior`, tone: Math.abs(d) < 0.5 ? "flat" : better ? "good" : "bad" };
-}
-
-const TONE = { good: "text-emerald-600", bad: "text-amber-600", warn: "text-amber-600", flat: "text-muted" } as const;
 
 function FunnelCell({
   tint, label, cur, prior, format, days, series, footer
@@ -184,15 +261,12 @@ function FunnelCell({
   );
 }
 
-function CostCell({ tint, label, value, prior, days, highlight }: { tint: Tint; label: string; value: number | null; prior: number | null; days: number; highlight?: boolean }) {
-  const c = change(value, prior, true);
+function CostCell({ tint, label, value, days }: { tint: Tint; label: string; value: number | null; days: number }) {
   return (
-    <div className={cn("rounded-2xl border p-4 shadow-soft", TINT[tint], highlight && "ring-1 ring-violet-300")}>
+    <div className={cn("rounded-2xl border p-4 shadow-soft", TINT[tint])}>
       <div className="text-[11px] font-semibold uppercase tracking-wide text-muted">{label}</div>
-      <div className="mt-2 text-[24px] font-bold leading-none tabular-nums text-ink">{usd(value, 2)}</div>
-      <div className="mt-2 text-[11px] font-medium text-muted">
-        {days}-day average{c && <span className={cn("ml-1.5", TONE[c.tone])}>· {c.text}</span>}
-      </div>
+      <div className="mt-2 text-[24px] font-bold leading-none tabular-nums text-ink">{usd(value)}</div>
+      <div className="mt-2 text-[11px] font-medium text-muted">{days}-day average</div>
     </div>
   );
 }
@@ -200,7 +274,7 @@ function CostCell({ tint, label, value, prior, days, highlight }: { tint: Tint; 
 function MetricCard({
   label, value, sub, delta, note
 }: {
-  label: string; value: string; sub?: string; delta?: { text: string; tone: "good" | "bad" | "flat" } | null; note?: { text: string; tone: "good" | "warn" | "bad" } | null;
+  label: string; value: string; sub?: string; delta?: { text: string; tone: "good" | "bad" | "flat" } | null; note?: { text: string; tone: "good" | "warn" | "bad" | "flat" } | null;
 }) {
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-soft">

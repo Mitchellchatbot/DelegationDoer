@@ -82,9 +82,21 @@ export default async function ScaleOutboundPage({
 // on DD's side.
 async function OutboundTabSection({ days, view }: { days: ReturnType<typeof metaDays>; view: OutboundView | null }) {
   const sources = await getScaleSources();
-  // Both reads in parallel; each fails on its own into its own view.
-  const [result, meta] = sources.outbound
-    ? await Promise.all([getOutboundBoard(), getOutboundMeta(days)])
-    : [null, null];
-  return <OutboundTab result={result} sourceOff={!sources.outbound} meta={meta} metaDays={days} initialView={view} />;
+  // All reads in parallel; each fails on its own into its own view. The
+  // engagement row always shows 7d and 30d figures (as the Meta ads dashboard
+  // does), so a shorter range also reads the last 30 days for it.
+  const [result, meta, meta30] = sources.outbound
+    ? await Promise.all([getOutboundBoard(), getOutboundMeta(days), days < 30 ? getOutboundMeta(30) : null])
+    : [null, null, null];
+  const engagementDaily = meta30?.ok ? meta30.data.daily : meta?.ok ? meta.data.daily : null;
+  return (
+    <OutboundTab
+      result={result}
+      sourceOff={!sources.outbound}
+      meta={meta}
+      metaDays={days}
+      engagementDaily={engagementDaily}
+      initialView={view}
+    />
+  );
 }

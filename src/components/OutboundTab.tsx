@@ -10,7 +10,7 @@ import type {
 } from "@/lib/outbound-board-types";
 import { MetaOutboundFrame } from "@/components/MetaOutboundFrame";
 import { OutboundMetaDashboard } from "@/components/OutboundMetaDashboard";
-import type { OutboundMetaResult } from "@/lib/outbound-meta-types";
+import type { MetaDay, OutboundMetaResult } from "@/lib/outbound-meta-types";
 
 // The Scale Room's Outbound tab. Pipeline and Ads render the Meta ads
 // dashboard's own figures here in DD (GET /api/outbound/board — every count,
@@ -111,12 +111,14 @@ export function OutboundTab({
   sourceOff,
   meta,
   metaDays,
+  engagementDaily,
   initialView
 }: {
   result: OutboundBoardResult | null;
   sourceOff: boolean;
   meta: OutboundMetaResult | null;
   metaDays: number;
+  engagementDaily: MetaDay[] | null;
   initialView: View | null;
 }) {
   const data = result?.ok ? result.data : null;
@@ -167,7 +169,7 @@ export function OutboundTab({
           Switch it back on from the Overview tab, or use the Live board.
         </Notice>
       ) : view === "meta" ? (
-        <OutboundMetaDashboard result={meta} days={metaDays} />
+        <OutboundMetaDashboard result={meta} days={metaDays} engagementDaily={engagementDaily} />
       ) : !data ? (
         <Notice>
           Couldn&apos;t load from the Meta ads dashboard — {result && !result.ok ? result.error : "no response"}. The Live

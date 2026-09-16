@@ -85,7 +85,7 @@ function linesOf(el: Element, pre: boolean): string[] {
 
 function walk(node: Node, buf: LineBuffer, pre: boolean) {
   if (node.nodeType === Node.TEXT_NODE) {
-    const data = (node.nodeValue || "").replace(/ /g, " ");
+    const data = (node.nodeValue || "").replace(/\u00a0/g, " ");
     if (!pre) {
       buf.text(data.replace(/[\t\n\r\f ]+/g, " "));
       return;

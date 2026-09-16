@@ -177,6 +177,7 @@ body {
 .dd-email-content .ProseMirror u { text-decoration: underline; }
 .dd-email-content .ProseMirror s,
 .dd-email-content .ProseMirror strike { text-decoration: line-through; }
+.dd-email-content .ProseMirror blockquote { margin: 0 0 0 .8ex; border-left: 1px solid #ccc; padding-left: 1ex; }
 .dd-email-content .ProseMirror .is-editor-empty:first-child::before {
   content: attr(data-placeholder);
   float: left;

@@ -67,7 +67,11 @@ const PUBLIC_PREFIXES = [
   // resolve the token themselves and 404 on an unknown or revoked one; see
   // lib/client-onboarding.getLinkByToken.
   "/onboarding",
-  "/api/onboarding"
+  "/api/onboarding",
+  // MCP connector for outside AI agents (Mitchell's Claude agent). No Supabase
+  // cookie — the handler checks a bearer key from AGENT_API_KEYS and fails
+  // closed, so this makes it reachable, not public.
+  "/api/mcp"
 ];
 
 function isPublic(pathname: string): boolean {

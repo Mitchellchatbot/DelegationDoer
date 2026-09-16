@@ -2163,7 +2163,7 @@ async function outboundGate(ctx: ToolContext): Promise<{ error: string } | null>
   return null;
 }
 
-async function getOutboundPipelineTool(input: Record<string, unknown>, ctx: ToolContext) {
+export async function getOutboundPipelineTool(input: Record<string, unknown>, ctx: ToolContext) {
   const denied = await outboundGate(ctx);
   if (denied) return denied;
   const res = await getOutboundBoard(20_000);
@@ -2248,7 +2248,7 @@ async function getOutboundPipelineTool(input: Record<string, unknown>, ctx: Tool
   };
 }
 
-async function getMetaAdsTool(input: Record<string, unknown>, ctx: ToolContext) {
+export async function getMetaAdsTool(input: Record<string, unknown>, ctx: ToolContext) {
   const denied = await outboundGate(ctx);
   if (denied) return denied;
   const days = metaDays(input.days);

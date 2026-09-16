@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 import {
   ListTodo, Users, Sparkles, Crown, Mail, Home as HomeIcon, Sunrise, Moon, Briefcase,
   CalendarDays, FolderKanban, ClipboardCheck, BookOpen, Settings, LifeBuoy, LayoutGrid,
-  Users2, Lock, Rocket
+  Users2, Lock, Rocket, Megaphone
 } from "lucide-react";
 // Sparkles is reused for both Ask AI and Updates — same icon, different context.
 import { useEffect, useState } from "react";
@@ -54,6 +54,9 @@ const MANAGE_HEAD_ITEM: NavItem = { href: "/leader", label: "Manage", icon: User
 const SETTINGS_ITEM: NavItem = { href: "/settings", label: "Settings", icon: Settings, tone: "indigo" };
 const FINANCE_ITEM: NavItem = { href: "/finance", label: "Finance", icon: Lock, tone: "emerald" };
 const SCALE_ITEM: NavItem = { href: "/scale", label: "Scale Room", icon: Rocket, tone: "indigo" };
+// The Scale Room's Outbound tab — the Meta ads dashboard's pipeline and our ad
+// account, framed. Its own row so it's one click away, not a tab inside a tab.
+const SCALE_OUTBOUND_ITEM: NavItem = { href: "/scale/outbound", label: "Outbound", icon: Megaphone, tone: "fuchsia" };
 
 // Sidebar lives on a soft slate-blue panel now. Per-row tones drive:
 //   - idle: a low-saturation glyph that reads on the dark background
@@ -323,7 +326,7 @@ export function Sidebar({ user }: { user: User }) {
     UPDATES_ITEM,
     SOPS_ITEM,
     manageOrPeople,
-    ...(isOwner(user) ? [SCALE_ITEM, FINANCE_ITEM] : []),
+    ...(isOwner(user) ? [SCALE_ITEM, SCALE_OUTBOUND_ITEM, FINANCE_ITEM] : []),
     SETTINGS_ITEM
   ];
   // Section partition. Each entry pairs a label with the hrefs that
@@ -335,8 +338,14 @@ export function Sidebar({ user }: { user: User }) {
     { label: "Work", hrefs: ["/tasks", "/schedule", "/projects"] },
     { label: "Communication", hrefs: ["/inboxes", "/approvals", "/customer-support"] },
     { label: "Knowledge", hrefs: ["/clients", "/client-teams", "/updates", "/sops"] },
-    { label: "Account", hrefs: ["/people", "/leader", "/scale", "/finance", "/settings"] }
+    { label: "Account", hrefs: ["/people", "/leader", "/scale", "/scale/outbound", "/finance", "/settings"] }
   ];
+  // The one row to highlight: the LONGEST href the path sits under, so
+  // /scale/outbound lights its own row and not Scale Room's as well.
+  const activeHref = NAV
+    .map((i) => i.href)
+    .filter((h) => path === h || (h !== "/" && path.startsWith(h)))
+    .sort((a, b) => b.length - a.length)[0];
   function groupFor(href: string): string | null {
     const g = NAV_GROUPS.find((g) => g.hrefs.includes(href));
     return g ? g.label : null;
@@ -386,7 +395,7 @@ export function Sidebar({ user }: { user: User }) {
         <nav className="space-y-0.5">
           {NAV.map((item, idx) => {
             const Icon = item.icon;
-            const active = path === item.href || (item.href !== "/" && path.startsWith(item.href));
+            const active = item.href === activeHref;
             const tone = TONE_STYLES[item.tone];
             // Render a "• Label" group header above the first item of
             // each section. Mirrors AA's sidebar where nav rows sit

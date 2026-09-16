@@ -19,6 +19,7 @@ import { getOutboundSummary } from "@/lib/outbound-summary";
 import { getScaleSources } from "@/lib/scale-sources";
 import type { ScaleSourceFlags } from "@/lib/scale-sources-types";
 import { ScaleSourceSwitches } from "@/components/ScaleSourceSwitches";
+import { ScaleTabs } from "@/components/ScaleTabs";
 import type { ParsedPnl } from "@/lib/pnl-parse";
 
 export const dynamic = "force-dynamic";
@@ -113,6 +114,9 @@ export default async function ScalePage() {
           </p>
         </div>
       </div>
+
+      {/* Overview (this page) · Outbound (the full pipeline + ad account) */}
+      <ScaleTabs active="overview" />
 
       {/* Which outside apps the room (and the brain) reads */}
       <ScaleSourceSwitches initial={sources} />

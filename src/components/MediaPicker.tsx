@@ -101,6 +101,9 @@ export function MediaPicker({
   useEffect(() => {
     if (!capturePaste || disabled) return;
     const handler = (e: ClipboardEvent) => {
+      // Already handled — by a rich editor that attaches files itself, or by
+      // another mounted picker (without this, both would upload the file).
+      if (e.defaultPrevented) return;
       const items = e.clipboardData?.items;
       if (!items || items.length === 0) return;
       const files: File[] = [];

@@ -99,9 +99,13 @@ export interface UpsertDraftInput {
 // recipient + subject are auto-derived from the thread, so they don't count —
 // an empty body means an empty reply that shouldn't linger in the folder.
 function isEmptyDraft(input: UpsertDraftInput): boolean {
+  // HTML counts only if it renders something: an emptied rich editor leaves
+  // markup like <div><br></div> or &nbsp; behind.
+  const html = input.bodyHtml ?? "";
   const hasBody =
     input.bodyText.trim().length > 0 ||
-    (input.bodyHtml ?? "").replace(/<br\/?>/g, "").trim().length > 0;
+    /<img\b/i.test(html) ||
+    html.replace(/<[^>]*>/g, "").replace(/&nbsp;|&#160;|&#xa0;/gi, " ").trim().length > 0;
   const hasAttachments = (input.attachments ?? []).length > 0;
   if (hasBody || hasAttachments) return false;
 

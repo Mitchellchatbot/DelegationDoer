@@ -66,7 +66,9 @@ export function ThreadConversation({
     const prevOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setMaximized(false);
+      // A popover or dialog inside the conversation consumes its own Escape
+      // (Radix calls preventDefault); only a bare Escape un-maximizes.
+      if (e.key === "Escape" && !e.defaultPrevented) setMaximized(false);
     };
     window.addEventListener("keydown", onKey);
     return () => {

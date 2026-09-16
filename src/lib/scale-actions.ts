@@ -4,8 +4,9 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { getClients } from "@/lib/clients-data";
 import { getLatestTouchpointsByClient, computeTouchpointLabel, daysSince } from "@/lib/client-touchpoint";
 import { listThreads } from "@/lib/missive-client";
-import { getOwnerAccount } from "@/lib/owner-inbox";
+import { getOwnerAccount, AUTOMATED_SUBJECT } from "@/lib/owner-inbox";
 import { OWNER_EMAIL } from "@/lib/access";
+import { getAnthropic, MODELS } from "@/lib/anthropic-client";
 
 // Two owner-only "Act now" modules for the Scale Room:
 //   Reach out  — paying clients who've gone quiet (no personal email in a while)
@@ -104,6 +105,11 @@ export async function getReactivatePitches(limit = 15): Promise<ReactivatePitch[
   } catch {
     return [];
   }
+  let mrrRows: { company: string }[] = [];
+  try {
+    const { data } = await getSupabaseAdmin().from("mrr_entries").select("company");
+    mrrRows = (data ?? []) as { company: string }[];
+  } catch { /* MRR sheet unavailable — board names still exclude clients */ }
   const ownerEmail = (owner?.email ?? OWNER_EMAIL).toLowerCase();
   const now = Date.now();
 
@@ -118,9 +124,29 @@ export async function getReactivatePitches(limit = 15): Promise<ReactivatePitch[
     (clients ?? []).flatMap((c) => [c.website, ...(c.websites ?? [])]).map(dnorm).filter((d) => d && d.includes("."))
   );
   const clientEmails = new Set((clients ?? []).flatMap((c) => c.contactEmails ?? []).map((e) => e.toLowerCase()));
+  // The board often lacks a website domain, so also match the recipient's
+  // domain ROOT against client NAMES (changestreatment.com <-> "Changes
+  // Treatment", questiop.com <-> "Quest IOP", fountainhillsrecovery.com <->
+  // "Fountain Hills Recovery").
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+  // "Client" spans the board AND the manual MRR sheet (Facebook-side clients like
+  // Alter BH, Ojai, Recovery Unplugged live there, not the board).
+  const clientNameTokens = [...(clients ?? []).map((c) => c.name), ...mrrRows.map((r) => r.company)]
+    .map(norm)
+    .filter((n) => n.length >= 5);
   const domainOf = (addr: string) => {
     const m = addr.toLowerCase().match(/[\w.+-]+@([\w.-]+)/);
     return m ? m[1].replace(/^www\./, "") : "";
+  };
+  const isClientRecipient = (addr: string): boolean => {
+    const rl = addr.toLowerCase();
+    if (clientEmails.has(rl)) return true;
+    const dom = domainOf(addr);
+    if (!dom) return false;
+    if (clientDomains.has(dom)) return true;
+    const root = norm(dom.split(".")[0]);
+    if (root.length < 5) return false;
+    return clientNameTokens.some((n) => n === root || n.includes(root) || root.includes(n));
   };
 
   const out: ReactivatePitch[] = [];
@@ -130,13 +156,13 @@ export async function getReactivatePitches(limit = 15): Promise<ReactivatePitch[
     if (!lastFrom.includes(ownerEmail)) continue;
     const sentAt = t.last_outbound_at ?? t.last_message_at;
     if (!sentAt) continue;
-    const daysSilent = Math.floor((now - Date.parse(sentAt)) / 86_400_000);
-    if (daysSilent < 4 || daysSilent > 300) continue; // pitches from the last ~300 days you never heard back on
+    const daysSilent = Math.max(0, Math.floor((now - Date.parse(sentAt)) / 86_400_000));
+    if (daysSilent > 360) continue; // every prospect pitch from the last 360 days with no reply — including today's
+    // Drop non-pitch noise (invoices, calendar invites, onboarding/ops notices).
+    if (AUTOMATED_SUBJECT.test(t.subject || "")) continue;
     const recipient = displayRecipient(t.participants ?? [], ownerEmail);
     if (!recipient || INTERNAL.test(recipient)) continue; // skip internal team threads
-    // Skip existing clients — Reactivate is prospects only.
-    const rl = recipient.toLowerCase();
-    if (clientEmails.has(rl) || (domainOf(recipient) && clientDomains.has(domainOf(recipient)))) continue;
+    if (isClientRecipient(recipient)) continue; // prospects only — no existing clients
     out.push({
       id: t.id,
       subject: t.subject || "(no subject)",
@@ -146,7 +172,40 @@ export async function getReactivatePitches(limit = 15): Promise<ReactivatePitch[
       daysSilent
     });
   }
-  // Most-recently-cold first — warmest to revive.
-  out.sort((a, b) => a.daysSilent - b.daysSilent);
-  return out.slice(0, limit);
+  out.sort((a, b) => a.daysSilent - b.daysSilent); // most-recently-cold first
+
+  // The deterministic pass still lets through non-pitches (invoices, calendar
+  // invites, onboarding/ops for people already engaged). An AI pass keeps ONLY
+  // genuine sales pitches / outreach to a potential client awaiting a reply.
+  const pitches = await keepPitches(out.slice(0, 40));
+  return pitches.slice(0, limit);
+}
+
+// Classify sent threads: keep only real prospect pitches/outreach, drop invoices,
+// receipts, calendar invites, onboarding/service ops, and internal notes. Falls
+// back to the deterministic set if the model is unavailable.
+async function keepPitches(rows: ReactivatePitch[]): Promise<ReactivatePitch[]> {
+  if (rows.length === 0) return rows;
+  try {
+    const client = await getAnthropic();
+    const list = rows.map((r, i) => `${i}. to: ${r.from} | subject: ${r.subject} | ${r.snippet.slice(0, 140)}`).join("\n");
+    const res = await client.messages.create({
+      model: MODELS.classify,
+      max_tokens: 400,
+      system: [
+        "You review emails Mitchell (founder of Scaled AI, a marketing agency for treatment centers) SENT that got no reply.",
+        "Keep ONLY genuine sales pitches or business-development outreach to a POTENTIAL client — a cold or warm pitch, a follow-up on a pitch, a proposal, a 'let's talk' to a prospect.",
+        "DROP everything else: invoices, receipts, calendar invites/scheduling, onboarding or service/ops emails to someone already working with us, internal notes, reports, anything administrative.",
+        "Return STRICT JSON only: { \"keep\": [indices] } — the indices that are real prospect pitches worth reviving."
+      ].join("\n"),
+      messages: [{ role: "user", content: list }]
+    });
+    const text = res.content.filter((b): b is Extract<typeof b, { type: "text" }> => b.type === "text").map((b) => b.text).join("").trim();
+    const json = JSON.parse(text.replace(/^```json?\s*/i, "").replace(/```\s*$/, "").trim());
+    if (!Array.isArray(json.keep)) return rows;
+    const keep = new Set<number>(json.keep.map((n: unknown) => Number(n)));
+    return rows.filter((_, i) => keep.has(i));
+  } catch {
+    return rows;
+  }
 }

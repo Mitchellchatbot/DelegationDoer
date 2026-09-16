@@ -126,7 +126,9 @@ Guidelines:
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const result: any = await client.messages.create({
         model: MODELS.chat,
-        max_tokens: 1024,
+        // 2048, not 1024: owner answers built from the outbound/Meta tools
+        // (campaign tables, lead lists) were getting cut off mid-sentence.
+        max_tokens: 2048,
         system: [
           {
             type: "text",

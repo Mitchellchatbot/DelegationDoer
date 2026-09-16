@@ -22,16 +22,29 @@ const GROW_ICON: Record<string, string> = {
 export function GrowthBoard({ initial, currentSources }: { initial: GrowthBrief | null; currentSources?: ScaleSourceFlags }) {
   const [brief, setBrief] = useState<GrowthBrief | null>(initial);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   // Sources this brief was built from that are switched off now. Only a
   // notice — regenerating costs a model call, so it's the owner's click.
   const stale = brief && currentSources ? staleBriefSources(brief.sources, currentSources) : [];
 
+  // A failed run used to vanish: the route's { error } was ignored and a
+  // non-JSON reply (proxy timeout page, 504) threw inside the click handler,
+  // so the spinner just stopped and the old brief sat there looking fresh.
+  // Now any failure leaves a visible line; the next good run clears it.
   async function generate() {
     setLoading(true);
     try {
       const res = await fetch("/api/brain/growth", { method: "POST" });
-      const j = await res.json();
-      if (j.brief) setBrief(j.brief);
+      const j: { brief?: GrowthBrief | null; error?: string } | null = await res.json().catch(() => null);
+      if (!res.ok || !j?.brief) {
+        setError(j?.error || `Couldn't generate the brief (HTTP ${res.status})`);
+        return;
+      }
+      setBrief(j.brief);
+      setError(null);
+    } catch (err) {
+      // fetch itself rejected — offline, or the connection dropped mid-run.
+      setError(`Couldn't generate the brief (${err instanceof Error ? err.message : "network error"})`);
     } finally {
       setLoading(false);
     }
@@ -57,6 +70,11 @@ export function GrowthBoard({ initial, currentSources }: { initial: GrowthBrief 
             {loading ? "Thinking…" : brief ? "Re-run" : "Ask the brain"}
           </button>
         </div>
+        {error && !loading && (
+          <div role="alert" className="mt-2 rounded-lg bg-rose-100 text-rose-900 px-3 py-2 text-[12px]">
+            {error}{brief ? " — the brief below is from the last successful run." : ""}
+          </div>
+        )}
         {stale.length > 0 && !loading && (
           <div className="mt-2 flex flex-wrap items-center gap-2 rounded-lg bg-amber-100 text-amber-900 px-3 py-2 text-[12px]">
             <span>

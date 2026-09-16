@@ -190,10 +190,17 @@ function FacebookSide({ data }: { data: FacebookRevenueData }) {
           <div className="text-[12px] font-semibold text-ink mb-2">Facebook-side revenue · last {trend.length} months</div>
           <div className="flex items-end gap-2 h-20">
             {trend.map((m) => (
-              <div key={m.period} className="flex-1 flex flex-col items-center gap-1 min-w-0">
-                <div className="w-full rounded-t bg-indigo-500/70" style={{ height: `${Math.max(4, (m.revenue / maxRev) * 100)}%` }} title={money(m.revenue)} />
-                <div className="text-[9px] text-muted tabular-nums truncate w-full text-center">{money(m.revenue)}</div>
-                <div className="text-[9px] text-muted truncate w-full text-center">{monthLabel(m.period).slice(0, 3)}</div>
+              // h-full gives the column a definite height (the row's h-20) so the
+              // bar's percentage resolves instead of collapsing to 0px. The bar
+              // sits in its own flex-1 track above the labels: sized straight
+              // off the column, the tallest bar plus the labels would overflow
+              // and flex-shrink would squash it, skewing the months' ratios.
+              <div key={m.period} className="flex-1 flex flex-col items-center justify-end gap-1 min-w-0 h-full">
+                <div className="w-full flex-1 min-h-0 flex items-end">
+                  <div className="w-full rounded-t bg-indigo-500/70" style={{ height: `${Math.max(4, (m.revenue / maxRev) * 100)}%` }} title={money(m.revenue)} />
+                </div>
+                <div className="shrink-0 text-[9px] text-muted tabular-nums truncate w-full text-center">{money(m.revenue)}</div>
+                <div className="shrink-0 text-[9px] text-muted truncate w-full text-center">{monthLabel(m.period).slice(0, 3)}</div>
               </div>
             ))}
           </div>

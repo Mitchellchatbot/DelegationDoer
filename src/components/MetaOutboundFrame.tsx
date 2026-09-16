@@ -31,8 +31,14 @@ export function MetaOutboundFrame() {
   // phone never starts loading a frame it will immediately drop.
   const [wide, setWide] = useState<boolean | null>(null);
   const [height, setHeight] = useState<number | null>(null);
-  // Full-screen: fill the viewport so the board is a real workspace, not a
-  // letterbox. Esc exits.
+  // Full-screen: the browser's own (Fullscreen API on the box), so the board is
+  // a real workspace, not a letterbox. A CSS `fixed` overlay can't do it — it
+  // is capped by main's `relative z-10` stacking context, so the Topbar paints
+  // over its toolbar — and a keydown listener here never hears Esc once focus
+  // is inside the cross-origin frame. The browser's full screen sits above all
+  // of that and exits on Esc itself. This mirrors document.fullscreenElement
+  // (via fullscreenchange) rather than driving it, so Esc, F11 and the button
+  // all agree.
   const [full, setFull] = useState(false);
   // The dashboard's session cookie is SameSite=Lax, so it only rides into the
   // frame when this page is same-site with it (operations.scaledai.org). From
@@ -49,6 +55,11 @@ export function MetaOutboundFrame() {
   useEffect(() => {
     const mq = window.matchMedia(WIDE_ENOUGH);
     const fit = () => {
+      // Entering and leaving full screen resizes the window. While anything is
+      // full screen the viewport is the screen, not the page, so a height (or
+      // a narrow verdict that would unmount the frame) measured now is wrong —
+      // leave both alone and measure again once it exits.
+      if (document.fullscreenElement) return;
       setWide(mq.matches);
       const el = box.current;
       if (!el) return;
@@ -56,40 +67,63 @@ export function MetaOutboundFrame() {
       const below = mq.matches ? BELOW_MD : BELOW_SM;
       setHeight(Math.max(MIN_HEIGHT, Math.floor(window.innerHeight - top - below)));
     };
+    // Only our box counts as "full": the framed dashboard can put something of
+    // its own full screen, which the parent document reports as the iframe.
+    const onFullscreen = () => {
+      setFull(!!box.current && document.fullscreenElement === box.current);
+      if (!document.fullscreenElement) fit();
+    };
     fit();
     window.addEventListener("resize", fit);
     mq.addEventListener("change", fit);
+    document.addEventListener("fullscreenchange", onFullscreen);
     return () => {
       window.removeEventListener("resize", fit);
       mq.removeEventListener("change", fit);
+      document.removeEventListener("fullscreenchange", onFullscreen);
     };
   }, []);
 
   // DD's Ask AI launcher is fixed bottom-right, exactly where the framed
   // dashboard puts its own — and DD's paints over it. Hidden only while the
-  // frame is on screen; the drawer is still a ⌘K away.
+  // frame is actually mounted (wide), so the narrow-screen notice and the
+  // moment before mount keep it; the drawer is still a ⌘K away.
   useEffect(() => {
+    if (!wide) return;
     document.body.classList.add("hide-ai-fab");
     return () => document.body.classList.remove("hide-ai-fab");
-  }, []);
-
-  // Full-screen: lock the page behind it and let Esc exit.
-  useEffect(() => {
-    if (!full) return;
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setFull(false);
-    document.addEventListener("keydown", onKey);
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => {
-      document.removeEventListener("keydown", onKey);
-      document.body.style.overflow = prev;
-    };
-  }, [full]);
+  }, [wide]);
 
   // Reload the board without reloading DD (re-poke the iframe's src).
   const reload = () => {
     const el = frame.current;
     if (el) el.src = app.url;
+  };
+
+  // The toolbar's full-screen button. Toggling only asks the browser; `full`
+  // follows from fullscreenchange above. The iframe stays the same element
+  // either way, so the board never reloads. Where the API is missing or
+  // refused (iPhone Safari, DD itself framed without allow="fullscreen", a
+  // policy block) the nearest thing to a full-screen board is its own tab.
+  const toggleFull = () => {
+    if (document.fullscreenElement) {
+      Promise.resolve(document.exitFullscreen()).catch(() => {});
+      return;
+    }
+    const openOwnTab = () => {
+      window.open(app.url, "_blank", "noopener");
+    };
+    const el = box.current;
+    if (!el || !document.fullscreenEnabled || typeof el.requestFullscreen !== "function") {
+      openOwnTab();
+      return;
+    }
+    try {
+      // Promise.resolve: some older engines return undefined, not a promise.
+      Promise.resolve(el.requestFullscreen()).catch(openOwnTab);
+    } catch {
+      openOwnTab();
+    }
   };
 
   if (wide === false) {
@@ -109,9 +143,10 @@ export function MetaOutboundFrame() {
       ref={box}
       className={
         full
-          ? "fixed inset-0 z-[60] flex flex-col overflow-hidden bg-white"
+          ? "flex h-full w-full flex-col overflow-hidden bg-white"
           : "flex flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-soft"
       }
+      // The fitted height is for the page; in full screen the box is the screen.
       style={full ? undefined : { height: height ?? MIN_HEIGHT }}
     >
       {/* Toolbar: reload, full-screen toggle, open in own tab. */}
@@ -121,7 +156,7 @@ export function MetaOutboundFrame() {
           <button type="button" onClick={reload} title="Reload board" className="rounded-md p-1.5 text-muted hover:bg-slate-200/60 hover:text-ink transition-colors">
             <RefreshCw className="h-3.5 w-3.5" />
           </button>
-          <button type="button" onClick={() => setFull((f) => !f)} title={full ? "Exit full screen (Esc)" : "Full screen"} className="rounded-md p-1.5 text-muted hover:bg-slate-200/60 hover:text-ink transition-colors">
+          <button type="button" onClick={toggleFull} title={full ? "Exit full screen (Esc)" : "Full screen"} className="rounded-md p-1.5 text-muted hover:bg-slate-200/60 hover:text-ink transition-colors">
             {full ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
           </button>
           <a href={app.url} target="_blank" rel="noreferrer" title="Open in own tab" className="rounded-md p-1.5 text-muted hover:bg-slate-200/60 hover:text-ink transition-colors">

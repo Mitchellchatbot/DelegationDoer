@@ -63,6 +63,15 @@ export interface OutboundMetaResponse {
   // Ad-form prospects created in each window, and how many are now booked.
   pipeline: { prospects: number; booked: number; priorProspects: number; priorBooked: number };
   via: string;
+  // Both optional: older deploys of that app don't send them, and the view
+  // has to render either way.
+  // The one Meta action_type counted as a lead across the whole read (totals,
+  // days and every row), e.g. "lead" or "offsite_conversion.fb_pixel_lead";
+  // null = Meta reported no lead event at all in the window.
+  leadActionType?: string | null;
+  // Spend in `totals` that no campaign row covers: ads since archived or
+  // deleted, which Meta no longer breaks out. Always >= 0.
+  unattributedSpend?: number;
 }
 
 export type OutboundMetaResult =

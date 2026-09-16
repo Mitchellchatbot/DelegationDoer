@@ -1,25 +1,31 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
-import type {
-  OutboundBoardMonth,
-  OutboundBoardProspect,
-  OutboundBoardResponse,
-  OutboundBoardResult
-} from "@/lib/outbound-board-types";
+import type { OutboundBoardMonth, OutboundBoardProspect, OutboundBoardResponse } from "@/lib/outbound-board-types";
 import { MetaOutboundFrame } from "@/components/MetaOutboundFrame";
-import { OutboundMetaDashboard } from "@/components/OutboundMetaDashboard";
-import type { MetaDay, OutboundMetaResult } from "@/lib/outbound-meta-types";
 
-// The Scale Room's Outbound tab. Pipeline and Ads render the Meta ads
+// The Scale Room's Outbound tab. Pipeline and Monthly spend render the Meta ads
 // dashboard's own figures here in DD (GET /api/outbound/board — every count,
-// queue, spend and cost arrives finished); Live board frames that dashboard's
-// page for actually working the leads (texting, moving stages), which this
-// read-only copy deliberately can't do.
+// queue, spend and cost arrives finished), and Meta ads its live read of our ad
+// account (GET /api/outbound/meta); Live board frames that dashboard's page for
+// actually working the leads (texting, moving stages), which this read-only
+// copy deliberately can't do.
+//
+// This file is the shell: the switcher and the Live board, which need no read.
+// The data views arrive from the page as slots — server-rendered, each in its
+// own Suspense boundary — so the tab is usable at once and each view streams in
+// when its read lands, instead of the whole tab waiting on the slowest one.
 
 export type OutboundView = "meta" | "pipeline" | "ads" | "live";
 type View = OutboundView;
+
+// What each board view reads. A whole OutboundBoardResult fits either; the page
+// hands each slot only its part (see PipelineSection there).
+type BoardPart<T> = { ok: true; data: T } | { ok: false; error: string };
+type PipelineData = Pick<OutboundBoardResponse, "pipeline" | "stages" | "queues" | "prospects">;
+export type OutboundPipelineResult = BoardPart<PipelineData>;
+export type OutboundMonthlySpendResult = BoardPart<Pick<OutboundBoardResponse, "ads">>;
 type Layout = "board" | "table";
 type Filter = "all" | "notbooked" | "booked" | "needs" | "longterm";
 type Sort = "created" | "created_asc" | "contacted" | "value" | "name";
@@ -107,25 +113,40 @@ function siteHref(site: string | null): string | null {
 }
 
 export function OutboundTab({
-  result,
+  initialView,
   sourceOff,
-  meta,
-  metaDays,
-  engagementDaily,
-  initialView
+  sourceReadError,
+  metaSlot,
+  pipelineSlot,
+  monthlySlot
 }: {
-  result: OutboundBoardResult | null;
-  sourceOff: boolean;
-  meta: OutboundMetaResult | null;
-  metaDays: number;
-  engagementDaily: MetaDay[] | null;
   initialView: View | null;
+  // Off also when the switch couldn't be read (sourceReadError says why): the
+  // page builds no data slots then, so they arrive null.
+  sourceOff: boolean;
+  sourceReadError: string | null;
+  metaSlot: ReactNode;
+  pipelineSlot: ReactNode;
+  monthlySlot: ReactNode;
 }) {
-  const data = result?.ok ? result.data : null;
   // Opens on Meta ads (our ad account, laid out like a client's Dashboard) —
-  // or wherever the URL says, so a date-range change keeps you there. Nothing
-  // to show natively at all? Open on the Live board, which never needed a feed.
-  const [view, setView] = useState<View>(initialView ?? (sourceOff || (!data && !meta?.ok) ? "live" : "meta"));
+  // or wherever the URL says, so a date-range change or a reload keeps you
+  // there. Source off? Open on the Live board, which never needed a feed.
+  const [view, setView] = useState<View>(initialView ?? (sourceOff ? "live" : "meta"));
+
+  function pick(v: View) {
+    setView(v);
+    // Mirror the view into ?view= (keeping ?days=) so a reload or a shared link
+    // lands on it. replaceState, not a router navigation: that would re-render
+    // the page and re-read every slot. Pass null as the state: Next 14's patched
+    // replaceState treats a state carrying its own __NA marker as an internal
+    // call and skips syncing the router, which would leave the router on the old
+    // URL — and its next refresh (e.g. after creating a task) would rewrite the
+    // address bar without ?view=. With null, Next copies its state in and syncs.
+    const u = new URL(window.location.href);
+    u.searchParams.set("view", v);
+    window.history.replaceState(null, "", u);
+  }
 
   const views: [View, string][] = [
     ["meta", "Meta ads"],
@@ -136,63 +157,72 @@ export function OutboundTab({
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between gap-3 flex-wrap">
-        <div className="inline-flex items-center gap-0.5 rounded-full border border-slate-200 bg-white p-0.5 shadow-soft">
-          {views.map(([v, label]) => (
-            <button
-              key={v}
-              type="button"
-              onClick={() => setView(v)}
-              className={cn(
-                "rounded-full px-3.5 py-1.5 text-[12.5px] font-semibold transition-colors",
-                view === v ? "bg-slate-900 text-white" : "text-muted hover:text-ink"
-              )}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-        {data && (
-          <div className="text-[12.5px] text-muted">
-            <span className="font-semibold text-ink">{data.pipeline.total.toLocaleString("en-US")}</span> prospects ·{" "}
-            <span className="font-semibold text-emerald-700">{data.pipeline.booked.toLocaleString("en-US")}</span> booked ·{" "}
-            <span className="font-semibold text-amber-700">{data.pipeline.notBooked.toLocaleString("en-US")}</span> not booked
-          </div>
-        )}
+      <div className="inline-flex items-center gap-0.5 rounded-full border border-slate-200 bg-white p-0.5 shadow-soft">
+        {views.map(([v, label]) => (
+          <button
+            key={v}
+            type="button"
+            onClick={() => pick(v)}
+            className={cn(
+              "rounded-full px-3.5 py-1.5 text-[12.5px] font-semibold transition-colors",
+              view === v ? "bg-slate-900 text-white" : "text-muted hover:text-ink"
+            )}
+          >
+            {label}
+          </button>
+        ))}
       </div>
 
       {view === "live" ? (
         <MetaOutboundFrame />
       ) : sourceOff ? (
-        <Notice>
-          Outbound is switched off in the Scale Room&apos;s sources, so nothing is read from the Meta ads dashboard.
-          Switch it back on from the Overview tab, or use the Live board.
-        </Notice>
+        sourceReadError ? (
+          <Notice>
+            Couldn&apos;t read the Scale Room&apos;s Outbound switch ({sourceReadError}), so nothing is read from the Meta
+            ads dashboard. The Live board still works.
+          </Notice>
+        ) : (
+          <Notice>
+            Outbound is switched off in the Scale Room&apos;s sources, so nothing is read from the Meta ads dashboard.
+            Switch it back on from the Overview tab, or use the Live board.
+          </Notice>
+        )
       ) : view === "meta" ? (
-        <OutboundMetaDashboard result={meta} days={metaDays} engagementDaily={engagementDaily} />
-      ) : !data ? (
-        <Notice>
-          Couldn&apos;t load from the Meta ads dashboard — {result && !result.ok ? result.error : "no response"}. The Live
-          board still works.
-        </Notice>
+        metaSlot
       ) : view === "pipeline" ? (
-        <Pipeline data={data} />
+        pipelineSlot
       ) : (
-        <Ads data={data} />
+        monthlySlot
       )}
     </div>
   );
 }
 
-function Notice({ children }: { children: React.ReactNode }) {
+function Notice({ children }: { children: ReactNode }) {
   return <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-[12.5px] text-amber-900">{children}</div>;
+}
+
+// A failed board read, shown by whichever board view is open.
+function LoadFailed({ error }: { error: string }) {
+  return (
+    <Notice>
+      Couldn&apos;t load from the Meta ads dashboard — {error}. The Live board still works.
+    </Notice>
+  );
 }
 
 // ---------------------------------------------------------------------------
 // Pipeline
 // ---------------------------------------------------------------------------
 
-function Pipeline({ data }: { data: OutboundBoardResponse }) {
+// Exported for the page's pipeline slot, which renders it on the server around
+// the board read; it stays a client component (filters, search, layout).
+export function OutboundPipelineView({ result }: { result: OutboundPipelineResult }) {
+  if (!result.ok) return <LoadFailed error={result.error} />;
+  return <Pipeline data={result.data} />;
+}
+
+function Pipeline({ data }: { data: PipelineData }) {
   const [layout, setLayout] = useState<Layout>("board");
   const [filter, setFilter] = useState<Filter>("all");
   const [sort, setSort] = useState<Sort>("created");
@@ -236,6 +266,14 @@ function Pipeline({ data }: { data: OutboundBoardResponse }) {
 
   return (
     <div className="space-y-4">
+      {/* The headline counts. They come with the board read, so they live in
+          this view rather than beside the switcher, which renders before it. */}
+      <div className="text-[12.5px] text-muted px-1">
+        <span className="font-semibold text-ink">{data.pipeline.total.toLocaleString("en-US")}</span> prospects ·{" "}
+        <span className="font-semibold text-emerald-700">{data.pipeline.booked.toLocaleString("en-US")}</span> booked ·{" "}
+        <span className="font-semibold text-amber-700">{data.pipeline.notBooked.toLocaleString("en-US")}</span> not booked
+      </div>
+
       {/* The reps' chips: today's deal against each daily budget, and the backlog. */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
         {queues.reps.map((r) => (
@@ -441,11 +479,14 @@ function ProspectTable({ rows, stages }: { rows: OutboundBoardProspect[]; stages
 }
 
 // ---------------------------------------------------------------------------
-// Ads — every month of our ad account, as the dashboard's Ads view shows it
+// Monthly spend — every month of our ad account, as the dashboard's Ads view
+// shows it
 // ---------------------------------------------------------------------------
 
-function Ads({ data }: { data: OutboundBoardResponse }) {
-  const { ads } = data;
+// Exported for the page's monthly-spend slot, like OutboundPipelineView.
+export function OutboundMonthlySpendView({ result }: { result: OutboundMonthlySpendResult }) {
+  if (!result.ok) return <LoadFailed error={result.error} />;
+  const { ads } = result.data;
   if (!ads.ok) {
     return <Notice>Ad numbers unavailable — {ads.error}</Notice>;
   }

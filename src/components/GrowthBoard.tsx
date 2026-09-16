@@ -31,21 +31,41 @@ export function GrowthBoard({ initial, currentSources }: { initial: GrowthBrief 
   // non-JSON reply (proxy timeout page, 504) threw inside the click handler,
   // so the spinner just stopped and the old brief sat there looking fresh.
   // Now any failure leaves a visible line; the next good run clears it.
+  // Generation runs in the background now (1-3 min), so kick it off then poll
+  // the latest brief until its timestamp advances. No more blocking POST / 502.
   async function generate() {
     setLoading(true);
+    setError(null);
+    const before = brief?.generatedAt ?? "";
     try {
       const res = await fetch("/api/brain/growth", { method: "POST" });
-      const j: { brief?: GrowthBrief | null; error?: string } | null = await res.json().catch(() => null);
-      if (!res.ok || !j?.brief) {
-        setError(j?.error || `Couldn't generate the brief (HTTP ${res.status})`);
+      const j: { error?: string } | null = await res.json().catch(() => null);
+      if (!res.ok) {
+        setError(j?.error || `Couldn't start the brief (HTTP ${res.status})`);
+        setLoading(false);
         return;
       }
-      setBrief(j.brief);
-      setError(null);
+      const started = Date.now();
+      while (Date.now() - started < 240_000) {
+        await new Promise((r) => setTimeout(r, 7000));
+        const g: { brief?: GrowthBrief | null; generating?: boolean; error?: string } | null =
+          await fetch("/api/brain/growth").then((r) => r.json()).catch(() => null);
+        if (g?.brief?.generatedAt && g.brief.generatedAt !== before) {
+          setBrief(g.brief);
+          setError(null);
+          setLoading(false);
+          return;
+        }
+        if (g && g.generating === false && g.error) {
+          setError(g.error);
+          setLoading(false);
+          return;
+        }
+      }
+      setError("Still working — give it another moment, then refresh.");
+      setLoading(false);
     } catch (err) {
-      // fetch itself rejected — offline, or the connection dropped mid-run.
       setError(`Couldn't generate the brief (${err instanceof Error ? err.message : "network error"})`);
-    } finally {
       setLoading(false);
     }
   }

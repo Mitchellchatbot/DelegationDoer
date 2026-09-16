@@ -490,6 +490,35 @@ export async function generateGrowthBrief(): Promise<GrowthBrief> {
   return brief;
 }
 
+// Generating the brief takes 1-3 min (whole-business read + model call), which
+// blows past the platform's request timeout — so a blocking POST 502s. Instead
+// we kick generation off in the background (Railway runs a persistent process,
+// so a non-awaited promise finishes after the response returns) and the client
+// polls getLatestGrowthBrief until the timestamp advances.
+let generating = false;
+let lastRunError: string | null = null;
+
+export function growthBriefStatus(): { generating: boolean; lastError: string | null } {
+  return { generating, lastError: lastRunError };
+}
+
+// Start a background regeneration. Returns immediately. A no-op (started:false)
+// if one is already running, so double-clicks don't stack model calls.
+export function startGrowthBriefGeneration(): { started: boolean; alreadyRunning: boolean } {
+  if (generating) return { started: false, alreadyRunning: true };
+  generating = true;
+  lastRunError = null;
+  void generateGrowthBrief()
+    .catch((e) => {
+      lastRunError = e instanceof Error ? e.message : "generation failed";
+      console.error("[growth] background generation failed:", lastRunError);
+    })
+    .finally(() => {
+      generating = false;
+    });
+  return { started: true, alreadyRunning: false };
+}
+
 export async function getLatestGrowthBrief(): Promise<GrowthBrief | null> {
   const { data } = await getSupabaseAdmin()
     .from("brain_growth")

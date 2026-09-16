@@ -1,12 +1,13 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import { Reply, Send, Loader2, X, CalendarClock, Sparkles, Check, Maximize2, Minimize2 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { MediaPicker } from "@/components/MediaPicker";
+import { EmailEditor, EmailFormatButtons, useEmailBody, useFormattingBar } from "@/components/email-editor";
 import { RecipientAutocomplete } from "@/components/RecipientAutocomplete";
 import { useInboxFocus } from "@/components/InboxFocusProvider";
 import { useRecipientSuggestions } from "@/lib/use-recipient-suggestions";
@@ -15,6 +16,7 @@ import type { TaskMedia } from "@/lib/types";
 import type { MissiveMessage } from "@/lib/missive-client";
 import { rawEmail, shortName } from "@/lib/email-format";
 import { emailHtmlToText } from "@/lib/email-html-to-text";
+import { EMPTY_EMAIL_BODY, emailBodyFields } from "@/lib/email-doc";
 
 // Inline reply panel that sits at the bottom of a thread detail. Folded
 // into a "Reply" pill by default; expands into a Gmail-style composer
@@ -23,14 +25,12 @@ import { emailHtmlToText } from "@/lib/email-html-to-text";
 // appears in the open thread (router.refresh alone can't — the pane is
 // client-cached and router-independent).
 
+// Autosave compares these with what's on screen to decide whether to save.
+type DraftSig = { headers: string; body: string };
+const EMPTY_BODY_SIG = JSON.stringify(emailBodyFields(EMPTY_EMAIL_BODY));
+
 function escapeHtml(s: string): string {
   return String(s || "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] as string));
-}
-
-// Plain textarea text → minimal HTML for the body (the user types plain text;
-// the quote we append is HTML, so the whole body becomes HTML on send).
-function plainTextToHtml(t: string): string {
-  return escapeHtml(t || "").replace(/\n/g, "<br/>");
 }
 
 // Gmail-style attribution date, e.g. "Fri, Jun 12, 2026 at 3:10 AM".
@@ -89,7 +89,7 @@ export function ReplyComposer({
   // Clears the pinned target back to the default (reply-to-latest).
   onClearReplyTarget?: () => void;
   // The message to quote (the pinned target, or the latest message for a
-  // thread-level reply). Drives the collapsed "•••" quote below the textarea.
+  // thread-level reply). Drives the collapsed "•••" quote below the message body.
   quoteSource?: MissiveMessage | null;
   // Connected accounts (access-scoped) the user may send FROM. Powers the
   // "From" selector; defaults to the thread's inbox (`accountId`).
@@ -130,7 +130,11 @@ export function ReplyComposer({
   const fromOptions = accounts ?? [];
   const [fromAccountId, setFromAccountId] = useState(accountId);
   const [subject, setSubject] = useState(prefixRe(defaultSubject ?? ""));
-  const [bodyText, setBodyText] = useState("");
+  // The message body (rich editor). The quote below is kept out of it.
+  const emailBody = useEmailBody();
+  const [toolbarOpen, toggleToolbar] = useFormattingBar();
+  // Files pasted or dropped into the body are uploaded by the attachment picker.
+  const uploadRef = useRef<((files: File[]) => void) | null>(null);
   // Whether the Cc row is shown. Auto-revealed in reply-all mode or when
   // Cc has content; otherwise the user opens it via the "Add Cc" button.
   const [ccOpen, setCcOpen] = useState(false);
@@ -188,9 +192,9 @@ export function ReplyComposer({
   // specific one via its per-message Reply button. null = thread under the
   // latest message (server default). Sent as `inReplyTo` on both send paths.
   const [inReplyTo, setInReplyTo] = useState<string | null>(null);
-  // The quoted-original block (Gmail-standard HTML), shown below the textarea
+  // The quoted-original block (Gmail-standard HTML), shown below the body
   // behind a collapsed "•••" toggle and appended to the body on send. Kept out
-  // of `bodyText` so drafts/AI-compose stay clean.
+  // of the editor so drafts/AI-compose stay clean.
   const [quoteHtml, setQuoteHtml] = useState("");
   const [quoteOpen, setQuoteOpen] = useState(false);
   // Outer wrapper — scrolled into view when a target is picked from a message
@@ -200,11 +204,14 @@ export function ReplyComposer({
   // Draft autosave. We persist the in-progress reply to inbox_drafts
   // (debounced) so it survives navigation/reload, and re-hydrate it on
   // mount. `loaded` gates autosave until the initial fetch settles;
-  // `skipSaveRef` swallows the one effect run caused by hydration so we
-  // don't immediately re-save unchanged content.
+  // `skipSaveRef` marks what's on screen as already saved (after hydration,
+  // discard, send); `savedSigRef` is what the server holds, so unchanged
+  // content (e.g. the editor remounting on reopen) isn't saved again.
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle");
   const [loaded, setLoaded] = useState(false);
   const skipSaveRef = useRef(false);
+  const savedSigRef = useRef<DraftSig>({ headers: "", body: EMPTY_BODY_SIG });
+  const seenLoadsRef = useRef(0);
 
   // Load an existing draft for this thread (once).
   useEffect(() => {
@@ -221,7 +228,8 @@ export function ReplyComposer({
           if (Array.isArray(d.to) && d.to.length > 0) setTo(d.to.join(", "));
           if (Array.isArray(d.cc) && d.cc.length > 0) { setCc(d.cc.join(", ")); setCcOpen(true); }
           if (typeof d.subject === "string" && d.subject) setSubject(d.subject);
-          if (typeof d.bodyText === "string") setBodyText(d.bodyText);
+          if (typeof d.bodyHtml === "string" && d.bodyHtml) emailBody.seed({ kind: "html", html: d.bodyHtml });
+          else if (typeof d.bodyText === "string") emailBody.seed({ kind: "text", text: d.bodyText });
           if (Array.isArray(d.attachments)) setAttachments(d.attachments);
           // Restore the saved "From" account, but only if it's still one the
           // user can send from (else keep the thread's inbox default).
@@ -241,35 +249,64 @@ export function ReplyComposer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [threadId]);
 
-  const saveDraft = useCallback(async () => {
-    const toList = to.split(/[,\n]/).map((s) => s.trim()).filter(Boolean);
-    const ccList = cc.split(/[,\n]/).map((s) => s.trim()).filter(Boolean);
+  // What autosave would write, split into the header fields and the body so
+  // each can be compared with what the server already has.
+  const draftHeaders = useMemo(() => ({
+    threadId,
+    accountId: fromAccountId,
+    to: to.split(/[,\n]/).map((s) => s.trim()).filter(Boolean),
+    cc: cc.split(/[,\n]/).map((s) => s.trim()).filter(Boolean),
+    subject: subject.trim() || undefined,
+    attachmentUrls: attachments
+  }), [threadId, fromAccountId, to, cc, subject, attachments]);
+  const draftBody = useMemo(() => emailBodyFields(emailBody.body), [emailBody.body]);
+  const headersSig = JSON.stringify(draftHeaders);
+  const bodySig = JSON.stringify(draftBody);
+
+  const saveDraft = useCallback(async (payload: object, sig: DraftSig) => {
+    // Counts as saved from the moment it's sent, so undoing back to the old
+    // content while this request is in flight still schedules a save.
+    const previous = savedSigRef.current;
+    savedSigRef.current = sig;
     setSaveState("saving");
     try {
       const res = await fetch("/api/inboxes/drafts", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          threadId, accountId: fromAccountId, to: toList, cc: ccList,
-          subject: subject.trim() || undefined, bodyText, attachmentUrls: attachments
-        })
+        body: JSON.stringify(payload)
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) { setSaveState("idle"); return; }
+      if (!res.ok) {
+        if (savedSigRef.current === sig) savedSigRef.current = previous;
+        setSaveState("idle");
+        return;
+      }
       setSaveState(data.deleted ? "idle" : "saved");
     } catch {
+      if (savedSigRef.current === sig) savedSigRef.current = previous;
       setSaveState("idle");
     }
-  }, [threadId, fromAccountId, to, cc, subject, bodyText, attachments]);
+  }, []);
 
-  // Debounced autosave. Skips until the initial load settles and swallows
-  // the hydration-triggered run.
+  // Debounced autosave, once the initial load has settled.
   useEffect(() => {
     if (!loaded) return;
-    if (skipSaveRef.current) { skipSaveRef.current = false; return; }
-    const t = setTimeout(() => { void saveDraft(); }, 700);
+    if (skipSaveRef.current) {
+      skipSaveRef.current = false;
+      savedSigRef.current = { headers: headersSig, body: emailBody.ready ? bodySig : savedSigRef.current.body };
+    }
+    // An editor still loading would save an empty body over the draft.
+    if (!emailBody.ready) return;
+    // A body put in by code (restored draft, reset) is already on the server.
+    if (emailBody.loads !== seenLoadsRef.current) {
+      seenLoadsRef.current = emailBody.loads;
+      savedSigRef.current = { ...savedSigRef.current, body: bodySig };
+    }
+    if (headersSig === savedSigRef.current.headers && bodySig === savedSigRef.current.body) return;
+    const sig = { headers: headersSig, body: bodySig };
+    const t = setTimeout(() => { void saveDraft({ ...draftHeaders, ...draftBody }, sig); }, 700);
     return () => clearTimeout(t);
-  }, [loaded, saveDraft]);
+  }, [loaded, emailBody.ready, emailBody.loads, headersSig, bodySig, draftHeaders, draftBody, saveDraft]);
 
   // When the user clicks "Reply" on a specific message, open the composer and
   // pre-fill the addressing fields from THAT message — without touching the
@@ -300,7 +337,7 @@ export function ReplyComposer({
   }, [replyTarget?.id]);
 
   // Derive the quoted-original block (pinned target, or latest for a thread-level
-  // reply) and collapse it by default. Never touches bodyText — switching targets
+  // reply) and collapse it by default. Never touches the body — switching targets
   // just swaps the quote. When the target's body was deferred (an older message,
   // withheld on thread open), fetch it first so the quote isn't empty — a cache
   // hit if the user already expanded it. The default target (latest message)
@@ -358,7 +395,7 @@ export function ReplyComposer({
 
   // AI drafting state. `aiOpen` reveals an inline instruction box;
   // `aiBusy` blocks repeat clicks while the model is generating.
-  // The model output replaces whatever's already in bodyText — we
+  // The model output replaces whatever's already in the body — we
   // confirm with the user if they've started typing.
   const [aiOpen, setAiOpen] = useState(false);
   const [aiInstruction, setAiInstruction] = useState("");
@@ -366,8 +403,10 @@ export function ReplyComposer({
   const [aiBusy, setAiBusy] = useState(false);
 
   async function aiDraft() {
-    if (aiBusy) return;
-    if (bodyText.trim().length > 0) {
+    // Wait for a restored draft to reach the editor, or the overwrite check
+    // below would see an empty body.
+    if (aiBusy || !emailBody.ready) return;
+    if (!emailBody.current().isEmpty) {
       const ok = window.confirm("Replace what you've already written with the AI draft?");
       if (!ok) return;
     }
@@ -386,7 +425,8 @@ export function ReplyComposer({
         toast.error(data?.error ?? `Draft failed (${res.status})`);
         return;
       }
-      setBodyText(data.bodyText ?? "");
+      // Undoable: ⌘Z brings back what was there before.
+      emailBody.seed({ kind: "text", text: data.bodyText ?? "" }, { undoable: true });
       toast.success("Drafted — edit before sending");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "network error");
@@ -402,7 +442,8 @@ export function ReplyComposer({
       toast.error("Add a recipient");
       return;
     }
-    if (!bodyText.trim()) {
+    const message = emailBody.current();
+    if (message.isEmpty) {
       toast.error("Write something before sending");
       return;
     }
@@ -440,9 +481,11 @@ export function ReplyComposer({
     try {
       // Append the quoted original below the user's text so the reply carries
       // its context — the same wire shape missiveclone sends (body_html =
-      // userHtml + gmail_quote, body_text derived from the combined HTML).
-      const fullHtml = plainTextToHtml(bodyText) + (quoteHtml || "");
-      const sendText = emailHtmlToText(fullHtml);
+      // userHtml + gmail_quote). The quote opens with two <br>s meant to follow
+      // inline text; after the body's block <div>, one gives the same single
+      // blank line.
+      const fullHtml = message.html + quoteHtml.replace(/^<br\/>/, "");
+      const sendText = quoteHtml ? `${message.text}\n\n${emailHtmlToText(quoteHtml)}` : message.text;
       const url = scheduling
         ? `/api/inboxes/threads/${encodeURIComponent(threadId)}/reply/schedule`
         : `/api/inboxes/threads/${encodeURIComponent(threadId)}/reply`;
@@ -484,7 +527,7 @@ export function ReplyComposer({
       // autosave that clearing these fields would otherwise trigger.
       skipSaveRef.current = true;
       setSaveState("idle");
-      setBodyText("");
+      emailBody.reset();
       setAttachments([]);
       setScheduleOpen(false);
       setScheduleAt("");
@@ -698,7 +741,7 @@ export function ReplyComposer({
                   <button
                     type="button"
                     onClick={() => { confirmedStrangerSigRef.current = strangerSig; void send(); }}
-                    disabled={busy}
+                    disabled={busy || !emailBody.ready}
                     className="ml-auto shrink-0 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-60 transition-colors"
                   >
                     Send anyway
@@ -722,7 +765,7 @@ export function ReplyComposer({
               {/* AI compose row — collapsed to a single pill by default.
                   Clicking expands into an instruction box + tone picker,
                   so the user can steer the draft without leaving the
-                  composer. Output drops straight into the textarea below. */}
+                  composer. Output drops straight into the body below. */}
               <div className="rounded-xl border border-violet-200/60 bg-gradient-to-r from-violet-50/60 to-fuchsia-50/30">
                 {!aiOpen ? (
                   <button
@@ -781,10 +824,10 @@ export function ReplyComposer({
                       <button
                         type="button"
                         onClick={() => void aiDraft()}
-                        disabled={aiBusy}
+                        disabled={aiBusy || !emailBody.ready}
                         className={cn(
                           "inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-semibold text-white shadow-sm transition-all",
-                          aiBusy ? "opacity-60 cursor-not-allowed" : "hover:-translate-y-0.5 hover:shadow-lift active:scale-95"
+                          aiBusy || !emailBody.ready ? "opacity-60 cursor-not-allowed" : "hover:-translate-y-0.5 hover:shadow-lift active:scale-95"
                         )}
                         style={{ background: "linear-gradient(135deg, #7c3aed 0%, #c026d3 100%)" }}
                       >
@@ -798,19 +841,17 @@ export function ReplyComposer({
                 )}
               </div>
 
-              <textarea
-                value={bodyText}
-                onChange={(e) => setBodyText(e.target.value)}
+              <EmailEditor
+                {...emailBody.editorProps}
                 placeholder="Write your reply…"
-                rows={7}
-                className={cn(
-                  "w-full text-sm bg-white/60 border border-slate-200/70 rounded-xl px-3 py-2.5 outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent/40 resize-none transition-all",
-                  focusMode && "min-h-[45vh]"
-                )}
+                ariaLabel="Reply message"
+                toolbarOpen={toolbarOpen}
+                onAttachFiles={(files) => uploadRef.current?.(files)}
+                contentClassName={focusMode ? "min-h-[45vh]" : "min-h-[160px] max-h-[55vh]"}
               />
 
               {/* Quoted original — collapsed behind a "•••" toggle like Gmail's
-                  compose, so the textarea above stays clean. The quote is
+                  compose, so the body above stays clean. The quote is
                   appended to the body on send; here it's a read-only, sandboxed
                   preview (no scripts, isolated CSS). */}
               {quoteHtml && (
@@ -841,11 +882,17 @@ export function ReplyComposer({
                 label="Attach files"
                 compact
                 hint={scheduleOpen ? "Attachments are not supported on scheduled sends." : undefined}
+                uploadRef={uploadRef}
               />
             </div>
 
             <footer className="px-4 py-2.5 border-t border-slate-100 flex items-center justify-between gap-2 bg-slate-50/60 flex-wrap">
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap min-w-0">
+                <EmailFormatButtons
+                  toolbarOpen={toolbarOpen}
+                  onToggleToolbar={toggleToolbar}
+                  onInsertLink={() => emailBody.apiRef.current?.openLinkDialog()}
+                />
                 <button
                   type="button"
                   onClick={() => setScheduleOpen((v) => !v)}
@@ -872,7 +919,7 @@ export function ReplyComposer({
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => { discardDraft(); setOpen(false); setBodyText(""); setAttachments([]); setScheduleOpen(false); setScheduleAt(""); setMode("reply"); setCc(""); setCcOpen(false); setInReplyTo(null); setQuoteOpen(false); onClearReplyTarget?.(); }}
+                  onClick={() => { discardDraft(); setOpen(false); emailBody.reset(); setAttachments([]); setScheduleOpen(false); setScheduleAt(""); setMode("reply"); setCc(""); setCcOpen(false); setInReplyTo(null); setQuoteOpen(false); onClearReplyTarget?.(); }}
                   className="px-3 py-1.5 rounded-full text-xs font-medium text-ink/70 hover:text-ink hover:bg-white transition-colors"
                 >
                   Discard
@@ -880,7 +927,7 @@ export function ReplyComposer({
                 <button
                   type="button"
                   onClick={send}
-                  disabled={busy}
+                  disabled={busy || !emailBody.ready}
                   className={cn(
                     "inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs font-semibold text-white shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-lift active:scale-95",
                     busy && "opacity-60 cursor-not-allowed hover:translate-y-0"

@@ -8,8 +8,14 @@ import { PenSquare, Send, X, Loader2, Clock, Check, Maximize2, Minimize2 } from 
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { MediaPicker } from "@/components/MediaPicker";
+import { EmailEditor, EmailFormatButtons, useEmailBody, useFormattingBar } from "@/components/email-editor";
+import { EMPTY_EMAIL_BODY, emailBodyFields } from "@/lib/email-doc";
 import { RecipientAutocomplete, type ClientSuggestion } from "@/components/RecipientAutocomplete";
 import type { TaskMedia } from "@/lib/types";
+
+// Autosave compares these with what's on screen to decide whether to save.
+type DraftSig = { headers: string; body: string };
+const EMPTY_BODY_SIG = JSON.stringify(emailBodyFields(EMPTY_EMAIL_BODY));
 
 // "Compose" affordance — pill button on the inbox header that opens a
 // Gmail-style modal. State is local; submit hits /api/inboxes/compose.
@@ -37,10 +43,14 @@ export function ComposeButton({
   const [maximized, setMaximized] = useState(false);
   // Draft autosave. draftIdRef identifies this compose draft (client-owned,
   // since there's no thread to key on). saveState drives the header chip;
-  // skipSaveRef swallows the autosave run that opening / hydration triggers.
+  // skipSaveRef marks what opening / hydration put on screen as already
+  // saved; savedSigRef is what the server holds, so unchanged content isn't
+  // saved again.
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle");
   const draftIdRef = useRef<string | null>(null);
   const skipSaveRef = useRef(false);
+  const savedSigRef = useRef<DraftSig>({ headers: "", body: EMPTY_BODY_SIG });
+  const seenLoadsRef = useRef(0);
   const composeDraftParam = searchParams.get("composeDraft");
   // When `accounts` is supplied, this picks which mailbox to send FROM.
   // Defaults to the first; the picker only renders if there's >1 option.
@@ -49,7 +59,10 @@ export function ComposeButton({
   const [to, setTo] = useState("");
   const [cc, setCc] = useState("");
   const [subject, setSubject] = useState("");
-  const [bodyText, setBodyText] = useState("");
+  const emailBody = useEmailBody();
+  const [toolbarOpen, toggleToolbar] = useFormattingBar();
+  // Files pasted or dropped into the body are uploaded by the attachment picker.
+  const uploadRef = useRef<((files: File[]) => void) | null>(null);
   const [showCc, setShowCc] = useState(false);
   const [scheduleOpen, setScheduleOpen] = useState(false);
   // <input type="datetime-local"> value: "YYYY-MM-DDTHH:mm" (no seconds,
@@ -87,7 +100,7 @@ export function ComposeButton({
     setTo("");
     setCc("");
     setSubject("");
-    setBodyText("");
+    emailBody.reset();
     setShowCc(false);
     setScheduleOpen(false);
     setSendAtLocal("");
@@ -130,7 +143,8 @@ export function ComposeButton({
         if (Array.isArray(d.to)) setTo(d.to.join(", "));
         if (Array.isArray(d.cc) && d.cc.length > 0) { setCc(d.cc.join(", ")); setShowCc(true); }
         if (typeof d.subject === "string") setSubject(d.subject);
-        if (typeof d.bodyText === "string") setBodyText(d.bodyText);
+        if (typeof d.bodyHtml === "string" && d.bodyHtml) emailBody.seed({ kind: "html", html: d.bodyHtml });
+        else if (typeof d.bodyText === "string") emailBody.seed({ kind: "text", text: d.bodyText });
         if (Array.isArray(d.attachments)) setAttachments(d.attachments);
         if (d.accountId) setFromAccountId(d.accountId);
         setSaveState("saved");
@@ -186,41 +200,66 @@ export function ComposeButton({
     return () => { cancelled = true; };
   }, [open]);
 
-  const saveDraft = useCallback(async () => {
+  // What autosave would write (minus the client-owned id), split into the
+  // header fields and the body so each can be compared with what the server
+  // already has.
+  const draftHeaders = useMemo(() => ({
+    accountId: effectiveAccountId || undefined,
+    threadId: null,
+    to: to.split(/[,\n]/).map((s) => s.trim()).filter(Boolean),
+    cc: cc.split(/[,\n]/).map((s) => s.trim()).filter(Boolean),
+    subject: subject.trim() || undefined,
+    attachmentUrls: attachments
+  }), [to, cc, subject, attachments, effectiveAccountId]);
+  const draftBody = useMemo(() => emailBodyFields(emailBody.body), [emailBody.body]);
+  const headersSig = JSON.stringify(draftHeaders);
+  const bodySig = JSON.stringify(draftBody);
+
+  const saveDraft = useCallback(async (payload: object, sig: DraftSig) => {
     if (!draftIdRef.current) return;
-    const toList = to.split(/[,\n]/).map((s) => s.trim()).filter(Boolean);
-    const ccList = cc.split(/[,\n]/).map((s) => s.trim()).filter(Boolean);
+    // Counts as saved from the moment it's sent, so undoing back to the old
+    // content while this request is in flight still schedules a save.
+    const previous = savedSigRef.current;
+    savedSigRef.current = sig;
     setSaveState("saving");
     try {
       const res = await fetch("/api/inboxes/drafts", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          id: draftIdRef.current,
-          accountId: effectiveAccountId || undefined,
-          threadId: null,
-          to: toList,
-          cc: ccList,
-          subject: subject.trim() || undefined,
-          bodyText,
-          attachmentUrls: attachments
-        })
+        body: JSON.stringify({ id: draftIdRef.current, ...payload })
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) { setSaveState("idle"); return; }
+      if (!res.ok) {
+        if (savedSigRef.current === sig) savedSigRef.current = previous;
+        setSaveState("idle");
+        return;
+      }
       setSaveState(data.deleted ? "idle" : "saved");
     } catch {
+      if (savedSigRef.current === sig) savedSigRef.current = previous;
       setSaveState("idle");
     }
-  }, [to, cc, subject, bodyText, attachments, effectiveAccountId]);
+  }, []);
 
   // Debounced autosave while the modal is open.
   useEffect(() => {
     if (!open) return;
-    if (skipSaveRef.current) { skipSaveRef.current = false; return; }
-    const t = setTimeout(() => { void saveDraft(); }, 700);
+    if (skipSaveRef.current) {
+      skipSaveRef.current = false;
+      savedSigRef.current = { headers: headersSig, body: emailBody.ready ? bodySig : savedSigRef.current.body };
+    }
+    // An editor still loading would save an empty body over a resumed draft.
+    if (!emailBody.ready) return;
+    // A body put in by code (resumed draft, reset) is already on the server.
+    if (emailBody.loads !== seenLoadsRef.current) {
+      seenLoadsRef.current = emailBody.loads;
+      savedSigRef.current = { ...savedSigRef.current, body: bodySig };
+    }
+    if (headersSig === savedSigRef.current.headers && bodySig === savedSigRef.current.body) return;
+    const sig = { headers: headersSig, body: bodySig };
+    const t = setTimeout(() => { void saveDraft({ ...draftHeaders, ...draftBody }, sig); }, 700);
     return () => clearTimeout(t);
-  }, [open, saveDraft]);
+  }, [open, emailBody.ready, emailBody.loads, headersSig, bodySig, draftHeaders, draftBody, saveDraft]);
 
   async function submit() {
     const toList = to.split(/[,\n]/).map((s) => s.trim()).filter(Boolean);
@@ -233,7 +272,8 @@ export function ComposeButton({
       toast.error("Add a subject");
       return;
     }
-    if (!bodyText.trim()) {
+    const message = emailBody.current();
+    if (message.isEmpty) {
       toast.error("Write something before sending");
       return;
     }
@@ -264,7 +304,7 @@ export function ComposeButton({
           to: toList,
           cc: ccList,
           subject: subject.trim(),
-          bodyText: bodyText,
+          ...emailBodyFields(message),
           // Lets the compose route clear this draft after a successful send.
           ...(draftIdRef.current ? { draftId: draftIdRef.current } : {}),
           ...(sendAtISO ? { sendAt: sendAtISO } : {}),
@@ -345,7 +385,8 @@ export function ComposeButton({
                 transition={{ duration: 0.22, ease: [0.2, 0.8, 0.2, 1] }}
                 className={cn(
                   "pointer-events-auto max-w-full rounded-2xl border border-slate-200/70 bg-white shadow-[0_30px_60px_-20px_rgba(15,23,42,0.35)] overflow-hidden",
-                  maximized ? "w-[min(1100px,95vw)] h-[88vh] flex flex-col" : "w-[640px]"
+                  // Bounded to the viewport; the body scrolls so Send stays reachable.
+                  maximized ? "w-[min(1100px,95vw)] h-[88vh] flex flex-col" : "w-[640px] max-h-[calc(100dvh-2rem)] flex flex-col"
                 )}
               >
                 <header
@@ -405,7 +446,7 @@ export function ComposeButton({
                   </div>
                 </header>
 
-                <div className={cn("p-4 space-y-2.5", maximized && "flex-1 flex flex-col min-h-0 overflow-y-auto")}>
+                <div className={cn("p-4 space-y-2.5 min-h-0 overflow-y-auto", maximized && "flex-1 flex flex-col")}>
                   <FieldRow label="To">
                     <RecipientAutocomplete
                       value={to}
@@ -455,15 +496,14 @@ export function ComposeButton({
                     />
                   </FieldRow>
 
-                  <textarea
-                    value={bodyText}
-                    onChange={(e) => setBodyText(e.target.value)}
+                  <EmailEditor
+                    {...emailBody.editorProps}
                     placeholder="Write your message…"
-                    rows={9}
-                    className={cn(
-                      "w-full text-sm bg-white/60 border border-slate-200/70 rounded-xl px-3 py-2.5 outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent/40 resize-none transition-all",
-                      maximized && "flex-1 min-h-0"
-                    )}
+                    ariaLabel="Message"
+                    toolbarOpen={toolbarOpen}
+                    onAttachFiles={(files) => uploadRef.current?.(files)}
+                    contentClassName={maximized ? undefined : "min-h-[200px] max-h-[50vh]"}
+                    fill={maximized}
                   />
 
                   <MediaPicker
@@ -471,11 +511,17 @@ export function ComposeButton({
                     onChange={setAttachments}
                     label="Attach files"
                     compact
+                    uploadRef={uploadRef}
                   />
                 </div>
 
                 <footer className="px-4 py-3 border-t border-slate-100 flex items-center justify-between gap-2 bg-slate-50/60 flex-wrap">
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <EmailFormatButtons
+                      toolbarOpen={toolbarOpen}
+                      onToggleToolbar={toggleToolbar}
+                      onInsertLink={() => emailBody.apiRef.current?.openLinkDialog()}
+                    />
                     <button
                       type="button"
                       onClick={() => setScheduleOpen((v) => !v)}
@@ -528,7 +574,7 @@ export function ComposeButton({
                     <button
                       type="button"
                       onClick={submit}
-                      disabled={busy}
+                      disabled={busy || !emailBody.ready}
                       className={cn(
                         "inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs font-semibold text-white shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-lift active:scale-95",
                         busy && "opacity-60 cursor-not-allowed hover:translate-y-0"

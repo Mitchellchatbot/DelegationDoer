@@ -394,7 +394,13 @@ export async function getGrowthSnapshot(): Promise<{ text: string; sources: Scal
     `## Revenue`,
     `MRR (source of truth): ${money(mrr)}/mo. Top clients: ${top.map((c) => `${c.company} ${money(c.mrr)}`).join(", ")}.`,
     `Concentration: top 3 = ${top3Share}% of MRR.`,
-    revenue ? `Stripe: ${money(revenue.mrr)} MRR, net-new this month ${money(revenue.newMrr - revenue.churnedMrr)}, past-due ${money(revenue.pastDueMrr)} (${revenue.pastDue.length}).` : "Stripe unavailable.",
+    revenue ? `Stripe: ${money(revenue.mrr)} MRR, net-new this month ${money(revenue.newMrr - revenue.churnedMrr)}.` : "Stripe unavailable (revenue-by-client / churn signals are off until the Stripe key is set in prod).",
+    revenue && revenue.pastDue.length
+      ? `CHURN RISK — PAST DUE (payment failing, protect these NOW): ${revenue.pastDue.map((p) => `${p.name} ${money(p.mrr)}/mo`).join("; ")}.`
+      : "",
+    revenue && revenue.churnedThisMonth.length
+      ? `CHURNED this month (lost revenue — win back if possible): ${revenue.churnedThisMonth.map((c) => `${c.name} ${money(c.mrr)}/mo`).join("; ")}.`
+      : "",
     ``,
     `## Finance`,
     financeLine,
@@ -437,6 +443,7 @@ const growthSystem = (sources: ScaleSourceFlags, rules: string) => [
   rules,
   ...(sources.facebook ? ["- Facebook-side revenue (from the Finance app: management + setup fees on the client Meta spend we manage) is a SEPARATE stream from MRR. Never sum the two or double count a client across them. If it's unavailable, say so; never treat it as $0."] : []),
   ...(sources.outbound ? ["- Outbound spend / prospects / booked / cost per booked are our own acquisition funnel. When judging whether leads or sales is the constraint, use the cost-per-lead and cost-per-booked trend and the texting backlog vs the reps' daily caps as evidence. An estimate month is partial (leads include today, spend stops at yesterday) — never compare it to a full month as if it were complete.", "- The outbound pipeline and our Meta ads sections are LIVE. Use them lead by lead: name the booked/proposal facilities that need a push, the leads flagged NEEDS FOLLOW-UP, how stale the un-reached backlog is against the reps' daily capacity, which sources actually book, and — from the last 7 days of Meta delivery — whether CPL/CTR/frequency say the ads or the follow-up is the leak. When a lead is dealt to a rep, make that rep the owner.", "- CRITICAL: there are TWO SEPARATE pipelines, never conflate them or sum them. (1) COLD TEXTING pipeline: the ~300+ 'Treatment center list' leads the reps cold-text — high volume, ~0% book rate, its problem is throughput/backlog. (2) FACEBOOK BOOKED pipeline: 'Inbound form' + 'Typeform' leads from our Meta ads that convert to booked intro calls at a high rate — its problem is closing the booked calls. When you talk about backlog/texting capacity that's pipeline 1; when you talk about booked calls to close and cost-per-booked that's pipeline 2. Always say which pipeline an item is about."] : []),
+  "- CHURN PROTECTION is the highest form of protecting clients: any client shown as PAST DUE (their Stripe payment is failing) is a top-severity PROTECT item — imminent revenue loss — name them and say to chase the payment today. A client who CHURNED this month is lost MRR: flag it and whether to win them back. If the Stripe line says it's unavailable, do NOT infer there's no churn — say the signal is off.",
   "",
   "PROVENANCE (required): every protect and grow item MUST include a \"source\" naming exactly where the claim comes from (which tl;dv call and how many days ago, which client health note, the P&L, the live pipeline, Meta delivery, etc.). If you cannot point to a source in the data below, do NOT include the item. Never state a specific fact (a cost-per-VOB, a missed report, a compliance risk) without its source.",
   "",

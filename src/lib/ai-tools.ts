@@ -12,6 +12,9 @@ import { coerceMeetingBrief } from "@/lib/meeting-brief";
 import { listLabels, listThreads, getThread, listAccounts } from "@/lib/missive-client";
 import { visibleAccountIdsFor } from "@/lib/inbox-access";
 import { rankCandidates, buildLoadSignals } from "@/lib/skill-rank";
+import { getOutboundBoard } from "@/lib/outbound-board";
+import { getOutboundMeta, metaDays } from "@/lib/outbound-meta";
+import { getScaleSources } from "@/lib/scale-sources";
 import type { Task, User } from "@/lib/types";
 
 // AI tool definitions + dispatchers. The Ask AI route hands these
@@ -415,6 +418,33 @@ export const AI_TOOLS = [
     description:
       "OWNER-ONLY. Returns the full financial picture: manual MRR (the owner's source-of-truth sheet), live Stripe revenue (MRR, new/churned/past-due), and the P&L (monthly revenue/expenses/net/margin) with a full expense breakdown down to individual line items / vendors (per-month values included). Use this for ANY money question — 'what's my MRR', 'what should I cut', 'what's my burn', 'biggest expense', 'what's rising', 'margin', 'who's my biggest client'. Returns { error } for any non-owner caller — if that happens, tell the user finance data is private to the owner and do not answer the finance question from memory.",
     input_schema: { type: "object", properties: {} }
+  },
+  {
+    name: "get_outbound_pipeline",
+    description:
+      "OWNER-ONLY. LIVE outbound sales pipeline — the treatment centers WE are prospecting as potential new clients (not existing clients), from the Meta ads dashboard's Outbound board that the reps work every day (the same board as the Scale Room's Outbound tab and Live board). Returns stage counts (New, Contacted, No response, Call booked, Proposal, Won, Lost), booked vs not booked, today's texting queues per rep vs their daily cap plus the backlog, how stale the un-reached leads are, leads → bookings by source, new-lead velocity, month-by-month ad spend / ad-form prospects / booked / cost per lead / cost per booked, and the matching leads (facility, contact, role, location, stage, rep, source, budget, follow-up flag, next action, last contacted, age). Filter with stage / source / owner / followUp / search; leads are newest first. Use for ANY question about outbound, prospects, leads we're chasing, booked calls, proposals, the texting backlog, reps' queues, or 'how is the pipeline'. Returns { error } for non-owners or when the Outbound source is switched off.",
+    input_schema: {
+      type: "object",
+      properties: {
+        stage: { type: "string", enum: ["new", "contacted", "no_response", "booked", "proposal", "won", "lost", "booked_or_beyond", "not_booked"], description: "Only leads at this stage. booked_or_beyond = Call booked, Proposal or Won; not_booked = New, Contacted or No response." },
+        source: { type: "string", description: "Only leads whose source contains this text, e.g. 'Typeform', 'Inbound form', 'Treatment center list'." },
+        owner: { type: "string", description: "Only leads dealt to this rep today (e.g. Mujtaba, Mitch, Joe)." },
+        followUp: { type: "string", enum: ["needs", "longterm"], description: "Only leads flagged Needs follow-up or Long-term." },
+        search: { type: "string", description: "Case-insensitive match on facility, contact, location or next action." },
+        limit: { type: "number", description: "Max leads returned (default 40, max 200). Counts and breakdowns always cover the whole pipeline." }
+      }
+    }
+  },
+  {
+    name: "get_meta_ads",
+    description:
+      "OWNER-ONLY. LIVE performance of OUR OWN Meta (Facebook/Instagram) ad account — the ads that feed the outbound pipeline, not client accounts — read straight from Meta by the Meta ads dashboard. For the last N full days (ending yesterday) vs the N days before: spend, impressions, clicks, link clicks, Meta leads, reach, frequency, CTR, CPC, CPM, CPL; the day-by-day series; every campaign, ad set and ad with status, spend, clicks, CTR, CPC, leads and CPL; plus the ad-form prospects created in the window and how many are now booked (cost per booking). Use for ANY question about our ads, ad spend, cost per lead, which campaign/ad is working, CTR, frequency/fatigue. Returns { error } for non-owners or when the Outbound source is switched off.",
+    input_schema: {
+      type: "object",
+      properties: {
+        days: { type: "number", enum: [7, 14, 30, 90], description: "Window length in full days ending yesterday (default 7)." }
+      }
+    }
   }
 ] as const;
 
@@ -454,6 +484,8 @@ export async function runTool(
       case "search_sops": return searchSops(input);
       case "create_task": return createTask(input, ctx);
       case "get_finances": return getFinances(ctx);
+      case "get_outbound_pipeline": return getOutboundPipelineTool(input, ctx);
+      case "get_meta_ads": return getMetaAdsTool(input, ctx);
       case "propose_email": return proposeEmail(input, ctx);
       case "remember": return rememberFact(input, ctx);
       case "forget": return forgetFact(input, ctx);
@@ -2098,6 +2130,137 @@ async function getFinances(ctx: ToolContext) {
     pnl,
     software,
     payroll
+  };
+}
+
+// ---------------------------------------------------------------------------
+// OWNER-ONLY outbound: the live pipeline and our own Meta ads, from the Meta ads
+// dashboard (GET /api/outbound/board and /api/outbound/meta — the same reads
+// as the Scale Room's Outbound tab and the Growth Brain). Every figure arrives
+// computed by that app; the counts below only slice its rows. Honours the Scale
+// Room's Outbound source switch: off means not fetched, for chat too.
+// ---------------------------------------------------------------------------
+
+const OUTBOUND_BOOKED = new Set(["booked", "proposal", "won"]);
+const OUTBOUND_NOT_BOOKED = new Set(["new", "contacted", "no_response"]);
+const DAY_MS = 86_400_000;
+
+async function outboundGate(ctx: ToolContext): Promise<{ error: string } | null> {
+  if (!isOwner(ctx.actor)) {
+    return { error: "access denied — the outbound pipeline and our ad account are private to the owner (Mitchell) only" };
+  }
+  const sources = await getScaleSources();
+  if (!sources.outbound) {
+    return { error: "the Outbound source is switched off in the Scale Room, so nothing is read from the Meta ads dashboard — switch it on from /scale to use this" };
+  }
+  return null;
+}
+
+async function getOutboundPipelineTool(input: Record<string, unknown>, ctx: ToolContext) {
+  const denied = await outboundGate(ctx);
+  if (denied) return denied;
+  const res = await getOutboundBoard(20_000);
+  if (!res.ok) return { error: `live pipeline unavailable: ${res.error} (do not treat as an empty pipeline)` };
+  const b = res.data;
+  const now = Date.now();
+  const ageDays = (iso: string | null) => (iso ? Math.max(0, Math.floor((now - Date.parse(iso)) / DAY_MS)) : null);
+  const label = (k: string) => b.stages.find((s) => s.key === k)?.label ?? k;
+  const str = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim().toLowerCase() : null);
+
+  const stage = str(input.stage);
+  const source = str(input.source);
+  const owner = str(input.owner);
+  const followUp = str(input.followUp);
+  const search = str(input.search);
+  const limit = Math.min(Math.max(Math.floor(Number(input.limit) || 40), 1), 200);
+
+  const matches = b.prospects.filter((p) => {
+    if (stage === "booked_or_beyond" ? !OUTBOUND_BOOKED.has(p.stage) : stage === "not_booked" ? !OUTBOUND_NOT_BOOKED.has(p.stage) : stage && p.stage !== stage) return false;
+    if (source && !(p.source ?? "").toLowerCase().includes(source)) return false;
+    if (owner && (p.owner ?? "").toLowerCase() !== owner) return false;
+    if (followUp && p.followUp !== followUp) return false;
+    if (search && ![p.facility, p.name, p.location, p.nextAction].some((f) => (f ?? "").toLowerCase().includes(search))) return false;
+    return true;
+  });
+
+  const bySource = new Map<string, { leads: number; bookedOrBeyond: number }>();
+  for (const p of b.prospects) {
+    const k = p.source || "(no source)";
+    const e = bySource.get(k) ?? { leads: 0, bookedOrBeyond: 0 };
+    e.leads++;
+    if (OUTBOUND_BOOKED.has(p.stage)) e.bookedOrBeyond++;
+    bySource.set(k, e);
+  }
+  const cold = b.prospects.filter((p) => p.stage === "new" || p.stage === "no_response");
+  const coldAge = { upTo7d: 0, d8to14: 0, d15to30: 0, over30d: 0 };
+  for (const p of cold) {
+    const a = ageDays(p.createdAt);
+    if (a == null) continue;
+    if (a <= 7) coldAge.upTo7d++; else if (a <= 14) coldAge.d8to14++; else if (a <= 30) coldAge.d15to30++; else coldAge.over30d++;
+  }
+  const within = (d: number) => b.prospects.filter((p) => { const a = ageDays(p.createdAt); return a != null && a <= d; }).length;
+
+  return {
+    note: "LIVE from the Meta ads dashboard's Outbound board (the board the reps work). These are PROSPECTS we are trying to win, not existing clients. Counts and breakdowns cover the whole pipeline; `leads` is the filtered list.",
+    generatedAt: b.generatedAt,
+    pipeline: b.pipeline,
+    stages: b.stages.map((s) => ({ stage: s.label, key: s.key, count: s.count })),
+    texting: {
+      reps: b.queues.reps.map((r) => ({ rep: r.owner, leftToTextToday: r.queued, dailyCap: r.dailyCap })),
+      backlog: b.queues.backlog,
+      notYetReached: cold.length,
+      notYetReachedByAgeSinceTheyCameIn: coldAge
+    },
+    newLeads: { last7Days: within(7), last30Days: within(30) },
+    bySource: [...bySource.entries()].sort((x, y) => y[1].leads - x[1].leads).map(([k, v]) => ({ source: k, ...v })),
+    adMonths: b.ads.ok
+      ? b.ads.months.slice(0, 6).map((m) => ({ month: m.period, spend: m.spend, estimate: m.isEstimate, adFormProspects: m.prospects, nowBooked: m.booked, costPerLead: m.costPerLead, costPerBooked: m.costPerBooked, topCampaigns: m.campaigns.slice(0, 3) }))
+      : { error: b.ads.error },
+    filter: { stage, source, owner, followUp, search },
+    matchingLeads: matches.length,
+    leads: matches.slice(0, limit).map((p) => ({
+      facility: p.facility,
+      contact: p.name,
+      role: p.role,
+      location: p.location,
+      stage: label(p.stage),
+      rep: p.owner,
+      lastTextedBy: p.lastTextedBy,
+      source: p.source,
+      budgetPerMonth: p.value && p.value > 0 ? p.value : null,
+      followUp: p.followUp,
+      nextAction: p.nextAction,
+      nextActionDue: p.nextActionAt,
+      lastContacted: p.lastContactedAt,
+      cameInDaysAgo: ageDays(p.createdAt),
+      website: p.website
+    })),
+    truncated: matches.length > limit
+  };
+}
+
+async function getMetaAdsTool(input: Record<string, unknown>, ctx: ToolContext) {
+  const denied = await outboundGate(ctx);
+  if (denied) return denied;
+  const days = metaDays(input.days);
+  const res = await getOutboundMeta(days, 30_000);
+  if (!res.ok) return { error: `live Meta read unavailable: ${res.error} (do not treat as zero spend)` };
+  const d = res.data;
+  const costPerBooking = d.pipeline.booked > 0 ? Math.round((d.totals.spend / d.pipeline.booked) * 100) / 100 : null;
+  const priorCostPerBooking = d.pipeline.priorBooked > 0 ? Math.round((d.priorTotals.spend / d.pipeline.priorBooked) * 100) / 100 : null;
+  return {
+    note: "LIVE from Meta for OUR OWN ad account (not a client's). ctr is a percent; cpm is per 1,000 impressions; frequency over the whole window grows with the window, so compare like with like. Leads are Meta-reported.",
+    account: d.accountLabel,
+    window: d.range,
+    priorWindow: d.prior,
+    totals: d.totals,
+    priorTotals: d.priorTotals,
+    adFormPipeline: { ...d.pipeline, costPerBooking, priorCostPerBooking },
+    daily: d.daily.map((x) => ({ date: x.date, spend: x.spend, leads: x.leads, clicks: x.clicks, impressions: x.impressions, ctr: x.ctr, frequency: x.frequency })),
+    campaigns: d.campaigns,
+    adsets: d.adsets.slice(0, 25),
+    ads: d.ads.slice(0, 25).map(({ thumbnailUrl: _thumb, ...a }) => a),
+    readAt: d.generatedAt
   };
 }
 

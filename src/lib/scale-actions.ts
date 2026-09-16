@@ -91,12 +91,12 @@ function displayRecipient(participants: string[], ownerEmail: string): string | 
 // Pitches/sales he sent that went silent: Sent-folder threads whose newest
 // message is his outbound, 4–60 days old, to an outside recipient (not internal).
 // Most-recently-cold first (warmest to revive). Fail-soft to [].
-export async function getReactivatePitches(limit = 8): Promise<ReactivatePitch[]> {
+export async function getReactivatePitches(limit = 15): Promise<ReactivatePitch[]> {
   let threads;
   let owner;
   try {
     [threads, owner] = await Promise.all([
-      listThreads({ folder: "SENT", status: "open", limit: 80 }),
+      listThreads({ folder: "SENT", status: "open", limit: 200 }),
       getOwnerAccount()
     ]);
   } catch {
@@ -113,7 +113,7 @@ export async function getReactivatePitches(limit = 8): Promise<ReactivatePitch[]
     const sentAt = t.last_outbound_at ?? t.last_message_at;
     if (!sentAt) continue;
     const daysSilent = Math.floor((now - Date.parse(sentAt)) / 86_400_000);
-    if (daysSilent < 4 || daysSilent > 60) continue;
+    if (daysSilent < 4 || daysSilent > 300) continue; // pitches from the last ~300 days you never heard back on
     const recipient = displayRecipient(t.participants ?? [], ownerEmail);
     if (!recipient || INTERNAL.test(recipient)) continue; // skip internal team threads
     out.push({

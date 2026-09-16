@@ -7,6 +7,7 @@ import { getOutboundBoard } from "@/lib/outbound-board";
 import { getOutboundMeta } from "@/lib/outbound-meta";
 import { getScaleSources } from "@/lib/scale-sources";
 import { listMemories, formatMemoriesBlock } from "@/lib/brain-memory";
+import { getBrainInstructions } from "@/lib/brain-instructions";
 import { getAnthropic, MODELS } from "@/lib/anthropic-client";
 import type { Task } from "@/lib/types";
 import type { FacebookRevenueResult } from "@/lib/facebook-revenue-types";
@@ -52,6 +53,10 @@ export interface GrowthBrief {
   // Which outside sources were switched on when this brief was built. Absent on
   // briefs saved before the switches existed.
   sources?: ScaleSourceFlags;
+  // Which core-rules version wrote it: a brain_instructions id, or "default"
+  // when it ran on the hard-coded rules. Absent on briefs saved before the
+  // rules became editable. Lets a bad brief be traced to an instructions edit.
+  instructionsVersion?: string;
 }
 
 const money = (n: number | null | undefined) => (n == null ? "$0" : `$${Math.round(n).toLocaleString("en-US")}`);
@@ -218,7 +223,10 @@ function summaryFromBoard(board: OutboundBoardResult): OutboundSummaryResult {
 // Assemble everything the Growth Brain reasons over into one snapshot string.
 // The source switches are read once here and handed back, so the snapshot, the
 // system prompt, and the brief's stamp all follow the same read.
-async function assembleSnapshot(): Promise<{ text: string; sources: ScaleSourceFlags }> {
+// Exported so the agent connector can show the brain's exact input without
+// paying for a model call. Owner-only data: callers gate with isOwner (or an
+// owner-scoped agent key).
+export async function getGrowthSnapshot(): Promise<{ text: string; sources: ScaleSourceFlags }> {
   const supabase = getSupabaseAdmin();
   // Never throws; a failed read is both off.
   const scale = await getScaleSources();
@@ -405,26 +413,18 @@ async function assembleSnapshot(): Promise<{ text: string; sources: ScaleSourceF
   return { text, sources };
 }
 
-// The system prompt. The Facebook-side and Outbound rules are there only when
-// their source is switched on — a rule about data the brain wasn't given would
-// invite it to reason about numbers it doesn't have.
-const growthSystem = (sources: ScaleSourceFlags) => [
-  "You are the AI Brain for Scaled AI, a digital agency for addiction-treatment / behavioral-health clients. You operate like an aggressive but disciplined COO + Chief Growth Officer for the founder, Mitchell.",
-  "",
-  "Your mandate has two sides, always active at once:",
-  "1) PROTECT the business: prevent churn, missed deadlines, poor performance, wasted spend, dropped leads, communication gaps, bottlenecks, margin leakage, and capacity failures.",
-  "2) PUSH the business: constantly find where Scaled AI can acquire more customers, expand existing accounts, increase capacity, improve margins, replicate wins, and move faster.",
-  "",
-  "Core rules:",
-  "- Do NOT confuse stability with success. Healthy operations are the foundation for growth, not the goal. When something works, ask: how do we scale, replicate, automate, delegate, productize, or monetize it?",
-  "- Hunt the constraint. Growth is limited by the single biggest current bottleneck (leads, sales, delivery capacity, onboarding, account management, cash). Identify the #1 constraint right now with evidence and the impact of removing it.",
-  "- Turn isolated wins into systems. When something performs unusually well, investigate WHY and whether it's repeatable across clients/departments.",
-  "- Think in outcomes, not activity. Not 'X sent 5 texts' — think funnel and throughput, and how to increase it without losing quality.",
-  "- Controlled aggression: push hard when evidence shows capacity to scale, but protect quality, client outcomes, cash flow, and margins. Never recommend growth merely for activity's sake.",
-  "- Be specific and grounded in the real data below: name clients, people, numbers, dollar estimates, and owners. No vague themes.",
-  "- IGNORE automated system noise. Security/Wordfence/plugin/vulnerability/backup/uptime/SSL alerts are ops noise, NOT churn signals or client sentiment — never surface them as risks. A client is only 'at risk' when there's a REAL human signal: a person expressed frustration/dissatisfaction, an unmet request or broken promise, a payment/past-due problem, or explicit churn intent.",
-  "- Do NOT surface internal team task-status ('X has 3 overdue tasks', 'stuck with the team') as a PROTECT item on its own. Team load only matters as a capacity constraint or when it's directly causing a client-facing failure a human has reacted to.",
-  "- Weigh recency. Client health/notes carry an 'as of Nd ago' stamp, and recent client calls (tl;dv) are dated — LEAD with the freshest signals. A risk raised on a call this week outranks a 2-week-old note; a request made on a call is a live expansion opening (turn it into a GROW item). When you flag a client risk, state how recent it is, and discount anything older than ~3 weeks unless corroborated.",
+// The system prompt, in three parts:
+//   1. `rules` — the mandate + core rules. Editable and versioned (see
+//      brain-instructions.ts); DEFAULT_BRAIN_RULES is byte-identical to the
+//      lines that used to be hard-coded here, so the default prompt is unchanged.
+//   2. The Facebook-side and Outbound rules — there only when their source is
+//      switched on (a rule about data the brain wasn't given would invite it to
+//      reason about numbers it doesn't have). Kept in code: they must follow the
+//      snapshot, not an edit.
+//   3. The output contract — kept in code and always LAST, so no rules edit can
+//      change the JSON shape generateGrowthBrief parses and /scale renders.
+const growthSystem = (sources: ScaleSourceFlags, rules: string) => [
+  rules,
   ...(sources.facebook ? ["- Facebook-side revenue (from the Finance app: management + setup fees on the client Meta spend we manage) is a SEPARATE stream from MRR. Never sum the two or double count a client across them. If it's unavailable, say so; never treat it as $0."] : []),
   ...(sources.outbound ? ["- Outbound spend / prospects / booked / cost per booked are our own acquisition funnel. When judging whether leads or sales is the constraint, use the cost-per-lead and cost-per-booked trend and the texting backlog vs the reps' daily caps as evidence. An estimate month is partial (leads include today, spend stops at yesterday) — never compare it to a full month as if it were complete.", "- The outbound pipeline and our Meta ads sections are LIVE. Use them lead by lead: name the booked/proposal facilities that need a push, the leads flagged NEEDS FOLLOW-UP, how stale the un-reached backlog is against the reps' daily capacity, which sources actually book, and — from the last 7 days of Meta delivery — whether CPL/CTR/frequency say the ads or the follow-up is the leak. When a lead is dealt to a rep, make that rep the owner."] : []),
   "",
@@ -439,13 +439,16 @@ const growthSystem = (sources: ScaleSourceFlags) => [
 
 // Generate a fresh Growth Brief, persist it, and return it.
 export async function generateGrowthBrief(): Promise<GrowthBrief> {
-  const { text: snapshot, sources } = await assembleSnapshot();
+  // The instructions read never throws: unreadable → default rules + readError,
+  // so a missing table can't take the brief down. Read once, used once.
+  const [{ text: snapshot, sources }, instructions] = await Promise.all([getGrowthSnapshot(), getBrainInstructions()]);
+  if (instructions.readError) console.warn("[growth-brain] using default rules:", instructions.readError);
   const client = await getAnthropic();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const result: any = await client.messages.create({
     model: MODELS.chat,
     max_tokens: 5000,
-    system: growthSystem(sources),
+    system: growthSystem(sources, instructions.rules),
     messages: [{ role: "user", content: `Here is the current state of Scaled AI:\n\n${snapshot}\n\nGiven everything above, what should we do next to make the company bigger, better, and more profitable? Return the JSON brief.` }]
   });
   const text = (result.content ?? []).filter((b: { type: string }) => b.type === "text").map((b: { text: string }) => b.text).join("").trim();
@@ -466,7 +469,8 @@ export async function generateGrowthBrief(): Promise<GrowthBrief> {
     grow: Array.isArray(json.grow) ? json.grow.slice(0, 10) : [],
     generatedAt: new Date().toISOString(),
     // So /scale can tell when a source this brief used has since been switched off.
-    sources
+    sources,
+    instructionsVersion: instructions.active?.id ?? "default"
   };
 
   const id = `gb_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;

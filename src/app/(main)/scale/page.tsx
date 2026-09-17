@@ -13,7 +13,7 @@ import { GrowthBoard, type GrowthBrief } from "@/components/GrowthBoard";
 import { getLatestGrowthBrief } from "@/lib/growth-brain";
 import { MemoryEditor, type ScaleMemory } from "@/components/MemoryEditor";
 import { ActNowTabs } from "@/components/ActNowTabs";
-import { getReachOutClients, getReactivatePitches } from "@/lib/scale-actions";
+import { getReachOutClients, getReactivatePitches, getFollowUpLeads } from "@/lib/scale-actions";
 import { type InboxThread } from "@/components/InboxCopilot";
 import { ScaleAcquisition, ScaleAcquisitionLoading } from "@/components/ScaleAcquisition";
 import { getFacebookRevenue } from "@/lib/facebook-revenue";
@@ -157,16 +157,18 @@ export default async function ScalePage() {
 // streamed under a Suspense boundary so it never blocks the shell/constraint.
 // Rendered below the owner gate; every fetch fails soft.
 async function ActNowSection() {
-  const [reachOut, reactivate, inbox] = await Promise.all([
+  const [reachOut, reactivate, inbox, followUps] = await Promise.all([
     getReachOutClients().catch(() => []),
     getReactivatePitches().catch(() => []),
-    loadSortedInbox()
+    loadSortedInbox(),
+    getFollowUpLeads().catch(() => ({ booked: [], noResponse: [] }))
   ]);
-  const hasAny = inbox.threads.length > 0 || reactivate.length > 0 || reachOut.length > 0;
+  const followCount = followUps.booked.length + followUps.noResponse.length;
+  const hasAny = inbox.threads.length > 0 || reactivate.length > 0 || reachOut.length > 0 || followCount > 0;
   if (!hasAny) {
     return <div className="rounded-2xl border border-slate-200 bg-white p-6 text-[13px] text-muted shadow-soft">Nothing needs you right now. 🎉</div>;
   }
-  return <ActNowTabs inbox={inbox.threads} inboxNote={inbox.note} reactivate={reactivate} reachOut={reachOut} />;
+  return <ActNowTabs inbox={inbox.threads} inboxNote={inbox.note} reactivate={reactivate} reachOut={reachOut} followUps={followUps} />;
 }
 
 // Mitchell's inbox, sorted (owner-only, gated upstream). Fails soft to a note.

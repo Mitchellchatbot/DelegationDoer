@@ -1,56 +1,21 @@
 "use client";
 
 import { useState } from "react";
-import { Linkedin, Copy, Check, ArrowUpRight, Users } from "lucide-react";
+import { Linkedin, Copy, Check, ArrowUpRight, Users, Sparkles, RefreshCw } from "lucide-react";
 import type { LinkedInTarget } from "@/lib/scale-actions";
 
-// LinkedIn card for the Scale Room: a ready-to-post idea for today (copy or ask
-// the brain to publish) + the 5 ICP people to message today from the live
-// pipeline. LinkedIn's API can't send DMs/connection requests, so the 5 are a
-// surfaced list you (or Dripify) work by hand.
+// LinkedIn card for the Scale Room:
+//  - You type a TOPIC, the brain drafts a post in your voice, and you can give
+//    feedback to revise it (topic → draft → feedback → revise).
+//  - The 5 ICP people to DM today, from the live pipeline (LinkedIn's API can't
+//    send DMs/invites, so you work these by hand or via Dripify).
 
-// A few on-brand drafts (value-first, Mitchell's voice, no dashes). Rotates by
-// day so there's a fresh angle each morning. Ask the brain to publish, or copy.
-const POSTS: { angle: string; text: string }[] = [
-  {
-    angle: "Facebook offer",
-    text: `Most treatment centers are lighting money on fire with Facebook ads.
-
-They boost a post, run a generic "we can help" ad, point it at a homepage, and wonder why nothing happens.
-
-Here's what actually works for behavioral health. You don't sell treatment in the ad. You lead with value, capture with a simple form, then get them on a call.
-
-The mistakes I see every week:
-1. Sending ad traffic to a homepage instead of a dedicated page
-2. Asking for a call before giving any value
-3. Never following up with people who filled the form but didn't book
-
-That third one is where the money is. Most leads don't book on day one. The centers that win follow up for 30 days, not 3.
-
-If your Meta ads aren't producing booked admits, it's almost never the budget. It's the funnel.
-
-Happy to break down what's working right now. Message me.`
-  },
-  {
-    angle: "SEO authority",
-    text: `A family looking for treatment at 2am isn't scrolling. They search, they call the top 3 on the map, and they go with whoever shows up first.
-
-If you're not there, you don't exist to them.
-
-We run SEO for 50+ treatment centers and haven't lost one in 8 months. The pattern is always the same: fix the foundation, show up when families search, and the calls come without paying per click.
-
-If you're spending on ads but invisible on search, you're paying to be someone's second choice. Fix the foundation first.`
-  },
-  {
-    angle: "Follow-up discipline",
-    text: `The best marketing channel in treatment isn't a channel. It's follow-up.
-
-We watch centers spend thousands to generate a lead, then quit after two texts. Meanwhile the family was overwhelmed, not uninterested.
-
-Every lead that fills a form is a person who raised their hand. Follow up for 30 days, not 3. Call, text, email. Lead with help, not a pitch.
-
-The centers that do this quietly outgrow the ones with bigger budgets. Every time.`
-  }
+const TOPIC_IDEAS = [
+  "our Facebook ads offer for treatment centers",
+  "why follow-up beats ad budget",
+  "a recent client win",
+  "SEO for behavioral health",
+  "the biggest mistake treatment centers make with marketing"
 ];
 
 function stageChip(stage: string): { label: string; cls: string } {
@@ -60,9 +25,41 @@ function stageChip(stage: string): { label: string; cls: string } {
 }
 
 export function LinkedInModule({ targets }: { targets: LinkedInTarget[] }) {
-  const idx = Math.floor(Date.now() / 86_400_000) % POSTS.length;
-  const [post, setPost] = useState(POSTS[idx].text);
+  const [topic, setTopic] = useState("");
+  const [post, setPost] = useState("");
+  const [instruction, setInstruction] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+
+  async function draft(revise: boolean) {
+    const t = topic.trim();
+    if (!t && !post) { setError("Type a topic first."); return; }
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/brain/linkedin/draft", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          topic: t,
+          instruction: revise ? instruction.trim() : "",
+          current: revise ? post : ""
+        })
+      });
+      const j = await res.json();
+      if (res.ok && j.post) {
+        setPost(j.post);
+        setInstruction("");
+      } else {
+        setError(j.error || "draft failed");
+      }
+    } catch {
+      setError("draft failed");
+    } finally {
+      setLoading(false);
+    }
+  }
 
   async function copy() {
     try {
@@ -70,7 +67,7 @@ export function LinkedInModule({ targets }: { targets: LinkedInTarget[] }) {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     } catch {
-      /* clipboard blocked — the text is still selectable in the box */
+      /* clipboard blocked — text still selectable */
     }
   }
 
@@ -82,38 +79,81 @@ export function LinkedInModule({ targets }: { targets: LinkedInTarget[] }) {
         </div>
         <div className="min-w-0 flex-1">
           <div className="text-[13px] font-semibold text-ink leading-tight">LinkedIn</div>
-          <div className="text-[11px] text-muted leading-tight">Post 2–3×/week, value first. Message 5 ICP people a day.</div>
+          <div className="text-[11px] text-muted leading-tight">Write a post from your topic. Message 5 ICP people a day.</div>
         </div>
       </div>
 
       <div className="p-4 space-y-4">
-        {/* Today's post */}
+        {/* Topic → draft */}
         <div>
-          <div className="flex items-center justify-between mb-1.5">
-            <span className="text-[12px] font-semibold text-ink">Today&apos;s post · {POSTS[idx].angle}</span>
-            <button type="button" onClick={copy} className="inline-flex items-center gap-1 text-[11px] font-medium text-sky-700 hover:bg-sky-50 rounded-lg px-2 py-1">
-              {copied ? <><Check className="w-3.5 h-3.5" /> Copied</> : <><Copy className="w-3.5 h-3.5" /> Copy</>}
+          <label className="text-[12px] font-semibold text-ink">What do you want to post about?</label>
+          <div className="flex items-center gap-2 mt-1.5">
+            <input
+              value={topic}
+              onChange={(e) => setTopic(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter" && !loading) draft(false); }}
+              placeholder="e.g. our Facebook ads offer for treatment centers"
+              className="flex-1 min-w-0 text-[13px] rounded-lg border border-slate-200 px-3 py-2 bg-white focus:outline-none focus:border-sky-300"
+            />
+            <button type="button" onClick={() => draft(false)} disabled={loading || !topic.trim()}
+              className="flex items-center gap-1.5 text-[12px] font-medium text-white bg-sky-600 rounded-lg px-3 py-2 hover:bg-sky-700 disabled:opacity-50 shrink-0">
+              {loading ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+              {loading ? "Writing…" : "Write it"}
             </button>
           </div>
-          <textarea
-            value={post}
-            onChange={(e) => setPost(e.target.value)}
-            rows={Math.min(18, Math.max(8, post.split("\n").length + 1))}
-            className="w-full text-[12.5px] leading-relaxed rounded-xl border border-slate-200 p-3 bg-slate-50/50 focus:outline-none focus:border-sky-300 resize-y"
-          />
-          <div className="text-[11px] text-muted mt-1.5">
-            Edit it, then say <span className="font-medium text-ink">&ldquo;post it&rdquo;</span> to your brain and it publishes to your LinkedIn — or copy and paste it yourself.
-          </div>
+          {!post && (
+            <div className="flex flex-wrap gap-1.5 mt-2">
+              {TOPIC_IDEAS.map((t) => (
+                <button key={t} type="button" onClick={() => setTopic(t)}
+                  className="text-[11px] text-sky-700 bg-sky-50 hover:bg-sky-100 rounded-full px-2 py-1">{t}</button>
+              ))}
+            </div>
+          )}
+          {error && <div className="text-[12px] text-rose-600 mt-1.5">{error}</div>}
         </div>
 
-        {/* 5 to message today */}
-        <div>
-          <div className="flex items-center gap-1.5 mb-1.5">
+        {/* Draft + feedback loop */}
+        {post && (
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-[12px] font-semibold text-ink">Your post</span>
+              <button type="button" onClick={copy} className="inline-flex items-center gap-1 text-[11px] font-medium text-sky-700 hover:bg-sky-50 rounded-lg px-2 py-1">
+                {copied ? <><Check className="w-3.5 h-3.5" /> Copied</> : <><Copy className="w-3.5 h-3.5" /> Copy</>}
+              </button>
+            </div>
+            <textarea
+              value={post}
+              onChange={(e) => setPost(e.target.value)}
+              rows={Math.min(20, Math.max(8, post.split("\n").length + 1))}
+              className="w-full text-[12.5px] leading-relaxed rounded-xl border border-slate-200 p-3 bg-slate-50/50 focus:outline-none focus:border-sky-300 resize-y"
+            />
+            <div className="flex items-center gap-2 flex-wrap">
+              <input
+                value={instruction}
+                onChange={(e) => setInstruction(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter" && !loading && instruction.trim()) draft(true); }}
+                placeholder="Give feedback (e.g. 'shorter, more aggressive, add a stat')"
+                className="flex-1 min-w-[200px] text-[12px] rounded-lg border border-slate-200 px-2.5 py-1.5 bg-white focus:outline-none focus:border-sky-300"
+              />
+              <button type="button" onClick={() => draft(true)} disabled={loading || !instruction.trim()}
+                className="flex items-center gap-1 text-[12px] font-medium text-sky-700 hover:bg-sky-50 rounded-lg px-2.5 py-1.5 disabled:opacity-50">
+                <RefreshCw className={"w-3.5 h-3.5 " + (loading ? "animate-spin" : "")} /> Revise
+              </button>
+            </div>
+            <div className="text-[11px] text-muted">
+              Edit it, then say <span className="font-medium text-ink">&ldquo;post it&rdquo;</span> to your brain and it publishes to your LinkedIn — or copy and paste it yourself.
+            </div>
+          </div>
+        )}
+
+        {/* 5 to DM today */}
+        <div className="pt-1 border-t border-slate-100">
+          <div className="flex items-center gap-1.5 mb-1.5 mt-3">
             <Users className="w-3.5 h-3.5 text-sky-600" />
-            <span className="text-[12px] font-semibold text-ink">Message today ({targets.length})</span>
+            <span className="text-[12px] font-semibold text-ink">5 to DM today ({targets.length})</span>
           </div>
           {targets.length === 0 ? (
-            <div className="text-[12px] text-muted px-1">No ICP contacts in the pipeline right now — pull a fresh Apollo list.</div>
+            <div className="text-[12px] text-muted px-1">No ICP contacts in the pipeline right now — pull a fresh Apollo list, or the ads dashboard is down.</div>
           ) : (
             <div className="rounded-xl border border-slate-200 bg-white divide-y divide-slate-100 overflow-hidden">
               {targets.map((t, i) => {
@@ -138,7 +178,7 @@ export function LinkedInModule({ targets }: { targets: LinkedInTarget[] }) {
             </div>
           )}
           <div className="text-[11px] text-muted mt-1.5">
-            LinkedIn&apos;s API can&apos;t send DMs or invites, so these are yours to message (or run through Dripify) per the outreach SOP.
+            LinkedIn&apos;s API can&apos;t send DMs or invites, so these are yours to DM (or run through Dripify) per the outreach SOP.
           </div>
         </div>
       </div>

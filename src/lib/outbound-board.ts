@@ -10,7 +10,10 @@ import { fetchAdsDashboard, isAds, isNum, isNumOrNull, isObj, isRep, isStr, isSt
 // outbound-summary.ts).
 
 // Every prospect plus Finance's whole ledger — give it the summary's room.
-const TIMEOUT_MS = 25_000;
+// The ads dashboard's live Meta/board pull is sometimes slow; give it the same
+// room as the Meta read (outbound-meta.ts) so the Scale Room shows the data
+// instead of an "unavailable" line. Real fix is caching that read on the dashboard.
+const TIMEOUT_MS = 55_000;
 
 export function getOutboundBoard(timeoutMs = TIMEOUT_MS): Promise<OutboundBoardResult> {
   return fetchAdsDashboard("/api/outbound/board", isBoard, timeoutMs, "Outbound board failed");

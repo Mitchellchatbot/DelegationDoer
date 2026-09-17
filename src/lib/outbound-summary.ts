@@ -16,7 +16,9 @@ import type { OutboundSummaryResponse, OutboundSummaryResult } from "./outbound-
 // OUTBOUND_AGENT_SECRET (outbound-agent.ts) is a separate one that can write;
 // it goes out only on the agent API's routes, never on these reads.
 
-const TIMEOUT_MS = 25_000;
+// Matches outbound-meta / outbound-board: the dashboard's live pull is slow at
+// times, so wait long enough to actually show the numbers instead of a timeout.
+const TIMEOUT_MS = 55_000;
 
 export async function getOutboundSummary(timeoutMs = TIMEOUT_MS): Promise<OutboundSummaryResult> {
   return fetchAdsDashboard("/api/outbound/summary", isSummary, timeoutMs, "Outbound summary failed");

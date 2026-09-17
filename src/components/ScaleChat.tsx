@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Sparkles, Send, Loader2, RefreshCw, Mail, CheckCircle2, ArrowUp } from "lucide-react";
+import { Sparkles, Send, Loader2, RefreshCw, Mail, CheckCircle2, ArrowUp, Mic, MicOff } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -71,6 +71,12 @@ export function ScaleChat() {
     }
   }
 
+  // Voice: hold-to-talk to the brain. Records the mic, transcribes via
+  // /api/transcribe, and drops the text into the input to send or edit.
+  const { supported, listening, transcribing, toggle } = useDictation((text) =>
+    setInput((v) => (v ? v + (v.endsWith(" ") ? "" : " ") + text : text))
+  );
+
   const hasThread = messages.length > 0;
 
   return (
@@ -123,14 +129,22 @@ export function ScaleChat() {
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={onKeyDown}
             disabled={loading}
-            placeholder={loading ? "Thinking…" : "Ask your brain anything…"}
+            placeholder={loading ? "Thinking…" : transcribing ? "Transcribing…" : listening ? "Listening… tap the mic to stop" : "Ask your brain anything…"}
             className="flex-1 min-w-0 resize-none bg-transparent text-[14px] leading-snug outline-none placeholder:text-slate-400 py-1.5 max-h-32"
           />
+          {supported && (
+            <button type="button" onClick={toggle} disabled={loading || transcribing} aria-label={listening ? "Stop" : "Speak to your brain"}
+              title={listening ? "Stop and transcribe" : "Speak to your brain"}
+              className={"w-9 h-9 rounded-full grid place-items-center shrink-0 transition-all border " + (listening ? "bg-rose-50 text-rose-600 border-rose-200 animate-pulse" : "bg-white text-slate-500 border-slate-200 hover:text-indigo-600 hover:border-indigo-300") + ((loading || transcribing) ? " opacity-40 cursor-not-allowed" : "")}>
+              {transcribing ? <Loader2 className="w-4 h-4 animate-spin" /> : listening ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+            </button>
+          )}
           <button type="button" onClick={() => send()} disabled={!input.trim() || loading} aria-label="Send"
-            className={"w-8 h-8 rounded-full grid place-items-center shrink-0 transition-all " + (input.trim() && !loading ? "bg-indigo-600 text-white hover:bg-indigo-700 active:scale-95" : "bg-slate-100 text-slate-400 cursor-not-allowed")}>
-            {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
+            className={"w-9 h-9 rounded-full grid place-items-center shrink-0 transition-all " + (input.trim() && !loading ? "bg-indigo-600 text-white hover:bg-indigo-700 active:scale-95" : "bg-slate-100 text-slate-400 cursor-not-allowed")}>
+            {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
           </button>
         </div>
+        {supported && <div className="text-[10px] text-slate-400 px-1 pt-1.5">Tap the mic to talk to your brain, or type. Enter to send.</div>}
       </div>
     </div>
   );
@@ -215,6 +229,69 @@ function SendEmailCard({ action }: { action: ProposedEmail }) {
       )}
     </div>
   );
+}
+
+// Click-to-talk dictation: record the mic, POST the audio to /api/transcribe on
+// stop, and hand the text back. Same endpoint the Ask AI drawer uses.
+function useDictation(onText: (t: string) => void) {
+  const [supported, setSupported] = useState(false);
+  const [listening, setListening] = useState(false);
+  const [transcribing, setTranscribing] = useState(false);
+  const recRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    setSupported(!!navigator.mediaDevices?.getUserMedia && typeof MediaRecorder !== "undefined");
+    return () => { try { recRef.current?.stop(); } catch { /* */ } };
+  }, []);
+
+  async function start() {
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch {
+      return; // permission denied / no mic — stay silent, user can type
+    }
+    const mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? "audio/webm;codecs=opus"
+      : MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm"
+      : MediaRecorder.isTypeSupported("audio/mp4") ? "audio/mp4" : "";
+    const rec = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+    chunksRef.current = [];
+    rec.ondataavailable = (e) => { if (e.data && e.data.size > 0) chunksRef.current.push(e.data); };
+    rec.onstop = async () => {
+      stream.getTracks().forEach((t) => t.stop());
+      const type = rec.mimeType || "audio/webm";
+      const blob = new Blob(chunksRef.current, { type });
+      chunksRef.current = [];
+      if (blob.size === 0) return;
+      setTranscribing(true);
+      try {
+        const ext = type.includes("mp4") ? "m4a" : "webm";
+        const fd = new FormData();
+        fd.append("file", blob, `dictation.${ext}`);
+        const res = await fetch("/api/transcribe", { method: "POST", body: fd });
+        const data = await res.json().catch(() => ({}));
+        const text = typeof data.text === "string" ? data.text.trim() : "";
+        if (text) onText(text);
+      } catch {
+        /* transcription failed — user can type instead */
+      } finally {
+        setTranscribing(false);
+      }
+    };
+    recRef.current = rec;
+    rec.start();
+    setListening(true);
+  }
+
+  function stop() {
+    try { recRef.current?.stop(); } catch { /* */ }
+    recRef.current = null;
+    setListening(false);
+  }
+
+  return { supported, listening, transcribing, toggle: () => (listening ? stop() : void start()) };
 }
 
 function Markdown({ content }: { content: string }) {

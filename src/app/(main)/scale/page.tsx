@@ -18,6 +18,7 @@ import { type InboxThread } from "@/components/InboxCopilot";
 import { ScaleAcquisition, ScaleAcquisitionLoading } from "@/components/ScaleAcquisition";
 import { getFacebookRevenue } from "@/lib/facebook-revenue";
 import { getOutboundSummary } from "@/lib/outbound-summary";
+import { getOutboundMeta } from "@/lib/outbound-meta";
 import type { ScaleSourceFlags } from "@/lib/scale-sources-types";
 import { ScaleChat } from "@/components/ScaleChat";
 import { ScaleTabs } from "@/components/ScaleTabs";
@@ -195,9 +196,12 @@ async function loadSortedInbox(): Promise<{ threads: InboxThread[]; note: string
 // Only ever rendered below the owner gate above. Neither fetch throws. A source
 // switched off is never called — not fetched and discarded, not called at all.
 async function ScaleAcquisitionSection({ sources }: { sources: ScaleSourceFlags }) {
-  const [revenue, outbound] = await Promise.all([
+  const [revenue, outbound, meta] = await Promise.all([
     sources.facebook ? getFacebookRevenue() : undefined,
-    sources.outbound ? getOutboundSummary() : undefined
+    sources.outbound ? getOutboundSummary() : undefined,
+    // Live Meta stats come straight from Meta's API — independent of the ads
+    // dashboard's pipeline DB, so they still show when the board query 500s.
+    sources.outbound ? getOutboundMeta(7) : undefined
   ]);
-  return <ScaleAcquisition revenue={revenue} outbound={outbound} />;
+  return <ScaleAcquisition revenue={revenue} outbound={outbound} meta={meta} />;
 }

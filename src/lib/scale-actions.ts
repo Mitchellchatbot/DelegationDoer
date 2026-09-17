@@ -8,6 +8,8 @@ import { getOwnerAccount, AUTOMATED_SUBJECT } from "@/lib/owner-inbox";
 import { OWNER_EMAIL } from "@/lib/access";
 import { getAnthropic, MODELS } from "@/lib/anthropic-client";
 import { getFacebookRevenue } from "@/lib/facebook-revenue";
+import { getOutboundBoard } from "@/lib/outbound-board";
+import type { OutboundBoardProspect } from "@/lib/outbound-board-types";
 
 // Two owner-only "Act now" modules for the Scale Room:
 //   Reach out  — paying clients who've gone quiet (no personal email in a while)
@@ -21,6 +23,51 @@ export interface ReachOutClient {
   days: number | null;      // days since last real outbound email; null = never
   lastSubject: string | null;
   contactEmail: string | null;
+}
+
+// Booked-call pipeline follow-ups — the hottest prospects from the outbound
+// board (booked calls that haven't closed, and no-response leads to re-touch).
+// Read-only: the board's whitelist sends no email/phone, so these are worked on
+// the Live board (link in the UI), not drafted here.
+export interface FollowUpLead {
+  facility: string;
+  contact: string | null;
+  role: string | null;
+  source: string | null;
+  stage: string;
+  daysInPipeline: number | null;  // since it came in
+  lastContacted: string | null;   // YYYY-MM-DD
+  nextActionDue: string | null;   // YYYY-MM-DD
+}
+export interface FollowUps { booked: FollowUpLead[]; noResponse: FollowUpLead[] }
+
+export async function getFollowUpLeads(bookedLimit = 20, noRespLimit = 20): Promise<FollowUps> {
+  const res = await getOutboundBoard().catch(() => null);
+  if (!res || !res.ok) return { booked: [], noResponse: [] };
+  const map = (p: OutboundBoardProspect): FollowUpLead => ({
+    facility: p.facility || p.website || "Unknown facility",
+    contact: p.name,
+    role: p.role,
+    source: p.source,
+    stage: p.stage,
+    daysInPipeline: p.createdAt ? Math.max(0, Math.floor((Date.now() - Date.parse(p.createdAt)) / 86_400_000)) : null,
+    lastContacted: p.lastContactedAt,
+    nextActionDue: p.nextActionAt
+  });
+  // Booked (+ proposal) = your close list. Oldest in pipeline first — those are
+  // the calls most at risk of going cold.
+  const booked = res.data.prospects
+    .filter((p) => p.stage === "booked" || p.stage === "proposal")
+    .map(map)
+    .sort((a, b) => (b.daysInPipeline ?? 0) - (a.daysInPipeline ?? 0))
+    .slice(0, bookedLimit);
+  // No-response = re-touch list. Longest since last contact first.
+  const noResponse = res.data.prospects
+    .filter((p) => p.stage === "no_response")
+    .map(map)
+    .sort((a, b) => (a.lastContacted || "").localeCompare(b.lastContacted || ""))
+    .slice(0, noRespLimit);
+  return { booked, noResponse };
 }
 
 // Match a client's board name to its manual-MRR row (fuzzy, like elsewhere).

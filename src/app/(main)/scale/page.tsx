@@ -1,6 +1,6 @@
 import { Suspense } from "react";
 import { notFound, redirect } from "next/navigation";
-import { Rocket } from "lucide-react";
+import { Rocket, Mail, Flame } from "lucide-react";
 import { getCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
@@ -18,9 +18,8 @@ import { InboxCopilot, type InboxThread } from "@/components/InboxCopilot";
 import { ScaleAcquisition, ScaleAcquisitionLoading } from "@/components/ScaleAcquisition";
 import { getFacebookRevenue } from "@/lib/facebook-revenue";
 import { getOutboundSummary } from "@/lib/outbound-summary";
-import { getScaleSources } from "@/lib/scale-sources";
 import type { ScaleSourceFlags } from "@/lib/scale-sources-types";
-import { ScaleSourceSwitches } from "@/components/ScaleSourceSwitches";
+import { ScaleChat } from "@/components/ScaleChat";
 import { ScaleTabs } from "@/components/ScaleTabs";
 import type { ParsedPnl } from "@/lib/pnl-parse";
 
@@ -42,16 +41,16 @@ export default async function ScalePage() {
   if (!isOwner(user)) notFound();
 
   const supabase = getSupabaseAdmin();
-  const [revenue, memories, mrrRes, finRes, growthBrief, sources] = await Promise.all([
+  const [revenue, memories, mrrRes, finRes, growthBrief] = await Promise.all([
     getStripeRevenue().catch(() => null),
     listMemories().catch(() => []),
     supabase.from("mrr_entries").select("company, mrr, status"),
     supabase.from("finance_documents").select("parsed").order("uploaded_at", { ascending: false }).limit(5),
-    getLatestGrowthBrief().catch(() => null),
-    // Never throws; a failed read comes back as both off with the reason.
-    getScaleSources()
+    getLatestGrowthBrief().catch(() => null)
   ]);
-  const sourceFlags: ScaleSourceFlags = { facebook: sources.facebook, outbound: sources.outbound };
+  // The room always reads both acquisition sources — Facebook (booked calls)
+  // and the outbound pipeline. No toggles: Mitchell wants both, always.
+  const sourceFlags: ScaleSourceFlags = { facebook: true, outbound: true };
 
   // Snapshot: manual MRR (source of truth) + concentration + margin.
   const mrrRows = (mrrRes.data ?? []) as { company: string; mrr: number; status: string }[];
@@ -72,59 +71,79 @@ export default async function ScalePage() {
   }
   const netNew = revenue ? revenue.newMrr - revenue.churnedMrr : null;
 
+  // Colored metric tiles — each hue is a full class string so Tailwind's JIT
+  // keeps them. Net-new flips green/red on sign; concentration flips amber when
+  // it's a risk.
+  const HUE: Record<string, { card: string; label: string; value: string }> = {
+    indigo: { card: "bg-indigo-50 border-indigo-100", label: "text-indigo-600", value: "text-indigo-700" },
+    emerald: { card: "bg-emerald-50 border-emerald-100", label: "text-emerald-600", value: "text-emerald-700" },
+    rose: { card: "bg-rose-50 border-rose-100", label: "text-rose-600", value: "text-rose-700" },
+    violet: { card: "bg-violet-50 border-violet-100", label: "text-violet-600", value: "text-violet-700" },
+    amber: { card: "bg-amber-50 border-amber-100", label: "text-amber-600", value: "text-amber-700" },
+    sky: { card: "bg-sky-50 border-sky-100", label: "text-sky-600", value: "text-sky-700" }
+  };
   const cards = [
-    { label: "MRR", value: money(mrr), tone: "ink" as const },
-    { label: "Net new · this mo", value: (netNew ?? 0) >= 0 ? `+${money(netNew)}` : money(netNew), tone: (netNew ?? 0) > 0 ? "emerald" : (netNew ?? 0) < 0 ? "rose" : "ink" as const },
-    { label: "Margin", value: margin != null ? `${margin}%` : "—", tone: "ink" as const },
-    { label: "Top-3 concentration", value: `${top3Share}%`, tone: top3Share >= 50 ? "amber" : "ink" as const }
+    { label: "MRR", value: money(mrr), hue: "indigo" },
+    { label: "Net new · this mo", value: (netNew ?? 0) >= 0 ? `+${money(netNew)}` : money(netNew), hue: (netNew ?? 0) < 0 ? "rose" : "emerald" },
+    { label: "Margin", value: margin != null ? `${margin}%` : "—", hue: "violet" },
+    { label: "Top-3 concentration", value: `${top3Share}%`, hue: top3Share >= 50 ? "amber" : "sky" }
   ];
 
   return (
     <div className="space-y-5 max-w-3xl mx-auto">
-      <div className="flex items-start gap-3">
-        <div className="w-11 h-11 rounded-2xl bg-indigo-100 text-indigo-700 grid place-items-center shrink-0">
-          <Rocket className="w-5 h-5" />
-        </div>
-        <div>
-          <div className="text-[11px] font-semibold uppercase tracking-wide text-indigo-700">Private · you only</div>
-          <h1 className="text-2xl font-bold text-ink leading-tight">Scale Room</h1>
-          <p className="text-sm text-muted mt-0.5 max-w-prose">
-            You and your brain in one place: the numbers, what to do to scale, the emails to reply to, and what we&apos;re optimizing for. Just what needs you — nothing else.
-          </p>
+      <div className="rounded-3xl p-5 shadow-soft bg-gradient-to-br from-indigo-500 via-violet-500 to-fuchsia-500 text-white">
+        <div className="flex items-start gap-3">
+          <div className="w-11 h-11 rounded-2xl bg-white/20 backdrop-blur grid place-items-center shrink-0">
+            <Rocket className="w-5 h-5" />
+          </div>
+          <div>
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-indigo-100">Private · you only</div>
+            <h1 className="text-2xl font-bold leading-tight">Scale Room</h1>
+            <p className="text-sm text-indigo-50/90 mt-0.5 max-w-prose">
+              You and your brain in one place: the numbers, what to do to scale, the emails to reply to, and what we&apos;re optimizing for. Just what needs you — nothing else.
+            </p>
+          </div>
         </div>
       </div>
 
       {/* Overview (this page) · Outbound (the full pipeline + ad account) */}
       <ScaleTabs active="overview" />
 
-      {/* Which outside apps the room (and the brain) reads */}
-      <ScaleSourceSwitches initial={sources} />
+      {/* 1. Talk to your brain — ask what to do next, right at the top. */}
+      <ScaleChat />
 
-      {/* 1. The #1 constraint + collapsed Protect / Grow */}
+      {/* 2. The #1 constraint + collapsed Protect / Grow */}
       <GrowthBoard initial={growthBrief as GrowthBrief | null} currentSources={sourceFlags} />
 
-      {/* 2. ACT NOW — what needs Mitchell today, top of the page. Streamed so the
-          shell + constraint render instantly instead of the whole page blocking
-          on the inbox/reactivate AI sort. */}
+      {/* 3. ACT NOW — what needs Mitchell today. Streamed so the shell +
+          constraint render instantly instead of the whole page blocking on the
+          inbox/reactivate AI sort. */}
       <div className="pt-1">
-        <div className="text-[11px] font-semibold uppercase tracking-wide text-indigo-700 px-1 mb-2">Act now</div>
+        <div className="flex items-center gap-1.5 px-1 mb-2">
+          <span className="w-2 h-2 rounded-full bg-indigo-500" />
+          <span className="text-[11px] font-semibold uppercase tracking-wide text-indigo-700">Act now</span>
+        </div>
         <Suspense fallback={<div className="rounded-2xl border border-slate-200 bg-white p-6 text-[13px] text-muted shadow-soft">Sorting your inbox, pitches and quiet clients…</div>}>
           <ActNowSection />
         </Suspense>
       </div>
 
-      {/* 3. THE NUMBERS — reference, below the actions */}
+      {/* 4. THE NUMBERS — reference, below the actions */}
       <div className="pt-1">
-        <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500 px-1 mb-2">The numbers</div>
+        <div className="flex items-center gap-1.5 px-1 mb-2">
+          <span className="w-2 h-2 rounded-full bg-emerald-500" />
+          <span className="text-[11px] font-semibold uppercase tracking-wide text-emerald-700">The numbers</span>
+        </div>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          {cards.map((c) => (
-            <div key={c.label} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-soft">
-              <div className="text-[11px] font-medium text-muted">{c.label}</div>
-              <div className={"mt-1 text-2xl font-bold tabular-nums " + (c.tone === "emerald" ? "text-emerald-600" : c.tone === "rose" ? "text-rose-600" : c.tone === "amber" ? "text-amber-600" : "text-ink")}>
-                {c.value}
+          {cards.map((c) => {
+            const h = HUE[c.hue];
+            return (
+              <div key={c.label} className={"rounded-2xl border p-4 shadow-soft " + h.card}>
+                <div className={"text-[11px] font-semibold " + h.label}>{c.label}</div>
+                <div className={"mt-1 text-2xl font-bold tabular-nums " + h.value}>{c.value}</div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
         {(sourceFlags.facebook || sourceFlags.outbound) && (
           <div className="mt-3">
@@ -135,7 +154,7 @@ export default async function ScalePage() {
         )}
       </div>
 
-      {/* 4. What we're optimizing for */}
+      {/* 5. What we're optimizing for */}
       <MemoryEditor initial={memories as ScaleMemory[]} />
     </div>
   );
@@ -154,14 +173,18 @@ async function ActNowSection() {
   return (
     <div className="space-y-4">
       <div>
-        <div className="text-[13px] font-semibold text-ink mb-2 px-1">
-          Reply · inbox{inbox.threads.length ? ` (${inbox.threads.length})` : ""}
+        <div className="flex items-center gap-2 mb-2 px-1">
+          <span className="w-6 h-6 rounded-lg bg-indigo-100 text-indigo-700 grid place-items-center shrink-0"><Mail className="w-3.5 h-3.5" /></span>
+          <span className="text-[13px] font-semibold text-ink">Reply · inbox{inbox.threads.length ? ` (${inbox.threads.length})` : ""}</span>
         </div>
         <InboxCopilot threads={inbox.threads} note={inbox.note} />
       </div>
       {reactivate.length > 0 && (
         <div>
-          <div className="text-[13px] font-semibold text-ink mb-2 px-1">Reactivate · pitches that went quiet ({reactivate.length})</div>
+          <div className="flex items-center gap-2 mb-2 px-1">
+            <span className="w-6 h-6 rounded-lg bg-amber-100 text-amber-700 grid place-items-center shrink-0"><Flame className="w-3.5 h-3.5" /></span>
+            <span className="text-[13px] font-semibold text-ink">Reactivate · pitches that went quiet ({reactivate.length})</span>
+          </div>
           <InboxCopilot flat threads={reactivate} note={null} />
         </div>
       )}

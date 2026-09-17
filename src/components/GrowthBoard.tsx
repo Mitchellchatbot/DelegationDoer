@@ -84,16 +84,16 @@ export function GrowthBoard({ initial, currentSources }: { initial: GrowthBrief 
   return (
     <div className="space-y-4">
       {/* The soul question + #1 constraint */}
-      <div className="rounded-2xl border border-indigo-300 bg-gradient-to-br from-indigo-600 to-indigo-800 text-white p-5 shadow-soft">
+      <div className="rounded-2xl border border-slate-800 bg-slate-900 text-white p-5">
         <div className="flex items-start justify-between gap-3">
-          <div className="text-[11px] font-semibold uppercase tracking-wide text-indigo-200 flex items-center gap-1.5">
-            <Target className="w-3.5 h-3.5" /> What&apos;s stopping us from growing faster?
+          <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+            <Target className="w-3.5 h-3.5" /> The #1 constraint on growth
           </div>
           <button
             type="button"
             onClick={generate}
             disabled={loading}
-            className="flex items-center gap-1.5 text-[12px] font-medium bg-white/15 hover:bg-white/25 rounded-lg px-3 py-1.5 disabled:opacity-60 shrink-0"
+            className="flex items-center gap-1.5 text-[12px] font-medium bg-white/10 hover:bg-white/20 rounded-lg px-3 py-1.5 disabled:opacity-60 shrink-0"
           >
             <RefreshCw className={"w-3.5 h-3.5 " + (loading ? "animate-spin" : "")} />
             {loading ? "Thinking…" : brief ? "Re-run" : "Ask the brain"}
@@ -121,25 +121,25 @@ export function GrowthBoard({ initial, currentSources }: { initial: GrowthBrief 
         {c ? (
           <div className="mt-2">
             <div className="text-lg font-bold leading-snug">{c.title}</div>
-            {c.solution && <div className="mt-2 text-[13px] text-indigo-50"><span className="text-indigo-300 font-medium">Fix: </span>{c.solution}</div>}
+            {c.solution && <div className="mt-2 text-[13px] text-slate-200"><span className="text-slate-400 font-medium">Fix: </span>{c.solution}</div>}
             <div className="mt-2 flex items-center gap-3 flex-wrap">
-              {c.owner && <span className="text-[11px] text-indigo-200">Owner: {c.owner}</span>}
+              {c.owner && <span className="text-[11px] text-slate-400">Owner: {c.owner}</span>}
               {(c.why || c.evidence || c.impact) && (
-                <button type="button" onClick={() => setShowWhy((v) => !v)} className="text-[11px] font-medium text-indigo-100 underline underline-offset-2 hover:text-white">
+                <button type="button" onClick={() => setShowWhy((v) => !v)} className="text-[11px] font-medium text-slate-300 underline underline-offset-2 hover:text-white">
                   {showWhy ? "Hide details" : "Why & evidence"}
                 </button>
               )}
             </div>
             {showWhy && (
-              <div className="grid sm:grid-cols-2 gap-x-6 gap-y-1.5 mt-3 text-[12.5px] text-indigo-50 border-t border-white/15 pt-3">
-                {c.why && <div><span className="text-indigo-300 font-medium">Why: </span>{c.why}</div>}
-                {c.evidence && <div><span className="text-indigo-300 font-medium">Evidence: </span>{c.evidence}</div>}
-                {c.impact && <div><span className="text-indigo-300 font-medium">Impact: </span>{c.impact}</div>}
+              <div className="grid sm:grid-cols-2 gap-x-6 gap-y-1.5 mt-3 text-[12.5px] text-slate-200 border-t border-white/10 pt-3">
+                {c.why && <div><span className="text-slate-400 font-medium">Why: </span>{c.why}</div>}
+                {c.evidence && <div><span className="text-slate-400 font-medium">Evidence: </span>{c.evidence}</div>}
+                {c.impact && <div><span className="text-slate-400 font-medium">Impact: </span>{c.impact}</div>}
               </div>
             )}
           </div>
         ) : (
-          <div className="mt-2 text-[13px] text-indigo-100">
+          <div className="mt-2 text-[13px] text-slate-300">
             {loading ? "Reading the whole business…" : "Run the brain — it reads revenue, clients, costs, capacity, and wins, then names the one constraint holding growth back plus what to protect and where to grow."}
           </div>
         )}

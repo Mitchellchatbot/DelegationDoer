@@ -44,11 +44,11 @@ export default async function ScalePage() {
   return (
     <div className="space-y-6 max-w-3xl mx-auto">
       <div className="flex items-center gap-3">
-        <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-indigo-500 to-fuchsia-500 text-white grid place-items-center shrink-0 shadow-soft">
-          <Rocket className="w-4.5 h-4.5" />
+        <div className="w-9 h-9 rounded-xl bg-slate-900 text-white grid place-items-center shrink-0">
+          <Rocket className="w-4 h-4" />
         </div>
-        <h1 className="text-2xl font-bold text-ink leading-tight">Scale Room</h1>
-        <span className="text-[10px] font-semibold uppercase tracking-wide text-indigo-600 bg-indigo-50 rounded-full px-2 py-0.5">Private · you only</span>
+        <h1 className="text-2xl font-bold text-slate-900 leading-tight">Scale Room</h1>
+        <span className="text-[10px] font-medium uppercase tracking-wide text-slate-500 bg-slate-100 rounded-full px-2 py-0.5">Private</span>
       </div>
 
       {/* Overview (this page) · Outbound (the full pipeline + ad account) */}
@@ -73,10 +73,7 @@ export default async function ScalePage() {
           constraint render instantly instead of the whole page blocking on the
           inbox/reactivate AI sort. */}
       <div className="pt-1">
-        <div className="flex items-center gap-1.5 px-1 mb-2">
-          <span className="w-2 h-2 rounded-full bg-indigo-500" />
-          <span className="text-[11px] font-semibold uppercase tracking-wide text-indigo-700">Act now</span>
-        </div>
+        <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 px-1 mb-2.5">Act now</div>
         <Suspense fallback={<div className="rounded-2xl border border-slate-200 bg-white p-6 text-[13px] text-muted shadow-soft">Sorting your inbox, pitches and quiet clients…</div>}>
           <ActNowSection />
         </Suspense>
@@ -84,10 +81,7 @@ export default async function ScalePage() {
 
       {/* 4. LinkedIn — today's post to publish + the 5 ICP people to message. */}
       <div className="pt-1">
-        <div className="flex items-center gap-1.5 px-1 mb-2">
-          <span className="w-2 h-2 rounded-full bg-sky-500" />
-          <span className="text-[11px] font-semibold uppercase tracking-wide text-sky-700">LinkedIn</span>
-        </div>
+        <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 px-1 mb-2.5">LinkedIn</div>
         <Suspense fallback={<div className="rounded-2xl border border-slate-200 bg-white p-6 text-[13px] text-muted shadow-soft">Loading your LinkedIn targets…</div>}>
           <LinkedInSection />
         </Suspense>
@@ -97,10 +91,7 @@ export default async function ScalePage() {
           sends). Streams; the card hides itself when the ads dashboard is down.
           Finance lives on /finance, deliberately not here. */}
       <div className="pt-1">
-        <div className="flex items-center gap-1.5 px-1 mb-2">
-          <span className="w-2 h-2 rounded-full bg-emerald-500" />
-          <span className="text-[11px] font-semibold uppercase tracking-wide text-emerald-700">Meta ads · daily recap</span>
-        </div>
+        <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 px-1 mb-2.5">Meta ads · daily recap</div>
         <Suspense fallback={<div className="text-[12px] text-muted px-1">Loading Meta ads…</div>}>
           <MetaSection />
         </Suspense>
@@ -166,16 +157,16 @@ function BrainHighlights({ brief }: { brief: GrowthBrief }) {
   return (
     <div className="grid sm:grid-cols-2 gap-3">
       {g && (
-        <div className="rounded-2xl border border-emerald-200 bg-emerald-50/50 p-3.5 shadow-soft">
-          <div className="text-[10px] font-semibold uppercase tracking-wide text-emerald-700 flex items-center gap-1"><TrendingUp className="w-3 h-3" /> Biggest opportunity</div>
-          <div className="text-[13px] font-semibold text-ink mt-1 leading-snug line-clamp-2">{g.title}</div>
-          {g.estValue && <div className="text-[12px] font-bold text-emerald-700 mt-0.5">{g.estValue}</div>}
+        <div className="rounded-xl border border-slate-200 bg-white p-4">
+          <div className="text-[10px] font-semibold uppercase tracking-wide text-emerald-600 flex items-center gap-1"><TrendingUp className="w-3 h-3" /> Biggest opportunity</div>
+          <div className="text-[13px] font-semibold text-slate-900 mt-1.5 leading-snug line-clamp-2">{g.title}</div>
+          {g.estValue && <div className="text-[13px] font-bold text-slate-900 mt-1">{g.estValue}</div>}
         </div>
       )}
       {p && (
-        <div className="rounded-2xl border border-rose-200 bg-rose-50/50 p-3.5 shadow-soft">
-          <div className="text-[10px] font-semibold uppercase tracking-wide text-rose-700 flex items-center gap-1"><ShieldAlert className="w-3 h-3" /> Top risk</div>
-          <div className="text-[13px] font-semibold text-ink mt-1 leading-snug line-clamp-2">{p.title}</div>
+        <div className="rounded-xl border border-slate-200 bg-white p-4">
+          <div className="text-[10px] font-semibold uppercase tracking-wide text-rose-500 flex items-center gap-1"><ShieldAlert className="w-3 h-3" /> Top risk</div>
+          <div className="text-[13px] font-semibold text-slate-900 mt-1.5 leading-snug line-clamp-2">{p.title}</div>
         </div>
       )}
     </div>

@@ -51,6 +51,41 @@ const readMetaCached = cache(() => getOutboundMeta(7).catch(() => null));
 // The Meta card reads through the same cache so the strip + card share one call.
 export function getScaleMeta() { return readMetaCached(); }
 
+// The finances that actually inform SCALING (not a P&L): MRR + average client
+// value (from the manual MRR sheet, the source of truth), what the booked
+// pipeline is worth if closed, and how many new clients stand between us and the
+// next MRR milestone. Everything a "should we pour fuel on growth" call needs.
+export interface ScaleFinance {
+  mrr: number;
+  avgClient: number;
+  activeClients: number;
+  bookedCalls: number;
+  potentialFromBooked: number;
+  goal: number;
+  clientsToGoal: number;
+}
+export async function getScaleFinance(goal = 100_000): Promise<ScaleFinance | null> {
+  const [mrrRes, board] = await Promise.all([
+    getSupabaseAdmin().from("mrr_entries").select("mrr, status"),
+    readBoardCached()
+  ]);
+  const rows = (mrrRes.data ?? []) as { mrr: number; status: string }[];
+  const active = rows.filter((r) => r.status === "active" || r.status === "paused");
+  if (active.length === 0) return null;
+  const mrr = active.reduce((s, r) => s + Number(r.mrr), 0);
+  const avgClient = mrr / active.length;
+  const bookedCalls = board && board.ok ? board.data.pipeline.booked : 0;
+  return {
+    mrr: Math.round(mrr),
+    avgClient: Math.round(avgClient),
+    activeClients: active.length,
+    bookedCalls,
+    potentialFromBooked: Math.round(bookedCalls * avgClient),
+    goal,
+    clientsToGoal: avgClient ? Math.max(0, Math.ceil((goal - mrr) / avgClient)) : 0
+  };
+}
+
 // Top-line SCALE KPIs for the dashboard strip — acquisition, not finance:
 // booked calls waiting to close, total pipeline, and Meta leads + CTR for the
 // last 7 days vs the prior 7 (real trend where we have it). Both sources fall

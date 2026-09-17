@@ -23,7 +23,7 @@ const STARTERS = [
   "Who should I follow up with this week?"
 ];
 
-export function ScaleChat() {
+export function ScaleChat({ opening }: { opening?: string }) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -105,6 +105,15 @@ export function ScaleChat() {
               <Loader2 className="w-3.5 h-3.5 animate-spin text-indigo-500" /> Thinking…
             </div>
           )}
+        </div>
+      )}
+
+      {!hasThread && opening && (
+        <div className="px-4 pt-4">
+          <div className="text-[10px] text-slate-400 px-1 mb-1">Brain</div>
+          <div className="rounded-2xl bg-slate-50 border border-slate-200 text-slate-800 px-3.5 py-3 text-[13px] leading-relaxed">
+            <Markdown content={opening} />
+          </div>
         </div>
       )}
 

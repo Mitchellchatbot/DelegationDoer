@@ -13,7 +13,7 @@ import { GrowthBoard, type GrowthBrief, type GrowItem } from "@/components/Growt
 import { getLatestGrowthBrief } from "@/lib/growth-brain";
 import { MemoryEditor, type ScaleMemory } from "@/components/MemoryEditor";
 import { ActNowTabs } from "@/components/ActNowTabs";
-import { getReachOutClients, getReactivatePitches, getFollowUpLeads, getLinkedInTargets, getScaleKpis, getScaleMeta, type ScaleKpi } from "@/lib/scale-actions";
+import { getReachOutClients, getReactivatePitches, getFollowUpLeads, getLinkedInTargets, getScaleKpis, getScaleMeta, getScaleFinance, type ScaleKpi, type ScaleFinance } from "@/lib/scale-actions";
 import { type InboxThread } from "@/components/InboxCopilot";
 import { LinkedInModule } from "@/components/LinkedInModule";
 import { MetaLive } from "@/components/ScaleAcquisition";
@@ -64,9 +64,12 @@ export default async function ScalePage() {
 
       {/* Top row: the brain (hero) + a side panel of the one move + the numbers. */}
       <div className="grid lg:grid-cols-[1.55fr_1fr] gap-5 items-stretch">
-        <ScaleChat />
+        <ScaleChat opening={buildOpening(brief)} />
         <div className="flex flex-col gap-5">
           <DoThisNext item={brief?.grow?.[0]} />
+          <Suspense fallback={<GlanceLoading />}>
+            <RoomToScaleSection />
+          </Suspense>
           <Suspense fallback={<GlanceLoading />}>
             <AtAGlanceSection />
           </Suspense>
@@ -142,6 +145,51 @@ function DoThisNext({ item }: { item?: GrowItem }) {
       {item.action && <div className="text-[13px] text-slate-500 mt-2.5 leading-relaxed line-clamp-4">{item.action}</div>}
     </div>
   );
+}
+
+function money(n: number): string {
+  return `$${Math.round(n).toLocaleString("en-US")}`;
+}
+
+// The brain "speaks first": a short brief built from the latest run (no model
+// call), so the chat leads with today's focus instead of an empty box.
+function buildOpening(brief: GrowthBrief | null): string | undefined {
+  if (!brief) return undefined;
+  const hour = new Date().getHours();
+  const greet = hour < 12 ? "Morning" : hour < 18 ? "Afternoon" : "Evening";
+  const lines: string[] = [`**${greet}, Mitchell — here's your focus today.**`];
+  const g = brief.grow?.[0];
+  if (g) lines.push(`**Do this next:** ${g.title}${g.estValue ? ` (${g.estValue})` : ""}`);
+  const p = brief.protect?.[0];
+  if (p) lines.push(`**Watch:** ${p.title}`);
+  lines.push("Ask me anything, or tap a question below.");
+  return lines.join("\n\n");
+}
+
+// Side-panel card: the finances that inform scaling — MRR, avg client value,
+// what the booked pipeline is worth, and the gap to the next milestone.
+function RoomToScale({ f }: { f: ScaleFinance }) {
+  const closeToGoal = f.potentialFromBooked > 0 && f.goal > f.mrr
+    ? Math.min(100, Math.round((f.potentialFromBooked / (f.goal - f.mrr)) * 100))
+    : 0;
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+      <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 mb-3">Room to scale</div>
+      <div className="divide-y divide-slate-100">
+        <div className="flex items-center justify-between py-2.5"><span className="text-[13px] text-slate-500">MRR</span><span className="text-[15px] font-semibold tabular-nums text-slate-900">{money(f.mrr)}</span></div>
+        <div className="flex items-center justify-between py-2.5"><span className="text-[13px] text-slate-500">Avg client</span><span className="text-[15px] font-semibold tabular-nums text-slate-900">{money(f.avgClient)}<span className="text-[12px] font-normal text-slate-400">/mo</span></span></div>
+        <div className="flex items-center justify-between py-2.5"><span className="text-[13px] text-slate-500">{f.bookedCalls} booked calls</span><span className="text-[15px] font-semibold tabular-nums text-emerald-600">up to {money(f.potentialFromBooked)}<span className="text-[12px] font-normal text-slate-400">/mo</span></span></div>
+      </div>
+      <div className="mt-3 pt-3 border-t border-slate-100 text-[12.5px] text-slate-600 leading-relaxed">
+        ~{f.clientsToGoal} new clients from {money(f.goal)} MRR.{closeToGoal > 0 ? ` Closing your booked calls covers ~${closeToGoal}% of the gap.` : ""}
+      </div>
+    </div>
+  );
+}
+async function RoomToScaleSection() {
+  const f = await getScaleFinance().catch(() => null);
+  if (!f) return null;
+  return <RoomToScale f={f} />;
 }
 
 // Side-panel card: the numbers, compact — for reference, not a hero strip.

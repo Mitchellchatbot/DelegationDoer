@@ -1,6 +1,7 @@
 import Link from "next/link";
 import type { FacebookRevenueData, FacebookRevenueResult } from "@/lib/facebook-revenue-types";
 import type { OutboundSummaryMonth, OutboundSummaryResponse, OutboundSummaryResult } from "@/lib/outbound-summary-types";
+import type { OutboundMetaResponse, OutboundMetaResult } from "@/lib/outbound-meta-types";
 
 // The Scale Room's acquisition blocks: the Facebook side as the Finance app
 // computes it, and our own Outbound funnel as the Meta ads dashboard computes
@@ -90,11 +91,51 @@ export function ScaleAcquisitionLoading({ facebook, outbound }: { facebook: bool
   );
 }
 
+// Live Meta ad stats, read straight from Meta's API (not the pipeline DB), so
+// this shows real spend/CTR/CPC/leads even when the ads dashboard's board query
+// is down. pct values arrive as percents already (1.7 = 1.7%).
+function money0(n: number | null | undefined): string {
+  if (n == null) return "—";
+  return `$${Math.round(n).toLocaleString("en-US")}`;
+}
+function num(n: number | null | undefined): string {
+  return n == null ? "—" : Math.round(n).toLocaleString("en-US");
+}
+export function MetaLive({ meta }: { meta: OutboundMetaResult }) {
+  // Silent on failure — the Outbound block below already reports the ads
+  // dashboard being down, so this would just duplicate the same error line.
+  // When the dashboard is up, this shows real live ad numbers.
+  if (!meta.ok) return null;
+  const d: OutboundMetaResponse = meta.data;
+  const t = d.totals;
+  const days = d.range?.days ?? 7;
+  const best = [...(d.campaigns ?? [])].filter((c) => (c.status ?? "").toUpperCase() === "ACTIVE" && c.spend > 0)
+    .sort((a, b) => (b.ctr ?? 0) - (a.ctr ?? 0))[0];
+  return (
+    <div>
+      <Heading title="Our Meta ads · live" period={`last ${days} days`} link={OUTBOUND_LINK} />
+      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3">
+        <Card label="Ad spend" value={money0(t.spend)} />
+        <Card label="Link clicks" value={num(t.linkClicks)} hint={`${num(t.clicks)} total clicks`} />
+        <Card label="CTR" value={t.ctr == null ? "—" : `${t.ctr.toFixed(2)}%`} />
+        <Card label="Cost / click" value={t.cpc == null ? "—" : `$${t.cpc.toFixed(2)}`} />
+        <Card label="Leads" value={num(t.leads)} tone={(t.leads ?? 0) === 0 ? "rose" : "ink"} hint={t.cpl == null ? "none this window" : `$${t.cpl.toFixed(0)}/lead`} />
+      </div>
+      {best && (
+        <div className="text-[11px] text-muted mt-2 px-1">
+          Best active campaign: <span className="text-ink font-medium">{best.name}</span> · {best.ctr == null ? "—" : `${best.ctr.toFixed(2)}% CTR`} · {best.cpc == null ? "—" : `$${best.cpc.toFixed(2)} CPC`}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // A result that's undefined means that source is switched off: no block, no
 // heading, no error — as if it weren't wired in at all.
-export function ScaleAcquisition({ revenue, outbound }: { revenue?: FacebookRevenueResult; outbound?: OutboundSummaryResult }) {
+export function ScaleAcquisition({ revenue, outbound, meta }: { revenue?: FacebookRevenueResult; outbound?: OutboundSummaryResult; meta?: OutboundMetaResult }) {
   return (
     <div className="space-y-4">
+      {meta && <MetaLive meta={meta} />}
       {revenue && (
         <div>
           {revenue.ok ? (

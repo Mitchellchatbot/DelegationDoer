@@ -1,0 +1,260 @@
+"use client";
+
+import { useEffect, useRef, useState } from "react";
+import { Sparkles, Send, Loader2, RefreshCw, Mail, CheckCircle2, ArrowUp } from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+
+// Inline "talk to your brain" box for the Scale Room. Same backend as the
+// Ask AI drawer (/api/ai/chat — owner tools: finances, outbound, Meta,
+// memory, email drafting), but rendered inline at the top of the page so
+// Mitchell can ask "what do I do today?" without opening a modal. The Scale
+// page is already owner-gated, so this is his alone.
+
+type ProposedEmail = { kind: "send_email"; id: string; to: string; subject: string; body: string; purpose?: string | null };
+type ProposedAction = { kind: string; id: string } & Record<string, unknown>;
+interface Message { role: "user" | "assistant"; content: string; actions?: ProposedAction[] }
+
+const STARTERS = [
+  "What should I do today to grow?",
+  "Which clients are most at risk right now?",
+  "Where's my next new client coming from?",
+  "Draft me a LinkedIn post about a recent client win",
+  "Who should I follow up with this week?"
+];
+
+export function ScaleChat() {
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+  }, [messages, loading]);
+
+  async function send(text?: string) {
+    const content = (text ?? input).trim();
+    if (!content || loading) return;
+    const next: Message[] = [...messages, { role: "user", content }];
+    setMessages(next);
+    setInput("");
+    setLoading(true);
+    try {
+      const res = await fetch("/api/ai/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messages: next })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setMessages((m) => [...m, { role: "assistant", content: `⚠ Couldn't reach the brain — ${data?.error ?? res.statusText}` }]);
+      } else {
+        setMessages((m) => [...m, {
+          role: "assistant",
+          content: data.reply ?? "(no reply)",
+          actions: Array.isArray(data.actions) ? (data.actions as ProposedAction[]) : undefined
+        }]);
+      }
+    } catch (err) {
+      setMessages((m) => [...m, { role: "assistant", content: `⚠ Couldn't reach the brain — ${err instanceof Error ? err.message : "network error"}` }]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (e.key === "Enter" && !e.shiftKey && !loading) {
+      e.preventDefault();
+      void send();
+    }
+  }
+
+  const hasThread = messages.length > 0;
+
+  return (
+    <div className="rounded-2xl border border-indigo-200 bg-white shadow-soft overflow-hidden">
+      <div className="flex items-center gap-2 px-4 py-3 border-b border-slate-100 bg-gradient-to-r from-indigo-50 to-white">
+        <div className="w-7 h-7 rounded-lg bg-indigo-100 text-indigo-700 grid place-items-center shrink-0">
+          <Sparkles className="w-4 h-4" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="text-[13px] font-semibold text-ink leading-tight">Talk to your brain</div>
+          <div className="text-[11px] text-muted leading-tight">Ask what to do next — it reads your revenue, clients, pipeline, ads and memory.</div>
+        </div>
+        {hasThread && (
+          <button type="button" onClick={() => { setMessages([]); setInput(""); inputRef.current?.focus(); }}
+            className="p-1.5 rounded-lg text-muted hover:text-ink hover:bg-slate-100 transition-colors shrink-0" title="Start over">
+            <RefreshCw className="w-3.5 h-3.5" />
+          </button>
+        )}
+      </div>
+
+      {hasThread && (
+        <div ref={scrollRef} className="max-h-[420px] overflow-y-auto p-4 space-y-3">
+          {messages.map((m, i) => <Bubble key={i} message={m} />)}
+          {loading && (
+            <div className="flex items-center gap-2 text-[12px] text-muted">
+              <Loader2 className="w-3.5 h-3.5 animate-spin text-indigo-500" /> Thinking…
+            </div>
+          )}
+        </div>
+      )}
+
+      {!hasThread && (
+        <div className="p-4 space-y-1.5">
+          {STARTERS.map((s) => (
+            <button key={s} type="button" onClick={() => send(s)}
+              className="w-full text-left text-[13px] px-3 py-2 rounded-xl border border-slate-200 bg-white hover:border-indigo-300 hover:bg-indigo-50/40 hover:text-indigo-700 transition-colors inline-flex items-center gap-2 group">
+              <span className="flex-1">{s}</span>
+              <ArrowUp className="w-3 h-3 text-slate-300 rotate-45 group-hover:text-indigo-500 transition-colors" />
+            </button>
+          ))}
+        </div>
+      )}
+
+      <div className="p-3 border-t border-slate-100 bg-slate-50/50">
+        <div className="flex items-end gap-2 rounded-xl border border-slate-200 bg-white pl-3 pr-1.5 py-1.5 shadow-sm focus-within:border-indigo-300 focus-within:ring-2 focus-within:ring-indigo-100 transition-all">
+          <textarea
+            ref={inputRef}
+            rows={1}
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={onKeyDown}
+            disabled={loading}
+            placeholder={loading ? "Thinking…" : "Ask your brain anything…"}
+            className="flex-1 min-w-0 resize-none bg-transparent text-[13px] leading-snug outline-none placeholder:text-slate-400 py-1.5 max-h-32"
+          />
+          <button type="button" onClick={() => send()} disabled={!input.trim() || loading} aria-label="Send"
+            className={"w-8 h-8 rounded-full grid place-items-center shrink-0 transition-all " + (input.trim() && !loading ? "bg-indigo-600 text-white hover:bg-indigo-700 active:scale-95" : "bg-slate-100 text-slate-400 cursor-not-allowed")}>
+            {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Bubble({ message }: { message: Message }) {
+  const isUser = message.role === "user";
+  const emails = (message.actions ?? []).filter((a): a is ProposedEmail => a.kind === "send_email");
+  return (
+    <div className={"flex flex-col gap-1 " + (isUser ? "items-end" : "items-start")}>
+      <div className="text-[10px] text-slate-400 px-1">{isUser ? "You" : "Brain"}</div>
+      <div className={"max-w-[92%] rounded-2xl px-3.5 py-2.5 text-[13px] leading-relaxed " + (isUser ? "bg-indigo-600 text-white" : "bg-slate-50 border border-slate-200 text-ink")}>
+        {isUser ? <div className="whitespace-pre-wrap">{message.content}</div> : <Markdown content={message.content} />}
+      </div>
+      {emails.length > 0 && (
+        <div className="w-full max-w-[92%] space-y-2 mt-1">
+          {emails.map((e) => <SendEmailCard key={e.id} action={e} />)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Compact inline draft-email card. Same contract as the drawer: nothing sends
+// until Mitchell clicks Send; it posts to /api/brain/compose (sends as him).
+function SendEmailCard({ action }: { action: ProposedEmail }) {
+  const [to, setTo] = useState(action.to);
+  const [subject, setSubject] = useState(action.subject);
+  const [body, setBody] = useState(action.body);
+  const [sending, setSending] = useState(false);
+  const [sent, setSent] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function send() {
+    if (sending || sent) return;
+    setSending(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/brain/compose", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ to, subject, bodyText: body })
+      });
+      const j = await res.json();
+      if (j.ok) setSent(true);
+      else setError(j.error || "send failed");
+    } catch {
+      setError("send failed");
+    } finally {
+      setSending(false);
+    }
+  }
+
+  return (
+    <div className="rounded-xl border border-indigo-200 bg-indigo-50/50 p-3 text-[13px]">
+      <div className="flex items-center gap-1.5 text-[12px] font-semibold text-indigo-700 mb-2">
+        <Mail className="w-3.5 h-3.5" /> Draft email{action.purpose ? ` · ${action.purpose}` : ""}
+      </div>
+      {sent ? (
+        <div className="flex items-center gap-1.5 text-[13px] text-emerald-700"><CheckCircle2 className="w-4 h-4" /> Sent to {to}.</div>
+      ) : (
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <span className="text-[11px] text-muted w-12 shrink-0">To</span>
+            <input value={to} onChange={(e) => setTo(e.target.value)} className="flex-1 text-[12px] rounded-lg border border-slate-200 px-2 py-1 bg-white focus:outline-none focus:border-indigo-300" />
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-[11px] text-muted w-12 shrink-0">Subject</span>
+            <input value={subject} onChange={(e) => setSubject(e.target.value)} className="flex-1 text-[12px] rounded-lg border border-slate-200 px-2 py-1 bg-white focus:outline-none focus:border-indigo-300" />
+          </div>
+          <textarea value={body} onChange={(e) => setBody(e.target.value)} rows={Math.min(16, Math.max(6, body.split("\n").length + 1))}
+            className="w-full text-[13px] leading-relaxed rounded-lg border border-slate-200 p-2.5 bg-white focus:outline-none focus:border-indigo-300 resize-y" />
+          <div className="flex items-center gap-2">
+            <button type="button" onClick={send} disabled={sending}
+              className="flex items-center gap-1.5 text-[12px] font-medium text-white bg-ink rounded-lg px-3 py-1.5 hover:opacity-90 disabled:opacity-50">
+              {sending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
+              {sending ? "Sending…" : "Send as me"}
+            </button>
+            {error && <span className="text-[12px] text-rose-600">{error}</span>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Markdown({ content }: { content: string }) {
+  return (
+    <div className="markdown-body">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          // eslint-disable-next-line @typescript-eslint/no-unused-vars
+          p: ({ node, ...props }) => <p {...props} className="my-1.5 first:mt-0 last:mb-0" />,
+          // eslint-disable-next-line @typescript-eslint/no-unused-vars
+          ul: ({ node, ...props }) => <ul {...props} className="my-1.5 ml-4 list-disc space-y-0.5" />,
+          // eslint-disable-next-line @typescript-eslint/no-unused-vars
+          ol: ({ node, ...props }) => <ol {...props} className="my-1.5 ml-4 list-decimal space-y-0.5" />,
+          // eslint-disable-next-line @typescript-eslint/no-unused-vars
+          li: ({ node, ...props }) => <li {...props} className="leading-snug" />,
+          // eslint-disable-next-line @typescript-eslint/no-unused-vars
+          strong: ({ node, ...props }) => <strong {...props} className="font-semibold text-ink" />,
+          // eslint-disable-next-line @typescript-eslint/no-unused-vars
+          a: ({ node, ...props }) => <a {...props} target="_blank" rel="noopener noreferrer" className="text-indigo-600 underline-offset-2 hover:underline font-medium" />,
+          // eslint-disable-next-line @typescript-eslint/no-unused-vars
+          h1: ({ node, ...props }) => <h3 {...props} className="text-[14px] font-bold text-ink mt-3 mb-1.5 first:mt-0" />,
+          // eslint-disable-next-line @typescript-eslint/no-unused-vars
+          h2: ({ node, ...props }) => <h4 {...props} className="text-[13px] font-bold text-ink mt-2.5 mb-1 first:mt-0" />,
+          // eslint-disable-next-line @typescript-eslint/no-unused-vars
+          h3: ({ node, ...props }) => <h5 {...props} className="text-[13px] font-bold text-ink mt-2.5 mb-1 first:mt-0" />,
+          // eslint-disable-next-line @typescript-eslint/no-unused-vars
+          code: ({ node, inline, ...props }: any) => inline
+            ? <code {...props} className="px-1 py-0.5 rounded bg-slate-100 text-[11.5px] font-mono text-ink/85" />
+            : <code {...props} className="block px-3 py-2 rounded-lg bg-white border border-slate-200 text-[11.5px] font-mono overflow-x-auto whitespace-pre" />,
+          // eslint-disable-next-line @typescript-eslint/no-unused-vars
+          table: ({ node, ...props }) => <div className="my-2 overflow-x-auto rounded-lg border border-slate-200"><table {...props} className="w-full text-[12px] border-collapse" /></div>,
+          // eslint-disable-next-line @typescript-eslint/no-unused-vars
+          th: ({ node, ...props }) => <th {...props} className="text-left px-2.5 py-1.5 border-b border-slate-200 font-semibold bg-slate-50" />,
+          // eslint-disable-next-line @typescript-eslint/no-unused-vars
+          td: ({ node, ...props }) => <td {...props} className="px-2.5 py-1.5 border-b border-slate-100 last:border-0 align-top" />
+        }}
+      >
+        {content}
+      </ReactMarkdown>
+    </div>
+  );
+}

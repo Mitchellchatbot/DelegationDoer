@@ -17,7 +17,6 @@ import { getOutboundBoard } from "@/lib/outbound-board";
 import { getOutboundMeta, metaDays } from "@/lib/outbound-meta";
 import type { MetaDays } from "@/lib/outbound-meta-types";
 import { cache } from "@/lib/safe-cache";
-import { getScaleSources } from "@/lib/scale-sources";
 
 export const dynamic = "force-dynamic";
 
@@ -48,13 +47,9 @@ export default async function ScaleOutboundPage({
   const rawView = Array.isArray(searchParams?.view) ? searchParams?.view[0] : searchParams?.view;
   const view = VIEWS.find((v) => v === rawView) ?? null;
 
-  // Honours the Scale Room's Outbound source switch the way /scale does: off —
-  // or unreadable, which getScaleSources reports as off with a reason — means
-  // nothing is read from the Meta ads dashboard, so no data slot is even built.
-  // The Live board is still offered; it reads nothing on DD's side. A single
-  // settings row, so it's awaited here rather than holding up a slot.
-  const sources = await getScaleSources();
-  const on = sources.outbound;
+  // The room always reads both sources now (no toggles) — the Meta ads
+  // dashboard slots are always built. The Live board reads nothing on DD's side.
+  const on = true;
 
   // Each view streams in on its own, so the switcher and the Live board are
   // usable at once and a slow Meta read never holds up the pipeline (or the
@@ -112,7 +107,7 @@ export default async function ScaleOutboundPage({
       <OutboundTab
         initialView={view}
         sourceOff={!on}
-        sourceReadError={sources.readError}
+        sourceReadError={null}
         metaSlot={metaSlot}
         pipelineSlot={pipelineSlot}
         monthlySlot={monthlySlot}

@@ -80,18 +80,18 @@ export function ScaleChat() {
   const hasThread = messages.length > 0;
 
   return (
-    <div className="rounded-3xl border border-indigo-200/70 bg-white shadow-[0_16px_50px_-16px_rgba(79,70,229,0.30)] overflow-hidden">
-      <div className="flex items-center gap-3 px-5 py-4 border-b border-slate-100 bg-gradient-to-r from-indigo-50 via-violet-50/60 to-white">
-        <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-500 text-white grid place-items-center shrink-0 shadow-soft">
-          <Sparkles className="w-5 h-5" />
+    <div className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+      <div className="flex items-center gap-3 px-5 py-4 border-b border-slate-100">
+        <div className="w-9 h-9 rounded-xl bg-slate-900 text-white grid place-items-center shrink-0">
+          <Sparkles className="w-4 h-4" />
         </div>
         <div className="min-w-0 flex-1">
-          <div className="text-[15px] font-bold text-ink leading-tight">Ask your brain</div>
-          <div className="text-[12px] text-muted leading-tight">What should you do next? It reads your clients, pipeline, ads, and memory.</div>
+          <div className="text-[15px] font-semibold text-slate-900 leading-tight">Ask your brain</div>
+          <div className="text-[12px] text-slate-500 leading-tight">What should you do next? It reads your clients, pipeline, ads, and memory.</div>
         </div>
         {hasThread && (
           <button type="button" onClick={() => { setMessages([]); setInput(""); inputRef.current?.focus(); }}
-            className="p-1.5 rounded-lg text-muted hover:text-ink hover:bg-slate-100 transition-colors shrink-0" title="Start over">
+            className="p-1.5 rounded-lg text-slate-400 hover:text-slate-900 hover:bg-slate-100 transition-colors shrink-0" title="Start over">
             <RefreshCw className="w-4 h-4" />
           </button>
         )}
@@ -112,16 +112,16 @@ export function ScaleChat() {
         <div className="p-4 grid sm:grid-cols-2 gap-2">
           {STARTERS.map((s) => (
             <button key={s} type="button" onClick={() => send(s)}
-              className="w-full text-left text-[13px] px-3 py-2.5 rounded-xl border border-slate-200 bg-white hover:border-indigo-300 hover:bg-indigo-50/40 hover:text-indigo-700 transition-colors inline-flex items-center gap-2 group">
-              <span className="flex-1">{s}</span>
-              <ArrowUp className="w-3 h-3 text-slate-300 rotate-45 group-hover:text-indigo-500 transition-colors" />
+              className="w-full text-left text-[13px] px-3 py-2.5 rounded-xl border border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50 transition-colors inline-flex items-center gap-2 group">
+              <span className="flex-1 text-slate-700">{s}</span>
+              <ArrowUp className="w-3 h-3 text-slate-300 rotate-45 group-hover:text-slate-500 transition-colors" />
             </button>
           ))}
         </div>
       )}
 
       <div className="p-4 border-t border-slate-100 bg-slate-50/50">
-        <div className="flex items-end gap-2 rounded-2xl border border-slate-200 bg-white pl-4 pr-2 py-2 shadow-sm focus-within:border-indigo-300 focus-within:ring-2 focus-within:ring-indigo-100 transition-all">
+        <div className="flex items-end gap-2 rounded-2xl border border-slate-200 bg-white pl-4 pr-2 py-2 shadow-sm focus-within:border-slate-400 focus-within:ring-2 focus-within:ring-slate-100 transition-all">
           <textarea
             ref={inputRef}
             rows={1}
@@ -135,12 +135,12 @@ export function ScaleChat() {
           {supported && (
             <button type="button" onClick={toggle} disabled={loading || transcribing} aria-label={listening ? "Stop" : "Speak to your brain"}
               title={listening ? "Stop and transcribe" : "Speak to your brain"}
-              className={"w-9 h-9 rounded-full grid place-items-center shrink-0 transition-all border " + (listening ? "bg-rose-50 text-rose-600 border-rose-200 animate-pulse" : "bg-white text-slate-500 border-slate-200 hover:text-indigo-600 hover:border-indigo-300") + ((loading || transcribing) ? " opacity-40 cursor-not-allowed" : "")}>
+              className={"w-9 h-9 rounded-full grid place-items-center shrink-0 transition-all border " + (listening ? "bg-rose-50 text-rose-600 border-rose-200 animate-pulse" : "bg-white text-slate-500 border-slate-200 hover:text-slate-900 hover:border-slate-300") + ((loading || transcribing) ? " opacity-40 cursor-not-allowed" : "")}>
               {transcribing ? <Loader2 className="w-4 h-4 animate-spin" /> : listening ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
             </button>
           )}
           <button type="button" onClick={() => send()} disabled={!input.trim() || loading} aria-label="Send"
-            className={"w-9 h-9 rounded-full grid place-items-center shrink-0 transition-all " + (input.trim() && !loading ? "bg-indigo-600 text-white hover:bg-indigo-700 active:scale-95" : "bg-slate-100 text-slate-400 cursor-not-allowed")}>
+            className={"w-9 h-9 rounded-full grid place-items-center shrink-0 transition-all " + (input.trim() && !loading ? "bg-slate-900 text-white hover:bg-slate-800 active:scale-95" : "bg-slate-100 text-slate-400 cursor-not-allowed")}>
             {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
           </button>
         </div>
@@ -156,7 +156,7 @@ function Bubble({ message }: { message: Message }) {
   return (
     <div className={"flex flex-col gap-1 " + (isUser ? "items-end" : "items-start")}>
       <div className="text-[10px] text-slate-400 px-1">{isUser ? "You" : "Brain"}</div>
-      <div className={"max-w-[92%] rounded-2xl px-3.5 py-2.5 text-[13px] leading-relaxed " + (isUser ? "bg-indigo-600 text-white" : "bg-slate-50 border border-slate-200 text-ink")}>
+      <div className={"max-w-[92%] rounded-2xl px-3.5 py-2.5 text-[13px] leading-relaxed " + (isUser ? "bg-slate-900 text-white" : "bg-slate-50 border border-slate-200 text-slate-800")}>
         {isUser ? <div className="whitespace-pre-wrap">{message.content}</div> : <Markdown content={message.content} />}
       </div>
       {emails.length > 0 && (

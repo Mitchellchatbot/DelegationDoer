@@ -10,6 +10,7 @@ import { OWNER_EMAIL } from "@/lib/access";
 import { getAnthropic, MODELS } from "@/lib/anthropic-client";
 import { getFacebookRevenue } from "@/lib/facebook-revenue";
 import { getOutboundBoard } from "@/lib/outbound-board";
+import { getOutboundMeta } from "@/lib/outbound-meta";
 import type { OutboundBoardProspect } from "@/lib/outbound-board-types";
 
 // Two owner-only "Act now" modules for the Scale Room:
@@ -42,9 +43,59 @@ export interface FollowUpLead {
 }
 export interface FollowUps { booked: FollowUpLead[]; noResponse: FollowUpLead[] }
 
-// One board read per server request, shared by the Follow-up tab and the
-// LinkedIn "5 to message" list (the board fetch is slow, so never do it twice).
+// One board read per server request, shared by the Follow-up tab, the LinkedIn
+// list and the KPI strip (the board fetch is slow, so never do it twice).
 const readBoardCached = cache(() => getOutboundBoard().catch(() => null));
+// Same for the 7-day Meta read — shared by the KPI strip and the Meta card.
+const readMetaCached = cache(() => getOutboundMeta(7).catch(() => null));
+// The Meta card reads through the same cache so the strip + card share one call.
+export function getScaleMeta() { return readMetaCached(); }
+
+// Top-line SCALE KPIs for the dashboard strip — acquisition, not finance:
+// booked calls waiting to close, total pipeline, and Meta leads + CTR for the
+// last 7 days vs the prior 7 (real trend where we have it). Both sources fall
+// back to last-good cache, so this shows numbers even when the dashboard blips.
+export interface ScaleKpi {
+  label: string;
+  value: string;
+  sub: string;
+  delta?: { dir: "up" | "down"; text: string; good: boolean };
+  hue: "indigo" | "violet" | "sky" | "emerald" | "rose" | "amber";
+}
+export async function getScaleKpis(): Promise<{ kpis: ScaleKpi[]; stale: boolean }> {
+  const [board, meta] = await Promise.all([readBoardCached(), readMetaCached()]);
+  const stale = Boolean((board && board.ok && board.stale) || (meta && meta.ok && meta.stale));
+  const kpis: ScaleKpi[] = [];
+
+  if (board && board.ok) {
+    const p = board.data.pipeline;
+    kpis.push({ label: "Booked calls", value: p.booked.toLocaleString("en-US"), sub: "waiting to close", hue: "indigo" });
+    kpis.push({ label: "Pipeline", value: p.total.toLocaleString("en-US"), sub: `${p.notBooked.toLocaleString("en-US")} not yet booked`, hue: "violet" });
+  } else {
+    kpis.push({ label: "Booked calls", value: "—", sub: "dashboard unavailable", hue: "indigo" });
+    kpis.push({ label: "Pipeline", value: "—", sub: "dashboard unavailable", hue: "violet" });
+  }
+
+  if (meta && meta.ok) {
+    const t = meta.data.totals;
+    const prior = meta.data.priorTotals;
+    const leads = t.leads ?? 0;
+    const leadDelta = prior?.leads != null
+      ? { dir: (leads >= prior.leads ? "up" : "down") as "up" | "down", text: `${leads - prior.leads >= 0 ? "+" : ""}${leads - prior.leads} vs prior 7d`, good: leads >= prior.leads }
+      : undefined;
+    kpis.push({ label: "Leads · 7d", value: leads.toLocaleString("en-US"), sub: "from our Meta ads", delta: leadDelta, hue: leads === 0 ? "rose" : "emerald" });
+    const ctr = t.ctr;
+    const ctrDelta = ctr != null && prior?.ctr != null
+      ? { dir: (ctr >= prior.ctr ? "up" : "down") as "up" | "down", text: `${ctr >= prior.ctr ? "+" : ""}${(ctr - prior.ctr).toFixed(2)} pts`, good: ctr >= prior.ctr }
+      : undefined;
+    kpis.push({ label: "Meta CTR · 7d", value: ctr == null ? "—" : `${ctr.toFixed(2)}%`, sub: `$${Math.round(t.spend ?? 0)} spent`, delta: ctrDelta, hue: "sky" });
+  } else {
+    kpis.push({ label: "Leads · 7d", value: "—", sub: "dashboard unavailable", hue: "sky" });
+    kpis.push({ label: "Meta CTR · 7d", value: "—", sub: "dashboard unavailable", hue: "sky" });
+  }
+
+  return { kpis, stale };
+}
 
 export async function getFollowUpLeads(bookedLimit = 20, noRespLimit = 20): Promise<FollowUps> {
   const res = await readBoardCached();

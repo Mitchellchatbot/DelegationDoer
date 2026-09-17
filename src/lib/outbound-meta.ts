@@ -8,7 +8,9 @@ import { fetchAdsDashboard, isNum, isNumOrNull, isObj, isStr, isStrOrNull } from
 // Scale Room's other two reads (outbound-summary.ts, outbound-board.ts).
 
 // That route reads Meta live (cached there for a few minutes), so allow for it.
-const TIMEOUT_MS = 30_000;
+// The ads dashboard's live Meta pull is sometimes slow; give it more room
+// before giving up (the real fix is caching that read on the dashboard).
+const TIMEOUT_MS = 55_000;
 
 export function metaDays(raw: unknown): MetaDays {
   const n = Number(Array.isArray(raw) ? raw[0] : raw);

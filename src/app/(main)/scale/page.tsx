@@ -1,4 +1,5 @@
 import { Suspense } from "react";
+import { Inter } from "next/font/google";
 import { notFound, redirect } from "next/navigation";
 import { Rocket, Mail, Linkedin, Infinity as InfinityIcon, ExternalLink } from "lucide-react";
 import { getCurrentUserId } from "@/lib/session";
@@ -21,6 +22,9 @@ import { ScaleChat } from "@/components/ScaleChat";
 import { ScaleTabs } from "@/components/ScaleTabs";
 
 export const dynamic = "force-dynamic";
+
+// Inter, scoped to the Scale Room, for the crisp reference-dashboard feel.
+const inter = Inter({ subsets: ["latin"], display: "swap" });
 
 // External tools the room links out to, opened from their brand logo.
 const OUTLOOK_URL = "https://outlook.office.com/mail/";
@@ -47,7 +51,7 @@ export default async function ScalePage() {
   const sourceFlags: ScaleSourceFlags = { facebook: true, outbound: true };
 
   return (
-    <div className="space-y-5 max-w-5xl mx-auto">
+    <div className={inter.className + " space-y-6 max-w-5xl mx-auto text-slate-900"}>
       <div className="flex items-center gap-3">
         <div className="w-9 h-9 rounded-xl bg-slate-900 text-white grid place-items-center shrink-0">
           <Rocket className="w-4 h-4" />
@@ -122,20 +126,20 @@ function ToolHeader({ icon, tint, name, tagline, href }: { icon: React.ReactNode
 function DoThisNext({ item }: { item?: GrowItem }) {
   if (!item) {
     return (
-      <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
         <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 mb-2">Do this next</div>
         <div className="text-[13px] text-slate-500">Run the brain to surface today&apos;s highest-leverage move.</div>
       </div>
     );
   }
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-      <div className="flex items-center justify-between gap-2 mb-2.5">
-        <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Do this next</span>
-        {item.estValue && <span className="text-[12px] font-semibold text-emerald-600 bg-emerald-50 rounded-full px-2 py-0.5 shrink-0">{item.estValue}</span>}
-      </div>
+    <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+      <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 mb-2.5">Do this next</div>
       <div className="text-[15px] font-semibold text-slate-900 leading-snug">{item.title}</div>
-      {item.action && <div className="text-[13px] text-slate-500 mt-2 leading-relaxed line-clamp-4">{item.action}</div>}
+      {item.estValue && (
+        <div className="text-[13px] font-semibold text-emerald-600 mt-1.5">{item.estValue}</div>
+      )}
+      {item.action && <div className="text-[13px] text-slate-500 mt-2.5 leading-relaxed line-clamp-4">{item.action}</div>}
     </div>
   );
 }
@@ -143,13 +147,13 @@ function DoThisNext({ item }: { item?: GrowItem }) {
 // Side-panel card: the numbers, compact — for reference, not a hero strip.
 function AtAGlance({ kpis, stale }: { kpis: ScaleKpi[]; stale: boolean }) {
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+    <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
       <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 mb-3">At a glance</div>
       <div className="divide-y divide-slate-100">
         {kpis.map((k) => (
-          <div key={k.label} className="flex items-center justify-between py-2">
+          <div key={k.label} className="flex items-center justify-between py-2.5">
             <span className="text-[13px] text-slate-500">{k.label}</span>
-            <span className="text-[14px] font-semibold tabular-nums text-slate-900 inline-flex items-center gap-1.5">
+            <span className="text-[15px] font-semibold tabular-nums text-slate-900 inline-flex items-center gap-1.5">
               {k.value}
               {k.delta && <span className={"text-[11px] font-medium " + (k.delta.good ? "text-emerald-600" : "text-rose-500")}>{k.delta.dir === "up" ? "↑" : "↓"}{k.delta.text.replace(/ vs.*/, "")}</span>}
             </span>

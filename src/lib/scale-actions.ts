@@ -1,5 +1,6 @@
 import "server-only";
 
+import { cache } from "react";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { getClients } from "@/lib/clients-data";
 import { getLatestTouchpointsByClient, computeTouchpointLabel, daysSince } from "@/lib/client-touchpoint";
@@ -41,8 +42,12 @@ export interface FollowUpLead {
 }
 export interface FollowUps { booked: FollowUpLead[]; noResponse: FollowUpLead[] }
 
+// One board read per server request, shared by the Follow-up tab and the
+// LinkedIn "5 to message" list (the board fetch is slow, so never do it twice).
+const readBoardCached = cache(() => getOutboundBoard().catch(() => null));
+
 export async function getFollowUpLeads(bookedLimit = 20, noRespLimit = 20): Promise<FollowUps> {
-  const res = await getOutboundBoard().catch(() => null);
+  const res = await readBoardCached();
   if (!res || !res.ok) return { booked: [], noResponse: [] };
   const map = (p: OutboundBoardProspect): FollowUpLead => ({
     facility: p.facility || p.website || "Unknown facility",
@@ -68,6 +73,40 @@ export async function getFollowUpLeads(bookedLimit = 20, noRespLimit = 20): Prom
     .sort((a, b) => (a.lastContacted || "").localeCompare(b.lastContacted || ""))
     .slice(0, noRespLimit);
   return { booked, noResponse };
+}
+
+// The daily "5 people to message on LinkedIn" list — ICP decision-makers from
+// the live pipeline (warmest first: booked, then no-response, then new). Rotates
+// day to day so it's a fresh 5 each morning. Read-only: LinkedIn's API can't send
+// DMs or connection requests, so Mitchell (or Dripify) works these by hand.
+export interface LinkedInTarget {
+  facility: string;
+  contact: string;
+  role: string | null;
+  source: string | null;
+  stage: string;
+}
+const ICP_ROLE = /(ceo|chief executive|founder|owner|president|executive director|clinical director|coo|chief operating|director of (admissions|business))/i;
+
+export async function getLinkedInTargets(count = 5): Promise<LinkedInTarget[]> {
+  const res = await readBoardCached();
+  if (!res || !res.ok) return [];
+  const rank = (stage: string) => (stage === "booked" || stage === "proposal" ? 0 : stage === "no_response" ? 1 : stage === "new" ? 2 : 3);
+  const pool = res.data.prospects
+    .filter((p) => p.name && p.name.trim() && p.role && ICP_ROLE.test(p.role) && p.stage !== "won" && p.stage !== "lost")
+    .sort((a, b) => rank(a.stage) - rank(b.stage));
+  if (pool.length === 0) return [];
+  // Rotate the window by day-of-year so it's a different 5 most days, but always
+  // keep the warmest tier at the front.
+  const dayOffset = Math.floor(Date.now() / 86_400_000) % Math.max(1, pool.length);
+  const rotated = [...pool.slice(dayOffset), ...pool.slice(0, dayOffset)];
+  return rotated.slice(0, count).map((p) => ({
+    facility: p.facility || p.website || "Unknown facility",
+    contact: p.name as string,
+    role: p.role,
+    source: p.source,
+    stage: p.stage
+  }));
 }
 
 // Match a client's board name to its manual-MRR row (fuzzy, like elsewhere).

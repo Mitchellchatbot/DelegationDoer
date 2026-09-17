@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Sparkles, Send, RefreshCw, Check, ChevronDown } from "lucide-react";
+import { Sparkles, Send, RefreshCw, Check, ChevronDown, X } from "lucide-react";
 
 // Owner Inbox cockpit: work through Mitchell's reply-needed threads with the
 // brain. Draft a grounded reply, edit it, and send AS Mitchell in one click.
@@ -97,6 +97,21 @@ export function InboxCopilot({ threads, note, flat = false }: { threads: InboxTh
     }
   }
 
+  // Hide a thread from the room so it won't come back. Does NOT delete the real
+  // email — it just records the dismissal server-side. Optimistic: drop it now.
+  async function dismiss(id: string) {
+    setRows((rs) => rs.filter((r) => r.id !== id));
+    try {
+      await fetch("/api/brain/inbox/dismiss", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ threadId: id })
+      });
+    } catch {
+      /* best effort — it's already hidden for this session */
+    }
+  }
+
   async function send(id: string) {
     const row = rows.find((r) => r.id === id);
     if (!row?.draft.trim()) return;
@@ -129,25 +144,31 @@ export function InboxCopilot({ threads, note, flat = false }: { threads: InboxTh
 
   const renderRow = (r: Row) => (
     <div key={r.id} className={r.sent ? "opacity-60" : ""}>
-      <button type="button" onClick={() => patch(r.id, { open: !r.open })} className="w-full text-left px-3.5 py-2.5 hover:bg-slate-50 transition-colors flex items-center gap-2.5">
-        {/* reply-needed dot rail */}
-        <span className={"w-1.5 h-1.5 rounded-full shrink-0 " + (r.sent ? "bg-emerald-400" : r.needsReply ? "bg-indigo-500" : "bg-slate-200")} />
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            {r.category && CAT_CHIP[r.category] && (
-              <span className={"text-[9px] uppercase tracking-wide rounded px-1 py-0.5 shrink-0 " + CAT_CHIP[r.category]!.cls}>{CAT_CHIP[r.category]!.label}</span>
-            )}
-            <span className="text-[13px] font-medium text-ink truncate">{r.subject}</span>
-            {r.needsReply && !r.sent && <span className="text-[9px] uppercase tracking-wide text-indigo-700 bg-indigo-100 rounded px-1 py-0.5 shrink-0">reply</span>}
-            {r.sent && <span className="text-[9px] uppercase tracking-wide text-emerald-600 bg-emerald-100 rounded px-1 py-0.5 shrink-0">sent</span>}
+      <div className="flex items-stretch hover:bg-slate-50 transition-colors">
+        <button type="button" onClick={() => patch(r.id, { open: !r.open })} className="flex-1 min-w-0 text-left px-3.5 py-2.5 flex items-center gap-2.5">
+          {/* reply-needed dot rail */}
+          <span className={"w-1.5 h-1.5 rounded-full shrink-0 " + (r.sent ? "bg-emerald-400" : r.needsReply ? "bg-indigo-500" : "bg-slate-200")} />
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2">
+              {r.category && CAT_CHIP[r.category] && (
+                <span className={"text-[9px] uppercase tracking-wide rounded px-1 py-0.5 shrink-0 " + CAT_CHIP[r.category]!.cls}>{CAT_CHIP[r.category]!.label}</span>
+              )}
+              <span className="text-[13px] font-medium text-ink truncate">{r.subject}</span>
+              {r.needsReply && !r.sent && <span className="text-[9px] uppercase tracking-wide text-indigo-700 bg-indigo-100 rounded px-1 py-0.5 shrink-0">reply</span>}
+              {r.sent && <span className="text-[9px] uppercase tracking-wide text-emerald-600 bg-emerald-100 rounded px-1 py-0.5 shrink-0">sent</span>}
+            </div>
+            <div className="text-[11.5px] text-muted truncate">
+              {cleanFrom(r.from)}{r.snippet ? <span className="text-slate-400"> — {r.snippet}</span> : null}
+            </div>
           </div>
-          <div className="text-[11.5px] text-muted truncate">
-            {cleanFrom(r.from)}{r.snippet ? <span className="text-slate-400"> — {r.snippet}</span> : null}
-          </div>
-        </div>
-        <span className="text-[10px] text-slate-400 tabular-nums shrink-0">{ago(r.lastAt)}</span>
-        <ChevronDown className={"w-3.5 h-3.5 text-slate-300 shrink-0 transition-transform " + (r.open ? "rotate-180" : "")} />
-      </button>
+          <span className="text-[10px] text-slate-400 tabular-nums shrink-0">{ago(r.lastAt)}</span>
+          <ChevronDown className={"w-3.5 h-3.5 text-slate-300 shrink-0 transition-transform " + (r.open ? "rotate-180" : "")} />
+        </button>
+        <button type="button" onClick={() => dismiss(r.id)} title="Dismiss — hide this from the room (doesn't delete the email)"
+          aria-label="Dismiss" className="px-2.5 grid place-items-center text-slate-300 hover:text-rose-500 hover:bg-rose-50 shrink-0 border-l border-slate-100">
+          <X className="w-3.5 h-3.5" />
+        </button>
+      </div>
 
       {r.open && !r.sent && (
         <div className="px-3.5 pb-3.5 space-y-2 bg-slate-50/50">

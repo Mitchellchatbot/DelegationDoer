@@ -49,7 +49,7 @@ export function ScaleChat({ opening }: { opening?: string }) {
       });
       const data = await res.json();
       if (!res.ok) {
-        setMessages((m) => [...m, { role: "assistant", content: `⚠ Couldn't reach the brain — ${data?.error ?? res.statusText}` }]);
+        setMessages((m) => [...m, { role: "assistant", content: `Couldn't reach the brain — ${data?.error ?? res.statusText}` }]);
       } else {
         setMessages((m) => [...m, {
           role: "assistant",
@@ -58,7 +58,7 @@ export function ScaleChat({ opening }: { opening?: string }) {
         }]);
       }
     } catch (err) {
-      setMessages((m) => [...m, { role: "assistant", content: `⚠ Couldn't reach the brain — ${err instanceof Error ? err.message : "network error"}` }]);
+      setMessages((m) => [...m, { role: "assistant", content: `Couldn't reach the brain — ${err instanceof Error ? err.message : "network error"}` }]);
     } finally {
       setLoading(false);
     }

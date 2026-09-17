@@ -33,7 +33,7 @@ const META_ADS_URL = "https://adsmanager.facebook.com/";
 
 // Owner-only command center — Mitchell + the brain in one place: what to do to
 // scale, the emails/leads that need him, live Meta performance, and the
-// priorities the brain optimizes toward (which it learns from his 👍/👎).
+// priorities the brain optimizes toward (which it learns from his thumbs up/down).
 // Finance lives on /finance, not here. Same 404 gate as /finance.
 export default async function ScalePage() {
   const userId = await getCurrentUserId();
@@ -76,7 +76,7 @@ export default async function ScalePage() {
         </div>
       </div>
 
-      {/* The #1 constraint + Protect / Grow — each item has 👍/👎 so the brain
+      {/* The #1 constraint + Protect / Grow — each item has thumbs up/down so the brain
           learns from Mitchell's feedback (the self-learning system). */}
       <GrowthBoard initial={brief} currentSources={sourceFlags} />
 
@@ -240,7 +240,7 @@ async function ActNowSection() {
   ]);
   const followCount = followUps.booked.length + followUps.noResponse.length;
   const hasAny = inbox.threads.length > 0 || reactivate.length > 0 || reachOut.length > 0 || followCount > 0;
-  if (!hasAny) return <Loading>Nothing needs you right now. 🎉</Loading>;
+  if (!hasAny) return <Loading>Nothing needs you right now.</Loading>;
   return <ActNowTabs inbox={inbox.threads} inboxNote={inbox.note} reactivate={reactivate} reachOut={reachOut} followUps={followUps} />;
 }
 

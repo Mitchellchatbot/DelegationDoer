@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
-import { RefreshCw, Target, ShieldAlert, Rocket, ChevronDown, ThumbsUp, ThumbsDown, Check } from "lucide-react";
+import { useState, type ComponentType } from "react";
+import { RefreshCw, Target, ShieldAlert, Rocket, ChevronDown, ThumbsUp, ThumbsDown, Check,
+  AlertCircle, Activity, Clock, Filter, DollarSign, Users, TrendingUp, Copy, Bot, UserPlus, Lightbulb } from "lucide-react";
 import { SCALE_SOURCE_LABELS, staleBriefSources, type ScaleSourceFlags } from "@/lib/scale-sources-types";
 
 // The CEO screen: the soul question + #1 growth constraint up top, then two
@@ -12,11 +13,12 @@ export interface ProtectItem { type: string; title: string; detail: string; seve
 export interface GrowItem { type: string; title: string; detail: string; estValue?: string; action: string; owner?: string; confidence?: "high" | "medium" | "low"; source?: string; }
 export interface GrowthBrief { constraint: GrowthConstraint | null; protect: ProtectItem[]; grow: GrowItem[]; generatedAt: string; sources?: ScaleSourceFlags; }
 
-const PROTECT_ICON: Record<string, string> = {
-  "clients-at-risk": "🔥", performance: "⚠️", "missed-commitment": "⏰", bottleneck: "🚧", "margin-leak": "💰", capacity: "👥"
+type Icon = ComponentType<{ className?: string }>;
+const PROTECT_ICON: Record<string, Icon> = {
+  "clients-at-risk": AlertCircle, performance: Activity, "missed-commitment": Clock, bottleneck: Filter, "margin-leak": DollarSign, capacity: Users
 };
-const GROW_ICON: Record<string, string> = {
-  expansion: "📈", upsell: "💵", "sales-push": "🎯", "replicate-win": "🔁", automation: "🤖", delegation: "👤", hiring: "🧑‍💼", experiment: "💡"
+const GROW_ICON: Record<string, Icon> = {
+  expansion: TrendingUp, upsell: DollarSign, "sales-push": Target, "replicate-win": Copy, automation: Bot, delegation: Users, hiring: UserPlus, experiment: Lightbulb
 };
 
 export function GrowthBoard({ initial, currentSources }: { initial: GrowthBrief | null; currentSources?: ScaleSourceFlags }) {
@@ -159,10 +161,11 @@ export function GrowthBoard({ initial, currentSources }: { initial: GrowthBrief 
               {brief.protect.length === 0 && <div className="text-[12px] text-muted">Nothing flagged.</div>}
               {brief.protect.map((p, i) => {
                 const k = `p${i}`; const isOpen = !!open[k];
+                const PIcon = PROTECT_ICON[p.type] ?? ShieldAlert;
                 return (
                   <div key={k} className="border-b border-slate-100 last:border-0">
                     <button type="button" onClick={() => toggle(k)} className="w-full text-left flex items-start gap-2 py-2 hover:bg-slate-50 rounded-lg transition-colors">
-                      <span className="text-[15px] leading-none mt-0.5">{PROTECT_ICON[p.type] ?? "⚠️"}</span>
+                      <PIcon className="w-4 h-4 text-slate-400 mt-0.5 shrink-0" />
                       <div className="min-w-0 flex-1">
                         <div className="text-[13px] font-medium text-ink flex items-center gap-1.5">
                           <span className="flex-1">{p.title}</span>
@@ -190,10 +193,11 @@ export function GrowthBoard({ initial, currentSources }: { initial: GrowthBrief 
               {brief.grow.length === 0 && <div className="text-[12px] text-muted">Nothing surfaced.</div>}
               {brief.grow.map((g, i) => {
                 const k = `g${i}`; const isOpen = !!open[k];
+                const GIcon = GROW_ICON[g.type] ?? Rocket;
                 return (
                   <div key={k} className="border-b border-slate-100 last:border-0">
                     <button type="button" onClick={() => toggle(k)} className="w-full text-left flex items-start gap-2 py-2 hover:bg-slate-50 rounded-lg transition-colors">
-                      <span className="text-[15px] leading-none mt-0.5">{GROW_ICON[g.type] ?? "🚀"}</span>
+                      <GIcon className="w-4 h-4 text-slate-400 mt-0.5 shrink-0" />
                       <div className="min-w-0 flex-1">
                         <div className="text-[13px] font-medium text-ink flex items-center gap-1.5 flex-wrap">
                           <span className="flex-1 min-w-0">{g.title}</span>

@@ -12,11 +12,11 @@ import { GrowthBoard, type GrowthBrief } from "@/components/GrowthBoard";
 import { getLatestGrowthBrief } from "@/lib/growth-brain";
 import { MemoryEditor, type ScaleMemory } from "@/components/MemoryEditor";
 import { ActNowTabs } from "@/components/ActNowTabs";
-import { getReachOutClients, getReactivatePitches, getFollowUpLeads, getLinkedInTargets } from "@/lib/scale-actions";
+import { getReachOutClients, getReactivatePitches, getFollowUpLeads, getLinkedInTargets, getScaleKpis, getScaleMeta } from "@/lib/scale-actions";
 import { type InboxThread } from "@/components/InboxCopilot";
 import { LinkedInModule } from "@/components/LinkedInModule";
 import { MetaLive } from "@/components/ScaleAcquisition";
-import { getOutboundMeta } from "@/lib/outbound-meta";
+import { ScaleKpis, ScaleKpisLoading } from "@/components/ScaleKpis";
 import type { ScaleSourceFlags } from "@/lib/scale-sources-types";
 import { ScaleChat } from "@/components/ScaleChat";
 import { ScaleTabs } from "@/components/ScaleTabs";
@@ -42,7 +42,7 @@ export default async function ScalePage() {
   const sourceFlags: ScaleSourceFlags = { facebook: true, outbound: true };
 
   return (
-    <div className="space-y-5 max-w-3xl mx-auto">
+    <div className="space-y-6 max-w-3xl mx-auto">
       <div className="flex items-center gap-3">
         <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-indigo-500 to-fuchsia-500 text-white grid place-items-center shrink-0 shadow-soft">
           <Rocket className="w-4.5 h-4.5" />
@@ -54,7 +54,12 @@ export default async function ScalePage() {
       {/* Overview (this page) · Outbound (the full pipeline + ad account) */}
       <ScaleTabs active="overview" />
 
-      {/* 1. Talk to your brain — ask what to do next, right at the top. */}
+      {/* Scale KPIs — the top-line acquisition numbers, streamed. */}
+      <Suspense fallback={<ScaleKpisLoading />}>
+        <KpiSection />
+      </Suspense>
+
+      {/* 1. Talk to your brain — ask what to do next, the hero of the page. */}
       <ScaleChat />
 
       {/* 2. Brain highlights — the single biggest opportunity + top risk, always
@@ -177,12 +182,17 @@ function BrainHighlights({ brief }: { brief: GrowthBrief }) {
   );
 }
 
-// Live Meta ad performance only — read straight from Meta's API, independent of
-// the ads dashboard's pipeline DB, so it shows whenever the dashboard is up.
-// Renders nothing when the read fails (MetaLive is silent on error).
+// The top-line scale KPI strip — booked calls, pipeline, Meta leads + CTR.
+async function KpiSection() {
+  const { kpis, stale } = await getScaleKpis();
+  return <ScaleKpis kpis={kpis} stale={stale} />;
+}
+
+// Live Meta ad performance — read straight from Meta's API (shared cache with
+// the KPI strip). Falls back to last-good cache when the dashboard is down.
 async function MetaSection() {
-  const meta = await getOutboundMeta(7);
-  return <MetaLive meta={meta} />;
+  const meta = await getScaleMeta();
+  return <MetaLive meta={meta ?? { ok: false, error: "the ads dashboard didn't respond" }} />;
 }
 
 // The 5 ICP people to message on LinkedIn today, from the live pipeline. Reads

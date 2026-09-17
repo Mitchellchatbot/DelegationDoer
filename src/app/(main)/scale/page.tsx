@@ -1,6 +1,6 @@
 import { Suspense } from "react";
 import { notFound, redirect } from "next/navigation";
-import { Rocket, Mail, Flame } from "lucide-react";
+import { Rocket } from "lucide-react";
 import { getCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
@@ -12,9 +12,9 @@ import { categorizeInbox } from "@/lib/owner-inbox";
 import { GrowthBoard, type GrowthBrief } from "@/components/GrowthBoard";
 import { getLatestGrowthBrief } from "@/lib/growth-brain";
 import { MemoryEditor, type ScaleMemory } from "@/components/MemoryEditor";
-import { ReachOutList } from "@/components/ActNow";
+import { ActNowTabs } from "@/components/ActNowTabs";
 import { getReachOutClients, getReactivatePitches } from "@/lib/scale-actions";
-import { InboxCopilot, type InboxThread } from "@/components/InboxCopilot";
+import { type InboxThread } from "@/components/InboxCopilot";
 import { ScaleAcquisition, ScaleAcquisitionLoading } from "@/components/ScaleAcquisition";
 import { getFacebookRevenue } from "@/lib/facebook-revenue";
 import { getOutboundSummary } from "@/lib/outbound-summary";
@@ -170,28 +170,10 @@ async function ActNowSection() {
     loadSortedInbox()
   ]);
   const hasAny = inbox.threads.length > 0 || reactivate.length > 0 || reachOut.length > 0;
-  return (
-    <div className="space-y-4">
-      <div>
-        <div className="flex items-center gap-2 mb-2 px-1">
-          <span className="w-6 h-6 rounded-lg bg-indigo-100 text-indigo-700 grid place-items-center shrink-0"><Mail className="w-3.5 h-3.5" /></span>
-          <span className="text-[13px] font-semibold text-ink">Reply · inbox{inbox.threads.length ? ` (${inbox.threads.length})` : ""}</span>
-        </div>
-        <InboxCopilot threads={inbox.threads} note={inbox.note} />
-      </div>
-      {reactivate.length > 0 && (
-        <div>
-          <div className="flex items-center gap-2 mb-2 px-1">
-            <span className="w-6 h-6 rounded-lg bg-amber-100 text-amber-700 grid place-items-center shrink-0"><Flame className="w-3.5 h-3.5" /></span>
-            <span className="text-[13px] font-semibold text-ink">Reactivate · pitches that went quiet ({reactivate.length})</span>
-          </div>
-          <InboxCopilot flat threads={reactivate} note={null} />
-        </div>
-      )}
-      {reachOut.length > 0 && <ReachOutList clients={reachOut} />}
-      {!hasAny && <div className="rounded-2xl border border-slate-200 bg-white p-6 text-[13px] text-muted shadow-soft">Nothing needs you right now. 🎉</div>}
-    </div>
-  );
+  if (!hasAny) {
+    return <div className="rounded-2xl border border-slate-200 bg-white p-6 text-[13px] text-muted shadow-soft">Nothing needs you right now. 🎉</div>;
+  }
+  return <ActNowTabs inbox={inbox.threads} inboxNote={inbox.note} reactivate={reactivate} reachOut={reachOut} />;
 }
 
 // Mitchell's inbox, sorted (owner-only, gated upstream). Fails soft to a note.

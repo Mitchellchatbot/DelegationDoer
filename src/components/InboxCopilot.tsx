@@ -38,6 +38,14 @@ const SECTIONS: { key: InboxCategory; label: string }[] = [
   { key: "other", label: "Other" }
 ];
 
+// Small colored chip so a single flat list still shows which bucket a thread is
+// in (Client / Prospect / Sales) without breaking it into separate sections.
+const CAT_CHIP: Partial<Record<InboxCategory, { label: string; cls: string }>> = {
+  client: { label: "Client", cls: "text-indigo-700 bg-indigo-100" },
+  prospect: { label: "Prospect", cls: "text-violet-700 bg-violet-100" },
+  sales: { label: "Sales", cls: "text-amber-700 bg-amber-100" }
+};
+
 // Missive hands us the sender as a display name, an address, or the very
 // common "michael@x.com <michael@x.com>" where both halves are identical.
 // Show one clean value: a real name if we have one, otherwise the address.
@@ -126,6 +134,9 @@ export function InboxCopilot({ threads, note, flat = false }: { threads: InboxTh
         <span className={"w-1.5 h-1.5 rounded-full shrink-0 " + (r.sent ? "bg-emerald-400" : r.needsReply ? "bg-indigo-500" : "bg-slate-200")} />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
+            {r.category && CAT_CHIP[r.category] && (
+              <span className={"text-[9px] uppercase tracking-wide rounded px-1 py-0.5 shrink-0 " + CAT_CHIP[r.category]!.cls}>{CAT_CHIP[r.category]!.label}</span>
+            )}
             <span className="text-[13px] font-medium text-ink truncate">{r.subject}</span>
             {r.needsReply && !r.sent && <span className="text-[9px] uppercase tracking-wide text-indigo-700 bg-indigo-100 rounded px-1 py-0.5 shrink-0">reply</span>}
             {r.sent && <span className="text-[9px] uppercase tracking-wide text-emerald-600 bg-emerald-100 rounded px-1 py-0.5 shrink-0">sent</span>}

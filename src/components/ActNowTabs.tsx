@@ -62,7 +62,7 @@ export function ActNowTabs({
       {tab === "reachout" && (
         reachOut.length > 0
           ? <ReachOutList clients={reachOut} />
-          : <Empty>No paying clients have gone quiet. 🎉</Empty>
+          : <Empty>No paying clients have gone quiet.</Empty>
       )}
     </div>
   );

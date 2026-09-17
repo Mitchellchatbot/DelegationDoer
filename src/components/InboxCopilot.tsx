@@ -134,7 +134,7 @@ export function InboxCopilot({ threads, note, flat = false }: { threads: InboxTh
     return <div className="rounded-2xl border border-slate-200 bg-white p-6 text-[13px] text-muted shadow-soft">{note}</div>;
   }
   if (!rows.length) {
-    return <div className="rounded-2xl border border-slate-200 bg-white p-6 text-[13px] text-muted shadow-soft">Inbox zero — nothing open right now. 🎉</div>;
+    return <div className="rounded-2xl border border-slate-200 bg-white p-6 text-[13px] text-muted shadow-soft">Inbox zero — nothing open right now.</div>;
   }
 
   // Within a bucket: reply-needed first, then newest.

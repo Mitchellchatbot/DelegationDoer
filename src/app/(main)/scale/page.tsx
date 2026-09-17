@@ -1,6 +1,6 @@
 import { Suspense } from "react";
 import { notFound, redirect } from "next/navigation";
-import { Rocket } from "lucide-react";
+import { Rocket, TrendingUp, ShieldAlert } from "lucide-react";
 import { getCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
@@ -12,8 +12,9 @@ import { GrowthBoard, type GrowthBrief } from "@/components/GrowthBoard";
 import { getLatestGrowthBrief } from "@/lib/growth-brain";
 import { MemoryEditor, type ScaleMemory } from "@/components/MemoryEditor";
 import { ActNowTabs } from "@/components/ActNowTabs";
-import { getReachOutClients, getReactivatePitches, getFollowUpLeads } from "@/lib/scale-actions";
+import { getReachOutClients, getReactivatePitches, getFollowUpLeads, getLinkedInTargets } from "@/lib/scale-actions";
 import { type InboxThread } from "@/components/InboxCopilot";
+import { LinkedInModule } from "@/components/LinkedInModule";
 import { MetaLive } from "@/components/ScaleAcquisition";
 import { getOutboundMeta } from "@/lib/outbound-meta";
 import type { ScaleSourceFlags } from "@/lib/scale-sources-types";
@@ -56,7 +57,11 @@ export default async function ScalePage() {
       {/* 1. Talk to your brain — ask what to do next, right at the top. */}
       <ScaleChat />
 
-      {/* 2. The #1 constraint + collapsed Protect / Grow */}
+      {/* 2. Brain highlights — the single biggest opportunity + top risk, always
+          visible (the rest of Grow/Protect stays in the board below). */}
+      {growthBrief && <BrainHighlights brief={growthBrief as GrowthBrief} />}
+
+      {/* 3. The #1 constraint + collapsed Protect / Grow */}
       <GrowthBoard initial={growthBrief as GrowthBrief | null} currentSources={sourceFlags} />
 
       {/* 3. ACT NOW — what needs Mitchell today. Streamed so the shell +
@@ -72,10 +77,25 @@ export default async function ScalePage() {
         </Suspense>
       </div>
 
-      {/* 4. Meta ads — live performance (the acquisition signal). Streams; the
-          card hides itself when the ads dashboard is down. Finance lives on
-          /finance, deliberately not here. */}
+      {/* 4. LinkedIn — today's post to publish + the 5 ICP people to message. */}
       <div className="pt-1">
+        <div className="flex items-center gap-1.5 px-1 mb-2">
+          <span className="w-2 h-2 rounded-full bg-sky-500" />
+          <span className="text-[11px] font-semibold uppercase tracking-wide text-sky-700">LinkedIn</span>
+        </div>
+        <Suspense fallback={<div className="rounded-2xl border border-slate-200 bg-white p-6 text-[13px] text-muted shadow-soft">Loading your LinkedIn targets…</div>}>
+          <LinkedInSection />
+        </Suspense>
+      </div>
+
+      {/* 5. Meta ads — live performance + today's fixes (same read the 8am recap
+          sends). Streams; the card hides itself when the ads dashboard is down.
+          Finance lives on /finance, deliberately not here. */}
+      <div className="pt-1">
+        <div className="flex items-center gap-1.5 px-1 mb-2">
+          <span className="w-2 h-2 rounded-full bg-emerald-500" />
+          <span className="text-[11px] font-semibold uppercase tracking-wide text-emerald-700">Meta ads · daily recap</span>
+        </div>
         <Suspense fallback={<div className="text-[12px] text-muted px-1">Loading Meta ads…</div>}>
           <MetaSection />
         </Suspense>
@@ -132,10 +152,42 @@ async function loadSortedInbox(): Promise<{ threads: InboxThread[]; note: string
   }
 }
 
+// The single biggest opportunity + top risk from the latest brief, always
+// visible so the money-idle item isn't buried in the collapsed Grow dropdown.
+function BrainHighlights({ brief }: { brief: GrowthBrief }) {
+  const g = brief.grow?.[0];
+  const p = brief.protect?.[0];
+  if (!g && !p) return null;
+  return (
+    <div className="grid sm:grid-cols-2 gap-3">
+      {g && (
+        <div className="rounded-2xl border border-emerald-200 bg-emerald-50/50 p-3.5 shadow-soft">
+          <div className="text-[10px] font-semibold uppercase tracking-wide text-emerald-700 flex items-center gap-1"><TrendingUp className="w-3 h-3" /> Biggest opportunity</div>
+          <div className="text-[13px] font-semibold text-ink mt-1 leading-snug line-clamp-2">{g.title}</div>
+          {g.estValue && <div className="text-[12px] font-bold text-emerald-700 mt-0.5">{g.estValue}</div>}
+        </div>
+      )}
+      {p && (
+        <div className="rounded-2xl border border-rose-200 bg-rose-50/50 p-3.5 shadow-soft">
+          <div className="text-[10px] font-semibold uppercase tracking-wide text-rose-700 flex items-center gap-1"><ShieldAlert className="w-3 h-3" /> Top risk</div>
+          <div className="text-[13px] font-semibold text-ink mt-1 leading-snug line-clamp-2">{p.title}</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Live Meta ad performance only — read straight from Meta's API, independent of
 // the ads dashboard's pipeline DB, so it shows whenever the dashboard is up.
 // Renders nothing when the read fails (MetaLive is silent on error).
 async function MetaSection() {
   const meta = await getOutboundMeta(7);
   return <MetaLive meta={meta} />;
+}
+
+// The 5 ICP people to message on LinkedIn today, from the live pipeline. Reads
+// the (cached) board, so it shares the Follow-up tab's one board fetch.
+async function LinkedInSection() {
+  const targets = await getLinkedInTargets(5).catch(() => []);
+  return <LinkedInModule targets={targets} />;
 }

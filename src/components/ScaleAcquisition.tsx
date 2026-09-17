@@ -102,10 +102,11 @@ function num(n: number | null | undefined): string {
   return n == null ? "—" : Math.round(n).toLocaleString("en-US");
 }
 export function MetaLive({ meta }: { meta: OutboundMetaResult }) {
-  // Silent on failure — the Outbound block below already reports the ads
-  // dashboard being down, so this would just duplicate the same error line.
-  // When the dashboard is up, this shows real live ad numbers.
-  if (!meta.ok) return null;
+  // When the ads dashboard is down, say so briefly (the numbers come straight
+  // from Meta's API, so this only fails when the dashboard itself is unreachable).
+  if (!meta.ok) {
+    return <div className="text-[12px] text-muted px-1">Live Meta read unavailable — the ads dashboard didn&apos;t respond. It&apos;ll show as soon as it&apos;s back.</div>;
+  }
   const d: OutboundMetaResponse = meta.data;
   const t = d.totals;
   const days = d.range?.days ?? 7;
@@ -126,6 +127,38 @@ export function MetaLive({ meta }: { meta: OutboundMetaResult }) {
           Best active campaign: <span className="text-ink font-medium">{best.name}</span> · {best.ctr == null ? "—" : `${best.ctr.toFixed(2)}% CTR`} · {best.cpc == null ? "—" : `$${best.cpc.toFixed(2)} CPC`}
         </div>
       )}
+      <MetaFixes meta={d} />
+    </div>
+  );
+}
+
+// Quick auto-diagnosis of the last 7 days — the same read the 8am recap sends,
+// surfaced on the page. Pure computation from the Meta data, no model call.
+function MetaFixes({ meta }: { meta: OutboundMetaResponse }) {
+  const t = meta.totals;
+  const fixes: string[] = [];
+  if (t.frequency != null && t.frequency >= 2) {
+    fixes.push(`Audience saturating — frequency ${t.frequency.toFixed(1)} on only ${num(t.reach)} reach. Refresh creative and widen the audience before adding spend.`);
+  }
+  if ((t.leads ?? 0) === 0 && (t.spend ?? 0) > 50) {
+    fixes.push(`$${Math.round(t.spend)} spent, 0 leads this window — the funnel/follow-up, not the budget.`);
+  }
+  // Worst active ad: real spend, zero leads, highest CPC.
+  const worst = [...(meta.ads ?? [])]
+    .filter((a) => (a.status ?? "").toUpperCase() === "ACTIVE" && a.spend >= 20 && (a.leads ?? 0) === 0 && a.cpc != null)
+    .sort((a, b) => (b.cpc ?? 0) - (a.cpc ?? 0))[0];
+  if (worst) {
+    fixes.push(`Pause "${worst.name}" (${worst.campaignName}) — $${worst.cpc!.toFixed(2)} CPC, 0 leads on $${Math.round(worst.spend)}.`);
+  }
+  if (fixes.length === 0) return null;
+  return (
+    <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50/60 p-3">
+      <div className="text-[11px] font-semibold text-amber-700 mb-1">Today&apos;s fixes</div>
+      <ul className="space-y-1">
+        {fixes.slice(0, 3).map((f, i) => (
+          <li key={i} className="text-[12px] text-ink flex gap-1.5"><span className="text-amber-600">→</span><span>{f}</span></li>
+        ))}
+      </ul>
     </div>
   );
 }

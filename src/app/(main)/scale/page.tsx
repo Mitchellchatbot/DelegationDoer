@@ -179,13 +179,19 @@ async function loadSortedInbox(): Promise<{ threads: InboxThread[]; note: string
     const acct = accounts.find((a) => (a.email ?? "").toLowerCase() === OWNER_EMAIL);
     if (!acct) return { threads: [], note: `No Missive inbox found for ${OWNER_EMAIL}.` };
     const raw = await listThreads({ mailboxId: acct.id, folder: "INBOX", status: "open", limit: 40 });
-    const mapped = raw.map((t) => ({
-      id: t.id,
-      subject: t.subject || "(no subject)",
-      from: t.last_from ?? (t.participants?.[0] ?? "unknown"),
-      snippet: t.last_snippet ?? "",
-      lastAt: t.last_message_at
-    }));
+    // Threads Mitchell has dismissed from the room — hidden here only, the real
+    // Missive email is untouched.
+    const dismissedRes = await getSupabaseAdmin().from("inbox_dismissals").select("thread_id");
+    const dismissed = new Set((dismissedRes.data ?? []).map((r) => r.thread_id as string));
+    const mapped = raw
+      .filter((t) => !dismissed.has(t.id))
+      .map((t) => ({
+        id: t.id,
+        subject: t.subject || "(no subject)",
+        from: t.last_from ?? (t.participants?.[0] ?? "unknown"),
+        snippet: t.last_snippet ?? "",
+        lastAt: t.last_message_at
+      }));
     const threads = await categorizeInbox(mapped);
     return { threads, note: threads.length === 0 ? "Nothing needs a reply right now." : null };
   } catch (err) {

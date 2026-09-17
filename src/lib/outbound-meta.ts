@@ -2,6 +2,7 @@ import "server-only";
 
 import { META_DAYS, type MetaDays, type OutboundMetaResponse, type OutboundMetaResult } from "./outbound-meta-types";
 import { fetchAdsDashboard, isNum, isNumOrNull, isObj, isStr, isStrOrNull } from "./outbound-summary";
+import { readAdsCache, writeAdsCache } from "./ads-cache";
 
 // Our own Meta ad account, as the Meta ads dashboard shows a client's Dashboard,
 // from its GET /api/outbound/meta. Same host, secret and fetch checks as the
@@ -17,8 +18,17 @@ export function metaDays(raw: unknown): MetaDays {
   return (META_DAYS as readonly number[]).includes(n) ? (n as MetaDays) : 7;
 }
 
-export function getOutboundMeta(days: MetaDays, timeoutMs = TIMEOUT_MS): Promise<OutboundMetaResult> {
-  return fetchAdsDashboard(`/api/outbound/meta?days=${days}`, isMeta, timeoutMs, "Meta ads read failed");
+export async function getOutboundMeta(days: MetaDays, timeoutMs = TIMEOUT_MS): Promise<OutboundMetaResult> {
+  const res = await fetchAdsDashboard(`/api/outbound/meta?days=${days}`, isMeta, timeoutMs, "Meta ads read failed");
+  // Cache every good read; fall back to the last good one when the dashboard is
+  // overloaded, so the Scale Room shows last-known numbers instead of a blank.
+  if (res.ok) {
+    await writeAdsCache(`meta:${days}`, res.data);
+    return res;
+  }
+  const cached = await readAdsCache<OutboundMetaResponse>(`meta:${days}`);
+  if (cached) return { ok: true, data: cached.payload, stale: true, cachedAt: cached.fetchedAt };
+  return res;
 }
 
 // Every field the view reads, so a renamed field on the other app lands as

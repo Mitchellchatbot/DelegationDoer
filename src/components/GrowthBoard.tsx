@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { RefreshCw, Target, ShieldAlert, Rocket, ChevronDown } from "lucide-react";
+import { RefreshCw, Target, ShieldAlert, Rocket, ChevronDown, ThumbsUp, ThumbsDown, Check } from "lucide-react";
 import { SCALE_SOURCE_LABELS, staleBriefSources, type ScaleSourceFlags } from "@/lib/scale-sources-types";
 
 // The CEO screen: the soul question + #1 growth constraint up top, then two
@@ -172,7 +172,7 @@ export function GrowthBoard({ initial, currentSources }: { initial: GrowthBrief 
                         {p.source && <div className="text-[10px] text-slate-400 mt-0.5">from {p.source}</div>}
                       </div>
                     </button>
-                    {isOpen && <div className="pl-7 pb-2.5 text-[12px] text-muted">{p.detail}</div>}
+                    {isOpen && <div className="pl-7 pb-2.5 text-[12px] text-muted">{p.detail}<Feedback item={p.title} /></div>}
                   </div>
                 );
               })}
@@ -210,6 +210,7 @@ export function GrowthBoard({ initial, currentSources }: { initial: GrowthBrief 
                         <div className="text-[10px] text-muted mt-0.5">
                           {g.owner ? `Owner: ${g.owner}` : ""}{g.owner && g.confidence ? " · " : ""}{g.confidence ? `Confidence: ${g.confidence}` : ""}
                         </div>
+                        <Feedback item={g.title} />
                       </div>
                     )}
                   </div>
@@ -220,6 +221,66 @@ export function GrowthBoard({ initial, currentSources }: { initial: GrowthBrief 
         </div>
       )}
       {brief?.generatedAt && <div className="text-[10px] text-muted">Generated {new Date(brief.generatedAt).toLocaleString()}</div>}
+    </div>
+  );
+}
+
+// Teach the brain from one item. Thumbs-down asks a one-line "why" and saves it
+// to the brain's memory so it learns and won't repeat the mistake; thumbs-up
+// with an optional note reinforces what works. Fully self-contained.
+function Feedback({ item }: { item: string }) {
+  const [open, setOpen] = useState<null | "up" | "down">(null);
+  const [why, setWhy] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  async function submit(verdict: "up" | "down") {
+    setSaving(true);
+    try {
+      const res = await fetch("/api/brain/feedback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ verdict, item, why: why.trim() })
+      });
+      if (res.ok) { setSaved(true); setOpen(null); }
+    } catch {
+      /* best effort */
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (saved) {
+    return <div className="mt-2 text-[11px] text-emerald-600 flex items-center gap-1"><Check className="w-3 h-3" /> Learned — the brain will remember this.</div>;
+  }
+
+  return (
+    <div className="mt-2 pt-2 border-t border-slate-100">
+      {open === null ? (
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] text-muted">Teach your brain:</span>
+          <button type="button" onClick={() => setOpen("up")} title="Good — do more like this"
+            className="w-6 h-6 rounded-lg grid place-items-center text-slate-400 hover:text-emerald-600 hover:bg-emerald-50"><ThumbsUp className="w-3.5 h-3.5" /></button>
+          <button type="button" onClick={() => setOpen("down")} title="Wrong or irrelevant — don't repeat this"
+            className="w-6 h-6 rounded-lg grid place-items-center text-slate-400 hover:text-rose-600 hover:bg-rose-50"><ThumbsDown className="w-3.5 h-3.5" /></button>
+        </div>
+      ) : (
+        <div className="flex items-center gap-2 flex-wrap">
+          <input
+            autoFocus
+            value={why}
+            onChange={(e) => setWhy(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter" && !saving && (open === "up" || why.trim())) submit(open); }}
+            placeholder={open === "down" ? "What's wrong? (e.g. 'he's already a client')" : "What did you like? (optional)"}
+            className="flex-1 min-w-[180px] text-[12px] rounded-lg border border-slate-200 px-2.5 py-1.5 focus:outline-none focus:border-indigo-300"
+          />
+          <button type="button" onClick={() => submit(open)} disabled={saving || (open === "down" && !why.trim())}
+            className="text-[12px] font-medium text-white bg-ink rounded-lg px-3 py-1.5 hover:opacity-90 disabled:opacity-50">
+            {saving ? "Saving…" : "Teach"}
+          </button>
+          <button type="button" onClick={() => { setOpen(null); setWhy(""); }} className="text-[12px] text-muted hover:text-ink">Cancel</button>
+        </div>
+      )}
     </div>
   );
 }

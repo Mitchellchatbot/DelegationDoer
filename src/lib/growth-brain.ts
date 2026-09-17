@@ -255,7 +255,7 @@ export async function getGrowthSnapshot(): Promise<{ text: string; sources: Scal
     sources.facebook ? getFacebookRevenue(20_000) : null,
     sources.outbound ? getOutboundBoard(20_000) : null,
     // Meta is read live on the other side (cached there a few minutes).
-    sources.outbound ? getOutboundMeta(7, 25_000) : null
+    sources.outbound ? getOutboundMeta(7, 45_000) : null
   ]);
   const outbound = outboundBoard ? summaryFromBoard(outboundBoard) : null;
   // Health notes carry their OWN computed date — a client row's updated_at moves

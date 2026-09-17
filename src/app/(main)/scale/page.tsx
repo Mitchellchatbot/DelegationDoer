@@ -91,19 +91,12 @@ export default async function ScalePage() {
 
   return (
     <div className="space-y-5 max-w-3xl mx-auto">
-      <div className="rounded-3xl p-5 shadow-soft bg-gradient-to-br from-indigo-500 via-violet-500 to-fuchsia-500 text-white">
-        <div className="flex items-start gap-3">
-          <div className="w-11 h-11 rounded-2xl bg-white/20 backdrop-blur grid place-items-center shrink-0">
-            <Rocket className="w-5 h-5" />
-          </div>
-          <div>
-            <div className="text-[11px] font-semibold uppercase tracking-wide text-indigo-100">Private · you only</div>
-            <h1 className="text-2xl font-bold leading-tight">Scale Room</h1>
-            <p className="text-sm text-indigo-50/90 mt-0.5 max-w-prose">
-              You and your brain in one place: the numbers, what to do to scale, the emails to reply to, and what we&apos;re optimizing for. Just what needs you — nothing else.
-            </p>
-          </div>
+      <div className="flex items-center gap-3">
+        <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-indigo-500 to-fuchsia-500 text-white grid place-items-center shrink-0 shadow-soft">
+          <Rocket className="w-4.5 h-4.5" />
         </div>
+        <h1 className="text-2xl font-bold text-ink leading-tight">Scale Room</h1>
+        <span className="text-[10px] font-semibold uppercase tracking-wide text-indigo-600 bg-indigo-50 rounded-full px-2 py-0.5">Private · you only</span>
       </div>
 
       {/* Overview (this page) · Outbound (the full pipeline + ad account) */}

@@ -51,5 +51,5 @@ export interface OutboundBoardResponse {
 export type OutboundBoardMonth = OutboundSummaryMonth;
 
 export type OutboundBoardResult =
-  | { ok: true; data: OutboundBoardResponse }
+  | { ok: true; data: OutboundBoardResponse; stale?: boolean; cachedAt?: string }
   | { ok: false; error: string };

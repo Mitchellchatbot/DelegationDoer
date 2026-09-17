@@ -2,6 +2,7 @@ import "server-only";
 
 import type { OutboundBoardResponse, OutboundBoardResult } from "./outbound-board-types";
 import { fetchAdsDashboard, isAds, isNum, isNumOrNull, isObj, isRep, isStr, isStrOrNull } from "./outbound-summary";
+import { readAdsCache, writeAdsCache } from "./ads-cache";
 
 // The Scale Room's Outbound tab: the Meta ads dashboard's pipeline (every
 // prospect, by stage) and every month of our ad account, from its
@@ -15,8 +16,17 @@ import { fetchAdsDashboard, isAds, isNum, isNumOrNull, isObj, isRep, isStr, isSt
 // instead of an "unavailable" line. Real fix is caching that read on the dashboard.
 const TIMEOUT_MS = 55_000;
 
-export function getOutboundBoard(timeoutMs = TIMEOUT_MS): Promise<OutboundBoardResult> {
-  return fetchAdsDashboard("/api/outbound/board", isBoard, timeoutMs, "Outbound board failed");
+export async function getOutboundBoard(timeoutMs = TIMEOUT_MS): Promise<OutboundBoardResult> {
+  const res = await fetchAdsDashboard("/api/outbound/board", isBoard, timeoutMs, "Outbound board failed");
+  // Cache every good read; fall back to the last good one when the dashboard's
+  // DB is overloaded, so the pipeline + LinkedIn list show last-known data.
+  if (res.ok) {
+    await writeAdsCache("board", res.data);
+    return res;
+  }
+  const cached = await readAdsCache<OutboundBoardResponse>("board");
+  if (cached) return { ok: true, data: cached.payload, stale: true, cachedAt: cached.fetchedAt };
+  return res;
 }
 
 // Every field the tab reads. The two apps deploy separately, so a renamed or

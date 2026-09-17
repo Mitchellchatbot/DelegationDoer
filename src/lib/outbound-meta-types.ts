@@ -75,5 +75,5 @@ export interface OutboundMetaResponse {
 }
 
 export type OutboundMetaResult =
-  | { ok: true; data: OutboundMetaResponse }
+  | { ok: true; data: OutboundMetaResponse; stale?: boolean; cachedAt?: string }
   | { ok: false; error: string };

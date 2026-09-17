@@ -110,11 +110,14 @@ export function MetaLive({ meta }: { meta: OutboundMetaResult }) {
   const d: OutboundMetaResponse = meta.data;
   const t = d.totals;
   const days = d.range?.days ?? 7;
+  const cachedNote = meta.stale && meta.cachedAt
+    ? `last good read ${new Date(meta.cachedAt).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}`
+    : null;
   const best = [...(d.campaigns ?? [])].filter((c) => (c.status ?? "").toUpperCase() === "ACTIVE" && c.spend > 0)
     .sort((a, b) => (b.ctr ?? 0) - (a.ctr ?? 0))[0];
   return (
     <div>
-      <Heading title="Our Meta ads · live" period={`last ${days} days`} link={OUTBOUND_LINK} />
+      <Heading title="Our Meta ads · live" period={cachedNote ?? `last ${days} days`} pill={cachedNote ? "cached" : null} link={OUTBOUND_LINK} />
       <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3">
         <Card label="Ad spend" value={money0(t.spend)} />
         <Card label="Link clicks" value={num(t.linkClicks)} hint={`${num(t.clicks)} total clicks`} />

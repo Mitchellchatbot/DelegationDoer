@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Linkedin, Copy, Check, ArrowUpRight, Users, Sparkles, RefreshCw } from "lucide-react";
+import { Copy, Check, ArrowUpRight, Users, Sparkles, RefreshCw } from "lucide-react";
 import type { LinkedInTarget } from "@/lib/scale-actions";
 
 // LinkedIn card for the Scale Room:
@@ -72,18 +72,8 @@ export function LinkedInModule({ targets }: { targets: LinkedInTarget[] }) {
   }
 
   return (
-    <div className="rounded-2xl border border-sky-200 bg-white shadow-soft overflow-hidden">
-      <div className="flex items-center gap-2 px-4 py-3 border-b border-slate-100 bg-gradient-to-r from-sky-50 to-white">
-        <div className="w-7 h-7 rounded-lg bg-sky-100 text-sky-700 grid place-items-center shrink-0">
-          <Linkedin className="w-4 h-4" />
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="text-[13px] font-semibold text-ink leading-tight">LinkedIn</div>
-          <div className="text-[11px] text-muted leading-tight">Write a post from your topic. Message 5 ICP people a day.</div>
-        </div>
-      </div>
-
-      <div className="p-4 space-y-4">
+    <div className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+      <div className="p-5 space-y-4">
         {/* Topic → draft */}
         <div>
           <label className="text-[12px] font-semibold text-ink">What do you want to post about?</label>

@@ -1,6 +1,6 @@
 import { Suspense } from "react";
 import { notFound, redirect } from "next/navigation";
-import { Rocket, TrendingUp, ShieldAlert } from "lucide-react";
+import { Rocket, Mail, Linkedin, Infinity as InfinityIcon, ExternalLink } from "lucide-react";
 import { getCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
@@ -8,25 +8,29 @@ import { isOwner, OWNER_EMAIL } from "@/lib/access";
 import { listMemories } from "@/lib/brain-memory";
 import { listAccounts, listThreads } from "@/lib/missive-client";
 import { categorizeInbox } from "@/lib/owner-inbox";
-import { GrowthBoard, type GrowthBrief } from "@/components/GrowthBoard";
+import { GrowthBoard, type GrowthBrief, type GrowItem } from "@/components/GrowthBoard";
 import { getLatestGrowthBrief } from "@/lib/growth-brain";
 import { MemoryEditor, type ScaleMemory } from "@/components/MemoryEditor";
 import { ActNowTabs } from "@/components/ActNowTabs";
-import { getReachOutClients, getReactivatePitches, getFollowUpLeads, getLinkedInTargets, getScaleKpis, getScaleMeta } from "@/lib/scale-actions";
+import { getReachOutClients, getReactivatePitches, getFollowUpLeads, getLinkedInTargets, getScaleKpis, getScaleMeta, type ScaleKpi } from "@/lib/scale-actions";
 import { type InboxThread } from "@/components/InboxCopilot";
 import { LinkedInModule } from "@/components/LinkedInModule";
 import { MetaLive } from "@/components/ScaleAcquisition";
-import { ScaleKpis, ScaleKpisLoading } from "@/components/ScaleKpis";
 import type { ScaleSourceFlags } from "@/lib/scale-sources-types";
 import { ScaleChat } from "@/components/ScaleChat";
 import { ScaleTabs } from "@/components/ScaleTabs";
 
 export const dynamic = "force-dynamic";
 
+// External tools the room links out to, opened from their brand logo.
+const OUTLOOK_URL = "https://outlook.office.com/mail/";
+const LINKEDIN_URL = "https://www.linkedin.com/feed/";
+const META_ADS_URL = "https://adsmanager.facebook.com/";
+
 // Owner-only command center — Mitchell + the brain in one place: what to do to
 // scale, the emails/leads that need him, live Meta performance, and the
-// priorities the brain optimizes toward. Finance lives on /finance, not here.
-// Same 404 gate as /finance.
+// priorities the brain optimizes toward (which it learns from his 👍/👎).
+// Finance lives on /finance, not here. Same 404 gate as /finance.
 export default async function ScalePage() {
   const userId = await getCurrentUserId();
   if (!userId) redirect("/login");
@@ -37,12 +41,13 @@ export default async function ScalePage() {
     listMemories().catch(() => []),
     getLatestGrowthBrief().catch(() => null)
   ]);
+  const brief = growthBrief as GrowthBrief | null;
   // The room always reads both acquisition sources — Facebook (booked calls)
   // and the outbound pipeline. No toggles: Mitchell wants both, always.
   const sourceFlags: ScaleSourceFlags = { facebook: true, outbound: true };
 
   return (
-    <div className="space-y-6 max-w-3xl mx-auto">
+    <div className="space-y-5 max-w-5xl mx-auto">
       <div className="flex items-center gap-3">
         <div className="w-9 h-9 rounded-xl bg-slate-900 text-white grid place-items-center shrink-0">
           <Rocket className="w-4 h-4" />
@@ -51,61 +56,129 @@ export default async function ScalePage() {
         <span className="text-[10px] font-medium uppercase tracking-wide text-slate-500 bg-slate-100 rounded-full px-2 py-0.5">Private</span>
       </div>
 
-      {/* Overview (this page) · Outbound (the full pipeline + ad account) */}
       <ScaleTabs active="overview" />
 
-      {/* Scale KPIs — the top-line acquisition numbers, streamed. */}
-      <Suspense fallback={<ScaleKpisLoading />}>
-        <KpiSection />
-      </Suspense>
+      {/* Top row: the brain (hero) + a side panel of the one move + the numbers. */}
+      <div className="grid lg:grid-cols-[1.55fr_1fr] gap-5 items-stretch">
+        <ScaleChat />
+        <div className="flex flex-col gap-5">
+          <DoThisNext item={brief?.grow?.[0]} />
+          <Suspense fallback={<GlanceLoading />}>
+            <AtAGlanceSection />
+          </Suspense>
+        </div>
+      </div>
 
-      {/* 1. Talk to your brain — ask what to do next, the hero of the page. */}
-      <ScaleChat />
+      {/* The #1 constraint + Protect / Grow — each item has 👍/👎 so the brain
+          learns from Mitchell's feedback (the self-learning system). */}
+      <GrowthBoard initial={brief} currentSources={sourceFlags} />
 
-      {/* 2. Brain highlights — the single biggest opportunity + top risk, always
-          visible (the rest of Grow/Protect stays in the board below). */}
-      {growthBrief && <BrainHighlights brief={growthBrief as GrowthBrief} />}
-
-      {/* 3. The #1 constraint + collapsed Protect / Grow */}
-      <GrowthBoard initial={growthBrief as GrowthBrief | null} currentSources={sourceFlags} />
-
-      {/* 3. ACT NOW — what needs Mitchell today. Streamed so the shell +
-          constraint render instantly instead of the whole page blocking on the
-          inbox/reactivate AI sort. */}
-      <div className="pt-1">
-        <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 px-1 mb-2.5">Act now</div>
-        <Suspense fallback={<div className="rounded-2xl border border-slate-200 bg-white p-6 text-[13px] text-muted shadow-soft">Sorting your inbox, pitches and quiet clients…</div>}>
+      {/* Inbox / email — opens in Outlook. */}
+      <section>
+        <ToolHeader icon={<Mail className="w-4 h-4" />} tint="#0F6CBD" name="Inbox" tagline="reply, follow up, reactivate — opens in Outlook" href={OUTLOOK_URL} />
+        <Suspense fallback={<Loading>Sorting your inbox, pitches and quiet clients…</Loading>}>
           <ActNowSection />
         </Suspense>
-      </div>
+      </section>
 
-      {/* 4. LinkedIn — today's post to publish + the 5 ICP people to message. */}
-      <div className="pt-1">
-        <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 px-1 mb-2.5">LinkedIn</div>
-        <Suspense fallback={<div className="rounded-2xl border border-slate-200 bg-white p-6 text-[13px] text-muted shadow-soft">Loading your LinkedIn targets…</div>}>
+      {/* LinkedIn — write a post + the 5 to DM. */}
+      <section>
+        <ToolHeader icon={<Linkedin className="w-4 h-4" />} tint="#0A66C2" name="LinkedIn" tagline="post of the day + 5 to DM" href={LINKEDIN_URL} />
+        <Suspense fallback={<Loading>Loading your LinkedIn targets…</Loading>}>
           <LinkedInSection />
         </Suspense>
-      </div>
+      </section>
 
-      {/* 5. Meta ads — live performance + today's fixes (same read the 8am recap
-          sends). Streams; the card hides itself when the ads dashboard is down.
-          Finance lives on /finance, deliberately not here. */}
-      <div className="pt-1">
-        <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 px-1 mb-2.5">Meta ads · daily recap</div>
-        <Suspense fallback={<div className="text-[12px] text-muted px-1">Loading Meta ads…</div>}>
+      {/* Meta ads — live performance + today's fixes. */}
+      <section>
+        <ToolHeader icon={<InfinityIcon className="w-4 h-4" />} tint="#0866FF" name="Meta ads" tagline="last 7 days + today's fixes" href={META_ADS_URL} />
+        <Suspense fallback={<Loading>Loading Meta ads…</Loading>}>
           <MetaSection />
         </Suspense>
-      </div>
+      </section>
 
-      {/* 5. What we're optimizing for */}
+      {/* What we're optimizing for (persistent memory the brain builds on). */}
       <MemoryEditor initial={memories as ScaleMemory[]} />
     </div>
   );
 }
 
-// The slow part of the page — inbox AI-sort, reactivate AI-sort, quiet clients —
-// streamed under a Suspense boundary so it never blocks the shell/constraint.
-// Rendered below the owner gate; every fetch fails soft.
+// A branded section header: the tool's logo (colored tile) opens the tool, with
+// a plain-language tagline beside it.
+function ToolHeader({ icon, tint, name, tagline, href }: { icon: React.ReactNode; tint: string; name: string; tagline: string; href: string }) {
+  return (
+    <div className="flex items-center gap-2.5 px-1 mb-2.5">
+      <a href={href} target="_blank" rel="noopener noreferrer" className="group inline-flex items-center gap-2.5">
+        <span className="w-7 h-7 rounded-lg grid place-items-center text-white shrink-0" style={{ backgroundColor: tint }}>{icon}</span>
+        <span className="text-[14px] font-semibold text-slate-900 group-hover:underline inline-flex items-center gap-1">{name}<ExternalLink className="w-3 h-3 text-slate-400" /></span>
+      </a>
+      <span className="text-[12px] text-slate-400 truncate">· {tagline}</span>
+    </div>
+  );
+}
+
+// Side-panel card: the single highest-leverage move, from the brief's top Grow
+// item. Sits right next to the chat so the one thing to do is always in view.
+function DoThisNext({ item }: { item?: GrowItem }) {
+  if (!item) {
+    return (
+      <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 mb-2">Do this next</div>
+        <div className="text-[13px] text-slate-500">Run the brain to surface today&apos;s highest-leverage move.</div>
+      </div>
+    );
+  }
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="flex items-center justify-between gap-2 mb-2.5">
+        <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Do this next</span>
+        {item.estValue && <span className="text-[12px] font-semibold text-emerald-600 bg-emerald-50 rounded-full px-2 py-0.5 shrink-0">{item.estValue}</span>}
+      </div>
+      <div className="text-[15px] font-semibold text-slate-900 leading-snug">{item.title}</div>
+      {item.action && <div className="text-[13px] text-slate-500 mt-2 leading-relaxed line-clamp-4">{item.action}</div>}
+    </div>
+  );
+}
+
+// Side-panel card: the numbers, compact — for reference, not a hero strip.
+function AtAGlance({ kpis, stale }: { kpis: ScaleKpi[]; stale: boolean }) {
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 mb-3">At a glance</div>
+      <div className="divide-y divide-slate-100">
+        {kpis.map((k) => (
+          <div key={k.label} className="flex items-center justify-between py-2">
+            <span className="text-[13px] text-slate-500">{k.label}</span>
+            <span className="text-[14px] font-semibold tabular-nums text-slate-900 inline-flex items-center gap-1.5">
+              {k.value}
+              {k.delta && <span className={"text-[11px] font-medium " + (k.delta.good ? "text-emerald-600" : "text-rose-500")}>{k.delta.dir === "up" ? "↑" : "↓"}{k.delta.text.replace(/ vs.*/, "")}</span>}
+            </span>
+          </div>
+        ))}
+      </div>
+      {stale && <div className="text-[10px] text-slate-400 mt-2">Last good read — the ads dashboard is catching up.</div>}
+    </div>
+  );
+}
+function GlanceLoading() {
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="h-2.5 w-20 bg-slate-100 rounded animate-pulse mb-4" />
+      {[0, 1, 2].map((i) => <div key={i} className="h-4 w-full bg-slate-50 rounded animate-pulse mb-2.5" />)}
+    </div>
+  );
+}
+async function AtAGlanceSection() {
+  const { kpis, stale } = await getScaleKpis();
+  return <AtAGlance kpis={kpis} stale={stale} />;
+}
+
+function Loading({ children }: { children: React.ReactNode }) {
+  return <div className="rounded-2xl border border-slate-200 bg-white p-6 text-[13px] text-muted shadow-sm">{children}</div>;
+}
+
+// The slow part of the page — inbox AI-sort, reactivate AI-sort, quiet clients,
+// booked pipeline — streamed under Suspense. Every fetch fails soft.
 async function ActNowSection() {
   const [reachOut, reactivate, inbox, followUps] = await Promise.all([
     getReachOutClients().catch(() => []),
@@ -115,9 +188,7 @@ async function ActNowSection() {
   ]);
   const followCount = followUps.booked.length + followUps.noResponse.length;
   const hasAny = inbox.threads.length > 0 || reactivate.length > 0 || reachOut.length > 0 || followCount > 0;
-  if (!hasAny) {
-    return <div className="rounded-2xl border border-slate-200 bg-white p-6 text-[13px] text-muted shadow-soft">Nothing needs you right now. 🎉</div>;
-  }
+  if (!hasAny) return <Loading>Nothing needs you right now. 🎉</Loading>;
   return <ActNowTabs inbox={inbox.threads} inboxNote={inbox.note} reactivate={reactivate} reachOut={reachOut} followUps={followUps} />;
 }
 
@@ -126,10 +197,8 @@ async function loadSortedInbox(): Promise<{ threads: InboxThread[]; note: string
   try {
     const accounts = await listAccounts();
     const acct = accounts.find((a) => (a.email ?? "").toLowerCase() === OWNER_EMAIL);
-    if (!acct) return { threads: [], note: `No Missive inbox found for ${OWNER_EMAIL}.` };
+    if (!acct) return { threads: [], note: `No inbox found for ${OWNER_EMAIL}.` };
     const raw = await listThreads({ mailboxId: acct.id, folder: "INBOX", status: "open", limit: 40 });
-    // Threads Mitchell has dismissed from the room — hidden here only, the real
-    // Missive email is untouched.
     const dismissedRes = await getSupabaseAdmin().from("inbox_dismissals").select("thread_id");
     const dismissed = new Set((dismissedRes.data ?? []).map((r) => r.thread_id as string));
     const mapped = raw
@@ -148,46 +217,11 @@ async function loadSortedInbox(): Promise<{ threads: InboxThread[]; note: string
   }
 }
 
-// The single biggest opportunity + top risk from the latest brief, always
-// visible so the money-idle item isn't buried in the collapsed Grow dropdown.
-function BrainHighlights({ brief }: { brief: GrowthBrief }) {
-  const g = brief.grow?.[0];
-  const p = brief.protect?.[0];
-  if (!g && !p) return null;
-  return (
-    <div className="grid sm:grid-cols-2 gap-3">
-      {g && (
-        <div className="rounded-xl border border-slate-200 bg-white p-4">
-          <div className="text-[10px] font-semibold uppercase tracking-wide text-emerald-600 flex items-center gap-1"><TrendingUp className="w-3 h-3" /> Biggest opportunity</div>
-          <div className="text-[13px] font-semibold text-slate-900 mt-1.5 leading-snug line-clamp-2">{g.title}</div>
-          {g.estValue && <div className="text-[13px] font-bold text-slate-900 mt-1">{g.estValue}</div>}
-        </div>
-      )}
-      {p && (
-        <div className="rounded-xl border border-slate-200 bg-white p-4">
-          <div className="text-[10px] font-semibold uppercase tracking-wide text-rose-500 flex items-center gap-1"><ShieldAlert className="w-3 h-3" /> Top risk</div>
-          <div className="text-[13px] font-semibold text-slate-900 mt-1.5 leading-snug line-clamp-2">{p.title}</div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// The top-line scale KPI strip — booked calls, pipeline, Meta leads + CTR.
-async function KpiSection() {
-  const { kpis, stale } = await getScaleKpis();
-  return <ScaleKpis kpis={kpis} stale={stale} />;
-}
-
-// Live Meta ad performance — read straight from Meta's API (shared cache with
-// the KPI strip). Falls back to last-good cache when the dashboard is down.
 async function MetaSection() {
   const meta = await getScaleMeta();
   return <MetaLive meta={meta ?? { ok: false, error: "the ads dashboard didn't respond" }} />;
 }
 
-// The 5 ICP people to message on LinkedIn today, from the live pipeline. Reads
-// the (cached) board, so it shares the Follow-up tab's one board fetch.
 async function LinkedInSection() {
   const targets = await getLinkedInTargets(5).catch(() => []);
   return <LinkedInModule targets={targets} />;

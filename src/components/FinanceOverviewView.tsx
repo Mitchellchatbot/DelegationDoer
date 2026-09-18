@@ -1,6 +1,7 @@
-import { Scissors, TrendingUp } from "lucide-react";
-import type { FinanceOverview, RisingRow, CostRow } from "@/lib/finance-overview";
+import { Scissors } from "lucide-react";
+import type { FinanceOverview, CostRow } from "@/lib/finance-overview";
 import { FinanceKpiCards } from "@/components/FinanceKpiCards";
+import { WhereToCutList } from "@/components/WhereToCutList";
 
 // The reference-style finance dashboard: KPI cards, a revenue-vs-expenses chart,
 // where the money goes, and the fastest-rising costs (the cut candidates). Pure
@@ -66,27 +67,6 @@ function TopCosts({ rows }: { rows: CostRow[] }) {
   );
 }
 
-function WhereToCut({ rows }: { rows: RisingRow[] }) {
-  if (rows.length === 0) {
-    return <div className="text-[13px] text-slate-500">No costs rose month-over-month. Nothing jumping out to cut right now.</div>;
-  }
-  return (
-    <div className="divide-y divide-slate-100">
-      {rows.map((r, i) => (
-        <div key={i} className="flex items-center justify-between gap-3 py-2.5">
-          <div className="min-w-0">
-            <div className="text-[13px] font-medium text-slate-900 truncate">{r.name}</div>
-            <div className="text-[11.5px] text-slate-400">{r.kind === "software" ? "software" : "expense"} · {money(r.from)} → {money(r.to)}</div>
-          </div>
-          <span className="inline-flex items-center gap-1 text-[12px] font-semibold text-rose-600 shrink-0">
-            <TrendingUp className="w-3.5 h-3.5" /> +{r.deltaPct}%
-          </span>
-        </div>
-      ))}
-    </div>
-  );
-}
-
 export function FinanceOverviewView({ data }: { data: FinanceOverview }) {
   if (!data.hasPnl) {
     return <div className="rounded-2xl border border-slate-200 bg-white p-6 text-[13px] text-slate-500 shadow-sm">Upload a P&amp;L below to light up the dashboard.</div>;
@@ -126,8 +106,8 @@ export function FinanceOverviewView({ data }: { data: FinanceOverview }) {
           <Scissors className="w-4 h-4 text-rose-500" />
           <div className="text-[16px] font-semibold text-slate-900">Where to cut</div>
         </div>
-        <div className="text-[13px] text-slate-500 mb-4">Costs rising month-over-month — the first place to trim. Ask the brain below for the plan.</div>
-        <WhereToCut rows={data.rising} />
+        <div className="text-[13px] text-slate-500 mb-4">Costs rising month-over-month — the first place to trim. Mark one Keep or Cut and the brain remembers.</div>
+        <WhereToCutList rows={data.rising} />
       </div>
     </div>
   );

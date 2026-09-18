@@ -49,11 +49,14 @@ function siteLabel(url: string): string {
 export function ClientOutreachBoard({
   clients: initial,
   columns,
-  canEdit
+  canEdit,
+  canMarkEmailed
 }: {
   clients: BoardClient[];
   columns: BoardColumn[];
   canEdit: boolean;
+  // Just the "Mark emailed" button — wider than canEdit (canMarkOutreachEmailed).
+  canMarkEmailed: boolean;
 }) {
   const [clients, setClients] = useState(initial);
   const [showHidden, setShowHidden] = useState(false);
@@ -195,7 +198,7 @@ export function ClientOutreachBoard({
             </div>
             <div className="rounded-2xl border border-slate-200 bg-white shadow-soft overflow-hidden">
               {list.map((c, i) => (
-                <OutreachRow key={c.id} client={c} rank={i + 1} canEdit={canEdit} onSetEmailed={setEmailed} onHideSite={hideSite} onSetHidden={setHidden} />
+                <OutreachRow key={c.id} client={c} rank={i + 1} canEdit={canEdit} canMarkEmailed={canMarkEmailed} onSetEmailed={setEmailed} onHideSite={hideSite} onSetHidden={setHidden} />
               ))}
             </div>
           </div>
@@ -206,11 +209,12 @@ export function ClientOutreachBoard({
 }
 
 function OutreachRow({
-  client: c, rank, canEdit, onSetEmailed, onHideSite, onSetHidden
+  client: c, rank, canEdit, canMarkEmailed, onSetEmailed, onHideSite, onSetHidden
 }: {
   client: BoardClient;
   rank: number;
   canEdit: boolean;
+  canMarkEmailed: boolean;
   onSetEmailed: (id: string, mark: boolean) => Promise<void>;
   onHideSite: (id: string, site: string) => Promise<void>;
   onSetHidden: (id: string, hidden: boolean) => Promise<void>;
@@ -317,7 +321,7 @@ function OutreachRow({
           <span className={cn("w-1.5 h-1.5 rounded-full", pill.dot)} />
           {pill.label}
         </span>
-        {canEdit && (
+        {canMarkEmailed && (
           done ? (
             <button
               type="button"

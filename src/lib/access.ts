@@ -172,6 +172,23 @@ export function canEditClientTeams(u: Pick<User, "email"> | null | undefined): b
   return CLIENT_TEAM_EDITOR_EMAILS.includes(u.email.trim().toLowerCase());
 }
 
+// The "Mark emailed" check-off on the /client-teams personal-email cadence
+// board. Wider than the split editors above: the people who actually send
+// the emails need to tick them off. Grants ONLY outreachEmailedAt — not the
+// split, not removing clients/sites from the board. Exact emails, same
+// reasoning as CLIENT_TEAM_EDITOR_EMAILS ("samir" ≠ "sam").
+const OUTREACH_MARKER_EMAILS = [
+  "steve@scaledai.org",        // Saifullah Sattar
+  "samir@scaledai.org",        // Samir Gill
+  "bella@scaledai.org"         // Bismah
+];
+
+export function canMarkOutreachEmailed(u: Pick<User, "email"> | null | undefined): boolean {
+  if (canEditClientTeams(u)) return true;
+  if (!u?.email) return false;
+  return OUTREACH_MARKER_EMAILS.includes(u.email.trim().toLowerCase());
+}
+
 // "Can delete" is deliberately STRICTER than canManageTask. Deletion is
 // destructive and outside the normal task lifecycle, so it's restricted to
 // admins/leaders (any task), department heads (tasks in a department they

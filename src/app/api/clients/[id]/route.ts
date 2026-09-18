@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUserId } from "@/lib/session";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { isValidTeamId, isSeoTeamId, TEAM_DEPARTMENT, type TeamId } from "@/lib/client-teams";
-import { canEditClientTeams } from "@/lib/access";
+import { canEditClientTeams, canMarkOutreachEmailed } from "@/lib/access";
 
 export const dynamic = "force-dynamic";
 
@@ -36,11 +36,20 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       .select("role, is_admin, email")
       .eq("id", userId)
       .maybeSingle();
-    if (!(me?.role === "leader" || me?.role === "department_head" || me?.is_admin === true)) {
+    const body = await req.json().catch(() => ({}));
+
+    // Outreach markers (canMarkOutreachEmailed) may send a PATCH that touches
+    // ONLY outreachEmailedAt — the cadence board's "Mark emailed" button.
+    // Anything else still needs leader/head/admin.
+    const keys = Object.keys(body ?? {});
+    const outreachMarkOnly =
+      keys.length === 1 && keys[0] === "outreachEmailedAt" &&
+      canMarkOutreachEmailed({ email: me?.email ?? null });
+    if (!outreachMarkOnly &&
+        !(me?.role === "leader" || me?.role === "department_head" || me?.is_admin === true)) {
       return NextResponse.json({ error: "leader/head/admin only" }, { status: 403 });
     }
 
-    const body = await req.json().catch(() => ({}));
     const update: Record<string, unknown> = {};
 
     if ("teamId" in body) {

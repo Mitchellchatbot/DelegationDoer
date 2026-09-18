@@ -5,7 +5,7 @@ import { PageHero } from "@/components/PageHero";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById, getAllUsers } from "@/lib/server-data";
 import { getClients } from "@/lib/clients-data";
-import { canEditClientTeams } from "@/lib/access";
+import { canEditClientTeams, canMarkOutreachEmailed } from "@/lib/access";
 import { TEAMS, teamsForDepartment, type TeamId } from "@/lib/client-teams";
 import {
   ClientTeamsBoard,
@@ -146,6 +146,7 @@ export default async function ClientTeamsPage() {
         clients={boardClients}
         columns={columns}
         canEdit={canEdit}
+        canMarkEmailed={canMarkOutreachEmailed(me)}
       />
     </div>
   );

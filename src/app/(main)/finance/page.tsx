@@ -15,6 +15,7 @@ import { StripeMissing } from "@/components/StripeMissing";
 import { MrrManual, type MrrEntry } from "@/components/MrrManual";
 import { FacebookRevenue, FacebookRevenueLoading } from "@/components/FacebookRevenue";
 import { FinanceOverviewView } from "@/components/FinanceOverviewView";
+import { NextMonthBudget } from "@/components/NextMonthBudget";
 import { getFinanceOverview, type FinanceOverview } from "@/lib/finance-overview";
 import { ScaleChat } from "@/components/ScaleChat";
 import { getStripeRevenue } from "@/lib/stripe";
@@ -60,18 +61,21 @@ export default async function FinancePage() {
   if (!isOwner(user)) notFound();
 
   const supabase = getSupabaseAdmin();
-  const [docRes, overview, revenue, mrrRes, expRes, payRes] = await Promise.all([
+  const [docRes, overview, revenue, mrrRes, expRes, payRes, estRes] = await Promise.all([
     supabase.from("finance_documents").select("id, label, filename, content_type, size_bytes, uploaded_at, parsed").order("uploaded_at", { ascending: false }),
     getFinanceOverview(),
     getStripeRevenue().catch(() => null),
     supabase.from("mrr_entries").select("id, company, mrr, status, subscription_day, satisfaction, note, rank").order("rank", { ascending: true }),
     supabase.from("expense_line_items").select("account, vendor, month, amount"),
-    supabase.from("payroll_entries").select("id, name, role, status, scale, rate, note, rank").order("rank", { ascending: true })
+    supabase.from("payroll_entries").select("id, name, role, status, scale, rate, note, rank").order("rank", { ascending: true }),
+    supabase.from("expense_estimates").select("account, amount")
   ]);
 
   const rows = (docRes.data ?? []) as (FinanceDoc & { parsed: ParsedPnl | null })[];
   const latestParsed = rows.find((r) => r.parsed)?.parsed ?? null;
   const mrrRows = mrrRes.data ?? [];
+  const estimates: Record<string, number> = {};
+  for (const e of (estRes.data ?? []) as { account: string; amount: number }[]) estimates[e.account] = Number(e.amount);
 
   return (
     <div className={inter.className + " space-y-6 max-w-5xl mx-auto text-slate-900"}>
@@ -105,6 +109,7 @@ export default async function FinancePage() {
           </Suspense>
           <FinanceDashboard parsed={latestParsed} />
           <ExpenseBreakdown parsed={latestParsed} />
+          <NextMonthBudget parsed={latestParsed} estimates={estimates} />
           <PayrollManual initial={(payRes.data ?? []) as PayrollEntry[]} />
           <ExpenseVendors rows={(expRes.data ?? []) as ExpenseRow[]} />
           <FinancePanel initialDocuments={rows.map(({ parsed, ...d }) => d)} />

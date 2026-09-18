@@ -1,5 +1,6 @@
-import { ArrowUpRight, ArrowDownRight, Scissors, TrendingUp } from "lucide-react";
-import type { FinanceOverview, FinanceKpi, RisingRow, CostRow } from "@/lib/finance-overview";
+import { Scissors, TrendingUp } from "lucide-react";
+import type { FinanceOverview, RisingRow, CostRow } from "@/lib/finance-overview";
+import { FinanceKpiCards } from "@/components/FinanceKpiCards";
 
 // The reference-style finance dashboard: KPI cards, a revenue-vs-expenses chart,
 // where the money goes, and the fastest-rising costs (the cut candidates). Pure
@@ -18,47 +19,6 @@ function kpiSeries(d: FinanceOverview, label: string): number[] {
   if (label === "Net") return d.net;
   if (label === "Margin") return d.revenue.map((r, i) => (r ? Math.round((d.net[i] / r) * 100) : 0));
   return [];
-}
-
-// A tiny sparkline path from a month series, normalized into the viewBox.
-function sparkPath(series: number[], W = 76, H = 30): string {
-  if (series.length < 2) return "";
-  const min = Math.min(...series), max = Math.max(...series);
-  const range = max - min || 1;
-  const pad = 3;
-  return series.map((v, i) => {
-    const x = (i / (series.length - 1)) * W;
-    const y = H - pad - ((v - min) / range) * (H - pad * 2);
-    return `${i === 0 ? "M" : "L"} ${x.toFixed(1)} ${y.toFixed(1)}`;
-  }).join(" ");
-}
-
-function KpiCard({ k, series }: { k: FinanceKpi; series: number[] }) {
-  const up = (k.deltaPct ?? 0) >= 0;
-  const good = k.deltaPct == null ? true : up === k.goodWhenUp;
-  const stroke = k.deltaPct == null ? "#cbd5e1" : good ? "#16a34a" : "#ef4444";
-  return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-[13px] font-medium text-slate-500 truncate">{k.label}</span>
-        {k.deltaPct != null && (
-          <span className={"inline-flex items-center gap-0.5 text-[12px] font-medium rounded-full px-2 py-0.5 " + (good ? "text-emerald-700 bg-emerald-50" : "text-rose-600 bg-rose-50")}>
-            {up ? <ArrowUpRight className="w-3 h-3" /> : <ArrowDownRight className="w-3 h-3" />}
-            {Math.abs(k.deltaPct)}{k.isPct ? " pts" : "%"}
-          </span>
-        )}
-      </div>
-      <div className="mt-3 flex items-end justify-between gap-2">
-        <div className="text-[28px] font-bold tabular-nums leading-none text-slate-900">{k.isPct ? `${k.value}%` : money(k.value)}</div>
-        {series.length >= 2 && (
-          <svg viewBox="0 0 76 30" className="w-[76px] h-[30px] shrink-0" fill="none" aria-hidden="true">
-            <path d={sparkPath(series)} stroke={stroke} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" opacity="0.9" />
-          </svg>
-        )}
-      </div>
-      <div className="mt-2.5 text-[12px] text-slate-400">vs. previous month</div>
-    </div>
-  );
 }
 
 // Revenue vs expenses line chart (SVG). Few months = few points, that's fine.
@@ -133,9 +93,13 @@ export function FinanceOverviewView({ data }: { data: FinanceOverview }) {
   }
   return (
     <div className="space-y-5">
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        {data.kpis.map((k) => <KpiCard key={k.label} k={k} series={kpiSeries(data, k.label)} />)}
-      </div>
+      <FinanceKpiCards
+        actual={data.kpis}
+        estimated={data.estKpis}
+        partial={data.partialMonth}
+        estLabel={data.estLabel}
+        series={{ Revenue: kpiSeries(data, "Revenue"), Expenses: kpiSeries(data, "Expenses"), Net: kpiSeries(data, "Net"), Margin: kpiSeries(data, "Margin") }}
+      />
 
       <div className="grid lg:grid-cols-[1.55fr_1fr] gap-5 items-start">
         <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">

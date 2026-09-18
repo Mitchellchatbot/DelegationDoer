@@ -23,7 +23,7 @@ const STARTERS = [
   "Who should I follow up with this week?"
 ];
 
-export function ScaleChat({ opening }: { opening?: string }) {
+export function ScaleChat({ opening, title = "Ask your brain", subtitle = "What should you do next? It reads your clients, pipeline, ads, and memory.", starters = STARTERS }: { opening?: string; title?: string; subtitle?: string; starters?: string[] }) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -86,8 +86,8 @@ export function ScaleChat({ opening }: { opening?: string }) {
           <Sparkles className="w-4 h-4" />
         </div>
         <div className="min-w-0 flex-1">
-          <div className="text-[15px] font-semibold text-slate-900 leading-tight">Ask your brain</div>
-          <div className="text-[12px] text-slate-500 leading-tight">What should you do next? It reads your clients, pipeline, ads, and memory.</div>
+          <div className="text-[15px] font-semibold text-slate-900 leading-tight">{title}</div>
+          <div className="text-[12px] text-slate-500 leading-tight">{subtitle}</div>
         </div>
         {hasThread && (
           <button type="button" onClick={() => { setMessages([]); setInput(""); inputRef.current?.focus(); }}
@@ -119,7 +119,7 @@ export function ScaleChat({ opening }: { opening?: string }) {
 
       {!hasThread && (
         <div className="p-4 grid sm:grid-cols-2 gap-2">
-          {STARTERS.map((s) => (
+          {starters.map((s) => (
             <button key={s} type="button" onClick={() => send(s)}
               className="w-full text-left text-[13px] px-3 py-2.5 rounded-xl border border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50 transition-colors inline-flex items-center gap-2 group">
               <span className="flex-1 text-slate-700">{s}</span>

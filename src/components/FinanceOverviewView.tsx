@@ -11,24 +11,52 @@ function money(n: number): string {
   return `${s}$${Math.abs(Math.round(n)).toLocaleString("en-US")}`;
 }
 
-function KpiCard({ k }: { k: FinanceKpi }) {
+// The month series behind each KPI, for its sparkline.
+function kpiSeries(d: FinanceOverview, label: string): number[] {
+  if (label === "Revenue") return d.revenue;
+  if (label === "Expenses") return d.expenses;
+  if (label === "Net") return d.net;
+  if (label === "Margin") return d.revenue.map((r, i) => (r ? Math.round((d.net[i] / r) * 100) : 0));
+  return [];
+}
+
+// A tiny sparkline path from a month series, normalized into the viewBox.
+function sparkPath(series: number[], W = 76, H = 30): string {
+  if (series.length < 2) return "";
+  const min = Math.min(...series), max = Math.max(...series);
+  const range = max - min || 1;
+  const pad = 3;
+  return series.map((v, i) => {
+    const x = (i / (series.length - 1)) * W;
+    const y = H - pad - ((v - min) / range) * (H - pad * 2);
+    return `${i === 0 ? "M" : "L"} ${x.toFixed(1)} ${y.toFixed(1)}`;
+  }).join(" ");
+}
+
+function KpiCard({ k, series }: { k: FinanceKpi; series: number[] }) {
   const up = (k.deltaPct ?? 0) >= 0;
   const good = k.deltaPct == null ? true : up === k.goodWhenUp;
+  const stroke = k.deltaPct == null ? "#cbd5e1" : good ? "#16a34a" : "#ef4444";
   return (
-    <div className="rounded-xl border border-slate-200 bg-white p-4">
+    <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
       <div className="flex items-center justify-between gap-2">
-        <span className="text-[12px] font-medium text-slate-500 truncate">{k.label}</span>
+        <span className="text-[13px] font-medium text-slate-500 truncate">{k.label}</span>
         {k.deltaPct != null && (
-          <span className={"inline-flex items-center gap-0.5 text-[11px] font-medium " + (good ? "text-emerald-600" : "text-rose-500")}>
+          <span className={"inline-flex items-center gap-0.5 text-[12px] font-medium rounded-full px-2 py-0.5 " + (good ? "text-emerald-700 bg-emerald-50" : "text-rose-600 bg-rose-50")}>
             {up ? <ArrowUpRight className="w-3 h-3" /> : <ArrowDownRight className="w-3 h-3" />}
             {Math.abs(k.deltaPct)}{k.isPct ? " pts" : "%"}
           </span>
         )}
       </div>
-      <div className="mt-2 text-[26px] font-bold tabular-nums leading-none text-slate-900">
-        {k.isPct ? `${k.value}%` : money(k.value)}
+      <div className="mt-3 flex items-end justify-between gap-2">
+        <div className="text-[28px] font-bold tabular-nums leading-none text-slate-900">{k.isPct ? `${k.value}%` : money(k.value)}</div>
+        {series.length >= 2 && (
+          <svg viewBox="0 0 76 30" className="w-[76px] h-[30px] shrink-0" fill="none" aria-hidden="true">
+            <path d={sparkPath(series)} stroke={stroke} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" opacity="0.9" />
+          </svg>
+        )}
       </div>
-      <div className="mt-1.5 text-[11px] text-slate-400">vs. previous month</div>
+      <div className="mt-2.5 text-[12px] text-slate-400">vs. previous month</div>
     </div>
   );
 }
@@ -45,6 +73,9 @@ function Chart({ months, revenue, expenses }: { months: string[]; revenue: numbe
   return (
     <div>
       <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-auto" preserveAspectRatio="none" role="img" aria-label="Revenue versus expenses by month">
+        {[0.25, 0.5, 0.75].map((f) => (
+          <line key={f} x1={padX} x2={W - padX} y1={padY + f * (H - padY * 2)} y2={padY + f * (H - padY * 2)} stroke="#eef1f4" strokeWidth="1" strokeDasharray="4 4" />
+        ))}
         <path d={area} fill="#2563eb" opacity="0.06" />
         <path d={line(revenue)} fill="none" stroke="#2563eb" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
         <path d={line(expenses)} fill="none" stroke="#cbd5e1" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
@@ -102,8 +133,8 @@ export function FinanceOverviewView({ data }: { data: FinanceOverview }) {
   }
   return (
     <div className="space-y-5">
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        {data.kpis.map((k) => <KpiCard key={k.label} k={k} />)}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        {data.kpis.map((k) => <KpiCard key={k.label} k={k} series={kpiSeries(data, k.label)} />)}
       </div>
 
       <div className="grid lg:grid-cols-[1.55fr_1fr] gap-5 items-start">

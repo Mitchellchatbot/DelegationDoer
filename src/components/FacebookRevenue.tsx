@@ -74,9 +74,32 @@ export function FacebookRevenue({ result }: { result: FacebookRevenueResult }) {
   return <RevenueCard data={result.data} />;
 }
 
+// Mitchell keeps 50% of the Facebook side — there's a partner on it — so this
+// card shows HIS profit, not the gross fee. The rest is the gross for reference.
+const OWNER_SHARE = 0.5;
+function dayOfMonth(d: string | null): number | null {
+  if (!d || d.length < 10) return null;
+  const n = Number(d.slice(8, 10));
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
 function RevenueCard({ data }: { data: FacebookRevenueData }) {
   const { current, delta, asOf } = data;
   const month = monthName(data.period);
+
+  // His profit so far = 50% of the gross Facebook revenue (fees + setup).
+  const profit = current.revenue * OWNER_SHARE;
+
+  // Estimated month-end profit: project the recurring management fees to the
+  // full month by the daily run-rate (fees so far ÷ days elapsed × days in
+  // month), keep one-off/setup as actual, then take the 50% share. Only while
+  // the month is still filling in. e.g. $1k/day, day 17 → $17k so far, project
+  // to ~$30k, 20% fee = $6k, your half = $3k.
+  const daysIn = dayOfMonth(data.monthEnd);
+  const elapsed = dayOfMonth(asOf) ?? dayOfMonth(data.asOf);
+  const canEstimate = data.provisional && daysIn && elapsed && elapsed < daysIn && current.managementFees > 0;
+  const projFees = canEstimate ? current.managementFees * (daysIn! / elapsed!) : current.managementFees;
+  const estMonthEndProfit = (projFees + current.oneOffRevenue) * OWNER_SHARE;
 
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-soft">
@@ -84,22 +107,24 @@ function RevenueCard({ data }: { data: FacebookRevenueData }) {
         <div className="min-w-0">
           <Title provisional={data.provisional} />
           <div className="text-[11px] text-muted mt-0.5 max-w-prose">
-            Management + setup fees on managed Meta ad spend, computed by the Finance app. Separate from MRR — not included in any other total on this page.
+            Your profit on the Facebook side (management + setup fees on managed Meta spend), after the 50% partner split. Separate from MRR.
           </div>
         </div>
         <div className="text-right">
-          <div className="text-[10px] text-muted">{month}{data.provisional ? " so far" : ""}</div>
-          <div className="text-2xl font-bold tabular-nums text-ink leading-none">{usd(current.revenue)}</div>
-          {delta && <div className={`text-[11px] tabular-nums mt-0.5 ${DELTA_TONE[delta.tone]}`}>{delta.label}</div>}
-          {/* The Finance app's Revenue-card subtitle, same rule. */}
-          <div className="text-[10px] text-muted mt-0.5">
-            {current.oneOffRevenue
-              ? `fees ${usd(current.managementFees)} · setup ${usd(current.oneOffRevenue)}`
-              : `from ${usd(current.managedSpend)} of managed ad spend`}
-          </div>
-          {current.oneOffRevenue !== 0 && (
-            <div className="text-[10px] text-muted">from {usd(current.managedSpend)} of managed ad spend</div>
+          <div className="text-[10px] text-muted">{month} profit · your 50%{data.provisional ? " so far" : ""}</div>
+          <div className="text-2xl font-bold tabular-nums text-emerald-600 leading-none">{usd(profit)}</div>
+          <div className="text-[10px] text-muted mt-0.5">of {usd(current.revenue)} gross · 50% partner split</div>
+          {canEstimate && (
+            <div className="text-[11px] mt-1">
+              <span className="text-muted">Est. month-end: </span>
+              <span className="font-semibold tabular-nums text-ink">{usd(estMonthEndProfit)}</span>
+              <span className="text-[10px] text-muted"> (your 50%)</span>
+            </div>
           )}
+          {delta && <div className={`text-[11px] tabular-nums mt-0.5 ${DELTA_TONE[delta.tone]}`}>{delta.label} (gross)</div>}
+          <div className="text-[10px] text-muted mt-0.5">
+            gross fees {usd(current.managementFees)}{current.oneOffRevenue ? ` · setup ${usd(current.oneOffRevenue)}` : ""}
+          </div>
         </div>
       </div>
 
@@ -136,12 +161,12 @@ function RevenueCard({ data }: { data: FacebookRevenueData }) {
       )}
 
       <div className="mt-3 pt-2 border-t border-slate-100">
-        <div className="text-[10px] uppercase tracking-wide text-muted mb-1">Facebook revenue — last {data.months.length} months</div>
+        <div className="text-[10px] uppercase tracking-wide text-muted mb-1">Your Facebook profit (50%) — last {data.months.length} months</div>
         <div className="flex flex-wrap gap-x-4 gap-y-1 text-[12px]">
           {data.months.map((m) => (
             <div key={m.period} className="tabular-nums">
               <span className="text-muted">{monthName(m.period).slice(0, 3)}</span>{" "}
-              <span className={m.period === data.period ? "font-semibold text-ink" : "text-ink"}>{usd(m.revenue)}</span>
+              <span className={m.period === data.period ? "font-semibold text-ink" : "text-ink"}>{usd(m.revenue * OWNER_SHARE)}</span>
             </div>
           ))}
         </div>

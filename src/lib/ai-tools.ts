@@ -2124,13 +2124,26 @@ async function getFinances(ctx: ToolContext) {
     };
   }
 
+  // Next-month budget: Mitchell's per-line estimates (the forward budget he
+  // fills in on /finance). Their sum is his planned next-month spend.
+  const { data: estRows } = await supabase.from("expense_estimates").select("account, amount");
+  const estimates = (estRows ?? []) as { account: string; amount: number }[];
+  const nextMonthBudget = estimates.length
+    ? {
+        note: "Mitchell's own estimate for next month, per expense line (his forward budget). Use this for 'what's my burn next month' / 'can I afford X'.",
+        totalMonthly: Math.round(estimates.reduce((s, e) => s + Number(e.amount), 0)),
+        byLine: estimates.map((e) => ({ line: e.account, estimate: Math.round(Number(e.amount)) })).sort((a, b) => b.estimate - a.estimate)
+      }
+    : "No next-month budget set yet";
+
   return {
     note: "Owner-only finances. Manual MRR is the source of truth; Stripe is a cross-check; the P&L expense breakdown is where to find cuts.",
     manualMrr: manual,
     stripe: stripeSummary,
     pnl,
     software,
-    payroll
+    payroll,
+    nextMonthBudget
   };
 }
 

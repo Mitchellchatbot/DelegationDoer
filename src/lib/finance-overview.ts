@@ -18,12 +18,34 @@ export interface FinanceOverview {
   net: number[];
   latestMonth: string | null;
   kpis: FinanceKpi[];
+  estKpis: FinanceKpi[];   // projected/forecast for the current month
+  partialMonth: boolean;   // whether an estimate is available (show the toggle)
+  estLabel: string;        // "Est. month-end" (projection) or "Est. this month" (forecast)
   topCosts: CostRow[];
   rising: RisingRow[];
 }
 
+const MONTH_IDX: Record<string, number> = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11 };
+function parseMonthYear(label: string): { m: number; y: number } | null {
+  const m = MONTH_IDX[label.slice(0, 3).toLowerCase()];
+  if (m == null) return null;
+  const ym = label.match(/(\d{2,4})/);
+  let y = ym ? Number(ym[1]) : new Date().getFullYear();
+  if (y < 100) y += 2000;
+  return { m, y };
+}
+
 const r0 = (n: number | null | undefined) => Math.round(n ?? 0);
 const pctChange = (from: number, to: number): number | null => (from ? Math.round(((to - from) / Math.abs(from)) * 100) : null);
+// Simple trend forecast for the next month: extend the slope of the last up-to-3
+// months. Clamped at zero.
+function forecastNext(series: number[]): number {
+  if (series.length === 0) return 0;
+  const w = series.slice(-3);
+  if (w.length === 1) return Math.round(w[0]);
+  const slope = (w[w.length - 1] - w[0]) / (w.length - 1);
+  return Math.max(0, Math.round(w[w.length - 1] + slope));
+}
 
 export async function getFinanceOverview(): Promise<FinanceOverview> {
   const supabase = getSupabaseAdmin();
@@ -33,7 +55,7 @@ export async function getFinanceOverview(): Promise<FinanceOverview> {
   ]);
   const parsed = ((finRes.data ?? []) as { parsed: ParsedPnl | null }[]).find((d) => d.parsed)?.parsed ?? null;
 
-  const empty: FinanceOverview = { hasPnl: false, months: [], revenue: [], expenses: [], net: [], latestMonth: null, kpis: [], topCosts: [], rising: [] };
+  const empty: FinanceOverview = { hasPnl: false, months: [], revenue: [], expenses: [], net: [], latestMonth: null, kpis: [], estKpis: [], partialMonth: false, estLabel: "Est. this month", topCosts: [], rising: [] };
   if (!parsed || !parsed.periods.length) return empty;
 
   const periods = parsed.periods;
@@ -55,6 +77,50 @@ export async function getFinanceOverview(): Promise<FinanceOverview> {
     { label: "Net", value: net[li], deltaPct: pi >= 0 ? pctChange(net[pi], net[li]) : null, goodWhenUp: true },
     { label: "Margin", value: marginOf(li), deltaPct: pi >= 0 ? marginOf(li) - marginOf(pi) : null, goodWhenUp: true, isPct: true }
   ];
+
+  // An estimate for the full current month, two ways:
+  //  - If the latest P&L month IS the current calendar month, it's still filling
+  //    in → project it to month-end by the daily run-rate.
+  //  - If the latest month is last month (data a month behind) → forecast this
+  //    month from the recent trend.
+  // Either way the estimate compares full-month vs full-month, not a partial vs
+  // a complete prior month.
+  const now = new Date();
+  const lp = parseMonthYear(months[li]);
+  let showEstimate = false;
+  let estLabel = "Est. month-end";
+  let eRev = revenue[li], eExp = expenses[li];
+  let baseIdx = pi; // month the estimate's delta compares against
+  if (lp) {
+    const isCurrent = lp.m === now.getMonth() && lp.y === now.getFullYear();
+    if (isCurrent) {
+      const daysIn = new Date(lp.y, lp.m + 1, 0).getDate();
+      const elapsed = Math.min(daysIn, now.getDate());
+      if (elapsed > 0 && elapsed < daysIn) {
+        const f = daysIn / elapsed;
+        eRev = Math.round(revenue[li] * f);
+        eExp = Math.round(expenses[li] * f);
+        showEstimate = true; estLabel = "Est. month-end"; baseIdx = pi;
+      }
+    } else {
+      const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      if (lp.m === lastMonth.getMonth() && lp.y === lastMonth.getFullYear()) {
+        eRev = forecastNext(revenue);
+        eExp = forecastNext(expenses);
+        showEstimate = true; estLabel = "Est. this month"; baseIdx = li; // vs the latest actual month
+      }
+    }
+  }
+  const eNet = eRev - eExp;
+  const eMargin = eRev ? Math.round((eNet / eRev) * 100) : 0;
+  const baseMargin = baseIdx >= 0 ? marginOf(baseIdx) : null;
+  const estKpis: FinanceKpi[] = [
+    { label: "Revenue", value: eRev, deltaPct: baseIdx >= 0 ? pctChange(revenue[baseIdx], eRev) : null, goodWhenUp: true },
+    { label: "Expenses", value: eExp, deltaPct: baseIdx >= 0 ? pctChange(expenses[baseIdx], eExp) : null, goodWhenUp: false },
+    { label: "Net", value: eNet, deltaPct: baseIdx >= 0 ? pctChange(net[baseIdx], eNet) : null, goodWhenUp: true },
+    { label: "Margin", value: eMargin, deltaPct: baseMargin != null ? eMargin - baseMargin : null, goodWhenUp: true, isPct: true }
+  ];
+  const partialMonth = showEstimate;
 
   // Expense categories (level-1 rows between EXPENSES and Total Expenses).
   const startI = parsed.rows.findIndex((r) => r.account.toUpperCase() === "EXPENSES");
@@ -110,5 +176,5 @@ export async function getFinanceOverview(): Promise<FinanceOverview> {
   }
   rising.sort((a, b) => (b.to - b.from) - (a.to - a.from));
 
-  return { hasPnl: true, months, revenue, expenses, net, latestMonth: months[li], kpis, topCosts, rising: rising.slice(0, 6) };
+  return { hasPnl: true, months, revenue, expenses, net, latestMonth: months[li], kpis, estKpis, partialMonth, estLabel, topCosts, rising: rising.slice(0, 6) };
 }

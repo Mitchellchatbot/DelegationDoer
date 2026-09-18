@@ -1,6 +1,7 @@
 import "server-only";
 
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
+import { listMemories } from "@/lib/brain-memory";
 import type { ParsedPnl } from "@/lib/pnl-parse";
 
 // Deterministic finance dashboard data — KPIs, the revenue/expenses series, the
@@ -176,5 +177,17 @@ export async function getFinanceOverview(): Promise<FinanceOverview> {
   }
   rising.sort((a, b) => (b.to - b.from) - (a.to - a.from));
 
-  return { hasPnl: true, months, revenue, expenses, net, latestMonth: months[li], kpis, estKpis, partialMonth, estLabel, topCosts, rising: rising.slice(0, 6) };
+  // Learn from Mitchell's decisions: drop any cost he's already marked keep or
+  // cut (written to brain memory as "Finance keep: X" / "Finance cut: X"), so
+  // the brain stops re-flagging what he's handled.
+  const decided = new Set<string>();
+  try {
+    for (const m of await listMemories()) {
+      const mm = m.content.match(/^Finance (?:keep|cut):\s*(.+?)(?:\s+—|\.|$)/i);
+      if (mm) decided.add(mm[1].trim().toLowerCase());
+    }
+  } catch { /* memory unavailable — show everything */ }
+  const filteredRising = rising.filter((r) => !decided.has(r.name.toLowerCase()));
+
+  return { hasPnl: true, months, revenue, expenses, net, latestMonth: months[li], kpis, estKpis, partialMonth, estLabel, topCosts, rising: filteredRising.slice(0, 6) };
 }

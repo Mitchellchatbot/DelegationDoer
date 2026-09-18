@@ -83,6 +83,10 @@ export function MrrManual({ initial }: { initial: MrrEntry[] }) {
   const sorted = [...rows].sort((a, b) => {
     const churn = (a.status === "churned" ? 1 : 0) - (b.status === "churned" ? 1 : 0);
     if (churn) return churn; // churned to the bottom
+    // Brand-new / unfilled rows ($0) float to the top so a just-added client is
+    // right there to fill in — not buried at the bottom by the mrr sort.
+    const zero = (a.mrr === 0 ? 1 : 0) - (b.mrr === 0 ? 1 : 0);
+    if (zero) return -zero;
     return b.mrr - a.mrr;
   });
 

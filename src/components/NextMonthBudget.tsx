@@ -52,10 +52,16 @@ export function NextMonthBudget({ parsed, estimates }: { parsed: ParsedPnl | nul
   const [est, setEst] = useState<Record<string, number>>(estimates);
   const [saving, setSaving] = useState<string | null>(null);
 
+  const [oneOffName, setOneOffName] = useState("");
+  const [oneOffAmt, setOneOffAmt] = useState("");
+
   if (!built || built.lines.length === 0) return null;
   const { lines, lastMonthLabel, thisMonthTotal } = built;
   const estOf = (l: Line) => (l.account in est ? est[l.account] : l.lastMonth);
-  const totalNext = lines.reduce((s, l) => s + estOf(l), 0);
+  // One-off / added lines = estimates that aren't one of the recurring P&L lines.
+  const pnlAccounts = new Set(lines.map((l) => l.account));
+  const oneOffs = Object.keys(est).filter((a) => !pnlAccounts.has(a) && est[a] > 0).map((a) => ({ account: a, amount: est[a] }));
+  const totalNext = lines.reduce((s, l) => s + estOf(l), 0) + oneOffs.reduce((s, o) => s + o.amount, 0);
   const delta = totalNext - thisMonthTotal;
 
   async function save(account: string, raw: string) {
@@ -65,6 +71,24 @@ export function NextMonthBudget({ parsed, estimates }: { parsed: ParsedPnl | nul
     try {
       await fetch("/api/finance/estimate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ account, amount }) });
     } catch { /* best effort */ } finally { setSaving(null); }
+  }
+
+  async function addOneOff() {
+    const name = oneOffName.trim();
+    const amount = Math.max(0, Math.round(Number(oneOffAmt) || 0));
+    if (!name || amount <= 0 || pnlAccounts.has(name)) return;
+    setEst((e) => ({ ...e, [name]: amount }));
+    setOneOffName(""); setOneOffAmt("");
+    try {
+      await fetch("/api/finance/estimate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ account: name, amount }) });
+    } catch { /* best effort */ }
+  }
+
+  async function removeOneOff(account: string) {
+    setEst((e) => { const n = { ...e }; delete n[account]; return n; });
+    try {
+      await fetch("/api/finance/estimate", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ account }) });
+    } catch { /* best effort */ }
   }
 
   return (
@@ -106,6 +130,47 @@ export function NextMonthBudget({ parsed, estimates }: { parsed: ParsedPnl | nul
             </div>
           </div>
         ))}
+      </div>
+
+      {/* One-off / added payments — one-time costs you expect next month. */}
+      <div className="mt-4 pt-4 border-t border-slate-100">
+        <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 mb-2">One-off payments next month</div>
+        {oneOffs.length > 0 && (
+          <div className="divide-y divide-slate-100 mb-2">
+            {oneOffs.map((o) => (
+              <div key={o.account} className="flex items-center gap-3 py-2">
+                <div className="min-w-0 flex-1">
+                  <div className="text-[13px] font-medium text-slate-900 truncate">{o.account}</div>
+                  <div className="text-[11px] text-slate-400">one-time</div>
+                </div>
+                <span className="text-[13px] font-semibold tabular-nums text-slate-900">${o.amount.toLocaleString("en-US")}</span>
+                <button type="button" onClick={() => removeOneOff(o.account)} className="text-[11px] text-slate-400 hover:text-rose-500 w-8 text-right">remove</button>
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="flex items-center gap-2 flex-wrap">
+          <input
+            value={oneOffName}
+            onChange={(e) => setOneOffName(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") addOneOff(); }}
+            placeholder="One-off (e.g. new laptop, legal, conference)"
+            className="flex-1 min-w-[200px] text-[13px] rounded-lg border border-slate-200 px-2.5 py-1.5 focus:outline-none focus:border-slate-400"
+          />
+          <div className="flex items-center gap-1">
+            <span className="text-[13px] text-slate-400">$</span>
+            <input
+              value={oneOffAmt}
+              onChange={(e) => setOneOffAmt(e.target.value.replace(/[^0-9.]/g, ""))}
+              onKeyDown={(e) => { if (e.key === "Enter") addOneOff(); }}
+              placeholder="amount"
+              inputMode="decimal"
+              className="w-24 text-[13px] text-right tabular-nums rounded-lg border border-slate-200 px-2 py-1.5 focus:outline-none focus:border-slate-400"
+            />
+          </div>
+          <button type="button" onClick={addOneOff} disabled={!oneOffName.trim() || !(Number(oneOffAmt) > 0)}
+            className="text-[12px] font-medium text-white bg-slate-900 rounded-lg px-3 py-1.5 hover:bg-slate-800 disabled:opacity-50">Add</button>
+        </div>
       </div>
     </div>
   );

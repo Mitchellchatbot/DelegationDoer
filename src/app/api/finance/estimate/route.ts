@@ -42,3 +42,15 @@ export async function POST(req: NextRequest) {
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json({ ok: true });
 }
+
+// DELETE { account } — remove a one-off / custom estimate line.
+export async function DELETE(req: NextRequest) {
+  const gate = await requireOwner();
+  if (!gate.ok) return gate.res;
+  const body = await req.json().catch(() => null);
+  const account = typeof body?.account === "string" ? body.account.trim() : "";
+  if (!account) return NextResponse.json({ error: "account required" }, { status: 400 });
+  const { error } = await getSupabaseAdmin().from("expense_estimates").delete().eq("account", account);
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  return NextResponse.json({ ok: true });
+}

@@ -163,9 +163,12 @@ export async function middleware(req: NextRequest) {
       },
       remove(name: string, options) {
         // Never expire the PKCE verifier here. When getUser() fails against a
-        // stale auth-token cookie, @supabase/ssr asks us to clear the whole
-        // sb-<ref>-auth-token* family, and the verifier is named as a suffix of
-        // that same key — so a dead session silently takes the in-flight
+        // stale auth-token cookie, auth-js tears the session down and
+        // _removeSession deletes `${storageKey}-code-verifier` BY NAME
+        // (GoTrueClient.js:4019) — it is a deliberate delete, not @supabase/ssr
+        // sweeping a shared prefix, whose chunk matcher is
+        // /^(.*)[.](0|[1-9][0-9]*)$/ and never matches this. Either way it
+        // arrives here as a remove(), and a dead session then takes the in-flight
         // password-reset / OAuth handshake down with it. That is not a session
         // credential and it is not what "sign this person out" should mean.
         // It is single-use and short-lived, and the next PKCE start overwrites

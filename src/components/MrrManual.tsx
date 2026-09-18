@@ -34,6 +34,9 @@ export function MrrManual({ initial }: { initial: MrrEntry[] }) {
   const [rows, setRows] = useState<MrrEntry[]>(initial);
   const [saving, setSaving] = useState<Record<string, boolean>>({});
   const [adding, setAdding] = useState(false);
+  const [showAdd, setShowAdd] = useState(false);
+  const [newCompany, setNewCompany] = useState("");
+  const [newMrr, setNewMrr] = useState("");
 
   const totals = useMemo(() => {
     let active = 0, pending = 0, churned = 0, live = 0;
@@ -65,16 +68,25 @@ export function MrrManual({ initial }: { initial: MrrEntry[] }) {
     await fetch(`/api/finance/mrr/${id}`, { method: "DELETE" });
   }
 
-  async function add() {
+  async function addClient() {
+    const company = newCompany.trim();
+    if (!company || adding) return;
     setAdding(true);
     try {
       const res = await fetch("/api/finance/mrr", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ company: "New client", mrr: 0, status: "active" })
+        body: JSON.stringify({ company, mrr: Number(newMrr) || 0, status: "active" })
       });
       const j = await res.json();
-      if (j.entry) setRows((rs) => [j.entry, ...rs]);
+      if (j.entry) {
+        setRows((rs) => [j.entry, ...rs]);
+        setNewCompany(""); setNewMrr(""); setShowAdd(false);
+      } else {
+        alert(j.error ? `Couldn't add: ${j.error}` : "Couldn't add the client — try again.");
+      }
+    } catch {
+      alert("Couldn't add the client — network error.");
     } finally {
       setAdding(false);
     }
@@ -110,14 +122,39 @@ export function MrrManual({ initial }: { initial: MrrEntry[] }) {
           </div>
           <button
             type="button"
-            onClick={add}
-            disabled={adding}
-            className="flex items-center gap-1 text-[12px] font-medium text-white bg-ink rounded-lg px-2.5 py-1.5 hover:opacity-90 disabled:opacity-50"
+            onClick={() => setShowAdd((v) => !v)}
+            className="flex items-center gap-1 text-[12px] font-medium text-white bg-ink rounded-lg px-2.5 py-1.5 hover:opacity-90"
           >
-            <Plus className="w-3.5 h-3.5" /> Add
+            <Plus className="w-3.5 h-3.5" /> Add client
           </button>
         </div>
       </div>
+
+      {showAdd && (
+        <div className="flex items-center gap-2 mb-3 p-2.5 rounded-xl border border-slate-200 bg-slate-50 flex-wrap">
+          <input
+            autoFocus
+            value={newCompany}
+            onChange={(e) => setNewCompany(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") addClient(); if (e.key === "Escape") setShowAdd(false); }}
+            placeholder="Client / company name"
+            className="flex-1 min-w-[180px] text-[13px] rounded-lg border border-slate-200 px-2.5 py-1.5 bg-white focus:outline-none focus:border-indigo-300"
+          />
+          <input
+            value={newMrr}
+            onChange={(e) => setNewMrr(e.target.value.replace(/[^0-9.]/g, ""))}
+            onKeyDown={(e) => { if (e.key === "Enter") addClient(); if (e.key === "Escape") setShowAdd(false); }}
+            placeholder="MRR $/mo"
+            inputMode="decimal"
+            className="w-28 text-[13px] rounded-lg border border-slate-200 px-2.5 py-1.5 bg-white focus:outline-none focus:border-indigo-300"
+          />
+          <button type="button" onClick={addClient} disabled={adding || !newCompany.trim()}
+            className="text-[12px] font-medium text-white bg-ink rounded-lg px-3 py-1.5 hover:opacity-90 disabled:opacity-50">
+            {adding ? "Adding…" : "Add"}
+          </button>
+          <button type="button" onClick={() => { setShowAdd(false); setNewCompany(""); setNewMrr(""); }} className="text-[12px] text-muted hover:text-ink">Cancel</button>
+        </div>
+      )}
 
       <div className="overflow-x-auto">
         <table className="w-full text-[12px] min-w-[560px]">

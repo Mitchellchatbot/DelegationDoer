@@ -1,7 +1,5 @@
-import { Scissors } from "lucide-react";
 import type { FinanceOverview, CostRow } from "@/lib/finance-overview";
 import { FinanceKpiCards } from "@/components/FinanceKpiCards";
-import { WhereToCutList } from "@/components/WhereToCutList";
 
 // The reference-style finance dashboard: KPI cards, a revenue-vs-expenses chart,
 // where the money goes, and the fastest-rising costs (the cut candidates). Pure
@@ -99,15 +97,6 @@ export function FinanceOverviewView({ data }: { data: FinanceOverview }) {
           <div className="text-[13px] text-slate-500 mb-4">Top costs · {data.latestMonth}</div>
           <TopCosts rows={data.topCosts} />
         </div>
-      </div>
-
-      <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-        <div className="flex items-center gap-2 mb-1">
-          <Scissors className="w-4 h-4 text-rose-500" />
-          <div className="text-[16px] font-semibold text-slate-900">Where to cut</div>
-        </div>
-        <div className="text-[13px] text-slate-500 mb-4">Costs rising month-over-month — the first place to trim. Mark one Keep or Cut and the brain remembers.</div>
-        <WhereToCutList rows={data.rising} />
       </div>
     </div>
   );

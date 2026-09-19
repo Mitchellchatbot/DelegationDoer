@@ -55,6 +55,14 @@ export function LearningsRisks({ data }: { data: Learnings }) {
         <div className="text-[12px] text-slate-500 mt-0.5">Normalized — taxes &amp; one-off write-offs removed.</div>
       </div>
 
+      {/* Plain-English verdict — read this first */}
+      {data.verdict && (
+        <div className="rounded-xl bg-slate-900 text-white p-4">
+          <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-400 mb-1">The read</div>
+          <div className="text-[14px] leading-relaxed">{data.verdict}</div>
+        </div>
+      )}
+
       {/* Biggest risk — leads the section */}
       {biggest && (
         <div className={"rounded-xl border p-4 " + s.banner}>

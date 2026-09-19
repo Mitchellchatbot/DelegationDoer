@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Plus, X } from "lucide-react";
+import { Plus, X, ChevronDown } from "lucide-react";
 
 // Editable payroll / contractor table (owner-only), seeded from the People
 // report. This is the Contractor Payments + payroll line, broken down by
@@ -33,6 +33,7 @@ function money(n: number): string { return `$${Math.round(n).toLocaleString("en-
 export function PayrollManual({ initial }: { initial: PayrollEntry[] }) {
   const [rows, setRows] = useState<PayrollEntry[]>(initial);
   const [adding, setAdding] = useState(false);
+  const [open, setOpen] = useState(false);
   // Rows added in this session — pinned to the top so a new $0 hire is visible
   // to fill in, instead of sinking to the bottom of the pay-sorted list.
   const [newIds, setNewIds] = useState<string[]>([]);
@@ -84,13 +85,16 @@ export function PayrollManual({ initial }: { initial: PayrollEntry[] }) {
 
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-soft">
-      <div className="flex items-center justify-between gap-2 mb-3 flex-wrap">
-        <div>
-          <div className="text-[13px] font-semibold text-ink flex items-center gap-2">
-            Payroll &amp; contractors <span className="text-[10px] font-medium uppercase tracking-wide text-indigo-600 bg-indigo-50 rounded px-1.5 py-0.5">manual</span>
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <button type="button" onClick={() => setOpen((v) => !v)} className="flex items-start gap-1.5 text-left min-w-0">
+          <ChevronDown className={"w-4 h-4 text-slate-400 mt-0.5 shrink-0 transition-transform " + (open ? "rotate-180" : "-rotate-90")} />
+          <div>
+            <div className="text-[13px] font-semibold text-ink flex items-center gap-2">
+              Payroll &amp; contractors <span className="text-[10px] font-medium uppercase tracking-wide text-indigo-600 bg-indigo-50 rounded px-1.5 py-0.5">manual</span>
+            </div>
+            <div className="text-[11px] text-muted mt-0.5">Contractor Payments + payroll, by person · tap to {open ? "collapse" : "expand"}</div>
           </div>
-          <div className="text-[11px] text-muted mt-0.5">The Contractor Payments + payroll line, by person. Click any field to edit.</div>
-        </div>
+        </button>
         <div className="flex items-baseline gap-3">
           <div className="text-right">
             <div className="text-2xl font-bold tabular-nums text-ink leading-none">{money(totals.activeMo)}<span className="text-[12px] font-medium text-muted">/mo</span></div>
@@ -99,12 +103,13 @@ export function PayrollManual({ initial }: { initial: PayrollEntry[] }) {
               {totals.drawMo > 0 && <> · <span className="text-violet-600">+{money(totals.drawMo)}/mo owner draw</span></>}
             </div>
           </div>
-          <button type="button" onClick={add} disabled={adding} className="flex items-center gap-1 text-[12px] font-medium text-white bg-ink rounded-lg px-2.5 py-1.5 hover:opacity-90 disabled:opacity-50">
+          <button type="button" onClick={() => { setOpen(true); add(); }} disabled={adding} className="flex items-center gap-1 text-[12px] font-medium text-white bg-ink rounded-lg px-2.5 py-1.5 hover:opacity-90 disabled:opacity-50">
             <Plus className="w-3.5 h-3.5" /> Add
           </button>
         </div>
       </div>
 
+      {open && (<div className="mt-3">
       <div className="overflow-x-auto">
         <table className="w-full text-[12px] min-w-[640px]">
           <thead>
@@ -164,6 +169,7 @@ export function PayrollManual({ initial }: { initial: PayrollEntry[] }) {
         </table>
       </div>
       <div className="mt-2 text-[11px] text-muted">Total counts monthly-equivalent of ACTIVE people (annual ÷ 12). &quot;Owner draw&quot; (your own pay) is tracked but excluded — it&apos;s a distribution of profit, not a business cost. Set someone inactive to drop them without deleting.</div>
+      </div>)}
     </div>
   );
 }

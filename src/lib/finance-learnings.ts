@@ -19,6 +19,7 @@ export interface VendorAmt { vendor: string; amount: number }
 
 export interface Learnings {
   hasData: boolean;
+  verdict: string;   // plain-English coworker summary
   latest: { label: string; revenue: number; normalizedNet: number; margin: number };
   series: TrendPoint[];
   revenueTrendPct: number;   // last vs first
@@ -47,7 +48,7 @@ export function computeLearnings(input: {
   const { fbRevenueByPeriod = {}, fbExpensesByPeriod = {}, softwareItems = [], mrrClients = [] } = input;
 
   const empty: Learnings = {
-    hasData: false, latest: { label: "", revenue: 0, normalizedNet: 0, margin: 0 }, series: [],
+    hasData: false, verdict: "", latest: { label: "", revenue: 0, normalizedNet: 0, margin: 0 }, series: [],
     revenueTrendPct: 0, netPeak: 0, netPeakLabel: "", netDeclinePct: 0, marginNow: 0, marginPeak: 0,
     software: { first: 0, last: 0, growthPct: 0, topVendors: [], rising: [] },
     facebook: { hasData: false, revenue: 0, profitBeforeCommission: 0, sharePct: 0, impliedSeoRevenue: 0, preFbAvgRevenue: 0, seoDeltaPct: 0 },
@@ -127,6 +128,20 @@ export function computeLearnings(input: {
   const sevRank: Record<RiskItem["severity"], number> = { high: 3, medium: 2, low: 1 };
   risks.sort((a, b) => sevRank[b.severity] - sevRank[a.severity]);
 
+  // Plain-English coworker verdict — the "read this first" line.
+  const m = (n: number) => `$${Math.abs(Math.round(n)).toLocaleString("en-US")}`;
+  const vparts: string[] = [];
+  vparts.push(latest.normalizedNet >= 0
+    ? `You're profitable — about ${m(latest.normalizedNet)}/mo at ${marginNow}% margin.`
+    : `You're running a loss — about ${m(latest.normalizedNet)}/mo.`);
+  if (netDeclinePct <= -15) vparts.push(`Profit is down ${Math.abs(netDeclinePct)}% from its ${netPeakLabel} peak on roughly flat revenue — the squeeze is rising costs (software +${swGrowthPct}%), not sales.`);
+  else if (netDeclinePct < 0) vparts.push(`Profit is drifting below its ${netPeakLabel} peak on flat revenue.`);
+  const watch: string[] = [];
+  if (top3Pct >= 25) watch.push(`your top 3 clients are ${top3Pct}% of revenue`);
+  if (facebook.hasData && seoDeltaPct <= -5) watch.push(`the core SEO book is ~${Math.abs(seoDeltaPct)}% soft while Facebook fills the gap`);
+  if (watch.length) vparts.push(`Watch: ${watch.join(", and ")}.`);
+  const verdict = vparts.join(" ");
+
   // ── Scale levers ───────────────────────────────────────────────────────────
   const scale = [
     "Grow the pipeline — flat revenue is the ceiling; new clients is the #1 lever (Apollo / LinkedIn / Meta).",
@@ -136,7 +151,7 @@ export function computeLearnings(input: {
     "Productize delivery so contractor cost (~35% of revenue) scales sub-linearly with clients."
   ];
 
-  return { hasData: true, latest, series, revenueTrendPct, netPeak: round(netPeak), netPeakLabel, netDeclinePct, marginNow, marginPeak, software: { first: swFirst, last: swLast, growthPct: swGrowthPct, topVendors, rising }, facebook, concentration: { top, top3Pct, totalMrr: round(totalMrr) }, projection, risks, scale };
+  return { hasData: true, verdict, latest, series, revenueTrendPct, netPeak: round(netPeak), netPeakLabel, netDeclinePct, marginNow, marginPeak, software: { first: swFirst, last: swLast, growthPct: swGrowthPct, topVendors, rising }, facebook, concentration: { top, top3Pct, totalMrr: round(totalMrr) }, projection, risks, scale };
 }
 
 const MONTHS3 = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];

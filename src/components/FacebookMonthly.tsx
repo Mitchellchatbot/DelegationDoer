@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { ChevronDown } from "lucide-react";
 
 // Facebook per month, from the Finance app: revenue (real spend × your fee +
 // setup) and the real commission EARNED that month (accrual — paid the next
@@ -14,6 +15,7 @@ export function FacebookMonthly({ months, initial, expensesInitial, commissionIn
   const [exp, setExp] = useState<Record<string, number>>(expensesInitial);
   const [comm, setComm] = useState<Record<string, number>>(commissionInitial);
   const [saving, setSaving] = useState<string | null>(null);
+  const [open, setOpen] = useState(false);
 
   const store: Record<"revenue" | "expenses" | "commission", (u: (p: Record<string, number>) => Record<string, number>) => void> = { revenue: setRev, expenses: setExp, commission: setComm };
   async function save(period: string, field: "revenue" | "expenses" | "commission", raw: string) {
@@ -28,10 +30,14 @@ export function FacebookMonthly({ months, initial, expensesInitial, commissionIn
 
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-      <div className="mb-4">
-        <div className="text-[16px] font-semibold text-slate-900">Facebook revenue &amp; commission (from Finance app)</div>
-        <div className="text-[12px] text-slate-500 mt-0.5">Per month: revenue (fees + setup) and the real commission earned that month. Commission drives the &ldquo;true month&rdquo; profit; the books profit uses what the P&amp;L booked.</div>
-      </div>
+      <button type="button" onClick={() => setOpen((v) => !v)} className="flex items-start gap-1.5 text-left w-full">
+        <ChevronDown className={"w-4 h-4 text-slate-400 mt-1 shrink-0 transition-transform " + (open ? "rotate-180" : "-rotate-90")} />
+        <div>
+          <div className="text-[16px] font-semibold text-slate-900">Facebook revenue &amp; commission (from Finance app)</div>
+          <div className="text-[12px] text-slate-500 mt-0.5">Revenue, operating expense &amp; commission per month · tap to {open ? "collapse" : "expand"}</div>
+        </div>
+      </button>
+      {open && (<div className="mt-4">
       <div className="divide-y divide-slate-100">
         <div className="flex items-center gap-3 pb-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
           <div className="flex-1">Month</div>
@@ -64,6 +70,7 @@ export function FacebookMonthly({ months, initial, expensesInitial, commissionIn
         ))}
       </div>
       {saving && <div className="mt-2 text-[10px] text-slate-400">saving…</div>}
+      </div>)}
     </div>
   );
 }

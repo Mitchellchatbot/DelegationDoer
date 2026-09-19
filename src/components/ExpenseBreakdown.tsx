@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { ChevronRight, TrendingUp, TrendingDown } from "lucide-react";
+import { ChevronRight, ChevronDown, TrendingUp, TrendingDown } from "lucide-react";
 import type { ParsedPnl } from "@/lib/pnl-parse";
 
 // Full drill-down of every expense line. Each top-level category expands to
@@ -104,6 +104,7 @@ function buildTree(parsed: ParsedPnl): {
 
 export function ExpenseBreakdown({ parsed }: { parsed: ParsedPnl | null | undefined }) {
   const tree = useMemo(() => (parsed ? buildTree(parsed) : null), [parsed]);
+  const [cardOpen, setCardOpen] = useState(false);
   const [byMonth, setByMonth] = useState(true);
   const [sortIdx, setSortIdx] = useState(-1); // -1 = Total column
   // Expand every category by default so all vendor line items are visible.
@@ -145,14 +146,17 @@ export function ExpenseBreakdown({ parsed }: { parsed: ParsedPnl | null | undefi
 
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-soft">
-      <div className="flex items-center justify-between mb-3 gap-2">
-        <div>
-          <div className="text-[13px] font-semibold text-ink">Every expense · line by line</div>
-          <div className="text-[11px] text-muted tabular-nums mt-0.5">
-            {money(totalExpenses)} total · <span className="text-rose-500">▲ rising</span> = look here first
+      <div className="flex items-center justify-between gap-2">
+        <button type="button" onClick={() => setCardOpen((v) => !v)} className="flex items-start gap-1.5 text-left min-w-0">
+          <ChevronDown className={"w-4 h-4 text-slate-400 mt-0.5 shrink-0 transition-transform " + (cardOpen ? "rotate-180" : "-rotate-90")} />
+          <div>
+            <div className="text-[13px] font-semibold text-ink">Every expense · line by line</div>
+            <div className="text-[11px] text-muted tabular-nums mt-0.5">
+              {money(totalExpenses)} total · <span className="text-rose-500">▲ rising</span> = look first · tap to {cardOpen ? "collapse" : "expand"}
+            </div>
           </div>
-        </div>
-        <div className="flex items-center gap-2 shrink-0">
+        </button>
+        {cardOpen && (<div className="flex items-center gap-2 shrink-0">
           <button
             type="button"
             onClick={() => setAll(allOpen ? false : true)}
@@ -177,10 +181,10 @@ export function ExpenseBreakdown({ parsed }: { parsed: ParsedPnl | null | undefi
               By month
             </button>
           </div>
-        </div>
+        </div>)}
       </div>
 
-      <div className="overflow-x-auto">
+      {cardOpen && (<div className="overflow-x-auto">
         <div className="min-w-[420px]">
           {/* Column header (month mode) */}
           {byMonth && (
@@ -302,7 +306,7 @@ export function ExpenseBreakdown({ parsed }: { parsed: ParsedPnl | null | undefi
             })}
           </div>
         </div>
-      </div>
+      </div>)}
     </div>
   );
 }

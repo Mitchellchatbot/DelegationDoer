@@ -2136,11 +2136,37 @@ async function getFinances(ctx: ToolContext) {
       }
     : "No next-month budget set yet";
 
+  // Full monthly P&L history (Nov '25 onward) — the long trend the /finance
+  // Learnings view uses. Covers months BEFORE the latest uploaded P&L, so use
+  // this for any month-over-month or "back in January" question.
+  const { data: histRows } = await supabase
+    .from("pnl_monthly")
+    .select("period, label, income, expenses, net, taxes, writeoffs, software, contractors, advertising")
+    .order("period", { ascending: true });
+  type HistRow = { period: string; label: string; income: number; expenses: number; net: number; taxes: number; writeoffs: number; software: number; contractors: number; advertising: number };
+  const hist = (histRows ?? []) as HistRow[];
+  const pnlHistory = hist.length
+    ? {
+        note: "Monthly P&L history — the source of truth for month-over-month and ANY month (incl. before the latest upload). normalizedNet = net + taxes + one-off write-offs (tax-only items added back).",
+        months: hist.map((m) => ({
+          month: m.label,
+          revenue: Math.round(Number(m.income)),
+          expenses: Math.round(Number(m.expenses)),
+          net: Math.round(Number(m.net)),
+          normalizedNet: Math.round(Number(m.net) + Number(m.taxes) + Number(m.writeoffs)),
+          software: Math.round(Number(m.software)),
+          contractors: Math.round(Number(m.contractors)),
+          advertising: Math.round(Number(m.advertising))
+        }))
+      }
+    : "No monthly history loaded";
+
   return {
-    note: "Owner-only finances. Manual MRR is the source of truth; Stripe is a cross-check; the P&L expense breakdown is where to find cuts.",
+    note: "Owner-only finances. Manual MRR is the source of truth; Stripe is a cross-check; pnlHistory has the full month-by-month P&L (use it for any month, incl. before the latest upload); the P&L expense breakdown is where to find cuts.",
     manualMrr: manual,
     stripe: stripeSummary,
     pnl,
+    pnlHistory,
     software,
     payroll,
     nextMonthBudget

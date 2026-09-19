@@ -25,6 +25,7 @@ import { ExpenseLabels, type SoftwareRow } from "@/components/ExpenseLabels";
 import { FacebookMonthly, type FbMonthInput } from "@/components/FacebookMonthly";
 import { computeLearnings, type PnlMonth } from "@/lib/finance-learnings";
 import { LearningsRisks } from "@/components/LearningsRisks";
+import { BooksByMonth, type BookLine, type BookMonth } from "@/components/BooksByMonth";
 
 // Map a P&L period label ("Aug '26") to a 'YYYY-MM' key.
 const MONTH_NUM: Record<string, number> = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
@@ -76,7 +77,7 @@ export default async function FinancePage() {
   if (!isOwner(user)) notFound();
 
   const supabase = getSupabaseAdmin();
-  const [docRes, overview, revenue, mrrRes, expRes, payRes, estRes, expSegRes, swRes, fbMonthRes, fbResult, pnlRes] = await Promise.all([
+  const [docRes, overview, revenue, mrrRes, expRes, payRes, estRes, expSegRes, swRes, fbMonthRes, fbResult, pnlRes, pnlLinesRes] = await Promise.all([
     supabase.from("finance_documents").select("id, label, filename, content_type, size_bytes, uploaded_at, parsed").order("uploaded_at", { ascending: false }),
     getFinanceOverview(),
     getStripeRevenue().catch(() => null),
@@ -88,7 +89,8 @@ export default async function FinancePage() {
     supabase.from("software_subscriptions").select("vendor, month, amount, segment"),
     supabase.from("facebook_monthly").select("period, revenue, commission, expenses"),
     getFacebookRevenue().catch(() => ({ ok: false as const, error: "unavailable" })),
-    supabase.from("pnl_monthly").select("period, label, income, expenses, net, taxes, writeoffs, software, contractors, advertising").order("period", { ascending: true })
+    supabase.from("pnl_monthly").select("period, label, income, expenses, net, taxes, writeoffs, software, contractors, advertising").order("period", { ascending: true }),
+    supabase.from("pnl_lines").select("period, account, section, amount")
   ]);
 
   const rows = (docRes.data ?? []) as (FinanceDoc & { parsed: ParsedPnl | null })[];
@@ -135,6 +137,10 @@ export default async function FinancePage() {
     mrrClients: (mrrRows as { company: string; mrr: number }[]).map((r) => ({ company: String(r.company ?? ""), mrr: Number(r.mrr) || 0 }))
   });
 
+  // Account-level books, every uploaded month (Nov '25 → Aug '26).
+  const bookLines = ((pnlLinesRes.data ?? []) as BookLine[]).map((l) => ({ period: l.period, account: l.account, section: l.section, amount: Number(l.amount) }));
+  const bookMonths: BookMonth[] = pnlMonths.map((m) => ({ period: m.period, label: m.label }));
+
   return (
     <div className={inter.className + " space-y-6 max-w-5xl mx-auto text-slate-900"}>
       <div className="flex items-center gap-3">
@@ -176,6 +182,7 @@ export default async function FinancePage() {
           <PayrollManual initial={(payRes.data ?? []) as PayrollEntry[]} />
           <ExpenseBreakdown parsed={latestParsed} />
           <ExpenseVendors rows={(expRes.data ?? []) as ExpenseRow[]} />
+          <BooksByMonth lines={bookLines} months={bookMonths} />
           {/* Reference + files, last. */}
           <FacebookRevenue result={fbResult} />
           <FinancePanel initialDocuments={rows.map(({ parsed, ...d }) => d)} />

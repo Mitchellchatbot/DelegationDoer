@@ -1,3 +1,7 @@
+"use client";
+
+import { useState } from "react";
+import { ChevronDown } from "lucide-react";
 import type { RevenueSummary } from "@/lib/stripe";
 import { AddToMrr } from "@/components/AddToMrr";
 
@@ -32,6 +36,7 @@ export function StripeMissing({
   rev: RevenueSummary | null | undefined;
   sheetNames: string[];
 }) {
+  const [open, setOpen] = useState(false);
   if (!rev) return null;
   const tokenSets = sheetNames.map(keyTokens);
   const norms = new Set(sheetNames.map((s) => s.toLowerCase().replace(/[^a-z0-9]/g, "")));
@@ -40,19 +45,23 @@ export function StripeMissing({
 
   return (
     <div className="rounded-2xl border border-indigo-200 bg-indigo-50/40 p-4">
-      <div className="flex items-baseline justify-between gap-2 mb-2 flex-wrap">
-        <div>
-          <div className="text-[13px] font-semibold text-ink flex items-center gap-2">
-            In Stripe, not in your sheet
-            <span className="text-[10px] font-medium uppercase tracking-wide text-indigo-600 bg-indigo-100 rounded px-1.5 py-0.5">from Stripe</span>
+      <div className="flex items-baseline justify-between gap-2 flex-wrap">
+        <button type="button" onClick={() => setOpen((v) => !v)} className="flex items-start gap-1.5 text-left min-w-0">
+          <ChevronDown className={"w-4 h-4 text-slate-400 mt-0.5 shrink-0 transition-transform " + (open ? "rotate-180" : "-rotate-90")} />
+          <div>
+            <div className="text-[13px] font-semibold text-ink flex items-center gap-2">
+              In Stripe, not in your sheet
+              <span className="text-[10px] font-medium uppercase tracking-wide text-indigo-600 bg-indigo-100 rounded px-1.5 py-0.5">from Stripe</span>
+            </div>
+            <div className="text-[11px] text-muted mt-0.5">Missing from your MRR sheet · tap to {open ? "collapse" : "expand"}</div>
           </div>
-          <div className="text-[11px] text-muted mt-0.5">Paying in Stripe but missing from your MRR sheet. Click “+ sheet” to add.</div>
-        </div>
+        </button>
         <div className="text-[11px] text-muted tabular-nums">
           {missing.length === 0 ? "all accounted for" : `${missing.length} missing · ${money(missingMrr)}/mo`}
         </div>
       </div>
 
+      {open && (<div className="mt-2">
       {missing.length === 0 ? (
         <div className="text-[12px] text-muted">Every active Stripe client is already in your sheet. 🎉</div>
       ) : (
@@ -70,6 +79,7 @@ export function StripeMissing({
           ))}
         </div>
       )}
+      </div>)}
     </div>
   );
 }

@@ -6,7 +6,6 @@ import { getUserById } from "@/lib/server-data";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { isOwner } from "@/lib/access";
 import { FinancePanel, type FinanceDoc } from "@/components/FinancePanel";
-import { FinanceDashboard } from "@/components/FinanceDashboard";
 import { ExpenseBreakdown } from "@/components/ExpenseBreakdown";
 import { ExpenseVendors, type ExpenseRow } from "@/components/ExpenseVendors";
 import { PayrollManual, type PayrollEntry } from "@/components/PayrollManual";
@@ -167,16 +166,18 @@ export default async function FinancePage() {
       <div className="pt-2">
         <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 px-1 mb-2.5">Manage</div>
         <div className="space-y-5">
+          {/* Source of truth + the inputs that drive the breakdown, first. */}
           <MrrManual initial={mrrRows as MrrEntry[]} />
           <StripeMissing rev={revenue} sheetNames={mrrRows.map((r) => r.company as string)} />
           <FacebookMonthly months={fbMonthInputs} initial={fbRevenueByPeriod} expensesInitial={fbExpensesByPeriod} commissionInitial={fbCommissionByPeriod} />
           <ExpenseLabels lines={expenseLines} lineInitial={expenseSegments} software={softwareItems as SoftwareRow[]} latestShort={latestShort} />
-          <FacebookRevenue result={fbResult} />
-          <FinanceDashboard parsed={latestParsed} />
-          <ExpenseBreakdown parsed={latestParsed} />
+          {/* Planning + drill-downs. */}
           <NextMonthBudget parsed={latestParsed} estimates={estimates} />
           <PayrollManual initial={(payRes.data ?? []) as PayrollEntry[]} />
+          <ExpenseBreakdown parsed={latestParsed} />
           <ExpenseVendors rows={(expRes.data ?? []) as ExpenseRow[]} />
+          {/* Reference + files, last. */}
+          <FacebookRevenue result={fbResult} />
           <FinancePanel initialDocuments={rows.map(({ parsed, ...d }) => d)} />
         </div>
       </div>

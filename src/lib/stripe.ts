@@ -248,6 +248,98 @@ export function isStripeConfigured(): boolean {
   return !!key();
 }
 
+// ── One-off (one-time) Stripe payments ───────────────────────────────────────
+// Subscriptions above are the recurring book. These are the one-time charges —
+// setup fees, website builds, Meta setup fees — that Mitchell tags Facebook vs
+// SEO/website. A charge counts as a one-off when it isn't a subscription
+// renewal (no invoice, or an invoice whose billing_reason isn't a subscription).
+
+export interface OneOffPayment {
+  id: string;
+  name: string;        // best client/customer label we can resolve
+  description: string; // Stripe charge description, if any
+  amount: number;      // dollars, gross
+  date: string;        // YYYY-MM-DD (charge created)
+}
+
+interface StripeCharge {
+  id: string;
+  amount: number;
+  amount_captured?: number | null;
+  created: number;
+  currency: string;
+  description?: string | null;
+  paid: boolean;
+  refunded: boolean;
+  status: string;
+  invoice?: (string | { billing_reason?: string | null }) | null;
+  customer?: (string | { name?: string | null; email?: string | null }) | null;
+  billing_details?: { name?: string | null; email?: string | null } | null;
+}
+
+async function getAllCharges(sinceTs: number): Promise<StripeCharge[]> {
+  const k = key();
+  if (!k) return [];
+  const out: StripeCharge[] = [];
+  let after: string | null = null;
+  const base = `/charges?created[gte]=${sinceTs}&expand[]=data.invoice&expand[]=data.customer`;
+  for (let page = 0; page < 12; page++) {
+    const url = `${API}${base}&limit=100${after ? `&starting_after=${after}` : ""}`;
+    const r = await fetch(url, { headers: { Authorization: `Bearer ${k}` }, cache: "no-store" });
+    if (!r.ok) break;
+    const j = (await r.json()) as { data?: StripeCharge[]; has_more?: boolean };
+    const data = j.data ?? [];
+    out.push(...data);
+    if (!j.has_more || !data.length) break;
+    after = data[data.length - 1].id;
+  }
+  return out;
+}
+
+function isSubscriptionCharge(c: StripeCharge): boolean {
+  const inv = c.invoice;
+  if (!inv) return false;                    // no invoice → not a subscription cycle
+  if (typeof inv === "string") return true;  // unexpanded invoice present → treat as subscription
+  return (inv.billing_reason ?? "").startsWith("subscription");
+}
+
+function chargeName(c: StripeCharge, board: Board): string {
+  const cu = typeof c.customer === "object" && c.customer ? c.customer : null;
+  const email = (cu?.email ?? c.billing_details?.email ?? "").toLowerCase();
+  const domain = email.includes("@") ? email.split("@")[1] : "";
+  if (domain && !FREE_EMAIL.has(domain) && board.byDomain.has(domain)) return board.byDomain.get(domain)!;
+  const cn = cu?.name ?? c.billing_details?.name ?? "";
+  if (cn) return cn;
+  if (c.description) return c.description;
+  if (domain) { const root = domain.split(".")[0]; return root.charAt(0).toUpperCase() + root.slice(1); }
+  return email || c.id;
+}
+
+// One-time payments in the last ~120 days, newest first. Returns null only when
+// Stripe isn't configured or the call fails outright.
+export async function getStripeOneOffs(): Promise<OneOffPayment[] | null> {
+  if (!key()) return null;
+  const since = Math.floor((Date.now() - 120 * 86_400_000) / 1000);
+  let charges: StripeCharge[];
+  try {
+    charges = await getAllCharges(since);
+  } catch {
+    return null;
+  }
+  const board = await loadBoard();
+  return charges
+    .filter((c) => c.paid && !c.refunded && c.status === "succeeded" && !isSubscriptionCharge(c))
+    .map((c) => ({
+      id: c.id,
+      name: chargeName(c, board),
+      description: c.description ?? "",
+      amount: (c.amount_captured ?? c.amount ?? 0) / 100,
+      date: new Date(c.created * 1000).toISOString().slice(0, 10)
+    }))
+    .filter((o) => o.amount > 0)
+    .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+}
+
 export async function getStripeRevenue(): Promise<RevenueSummary | null> {
   if (!key()) return null;
   let subs: StripeSub[];

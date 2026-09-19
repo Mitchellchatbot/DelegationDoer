@@ -104,3 +104,44 @@ export function parsePnl(buf: Buffer): ParsedPnl | null {
 
   return { periods, rows, summary, expenseBreakdown: breakdown };
 }
+
+// ── Shared month/line helpers ────────────────────────────────────────────────
+// One place to derive the "latest month" column and the leaf expense lines, so
+// the business-breakdown split and the expense-labeling UI agree on exactly
+// which lines exist and what each one cost.
+
+// Index of the latest real month column (skips a trailing "Total" column).
+export function latestMonthIndex(parsed: ParsedPnl): number {
+  const p = parsed.periods;
+  const hasTotal = p[p.length - 1]?.toLowerCase() === "total";
+  const monthCount = hasTotal ? p.length - 1 : p.length;
+  return monthCount - 1;
+}
+
+export interface ExpenseLeaf { account: string; category: string; amount: number }
+
+// The individual expense lines for one month: each leaf line item, plus any
+// level-1 category that has no children (it's a line itself). Skips the
+// "Total <category>" subtotal rows. Amounts are that month's value, rounded.
+export function expenseLeafLines(parsed: ParsedPnl, monthIdx: number): ExpenseLeaf[] {
+  const rows = parsed.rows;
+  const startI = rows.findIndex((r) => r.account.toUpperCase() === "EXPENSES");
+  const endI = rows.findIndex((r) => r.account.toLowerCase() === "total expenses");
+  const lines: ExpenseLeaf[] = [];
+  if (startI >= 0 && endI > startI) {
+    let cat = "";
+    for (let i = startI + 1; i < endI; i++) {
+      const r = rows[i];
+      if (r.level === 1) {
+        cat = r.account;
+        const hasChildren = i + 1 < endI && rows[i + 1].level > 1;
+        if (!hasChildren) lines.push({ account: r.account, category: r.account, amount: Math.round(r.values[monthIdx] ?? 0) });
+        continue;
+      }
+      if (r.account.toLowerCase() === `total ${cat.toLowerCase()}`) continue;
+      lines.push({ account: r.account, category: cat, amount: Math.round(r.values[monthIdx] ?? 0) });
+    }
+  }
+  const seen = new Set<string>();
+  return lines.filter((l) => (seen.has(l.account) ? false : (seen.add(l.account), true)));
+}

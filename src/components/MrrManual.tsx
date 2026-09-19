@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Plus, X, Check } from "lucide-react";
+import { Plus, X, Check, ChevronDown } from "lucide-react";
 
 // Manually-maintained MRR list (owner's source of truth), seeded from the MRR
 // Mastersheet. Everything is editable inline; a client can be marked "no longer
@@ -35,6 +35,7 @@ export function MrrManual({ initial }: { initial: MrrEntry[] }) {
   const [saving, setSaving] = useState<Record<string, boolean>>({});
   const [adding, setAdding] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
+  const [open, setOpen] = useState(false);
   const [newCompany, setNewCompany] = useState("");
   const [newMrr, setNewMrr] = useState("");
 
@@ -104,13 +105,16 @@ export function MrrManual({ initial }: { initial: MrrEntry[] }) {
 
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-soft">
-      <div className="flex items-center justify-between gap-2 mb-3 flex-wrap">
-        <div>
-          <div className="text-[13px] font-semibold text-ink flex items-center gap-2">
-            MRR <span className="text-[10px] font-medium uppercase tracking-wide text-indigo-600 bg-indigo-50 rounded px-1.5 py-0.5">manual</span>
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <button type="button" onClick={() => setOpen((v) => !v)} className="flex items-start gap-1.5 text-left min-w-0">
+          <ChevronDown className={"w-4 h-4 text-slate-400 mt-0.5 shrink-0 transition-transform " + (open ? "rotate-180" : "-rotate-90")} />
+          <div>
+            <div className="text-[13px] font-semibold text-ink flex items-center gap-2">
+              MRR <span className="text-[10px] font-medium uppercase tracking-wide text-indigo-600 bg-indigo-50 rounded px-1.5 py-0.5">manual</span>
+            </div>
+            <div className="text-[11px] text-muted mt-0.5">Your source of truth · tap to {open ? "collapse" : "expand"}</div>
           </div>
-          <div className="text-[11px] text-muted mt-0.5">Your source of truth. Click any field to edit.</div>
-        </div>
+        </button>
         <div className="flex items-baseline gap-3">
           <div className="text-right">
             <div className="text-2xl font-bold tabular-nums text-ink leading-none">{money(totals.active)}</div>
@@ -122,7 +126,7 @@ export function MrrManual({ initial }: { initial: MrrEntry[] }) {
           </div>
           <button
             type="button"
-            onClick={() => setShowAdd((v) => !v)}
+            onClick={() => { setOpen(true); setShowAdd((v) => !v); }}
             className="flex items-center gap-1 text-[12px] font-medium text-white bg-ink rounded-lg px-2.5 py-1.5 hover:opacity-90"
           >
             <Plus className="w-3.5 h-3.5" /> Add client
@@ -130,6 +134,8 @@ export function MrrManual({ initial }: { initial: MrrEntry[] }) {
         </div>
       </div>
 
+      {open && (<>
+      <div className="mt-3" />
       {showAdd && (
         <div className="flex items-center gap-2 mb-3 p-2.5 rounded-xl border border-slate-200 bg-slate-50 flex-wrap">
           <input
@@ -249,6 +255,7 @@ export function MrrManual({ initial }: { initial: MrrEntry[] }) {
       <div className="mt-2 text-[11px] text-muted">
         MRR total counts Active + Paused. Pending and Churned are excluded. &quot;Churn&quot; drops a client from MRR but keeps the record; the × deletes it.
       </div>
+      </>)}
     </div>
   );
 }

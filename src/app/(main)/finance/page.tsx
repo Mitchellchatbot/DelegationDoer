@@ -1,4 +1,3 @@
-import { Suspense } from "react";
 import { Inter } from "next/font/google";
 import { notFound, redirect } from "next/navigation";
 import { Lock } from "lucide-react";
@@ -13,14 +12,31 @@ import { ExpenseVendors, type ExpenseRow } from "@/components/ExpenseVendors";
 import { PayrollManual, type PayrollEntry } from "@/components/PayrollManual";
 import { StripeMissing } from "@/components/StripeMissing";
 import { MrrManual, type MrrEntry } from "@/components/MrrManual";
-import { FacebookRevenue, FacebookRevenueLoading } from "@/components/FacebookRevenue";
+import { FacebookRevenue } from "@/components/FacebookRevenue";
 import { FinanceOverviewView } from "@/components/FinanceOverviewView";
 import { NextMonthBudget } from "@/components/NextMonthBudget";
 import { getFinanceOverview, type FinanceOverview } from "@/lib/finance-overview";
 import { ScaleChat } from "@/components/ScaleChat";
 import { getStripeRevenue } from "@/lib/stripe";
 import { getFacebookRevenue } from "@/lib/facebook-revenue";
-import type { ParsedPnl } from "@/lib/pnl-parse";
+import { latestMonthIndex, expenseLeafLines, type ParsedPnl, type ExpenseLeaf } from "@/lib/pnl-parse";
+import { computeBreakdown, type Segment, type SoftwareItem } from "@/lib/finance-segments";
+import { BusinessBreakdownView } from "@/components/BusinessBreakdown";
+import { ExpenseLabels, type SoftwareRow } from "@/components/ExpenseLabels";
+import { FacebookMonthly, type FbMonthInput } from "@/components/FacebookMonthly";
+import { computeLearnings, type PnlMonth } from "@/lib/finance-learnings";
+import { LearningsRisks } from "@/components/LearningsRisks";
+
+// Map a P&L period label ("Aug '26") to a 'YYYY-MM' key.
+const MONTH_NUM: Record<string, number> = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
+function periodOf(label: string): string | null {
+  const m = MONTH_NUM[label.slice(0, 3).toLowerCase()];
+  if (!m) return null;
+  const ym = label.match(/(\d{2,4})/);
+  let y = ym ? Number(ym[1]) : new Date().getFullYear();
+  if (y < 100) y += 2000;
+  return `${y}-${String(m).padStart(2, "0")}`;
+}
 
 export const dynamic = "force-dynamic";
 
@@ -61,14 +77,19 @@ export default async function FinancePage() {
   if (!isOwner(user)) notFound();
 
   const supabase = getSupabaseAdmin();
-  const [docRes, overview, revenue, mrrRes, expRes, payRes, estRes] = await Promise.all([
+  const [docRes, overview, revenue, mrrRes, expRes, payRes, estRes, expSegRes, swRes, fbMonthRes, fbResult, pnlRes] = await Promise.all([
     supabase.from("finance_documents").select("id, label, filename, content_type, size_bytes, uploaded_at, parsed").order("uploaded_at", { ascending: false }),
     getFinanceOverview(),
     getStripeRevenue().catch(() => null),
     supabase.from("mrr_entries").select("id, company, mrr, status, subscription_day, satisfaction, note, rank").order("rank", { ascending: true }),
     supabase.from("expense_line_items").select("account, vendor, month, amount"),
     supabase.from("payroll_entries").select("id, name, role, status, scale, rate, note, rank").order("rank", { ascending: true }),
-    supabase.from("expense_estimates").select("account, amount")
+    supabase.from("expense_estimates").select("account, amount"),
+    supabase.from("expense_segments").select("account, segment"),
+    supabase.from("software_subscriptions").select("vendor, month, amount, segment"),
+    supabase.from("facebook_monthly").select("period, revenue, commission, expenses"),
+    getFacebookRevenue().catch(() => ({ ok: false as const, error: "unavailable" })),
+    supabase.from("pnl_monthly").select("period, label, income, expenses, net, taxes, writeoffs, software, contractors, advertising").order("period", { ascending: true })
   ]);
 
   const rows = (docRes.data ?? []) as (FinanceDoc & { parsed: ParsedPnl | null })[];
@@ -76,6 +97,44 @@ export default async function FinancePage() {
   const mrrRows = mrrRes.data ?? [];
   const estimates: Record<string, number> = {};
   for (const e of (estRes.data ?? []) as { account: string; amount: number }[]) estimates[e.account] = Number(e.amount);
+
+  // Facebook assignment inputs: P&L line labels, software vendor labels, and the
+  // Facebook revenue per month from the Finance app.
+  const expenseSegments: Record<string, Segment> = {};
+  for (const s of (expSegRes.data ?? []) as { account: string; segment: Segment }[]) expenseSegments[s.account] = s.segment;
+  const softwareItems = ((swRes.data ?? []) as SoftwareItem[]).map((s) => ({ vendor: s.vendor, month: s.month, amount: Number(s.amount), segment: (s.segment ?? "seo") as Segment }));
+  const fbRevenueByPeriod: Record<string, number> = {};
+  const fbCommissionByPeriod: Record<string, number> = {};
+  const fbExpensesByPeriod: Record<string, number> = {};
+  for (const r of (fbMonthRes.data ?? []) as { period: string; revenue: number; commission: number; expenses: number }[]) {
+    fbRevenueByPeriod[r.period] = Number(r.revenue);
+    if (r.commission != null) fbCommissionByPeriod[r.period] = Number(r.commission);
+    if (r.expenses != null) fbExpensesByPeriod[r.period] = Number(r.expenses);
+  }
+
+  const expenseLines: ExpenseLeaf[] = latestParsed ? expenseLeafLines(latestParsed, latestMonthIndex(latestParsed)) : [];
+  const periods = latestParsed?.periods ?? [];
+  const hasTotal = periods[periods.length - 1]?.toLowerCase() === "total";
+  const monthLabels = periods.filter((_, i) => !(hasTotal && i === periods.length - 1));
+  const fbMonthInputs: FbMonthInput[] = monthLabels
+    .map((l) => ({ period: periodOf(l) ?? "", label: l }))
+    .filter((m) => m.period);
+  const latestShort = monthLabels.length ? monthLabels[monthLabels.length - 1].slice(0, 3).toLowerCase() : "";
+
+  const breakdown = computeBreakdown({ parsed: latestParsed, expenseSegments, softwareItems, fbRevenueByPeriod, fbCommissionByPeriod, fbExpensesByPeriod });
+
+  // Learnings & risks: 10-month P&L history + Facebook + software + client concentration.
+  const pnlMonths = ((pnlRes.data ?? []) as PnlMonth[]).map((m) => ({
+    period: m.period, label: m.label, income: Number(m.income), expenses: Number(m.expenses), net: Number(m.net),
+    taxes: Number(m.taxes), writeoffs: Number(m.writeoffs), software: Number(m.software), contractors: Number(m.contractors), advertising: Number(m.advertising)
+  }));
+  const learnings = computeLearnings({
+    pnl: pnlMonths,
+    fbRevenueByPeriod,
+    fbExpensesByPeriod,
+    softwareItems,
+    mrrClients: (mrrRows as { company: string; mrr: number }[]).map((r) => ({ company: String(r.company ?? ""), mrr: Number(r.mrr) || 0 }))
+  });
 
   return (
     <div className={inter.className + " space-y-6 max-w-5xl mx-auto text-slate-900"}>
@@ -86,6 +145,12 @@ export default async function FinancePage() {
         <h1 className="text-2xl font-bold text-slate-900 leading-tight">Finance</h1>
         <span className="text-[10px] font-medium uppercase tracking-wide text-slate-500 bg-slate-100 rounded-full px-2 py-0.5">Private</span>
       </div>
+
+      {/* The two sides of one P&L, side by side: Facebook vs SEO & website. */}
+      <BusinessBreakdownView data={breakdown} />
+
+      {/* Learnings & risks: growth, software, Facebook, concentration, projections. */}
+      <LearningsRisks data={learnings} />
 
       {/* Dashboard: KPIs, revenue vs expenses, where the money goes, where to cut. */}
       <FinanceOverviewView data={overview} />
@@ -104,9 +169,9 @@ export default async function FinancePage() {
         <div className="space-y-5">
           <MrrManual initial={mrrRows as MrrEntry[]} />
           <StripeMissing rev={revenue} sheetNames={mrrRows.map((r) => r.company as string)} />
-          <Suspense fallback={<FacebookRevenueLoading />}>
-            <FacebookRevenueSection />
-          </Suspense>
+          <FacebookMonthly months={fbMonthInputs} initial={fbRevenueByPeriod} expensesInitial={fbExpensesByPeriod} commissionInitial={fbCommissionByPeriod} />
+          <ExpenseLabels lines={expenseLines} lineInitial={expenseSegments} software={softwareItems as SoftwareRow[]} latestShort={latestShort} />
+          <FacebookRevenue result={fbResult} />
           <FinanceDashboard parsed={latestParsed} />
           <ExpenseBreakdown parsed={latestParsed} />
           <NextMonthBudget parsed={latestParsed} estimates={estimates} />
@@ -119,6 +184,3 @@ export default async function FinancePage() {
   );
 }
 
-async function FacebookRevenueSection() {
-  return <FacebookRevenue result={await getFacebookRevenue()} />;
-}

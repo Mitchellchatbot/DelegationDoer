@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { ChevronRight, TrendingUp, TrendingDown } from "lucide-react";
+import { ChevronRight, ChevronDown, TrendingUp, TrendingDown } from "lucide-react";
 
 // Every expense account, itemized down to the individual vendor/payment per
 // month — pulled from QuickBooks. Answers "why aren't these broken into line
@@ -17,6 +17,7 @@ function money(n: number): string {
 }
 
 export function ExpenseVendors({ rows }: { rows: ExpenseRow[] }) {
+  const [cardOpen, setCardOpen] = useState(false);
   const [open, setOpen] = useState<Record<string, boolean>>({});
   const { accounts, grandTotal } = useMemo(() => {
     type Acc = { total: number; monthly: Record<string, number>; vendors: Map<string, Record<string, number>> };
@@ -53,15 +54,20 @@ export function ExpenseVendors({ rows }: { rows: ExpenseRow[] }) {
 
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-soft">
-      <div className="flex items-baseline justify-between gap-2 mb-3 flex-wrap">
-        <div>
-          <div className="text-[13px] font-semibold text-ink">Every expense · by vendor <span className="text-[10px] font-medium uppercase tracking-wide text-emerald-700 bg-emerald-50 rounded px-1.5 py-0.5">QuickBooks</span></div>
-          <div className="text-[11px] text-muted mt-0.5">Every account, itemized to the actual vendor/payment. Click to expand. <span className="text-rose-500">▲ rising</span>.</div>
+      <button type="button" onClick={() => setCardOpen((o) => !o)}
+        className="w-full flex items-baseline justify-between gap-2 text-left flex-wrap">
+        <div className="flex items-baseline gap-2 min-w-0">
+          <ChevronDown className={"w-4 h-4 text-muted shrink-0 self-center transition-transform " + (cardOpen ? "" : "-rotate-90")} />
+          <div>
+            <div className="text-[13px] font-semibold text-ink">Every expense · by vendor <span className="text-[10px] font-medium uppercase tracking-wide text-emerald-700 bg-emerald-50 rounded px-1.5 py-0.5">QuickBooks</span></div>
+            <div className="text-[11px] text-muted mt-0.5">Every account, itemized to the actual vendor/payment. <span className="text-rose-500">▲ rising</span>.</div>
+          </div>
         </div>
-        <div className="text-[11px] text-muted tabular-nums">{money(grandTotal)} · Jun–Aug</div>
-      </div>
+        <div className="text-[11px] text-muted tabular-nums shrink-0">{money(grandTotal)} · Jun–Aug</div>
+      </button>
 
-      <div className="overflow-x-auto">
+      {cardOpen && (
+      <div className="overflow-x-auto mt-3">
         <div className="min-w-[420px]">
           <div className="flex items-center gap-2 pb-1.5 mb-1 border-b border-slate-200 text-[10px] font-medium text-muted uppercase tracking-wide">
             <span className="flex-1" />
@@ -108,6 +114,7 @@ export function ExpenseVendors({ rows }: { rows: ExpenseRow[] }) {
           </div>
         </div>
       </div>
+      )}
     </div>
   );
 }

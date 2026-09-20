@@ -1,36 +1,16 @@
 import type { Defense } from "@/lib/finance-defense";
 import type { Learnings } from "@/lib/finance-learnings";
+import { cfoMoves, readMoney as money } from "@/lib/finance-read";
 
 // The daily CFO read — the one thing to look at each morning. Survival status +
 // the situation in a sentence + today's 2–3 moves. Reuses the defense + learnings
-// models (no new data); it's the on-page twin of the morning brief's SURVIVAL note.
-
-function money(n: number): string {
-  const s = n < 0 ? "-" : "";
-  return `${s}$${Math.abs(Math.round(n)).toLocaleString("en-US")}`;
-}
-
-function moves(defense: Defense, learnings: Learnings): string[] {
-  const out: string[] = [];
-  if (defense.hasData && !defense.onTrack) out.push(`Clear the floor — cut ~${money(defense.gapNow)}/mo (start with software).`);
-  if (learnings.hasData && learnings.concentration.top3Pct >= 25) {
-    const worst = defense.scenarios[0];
-    out.push(`Lock your top 3 clients (${learnings.concentration.top3Pct}% of revenue)${worst ? ` — losing ${worst.client.split(",")[0]} drops margin to ${worst.newMarginPct}%` : ""}.`);
-  }
-  if (learnings.hasData && learnings.software.growthPct >= 40) out.push(`Audit software — up ${learnings.software.growthPct}% to ${money(learnings.software.last)}/mo.`);
-  // Fall back to the top risk mitigations if we still have room.
-  for (const r of learnings.risks ?? []) {
-    if (out.length >= 3) break;
-    if (!out.some((m) => m.toLowerCase().includes(r.title.toLowerCase().split(" ")[0]))) out.push(r.mitigation);
-  }
-  return out.slice(0, 3);
-}
+// models (no new data); it's the on-page twin of the morning CFO report DM.
 
 export function CfoRead({ defense, learnings }: { defense: Defense; learnings: Learnings }) {
   if (!defense.hasData && !learnings.hasData) return null;
   const today = new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
   const ok = defense.onTrack;
-  const list = moves(defense, learnings);
+  const list = cfoMoves(defense, learnings);
 
   return (
     <div className="rounded-2xl bg-slate-900 text-white p-6 shadow-sm">

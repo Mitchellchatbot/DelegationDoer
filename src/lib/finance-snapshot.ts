@@ -62,22 +62,3 @@ export async function loadCfoSnapshot(): Promise<CfoSnapshot | null> {
 
   return { defense, learnings };
 }
-
-// A compact plain-text CFO read for the morning brief — the same survival status
-// + moves as the on-page CFO read, as data the drafting model folds in.
-export function cfoReadBlock(snap: CfoSnapshot): string {
-  const { defense: d, learnings: l } = snap;
-  if (!d.hasData && !l.hasData) return "";
-  const m = (n: number) => `$${Math.abs(Math.round(n)).toLocaleString("en-US")}`;
-  const lines: string[] = [];
-  if (d.hasData) {
-    lines.push(d.onTrack
-      ? `Survival margin (before founder pay): ${d.marginPct}% — ABOVE the ${d.floorPct}% floor (${d.month}).`
-      : `Survival margin (before founder pay): ${d.marginPct}% — BELOW the ${d.floorPct}% floor by ${m(d.gapNow)}/mo (${d.month}). This is the survival rule; closing this gap is priority one.`);
-    const worst = d.scenarios[0];
-    if (worst) lines.push(`Client-loss exposure: losing ${worst.client.split(",")[0]} (−${m(worst.lostMrr)}/mo) drops margin to ${worst.newMarginPct}%${worst.cutNeeded > 0 ? `, needing ${m(worst.cutNeeded)}/mo of cuts to hold ${d.floorPct}%` : ""}.`);
-    lines.push(`Defense pool available if needed: ${m(d.cutCapacity)}/mo (software, ads, non-protected roles). Protected (never cut): ${d.protected.map((p) => p.name).join(", ") || "none"}.`);
-  }
-  if (l.hasData && l.verdict) lines.push(`The read: ${l.verdict}`);
-  return lines.join("\n");
-}

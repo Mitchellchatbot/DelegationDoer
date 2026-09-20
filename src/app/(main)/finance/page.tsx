@@ -27,6 +27,8 @@ import { computeLearnings, type PnlMonth } from "@/lib/finance-learnings";
 import { LearningsRisks } from "@/components/LearningsRisks";
 import { BooksByMonth, type BookLine, type BookMonth } from "@/components/BooksByMonth";
 import { DeelContractors, type DeelRow } from "@/components/DeelContractors";
+import { computeDefense } from "@/lib/finance-defense";
+import { SurvivalDefense } from "@/components/SurvivalDefense";
 
 // Map a P&L period label ("Aug '26") to a 'YYYY-MM' key.
 const MONTH_NUM: Record<string, number> = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
@@ -144,6 +146,19 @@ export default async function FinancePage() {
   const bookMonths: BookMonth[] = pnlMonths.map((m) => ({ period: m.period, label: m.label }));
   const deelRows = ((deelRes.data ?? []) as DeelRow[]).map((r) => ({ period: r.period, contractor: r.contractor, amount: Number(r.amount), is_fee: !!r.is_fee }));
 
+  // CFO survival model: 30% margin before founder pay, cut ladder, client-loss playbook.
+  const latestPnl = pnlMonths[pnlMonths.length - 1];
+  const defense = computeDefense({
+    month: latestPnl?.label ?? "",
+    revenue: latestPnl?.income ?? 0,
+    normalizedNet: latestPnl ? latestPnl.net + latestPnl.taxes + latestPnl.writeoffs : 0,
+    founderPay: latestPnl ? bookLines.filter((l) => l.period === latestPnl.period && l.account.toLowerCase().includes("mitchell price")).reduce((s, l) => s + l.amount, 0) : 0,
+    software: latestPnl?.software ?? 0,
+    ads: latestPnl?.advertising ?? 0,
+    contractors: latestPnl ? deelRows.filter((r) => r.period === latestPnl.period && !r.is_fee).map((r) => ({ name: r.contractor, monthly: r.amount })) : [],
+    topClients: (mrrRows as { company: string; mrr: number }[]).map((r) => ({ company: String(r.company ?? ""), mrr: Number(r.mrr) || 0 })).filter((c) => c.mrr > 0).sort((a, b) => b.mrr - a.mrr)
+  });
+
   return (
     <div className={inter.className + " space-y-6 max-w-5xl mx-auto text-slate-900"}>
       <div className="flex items-center gap-3">
@@ -153,6 +168,9 @@ export default async function FinancePage() {
         <h1 className="text-2xl font-bold text-slate-900 leading-tight">Finance</h1>
         <span className="text-[10px] font-medium uppercase tracking-wide text-slate-500 bg-slate-100 rounded-full px-2 py-0.5">Private</span>
       </div>
+
+      {/* CFO survival rule: 30% margin before founder pay, with the defense plan. */}
+      <SurvivalDefense data={defense} />
 
       {/* The two sides of one P&L, side by side: Facebook vs SEO & website. */}
       <BusinessBreakdownView data={breakdown} />

@@ -46,9 +46,9 @@ export function DeelContractors({ rows }: { rows: DeelRow[] }) {
           <ChevronDown className={"w-4 h-4 text-slate-400 mt-1 shrink-0 transition-transform " + (open ? "rotate-180" : "-rotate-90")} />
           <div>
             <div className="text-[16px] font-semibold text-slate-900 flex items-center gap-2 flex-wrap">
-              Contractor payments <span className="text-[10px] font-medium uppercase tracking-wide text-slate-500 bg-slate-100 rounded-full px-2 py-0.5">Deel</span>
+              Contractor payments <span className="text-[10px] font-medium uppercase tracking-wide text-slate-500 bg-slate-100 rounded-full px-2 py-0.5">Deel + bank</span>
             </div>
-            <div className="text-[12px] text-slate-500 mt-0.5">Per person × month, from your Deel statements ({m.months.length ? `${label(m.months[0])} → ${label(m.months[m.months.length - 1])}` : ""}) · tap to {open ? "collapse" : "expand"}</div>
+            <div className="text-[12px] text-slate-500 mt-0.5">Per person × month, from Deel statements + Novo bank ({m.months.length ? `${label(m.months[0])} → ${label(m.months[m.months.length - 1])}` : ""}) · tap to {open ? "collapse" : "expand"}</div>
           </div>
         </button>
         <div className="text-right shrink-0">
@@ -88,7 +88,7 @@ export function DeelContractors({ rows }: { rows: DeelRow[] }) {
               </tr>
             </tbody>
           </table>
-          <div className="mt-2 text-[11px] text-slate-400">From Deel payment statements, reconciled to the receipts. This is the itemized detail behind the P&amp;L &ldquo;Contractor Payments&rdquo; line (Deel-paid contractors only).</div>
+          <div className="mt-2 text-[11px] text-slate-400">Deel statements (reconciled to receipts) + bank-paid contractors (Sam via Novo). This is the itemized detail behind the P&amp;L &ldquo;Contractor Payments&rdquo; line — it now ties out to the P&amp;L (Feb–Aug); Jan &amp; May show Deel timing over the booked amount.</div>
         </div>
       )}
     </div>

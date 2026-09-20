@@ -15,7 +15,7 @@ export function CfoRead({ defense, learnings }: { defense: Defense; learnings: L
   return (
     <div className="rounded-2xl bg-slate-900 text-white p-6 shadow-sm">
       <div className="flex items-center justify-between gap-3 flex-wrap">
-        <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">CFO read · {today}</div>
+        <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">CFO read · {today}{defense.hasData ? ` · books through ${defense.month}` : ""}</div>
         <div className={"text-[11px] font-semibold rounded-full px-2 py-0.5 " + (ok ? "bg-emerald-500/20 text-emerald-300" : "bg-rose-500/20 text-rose-300")}>
           {ok ? `✓ ${defense.marginPct}% — above the ${defense.floorPct}% floor` : `✗ ${defense.marginPct}% — ${money(defense.gapNow)}/mo below the ${defense.floorPct}% floor`}
         </div>
@@ -24,7 +24,7 @@ export function CfoRead({ defense, learnings }: { defense: Defense; learnings: L
       {learnings.verdict && <div className="text-[15px] leading-relaxed mt-3">{learnings.verdict}</div>}
 
       {list.length > 0 && (
-        <div className="mt-4">
+        <div className="mt-4 pt-4 border-t border-white/10">
           <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 mb-1.5">Today&apos;s moves</div>
           <ol className="space-y-1.5">
             {list.map((mv, i) => (

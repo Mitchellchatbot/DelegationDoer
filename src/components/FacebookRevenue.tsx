@@ -1,3 +1,7 @@
+"use client";
+
+import { useState } from "react";
+import { ChevronDown } from "lucide-react";
 import type {
   FacebookRevenueData,
   FacebookRevenuePayer,
@@ -84,6 +88,7 @@ function dayOfMonth(d: string | null): number | null {
 }
 
 function RevenueCard({ data }: { data: FacebookRevenueData }) {
+  const [open, setOpen] = useState(false);
   const { current, delta, asOf } = data;
   const month = monthName(data.period);
 
@@ -103,11 +108,14 @@ function RevenueCard({ data }: { data: FacebookRevenueData }) {
 
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-      <div className="flex items-start justify-between gap-4 mb-4 flex-wrap">
-        <div className="min-w-0">
-          <Title provisional={data.provisional} />
-          <div className="text-[12px] text-slate-500 mt-1 max-w-prose">
-            Your profit after the 50% partner split — management + setup fees on managed Meta spend. Separate from MRR.
+      <button type="button" onClick={() => setOpen((o) => !o)} className="w-full flex items-start justify-between gap-4 text-left flex-wrap">
+        <div className="min-w-0 flex items-start gap-2">
+          <ChevronDown className={"w-4 h-4 text-slate-400 shrink-0 mt-1 transition-transform " + (open ? "" : "-rotate-90")} />
+          <div className="min-w-0">
+            <Title provisional={data.provisional} />
+            <div className="text-[12px] text-slate-500 mt-1 max-w-prose">
+              Your profit after the 50% partner split — management + setup fees on managed Meta spend. Separate from MRR.
+            </div>
           </div>
         </div>
         <div className="text-right shrink-0">
@@ -121,8 +129,10 @@ function RevenueCard({ data }: { data: FacebookRevenueData }) {
             </div>
           )}
         </div>
-      </div>
+      </button>
 
+      {open && (<>
+      <div className="mt-4" />
       {data.payers.length === 0 ? (
         <div className="text-[12px] text-slate-500">No clients billing this month yet.</div>
       ) : (
@@ -168,6 +178,7 @@ function RevenueCard({ data }: { data: FacebookRevenueData }) {
           Spend runs through {dayLabel(asOf)} — {month} is still filling in.
         </div>
       )}
+      </>)}
     </div>
   );
 }

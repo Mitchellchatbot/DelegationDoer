@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { Upload, Download, Trash2, Loader2, FileSpreadsheet, FileText } from "lucide-react";
+import { Upload, Download, Trash2, Loader2, FileSpreadsheet, FileText, ChevronDown } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
@@ -28,6 +28,7 @@ function isSheet(ct: string | null): boolean {
 }
 
 export function FinancePanel({ initialDocuments }: { initialDocuments: FinanceDoc[] }) {
+  const [open, setOpen] = useState(false);
   const [docs, setDocs] = useState<FinanceDoc[]>(initialDocuments);
   const [uploading, setUploading] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -83,7 +84,20 @@ export function FinancePanel({ initialDocuments }: { initialDocuments: FinanceDo
   }
 
   return (
-    <div className="space-y-4">
+    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+      <button type="button" onClick={() => setOpen((o) => !o)} className="w-full flex items-center justify-between gap-2 text-left">
+        <div className="flex items-center gap-2">
+          <ChevronDown className={"w-4 h-4 text-slate-400 shrink-0 transition-transform " + (open ? "" : "-rotate-90")} />
+          <div>
+            <div className="text-[15px] font-semibold text-ink">P&amp;L files</div>
+            <div className="text-[11px] text-muted mt-0.5">Upload &amp; manage the source P&amp;L documents. Stored privately.</div>
+          </div>
+        </div>
+        <div className="text-[11px] text-muted tabular-nums shrink-0">{docs.length} file{docs.length === 1 ? "" : "s"}</div>
+      </button>
+
+      {open && (
+      <div className="space-y-4 mt-4">
       {/* Upload */}
       <div className="rounded-2xl border border-dashed border-slate-300 bg-white/60 p-5 flex flex-col items-center text-center gap-2">
         <input
@@ -146,6 +160,8 @@ export function FinancePanel({ initialDocuments }: { initialDocuments: FinanceDo
             </div>
           ))}
         </div>
+      )}
+      </div>
       )}
     </div>
   );

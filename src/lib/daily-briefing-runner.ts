@@ -33,6 +33,7 @@ import { resolveSlackId } from "@/lib/slack-resolve";
 import { DEFAULT_TZ, nowInTz, ymdInTz } from "@/lib/shift";
 import { getStripeRevenue, type RevenueSummary } from "@/lib/stripe";
 import { listMemories, formatMemoriesBlock } from "@/lib/brain-memory";
+import { loadCfoSnapshot, cfoReadBlock } from "@/lib/finance-snapshot";
 import type { Task, User } from "@/lib/types";
 
 const OWNER_EMAIL = "mitchell@scaledai.org";
@@ -179,8 +180,10 @@ function buildPrompts(args: {
   memoryBlock?: string;
   // Compact expense/burn context (from the P&L), or "".
   expenseBlock?: string;
+  // CFO survival read (margin vs floor, client-loss exposure, verdict), or "".
+  survivalBlock?: string;
 }): { system: string; user: string } {
-  const { tasks, roster, inbox, inboxNote, nameById, recentlyMessaged, shipped, revenue, memoryBlock, expenseBlock } = args;
+  const { tasks, roster, inbox, inboxNote, nameById, recentlyMessaged, shipped, revenue, memoryBlock, expenseBlock, survivalBlock } = args;
 
   // Teammates Mitchell can be prompted to check in on: everyone but him and
   // other leaders (the engagement DMs are founder→team).
@@ -253,7 +256,7 @@ function buildPrompts(args: {
     "",
     "Return STRICT JSON only (no code fences, no prose around it) with exactly this shape:",
     "{",
-    '  "daily_update": string,        // a REPORT in clear labeled sections, each header on its own line, in THIS order (skip a section only if there is genuinely nothing for it): "SNAPSHOT:" (1-2 line headline: key counts + MRR + the single biggest thing today), "REVENUE:" (from the Stripe data below, as bullet lines "- ": MRR + net-new this month, then call out any PAST DUE clients to chase by name/amount, and any new or churned this month. Keep it to what needs his attention, not a full client dump. Skip only if revenue is unavailable.), "INBOX:" (SORT THROUGH the inbox threads listed below and triage them into sub-groups, each as bullet lines "- ": "Reply needed:" the ones Mitchell personally must answer (name the sender + subject + why in a few words), "Waiting on others:", and "FYI:". Lead with anything urgent or client-facing. If the inbox is unavailable, put a single line saying so.), "NEEDS YOUR CALL:" (decisions only the owner can resolve, bullet lines "- "), "AT RISK:" (overdue/blocked/overloaded work AND past-due revenue, bullet lines), "MOMENTUM:" (going well or just shipped, bullet lines), "MOVES TO SCALE:" (2-4 prioritized strategic recommendations to grow / cut / scale the business, each a bullet "- " = the specific move + a short "why" grounded in the real numbers. This is decision support: what should Mitchell actually DO to run and scale, not vague themes. Weight HEAVILY toward his standing priorities in the memory block above — e.g. if "getting more clients" is the #1 priority, lead with concrete client-acquisition moves (specific channels, who should own it, a number to hit); factor in revenue concentration risk, margin, rising costs, and team capacity. Rank most-impactful first). Reference real task titles, people, clients, numbers, and email senders/subjects. Be specific, skimmable, and honest.',
+    '  "daily_update": string,        // a REPORT in clear labeled sections, each header on its own line, in THIS order (skip a section only if there is genuinely nothing for it): "SNAPSHOT:" (1-2 line headline: key counts + MRR + the single biggest thing today), "SURVIVAL:" (the CFO read, from the "CFO survival read" block below — put this near the TOP right after SNAPSHOT because it is what Mitchell wants to see first every morning. As bullet lines "- ": state the survival margin before founder pay vs the 30% floor and whether we are above or below it (and by how much/mo if below), the biggest client-loss exposure, and 1-2 concrete moves for today to protect or restore the margin. The 30% floor is a hard survival rule — if we are below it, lead the whole brief with that and make the #1 move closing the gap. Skip only if the survival data is unavailable.), "REVENUE:" (from the Stripe data below, as bullet lines "- ": MRR + net-new this month, then call out any PAST DUE clients to chase by name/amount, and any new or churned this month. Keep it to what needs his attention, not a full client dump. Skip only if revenue is unavailable.), "INBOX:" (SORT THROUGH the inbox threads listed below and triage them into sub-groups, each as bullet lines "- ": "Reply needed:" the ones Mitchell personally must answer (name the sender + subject + why in a few words), "Waiting on others:", and "FYI:". Lead with anything urgent or client-facing. If the inbox is unavailable, put a single line saying so.), "NEEDS YOUR CALL:" (decisions only the owner can resolve, bullet lines "- "), "AT RISK:" (overdue/blocked/overloaded work AND past-due revenue, bullet lines), "MOMENTUM:" (going well or just shipped, bullet lines), "MOVES TO SCALE:" (2-4 prioritized strategic recommendations to grow / cut / scale the business, each a bullet "- " = the specific move + a short "why" grounded in the real numbers. This is decision support: what should Mitchell actually DO to run and scale, not vague themes. Weight HEAVILY toward his standing priorities in the memory block above — e.g. if "getting more clients" is the #1 priority, lead with concrete client-acquisition moves (specific channels, who should own it, a number to hit); factor in revenue concentration risk, margin, rising costs, and team capacity. Rank most-impactful first). Reference real task titles, people, clients, numbers, and email senders/subjects. Be specific, skimmable, and honest.',
     `  "needle_mover": string,        // THE single highest-leverage action for TODAY, drawn from MOVES TO SCALE and aligned with his top standing priority. Concrete and specific (name the action, and ideally who/what), not generic.`,
     `  "engagement_messages": [       // EXACTLY ${TARGET_MESSAGES} items, each to a DIFFERENT teammate`,
     '    { "userId": string,          // must be one of the teammate ids listed below',
@@ -293,6 +296,8 @@ function buildPrompts(args: {
     "",
     "## Recently shipped by teammate (last 7 days — use these for personal, specific check-ins)",
     shippedBlock,
+    "",
+    ...(survivalBlock ? ["", "## CFO survival read (owner-only — the 30% margin rule; use for the SURVIVAL section, and lead the brief with it if we are below the floor)", survivalBlock] : []),
     "",
     "## Revenue — live from Stripe (owner-only, where the money comes from)",
     revenueBlock,
@@ -551,6 +556,10 @@ export async function runDailyBriefing(
   ]);
   const memoryBlock = formatMemoriesBlock(memories);
   const expenseBlock = buildExpenseBlock((finDocs.data ?? []) as { parsed: unknown }[]);
+  // CFO read — the survival status + client-loss exposure + verdict, same as the
+  // /finance page. Fail-soft so a finance-data hiccup never blocks the brief.
+  const cfoSnap = await loadCfoSnapshot().catch(() => null);
+  const survivalBlock = cfoSnap ? cfoReadBlock(cfoSnap) : "";
   const tasks = allTasks.filter((t) => IN_FLIGHT.includes(t.status));
   // Recent wins (last 7 days) — material for personal check-ins.
   const shippedCutoff = Date.now() - 7 * 86_400_000;
@@ -574,7 +583,7 @@ export async function runDailyBriefing(
 
   const recentlyMessaged = await gatherRecentlyMessaged(supabase, now.ymd, nameById);
   const prompts = buildPrompts({
-    tasks, roster, inbox: inbox.items, inboxNote: inbox.note, nameById, recentlyMessaged, shipped, revenue, memoryBlock, expenseBlock
+    tasks, roster, inbox: inbox.items, inboxNote: inbox.note, nameById, recentlyMessaged, shipped, revenue, memoryBlock, expenseBlock, survivalBlock
   });
 
   let drafted: DraftedContent;

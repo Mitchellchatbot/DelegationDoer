@@ -29,6 +29,7 @@ import { BooksByMonth, type BookLine, type BookMonth } from "@/components/BooksB
 import { DeelContractors, type DeelRow } from "@/components/DeelContractors";
 import { computeDefense } from "@/lib/finance-defense";
 import { SurvivalDefense } from "@/components/SurvivalDefense";
+import { CfoRead } from "@/components/CfoRead";
 
 // Map a P&L period label ("Aug '26") to a 'YYYY-MM' key.
 const MONTH_NUM: Record<string, number> = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
@@ -169,7 +170,10 @@ export default async function FinancePage() {
         <span className="text-[10px] font-medium uppercase tracking-wide text-slate-500 bg-slate-100 rounded-full px-2 py-0.5">Private</span>
       </div>
 
-      {/* CFO survival rule: 30% margin before founder pay, with the defense plan. */}
+      {/* Start here every day: survival status + today's moves, one read. */}
+      <CfoRead defense={defense} learnings={learnings} />
+
+      {/* The defense playbook behind the read — collapsed, open when you act. */}
       <SurvivalDefense data={defense} />
 
       {/* The two sides of one P&L, side by side: Facebook vs SEO & website. */}

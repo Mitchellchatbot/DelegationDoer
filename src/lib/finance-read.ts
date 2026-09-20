@@ -1,6 +1,5 @@
-// The CFO read, shared by the on-page card (CfoRead.tsx) and the morning CFO
-// report DM (cfo-report-runner.ts) so the two never drift. Pure — no server or
-// React imports, safe to use from a client component and a server runner alike.
+// The CFO read logic behind the on-page card (CfoRead.tsx). Pure — no server or
+// React imports — so it stays easy to unit-test and reuse.
 
 import type { Defense } from "@/lib/finance-defense";
 import type { Learnings } from "@/lib/finance-learnings";

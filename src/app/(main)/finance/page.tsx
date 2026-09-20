@@ -170,20 +170,20 @@ export default async function FinancePage() {
         <span className="text-[10px] font-medium uppercase tracking-wide text-slate-500 bg-slate-100 rounded-full px-2 py-0.5">Private</span>
       </div>
 
-      {/* Start here every day: survival status + today's moves, one read. */}
-      <CfoRead defense={defense} learnings={learnings} />
+      {/* Daily zone — the read + the numbers behind it, tightened into one group. */}
+      <div className="space-y-4">
+        {/* Start here every day: survival status + today's moves, one read. */}
+        <CfoRead defense={defense} learnings={learnings} />
 
-      {/* The defense playbook behind the read — collapsed, open when you act. */}
-      <SurvivalDefense data={defense} />
+        {/* The defense playbook behind the read — collapsed, open when you act. */}
+        <SurvivalDefense data={defense} />
 
-      {/* The two sides of one P&L, side by side: Facebook vs SEO & website. */}
-      <BusinessBreakdownView data={breakdown} />
+        {/* The two sides of one P&L, side by side: Facebook vs SEO & website. */}
+        <BusinessBreakdownView data={breakdown} />
 
-      {/* Learnings & risks: growth, software, Facebook, concentration, projections. */}
-      <LearningsRisks data={learnings} />
-
-      {/* Dashboard: KPIs, revenue vs expenses, where the money goes, where to cut. */}
-      <FinanceOverviewView data={overview} />
+        {/* Learnings & risks: growth, software, Facebook, concentration, projections. */}
+        <LearningsRisks data={learnings} />
+      </div>
 
       {/* The cost-cutting brain — reasons over the P&L, software and payroll. */}
       <ScaleChat
@@ -192,6 +192,12 @@ export default async function FinancePage() {
         starters={FINANCE_STARTERS}
         opening={buildFinanceOpening(overview)}
       />
+
+      {/* Dashboard (reference): KPIs, revenue vs expenses, where the money goes. */}
+      <div>
+        <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 px-1 mb-2.5">Dashboard</div>
+        <FinanceOverviewView data={overview} />
+      </div>
 
       {/* Details + management — the source-of-truth lists and uploads. */}
       <div className="pt-2">

@@ -23,7 +23,7 @@ const STARTERS = [
   "Who should I follow up with this week?"
 ];
 
-export function ScaleChat({ opening, title = "Ask your brain", subtitle = "What should you do next? It reads your clients, pipeline, ads, and memory.", starters = STARTERS }: { opening?: string; title?: string; subtitle?: string; starters?: string[] }) {
+export function ScaleChat({ opening, title = "Ask your brain", subtitle = "What should you do next? It reads your inbox, clients, pipeline, ads, and memory.", starters = STARTERS }: { opening?: string; title?: string; subtitle?: string; starters?: string[] }) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);

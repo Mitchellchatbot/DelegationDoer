@@ -208,7 +208,7 @@ export default async function FinancePage() {
           <FacebookMonthly months={fbMonthInputs} initial={fbRevenueByPeriod} expensesInitial={fbExpensesByPeriod} commissionInitial={fbCommissionByPeriod} />
           <ExpenseLabels lines={expenseLines} lineInitial={expenseSegments} software={softwareItems as SoftwareRow[]} latestShort={latestShort} />
           {/* Planning + drill-downs. */}
-          <NextMonthBudget parsed={latestParsed} estimates={estimates} defaultRevenue={latestPnl?.income ?? 0} />
+          <NextMonthBudget parsed={latestParsed} estimates={estimates} defaultRevenue={latestPnl?.income ?? 0} vendors={(expRes.data ?? []) as ExplVendor[]} months={bookMonths} />
           <PayrollManual initial={(payRes.data ?? []) as PayrollEntry[]} />
           <DeelContractors rows={deelRows} />
           <ExpenseExplorer lines={bookLines} months={bookMonths} vendors={(expRes.data ?? []) as ExplVendor[]} />

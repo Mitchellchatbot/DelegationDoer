@@ -1,9 +1,12 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, ChevronRight } from "lucide-react";
 import type { ParsedPnl } from "@/lib/pnl-parse";
 import { MARGIN_FLOOR } from "@/lib/finance-defense";
+
+export interface BudgetVendor { account: string; vendor: string; month: string; amount: number }
+export interface BudgetMonth { period: string; label: string }
 
 // A forward forecast for next month: an editable revenue estimate + every
 // expense line with an editable estimate (pre-filled from last month's actual).
@@ -68,15 +71,37 @@ function buildLines(parsed: ParsedPnl): { lines: Line[]; lastMonthLabel: string;
     }
   }
   const seen = new Set<string>();
-  const dedup = lines.filter((l) => (seen.has(l.account) ? false : (seen.add(l.account), true))).filter((l) => l.lastMonth !== 0);
+  // Every line from the month before — even the $0 ones (they sort to the bottom).
+  const dedup = lines.filter((l) => (seen.has(l.account) ? false : (seen.add(l.account), true)));
   dedup.sort((a, b) => b.lastMonth - a.lastMonth);
   const thisMonthTotal = dedup.reduce((s, l) => s + l.lastMonth, 0);
   return { lines: dedup, lastMonthLabel, thisMonthTotal };
 }
 
-export function NextMonthBudget({ parsed, estimates, defaultRevenue = 0 }: { parsed: ParsedPnl | null | undefined; estimates: Record<string, number>; defaultRevenue?: number }) {
+export function NextMonthBudget({ parsed, estimates, defaultRevenue = 0, vendors = [], months = [] }: { parsed: ParsedPnl | null | undefined; estimates: Record<string, number>; defaultRevenue?: number; vendors?: BudgetVendor[]; months?: BudgetMonth[] }) {
   const built = useMemo(() => (parsed ? buildLines(parsed) : null), [parsed]);
   const [est, setEst] = useState<Record<string, number>>(estimates);
+  const [openLine, setOpenLine] = useState<Record<string, boolean>>({});
+
+  // Vendor breakdown per account for the last two months we have detail for
+  // (e.g. Jul → Aug), so each forecast line shows what actually made it up.
+  const vendorModel = useMemo(() => {
+    const shortSeq = months.map((m) => m.label.slice(0, 3));
+    const present = [...new Set(vendors.map((v) => v.month.slice(0, 3)))];
+    const ordered = shortSeq.filter((s) => present.includes(s));
+    const cols = ordered.slice(-2); // prev + last month (e.g. Jul, Aug)
+    const byAccount = new Map<string, Map<string, Record<string, number>>>();
+    for (const v of vendors) {
+      const mo = v.month.slice(0, 3);
+      if (!cols.includes(mo)) continue;
+      const vmap = byAccount.get(v.account) ?? new Map<string, Record<string, number>>();
+      const rec = vmap.get(v.vendor) ?? {};
+      rec[mo] = (rec[mo] ?? 0) + Number(v.amount);
+      vmap.set(v.vendor, rec);
+      byAccount.set(v.account, vmap);
+    }
+    return { cols, byAccount };
+  }, [vendors, months]);
   const [saving, setSaving] = useState<string | null>(null);
 
   const [oneOffName, setOneOffName] = useState("");
@@ -187,28 +212,59 @@ export function NextMonthBudget({ parsed, estimates, defaultRevenue = 0 }: { par
       </div>
 
       <div className="divide-y divide-slate-100">
-        {lines.map((l) => (
-          <div key={l.account} className="flex items-center gap-3 py-2">
-            <div className="min-w-0 flex-1">
-              <div className="text-[13px] font-medium text-slate-900 truncate">{l.account}</div>
-              <div className="text-[11px] text-slate-400 truncate">{l.category !== l.account ? l.category : "expense"} · was {money(l.lastMonth)}</div>
+        {lines.map((l) => {
+          const vmap = vendorModel.byAccount.get(l.account);
+          const vendorRows = vmap
+            ? [...vmap.entries()].map(([vendor, vals]) => ({ vendor, vals, last: vals[vendorModel.cols[vendorModel.cols.length - 1]] ?? 0 }))
+                .sort((a, b) => b.last - a.last)
+            : [];
+          const isOpen = !!openLine[l.account];
+          return (
+            <div key={l.account} className="py-2">
+              <div className="flex items-center gap-3">
+                <button type="button" onClick={() => vendorRows.length && setOpenLine((o) => ({ ...o, [l.account]: !o[l.account] }))}
+                  className={"min-w-0 flex-1 flex items-start gap-1.5 text-left " + (vendorRows.length ? "" : "cursor-default")}>
+                  {vendorRows.length > 0
+                    ? <ChevronRight className={"w-3.5 h-3.5 text-slate-400 mt-0.5 shrink-0 transition-transform " + (isOpen ? "rotate-90" : "")} />
+                    : <span className="w-3.5 shrink-0" />}
+                  <div className="min-w-0">
+                    <div className="text-[13px] font-medium text-slate-900 truncate">{l.account}</div>
+                    <div className="text-[11px] text-slate-400 truncate">{l.category !== l.account ? l.category : "expense"} · was {money(l.lastMonth)}{vendorRows.length ? ` · ${vendorRows.length} vendors` : ""}</div>
+                  </div>
+                </button>
+                <div className="flex items-center gap-1 shrink-0">
+                  <span className="text-[13px] text-slate-400">$</span>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    defaultValue={String(estOf(l))}
+                    onFocus={(e) => e.currentTarget.select()}
+                    onBlur={(e) => save(l.account, e.currentTarget.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
+                    className="w-24 text-[13px] text-right tabular-nums rounded-lg border border-slate-200 px-2 py-1 focus:outline-none focus:border-slate-400"
+                  />
+                  {saving === l.account && <span className="text-[10px] text-slate-400 w-8">saving</span>}
+                  {saving !== l.account && <span className="w-8" />}
+                </div>
+              </div>
+
+              {isOpen && vendorRows.length > 0 && (
+                <div className="ml-5 mt-1.5 mb-1 border-l border-slate-100 pl-3">
+                  <div className="flex items-center gap-2 pb-1 text-[10px] font-medium uppercase tracking-wide text-slate-400">
+                    <span className="flex-1">Vendor</span>
+                    {vendorModel.cols.map((c) => <span key={c} className="w-[64px] text-right shrink-0">{c}</span>)}
+                  </div>
+                  {vendorRows.map((v) => (
+                    <div key={v.vendor} className="flex items-center gap-2 py-0.5 text-[12px]">
+                      <span className="flex-1 min-w-0 truncate text-slate-600">{v.vendor}</span>
+                      {vendorModel.cols.map((c) => <span key={c} className="w-[64px] text-right shrink-0 tabular-nums text-slate-500">{money(v.vals[c] ?? 0)}</span>)}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
-            <div className="flex items-center gap-1 shrink-0">
-              <span className="text-[13px] text-slate-400">$</span>
-              <input
-                type="text"
-                inputMode="decimal"
-                defaultValue={String(estOf(l))}
-                onFocus={(e) => e.currentTarget.select()}
-                onBlur={(e) => save(l.account, e.currentTarget.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
-                className="w-24 text-[13px] text-right tabular-nums rounded-lg border border-slate-200 px-2 py-1 focus:outline-none focus:border-slate-400"
-              />
-              {saving === l.account && <span className="text-[10px] text-slate-400 w-8">saving</span>}
-              {saving !== l.account && <span className="w-8" />}
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       {/* One-off / added payments — one-time costs you expect next month. */}

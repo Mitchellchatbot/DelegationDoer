@@ -6,8 +6,7 @@ import { getUserById } from "@/lib/server-data";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { isOwner } from "@/lib/access";
 import { FinancePanel, type FinanceDoc } from "@/components/FinancePanel";
-import { ExpenseBreakdown } from "@/components/ExpenseBreakdown";
-import { ExpenseVendors, type ExpenseRow } from "@/components/ExpenseVendors";
+import { ExpenseExplorer, type ExplVendor } from "@/components/ExpenseExplorer";
 import { PayrollManual, type PayrollEntry } from "@/components/PayrollManual";
 import { StripeMissing } from "@/components/StripeMissing";
 import { MrrManual, type MrrEntry } from "@/components/MrrManual";
@@ -212,8 +211,7 @@ export default async function FinancePage() {
           <NextMonthBudget parsed={latestParsed} estimates={estimates} />
           <PayrollManual initial={(payRes.data ?? []) as PayrollEntry[]} />
           <DeelContractors rows={deelRows} />
-          <ExpenseBreakdown parsed={latestParsed} />
-          <ExpenseVendors rows={(expRes.data ?? []) as ExpenseRow[]} />
+          <ExpenseExplorer lines={bookLines} months={bookMonths} vendors={(expRes.data ?? []) as ExplVendor[]} />
           <BooksByMonth lines={bookLines} months={bookMonths} />
           {/* Reference + files, last. */}
           <FacebookRevenue result={fbResult} />

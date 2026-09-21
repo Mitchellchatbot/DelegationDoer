@@ -86,7 +86,7 @@ export function SurvivalDefense({ data }: { data: Defense }) {
                   </div>
                 ))}
               </div>
-              <div className="text-[11px] text-slate-400 mt-2 leading-snug">Revenue-share leads. Their cost auto-scales with revenue, so a client loss shrinks them proportionally — that&apos;s why they&apos;re not on the ladder.</div>
+              <div className="text-[11px] text-slate-400 mt-2 leading-snug">Revenue-share leads — never cut. Sam, Tabrez &amp; Farez are paid a share of SEO revenue, so a client loss shrinks their cost automatically; that&apos;s why they&apos;re not on the ladder.</div>
             </div>
           </div>
         </div>

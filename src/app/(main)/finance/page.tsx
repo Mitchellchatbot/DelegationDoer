@@ -164,7 +164,8 @@ export default async function FinancePage() {
     software: latestPnl?.software ?? 0,
     ads: latestPnl?.advertising ?? 0,
     contractors: latestPnl ? deelRows.filter((r) => r.period === latestPnl.period && !r.is_fee).map((r) => ({ name: r.contractor, monthly: r.amount })) : [],
-    topClients: (mrrRows as { company: string; mrr: number }[]).map((r) => ({ company: String(r.company ?? ""), mrr: Number(r.mrr) || 0 })).filter((c) => c.mrr > 0).sort((a, b) => b.mrr - a.mrr)
+    topClients: (mrrRows as { company: string; mrr: number }[]).map((r) => ({ company: String(r.company ?? ""), mrr: Number(r.mrr) || 0 })).filter((c) => c.mrr > 0).sort((a, b) => b.mrr - a.mrr),
+    seoRevenue: breakdown.seo.revenue
   });
 
   return (

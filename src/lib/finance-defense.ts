@@ -6,6 +6,12 @@
 export const MARGIN_FLOOR = 30; // % before founder pay
 export const PROTECTED = ["samrez", "tabrez", "farez", "mujtaba", "sam (novo)"]; // revenue-share, never cut
 export const isProtected = (name: string) => { const n = name.toLowerCase(); return PROTECTED.some((t) => n.includes(t)); };
+// Sam, Tabrez, Farez are paid a share of SEO revenue specifically — so on a
+// client loss (which is an SEO/recurring client) their cost scales down with
+// the SEO side, not total revenue. The rest of the protected pool scales with
+// total revenue.
+export const PROTECTED_SEO = ["samrez", "tabrez", "farez", "sam (novo)"];
+export const isSeoShare = (name: string) => { const n = name.toLowerCase(); return PROTECTED_SEO.some((t) => n.includes(t)); };
 
 export interface Contractor { name: string; monthly: number }
 export interface Lever { label: string; category: "software" | "ads" | "contractor"; monthly: number }
@@ -44,10 +50,12 @@ export function computeDefense(input: {
   ads: number;
   contractors: Contractor[];  // latest month, all
   topClients: { company: string; mrr: number }[];
+  seoRevenue?: number;        // SEO-side revenue; the SEO-share leads scale off this
   floorPct?: number;
 }): Defense {
   const floorPct = input.floorPct ?? MARGIN_FLOOR;
   const { month, revenue } = input;
+  const seoRevenue = input.seoRevenue && input.seoRevenue > 0 ? input.seoRevenue : revenue;
   if (!revenue) return { hasData: false, month, revenue: 0, beforeFounderProfit: 0, marginPct: 0, floorPct, onTrack: false, gapNow: 0, protected: [], protectedTotal: 0, cutLadder: [], cutCapacity: 0, scenarios: [], verdict: "No data yet." };
 
   const beforeFounderProfit = r0(input.normalizedNet + input.founderPay);
@@ -68,13 +76,22 @@ export function computeDefense(input: {
   ];
   const cutCapacity = cutLadder.reduce((s, l) => s + l.monthly, 0);
 
+  // Split the protected pool: SEO-share leads (Sam/Tabrez/Farez) scale with the
+  // SEO side; the rest scale with total revenue.
+  const seoShareTotal = r0(prot.filter((c) => isSeoShare(c.name)).reduce((s, c) => s + c.monthly, 0));
+  const otherProtTotal = protectedTotal - seoShareTotal;
+
   // Costs that DON'T auto-scale (everything except founder pay and the protected
   // revenue-share pool). Used to model a client loss.
   const otherFixed = (revenue - beforeFounderProfit) - protectedTotal;
   const scenarios: Scenario[] = input.topClients.slice(0, 3).map((c) => {
+    // A lost client is a recurring (SEO) client, so it comes off the SEO side.
     const lost = r0(c.mrr);
     const newRev = revenue - lost;
-    const protNew = protectedTotal * (newRev / revenue); // revenue-share auto-scales down
+    const newSeoRev = Math.max(0, seoRevenue - lost);
+    const seoShareNew = seoShareTotal * (seoRevenue ? newSeoRev / seoRevenue : 1); // SEO-share leads shrink with SEO
+    const otherProtNew = otherProtTotal * (revenue ? newRev / revenue : 1);
+    const protNew = seoShareNew + otherProtNew;
     const newBF = newRev - otherFixed - protNew;
     const newMarginPct = Math.round((newBF / newRev) * 1000) / 10;
     const cutNeeded = Math.max(0, r0((floorPct / 100) * newRev - newBF));

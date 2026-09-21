@@ -391,6 +391,19 @@ export const AI_TOOLS = [
     }
   },
   {
+    name: "search_inbox",
+    description:
+      "OWNER-ONLY. Read Mitchell's email inbox (Missive). Pass `query` to find specific mail by keyword, sender, company or subject (e.g. 'OpenAI', 'invoice', a person's name) — leave it out to get the most recent open threads. Returns matching threads with the sender, subject, date, participants, and the latest message's text so you can READ the conversation. Use this whenever Mitchell refers to his inbox or specific emails ('respond to the OpenAI emails', 'what did X say', 'anything from Deel'). To DRAFT a reply after reading, call propose_email (to = the sender, subject 'Re: …', body = your drafted reply) — nothing sends until he clicks Send. Returns { error } for non-owners.",
+    input_schema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Keyword / sender / company / subject to search for. Omit for the latest open threads." },
+        limit: { type: "number", description: "Max threads to return (default 6, max 10)." }
+      },
+      required: []
+    }
+  },
+  {
     name: "remember",
     description:
       "OWNER-ONLY. Save a durable fact the brain should carry across every future chat and the daily brief. Call this whenever Mitchell states a standing priority ('getting more clients is the top priority'), a decision ('we're cutting LinkedIn ads'), a company fact ('Talha owns outbound'), or a preference ('keep team messages casual'). Don't save one-off questions, transient status, or anything already obvious from the data. Pick the closest category. Returns the saved memory. Non-owner callers get access-denied — never save memory for them.",
@@ -488,6 +501,7 @@ export async function runTool(
       case "get_outbound_pipeline": return getOutboundPipelineTool(input, ctx);
       case "get_meta_ads": return getMetaAdsTool(input, ctx);
       case "propose_email": return proposeEmail(input, ctx);
+      case "search_inbox": return searchInbox(input, ctx);
       case "remember": return rememberFact(input, ctx);
       case "forget": return forgetFact(input, ctx);
       default:
@@ -2349,6 +2363,67 @@ async function forgetFact(input: Record<string, unknown>, ctx: ToolContext) {
 
 // OWNER-ONLY: stage a drafted new email as a "Send email" action card. The
 // send itself happens only when Mitchell clicks Send (see /api/brain/compose).
+// Read Mitchell's inbox so the brain can find + read specific emails and draft
+// replies (via propose_email). Owner-only. Prefers his own connected inbox; the
+// `q` search hits subject/body server-side. getThread returns full message text.
+export async function searchInbox(input: Record<string, unknown>, ctx: ToolContext) {
+  if (!isOwner(ctx.actor)) return { error: "access denied — the inbox is owner-only" };
+  const query = typeof input.query === "string" ? input.query.trim() : "";
+  const limit = Math.min(10, Math.max(1, Number(input.limit) || 6));
+
+  let accounts: Awaited<ReturnType<typeof listAccounts>>;
+  let visibleIds: Set<string> | null;
+  try {
+    [accounts, visibleIds] = await Promise.all([listAccounts(), visibleAccountIdsFor(ctx.actor)]);
+  } catch (err) {
+    return { error: `inbox unreachable: ${err instanceof Error ? err.message : String(err)}` };
+  }
+  const visible = visibleIds === null ? accounts : accounts.filter((a) => visibleIds!.has(a.id));
+  const ownerEmail = (ctx.actor.email ?? "").toLowerCase();
+  const own = visible.filter((a) => a.email.toLowerCase() === ownerEmail);
+  const mailboxIds = (own.length ? own : visible).map((a) => a.id);
+  if (mailboxIds.length === 0) return { error: "no inbox connected for you" };
+
+  let threads: Awaited<ReturnType<typeof listThreads>>;
+  try {
+    threads = await listThreads({ folder: "INBOX", status: "open", q: query || undefined, limit: Math.min(20, limit * 2), mailboxIds });
+  } catch (err) {
+    return { error: `inbox search failed: ${err instanceof Error ? err.message : String(err)}` };
+  }
+  if (threads.length === 0) {
+    return { query: query || null, threads: [], note: query ? `No open inbox threads match "${query}".` : "No open inbox threads." };
+  }
+
+  const clip = (s: string | null | undefined) => (s ?? "").replace(/\s+/g, " ").trim().slice(0, 1500);
+  const out = [];
+  for (const t of threads.slice(0, limit)) {
+    let detail: Awaited<ReturnType<typeof getThread>>;
+    try { detail = await getThread(t.id); } catch { continue; }
+    const msgs = detail.messages ?? [];
+    if (msgs.length === 0) continue;
+    const last = msgs[msgs.length - 1];
+    const lastInbound = [...msgs].reverse().find((m) => m.direction === "inbound");
+    out.push({
+      threadId: t.id,
+      subject: t.subject || last.subject || "(no subject)",
+      from: last.from_addr,
+      participants: [...new Set(msgs.map((m) => m.from_addr).filter(Boolean))].slice(0, 6),
+      lastAt: last.sent_at ?? t.last_message_at ?? null,
+      messageCount: msgs.length,
+      awaitingReply: last.direction === "inbound",
+      latest: { direction: last.direction, from: last.from_addr, to: last.to_addrs, at: last.sent_at, text: clip(last.body_text) || clip(last.snippet) },
+      // The last message they sent you — the one to respond to, if the latest is your own reply.
+      lastFromThem: lastInbound && lastInbound.id !== last.id ? { from: lastInbound.from_addr, at: lastInbound.sent_at, text: clip(lastInbound.body_text) || clip(lastInbound.snippet) } : null
+    });
+  }
+  return {
+    query: query || null,
+    count: out.length,
+    threads: out,
+    note: "To draft a reply, call propose_email with to = the sender's address, subject 'Re: …', and body = your drafted reply in Mitchell's voice. Nothing sends until he clicks Send."
+  };
+}
+
 function proposeEmail(input: Record<string, unknown>, ctx: ToolContext) {
   if (!isOwner(ctx.actor)) {
     return { error: "access denied — sending email is owner-only" };

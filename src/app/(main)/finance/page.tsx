@@ -200,31 +200,47 @@ export default async function FinancePage() {
         opening={buildFinanceOpening(overview)}
       />
 
-      {/* Dashboard (reference): KPIs, revenue vs expenses, where the money goes. */}
-      <div>
-        <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 px-1 mb-2.5">Dashboard</div>
-        <FinanceOverviewView data={overview} />
-      </div>
+      {/* Manage — grouped into daily-use buckets so it reads at a glance. */}
+      <div className="pt-2 space-y-7">
+        {/* Money in — the revenue sources. */}
+        <div>
+          <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 px-1 mb-2.5">Money in</div>
+          <div className="space-y-5">
+            <MrrManual initial={mrrRows as MrrEntry[]} />
+            <StripeMissing rev={revenue} sheetNames={mrrRows.map((r) => r.company as string)} />
+            <StripeOneOffs oneOffs={oneOffs} segments={oneOffSegments} />
+            <FacebookMonthly months={fbMonthInputs} initial={fbRevenueByPeriod} expensesInitial={fbExpensesByPeriod} commissionInitial={fbCommissionByPeriod} />
+          </div>
+        </div>
 
-      {/* Details + management — the source-of-truth lists and uploads. */}
-      <div className="pt-2">
-        <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 px-1 mb-2.5">Manage</div>
-        <div className="space-y-5">
-          {/* Source of truth + the inputs that drive the breakdown, first. */}
-          <MrrManual initial={mrrRows as MrrEntry[]} />
-          <StripeMissing rev={revenue} sheetNames={mrrRows.map((r) => r.company as string)} />
-          <StripeOneOffs oneOffs={oneOffs} segments={oneOffSegments} />
-          <FacebookMonthly months={fbMonthInputs} initial={fbRevenueByPeriod} expensesInitial={fbExpensesByPeriod} commissionInitial={fbCommissionByPeriod} />
-          <ExpenseLabels lines={expenseLines} lineInitial={expenseSegments} software={softwareItems as SoftwareRow[]} latestShort={latestShort} />
-          {/* Planning + drill-downs. */}
-          <NextMonthBudget parsed={latestParsed} estimates={estimates} defaultRevenue={latestPnl?.income ?? 0} vendors={(expRes.data ?? []) as ExplVendor[]} months={bookMonths} />
-          <PayrollManual initial={(payRes.data ?? []) as PayrollEntry[]} />
-          <DeelContractors rows={deelRows} />
-          <ExpenseExplorer lines={bookLines} months={bookMonths} vendors={(expRes.data ?? []) as ExplVendor[]} />
-          <BooksByMonth lines={bookLines} months={bookMonths} />
-          {/* Reference + files, last. */}
-          <FacebookRevenue result={fbResult} />
-          <FinancePanel initialDocuments={rows.map(({ parsed, ...d }) => d)} />
+        {/* Money out — where it goes + the Facebook/SEO labels. */}
+        <div>
+          <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 px-1 mb-2.5">Money out</div>
+          <div className="space-y-5">
+            <ExpenseExplorer lines={bookLines} months={bookMonths} vendors={(expRes.data ?? []) as ExplVendor[]} />
+            <DeelContractors rows={deelRows} />
+            <PayrollManual initial={(payRes.data ?? []) as PayrollEntry[]} />
+            <ExpenseLabels lines={expenseLines} lineInitial={expenseSegments} software={softwareItems as SoftwareRow[]} latestShort={latestShort} />
+          </div>
+        </div>
+
+        {/* Plan & books — the forecast + the full ledger. */}
+        <div>
+          <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 px-1 mb-2.5">Plan &amp; books</div>
+          <div className="space-y-5">
+            <NextMonthBudget parsed={latestParsed} estimates={estimates} defaultRevenue={latestPnl?.income ?? 0} vendors={(expRes.data ?? []) as ExplVendor[]} months={bookMonths} />
+            <BooksByMonth lines={bookLines} months={bookMonths} />
+          </div>
+        </div>
+
+        {/* Reference — read-only views + source files. */}
+        <div>
+          <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 px-1 mb-2.5">Reference</div>
+          <div className="space-y-5">
+            <FinanceOverviewView data={overview} />
+            <FacebookRevenue result={fbResult} />
+            <FinancePanel initialDocuments={rows.map(({ parsed, ...d }) => d)} />
+          </div>
         </div>
       </div>
     </div>

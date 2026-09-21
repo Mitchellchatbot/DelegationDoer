@@ -154,6 +154,17 @@ export default async function FinancePage() {
   const bookMonths: BookMonth[] = pnlMonths.map((m) => ({ period: m.period, label: m.label }));
   const deelRows = ((deelRes.data ?? []) as DeelRow[]).map((r) => ({ period: r.period, contractor: r.contractor, amount: Number(r.amount), is_fee: !!r.is_fee }));
 
+  // Vendor detail for the September forecast + explorer. Contractor Payments
+  // breaks down by PERSON (from Deel + bank), not the sparse expense-line vendors,
+  // so "what's Sam, what's everyone else" is editable. Other accounts use the
+  // QuickBooks transaction export.
+  const MONTH3 = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const period3 = (p: string) => MONTH3[Number(p.slice(5, 7)) - 1] ?? p;
+  const budgetVendors: ExplVendor[] = [
+    ...((expRes.data ?? []) as ExplVendor[]).filter((v) => v.account !== "Contractor Payments"),
+    ...deelRows.filter((r) => !r.is_fee).map((r) => ({ account: "Contractor Payments", vendor: r.contractor, month: period3(r.period), amount: r.amount }))
+  ];
+
   // CFO survival model: 30% margin before founder pay, cut ladder, client-loss playbook.
   const latestPnl = pnlMonths[pnlMonths.length - 1];
   const defense = computeDefense({
@@ -229,7 +240,7 @@ export default async function FinancePage() {
         <div>
           <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 px-1 mb-2.5">Plan &amp; books</div>
           <div className="space-y-5">
-            <NextMonthBudget parsed={latestParsed} estimates={estimates} defaultRevenue={latestPnl?.income ?? 0} vendors={(expRes.data ?? []) as ExplVendor[]} months={bookMonths} />
+            <NextMonthBudget parsed={latestParsed} estimates={estimates} defaultRevenue={latestPnl?.income ?? 0} vendors={budgetVendors} months={bookMonths} />
             <BooksByMonth lines={bookLines} months={bookMonths} />
           </div>
         </div>

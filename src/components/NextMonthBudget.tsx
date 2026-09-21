@@ -33,12 +33,14 @@ function money(n: number): string {
   return `${s}$${Math.abs(Math.round(n)).toLocaleString("en-US")}`;
 }
 
-function Stat({ label, value, tone }: { label: string; value: string; tone?: "rose" | "emerald" }) {
+function Stat({ label, value, tone, sub, subTone }: { label: string; value: string; tone?: "rose" | "emerald"; sub?: string; subTone?: "emerald" | "amber" }) {
   const color = tone === "rose" ? "text-rose-600" : tone === "emerald" ? "text-emerald-600" : "text-slate-900";
+  const subColor = subTone === "emerald" ? "text-emerald-600" : subTone === "amber" ? "text-amber-600" : "text-slate-400";
   return (
     <div>
       <div className="text-[10px] uppercase tracking-wide text-slate-400">{label}</div>
       <div className={"text-[16px] font-bold tabular-nums leading-tight mt-0.5 " + color}>{value}</div>
+      {sub && <div className={"text-[10px] font-medium tabular-nums mt-0.5 " + subColor}>{sub}</div>}
     </div>
   );
 }
@@ -208,13 +210,16 @@ export function NextMonthBudget({ parsed, estimates, defaultRevenue = 0, vendors
             className="w-32 text-[14px] font-semibold text-right tabular-nums rounded-lg border border-slate-200 px-2 py-1 focus:outline-none focus:border-slate-400"
           />
           {saving === REV_KEY && <span className="text-[10px] text-slate-400">saving</span>}
-          <span className="text-[11px] text-slate-400">
-            edit the cost lines below · spend {delta === 0 ? `= ${lastMonthLabel}` : `${delta > 0 ? "+" : ""}${money(delta)} vs ${lastMonthLabel}`}
-          </span>
+          {delta !== 0 && (
+            <span className={"ml-auto text-[12px] font-semibold rounded-full px-2.5 py-1 " + (delta < 0 ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700")}>
+              {delta < 0 ? `▼ Cutting ${money(-delta)}/mo` : `▲ ${money(delta)}/mo more`} vs {lastMonthLabel}
+            </span>
+          )}
         </div>
+        <div className="text-[11px] text-slate-400 mt-1">Edit the cost lines below — the total, net &amp; margin update as you go.</div>
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-3">
           <Stat label="Revenue" value={money(revenue)} />
-          <Stat label="Expenses" value={money(totalNext)} />
+          <Stat label="Expenses" value={money(totalNext)} sub={delta === 0 ? `same as ${lastMonthLabel}` : `${delta < 0 ? "−" : "+"}${money(Math.abs(delta))} vs ${lastMonthLabel}`} subTone={delta < 0 ? "emerald" : delta > 0 ? "amber" : undefined} />
           <Stat label="Net" value={money(net)} tone={net < 0 ? "rose" : undefined} />
           <Stat label="Margin before founder" value={`${marginBF.toFixed(1)}%`} tone={holdsFloor ? "emerald" : "rose"} />
         </div>
@@ -235,6 +240,8 @@ export function NextMonthBudget({ parsed, estimates, defaultRevenue = 0, vendors
                 .sort((a, b) => b.last - a.last)
             : [];
           const isOpen = !!openLine[l.account];
+          const lineDelta = estOf(l) - l.lastMonth;
+          const vendorNoun = l.account === "Contractor Payments" ? "people" : "vendors";
           return (
             <div key={l.account} className="py-2">
               <div className="flex items-center gap-3">
@@ -245,7 +252,10 @@ export function NextMonthBudget({ parsed, estimates, defaultRevenue = 0, vendors
                     : <span className="w-3.5 shrink-0" />}
                   <div className="min-w-0">
                     <div className="text-[13px] font-medium text-slate-900 truncate">{l.account}</div>
-                    <div className="text-[11px] text-slate-400 truncate">{l.category !== l.account ? l.category : "expense"} · was {money(l.lastMonth)}{vendorRows.length ? ` · ${vendorRows.length} vendors` : ""}</div>
+                    <div className="text-[11px] text-slate-400 truncate">
+                      {l.category !== l.account ? l.category : "expense"} · was {money(l.lastMonth)}{vendorRows.length ? ` · ${vendorRows.length} ${vendorNoun}` : ""}
+                      {lineDelta !== 0 && <span className={"font-medium " + (lineDelta < 0 ? "text-emerald-600" : "text-amber-600")}> · {lineDelta < 0 ? `saving ${money(-lineDelta)}` : `+${money(lineDelta)}`}</span>}
+                    </div>
                   </div>
                 </button>
                 <div className="flex items-center gap-1 shrink-0">

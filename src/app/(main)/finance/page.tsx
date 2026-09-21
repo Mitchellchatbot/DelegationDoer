@@ -15,7 +15,8 @@ import { FinanceOverviewView } from "@/components/FinanceOverviewView";
 import { NextMonthBudget } from "@/components/NextMonthBudget";
 import { getFinanceOverview, type FinanceOverview } from "@/lib/finance-overview";
 import { ScaleChat } from "@/components/ScaleChat";
-import { getStripeRevenue } from "@/lib/stripe";
+import { getStripeRevenue, getStripeOneOffs, type OneOffPayment } from "@/lib/stripe";
+import { StripeOneOffs } from "@/components/StripeOneOffs";
 import { getFacebookRevenue } from "@/lib/facebook-revenue";
 import { latestMonthIndex, expenseLeafLines, type ParsedPnl, type ExpenseLeaf } from "@/lib/pnl-parse";
 import { computeBreakdown, type Segment, type SoftwareItem } from "@/lib/finance-segments";
@@ -80,7 +81,7 @@ export default async function FinancePage() {
   if (!isOwner(user)) notFound();
 
   const supabase = getSupabaseAdmin();
-  const [docRes, overview, revenue, mrrRes, expRes, payRes, estRes, expSegRes, swRes, fbMonthRes, fbResult, pnlRes, pnlLinesRes, deelRes] = await Promise.all([
+  const [docRes, overview, revenue, mrrRes, expRes, payRes, estRes, expSegRes, swRes, fbMonthRes, fbResult, pnlRes, pnlLinesRes, deelRes, oneOffsRes, oneOffSegRes] = await Promise.all([
     supabase.from("finance_documents").select("id, label, filename, content_type, size_bytes, uploaded_at, parsed").order("uploaded_at", { ascending: false }),
     getFinanceOverview(),
     getStripeRevenue().catch(() => null),
@@ -94,7 +95,9 @@ export default async function FinancePage() {
     getFacebookRevenue().catch(() => ({ ok: false as const, error: "unavailable" })),
     supabase.from("pnl_monthly").select("period, label, income, expenses, net, taxes, writeoffs, software, contractors, advertising").order("period", { ascending: true }),
     supabase.from("pnl_lines").select("period, account, section, amount"),
-    supabase.from("deel_payments").select("period, contractor, amount, is_fee")
+    supabase.from("deel_payments").select("period, contractor, amount, is_fee"),
+    getStripeOneOffs().catch(() => null),
+    supabase.from("stripe_oneoff_segments").select("payment_id, segment")
   ]);
 
   const rows = (docRes.data ?? []) as (FinanceDoc & { parsed: ParsedPnl | null })[];
@@ -102,6 +105,11 @@ export default async function FinancePage() {
   const mrrRows = mrrRes.data ?? [];
   const estimates: Record<string, number> = {};
   for (const e of (estRes.data ?? []) as { account: string; amount: number }[]) estimates[e.account] = Number(e.amount);
+
+  // One-off Stripe charges + their Facebook/SEO labels (owner tags them here).
+  const oneOffs = (oneOffsRes ?? []) as OneOffPayment[];
+  const oneOffSegments: Record<string, "seo" | "facebook"> = {};
+  for (const s of (oneOffSegRes.data ?? []) as { payment_id: string; segment: "seo" | "facebook" }[]) oneOffSegments[s.payment_id] = s.segment;
 
   // Facebook assignment inputs: P&L line labels, software vendor labels, and the
   // Facebook revenue per month from the Finance app.
@@ -205,6 +213,7 @@ export default async function FinancePage() {
           {/* Source of truth + the inputs that drive the breakdown, first. */}
           <MrrManual initial={mrrRows as MrrEntry[]} />
           <StripeMissing rev={revenue} sheetNames={mrrRows.map((r) => r.company as string)} />
+          <StripeOneOffs oneOffs={oneOffs} segments={oneOffSegments} />
           <FacebookMonthly months={fbMonthInputs} initial={fbRevenueByPeriod} expensesInitial={fbExpensesByPeriod} commissionInitial={fbCommissionByPeriod} />
           <ExpenseLabels lines={expenseLines} lineInitial={expenseSegments} software={softwareItems as SoftwareRow[]} latestShort={latestShort} />
           {/* Planning + drill-downs. */}

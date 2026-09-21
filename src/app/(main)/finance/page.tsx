@@ -134,7 +134,7 @@ export default async function FinancePage() {
     .filter((m) => m.period);
   const latestShort = monthLabels.length ? monthLabels[monthLabels.length - 1].slice(0, 3).toLowerCase() : "";
 
-  const breakdown = computeBreakdown({ parsed: latestParsed, expenseSegments, softwareItems, fbRevenueByPeriod, fbCommissionByPeriod, fbExpensesByPeriod });
+  const breakdown = computeBreakdown({ parsed: latestParsed, expenseSegments, softwareItems, fbRevenueByPeriod, fbCommissionByPeriod, fbExpensesByPeriod, oneOffs: oneOffs.map((o) => ({ id: o.id, date: o.date, amount: o.amount })), oneOffSegments });
 
   // Learnings & risks: 10-month P&L history + Facebook + software + client concentration.
   const pnlMonths = ((pnlRes.data ?? []) as PnlMonth[]).map((m) => ({

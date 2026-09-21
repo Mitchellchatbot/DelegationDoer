@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { parseServiceLines } from "@/lib/client-service-lines";
 import { requireCurrentUserId } from "@/lib/session";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { isValidTeamId, isSeoTeamId, TEAM_DEPARTMENT, type TeamId } from "@/lib/client-teams";
@@ -51,6 +52,14 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     }
 
     const update: Record<string, unknown> = {};
+
+    // Moves a client between the SEO & Web and Facebook tabs on /clients.
+    if ("serviceLines" in body) {
+      if (!Array.isArray(body.serviceLines) || body.serviceLines.length === 0) {
+        return NextResponse.json({ error: "serviceLines must be a non-empty array" }, { status: 400 });
+      }
+      update.service_lines = parseServiceLines(body.serviceLines);
+    }
 
     if ("teamId" in body) {
       const raw = body.teamId;

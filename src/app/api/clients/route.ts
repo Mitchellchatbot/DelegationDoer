@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { parseServiceLines } from "@/lib/client-service-lines";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { requireCurrentUserId } from "@/lib/session";
 
@@ -102,7 +103,8 @@ export async function POST(req: NextRequest) {
         onboarding_date: onboardingDate,
         business_information: typeof body.businessInformation === "string" && body.businessInformation.trim()
           ? body.businessInformation.trim()
-          : null
+          : null,
+        service_lines: parseServiceLines(body.serviceLines)
       })
       .select()
       .single();

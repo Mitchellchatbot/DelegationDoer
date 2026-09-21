@@ -20,6 +20,7 @@
 // the resulting Missive threads.
 
 import { getClients, type Client } from "@/lib/clients-data";
+import { isSeoWebClient } from "@/lib/client-service-lines";
 
 export interface SharedEmail {
   email: string;
@@ -76,7 +77,10 @@ export async function getBulkRoster(): Promise<{ clients: BulkRecipientClient[] 
     }
   }
 
-  const clients: BulkRecipientClient[] = roster.map(({ client, emails }) => {
+  // Recipients are SEO/Web clients only — this is the SEO update. The shared-
+  // email index above still spans every client, so an address shared with a
+  // Facebook-only client is still flagged.
+  const clients: BulkRecipientClient[] = roster.filter(({ client }) => isSeoWebClient(client)).map(({ client, emails }) => {
     const sharedEmails: SharedEmail[] = [];
     for (const raw of emails) {
       const key = normalizeEmail(raw);

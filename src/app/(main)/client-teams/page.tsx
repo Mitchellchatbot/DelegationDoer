@@ -5,6 +5,7 @@ import { PageHero } from "@/components/PageHero";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById, getAllUsers } from "@/lib/server-data";
 import { getClients } from "@/lib/clients-data";
+import { isSeoWebClient } from "@/lib/client-service-lines";
 import { canEditClientTeams, canMarkOutreachEmailed } from "@/lib/access";
 import { TEAMS, teamsForDepartment, type TeamId } from "@/lib/client-teams";
 import {
@@ -34,7 +35,9 @@ export default async function ClientTeamsPage() {
   const me = await getUserById(userId);
   if (!me) redirect("/login");
 
-  const [clients, allUsers] = await Promise.all([getClients(), getAllUsers()]);
+  const [allClients, allUsers] = await Promise.all([getClients(), getAllUsers()]);
+  // Facebook-only clients would otherwise pile into the Unassigned column.
+  const clients = allClients.filter(isSeoWebClient);
 
   const seoTeamIds = new Set<string>(teamsForDepartment("dep_seo"));
 

@@ -4,6 +4,8 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Plus, X } from "lucide-react";
 import { toast } from "sonner";
+import { SERVICE_LINES, type ServiceLine } from "@/lib/client-service-lines";
+import { cn } from "@/lib/utils";
 
 // Inline dialog for creating a new client folder. Uses a controlled modal
 // triggered by a + button on the list page. Submits to /api/clients.
@@ -11,7 +13,7 @@ import { toast } from "sonner";
 // Loose email-format check, mirrored server-side in /api/clients.
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-export function NewClientDialog() {
+export function NewClientDialog({ defaultServiceLine = "seo_web" }: { defaultServiceLine?: ServiceLine }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
@@ -22,6 +24,7 @@ export function NewClientDialog() {
   const [priority, setPriority] = useState<"low" | "medium" | "high">("medium");
   const [businessInformation, setBusinessInformation] = useState("");
   const [notes, setNotes] = useState("");
+  const [serviceLines, setServiceLines] = useState<ServiceLine[]>([defaultServiceLine]);
   const [submitting, setSubmitting] = useState(false);
 
   // Optional, but if filled it has to look like an email.
@@ -29,7 +32,7 @@ export function NewClientDialog() {
 
   function reset() {
     setName(""); setWebsite(""); setOnboardingDate(""); setContactName("");
-    setEmail(""); setPriority("medium"); setBusinessInformation(""); setNotes("");
+    setEmail(""); setPriority("medium"); setBusinessInformation(""); setNotes(""); setServiceLines([defaultServiceLine]);
   }
 
   async function submit() {
@@ -41,7 +44,7 @@ export function NewClientDialog() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name, website, onboardingDate, contactName,
-          email, priority, businessInformation, notes
+          email, priority, businessInformation, notes, serviceLines
         })
       });
       const data = await res.json();
@@ -60,7 +63,7 @@ export function NewClientDialog() {
   return (
     <>
       <button
-        onClick={() => setOpen(true)}
+        onClick={() => { setServiceLines([defaultServiceLine]); setOpen(true); }}
         className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-sm font-medium text-white shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-lift"
         style={{ background: "linear-gradient(135deg, #0a4099 0%, #063270 100%)" }}
       >
@@ -94,6 +97,30 @@ export function NewClientDialog() {
                 className="input mt-1"
               />
             </label>
+            <div>
+              <span className="text-xs text-muted">Service line</span>
+              <div className="mt-1 flex gap-1.5">
+                {SERVICE_LINES.map((l) => {
+                  const on = serviceLines.includes(l.id);
+                  return (
+                    <button
+                      key={l.id}
+                      type="button"
+                      // Toggle, but never down to zero — a client is always on at least one line.
+                      onClick={() => setServiceLines(on
+                        ? (serviceLines.length > 1 ? serviceLines.filter((x) => x !== l.id) : serviceLines)
+                        : [...serviceLines, l.id])}
+                      className={cn(
+                        "px-3 py-1 rounded-full text-xs border transition-colors",
+                        on ? "border-accent/40 bg-accent/10 text-accent font-medium" : "border-border text-muted hover:bg-surface2"
+                      )}
+                    >
+                      {l.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
             <label className="block">
               <span className="text-xs text-muted">Website (optional)</span>
               <input

@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { ClientServiceLines } from "@/components/ClientServiceLines";
 import { notFound } from "next/navigation";
 import { headers } from "next/headers";
 import {
@@ -378,6 +379,12 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
           style={{ background: "radial-gradient(circle, rgba(99,102,241,0.18), transparent 70%)" }}
         />
       </header>
+
+      <ClientServiceLines
+        clientId={client.id}
+        initial={client.serviceLines}
+        canEdit={!!(me && (me.role === "leader" || me.role === "department_head" || me.isAdmin))}
+      />
 
       {/* SEO brief — leader/admin/SEO-head sets it; everyone viewing
           the client sees it (read-only for non-editors). Always

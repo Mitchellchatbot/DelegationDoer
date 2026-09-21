@@ -10,6 +10,7 @@
 // the client's name.
 
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
+import { parseServiceLines, type ServiceLine } from "@/lib/client-service-lines";
 import {
   getLatestTouchpointsByClient,
   rowToTouchpointFields,
@@ -106,6 +107,8 @@ export interface Client {
   // Filled by the picker's checkbox multi-select. Source of truth from
   // commit 20260623300000 onward.
   assignedUserIds: string[];
+  // Which service lines the client buys — see SERVICE_LINES. Never empty.
+  serviceLines: ServiceLine[];
   // Optional profile image URL. Set via PATCH /api/clients/[id]/icon
   // which uploads to Supabase Storage and writes the resulting public
   // URL here. Null = fall back to the generic briefcase icon.
@@ -209,6 +212,7 @@ interface ClientRow {
   team_id: string | null;
   assigned_user_id: string | null;
   assigned_user_ids: string[] | null;
+  service_lines: string[] | null;
   icon_url: string | null;
   seo_brief: string | null;
   seo_brief_at: string | null;
@@ -286,6 +290,7 @@ function rowToClient(r: ClientRow, touchpoint?: {
       // Fallback: pre-migration rows that only set the singular column
       // still surface their one person via the array shape.
       : (r.assigned_user_id ? [r.assigned_user_id] : []),
+    serviceLines: parseServiceLines(r.service_lines),
     iconUrl: r.icon_url ?? null,
     seoBrief: r.seo_brief ?? null,
     seoBriefAt: r.seo_brief_at ?? null,

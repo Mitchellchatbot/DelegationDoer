@@ -13,7 +13,7 @@ import { DeleteTaskButton } from "@/components/DeleteTaskButton";
 import { ArchiveTaskButton } from "@/components/ArchiveTaskButton";
 import { UnarchiveTaskButton } from "@/components/UnarchiveTaskButton";
 import { getUserById, getAllUsersLight, getDepartments, getLeaderIds } from "@/lib/server-data";
-import { Megaphone, Clock, History, Archive, Users } from "lucide-react";
+import { Megaphone, Clock, History, Archive, Users, Rocket, ArrowUpRight } from "lucide-react";
 import { HandoffButton, HandoffTimeline } from "@/components/HandoffPanel";
 import { TaskConversation } from "@/components/TaskConversation";
 import { DueDateInline } from "@/components/DueDateInline";
@@ -24,6 +24,8 @@ import { requireCurrentUserId } from "@/lib/session";
 import { formatDate, relativeTime } from "@/lib/utils";
 import { BackPill } from "@/components/BackPill";
 import { DepartmentEditor } from "@/components/DepartmentEditor";
+import { getOnboarding } from "@/lib/fb-onboarding-data";
+import { progress } from "@/lib/fb-onboarding";
 import type { Task } from "@/lib/types";
 
 // Always read fresh — comments / status changes need to surface immediately.
@@ -142,6 +144,10 @@ export default async function TaskDetailPage({ params }: { params: { id: string 
     if (data) project = { id: data.id, name: data.name };
   }
 
+  // A Facebook task with an onboarding started links out to its workspace.
+  const fbOnboarding = task.departmentId === "dep_facebook" ? await getOnboarding(task.id) : null;
+  const fbProgress = fbOnboarding ? progress(fbOnboarding.state) : null;
+
   return (
     <div className="space-y-5 max-w-5xl">
       <BackPill href="/tasks" label="Back to tasks" />
@@ -215,6 +221,26 @@ export default async function TaskDetailPage({ params }: { params: { id: string 
                 </div>
               )}
             </section>
+          )}
+
+          {fbProgress && (
+            <Link
+              href={`/fb-onboarding/${task.id}`}
+              className="card card-hover p-4 flex items-center gap-4 border-violet-200 bg-violet-50/40 group"
+            >
+              <Rocket className="w-5 h-5 text-violet-600 shrink-0" />
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-medium">Facebook onboarding</div>
+                <div className="text-xs text-muted">
+                  {fbOnboarding?.completedAt
+                    ? "Complete"
+                    : `Access ${fbProgress.accessCleared}/${fbProgress.accessTotal} · Main zap ${fbProgress.mainDone}/${fbProgress.mainTotal} · Setup ${fbProgress.setupDone}/${fbProgress.setupTotal} · Test ${fbProgress.testsDone}/${fbProgress.testsTotal}`}
+                </div>
+              </div>
+              <span className="text-xs text-accent inline-flex items-center gap-1 group-hover:underline">
+                Open workspace <ArrowUpRight className="w-3.5 h-3.5" />
+              </span>
+            </Link>
           )}
 
           {(task.mediaUrls?.length ?? 0) > 0 && (

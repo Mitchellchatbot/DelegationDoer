@@ -6,6 +6,7 @@ import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { isLeader } from "@/lib/auth";
 import { getClients } from "@/lib/clients-data";
+import { isSeoWebClient } from "@/lib/client-service-lines";
 import { ClientFollowUpWidget } from "@/components/ClientFollowUpWidget";
 import { TouchpointPill } from "@/components/TouchpointPill";
 import {
@@ -25,7 +26,8 @@ export default async function ClientHealthPage() {
   const me = await getUserById(userId);
   if (!me) redirect("/login");
 
-  const allClients = await getClients();
+  // SEO/Web book only — Facebook-only clients aren't scored on SEO touchpoints.
+  const allClients = (await getClients()).filter(isSeoWebClient);
   // Clients with encourageEmails=false sit out of every tally and band
   // group — the whole point of the toggle is to remove them from the
   // dashboard. They still appear in the all-clients tab + per-client

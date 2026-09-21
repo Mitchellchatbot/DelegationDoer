@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 import {
   ListTodo, Users, Sparkles, Crown, Mail, Home as HomeIcon, Sunrise, Moon, Briefcase,
   CalendarDays, FolderKanban, ClipboardCheck, BookOpen, Settings, LifeBuoy, LayoutGrid,
-  Users2, Lock, Rocket, Megaphone
+  Users2, Lock, Rocket, Megaphone, ListChecks
 } from "lucide-react";
 // Sparkles is reused for both Ask AI and Updates — same icon, different context.
 import { useEffect, useState } from "react";
@@ -40,6 +40,7 @@ const SOD_ITEM: NavItem = { href: "/sod", label: "Start day", icon: Sunrise, ton
 const EOD_ITEM: NavItem = { href: "/eod", label: "Wrap day", icon: Moon, tone: "indigo" };
 const TASKS_ITEM: NavItem = { href: "/tasks",  label: "Tasks",   icon: ListTodo, tone: "indigo"  };
 const SCHEDULE_ITEM: NavItem = { href: "/schedule", label: "Schedule", icon: CalendarDays, tone: "sky" };
+const FB_ONBOARDING_ITEM: NavItem = { href: "/fb-onboarding", label: "FB Onboarding", icon: ListChecks, tone: "fuchsia" };
 const PROJECTS_ITEM: NavItem = { href: "/projects", label: "Projects", icon: FolderKanban, tone: "indigo" };
 const INBOXES_ITEM: NavItem = { href: "/inboxes", label: "Inboxes", icon: Mail, tone: "fuchsia" };
 const APPROVALS_ITEM: NavItem = { href: "/approvals", label: "Approvals", icon: ClipboardCheck, tone: "emerald" };
@@ -284,6 +285,9 @@ export function Sidebar({ user }: { user: User }) {
   //   4. Manage (leaders/heads) OR People (workers, who don't get Manage)
   // Then SidebarMoreMenu below renders the overflow popover.
   const canSeeProjects = (user.departmentIds ?? []).includes("dep_software");
+  // Facebook team + leaders. Mirrors canSeeFbOnboarding in lib/fb-onboarding-data
+  // (server-only module, so the check is repeated here).
+  const canSeeFbOnboarding = isLeader(user) || (user.departmentIds ?? []).includes("dep_facebook");
   const isLeaderRole = isLeader(user);
   const isHeadRole = isHead(user);
 
@@ -314,6 +318,7 @@ export function Sidebar({ user }: { user: User }) {
     HOME_ITEM,
     ...(submitsDailies ? [SOD_ITEM, EOD_ITEM] : []),
     TASKS_ITEM,
+    ...(canSeeFbOnboarding ? [FB_ONBOARDING_ITEM] : []),
     SCHEDULE_ITEM,
     ...(canSeeProjects ? [PROJECTS_ITEM] : []),
     INBOXES_ITEM,
@@ -338,7 +343,7 @@ export function Sidebar({ user }: { user: User }) {
   const NAV_GROUPS: { label: string; hrefs: string[] }[] = [
     { label: "Overview", hrefs: ["/home"] },
     { label: "Today", hrefs: ["/sod", "/eod"] },
-    { label: "Work", hrefs: ["/tasks", "/schedule", "/projects"] },
+    { label: "Work", hrefs: ["/tasks", "/fb-onboarding", "/schedule", "/projects"] },
     { label: "Communication", hrefs: ["/inboxes", "/approvals", "/customer-support"] },
     { label: "Knowledge", hrefs: ["/clients", "/client-teams", "/updates", "/sops"] },
     { label: "Account", hrefs: ["/people", "/leader", "/scale", "/scale/outbound", "/finance", "/settings"] }

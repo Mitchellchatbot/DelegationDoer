@@ -14,15 +14,20 @@ import { NewClientDialog } from "@/components/NewClientDialog";
 import { NewOnboardingLinkButton } from "@/components/NewOnboardingLinkButton";
 import { ClientPriorityList } from "@/components/ClientPriorityList";
 import { RescanClientMailButton } from "@/components/RescanClientMailButton";
+import { SERVICE_LINES, type ServiceLine } from "@/lib/client-service-lines";
+import { cn } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 
-export default async function ClientsPage() {
+export default async function ClientsPage({ searchParams }: { searchParams: { line?: string } }) {
+  // Facebook clients live in their own tab; SEO & Web is the default book.
+  const line: ServiceLine = searchParams.line === "facebook" ? "facebook" : "seo_web";
+
   const userId = await requireCurrentUserId();
   const me = await getUserById(userId);
   if (!me) redirect("/login");
 
-  const [clients, openCountsMap, allUsers] = await Promise.all([
+  const [allClients, openCountsMap, allUsers] = await Promise.all([
     getClients(),                  // already sorted by display_order asc
     getOpenTaskCountsByClient(),
     // getAllUsers (not Light) so each user carries departmentIds — the
@@ -30,6 +35,11 @@ export default async function ClientsPage() {
     // which is impossible with the Light variant's empty membership.
     getAllUsers()
   ]);
+
+  const clients = allClients.filter((c) => c.serviceLines.includes(line));
+  const lineCounts = Object.fromEntries(
+    SERVICE_LINES.map((l) => [l.id, allClients.filter((c) => c.serviceLines.includes(l.id)).length])
+  ) as Record<ServiceLine, number>;
 
   // Plain object so we can pass it to a client component without serializing
   // a Map.
@@ -125,10 +135,25 @@ export default async function ClientsPage() {
               </Link>
             )}
             <NewOnboardingLinkButton forms={onboardingForms} />
-            <NewClientDialog />
+            <NewClientDialog defaultServiceLine={line} />
           </div>
         }
       />
+
+      <div className="inline-flex items-center gap-1 p-1 rounded-full bg-surface2 border border-border">
+        {SERVICE_LINES.map((l) => (
+          <Link
+            key={l.id}
+            href={l.id === "seo_web" ? "/clients" : `/clients?line=${l.id}`}
+            className={cn(
+              "px-3 py-1 rounded-full text-xs font-medium transition-colors",
+              line === l.id ? "bg-surface text-accent shadow-soft" : "text-muted hover:text-ink"
+            )}
+          >
+            {l.label} <span className="text-muted font-normal">{lineCounts[l.id]}</span>
+          </Link>
+        ))}
+      </div>
 
       {canEdit && clients.length > 1 && (
         <div className="flex items-center gap-1.5 text-[11px] text-ink/60 px-2">
@@ -138,6 +163,7 @@ export default async function ClientsPage() {
       )}
 
       <ClientPriorityList
+        key={line}
         initial={clients}
         openCounts={openCounts}
         canEdit={canEdit}

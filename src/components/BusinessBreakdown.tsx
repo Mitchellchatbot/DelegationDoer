@@ -1,15 +1,22 @@
+"use client";
+
+import { useState } from "react";
 import type { BusinessBreakdown, SideNumbers } from "@/lib/finance-segments";
 
-// Facebook vs SEO & website, split from one P&L. Latest month side by side (with
-// expenses broken out) + a month-by-month trend. The two profits sum to the P&L
-// net plus the owner salary (which is pulled out).
+// Facebook vs SEO & website, split from one P&L. Clean headline (profit, revenue,
+// expenses) per side; the expense-line detail, commission math, reconciliation
+// and month-by-month trend tuck behind "Show detail". Profits sum to P&L net +
+// the owner salary (pulled out).
 
 function money(n: number): string {
   const s = n < 0 ? "-" : "";
   return `${s}$${Math.abs(Math.round(n)).toLocaleString("en-US")}`;
 }
 
-function Side({ title, accent, data, totalRevenue, commission }: { title: string; accent: "blue" | "emerald"; data: SideNumbers; totalRevenue: number; commission?: { profitBefore: number; accrualCommission: number; trueProfit: number; booksCommission: number } }) {
+function Side({ title, accent, data, totalRevenue, detail, commission }: {
+  title: string; accent: "blue" | "emerald"; data: SideNumbers; totalRevenue: number; detail: boolean;
+  commission?: { profitBefore: number; accrualCommission: number; trueProfit: number; booksCommission: number };
+}) {
   const tone = accent === "blue"
     ? { dot: "bg-blue-500", ring: "border-blue-100", head: "text-blue-700" }
     : { dot: "bg-emerald-500", ring: "border-emerald-100", head: "text-emerald-700" };
@@ -18,6 +25,7 @@ function Side({ title, accent, data, totalRevenue, commission }: { title: string
   const shown = data.expenseLines.slice(0, TOP);
   const restCount = data.expenseLines.length - shown.length;
   const restSum = data.expenseLines.slice(TOP).reduce((s, l) => s + l.amount, 0);
+  const expenses = commission ? data.revenue - commission.profitBefore : data.expenses;
 
   return (
     <div className={"flex-1 min-w-0 rounded-xl border bg-white p-5 " + tone.ring}>
@@ -26,16 +34,17 @@ function Side({ title, accent, data, totalRevenue, commission }: { title: string
         <span className={"text-[13px] font-semibold " + tone.head}>{title}</span>
       </div>
 
+      {/* Headline profit */}
       {commission ? (
         <>
           <div className="text-[11px] text-slate-400">Profit before commission</div>
           <div className="text-[26px] font-bold tabular-nums leading-none mt-0.5 text-slate-900">{money(commission.profitBefore)}</div>
-          <div className="text-[12px] text-slate-500 mt-1.5">− commission {money(commission.accrualCommission)}</div>
-          <div className="text-[11px] text-slate-400 mt-1.5">Profit</div>
-          <div className={"text-[26px] font-bold tabular-nums leading-none mt-0.5 " + (commission.trueProfit < 0 ? "text-rose-500" : "text-slate-900")}>{money(commission.trueProfit)}</div>
-          <div className="text-[11px] text-slate-400 mt-2 pt-2 border-t border-slate-50">
-            Books (ties to P&amp;L): <span className="font-semibold text-slate-600 tabular-nums">{money(data.profit)}</span> · commission booked {money(commission.booksCommission)}
-          </div>
+          <div className="text-[12px] text-slate-500 mt-1.5">− commission {money(commission.accrualCommission)} → <span className={"font-semibold " + (commission.trueProfit < 0 ? "text-rose-500" : "text-slate-900")}>{money(commission.trueProfit)}</span> profit</div>
+          {detail && (
+            <div className="text-[11px] text-slate-400 mt-2 pt-2 border-t border-slate-50">
+              Books (ties to P&amp;L): <span className="font-semibold text-slate-600 tabular-nums">{money(data.profit)}</span> · commission booked {money(commission.booksCommission)}
+            </div>
+          )}
         </>
       ) : (
         <>
@@ -51,27 +60,32 @@ function Side({ title, accent, data, totalRevenue, commission }: { title: string
 
       <div className="mt-3 flex items-baseline justify-between gap-2">
         <span className="text-[12px] font-medium text-slate-600">{commission ? "Operating expenses" : "Expenses"}</span>
-        <span className="text-[14px] font-semibold tabular-nums text-slate-900">{money(commission ? data.revenue - commission.profitBefore : data.expenses)}</span>
+        <span className="text-[14px] font-semibold tabular-nums text-slate-900">{money(expenses)}</span>
       </div>
-      <div className="mt-1 space-y-0.5">
-        {shown.map((l, i) => (
-          <div key={i} className="flex items-baseline justify-between gap-2 text-[11px] text-slate-400">
-            <span className="truncate">{l.label}</span>
-            <span className="tabular-nums shrink-0">{money(l.amount)}</span>
-          </div>
-        ))}
-        {restCount > 0 && (
-          <div className="flex items-baseline justify-between gap-2 text-[11px] text-slate-400">
-            <span className="truncate">+{restCount} more</span>
-            <span className="tabular-nums shrink-0">{money(restSum)}</span>
-          </div>
-        )}
-      </div>
+
+      {/* Expense-line breakdown — detail only */}
+      {detail && (
+        <div className="mt-1 space-y-0.5">
+          {shown.map((l, i) => (
+            <div key={i} className="flex items-baseline justify-between gap-2 text-[11px] text-slate-400">
+              <span className="truncate">{l.label}</span>
+              <span className="tabular-nums shrink-0">{money(l.amount)}</span>
+            </div>
+          ))}
+          {restCount > 0 && (
+            <div className="flex items-baseline justify-between gap-2 text-[11px] text-slate-400">
+              <span className="truncate">+{restCount} more</span>
+              <span className="tabular-nums shrink-0">{money(restSum)}</span>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
 
 export function BusinessBreakdownView({ data }: { data: BusinessBreakdown }) {
+  const [detail, setDetail] = useState(false);
   if (!data.hasData) {
     return (
       <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
@@ -88,24 +102,27 @@ export function BusinessBreakdownView({ data }: { data: BusinessBreakdown }) {
         <div>
           <div className="text-[16px] font-semibold text-slate-900">Business breakdown</div>
           <div className="text-[12px] text-slate-500 mt-0.5">
-            Facebook vs SEO &amp; website{data.month ? `, latest month ${data.month}` : ""}. Profit before your salary ({money(data.salary)}), split from your one P&amp;L.
+            Facebook vs SEO &amp; website{data.month ? `, ${data.month}` : ""} — split from your one P&amp;L, before your {money(data.salary)} salary.
           </div>
         </div>
         <div className="text-right shrink-0">
           <div className="text-[11px] text-slate-400">Profit before owner pay</div>
           <div className="text-[20px] font-bold tabular-nums text-slate-900 leading-none mt-0.5">{money(data.beforeOwnerPay)}</div>
-          <div className="text-[10px] text-slate-400 mt-0.5">P&amp;L net {money(data.pnlNet)} + salary {money(data.salary)}</div>
-          <div className="text-[10px] text-emerald-600 mt-0.5">✓ sides sum to {money(check)}</div>
+          {detail && <div className="text-[10px] text-slate-400 mt-0.5">P&amp;L net {money(data.pnlNet)} + salary {money(data.salary)} · ✓ sides sum to {money(check)}</div>}
         </div>
       </div>
 
       <div className="flex gap-4 flex-col sm:flex-row">
-        <Side title="Facebook" accent="blue" data={data.fb} totalRevenue={totalRev} commission={{ profitBefore: data.fbProfitBeforeCommission, accrualCommission: data.fbAccrualCommission, trueProfit: data.fbProfitTrue, booksCommission: data.fbCommission }} />
-        <Side title="SEO & website" accent="emerald" data={data.seo} totalRevenue={totalRev} />
+        <Side title="Facebook" accent="blue" data={data.fb} totalRevenue={totalRev} detail={detail} commission={{ profitBefore: data.fbProfitBeforeCommission, accrualCommission: data.fbAccrualCommission, trueProfit: data.fbProfitTrue, booksCommission: data.fbCommission }} />
+        <Side title="SEO & website" accent="emerald" data={data.seo} totalRevenue={totalRev} detail={detail} />
       </div>
 
-      {data.months.length > 0 && (
-        <div className="mt-5 pt-4 border-t border-slate-100">
+      <button type="button" onClick={() => setDetail((v) => !v)} className="mt-4 text-[12px] font-medium text-slate-500 hover:text-slate-800">
+        {detail ? "Hide detail" : "Show detail — expenses, month by month"}
+      </button>
+
+      {detail && data.months.length > 0 && (
+        <div className="mt-4 pt-4 border-t border-slate-100">
           <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 mb-2">Month by month</div>
           <div className="overflow-x-auto">
             <table className="w-full text-[13px] min-w-[440px]">
@@ -134,15 +151,14 @@ export function BusinessBreakdownView({ data }: { data: BusinessBreakdown }) {
               </tbody>
             </table>
           </div>
+          {data.notes.length > 0 && (
+            <ul className="mt-4 space-y-1">
+              {data.notes.map((n, i) => (
+                <li key={i} className="text-[11px] text-slate-400 leading-snug">· {n}</li>
+              ))}
+            </ul>
+          )}
         </div>
-      )}
-
-      {data.notes.length > 0 && (
-        <ul className="mt-4 space-y-1">
-          {data.notes.map((n, i) => (
-            <li key={i} className="text-[11px] text-slate-400 leading-snug">· {n}</li>
-          ))}
-        </ul>
       )}
     </div>
   );

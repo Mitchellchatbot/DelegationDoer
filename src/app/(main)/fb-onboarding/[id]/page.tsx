@@ -5,10 +5,14 @@ import { BackPill } from "@/components/BackPill";
 import { PersonAvatar } from "@/components/PersonAvatar";
 import { StatusPill } from "@/components/Badges";
 import { FbOnboardingPanel } from "@/components/FbOnboardingPanel";
+import { TaskConversation } from "@/components/TaskConversation";
+import { DeleteFbOnboardingButton } from "@/components/DeleteFbOnboardingButton";
+import { PROVIDER_KEY } from "@/lib/fb-onboarding";
+import { MessagesSquare } from "lucide-react";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById, getAllUsersLight, getLeaderIds } from "@/lib/server-data";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
-import { canManageTask, canViewTask } from "@/lib/access";
+import { canDeleteTask, canManageTask, canViewTask } from "@/lib/access";
 import { canSeeFbOnboarding, getOnboarding, FB_DEPT } from "@/lib/fb-onboarding-data";
 import { formatDate } from "@/lib/utils";
 import type { Task } from "@/lib/types";
@@ -63,6 +67,14 @@ export default async function FbOnboardingPage({ params }: { params: { id: strin
           <Link href={`/tasks/${t.id}`} className="inline-flex items-center gap-1 text-accent hover:underline">
             Task &amp; conversation <ArrowUpRight className="w-3.5 h-3.5" />
           </Link>
+          {onboarding && (
+            <DeleteFbOnboardingButton
+              taskId={params.id}
+              provider={typeof onboarding.state[PROVIDER_KEY]?.v === "string" ? (onboarding.state[PROVIDER_KEY].v as string) : ""}
+              canDeleteTask={canDeleteTask(me, task)}
+              canRemoveChecklist={canManageTask(me, task)}
+            />
+          )}
         </div>
       </div>
 
@@ -73,6 +85,17 @@ export default async function FbOnboardingPage({ params }: { params: { id: strin
         users={users.map((u) => ({ id: u.id, name: u.name }))}
         canEdit={canEdit}
       />
+
+      {/* Team notes for this client — the task's conversation, so the same
+          thread shows on the task page. People only; @-mentions ping on Slack. */}
+      <section className="card p-5">
+        <div className="flex items-center gap-2 mb-1">
+          <MessagesSquare className="w-4 h-4 text-accent" />
+          <h2 className="text-sm font-semibold">Team notes</h2>
+        </div>
+        <p className="text-xs text-muted mb-4">Notes and back-and-forth on this client. @mention a teammate to ping them.</p>
+        <TaskConversation taskId={params.id} currentUserId={userId} users={users} />
+      </section>
     </div>
   );
 }

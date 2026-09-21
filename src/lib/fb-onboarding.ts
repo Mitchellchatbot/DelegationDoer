@@ -18,6 +18,11 @@
 // Pure data + pure functions — imported by both the API route and the client
 // panel, so no server-only imports.
 
+// Marks a task as a Facebook client onboarding. Beyond labelling, it opens the
+// task to the whole Facebook team even when a leader owns it (see
+// taskViewReason) — the onboarding and its conversation are team work.
+export const FB_ONBOARDING_TAG = "fb-onboarding";
+
 export type EntryValue = boolean | string;
 export interface Entry { v: EntryValue; by: string | null; at: string }
 export type OnboardingState = Record<string, Entry>;

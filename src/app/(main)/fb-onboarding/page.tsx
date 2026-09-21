@@ -4,6 +4,9 @@ import { Rocket, AlertTriangle, PartyPopper, ArrowRight } from "lucide-react";
 import { PageHero } from "@/components/PageHero";
 import { PersonAvatar } from "@/components/PersonAvatar";
 import { NewFbOnboardingButton } from "@/components/NewFbOnboardingButton";
+import { DeleteFbOnboardingButton } from "@/components/DeleteFbOnboardingButton";
+import { canDeleteTask, canManageTask } from "@/lib/access";
+import type { User } from "@/lib/types";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById, getAllUsers } from "@/lib/server-data";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
@@ -60,7 +63,7 @@ export default async function FbOnboardingListPage() {
           <div className="card p-8 text-center text-sm text-muted">No onboardings in progress. Start one with <span className="font-medium text-ink">New onboarding</span>.</div>
         ) : (
           <div className="grid gap-3 md:grid-cols-2">
-            {active.map((o) => <OnboardingCard key={o.taskId} o={o} assignee={o.assigneeId ? userById.get(o.assigneeId) ?? null : null} />)}
+            {active.map((o) => <OnboardingCard key={o.taskId} o={o} me={me} assignee={o.assigneeId ? userById.get(o.assigneeId) ?? null : null} />)}
           </div>
         )}
       </Section>
@@ -68,7 +71,7 @@ export default async function FbOnboardingListPage() {
       {done.length > 0 && (
         <Section title="Complete" count={done.length}>
           <div className="grid gap-3 md:grid-cols-2">
-            {done.map((o) => <OnboardingCard key={o.taskId} o={o} assignee={o.assigneeId ? userById.get(o.assigneeId) ?? null : null} />)}
+            {done.map((o) => <OnboardingCard key={o.taskId} o={o} me={me} assignee={o.assigneeId ? userById.get(o.assigneeId) ?? null : null} />)}
           </div>
         </Section>
       )}
@@ -88,8 +91,9 @@ function Section({ title, count, children }: { title: string; count: number; chi
   );
 }
 
-function OnboardingCard({ o, assignee }: { o: OnboardingSummary; assignee: { id: string; name: string; avatarUrl?: string | null } | null }) {
+function OnboardingCard({ o, me, assignee }: { o: OnboardingSummary; me: User; assignee: { id: string; name: string; avatarUrl?: string | null } | null }) {
   const p = o.progress;
+  const taskShape = { creatorId: o.creatorId ?? "", assigneeId: o.assigneeId, departmentId: FB_DEPT };
   const phases = [
     { label: "Access", done: p.accessCleared, total: p.accessTotal },
     { label: "Main zap", done: p.mainDone, total: p.mainTotal },
@@ -114,6 +118,13 @@ function OnboardingCard({ o, assignee }: { o: OnboardingSummary; assignee: { id:
             </span>
           ) : null}
           {assignee && <PersonAvatar userId={assignee.id} name={assignee.name} imageUrl={assignee.avatarUrl} size={24} />}
+          <DeleteFbOnboardingButton
+            variant="icon"
+            taskId={o.taskId}
+            provider={o.provider}
+            canDeleteTask={canDeleteTask(me, taskShape)}
+            canRemoveChecklist={canManageTask(me, taskShape)}
+          />
         </div>
       </div>
 

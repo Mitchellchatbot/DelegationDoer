@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { loadTaskForViewer } from "@/lib/task-access";
 import { canManageTask } from "@/lib/access";
-import { normaliseValue, progress, PROVIDER_KEY, type OnboardingState } from "@/lib/fb-onboarding";
+import { normaliseValue, progress, PROVIDER_KEY, FB_ONBOARDING_TAG, type OnboardingState } from "@/lib/fb-onboarding";
 
 export const dynamic = "force-dynamic";
 
@@ -32,12 +32,19 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
   if (!g.ok) return g.response;
   const supabase = getSupabaseAdmin();
 
+  const { data: task } = await supabase
+    .from("tasks").select("client_name, tags").eq("id", params.id).maybeSingle();
+  // Tag first, even on a repeat call: the tag is what lets the whole Facebook
+  // team see a leader-owned onboarding and its chat.
+  const tags = (task?.tags as string[] | null) ?? [];
+  if (!tags.includes(FB_ONBOARDING_TAG)) {
+    await supabase.from("tasks").update({ tags: [...tags, FB_ONBOARDING_TAG] }).eq("id", params.id);
+  }
+
   const { data: existing } = await supabase
     .from("fb_onboarding").select("state").eq("task_id", params.id).maybeSingle();
   if (existing) return NextResponse.json({ state: existing.state ?? {} });
 
-  const { data: task } = await supabase
-    .from("tasks").select("client_name").eq("id", params.id).maybeSingle();
   const state: OnboardingState = {};
   const provider = (task?.client_name as string | null)?.trim();
   if (provider) state[PROVIDER_KEY] = { v: provider, by: g.viewerId, at: new Date().toISOString() };
@@ -83,4 +90,27 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   await supabase.from("tasks").update({ last_activity_at: now }).eq("id", params.id);
 
   return NextResponse.json({ state, completedAt });
+}
+
+// DELETE — remove the checklist from this task, keeping the task itself.
+// Permanent: the progress is gone. (Deleting the whole onboarding goes
+// through DELETE /api/tasks/[id] instead — a recoverable soft delete that
+// keeps this row, so restoring the task restores the checklist.)
+// Manage-level only; ticking boxes as a teammate isn't enough to wipe them.
+export async function DELETE(_req: NextRequest, { params }: { params: { id: string } }) {
+  const access = await loadTaskForViewer(params.id);
+  if (!access.ok) return access.response;
+  if (!canManageTask(access.viewer, access.task)) {
+    return NextResponse.json({ error: "Only the onboarder, their department head or a leader can remove this" }, { status: 403 });
+  }
+  const supabase = getSupabaseAdmin();
+  const { error } = await supabase.from("fb_onboarding").delete().eq("task_id", params.id);
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  const { data: task } = await supabase.from("tasks").select("tags").eq("id", params.id).maybeSingle();
+  const tags = (task?.tags as string[] | null) ?? [];
+  if (tags.includes(FB_ONBOARDING_TAG)) {
+    await supabase.from("tasks").update({ tags: tags.filter((t) => t !== FB_ONBOARDING_TAG) }).eq("id", params.id);
+  }
+  return NextResponse.json({ ok: true });
 }

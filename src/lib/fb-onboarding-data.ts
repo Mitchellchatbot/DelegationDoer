@@ -22,6 +22,7 @@ export interface OnboardingSummary {
   taskTitle: string;
   taskStatus: string;
   assigneeId: string | null;
+  creatorId: string | null;
   dueDate: string | null;
   startedAt: string;
   updatedAt: string;
@@ -40,7 +41,7 @@ export async function listOnboardings(): Promise<OnboardingSummary[]> {
 
   const { data: tasks } = await supabase
     .from("tasks")
-    .select("id, title, status, assignee_id, due_date, client_name, deleted_at")
+    .select("id, title, status, assignee_id, creator_id, due_date, client_name, deleted_at")
     .in("id", list.map((r) => r.task_id));
   const byId = new Map((tasks ?? []).filter((t) => !t.deleted_at).map((t) => [t.id as string, t]));
 
@@ -57,6 +58,7 @@ export async function listOnboardings(): Promise<OnboardingSummary[]> {
       taskTitle: t.title as string,
       taskStatus: t.status as string,
       assigneeId: (t.assignee_id as string | null) ?? null,
+      creatorId: (t.creator_id as string | null) ?? null,
       dueDate: (t.due_date as string | null) ?? null,
       startedAt: r.started_at as string,
       updatedAt: r.updated_at as string,

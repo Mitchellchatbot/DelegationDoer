@@ -11,6 +11,7 @@
 //     helpers also work client-side via the same shape.
 
 import type { Task, User } from "@/lib/types";
+import { FB_ONBOARDING_TAG } from "@/lib/fb-onboarding";
 import { inDepartment, isTeamTask, isUnclaimedTeamTask } from "@/lib/task-team";
 
 // Stealth admin: a user whose public role is anything (typically
@@ -284,6 +285,14 @@ export function taskViewReason(
   // the head's team dashboard mid-meeting, which is when they most need to
   // see who took what.
   if (isTeamTask(task) && inDepartment(actor, task.departmentId)) return "team";
+  // Same escape for Facebook client onboardings: the checklist and its chat
+  // are worked by the whole Facebook team, whoever owns the task. Reported as
+  // "team" so the stricter write gate (no reassigning / moving it) applies.
+  if (
+    task.departmentId === "dep_facebook" &&
+    (task.tags ?? []).includes(FB_ONBOARDING_TAG) &&
+    inDepartment(actor, task.departmentId)
+  ) return "team";
   return null;
 }
 

@@ -1,4 +1,4 @@
-import type { FinanceOverview, CostRow } from "@/lib/finance-overview";
+import type { FinanceOverview } from "@/lib/finance-overview";
 import { FinanceKpiCards } from "@/components/FinanceKpiCards";
 
 // The reference-style finance dashboard: KPI cards, a revenue-vs-expenses chart,
@@ -6,10 +6,6 @@ import { FinanceKpiCards } from "@/components/FinanceKpiCards";
 // presentation over getFinanceOverview(); no emoji, muted palette, Inter (from
 // the page wrapper).
 
-function money(n: number): string {
-  const s = n < 0 ? "-" : "";
-  return `${s}$${Math.abs(Math.round(n)).toLocaleString("en-US")}`;
-}
 
 // The month series behind each KPI, for its sparkline.
 function kpiSeries(d: FinanceOverview, label: string): number[] {
@@ -46,25 +42,6 @@ function Chart({ months, revenue, expenses }: { months: string[]; revenue: numbe
   );
 }
 
-function TopCosts({ rows }: { rows: CostRow[] }) {
-  const max = Math.max(1, ...rows.map((r) => r.amount));
-  return (
-    <div className="space-y-2.5">
-      {rows.map((r) => (
-        <div key={r.name}>
-          <div className="flex items-center justify-between text-[13px]">
-            <span className="text-slate-600 truncate pr-2">{r.name}</span>
-            <span className="font-semibold tabular-nums text-slate-900 shrink-0">{money(r.amount)}<span className="text-[11px] font-normal text-slate-400"> · {r.sharePct}%</span></span>
-          </div>
-          <div className="mt-1 h-1.5 rounded-full bg-slate-100 overflow-hidden">
-            <div className="h-full bg-slate-800/80 rounded-full" style={{ width: `${Math.max(3, (r.amount / max) * 100)}%` }} />
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
 export function FinanceOverviewView({ data }: { data: FinanceOverview }) {
   if (!data.hasPnl) {
     return <div className="rounded-2xl border border-slate-200 bg-white p-6 text-[13px] text-slate-500 shadow-sm">Upload a P&amp;L below to light up the dashboard.</div>;
@@ -79,24 +56,16 @@ export function FinanceOverviewView({ data }: { data: FinanceOverview }) {
         series={{ Revenue: kpiSeries(data, "Revenue"), Expenses: kpiSeries(data, "Expenses"), Net: kpiSeries(data, "Net"), Margin: kpiSeries(data, "Margin") }}
       />
 
-      <div className="grid lg:grid-cols-[1.55fr_1fr] gap-5 items-start">
-        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-          <div className="flex items-center justify-between mb-1">
-            <div className="text-[16px] font-semibold text-slate-900">Revenue</div>
-            <div className="flex items-center gap-3 text-[12px]">
-              <span className="inline-flex items-center gap-1.5 text-slate-500"><span className="w-2 h-2 rounded-full" style={{ background: "#2563eb" }} />Revenue</span>
-              <span className="inline-flex items-center gap-1.5 text-slate-500"><span className="w-2 h-2 rounded-full" style={{ background: "#cbd5e1" }} />Expenses</span>
-            </div>
+      <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+        <div className="flex items-center justify-between mb-1">
+          <div className="text-[16px] font-semibold text-slate-900">Revenue</div>
+          <div className="flex items-center gap-3 text-[12px]">
+            <span className="inline-flex items-center gap-1.5 text-slate-500"><span className="w-2 h-2 rounded-full" style={{ background: "#2563eb" }} />Revenue</span>
+            <span className="inline-flex items-center gap-1.5 text-slate-500"><span className="w-2 h-2 rounded-full" style={{ background: "#cbd5e1" }} />Expenses</span>
           </div>
-          <div className="text-[13px] text-slate-500 mb-4">Monthly revenue vs. operating expenses</div>
-          <Chart months={data.months} revenue={data.revenue} expenses={data.expenses} />
         </div>
-
-        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-          <div className="text-[16px] font-semibold text-slate-900">Where the money goes</div>
-          <div className="text-[13px] text-slate-500 mb-4">Top costs · {data.latestMonth}</div>
-          <TopCosts rows={data.topCosts} />
-        </div>
+        <div className="text-[13px] text-slate-500 mb-4">Monthly revenue vs. operating expenses · where the money goes is in “Expenses · every month”.</div>
+        <Chart months={data.months} revenue={data.revenue} expenses={data.expenses} />
       </div>
     </div>
   );

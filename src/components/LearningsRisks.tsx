@@ -77,48 +77,48 @@ export function LearningsRisks({ data }: { data: Learnings }) {
         <Metric label="Software / mo" value={money(data.software.last)} sub={<><Delta pct={data.software.growthPct} goodWhenUp={false} /> vs start</>} />
       </div>
 
-      {/* Trend — the core story */}
-      <div>
-        <SectionLabel>Revenue vs profit — flat top line, compressing profit</SectionLabel>
-        <div className="space-y-1.5">
-          {data.series.map((pt) => (
-            <div key={pt.label} className="flex items-center gap-2 text-[11px]">
-              <div className="w-14 shrink-0 text-slate-500 tabular-nums">{pt.label}</div>
-              <div className="flex-1 flex items-center gap-1 min-w-0">
-                <div className="h-3 rounded-sm bg-slate-200" style={{ width: `${(pt.revenue / maxRev) * 100}%` }} title={`Revenue ${money(pt.revenue)}`} />
-                <span className="tabular-nums text-slate-400 shrink-0">{money0(pt.revenue)}</span>
-              </div>
-              <div className="flex-1 flex items-center gap-1 min-w-0">
-                <div className={"h-3 rounded-sm " + (pt.normalizedNet < 0 ? "bg-rose-300" : "bg-emerald-400")} style={{ width: `${(Math.abs(pt.normalizedNet) / maxNet) * 100}%` }} title={`Profit ${money(pt.normalizedNet)}`} />
-                <span className="tabular-nums text-slate-500 shrink-0">{money0(pt.normalizedNet)}</span>
-              </div>
-              <div className="w-9 shrink-0 text-right tabular-nums text-slate-400">{pt.margin}%</div>
-            </div>
-          ))}
-          <div className="flex items-center gap-3 text-[10px] text-slate-400 pt-1">
-            <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2 rounded-sm bg-slate-200" /> Revenue</span>
-            <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2 rounded-sm bg-emerald-400" /> Profit</span>
-            <span className="ml-auto">margin →</span>
-          </div>
-        </div>
-      </div>
-
-      {/* At-a-glance signals */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <Signal label="Software" value={`+${data.software.growthPct}%`} note={`to ${money(data.software.last)}/mo`} tone="warn" />
-        {data.facebook.hasData && <Signal label="Facebook" value={`${data.facebook.sharePct}%`} note={`of revenue · SEO ${data.facebook.seoDeltaPct}%`} tone="info" />}
-        <Signal label="Top-3 clients" value={`${data.concentration.top3Pct}%`} note="of recurring revenue" tone={data.concentration.top3Pct >= 40 ? "warn" : "info"} />
-        <Signal label="Run-rate / yr" value={money0(data.projection.annualRunRate)} note="normalized profit" tone="info" />
-      </div>
-
       {/* Details toggle */}
       <button type="button" onClick={() => setOpen((v) => !v)} className="flex items-center gap-1.5 text-[12px] font-medium text-slate-500 hover:text-slate-800">
         <ChevronDown className={"w-4 h-4 transition-transform " + (open ? "rotate-180" : "")} />
-        {open ? "Hide details" : "Show details — software, Facebook, concentration, projection & full risk model"}
+        {open ? "Hide details" : "Show details — trend, software, Facebook, concentration, projection & full risk model"}
       </button>
 
       {open && (
         <div className="space-y-6 pt-1">
+          {/* Trend — the core story */}
+          <div>
+            <SectionLabel>Revenue vs profit — flat top line, compressing profit</SectionLabel>
+            <div className="space-y-1.5">
+              {data.series.map((pt) => (
+                <div key={pt.label} className="flex items-center gap-2 text-[11px]">
+                  <div className="w-14 shrink-0 text-slate-500 tabular-nums">{pt.label}</div>
+                  <div className="flex-1 flex items-center gap-1 min-w-0">
+                    <div className="h-3 rounded-sm bg-slate-200" style={{ width: `${(pt.revenue / maxRev) * 100}%` }} title={`Revenue ${money(pt.revenue)}`} />
+                    <span className="tabular-nums text-slate-400 shrink-0">{money0(pt.revenue)}</span>
+                  </div>
+                  <div className="flex-1 flex items-center gap-1 min-w-0">
+                    <div className={"h-3 rounded-sm " + (pt.normalizedNet < 0 ? "bg-rose-300" : "bg-emerald-400")} style={{ width: `${(Math.abs(pt.normalizedNet) / maxNet) * 100}%` }} title={`Profit ${money(pt.normalizedNet)}`} />
+                    <span className="tabular-nums text-slate-500 shrink-0">{money0(pt.normalizedNet)}</span>
+                  </div>
+                  <div className="w-9 shrink-0 text-right tabular-nums text-slate-400">{pt.margin}%</div>
+                </div>
+              ))}
+              <div className="flex items-center gap-3 text-[10px] text-slate-400 pt-1">
+                <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2 rounded-sm bg-slate-200" /> Revenue</span>
+                <span className="inline-flex items-center gap-1"><span className="w-2.5 h-2 rounded-sm bg-emerald-400" /> Profit</span>
+                <span className="ml-auto">margin →</span>
+              </div>
+            </div>
+          </div>
+
+          {/* At-a-glance signals */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <Signal label="Software" value={`+${data.software.growthPct}%`} note={`to ${money(data.software.last)}/mo`} tone="warn" />
+            {data.facebook.hasData && <Signal label="Facebook" value={`${data.facebook.sharePct}%`} note={`of revenue · SEO ${data.facebook.seoDeltaPct}%`} tone="info" />}
+            <Signal label="Top-3 clients" value={`${data.concentration.top3Pct}%`} note="of recurring revenue" tone={data.concentration.top3Pct >= 40 ? "warn" : "info"} />
+            <Signal label="Run-rate / yr" value={money0(data.projection.annualRunRate)} note="normalized profit" tone="info" />
+          </div>
+
           {/* Software + Facebook */}
           <div className="grid sm:grid-cols-2 gap-5">
             <div>

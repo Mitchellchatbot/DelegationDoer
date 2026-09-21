@@ -110,11 +110,26 @@ export function NextMonthBudget({ parsed, estimates, defaultRevenue = 0, vendors
 
   if (!built || built.lines.length === 0) return null;
   const { lines, lastMonthLabel, thisMonthTotal } = built;
-  const estOf = (l: Line) => (l.account in est ? est[l.account] : l.lastMonth);
-  // One-off / added lines = estimates that aren't a recurring P&L line (and not
-  // the reserved revenue key).
+  // Vendor-level forecasting: accounts with vendor detail are estimated bottom-up
+  // (edit each vendor's next-month box); the account total = last month + the sum
+  // of vendor changes, so unedited stays exactly on last month's actual.
+  const SEP = "::sep::";
+  const lastCol = vendorModel.cols[vendorModel.cols.length - 1] ?? "";
+  const vKey = (account: string, vendor: string) => `${account}${SEP}${vendor}`;
+  const hasVendors = (account: string) => vendorModel.byAccount.has(account) && vendorModel.cols.length > 0;
+  const vendorSep = (account: string, vendor: string, augVal: number) => { const k = vKey(account, vendor); return k in est ? est[k] : augVal; };
+  const vendorDelta = (account: string) => {
+    const vmap = vendorModel.byAccount.get(account);
+    if (!vmap) return 0;
+    let d = 0;
+    for (const [vendor, vals] of vmap) { const k = vKey(account, vendor); if (k in est) d += est[k] - Math.round(vals[lastCol] ?? 0); }
+    return d;
+  };
+  const estOf = (l: Line) => (hasVendors(l.account) ? l.lastMonth + vendorDelta(l.account) : (l.account in est ? est[l.account] : l.lastMonth));
+  // One-off / added lines = estimates that aren't a recurring P&L line, a vendor
+  // box, or the reserved revenue key.
   const pnlAccounts = new Set(lines.map((l) => l.account));
-  const oneOffs = Object.keys(est).filter((a) => a !== REV_KEY && !pnlAccounts.has(a) && est[a] > 0).map((a) => ({ account: a, amount: est[a] }));
+  const oneOffs = Object.keys(est).filter((a) => a !== REV_KEY && !a.includes(SEP) && !pnlAccounts.has(a) && est[a] > 0).map((a) => ({ account: a, amount: est[a] }));
   const totalNext = lines.reduce((s, l) => s + estOf(l), 0) + oneOffs.reduce((s, o) => s + o.amount, 0);
   const delta = totalNext - thisMonthTotal;
 
@@ -131,7 +146,8 @@ export function NextMonthBudget({ parsed, estimates, defaultRevenue = 0, vendors
   const floorGap = Math.max(0, Math.round((MARGIN_FLOOR / 100) * revenue - beforeFounderProfit));
 
   async function save(account: string, raw: string) {
-    const amount = Math.max(0, Math.round(Number(raw) || 0));
+    // Strip commas, "$", spaces etc. so "115,000" and "$115,000" parse correctly.
+    const amount = Math.max(0, Math.round(Number(String(raw).replace(/[^0-9.]/g, "")) || 0));
     setEst((e) => ({ ...e, [account]: amount }));
     setSaving(account);
     try {
@@ -185,7 +201,7 @@ export function NextMonthBudget({ parsed, estimates, defaultRevenue = 0, vendors
           <input
             type="text"
             inputMode="decimal"
-            defaultValue={String(revenue)}
+            defaultValue={revenue.toLocaleString("en-US")}
             onFocus={(e) => e.currentTarget.select()}
             onBlur={(e) => save(REV_KEY, e.currentTarget.value)}
             onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
@@ -234,17 +250,20 @@ export function NextMonthBudget({ parsed, estimates, defaultRevenue = 0, vendors
                 </button>
                 <div className="flex items-center gap-1 shrink-0">
                   <span className="text-[13px] text-slate-400">$</span>
-                  <input
-                    type="text"
-                    inputMode="decimal"
-                    defaultValue={String(estOf(l))}
-                    onFocus={(e) => e.currentTarget.select()}
-                    onBlur={(e) => save(l.account, e.currentTarget.value)}
-                    onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
-                    className="w-24 text-[13px] text-right tabular-nums rounded-lg border border-slate-200 px-2 py-1 focus:outline-none focus:border-slate-400"
-                  />
-                  {saving === l.account && <span className="text-[10px] text-slate-400 w-8">saving</span>}
-                  {saving !== l.account && <span className="w-8" />}
+                  {vendorRows.length > 0 ? (
+                    <span className="w-24 text-[13px] text-right tabular-nums font-semibold text-slate-900 px-2 py-1" title="Sum of the vendor estimates below">{estOf(l).toLocaleString("en-US")}</span>
+                  ) : (
+                    <input
+                      type="text"
+                      inputMode="decimal"
+                      defaultValue={estOf(l).toLocaleString("en-US")}
+                      onFocus={(e) => e.currentTarget.select()}
+                      onBlur={(e) => save(l.account, e.currentTarget.value)}
+                      onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
+                      className="w-24 text-[13px] text-right tabular-nums rounded-lg border border-slate-200 px-2 py-1 focus:outline-none focus:border-slate-400"
+                    />
+                  )}
+                  <span className="w-8" />
                 </div>
               </div>
 
@@ -252,14 +271,30 @@ export function NextMonthBudget({ parsed, estimates, defaultRevenue = 0, vendors
                 <div className="ml-5 mt-1.5 mb-1 border-l border-slate-100 pl-3">
                   <div className="flex items-center gap-2 pb-1 text-[10px] font-medium uppercase tracking-wide text-slate-400">
                     <span className="flex-1">Vendor</span>
-                    {vendorModel.cols.map((c) => <span key={c} className="w-[64px] text-right shrink-0">{c}</span>)}
+                    {vendorModel.cols.map((c) => <span key={c} className="w-[56px] text-right shrink-0">{c}</span>)}
+                    <span className="w-[84px] text-right shrink-0 text-slate-500">{forecastLabel.replace(" '", "'")} (est)</span>
                   </div>
-                  {vendorRows.map((v) => (
-                    <div key={v.vendor} className="flex items-center gap-2 py-0.5 text-[12px]">
-                      <span className="flex-1 min-w-0 truncate text-slate-600">{v.vendor}</span>
-                      {vendorModel.cols.map((c) => <span key={c} className="w-[64px] text-right shrink-0 tabular-nums text-slate-500">{money(v.vals[c] ?? 0)}</span>)}
-                    </div>
-                  ))}
+                  {vendorRows.map((v) => {
+                    const aug = v.vals[lastCol] ?? 0;
+                    return (
+                      <div key={v.vendor} className="flex items-center gap-2 py-0.5 text-[12px]">
+                        <span className="flex-1 min-w-0 truncate text-slate-600">{v.vendor}</span>
+                        {vendorModel.cols.map((c) => <span key={c} className="w-[56px] text-right shrink-0 tabular-nums text-slate-500">{money(v.vals[c] ?? 0)}</span>)}
+                        <span className="w-[84px] shrink-0 flex items-center justify-end gap-0.5">
+                          <span className="text-[11px] text-slate-400">$</span>
+                          <input
+                            type="text"
+                            inputMode="decimal"
+                            defaultValue={Math.round(vendorSep(l.account, v.vendor, aug)).toLocaleString("en-US")}
+                            onFocus={(e) => e.currentTarget.select()}
+                            onBlur={(e) => save(vKey(l.account, v.vendor), e.currentTarget.value)}
+                            onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
+                            className="w-[64px] text-[12px] text-right tabular-nums rounded-md border border-slate-200 px-1.5 py-0.5 focus:outline-none focus:border-slate-400"
+                          />
+                        </span>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>

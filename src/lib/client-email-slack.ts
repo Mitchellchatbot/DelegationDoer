@@ -48,6 +48,16 @@ import type { InboxEvent } from "@/lib/inbox-event-bus";
 // as unnotified and dump the backlog into the channel.
 const FIRST_RUN_HARD_CAP_MS = 60 * 60 * 1000;
 
+// Mail older than this is never announced, whichever path delivers it. The
+// real-time paths normally fire within seconds of arrival, but when a mailbox
+// is reconnected (or its sync cursor resets) the clone walks the whole backlog
+// and fires `message:new` for every message it ingests. On 2026-09-21 that
+// posted days-old client mail into the channel as if it had just landed — the
+// claim table can't help, because those message ids had never been posted.
+// Generous enough to still announce mail that queued up during a clone outage
+// of several hours (that same day's ran ~6h).
+const MAX_MESSAGE_AGE_MS = 12 * 60 * 60 * 1000;
+
 // Threads inspected per poll pass, newest-first. The poll only exists to
 // cover a window where BOTH real-time paths were down, so it doesn't need
 // to be exhaustive.
@@ -81,6 +91,7 @@ export type SkipReason =
   | "message-not-found"
   | "outbound"
   | "spam-folder"
+  | "too-old"
   | "automated-sender"
   | "restricted-sender"
   | "private-inbox"
@@ -334,6 +345,13 @@ export async function notifyClientEmailToSlack(
   // isSpamFolder guard is at ~:417), so junk still reaches the bus via the
   // bridge. Same regex the clone uses.
   if (/spam|junk/i.test(message.folder || "")) return skip(event, "spam-folder");
+
+  // Backlog replayed as new (see MAX_MESSAGE_AGE_MS). A timestamp we can't
+  // parse can't be judged, so it fails open rather than dropping the post.
+  const sentMs = new Date(message.sent_at).getTime();
+  if (Number.isFinite(sentMs) && Date.now() - sentMs > MAX_MESSAGE_AGE_MS) {
+    return skip(event, "too-old");
+  }
 
   const { name: fromName, email: fromEmail } = splitAddress(message.from_addr);
   const subject = message.subject || detail.thread.subject || null;

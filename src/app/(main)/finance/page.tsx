@@ -103,6 +103,11 @@ export default async function FinancePage() {
   const rows = (docRes.data ?? []) as (FinanceDoc & { parsed: ParsedPnl | null })[];
   const latestParsed = rows.find((r) => r.parsed)?.parsed ?? null;
   const mrrRows = mrrRes.data ?? [];
+  // Only active clients count toward recurring revenue, concentration and the
+  // survival model — churned clients stay in the sheet for history but are out.
+  const activeMrr = (mrrRows as { company: string; mrr: number; status?: string }[])
+    .filter((r) => r.status !== "churned")
+    .map((r) => ({ company: String(r.company ?? ""), mrr: Number(r.mrr) || 0 }));
   const estimates: Record<string, number> = {};
   for (const e of (estRes.data ?? []) as { account: string; amount: number }[]) estimates[e.account] = Number(e.amount);
 
@@ -146,7 +151,7 @@ export default async function FinancePage() {
     fbRevenueByPeriod,
     fbExpensesByPeriod,
     softwareItems,
-    mrrClients: (mrrRows as { company: string; mrr: number }[]).map((r) => ({ company: String(r.company ?? ""), mrr: Number(r.mrr) || 0 }))
+    mrrClients: activeMrr
   });
 
   // Account-level books, every uploaded month (Nov '25 → Aug '26).
@@ -175,7 +180,7 @@ export default async function FinancePage() {
     software: latestPnl?.software ?? 0,
     ads: latestPnl?.advertising ?? 0,
     contractors: latestPnl ? deelRows.filter((r) => r.period === latestPnl.period && !r.is_fee).map((r) => ({ name: r.contractor, monthly: r.amount })) : [],
-    topClients: (mrrRows as { company: string; mrr: number }[]).map((r) => ({ company: String(r.company ?? ""), mrr: Number(r.mrr) || 0 })).filter((c) => c.mrr > 0).sort((a, b) => b.mrr - a.mrr),
+    topClients: activeMrr.filter((c) => c.mrr > 0).sort((a, b) => b.mrr - a.mrr),
     seoRevenue: breakdown.seo.revenue
   });
 

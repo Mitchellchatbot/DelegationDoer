@@ -78,6 +78,8 @@ const round = (n: number | null | undefined) => Math.round(n ?? 0);
 const EMPTY_SIDE: SideNumbers = { revenue: 0, expenses: 0, profit: 0, expenseLines: [] };
 
 export interface SoftwareItem { vendor: string; month: string; amount: number; segment: Segment }
+export interface OneOffItem { id: string; date: string; amount: number } // date = YYYY-MM-DD
+export const FB_OWNER_SHARE = 0.5; // Facebook is 50/50 with a partner — Mitchell keeps half
 
 export function computeBreakdown(input: {
   parsed: ParsedPnl | null | undefined;
@@ -86,8 +88,10 @@ export function computeBreakdown(input: {
   fbRevenueByPeriod: Record<string, number>;
   fbCommissionByPeriod?: Record<string, number>;
   fbExpensesByPeriod?: Record<string, number>; // Finance-app FB operating expenses, for the variance check
+  oneOffs?: OneOffItem[];                        // one-time Stripe charges
+  oneOffSegments?: Record<string, Segment>;      // charge id → seo | facebook (default seo)
 }): BusinessBreakdown {
-  const { parsed, expenseSegments = {}, softwareItems = [], fbRevenueByPeriod = {}, fbCommissionByPeriod = {}, fbExpensesByPeriod = {} } = input;
+  const { parsed, expenseSegments = {}, softwareItems = [], fbRevenueByPeriod = {}, fbCommissionByPeriod = {}, fbExpensesByPeriod = {}, oneOffs = [], oneOffSegments = {} } = input;
   const notes: string[] = [];
 
   if (!parsed || !parsed.periods.length) {
@@ -125,9 +129,18 @@ export function computeBreakdown(input: {
     }
     const period = my ? periodKey(my) : "";
     const hasFbRevenue = period in fbRevenueByPeriod;
-    // No Facebook revenue entered for a month → we can't split it, so show the
-    // whole month as SEO and leave Facebook blank (avoids a misleading negative).
-    const fbActive = hasFbRevenue;
+
+    // Facebook-tagged one-off Stripe charges in this month (full/gross). The full
+    // amount is P&L income; the partner's 50% is paid separately (an expense in
+    // the books), so Mitchell keeps 50%. We add the gross to Facebook revenue and
+    // the 50% partner share to Facebook expenses → net +50% to Facebook profit.
+    const fbOneOffGross = round(
+      oneOffs.filter((o) => oneOffSegments[o.id] === "facebook" && o.date.slice(0, 7) === period).reduce((s, o) => s + Number(o.amount), 0)
+    );
+    const fbOneOffPartner = round(fbOneOffGross * (1 - FB_OWNER_SHARE)); // partner's half (an expense)
+
+    // Active if Facebook revenue was entered OR there are Facebook one-offs.
+    const fbActive = hasFbRevenue || fbOneOffGross > 0;
 
     // Commission = the assigned Facebook line(s) that are the partner commission.
     const fbCommissionTagged = fbPnlLines.filter((l) => l.label.toLowerCase().includes("commission")).reduce((s, l) => s + l.amount, 0);
@@ -137,11 +150,12 @@ export function computeBreakdown(input: {
     // TRUE operating = the Finance-app figure (the source of truth). It anchors
     // Facebook profit so it never shows more than reality; the gap to what's
     // tagged is a "variance" expense line. Falls back to tagged when not entered.
-    const fbFinanceAppOperating = !fbActive ? 0 : period in fbExpensesByPeriod ? round(fbExpensesByPeriod[period]) : fbTaggedOperating;
-    const fbOperating = fbFinanceAppOperating;
-    const fbVariance = fbOperating - fbTaggedOperating; // untagged remainder, noted in expenses
+    const fbFinanceAppOperating = !fbActive ? 0 : period in fbExpensesByPeriod ? round(fbExpensesByPeriod[period]) : (hasFbRevenue ? fbTaggedOperating : 0);
+    const fbVariance = fbFinanceAppOperating - fbTaggedOperating; // untagged remainder, noted in expenses
+    // Operating includes the partner's 50% of the one-offs (a real payout).
+    const fbOperating = fbFinanceAppOperating + fbOneOffPartner;
 
-    const fbRevenue = fbActive ? round(fbRevenueByPeriod[period]) : 0;
+    const fbRevenue = (hasFbRevenue ? round(fbRevenueByPeriod[period]) : 0) + fbOneOffGross;
     const fbExpenses = fbOperating + fbCommission; // total incl booked commission
     const fbProfitBeforeCommission = fbRevenue - fbOperating; // the true figure
     const fbProfit = fbProfitBeforeCommission - fbCommission; // books (ties to P&L)
@@ -159,6 +173,7 @@ export function computeBreakdown(input: {
     // variance, so it sums to operating and profit never shows more than true.
     const fbLines: LinePart[] = fbActive ? fbPnlLines.filter((l) => !l.label.toLowerCase().includes("commission")).map((l) => ({ ...l })) : [];
     if (fbActive && fbSoftware) fbLines.push({ label: "Software (tagged)", amount: fbSoftware });
+    if (fbActive && fbOneOffPartner) fbLines.push({ label: "Partner share of one-offs (50%)", amount: fbOneOffPartner });
     if (fbActive && fbVariance) fbLines.push({ label: "Untagged Facebook costs (variance)", amount: fbVariance });
     fbLines.sort((a, b) => b.amount - a.amount);
 

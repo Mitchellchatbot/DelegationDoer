@@ -3,15 +3,41 @@
 import { useMemo, useState } from "react";
 import { ChevronDown } from "lucide-react";
 import type { ParsedPnl } from "@/lib/pnl-parse";
+import { MARGIN_FLOOR } from "@/lib/finance-defense";
 
-// A forward budget: every expense line with an editable "next month" estimate.
-// Each line pre-fills with last month's actual; Mitchell overrides what he
-// expects and it saves. The total is his projected next-month spend, and the
-// finance brain reads these estimates for "what's my burn next month".
+// A forward forecast for next month: an editable revenue estimate + every
+// expense line with an editable estimate (pre-filled from last month's actual).
+// It shows projected net, margin, and whether it holds the 30% survival floor
+// (margin before founder pay). The finance brain reads these estimates too.
+
+// Reserved estimate key for the projected-revenue number (kept out of the
+// expense lines / one-offs).
+const REV_KEY = "__forecast_revenue__";
+
+const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+function nextMonthLabel(last: string): string {
+  const i = MON.findIndex((m) => last.toLowerCase().startsWith(m.toLowerCase()));
+  const ym = last.match(/(\d{2})(?!.*\d)/);
+  let y = ym ? Number(ym[1]) : 26;
+  if (i < 0) return "Next month";
+  let n = i + 1;
+  if (n > 11) { n = 0; y += 1; }
+  return `${MON[n]} '${String(y).padStart(2, "0")}`;
+}
 
 function money(n: number): string {
   const s = n < 0 ? "-" : "";
   return `${s}$${Math.abs(Math.round(n)).toLocaleString("en-US")}`;
+}
+
+function Stat({ label, value, tone }: { label: string; value: string; tone?: "rose" | "emerald" }) {
+  const color = tone === "rose" ? "text-rose-600" : tone === "emerald" ? "text-emerald-600" : "text-slate-900";
+  return (
+    <div>
+      <div className="text-[10px] uppercase tracking-wide text-slate-400">{label}</div>
+      <div className={"text-[16px] font-bold tabular-nums leading-tight mt-0.5 " + color}>{value}</div>
+    </div>
+  );
 }
 
 interface Line { account: string; category: string; lastMonth: number }
@@ -48,7 +74,7 @@ function buildLines(parsed: ParsedPnl): { lines: Line[]; lastMonthLabel: string;
   return { lines: dedup, lastMonthLabel, thisMonthTotal };
 }
 
-export function NextMonthBudget({ parsed, estimates }: { parsed: ParsedPnl | null | undefined; estimates: Record<string, number> }) {
+export function NextMonthBudget({ parsed, estimates, defaultRevenue = 0 }: { parsed: ParsedPnl | null | undefined; estimates: Record<string, number>; defaultRevenue?: number }) {
   const built = useMemo(() => (parsed ? buildLines(parsed) : null), [parsed]);
   const [est, setEst] = useState<Record<string, number>>(estimates);
   const [saving, setSaving] = useState<string | null>(null);
@@ -60,11 +86,24 @@ export function NextMonthBudget({ parsed, estimates }: { parsed: ParsedPnl | nul
   if (!built || built.lines.length === 0) return null;
   const { lines, lastMonthLabel, thisMonthTotal } = built;
   const estOf = (l: Line) => (l.account in est ? est[l.account] : l.lastMonth);
-  // One-off / added lines = estimates that aren't one of the recurring P&L lines.
+  // One-off / added lines = estimates that aren't a recurring P&L line (and not
+  // the reserved revenue key).
   const pnlAccounts = new Set(lines.map((l) => l.account));
-  const oneOffs = Object.keys(est).filter((a) => !pnlAccounts.has(a) && est[a] > 0).map((a) => ({ account: a, amount: est[a] }));
+  const oneOffs = Object.keys(est).filter((a) => a !== REV_KEY && !pnlAccounts.has(a) && est[a] > 0).map((a) => ({ account: a, amount: est[a] }));
   const totalNext = lines.reduce((s, l) => s + estOf(l), 0) + oneOffs.reduce((s, o) => s + o.amount, 0);
   const delta = totalNext - thisMonthTotal;
+
+  // ── Forecast: revenue (editable) → net → margin → survival floor ──────────
+  const forecastLabel = nextMonthLabel(lastMonthLabel);
+  const revenue = REV_KEY in est ? est[REV_KEY] : Math.round(defaultRevenue);
+  const founderLine = lines.find((l) => l.account.toLowerCase().includes("mitchell price"));
+  const founderPay = founderLine ? estOf(founderLine) : 0;
+  const net = revenue - totalNext;
+  const beforeFounderProfit = net + founderPay; // survival rule = margin before founder pay
+  const marginBF = revenue > 0 ? (beforeFounderProfit / revenue) * 100 : 0;
+  const netMargin = revenue > 0 ? (net / revenue) * 100 : 0;
+  const holdsFloor = revenue > 0 && marginBF >= MARGIN_FLOOR;
+  const floorGap = Math.max(0, Math.round((MARGIN_FLOOR / 100) * revenue - beforeFounderProfit));
 
   async function save(account: string, raw: string) {
     const amount = Math.max(0, Math.round(Number(raw) || 0));
@@ -99,20 +138,54 @@ export function NextMonthBudget({ parsed, estimates }: { parsed: ParsedPnl | nul
         <button type="button" onClick={() => setOpen((v) => !v)} className="flex items-start gap-1.5 text-left min-w-0">
           <ChevronDown className={"w-4 h-4 text-slate-400 mt-1 shrink-0 transition-transform " + (open ? "rotate-180" : "-rotate-90")} />
           <div>
-            <div className="text-[16px] font-semibold text-slate-900">Next month budget</div>
-            <div className="text-[12px] text-slate-500 mt-0.5">Starts at last month ({lastMonthLabel}) · tap to {open ? "collapse" : "expand"}</div>
+            <div className="text-[16px] font-semibold text-slate-900">{forecastLabel} forecast</div>
+            <div className="text-[12px] text-slate-500 mt-0.5">Estimate revenue &amp; costs (pre-filled from {lastMonthLabel}) · tap to {open ? "collapse" : "expand"}</div>
           </div>
         </button>
         <div className="text-right shrink-0">
-          <div className="text-[11px] text-slate-400">Est. next month</div>
-          <div className="text-[26px] font-bold tabular-nums text-slate-900 leading-none mt-0.5">{money(totalNext)}</div>
-          <div className={"text-[12px] font-medium mt-1 " + (delta > 0 ? "text-rose-500" : delta < 0 ? "text-emerald-600" : "text-slate-400")}>
-            {delta > 0 ? "+" : ""}{money(delta)} vs this month
+          <div className="text-[11px] text-slate-400">Projected net · {forecastLabel}</div>
+          <div className={"text-[26px] font-bold tabular-nums leading-none mt-0.5 " + (net < 0 ? "text-rose-500" : "text-slate-900")}>{money(net)}</div>
+          <div className={"text-[11px] font-semibold rounded-full px-2 py-0.5 inline-block mt-1 " + (holdsFloor ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700")}>
+            {marginBF.toFixed(1)}% {holdsFloor ? `✓ ${MARGIN_FLOOR}% floor` : `✗ below ${MARGIN_FLOOR}%`}
           </div>
         </div>
       </div>
 
       {open && (<div className="mt-4">
+      {/* Forecast summary — revenue in, projected performance out. */}
+      <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-3.5 mb-4">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-[12px] font-medium text-slate-600">Projected revenue</span>
+          <span className="text-[13px] text-slate-400">$</span>
+          <input
+            type="text"
+            inputMode="decimal"
+            defaultValue={String(revenue)}
+            onFocus={(e) => e.currentTarget.select()}
+            onBlur={(e) => save(REV_KEY, e.currentTarget.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
+            className="w-32 text-[14px] font-semibold text-right tabular-nums rounded-lg border border-slate-200 px-2 py-1 focus:outline-none focus:border-slate-400"
+          />
+          {saving === REV_KEY && <span className="text-[10px] text-slate-400">saving</span>}
+          <span className="text-[11px] text-slate-400">
+            edit the cost lines below · spend {delta === 0 ? `= ${lastMonthLabel}` : `${delta > 0 ? "+" : ""}${money(delta)} vs ${lastMonthLabel}`}
+          </span>
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-3">
+          <Stat label="Revenue" value={money(revenue)} />
+          <Stat label="Expenses" value={money(totalNext)} />
+          <Stat label="Net" value={money(net)} tone={net < 0 ? "rose" : undefined} />
+          <Stat label="Margin before founder" value={`${marginBF.toFixed(1)}%`} tone={holdsFloor ? "emerald" : "rose"} />
+        </div>
+        <div className={"text-[12px] mt-2.5 " + (holdsFloor ? "text-emerald-700" : "text-rose-600")}>
+          {revenue <= 0
+            ? `Enter a revenue estimate to gauge ${forecastLabel}.`
+            : holdsFloor
+              ? `Holds the ${MARGIN_FLOOR}% survival floor (${netMargin.toFixed(1)}% net margin after your ${money(founderPay)} pay).`
+              : `Below the ${MARGIN_FLOOR}% floor — need ${money(floorGap)} more profit for ${forecastLabel} (cut costs or add revenue).`}
+        </div>
+      </div>
+
       <div className="divide-y divide-slate-100">
         {lines.map((l) => (
           <div key={l.account} className="flex items-center gap-3 py-2">

@@ -11,7 +11,6 @@ import { PayrollManual, type PayrollEntry } from "@/components/PayrollManual";
 import { StripeMissing } from "@/components/StripeMissing";
 import { MrrManual, type MrrEntry } from "@/components/MrrManual";
 import { FacebookRevenue } from "@/components/FacebookRevenue";
-import { FinanceOverviewView } from "@/components/FinanceOverviewView";
 import { NextMonthBudget } from "@/components/NextMonthBudget";
 import { getFinanceOverview, type FinanceOverview } from "@/lib/finance-overview";
 import { ScaleChat } from "@/components/ScaleChat";
@@ -254,7 +253,6 @@ export default async function FinancePage() {
         <div>
           <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 px-1 mb-2.5">Reference</div>
           <div className="space-y-5">
-            <FinanceOverviewView data={overview} />
             <FacebookRevenue result={fbResult} />
             <FinancePanel initialDocuments={rows.map(({ parsed, ...d }) => d)} />
           </div>

@@ -25,7 +25,7 @@ import { formatDate, relativeTime } from "@/lib/utils";
 import { BackPill } from "@/components/BackPill";
 import { DepartmentEditor } from "@/components/DepartmentEditor";
 import { getOnboarding } from "@/lib/fb-onboarding-data";
-import { progress } from "@/lib/fb-onboarding";
+import { progress, stage, stageProgress, STAGE_LABEL } from "@/lib/fb-onboarding";
 import type { Task } from "@/lib/types";
 
 // Always read fresh — comments / status changes need to surface immediately.
@@ -231,10 +231,17 @@ export default async function TaskDetailPage({ params }: { params: { id: string 
               <Rocket className="w-5 h-5 text-violet-600 shrink-0" />
               <div className="flex-1 min-w-0">
                 <div className="text-sm font-medium">Facebook onboarding</div>
+                {/* The stage, not four counters — three of which are always
+                    saturated. Same ladder the onboarding list groups by, so
+                    the two surfaces can't describe the same client
+                    differently. */}
                 <div className="text-xs text-muted">
-                  {fbOnboarding?.completedAt
-                    ? "Complete"
-                    : `Access ${fbProgress.accessCleared}/${fbProgress.accessTotal} · Main zap ${fbProgress.mainDone}/${fbProgress.mainTotal} · Setup ${fbProgress.setupDone}/${fbProgress.setupTotal} · Test ${fbProgress.testsDone}/${fbProgress.testsTotal}`}
+                  {(() => {
+                    const st = stage(fbProgress, fbOnboarding?.completedAt ?? null);
+                    if (st === "live") return "Complete";
+                    const sp = stageProgress(fbProgress, st);
+                    return `${STAGE_LABEL[st]} · ${sp.done}/${sp.total}`;
+                  })()}
                 </div>
               </div>
               <span className="text-xs text-accent inline-flex items-center gap-1 group-hover:underline">

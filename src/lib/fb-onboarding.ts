@@ -644,6 +644,32 @@ export function testCases(slug: string): TestCase[] {
 export const testResultKey = (id: string) => `test.${id}.result`;
 export const testNoteKey = (id: string) => `test.${id}.note`;
 
+// ---------------------------------------------------------------------------
+// Onboarding-level flags
+// ---------------------------------------------------------------------------
+//
+// One of each per onboarding, settable in ANY stage. These are NOT the six
+// access.<id>.blocked flags, which stay exactly as they are: those say "this
+// one access item is stuck", these say "the whole thing is parked" / "the ball
+// is with them".
+//
+// Both are ordinary state keys, so they inherit the generic { v, by, at }
+// stamp the PATCH route applies to every write. That is why there is no
+// hold_since column: state[HOLD_KEY].at IS "held since", and .by is who
+// paused it.
+
+// Who the ball is with. "" is a REAL, reachable value, not an absence:
+// fb_onboarding_set only ever MERGES, there is no key-deletion path, so
+// clearing the flag means writing "". testResultKey registers "" for the
+// same reason.
+export const WAITING_ON_KEY = "waiting.on";
+export const WAITING_NOTE_KEY = "waiting.note";
+export type WaitingOn = "" | "us" | "client";
+
+// Manual pause. "Not on hold" is { v: false }, never key-absent.
+export const HOLD_KEY = "hold.active";
+export const HOLD_NOTE_KEY = "hold.note";
+
 // Answers for one case, question order preserved, ready to paste or read off.
 export function caseAnswers(tc: TestCase): { q: string; a: string }[] {
   return TYPEFORM_BASE.map(({ q, a }) => ({ q, a: tc.answers?.[q] ?? a }));
@@ -682,6 +708,13 @@ function buildRegistry(): Map<string, KeyKind> {
     r.set(testResultKey(t.id), { kind: "choice", options: ["pass", "fail", "na", ""] });
     r.set(testNoteKey(t.id), { kind: "text" });
   }
+  // Onboarding-level flags. A choice rather than a check for "waiting on":
+  // a boolean would collapse "nobody has flagged this" into "waiting on us",
+  // because isOn() is false for both an absent key and an explicit false.
+  r.set(WAITING_ON_KEY, { kind: "choice", options: ["us", "client", ""] });
+  r.set(WAITING_NOTE_KEY, { kind: "text" });
+  r.set(HOLD_KEY, { kind: "check" });
+  r.set(HOLD_NOTE_KEY, { kind: "text" });
   return r;
 }
 
@@ -766,4 +799,146 @@ export function progress(s: OnboardingState) {
     testsDone, testsTotal: cases.length, testsFailed,
     complete
   };
+}
+
+export type Progress = ReturnType<typeof progress>;
+
+// ---------------------------------------------------------------------------
+// Stage
+// ---------------------------------------------------------------------------
+//
+// Phase is a TAB ID — which of the panel's four panes is open. Stage is a
+// LIFECYCLE POSITION and adds one rung the panel has no tab for: Live. They
+// share ids on purpose, so Stage is literally Phase | "live" and converting
+// between them is compiler-checked rather than a lookup table.
+//
+// The product words live in STAGE_LABEL. Note the id "main" is labelled
+// "Build": the id stays "main" so it lines up with the main.* keys inside
+// `state`, and renaming it would create a second id vocabulary needing
+// translation at every filter and stored value.
+
+export type Phase = "access" | "main" | "setup" | "test";
+export type Stage = Phase | "live";
+
+export const PHASES: Phase[] = ["access", "main", "setup", "test"];
+export const STAGES: Stage[] = ["access", "main", "setup", "test", "live"];
+
+export const STAGE_LABEL: Record<Stage, string> = {
+  access: "Access",
+  main: "Build",
+  setup: "Setup",
+  test: "Testing",
+  live: "Live"
+};
+
+export const STAGE_BLURB: Record<Stage, string> = {
+  access: "Waiting on the client to clear us.",
+  main: "The main zap, step by step.",
+  setup: "The other zaps, our channels and the client's delivery.",
+  test: "Live Typeform runs. All must pass.",
+  live: "Handed over and running."
+};
+
+export const stagePhase = (s: Stage): Phase => (s === "live" ? "test" : s);
+
+// THE ladder — derived from the checklist, never typed by a human.
+//
+// `completedAt` is the RECORDED completion (the stored column), not
+// p.complete: the two disagree for exactly the duration of a PATCH, and
+// keying Live off the recomputed value would flip the board to Live
+// optimistically and straight back again. A caller that is about to WRITE
+// completion passes the value it is about to write.
+export function stage(p: Progress, completedAt: string | null): Stage {
+  if (completedAt) return "live";
+  if (p.accessCleared < p.accessTotal) return "access";
+  if (p.mainDone < p.mainTotal) return "main";
+  if (p.setupDone < p.setupTotal) return "setup";
+  return "test";
+}
+
+// How far through the stage a client is actually in — the one bar worth
+// showing on a card, instead of four competing for attention.
+export function stageProgress(p: Progress, st: Stage): { done: number; total: number } {
+  if (st === "access") return { done: p.accessCleared, total: p.accessTotal };
+  if (st === "main") return { done: p.mainDone, total: p.mainTotal };
+  if (st === "setup") return { done: p.setupDone, total: p.setupTotal };
+  if (st === "test") return { done: p.testsDone, total: p.testsTotal };
+  return { done: 1, total: 1 };
+}
+
+// ---------------------------------------------------------------------------
+// Aging
+// ---------------------------------------------------------------------------
+
+// Fixed day budgets per stage, tuned by editing this table. No medians and no
+// learning — which is also why there is no stage-history table. Access gets a
+// long rope because it waits on six external systems the client controls;
+// Build and Setup are our own work.
+export const STAGE_AGING: Record<Stage, { amber: number; red: number } | null> = {
+  access: { amber: 9, red: 12 },
+  main: { amber: 6, red: 8 },
+  setup: { amber: 3, red: 4 },
+  test: { amber: 5, red: 6 },
+  live: null
+};
+
+export type AgeBand = "ok" | "amber" | "red" | "hold";
+
+// Elapsed 24h periods — the house idiom (see daysSince in client-touchpoint),
+// not ET calendar days. Duplicated rather than imported because that module is
+// server-only and this one is imported by the client panel.
+export function elapsedDays(fromIso: string | null, to: Date = new Date()): number | null {
+  if (!fromIso) return null;
+  const from = new Date(fromIso).getTime();
+  if (Number.isNaN(from)) return null;
+  return Math.max(0, Math.floor((to.getTime() - from) / 86_400_000));
+}
+
+// Days in the current stage. A hold FREEZES the number at the instant the hold
+// started.
+//
+// KNOWN SIMPLIFICATION: releasing a hold does not credit the held days back —
+// the count resumes from stageEnteredAt including them. Only the CURRENT hold
+// is excluded. Crediting held time needs an accumulator, and the only place to
+// keep one is `state`, which means read-modify-write: the pattern this work
+// exists to remove. Holds are expected to be few and long, so excluding the
+// current one carries nearly all the value.
+export function stageAgeDays(
+  stageEnteredAt: string | null,
+  heldSince: string | null,
+  now: Date = new Date()
+): number | null {
+  return elapsedDays(stageEnteredAt, heldSince ? new Date(heldSince) : now);
+}
+
+export function ageBand(st: Stage, days: number | null, held: boolean): AgeBand {
+  if (held) return "hold";
+  const t = STAGE_AGING[st];
+  if (!t || days === null) return "ok";
+  if (days >= t.red) return "red";
+  return days >= t.amber ? "amber" : "ok";
+}
+
+// ---------------------------------------------------------------------------
+// Flag readers
+// ---------------------------------------------------------------------------
+
+export function waitingOn(s: OnboardingState): WaitingOn {
+  const v = str(s, WAITING_ON_KEY);
+  return v === "us" || v === "client" ? v : "";
+}
+export function waitingSince(s: OnboardingState): string | null {
+  return waitingOn(s) ? s[WAITING_ON_KEY]?.at ?? null : null;
+}
+export function waitingNote(s: OnboardingState): string {
+  return str(s, WAITING_NOTE_KEY);
+}
+export function onHold(s: OnboardingState): boolean {
+  return isOn(s, HOLD_KEY);
+}
+export function holdSince(s: OnboardingState): string | null {
+  return onHold(s) ? s[HOLD_KEY]?.at ?? null : null;
+}
+export function holdNote(s: OnboardingState): string {
+  return str(s, HOLD_NOTE_KEY);
 }

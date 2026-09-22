@@ -8,6 +8,10 @@ import type { User } from "@/lib/types";
 
 export const FB_DEPT = "dep_facebook";
 
+// How many notes a list card carries. Past this, the card says how many more
+// there are and the side panel has the rest.
+const NOTES_PER_CARD = 30;
+
 // The Facebook team plus leaders / admins. Drives the sidebar row and the
 // list page; the per-onboarding page also admits anyone who can see the task.
 export function canSeeFbOnboarding(u: User | null | undefined): boolean {
@@ -28,9 +32,10 @@ export interface OnboardingSummary {
   updatedAt: string;
   completedAt: string | null;
   progress: ReturnType<typeof progress>;
-  // Team notes = the task's comments. Count plus the newest, for the card.
+  // Team notes = the task's comments, oldest first, for the card's thread.
+  // Capped per task so one chatty onboarding can't bloat the list page.
   noteCount: number;
-  latestNote: { userId: string | null; text: string; at: string } | null;
+  notes: { id: string; userId: string | null; text: string; at: string }[];
 }
 
 export async function listOnboardings(): Promise<OnboardingSummary[]> {
@@ -48,22 +53,27 @@ export async function listOnboardings(): Promise<OnboardingSummary[]> {
     .in("id", list.map((r) => r.task_id));
   const byId = new Map((tasks ?? []).filter((t) => !t.deleted_at).map((t) => [t.id as string, t]));
 
-  // Newest first, so the first row seen per task is its latest note.
+  // Oldest first — the card renders them as a thread and scrolls to the end.
   const { data: comments } = await supabase
     .from("activity_logs")
-    .select("task_id, user_id, detail, created_at")
+    .select("id, task_id, user_id, detail, created_at")
     .in("task_id", list.map((r) => r.task_id))
     .eq("action", "comment")
-    .order("created_at", { ascending: false });
-  const notes = new Map<string, { count: number; latest: OnboardingSummary["latestNote"] }>();
+    .order("created_at", { ascending: true });
+  const notes = new Map<string, { count: number; items: OnboardingSummary["notes"] }>();
   for (const c of comments ?? []) {
     const id = c.task_id as string;
-    const cur = notes.get(id);
-    if (cur) { cur.count++; continue; }
-    notes.set(id, {
-      count: 1,
-      latest: { userId: (c.user_id as string | null) ?? null, text: (c.detail as string | null) ?? "", at: c.created_at as string }
-    });
+    const cur = notes.get(id) ?? { count: 0, items: [] };
+    cur.count++;
+    if (cur.items.length < NOTES_PER_CARD) {
+      cur.items.push({
+        id: c.id as string,
+        userId: (c.user_id as string | null) ?? null,
+        text: (c.detail as string | null) ?? "",
+        at: c.created_at as string
+      });
+    }
+    notes.set(id, cur);
   }
 
   return list.flatMap((r) => {
@@ -86,7 +96,7 @@ export async function listOnboardings(): Promise<OnboardingSummary[]> {
       completedAt: (r.completed_at as string | null) ?? null,
       progress: progress(state),
       noteCount: notes.get(r.task_id as string)?.count ?? 0,
-      latestNote: notes.get(r.task_id as string)?.latest ?? null
+      notes: notes.get(r.task_id as string)?.items ?? []
     }];
   });
 }

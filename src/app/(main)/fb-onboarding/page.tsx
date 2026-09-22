@@ -101,7 +101,8 @@ function OnboardingCard({ o, me, noteUsers, assignee }: {
   noteUsers: NoteUser[];
   assignee: { id: string; name: string; avatarUrl?: string | null } | null;
 }) {
-  const noteAuthor = o.latestNote?.userId ? noteUsers.find((u) => u.id === o.latestNote?.userId)?.name ?? "Someone" : "Someone";
+  const nameOf = (id: string | null) => (id ? noteUsers.find((u) => u.id === id)?.name ?? "Someone" : "Someone");
+  const hidden = o.noteCount - o.notes.length;
   const p = o.progress;
   const taskShape = { creatorId: o.creatorId ?? "", assigneeId: o.assigneeId, departmentId: FB_DEPT };
   const phases = [
@@ -162,11 +163,18 @@ function OnboardingCard({ o, me, noteUsers, assignee }: {
         })}
       </div>
 
-      {o.latestNote && (
-        <div className="mt-3 flex items-start gap-2 rounded-lg bg-surface2/70 px-2.5 py-1.5 text-xs">
-          <span className="font-medium shrink-0">{noteAuthor}</span>
-          <span className="text-ink/80 truncate flex-1 min-w-0">{o.latestNote.text}</span>
-          <span className="text-[11px] text-muted shrink-0">{relativeTime(o.latestNote.at)}</span>
+      {o.notes.length > 0 && (
+        <div className="mt-3 rounded-lg bg-surface2/70 px-2.5 py-1.5 max-h-36 overflow-y-auto space-y-1.5">
+          {hidden > 0 && (
+            <div className="text-[11px] text-muted">{hidden} earlier note{hidden === 1 ? "" : "s"} — open the notes panel to read them</div>
+          )}
+          {o.notes.map((n) => (
+            <div key={n.id} className="flex items-start gap-2 text-xs">
+              <span className="font-medium shrink-0">{nameOf(n.userId)}</span>
+              <span className="text-ink/80 flex-1 min-w-0 whitespace-pre-wrap break-words">{n.text}</span>
+              <span className="text-[11px] text-muted shrink-0">{relativeTime(n.at)}</span>
+            </div>
+          ))}
         </div>
       )}
 

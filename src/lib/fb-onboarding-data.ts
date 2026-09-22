@@ -1,5 +1,5 @@
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
-import { progress, PROVIDER_KEY, type OnboardingState } from "@/lib/fb-onboarding";
+import { progress, accessStatus, ACCESS_ITEMS, PROVIDER_KEY, type OnboardingState, type AccessStatus } from "@/lib/fb-onboarding";
 import type { User } from "@/lib/types";
 
 // Server-side reads for the Facebook onboarding workspace (/fb-onboarding).
@@ -36,6 +36,9 @@ export interface OnboardingSummary {
   // Capped per task so one chatty onboarding can't bloat the list page.
   noteCount: number;
   notes: { id: string; userId: string | null; text: string; at: string }[];
+  // Per-item access state, so the list page can show the same tags the
+  // Access tab does without loading each onboarding.
+  access: { id: string; label: string; status: AccessStatus }[];
 }
 
 export async function listOnboardings(): Promise<OnboardingSummary[]> {
@@ -95,6 +98,7 @@ export async function listOnboardings(): Promise<OnboardingSummary[]> {
       updatedAt: r.updated_at as string,
       completedAt: (r.completed_at as string | null) ?? null,
       progress: progress(state),
+      access: ACCESS_ITEMS.map((it) => ({ id: it.id, label: it.label, status: accessStatus(state, it) })),
       noteCount: notes.get(r.task_id as string)?.count ?? 0,
       notes: notes.get(r.task_id as string)?.items ?? []
     }];

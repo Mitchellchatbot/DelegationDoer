@@ -1,16 +1,21 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Send, Inbox, Paperclip, SendHorizontal, Reply, Loader2 } from "lucide-react";
-import type { MissiveMessage } from "@/lib/missive-client";
+import type { MissiveMessage, MissiveMessageAttachment } from "@/lib/missive-client";
 import { shortName, rawEmail, messageSnippet } from "@/lib/email-format";
-import { fetchDeferredBody, prefetchThreadBodies, getCachedBody } from "@/lib/message-body-cache";
+import {
+  fetchDeferredBody,
+  prefetchThreadBodies,
+  getCachedBody,
+  useBodyStatus
+} from "@/lib/message-body-cache";
 import { Avatar } from "@/components/Avatar";
 import { ForwardButton } from "@/components/ForwardButton";
 import { EmailPrintButtons } from "@/components/EmailPrintButtons";
 import { EmailBody } from "@/components/EmailBody";
 import { AttachmentChip } from "@/components/AttachmentChip";
-import { rewriteInlineCids, referencedInlineIds } from "@/lib/inline-cid";
+import { rewriteInlineCids, chipAttachments } from "@/lib/inline-cid";
 
 // Gmail-style thread collapse. A thread can hold many messages; rendering every
 // one fully expanded turns it into a wall of email. Instead we show only the
@@ -90,16 +95,6 @@ export function ThreadMessages({
         const outbound = m.direction === "outbound";
         const isLatest = i === messages.length - 1;
         const expanded = effectiveExpanded.has(m.id);
-        const atts = m.attachments ?? [];
-        // Paperclip indicator on the collapsed stub — unchanged: true when the
-        // message carries ANY attachment (inline images included).
-        const hasAttachments = atts.length > 0;
-        // Chip row only: inline images already rendered into the body (via
-        // rewriteInlineCids) are dropped so they don't appear twice. Only
-        // computable when the body html is present (the non-deferred, latest
-        // message); deferred bodies keep every chip until expanded.
-        const inlinedIds = m.body_html ? referencedInlineIds(m.body_html, atts) : null;
-        const chipAtts = inlinedIds ? atts.filter((a) => !inlinedIds.has(a.id)) : atts;
 
         // Anchor wrapper keeps the scroll-to-latest target stable regardless of
         // whether the latest message is expanded or collapsed.
@@ -123,9 +118,7 @@ export function ThreadMessages({
                 <span className="text-sm text-ink/55 truncate flex-1 min-w-0">
                   {messageSnippet(m)}
                 </span>
-                {hasAttachments && (
-                  <Paperclip className="w-3.5 h-3.5 text-muted shrink-0" />
-                )}
+                <StubPaperclip message={m} />
                 <span className="text-[11px] text-muted shrink-0 tabular-nums">
                   {fmtDate(m.sent_at)}
                 </span>
@@ -232,24 +225,18 @@ export function ThreadMessages({
                     fetched on expand — this card only mounts when expanded. */}
                 <div className="p-5">
                   {m.body_html ? (
-                    // Inline images are referenced as `cid:<content-id>`, which
-                    // resolves nowhere inside the sandboxed iframe. Rewrite them
-                    // to the authenticated attachment proxy so received inline
-                    // images render instead of showing as broken "image.png".
-                    <EmailBody
-                      html={rewriteInlineCids(
-                        m.body_html,
-                        m.attachments ?? [],
-                        accountId,
-                        threadId
-                      )}
+                    <InlineMessageBody
+                      html={m.body_html}
+                      attachments={m.attachments}
+                      accountId={accountId}
+                      threadId={threadId}
                     />
                   ) : m.body_deferred ? (
                     <DeferredMessageBody
                       messageId={m.id}
                       accountId={accountId}
                       threadId={threadId}
-                      attachments={m.attachments ?? []}
+                      attachments={m.attachments}
                       fallbackText={m.body_text}
                     />
                   ) : (
@@ -259,24 +246,8 @@ export function ThreadMessages({
                   )}
                 </div>
 
-                {/* Attachments — one chip per file. Inline images that we just
-                    rendered into the body (their cid: was rewritten to the
-                    proxy) are dropped here so they aren't shown twice; a
-                    content_id image that no cid references still gets a chip, so
-                    real attachments never vanish. Each chip links to the proxy
-                    that streams bytes from the clone with an access check. */}
-                {chipAtts.length > 0 && (
-                  <div className="px-5 pb-5 -mt-1 flex flex-wrap gap-2">
-                    {chipAtts.map((a) => (
-                      <AttachmentChip
-                        key={a.id}
-                        attachment={a}
-                        accountId={accountId}
-                        threadId={threadId}
-                      />
-                    ))}
-                  </div>
-                )}
+                {/* Attachments — one chip per file; see AttachmentChipRow. */}
+                <AttachmentChipRow message={m} accountId={accountId} threadId={threadId} />
               </article>
             )}
           </div>
@@ -284,6 +255,89 @@ export function ThreadMessages({
       })}
     </div>
   );
+}
+
+// The attachments that get a download chip (and the stub paperclip) for one
+// message. Which html decides it:
+//   body_html present         → that html
+//   not deferred, no html     → none (text-only body): everything chips
+//   deferred, body ready      → the cached body's html
+//   deferred, body failed     → none: everything chips, no file is lost
+//   deferred, body pending    → Content-ID parts wait for the body
+// See chipAttachments for why content_id alone never means "inline". Used from
+// the small components below, so a body landing (on expand or via the
+// background prefetch) re-renders just that message's chips, not the thread.
+function useChipAttachments(m: MissiveMessage): MissiveMessageAttachment[] {
+  const status = useBodyStatus(m.body_deferred && !m.body_html ? m.id : null);
+  const html = m.body_html
+    ? m.body_html
+    : status === "ready"
+      ? getCachedBody(m.id)?.body_html ?? null
+      : null;
+  return useMemo(
+    () => chipAttachments(m.attachments ?? [], html, { pending: status === "pending" }),
+    [m.attachments, html, status]
+  );
+}
+
+// Paperclip on the collapsed stub means "has a real file" — the same set as the
+// chip row, so an inline-only message (a signature logo) shows none. On a stub
+// whose body hasn't been prefetched yet, a file carrying a Content-ID (e.g. an
+// Outlook PDF) gets its paperclip when the prefetch lands; accepted, it's
+// usually well under a second.
+function StubPaperclip({ message }: { message: MissiveMessage }) {
+  const chips = useChipAttachments(message);
+  return chips.length > 0 ? <Paperclip className="w-3.5 h-3.5 text-muted shrink-0" /> : null;
+}
+
+// One chip per file. Inline images rendered into the body (their cid: was
+// rewritten to the proxy, quoted history included) are dropped so they aren't
+// shown twice; anything no cid references still gets a chip, so real
+// attachments never vanish. Each chip links to the proxy that streams bytes
+// from the clone with an access check.
+function AttachmentChipRow({
+  message,
+  accountId,
+  threadId
+}: {
+  message: MissiveMessage;
+  accountId: string;
+  threadId: string;
+}) {
+  const chips = useChipAttachments(message);
+  if (chips.length === 0) return null;
+  return (
+    <div className="px-5 pb-5 -mt-1 flex flex-wrap gap-2">
+      {chips.map((a) => (
+        <AttachmentChip key={a.id} attachment={a} accountId={accountId} threadId={threadId} />
+      ))}
+    </div>
+  );
+}
+
+// The non-deferred html body. Its own component only so the cid: rewrite is
+// memoized: the thread re-renders as deferred bodies land, and rescanning a
+// large body on each of those renders adds up.
+function InlineMessageBody({
+  html,
+  attachments,
+  accountId,
+  threadId
+}: {
+  html: string;
+  attachments: MissiveMessage["attachments"];
+  accountId: string;
+  threadId: string;
+}) {
+  // Inline images are referenced as `cid:<content-id>`, which resolves nowhere
+  // inside the sandboxed iframe. Rewrite them to the authenticated attachment
+  // proxy so received inline images render instead of showing as broken
+  // "image.png".
+  const rewritten = useMemo(
+    () => rewriteInlineCids(html, attachments ?? [], accountId, threadId),
+    [html, attachments, accountId, threadId]
+  );
+  return <EmailBody html={rewritten} />;
 }
 
 // Renders a message body that was deferred on thread open. Mounts only when its
@@ -336,6 +390,14 @@ function DeferredMessageBody({
     return () => ac.abort();
   }, [messageId, accountId, threadId]);
 
+  // Memoized for the same reason as InlineMessageBody; computed before the
+  // early returns so the hook order stays fixed.
+  const readyHtml = state.status === "ready" ? state.html : null;
+  const rewritten = useMemo(
+    () => (readyHtml ? rewriteInlineCids(readyHtml, attachments ?? [], accountId, threadId) : null),
+    [readyHtml, attachments, accountId, threadId]
+  );
+
   if (state.status === "loading") {
     return (
       <div className="flex items-center gap-2 text-sm text-ink/50 py-4">
@@ -351,13 +413,7 @@ function DeferredMessageBody({
       </pre>
     );
   }
-  if (state.html) {
-    return (
-      <EmailBody
-        html={rewriteInlineCids(state.html, attachments ?? [], accountId, threadId)}
-      />
-    );
-  }
+  if (rewritten) return <EmailBody html={rewritten} />;
   return (
     <pre className="text-sm whitespace-pre-wrap font-sans leading-relaxed">
       {state.text || fallbackText || "(empty)"}

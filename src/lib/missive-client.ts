@@ -70,9 +70,11 @@ export interface MissiveMessageAttachment {
   filename: string;
   content_type: string;
   size_bytes: number;
-  // Set for inline images embedded in the HTML body (cid:...); null for
-  // ordinary file attachments. The UI only chips the latter so inline
-  // images aren't duplicated below the body they already render in.
+  // The MIME part's Content-ID, stored without angle brackets. NOT an inline
+  // signal on its own: the clone keeps it on nearly every part (Outlook stamps
+  // one on ordinary PDFs and invites too). An attachment is inline only when
+  // its message's body references `cid:<content_id>` — see
+  // referencedInlineIds / chipAttachments in inline-cid.ts.
   content_id: string | null;
 }
 

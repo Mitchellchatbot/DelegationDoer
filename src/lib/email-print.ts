@@ -774,7 +774,12 @@ function attachmentEntity(
   // remote-supplied, and a newline in it would inject arbitrary headers into
   // the .eml. mimeParam already refuses control characters in filenames; this
   // is the same guard for the one raw header value left.
-  if (inline && a.content_id) {
+  //
+  // Emitted on attachment-disposition parts too: a part the body references by
+  // cid: but that isn't treated as an inline image (a referenced PDF) lands in
+  // multipart/mixed, and without its Content-ID that reference would dangle.
+  // A Content-ID on an attachment part is valid MIME.
+  if (a.content_id) {
     const cid = a.content_id.replace(/[\r\n]+/g, "");
     if (cid) headers.push(`Content-ID: ${ensureAngle(cid)}`);
   }

@@ -69,3 +69,20 @@ export function isMissingColumnError(
   // Older/proxied responses don't always carry the code.
   return /column .* does not exist/i.test(error.message ?? "");
 }
+
+// Same idea for a function that isn't there — Postgres 42883, and PostgREST's
+// PGRST202 schema-cache miss, which is what you actually get in the window
+// between a migration creating a function and `notify pgrst, 'reload schema'`
+// landing. Checking only the Postgres wording misses that case entirely.
+//
+// Same rule as isMissingColumnError: fall through on THIS and nothing else. A
+// transient 5xx or a statement timeout must not silently re-enable the legacy
+// path the migration existed to replace.
+export function isMissingFunctionError(
+  error: { code?: string | null; message?: string | null } | null | undefined
+): boolean {
+  if (!error) return false;
+  if (error.code === "42883" || error.code === "PGRST202") return true;
+  const m = error.message ?? "";
+  return /function .* does not exist/i.test(m) || /could not find the function/i.test(m);
+}

@@ -1,4 +1,4 @@
-import { getSupabaseAdmin } from "@/lib/supabase-admin";
+import { getSupabaseAdmin, isMissingColumnError } from "@/lib/supabase-admin";
 import {
   progress, accessStatus, ACCESS_ITEMS, PROVIDER_KEY,
   stage, stageProgress, stageAgeDays, ageBand,
@@ -74,10 +74,25 @@ export interface OnboardingSummary {
 
 export async function listOnboardings(): Promise<OnboardingSummary[]> {
   const supabase = getSupabaseAdmin();
-  const { data: rows } = await supabase
+  // stage_entered_at arrives with a migration that is applied BY HAND, so
+  // deployed code meets a database without it for some window. Retry without
+  // it on 42703 and ONLY 42703 — falling back on any error would let a
+  // transient 5xx silently drop the day counts with nothing to show why.
+  const BASE_COLS = "task_id, state, started_at, updated_at, completed_at";
+  let rows: Record<string, unknown>[] | null = null;
+  const withStage = await supabase
     .from("fb_onboarding")
-    .select("task_id, state, started_at, updated_at, completed_at")
+    .select(`${BASE_COLS}, stage_entered_at`)
     .order("updated_at", { ascending: false });
+  if (withStage.error && isMissingColumnError(withStage.error)) {
+    const without = await supabase
+      .from("fb_onboarding")
+      .select(BASE_COLS)
+      .order("updated_at", { ascending: false });
+    rows = without.data;
+  } else {
+    rows = withStage.data;
+  }
   const list = rows ?? [];
   if (list.length === 0) return [];
 

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { loadTaskForViewer } from "@/lib/task-access";
 import { canManageTask } from "@/lib/access";
-import { normaliseValue, progress, PROVIDER_KEY, FB_ONBOARDING_TAG, type OnboardingState } from "@/lib/fb-onboarding";
+import { normaliseValue, progress, stage, PROVIDER_KEY, FB_ONBOARDING_TAG, type OnboardingState } from "@/lib/fb-onboarding";
 
 export const dynamic = "force-dynamic";
 
@@ -80,16 +80,36 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
 
   const state = merged as OnboardingState;
   const { complete } = progress(state);
+  const completedAt = await reconcileCompletedAt(supabase, params.id, complete, now);
+  await supabase.from("tasks").update({ last_activity_at: now }).eq("id", params.id);
+
+  return NextResponse.json({ state, completedAt, stage: stage(progress(state), completedAt) });
+}
+
+// Read-then-write on completed_at, exactly as it has always been.
+//
+// Extracted verbatim so the stage work can replace the call site with a single
+// atomic statement while keeping this as the fallback for the window before
+// that migration is applied by hand — a fallback that is already proven in
+// production beats a fresh one that no test can reach.
+//
+// Known and deliberate: two concurrent PATCHes can race this, and the one
+// carrying the staler verdict wins. That is the behaviour being replaced, not
+// behaviour being introduced.
+async function reconcileCompletedAt(
+  supabase: ReturnType<typeof getSupabaseAdmin>,
+  taskId: string,
+  complete: boolean,
+  now: string
+): Promise<string | null> {
   const { data: row } = await supabase
-    .from("fb_onboarding").select("completed_at").eq("task_id", params.id).maybeSingle();
+    .from("fb_onboarding").select("completed_at").eq("task_id", taskId).maybeSingle();
   let completedAt: string | null = (row?.completed_at as string | null) ?? null;
   if (complete !== !!completedAt) {
     completedAt = complete ? now : null;
-    await supabase.from("fb_onboarding").update({ completed_at: completedAt }).eq("task_id", params.id);
+    await supabase.from("fb_onboarding").update({ completed_at: completedAt }).eq("task_id", taskId);
   }
-  await supabase.from("tasks").update({ last_activity_at: now }).eq("id", params.id);
-
-  return NextResponse.json({ state, completedAt });
+  return completedAt;
 }
 
 // DELETE — remove the checklist from this task, keeping the task itself.

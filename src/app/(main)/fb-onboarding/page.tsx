@@ -5,6 +5,7 @@ import { PageHero } from "@/components/PageHero";
 import { PersonAvatar } from "@/components/PersonAvatar";
 import { NewFbOnboardingButton } from "@/components/NewFbOnboardingButton";
 import { DeleteFbOnboardingButton } from "@/components/DeleteFbOnboardingButton";
+import { FbOnboardingNotesButton } from "@/components/FbOnboardingNotesButton";
 import { canDeleteTask, canManageTask } from "@/lib/access";
 import type { User } from "@/lib/types";
 import { requireCurrentUserId } from "@/lib/session";
@@ -43,6 +44,7 @@ export default async function FbOnboardingListPage() {
     .filter((u) => (u.departmentIds ?? []).includes(FB_DEPT))
     .map((u) => ({ id: u.id, name: u.name }));
   const userById = new Map(users.map((u) => [u.id, u]));
+  const noteUsers = users.map((u) => ({ id: u.id, name: u.name, avatarUrl: u.avatarUrl ?? null, email: u.email ?? null, role: u.role }));
 
   const active = onboardings.filter((o) => !o.completedAt);
   const done = onboardings.filter((o) => o.completedAt);
@@ -63,7 +65,7 @@ export default async function FbOnboardingListPage() {
           <div className="card p-8 text-center text-sm text-muted">No onboardings in progress. Start one with <span className="font-medium text-ink">New onboarding</span>.</div>
         ) : (
           <div className="grid gap-3 md:grid-cols-2">
-            {active.map((o) => <OnboardingCard key={o.taskId} o={o} me={me} assignee={o.assigneeId ? userById.get(o.assigneeId) ?? null : null} />)}
+            {active.map((o) => <OnboardingCard key={o.taskId} o={o} me={me} noteUsers={noteUsers} assignee={o.assigneeId ? userById.get(o.assigneeId) ?? null : null} />)}
           </div>
         )}
       </Section>
@@ -71,7 +73,7 @@ export default async function FbOnboardingListPage() {
       {done.length > 0 && (
         <Section title="Complete" count={done.length}>
           <div className="grid gap-3 md:grid-cols-2">
-            {done.map((o) => <OnboardingCard key={o.taskId} o={o} me={me} assignee={o.assigneeId ? userById.get(o.assigneeId) ?? null : null} />)}
+            {done.map((o) => <OnboardingCard key={o.taskId} o={o} me={me} noteUsers={noteUsers} assignee={o.assigneeId ? userById.get(o.assigneeId) ?? null : null} />)}
           </div>
         </Section>
       )}
@@ -91,7 +93,15 @@ function Section({ title, count, children }: { title: string; count: number; chi
   );
 }
 
-function OnboardingCard({ o, me, assignee }: { o: OnboardingSummary; me: User; assignee: { id: string; name: string; avatarUrl?: string | null } | null }) {
+type NoteUser = { id: string; name: string; avatarUrl: string | null; email: string | null; role: string };
+
+function OnboardingCard({ o, me, noteUsers, assignee }: {
+  o: OnboardingSummary;
+  me: User;
+  noteUsers: NoteUser[];
+  assignee: { id: string; name: string; avatarUrl?: string | null } | null;
+}) {
+  const noteAuthor = o.latestNote?.userId ? noteUsers.find((u) => u.id === o.latestNote?.userId)?.name ?? "Someone" : "Someone";
   const p = o.progress;
   const taskShape = { creatorId: o.creatorId ?? "", assigneeId: o.assigneeId, departmentId: FB_DEPT };
   const phases = [
@@ -118,6 +128,13 @@ function OnboardingCard({ o, me, assignee }: { o: OnboardingSummary; me: User; a
             </span>
           ) : null}
           {assignee && <PersonAvatar userId={assignee.id} name={assignee.name} imageUrl={assignee.avatarUrl} size={24} />}
+          <FbOnboardingNotesButton
+            taskId={o.taskId}
+            provider={o.provider}
+            count={o.noteCount}
+            currentUserId={me.id}
+            users={noteUsers}
+          />
           <DeleteFbOnboardingButton
             variant="icon"
             taskId={o.taskId}
@@ -144,6 +161,14 @@ function OnboardingCard({ o, me, assignee }: { o: OnboardingSummary; me: User; a
           );
         })}
       </div>
+
+      {o.latestNote && (
+        <div className="mt-3 flex items-start gap-2 rounded-lg bg-surface2/70 px-2.5 py-1.5 text-xs">
+          <span className="font-medium shrink-0">{noteAuthor}</span>
+          <span className="text-ink/80 truncate flex-1 min-w-0">{o.latestNote.text}</span>
+          <span className="text-[11px] text-muted shrink-0">{relativeTime(o.latestNote.at)}</span>
+        </div>
+      )}
 
       <div className="flex items-center justify-between mt-3 text-[11px] text-muted">
         <span>Updated {relativeTime(o.updatedAt)}{assignee ? ` · ${assignee.name}` : ""}</span>

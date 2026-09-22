@@ -28,6 +28,9 @@ export interface OnboardingSummary {
   updatedAt: string;
   completedAt: string | null;
   progress: ReturnType<typeof progress>;
+  // Team notes = the task's comments. Count plus the newest, for the card.
+  noteCount: number;
+  latestNote: { userId: string | null; text: string; at: string } | null;
 }
 
 export async function listOnboardings(): Promise<OnboardingSummary[]> {
@@ -44,6 +47,24 @@ export async function listOnboardings(): Promise<OnboardingSummary[]> {
     .select("id, title, status, assignee_id, creator_id, due_date, client_name, deleted_at")
     .in("id", list.map((r) => r.task_id));
   const byId = new Map((tasks ?? []).filter((t) => !t.deleted_at).map((t) => [t.id as string, t]));
+
+  // Newest first, so the first row seen per task is its latest note.
+  const { data: comments } = await supabase
+    .from("activity_logs")
+    .select("task_id, user_id, detail, created_at")
+    .in("task_id", list.map((r) => r.task_id))
+    .eq("action", "comment")
+    .order("created_at", { ascending: false });
+  const notes = new Map<string, { count: number; latest: OnboardingSummary["latestNote"] }>();
+  for (const c of comments ?? []) {
+    const id = c.task_id as string;
+    const cur = notes.get(id);
+    if (cur) { cur.count++; continue; }
+    notes.set(id, {
+      count: 1,
+      latest: { userId: (c.user_id as string | null) ?? null, text: (c.detail as string | null) ?? "", at: c.created_at as string }
+    });
+  }
 
   return list.flatMap((r) => {
     const t = byId.get(r.task_id as string);
@@ -63,7 +84,9 @@ export async function listOnboardings(): Promise<OnboardingSummary[]> {
       startedAt: r.started_at as string,
       updatedAt: r.updated_at as string,
       completedAt: (r.completed_at as string | null) ?? null,
-      progress: progress(state)
+      progress: progress(state),
+      noteCount: notes.get(r.task_id as string)?.count ?? 0,
+      latestNote: notes.get(r.task_id as string)?.latest ?? null
     }];
   });
 }

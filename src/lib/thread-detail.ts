@@ -22,14 +22,35 @@ type AppUser = NonNullable<Awaited<ReturnType<typeof getUserById>>>;
 // they key on their own id and are never merged. The thread's account_emails
 // still records every inbox the conversation touches, so the multi-inbox
 // association is preserved.
+//
+// Body carry-over: with deferBodies the clone ships a body only on the LAST raw
+// row, which is often a duplicate this drops — leaving the latest message as a
+// deferred copy that spins and costs two more clone round-trips. When a dropped
+// copy has its body inline, move that body onto (a shallow copy of) the kept
+// row. Same Message-ID + direction means the same MIME body, so this is safe;
+// the kept row's id, attachments and account_id stay put, so the reply target,
+// expand state and attachment chips remain tied to one row.
 function dedupeByMessageId(messages: MissiveMessage[]): MissiveMessage[] {
-  const seen = new Set<string>();
+  const keptAt = new Map<string, number>();
   const out: MissiveMessage[] = [];
   for (const m of messages) {
     const key = m.message_id ? `mid:${m.message_id}:${m.direction}` : `row:${m.id}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(m);
+    const at = keptAt.get(key);
+    if (at === undefined) {
+      keptAt.set(key, out.length);
+      out.push(m);
+      continue;
+    }
+    const kept = out[at];
+    if (m.body_deferred === false && kept.body_deferred !== false) {
+      out[at] = {
+        ...kept,
+        body_html: m.body_html,
+        body_text: m.body_text,
+        snippet: m.snippet,
+        body_deferred: false
+      };
+    }
   }
   return out;
 }

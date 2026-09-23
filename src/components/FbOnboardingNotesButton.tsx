@@ -40,7 +40,7 @@ export function FbOnboardingNotesButton({
         )}
       >
         <MessageSquare className="w-3.5 h-3.5" />
-        {count > 0 && <span className="tabular-nums font-medium">{count}</span>}
+        <span className="tabular-nums font-medium">{count}</span>
       </button>
 
       <Dialog.Root open={open} onOpenChange={(v) => { setOpen(v); if (!v) router.refresh(); }}>

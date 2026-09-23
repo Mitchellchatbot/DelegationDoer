@@ -5,7 +5,7 @@ import {
   onHold, holdNote, holdSince, waitingOn, waitingNote, waitingSince,
   type OnboardingState, type AccessStatus, type Stage, type AgeBand, type WaitingOn
 } from "@/lib/fb-onboarding";
-import type { User } from "@/lib/types";
+import type { User, Priority } from "@/lib/types";
 
 // Server-side reads for the Facebook onboarding workspace (/fb-onboarding).
 // Each onboarding is anchored to one Facebook task — the task carries the
@@ -33,6 +33,7 @@ export interface OnboardingSummary {
   assigneeId: string | null;
   creatorId: string | null;
   dueDate: string | null;
+  priority: Priority;
   startedAt: string;
   updatedAt: string;
   completedAt: string | null;
@@ -98,7 +99,7 @@ export async function listOnboardings(): Promise<OnboardingSummary[]> {
 
   const { data: tasks } = await supabase
     .from("tasks")
-    .select("id, title, status, assignee_id, creator_id, due_date, client_name, deleted_at")
+    .select("id, title, status, assignee_id, creator_id, due_date, priority, client_name, deleted_at")
     .in("id", list.map((r) => r.task_id));
   const byId = new Map((tasks ?? []).filter((t) => !t.deleted_at).map((t) => [t.id as string, t]));
 
@@ -154,6 +155,7 @@ export async function listOnboardings(): Promise<OnboardingSummary[]> {
       assigneeId: (t.assignee_id as string | null) ?? null,
       creatorId: (t.creator_id as string | null) ?? null,
       dueDate: (t.due_date as string | null) ?? null,
+      priority: (t.priority as Priority | null) ?? "medium",
       startedAt: r.started_at as string,
       updatedAt: r.updated_at as string,
       completedAt,

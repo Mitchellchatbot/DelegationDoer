@@ -125,6 +125,16 @@ export const blockedKey = (itemId: string) => `access.${itemId}.blocked`;
 export const noteKey = (itemId: string) => `access.${itemId}.note`;
 
 // ---------------------------------------------------------------------------
+// Launch — the actual campaign: where it runs, what it starts with, and the
+// creative to run. Independent of the zap build, so it's soft-locked the
+// same way Main zap and Setup are rather than gated behind Access.
+// ---------------------------------------------------------------------------
+
+export const CITIES_KEY = "launch.cities";
+export const BUDGET_KEY = "launch.budget";
+export const CREATIVES_KEY = "launch.creatives";
+
+// ---------------------------------------------------------------------------
 // Setup
 // ---------------------------------------------------------------------------
 
@@ -654,6 +664,9 @@ function buildRegistry(): Map<string, KeyKind> {
     r.set(blockedKey(it.id), { kind: "check" });
     r.set(noteKey(it.id), { kind: "text" });
   }
+  r.set(CITIES_KEY, { kind: "text" });
+  r.set(BUDGET_KEY, { kind: "text" });
+  r.set(CREATIVES_KEY, { kind: "text" });
   r.set(PROVIDER_KEY, { kind: "text" });
   for (const z of ZAPS) {
     r.set(zapBuiltKey(z.id), { kind: "check" });
@@ -724,6 +737,9 @@ export function progress(s: OnboardingState) {
   const accessCleared = access.filter((a) => a === "cleared").length;
   const blocked = access.filter((a) => a === "blocked").length;
 
+  const launchTotal = 3;
+  const launchDone = (str(s, CITIES_KEY) ? 1 : 0) + (str(s, BUDGET_KEY) ? 1 : 0) + (str(s, CREATIVES_KEY) ? 1 : 0);
+
   const sKeys = setupKeys(s);
   // No channel picked yet means client delivery can't be set up — count it as
   // one outstanding step so setup can't read as done.
@@ -745,12 +761,14 @@ export function progress(s: OnboardingState) {
 
   const complete =
     accessCleared === ACCESS_ITEMS.length &&
+    launchDone === launchTotal &&
     mainDone === mainTotal &&
     setupDone === setupTotal &&
     testsDone === cases.length;
 
   return {
     accessCleared, accessTotal: ACCESS_ITEMS.length, blocked,
+    launchDone, launchTotal,
     mainDone, mainTotal,
     setupDone, setupTotal,
     testsDone, testsTotal: cases.length, testsFailed,

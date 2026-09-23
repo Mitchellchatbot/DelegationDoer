@@ -238,41 +238,6 @@ function OnboardingCard({ o, me, noteUsers, assignee }: {
           <div className="text-xs text-muted truncate">{o.taskTitle}</div>
         </div>
         <div className="flex items-center gap-2 shrink-0">
-          {/* Days in THIS stage. Absent until the stage migration is applied —
-              an absent signal rather than a fabricated one. */}
-          {o.stageAgeDays !== null && o.stage !== "live" && (
-            <span
-              title={o.onHold ? "Paused while on hold" : `Day ${o.stageAgeDays} in ${STAGE_LABEL[o.stage]}`}
-              className={cn(
-                "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium border tabular-nums",
-                o.ageBand === "red" ? "border-urgent/30 bg-urgent/10 text-urgent"
-                  : o.ageBand === "amber" ? "border-stalled/40 bg-stalled/10 text-stalled"
-                  : "border-border bg-surface2 text-muted"
-              )}
-            >
-              {o.ageBand === "red" || o.ageBand === "amber" ? <Clock className="w-3 h-3" /> : null}
-              day {o.stageAgeDays}
-            </span>
-          )}
-          {o.onHold ? (
-            <span
-              title={o.holdNote || undefined}
-              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium border border-border bg-surface2 text-muted"
-            >
-              <Pause className="w-3 h-3" /> On hold{o.holdSince ? ` · ${relativeTime(o.holdSince)}` : ""}
-            </span>
-          ) : o.waitingOn ? (
-            <span
-              title={o.waitingNote || undefined}
-              className={cn(
-                "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium border",
-                o.waitingOn === "client" ? "border-stalled/40 bg-stalled/10 text-stalled" : "border-border bg-surface2 text-muted"
-              )}
-            >
-              <Hourglass className="w-3 h-3" /> {o.waitingOn === "client" ? "On the client" : "On us"}
-              {o.waitingNote ? ` · ${o.waitingNote}` : ""}
-            </span>
-          ) : null}
           {o.completedAt ? (
             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium border border-ok/30 bg-ok/10 text-ok">
               <PartyPopper className="w-3 h-3" /> Complete
@@ -299,6 +264,55 @@ function OnboardingCard({ o, me, noteUsers, assignee }: {
           />
         </div>
       </div>
+
+      {/* Stage age and who the ball is with. Its own row on purpose — in the
+          header these compete with the client name and truncate it to
+          "Norths…" the moment the waiting note is more than a word. */}
+      {(o.stage !== "live" && (o.stageAgeDays !== null || o.onHold || o.waitingOn || p.testsFailed > 0)) && (
+        <div className="flex flex-wrap items-center gap-1.5 -mt-1">
+          {o.stageAgeDays !== null && (
+            <span
+              title={o.onHold ? "Paused while on hold" : `Day ${o.stageAgeDays} in ${STAGE_LABEL[o.stage]}`}
+              className={cn(
+                "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium border tabular-nums",
+                o.ageBand === "red" ? "border-urgent/30 bg-urgent/10 text-urgent"
+                  : o.ageBand === "amber" ? "border-stalled/40 bg-stalled/10 text-stalled"
+                  : "border-border bg-surface2 text-muted"
+              )}
+            >
+              {o.ageBand === "red" || o.ageBand === "amber" ? <Clock className="w-3 h-3" /> : null}
+              day {o.stageAgeDays}
+            </span>
+          )}
+          {o.onHold ? (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium border border-border bg-surface2 text-muted min-w-0">
+              <Pause className="w-3 h-3 shrink-0" />
+              <span className="truncate">
+                On hold{o.holdSince ? ` · ${relativeTime(o.holdSince)}` : ""}{o.holdNote ? ` · ${o.holdNote}` : ""}
+              </span>
+            </span>
+          ) : o.waitingOn ? (
+            <span
+              className={cn(
+                "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium border min-w-0",
+                o.waitingOn === "client" ? "border-stalled/40 bg-stalled/10 text-stalled" : "border-border bg-surface2 text-muted"
+              )}
+            >
+              <Hourglass className="w-3 h-3 shrink-0" />
+              <span className="truncate">
+                {o.waitingOn === "client" ? "On the client" : "On us"}{o.waitingNote ? ` · ${o.waitingNote}` : ""}
+              </span>
+            </span>
+          ) : null}
+          {/* A failing test is the loudest thing a Testing card can say, and
+              the header ternary only ever shows one badge. */}
+          {p.testsFailed > 0 && (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium border border-urgent/30 bg-urgent/10 text-urgent">
+              <AlertTriangle className="w-3 h-3" /> {p.testsFailed} test{p.testsFailed === 1 ? "" : "s"} failing
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Access at a glance — the same six items as the Access tab. */}
       <div className="flex flex-wrap gap-1.5">

@@ -14,6 +14,13 @@
 // Keyed by messageId (a body is immutable for a given message id). Holds only
 // data fetched through the access-checked `/api/inboxes/messages/[id]/body`
 // route, so it adds no new authorization surface.
+//
+// It is also a tiny external store: the thread view derives each message's
+// attachment chips from its body (an inline image referenced by `cid:` must not
+// also chip), so it needs to re-render when a deferred body lands or fails —
+// including ones warmed by the background prefetch, which nothing else awaits.
+
+import { useSyncExternalStore } from "react";
 
 export interface MessageBody {
   body_html: string | null;
@@ -22,6 +29,44 @@ export interface MessageBody {
 
 const resolved = new Map<string, MessageBody>();
 const inFlight = new Map<string, Promise<MessageBody>>();
+// Ids whose last fetch failed. Sticky until a later fetch SUCCEEDS (a retry in
+// flight doesn't clear it), so a consumer that falls back to "show every
+// attachment" on failure never hides a file mid-retry.
+const failed = new Set<string>();
+
+const listeners = new Set<() => void>();
+
+function subscribe(fn: () => void): () => void {
+  listeners.add(fn);
+  return () => {
+    listeners.delete(fn);
+  };
+}
+
+function notify() {
+  listeners.forEach((fn) => fn());
+}
+
+export type BodyStatus = "ready" | "failed" | "pending";
+
+// Where a deferred body stands in this page's cache. "pending" covers both
+// "in flight" and "never requested".
+export function getBodyStatus(messageId: string): BodyStatus {
+  if (resolved.has(messageId)) return "ready";
+  return failed.has(messageId) ? "failed" : "pending";
+}
+
+// Re-render when THIS message's body lands or fails (null = not watching, e.g.
+// a message whose body arrived inline). Per message on purpose: every landing
+// notifies every subscriber, but only the one whose status actually changed
+// re-renders — so the thread view keeps this in small per-message components
+// rather than re-rendering a long thread once per body the prefetch warms. The
+// status is a string, so useSyncExternalStore's Object.is check is a value
+// compare. Same function for the server snapshot: nothing resolves during SSR.
+export function useBodyStatus(messageId: string | null): BodyStatus | null {
+  const getSnapshot = () => (messageId ? getBodyStatus(messageId) : null);
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+}
 
 function url(messageId: string, accountId: string, threadId: string) {
   return (
@@ -65,10 +110,19 @@ export function fetchDeferredBody(
         body_text: data.body_text ?? null
       };
       resolved.set(messageId, body);
+      failed.delete(messageId);
       return body;
+    })
+    // Marked here, on the shared request, not in the callers: the prefetch
+    // swallows its errors, and a caller's own abort (withSignal) never rejects
+    // this chain, so collapsing a card mid-load never marks it failed.
+    .catch((err: unknown) => {
+      failed.add(messageId);
+      throw err;
     })
     .finally(() => {
       inFlight.delete(messageId);
+      notify();
     });
 
   inFlight.set(messageId, req);
@@ -84,10 +138,28 @@ export function fetchDeferredBody(
 const MAX_BODY_PREFETCH = 5;
 
 export function prefetchThreadBodies(
-  messages: Array<{ id: string; body_deferred?: boolean | null; body_html?: string | null }>,
+  messages: Array<{
+    id: string;
+    body_deferred?: boolean | null;
+    body_html?: string | null;
+    body_text?: string | null;
+  }>,
   accountId: string,
   threadId: string
 ): void {
+  // Seed the cache with bodies that arrived inline (the latest message). A
+  // later fetch — a new reply, an SWR revalidate — ships that same row
+  // deferred, and without this it would drop back to "pending": its Content-ID
+  // file chips (an Outlook PDF) would vanish until a refetch landed, and the
+  // prefetch below would pay a clone round-trip for a body we already had. No
+  // notify: a row carrying its body inline isn't one the thread view watches.
+  for (const m of messages) {
+    if (m.body_deferred || resolved.has(m.id)) continue;
+    if (m.body_html == null && m.body_text == null) continue;
+    resolved.set(m.id, { body_html: m.body_html ?? null, body_text: m.body_text ?? null });
+    failed.delete(m.id);
+  }
+
   const ids = messages
     .filter((m) => m.body_deferred && !m.body_html && !resolved.has(m.id) && !inFlight.has(m.id))
     .map((m) => m.id)

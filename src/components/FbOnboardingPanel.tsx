@@ -2,7 +2,7 @@
 
 import { useCallback, useMemo, useState } from "react";
 import {
-  Rocket, Check, AlertTriangle, Lock, Copy, ChevronDown, Loader2, PartyPopper, Wrench
+  Rocket, Check, AlertTriangle, Lock, Copy, ChevronDown, Loader2, PartyPopper, Wrench, Pause, Play
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn, relativeTime } from "@/lib/utils";
@@ -13,7 +13,9 @@ import {
   accessStatus, blockedKey, noteKey, zapBuiltKey, zapUrlKey, slackKey, clientKey, channelSlug,
   testCases, testResultKey, testNoteKey, caseAnswers, progress,
   MAIN_ZAP_STEPS, MAIN_ZAP_FAILURES, mainKey, mainStepKeys, fillTokens,
-  type OnboardingState, type EntryValue, type AccessStatus, type TestCase, type AccessItem, type MainZapStep
+  stage, stagePhase, WAITING_ON_KEY, WAITING_NOTE_KEY, HOLD_KEY, HOLD_NOTE_KEY,
+  type OnboardingState, type EntryValue, type AccessStatus, type TestCase, type AccessItem, type MainZapStep,
+  type Phase
 } from "@/lib/fb-onboarding";
 
 // Facebook client onboarding checklist on a Facebook task. Access → Launch →
@@ -21,7 +23,6 @@ import {
 // early, but bannered until the phase before is done. Nothing here notifies
 // anyone — blocked items are recorded for the onboarder to escalate themselves.
 
-type Phase = "access" | "launch" | "main" | "setup" | "test";
 interface UserRef { id: string; name: string }
 
 export function FbOnboardingPanel({
@@ -39,14 +40,14 @@ export function FbOnboardingPanel({
   const me = useCurrentUser();
 
   const p = useMemo(() => (state ? progress(state) : null), [state]);
-  const [phase, setPhase] = useState<Phase>(() => {
-    if (!p) return "access";
-    if (p.accessCleared < p.accessTotal) return "access";
-    if (p.launchDone < p.launchTotal) return "launch";
-    if (p.mainDone < p.mainTotal) return "main";
-    if (p.setupDone < p.setupTotal) return "setup";
-    return "test";
-  });
+  // Opens on the stage the client is actually in, via the same ladder the
+  // board groups by — so the section a card sits in and the tab that opens
+  // when you click it can never disagree.
+  //
+  // Stays a lazy initialiser on purpose. Deriving it on every render would
+  // yank you out of the tab you're mid-sentence in the instant you tick its
+  // last box; where you're looking is your business once you're in here.
+  const [phase, setPhase] = useState<Phase>(() => (p ? stagePhase(stage(p, completedAt)) : "access"));
 
   const nameOf = (id: string | null) => (id ? users.find((u) => u.id === id)?.name ?? "someone" : "someone");
 
@@ -152,6 +153,7 @@ export function FbOnboardingPanel({
             <div className="text-[11px] text-muted mt-1">Names every zap, sheet and channel.</div>
           )}
         </div>
+        <FlowControls ctx={ctx} />
         {tabs.map((t, i) => {
           const full = t.done === t.total;
           const activeTab = phase === t.id;
@@ -203,6 +205,16 @@ export function FbOnboardingPanel({
           <h2 className="text-lg font-semibold">{phaseTitle[phase].title}</h2>
           <p className="text-xs text-muted mt-0.5">{phaseTitle[phase].sub}</p>
         </div>
+
+        {state[HOLD_KEY]?.v === true && (
+          <div className="mb-4">
+            <SoftLock>
+              On hold since {relativeTime(state[HOLD_KEY].at)}
+              {str(state, HOLD_NOTE_KEY) ? ` — ${str(state, HOLD_NOTE_KEY)}` : ""}. Boxes still tick; the list dims this
+              client and leaves it out of the nudge list.
+            </SoftLock>
+          </div>
+        )}
 
       {phase === "access" && (
         <div className="space-y-3">
@@ -671,6 +683,74 @@ function Group({ title, children }: { title: string; children: React.ReactNode }
     <div>
       <div className="label">{title}</div>
       <div className="rounded-xl border border-border p-3 space-y-3">{children}</div>
+    </div>
+  );
+}
+
+// Onboarding-level status: who the ball is with, and whether the whole thing
+// is parked. Lives in the rail rather than a phase body because it applies in
+// every stage — a phase body would read as scoped to that phase.
+function FlowControls({ ctx }: { ctx: Ctx }) {
+  const waiting = str(ctx.state, WAITING_ON_KEY);
+  const held = ctx.state[HOLD_KEY]?.v === true;
+  const heldAt = ctx.state[HOLD_KEY]?.at ?? null;
+  const holdNoteText = str(ctx.state, HOLD_NOTE_KEY);
+  const [showHoldNote, setShowHoldNote] = useState(held || !!holdNoteText);
+
+  return (
+    <div className="px-2 py-2.5 border-y border-border/60 space-y-2.5">
+      <div className="text-[11px] uppercase tracking-wide text-muted">Status</div>
+
+      <div>
+        <div className="text-[11px] text-muted mb-1">Waiting on</div>
+        <Segmented
+          ctx={ctx}
+          k={WAITING_ON_KEY}
+          options={[
+            { value: "", label: "No one" },
+            { value: "us", label: "Us" },
+            { value: "client", label: "Client" }
+          ]}
+        />
+        {waiting && (
+          <div className="mt-1.5">
+            <TextField
+              ctx={ctx}
+              k={WAITING_NOTE_KEY}
+              small
+              placeholder={waiting === "client" ? "What we've asked them for" : "What we owe them"}
+            />
+          </div>
+        )}
+      </div>
+
+      <div>
+        {ctx.canEdit && (
+          <button
+            type="button"
+            // No-op when the value already matches: the PATCH route stamps
+            // `at` on every write, so re-setting true would reset "held since".
+            onClick={() => {
+              if (held) { ctx.set(HOLD_KEY, false); return; }
+              ctx.set(HOLD_KEY, true);
+              setShowHoldNote(true);
+            }}
+            className={cn(
+              "w-full inline-flex items-center gap-1.5 rounded-lg border px-2 py-1.5 text-xs transition-colors",
+              held ? "border-stalled/40 bg-stalled/10 text-stalled" : "border-border text-muted hover:bg-surface2 hover:text-ink"
+            )}
+          >
+            {held ? <Play className="w-3.5 h-3.5" /> : <Pause className="w-3.5 h-3.5" />}
+            {held ? "Resume" : "Put on hold"}
+            {held && heldAt && <span className="ml-auto text-[11px]">{relativeTime(heldAt)}</span>}
+          </button>
+        )}
+        {showHoldNote && (
+          <div className="mt-1.5">
+            <TextField ctx={ctx} k={HOLD_NOTE_KEY} small placeholder="Why it's paused, and what unpauses it" />
+          </div>
+        )}
+      </div>
     </div>
   );
 }

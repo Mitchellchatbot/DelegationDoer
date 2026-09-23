@@ -11,7 +11,7 @@
 // Both reuse cidPattern() so the matching logic stays in one place.
 
 import type { MissiveMessageAttachment } from "@/lib/missive-client";
-import { attachmentProxyUrl } from "@/lib/attachment-kind";
+import { attachmentProxyUrl, bareType, IMAGE_RE } from "@/lib/attachment-kind";
 
 // Build a global, case-insensitive regex matching a `cid:` reference for one
 // content-id. Content-ids routinely contain `@` and `.`, so they're
@@ -64,9 +64,17 @@ export function rewriteInlineCids(
 // The subset of `attachments` that are inline images ACTUALLY referenced by a
 // `cid:` in `html` — i.e. the ones rewriteInlineCids just rendered into the
 // body. Callers hide these from the download-chip row so an inline image isn't
-// shown twice. A content_id attachment that no `cid:` references (rare, but
-// possible) is deliberately NOT included, so it still gets a chip and can never
-// silently vanish.
+// shown twice. A content_id attachment that no `cid:` references (common: the
+// clone stores a Content-ID on nearly every part, Outlook PDFs/.ics included)
+// is deliberately NOT included, so it still gets a chip and can never silently
+// vanish.
+//
+// Only images count — by content type, or by filename when the clone typed the
+// part application/octet-stream (the same test previewKind uses). A referenced
+// PDF or .ics can't render in an <img>, so treating it as inline would leave it
+// reachable only as a broken-image box; it keeps its chip (and print lists it
+// as a file). The .eml export still keeps such a part's Content-ID, so the
+// body's cid: reference resolves there regardless.
 export function referencedInlineIds(
   html: string,
   attachments: MissiveMessageAttachment[]
@@ -74,7 +82,48 @@ export function referencedInlineIds(
   const ids = new Set<string>();
   if (!html) return ids;
   for (const a of attachments) {
-    if (a.content_id && cidPattern(a.content_id).test(html)) ids.add(a.id);
+    if (!a.content_id) continue;
+    if (!bareType(a.content_type).startsWith("image/") && !IMAGE_RE.test(a.filename)) continue;
+    if (cidPattern(a.content_id).test(html)) ids.add(a.id);
   }
   return ids;
+}
+
+// The attachments that deserve a download chip (and the collapsed-stub
+// paperclip) for one message, given its body html.
+//
+// "Inline" means the message's OWN body references `cid:<content_id>` (see
+// referencedInlineIds) — `content_id != null` alone is NOT an inline signal,
+// because Outlook stamps a Content-ID on ordinary PDFs and invites too.
+//
+//   - html known: drop the inline images the body renders (including ones that
+//     sit only inside quoted history, reachable under the "•••" toggle).
+//   - html null (text-only body, or its load failed): every attachment chips,
+//     so a real file can never disappear.
+//   - `pending` (deferred body not loaded yet): hide anything with a
+//     content_id until the body decides, so inline images never flash up as
+//     chips; attachments with no content_id can't be cid-referenced, so their
+//     chip is already final and shows immediately. Net: a chip, once shown, is
+//     never taken away.
+//
+// Also collapses identical rows within the message (same content_id +
+// size_bytes = the same MIME part stored twice by the clone's ingest race).
+// Rows without a content_id are never merged — two same-size files are real.
+export function chipAttachments(
+  attachments: MissiveMessageAttachment[],
+  html: string | null,
+  { pending = false }: { pending?: boolean } = {}
+): MissiveMessageAttachment[] {
+  const inline = !pending && html ? referencedInlineIds(html, attachments) : null;
+  const seen = new Set<string>();
+  return attachments.filter((a) => {
+    if (pending && a.content_id) return false;
+    if (inline?.has(a.id)) return false;
+    if (a.content_id) {
+      const key = `${a.content_id}|${a.size_bytes}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+    }
+    return true;
+  });
 }

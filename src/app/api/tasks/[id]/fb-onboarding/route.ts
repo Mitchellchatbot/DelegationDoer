@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSupabaseAdmin } from "@/lib/supabase-admin";
+import { getSupabaseAdmin, isMissingColumnError, isMissingFunctionError } from "@/lib/supabase-admin";
 import { loadTaskForViewer } from "@/lib/task-access";
 import { canManageTask } from "@/lib/access";
-import { normaliseValue, progress, PROVIDER_KEY, FB_ONBOARDING_TAG, type OnboardingState } from "@/lib/fb-onboarding";
+import { normaliseValue, progress, stage, PROVIDER_KEY, FB_ONBOARDING_TAG, type OnboardingState } from "@/lib/fb-onboarding";
 
 export const dynamic = "force-dynamic";
 
@@ -79,17 +79,70 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   if (!merged) return NextResponse.json({ error: "onboarding not started" }, { status: 404 });
 
   const state = merged as OnboardingState;
-  const { complete } = progress(state);
+  const prog = progress(state);
+
+  // The stage this WILL be in once completion is reconciled, so pass the
+  // completed_at we are about to write rather than the one currently stored.
+  const nextStage = stage(prog, prog.complete ? now : null);
+
+  let completedAt: string | null = null;
+  let stageEnteredAt: string | null = null;
+
+  const { data: rec, error: recErr } = await supabase.rpc("fb_onboarding_reconcile", {
+    p_task_id: params.id,
+    p_state: state,
+    p_stage: nextStage,
+    p_complete: prog.complete,
+    p_now: now
+  });
+
+  if (recErr && (isMissingFunctionError(recErr) || isMissingColumnError(recErr))) {
+    // Migration not applied yet, or only half of it — a 42703 raised inside
+    // the function surfaces here too, so one branch covers both. Completion
+    // still works and the stage is still named (it is pure TypeScript); only
+    // its age is unavailable.
+    completedAt = await reconcileCompletedAt(supabase, params.id, prog.complete, now);
+  } else if (recErr) {
+    return NextResponse.json({ error: recErr.message }, { status: 500 });
+  } else if (rec) {
+    const r = rec as { stage: string | null; stageEnteredAt: string | null; completedAt: string | null };
+    completedAt = r.completedAt ?? null;
+    stageEnteredAt = r.stageEnteredAt ?? null;
+  }
+  // rec === null means the row was deleted between the two calls. The state we
+  // merged is still what we return, and completedAt stays null. Not a 500.
+
+  await supabase.from("tasks").update({ last_activity_at: now }).eq("id", params.id);
+
+  // Re-derive from what was actually STORED, so a lost race answers the client
+  // with the truth rather than this request's guess.
+  return NextResponse.json({ state, completedAt, stage: stage(prog, completedAt), stageEnteredAt });
+}
+
+// Read-then-write on completed_at, exactly as it has always been.
+//
+// Extracted verbatim so the stage work can replace the call site with a single
+// atomic statement while keeping this as the fallback for the window before
+// that migration is applied by hand — a fallback that is already proven in
+// production beats a fresh one that no test can reach.
+//
+// Known and deliberate: two concurrent PATCHes can race this, and the one
+// carrying the staler verdict wins. That is the behaviour being replaced, not
+// behaviour being introduced.
+async function reconcileCompletedAt(
+  supabase: ReturnType<typeof getSupabaseAdmin>,
+  taskId: string,
+  complete: boolean,
+  now: string
+): Promise<string | null> {
   const { data: row } = await supabase
-    .from("fb_onboarding").select("completed_at").eq("task_id", params.id).maybeSingle();
+    .from("fb_onboarding").select("completed_at").eq("task_id", taskId).maybeSingle();
   let completedAt: string | null = (row?.completed_at as string | null) ?? null;
   if (complete !== !!completedAt) {
     completedAt = complete ? now : null;
-    await supabase.from("fb_onboarding").update({ completed_at: completedAt }).eq("task_id", params.id);
+    await supabase.from("fb_onboarding").update({ completed_at: completedAt }).eq("task_id", taskId);
   }
-  await supabase.from("tasks").update({ last_activity_at: now }).eq("id", params.id);
-
-  return NextResponse.json({ state, completedAt });
+  return completedAt;
 }
 
 // DELETE — remove the checklist from this task, keeping the task itself.

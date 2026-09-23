@@ -9,6 +9,7 @@ import { cn, relativeTime } from "@/lib/utils";
 import { useCurrentUser } from "@/lib/user-context";
 import {
   ACCESS_ITEMS, ZAPS, SLACK_CHANNELS, CLIENT_STREAMS, CLIENT_OTHER_KEY, PROVIDER_KEY, TEST_PHONE_NOTE,
+  CITIES_KEY, BUDGET_KEY, CREATIVES_KEY,
   accessStatus, blockedKey, noteKey, zapBuiltKey, zapUrlKey, slackKey, clientKey, channelSlug,
   testCases, testResultKey, testNoteKey, caseAnswers, progress,
   MAIN_ZAP_STEPS, MAIN_ZAP_FAILURES, mainKey, mainStepKeys, fillTokens,
@@ -17,10 +18,10 @@ import {
   type Phase
 } from "@/lib/fb-onboarding";
 
-// Facebook client onboarding checklist on a Facebook task. Access → Main Zap →
-// Setup → Test. Everything after Access is soft-locked: editable early, but
-// bannered until the phase before is done. Nothing here notifies anyone — blocked items are
-// recorded for the onboarder to escalate themselves.
+// Facebook client onboarding checklist on a Facebook task. Access → Launch →
+// Main Zap → Setup → Test. Everything after Access is soft-locked: editable
+// early, but bannered until the phase before is done. Nothing here notifies
+// anyone — blocked items are recorded for the onboarder to escalate themselves.
 
 interface UserRef { id: string; name: string }
 
@@ -124,6 +125,7 @@ export function FbOnboardingPanel({
 
   const tabs: { id: Phase; label: string; done: number; total: number; warn?: boolean }[] = [
     { id: "access", label: "Access", done: p.accessCleared, total: p.accessTotal, warn: p.blocked > 0 },
+    { id: "launch", label: "Launch", done: p.launchDone, total: p.launchTotal },
     { id: "main", label: "Main Zap", done: p.mainDone, total: p.mainTotal },
     { id: "setup", label: "Setup", done: p.setupDone, total: p.setupTotal },
     { id: "test", label: "Test", done: p.testsDone, total: p.testsTotal, warn: p.testsFailed > 0 }
@@ -131,6 +133,7 @@ export function FbOnboardingPanel({
 
   const phaseTitle: Record<Phase, { title: string; sub: string }> = {
     access: { title: "Access", sub: "Everything the client has to clear before the build starts." },
+    launch: { title: "Launch details", sub: "Where the campaign runs, what it starts with, and the creative to launch." },
     main: { title: ZAPS[0].name(provider || "{Provider}"), sub: "Typeform Client Intake SOP — dedup, filter, enrich and route each entry. About 60 minutes; work top to bottom." },
     setup: { title: "Setup", sub: "Calendly and Failsafe zaps, our Slack channels and the client's notifications." },
     test: { title: "Test", sub: "Live Typeform submissions through the finished build. Every case must pass before onboarding is complete." }
@@ -216,6 +219,23 @@ export function FbOnboardingPanel({
       {phase === "access" && (
         <div className="space-y-3">
           {ACCESS_ITEMS.map((it) => <AccessCard key={it.id} item={it} ctx={ctx} />)}
+        </div>
+      )}
+
+      {phase === "launch" && (
+        <div className="space-y-4">
+          <Group title="Cities">
+            <div className="text-[11px] text-muted mb-1">Where this client's campaign runs.</div>
+            <TextField ctx={ctx} k={CITIES_KEY} placeholder="e.g. Austin, TX; Dallas, TX; Houston, TX" small />
+          </Group>
+          <Group title="Starting budget">
+            <div className="text-[11px] text-muted mb-1">What it launches with — note daily or monthly.</div>
+            <TextField ctx={ctx} k={BUDGET_KEY} placeholder="e.g. $100/day" small />
+          </Group>
+          <Group title="Ad creatives">
+            <div className="text-[11px] text-muted mb-1">Link to the creatives — a Drive folder, Frame.io, etc.</div>
+            <TextField ctx={ctx} k={CREATIVES_KEY} placeholder="https://drive.google.com/…" small />
+          </Group>
         </div>
       )}
 

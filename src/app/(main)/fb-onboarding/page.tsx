@@ -100,7 +100,7 @@ export default async function FbOnboardingListPage() {
       <PageHero
         eyebrow="Facebook"
         headline={["Client ", { accent: "onboarding" }]}
-        subtitle="Access, the main zap build, setup and the Typeform test run for every new Facebook client."
+        subtitle="Access, launch details, the main zap build, setup and the Typeform test run for every new Facebook client."
         icon={<Rocket />}
         iconTone="violet"
         metaLabel="On the plate:"
@@ -216,6 +216,7 @@ function OnboardingCard({ o, me, noteUsers, assignee }: {
   const hidden = o.noteCount - o.notes.length;
   const phases = [
     { label: "Access", done: p.accessCleared, total: p.accessTotal },
+    { label: "Launch", done: p.launchDone, total: p.launchTotal },
     { label: "Main zap", done: p.mainDone, total: p.mainTotal },
     { label: "Setup", done: p.setupDone, total: p.setupTotal },
     { label: "Test", done: p.testsDone, total: p.testsTotal }
@@ -331,7 +332,7 @@ function OnboardingCard({ o, me, noteUsers, assignee }: {
         ))}
       </div>
 
-      <div className="grid grid-cols-4 gap-2">
+      <div className="grid grid-cols-5 gap-2">
         {phases.map((ph) => {
           const full = ph.done === ph.total;
           return (

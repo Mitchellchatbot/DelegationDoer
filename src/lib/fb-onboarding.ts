@@ -135,6 +135,16 @@ export const blockedKey = (itemId: string) => `access.${itemId}.blocked`;
 export const noteKey = (itemId: string) => `access.${itemId}.note`;
 
 // ---------------------------------------------------------------------------
+// Launch — the actual campaign: where it runs, what it starts with, and the
+// creative to run. Independent of the zap build, so it's soft-locked the
+// same way Main zap and Setup are rather than gated behind Access.
+// ---------------------------------------------------------------------------
+
+export const CITIES_KEY = "launch.cities";
+export const BUDGET_KEY = "launch.budget";
+export const CREATIVES_KEY = "launch.creatives";
+
+// ---------------------------------------------------------------------------
 // Setup
 // ---------------------------------------------------------------------------
 
@@ -690,6 +700,9 @@ function buildRegistry(): Map<string, KeyKind> {
     r.set(blockedKey(it.id), { kind: "check" });
     r.set(noteKey(it.id), { kind: "text" });
   }
+  r.set(CITIES_KEY, { kind: "text" });
+  r.set(BUDGET_KEY, { kind: "text" });
+  r.set(CREATIVES_KEY, { kind: "text" });
   r.set(PROVIDER_KEY, { kind: "text" });
   for (const z of ZAPS) {
     r.set(zapBuiltKey(z.id), { kind: "check" });
@@ -767,6 +780,9 @@ export function progress(s: OnboardingState) {
   const accessCleared = access.filter((a) => a === "cleared").length;
   const blocked = access.filter((a) => a === "blocked").length;
 
+  const launchTotal = 3;
+  const launchDone = (str(s, CITIES_KEY) ? 1 : 0) + (str(s, BUDGET_KEY) ? 1 : 0) + (str(s, CREATIVES_KEY) ? 1 : 0);
+
   const sKeys = setupKeys(s);
   // No channel picked yet means client delivery can't be set up — count it as
   // one outstanding step so setup can't read as done.
@@ -788,12 +804,14 @@ export function progress(s: OnboardingState) {
 
   const complete =
     accessCleared === ACCESS_ITEMS.length &&
+    launchDone === launchTotal &&
     mainDone === mainTotal &&
     setupDone === setupTotal &&
     testsDone === cases.length;
 
   return {
     accessCleared, accessTotal: ACCESS_ITEMS.length, blocked,
+    launchDone, launchTotal,
     mainDone, mainTotal,
     setupDone, setupTotal,
     testsDone, testsTotal: cases.length, testsFailed,
@@ -817,14 +835,15 @@ export type Progress = ReturnType<typeof progress>;
 // `state`, and renaming it would create a second id vocabulary needing
 // translation at every filter and stored value.
 
-export type Phase = "access" | "main" | "setup" | "test";
+export type Phase = "access" | "launch" | "main" | "setup" | "test";
 export type Stage = Phase | "live";
 
-export const PHASES: Phase[] = ["access", "main", "setup", "test"];
-export const STAGES: Stage[] = ["access", "main", "setup", "test", "live"];
+export const PHASES: Phase[] = ["access", "launch", "main", "setup", "test"];
+export const STAGES: Stage[] = ["access", "launch", "main", "setup", "test", "live"];
 
 export const STAGE_LABEL: Record<Stage, string> = {
   access: "Access",
+  launch: "Launch",
   main: "Build",
   setup: "Setup",
   test: "Testing",
@@ -833,6 +852,7 @@ export const STAGE_LABEL: Record<Stage, string> = {
 
 export const STAGE_BLURB: Record<Stage, string> = {
   access: "Waiting on the client to clear us.",
+  launch: "Cities, starting budget and the ad creatives.",
   main: "The main zap, step by step.",
   setup: "The other zaps, our channels and the client's delivery.",
   test: "Live Typeform runs. All must pass.",
@@ -851,6 +871,7 @@ export const stagePhase = (s: Stage): Phase => (s === "live" ? "test" : s);
 export function stage(p: Progress, completedAt: string | null): Stage {
   if (completedAt) return "live";
   if (p.accessCleared < p.accessTotal) return "access";
+  if (p.launchDone < p.launchTotal) return "launch";
   if (p.mainDone < p.mainTotal) return "main";
   if (p.setupDone < p.setupTotal) return "setup";
   return "test";
@@ -860,6 +881,7 @@ export function stage(p: Progress, completedAt: string | null): Stage {
 // showing on a card, instead of four competing for attention.
 export function stageProgress(p: Progress, st: Stage): { done: number; total: number } {
   if (st === "access") return { done: p.accessCleared, total: p.accessTotal };
+  if (st === "launch") return { done: p.launchDone, total: p.launchTotal };
   if (st === "main") return { done: p.mainDone, total: p.mainTotal };
   if (st === "setup") return { done: p.setupDone, total: p.setupTotal };
   if (st === "test") return { done: p.testsDone, total: p.testsTotal };
@@ -876,6 +898,7 @@ export function stageProgress(p: Progress, st: Stage): { done: number; total: nu
 // Build and Setup are our own work.
 export const STAGE_AGING: Record<Stage, { amber: number; red: number } | null> = {
   access: { amber: 9, red: 12 },
+  launch: { amber: 3, red: 5 },
   main: { amber: 6, red: 8 },
   setup: { amber: 3, red: 4 },
   test: { amber: 5, red: 6 },

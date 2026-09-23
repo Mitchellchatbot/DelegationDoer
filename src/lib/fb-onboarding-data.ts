@@ -1,5 +1,10 @@
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
-import { progress, accessStatus, ACCESS_ITEMS, PROVIDER_KEY, type OnboardingState, type AccessStatus } from "@/lib/fb-onboarding";
+import {
+  progress, accessStatus, ACCESS_ITEMS, PROVIDER_KEY,
+  stage, stageProgress, stageAgeDays, ageBand,
+  onHold, holdNote, holdSince, waitingOn, waitingNote, waitingSince,
+  type OnboardingState, type AccessStatus, type Stage, type AgeBand, type WaitingOn
+} from "@/lib/fb-onboarding";
 import type { User } from "@/lib/types";
 
 // Server-side reads for the Facebook onboarding workspace (/fb-onboarding).
@@ -39,6 +44,32 @@ export interface OnboardingSummary {
   // Per-item access state, so the list page can show the same tags the
   // Access tab does without loading each onboarding.
   access: { id: string; label: string; status: AccessStatus }[];
+
+  // Where the client is, and how long they have been there.
+  //
+  // `stage` is recomputed here in TypeScript from state + completed_at on
+  // every request. The fb_onboarding.stage COLUMN is a write-path transition
+  // detector and is deliberately never selected — see the stage migration.
+  //
+  // stageEnteredAt is null until that migration has been applied by hand, and
+  // then stageAgeDays is null too and the card shows no day chip. An absent
+  // signal, never a fabricated one: falling back to updated_at would put a
+  // confidently wrong number on every card.
+  stage: Stage;
+  stageDone: number;
+  stageTotal: number;
+  stageEnteredAt: string | null;
+  stageAgeDays: number | null;
+  ageBand: AgeBand;
+
+  // Onboarding-level flags, read straight out of `state` — no extra query,
+  // and the "since" timestamps are the generic { v, by, at } stamp.
+  onHold: boolean;
+  holdNote: string;
+  holdSince: string | null;
+  waitingOn: WaitingOn;
+  waitingNote: string;
+  waitingSince: string | null;
 }
 
 export async function listOnboardings(): Promise<OnboardingSummary[]> {
@@ -79,6 +110,10 @@ export async function listOnboardings(): Promise<OnboardingSummary[]> {
     notes.set(id, cur);
   }
 
+  // One clock for the whole list, so two adjacent rows can't land on opposite
+  // sides of the same amber boundary within a single render.
+  const now = new Date();
+
   return list.flatMap((r) => {
     const t = byId.get(r.task_id as string);
     if (!t) return [];
@@ -86,6 +121,16 @@ export async function listOnboardings(): Promise<OnboardingSummary[]> {
     const provider = typeof state[PROVIDER_KEY]?.v === "string" && state[PROVIDER_KEY].v
       ? (state[PROVIDER_KEY].v as string)
       : ((t.client_name as string | null) ?? (t.title as string));
+    const p = progress(state);
+    const completedAt = (r.completed_at as string | null) ?? null;
+    const st = stage(p, completedAt);
+    const sp = stageProgress(p, st);
+    // Selected only once the stage migration has been applied; undefined
+    // before that, which `?? null` turns into "no age" with no extra branch.
+    const enteredAt = ((r as Record<string, unknown>).stage_entered_at as string | null) ?? null;
+    const held = onHold(state);
+    const heldSince = holdSince(state);
+    const ageDays = stageAgeDays(enteredAt, heldSince, now);
     return [{
       taskId: r.task_id as string,
       provider,
@@ -96,9 +141,21 @@ export async function listOnboardings(): Promise<OnboardingSummary[]> {
       dueDate: (t.due_date as string | null) ?? null,
       startedAt: r.started_at as string,
       updatedAt: r.updated_at as string,
-      completedAt: (r.completed_at as string | null) ?? null,
-      progress: progress(state),
+      completedAt,
+      progress: p,
       access: ACCESS_ITEMS.map((it) => ({ id: it.id, label: it.label, status: accessStatus(state, it) })),
+      stage: st,
+      stageDone: sp.done,
+      stageTotal: sp.total,
+      stageEnteredAt: enteredAt,
+      stageAgeDays: ageDays,
+      ageBand: ageBand(st, ageDays, held),
+      onHold: held,
+      holdNote: holdNote(state),
+      holdSince: heldSince,
+      waitingOn: waitingOn(state),
+      waitingNote: waitingNote(state),
+      waitingSince: waitingSince(state),
       noteCount: notes.get(r.task_id as string)?.count ?? 0,
       notes: notes.get(r.task_id as string)?.items ?? []
     }];

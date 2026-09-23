@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSupabaseAdmin } from "@/lib/supabase-admin";
+import { getSupabaseAdmin, isMissingColumnError, isMissingFunctionError } from "@/lib/supabase-admin";
 import { loadTaskForViewer } from "@/lib/task-access";
 import { canManageTask } from "@/lib/access";
 import { normaliseValue, progress, stage, PROVIDER_KEY, FB_ONBOARDING_TAG, type OnboardingState } from "@/lib/fb-onboarding";
@@ -79,11 +79,44 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   if (!merged) return NextResponse.json({ error: "onboarding not started" }, { status: 404 });
 
   const state = merged as OnboardingState;
-  const { complete } = progress(state);
-  const completedAt = await reconcileCompletedAt(supabase, params.id, complete, now);
+  const prog = progress(state);
+
+  // The stage this WILL be in once completion is reconciled, so pass the
+  // completed_at we are about to write rather than the one currently stored.
+  const nextStage = stage(prog, prog.complete ? now : null);
+
+  let completedAt: string | null = null;
+  let stageEnteredAt: string | null = null;
+
+  const { data: rec, error: recErr } = await supabase.rpc("fb_onboarding_reconcile", {
+    p_task_id: params.id,
+    p_state: state,
+    p_stage: nextStage,
+    p_complete: prog.complete,
+    p_now: now
+  });
+
+  if (recErr && (isMissingFunctionError(recErr) || isMissingColumnError(recErr))) {
+    // Migration not applied yet, or only half of it — a 42703 raised inside
+    // the function surfaces here too, so one branch covers both. Completion
+    // still works and the stage is still named (it is pure TypeScript); only
+    // its age is unavailable.
+    completedAt = await reconcileCompletedAt(supabase, params.id, prog.complete, now);
+  } else if (recErr) {
+    return NextResponse.json({ error: recErr.message }, { status: 500 });
+  } else if (rec) {
+    const r = rec as { stage: string | null; stageEnteredAt: string | null; completedAt: string | null };
+    completedAt = r.completedAt ?? null;
+    stageEnteredAt = r.stageEnteredAt ?? null;
+  }
+  // rec === null means the row was deleted between the two calls. The state we
+  // merged is still what we return, and completedAt stays null. Not a 500.
+
   await supabase.from("tasks").update({ last_activity_at: now }).eq("id", params.id);
 
-  return NextResponse.json({ state, completedAt, stage: stage(progress(state), completedAt) });
+  // Re-derive from what was actually STORED, so a lost race answers the client
+  // with the truth rather than this request's guess.
+  return NextResponse.json({ state, completedAt, stage: stage(prog, completedAt), stageEnteredAt });
 }
 
 // Read-then-write on completed_at, exactly as it has always been.

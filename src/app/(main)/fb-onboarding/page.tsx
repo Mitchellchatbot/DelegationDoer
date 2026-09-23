@@ -7,8 +7,9 @@ import { NewFbOnboardingButton } from "@/components/NewFbOnboardingButton";
 import { DeleteFbOnboardingButton } from "@/components/DeleteFbOnboardingButton";
 import { FbOnboardingNotesButton } from "@/components/FbOnboardingNotesButton";
 import { DueDateInline } from "@/components/DueDateInline";
+import { PriorityInline } from "@/components/PriorityInline";
 import { canDeleteTask, canManageTask } from "@/lib/access";
-import type { User } from "@/lib/types";
+import type { User, Priority } from "@/lib/types";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById, getAllUsers } from "@/lib/server-data";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
@@ -23,11 +24,19 @@ export const dynamic = "force-dynamic";
 const LIVE_WINDOW_DAYS = 30;
 const LIVE_MIN = 4;
 
-export default async function FbOnboardingListPage() {
+// Highest first. Used for the "Priority" sort mode — the default, "Longest
+// waiting", never touches this.
+const PRIORITY_RANK: Record<Priority, number> = { critical: 3, high: 2, medium: 1, low: 0 };
+
+type SortMode = "age" | "priority";
+
+export default async function FbOnboardingListPage({ searchParams }: { searchParams: { sort?: string } }) {
   const userId = await requireCurrentUserId();
   const me = await getUserById(userId);
   if (!me) redirect("/login");
   if (!canSeeFbOnboarding(me)) return notFound();
+
+  const sortMode: SortMode = searchParams.sort === "priority" ? "priority" : "age";
 
   const [onboardings, users, { data: fbTasks }] = await Promise.all([
     listOnboardings(),
@@ -60,12 +69,17 @@ export default async function FbOnboardingListPage() {
   // sunk to the bottom — a parked client shouldn't hold the alarm slot. The
   // query still orders by updated_at, which every key write bumps, so sorting
   // here is what stops toggling a hold from jumping that card to the top.
+  //
+  // "Priority" mode swaps only the primary key: highest task priority first,
+  // still with on-hold sunk to the bottom and the same age/started tiebreak,
+  // so switching sort never reorders within a priority tier for no reason.
   const inFlight = onboardings.filter((o) => o.stage !== "live");
   const byStage = (st: Stage) =>
     onboardings
       .filter((o) => o.stage === st)
       .sort((a, b) =>
         Number(a.onHold) - Number(b.onHold) ||
+        (sortMode === "priority" ? PRIORITY_RANK[b.priority] - PRIORITY_RANK[a.priority] : 0) ||
         (b.stageAgeDays ?? 0) - (a.stageAgeDays ?? 0) ||
         (a.startedAt < b.startedAt ? -1 : 1)
       );
@@ -145,9 +159,16 @@ export default async function FbOnboardingListPage() {
             </section>
           )}
 
-          <p className="px-1 text-[12px] text-muted">
-            Nothing is dragged here — a client moves to the next stage the moment the one before it is fully ticked.
-          </p>
+          <div className="flex items-center justify-between gap-3 px-1">
+            <p className="text-[12px] text-muted">
+              Nothing is dragged here — a client moves to the next stage the moment the one before it is fully ticked.
+            </p>
+            <div className="flex items-center gap-1 text-[11px] shrink-0">
+              <span className="text-muted">Sort</span>
+              <SortLink mode="age" current={sortMode}>Longest waiting</SortLink>
+              <SortLink mode="priority" current={sortMode}>Priority</SortLink>
+            </div>
+          </div>
 
           {STAGES.map((st) => {
             const items = st === "live" ? liveShown : byStage(st);
@@ -176,6 +197,21 @@ export default async function FbOnboardingListPage() {
         </>
       )}
     </div>
+  );
+}
+
+function SortLink({ mode, current, children }: { mode: SortMode; current: SortMode; children: React.ReactNode }) {
+  const active = mode === current;
+  return (
+    <Link
+      href={mode === "age" ? "/fb-onboarding" : "/fb-onboarding?sort=priority"}
+      className={cn(
+        "px-2 py-0.5 rounded-full border transition-colors",
+        active ? "border-accent/40 bg-accent/10 text-accent font-medium" : "border-border text-muted hover:bg-surface2"
+      )}
+    >
+      {children}
+    </Link>
   );
 }
 
@@ -235,10 +271,11 @@ function OnboardingCard({ o, me, noteUsers, assignee }: {
             string again ("fountain hills onboarding" twice) or that string
             with a "Facebook onboarding — " prefix; it still shows in full on
             the onboarding page itself. */}
-        <div className="min-w-0">
+        <div className="min-w-0 flex items-center gap-2">
           <Link href={`/fb-onboarding/${o.taskId}`} className="text-base font-semibold truncate hover:text-accent transition-colors block">
             {o.provider}
           </Link>
+          <PriorityInline taskId={o.taskId} initialPriority={o.priority} canEdit={canEdit} />
         </div>
         <div className="flex items-center gap-2 shrink-0">
           {o.completedAt ? (
@@ -369,12 +406,16 @@ function OnboardingCard({ o, me, noteUsers, assignee }: {
           was ~50px of the card's height to duplicate something one click
           away. */}
 
-      <div className="flex items-center justify-between gap-3 pt-1 border-t border-border/60 text-[11px] text-muted">
-        <span className="inline-flex items-center gap-1.5">
-          <span className="uppercase tracking-wide">Go-live</span>
-          <DueDateInline taskId={o.taskId} initialDueDate={o.dueDate} canEdit={canEdit} />
-        </span>
-        <span className="truncate">Updated {relativeTime(o.updatedAt)}{assignee ? ` · ${assignee.name}` : ""}</span>
+      <div className="pt-2 border-t border-border/60">
+        <div className="rounded-lg bg-surface2/70 px-2.5 py-1.5">
+          <div className="text-[10px] font-medium uppercase tracking-wide text-muted">Go-live</div>
+          <div className="flex items-center gap-1.5 text-lg font-bold text-ink leading-tight">
+            <DueDateInline taskId={o.taskId} initialDueDate={o.dueDate} canEdit={canEdit} />
+          </div>
+        </div>
+        <div className="mt-1 text-[11px] text-muted truncate">
+          Updated {relativeTime(o.updatedAt)}{assignee ? ` · ${assignee.name}` : ""}
+        </div>
       </div>
     </div>
   );

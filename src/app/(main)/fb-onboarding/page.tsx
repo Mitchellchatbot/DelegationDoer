@@ -160,7 +160,7 @@ export default async function FbOnboardingListPage() {
                   </div>
                 ) : (
                   <>
-                    <div className="grid gap-3 md:grid-cols-2">
+                    <div className="grid gap-4 md:grid-cols-2">
                       {items.map((o) => <OnboardingCard key={o.taskId} o={o} me={me} noteUsers={noteUsers} assignee={o.assigneeId ? userById.get(o.assigneeId) ?? null : null} />)}
                     </div>
                     {st === "live" && liveHidden > 0 && (
@@ -183,7 +183,7 @@ function Section({ stage: st, count, children }: { stage: Stage; count: number; 
   const aging = STAGE_AGING[st];
   return (
     <section>
-      <div className="flex items-baseline gap-2 mb-2 px-1">
+      <div className="flex items-baseline gap-2 mb-3 px-1">
         <h2 className="text-sm font-semibold">{STAGE_LABEL[st]}</h2>
         <span className="text-xs text-muted tabular-nums">{count}</span>
         <span className="text-[11px] text-muted truncate">{STAGE_BLURB[st]}</span>

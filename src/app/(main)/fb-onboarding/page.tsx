@@ -6,7 +6,6 @@ import { PersonAvatar } from "@/components/PersonAvatar";
 import { NewFbOnboardingButton } from "@/components/NewFbOnboardingButton";
 import { DeleteFbOnboardingButton } from "@/components/DeleteFbOnboardingButton";
 import { FbOnboardingNotesButton } from "@/components/FbOnboardingNotesButton";
-import { FbOnboardingNoteComposer } from "@/components/FbOnboardingNoteComposer";
 import { DueDateInline } from "@/components/DueDateInline";
 import { canDeleteTask, canManageTask } from "@/lib/access";
 import type { User } from "@/lib/types";
@@ -229,13 +228,16 @@ function OnboardingCard({ o, me, noteUsers, assignee }: {
   // create a containing block for position:fixed and would re-anchor the
   // notes panel and the delete modal into the card.
   return (
-    <div className={cn("card p-4 flex flex-col gap-3", o.onHold && "opacity-60 hover:opacity-100 transition-opacity")}>
+    <div className={cn("card p-3 flex flex-col gap-2", o.onHold && "opacity-60 hover:opacity-100 transition-opacity")}>
       <div className="flex items-start justify-between gap-3">
+        {/* Name only. The task title underneath was almost always the same
+            string again ("fountain hills onboarding" twice) or that string
+            with a "Facebook onboarding — " prefix; it still shows in full on
+            the onboarding page itself. */}
         <div className="min-w-0">
           <Link href={`/fb-onboarding/${o.taskId}`} className="text-base font-semibold truncate hover:text-accent transition-colors block">
             {o.provider}
           </Link>
-          <div className="text-xs text-muted truncate">{o.taskTitle}</div>
         </div>
         <div className="flex items-center gap-2 shrink-0">
           {o.completedAt ? (
@@ -269,7 +271,7 @@ function OnboardingCard({ o, me, noteUsers, assignee }: {
           header these compete with the client name and truncate it to
           "Norths…" the moment the waiting note is more than a word. */}
       {(o.stage !== "live" && (o.stageAgeDays !== null || o.onHold || o.waitingOn || p.testsFailed > 0)) && (
-        <div className="flex flex-wrap items-center gap-1.5 -mt-1">
+        <div className="flex flex-wrap items-center gap-1.5">
           {o.stageAgeDays !== null && (
             <span
               title={o.onHold ? "Paused while on hold" : `Day ${o.stageAgeDays} in ${STAGE_LABEL[o.stage]}`}
@@ -361,7 +363,10 @@ function OnboardingCard({ o, me, noteUsers, assignee }: {
         </div>
       )}
 
-      <FbOnboardingNoteComposer taskId={o.taskId} />
+      {/* No inline composer. The notes button in the corner opens the full
+          thread, which already has one — an always-open input on every card
+          was ~50px of the card's height to duplicate something one click
+          away. */}
 
       <div className="flex items-center justify-between gap-3 pt-1 border-t border-border/60 text-[11px] text-muted">
         <span className="inline-flex items-center gap-1.5">

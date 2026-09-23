@@ -2,7 +2,7 @@
 // sits on a Facebook department task (one task per client).
 //
 // Four phases, in order:
-//   1. Access   — six things the client has to clear before we can build.
+//   1. Access   — seven things the client has to clear before we can build.
 //   2. Main zap — the Typeform Client Intake SOP as a step-by-step checklist.
 //   3. Setup    — the Calendly + Failsafe zaps, our four Slack channels and the
 //                 client's own notification delivery.
@@ -112,6 +112,13 @@ export const ACCESS_ITEMS: AccessItem[] = [
       { key: "access.dashboard.client_login", label: "Client got their login and has signed in" }
     ],
     inputs: [{ key: "access.dashboard.link", label: "Dashboard link", placeholder: "https://…" }]
+  },
+  {
+    id: "ein",
+    label: "EIN",
+    blurb: "The client's Employer Identification Number, for ad account and billing setup.",
+    checks: [],
+    inputs: [{ key: "access.ein.number", label: "EIN", placeholder: "XX-XXXXXXX" }]
   },
   {
     id: "notify",

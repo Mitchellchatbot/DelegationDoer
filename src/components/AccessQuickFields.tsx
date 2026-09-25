@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 import {
   ZAPIER_MODE_KEY, CRM_MODE_KEY, CALENDLY_MODE_KEY, EIN_KEY, AD_ACCOUNT_ID_KEY, MONTHLY_SPEND_KEY,
   LANDING_PAGE_KEY, TYPEFORM_LINK_KEY, ACCOUNT_METRICS_KEY,
-  TRUST_SUBMITTED_KEY, TRUST_ACCEPTED_KEY, CTM_GRANTED_KEY,
+  TRUST_SUBMITTED_KEY, TRUST_ACCEPTED_KEY, CTM_GRANTED_KEY, CAMPAIGN_LOADED_KEY,
   type OnboardingState, type EntryValue
 } from "@/lib/fb-onboarding";
 
@@ -80,6 +80,7 @@ export function AccessQuickFields({
         <QuickCheck label="CTM access granted" on={isOn(s, CTM_GRANTED_KEY)} canEdit={canEdit} onToggle={() => set(CTM_GRANTED_KEY, !isOn(s, CTM_GRANTED_KEY))} />
         <QuickCheck label="Trust Center submitted" on={isOn(s, TRUST_SUBMITTED_KEY)} canEdit={canEdit} onToggle={() => set(TRUST_SUBMITTED_KEY, !isOn(s, TRUST_SUBMITTED_KEY))} />
         <QuickCheck label="Trust Center accepted" on={isOn(s, TRUST_ACCEPTED_KEY)} canEdit={canEdit} onToggle={() => set(TRUST_ACCEPTED_KEY, !isOn(s, TRUST_ACCEPTED_KEY))} />
+        <QuickCheck label="Ad account loaded with campaign" on={isOn(s, CAMPAIGN_LOADED_KEY)} canEdit={canEdit} onToggle={() => set(CAMPAIGN_LOADED_KEY, !isOn(s, CAMPAIGN_LOADED_KEY))} />
       </div>
     </div>
   );

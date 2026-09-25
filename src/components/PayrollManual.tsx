@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Plus, X, ChevronDown } from "lucide-react";
+import { Plus, X, ChevronDown, Eye, EyeOff } from "lucide-react";
 
 // Editable payroll / contractor table (owner-only), seeded from the People
 // report. This is the Contractor Payments + payroll line, broken down by
@@ -34,6 +34,12 @@ export function PayrollManual({ initial }: { initial: PayrollEntry[] }) {
   const [rows, setRows] = useState<PayrollEntry[]>(initial);
   const [adding, setAdding] = useState(false);
   const [open, setOpen] = useState(false);
+  // Per-person pay is masked by default on every load — someone using this
+  // account who isn't Mitchell (e.g. sharing the login) still sees the
+  // aggregate totals below, never an individual rate, unless this is
+  // explicitly clicked open. Not persisted on purpose: it should default
+  // shut again next time.
+  const [revealed, setRevealed] = useState(false);
   // Rows added in this session — pinned to the top so a new $0 hire is visible
   // to fill in, instead of sinking to the bottom of the pay-sorted list.
   const [newIds, setNewIds] = useState<string[]>([]);
@@ -103,6 +109,15 @@ export function PayrollManual({ initial }: { initial: PayrollEntry[] }) {
               {totals.drawMo > 0 && <> · <span className="text-violet-600">+{money(totals.drawMo)}/mo owner draw</span></>}
             </div>
           </div>
+          <button
+            type="button"
+            onClick={() => setRevealed((v) => !v)}
+            title={revealed ? "Hide individual pay" : "Show individual pay"}
+            className="flex items-center gap-1 text-[12px] font-medium text-slate-600 bg-slate-100 rounded-lg px-2.5 py-1.5 hover:bg-slate-200"
+          >
+            {revealed ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+            {revealed ? "Hide" : "Show"}
+          </button>
           <button type="button" onClick={() => { setOpen(true); add(); }} disabled={adding} className="flex items-center gap-1 text-[12px] font-medium text-white bg-ink rounded-lg px-2.5 py-1.5 hover:opacity-90 disabled:opacity-50">
             <Plus className="w-3.5 h-3.5" /> Add
           </button>
@@ -143,11 +158,15 @@ export function PayrollManual({ initial }: { initial: PayrollEntry[] }) {
                     </select>
                   </td>
                   <td className="py-1 px-2 text-right">
-                    <div className="flex items-center justify-end">
-                      <span className="text-muted">$</span>
-                      <input type="number" defaultValue={r.rate} onBlur={(e) => Number(e.target.value) !== Number(r.rate) && patch(r.id, { rate: Number(e.target.value) || 0 })}
-                        className="w-[64px] bg-transparent rounded px-0.5 py-0.5 text-right tabular-nums text-ink hover:bg-slate-50 focus:bg-slate-100 focus:outline-none" />
-                    </div>
+                    {revealed ? (
+                      <div className="flex items-center justify-end">
+                        <span className="text-muted">$</span>
+                        <input type="number" defaultValue={r.rate} onBlur={(e) => Number(e.target.value) !== Number(r.rate) && patch(r.id, { rate: Number(e.target.value) || 0 })}
+                          className="w-[64px] bg-transparent rounded px-0.5 py-0.5 text-right tabular-nums text-ink hover:bg-slate-50 focus:bg-slate-100 focus:outline-none" />
+                      </div>
+                    ) : (
+                      <span className="text-slate-300 tracking-widest select-none">•••</span>
+                    )}
                   </td>
                   <td className="py-1 px-2">
                     <select value={r.scale} onChange={(e) => patch(r.id, { scale: e.target.value as PayrollEntry["scale"] })}
@@ -156,7 +175,9 @@ export function PayrollManual({ initial }: { initial: PayrollEntry[] }) {
                       <option value="annual">/yr</option>
                     </select>
                   </td>
-                  <td className="py-1 px-2 text-right tabular-nums font-medium text-ink">{money(monthlyOf(r))}</td>
+                  <td className="py-1 px-2 text-right tabular-nums font-medium text-ink">
+                    {revealed ? money(monthlyOf(r)) : <span className="text-slate-300 tracking-widest select-none">•••</span>}
+                  </td>
                   <td className="py-1 pl-2 text-right">
                     <button type="button" onClick={() => remove(r.id)} title="Remove" className="text-slate-300 hover:text-rose-600 opacity-0 group-hover:opacity-100 transition-opacity">
                       <X className="w-3.5 h-3.5" />

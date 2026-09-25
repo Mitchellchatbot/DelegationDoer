@@ -85,6 +85,22 @@ export function canManageTask(
   return false;
 }
 
+// Who may tick a Facebook onboarding's checklist: anyone who can manage the
+// task, plus the whole Facebook team (onboarding gets handed around; a
+// teammate covering shouldn't need a reassignment just to record that CRM
+// access came through). The PATCH route, the onboarding page and the list
+// card's quick fields all gate on this one rule — the card had drifted to
+// plain canManageTask and silently disabled its boxes for teammates.
+//
+// Checklist only. The task's own fields (priority, go-live) stay behind
+// canManageTask, which is what PATCH /api/tasks/[id] enforces.
+export function canEditFbOnboarding(
+  actor: User | null | undefined,
+  task: Pick<Task, "creatorId" | "assigneeId" | "departmentId"> | null | undefined
+): boolean {
+  return canManageTask(actor, task) || (actor?.departmentIds ?? []).includes("dep_facebook");
+}
+
 // Can `actor` take an unclaimed team task for themselves? This is the
 // "divide them amongst ourselves" affordance: anyone in the department the
 // task was queued for may claim it.

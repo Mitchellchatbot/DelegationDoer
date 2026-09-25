@@ -9,7 +9,7 @@ import { FbOnboardingNotesButton } from "@/components/FbOnboardingNotesButton";
 import { DueDateInline } from "@/components/DueDateInline";
 import { PriorityInline } from "@/components/PriorityInline";
 import { AccessQuickFields } from "@/components/AccessQuickFields";
-import { canDeleteTask, canManageTask } from "@/lib/access";
+import { canDeleteTask, canEditFbOnboarding, canManageTask } from "@/lib/access";
 import type { User, Priority } from "@/lib/types";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById, getAllUsers } from "@/lib/server-data";
@@ -249,6 +249,10 @@ function OnboardingCard({ o, me, noteUsers, assignee }: {
   const p = o.progress;
   const taskShape = { creatorId: o.creatorId ?? "", assigneeId: o.assigneeId, departmentId: FB_DEPT };
   const canEdit = canManageTask(me, taskShape);
+  // The quick fields are checklist state, so any Facebook teammate may edit
+  // them — same rule as the onboarding page and the PATCH route. Priority and
+  // go-live are task fields and stay behind canEdit.
+  const canEditChecklist = canEditFbOnboarding(me, taskShape);
   const nameOf = (id: string | null) => (id ? noteUsers.find((u) => u.id === id)?.name ?? "Someone" : "Someone");
   const hidden = o.noteCount - o.notes.length;
   const phases = [
@@ -416,7 +420,7 @@ function OnboardingCard({ o, me, noteUsers, assignee }: {
         </div>
 
         <div className="mt-2">
-          <AccessQuickFields taskId={o.taskId} state={o.state} canEdit={canEdit} />
+          <AccessQuickFields taskId={o.taskId} state={o.state} canEdit={canEditChecklist} />
         </div>
 
         <div className="mt-2 text-[11px] text-muted truncate">

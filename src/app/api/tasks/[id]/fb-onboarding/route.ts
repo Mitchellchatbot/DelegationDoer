@@ -1,25 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin, isMissingColumnError, isMissingFunctionError } from "@/lib/supabase-admin";
 import { loadTaskForViewer } from "@/lib/task-access";
-import { canManageTask } from "@/lib/access";
+import { canManageTask, canEditFbOnboarding } from "@/lib/access";
 import { normaliseValue, progress, stage, PROVIDER_KEY, FB_ONBOARDING_TAG, type OnboardingState } from "@/lib/fb-onboarding";
 
 export const dynamic = "force-dynamic";
 
 const FB_DEPT = "dep_facebook";
 
-// Who may tick boxes: anyone who can manage the task, plus the whole Facebook
-// team (onboarding gets handed around; a teammate covering shouldn't need a
-// reassignment just to record that CRM access came through).
+// Who may tick boxes: see canEditFbOnboarding.
 async function gate(taskId: string) {
   const access = await loadTaskForViewer(taskId);
   if (!access.ok) return { ok: false as const, response: access.response };
   if (access.task.departmentId !== FB_DEPT) {
     return { ok: false as const, response: NextResponse.json({ error: "not a Facebook task" }, { status: 400 }) };
   }
-  const v = access.viewer;
-  const canEdit = canManageTask(v, access.task) || (v?.departmentIds ?? []).includes(FB_DEPT);
-  if (!canEdit) {
+  if (!canEditFbOnboarding(access.viewer, access.task)) {
     return { ok: false as const, response: NextResponse.json({ error: "forbidden" }, { status: 403 }) };
   }
   return { ok: true as const, viewerId: access.viewerId };

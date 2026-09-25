@@ -8,6 +8,7 @@ import { DeleteFbOnboardingButton } from "@/components/DeleteFbOnboardingButton"
 import { FbOnboardingNotesButton } from "@/components/FbOnboardingNotesButton";
 import { DueDateInline } from "@/components/DueDateInline";
 import { PriorityInline } from "@/components/PriorityInline";
+import { AccessQuickFields } from "@/components/AccessQuickFields";
 import { canDeleteTask, canManageTask } from "@/lib/access";
 import type { User, Priority } from "@/lib/types";
 import { requireCurrentUserId } from "@/lib/session";
@@ -407,13 +408,18 @@ function OnboardingCard({ o, me, noteUsers, assignee }: {
           away. */}
 
       <div className="pt-2 border-t border-border/60">
-        <div className="rounded-lg bg-surface2/70 px-2.5 py-1.5">
+        <div className="rounded-lg bg-urgent/5 border border-urgent/20 px-2.5 py-1.5">
           <div className="text-[10px] font-medium uppercase tracking-wide text-muted">Go-live</div>
-          <div className="flex items-center gap-1.5 text-lg font-bold text-ink leading-tight">
+          <div className="flex items-center gap-1.5 text-lg font-bold text-urgent leading-tight">
             <DueDateInline taskId={o.taskId} initialDueDate={o.dueDate} canEdit={canEdit} />
           </div>
         </div>
-        <div className="mt-1 text-[11px] text-muted truncate">
+
+        <div className="mt-2">
+          <AccessQuickFields taskId={o.taskId} state={o.state} canEdit={canEdit} />
+        </div>
+
+        <div className="mt-2 text-[11px] text-muted truncate">
           Updated {relativeTime(o.updatedAt)}{assignee ? ` · ${assignee.name}` : ""}
         </div>
       </div>

@@ -159,6 +159,7 @@ export const noteKey = (itemId: string) => `access.${itemId}.note`;
 // glance" block), independent of the full Access tab this same data also
 // backs. Exported here, once, so the card and the tab never drift apart.
 export const ZAPIER_MODE_KEY = "access.zapier.mode";
+export const CRM_MODE_KEY = "access.crm.mode";
 export const CALENDLY_MODE_KEY = "access.calendly.mode";
 export const EIN_KEY = "access.ein.number";
 export const AD_ACCOUNT_ID_KEY = "access.meta_account.ad_account_id";
@@ -737,6 +738,10 @@ function buildRegistry(): Map<string, KeyKind> {
   r.set(BUDGET_KEY, { kind: "text" });
   r.set(CREATIVES_KEY, { kind: "text" });
   r.set(PROVIDER_KEY, { kind: "text" });
+  // CRM has no granted/our-account choice on the Access tab (its existing
+  // `choice` slot is taken by upload_mode) — this is card-only, same shape
+  // as Zapier's, standalone rather than borrowed from an AccessItem.
+  r.set(CRM_MODE_KEY, { kind: "choice", options: ["granted", "our_account", ""] });
   for (const z of ZAPS) {
     r.set(zapBuiltKey(z.id), { kind: "check" });
     r.set(zapUrlKey(z.id), { kind: "text" });

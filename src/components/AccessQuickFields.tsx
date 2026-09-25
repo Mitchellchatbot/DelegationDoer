@@ -5,7 +5,7 @@ import { Check } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import {
-  ZAPIER_MODE_KEY, CALENDLY_MODE_KEY, EIN_KEY, AD_ACCOUNT_ID_KEY, MONTHLY_SPEND_KEY,
+  ZAPIER_MODE_KEY, CRM_MODE_KEY, CALENDLY_MODE_KEY, EIN_KEY, AD_ACCOUNT_ID_KEY, MONTHLY_SPEND_KEY,
   TRUST_SUBMITTED_KEY, TRUST_ACCEPTED_KEY, CTM_GRANTED_KEY,
   type OnboardingState, type EntryValue
 } from "@/lib/fb-onboarding";
@@ -59,6 +59,11 @@ export function AccessQuickFields({
           label="Zapier" value={str(s, ZAPIER_MODE_KEY)} canEdit={canEdit}
           grantedValue="client_workspace" ourAccountValue="our_account"
           onToggle={(v) => set(ZAPIER_MODE_KEY, v)}
+        />
+        <ModePill
+          label="CRM" value={str(s, CRM_MODE_KEY)} canEdit={canEdit}
+          grantedValue="granted" ourAccountValue="our_account"
+          onToggle={(v) => set(CRM_MODE_KEY, v)}
         />
         <ModePill
           label="Calendly" value={str(s, CALENDLY_MODE_KEY)} canEdit={canEdit}

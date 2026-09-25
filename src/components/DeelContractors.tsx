@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, Eye, EyeOff } from "lucide-react";
 
 // Contractor payments by person × month, from Deel payment statements. Fed by
 // the deel_payments table (re-parsed from the receipts). Collapsed by default.
@@ -17,6 +17,10 @@ const label = (p: string) => `${MLBL[p.slice(5, 7)] ?? p.slice(5, 7)} '${p.slice
 
 export function DeelContractors({ rows }: { rows: DeelRow[] }) {
   const [open, setOpen] = useState(false);
+  // Same as Payroll & contractors: per-contractor pay hidden by default,
+  // aggregate totals (paid total, monthly column totals, fees) stay visible
+  // regardless. Not persisted — defaults shut again next load.
+  const [revealed, setRevealed] = useState(false);
 
   const m = useMemo(() => {
     const months = [...new Set(rows.map((r) => r.period))].sort();
@@ -51,10 +55,21 @@ export function DeelContractors({ rows }: { rows: DeelRow[] }) {
             <div className="text-[12px] text-slate-500 mt-0.5">Per person × month, from Deel statements + Novo bank ({m.months.length ? `${label(m.months[0])} → ${label(m.months[m.months.length - 1])}` : ""}) · tap to {open ? "collapse" : "expand"}</div>
           </div>
         </button>
-        <div className="text-right shrink-0">
-          <div className="text-[11px] text-slate-400">Total paid</div>
-          <div className="text-[20px] font-bold tabular-nums text-slate-900 leading-none mt-0.5">{money(m.grand)}</div>
-          <div className="text-[11px] text-slate-400 mt-0.5">+ {money(m.feeGrand)} Deel fees</div>
+        <div className="flex items-start gap-3 shrink-0">
+          <div className="text-right">
+            <div className="text-[11px] text-slate-400">Total paid</div>
+            <div className="text-[20px] font-bold tabular-nums text-slate-900 leading-none mt-0.5">{money(m.grand)}</div>
+            <div className="text-[11px] text-slate-400 mt-0.5">+ {money(m.feeGrand)} Deel fees</div>
+          </div>
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); setRevealed((v) => !v); }}
+            title={revealed ? "Hide individual pay" : "Show individual pay"}
+            className="flex items-center gap-1 text-[12px] font-medium text-slate-600 bg-slate-100 rounded-lg px-2.5 py-1.5 hover:bg-slate-200 mt-0.5"
+          >
+            {revealed ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+            {revealed ? "Hide" : "Show"}
+          </button>
         </div>
       </div>
 
@@ -72,8 +87,14 @@ export function DeelContractors({ rows }: { rows: DeelRow[] }) {
               {m.list.map((r) => (
                 <tr key={r.name} className="border-b border-slate-50 last:border-0">
                   <td className="py-1 pr-2 text-slate-700 truncate max-w-[220px] sticky left-0 bg-white">{r.name}</td>
-                  {m.months.map((p) => <td key={p} className="py-1 px-1.5 text-right tabular-nums text-slate-500">{money(r.vals[p] ?? 0)}</td>)}
-                  <td className="py-1 pl-2 text-right tabular-nums font-medium text-slate-900">{money(r.total)}</td>
+                  {m.months.map((p) => (
+                    <td key={p} className="py-1 px-1.5 text-right tabular-nums text-slate-500">
+                      {revealed ? money(r.vals[p] ?? 0) : <span className="text-slate-300 tracking-widest select-none">•••</span>}
+                    </td>
+                  ))}
+                  <td className="py-1 pl-2 text-right tabular-nums font-medium text-slate-900">
+                    {revealed ? money(r.total) : <span className="text-slate-300 tracking-widest select-none">•••</span>}
+                  </td>
                 </tr>
               ))}
               <tr className="border-t border-slate-200 font-semibold text-slate-800">

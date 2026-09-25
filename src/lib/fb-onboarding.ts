@@ -131,7 +131,10 @@ export const ACCESS_ITEMS: AccessItem[] = [
     ],
     inputs: [
       { key: "access.meta_account.ad_account_id", label: "Ad account ID", placeholder: "act_…" },
-      { key: "access.meta_account.monthly_spend", label: "Monthly spend", placeholder: "e.g. $5,000/mo" }
+      { key: "access.meta_account.monthly_spend", label: "Monthly spend", placeholder: "e.g. $5,000/mo" },
+      { key: "access.meta_account.landing_page", label: "Landing page link", placeholder: "https://…" },
+      { key: "access.meta_account.typeform", label: "Typeform link", placeholder: "https://…" },
+      { key: "access.meta_account.account_metrics", label: "Account metrics link", placeholder: "https://…" }
     ]
   },
   {
@@ -164,6 +167,9 @@ export const CALENDLY_MODE_KEY = "access.calendly.mode";
 export const EIN_KEY = "access.ein.number";
 export const AD_ACCOUNT_ID_KEY = "access.meta_account.ad_account_id";
 export const MONTHLY_SPEND_KEY = "access.meta_account.monthly_spend";
+export const LANDING_PAGE_KEY = "access.meta_account.landing_page";
+export const TYPEFORM_LINK_KEY = "access.meta_account.typeform";
+export const ACCOUNT_METRICS_KEY = "access.meta_account.account_metrics";
 export const TRUST_SUBMITTED_KEY = "access.meta_account.trust_submitted";
 export const TRUST_ACCEPTED_KEY = "access.meta_account.trust_accepted";
 export const CTM_GRANTED_KEY = "access.ctm.granted";

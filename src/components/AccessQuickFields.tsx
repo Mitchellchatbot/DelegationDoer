@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import {
   ZAPIER_MODE_KEY, CRM_MODE_KEY, CALENDLY_MODE_KEY, EIN_KEY, AD_ACCOUNT_ID_KEY, MONTHLY_SPEND_KEY,
+  LANDING_PAGE_KEY, TYPEFORM_LINK_KEY, ACCOUNT_METRICS_KEY,
   TRUST_SUBMITTED_KEY, TRUST_ACCEPTED_KEY, CTM_GRANTED_KEY,
   type OnboardingState, type EntryValue
 } from "@/lib/fb-onboarding";
@@ -73,6 +74,9 @@ export function AccessQuickFields({
         <QuickInput label="EIN" value={str(s, EIN_KEY)} canEdit={canEdit} placeholder="XX-XXXXXXX" onSave={(v) => set(EIN_KEY, v)} />
         <QuickInput label="Ad account ID" value={str(s, AD_ACCOUNT_ID_KEY)} canEdit={canEdit} placeholder="act_…" onSave={(v) => set(AD_ACCOUNT_ID_KEY, v)} />
         <QuickInput label="Monthly spend" value={str(s, MONTHLY_SPEND_KEY)} canEdit={canEdit} placeholder="$…/mo" onSave={(v) => set(MONTHLY_SPEND_KEY, v)} />
+        <QuickInput label="Landing page link" value={str(s, LANDING_PAGE_KEY)} canEdit={canEdit} placeholder="https://…" onSave={(v) => set(LANDING_PAGE_KEY, v)} />
+        <QuickInput label="Typeform link" value={str(s, TYPEFORM_LINK_KEY)} canEdit={canEdit} placeholder="https://…" onSave={(v) => set(TYPEFORM_LINK_KEY, v)} />
+        <QuickInput label="Account metrics link" value={str(s, ACCOUNT_METRICS_KEY)} canEdit={canEdit} placeholder="https://…" onSave={(v) => set(ACCOUNT_METRICS_KEY, v)} />
         <QuickCheck label="CTM access granted" on={isOn(s, CTM_GRANTED_KEY)} canEdit={canEdit} onToggle={() => set(CTM_GRANTED_KEY, !isOn(s, CTM_GRANTED_KEY))} />
         <QuickCheck label="Trust Center submitted" on={isOn(s, TRUST_SUBMITTED_KEY)} canEdit={canEdit} onToggle={() => set(TRUST_SUBMITTED_KEY, !isOn(s, TRUST_SUBMITTED_KEY))} />
         <QuickCheck label="Trust Center accepted" on={isOn(s, TRUST_ACCEPTED_KEY)} canEdit={canEdit} onToggle={() => set(TRUST_ACCEPTED_KEY, !isOn(s, TRUST_ACCEPTED_KEY))} />

@@ -127,7 +127,8 @@ export const ACCESS_ITEMS: AccessItem[] = [
     blurb: "The ad account itself — its ID, what it spends monthly, and Meta's Trust Center verification.",
     checks: [
       { key: "access.meta_account.trust_submitted", label: "Trust Center verification submitted" },
-      { key: "access.meta_account.trust_accepted", label: "Trust Center verification accepted" }
+      { key: "access.meta_account.trust_accepted", label: "Trust Center verification accepted" },
+      { key: "access.meta_account.campaign_loaded", label: "Ad account loaded with campaign" }
     ],
     inputs: [
       { key: "access.meta_account.ad_account_id", label: "Ad account ID", placeholder: "act_…" },
@@ -172,6 +173,7 @@ export const TYPEFORM_LINK_KEY = "access.meta_account.typeform";
 export const ACCOUNT_METRICS_KEY = "access.meta_account.account_metrics";
 export const TRUST_SUBMITTED_KEY = "access.meta_account.trust_submitted";
 export const TRUST_ACCEPTED_KEY = "access.meta_account.trust_accepted";
+export const CAMPAIGN_LOADED_KEY = "access.meta_account.campaign_loaded";
 export const CTM_GRANTED_KEY = "access.ctm.granted";
 
 // ---------------------------------------------------------------------------

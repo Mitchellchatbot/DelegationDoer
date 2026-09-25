@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { Check } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -8,7 +9,7 @@ import {
   ZAPIER_MODE_KEY, CRM_MODE_KEY, CALENDLY_MODE_KEY, EIN_KEY, AD_ACCOUNT_ID_KEY, MONTHLY_SPEND_KEY,
   LANDING_PAGE_KEY, TYPEFORM_LINK_KEY, ACCOUNT_METRICS_KEY, CITIES_KEY,
   TRUST_SUBMITTED_KEY, TRUST_ACCEPTED_KEY, CTM_GRANTED_KEY, CAMPAIGN_LOADED_KEY,
-  type OnboardingState, type EntryValue
+  type OnboardingState, type Entry, type EntryValue
 } from "@/lib/fb-onboarding";
 
 const str = (s: OnboardingState, k: string) => (typeof s[k]?.v === "string" ? (s[k].v as string) : "");
@@ -26,29 +27,62 @@ export function AccessQuickFields({
   state: OnboardingState;
   canEdit: boolean;
 }) {
-  const [s, setS] = useState(state);
+  const router = useRouter();
+
+  // `state` is the truth — it carries teammates' edits and the Access tab's,
+  // and arrives fresh on every server re-render of the list. Only this card's
+  // own unconfirmed writes sit on top of it. Copying `state` into useState
+  // once pinned the card to whatever it first loaded with: nothing from
+  // anyone else showed up until a hard reload.
+  const [local, setLocal] = useState<OnboardingState>({});
+  const inFlight = useRef(new Map<string, number>());
+  const s = useMemo(() => ({ ...state, ...local }), [state, local]);
+
+  // A fresh `state` retires every override it has caught up with. Compared by
+  // the server's own `at` stamp, not by value: a refresh that read the row
+  // just before our write landed must not undo the box that was just ticked,
+  // and a teammate's later write to the same key must still win.
+  useEffect(() => {
+    setLocal((cur) => {
+      const next: OnboardingState = {};
+      for (const [k, e] of Object.entries(cur)) {
+        const caughtUp = !inFlight.current.get(k) && (state[k]?.at ?? "") >= e.at;
+        if (!caughtUp) next[k] = e;
+      }
+      return Object.keys(next).length === Object.keys(cur).length ? cur : next;
+    });
+  }, [state]);
 
   async function set(key: string, value: EntryValue) {
     if (!canEdit) return;
-    const prev = s[key];
-    setS((cur) => ({ ...cur, [key]: { v: value, by: null, at: new Date().toISOString() } }));
+    inFlight.current.set(key, (inFlight.current.get(key) ?? 0) + 1);
+    setLocal((cur) => ({ ...cur, [key]: { v: value, by: null, at: new Date().toISOString() } }));
     try {
       const res = await fetch(`/api/tasks/${taskId}/fb-onboarding`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ key, value })
       });
-      if (!res.ok) {
-        const d = await res.json().catch(() => null);
-        throw new Error(d?.error ?? `failed (${res.status})`);
-      }
+      const d = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(d?.error ?? `failed (${res.status})`);
+      // Swap in the server's stamp so the catch-up check above has a real
+      // `at` to compare — unless a newer click on this key has overtaken it.
+      const saved = d?.state?.[key] as Entry | undefined;
+      if (saved) setLocal((cur) => (cur[key]?.v === saved.v ? { ...cur, [key]: saved } : cur));
+      // The access tags, phase bars, stage section and "Updated" line are all
+      // rendered on the server from this same state — re-render them.
+      router.refresh();
     } catch (e) {
-      setS((cur) => {
-        const next = { ...cur };
-        if (prev) next[key] = prev; else delete next[key];
-        return next;
-      });
+      if (inFlight.current.get(key) === 1) {
+        setLocal((cur) => {
+          const next = { ...cur };
+          delete next[key];
+          return next;
+        });
+      }
       toast.error(`Couldn't save: ${e instanceof Error ? e.message : "network error"}`);
+    } finally {
+      inFlight.current.set(key, (inFlight.current.get(key) ?? 1) - 1);
     }
   }
 

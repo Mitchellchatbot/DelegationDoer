@@ -12,7 +12,7 @@ import { MessagesSquare } from "lucide-react";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById, getAllUsersLight, getLeaderIds } from "@/lib/server-data";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
-import { canDeleteTask, canManageTask, canViewTask } from "@/lib/access";
+import { canDeleteTask, canEditFbOnboarding, canManageTask, canViewTask } from "@/lib/access";
 import { canSeeFbOnboarding, getOnboarding, FB_DEPT } from "@/lib/fb-onboarding-data";
 import { formatDate } from "@/lib/utils";
 import type { Task } from "@/lib/types";
@@ -46,7 +46,7 @@ export default async function FbOnboardingPage({ params }: { params: { id: strin
   if (!canSeeFbOnboarding(me) && !canViewTask(me, task, leaderIds)) return notFound();
 
   const onboarding = await getOnboarding(params.id);
-  const canEdit = canManageTask(me, task) || (me?.departmentIds ?? []).includes(FB_DEPT);
+  const canEdit = canEditFbOnboarding(me, task);
   const assignee = task.assigneeId ? users.find((u) => u.id === task.assigneeId) ?? null : null;
 
   return (

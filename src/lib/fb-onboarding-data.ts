@@ -46,6 +46,12 @@ export interface OnboardingSummary {
   // Access tab does without loading each onboarding.
   access: { id: string; label: string; status: AccessStatus }[];
 
+  // The raw checklist state, so the list card's own quick-edit fields
+  // (AccessQuickFields — Zapier/Calendly mode, EIN, ad account, Trust
+  // Center) can read and write the exact same keys the Access tab does,
+  // with no separate typed fields to keep in sync.
+  state: OnboardingState;
+
   // Where the client is, and how long they have been there.
   //
   // `stage` is recomputed here in TypeScript from state + completed_at on
@@ -161,6 +167,7 @@ export async function listOnboardings(): Promise<OnboardingSummary[]> {
       completedAt,
       progress: p,
       access: ACCESS_ITEMS.map((it) => ({ id: it.id, label: it.label, status: accessStatus(state, it) })),
+      state,
       stage: st,
       stageDone: sp.done,
       stageTotal: sp.total,

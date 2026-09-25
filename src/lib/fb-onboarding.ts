@@ -2,7 +2,7 @@
 // sits on a Facebook department task (one task per client).
 //
 // Four phases, in order:
-//   1. Access   — seven things the client has to clear before we can build.
+//   1. Access   — eight things the client has to clear before we can build.
 //   2. Main zap — the Typeform Client Intake SOP as a step-by-step checklist.
 //   3. Setup    — the Calendly + Failsafe zaps, our four Slack channels and the
 //                 client's own notification delivery.
@@ -99,7 +99,8 @@ export const ACCESS_ITEMS: AccessItem[] = [
     blurb: "Access to start the first-time text flow. The number doesn't need to be cleared yet.",
     checks: [
       { key: "access.ctm.access_sent", label: "Access sent to henry@scaledai.org" },
-      { key: "access.ctm.tracking_number", label: "Have a tracking number for first-time texts" }
+      { key: "access.ctm.tracking_number", label: "Have a tracking number for first-time texts" },
+      { key: "access.ctm.granted", label: "Access granted" }
     ],
     inputs: [{ key: "access.ctm.number", label: "Tracking number", placeholder: "+1…" }]
   },
@@ -121,6 +122,19 @@ export const ACCESS_ITEMS: AccessItem[] = [
     inputs: [{ key: "access.ein.number", label: "EIN", placeholder: "XX-XXXXXXX" }]
   },
   {
+    id: "meta_account",
+    label: "Meta account",
+    blurb: "The ad account itself — its ID, what it spends monthly, and Meta's Trust Center verification.",
+    checks: [
+      { key: "access.meta_account.trust_submitted", label: "Trust Center verification submitted" },
+      { key: "access.meta_account.trust_accepted", label: "Trust Center verification accepted" }
+    ],
+    inputs: [
+      { key: "access.meta_account.ad_account_id", label: "Ad account ID", placeholder: "act_…" },
+      { key: "access.meta_account.monthly_spend", label: "Monthly spend", placeholder: "e.g. $5,000/mo" }
+    ]
+  },
+  {
     id: "notify",
     label: "Notifications",
     blurb: "How the client hears about new Facebook leads — anything Zapier can post to.",
@@ -140,6 +154,18 @@ export const ACCESS_ITEMS: AccessItem[] = [
 
 export const blockedKey = (itemId: string) => `access.${itemId}.blocked`;
 export const noteKey = (itemId: string) => `access.${itemId}.note`;
+
+// Keys the list-page card reads/writes directly (its own compact "at a
+// glance" block), independent of the full Access tab this same data also
+// backs. Exported here, once, so the card and the tab never drift apart.
+export const ZAPIER_MODE_KEY = "access.zapier.mode";
+export const CALENDLY_MODE_KEY = "access.calendly.mode";
+export const EIN_KEY = "access.ein.number";
+export const AD_ACCOUNT_ID_KEY = "access.meta_account.ad_account_id";
+export const MONTHLY_SPEND_KEY = "access.meta_account.monthly_spend";
+export const TRUST_SUBMITTED_KEY = "access.meta_account.trust_submitted";
+export const TRUST_ACCEPTED_KEY = "access.meta_account.trust_accepted";
+export const CTM_GRANTED_KEY = "access.ctm.granted";
 
 // ---------------------------------------------------------------------------
 // Launch — the actual campaign: where it runs, what it starts with, and the

@@ -6,7 +6,7 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import {
   ZAPIER_MODE_KEY, CRM_MODE_KEY, CALENDLY_MODE_KEY, EIN_KEY, AD_ACCOUNT_ID_KEY, MONTHLY_SPEND_KEY,
-  LANDING_PAGE_KEY, TYPEFORM_LINK_KEY, ACCOUNT_METRICS_KEY,
+  LANDING_PAGE_KEY, TYPEFORM_LINK_KEY, ACCOUNT_METRICS_KEY, CITIES_KEY,
   TRUST_SUBMITTED_KEY, TRUST_ACCEPTED_KEY, CTM_GRANTED_KEY, CAMPAIGN_LOADED_KEY,
   type OnboardingState, type EntryValue
 } from "@/lib/fb-onboarding";
@@ -71,6 +71,7 @@ export function AccessQuickFields({
           grantedValue="client_invites_us" ourAccountValue="we_invite_client"
           onToggle={(v) => set(CALENDLY_MODE_KEY, v)}
         />
+        <QuickInput label="Cities running" value={str(s, CITIES_KEY)} canEdit={canEdit} placeholder="e.g. Austin, TX; Dallas, TX" onSave={(v) => set(CITIES_KEY, v)} />
         <QuickInput label="EIN" value={str(s, EIN_KEY)} canEdit={canEdit} placeholder="XX-XXXXXXX" onSave={(v) => set(EIN_KEY, v)} />
         <QuickInput label="Ad account ID" value={str(s, AD_ACCOUNT_ID_KEY)} canEdit={canEdit} placeholder="act_…" onSave={(v) => set(AD_ACCOUNT_ID_KEY, v)} />
         <QuickInput label="Monthly spend" value={str(s, MONTHLY_SPEND_KEY)} canEdit={canEdit} placeholder="$…/mo" onSave={(v) => set(MONTHLY_SPEND_KEY, v)} />

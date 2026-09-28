@@ -2,17 +2,17 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
-import { isOwner } from "@/lib/access";
+import { canViewFinance } from "@/lib/access";
 
 export const dynamic = "force-dynamic";
 
-// Owner-only: next-month expense estimates (the forward budget). Keyed by the
+// Finance-access only: next-month expense estimates (the forward budget). Keyed by the
 // expense-line account name.
-async function requireOwner(): Promise<{ ok: true } | { ok: false; res: NextResponse }> {
+async function requireFinanceAccess(): Promise<{ ok: true } | { ok: false; res: NextResponse }> {
   try {
     const userId = await requireCurrentUserId();
     const user = await getUserById(userId);
-    if (!isOwner(user)) return { ok: false, res: NextResponse.json({ error: "not found" }, { status: 404 }) };
+    if (!canViewFinance(user)) return { ok: false, res: NextResponse.json({ error: "not found" }, { status: 404 }) };
     return { ok: true };
   } catch {
     return { ok: false, res: NextResponse.json({ error: "unauthorized" }, { status: 401 }) };
@@ -20,7 +20,7 @@ async function requireOwner(): Promise<{ ok: true } | { ok: false; res: NextResp
 }
 
 export async function GET() {
-  const gate = await requireOwner();
+  const gate = await requireFinanceAccess();
   if (!gate.ok) return gate.res;
   const { data, error } = await getSupabaseAdmin().from("expense_estimates").select("account, amount");
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
@@ -29,7 +29,7 @@ export async function GET() {
 
 // POST { account, amount } — upsert one line's estimate.
 export async function POST(req: NextRequest) {
-  const gate = await requireOwner();
+  const gate = await requireFinanceAccess();
   if (!gate.ok) return gate.res;
   const body = await req.json().catch(() => null);
   const account = typeof body?.account === "string" ? body.account.trim() : "";
@@ -45,7 +45,7 @@ export async function POST(req: NextRequest) {
 
 // DELETE { account } — remove a one-off / custom estimate line.
 export async function DELETE(req: NextRequest) {
-  const gate = await requireOwner();
+  const gate = await requireFinanceAccess();
   if (!gate.ok) return gate.res;
   const body = await req.json().catch(() => null);
   const account = typeof body?.account === "string" ? body.account.trim() : "";

@@ -2,15 +2,15 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
-import { isOwner } from "@/lib/access";
+import { canViewFinance } from "@/lib/access";
 
 export const dynamic = "force-dynamic";
 
-async function requireOwner(): Promise<{ ok: true } | { ok: false; res: NextResponse }> {
+async function requireFinanceAccess(): Promise<{ ok: true } | { ok: false; res: NextResponse }> {
   try {
     const userId = await requireCurrentUserId();
     const user = await getUserById(userId);
-    if (!isOwner(user)) return { ok: false, res: NextResponse.json({ error: "not found" }, { status: 404 }) };
+    if (!canViewFinance(user)) return { ok: false, res: NextResponse.json({ error: "not found" }, { status: 404 }) };
     return { ok: true };
   } catch {
     return { ok: false, res: NextResponse.json({ error: "unauthorized" }, { status: 401 }) };
@@ -21,7 +21,7 @@ const STATUSES = new Set(["active", "pending", "paused", "churned"]);
 
 // PATCH /api/finance/mrr/[id] — edit a field (company, mrr, status, note...).
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
-  const gate = await requireOwner();
+  const gate = await requireFinanceAccess();
   if (!gate.ok) return gate.res;
   const body = await req.json().catch(() => null);
   if (!body || typeof body !== "object") return NextResponse.json({ error: "bad body" }, { status: 400 });
@@ -47,7 +47,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
 
 // DELETE /api/finance/mrr/[id] — remove an entry entirely.
 export async function DELETE(_req: NextRequest, { params }: { params: { id: string } }) {
-  const gate = await requireOwner();
+  const gate = await requireFinanceAccess();
   if (!gate.ok) return gate.res;
   const { error } = await getSupabaseAdmin().from("mrr_entries").delete().eq("id", params.id);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });

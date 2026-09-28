@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
-import { isOwner } from "@/lib/access";
+import { canViewFinance } from "@/lib/access";
 import { parsePnl } from "@/lib/pnl-parse";
 
 export const dynamic = "force-dynamic";
@@ -17,14 +17,14 @@ const ALLOWED = new Set([
 ]);
 const MAX_BYTES = 25 * 1024 * 1024;
 
-// Owner-only guard. Returns the user id on success, or a NextResponse to
+// Finance guard (owner + FINANCE_VIEWER_EMAILS). Returns ok on success, or a NextResponse to
 // return immediately. Financials are visible to Mitchell alone — not other
 // leaders/admins.
-async function requireOwner(): Promise<{ ok: true } | { ok: false; res: NextResponse }> {
+async function requireFinanceAccess(): Promise<{ ok: true } | { ok: false; res: NextResponse }> {
   try {
     const userId = await requireCurrentUserId();
     const user = await getUserById(userId);
-    if (!isOwner(user)) {
+    if (!canViewFinance(user)) {
       return { ok: false, res: NextResponse.json({ error: "not found" }, { status: 404 }) };
     }
     return { ok: true };
@@ -33,9 +33,9 @@ async function requireOwner(): Promise<{ ok: true } | { ok: false; res: NextResp
   }
 }
 
-// GET /api/finance/pnl — list uploaded P&L documents (owner only).
+// GET /api/finance/pnl — list uploaded P&L documents (finance access only).
 export async function GET() {
-  const gate = await requireOwner();
+  const gate = await requireFinanceAccess();
   if (!gate.ok) return gate.res;
 
   const supabase = getSupabaseAdmin();
@@ -47,9 +47,9 @@ export async function GET() {
   return NextResponse.json({ documents: data ?? [] });
 }
 
-// POST /api/finance/pnl — upload a P&L file to the private bucket (owner only).
+// POST /api/finance/pnl — upload a P&L file to the private bucket (finance access only).
 export async function POST(req: NextRequest) {
-  const gate = await requireOwner();
+  const gate = await requireFinanceAccess();
   if (!gate.ok) return gate.res;
 
   const form = await req.formData().catch(() => null);

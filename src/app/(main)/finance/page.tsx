@@ -4,7 +4,7 @@ import { Lock } from "lucide-react";
 import { getCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
-import { isOwner } from "@/lib/access";
+import { canViewFinance } from "@/lib/access";
 import { FinancePanel, type FinanceDoc } from "@/components/FinancePanel";
 import { ExpenseExplorer, type ExplVendor } from "@/components/ExpenseExplorer";
 import { PayrollManual, type PayrollEntry } from "@/components/PayrollManual";
@@ -71,13 +71,14 @@ function buildFinanceOpening(o: FinanceOverview): string | undefined {
   return lines.join("\n\n");
 }
 
-// Owner-only, hidden financials section. Anyone who isn't Mitchell gets a 404.
+// Hidden financials section. Visible to the owner plus the FINANCE_VIEWER_EMAILS
+// allowlist in lib/access.ts; everyone else gets a 404.
 // The API routes enforce the same gate independently.
 export default async function FinancePage() {
   const userId = await getCurrentUserId();
   if (!userId) redirect("/login");
   const user = await getUserById(userId);
-  if (!isOwner(user)) notFound();
+  if (!canViewFinance(user)) notFound();
 
   const supabase = getSupabaseAdmin();
   const [docRes, overview, revenue, mrrRes, expRes, payRes, estRes, expSegRes, swRes, fbMonthRes, fbResult, pnlRes, pnlLinesRes, deelRes, oneOffsRes, oneOffSegRes] = await Promise.all([

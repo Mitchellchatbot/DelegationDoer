@@ -2,17 +2,17 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
-import { isOwner } from "@/lib/access";
+import { canViewFinance } from "@/lib/access";
 
 export const dynamic = "force-dynamic";
 
 const BUCKET = "finance";
 
-async function requireOwner(): Promise<{ ok: true } | { ok: false; res: NextResponse }> {
+async function requireFinanceAccess(): Promise<{ ok: true } | { ok: false; res: NextResponse }> {
   try {
     const userId = await requireCurrentUserId();
     const user = await getUserById(userId);
-    if (!isOwner(user)) {
+    if (!canViewFinance(user)) {
       return { ok: false, res: NextResponse.json({ error: "not found" }, { status: 404 }) };
     }
     return { ok: true };
@@ -21,11 +21,11 @@ async function requireOwner(): Promise<{ ok: true } | { ok: false; res: NextResp
   }
 }
 
-// GET /api/finance/pnl/[id] — mint a short-lived signed download URL (owner
+// GET /api/finance/pnl/[id] — mint a short-lived signed download URL (finance access
 // only). The bucket is private, so this server-gated signing is the only way
 // to reach the file; the link expires in 60s.
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
-  const gate = await requireOwner();
+  const gate = await requireFinanceAccess();
   if (!gate.ok) return gate.res;
 
   const supabase = getSupabaseAdmin();
@@ -45,9 +45,9 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
   return NextResponse.json({ url: data.signedUrl });
 }
 
-// DELETE /api/finance/pnl/[id] — remove the file + row (owner only).
+// DELETE /api/finance/pnl/[id] — remove the file + row (finance access only).
 export async function DELETE(_req: NextRequest, { params }: { params: { id: string } }) {
-  const gate = await requireOwner();
+  const gate = await requireFinanceAccess();
   if (!gate.ok) return gate.res;
 
   const supabase = getSupabaseAdmin();

@@ -2,17 +2,17 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
-import { isOwner } from "@/lib/access";
+import { canViewFinance } from "@/lib/access";
 
 export const dynamic = "force-dynamic";
 
-// Owner-only: Facebook revenue per month (from the Finance app). Keyed by
+// Finance-access only: Facebook revenue per month (from the Finance app). Keyed by
 // period 'YYYY-MM'. Drives the Facebook side of the /finance breakdown.
-async function requireOwner(): Promise<{ ok: true } | { ok: false; res: NextResponse }> {
+async function requireFinanceAccess(): Promise<{ ok: true } | { ok: false; res: NextResponse }> {
   try {
     const userId = await requireCurrentUserId();
     const user = await getUserById(userId);
-    if (!isOwner(user)) return { ok: false, res: NextResponse.json({ error: "not found" }, { status: 404 }) };
+    if (!canViewFinance(user)) return { ok: false, res: NextResponse.json({ error: "not found" }, { status: 404 }) };
     return { ok: true };
   } catch {
     return { ok: false, res: NextResponse.json({ error: "unauthorized" }, { status: 401 }) };
@@ -22,7 +22,7 @@ async function requireOwner(): Promise<{ ok: true } | { ok: false; res: NextResp
 // POST { period: "YYYY-MM", revenue?, commission? } — upsert the month's
 // Facebook revenue and/or the real commission earned that month.
 export async function POST(req: NextRequest) {
-  const gate = await requireOwner();
+  const gate = await requireFinanceAccess();
   if (!gate.ok) return gate.res;
   const body = await req.json().catch(() => null);
   const period = typeof body?.period === "string" && /^\d{4}-\d{2}$/.test(body.period.trim()) ? body.period.trim() : "";

@@ -15,7 +15,7 @@ import { AIAssistantDrawer } from "./AIAssistantDrawer";
 import { useNavDrawer } from "./NavDrawerProvider";
 import { RaiseLink } from "./RaiseLink";
 import { isLeader, isHead, canSeeCustomerSupport } from "@/lib/auth";
-import { isOwner } from "@/lib/access";
+import { canViewFinance, isOwner } from "@/lib/access";
 import { isEmailApprovalsViewer } from "@/lib/email-approvers";
 import { primaryDepartment } from "@/lib/departments";
 import type { User } from "@/lib/types";
@@ -334,7 +334,10 @@ export function Sidebar({ user }: { user: User }) {
     UPDATES_ITEM,
     SOPS_ITEM,
     manageOrPeople,
-    ...(isOwner(user) ? [SCALE_ITEM, SCALE_OUTBOUND_ITEM, FINANCE_ITEM] : []),
+    ...(isOwner(user) ? [SCALE_ITEM, SCALE_OUTBOUND_ITEM] : []),
+    // Finance has its own gate: the owner plus the FINANCE_VIEWER_EMAILS
+    // allowlist. Scale/outbound stay owner-only.
+    ...(canViewFinance(user) ? [FINANCE_ITEM] : []),
     SETTINGS_ITEM
   ];
   // Section partition. Each entry pairs a label with the hrefs that

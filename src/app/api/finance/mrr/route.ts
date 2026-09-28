@@ -2,16 +2,17 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
-import { isOwner } from "@/lib/access";
+import { canViewFinance } from "@/lib/access";
 
 export const dynamic = "force-dynamic";
 
-// Owner-only guard. Financials are visible to Mitchell alone.
-async function requireOwner(): Promise<{ ok: true } | { ok: false; res: NextResponse }> {
+// Finance guard. Financials are visible to the owner plus the
+// FINANCE_VIEWER_EMAILS allowlist in lib/access.ts.
+async function requireFinanceAccess(): Promise<{ ok: true } | { ok: false; res: NextResponse }> {
   try {
     const userId = await requireCurrentUserId();
     const user = await getUserById(userId);
-    if (!isOwner(user)) return { ok: false, res: NextResponse.json({ error: "not found" }, { status: 404 }) };
+    if (!canViewFinance(user)) return { ok: false, res: NextResponse.json({ error: "not found" }, { status: 404 }) };
     return { ok: true };
   } catch {
     return { ok: false, res: NextResponse.json({ error: "unauthorized" }, { status: 401 }) };
@@ -20,9 +21,9 @@ async function requireOwner(): Promise<{ ok: true } | { ok: false; res: NextResp
 
 const STATUSES = new Set(["active", "pending", "paused", "churned"]);
 
-// GET /api/finance/mrr — list manual MRR entries (owner only).
+// GET /api/finance/mrr — list manual MRR entries (finance access only).
 export async function GET() {
-  const gate = await requireOwner();
+  const gate = await requireFinanceAccess();
   if (!gate.ok) return gate.res;
   const { data, error } = await getSupabaseAdmin()
     .from("mrr_entries")
@@ -32,9 +33,9 @@ export async function GET() {
   return NextResponse.json({ entries: data ?? [] });
 }
 
-// POST /api/finance/mrr — add a manual MRR entry (owner only).
+// POST /api/finance/mrr — add a manual MRR entry (finance access only).
 export async function POST(req: NextRequest) {
-  const gate = await requireOwner();
+  const gate = await requireFinanceAccess();
   if (!gate.ok) return gate.res;
   const body = await req.json().catch(() => null);
   const company = typeof body?.company === "string" ? body.company.trim() : "";

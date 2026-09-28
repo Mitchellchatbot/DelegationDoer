@@ -1,6 +1,6 @@
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { getAllTasks, getAllUsersLight, getUserById, getDepartments, getLeaderIds } from "@/lib/server-data";
-import { canViewTaskScopedToDepartment, isOwner } from "@/lib/access";
+import { canViewFinance, canViewTaskScopedToDepartment, isOwner } from "@/lib/access";
 import { getStripeRevenue } from "@/lib/stripe";
 import { addMemory, forgetMemory } from "@/lib/brain-memory";
 import type { ParsedPnl } from "@/lib/pnl-parse";
@@ -429,7 +429,7 @@ export const AI_TOOLS = [
   {
     name: "get_finances",
     description:
-      "OWNER-ONLY. Returns the full financial picture: manual MRR (the owner's source-of-truth sheet), live Stripe revenue (MRR, new/churned/past-due), and the P&L (monthly revenue/expenses/net/margin) with a full expense breakdown down to individual line items / vendors (per-month values included). Use this for ANY money question — 'what's my MRR', 'what should I cut', 'what's my burn', 'biggest expense', 'what's rising', 'margin', 'who's my biggest client'. Returns { error } for any non-owner caller — if that happens, tell the user finance data is private to the owner and do not answer the finance question from memory.",
+      "RESTRICTED. Returns the full financial picture: manual MRR (the owner's source-of-truth sheet), live Stripe revenue (MRR, new/churned/past-due), and the P&L (monthly revenue/expenses/net/margin) with a full expense breakdown down to individual line items / vendors (per-month values included). Use this for ANY money question — 'what's my MRR', 'what should I cut', 'what's my burn', 'biggest expense', 'what's rising', 'margin', 'who's my biggest client'. Returns { error } for any caller without finance access — if that happens, tell the user finance data is private and do not answer the finance question from memory.",
     input_schema: { type: "object", properties: {} }
   },
   {
@@ -1992,14 +1992,16 @@ async function searchSops(input: Record<string, unknown>) {
 
 
 
-// OWNER-ONLY financial snapshot for the Ask AI widget. Combines the manual MRR
+// RESTRICTED financial snapshot for the Ask AI widget. Combines the manual MRR
 // sheet, live Stripe revenue, and the P&L expense breakdown so the brain can
-// answer money / cut questions grounded in real data. Every non-owner caller
-// gets an access-denied object — the model is instructed not to answer from
-// memory when it sees that.
+// answer money / cut questions grounded in real data. Gated by canViewFinance
+// (the owner + the FINANCE_VIEWER_EMAILS allowlist), which is the same gate the
+// /finance page uses — so anyone who can open that page can also ask about it
+// here. Every other caller gets an access-denied object — the model is
+// instructed not to answer from memory when it sees that.
 async function getFinances(ctx: ToolContext) {
-  if (!isOwner(ctx.actor)) {
-    return { error: "access denied — financial data is private to the owner (Mitchell) only" };
+  if (!canViewFinance(ctx.actor)) {
+    return { error: "access denied — financial data is private" };
   }
   const supabase = getSupabaseAdmin();
 

@@ -23,12 +23,51 @@ export function isAdmin(u: Pick<User, "isAdmin"> | null | undefined): boolean {
 }
 
 // The founder/owner. Deliberately NOT role/isAdmin — this is the single
-// person allowed to see owner-private surfaces like the P&L / financials,
-// stricter than "leader" (other leaders and stealth admins do NOT qualify).
-// Matched by email so it stays correct regardless of role/flag changes.
+// person allowed to see owner-private surfaces (the inbox, Scale, the brain's
+// memory), stricter than "leader" (other leaders and stealth admins do NOT
+// qualify). Matched by email so it stays correct regardless of role/flag changes.
+//
+// This is a SINGLE IDENTITY, not a permission list, and must stay that way:
+// several call sites read OWNER_EMAIL to mean "Mitchell specifically" — which
+// Missive inbox to load (lib/owner-inbox.ts, /api/brain/inbox), who the MCP
+// server acts as (/api/mcp), who the daily briefing DMs
+// (lib/daily-briefing-runner.ts), and the memory source tag. Widening isOwner
+// would silently hand a second person Mitchell's email (including sending AS
+// him) and his private brain memory. To grant someone one owner-private
+// surface, add a narrow gate like canViewFinance below instead.
 export const OWNER_EMAIL = "mitchell@scaledai.org";
 export function isOwner(u: Pick<User, "email"> | null | undefined): boolean {
   return !!u && (u.email ?? "").trim().toLowerCase() === OWNER_EMAIL;
+}
+
+// Who may see and edit the private financials: the /finance page, every
+// /api/finance/* route, the finance decision writer, and the get_finances tool
+// behind "Ask your finances". Full access — viewing plus editing MRR, payroll,
+// budget estimates, the Facebook/SEO segment tags and the P&L file uploads —
+// i.e. exactly what the owner sees today. There is deliberately no read-only
+// tier; if one is ever needed it belongs in a second, narrower gate.
+//
+// The owner always qualifies (via isOwner), so he is NOT repeated in the list.
+//
+// Keyed by EXACT email, like CLIENT_TEAM_EDITOR_EMAILS and
+// SEO_LEAD_DELETER_EMAILS below, and for the same reasons: role/isAdmin would
+// be a near-miss that silently widens the grant the next time someone is made
+// an admin, and a name list risks matching the wrong person. A DB flag was
+// considered and rejected — anyone who can write the users table could then
+// grant themselves the P&L without a code review.
+//
+// This grants the FINANCIALS ONLY. It does not open the owner's inbox, Scale,
+// outbound or the brain's memory — those stay on isOwner.
+//
+// To add or remove someone, change this list and only this list.
+const FINANCE_VIEWER_EMAILS = [
+  "moizahmad924@gmail.com" // Moiz Ahmad
+];
+
+export function canViewFinance(u: Pick<User, "email"> | null | undefined): boolean {
+  if (isOwner(u)) return true;
+  if (!u?.email) return false;
+  return FINANCE_VIEWER_EMAILS.includes(u.email.trim().toLowerCase());
 }
 
 // "Leader for permission purposes." Returns true for both real

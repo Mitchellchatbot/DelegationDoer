@@ -25,7 +25,7 @@ function Side({ title, accent, data, totalRevenue, detail, commission }: {
   const shown = data.expenseLines.slice(0, TOP);
   const restCount = data.expenseLines.length - shown.length;
   const restSum = data.expenseLines.slice(TOP).reduce((s, l) => s + l.amount, 0);
-  const expenses = commission ? data.revenue - commission.profitBefore : data.expenses;
+  const expenses = data.expenses;
 
   return (
     <div className={"flex-1 min-w-0 rounded-xl border bg-white p-5 " + tone.ring}>
@@ -37,14 +37,9 @@ function Side({ title, accent, data, totalRevenue, detail, commission }: {
       {/* Headline profit */}
       {commission ? (
         <>
-          <div className="text-[11px] text-slate-400">Profit before commission</div>
-          <div className="text-[26px] font-bold tabular-nums leading-none mt-0.5 text-slate-900">{money(commission.profitBefore)}</div>
-          <div className="text-[12px] text-slate-500 mt-1.5">− commission {money(commission.accrualCommission)} → <span className={"font-semibold " + (commission.trueProfit < 0 ? "text-rose-500" : "text-slate-900")}>{money(commission.trueProfit)}</span> profit</div>
-          {detail && (
-            <div className="text-[11px] text-slate-400 mt-2 pt-2 border-t border-slate-50">
-              Books (ties to P&amp;L): <span className="font-semibold text-slate-600 tabular-nums">{money(data.profit)}</span> · commission booked {money(commission.booksCommission)}
-            </div>
-          )}
+          <div className="text-[11px] text-slate-400">Your profit · 50% of net</div>
+          <div className={"text-[26px] font-bold tabular-nums leading-none mt-0.5 " + (commission.trueProfit < 0 ? "text-rose-500" : "text-slate-900")}>{money(commission.trueProfit)}</div>
+          <div className="text-[12px] text-slate-500 mt-1.5">{money(commission.profitBefore)} net after all costs · partner&rsquo;s 50% {money(commission.accrualCommission)}</div>
         </>
       ) : (
         <>
@@ -59,7 +54,7 @@ function Side({ title, accent, data, totalRevenue, detail, commission }: {
       </div>
 
       <div className="mt-3 flex items-baseline justify-between gap-2">
-        <span className="text-[12px] font-medium text-slate-600">{commission ? "Operating expenses" : "Expenses"}</span>
+        <span className="text-[12px] font-medium text-slate-600">{commission ? "Costs (incl. partner 50%)" : "Expenses"}</span>
         <span className="text-[14px] font-semibold tabular-nums text-slate-900">{money(expenses)}</span>
       </div>
 

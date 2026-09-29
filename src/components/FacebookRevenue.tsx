@@ -123,7 +123,7 @@ function RevenueCard({ data, netProfit, netMonth }: { data: FacebookRevenueData;
             <Title provisional={data.provisional} />
             <div className="text-[12px] text-slate-500 mt-1 max-w-prose">
               {hasNet
-                ? "Your true Facebook profit — net of Facebook operating costs and the 50% partner split, including any Stripe one-off you tag Facebook. The per-client table below is this month's live fee run-rate."
+                ? "Your true Facebook profit — 50% of net after ALL Facebook costs: operating, contractors you tag Facebook, and any Stripe one-off you tag Facebook. The per-client table below is this month's live fee run-rate."
                 : "Your profit after the 50% partner split — management + setup fees on managed Meta spend. Separate from MRR."}
             </div>
           </div>

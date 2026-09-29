@@ -8,7 +8,7 @@ import { ChevronDown, Eye, EyeOff } from "lucide-react";
 
 export interface DeelRow { period: string; contractor: string; amount: number; is_fee: boolean }
 
-const DEPARTMENTS = ["Unassigned", "SEO", "Website", "Facebook", "Software", "Sales", "Admin"] as const;
+type Seg = "facebook" | "seo";
 
 function money(n: number): string {
   if (!n) return "—";
@@ -17,15 +17,30 @@ function money(n: number): string {
 const MLBL: Record<string, string> = { "01": "Jan", "02": "Feb", "03": "Mar", "04": "Apr", "05": "May", "06": "Jun", "07": "Jul", "08": "Aug", "09": "Sep", "10": "Oct", "11": "Nov", "12": "Dec" };
 const label = (p: string) => `${MLBL[p.slice(5, 7)] ?? p.slice(5, 7)} '${p.slice(2, 4)}`;
 
+// Facebook / SEO toggle per contractor — tags whether this person is a Facebook
+// cost (rolls into Facebook expenses) or SEO/website (the default).
+function SegToggle({ value, onChange }: { value: Seg; onChange: (s: Seg) => void }) {
+  return (
+    <div className="inline-flex rounded-lg border border-slate-200 overflow-hidden shrink-0 text-[11px] font-semibold">
+      <button type="button" onClick={() => onChange("facebook")}
+        className={"px-2.5 py-1 " + (value === "facebook" ? "bg-blue-600 text-white" : "bg-white text-slate-500 hover:bg-slate-50")}>Facebook</button>
+      <button type="button" onClick={() => onChange("seo")}
+        className={"px-2.5 py-1 border-l border-slate-200 " + (value === "seo" ? "bg-emerald-600 text-white" : "bg-white text-slate-500 hover:bg-slate-50")}>SEO</button>
+    </div>
+  );
+}
+
 export function DeelContractors({ rows, departments = {} }: { rows: DeelRow[]; departments?: Record<string, string> }) {
   const [open, setOpen] = useState(false);
   // Same as Payroll & contractors: per-contractor pay hidden by default,
   // aggregate totals (paid total, monthly column totals, fees) stay visible
   // regardless. Not persisted — defaults shut again next load.
   const [revealed, setRevealed] = useState(false);
-  // What each contractor is for — Mitchell tags it, saved per contractor.
+  // What each contractor is for — Facebook or SEO. Anything not tagged Facebook
+  // counts as SEO (the remainder side). Saved per contractor on change.
   const [depts, setDepts] = useState<Record<string, string>>(departments);
-  function setDept(contractor: string, department: string) {
+  const segOf = (name: string): Seg => (depts[name] === "facebook" ? "facebook" : "seo");
+  function setDept(contractor: string, department: Seg) {
     setDepts((d) => ({ ...d, [contractor]: department }));
     fetch("/api/finance/contractor-department", {
       method: "POST",
@@ -101,13 +116,7 @@ export function DeelContractors({ rows, departments = {} }: { rows: DeelRow[]; d
                 <tr key={r.name} className="border-b border-slate-50 last:border-0">
                   <td className="py-1 pr-2 text-slate-700 truncate max-w-[220px] sticky left-0 bg-white">{r.name}</td>
                   <td className="py-1 px-2">
-                    <select
-                      value={depts[r.name] ?? "Unassigned"}
-                      onChange={(e) => setDept(r.name, e.target.value)}
-                      className={"text-[11px] rounded-lg border px-1.5 py-1 focus:outline-none focus:border-slate-400 " + ((depts[r.name] ?? "Unassigned") === "Unassigned" ? "border-amber-300 bg-amber-50 text-amber-700" : "border-slate-200 bg-white text-slate-700")}
-                    >
-                      {DEPARTMENTS.map((d) => <option key={d} value={d}>{d}</option>)}
-                    </select>
+                    <SegToggle value={segOf(r.name)} onChange={(s) => setDept(r.name, s)} />
                   </td>
                   {m.months.map((p) => (
                     <td key={p} className="py-1 px-1.5 text-right tabular-nums text-slate-500">
@@ -124,6 +133,12 @@ export function DeelContractors({ rows, departments = {} }: { rows: DeelRow[]; d
                 <td className="px-2" />
                 {m.months.map((p) => <td key={p} className="py-1 px-1.5 text-right tabular-nums">{money(m.colTotals[p] ?? 0)}</td>)}
                 <td className="py-1 pl-2 text-right tabular-nums">{money(m.grand)}</td>
+              </tr>
+              <tr className="text-blue-600 text-[11px]">
+                <td className="py-1 pr-2 sticky left-0 bg-white">→ Facebook (into FB expenses)</td>
+                <td className="px-2" />
+                {m.months.map((p) => <td key={p} className="py-1 px-1.5 text-right tabular-nums">{money(m.list.filter((r) => segOf(r.name) === "facebook").reduce((s, r) => s + (r.vals[p] ?? 0), 0))}</td>)}
+                <td className="py-1 pl-2 text-right tabular-nums font-semibold">{money(m.list.filter((r) => segOf(r.name) === "facebook").reduce((s, r) => s + r.total, 0))}</td>
               </tr>
               <tr className="text-slate-400">
                 <td className="py-1 pr-2 sticky left-0 bg-white">Deel fees</td>

@@ -81,7 +81,7 @@ export default async function FinancePage() {
   if (!isOwner(user)) notFound();
 
   const supabase = getSupabaseAdmin();
-  const [docRes, overview, revenue, mrrRes, expRes, payRes, estRes, expSegRes, swRes, fbMonthRes, fbResult, pnlRes, pnlLinesRes, deelRes, oneOffsRes, oneOffSegRes] = await Promise.all([
+  const [docRes, overview, revenue, mrrRes, expRes, payRes, estRes, expSegRes, swRes, fbMonthRes, fbResult, pnlRes, pnlLinesRes, deelRes, oneOffsRes, oneOffSegRes, deptRes] = await Promise.all([
     supabase.from("finance_documents").select("id, label, filename, content_type, size_bytes, uploaded_at, parsed").order("uploaded_at", { ascending: false }),
     getFinanceOverview(),
     getStripeRevenue().catch(() => null),
@@ -97,7 +97,8 @@ export default async function FinancePage() {
     supabase.from("pnl_lines").select("period, account, section, amount"),
     supabase.from("deel_payments").select("period, contractor, amount, is_fee"),
     getStripeOneOffs().catch(() => null),
-    supabase.from("stripe_oneoff_segments").select("payment_id, segment")
+    supabase.from("stripe_oneoff_segments").select("payment_id, segment"),
+    supabase.from("contractor_departments").select("contractor, department")
   ]);
 
   const rows = (docRes.data ?? []) as (FinanceDoc & { parsed: ParsedPnl | null })[];
@@ -158,6 +159,9 @@ export default async function FinancePage() {
   const bookLines = ((pnlLinesRes.data ?? []) as BookLine[]).map((l) => ({ period: l.period, account: l.account, section: l.section, amount: Number(l.amount) }));
   const bookMonths: BookMonth[] = pnlMonths.map((m) => ({ period: m.period, label: m.label }));
   const deelRows = ((deelRes.data ?? []) as DeelRow[]).map((r) => ({ period: r.period, contractor: r.contractor, amount: Number(r.amount), is_fee: !!r.is_fee }));
+  // What each contractor is for — Mitchell's per-contractor department tags.
+  const contractorDepartments: Record<string, string> = {};
+  for (const d of (deptRes.data ?? []) as { contractor: string; department: string }[]) contractorDepartments[d.contractor] = d.department;
 
   // Vendor detail for the September forecast + explorer. Contractor Payments
   // breaks down by PERSON (from Deel + bank), not the sparse expense-line vendors,
@@ -237,7 +241,7 @@ export default async function FinancePage() {
           <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 px-1 mb-2.5">Money out</div>
           <div className="space-y-5">
             <ExpenseExplorer lines={bookLines} months={bookMonths} vendors={(expRes.data ?? []) as ExplVendor[]} />
-            <DeelContractors rows={deelRows} />
+            <DeelContractors rows={deelRows} departments={contractorDepartments} />
             <PayrollManual initial={(payRes.data ?? []) as PayrollEntry[]} />
             <ExpenseLabels lines={expenseLines} lineInitial={expenseSegments} software={softwareItems as SoftwareRow[]} latestShort={latestShort} />
           </div>

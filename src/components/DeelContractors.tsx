@@ -8,6 +8,8 @@ import { ChevronDown, Eye, EyeOff } from "lucide-react";
 
 export interface DeelRow { period: string; contractor: string; amount: number; is_fee: boolean }
 
+const DEPARTMENTS = ["Unassigned", "SEO", "Website", "Facebook", "Software", "Sales", "Admin"] as const;
+
 function money(n: number): string {
   if (!n) return "—";
   return `${n < 0 ? "-" : ""}$${Math.abs(Math.round(n)).toLocaleString("en-US")}`;
@@ -15,12 +17,22 @@ function money(n: number): string {
 const MLBL: Record<string, string> = { "01": "Jan", "02": "Feb", "03": "Mar", "04": "Apr", "05": "May", "06": "Jun", "07": "Jul", "08": "Aug", "09": "Sep", "10": "Oct", "11": "Nov", "12": "Dec" };
 const label = (p: string) => `${MLBL[p.slice(5, 7)] ?? p.slice(5, 7)} '${p.slice(2, 4)}`;
 
-export function DeelContractors({ rows }: { rows: DeelRow[] }) {
+export function DeelContractors({ rows, departments = {} }: { rows: DeelRow[]; departments?: Record<string, string> }) {
   const [open, setOpen] = useState(false);
   // Same as Payroll & contractors: per-contractor pay hidden by default,
   // aggregate totals (paid total, monthly column totals, fees) stay visible
   // regardless. Not persisted — defaults shut again next load.
   const [revealed, setRevealed] = useState(false);
+  // What each contractor is for — Mitchell tags it, saved per contractor.
+  const [depts, setDepts] = useState<Record<string, string>>(departments);
+  function setDept(contractor: string, department: string) {
+    setDepts((d) => ({ ...d, [contractor]: department }));
+    fetch("/api/finance/contractor-department", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ contractor, department })
+    }).catch(() => {});
+  }
 
   const m = useMemo(() => {
     const months = [...new Set(rows.map((r) => r.period))].sort();
@@ -79,6 +91,7 @@ export function DeelContractors({ rows }: { rows: DeelRow[] }) {
             <thead>
               <tr className="text-slate-400 text-[10px] uppercase tracking-wider border-b border-slate-200">
                 <th className="font-medium pb-1.5 pr-2 text-left sticky left-0 bg-white">Contractor</th>
+                <th className="font-medium pb-1.5 px-2 text-left whitespace-nowrap">For</th>
                 {m.months.map((p) => <th key={p} className="font-medium pb-1.5 px-1.5 text-right whitespace-nowrap">{label(p)}</th>)}
                 <th className="font-medium pb-1.5 pl-2 text-right">Total</th>
               </tr>
@@ -87,6 +100,15 @@ export function DeelContractors({ rows }: { rows: DeelRow[] }) {
               {m.list.map((r) => (
                 <tr key={r.name} className="border-b border-slate-50 last:border-0">
                   <td className="py-1 pr-2 text-slate-700 truncate max-w-[220px] sticky left-0 bg-white">{r.name}</td>
+                  <td className="py-1 px-2">
+                    <select
+                      value={depts[r.name] ?? "Unassigned"}
+                      onChange={(e) => setDept(r.name, e.target.value)}
+                      className={"text-[11px] rounded-lg border px-1.5 py-1 focus:outline-none focus:border-slate-400 " + ((depts[r.name] ?? "Unassigned") === "Unassigned" ? "border-amber-300 bg-amber-50 text-amber-700" : "border-slate-200 bg-white text-slate-700")}
+                    >
+                      {DEPARTMENTS.map((d) => <option key={d} value={d}>{d}</option>)}
+                    </select>
+                  </td>
                   {m.months.map((p) => (
                     <td key={p} className="py-1 px-1.5 text-right tabular-nums text-slate-500">
                       {revealed ? money(r.vals[p] ?? 0) : <span className="text-slate-300 tracking-widest select-none">•••</span>}
@@ -99,11 +121,13 @@ export function DeelContractors({ rows }: { rows: DeelRow[] }) {
               ))}
               <tr className="border-t border-slate-200 font-semibold text-slate-800">
                 <td className="py-1 pr-2 sticky left-0 bg-white">Total contractors</td>
+                <td className="px-2" />
                 {m.months.map((p) => <td key={p} className="py-1 px-1.5 text-right tabular-nums">{money(m.colTotals[p] ?? 0)}</td>)}
                 <td className="py-1 pl-2 text-right tabular-nums">{money(m.grand)}</td>
               </tr>
               <tr className="text-slate-400">
                 <td className="py-1 pr-2 sticky left-0 bg-white">Deel fees</td>
+                <td className="px-2" />
                 {m.months.map((p) => <td key={p} className="py-1 px-1.5 text-right tabular-nums">{money(m.fees[p] ?? 0)}</td>)}
                 <td className="py-1 pl-2 text-right tabular-nums">{money(m.feeGrand)}</td>
               </tr>

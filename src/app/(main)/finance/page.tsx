@@ -29,6 +29,7 @@ import { DeelContractors, type DeelRow } from "@/components/DeelContractors";
 import { computeDefense } from "@/lib/finance-defense";
 import { SurvivalDefense } from "@/components/SurvivalDefense";
 import { CfoRead } from "@/components/CfoRead";
+import { FinanceTabs } from "@/components/FinanceTabs";
 
 // Map a P&L period label ("Aug '26") to a 'YYYY-MM' key.
 const MONTH_NUM: Record<string, number> = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
@@ -192,6 +193,8 @@ export default async function FinancePage() {
         <h1 className="text-2xl font-bold text-slate-900 leading-tight">Finance</h1>
         <span className="text-[10px] font-medium uppercase tracking-wide text-slate-500 bg-slate-100 rounded-full px-2 py-0.5">Private</span>
       </div>
+
+      <FinanceTabs active="overview" />
 
       {/* Daily zone — the read + the numbers behind it, tightened into one group. */}
       <div className="space-y-4">

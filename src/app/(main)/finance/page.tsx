@@ -140,7 +140,18 @@ export default async function FinancePage() {
     .filter((m) => m.period);
   const latestShort = monthLabels.length ? monthLabels[monthLabels.length - 1].slice(0, 3).toLowerCase() : "";
 
-  const breakdown = computeBreakdown({ parsed: latestParsed, expenseSegments, softwareItems, fbRevenueByPeriod, fbCommissionByPeriod, fbExpensesByPeriod, oneOffs: oneOffs.map((o) => ({ id: o.id, date: o.date, amount: o.amount })), oneOffSegments });
+  const deelRows = ((deelRes.data ?? []) as DeelRow[]).map((r) => ({ period: r.period, contractor: r.contractor, amount: Number(r.amount), is_fee: !!r.is_fee }));
+  // What each contractor is for — Facebook or SEO (default SEO). Feeds the split.
+  const contractorDepartments: Record<string, string> = {};
+  for (const d of (deptRes.data ?? []) as { contractor: string; department: string }[]) contractorDepartments[d.contractor] = d.department;
+  // Facebook contractor spend per month = Deel/bank contractors tagged Facebook.
+  const fbContractorsByPeriod: Record<string, number> = {};
+  for (const r of deelRows) {
+    if (r.is_fee) continue;
+    if (contractorDepartments[r.contractor] === "facebook") fbContractorsByPeriod[r.period] = (fbContractorsByPeriod[r.period] ?? 0) + r.amount;
+  }
+
+  const breakdown = computeBreakdown({ parsed: latestParsed, expenseSegments, softwareItems, fbRevenueByPeriod, fbCommissionByPeriod, fbExpensesByPeriod, oneOffs: oneOffs.map((o) => ({ id: o.id, date: o.date, amount: o.amount })), oneOffSegments, fbContractorsByPeriod });
 
   // Learnings & risks: 10-month P&L history + Facebook + software + client concentration.
   const pnlMonths = ((pnlRes.data ?? []) as PnlMonth[]).map((m) => ({
@@ -158,10 +169,6 @@ export default async function FinancePage() {
   // Account-level books, every uploaded month (Nov '25 → Aug '26).
   const bookLines = ((pnlLinesRes.data ?? []) as BookLine[]).map((l) => ({ period: l.period, account: l.account, section: l.section, amount: Number(l.amount) }));
   const bookMonths: BookMonth[] = pnlMonths.map((m) => ({ period: m.period, label: m.label }));
-  const deelRows = ((deelRes.data ?? []) as DeelRow[]).map((r) => ({ period: r.period, contractor: r.contractor, amount: Number(r.amount), is_fee: !!r.is_fee }));
-  // What each contractor is for — Mitchell's per-contractor department tags.
-  const contractorDepartments: Record<string, string> = {};
-  for (const d of (deptRes.data ?? []) as { contractor: string; department: string }[]) contractorDepartments[d.contractor] = d.department;
 
   // Vendor detail for the September forecast + explorer. Contractor Payments
   // breaks down by PERSON (from Deel + bank), not the sparse expense-line vendors,
@@ -232,7 +239,7 @@ export default async function FinancePage() {
             <MrrManual initial={mrrRows as MrrEntry[]} />
             <StripeMissing rev={revenue} sheetNames={mrrRows.map((r) => r.company as string)} />
             <StripeOneOffs oneOffs={oneOffs} segments={oneOffSegments} />
-            <FacebookMonthly months={fbMonthInputs} initial={fbRevenueByPeriod} expensesInitial={fbExpensesByPeriod} commissionInitial={fbCommissionByPeriod} />
+            <FacebookMonthly months={fbMonthInputs} initial={fbRevenueByPeriod} expensesInitial={fbExpensesByPeriod} />
           </div>
         </div>
 

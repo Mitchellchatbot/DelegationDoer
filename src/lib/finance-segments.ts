@@ -90,8 +90,9 @@ export function computeBreakdown(input: {
   fbExpensesByPeriod?: Record<string, number>; // Finance-app FB operating expenses, for the variance check
   oneOffs?: OneOffItem[];                        // one-time Stripe charges
   oneOffSegments?: Record<string, Segment>;      // charge id → seo | facebook (default seo)
+  fbContractorsByPeriod?: Record<string, number>; // Deel/bank contractors tagged Facebook, per period
 }): BusinessBreakdown {
-  const { parsed, expenseSegments = {}, softwareItems = [], fbRevenueByPeriod = {}, fbCommissionByPeriod = {}, fbExpensesByPeriod = {}, oneOffs = [], oneOffSegments = {} } = input;
+  const { parsed, expenseSegments = {}, softwareItems = [], fbRevenueByPeriod = {}, fbExpensesByPeriod = {}, oneOffs = [], oneOffSegments = {}, fbContractorsByPeriod = {} } = input;
   const notes: string[] = [];
 
   if (!parsed || !parsed.periods.length) {
@@ -130,51 +131,53 @@ export function computeBreakdown(input: {
     const period = my ? periodKey(my) : "";
     const hasFbRevenue = period in fbRevenueByPeriod;
 
-    // Facebook-tagged one-off Stripe charges in this month (full/gross). The full
-    // amount is P&L income; the partner's 50% is paid separately (an expense in
-    // the books), so Mitchell keeps 50%. We add the gross to Facebook revenue and
-    // the 50% partner share to Facebook expenses → net +50% to Facebook profit.
+    // Facebook-tagged one-off Stripe charges this month (full/gross). Under the
+    // 50/50 model the gross is Facebook revenue and the partner's half comes out
+    // of the single 50% split below — no separate one-off expense line.
     const fbOneOffGross = round(
       oneOffs.filter((o) => oneOffSegments[o.id] === "facebook" && o.date.slice(0, 7) === period).reduce((s, o) => s + Number(o.amount), 0)
     );
-    const fbOneOffPartner = round(fbOneOffGross * (1 - FB_OWNER_SHARE)); // partner's half (an expense)
+    // Facebook contractors this month = Deel/bank contractors Mitchell tagged
+    // Facebook. A real Facebook cost that used to sit on the SEO side.
+    const fbContractors = round(fbContractorsByPeriod[period] ?? 0);
 
-    // Active if Facebook revenue was entered OR there are Facebook one-offs.
-    const fbActive = hasFbRevenue || fbOneOffGross > 0;
-
-    // Commission = the assigned Facebook line(s) that are the partner commission.
+    // Tagged operating (ex-commission) = tagged FB P&L lines + tagged software.
     const fbCommissionTagged = fbPnlLines.filter((l) => l.label.toLowerCase().includes("commission")).reduce((s, l) => s + l.amount, 0);
-    const fbCommission = fbActive ? fbCommissionTagged : 0;
-    // Tagged operating (ex-commission) = tagged FB P&L lines minus commission + tagged software.
-    const fbTaggedOperating = fbActive ? fbPnlLines.reduce((s, l) => s + l.amount, 0) - fbCommissionTagged + fbSoftware : 0;
-    // TRUE operating = the Finance-app figure (the source of truth). It anchors
-    // Facebook profit so it never shows more than reality; the gap to what's
-    // tagged is a "variance" expense line. Falls back to tagged when not entered.
-    const fbFinanceAppOperating = !fbActive ? 0 : period in fbExpensesByPeriod ? round(fbExpensesByPeriod[period]) : (hasFbRevenue ? fbTaggedOperating : 0);
-    const fbVariance = fbFinanceAppOperating - fbTaggedOperating; // untagged remainder, noted in expenses
-    // Operating includes the partner's 50% of the one-offs (a real payout).
-    const fbOperating = fbFinanceAppOperating + fbOneOffPartner;
+    const fbTaggedOperating = fbPnlLines.reduce((s, l) => s + l.amount, 0) - fbCommissionTagged + fbSoftware;
 
+    // Active if there's Facebook revenue, a Facebook one-off, or FB contractors.
+    const fbActive = hasFbRevenue || fbOneOffGross > 0 || fbContractors > 0;
+
+    // Entered operating (the Finance-app figure) is the source of truth for FB
+    // operating cost, EX contractors; tagged lines are a breakdown of it.
+    const fbFinanceAppOperating = !fbActive ? 0 : period in fbExpensesByPeriod ? round(fbExpensesByPeriod[period]) : fbTaggedOperating;
+    const fbVariance = fbFinanceAppOperating - fbTaggedOperating; // untagged operating remainder
+
+    // All-in Facebook cost, before the partner split: operating + contractors.
+    const fbExpensesAll = fbActive ? fbFinanceAppOperating + fbContractors : 0;
     const fbRevenue = (hasFbRevenue ? round(fbRevenueByPeriod[period]) : 0) + fbOneOffGross;
-    const fbExpenses = fbOperating + fbCommission; // total incl booked commission
-    const fbProfitBeforeCommission = fbRevenue - fbOperating; // the true figure
-    const fbProfit = fbProfitBeforeCommission - fbCommission; // books (ties to P&L)
-    // Accrual commission = the real commission EARNED this month (entered), used
-    // for the "true month" gauge; falls back to the booked commission.
-    const fbAccrualCommission = period in fbCommissionByPeriod ? round(fbCommissionByPeriod[period]) : fbCommission;
-    const fbProfitTrue = fbProfitBeforeCommission - fbAccrualCommission;
+
+    // The 50/50 partner split is taken on the NET, AFTER all Facebook costs.
+    // Mitchell keeps 50%; the partner's commission is the other 50%.
+    const fbProfitBeforeCommission = fbActive ? fbRevenue - fbExpensesAll : 0; // net before the split
+    const fbProfit = round(fbProfitBeforeCommission * FB_OWNER_SHARE);          // Mitchell's 50%
+    const fbCommission = fbProfitBeforeCommission - fbProfit;                   // partner's 50%
+    const fbAccrualCommission = fbCommission;
+    const fbProfitTrue = fbProfit;                                             // true = books here
+    const fbExpenses = fbExpensesAll + fbCommission; // so revenue − expenses = your profit
 
     const beforeOwnerPay = pnlNet + salary;
-    const seoProfit = beforeOwnerPay - fbProfit;      // remainder → ties out (books)
+    const seoProfit = beforeOwnerPay - fbProfit;      // remainder
     const seoRevenue = income - fbRevenue;
     const seoExpenses = seoRevenue - seoProfit;
 
-    // Facebook operating expense breakdown: tagged lines + software + the untagged
-    // variance, so it sums to operating and profit never shows more than true.
+    // Facebook expense breakdown: tagged lines + software + other operating +
+    // contractors + the partner's 50%. Sums to fbExpenses.
     const fbLines: LinePart[] = fbActive ? fbPnlLines.filter((l) => !l.label.toLowerCase().includes("commission")).map((l) => ({ ...l })) : [];
     if (fbActive && fbSoftware) fbLines.push({ label: "Software (tagged)", amount: fbSoftware });
-    if (fbActive && fbOneOffPartner) fbLines.push({ label: "Partner share of one-offs (50%)", amount: fbOneOffPartner });
-    if (fbActive && fbVariance) fbLines.push({ label: "Untagged Facebook costs (variance)", amount: fbVariance });
+    if (fbActive && fbVariance) fbLines.push({ label: "Other operating", amount: fbVariance });
+    if (fbActive && fbContractors) fbLines.push({ label: "Contractors (Facebook)", amount: fbContractors });
+    if (fbActive && fbCommission) fbLines.push({ label: "Partner commission (50% of net)", amount: fbCommission });
     fbLines.sort((a, b) => b.amount - a.amount);
 
     // SEO expense breakdown = the other P&L leaf lines (salary removed, software
@@ -199,7 +202,7 @@ export function computeBreakdown(input: {
   const r = latest.row;
 
   if (!r.hasFbRevenue) notes.push(`No Facebook revenue entered for ${r.label} yet — enter it below (from the Finance app) so the split is right.`);
-  notes.push("Facebook revenue = Finance app; Facebook expenses = the P&L lines + software you tag Facebook; commission counts as the P&L booked it. Both sides sum to your P&L net + your salary.");
+  notes.push("Facebook profit = 50% of (Facebook revenue − all Facebook costs: operating + software + tagged contractors). The partner's commission is the other 50%. SEO & website is the remainder, so both sides sum to your P&L net + your salary.");
 
   return {
     hasData: true,

@@ -6,9 +6,10 @@ import { isOwner } from "@/lib/access";
 
 export const dynamic = "force-dynamic";
 
-// Owner-only: what department each contractor belongs to. Keyed by contractor
-// name (matches deel_payments.contractor).
-export const DEPARTMENTS = ["Unassigned", "SEO", "Website", "Facebook", "Software", "Sales", "Admin"] as const;
+// Owner-only: which side each contractor is on — Facebook or SEO (default SEO).
+// Keyed by contractor name (matches deel_payments.contractor). Feeds the
+// Facebook vs SEO split: Facebook contractors roll into Facebook expenses.
+export const DEPARTMENTS = ["facebook", "seo"] as const;
 
 async function requireOwner(): Promise<{ ok: true } | { ok: false; res: NextResponse }> {
   try {

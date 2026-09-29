@@ -11,7 +11,6 @@ import { PayrollManual, type PayrollEntry } from "@/components/PayrollManual";
 import { StripeMissing } from "@/components/StripeMissing";
 import { MrrManual, type MrrEntry } from "@/components/MrrManual";
 import { FacebookRevenue } from "@/components/FacebookRevenue";
-import { NextMonthBudget } from "@/components/NextMonthBudget";
 import { getFinanceOverview, type FinanceOverview } from "@/lib/finance-overview";
 import { ScaleChat } from "@/components/ScaleChat";
 import { getStripeRevenue, getStripeOneOffs, type OneOffPayment } from "@/lib/stripe";
@@ -29,7 +28,10 @@ import { DeelContractors, type DeelRow } from "@/components/DeelContractors";
 import { computeDefense } from "@/lib/finance-defense";
 import { SurvivalDefense } from "@/components/SurvivalDefense";
 import { CfoRead } from "@/components/CfoRead";
-import { FinanceTabs } from "@/components/FinanceTabs";
+import { FinanceTabsView } from "@/components/FinanceTabsView";
+import { SegmentTrend } from "@/components/SegmentTrend";
+import { ProjectionsView } from "@/components/ProjectionsView";
+import { projectFacebook, type FbProjection } from "@/lib/finance-projections";
 
 // Map a P&L period label ("Aug '26") to a 'YYYY-MM' key.
 const MONTH_NUM: Record<string, number> = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
@@ -85,7 +87,7 @@ export default async function FinancePage() {
     supabase.from("finance_documents").select("id, label, filename, content_type, size_bytes, uploaded_at, parsed").order("uploaded_at", { ascending: false }),
     getFinanceOverview(),
     getStripeRevenue().catch(() => null),
-    supabase.from("mrr_entries").select("id, company, mrr, status, subscription_day, satisfaction, note, rank").order("rank", { ascending: true }),
+    supabase.from("mrr_entries").select("id, company, mrr, status, subscription_day, satisfaction, note, rank, segment").order("rank", { ascending: true }),
     supabase.from("expense_line_items").select("account, vendor, month, amount"),
     supabase.from("payroll_entries").select("id, name, role, status, scale, rate, note, rank").order("rank", { ascending: true }),
     supabase.from("expense_estimates").select("account, amount"),
@@ -195,6 +197,19 @@ export default async function FinancePage() {
     seoRevenue: breakdown.seo.revenue
   });
 
+  // Projections: next-month forecast — Facebook run-rate (your 50%) + SEO retainers.
+  const mrrForProj = (mrrRows as { company: string; mrr: number; status?: string; segment?: string }[])
+    .map((r) => ({ company: String(r.company ?? ""), mrr: Number(r.mrr) || 0, status: String(r.status ?? "active"), segment: (r.segment ?? "seo") as "seo" | "facebook" }));
+  const seoClients = mrrForProj.filter((r) => r.segment === "seo" && r.status !== "churned" && r.mrr > 0).sort((a, b) => b.mrr - a.mrr);
+  const seoTotal = seoClients.reduce((s, r) => s + r.mrr, 0);
+  const fbProjection: FbProjection | null = fbResult.ok ? projectFacebook(fbResult.data) : null;
+  const projectedRevenue = (fbProjection?.yourTotal ?? 0) + seoTotal;
+  const expenseTrend = overview.months.map((label, i) => ({ label, value: overview.expenses[i] ?? 0 })).slice(-6);
+
+  // Per-month Facebook & SEO lines for the segment tabs (latest first + trend).
+  const fbMonths = breakdown.months.map((m) => ({ label: m.label, revenue: m.fbRevenue, expenses: m.fbExpenses, profit: m.fbProfitTrue }));
+  const seoMonths = breakdown.months.map((m) => ({ label: m.label, revenue: m.seoRevenue, expenses: m.seoExpenses, profit: m.seoProfit }));
+
   return (
     <div className={inter.className + " space-y-6 max-w-5xl mx-auto text-slate-900"}>
       <div className="flex items-center gap-3">
@@ -205,73 +220,69 @@ export default async function FinancePage() {
         <span className="text-[10px] font-medium uppercase tracking-wide text-slate-500 bg-slate-100 rounded-full px-2 py-0.5">Private</span>
       </div>
 
-      <FinanceTabs active="overview" />
-
-      {/* Daily zone — the read + the numbers behind it, tightened into one group. */}
-      <div className="space-y-4">
-        {/* Start here every day: survival status + today's moves, one read. */}
-        <CfoRead defense={defense} learnings={learnings} />
-
-        {/* The defense playbook behind the read — collapsed, open when you act. */}
-        <SurvivalDefense data={defense} />
-
-        {/* The two sides of one P&L, side by side: Facebook vs SEO & website. */}
-        <BusinessBreakdownView data={breakdown} />
-
-        {/* Learnings & risks: growth, software, Facebook, concentration, projections. */}
-        <LearningsRisks data={learnings} />
-      </div>
-
-      {/* The cost-cutting brain — reasons over the P&L, software and payroll. */}
-      <ScaleChat
-        title="Ask your finances"
-        subtitle="What should you cut? It reads your P&L, software, payroll and MRR."
-        starters={FINANCE_STARTERS}
-        opening={buildFinanceOpening(overview)}
-      />
-
-      {/* Manage — grouped into daily-use buckets so it reads at a glance. */}
-      <div className="pt-2 space-y-7">
-        {/* Money in — the revenue sources. */}
-        <div>
-          <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 px-1 mb-2.5">Money in</div>
+      <FinanceTabsView
+        overview={
+          <div className="space-y-4">
+            {/* Start here every day: survival status + today's moves, one read. */}
+            <CfoRead defense={defense} learnings={learnings} />
+            <SurvivalDefense data={defense} />
+            {/* The two sides of one P&L, side by side: Facebook vs SEO & website. */}
+            <BusinessBreakdownView data={breakdown} />
+            <LearningsRisks data={learnings} />
+            {/* The cost-cutting brain — reasons over the P&L, software and payroll. */}
+            <ScaleChat
+              title="Ask your finances"
+              subtitle="What should you cut? It reads your P&L, software, payroll and MRR."
+              starters={FINANCE_STARTERS}
+              opening={buildFinanceOpening(overview)}
+            />
+          </div>
+        }
+        facebook={
           <div className="space-y-5">
+            {/* Latest month first, then month-by-month. Your 50% of net. */}
+            <SegmentTrend title="Facebook" accent="blue" months={fbMonths} profitLabel="Your profit (50%)" note="net of all FB costs incl. tagged contractors" />
+            {/* Live per-client fee run-rate from the Finance app + true net headline. */}
+            <FacebookRevenue result={fbResult} netProfit={breakdown.hasData ? breakdown.fbProfitTrue : null} netMonth={latestPnl?.period ?? null} />
+            {/* Enter Facebook revenue & operating expense per month. */}
+            <FacebookMonthly months={fbMonthInputs} initial={fbRevenueByPeriod} expensesInitial={fbExpensesByPeriod} />
+            {/* Tag one-off Stripe charges Facebook (setup/Meta) so they count here. */}
+            <StripeOneOffs oneOffs={oneOffs} segments={oneOffSegments} />
+          </div>
+        }
+        seo={
+          <div className="space-y-5">
+            <SegmentTrend title="SEO & website" accent="emerald" months={seoMonths} profitLabel="Profit" note="the remainder of the P&L after Facebook" />
             <MrrManual initial={mrrRows as MrrEntry[]} />
             <StripeMissing rev={revenue} sheetNames={mrrRows.map((r) => r.company as string)} />
-            <StripeOneOffs oneOffs={oneOffs} segments={oneOffSegments} />
-            <FacebookMonthly months={fbMonthInputs} initial={fbRevenueByPeriod} expensesInitial={fbExpensesByPeriod} />
           </div>
-        </div>
-
-        {/* Money out — where it goes + the Facebook/SEO labels. */}
-        <div>
-          <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 px-1 mb-2.5">Money out</div>
+        }
+        expenses={
           <div className="space-y-5">
             <ExpenseExplorer lines={bookLines} months={bookMonths} vendors={(expRes.data ?? []) as ExplVendor[]} />
             <DeelContractors rows={deelRows} departments={contractorDepartments} />
             <PayrollManual initial={(payRes.data ?? []) as PayrollEntry[]} />
             <ExpenseLabels lines={expenseLines} lineInitial={expenseSegments} software={softwareItems as SoftwareRow[]} latestShort={latestShort} />
-          </div>
-        </div>
-
-        {/* Plan & books — the forecast + the full ledger. */}
-        <div>
-          <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 px-1 mb-2.5">Plan &amp; books</div>
-          <div className="space-y-5">
-            <NextMonthBudget parsed={latestParsed} estimates={estimates} defaultRevenue={latestPnl?.income ?? 0} vendors={budgetVendors} months={bookMonths} />
             <BooksByMonth lines={bookLines} months={bookMonths} />
-          </div>
-        </div>
-
-        {/* Reference — read-only views + source files. */}
-        <div>
-          <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 px-1 mb-2.5">Reference</div>
-          <div className="space-y-5">
-            <FacebookRevenue result={fbResult} netProfit={breakdown.hasData ? breakdown.fbProfitTrue : null} netMonth={latestPnl?.period ?? null} />
             <FinancePanel initialDocuments={rows.map(({ parsed, ...d }) => d)} />
           </div>
-        </div>
-      </div>
+        }
+        projections={
+          <ProjectionsView
+            fb={fbProjection}
+            fbUnavailable={!fbResult.ok}
+            seoClients={seoClients}
+            seoTotal={seoTotal}
+            projectedRevenue={projectedRevenue}
+            parsed={latestParsed}
+            estimates={estimates}
+            budgetVendors={budgetVendors}
+            bookMonths={bookMonths}
+            mrr={mrrForProj}
+            trend={expenseTrend}
+          />
+        }
+      />
     </div>
   );
 }

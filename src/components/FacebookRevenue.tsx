@@ -66,7 +66,13 @@ export function FacebookRevenueLoading() {
   );
 }
 
-export function FacebookRevenue({ result }: { result: FacebookRevenueResult }) {
+// netProfit / netMonth come from the Facebook vs SEO breakdown (computeBreakdown
+// → fbProfitTrue for the latest closed P&L month). It's the reconciled, ties-to-
+// P&L figure: net of Facebook operating costs AND the 50% partner split, and it
+// already folds in any Stripe one-off tagged Facebook. We lead with it so this
+// card shows real profit, not just the 50% fee share, and keep the live Meta
+// run-rate as a secondary "this month so far" pulse.
+export function FacebookRevenue({ result, netProfit = null, netMonth = null }: { result: FacebookRevenueResult; netProfit?: number | null; netMonth?: string | null }) {
   if (!result.ok) {
     return (
       <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
@@ -75,7 +81,7 @@ export function FacebookRevenue({ result }: { result: FacebookRevenueResult }) {
       </div>
     );
   }
-  return <RevenueCard data={result.data} />;
+  return <RevenueCard data={result.data} netProfit={netProfit} netMonth={netMonth} />;
 }
 
 // Mitchell keeps 50% of the Facebook side — there's a partner on it — so this
@@ -87,10 +93,12 @@ function dayOfMonth(d: string | null): number | null {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
-function RevenueCard({ data }: { data: FacebookRevenueData }) {
+function RevenueCard({ data, netProfit, netMonth }: { data: FacebookRevenueData; netProfit: number | null; netMonth: string | null }) {
   const [open, setOpen] = useState(false);
   const { current, delta, asOf } = data;
   const month = monthName(data.period);
+  const hasNet = netProfit !== null && netProfit !== undefined;
+  const netMonthName = netMonth ? monthName(netMonth) : "";
 
   // His profit so far = 50% of the gross Facebook revenue (fees + setup).
   const profit = current.revenue * OWNER_SHARE;
@@ -114,20 +122,33 @@ function RevenueCard({ data }: { data: FacebookRevenueData }) {
           <div className="min-w-0">
             <Title provisional={data.provisional} />
             <div className="text-[12px] text-slate-500 mt-1 max-w-prose">
-              Your profit after the 50% partner split — management + setup fees on managed Meta spend. Separate from MRR.
+              {hasNet
+                ? "Your true Facebook profit — net of Facebook operating costs and the 50% partner split, including any Stripe one-off you tag Facebook. The per-client table below is this month's live fee run-rate."
+                : "Your profit after the 50% partner split — management + setup fees on managed Meta spend. Separate from MRR."}
             </div>
           </div>
         </div>
         <div className="text-right shrink-0">
-          <div className="text-[11px] text-slate-400">{month} · your 50%{data.provisional ? " so far" : ""}</div>
-          <div className="text-[28px] font-bold tabular-nums text-emerald-600 leading-none mt-0.5">{usd(profit)}</div>
-          <div className="text-[11px] text-slate-400 mt-1">of {usd(current.revenue)} gross</div>
-          {canEstimate && (
+          {hasNet ? (<>
+            <div className="text-[11px] text-slate-400">{netMonthName} · your true profit</div>
+            <div className={"text-[28px] font-bold tabular-nums leading-none mt-0.5 " + ((netProfit as number) < 0 ? "text-rose-500" : "text-emerald-600")}>{usd(netProfit as number)}</div>
+            <div className="text-[11px] text-slate-400 mt-1">net of FB costs + 50% partner · incl. tagged Stripe one-offs</div>
             <div className="text-[12px] mt-1.5">
-              <span className="text-slate-400">Est. month-end </span>
-              <span className="font-semibold tabular-nums text-slate-900">{usd(estMonthEndProfit)}</span>
+              <span className="text-slate-400">{month} fees so far </span>
+              <span className="font-semibold tabular-nums text-slate-900">{usd(profit)}</span>
+              <span className="text-slate-400"> (before costs)</span>
             </div>
-          )}
+          </>) : (<>
+            <div className="text-[11px] text-slate-400">{month} · your 50%{data.provisional ? " so far" : ""}</div>
+            <div className="text-[28px] font-bold tabular-nums text-emerald-600 leading-none mt-0.5">{usd(profit)}</div>
+            <div className="text-[11px] text-slate-400 mt-1">of {usd(current.revenue)} gross</div>
+            {canEstimate && (
+              <div className="text-[12px] mt-1.5">
+                <span className="text-slate-400">Est. month-end </span>
+                <span className="font-semibold tabular-nums text-slate-900">{usd(estMonthEndProfit)}</span>
+              </div>
+            )}
+          </>)}
         </div>
       </button>
 
@@ -169,7 +190,7 @@ function RevenueCard({ data }: { data: FacebookRevenueData }) {
       )}
 
       <div className="mt-5 pt-4 border-t border-slate-100">
-        <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 mb-3">Your Facebook profit (50%) — last {data.months.length} months</div>
+        <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 mb-3">Your Facebook fees (50%, before costs) — last {data.months.length} months</div>
         <ProfitBars months={data.months} current={data.period} />
       </div>
 

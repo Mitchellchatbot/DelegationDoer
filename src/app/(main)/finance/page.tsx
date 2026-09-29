@@ -260,7 +260,7 @@ export default async function FinancePage() {
         <div>
           <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 px-1 mb-2.5">Reference</div>
           <div className="space-y-5">
-            <FacebookRevenue result={fbResult} />
+            <FacebookRevenue result={fbResult} netProfit={breakdown.hasData ? breakdown.fbProfitTrue : null} netMonth={latestPnl?.period ?? null} />
             <FinancePanel initialDocuments={rows.map(({ parsed, ...d }) => d)} />
           </div>
         </div>

@@ -106,16 +106,57 @@ end $$;
 
 -- Verification grid. RAISE NOTICE is invisible in the Supabase SQL editor, so
 -- anything the operator needs to READ has to be a SELECT, and it has to be the
--- LAST statement in the file. Expect a row for Abeer alongside Samir's own.
-select
-  u.name                  as grantee,
-  u.email                 as grantee_email,
-  ia.inbox_email          as granted_inbox,
-  ia.missive_account_id,
-  case when p.missive_account_id is null then 'no' else 'yes' end as inbox_private,
-  ia.created_at
-from public.inbox_assignments ia
-join public.users u on u.id = ia.user_id
-left join public.inbox_privacy p on p.missive_account_id = ia.missive_account_id
-where lower(ia.inbox_email) = 'samir@scaledai.org'
-order by ia.created_at desc;
+-- LAST statement in the file.
+--
+-- Section 1 fires only in the one case where this grant changes behaviour
+-- beyond "Abeer can read Samir's mail": the email-draft approve route
+-- (src/app/api/email-drafts/[id]/approve/route.ts) falls back to a user's
+-- OLDEST inbox_assignment to decide the From: account when a draft has no
+-- explicit account_id. This new row sorts LAST, so it is inert for anyone who
+-- already has an assignment — but if it is Abeer's ONLY one it becomes his
+-- oldest, and his unattributed drafts would go out AS samir@.
+-- Section 2 = who can now read Samir's inbox (expect Abeer + Samir).
+-- Section 3 = Abeer's own inboxes.
+select sort_key, section, person, inbox, missive_account_id, created_at
+from (
+  select 0 as sort_key,
+         '!! CHECK' as section,
+         'samir@ is Abeer''s ONLY inbox assignment, so the email-draft send-from fallback would use it: drafts authored or approved by Abeer with no explicit account would send AS samir@. Give Abeer an assignment to his own inbox (older row wins), or set the draft account explicitly.' as person,
+         null::text as inbox,
+         null::text as missive_account_id,
+         null::timestamptz as created_at
+   where (select count(*)
+            from public.inbox_assignments ia
+            join public.users u on u.id = ia.user_id
+           where lower(u.email) = 'aiden@scaledai.org') = 1
+     and exists (select 1
+                   from public.inbox_assignments ia
+                   join public.users u on u.id = ia.user_id
+                  where lower(u.email) = 'aiden@scaledai.org'
+                    and lower(ia.inbox_email) = 'samir@scaledai.org')
+
+  union all
+
+  select 1,
+         'can read samir@',
+         u.name || ' <' || u.email || '>',
+         ia.inbox_email,
+         ia.missive_account_id,
+         ia.created_at
+    from public.inbox_assignments ia
+    join public.users u on u.id = ia.user_id
+   where lower(ia.inbox_email) = 'samir@scaledai.org'
+
+  union all
+
+  select 2,
+         'abeer''s inboxes',
+         u.name || ' <' || u.email || '>',
+         ia.inbox_email,
+         ia.missive_account_id,
+         ia.created_at
+    from public.inbox_assignments ia
+    join public.users u on u.id = ia.user_id
+   where lower(u.email) = 'aiden@scaledai.org'
+) report
+order by sort_key, created_at;

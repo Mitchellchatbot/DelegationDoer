@@ -15,7 +15,10 @@ export function FacebookMonthly({ months, initial, expensesInitial, commissionIn
   const [exp, setExp] = useState<Record<string, number>>(expensesInitial);
   const [comm, setComm] = useState<Record<string, number>>(commissionInitial);
   const [saving, setSaving] = useState<string | null>(null);
-  const [open, setOpen] = useState(false);
+  // Starts open: this renders inside the finance page's side sheet, which the
+  // user already opened deliberately from the Manage menu. Collapsing it again
+  // would just cost a second click.
+  const [open, setOpen] = useState(true);
 
   const store: Record<"revenue" | "expenses" | "commission", (u: (p: Record<string, number>) => Record<string, number>) => void> = { revenue: setRev, expenses: setExp, commission: setComm };
   async function save(period: string, field: "revenue" | "expenses" | "commission", raw: string) {

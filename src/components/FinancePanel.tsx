@@ -28,7 +28,10 @@ function isSheet(ct: string | null): boolean {
 }
 
 export function FinancePanel({ initialDocuments }: { initialDocuments: FinanceDoc[] }) {
-  const [open, setOpen] = useState(false);
+  // Starts open: this renders inside the finance page's side sheet, which the
+  // user already opened deliberately from the Manage menu. Collapsing it again
+  // would just cost a second click.
+  const [open, setOpen] = useState(true);
   const [docs, setDocs] = useState<FinanceDoc[]>(initialDocuments);
   const [uploading, setUploading] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);

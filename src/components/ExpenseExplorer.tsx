@@ -41,7 +41,8 @@ function Spark({ vals }: { vals: number[] }) {
 }
 
 export function ExpenseExplorer({ lines, months, vendors }: { lines: ExplLine[]; months: ExplMonth[]; vendors: ExplVendor[] }) {
-  const [cardOpen, setCardOpen] = useState(false);
+  // Starts open: rendered inside the finance sheet the user already opened.
+  const [cardOpen, setCardOpen] = useState(true);
   const [open, setOpen] = useState<Record<string, boolean>>({});
 
   const model = useMemo(() => {

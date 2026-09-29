@@ -16,7 +16,10 @@ const MLBL: Record<string, string> = { "01": "Jan", "02": "Feb", "03": "Mar", "0
 const label = (p: string) => `${MLBL[p.slice(5, 7)] ?? p.slice(5, 7)} '${p.slice(2, 4)}`;
 
 export function DeelContractors({ rows }: { rows: DeelRow[] }) {
-  const [open, setOpen] = useState(false);
+  // Starts open: this renders inside the finance page's side sheet, which the
+  // user already opened deliberately from the Manage menu. Collapsing it again
+  // would just cost a second click.
+  const [open, setOpen] = useState(true);
   // Same as Payroll & contractors: per-contractor pay hidden by default,
   // aggregate totals (paid total, monthly column totals, fees) stay visible
   // regardless. Not persisted — defaults shut again next load.

@@ -33,7 +33,10 @@ function money(n: number): string { return `$${Math.round(n).toLocaleString("en-
 export function PayrollManual({ initial }: { initial: PayrollEntry[] }) {
   const [rows, setRows] = useState<PayrollEntry[]>(initial);
   const [adding, setAdding] = useState(false);
-  const [open, setOpen] = useState(false);
+  // Starts open: this renders inside the finance page's side sheet, which the
+  // user already opened deliberately from the Manage menu. Collapsing it again
+  // would just cost a second click.
+  const [open, setOpen] = useState(true);
   // Per-person pay is masked by default on every load — someone using this
   // account who isn't Mitchell (e.g. sharing the login) still sees the
   // aggregate totals below, never an individual rate, unless this is

@@ -33,7 +33,10 @@ function Toggle({ value, onChange }: { value: Seg; onChange: (s: Seg) => void })
 }
 
 export function StripeOneOffs({ oneOffs, segments }: { oneOffs: OneOffPayment[]; segments: Record<string, Seg> }) {
-  const [open, setOpen] = useState(false);
+  // Starts open: this renders inside the finance page's side sheet, which the
+  // user already opened deliberately from the Manage menu. Collapsing it again
+  // would just cost a second click.
+  const [open, setOpen] = useState(true);
   const [seg, setSeg] = useState<Record<string, Seg>>(segments);
 
   const months = useMemo(() => [...new Set(oneOffs.map((o) => monthKey(o.date)))].sort().reverse(), [oneOffs]);

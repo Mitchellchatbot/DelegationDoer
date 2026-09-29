@@ -21,7 +21,10 @@ export function ExpenseLabels({ lines, lineInitial, software, latestShort }: {
   software: SoftwareRow[];
   latestShort: string; // e.g. "aug"
 }) {
-  const [open, setOpen] = useState(false);
+  // Starts open: this renders inside the finance page's side sheet, which the
+  // user already opened deliberately from the Manage menu. Collapsing it again
+  // would just cost a second click.
+  const [open, setOpen] = useState(true);
   const [lineSeg, setLineSeg] = useState<Record<string, Segment>>(lineInitial);
   const [swSeg, setSwSeg] = useState<Record<string, Segment>>(() => {
     const m: Record<string, Segment> = {};

@@ -36,7 +36,10 @@ export function StripeMissing({
   rev: RevenueSummary | null | undefined;
   sheetNames: string[];
 }) {
-  const [open, setOpen] = useState(false);
+  // Starts open: this renders inside the finance page's side sheet, which the
+  // user already opened deliberately from the Manage menu. Collapsing it again
+  // would just cost a second click.
+  const [open, setOpen] = useState(true);
   if (!rev) return null;
   const tokenSets = sheetNames.map(keyTokens);
   const norms = new Set(sheetNames.map((s) => s.toLowerCase().replace(/[^a-z0-9]/g, "")));

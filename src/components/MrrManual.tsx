@@ -35,7 +35,10 @@ export function MrrManual({ initial }: { initial: MrrEntry[] }) {
   const [saving, setSaving] = useState<Record<string, boolean>>({});
   const [adding, setAdding] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
-  const [open, setOpen] = useState(false);
+  // Starts open: this renders inside the finance page's side sheet, which the
+  // user already opened deliberately from the Manage menu. Collapsing it again
+  // would just cost a second click.
+  const [open, setOpen] = useState(true);
   const [newCompany, setNewCompany] = useState("");
   const [newMrr, setNewMrr] = useState("");
 

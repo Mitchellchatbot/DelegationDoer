@@ -88,7 +88,10 @@ function dayOfMonth(d: string | null): number | null {
 }
 
 function RevenueCard({ data }: { data: FacebookRevenueData }) {
-  const [open, setOpen] = useState(false);
+  // Starts open: this renders inside the finance page's side sheet, which the
+  // user already opened deliberately from the Manage menu. Collapsing it again
+  // would just cost a second click.
+  const [open, setOpen] = useState(true);
   const { current, delta, asOf } = data;
   const month = monthName(data.period);
 

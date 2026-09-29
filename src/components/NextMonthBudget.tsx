@@ -108,7 +108,10 @@ export function NextMonthBudget({ parsed, estimates, defaultRevenue = 0, vendors
 
   const [oneOffName, setOneOffName] = useState("");
   const [oneOffAmt, setOneOffAmt] = useState("");
-  const [open, setOpen] = useState(false);
+  // Starts open: this renders inside the finance page's side sheet, which the
+  // user already opened deliberately from the Manage menu. Collapsing it again
+  // would just cost a second click.
+  const [open, setOpen] = useState(true);
 
   if (!built || built.lines.length === 0) return null;
   const { lines, lastMonthLabel, thisMonthTotal } = built;

@@ -217,13 +217,13 @@ export function FinanceRoom(props: FinanceRoomProps) {
   ];
 
   return (
-    <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_200px] gap-5 items-start text-slate-900">
+    <div className="text-slate-900">
       <div className="min-w-0 space-y-5">
 
         {/* ── command bar: one period control for the whole page ── */}
         <div
           className="sticky z-20 -mx-1 px-1 pt-1 pb-2"
-          style={{ top: 68, background: "linear-gradient(#F8FAFC 72%, rgba(248,250,252,0))" }}
+          style={{ top: 84, background: "linear-gradient(#F8FAFC 72%, rgba(248,250,252,0))" }}
         >
           <div className="card px-3 py-2.5 flex items-center gap-3 flex-wrap">
             <div className="flex items-center gap-1 relative">
@@ -335,6 +335,22 @@ export function FinanceRoom(props: FinanceRoomProps) {
                 )}
               </div>
             </div>
+          </div>
+
+          <div
+            className="card mt-2 px-2 py-1.5 flex items-center gap-1 overflow-x-auto [&::-webkit-scrollbar]:hidden"
+            style={{ scrollbarWidth: "none" }}
+          >
+            <span className="shrink-0 text-[10px] uppercase tracking-widest text-muted font-semibold px-1.5">Jump</span>
+            {sections.map((sec) => (
+              <a
+                key={sec.id}
+                href={`#${sec.id}`}
+                className="shrink-0 px-2.5 py-1 rounded-full text-[11.5px] text-muted hover:bg-surface2 hover:text-ink transition-colors whitespace-nowrap"
+              >
+                {sec.label}
+              </a>
+            ))}
           </div>
         </div>
 
@@ -558,30 +574,11 @@ export function FinanceRoom(props: FinanceRoomProps) {
         <OutlookCard learnings={learnings} />
       </div>
 
-      {/* ── jump rail ── */}
-      <aside className="hidden xl:block sticky top-[84px]">
-        <div className="card overflow-hidden">
-          <div className="px-4 pt-3.5 pb-2">
-            <span className="inline-flex items-center gap-1.5 text-[10px] uppercase tracking-widest font-semibold text-muted">
-              <Compass className="w-3 h-3" />Jump to
-            </span>
-          </div>
-          <div className="px-2 pb-3 space-y-0.5">
-            {sections.map((s) => (
-              <a key={s.id} href={`#${s.id}`}
-                 className="block px-2.5 py-1.5 rounded-lg text-[11.5px] text-muted hover:bg-surface2 hover:text-ink transition-colors">
-                {s.label}
-              </a>
-            ))}
-          </div>
-        </div>
-      </aside>
-
       {/* ── side sheet: an account, or one of the editor panels ── */}
       {(account || panel) && (
         <div className="fixed inset-0 z-[70]">
           <div className="absolute inset-0 bg-slate-900/40" onClick={closeSheet} />
-          <div className="absolute right-0 top-0 h-full w-full max-w-[560px] bg-surface border-l border-border shadow-lift overflow-auto">
+          <div className="absolute right-0 top-0 h-full w-full sm:w-[min(94vw,980px)] bg-surface border-l border-border shadow-lift overflow-auto">
             <div className="sticky top-0 bg-surface/95 backdrop-blur border-b border-border px-5 py-3.5 flex items-start gap-3 z-10">
               <div className="min-w-0 flex-1">
                 <div className="text-[10px] uppercase tracking-widest text-muted font-semibold">

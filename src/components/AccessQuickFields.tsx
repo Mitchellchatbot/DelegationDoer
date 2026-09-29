@@ -9,7 +9,7 @@ import {
   ZAPIER_MODE_KEY, CRM_MODE_KEY, CALENDLY_MODE_KEY, EIN_KEY, AD_ACCOUNT_ID_KEY, MONTHLY_SPEND_KEY,
   LANDING_PAGE_KEY, TYPEFORM_LINK_KEY, ACCOUNT_METRICS_KEY, CITIES_KEY,
   TRUST_SUBMITTED_KEY, TRUST_ACCEPTED_KEY, CTM_GRANTED_KEY, CAMPAIGN_LOADED_KEY,
-  SLACK_INVITE_KEY, TEAM_ADDED_KEY,
+  SLACK_CHANNELS_KEY, TEAM_ADDED_KEY, parseChannels,
   type OnboardingState, type EntryValue
 } from "@/lib/fb-onboarding";
 
@@ -87,8 +87,8 @@ export function AccessQuickFields({
       </div>
 
       <div className="text-[10px] font-medium uppercase tracking-wide text-muted mt-2 mb-1.5">Slack</div>
-      <div className="grid grid-cols-2 gap-1.5">
-        <QuickInput label="Slack invite link" value={str(s, SLACK_INVITE_KEY)} canEdit={canEdit} placeholder="https://join.slack.com/…" url onSave={(v) => set(SLACK_INVITE_KEY, v)} />
+      <div className="space-y-1.5">
+        <ChannelChips channels={parseChannels(s[SLACK_CHANNELS_KEY]?.v)} />
         <QuickCheck label="Team added to channels" on={isOn(s, TEAM_ADDED_KEY)} canEdit={canEdit} onToggle={() => set(TEAM_ADDED_KEY, !isOn(s, TEAM_ADDED_KEY))} />
       </div>
     </div>
@@ -126,6 +126,56 @@ function ModePill({
       <span className="text-[10px] uppercase tracking-wide text-muted">{label}</span>
       <span className={cn("text-xs font-medium", isGranted ? "text-ok" : isOurAccount ? "text-accent" : "text-muted")}>{text}</span>
     </button>
+  );
+}
+
+// One chip per channel. A chip with a link opens it; one without copies the
+// name, because that is what you paste into Slack's jump-to. Both affordances
+// already exist elsewhere — this is the card-sized version of them.
+function ChannelChips({ channels }: { channels: { name: string; url: string }[] }) {
+  if (channels.length === 0) {
+    return <div className="text-[11px] text-muted/70 italic">No channels listed — add them on the Notifications card.</div>;
+  }
+  return (
+    <div className="flex flex-wrap gap-1">
+      {channels.map((c, i) => {
+        const href = toSafeAbsoluteHref(c.url);
+        const label = c.name || c.url;
+        const cls = "inline-flex items-center gap-1 max-w-full rounded-md border border-border bg-surface2 px-1.5 py-0.5 font-mono text-[11px] text-ink/80 hover:border-accent/40 hover:text-accent transition-colors";
+        if (href) {
+          return (
+            <a
+              key={i}
+              href={href}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(e) => e.stopPropagation()}
+              title={c.url}
+              aria-label={`Open #${label} in Slack (opens in new tab)`}
+              className={cls}
+            >
+              <span className="truncate">#{label}</span>
+              <ExternalLink className="w-2.5 h-2.5 shrink-0" />
+            </a>
+          );
+        }
+        return (
+          <button
+            key={i}
+            type="button"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              navigator.clipboard.writeText(label).then(() => toast.success(`Copied ${label}`), () => toast.error("Couldn't copy"));
+            }}
+            title="Copy channel name"
+            className={cn(cls, "cursor-copy")}
+          >
+            <span className="truncate">#{label}</span>
+          </button>
+        );
+      })}
+    </div>
   );
 }
 

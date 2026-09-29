@@ -35,6 +35,10 @@ interface Check { key: string; label: string; hint?: string; optional?: boolean 
 // field out of accessStatus's cleared test — it still renders and still
 // saves, it just never holds the item back.
 interface TextInput { key: string; label: string; placeholder?: string; url?: boolean; optional?: boolean }
+// A variable-length list of named links. Stored as one JSON string rather
+// than indexed keys because the count genuinely varies per client — some
+// have two channels, some six — and indexed keys leave holes on delete.
+interface ListInput { key: string; label: string; blurb?: string }
 
 export interface AccessItem {
   id: string;
@@ -43,7 +47,11 @@ export interface AccessItem {
   choice?: Choice;
   checks: Check[];
   inputs?: TextInput[];
+  lists?: ListInput[];
 }
+
+// Declared above ACCESS_ITEMS because the notify item references it.
+export const SLACK_CHANNELS_KEY = "access.notify.slack_channels";
 
 export const ACCESS_ITEMS: AccessItem[] = [
   {
@@ -166,22 +174,48 @@ export const ACCESS_ITEMS: AccessItem[] = [
       }
     ],
     inputs: [
-      { key: "access.notify.target", label: "Where", placeholder: "Their Slack workspace / email address / tool" },
-      // Slack has no per-channel invite link, so this one field takes either
-      // shape: a workspace shared invite (join.slack.com/t/…/shared_invite/zt-…)
-      // for a Slack we aren't in, or a channel link (…/archives/C…) for one we
-      // are. Optional — plenty of clients are on email or never need one, and a
-      // required-but-empty input would keep the onboarding from ever completing.
+      { key: "access.notify.target", label: "Where", placeholder: "Their Slack workspace / email address / tool" }
+    ],
+    lists: [
       {
-        key: "access.notify.slack_invite",
-        label: "Slack invite link",
-        placeholder: "https://join.slack.com/… or the channel link",
-        url: true,
-        optional: true
+        key: SLACK_CHANNELS_KEY,
+        label: "Slack channels",
+        blurb: "The channels for this client, so anyone can find them. A link opens the channel for people already in it — Slack has no link that adds someone to a private channel, so that is still Add people inside each one."
       }
     ]
   }
 ];
+
+// A client's channels, as typed on the Notifications card. Free text: the
+// names are chosen by hand per client (the Bright Paths channels are
+// "bright-paths-…", not "bright-paths-recovery-…"), so nothing derives them.
+export interface SlackChannel { name: string; url: string }
+export const MAX_SLACK_CHANNELS = 12;
+
+// Never throws: a malformed value reads as "no channels" rather than
+// breaking every surface that renders the card.
+export function parseChannels(raw: unknown): SlackChannel[] {
+  if (typeof raw !== "string" || raw.trim() === "") return [];
+  let parsed: unknown;
+  try { parsed = JSON.parse(raw); } catch { return []; }
+  if (!Array.isArray(parsed)) return [];
+  const out: SlackChannel[] = [];
+  for (const e of parsed) {
+    if (!e || typeof e !== "object") continue;
+    const r = e as Record<string, unknown>;
+    const name = typeof r.name === "string" ? r.name.trim().replace(/^#/, "").slice(0, 80) : "";
+    const url = typeof r.url === "string" ? r.url.trim().slice(0, 300) : "";
+    if (!name && !url) continue;
+    out.push({ name, url });
+    if (out.length >= MAX_SLACK_CHANNELS) break;
+  }
+  return out;
+}
+
+export const serialiseChannels = (list: SlackChannel[]): string =>
+  JSON.stringify(list.filter((c) => c.name || c.url).slice(0, MAX_SLACK_CHANNELS));
+
+export const channelsOf = (s: OnboardingState): SlackChannel[] => parseChannels(s[SLACK_CHANNELS_KEY]?.v);
 
 export const blockedKey = (itemId: string) => `access.${itemId}.blocked`;
 export const noteKey = (itemId: string) => `access.${itemId}.note`;
@@ -202,7 +236,6 @@ export const TRUST_SUBMITTED_KEY = "access.meta_account.trust_submitted";
 export const TRUST_ACCEPTED_KEY = "access.meta_account.trust_accepted";
 export const CAMPAIGN_LOADED_KEY = "access.meta_account.campaign_loaded";
 export const CTM_GRANTED_KEY = "access.ctm.granted";
-export const SLACK_INVITE_KEY = "access.notify.slack_invite";
 export const TEAM_ADDED_KEY = "access.notify.team_added";
 
 // ---------------------------------------------------------------------------
@@ -419,7 +452,7 @@ export const MAIN_ZAP_STEPS: MainZapStep[] = [
     id: "s12", step: "Step 12", title: "Slack → notify the leads channel",
     checks: [
       { key: "action", label: "Slack → Send Channel Message, send as bot: Yes, include Zap link: No" },
-      { key: "channels", label: "Path A → #{slug}-fb-leads-vob, Path B → #{slug}-fb-leads-non-vob" },
+      { key: "channels", label: "Path A → #{slug}-vob-leads, Path B → #{slug}-nonvob-leads" },
       { key: "fields", label: "Message rebuilt from this client's field picker — no IDs copied from another zap" },
       { key: "header", label: "Header bolded and reads VOB on Path A, Non-VOB on Path B" },
       { key: "files", label: "Front and Back use the same (_file) variant" },
@@ -525,11 +558,16 @@ export function fillTokens(text: string, provider: string): string {
     .replace(/\{slug\}/g, channelSlug(provider) || "{provider}");
 }
 
+// Suffixes match the live Scaledai workspace (checked against Bright Paths
+// Recovery: bright-paths-vob-leads / -nonvob-leads / -calendly / -zap-errors).
+// These are a SUGGESTION, not the truth: the real slug is shortened by hand
+// ("bright-paths" from "Bright Paths Recovery"), so what a client actually
+// has is whatever is typed into the Notifications card's channel list.
 export const SLACK_CHANNELS = [
-  { id: "vob", suffix: "fb-leads-vob", blurb: "All VOB leads" },
-  { id: "non_vob", suffix: "fb-leads-non-vob", blurb: "All non-VOB leads" },
-  { id: "calendly", suffix: "calendly-call-booked", blurb: "Bookings and reminder notifications" },
-  { id: "failsafe", suffix: "failsafe", blurb: "Zap error notifications" }
+  { id: "vob", suffix: "vob-leads", blurb: "All VOB leads" },
+  { id: "non_vob", suffix: "nonvob-leads", blurb: "All non-VOB leads" },
+  { id: "calendly", suffix: "calendly", blurb: "Bookings and reminder notifications" },
+  { id: "failsafe", suffix: "zap-errors", blurb: "Zap error notifications" }
 ] as const;
 export const slackKey = (id: string) => `setup.slack.${id}`;
 
@@ -607,7 +645,7 @@ export function testCases(slug: string): TestCase[] {
       why: "The main happy path, end to end.",
       answers: { [Q.last]: "VOB", [Q.why]: "Onboarding test — VOB path, ready to start treatment this week" },
       expect: [
-        `Exactly one post in ${ch("fb-leads-vob")} with the VOB header and @channel, every field filled`,
+        `Exactly one post in ${ch("vob-leads")} with the VOB header and @channel, every field filled`,
         "AI summary is present and under 150 characters",
         "Phone shows in E.164 (+1XXXXXXXXXX) in Slack and the CRM",
         "Lead created in the client's CRM with the right name, DOB, phone, insurance and substance",
@@ -629,7 +667,7 @@ export function testCases(slug: string): TestCase[] {
         [Q.why]: "Onboarding test — non-VOB path"
       },
       expect: [
-        `Exactly one post in ${ch("fb-leads-non-vob")} with the Non-VOB header — nothing in ${ch("fb-leads-vob")}`,
+        `Exactly one post in ${ch("nonvob-leads")} with the Non-VOB header — nothing in ${ch("vob-leads")}`,
         "Lead created in the CRM, with no image upload attempted",
         "First-time text arrives",
         "Row appended to the client lead sheet",
@@ -687,7 +725,7 @@ export function testCases(slug: string): TestCase[] {
       steps: ["Book a slot on the round robin event as Test VOB (same email as the VOB case)."],
       why: "Calendly zap, round robin assignment and reminders.",
       expect: [
-        `Post in ${ch("calendly-call-booked")} with the lead and the booked time`,
+        `Post in ${ch("calendly")} with the lead and the booked time`,
         "Booking went to a host through round robin",
         "The client got the booking notification",
         "Any reminders the client asked for fire on schedule"
@@ -703,7 +741,7 @@ export function testCases(slug: string): TestCase[] {
         "Restore both zaps and replay the failed runs."
       ],
       expect: [
-        `An error post in ${ch("failsafe")} for each zap, naming which zap failed`,
+        `An error post in ${ch("zap-errors")} for each zap, naming which zap failed`,
         "Both replays go through cleanly after the fix"
       ]
     },
@@ -760,7 +798,7 @@ export function caseAnswers(tc: TestCase): { q: string; a: string }[] {
 // Key registry — the API only accepts these.
 // ---------------------------------------------------------------------------
 
-type KeyKind = { kind: "check" } | { kind: "text" } | { kind: "choice"; options: string[] };
+type KeyKind = { kind: "check" } | { kind: "text" } | { kind: "choice"; options: string[] } | { kind: "list" };
 
 function buildRegistry(): Map<string, KeyKind> {
   const r = new Map<string, KeyKind>();
@@ -768,6 +806,7 @@ function buildRegistry(): Map<string, KeyKind> {
     if (it.choice) r.set(it.choice.key, { kind: "choice", options: it.choice.options.map((o) => o.value) });
     for (const c of it.checks) r.set(c.key, { kind: "check" });
     for (const i of it.inputs ?? []) r.set(i.key, { kind: "text" });
+    for (const l of it.lists ?? []) r.set(l.key, { kind: "list" });
     r.set(blockedKey(it.id), { kind: "check" });
     r.set(noteKey(it.id), { kind: "text" });
   }
@@ -815,6 +854,9 @@ export function normaliseValue(key: string, value: unknown): EntryValue | null {
   if (k.kind === "check") return typeof value === "boolean" ? value : null;
   if (typeof value !== "string") return null;
   if (k.kind === "text") return value.trim().slice(0, 500);
+  // Re-serialised from the parsed form, so whatever is stored is always
+  // canonical, capped and free of extra fields — never the raw client string.
+  if (k.kind === "list") return serialiseChannels(parseChannels(value));
   return k.options.includes(value) ? value : null;
 }
 
@@ -840,7 +882,8 @@ export function accessStatus(s: OnboardingState, it: AccessItem): AccessStatus {
   ];
   const extras = [
     ...it.checks.filter((c) => c.optional).map((c) => isOn(s, c.key)),
-    ...(it.inputs ?? []).filter((i) => i.optional).map((i) => str(s, i.key) !== "")
+    ...(it.inputs ?? []).filter((i) => i.optional).map((i) => str(s, i.key) !== ""),
+    ...(it.lists ?? []).map((l) => parseChannels(s[l.key]?.v).length > 0)
   ];
   if (parts.every(Boolean)) return "cleared";
   return parts.some(Boolean) || extras.some(Boolean) ? "in_progress" : "not_started";

@@ -2,10 +2,11 @@
 
 import { useCallback, useMemo, useState } from "react";
 import {
-  Rocket, Check, AlertTriangle, Lock, Copy, ChevronDown, Loader2, PartyPopper, Wrench, Pause, Play
+  Rocket, Check, AlertTriangle, Lock, Copy, ChevronDown, Loader2, PartyPopper, Wrench, Pause, Play, ExternalLink
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn, relativeTime } from "@/lib/utils";
+import { toSafeAbsoluteHref } from "@/lib/email-links";
 import { useCurrentUser } from "@/lib/user-context";
 import {
   ACCESS_ITEMS, ZAPS, SLACK_CHANNELS, CLIENT_STREAMS, CLIENT_OTHER_KEY, PROVIDER_KEY, TEST_PHONE_NOTE,
@@ -338,7 +339,10 @@ function AccessCard({ item, ctx }: { item: AccessItem; ctx: Ctx }) {
         {item.checks.map((c) => <CheckRow key={c.key} ctx={ctx} k={c.key} label={c.label} hint={c.hint} />)}
         {item.inputs?.map((inp) => (
           <div key={inp.key}>
-            <div className="text-[11px] text-muted mb-1">{inp.label}</div>
+            <div className="flex items-center justify-between gap-2 mb-1">
+              <div className="text-[11px] text-muted">{inp.label}</div>
+              {inp.url && <LinkActions value={str(ctx.state, inp.key)} label={inp.label} />}
+            </div>
             <TextField ctx={ctx} k={inp.key} placeholder={inp.placeholder} small />
           </div>
         ))}
@@ -660,6 +664,38 @@ function TextFieldInner({ stored, ctx, k, placeholder, small, bare }: { stored: 
       onBlur={commit}
       onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
     />
+  );
+}
+
+// Copy + open for a `url` input. The stored value is free text somebody
+// pasted, so it goes through the composer's link allowlist rather than
+// straight into an href — javascript: and data: never resolve, and a
+// half-typed URL shows no dead affordance because nothing renders until it
+// is a real link. Copy leads: an invite link's job is to be pasted to the
+// person being added. "Open" rather than the URL itself — a bare URL as
+// link text is unreadable in a screen reader's link list.
+function LinkActions({ value, label }: { value: string; label: string }) {
+  const href = toSafeAbsoluteHref(value);
+  if (!href) return null;
+  return (
+    <span className="flex items-center gap-2 shrink-0">
+      <button
+        type="button"
+        onClick={() => navigator.clipboard.writeText(value).then(() => toast.success("Copied"), () => toast.error("Couldn't copy"))}
+        className="inline-flex items-center gap-1 text-[11px] text-accent hover:underline"
+      >
+        <Copy className="w-3 h-3" /> Copy<span className="sr-only"> {label}</span>
+      </button>
+      <a
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer"
+        title={value}
+        className="inline-flex items-center gap-1 text-[11px] text-accent hover:underline"
+      >
+        <ExternalLink className="w-3 h-3" /> Open<span className="sr-only"> {label} (opens in new tab)</span>
+      </a>
+    </span>
   );
 }
 

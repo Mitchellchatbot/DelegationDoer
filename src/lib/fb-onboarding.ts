@@ -30,8 +30,11 @@ export type OnboardingState = Record<string, Entry>;
 export type TestResult = "pass" | "fail" | "na";
 
 interface Choice { key: string; label: string; options: { value: string; label: string }[] }
-interface Check { key: string; label: string; hint?: string }
-interface TextInput { key: string; label: string; placeholder?: string }
+interface Check { key: string; label: string; hint?: string; optional?: boolean }
+// `url` renders copy + open actions beside the field. `optional` keeps a
+// field out of accessStatus's cleared test — it still renders and still
+// saves, it just never holds the item back.
+interface TextInput { key: string; label: string; placeholder?: string; url?: boolean; optional?: boolean }
 
 export interface AccessItem {
   id: string;
@@ -133,9 +136,9 @@ export const ACCESS_ITEMS: AccessItem[] = [
     inputs: [
       { key: "access.meta_account.ad_account_id", label: "Ad account ID", placeholder: "act_…" },
       { key: "access.meta_account.monthly_spend", label: "Monthly spend", placeholder: "e.g. $5,000/mo" },
-      { key: "access.meta_account.landing_page", label: "Landing page link", placeholder: "https://…" },
-      { key: "access.meta_account.typeform", label: "Typeform link", placeholder: "https://…" },
-      { key: "access.meta_account.account_metrics", label: "Account metrics link", placeholder: "https://…" }
+      { key: "access.meta_account.landing_page", label: "Landing page link", placeholder: "https://…", url: true },
+      { key: "access.meta_account.typeform", label: "Typeform link", placeholder: "https://…", url: true },
+      { key: "access.meta_account.account_metrics", label: "Account metrics link", placeholder: "https://…", url: true }
     ]
   },
   {
@@ -151,8 +154,32 @@ export const ACCESS_ITEMS: AccessItem[] = [
         { value: "other", label: "Other" }
       ]
     },
-    checks: [{ key: "access.notify.reachable", label: "Zapier can post to it" }],
-    inputs: [{ key: "access.notify.target", label: "Where", placeholder: "Their Slack workspace / email address / tool" }]
+    checks: [
+      { key: "access.notify.reachable", label: "Zapier can post to it" },
+      // Our own team's membership, not the client's access — optional so it
+      // can't un-clear Notifications on every onboarding that already cleared.
+      {
+        key: "access.notify.team_added",
+        label: "Team added to the Slack channels",
+        hint: "Everyone working this client is in the lead channels",
+        optional: true
+      }
+    ],
+    inputs: [
+      { key: "access.notify.target", label: "Where", placeholder: "Their Slack workspace / email address / tool" },
+      // Slack has no per-channel invite link, so this one field takes either
+      // shape: a workspace shared invite (join.slack.com/t/…/shared_invite/zt-…)
+      // for a Slack we aren't in, or a channel link (…/archives/C…) for one we
+      // are. Optional — plenty of clients are on email or never need one, and a
+      // required-but-empty input would keep the onboarding from ever completing.
+      {
+        key: "access.notify.slack_invite",
+        label: "Slack invite link",
+        placeholder: "https://join.slack.com/… or the channel link",
+        url: true,
+        optional: true
+      }
+    ]
   }
 ];
 
@@ -175,6 +202,8 @@ export const TRUST_SUBMITTED_KEY = "access.meta_account.trust_submitted";
 export const TRUST_ACCEPTED_KEY = "access.meta_account.trust_accepted";
 export const CAMPAIGN_LOADED_KEY = "access.meta_account.campaign_loaded";
 export const CTM_GRANTED_KEY = "access.ctm.granted";
+export const SLACK_INVITE_KEY = "access.notify.slack_invite";
+export const TEAM_ADDED_KEY = "access.notify.team_added";
 
 // ---------------------------------------------------------------------------
 // Launch — the actual campaign: where it runs, what it starts with, and the
@@ -800,13 +829,21 @@ export type AccessStatus = "blocked" | "cleared" | "in_progress" | "not_started"
 
 export function accessStatus(s: OnboardingState, it: AccessItem): AccessStatus {
   if (isOn(s, blockedKey(it.id))) return "blocked";
+  // Optional entries never hold an item back from "cleared" — an optional
+  // input nobody fills would otherwise strand the item, and progress()
+  // .complete with it. They still count as activity, so filling only an
+  // optional field reads "in progress" rather than "not started".
   const parts = [
-    ...it.checks.map((c) => isOn(s, c.key)),
+    ...it.checks.filter((c) => !c.optional).map((c) => isOn(s, c.key)),
     ...(it.choice ? [str(s, it.choice.key) !== ""] : []),
-    ...(it.inputs ?? []).map((i) => str(s, i.key) !== "")
+    ...(it.inputs ?? []).filter((i) => !i.optional).map((i) => str(s, i.key) !== "")
+  ];
+  const extras = [
+    ...it.checks.filter((c) => c.optional).map((c) => isOn(s, c.key)),
+    ...(it.inputs ?? []).filter((i) => i.optional).map((i) => str(s, i.key) !== "")
   ];
   if (parts.every(Boolean)) return "cleared";
-  return parts.some(Boolean) ? "in_progress" : "not_started";
+  return parts.some(Boolean) || extras.some(Boolean) ? "in_progress" : "not_started";
 }
 
 export function setupKeys(s: OnboardingState): string[] {

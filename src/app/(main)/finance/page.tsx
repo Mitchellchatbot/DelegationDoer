@@ -18,17 +18,13 @@ import { getStripeRevenue, getStripeOneOffs, type OneOffPayment } from "@/lib/st
 import { StripeOneOffs } from "@/components/StripeOneOffs";
 import { getFacebookRevenue } from "@/lib/facebook-revenue";
 import { latestMonthIndex, expenseLeafLines, type ParsedPnl, type ExpenseLeaf } from "@/lib/pnl-parse";
-import { computeBreakdown, type Segment, type SoftwareItem } from "@/lib/finance-segments";
-import { BusinessBreakdownView } from "@/components/BusinessBreakdown";
+import { type Segment, type SoftwareItem } from "@/lib/finance-segments";
 import { ExpenseLabels, type SoftwareRow } from "@/components/ExpenseLabels";
 import { FacebookMonthly, type FbMonthInput } from "@/components/FacebookMonthly";
-import { computeLearnings, type PnlMonth } from "@/lib/finance-learnings";
-import { LearningsRisks } from "@/components/LearningsRisks";
 import { BooksByMonth, type BookLine, type BookMonth } from "@/components/BooksByMonth";
 import { DeelContractors, type DeelRow } from "@/components/DeelContractors";
-import { computeDefense } from "@/lib/finance-defense";
-import { SurvivalDefense } from "@/components/SurvivalDefense";
-import { CfoRead } from "@/components/CfoRead";
+import { FinanceRoom } from "@/components/FinanceRoom";
+import type { RoomMonth } from "@/lib/finance-room";
 
 // Map a P&L period label ("Aug '26") to a 'YYYY-MM' key.
 const MONTH_NUM: Record<string, number> = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
@@ -139,20 +135,13 @@ export default async function FinancePage() {
     .filter((m) => m.period);
   const latestShort = monthLabels.length ? monthLabels[monthLabels.length - 1].slice(0, 3).toLowerCase() : "";
 
-  const breakdown = computeBreakdown({ parsed: latestParsed, expenseSegments, softwareItems, fbRevenueByPeriod, fbCommissionByPeriod, fbExpensesByPeriod, oneOffs: oneOffs.map((o) => ({ id: o.id, date: o.date, amount: o.amount })), oneOffSegments });
-
-  // Learnings & risks: 10-month P&L history + Facebook + software + client concentration.
-  const pnlMonths = ((pnlRes.data ?? []) as PnlMonth[]).map((m) => ({
+  // The monthly roll-up drives the month stepper; the client recomputes the
+  // survival and learnings models per selected month from these same rows.
+  const pnlMonths = ((pnlRes.data ?? []) as RoomMonth[]).map((m) => ({
     period: m.period, label: m.label, income: Number(m.income), expenses: Number(m.expenses), net: Number(m.net),
-    taxes: Number(m.taxes), writeoffs: Number(m.writeoffs), software: Number(m.software), contractors: Number(m.contractors), advertising: Number(m.advertising)
+    taxes: Number(m.taxes), writeoffs: Number(m.writeoffs), software: Number(m.software),
+    contractors: Number(m.contractors), advertising: Number(m.advertising)
   }));
-  const learnings = computeLearnings({
-    pnl: pnlMonths,
-    fbRevenueByPeriod,
-    fbExpensesByPeriod,
-    softwareItems,
-    mrrClients: activeMrr
-  });
 
   // Account-level books, every uploaded month (Nov '25 → Aug '26).
   const bookLines = ((pnlLinesRes.data ?? []) as BookLine[]).map((l) => ({ period: l.period, account: l.account, section: l.section, amount: Number(l.amount) }));
@@ -170,96 +159,92 @@ export default async function FinancePage() {
     ...deelRows.filter((r) => !r.is_fee).map((r) => ({ account: "Contractor Payments", vendor: r.contractor, month: period3(r.period), amount: r.amount }))
   ];
 
-  // CFO survival model: 30% margin before founder pay, cut ladder, client-loss playbook.
-  const latestPnl = pnlMonths[pnlMonths.length - 1];
-  const defense = computeDefense({
-    month: latestPnl?.label ?? "",
-    revenue: latestPnl?.income ?? 0,
-    normalizedNet: latestPnl ? latestPnl.net + latestPnl.taxes + latestPnl.writeoffs : 0,
-    founderPay: latestPnl ? bookLines.filter((l) => l.period === latestPnl.period && l.account.toLowerCase().includes("mitchell price")).reduce((s, l) => s + l.amount, 0) : 0,
-    software: latestPnl?.software ?? 0,
-    ads: latestPnl?.advertising ?? 0,
-    contractors: latestPnl ? deelRows.filter((r) => r.period === latestPnl.period && !r.is_fee).map((r) => ({ name: r.contractor, monthly: r.amount })) : [],
-    topClients: activeMrr.filter((c) => c.mrr > 0).sort((a, b) => b.mrr - a.mrr),
-    seoRevenue: breakdown.seo.revenue
-  });
+  // The existing editors, unchanged, handed to the layout as slots. They keep
+  // their own save/delete behaviour; the layout only decides where they open.
+  const panels = [
+    { key: "mrr", label: "MRR sheet", hint: "Recurring clients",
+      node: <MrrManual initial={mrrRows as MrrEntry[]} /> },
+    { key: "stripe", label: "Stripe", hint: "Subscriptions and one-off charges",
+      node: (
+        <div className="space-y-5">
+          <StripeMissing rev={revenue} sheetNames={mrrRows.map((r) => r.company as string)} />
+          <StripeOneOffs oneOffs={oneOffs} segments={oneOffSegments} />
+        </div>
+      ) },
+    { key: "fbrev", label: "Facebook revenue", hint: "Entered month by month",
+      node: (
+        <FacebookMonthly
+          months={fbMonthInputs}
+          initial={fbRevenueByPeriod}
+          expensesInitial={fbExpensesByPeriod}
+          commissionInitial={fbCommissionByPeriod}
+        />
+      ) },
+    { key: "deel", label: "Contractor payments", hint: "Deel, per person",
+      node: <DeelContractors rows={deelRows} /> },
+    { key: "payroll", label: "Payroll", hint: "Salaried people and rates",
+      node: <PayrollManual initial={(payRes.data ?? []) as PayrollEntry[]} /> },
+    { key: "explorer", label: "Expense explorer", hint: "Vendor detail per account",
+      node: <ExpenseExplorer lines={bookLines} months={bookMonths} vendors={(expRes.data ?? []) as ExplVendor[]} /> },
+    { key: "labels", label: "Facebook / SEO labels", hint: "Which costs belong where",
+      node: (
+        <ExpenseLabels
+          lines={expenseLines}
+          lineInitial={expenseSegments}
+          software={softwareItems as SoftwareRow[]}
+          latestShort={latestShort}
+        />
+      ) },
+    { key: "budget", label: "Next month's budget", hint: "Forecast per account",
+      node: (
+        <NextMonthBudget
+          parsed={latestParsed}
+          estimates={estimates}
+          defaultRevenue={pnlMonths[pnlMonths.length - 1]?.income ?? 0}
+          vendors={budgetVendors}
+          months={bookMonths}
+        />
+      ) },
+    { key: "ledger", label: "Full ledger", hint: "Every account, every month",
+      node: <BooksByMonth lines={bookLines} months={bookMonths} /> },
+    { key: "fbapp", label: "Facebook app revenue", hint: "Read-only feed",
+      node: <FacebookRevenue result={fbResult} /> },
+    { key: "files", label: "P&L files", hint: "The uploaded source documents",
+      node: <FinancePanel initialDocuments={rows.map(({ parsed, ...d }) => d)} /> }
+  ];
 
   return (
-    <div className={inter.className + " space-y-6 max-w-5xl mx-auto text-slate-900"}>
-      <div className="flex items-center gap-3">
+    <div className={inter.className + " max-w-[1320px] mx-auto text-slate-900"}>
+      <div className="flex items-center gap-3 mb-5">
         <div className="w-9 h-9 rounded-xl bg-slate-900 text-white grid place-items-center shrink-0">
           <Lock className="w-4 h-4" />
         </div>
         <h1 className="text-2xl font-bold text-slate-900 leading-tight">Finance</h1>
-        <span className="text-[10px] font-medium uppercase tracking-wide text-slate-500 bg-slate-100 rounded-full px-2 py-0.5">Private</span>
+        <span className="text-[10px] font-medium uppercase tracking-wide text-slate-500 bg-slate-100 rounded-full px-2 py-0.5">
+          Private
+        </span>
       </div>
 
-      {/* Daily zone — the read + the numbers behind it, tightened into one group. */}
-      <div className="space-y-4">
-        {/* Start here every day: survival status + today's moves, one read. */}
-        <CfoRead defense={defense} learnings={learnings} />
-
-        {/* The defense playbook behind the read — collapsed, open when you act. */}
-        <SurvivalDefense data={defense} />
-
-        {/* The two sides of one P&L, side by side: Facebook vs SEO & website. */}
-        <BusinessBreakdownView data={breakdown} />
-
-        {/* Learnings & risks: growth, software, Facebook, concentration, projections. */}
-        <LearningsRisks data={learnings} />
-      </div>
-
-      {/* The cost-cutting brain — reasons over the P&L, software and payroll. */}
-      <ScaleChat
-        title="Ask your finances"
-        subtitle="What should you cut? It reads your P&L, software, payroll and MRR."
-        starters={FINANCE_STARTERS}
-        opening={buildFinanceOpening(overview)}
+      <FinanceRoom
+        pnl={pnlMonths}
+        lines={bookLines}
+        deel={deelRows}
+        tags={expenseSegments}
+        fbRevenue={fbRevenueByPeriod}
+        fbExpenses={fbExpensesByPeriod}
+        fbCommission={fbCommissionByPeriod}
+        clients={activeMrr}
+        softwareItems={softwareItems}
+        panels={panels}
+        chat={
+          <ScaleChat
+            title="Ask your finances"
+            subtitle="What should you cut? It reads your P&L, software, payroll and MRR."
+            starters={FINANCE_STARTERS}
+            opening={buildFinanceOpening(overview)}
+          />
+        }
       />
-
-      {/* Manage — grouped into daily-use buckets so it reads at a glance. */}
-      <div className="pt-2 space-y-7">
-        {/* Money in — the revenue sources. */}
-        <div>
-          <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 px-1 mb-2.5">Money in</div>
-          <div className="space-y-5">
-            <MrrManual initial={mrrRows as MrrEntry[]} />
-            <StripeMissing rev={revenue} sheetNames={mrrRows.map((r) => r.company as string)} />
-            <StripeOneOffs oneOffs={oneOffs} segments={oneOffSegments} />
-            <FacebookMonthly months={fbMonthInputs} initial={fbRevenueByPeriod} expensesInitial={fbExpensesByPeriod} commissionInitial={fbCommissionByPeriod} />
-          </div>
-        </div>
-
-        {/* Money out — where it goes + the Facebook/SEO labels. */}
-        <div>
-          <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 px-1 mb-2.5">Money out</div>
-          <div className="space-y-5">
-            <ExpenseExplorer lines={bookLines} months={bookMonths} vendors={(expRes.data ?? []) as ExplVendor[]} />
-            <DeelContractors rows={deelRows} />
-            <PayrollManual initial={(payRes.data ?? []) as PayrollEntry[]} />
-            <ExpenseLabels lines={expenseLines} lineInitial={expenseSegments} software={softwareItems as SoftwareRow[]} latestShort={latestShort} />
-          </div>
-        </div>
-
-        {/* Plan & books — the forecast + the full ledger. */}
-        <div>
-          <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 px-1 mb-2.5">Plan &amp; books</div>
-          <div className="space-y-5">
-            <NextMonthBudget parsed={latestParsed} estimates={estimates} defaultRevenue={latestPnl?.income ?? 0} vendors={budgetVendors} months={bookMonths} />
-            <BooksByMonth lines={bookLines} months={bookMonths} />
-          </div>
-        </div>
-
-        {/* Reference — read-only views + source files. */}
-        <div>
-          <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 px-1 mb-2.5">Reference</div>
-          <div className="space-y-5">
-            <FacebookRevenue result={fbResult} />
-            <FinancePanel initialDocuments={rows.map(({ parsed, ...d }) => d)} />
-          </div>
-        </div>
-      </div>
     </div>
   );
 }
-

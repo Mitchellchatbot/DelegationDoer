@@ -1,13 +1,15 @@
 "use client";
 
 import { useState } from "react";
-import { Check } from "lucide-react";
+import { Check, ExternalLink } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { toSafeAbsoluteHref } from "@/lib/email-links";
 import {
   ZAPIER_MODE_KEY, CRM_MODE_KEY, CALENDLY_MODE_KEY, EIN_KEY, AD_ACCOUNT_ID_KEY, MONTHLY_SPEND_KEY,
   LANDING_PAGE_KEY, TYPEFORM_LINK_KEY, ACCOUNT_METRICS_KEY, CITIES_KEY,
   TRUST_SUBMITTED_KEY, TRUST_ACCEPTED_KEY, CTM_GRANTED_KEY, CAMPAIGN_LOADED_KEY,
+  SLACK_CHANNELS_KEY, TEAM_ADDED_KEY, parseChannels,
   type OnboardingState, type EntryValue
 } from "@/lib/fb-onboarding";
 
@@ -75,13 +77,19 @@ export function AccessQuickFields({
         <QuickInput label="EIN" value={str(s, EIN_KEY)} canEdit={canEdit} placeholder="XX-XXXXXXX" onSave={(v) => set(EIN_KEY, v)} />
         <QuickInput label="Ad account ID" value={str(s, AD_ACCOUNT_ID_KEY)} canEdit={canEdit} placeholder="act_…" onSave={(v) => set(AD_ACCOUNT_ID_KEY, v)} />
         <QuickInput label="Monthly spend" value={str(s, MONTHLY_SPEND_KEY)} canEdit={canEdit} placeholder="$…/mo" onSave={(v) => set(MONTHLY_SPEND_KEY, v)} />
-        <QuickInput label="Landing page link" value={str(s, LANDING_PAGE_KEY)} canEdit={canEdit} placeholder="https://…" onSave={(v) => set(LANDING_PAGE_KEY, v)} />
-        <QuickInput label="Typeform link" value={str(s, TYPEFORM_LINK_KEY)} canEdit={canEdit} placeholder="https://…" onSave={(v) => set(TYPEFORM_LINK_KEY, v)} />
-        <QuickInput label="Account metrics link" value={str(s, ACCOUNT_METRICS_KEY)} canEdit={canEdit} placeholder="https://…" onSave={(v) => set(ACCOUNT_METRICS_KEY, v)} />
+        <QuickInput label="Landing page link" value={str(s, LANDING_PAGE_KEY)} canEdit={canEdit} placeholder="https://…" url onSave={(v) => set(LANDING_PAGE_KEY, v)} />
+        <QuickInput label="Typeform link" value={str(s, TYPEFORM_LINK_KEY)} canEdit={canEdit} placeholder="https://…" url onSave={(v) => set(TYPEFORM_LINK_KEY, v)} />
+        <QuickInput label="Account metrics link" value={str(s, ACCOUNT_METRICS_KEY)} canEdit={canEdit} placeholder="https://…" url onSave={(v) => set(ACCOUNT_METRICS_KEY, v)} />
         <QuickCheck label="CTM access granted" on={isOn(s, CTM_GRANTED_KEY)} canEdit={canEdit} onToggle={() => set(CTM_GRANTED_KEY, !isOn(s, CTM_GRANTED_KEY))} />
         <QuickCheck label="Trust Center submitted" on={isOn(s, TRUST_SUBMITTED_KEY)} canEdit={canEdit} onToggle={() => set(TRUST_SUBMITTED_KEY, !isOn(s, TRUST_SUBMITTED_KEY))} />
         <QuickCheck label="Trust Center accepted" on={isOn(s, TRUST_ACCEPTED_KEY)} canEdit={canEdit} onToggle={() => set(TRUST_ACCEPTED_KEY, !isOn(s, TRUST_ACCEPTED_KEY))} />
         <QuickCheck label="Ad account loaded with campaign" on={isOn(s, CAMPAIGN_LOADED_KEY)} canEdit={canEdit} onToggle={() => set(CAMPAIGN_LOADED_KEY, !isOn(s, CAMPAIGN_LOADED_KEY))} />
+      </div>
+
+      <div className="text-[10px] font-medium uppercase tracking-wide text-muted mt-2 mb-1.5">Slack</div>
+      <div className="space-y-1.5">
+        <ChannelChips channels={parseChannels(s[SLACK_CHANNELS_KEY]?.v)} />
+        <QuickCheck label="Team added to channels" on={isOn(s, TEAM_ADDED_KEY)} canEdit={canEdit} onToggle={() => set(TEAM_ADDED_KEY, !isOn(s, TEAM_ADDED_KEY))} />
       </div>
     </div>
   );
@@ -121,34 +129,106 @@ function ModePill({
   );
 }
 
+// One chip per channel. A chip with a link opens it; one without copies the
+// name, because that is what you paste into Slack's jump-to. Both affordances
+// already exist elsewhere — this is the card-sized version of them.
+function ChannelChips({ channels }: { channels: { name: string; url: string }[] }) {
+  if (channels.length === 0) {
+    return <div className="text-[11px] text-muted/70 italic">No channels listed — add them on the Notifications card.</div>;
+  }
+  return (
+    <div className="flex flex-wrap gap-1">
+      {channels.map((c, i) => {
+        const href = toSafeAbsoluteHref(c.url);
+        const label = c.name || c.url;
+        const cls = "inline-flex items-center gap-1 max-w-full rounded-md border border-border bg-surface2 px-1.5 py-0.5 font-mono text-[11px] text-ink/80 hover:border-accent/40 hover:text-accent transition-colors";
+        if (href) {
+          return (
+            <a
+              key={i}
+              href={href}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(e) => e.stopPropagation()}
+              title={c.url}
+              aria-label={`Open #${label} in Slack (opens in new tab)`}
+              className={cls}
+            >
+              <span className="truncate">#{label}</span>
+              <ExternalLink className="w-2.5 h-2.5 shrink-0" />
+            </a>
+          );
+        }
+        return (
+          <button
+            key={i}
+            type="button"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              navigator.clipboard.writeText(label).then(() => toast.success(`Copied ${label}`), () => toast.error("Couldn't copy"));
+            }}
+            title="Copy channel name"
+            className={cn(cls, "cursor-copy")}
+          >
+            <span className="truncate">#{label}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function QuickInput({
-  label, value, canEdit, placeholder, onSave
+  label, value, canEdit, placeholder, url, onSave
 }: {
   label: string;
   value: string;
   canEdit: boolean;
   placeholder?: string;
+  url?: boolean;
   onSave: (next: string) => void;
 }) {
   // Re-keyed on the stored value so a save from elsewhere (or the optimistic
   // rollback above) replaces a stale draft, same trick FbOnboardingPanel uses.
-  return <QuickInputInner key={value} stored={value} label={label} canEdit={canEdit} placeholder={placeholder} onSave={onSave} />;
+  return <QuickInputInner key={value} stored={value} label={label} canEdit={canEdit} placeholder={placeholder} url={url} onSave={onSave} />;
 }
 
 function QuickInputInner({
-  stored, label, canEdit, placeholder, onSave
+  stored, label, canEdit, placeholder, url, onSave
 }: {
   stored: string;
   label: string;
   canEdit: boolean;
   placeholder?: string;
+  url?: boolean;
   onSave: (next: string) => void;
 }) {
   const [draft, setDraft] = useState(stored);
   const commit = () => { if (draft.trim() !== stored) onSave(draft.trim()); };
+  // Same allowlist the panel uses — nothing to click until the pasted value
+  // resolves to a real http(s) link, so a half-typed URL shows no affordance.
+  const href = url ? toSafeAbsoluteHref(stored) : null;
   return (
     <div className="rounded-lg border border-border bg-surface2 px-2 py-1.5">
-      <div className="text-[10px] uppercase tracking-wide text-muted mb-0.5">{label}</div>
+      <div className="flex items-center justify-between gap-1 mb-0.5">
+        <div className="text-[10px] uppercase tracking-wide text-muted truncate">{label}</div>
+        {href && (
+          // 24x24 hit area for a 12px glyph (WCAG 2.2 SC 2.5.8); the negative
+          // margins keep the tile the same height so the grid does not reflow.
+          <a
+            href={href}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(e) => e.stopPropagation()}
+            title={stored}
+            aria-label={`Open ${label} (opens in new tab)`}
+            className="-mr-1 -my-1 w-6 h-6 shrink-0 grid place-items-center rounded text-muted hover:text-accent"
+          >
+            <ExternalLink className="w-3 h-3" />
+          </a>
+        )}
+      </div>
       <input
         className="w-full bg-transparent text-xs font-medium text-ink placeholder:text-muted/60 placeholder:font-normal focus:outline-none"
         value={draft}

@@ -2,14 +2,16 @@
 
 import { useCallback, useMemo, useState } from "react";
 import {
-  Rocket, Check, AlertTriangle, Lock, Copy, ChevronDown, Loader2, PartyPopper, Wrench, Pause, Play
+  Rocket, Check, AlertTriangle, Lock, Copy, ChevronDown, Loader2, PartyPopper, Wrench, Pause, Play, ExternalLink, Plus, X
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn, relativeTime } from "@/lib/utils";
+import { toSafeAbsoluteHref } from "@/lib/email-links";
 import { useCurrentUser } from "@/lib/user-context";
 import {
   ACCESS_ITEMS, ZAPS, SLACK_CHANNELS, CLIENT_STREAMS, CLIENT_OTHER_KEY, PROVIDER_KEY, TEST_PHONE_NOTE,
-  CITIES_KEY, BUDGET_KEY, CREATIVES_KEY,
+  CITIES_KEY, BUDGET_KEY, CREATIVES_KEY, SLACK_CHANNELS_KEY,
+  parseChannels, serialiseChannels, MAX_SLACK_CHANNELS, type SlackChannel,
   accessStatus, blockedKey, noteKey, zapBuiltKey, zapUrlKey, slackKey, clientKey, channelSlug,
   testCases, testResultKey, testNoteKey, caseAnswers, progress,
   MAIN_ZAP_STEPS, MAIN_ZAP_FAILURES, mainKey, mainStepKeys, fillTokens,
@@ -338,8 +340,18 @@ function AccessCard({ item, ctx }: { item: AccessItem; ctx: Ctx }) {
         {item.checks.map((c) => <CheckRow key={c.key} ctx={ctx} k={c.key} label={c.label} hint={c.hint} />)}
         {item.inputs?.map((inp) => (
           <div key={inp.key}>
-            <div className="text-[11px] text-muted mb-1">{inp.label}</div>
+            <div className="flex items-center justify-between gap-2 mb-1">
+              <div className="text-[11px] text-muted">{inp.label}</div>
+              {inp.url && <LinkActions value={str(ctx.state, inp.key)} label={inp.label} />}
+            </div>
             <TextField ctx={ctx} k={inp.key} placeholder={inp.placeholder} small />
+          </div>
+        ))}
+        {item.lists?.map((l) => (
+          <div key={l.key} className="pt-1">
+            <div className="text-[11px] text-muted mb-1">{l.label}</div>
+            {l.blurb && <div className="text-[11px] text-muted/80 mb-1.5 leading-snug">{l.blurb}</div>}
+            <ChannelList ctx={ctx} k={l.key} />
           </div>
         ))}
       </div>
@@ -660,6 +672,114 @@ function TextFieldInner({ stored, ctx, k, placeholder, small, bare }: { stored: 
       onBlur={commit}
       onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
     />
+  );
+}
+
+// A client's Slack channels: however many they have. Rows are edited in a
+// local draft and committed on blur, because every keystroke would otherwise
+// PATCH the whole list. The row's own state is the draft, so the parent's
+// stored value re-keys it the same way TextField does.
+function ChannelList({ ctx, k }: { ctx: Ctx; k: string }) {
+  const stored = ctx.state[k]?.v;
+  return <ChannelListInner key={typeof stored === "string" ? stored : ""} ctx={ctx} k={k} rows={parseChannels(stored)} />;
+}
+
+function ChannelListInner({ ctx, k, rows }: { ctx: Ctx; k: string; rows: SlackChannel[] }) {
+  const [draft, setDraft] = useState<SlackChannel[]>(rows);
+
+  const commit = (next: SlackChannel[]) => {
+    const cleaned = next.filter((r) => r.name.trim() || r.url.trim());
+    if (serialiseChannels(cleaned) !== serialiseChannels(rows)) ctx.set(k, serialiseChannels(cleaned));
+  };
+  const edit = (i: number, patch: Partial<SlackChannel>) =>
+    setDraft((cur) => cur.map((r, n) => (n === i ? { ...r, ...patch } : r)));
+  const remove = (i: number) => {
+    const next = draft.filter((_, n) => n !== i);
+    setDraft(next);
+    commit(next);
+  };
+
+  return (
+    <div className="space-y-1.5">
+      {draft.length === 0 && (
+        <div className="text-[11px] text-muted/80 italic">No channels listed yet.</div>
+      )}
+      {draft.map((row, i) => (
+        <div key={i} className="flex items-center gap-1.5">
+          <span className="text-muted text-xs shrink-0">#</span>
+          <input
+            className="input py-1 text-xs flex-[2] min-w-0 font-mono"
+            value={row.name}
+            placeholder="client-vob-leads"
+            disabled={!ctx.canEdit}
+            onChange={(e) => edit(i, { name: e.target.value })}
+            onBlur={() => commit(draft)}
+            onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+          />
+          <input
+            className="input py-1 text-xs flex-[3] min-w-0"
+            value={row.url}
+            placeholder="Channel link (optional)"
+            disabled={!ctx.canEdit}
+            onChange={(e) => edit(i, { url: e.target.value })}
+            onBlur={() => commit(draft)}
+            onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+          />
+          <LinkActions value={row.url} label={row.name || "channel"} />
+          {ctx.canEdit && (
+            <button
+              type="button"
+              onClick={() => remove(i)}
+              aria-label={`Remove ${row.name || "channel"}`}
+              className="shrink-0 w-6 h-6 grid place-items-center rounded text-muted hover:text-urgent"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
+      ))}
+      {ctx.canEdit && draft.length < MAX_SLACK_CHANNELS && (
+        <button
+          type="button"
+          onClick={() => setDraft((cur) => [...cur, { name: "", url: "" }])}
+          className="inline-flex items-center gap-1 text-[11px] text-accent hover:underline"
+        >
+          <Plus className="w-3 h-3" /> Add channel
+        </button>
+      )}
+    </div>
+  );
+}
+
+// Copy + open for a `url` input. The stored value is free text somebody
+// pasted, so it goes through the composer's link allowlist rather than
+// straight into an href — javascript: and data: never resolve, and a
+// half-typed URL shows no dead affordance because nothing renders until it
+// is a real link. Copy leads: an invite link's job is to be pasted to the
+// person being added. "Open" rather than the URL itself — a bare URL as
+// link text is unreadable in a screen reader's link list.
+function LinkActions({ value, label }: { value: string; label: string }) {
+  const href = toSafeAbsoluteHref(value);
+  if (!href) return null;
+  return (
+    <span className="flex items-center gap-2 shrink-0">
+      <button
+        type="button"
+        onClick={() => navigator.clipboard.writeText(value).then(() => toast.success("Copied"), () => toast.error("Couldn't copy"))}
+        className="inline-flex items-center gap-1 text-[11px] text-accent hover:underline"
+      >
+        <Copy className="w-3 h-3" /> Copy<span className="sr-only"> {label}</span>
+      </button>
+      <a
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer"
+        title={value}
+        className="inline-flex items-center gap-1 text-[11px] text-accent hover:underline"
+      >
+        <ExternalLink className="w-3 h-3" /> Open<span className="sr-only"> {label} (opens in new tab)</span>
+      </a>
+    </span>
   );
 }
 

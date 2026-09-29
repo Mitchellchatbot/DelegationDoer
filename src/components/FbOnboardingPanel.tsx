@@ -710,7 +710,7 @@ function ChannelListInner({ ctx, k, rows }: { ctx: Ctx; k: string; rows: SlackCh
           <input
             className="input py-1 text-xs flex-[2] min-w-0 font-mono"
             value={row.name}
-            placeholder="bright-paths-vob-leads"
+            placeholder="client-vob-leads"
             disabled={!ctx.canEdit}
             onChange={(e) => edit(i, { name: e.target.value })}
             onBlur={() => commit(draft)}

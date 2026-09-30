@@ -1,5 +1,5 @@
 import { NextMonthBudget } from "@/components/NextMonthBudget";
-import type { FbProjection } from "@/lib/finance-projections";
+import type { FbEstimateResult } from "@/lib/fb-estimate";
 import type { ParsedPnl } from "@/lib/pnl-parse";
 import type { ExplVendor } from "@/components/ExpenseExplorer";
 
@@ -13,9 +13,10 @@ function money(n: number): string {
 
 export interface ProjMrrRow { company: string; mrr: number; status: string; segment: "seo" | "facebook" }
 
-export function ProjectionsView({ fb, fbUnavailable, seoClients, seoTotal, projectedRevenue, parsed, estimates, budgetVendors, bookMonths, mrr, trend }: {
-  fb: FbProjection | null;
+export function ProjectionsView({ fbEst, fbUnavailable, fbEstMonthLabel, seoClients, seoTotal, projectedRevenue, parsed, estimates, budgetVendors, bookMonths, mrr, trend }: {
+  fbEst: FbEstimateResult;
   fbUnavailable: boolean;
+  fbEstMonthLabel: string;
   seoClients: { company: string; mrr: number }[];
   seoTotal: number;
   projectedRevenue: number;
@@ -26,8 +27,7 @@ export function ProjectionsView({ fb, fbUnavailable, seoClients, seoTotal, proje
   mrr: ProjMrrRow[];
   trend: { label: string; value: number }[];
 }) {
-  const fbYour = fb?.yourTotal ?? 0;
-  const revenueNote = `Projected revenue = Facebook (your 50%) ${money(fbYour)} + SEO retainers ${money(seoTotal)}`;
+  const revenueNote = `Projected revenue = Facebook profit (your 50%) ${money(fbEst.yourProfit)} + SEO retainers ${money(seoTotal)}`;
   return (
     <div className="space-y-5">
       {/* Header — this whole tab is the current-month projection. */}
@@ -41,7 +41,7 @@ export function ProjectionsView({ fb, fbUnavailable, seoClients, seoTotal, proje
 
       {/* Where the projected revenue comes from — the fee breakdown by client. */}
       <div className="grid lg:grid-cols-2 gap-5">
-        <FacebookProjection fb={fb} unavailable={fbUnavailable} />
+        <FacebookProjection est={fbEst} unavailable={fbUnavailable} monthLabel={fbEstMonthLabel} />
         <SeoProjection clients={seoClients} total={seoTotal} />
       </div>
 
@@ -61,46 +61,48 @@ function Card({ title, sub, children }: { title: string; sub?: string; children:
   );
 }
 
-function FacebookProjection({ fb, unavailable }: { fb: FbProjection | null; unavailable: boolean }) {
-  if (unavailable || !fb) {
-    return <Card title="Facebook profit projection" sub="From live ad spend"><div className="text-[13px] text-slate-500">Facebook dashboard unavailable right now.</div></Card>;
-  }
-  const note = fb.provisional ? `run-rate through day ${fb.elapsed} of ${fb.daysInMonth}` : "full month";
+function FacebookProjection({ est, unavailable, monthLabel }: { est: FbEstimateResult; unavailable: boolean; monthLabel: string }) {
   return (
-    <Card title="Facebook profit projection" sub={`Your 50% after Facebook salaries & costs · ${note}`}>
+    <Card title="Facebook profit projection" sub={`Your 50% after all Facebook costs · ${monthLabel}${unavailable ? " · dashboard offline, using your estimate" : ""}`}>
       <div className="mb-3 pb-3 border-b border-slate-100">
         <div className="flex items-end justify-between">
           <div>
             <div className="text-[11px] text-slate-400">Your projected profit (50%)</div>
-            <div className={"text-[26px] font-bold tabular-nums leading-none mt-0.5 " + (fb.yourProfit < 0 ? "text-rose-500" : "text-emerald-600")}>{money(fb.yourProfit)}</div>
+            <div className={"text-[26px] font-bold tabular-nums leading-none mt-0.5 " + (est.yourProfit < 0 ? "text-rose-500" : "text-emerald-600")}>{money(est.yourProfit)}</div>
           </div>
           <div className="text-[11px] text-slate-400 text-right leading-relaxed">
-            fee {money(fb.grossFee)}<br />
-            − salaries {money(fb.salaries)}<br />
-            {fb.opex > 0 && <>− costs {money(fb.opex)}<br /></>}
-            = net {money(fb.net)}
+            revenue {money(est.revenue)}<br />
+            − costs {money(est.costs)}<br />
+            = net {money(est.net)}
           </div>
         </div>
       </div>
-      <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-400 mb-1.5">Fee breakdown by client</div>
+      <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-400 mb-1.5">Ad spend fee by provider</div>
       <table className="w-full text-[12px]">
         <thead>
           <tr className="text-slate-400 text-left text-[10px] uppercase tracking-wider">
-            <th className="font-medium pb-1.5">Client</th>
-            <th className="font-medium pb-1.5 px-2 text-right">Rate</th>
-            <th className="font-medium pb-1.5 px-2 text-right">Proj. spend</th>
-            <th className="font-medium pb-1.5 pl-2 text-right">Your fee</th>
+            <th className="font-medium pb-1.5">Provider</th>
+            <th className="font-medium pb-1.5 px-2 text-right">Fee %</th>
+            <th className="font-medium pb-1.5 px-2 text-right">Ad spend</th>
+            <th className="font-medium pb-1.5 pl-2 text-right">Fee</th>
           </tr>
         </thead>
         <tbody>
-          {fb.clients.slice(0, 10).map((c) => (
-            <tr key={c.name} className="border-t border-slate-50">
-              <td className="py-1.5 text-slate-700 truncate max-w-[140px]">{c.name}</td>
-              <td className="py-1.5 px-2 text-right tabular-nums text-slate-400">{Math.round(c.rate * 100)}%</td>
-              <td className="py-1.5 px-2 text-right tabular-nums text-slate-500">{money(c.projectedSpend)}</td>
-              <td className="py-1.5 pl-2 text-right tabular-nums font-semibold text-slate-900">{money(c.yourShare)}</td>
+          {est.providerRows.filter((r) => r.fee > 0).slice(0, 12).map((r) => (
+            <tr key={r.name} className="border-t border-slate-50">
+              <td className="py-1.5 text-slate-700 truncate max-w-[140px]">{r.name}</td>
+              <td className="py-1.5 px-2 text-right tabular-nums text-slate-400">{r.feePct}%</td>
+              <td className="py-1.5 px-2 text-right tabular-nums text-slate-500">{money(r.spend)}</td>
+              <td className="py-1.5 pl-2 text-right tabular-nums font-semibold text-slate-900">{money(r.fee)}</td>
             </tr>
           ))}
+          {est.onboarding > 0 && (
+            <tr className="border-t border-slate-50">
+              <td className="py-1.5 text-slate-700">Onboarding</td>
+              <td className="py-1.5 px-2" /><td className="py-1.5 px-2" />
+              <td className="py-1.5 pl-2 text-right tabular-nums font-semibold text-slate-900">{money(est.onboarding)}</td>
+            </tr>
+          )}
         </tbody>
       </table>
     </Card>

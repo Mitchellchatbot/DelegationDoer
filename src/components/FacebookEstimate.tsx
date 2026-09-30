@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { X } from "lucide-react";
+import { computeFbEstimate } from "@/lib/fb-estimate";
 
 // September Facebook profit estimate — an editable mini-P&L (owner-only).
 // REVENUE: ad spend per provider (spend × custom fee %) + onboarding (Stripe
@@ -45,33 +46,10 @@ export function FacebookEstimate({ monthLabel, providers, onboardingStripe, sala
     for (const key of keys) { try { await fetch("/api/finance/fb-estimate", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key }) }); } catch { /* best effort */ } }
   }
 
-  // Providers = seeded (from the dashboard) + any custom ones added (a spend key
-  // whose name isn't in the seeded list).
+  // One shared calc (same one the Projections tab uses, so the numbers match).
+  const { providerRows: rows, mgmtFee, onboardingManual, onboarding, revenue, expLines, costs, net, yourProfit } = computeFbEstimate({ providers, est, onboardingStripe, salaries, taggedItems });
   const seededNames = providers.map((p) => p.name);
-  const customNames = [...new Set(Object.keys(est).filter((k) => k.startsWith("prov::") && k.endsWith("::spend")).map((k) => k.slice(6, -7)))].filter((n) => !seededNames.includes(n));
-  const rows = [
-    ...providers.map((p) => ({ name: p.name, spend: SPEND(p.name) in est ? est[SPEND(p.name)] : p.defaultSpend, feePct: FEE(p.name) in est ? est[FEE(p.name)] : p.defaultFeePct, custom: false })),
-    ...customNames.map((n) => ({ name: n, spend: est[SPEND(n)] ?? 0, feePct: est[FEE(n)] ?? 0, custom: true }))
-  ].map((r) => ({ ...r, fee: Math.round(r.spend * (r.feePct / 100)) }));
-
-  const mgmtFee = rows.reduce((s, r) => s + r.fee, 0);
-  const onboardingManual = est.onboarding_manual ?? 0;
-  const onboarding = onboardingStripe + onboardingManual;
-  const revenue = mgmtFee + onboarding;
-
-  // Expense lines = last month's tagged FB expenses as a SEED (each editable for
-  // this month) + any vendor you add manually. This is a September projection, so
-  // every amount is your estimate; the seed just pre-fills from last month.
-  const seedLabels = new Set(taggedItems.map((t) => t.label));
-  const expLines = [
-    ...taggedItems.map((t) => ({ key: EXP + t.label, label: t.label, amount: (EXP + t.label) in est ? est[EXP + t.label] : t.amount, lastMonth: t.amount, seeded: true })),
-    ...Object.keys(est).filter((k) => k.startsWith(EXP) && !seedLabels.has(k.slice(EXP.length)) && est[k] > 0).map((k) => ({ key: k, label: k.slice(EXP.length), amount: est[k], lastMonth: 0, seeded: false }))
-  ];
-  const expSum = expLines.reduce((s, l) => s + l.amount, 0);
-  const costs = salaries + expSum;
-
-  const net = revenue - costs;
-  const yourProfit = Math.round(net * 0.5);
+  const customNames = rows.filter((r) => r.custom).map((r) => r.name);
 
   const Num = ({ k, value, w = "w-24" }: { k: string; value: number; w?: string }) => (
     <input type="text" inputMode="decimal" defaultValue={value.toLocaleString("en-US")}

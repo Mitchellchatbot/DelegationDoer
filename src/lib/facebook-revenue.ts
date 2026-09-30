@@ -1,5 +1,6 @@
 import "server-only";
 
+import { describeNetworkError, isRetryableNetworkError } from "./fetch-error";
 import type { FacebookRevenueData, FacebookRevenueResult } from "./facebook-revenue-types";
 
 // Facebook-side revenue for the owner-only /finance page.
@@ -16,8 +17,20 @@ import type { FacebookRevenueData, FacebookRevenueResult } from "./facebook-reve
 
 const TIMEOUT_MS = 25_000;
 
-// One retry on a transient connection failure (Railway inter-service networking
-// can blip). A timeout is NOT retried — it already waited the full budget.
+// Discarding a body must never change the outcome. cancel() rejects on a
+// connection that is already gone, and an unhandled rejection here would
+// escape as the card's whole message — replacing a precise HTTP status with a
+// one-word "terminated".
+async function drop(res: Response): Promise<void> {
+  try {
+    await res.body?.cancel();
+  } catch {
+    // The status line is what we came for; the rest of the body is not.
+  }
+}
+
+// One extra attempt, but only for the failures a second attempt can fix —
+// see isRetryableNetworkError. A timeout is never retried.
 async function fetchRevenue(url: URL, secret: string, timeoutMs: number): Promise<Response> {
   const init: RequestInit = {
     headers: { Authorization: `Bearer ${secret}`, Accept: "application/json" },
@@ -27,25 +40,31 @@ async function fetchRevenue(url: URL, secret: string, timeoutMs: number): Promis
     // stopping here lets the card say what actually happened.
     redirect: "manual"
   };
+  // ONE budget across both attempts. Giving each attempt its own full timeout
+  // would let a slow failure spend 2x timeoutMs on a page the owner is waiting
+  // on — /finance renders this inside its Promise.all, so that delay is the
+  // whole page.
+  const deadline = Date.now() + timeoutMs;
   let lastErr: unknown;
+
   for (let attempt = 0; attempt < 2; attempt++) {
+    const left = deadline - Date.now();
+    // Always make the first attempt, even if the budget is somehow already
+    // spent — bailing before any fetch would leave lastErr undefined and throw
+    // that, which reads as an internal fault rather than a network one.
+    if (attempt > 0 && left <= 0) break;
     try {
-      return await fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
+      return await fetch(url, { ...init, signal: AbortSignal.timeout(Math.max(1, left)) });
     } catch (e) {
       lastErr = e;
+      // A timeout has already spent the budget; retrying only makes the reader
+      // wait longer for the same answer.
       const name = (e as Error).name;
       if (name === "TimeoutError" || name === "AbortError") throw e;
+      if (!isRetryableNetworkError(e)) throw e;
     }
   }
   throw lastErr;
-}
-
-// undici wraps the real reason in `.cause`; pull out its code/message.
-function describeNetworkError(err: Error): string {
-  const cause = (err as { cause?: unknown }).cause as { code?: string; message?: string } | undefined;
-  if (cause?.code) return cause.message ? `${cause.code} — ${cause.message}` : cause.code;
-  if (cause?.message) return cause.message;
-  return err.message || "fetch failed";
 }
 
 export async function getFacebookRevenue(timeoutMs = TIMEOUT_MS): Promise<FacebookRevenueResult> {
@@ -84,14 +103,15 @@ export async function getFacebookRevenue(timeoutMs = TIMEOUT_MS): Promise<Facebo
       if (err.name === "TimeoutError" || err.name === "AbortError") {
         return { ok: false, error: `Finance app did not answer within ${Math.round(timeoutMs / 1000)}s` };
       }
-      // "fetch failed" on its own is useless — the real reason is on .cause
-      // (ENOTFOUND = DNS, ECONNREFUSED, certificate…). Surface it so a
-      // prod-only connection failure is diagnosable from the card itself.
-      return { ok: false, error: `Network error: ${describeNetworkError(err)}` };
+      // Name the host as well as the reason. A wrong FINANCE_URL and an
+      // unreachable Finance app produce the same TypeError, and only the host
+      // tells them apart — it is the one piece of this config that is not a
+      // secret, so it can safely appear on the card.
+      return { ok: false, error: `Network error reaching ${url.host}: ${describeNetworkError(err)}` };
     }
 
     if (res.status >= 300 && res.status < 400) {
-      await res.body?.cancel();
+      await drop(res);
       return { ok: false, error: `Finance app redirected (HTTP ${res.status}) — is /api/revenue deployed there?` };
     }
 
@@ -106,13 +126,13 @@ export async function getFacebookRevenue(timeoutMs = TIMEOUT_MS): Promise<Facebo
         const body = (await res.json().catch(() => null)) as { error?: unknown } | null;
         if (typeof body?.error === "string") reason = ` ${body.error}`;
       } else {
-        await res.body?.cancel();
+        await drop(res);
       }
       return { ok: false, error: `HTTP ${res.status}${reason}` };
     }
 
     if (!isJson) {
-      await res.body?.cancel();
+      await drop(res);
       return { ok: false, error: `Finance app returned ${ct || "non-JSON"} (HTTP ${res.status})` };
     }
 
@@ -124,6 +144,13 @@ export async function getFacebookRevenue(timeoutMs = TIMEOUT_MS): Promise<Facebo
       const name = (e as Error).name;
       if (name === "TimeoutError" || name === "AbortError") {
         return { ok: false, error: `Finance app did not answer within ${Math.round(timeoutMs / 1000)}s` };
+      }
+      // A body that stops arriving is a network failure, not bad JSON — undici
+      // raises TypeError("terminated") for it. Calling that "invalid JSON"
+      // sends the reader to audit the Finance app's output when the fault is
+      // the connection between the two services.
+      if (!(e instanceof SyntaxError)) {
+        return { ok: false, error: `Network error reading the reply from ${url.host}: ${describeNetworkError(e)}` };
       }
       return { ok: false, error: "Finance app returned invalid JSON" };
     }

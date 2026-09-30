@@ -1,5 +1,6 @@
 import "server-only";
 
+import { describeNetworkError } from "./fetch-error";
 import type { OutboundSummaryResponse, OutboundSummaryResult } from "./outbound-summary-types";
 
 // Outbound acquisition numbers for the owner-only Scale Room and Growth Brain.
@@ -151,7 +152,11 @@ export async function requestAdsDashboard<T>(
       if (name === "TimeoutError" || name === "AbortError") {
         return { ok: false, error: `Ads dashboard did not answer within ${Math.round(timeoutMs / 1000)}s${unsure}` };
       }
-      return { ok: false, error: `Network error: ${(e as Error).message}${unsure}` };
+      // `(e as Error).message` here is always the opaque "fetch failed" — the
+      // real reason is buried on .cause, and on a dual-stack host in an
+      // AggregateError under that. Same blindness that hid a Finance app
+      // outage on /finance for a day (2026-09-30).
+      return { ok: false, error: `Network error: ${describeNetworkError(e)}${unsure}` };
     }
 
     if (res.status >= 300 && res.status < 400) {

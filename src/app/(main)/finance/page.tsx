@@ -95,7 +95,9 @@ export default async function FinancePage() {
     supabase.from("expense_segments").select("account, segment"),
     supabase.from("software_subscriptions").select("vendor, month, amount, segment"),
     supabase.from("facebook_monthly").select("period, revenue, commission, expenses"),
-    getFacebookRevenue().catch(() => ({ ok: false as const, error: "unavailable" })),
+    // getFacebookRevenue never throws, but if that ever changes, keep the
+    // reason: "unavailable" is the string this whole bug was invisible behind.
+    getFacebookRevenue().catch((e) => ({ ok: false as const, error: e instanceof Error ? e.message : "unavailable" })),
     supabase.from("pnl_monthly").select("period, label, income, expenses, net, taxes, writeoffs, software, contractors, advertising").order("period", { ascending: true }),
     supabase.from("pnl_lines").select("period, account, section, amount"),
     supabase.from("deel_payments").select("period, contractor, amount, is_fee"),
@@ -297,7 +299,7 @@ export default async function FinancePage() {
         projections={
           <ProjectionsView
             fb={fbProjection}
-            fbUnavailable={!fbResult.ok}
+            fbError={fbResult.ok ? null : fbResult.error}
             seoClients={seoClients}
             seoTotal={seoTotal}
             projectedRevenue={projectedRevenue}

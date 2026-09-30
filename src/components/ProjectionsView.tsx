@@ -11,11 +11,25 @@ function money(n: number): string {
   return `${s}$${Math.abs(Math.round(n)).toLocaleString("en-US")}`;
 }
 
+const MONTHS = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December"
+];
+
+// The period arrives as 'YYYY-MM' on the ad accounts' calendar. Split it rather
+// than going through Date, so the viewer's timezone can't shift the month.
+function monthName(period: string): string {
+  return MONTHS[Number(period.slice(5, 7)) - 1] ?? period;
+}
+
 export interface ProjMrrRow { company: string; mrr: number; status: string; segment: "seo" | "facebook" }
 
-export function ProjectionsView({ fb, fbUnavailable, seoClients, seoTotal, projectedRevenue, parsed, estimates, budgetVendors, bookMonths, mrr, trend }: {
+export function ProjectionsView({ fb, fbError, seoClients, seoTotal, projectedRevenue, parsed, estimates, budgetVendors, bookMonths, mrr, trend }: {
   fb: FbProjection | null;
-  fbUnavailable: boolean;
+  /** Why the Finance app feed is missing, verbatim, or null when it loaded.
+   *  A boolean here used to strand the reason on the Facebook card alone,
+   *  leaving this tab saying only "unavailable". */
+  fbError: string | null;
   seoClients: { company: string; mrr: number }[];
   seoTotal: number;
   projectedRevenue: number;
@@ -26,13 +40,22 @@ export function ProjectionsView({ fb, fbUnavailable, seoClients, seoTotal, proje
   mrr: ProjMrrRow[];
   trend: { label: string; value: number }[];
 }) {
-  const fbYour = fb?.yourTotal ?? 0;
-  const revenueNote = `Projected revenue = Facebook (your 50%) ${money(fbYour)} + SEO retainers ${money(seoTotal)}`;
+  // Name the month from the same payload the figures come from, so the heading
+  // and the numbers can never disagree — and claim no month at all when the
+  // Finance app is unreachable, rather than asserting one we can't confirm.
+  const heading = fb ? `${monthName(fb.period)} projection` : "Current month projection";
+  // A missing Facebook feed is NOT $0. projectedRevenue already excludes it, so
+  // say so plainly instead of quietly understating the month — the revenue line
+  // below is editable, and the owner needs to know it is short a whole segment.
+  const fbDown = fbError !== null || !fb;
+  const revenueNote = fbDown
+    ? `Projected revenue = SEO retainers ${money(seoTotal)} only — the Facebook run-rate is unavailable, so it is not included.`
+    : `Projected revenue = Facebook (your 50%) ${money(fb.yourTotal)} + SEO retainers ${money(seoTotal)}`;
   return (
     <div className="space-y-5">
       {/* Header — this whole tab is the current-month projection. */}
       <div>
-        <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 px-1">September projection</div>
+        <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 px-1">{heading}</div>
         <div className="text-[13px] text-slate-500 px-1 mt-0.5">Projected revenue (Facebook run-rate + SEO retainers) minus your costs — edit or add expenses to see projected profit.</div>
       </div>
 
@@ -41,7 +64,7 @@ export function ProjectionsView({ fb, fbUnavailable, seoClients, seoTotal, proje
 
       {/* Where the projected revenue comes from — the fee breakdown by client. */}
       <div className="grid lg:grid-cols-2 gap-5">
-        <FacebookProjection fb={fb} unavailable={fbUnavailable} />
+        <FacebookProjection fb={fb} error={fbError} />
         <SeoProjection clients={seoClients} total={seoTotal} />
       </div>
 
@@ -61,9 +84,18 @@ function Card({ title, sub, children }: { title: string; sub?: string; children:
   );
 }
 
-function FacebookProjection({ fb, unavailable }: { fb: FbProjection | null; unavailable: boolean }) {
-  if (unavailable || !fb) {
-    return <Card title="Facebook profit projection" sub="From live ad spend"><div className="text-[13px] text-slate-500">Facebook dashboard unavailable right now.</div></Card>;
+function FacebookProjection({ fb, error }: { fb: FbProjection | null; error: string | null }) {
+  if (error !== null || !fb) {
+    // Say which app and why. "unavailable right now" reads as a blip you should
+    // wait out; the reason is what tells the owner whether to wait, re-check
+    // the config, or go look at the Finance app. It also named the wrong
+    // service — these figures come from the Finance app, not the ads dashboard.
+    return (
+      <Card title="Facebook profit projection" sub="From live ad spend">
+        <div className="text-[13px] text-slate-500">Finance app unavailable — this month&rsquo;s Facebook fees are not included in the projection above.</div>
+        {error && <div className="text-[12px] text-amber-600 mt-1.5 break-words">{error}</div>}
+      </Card>
+    );
   }
   const note = fb.provisional ? `run-rate through day ${fb.elapsed} of ${fb.daysInMonth}` : "full month";
   return (

@@ -84,7 +84,7 @@ export default async function FinancePage() {
   if (!isOwner(user)) notFound();
 
   const supabase = getSupabaseAdmin();
-  const [docRes, overview, revenue, mrrRes, expRes, payRes, estRes, expSegRes, swRes, fbMonthRes, fbResult, pnlRes, pnlLinesRes, deelRes, oneOffsRes, oneOffSegRes, fbEstRes] = await Promise.all([
+  const [docRes, overview, revenue, mrrRes, expRes, payRes, estRes, expSegRes, swRes, fbMonthRes, fbResult, pnlRes, pnlLinesRes, deelRes, oneOffsRes, oneOffSegRes, fbEstRes, fbVendorRes] = await Promise.all([
     supabase.from("finance_documents").select("id, label, filename, content_type, size_bytes, uploaded_at, parsed").order("uploaded_at", { ascending: false }),
     getFinanceOverview(),
     getStripeRevenue().catch(() => null),
@@ -101,7 +101,8 @@ export default async function FinancePage() {
     supabase.from("deel_payments").select("period, contractor, amount, is_fee"),
     getStripeOneOffs().catch(() => null),
     supabase.from("stripe_oneoff_segments").select("payment_id, segment"),
-    supabase.from("fb_estimate").select("key, value")
+    supabase.from("fb_estimate").select("key, value"),
+    supabase.from("fb_vendor_rules").select("vendor")
   ]);
 
   const rows = (docRes.data ?? []) as (FinanceDoc & { parsed: ParsedPnl | null })[];
@@ -165,7 +166,36 @@ export default async function FinancePage() {
   const fbContractorsByPeriod: Record<string, number> = {};
   for (const m of ((pnlRes.data ?? []) as { period: string }[])) fbContractorsByPeriod[m.period] = fbSalariesMonthly;
 
-  const breakdown = computeBreakdown({ parsed: latestParsed, expenseSegments, softwareItems, fbRevenueByPeriod, fbCommissionByPeriod, fbExpensesByPeriod, oneOffs: oneOffs.map((o) => ({ id: o.id, date: o.date, amount: o.amount })), oneOffSegments, fbContractorsByPeriod });
+  // Vendors always-Facebook (persistent rules). Their expense_line_items amounts
+  // roll into the Facebook side every month — even inside a mixed account. We
+  // skip accounts already tagged Facebook wholesale (avoid double-count) and the
+  // software line + contractor payments (handled separately).
+  const fbVendorRuleSet = new Set(((fbVendorRes.data ?? []) as { vendor: string }[]).map((r) => r.vendor));
+  const shortToPeriod: Record<string, string> = {};
+  for (const m of ((pnlRes.data ?? []) as { period: string; label: string }[])) shortToPeriod[m.label.slice(0, 3).toLowerCase()] = m.period;
+  const fbVendorItemsByPeriod: Record<string, { label: string; amount: number }[]> = {};
+  for (const r of ((expRes.data ?? []) as ExplVendor[])) {
+    if (!fbVendorRuleSet.has(r.vendor)) continue;
+    if (expenseSegments[r.account] === "facebook") continue;
+    if (r.account === "Software/Subscriptions" || r.account === "Contractor Payments") continue;
+    const period = shortToPeriod[String(r.month).slice(0, 3).toLowerCase()];
+    if (!period) continue;
+    (fbVendorItemsByPeriod[period] ??= []).push({ label: r.vendor, amount: Number(r.amount) });
+  }
+
+  // Vendor list Mitchell can tag always-Facebook — latest month's non-software,
+  // non-contractor expense vendors, biggest first.
+  const fbTagVendorMap = new Map<string, { vendor: string; account: string; amount: number }>();
+  for (const r of ((expRes.data ?? []) as ExplVendor[])) {
+    if (String(r.month).slice(0, 3).toLowerCase() !== latestShort) continue;
+    if (r.account === "Software/Subscriptions" || r.account === "Contractor Payments") continue;
+    const cur = fbTagVendorMap.get(r.vendor) ?? { vendor: r.vendor, account: r.account, amount: 0 };
+    cur.amount += Number(r.amount);
+    fbTagVendorMap.set(r.vendor, cur);
+  }
+  const fbTagVendors = [...fbTagVendorMap.values()].filter((v) => v.amount !== 0).sort((a, b) => b.amount - a.amount);
+
+  const breakdown = computeBreakdown({ parsed: latestParsed, expenseSegments, softwareItems, fbRevenueByPeriod, fbCommissionByPeriod, fbExpensesByPeriod, oneOffs: oneOffs.map((o) => ({ id: o.id, date: o.date, amount: o.amount })), oneOffSegments, fbContractorsByPeriod, fbVendorItemsByPeriod });
 
   // Learnings & risks: 10-month P&L history + Facebook + software + client concentration.
   const pnlMonths = ((pnlRes.data ?? []) as PnlMonth[]).map((m) => ({
@@ -289,7 +319,7 @@ export default async function FinancePage() {
           <div className="space-y-5">
             <ExpenseExplorer lines={bookLines} months={bookMonths} vendors={(expRes.data ?? []) as ExplVendor[]} />
             <PayrollManual initial={(payRes.data ?? []) as PayrollEntry[]} />
-            <ExpenseLabels lines={expenseLines} lineInitial={expenseSegments} software={softwareItems as SoftwareRow[]} latestShort={latestShort} />
+            <ExpenseLabels lines={expenseLines} lineInitial={expenseSegments} software={softwareItems as SoftwareRow[]} latestShort={latestShort} vendors={fbTagVendors} vendorInitial={[...fbVendorRuleSet]} />
             <BooksByMonth lines={bookLines} months={bookMonths} />
             <FinancePanel initialDocuments={rows.map(({ parsed, ...d }) => d)} />
           </div>

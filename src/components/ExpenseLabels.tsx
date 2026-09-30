@@ -15,11 +15,15 @@ export interface SoftwareRow { vendor: string; month: string; amount: number; se
 
 const isSalary = (a: string) => a.toLowerCase().includes("mitchell price");
 
-export function ExpenseLabels({ lines, lineInitial, software, latestShort }: {
+export interface TagVendor { vendor: string; account: string; amount: number }
+
+export function ExpenseLabels({ lines, lineInitial, software, latestShort, vendors = [], vendorInitial = [] }: {
   lines: ExpenseLeaf[];
   lineInitial: Record<string, Segment>;
   software: SoftwareRow[];
   latestShort: string; // e.g. "aug"
+  vendors?: TagVendor[];        // vendors inside P&L lines, taggable always-Facebook
+  vendorInitial?: string[];     // vendor names already tagged Facebook
 }) {
   const [open, setOpen] = useState(false);
   const [lineSeg, setLineSeg] = useState<Record<string, Segment>>(lineInitial);
@@ -28,6 +32,15 @@ export function ExpenseLabels({ lines, lineInitial, software, latestShort }: {
     for (const s of software) m[s.vendor] = s.segment;
     return m;
   });
+  const [vendorSeg, setVendorSeg] = useState<Record<string, Segment>>(() => {
+    const m: Record<string, Segment> = {};
+    for (const v of vendorInitial) m[v] = "facebook";
+    return m;
+  });
+  async function saveVendor(vendor: string, segment: Segment) {
+    setVendorSeg((s) => ({ ...s, [vendor]: segment }));
+    try { await fetch("/api/finance/fb-vendor-rule", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ vendor, facebook: segment === "facebook" }) }); } catch { /* best effort */ }
+  }
 
   const pnlLines = useMemo(
     () => lines.filter((l) => l.amount !== 0 && l.account !== SOFTWARE_LINE && !isSalary(l.account)).sort((a, b) => b.amount - a.amount),
@@ -41,6 +54,9 @@ export function ExpenseLabels({ lines, lineInitial, software, latestShort }: {
 
   const fbLineTotal = pnlLines.filter((l) => (lineSeg[l.account] ?? "seo") === "facebook").reduce((s, l) => s + l.amount, 0);
   const fbSwTotal = swVendors.filter((v) => (swSeg[v.vendor] ?? "seo") === "facebook").reduce((s, v) => s + v.amount, 0);
+  // Vendor rules only add value when the vendor's account isn't already tagged FB.
+  const fbAccountTagged = new Set(pnlLines.filter((l) => (lineSeg[l.account] ?? "seo") === "facebook").map((l) => l.account));
+  const fbVendorTotal = vendors.filter((v) => (vendorSeg[v.vendor] ?? "seo") === "facebook" && !fbAccountTagged.has(v.account)).reduce((s, v) => s + v.amount, 0);
 
   async function saveLine(account: string, segment: Segment) {
     setLineSeg((s) => ({ ...s, [account]: segment }));
@@ -63,7 +79,7 @@ export function ExpenseLabels({ lines, lineInitial, software, latestShort }: {
         </button>
         <div className="text-right shrink-0">
           <div className="text-[11px] text-slate-400">Tagged Facebook ({latestShort.replace(/^\w/, (c) => c.toUpperCase())})</div>
-          <div className="text-[20px] font-bold tabular-nums text-blue-600 leading-none mt-0.5">{money(fbLineTotal + fbSwTotal)}</div>
+          <div className="text-[20px] font-bold tabular-nums text-blue-600 leading-none mt-0.5">{money(fbLineTotal + fbSwTotal + fbVendorTotal)}</div>
         </div>
       </div>
 
@@ -93,6 +109,27 @@ export function ExpenseLabels({ lines, lineInitial, software, latestShort }: {
           </div>
         ))}
       </div>
+
+      {vendors.length > 0 && (<>
+        <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 mt-5 mb-1.5">Vendors (inside P&amp;L lines) — always-Facebook rule</div>
+        <div className="text-[11px] text-slate-400 mb-1.5">Tag a vendor once (e.g. Ads with Finnesse, The Tracking Academy) and it counts as Facebook every month, even in a mixed account.</div>
+        <div className="divide-y divide-slate-100 max-h-[26rem] overflow-y-auto">
+          {vendors.map((v) => {
+            const accountTagged = (lineSeg[v.account] ?? "seo") === "facebook";
+            return (
+              <div key={v.vendor} className="flex items-center gap-3 py-2">
+                <div className="min-w-0 flex-1">
+                  <div className="text-[13px] font-medium text-slate-900 truncate">{v.vendor}</div>
+                  <div className="text-[11px] text-slate-400 truncate">{v.account} · {money(v.amount)}{accountTagged ? " · account already Facebook" : ""}</div>
+                </div>
+                {accountTagged
+                  ? <span className="text-[10px] font-medium uppercase tracking-wide text-blue-600 bg-blue-50 rounded px-2 py-1">via account</span>
+                  : <SegmentToggle value={vendorSeg[v.vendor] ?? "seo"} onChange={(s) => saveVendor(v.vendor, s)} />}
+              </div>
+            );
+          })}
+        </div>
+      </>)}
       </div>)}
     </div>
   );

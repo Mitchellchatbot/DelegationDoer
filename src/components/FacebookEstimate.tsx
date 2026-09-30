@@ -59,9 +59,16 @@ export function FacebookEstimate({ monthLabel, providers, onboardingStripe, sala
   const onboarding = onboardingStripe + onboardingManual;
   const revenue = mgmtFee + onboarding;
 
-  const addedExp = Object.keys(est).filter((k) => k.startsWith(EXP) && est[k] > 0).map((k) => ({ key: k, label: k.slice(EXP.length), amount: est[k] }));
-  const addedSum = addedExp.reduce((s, a) => s + a.amount, 0);
-  const costs = salaries + taggedExpenses + addedSum;
+  // Expense lines = last month's tagged FB expenses as a SEED (each editable for
+  // this month) + any vendor you add manually. This is a September projection, so
+  // every amount is your estimate; the seed just pre-fills from last month.
+  const seedLabels = new Set(taggedItems.map((t) => t.label));
+  const expLines = [
+    ...taggedItems.map((t) => ({ key: EXP + t.label, label: t.label, amount: (EXP + t.label) in est ? est[EXP + t.label] : t.amount, lastMonth: t.amount, seeded: true })),
+    ...Object.keys(est).filter((k) => k.startsWith(EXP) && !seedLabels.has(k.slice(EXP.length)) && est[k] > 0).map((k) => ({ key: k, label: k.slice(EXP.length), amount: est[k], lastMonth: 0, seeded: false }))
+  ];
+  const expSum = expLines.reduce((s, l) => s + l.amount, 0);
+  const costs = salaries + expSum;
 
   const net = revenue - costs;
   const yourProfit = Math.round(net * 0.5);
@@ -152,31 +159,27 @@ export function FacebookEstimate({ monthLabel, providers, onboardingStripe, sala
         <div><span className="text-slate-700">Facebook salaries</span><div className="text-[11px] text-slate-400">Roster people tagged Facebook</div></div>
         <span className="tabular-nums font-medium text-slate-900">{money(salaries)}</span>
       </div>
-      <div className="py-1.5 text-[13px] border-b border-slate-50">
-        <div className="flex items-center justify-between">
-          <div><span className="text-slate-700">Tagged Facebook expenses</span><div className="text-[11px] text-slate-400">From &lsquo;Assign Facebook expenses&rsquo;</div></div>
-          <span className="tabular-nums font-medium text-slate-900">{money(taggedExpenses)}</span>
-        </div>
-        {taggedItems.length > 0 && (
-          <div className="mt-1 ml-3 border-l border-slate-100 pl-3 space-y-0.5">
-            {taggedItems.map((t, i) => (
-              <div key={i} className="flex items-center justify-between text-[11px] text-slate-400">
-                <span className="truncate">{t.label}</span><span className="tabular-nums shrink-0">{money(t.amount)}</span>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-      {addedExp.map((a) => (
-        <div key={a.key} className="flex items-center justify-between py-1.5 text-[13px] border-b border-slate-50">
-          <span className="text-slate-700">{a.label}</span>
-          <span className="inline-flex items-center gap-2"><span className="tabular-nums font-medium text-slate-900">{money(a.amount)}</span>
-            <button type="button" onClick={() => removeKey(a.key)} className="text-slate-300 hover:text-rose-500"><X className="w-3.5 h-3.5" /></button></span>
+      {/* Editable expense lines — seeded from last month's tagged FB expenses,
+          each an estimate you set for this month, plus vendors you add. */}
+      {expLines.map((l) => (
+        <div key={l.key} className="flex items-center justify-between py-1.5 text-[13px] border-b border-slate-50">
+          <span className="inline-flex items-center gap-2 min-w-0">
+            <span className="text-slate-700 truncate">{l.label}</span>
+            {l.seeded
+              ? <span className="text-[10px] text-slate-400 shrink-0">was {money(l.lastMonth)}</span>
+              : <span className="text-[10px] font-medium uppercase tracking-wide text-amber-600 bg-amber-50 rounded px-1.5 py-0.5 shrink-0">estimate</span>}
+          </span>
+          <span className="inline-flex items-center gap-2">
+            <span className="text-slate-400 text-[11px]">$</span> <Num k={l.key} value={l.amount} w="w-24" />
+            {l.seeded
+              ? <span className="w-3.5" />
+              : <button type="button" onClick={() => removeKey(l.key)} title="Remove" className="text-slate-300 hover:text-rose-500"><X className="w-3.5 h-3.5" /></button>}
+          </span>
         </div>
       ))}
       <div className="flex items-center gap-2 mt-2">
         <input value={newExp} onChange={(e) => setNewExp(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addExpense(); }}
-          placeholder="Add a cost line (e.g. tool, freelancer)" className="flex-1 min-w-[160px] text-[12px] rounded-lg border border-slate-200 px-2.5 py-1.5 focus:outline-none focus:border-slate-400" />
+          placeholder="Add a vendor / cost (e.g. Ads with Finnesse)" className="flex-1 min-w-[160px] text-[12px] rounded-lg border border-slate-200 px-2.5 py-1.5 focus:outline-none focus:border-slate-400" />
         <span className="inline-flex items-center gap-1"><span className="text-[13px] text-slate-400">$</span>
           <input value={newExpAmt} onChange={(e) => setNewExpAmt(e.target.value.replace(/[^0-9.]/g, ""))} onKeyDown={(e) => { if (e.key === "Enter") addExpense(); }}
             placeholder="amount" inputMode="decimal" className="w-24 text-[12px] text-right tabular-nums rounded-lg border border-slate-200 px-2 py-1.5 focus:outline-none focus:border-slate-400" /></span>

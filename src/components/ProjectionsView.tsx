@@ -26,14 +26,26 @@ export function ProjectionsView({ fb, fbUnavailable, seoClients, seoTotal, proje
   mrr: ProjMrrRow[];
   trend: { label: string; value: number }[];
 }) {
+  const fbYour = fb?.yourTotal ?? 0;
+  const revenueNote = `Projected revenue = Facebook (your 50%) ${money(fbYour)} + SEO retainers ${money(seoTotal)}`;
   return (
     <div className="space-y-5">
+      {/* Header — this whole tab is the current-month projection. */}
+      <div>
+        <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 px-1">September projection</div>
+        <div className="text-[13px] text-slate-500 px-1 mt-0.5">Projected revenue (Facebook run-rate + SEO retainers) minus your costs — edit or add expenses to see projected profit.</div>
+      </div>
+
+      {/* The projection itself: revenue in, editable + add-able costs, profit out. */}
+      <NextMonthBudget parsed={parsed} estimates={estimates} defaultRevenue={projectedRevenue} vendors={budgetVendors} months={bookMonths} defaultOpen revenueNote={revenueNote} />
+
+      {/* Where the projected revenue comes from — the fee breakdown by client. */}
       <div className="grid lg:grid-cols-2 gap-5">
         <FacebookProjection fb={fb} unavailable={fbUnavailable} />
         <SeoProjection clients={seoClients} total={seoTotal} />
       </div>
+
       {trend.length > 1 && <ExpenseTrend rows={trend} />}
-      <NextMonthBudget parsed={parsed} estimates={estimates} defaultRevenue={projectedRevenue} vendors={budgetVendors} months={bookMonths} />
       <ClientList rows={mrr} />
     </div>
   );
@@ -51,26 +63,38 @@ function Card({ title, sub, children }: { title: string; sub?: string; children:
 
 function FacebookProjection({ fb, unavailable }: { fb: FbProjection | null; unavailable: boolean }) {
   if (unavailable || !fb) {
-    return <Card title="Facebook — projected" sub="From live ad spend"><div className="text-[13px] text-slate-500">Facebook dashboard unavailable right now.</div></Card>;
+    return <Card title="Facebook fee breakdown" sub="From live ad spend"><div className="text-[13px] text-slate-500">Facebook dashboard unavailable right now.</div></Card>;
   }
   const note = fb.provisional ? `run-rate through day ${fb.elapsed} of ${fb.daysInMonth}` : "full month";
   return (
-    <Card title="Facebook — projected" sub={`Ad spend × days × fee, your 50% · ${note}`}>
-      <div className="flex items-end justify-between mb-3">
+    <Card title="Facebook fee breakdown" sub={`Projected management fee by client · your 50% · ${note}`}>
+      <div className="flex items-end justify-between mb-3 pb-3 border-b border-slate-100">
         <div>
-          <div className="text-[11px] text-slate-400">Your projected revenue (50%)</div>
+          <div className="text-[11px] text-slate-400">Your projected fee (50%)</div>
           <div className="text-[26px] font-bold tabular-nums text-emerald-600 leading-none mt-0.5">{money(fb.yourTotal)}</div>
         </div>
-        <div className="text-[12px] text-slate-400 text-right">of {money(fb.grossFee)} gross fee</div>
+        <div className="text-[12px] text-slate-400 text-right">of {money(fb.grossFee)}<br />gross fee</div>
       </div>
-      <div className="divide-y divide-slate-100">
-        {fb.clients.slice(0, 8).map((c) => (
-          <div key={c.name} className="flex items-center justify-between gap-2 py-1.5 text-[13px]">
-            <span className="text-slate-700 truncate">{c.name} <span className="text-slate-400">{Math.round(c.rate * 100)}%</span></span>
-            <span className="tabular-nums text-slate-500 shrink-0">{money(c.projectedSpend)} → <span className="font-semibold text-slate-900">{money(c.yourShare)}</span></span>
-          </div>
-        ))}
-      </div>
+      <table className="w-full text-[12px]">
+        <thead>
+          <tr className="text-slate-400 text-left text-[10px] uppercase tracking-wider">
+            <th className="font-medium pb-1.5">Client</th>
+            <th className="font-medium pb-1.5 px-2 text-right">Rate</th>
+            <th className="font-medium pb-1.5 px-2 text-right">Proj. spend</th>
+            <th className="font-medium pb-1.5 pl-2 text-right">Your fee</th>
+          </tr>
+        </thead>
+        <tbody>
+          {fb.clients.slice(0, 10).map((c) => (
+            <tr key={c.name} className="border-t border-slate-50">
+              <td className="py-1.5 text-slate-700 truncate max-w-[140px]">{c.name}</td>
+              <td className="py-1.5 px-2 text-right tabular-nums text-slate-400">{Math.round(c.rate * 100)}%</td>
+              <td className="py-1.5 px-2 text-right tabular-nums text-slate-500">{money(c.projectedSpend)}</td>
+              <td className="py-1.5 pl-2 text-right tabular-nums font-semibold text-slate-900">{money(c.yourShare)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </Card>
   );
 }

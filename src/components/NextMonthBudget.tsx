@@ -80,7 +80,7 @@ function buildLines(parsed: ParsedPnl): { lines: Line[]; lastMonthLabel: string;
   return { lines: dedup, lastMonthLabel, thisMonthTotal };
 }
 
-export function NextMonthBudget({ parsed, estimates, defaultRevenue = 0, vendors = [], months = [] }: { parsed: ParsedPnl | null | undefined; estimates: Record<string, number>; defaultRevenue?: number; vendors?: BudgetVendor[]; months?: BudgetMonth[] }) {
+export function NextMonthBudget({ parsed, estimates, defaultRevenue = 0, vendors = [], months = [], defaultOpen = false, revenueNote }: { parsed: ParsedPnl | null | undefined; estimates: Record<string, number>; defaultRevenue?: number; vendors?: BudgetVendor[]; months?: BudgetMonth[]; defaultOpen?: boolean; revenueNote?: string }) {
   const built = useMemo(() => (parsed ? buildLines(parsed) : null), [parsed]);
   const [est, setEst] = useState<Record<string, number>>(estimates);
   const [openLine, setOpenLine] = useState<Record<string, boolean>>({});
@@ -108,7 +108,7 @@ export function NextMonthBudget({ parsed, estimates, defaultRevenue = 0, vendors
 
   const [oneOffName, setOneOffName] = useState("");
   const [oneOffAmt, setOneOffAmt] = useState("");
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(defaultOpen);
 
   if (!built || built.lines.length === 0) return null;
   const { lines, lastMonthLabel, thisMonthTotal } = built;
@@ -181,8 +181,8 @@ export function NextMonthBudget({ parsed, estimates, defaultRevenue = 0, vendors
         <button type="button" onClick={() => setOpen((v) => !v)} className="flex items-start gap-1.5 text-left min-w-0">
           <ChevronDown className={"w-4 h-4 text-slate-400 mt-1 shrink-0 transition-transform " + (open ? "rotate-180" : "-rotate-90")} />
           <div>
-            <div className="text-[16px] font-semibold text-slate-900">{forecastLabel} forecast</div>
-            <div className="text-[12px] text-slate-500 mt-0.5">Estimate revenue &amp; costs (pre-filled from {lastMonthLabel}) · tap to {open ? "collapse" : "expand"}</div>
+            <div className="text-[16px] font-semibold text-slate-900">{forecastLabel} projection</div>
+            <div className="text-[12px] text-slate-500 mt-0.5">Projected revenue &amp; costs (costs pre-filled from {lastMonthLabel}, edit or add your own) · tap to {open ? "collapse" : "expand"}</div>
           </div>
         </button>
         <div className="text-right shrink-0">
@@ -216,7 +216,7 @@ export function NextMonthBudget({ parsed, estimates, defaultRevenue = 0, vendors
             </span>
           )}
         </div>
-        <div className="text-[11px] text-slate-400 mt-1">Edit the cost lines below — the total, net &amp; margin update as you go.</div>
+        <div className="text-[11px] text-slate-400 mt-1">{revenueNote ? revenueNote + " — edit above, or edit the cost lines below." : "Edit the cost lines below — the total, net & margin update as you go."}</div>
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-3">
           <Stat label="Revenue" value={money(revenue)} />
           <Stat label="Expenses" value={money(totalNext)} sub={delta === 0 ? `same as ${lastMonthLabel}` : `${delta < 0 ? "−" : "+"}${money(Math.abs(delta))} vs ${lastMonthLabel}`} subTone={delta < 0 ? "emerald" : delta > 0 ? "amber" : undefined} />
@@ -314,7 +314,7 @@ export function NextMonthBudget({ parsed, estimates, defaultRevenue = 0, vendors
 
       {/* One-off / added payments — one-time costs you expect next month. */}
       <div className="mt-4 pt-4 border-t border-slate-100">
-        <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 mb-2">One-off payments next month</div>
+        <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 mb-2">Add an expense (one-time / not in the list above)</div>
         {oneOffs.length > 0 && (
           <div className="divide-y divide-slate-100 mb-2">
             {oneOffs.map((o) => (

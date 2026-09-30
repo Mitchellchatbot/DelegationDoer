@@ -92,8 +92,9 @@ export function computeBreakdown(input: {
   oneOffs?: OneOffItem[];                        // one-time Stripe charges
   oneOffSegments?: Record<string, string>;       // charge id → seo | facebook | onboarding (default seo)
   fbContractorsByPeriod?: Record<string, number>; // Deel/bank contractors tagged Facebook, per period
+  fbVendorItemsByPeriod?: Record<string, LinePart[]>; // vendor-tagged FB expenses, per period
 }): BusinessBreakdown {
-  const { parsed, expenseSegments = {}, softwareItems = [], fbRevenueByPeriod = {}, fbExpensesByPeriod = {}, oneOffs = [], oneOffSegments = {}, fbContractorsByPeriod = {} } = input;
+  const { parsed, expenseSegments = {}, softwareItems = [], fbRevenueByPeriod = {}, fbExpensesByPeriod = {}, oneOffs = [], oneOffSegments = {}, fbContractorsByPeriod = {}, fbVendorItemsByPeriod = {} } = input;
   const notes: string[] = [];
 
   if (!parsed || !parsed.periods.length) {
@@ -115,10 +116,13 @@ export function computeBreakdown(input: {
     const leaves = expenseLeafLines(parsed!, mo);
     const salary = round(leaves.find((l) => isSalaryLine(l.account))?.amount ?? 0);
 
-    // Facebook software = assigned software vendors for this month.
-    const fbSoftware = round(
-      softwareItems.filter((s) => s.segment === "facebook" && short(s.month) === short(label)).reduce((sum, s) => sum + Number(s.amount), 0)
-    );
+    // Facebook software = assigned software vendors for this month (itemized so
+    // the "Software (tagged)" line can be broken down per vendor).
+    const fbSoftwareItems = softwareItems
+      .filter((s) => s.segment === "facebook" && short(s.month) === short(label))
+      .map((s) => ({ label: `${s.vendor} (software)`, amount: round(Number(s.amount)) }))
+      .filter((s) => s.amount !== 0);
+    const fbSoftware = fbSoftwareItems.reduce((sum, s) => sum + s.amount, 0);
     const softwareLump = round(leaves.find((l) => l.account === SOFTWARE_LINE)?.amount ?? 0);
 
     // Facebook P&L lines (assigned), excluding the software lump (handled above)
@@ -142,9 +146,14 @@ export function computeBreakdown(input: {
     // Facebook. A real Facebook cost that used to sit on the SEO side.
     const fbContractors = round(fbContractorsByPeriod[period] ?? 0);
 
-    // Tagged operating (ex-commission) = tagged FB P&L lines + tagged software.
+    // Vendor-tagged FB expenses this month (individual vendors marked always-FB,
+    // e.g. inside a mixed account). Passed in from expense_line_items + rules.
+    const fbVendorItems = (fbVendorItemsByPeriod[period] ?? []).map((v) => ({ label: v.label, amount: round(v.amount) })).filter((v) => v.amount !== 0);
+    const fbVendorTagged = fbVendorItems.reduce((s, v) => s + v.amount, 0);
+
+    // Tagged operating (ex-commission) = tagged FB P&L lines + tagged software + tagged vendors.
     const fbCommissionTagged = fbPnlLines.filter((l) => l.label.toLowerCase().includes("commission")).reduce((s, l) => s + l.amount, 0);
-    const fbTaggedOperating = fbPnlLines.reduce((s, l) => s + l.amount, 0) - fbCommissionTagged + fbSoftware;
+    const fbTaggedOperating = fbPnlLines.reduce((s, l) => s + l.amount, 0) - fbCommissionTagged + fbSoftware + fbVendorTagged;
 
     // Active if there's Facebook revenue, a Facebook one-off, or FB contractors.
     const fbActive = hasFbRevenue || fbOneOffGross > 0 || fbContractors > 0;
@@ -175,7 +184,8 @@ export function computeBreakdown(input: {
     // Itemized "tagged Facebook operating" = the tagged P&L lines (ex commission)
     // + tagged software. Sums to fbTaggedOperating; used to break that line down.
     const fbTaggedItems: LinePart[] = fbActive ? fbPnlLines.filter((l) => !l.label.toLowerCase().includes("commission")).map((l) => ({ ...l })) : [];
-    if (fbActive && fbSoftware) fbTaggedItems.push({ label: "Software (tagged)", amount: fbSoftware });
+    if (fbActive) for (const s of fbSoftwareItems) fbTaggedItems.push(s);
+    if (fbActive) for (const v of fbVendorItems) fbTaggedItems.push({ label: v.label, amount: v.amount });
     fbTaggedItems.sort((a, b) => b.amount - a.amount);
 
     // Facebook expense breakdown: tagged lines + software + other operating +

@@ -19,15 +19,16 @@ async function requireOwner(): Promise<{ ok: true } | { ok: false; res: NextResp
   }
 }
 
-// POST { payment_id, segment: "seo" | "facebook" } — upsert one one-off's segment.
+// POST { payment_id, segment: "seo" | "facebook" | "onboarding" } — upsert one.
+const SEGMENTS = new Set(["seo", "facebook", "onboarding"]);
 export async function POST(req: NextRequest) {
   const gate = await requireOwner();
   if (!gate.ok) return gate.res;
   const body = await req.json().catch(() => null);
   const payment_id = typeof body?.payment_id === "string" ? body.payment_id.trim() : "";
-  const segment = body?.segment === "facebook" ? "facebook" : body?.segment === "seo" ? "seo" : "";
+  const segment = typeof body?.segment === "string" && SEGMENTS.has(body.segment) ? body.segment : "";
   if (!payment_id) return NextResponse.json({ error: "payment_id required" }, { status: 400 });
-  if (!segment) return NextResponse.json({ error: "segment must be seo or facebook" }, { status: 400 });
+  if (!segment) return NextResponse.json({ error: "segment must be seo, facebook or onboarding" }, { status: 400 });
   const { error } = await getSupabaseAdmin()
     .from("stripe_oneoff_segments")
     .upsert({ payment_id, segment, updated_at: new Date().toISOString() }, { onConflict: "payment_id" });

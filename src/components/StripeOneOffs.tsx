@@ -8,7 +8,7 @@ import type { OneOffPayment } from "@/lib/stripe";
 // labelled Facebook or SEO. Untagged = SEO by default. Persists to
 // stripe_oneoff_segments so the Facebook/SEO split can pick them up.
 
-type Seg = "seo" | "facebook";
+type Seg = "seo" | "facebook" | "onboarding";
 
 function money(n: number): string {
   return `$${Math.round(n).toLocaleString("en-US")}`;
@@ -24,8 +24,10 @@ function monthLabel(ym: string): string {
 function Toggle({ value, onChange }: { value: Seg; onChange: (s: Seg) => void }) {
   return (
     <div className="inline-flex rounded-lg border border-slate-200 overflow-hidden shrink-0 text-[11px] font-semibold">
+      <button type="button" onClick={() => onChange("onboarding")}
+        className={"px-2.5 py-1 " + (value === "onboarding" ? "bg-blue-600 text-white" : "bg-white text-slate-500 hover:bg-slate-50")}>Onboarding</button>
       <button type="button" onClick={() => onChange("facebook")}
-        className={"px-2.5 py-1 " + (value === "facebook" ? "bg-blue-600 text-white" : "bg-white text-slate-500 hover:bg-slate-50")}>Facebook</button>
+        className={"px-2.5 py-1 border-l border-slate-200 " + (value === "facebook" ? "bg-indigo-600 text-white" : "bg-white text-slate-500 hover:bg-slate-50")}>FB other</button>
       <button type="button" onClick={() => onChange("seo")}
         className={"px-2.5 py-1 border-l border-slate-200 " + (value === "seo" ? "bg-emerald-600 text-white" : "bg-white text-slate-500 hover:bg-slate-50")}>SEO</button>
     </div>
@@ -44,9 +46,10 @@ export function StripeOneOffs({ oneOffs, segments }: { oneOffs: OneOffPayment[];
 
   const rows = oneOffs.filter((o) => monthKey(o.date) === month);
   const segOf = (id: string): Seg => seg[id] ?? "seo";
+  const onbTotal = rows.filter((o) => segOf(o.id) === "onboarding").reduce((s, o) => s + o.amount, 0);
   const fbTotal = rows.filter((o) => segOf(o.id) === "facebook").reduce((s, o) => s + o.amount, 0);
   const seoTotal = rows.filter((o) => segOf(o.id) === "seo").reduce((s, o) => s + o.amount, 0);
-  const total = fbTotal + seoTotal;
+  const total = onbTotal + fbTotal + seoTotal;
 
   async function setSegment(id: string, s: Seg) {
     setSeg((cur) => ({ ...cur, [id]: s }));
@@ -67,7 +70,7 @@ export function StripeOneOffs({ oneOffs, segments }: { oneOffs: OneOffPayment[];
               Stripe one-off payments
               <span className="text-[10px] font-medium uppercase tracking-wide text-indigo-600 bg-indigo-100 rounded px-1.5 py-0.5">from Stripe</span>
             </div>
-            <div className="text-[11px] text-muted mt-0.5">One-time charges (onboarding, setup, Meta) — label each Facebook or SEO · tap to {open ? "collapse" : "expand"}</div>
+            <div className="text-[11px] text-muted mt-0.5">One-time charges — tag each Onboarding, FB other, or SEO · tap to {open ? "collapse" : "expand"}</div>
           </div>
         </button>
         <div className="text-[11px] text-muted tabular-nums shrink-0">{rows.length} · {money(total)}</div>
@@ -86,8 +89,9 @@ export function StripeOneOffs({ oneOffs, segments }: { oneOffs: OneOffPayment[];
           </div>
 
           {/* Split summary */}
-          <div className="flex items-center gap-4 text-[12px] mb-2">
-            <span className="text-blue-700">Facebook <span className="font-semibold tabular-nums">{money(fbTotal)}</span></span>
+          <div className="flex items-center gap-4 text-[12px] mb-2 flex-wrap">
+            <span className="text-blue-700">Onboarding <span className="font-semibold tabular-nums">{money(onbTotal)}</span></span>
+            <span className="text-indigo-700">FB other <span className="font-semibold tabular-nums">{money(fbTotal)}</span></span>
             <span className="text-emerald-700">SEO <span className="font-semibold tabular-nums">{money(seoTotal)}</span></span>
           </div>
 
@@ -107,7 +111,7 @@ export function StripeOneOffs({ oneOffs, segments }: { oneOffs: OneOffPayment[];
               ))}
             </div>
           )}
-          <div className="text-[11px] text-muted mt-2">Untagged = SEO. Tag the Meta/Facebook ones so the Facebook vs SEO split counts them right.</div>
+          <div className="text-[11px] text-muted mt-2">Untagged = SEO. Tag setup fees <b>Onboarding</b> — those get added to your Facebook profit estimate. <b>FB other</b> = any other Facebook-side one-off (counts in the Facebook vs SEO split, not the onboarding line).</div>
         </div>
       )}
     </div>

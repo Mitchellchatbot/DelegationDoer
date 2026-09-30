@@ -133,6 +133,14 @@ export default async function FinancePage() {
     if (r.commission != null) fbCommissionByPeriod[r.period] = Number(r.commission);
     if (r.expenses != null) fbExpensesByPeriod[r.period] = Number(r.expenses);
   }
+  // Backfill Facebook revenue for months not entered in facebook_monthly, from
+  // the Facebook dashboard (finance app) — so Jun/Jul etc. show real revenue in
+  // the trend instead of $0. Entered months take precedence.
+  if (fbResult.ok) {
+    for (const m of fbResult.data.months) {
+      if (!(m.period in fbRevenueByPeriod)) fbRevenueByPeriod[m.period] = Math.round(Number(m.revenue) || 0);
+    }
+  }
 
   const expenseLines: ExpenseLeaf[] = latestParsed ? expenseLeafLines(latestParsed, latestMonthIndex(latestParsed)) : [];
   const periods = latestParsed?.periods ?? [];

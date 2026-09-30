@@ -33,6 +33,7 @@ import { SegmentTrend } from "@/components/SegmentTrend";
 import { ProjectionsView } from "@/components/ProjectionsView";
 import { FacebookEstimate } from "@/components/FacebookEstimate";
 import { projectFacebook, type FbProjection } from "@/lib/finance-projections";
+import { computeFbEstimate } from "@/lib/fb-estimate";
 
 // Map a P&L period label ("Aug '26") to a 'YYYY-MM' key.
 const MONTH_NUM: Record<string, number> = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
@@ -259,7 +260,10 @@ export default async function FinancePage() {
   const fbTaggedOpex = breakdown.hasData && breakdown.fbTaggedOperating > 0 ? Math.round(breakdown.fbTaggedOperating) : fbProjOpex;
   const fbEstimateInitial: Record<string, number> = {};
   for (const r of (fbEstRes.data ?? []) as { key: string; value: number }[]) fbEstimateInitial[r.key] = Number(r.value);
-  const projectedRevenue = (fbProjection?.yourTotal ?? 0) + seoTotal;
+  // Same Facebook estimate the editable card computes — so the Projections tab
+  // shows the identical profit number.
+  const fbEst = computeFbEstimate({ providers: fbProviders, est: fbEstimateInitial, onboardingStripe: fbOnboarding, salaries: fbSalariesMonthly, taggedItems: breakdown.hasData ? breakdown.fbTaggedItems : [] });
+  const projectedRevenue = fbEst.yourProfit + seoTotal;
   const expenseTrend = overview.months.map((label, i) => ({ label, value: overview.expenses[i] ?? 0 })).slice(-6);
 
   // Per-month Facebook & SEO lines for the segment tabs (latest first + trend).
@@ -326,8 +330,9 @@ export default async function FinancePage() {
         }
         projections={
           <ProjectionsView
-            fb={fbProjection}
+            fbEst={fbEst}
             fbUnavailable={!fbResult.ok}
+            fbEstMonthLabel={fbEstMonthLabel}
             seoClients={seoClients}
             seoTotal={seoTotal}
             projectedRevenue={projectedRevenue}

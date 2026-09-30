@@ -195,8 +195,8 @@ export function PayrollManual({ initial }: { initial: PayrollEntry[] }) {
                     {revealed ? money(monthlyOf(r)) : <span className="text-slate-300 tracking-widest select-none">•••</span>}
                   </td>
                   <td className="py-1 pl-2 text-right">
-                    <button type="button" onClick={() => remove(r.id)} title="Remove" className="text-slate-300 hover:text-rose-600 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <X className="w-3.5 h-3.5" />
+                    <button type="button" onClick={() => { if (confirm(`Remove ${r.name} from the roster?`)) remove(r.id); }} title="Remove" className="text-slate-300 hover:text-rose-600 transition-colors">
+                      <X className="w-4 h-4" />
                     </button>
                   </td>
                 </tr>

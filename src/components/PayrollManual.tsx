@@ -61,8 +61,7 @@ export function PayrollManual({ initial }: { initial: PayrollEntry[] }) {
   const totals = useMemo(() => {
     let activeMo = 0, activeCount = 0, otherCount = 0, drawMo = 0, fbMo = 0;
     for (const r of rows) {
-      const isFb = r.segment === "facebook" || (r.role ?? "").toLowerCase().includes("facebook");
-      if (r.status === "active") { activeMo += monthlyOf(r); activeCount++; if (isFb) fbMo += monthlyOf(r); }
+      if (r.status === "active") { activeMo += monthlyOf(r); activeCount++; if (r.segment === "facebook") fbMo += monthlyOf(r); }
       else if (r.status === "owner-draw") { drawMo += monthlyOf(r); }
       else otherCount++;
     }

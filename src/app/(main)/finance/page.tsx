@@ -156,11 +156,10 @@ export default async function FinancePage() {
   // contractors roster (the source of truth), not Deel. Monthly-equivalent of
   // every ACTIVE Facebook-tagged person.
   const payrollRows = (payRes.data ?? []) as { status: string; scale: string; rate: number; role?: string | null; segment?: string | null }[];
-  // Facebook people = anyone you marked Facebook, by the FB/SEO toggle OR by
-  // typing "Facebook" in their role.
-  const isFbPerson = (p: { role?: string | null; segment?: string | null }) => p.segment === "facebook" || (p.role ?? "").toLowerCase().includes("facebook");
+  // Facebook people = active roster people you explicitly flip to Facebook with
+  // the FB/SEO toggle (segment='facebook'). Role text is ignored.
   const fbSalariesMonthly = payrollRows
-    .filter((p) => p.status === "active" && isFbPerson(p))
+    .filter((p) => p.status === "active" && p.segment === "facebook")
     .reduce((s, p) => s + (p.scale === "annual" ? Number(p.rate) / 12 : Number(p.rate)), 0);
   // Apply that run-rate as the Facebook people cost in every P&L month's split.
   const fbContractorsByPeriod: Record<string, number> = {};
@@ -223,11 +222,10 @@ export default async function FinancePage() {
   const fbEstPeriod = fbResult.ok ? fbResult.data.period : new Date().toISOString().slice(0, 7);
   const fbEstMonthLabel = new Date(`${fbEstPeriod}-01T00:00:00`).toLocaleDateString("en-US", { month: "long" });
   const fbOnboarding = oneOffs.filter((o) => oneOffSegments[o.id] === "onboarding" && o.date.slice(0, 7) === fbEstPeriod).reduce((s, o) => s + Number(o.amount), 0);
-  const fbRunRateSpend = fbProjection ? fbProjection.clients.reduce((s, c) => s + c.projectedSpend, 0) : 0;
-  const fbBlendedRate = fbRunRateSpend > 0 && fbProjection ? fbProjection.grossFee / fbRunRateSpend : 0;
-  // Operating expense default = the Facebook expenses Mitchell marked in "Assign
-  // Facebook expenses" (tagged P&L lines + software), not the sparse
-  // facebook_monthly figure. Falls back to that when nothing is tagged.
+  // Ad-spend providers for the estimate, seeded from the Facebook dashboard
+  // (per client: run-rate spend + fee %). Mitchell edits spend/fee & adds more.
+  const fbProviders = fbProjection ? fbProjection.clients.map((c) => ({ name: c.name, defaultSpend: c.projectedSpend, defaultFeePct: Math.round(c.rate * 100) })) : [];
+  // Tagged Facebook expenses ("Assign Facebook expenses") — an auto cost line.
   const fbTaggedOpex = breakdown.hasData && breakdown.fbTaggedOperating > 0 ? Math.round(breakdown.fbTaggedOperating) : fbProjOpex;
   const fbEstimateInitial: Record<string, number> = {};
   for (const r of (fbEstRes.data ?? []) as { key: string; value: number }[]) fbEstimateInitial[r.key] = Number(r.value);
@@ -271,7 +269,7 @@ export default async function FinancePage() {
             {/* Latest month first, then month-by-month. Your 50% of net. */}
             <SegmentTrend title="Facebook" accent="blue" months={fbMonths} profitLabel="Your profit (50%)" note="net of all FB costs incl. tagged contractors" />
             {/* Editable September profit estimate: ad spend → fee + onboarding − costs. */}
-            <FacebookEstimate monthLabel={fbEstMonthLabel} runRateSpend={fbRunRateSpend} blendedRate={fbBlendedRate} onboarding={fbOnboarding} salaries={fbSalariesMonthly} opexDefault={fbTaggedOpex} initial={fbEstimateInitial} />
+            <FacebookEstimate monthLabel={fbEstMonthLabel} providers={fbProviders} onboardingStripe={fbOnboarding} salaries={fbSalariesMonthly} taggedExpenses={fbTaggedOpex} initial={fbEstimateInitial} />
             {/* Live per-client fee run-rate from the Finance app + true net headline. */}
             <FacebookRevenue result={fbResult} netProfit={breakdown.hasData ? breakdown.fbProfitTrue : null} netMonth={latestPnl?.period ?? null} />
             {/* Enter Facebook revenue & operating expense per month. */}

@@ -31,6 +31,7 @@ import { CfoRead } from "@/components/CfoRead";
 import { FinanceTabsView } from "@/components/FinanceTabsView";
 import { SegmentTrend } from "@/components/SegmentTrend";
 import { ProjectionsView } from "@/components/ProjectionsView";
+import { FacebookEstimate } from "@/components/FacebookEstimate";
 import { projectFacebook, type FbProjection } from "@/lib/finance-projections";
 
 // Map a P&L period label ("Aug '26") to a 'YYYY-MM' key.
@@ -83,7 +84,7 @@ export default async function FinancePage() {
   if (!isOwner(user)) notFound();
 
   const supabase = getSupabaseAdmin();
-  const [docRes, overview, revenue, mrrRes, expRes, payRes, estRes, expSegRes, swRes, fbMonthRes, fbResult, pnlRes, pnlLinesRes, deelRes, oneOffsRes, oneOffSegRes] = await Promise.all([
+  const [docRes, overview, revenue, mrrRes, expRes, payRes, estRes, expSegRes, swRes, fbMonthRes, fbResult, pnlRes, pnlLinesRes, deelRes, oneOffsRes, oneOffSegRes, fbEstRes] = await Promise.all([
     supabase.from("finance_documents").select("id, label, filename, content_type, size_bytes, uploaded_at, parsed").order("uploaded_at", { ascending: false }),
     getFinanceOverview(),
     getStripeRevenue().catch(() => null),
@@ -99,7 +100,8 @@ export default async function FinancePage() {
     supabase.from("pnl_lines").select("period, account, section, amount"),
     supabase.from("deel_payments").select("period, contractor, amount, is_fee"),
     getStripeOneOffs().catch(() => null),
-    supabase.from("stripe_oneoff_segments").select("payment_id, segment")
+    supabase.from("stripe_oneoff_segments").select("payment_id, segment"),
+    supabase.from("fb_estimate").select("key, value")
   ]);
 
   const rows = (docRes.data ?? []) as (FinanceDoc & { parsed: ParsedPnl | null })[];
@@ -204,6 +206,16 @@ export default async function FinancePage() {
   const seoTotal = seoClients.reduce((s, r) => s + r.mrr, 0);
   const fbProjOpex = fbResult.ok ? (fbExpensesByPeriod[fbResult.data.period] ?? 0) : 0;
   const fbProjection: FbProjection | null = fbResult.ok ? projectFacebook(fbResult.data, { salariesMonthly: fbSalariesMonthly, opexMonthly: fbProjOpex }) : null;
+
+  // Facebook profit estimate inputs (Facebook tab). Onboarding = Stripe one-offs
+  // tagged Facebook this month (added to FB profit, separate from ad spend).
+  const fbEstPeriod = fbResult.ok ? fbResult.data.period : new Date().toISOString().slice(0, 7);
+  const fbEstMonthLabel = new Date(`${fbEstPeriod}-01T00:00:00`).toLocaleDateString("en-US", { month: "long" });
+  const fbOnboarding = oneOffs.filter((o) => oneOffSegments[o.id] === "facebook" && o.date.slice(0, 7) === fbEstPeriod).reduce((s, o) => s + Number(o.amount), 0);
+  const fbRunRateSpend = fbProjection ? fbProjection.clients.reduce((s, c) => s + c.projectedSpend, 0) : 0;
+  const fbBlendedRate = fbRunRateSpend > 0 && fbProjection ? fbProjection.grossFee / fbRunRateSpend : 0;
+  const fbEstimateInitial: Record<string, number> = {};
+  for (const r of (fbEstRes.data ?? []) as { key: string; value: number }[]) fbEstimateInitial[r.key] = Number(r.value);
   const projectedRevenue = (fbProjection?.yourTotal ?? 0) + seoTotal;
   const expenseTrend = overview.months.map((label, i) => ({ label, value: overview.expenses[i] ?? 0 })).slice(-6);
 
@@ -243,6 +255,8 @@ export default async function FinancePage() {
           <div className="space-y-5">
             {/* Latest month first, then month-by-month. Your 50% of net. */}
             <SegmentTrend title="Facebook" accent="blue" months={fbMonths} profitLabel="Your profit (50%)" note="net of all FB costs incl. tagged contractors" />
+            {/* Editable September profit estimate: ad spend → fee + onboarding − costs. */}
+            <FacebookEstimate monthLabel={fbEstMonthLabel} runRateSpend={fbRunRateSpend} blendedRate={fbBlendedRate} onboarding={fbOnboarding} salaries={fbSalariesMonthly} opexDefault={fbProjOpex} initial={fbEstimateInitial} />
             {/* Live per-client fee run-rate from the Finance app + true net headline. */}
             <FacebookRevenue result={fbResult} netProfit={breakdown.hasData ? breakdown.fbProfitTrue : null} netMonth={latestPnl?.period ?? null} />
             {/* Enter Facebook revenue & operating expense per month. */}

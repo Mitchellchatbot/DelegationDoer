@@ -9,7 +9,11 @@ export const dynamic = "force-dynamic";
 // Owner-only: which side each contractor is on — Facebook or SEO (default SEO).
 // Keyed by contractor name (matches deel_payments.contractor). Feeds the
 // Facebook vs SEO split: Facebook contractors roll into Facebook expenses.
-export const DEPARTMENTS = ["facebook", "seo"] as const;
+// Not exported: a Route Handler module may only export the HTTP verbs and
+// Next's own route config, and any other export fails the generated route
+// type check ("Property 'DEPARTMENTS' is incompatible with index
+// signature"). Only this file reads it.
+const DEPARTMENTS = ["facebook", "seo"] as const;
 
 async function requireOwner(): Promise<{ ok: true } | { ok: false; res: NextResponse }> {
   try {

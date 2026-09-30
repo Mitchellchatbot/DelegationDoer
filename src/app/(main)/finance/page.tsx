@@ -269,7 +269,7 @@ export default async function FinancePage() {
             {/* Latest month first, then month-by-month. Your 50% of net. */}
             <SegmentTrend title="Facebook" accent="blue" months={fbMonths} profitLabel="Your profit (50%)" note="net of all FB costs incl. tagged contractors" />
             {/* Editable September profit estimate: ad spend → fee + onboarding − costs. */}
-            <FacebookEstimate monthLabel={fbEstMonthLabel} providers={fbProviders} onboardingStripe={fbOnboarding} salaries={fbSalariesMonthly} taggedExpenses={fbTaggedOpex} initial={fbEstimateInitial} />
+            <FacebookEstimate monthLabel={fbEstMonthLabel} providers={fbProviders} onboardingStripe={fbOnboarding} salaries={fbSalariesMonthly} taggedExpenses={fbTaggedOpex} taggedItems={breakdown.hasData ? breakdown.fbTaggedItems : []} initial={fbEstimateInitial} />
             {/* Live per-client fee run-rate from the Finance app + true net headline. */}
             <FacebookRevenue result={fbResult} netProfit={breakdown.hasData ? breakdown.fbProfitTrue : null} netMonth={latestPnl?.period ?? null} />
             {/* Enter Facebook revenue & operating expense per month. */}

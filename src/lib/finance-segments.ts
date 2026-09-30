@@ -55,6 +55,7 @@ export interface BusinessBreakdown {
   fbProfitBeforeCommission: number; // latest month
   fbProfitTrue: number;             // latest month, true-month gauge
   fbTaggedOperating: number;        // FB operating expenses from P&L tags (ex-commission)
+  fbTaggedItems: LinePart[];        // itemized tagged FB operating (sums to fbTaggedOperating)
   fbFinanceAppOperating: number;    // FB operating expenses per the Finance app
   fbVariance: number;               // tagged − finance app (0 = reconciled)
   fb: SideNumbers;
@@ -96,7 +97,7 @@ export function computeBreakdown(input: {
   const notes: string[] = [];
 
   if (!parsed || !parsed.periods.length) {
-    return { hasData: false, month: null, income: 0, totalExpenses: 0, pnlNet: 0, salary: 0, beforeOwnerPay: 0, fbCommission: 0, fbAccrualCommission: 0, fbProfitBeforeCommission: 0, fbProfitTrue: 0, fbTaggedOperating: 0, fbFinanceAppOperating: 0, fbVariance: 0, fb: EMPTY_SIDE, seo: EMPTY_SIDE, months: [], notes: ["Upload a P&L to see the breakdown."] };
+    return { hasData: false, month: null, income: 0, totalExpenses: 0, pnlNet: 0, salary: 0, beforeOwnerPay: 0, fbCommission: 0, fbAccrualCommission: 0, fbProfitBeforeCommission: 0, fbProfitTrue: 0, fbTaggedOperating: 0, fbTaggedItems: [], fbFinanceAppOperating: 0, fbVariance: 0, fb: EMPTY_SIDE, seo: EMPTY_SIDE, months: [], notes: ["Upload a P&L to see the breakdown."] };
   }
 
   const periods = parsed.periods;
@@ -171,6 +172,12 @@ export function computeBreakdown(input: {
     const seoRevenue = income - fbRevenue;
     const seoExpenses = seoRevenue - seoProfit;
 
+    // Itemized "tagged Facebook operating" = the tagged P&L lines (ex commission)
+    // + tagged software. Sums to fbTaggedOperating; used to break that line down.
+    const fbTaggedItems: LinePart[] = fbActive ? fbPnlLines.filter((l) => !l.label.toLowerCase().includes("commission")).map((l) => ({ ...l })) : [];
+    if (fbActive && fbSoftware) fbTaggedItems.push({ label: "Software (tagged)", amount: fbSoftware });
+    fbTaggedItems.sort((a, b) => b.amount - a.amount);
+
     // Facebook expense breakdown: tagged lines + software + other operating +
     // contractors + the partner's 50%. Sums to fbExpenses.
     const fbLines: LinePart[] = fbActive ? fbPnlLines.filter((l) => !l.label.toLowerCase().includes("commission")).map((l) => ({ ...l })) : [];
@@ -194,7 +201,7 @@ export function computeBreakdown(input: {
     if (Math.abs(seoExpenses - seoListed) >= 1) seoLines.push({ label: "Other / rounding", amount: seoExpenses - seoListed });
 
     const row: MonthRow = { label, pnlNet, salary, fbRevenue, fbExpenses, fbCommission, fbAccrualCommission, fbProfitBeforeCommission, fbProfit, fbProfitTrue, seoRevenue, seoExpenses, seoProfit, hasFbRevenue };
-    return { row, income, totalExpenses, fbLines, seoLines, fbTaggedOperating, fbFinanceAppOperating, fbVariance };
+    return { row, income, totalExpenses, fbLines, seoLines, fbTaggedItems, fbTaggedOperating, fbFinanceAppOperating, fbVariance };
   }
 
   const months = monthIdxs.map((mo) => forMonth(mo).row);
@@ -217,6 +224,7 @@ export function computeBreakdown(input: {
     fbProfitBeforeCommission: r.fbProfitBeforeCommission,
     fbProfitTrue: r.fbProfitTrue,
     fbTaggedOperating: latest.fbTaggedOperating,
+    fbTaggedItems: latest.fbTaggedItems,
     fbFinanceAppOperating: latest.fbFinanceAppOperating,
     fbVariance: latest.fbVariance,
     fb: { revenue: r.fbRevenue, expenses: r.fbExpenses, profit: r.fbProfit, expenseLines: latest.fbLines },

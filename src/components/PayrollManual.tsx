@@ -48,12 +48,9 @@ export function PayrollManual({ initial }: { initial: PayrollEntry[] }) {
   const [rows, setRows] = useState<PayrollEntry[]>(initial);
   const [adding, setAdding] = useState(false);
   const [open, setOpen] = useState(false);
-  // Per-person pay is masked by default on every load — someone using this
-  // account who isn't Mitchell (e.g. sharing the login) still sees the
-  // aggregate totals below, never an individual rate, unless this is
-  // explicitly clicked open. Not persisted on purpose: it should default
-  // shut again next time.
-  const [revealed, setRevealed] = useState(false);
+  // Per-person pay is shown by default — /finance is owner-only. The eye toggle
+  // still hides it on demand (e.g. before screen-sharing). Not persisted.
+  const [revealed, setRevealed] = useState(true);
   // Rows added in this session — pinned to the top so a new $0 hire is visible
   // to fill in, instead of sinking to the bottom of the pay-sorted list.
   const [newIds, setNewIds] = useState<string[]>([]);

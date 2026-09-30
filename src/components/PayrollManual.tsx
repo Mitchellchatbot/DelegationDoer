@@ -16,6 +16,20 @@ export interface PayrollEntry {
   rate: number;
   note: string | null;
   rank: number | null;
+  segment?: "facebook" | "seo" | null;
+}
+
+// Facebook / SEO tag per person — Facebook-tagged salaries roll into the
+// Facebook profit projection; everyone else is SEO (the default).
+function SegToggle({ value, onChange }: { value: "facebook" | "seo"; onChange: (s: "facebook" | "seo") => void }) {
+  return (
+    <div className="inline-flex rounded-lg border border-slate-200 overflow-hidden shrink-0 text-[10px] font-semibold">
+      <button type="button" onClick={() => onChange("facebook")}
+        className={"px-2 py-0.5 " + (value === "facebook" ? "bg-blue-600 text-white" : "bg-white text-slate-500 hover:bg-slate-50")}>FB</button>
+      <button type="button" onClick={() => onChange("seo")}
+        className={"px-2 py-0.5 border-l border-slate-200 " + (value === "seo" ? "bg-emerald-600 text-white" : "bg-white text-slate-500 hover:bg-slate-50")}>SEO</button>
+    </div>
+  );
 }
 
 const STATUS_OPTS: PayrollEntry["status"][] = ["active", "owner-draw", "onboarding", "invited", "inactive"];
@@ -45,13 +59,13 @@ export function PayrollManual({ initial }: { initial: PayrollEntry[] }) {
   const [newIds, setNewIds] = useState<string[]>([]);
 
   const totals = useMemo(() => {
-    let activeMo = 0, activeCount = 0, otherCount = 0, drawMo = 0;
+    let activeMo = 0, activeCount = 0, otherCount = 0, drawMo = 0, fbMo = 0;
     for (const r of rows) {
-      if (r.status === "active") { activeMo += monthlyOf(r); activeCount++; }
+      if (r.status === "active") { activeMo += monthlyOf(r); activeCount++; if (r.segment === "facebook") fbMo += monthlyOf(r); }
       else if (r.status === "owner-draw") { drawMo += monthlyOf(r); }
       else otherCount++;
     }
-    return { activeMo, activeCount, otherCount, drawMo };
+    return { activeMo, activeCount, otherCount, drawMo, fbMo };
   }, [rows]);
 
   async function patch(id: string, field: Partial<PayrollEntry>) {
@@ -106,6 +120,7 @@ export function PayrollManual({ initial }: { initial: PayrollEntry[] }) {
             <div className="text-2xl font-bold tabular-nums text-ink leading-none">{money(totals.activeMo)}<span className="text-[12px] font-medium text-muted">/mo</span></div>
             <div className="text-[10px] text-muted mt-0.5">
               {totals.activeCount} active · {money(totals.activeMo * 12)}/yr{totals.otherCount ? ` · ${totals.otherCount} inactive/pending` : ""}
+              {totals.fbMo > 0 && <> · <span className="text-blue-600">{money(totals.fbMo)}/mo Facebook</span></>}
               {totals.drawMo > 0 && <> · <span className="text-violet-600">+{money(totals.drawMo)}/mo owner draw</span></>}
             </div>
           </div>
@@ -131,6 +146,7 @@ export function PayrollManual({ initial }: { initial: PayrollEntry[] }) {
             <tr className="text-muted text-left text-[10px] uppercase tracking-wide border-b border-slate-200">
               <th className="font-medium pb-1.5 pr-2">Name</th>
               <th className="font-medium pb-1.5 px-2">Role</th>
+              <th className="font-medium pb-1.5 px-2 w-[92px]">For</th>
               <th className="font-medium pb-1.5 px-2 w-[100px]">Status</th>
               <th className="font-medium pb-1.5 px-2 text-right w-[90px]">Rate</th>
               <th className="font-medium pb-1.5 px-2 w-[80px]">Scale</th>
@@ -150,6 +166,9 @@ export function PayrollManual({ initial }: { initial: PayrollEntry[] }) {
                   <td className="py-1 px-2">
                     <input defaultValue={r.role ?? ""} placeholder="—" onBlur={(e) => (e.target.value.trim() || null) !== (r.role ?? null) && patch(r.id, { role: e.target.value.trim() || null })}
                       className="w-full bg-transparent rounded px-1 py-0.5 text-slate-600 hover:bg-slate-50 focus:bg-slate-100 focus:outline-none" />
+                  </td>
+                  <td className="py-1 px-2">
+                    <SegToggle value={r.segment === "facebook" ? "facebook" : "seo"} onChange={(s) => patch(r.id, { segment: s })} />
                   </td>
                   <td className="py-1 px-2">
                     <select value={r.status} onChange={(e) => patch(r.id, { status: e.target.value as PayrollEntry["status"] })}

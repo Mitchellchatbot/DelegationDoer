@@ -26,7 +26,7 @@ export async function GET() {
   if (!gate.ok) return gate.res;
   const { data, error } = await getSupabaseAdmin()
     .from("payroll_entries")
-    .select("id, name, role, status, scale, rate, note, rank, updated_at")
+    .select("id, name, role, status, scale, rate, note, rank, segment, updated_at")
     .order("rank", { ascending: true });
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json({ entries: data ?? [] });
@@ -55,7 +55,7 @@ export async function POST(req: NextRequest) {
       note: typeof body?.note === "string" ? body.note : null,
       rank
     })
-    .select("id, name, role, status, scale, rate, note, rank, updated_at")
+    .select("id, name, role, status, scale, rate, note, rank, segment, updated_at")
     .single();
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json({ entry: data });

@@ -19,6 +19,7 @@ async function requireOwner(): Promise<{ ok: true } | { ok: false; res: NextResp
 
 const STATUSES = new Set(["active", "inactive", "onboarding", "invited", "owner-draw"]);
 const SCALES = new Set(["monthly", "annual"]);
+const SEGMENTS = new Set(["facebook", "seo"]);
 
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
   const gate = await requireOwner();
@@ -32,11 +33,12 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   if (typeof body.scale === "string" && SCALES.has(body.scale)) patch.scale = body.scale;
   if (body.rate !== undefined) patch.rate = Number(body.rate) || 0;
   if ("note" in body) patch.note = body.note ?? null;
+  if (typeof body.segment === "string" && SEGMENTS.has(body.segment)) patch.segment = body.segment;
   const { data, error } = await getSupabaseAdmin()
     .from("payroll_entries")
     .update(patch)
     .eq("id", params.id)
-    .select("id, name, role, status, scale, rate, note, rank, updated_at")
+    .select("id, name, role, status, scale, rate, note, rank, segment, updated_at")
     .single();
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json({ entry: data });

@@ -24,7 +24,7 @@ import { FacebookMonthly, type FbMonthInput } from "@/components/FacebookMonthly
 import { computeLearnings, type PnlMonth } from "@/lib/finance-learnings";
 import { LearningsRisks } from "@/components/LearningsRisks";
 import { BooksByMonth, type BookLine, type BookMonth } from "@/components/BooksByMonth";
-import { DeelContractors, type DeelRow } from "@/components/DeelContractors";
+import { type DeelRow } from "@/components/DeelContractors";
 import { computeDefense } from "@/lib/finance-defense";
 import { SurvivalDefense } from "@/components/SurvivalDefense";
 import { CfoRead } from "@/components/CfoRead";
@@ -83,13 +83,13 @@ export default async function FinancePage() {
   if (!isOwner(user)) notFound();
 
   const supabase = getSupabaseAdmin();
-  const [docRes, overview, revenue, mrrRes, expRes, payRes, estRes, expSegRes, swRes, fbMonthRes, fbResult, pnlRes, pnlLinesRes, deelRes, oneOffsRes, oneOffSegRes, deptRes] = await Promise.all([
+  const [docRes, overview, revenue, mrrRes, expRes, payRes, estRes, expSegRes, swRes, fbMonthRes, fbResult, pnlRes, pnlLinesRes, deelRes, oneOffsRes, oneOffSegRes] = await Promise.all([
     supabase.from("finance_documents").select("id, label, filename, content_type, size_bytes, uploaded_at, parsed").order("uploaded_at", { ascending: false }),
     getFinanceOverview(),
     getStripeRevenue().catch(() => null),
     supabase.from("mrr_entries").select("id, company, mrr, status, subscription_day, satisfaction, note, rank, segment").order("rank", { ascending: true }),
     supabase.from("expense_line_items").select("account, vendor, month, amount"),
-    supabase.from("payroll_entries").select("id, name, role, status, scale, rate, note, rank").order("rank", { ascending: true }),
+    supabase.from("payroll_entries").select("id, name, role, status, scale, rate, note, rank, segment").order("rank", { ascending: true }),
     supabase.from("expense_estimates").select("account, amount"),
     supabase.from("expense_segments").select("account, segment"),
     supabase.from("software_subscriptions").select("vendor, month, amount, segment"),
@@ -99,8 +99,7 @@ export default async function FinancePage() {
     supabase.from("pnl_lines").select("period, account, section, amount"),
     supabase.from("deel_payments").select("period, contractor, amount, is_fee"),
     getStripeOneOffs().catch(() => null),
-    supabase.from("stripe_oneoff_segments").select("payment_id, segment"),
-    supabase.from("contractor_departments").select("contractor, department")
+    supabase.from("stripe_oneoff_segments").select("payment_id, segment")
   ]);
 
   const rows = (docRes.data ?? []) as (FinanceDoc & { parsed: ParsedPnl | null })[];
@@ -143,15 +142,16 @@ export default async function FinancePage() {
   const latestShort = monthLabels.length ? monthLabels[monthLabels.length - 1].slice(0, 3).toLowerCase() : "";
 
   const deelRows = ((deelRes.data ?? []) as DeelRow[]).map((r) => ({ period: r.period, contractor: r.contractor, amount: Number(r.amount), is_fee: !!r.is_fee }));
-  // What each contractor is for — Facebook or SEO (default SEO). Feeds the split.
-  const contractorDepartments: Record<string, string> = {};
-  for (const d of (deptRes.data ?? []) as { contractor: string; department: string }[]) contractorDepartments[d.contractor] = d.department;
-  // Facebook contractor spend per month = Deel/bank contractors tagged Facebook.
+  // Facebook people cost = the salaries Mitchell tags Facebook on the Payroll &
+  // contractors roster (the source of truth), not Deel. Monthly-equivalent of
+  // every ACTIVE Facebook-tagged person.
+  const payrollRows = (payRes.data ?? []) as { status: string; scale: string; rate: number; segment?: string | null }[];
+  const fbSalariesMonthly = payrollRows
+    .filter((p) => p.status === "active" && p.segment === "facebook")
+    .reduce((s, p) => s + (p.scale === "annual" ? Number(p.rate) / 12 : Number(p.rate)), 0);
+  // Apply that run-rate as the Facebook people cost in every P&L month's split.
   const fbContractorsByPeriod: Record<string, number> = {};
-  for (const r of deelRows) {
-    if (r.is_fee) continue;
-    if (contractorDepartments[r.contractor] === "facebook") fbContractorsByPeriod[r.period] = (fbContractorsByPeriod[r.period] ?? 0) + r.amount;
-  }
+  for (const m of ((pnlRes.data ?? []) as { period: string }[])) fbContractorsByPeriod[m.period] = fbSalariesMonthly;
 
   const breakdown = computeBreakdown({ parsed: latestParsed, expenseSegments, softwareItems, fbRevenueByPeriod, fbCommissionByPeriod, fbExpensesByPeriod, oneOffs: oneOffs.map((o) => ({ id: o.id, date: o.date, amount: o.amount })), oneOffSegments, fbContractorsByPeriod });
 
@@ -202,7 +202,8 @@ export default async function FinancePage() {
     .map((r) => ({ company: String(r.company ?? ""), mrr: Number(r.mrr) || 0, status: String(r.status ?? "active"), segment: (r.segment ?? "seo") as "seo" | "facebook" }));
   const seoClients = mrrForProj.filter((r) => r.segment === "seo" && r.status !== "churned" && r.mrr > 0).sort((a, b) => b.mrr - a.mrr);
   const seoTotal = seoClients.reduce((s, r) => s + r.mrr, 0);
-  const fbProjection: FbProjection | null = fbResult.ok ? projectFacebook(fbResult.data) : null;
+  const fbProjOpex = fbResult.ok ? (fbExpensesByPeriod[fbResult.data.period] ?? 0) : 0;
+  const fbProjection: FbProjection | null = fbResult.ok ? projectFacebook(fbResult.data, { salariesMonthly: fbSalariesMonthly, opexMonthly: fbProjOpex }) : null;
   const projectedRevenue = (fbProjection?.yourTotal ?? 0) + seoTotal;
   const expenseTrend = overview.months.map((label, i) => ({ label, value: overview.expenses[i] ?? 0 })).slice(-6);
 
@@ -260,7 +261,6 @@ export default async function FinancePage() {
         expenses={
           <div className="space-y-5">
             <ExpenseExplorer lines={bookLines} months={bookMonths} vendors={(expRes.data ?? []) as ExplVendor[]} />
-            <DeelContractors rows={deelRows} departments={contractorDepartments} />
             <PayrollManual initial={(payRes.data ?? []) as PayrollEntry[]} />
             <ExpenseLabels lines={expenseLines} lineInitial={expenseSegments} software={softwareItems as SoftwareRow[]} latestShort={latestShort} />
             <BooksByMonth lines={bookLines} months={bookMonths} />

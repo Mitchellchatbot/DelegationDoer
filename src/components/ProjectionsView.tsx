@@ -63,18 +63,26 @@ function Card({ title, sub, children }: { title: string; sub?: string; children:
 
 function FacebookProjection({ fb, unavailable }: { fb: FbProjection | null; unavailable: boolean }) {
   if (unavailable || !fb) {
-    return <Card title="Facebook fee breakdown" sub="From live ad spend"><div className="text-[13px] text-slate-500">Facebook dashboard unavailable right now.</div></Card>;
+    return <Card title="Facebook profit projection" sub="From live ad spend"><div className="text-[13px] text-slate-500">Facebook dashboard unavailable right now.</div></Card>;
   }
   const note = fb.provisional ? `run-rate through day ${fb.elapsed} of ${fb.daysInMonth}` : "full month";
   return (
-    <Card title="Facebook fee breakdown" sub={`Projected management fee by client · your 50% · ${note}`}>
-      <div className="flex items-end justify-between mb-3 pb-3 border-b border-slate-100">
-        <div>
-          <div className="text-[11px] text-slate-400">Your projected fee (50%)</div>
-          <div className="text-[26px] font-bold tabular-nums text-emerald-600 leading-none mt-0.5">{money(fb.yourTotal)}</div>
+    <Card title="Facebook profit projection" sub={`Your 50% after Facebook salaries & costs · ${note}`}>
+      <div className="mb-3 pb-3 border-b border-slate-100">
+        <div className="flex items-end justify-between">
+          <div>
+            <div className="text-[11px] text-slate-400">Your projected profit (50%)</div>
+            <div className={"text-[26px] font-bold tabular-nums leading-none mt-0.5 " + (fb.yourProfit < 0 ? "text-rose-500" : "text-emerald-600")}>{money(fb.yourProfit)}</div>
+          </div>
+          <div className="text-[11px] text-slate-400 text-right leading-relaxed">
+            fee {money(fb.grossFee)}<br />
+            − salaries {money(fb.salaries)}<br />
+            {fb.opex > 0 && <>− costs {money(fb.opex)}<br /></>}
+            = net {money(fb.net)}
+          </div>
         </div>
-        <div className="text-[12px] text-slate-400 text-right">of {money(fb.grossFee)}<br />gross fee</div>
       </div>
+      <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-400 mb-1.5">Fee breakdown by client</div>
       <table className="w-full text-[12px]">
         <thead>
           <tr className="text-slate-400 text-left text-[10px] uppercase tracking-wider">

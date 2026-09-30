@@ -22,12 +22,13 @@ const clean = (raw: string) => Math.max(0, Math.round(Number(String(raw).replace
 
 export interface EstProvider { name: string; defaultSpend: number; defaultFeePct: number }
 
-export function FacebookEstimate({ monthLabel, providers, onboardingStripe, salaries, taggedExpenses, initial }: {
+export function FacebookEstimate({ monthLabel, providers, onboardingStripe, salaries, taggedExpenses, taggedItems = [], initial }: {
   monthLabel: string;
   providers: EstProvider[];        // seeded from the Facebook dashboard
   onboardingStripe: number;        // Stripe one-offs tagged Onboarding (read-only)
   salaries: number;                // roster people tagged Facebook (read-only)
   taggedExpenses: number;          // "Assign Facebook expenses" total (read-only)
+  taggedItems?: { label: string; amount: number }[]; // itemized breakdown of taggedExpenses
   initial: Record<string, number>;
 }) {
   const [est, setEst] = useState<Record<string, number>>(initial);
@@ -151,9 +152,20 @@ export function FacebookEstimate({ monthLabel, providers, onboardingStripe, sala
         <div><span className="text-slate-700">Facebook salaries</span><div className="text-[11px] text-slate-400">Roster people tagged Facebook</div></div>
         <span className="tabular-nums font-medium text-slate-900">{money(salaries)}</span>
       </div>
-      <div className="flex items-center justify-between py-1.5 text-[13px] border-b border-slate-50">
-        <div><span className="text-slate-700">Tagged Facebook expenses</span><div className="text-[11px] text-slate-400">From &lsquo;Assign Facebook expenses&rsquo;</div></div>
-        <span className="tabular-nums font-medium text-slate-900">{money(taggedExpenses)}</span>
+      <div className="py-1.5 text-[13px] border-b border-slate-50">
+        <div className="flex items-center justify-between">
+          <div><span className="text-slate-700">Tagged Facebook expenses</span><div className="text-[11px] text-slate-400">From &lsquo;Assign Facebook expenses&rsquo;</div></div>
+          <span className="tabular-nums font-medium text-slate-900">{money(taggedExpenses)}</span>
+        </div>
+        {taggedItems.length > 0 && (
+          <div className="mt-1 ml-3 border-l border-slate-100 pl-3 space-y-0.5">
+            {taggedItems.map((t, i) => (
+              <div key={i} className="flex items-center justify-between text-[11px] text-slate-400">
+                <span className="truncate">{t.label}</span><span className="tabular-nums shrink-0">{money(t.amount)}</span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
       {addedExp.map((a) => (
         <div key={a.key} className="flex items-center justify-between py-1.5 text-[13px] border-b border-slate-50">

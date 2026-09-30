@@ -89,7 +89,7 @@ export function computeBreakdown(input: {
   fbCommissionByPeriod?: Record<string, number>;
   fbExpensesByPeriod?: Record<string, number>; // Finance-app FB operating expenses, for the variance check
   oneOffs?: OneOffItem[];                        // one-time Stripe charges
-  oneOffSegments?: Record<string, Segment>;      // charge id → seo | facebook (default seo)
+  oneOffSegments?: Record<string, string>;       // charge id → seo | facebook | onboarding (default seo)
   fbContractorsByPeriod?: Record<string, number>; // Deel/bank contractors tagged Facebook, per period
 }): BusinessBreakdown {
   const { parsed, expenseSegments = {}, softwareItems = [], fbRevenueByPeriod = {}, fbExpensesByPeriod = {}, oneOffs = [], oneOffSegments = {}, fbContractorsByPeriod = {} } = input;
@@ -135,7 +135,7 @@ export function computeBreakdown(input: {
     // 50/50 model the gross is Facebook revenue and the partner's half comes out
     // of the single 50% split below — no separate one-off expense line.
     const fbOneOffGross = round(
-      oneOffs.filter((o) => oneOffSegments[o.id] === "facebook" && o.date.slice(0, 7) === period).reduce((s, o) => s + Number(o.amount), 0)
+      oneOffs.filter((o) => (oneOffSegments[o.id] === "facebook" || oneOffSegments[o.id] === "onboarding") && o.date.slice(0, 7) === period).reduce((s, o) => s + Number(o.amount), 0)
     );
     // Facebook contractors this month = Deel/bank contractors Mitchell tagged
     // Facebook. A real Facebook cost that used to sit on the SEO side.

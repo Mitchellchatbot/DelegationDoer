@@ -106,7 +106,7 @@ export function FacebookEstimate({ monthLabel, runRateSpend, blendedRate, onboar
         <Row label="Ad spend (estimate)" sub={`× ${(blendedRate * 100).toFixed(0)}% fee = ${money(fee)} management fee · run-rate ${money(runRateSpend)}`}>
           <NumInput k="ad_spend" value={adSpend} />
         </Row>
-        <Row label="Onboarding (Stripe, tagged Facebook)" sub="Tag one-offs Facebook below — your 50% is added">
+        <Row label="Onboarding (Stripe one-offs)" sub="Tag a one-off 'Onboarding' below — your 50% is added">
           <span className="text-[13px] tabular-nums font-medium text-slate-900">{money(onboarding)}</span>
         </Row>
         <div className="flex items-center justify-between py-2 text-[13px] font-semibold text-slate-900 border-t border-slate-200 mt-1">
@@ -118,7 +118,7 @@ export function FacebookEstimate({ monthLabel, runRateSpend, blendedRate, onboar
         <Row label="Facebook salaries" sub="From the roster (tagged Facebook)">
           <span className="text-[13px] tabular-nums font-medium text-slate-900">{money(salaries)}</span>
         </Row>
-        <Row label="Operating expense (estimate)" sub="Ad tools, VAs, etc.">
+        <Row label="Operating expense (estimate)" sub="Defaults to your tagged Facebook expenses · edit to override">
           <NumInput k="opex" value={opex} />
         </Row>
         {added.map((a) => (

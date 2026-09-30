@@ -16,6 +16,38 @@ import type { FacebookRevenueData, FacebookRevenueResult } from "./facebook-reve
 
 const TIMEOUT_MS = 25_000;
 
+// One retry on a transient connection failure (Railway inter-service networking
+// can blip). A timeout is NOT retried — it already waited the full budget.
+async function fetchRevenue(url: URL, secret: string, timeoutMs: number): Promise<Response> {
+  const init: RequestInit = {
+    headers: { Authorization: `Bearer ${secret}`, Accept: "application/json" },
+    cache: "no-store",
+    // The Finance app's session middleware answers anything it doesn't exempt
+    // with a 307 to /login. Following it would hand us an HTML login page;
+    // stopping here lets the card say what actually happened.
+    redirect: "manual"
+  };
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      return await fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
+    } catch (e) {
+      lastErr = e;
+      const name = (e as Error).name;
+      if (name === "TimeoutError" || name === "AbortError") throw e;
+    }
+  }
+  throw lastErr;
+}
+
+// undici wraps the real reason in `.cause`; pull out its code/message.
+function describeNetworkError(err: Error): string {
+  const cause = (err as { cause?: unknown }).cause as { code?: string; message?: string } | undefined;
+  if (cause?.code) return cause.message ? `${cause.code} — ${cause.message}` : cause.code;
+  if (cause?.message) return cause.message;
+  return err.message || "fetch failed";
+}
+
 export async function getFacebookRevenue(timeoutMs = TIMEOUT_MS): Promise<FacebookRevenueResult> {
   // Never throws: the page renders this inside the owner's Finance view, and
   // a Finance app outage should cost one card, not the page.
@@ -46,24 +78,16 @@ export async function getFacebookRevenue(timeoutMs = TIMEOUT_MS): Promise<Facebo
 
     let res: Response;
     try {
-      res = await fetch(url, {
-        headers: { Authorization: `Bearer ${secret}`, Accept: "application/json" },
-        cache: "no-store",
-        // The Finance app's session middleware answers anything it doesn't
-        // exempt with a 307 to /login. Following it would hand us an HTML
-        // login page; stopping here lets the card say what actually happened.
-        redirect: "manual",
-        // Bound the wait. The Finance app retries a slow query (bounded per
-        // attempt and per query), so leave it real room — but a Finance app
-        // that is down should cost this card a clear message, not hang it.
-        signal: AbortSignal.timeout(timeoutMs)
-      });
+      res = await fetchRevenue(url, secret, timeoutMs);
     } catch (e) {
-      const name = (e as Error).name;
-      if (name === "TimeoutError" || name === "AbortError") {
+      const err = e as Error;
+      if (err.name === "TimeoutError" || err.name === "AbortError") {
         return { ok: false, error: `Finance app did not answer within ${Math.round(timeoutMs / 1000)}s` };
       }
-      return { ok: false, error: `Network error: ${(e as Error).message}` };
+      // "fetch failed" on its own is useless — the real reason is on .cause
+      // (ENOTFOUND = DNS, ECONNREFUSED, certificate…). Surface it so a
+      // prod-only connection failure is diagnosable from the card itself.
+      return { ok: false, error: `Network error: ${describeNetworkError(err)}` };
     }
 
     if (res.status >= 300 && res.status < 400) {

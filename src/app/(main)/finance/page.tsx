@@ -196,6 +196,24 @@ export default async function FinancePage() {
   }
   const fbTagVendors = [...fbTagVendorMap.values()].filter((v) => v.amount !== 0).sort((a, b) => b.amount - a.amount);
 
+  // Everything in the books that can be tagged Facebook, NOT already tagged —
+  // so the estimate can "add" a cost by picking a real book line and labeling it
+  // Facebook (pulls its real amount), instead of a free-text estimate. Each item
+  // carries the tag API to call and the seed label it'll show as.
+  type Taggable = { name: string; kind: "account" | "software" | "vendor"; amount: number };
+  const taggedFbAccounts = new Set(Object.entries(expenseSegments).filter(([, s]) => s === "facebook").map(([a]) => a));
+  const bookTaggables: Taggable[] = [];
+  for (const l of expenseLines) {
+    if (!l.amount || l.account === "Software/Subscriptions" || l.account.toLowerCase().includes("mitchell price")) continue;
+    if (taggedFbAccounts.has(l.account)) continue;
+    bookTaggables.push({ name: l.account, kind: "account", amount: Math.round(l.amount) });
+  }
+  const swByVendor = new Map<string, number>();
+  for (const s of softwareItems) if (String(s.month).slice(0, 3).toLowerCase() === latestShort && s.segment !== "facebook") swByVendor.set(s.vendor, (swByVendor.get(s.vendor) ?? 0) + Number(s.amount));
+  for (const [vendor, amount] of swByVendor) if (amount) bookTaggables.push({ name: vendor, kind: "software", amount: Math.round(amount) });
+  for (const v of fbTagVendors) if (!fbVendorRuleSet.has(v.vendor) && expenseSegments[v.account] !== "facebook") bookTaggables.push({ name: v.vendor, kind: "vendor", amount: Math.round(v.amount) });
+  bookTaggables.sort((a, b) => b.amount - a.amount);
+
   const breakdown = computeBreakdown({ parsed: latestParsed, expenseSegments, softwareItems, fbRevenueByPeriod, fbCommissionByPeriod, fbExpensesByPeriod, oneOffs: oneOffs.map((o) => ({ id: o.id, date: o.date, amount: o.amount })), oneOffSegments, fbContractorsByPeriod, fbVendorItemsByPeriod });
 
   // Learnings & risks: 10-month P&L history + Facebook + software + client concentration.
@@ -303,7 +321,7 @@ export default async function FinancePage() {
             {/* Latest month first, then month-by-month. Your 50% of net. */}
             <SegmentTrend title="Facebook" accent="blue" months={fbMonths} profitLabel="Your profit (50%)" note="net of all FB costs incl. tagged contractors" />
             {/* Editable September profit estimate: ad spend → fee + onboarding − costs. */}
-            <FacebookEstimate monthLabel={fbEstMonthLabel} providers={fbProviders} onboardingStripe={fbOnboarding} salaries={fbSalariesMonthly} taggedExpenses={fbTaggedOpex} taggedItems={breakdown.hasData ? breakdown.fbTaggedItems : []} initial={fbEstimateInitial} />
+            <FacebookEstimate monthLabel={fbEstMonthLabel} providers={fbProviders} onboardingStripe={fbOnboarding} salaries={fbSalariesMonthly} taggedExpenses={fbTaggedOpex} taggedItems={breakdown.hasData ? breakdown.fbTaggedItems : []} bookTaggables={bookTaggables} initial={fbEstimateInitial} />
             {/* Live per-client fee run-rate from the Finance app + true net headline. */}
             <FacebookRevenue result={fbResult} netProfit={breakdown.hasData ? breakdown.fbProfitTrue : null} netMonth={latestPnl?.period ?? null} />
             {/* Enter Facebook revenue & operating expense per month. */}

@@ -118,12 +118,26 @@ export const ACCESS_ITEMS: AccessItem[] = [
   {
     id: "dashboard",
     label: "Dashboard",
-    blurb: "The client's ad account feeding the dashboard, and the client able to get into it.",
+    blurb: "The client's ad account feeding the dashboard, the client able to get into it, and their automated email report running.",
+    choice: {
+      key: "access.dashboard.report_cadence",
+      label: "Email report sends",
+      options: [
+        { value: "daily", label: "Daily" },
+        { value: "weekly", label: "Weekly" },
+        { value: "monthly", label: "Monthly" }
+      ]
+    },
     checks: [
       { key: "access.dashboard.ad_account", label: "Ad account connected to the dashboard" },
-      { key: "access.dashboard.client_login", label: "Client got their login and has signed in" }
+      { key: "access.dashboard.client_login", label: "Client got their login and has signed in" },
+      { key: "access.dashboard.report_on", label: "Automated email report scheduled on the dashboard" },
+      { key: "access.dashboard.report_test", label: "Test report sent and arrived, with the right numbers in it" }
     ],
-    inputs: [{ key: "access.dashboard.link", label: "Dashboard link", placeholder: "https://…" }]
+    inputs: [
+      { key: "access.dashboard.link", label: "Dashboard link", placeholder: "https://…" },
+      { key: "access.dashboard.report_to", label: "Report goes to", placeholder: "Client addresses on the report" }
+    ]
   },
   {
     id: "ein",

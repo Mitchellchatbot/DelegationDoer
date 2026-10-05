@@ -356,14 +356,15 @@ export default function BoardPage() {
         u.departmentIds.some((d) => selectedDepts.has(d))
       );
     }
-    // Pipeline order, left → right: Unassigned, each person, Needs approval,
-    // Completed.
+    // Pipeline order, left → right: Unassigned, Needs approval (kept on the left
+    // so it's visible on load, not buried past the people columns), each person,
+    // then Completed.
     const cols: Column[] = [
       { id: "__unassigned", label: "Unassigned", tone: "border-slate-300/40" },
-      ...people.map((u) => ({ id: u.id, label: u.name, tone: "border-indigo-300/40", user: u })),
       // Facebook tasks submitted for manager approval land here (not in the
       // submitter's column) so a manager can pick them up and proof them.
-      { id: "__needs_approval", label: "Needs approval", tone: "border-violet-300/50" },
+      { id: "__needs_approval", label: "Needs approval", tone: "border-amber-400/70" },
+      ...people.map((u) => ({ id: u.id, label: u.name, tone: "border-indigo-300/40", user: u })),
       // Dedicated bucket for finished work — pulls done tasks out of each
       // person's column so the live worklist is just open items. Drag out
       // onto a person to reopen + reassign.

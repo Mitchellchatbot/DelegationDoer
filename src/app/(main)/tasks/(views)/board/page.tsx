@@ -51,6 +51,7 @@ interface Column {
   id: string;        // droppable id; "__internal" / "__unassigned" for null buckets
   label: string;
   tone: string;
+  head?: string;     // optional tinted header classes (bg + text) so a bucket pops
   user?: User;       // populated only in person mode (for the avatar in the header)
 }
 
@@ -363,12 +364,12 @@ export default function BoardPage() {
     // member. Each bucket a distinct colour (emerald / amber / slate; people indigo).
     const cols: Column[] = [
       // Finished work — drag out onto a person to reopen + reassign.
-      { id: "__completed", label: "Completed", tone: "border-emerald-400/70" },
+      { id: "__completed", label: "Completed", tone: "border-emerald-400", head: "bg-emerald-100 text-emerald-900" },
       // Facebook tasks submitted for manager approval land here (not in the
       // submitter's column) so a manager can pick them up and proof them.
-      { id: "__needs_approval", label: "Needs approval", tone: "border-amber-400/80" },
-      { id: "__unassigned", label: "Unassigned", tone: "border-slate-400/70" },
-      ...people.map((u) => ({ id: u.id, label: u.name, tone: "border-indigo-300/40", user: u }))
+      { id: "__needs_approval", label: "Needs approval", tone: "border-amber-400", head: "bg-amber-100 text-amber-900" },
+      { id: "__unassigned", label: "Unassigned", tone: "border-slate-400", head: "bg-slate-200 text-slate-800" },
+      ...people.map((u) => ({ id: u.id, label: u.name, tone: "border-indigo-300/50", user: u }))
     ];
     return cols;
   }, [groupBy, visible, users, selectedDepts, filterStatus]);
@@ -715,10 +716,10 @@ export default function BoardPage() {
             {columns.map((col, colIdx) => (
               <div
                 key={col.id}
-                className={cn("rounded-2xl bg-surface/40 border anim-fade-in shrink-0 w-72", col.tone)}
+                className={cn("rounded-2xl bg-surface/40 overflow-hidden anim-fade-in shrink-0 w-72", col.head ? "border-2" : "border", col.tone)}
                 style={{ animationDelay: `${colIdx * 30}ms` }}
               >
-                <div className="px-3 py-2 flex items-center justify-between gap-2">
+                <div className={cn("px-3 py-2 flex items-center justify-between gap-2", col.head)}>
                   <div className="flex items-center gap-2 min-w-0">
                     {col.user && <PersonAvatar userId={col.user.id} name={col.user.name} imageUrl={col.user.avatarUrl} size={20} />}
                     {groupBy === "client" && col.id !== "__internal" && (
@@ -727,7 +728,7 @@ export default function BoardPage() {
                     <div className="text-sm font-medium truncate">{col.label}</div>
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
-                    <div className="text-xs text-muted tabular-nums">{grouped[col.id]?.length ?? 0}</div>
+                    <div className={cn("text-xs tabular-nums", col.head ? "font-bold" : "text-muted")}>{grouped[col.id]?.length ?? 0}</div>
                     {/* Per-person quick-add. `col.user` is set only in person
                         mode, so this never appears on status/client columns
                         nor on the Unassigned / Completed buckets (a task has

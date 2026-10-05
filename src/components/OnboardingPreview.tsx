@@ -48,7 +48,7 @@ export function OnboardingPreview({
   return (
     <div className="min-h-screen bg-bg">
       {/* One bar, carrying both the warning and the switch. Sticky, because the
-          form below runs to eight or nine screens and somebody who scrolled into
+          form below runs to eight-odd screens and somebody who scrolled into
           the middle of it should never be in any doubt that this is a preview. */}
       <div className="sticky top-0 z-40 bg-amber-50 border-b border-amber-200">
         <div className="max-w-[900px] mx-auto px-5 py-2.5 flex items-center gap-3 flex-wrap">

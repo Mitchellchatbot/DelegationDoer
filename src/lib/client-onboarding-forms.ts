@@ -17,8 +17,9 @@
 // support, and the free-text location the address boxes above it already
 // answered) — plus its separate logo-and-images step, whose upload now sits on
 // the brand step, and its hosting-and-domain question, which moved onto the
-// current-site step. The SEO script kept every question it had; only the wording
-// changed there.
+// current-site step. The SEO script kept every question it had through that
+// pass, and only its wording changed. It has since lost a step of its own: the
+// plan confirmation, removed in October 2026 at the team's request.
 //
 // The cost is real and was accepted rather than avoided: an answer exported from
 // either Typeform and one collected here will NOT read identically any more, so
@@ -45,11 +46,12 @@
  *  change of inbox is one edit and not a hunt through every question on both
  *  forms. */
 export const AGENCY = {
-  // websiteEmail and seoWebsiteEmail hold the same address today. Kept as two
-  // names rather than collapsed into one because they are two teams' inboxes
-  // that happen to agree: the day one of them moves, that should be one edit
-  // here and not a silent rewrite of the other form's instructions as well.
-  websiteEmail: "websites@scaledai.org",
+  // websiteEmail and seoWebsiteEmail are two teams' inboxes, and they no longer
+  // agree: the Website form's domain-access request moved to Mitchell in October
+  // 2026 while the SEO form's stayed on the shared Website inbox. Keeping them as
+  // two names rather than collapsing them into one is exactly what made that a
+  // single edit here instead of a silent rewrite of the SEO instructions too.
+  websiteEmail: "mitchell@scaledai.org",
   seoWebsiteEmail: "websites@scaledai.org",
   googleEmail: "marketingscaledai@gmail.com",
   // Call tracking goes to Sam directly rather than to a shared inbox: he owns
@@ -57,11 +59,6 @@ export const AGENCY = {
   // named person rather than a team address.
   callTrackingEmail: "Sam@scaledai.org"
 } as const;
-
-/** The Typeform tells clients to watch a video before picking a plan. The video
- *  is not in the form definition we can read, so the plan step renders without
- *  it until somebody supplies the URL. Set this and the note appears. */
-export const PLAN_VIDEO_URL: string | null = null;
 
 export type FieldKind =
   | "text"
@@ -918,27 +915,16 @@ const SEO_STEPS: Step[] = [
     ]
   },
 
-  {
-    id: "plan",
-    n: 9,
-    title: "Your plan",
-    short: "Plan",
-    doneLabel: "Confirmed plan",
-    minutes: 2,
-    collect: [
-      {
-        key: "plan_level",
-        label: "Please confirm your plan level.",
-        kind: "choice",
-        choices: ["Starter Plan", "Growth Plan", "Gold Plan", "Platinum Plan"],
-        hint: PLAN_VIDEO_URL ? "Please watch this video before choosing your plan." : undefined
-      }
-    ]
-  },
+  // There is no plan step any more. The team confirms the plan level with the
+  // client directly rather than having them pick one mid-questionnaire, so the
+  // SEO script runs to eight working steps like the Website one. Answers already
+  // given under step id "plan" survive in client_onboarding_answers and still
+  // show on the client card, which filters by link rather than by step; with no
+  // step left to look the title up from, they group under the raw id.
 
   {
     id: "done",
-    n: 10,
+    n: 9,
     title: "That's everything",
     short: "Done",
     doneLabel: "Finish",
@@ -1001,8 +987,8 @@ export function getField(key: FormKey, stepId: string, fieldKey: string): Collec
  *  celebration is not work the client has to do, so counting it would leave the
  *  rail permanently one short of full.
  *
- *  N differs per form (the Website script is eight working steps, the SEO one
- *  nine) and moves whenever a questionnaire does, which is why every caller —
+ *  N moves whenever a questionnaire does — both scripts are eight working
+ *  steps today, and neither number is promised — which is why every caller —
  *  the rail, the Slack notices, the client card — asks this rather than writing
  *  a number down. */
 export function workingSteps(key: FormKey): Step[] {

@@ -356,17 +356,19 @@ export default function BoardPage() {
         u.departmentIds.some((d) => selectedDepts.has(d))
       );
     }
-    const cols: Column[] = people.map((u) => ({
-      id: u.id,
-      label: u.name,
-      tone: "border-indigo-300/40",
-      user: u
-    }));
-    cols.push({ id: "__unassigned", label: "Unassigned", tone: "border-slate-300/40" });
-    // Dedicated bucket for finished work — pulls done tasks out of each
-    // person's column so the live worklist is just open items. Drag into
-    // here to mark done; drag out onto a person to reopen + reassign.
-    cols.push({ id: "__completed", label: "Completed", tone: "border-emerald-300/50" });
+    // Pipeline order, left → right: Unassigned, each person, Needs approval,
+    // Completed.
+    const cols: Column[] = [
+      { id: "__unassigned", label: "Unassigned", tone: "border-slate-300/40" },
+      ...people.map((u) => ({ id: u.id, label: u.name, tone: "border-indigo-300/40", user: u })),
+      // Facebook tasks submitted for manager approval land here (not in the
+      // submitter's column) so a manager can pick them up and proof them.
+      { id: "__needs_approval", label: "Needs approval", tone: "border-violet-300/50" },
+      // Dedicated bucket for finished work — pulls done tasks out of each
+      // person's column so the live worklist is just open items. Drag out
+      // onto a person to reopen + reassign.
+      { id: "__completed", label: "Completed", tone: "border-emerald-300/50" }
+    ];
     return cols;
   }, [groupBy, visible, users, selectedDepts, filterStatus]);
 
@@ -380,9 +382,11 @@ export default function BoardPage() {
       if (groupBy === "status") key = t.status;
       else if (groupBy === "client") key = t.clientName ?? "__internal";
       else if (groupBy === "person") {
-        // Done tasks go to the shared Completed bucket regardless of
-        // assignee — keeps each person's column focused on open work.
-        key = t.status === "done" ? "__completed" : (t.assigneeId ?? "__unassigned");
+        // Done → Completed, pending_approval → Needs approval (both pulled out
+        // of the person's column); everything else sits under its assignee.
+        key = t.status === "done" ? "__completed"
+          : t.status === "pending_approval" ? "__needs_approval"
+          : (t.assigneeId ?? "__unassigned");
       }
       if (key && map[key] !== undefined) map[key].push(t);
     });
@@ -439,6 +443,11 @@ export default function BoardPage() {
     }
 
     if (groupBy === "person") {
+      // "Needs approval" is driven by the FB proof flow, not drag: you can't
+      // drop a card in to set pending_approval (it needs a proof submission),
+      // and a task already awaiting approval is approved/sent-back from the
+      // task's proof panel, not by dragging. Snap those back.
+      if (dest === "__needs_approval" || before.status === "pending_approval") return;
       // Drag into Completed → mark task done (keep assignee).
       if (dest === "__completed") {
         if (before.status === "done") return;

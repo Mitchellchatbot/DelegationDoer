@@ -359,18 +359,16 @@ export default function BoardPage() {
     // Pipeline order, left → right: Unassigned, Needs approval (kept on the left
     // so it's visible on load, not buried past the people columns), each person,
     // then Completed.
+    // Order, left → right: Completed, Needs approval, Unassigned, then each team
+    // member. Each bucket a distinct colour (emerald / amber / slate; people indigo).
     const cols: Column[] = [
-      // Each pipeline bucket gets its own clear colour: Unassigned = slate,
-      // Needs approval = amber, Completed = emerald.
-      { id: "__unassigned", label: "Unassigned", tone: "border-slate-400/70" },
+      // Finished work — drag out onto a person to reopen + reassign.
+      { id: "__completed", label: "Completed", tone: "border-emerald-400/70" },
       // Facebook tasks submitted for manager approval land here (not in the
       // submitter's column) so a manager can pick them up and proof them.
       { id: "__needs_approval", label: "Needs approval", tone: "border-amber-400/80" },
-      ...people.map((u) => ({ id: u.id, label: u.name, tone: "border-indigo-300/40", user: u })),
-      // Dedicated bucket for finished work — pulls done tasks out of each
-      // person's column so the live worklist is just open items. Drag out
-      // onto a person to reopen + reassign.
-      { id: "__completed", label: "Completed", tone: "border-emerald-400/70" }
+      { id: "__unassigned", label: "Unassigned", tone: "border-slate-400/70" },
+      ...people.map((u) => ({ id: u.id, label: u.name, tone: "border-indigo-300/40", user: u }))
     ];
     return cols;
   }, [groupBy, visible, users, selectedDepts, filterStatus]);

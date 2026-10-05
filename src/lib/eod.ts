@@ -112,7 +112,7 @@ export async function buildEodForDepartment(
       .lt("started_at", endIso),
     supabase
       .from("eod_notes")
-      .select("user_id, note, worked_on, accomplished, plan_tomorrow, blockers, leads_messaged, linkedin_comments, submitted_at, reviewed_at, reviewed_by")
+      .select("user_id, note, worked_on, accomplished, plan_tomorrow, blockers, leads_messaged, linkedin_comments, ideas, left_where_off, submitted_at, reviewed_at, reviewed_by")
       .in("user_id", memberIds)
       .eq("note_date", isoDate),
     // Per-client EOD work logged today (the client-by-client flow). A
@@ -142,6 +142,8 @@ export async function buildEodForDepartment(
     blockers: string | null;
     leads_messaged: string | null;
     linkedin_comments: string | null;
+    ideas: string | null;
+    left_where_off: string | null;
     submitted_at: string | null;
     reviewed_at: string | null;
     reviewed_by: string | null;
@@ -224,6 +226,8 @@ export async function buildEodForDepartment(
         blockers: blank(row?.blockers),
         leadsMessaged: blank(row?.leads_messaged),
         linkedinComments: blank(row?.linkedin_comments),
+        ideas: blank(row?.ideas),
+        leftWhereOff: blank(row?.left_where_off),
         clientWork: clientWorkByUser.get(u.id) ?? [],
         submittedAt: row?.submitted_at ?? null,
         reviewedAt: row?.reviewed_at ?? null,

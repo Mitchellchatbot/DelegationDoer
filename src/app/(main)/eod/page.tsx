@@ -31,6 +31,9 @@ interface PersonSummary {
   // Marketing-style flow extras (Talha Ali). Null for everyone else.
   leadsMessaged: string | null;
   linkedinComments: string | null;
+  // Facebook-flow extras. Null for everyone else.
+  ideas: string | null;
+  leftWhereOff: string | null;
   // Per-client work logged via the client-by-client EOD flow.
   clientWork?: Array<{ clientName: string; workedOn: string; results: string | null }>;
   submittedAt: string | null;
@@ -159,7 +162,9 @@ export default function EodPage() {
         planTomorrow: me_.planTomorrow,
         blockers: me_.blockers,
         leadsMessaged: me_.leadsMessaged,
-        linkedinComments: me_.linkedinComments
+        linkedinComments: me_.linkedinComments,
+        ideas: me_.ideas,
+        leftWhereOff: me_.leftWhereOff
       };
     }
     return {
@@ -168,7 +173,9 @@ export default function EodPage() {
       planTomorrow: null,
       blockers: null,
       leadsMessaged: null,
-      linkedinComments: null
+      linkedinComments: null,
+      ideas: null,
+      leftWhereOff: null
     };
   }, [summaries, me.id]);
 
@@ -381,6 +388,13 @@ export default function EodPage() {
   // flip this to a stable user id.
   const isMarketingTalha = me.name === "Talha Ali";
 
+  // Facebook team gets the lean FB check-in. Scoped to dep_facebook members
+  // (not the leader, who oversees). Takes precedence over the client flow.
+  const isFacebookTeam =
+    !isMarketingTalha
+    && me.role !== "leader"
+    && (me.departmentIds ?? []).includes("dep_facebook");
+
   return (
     <div className="space-y-6 max-w-6xl mx-auto">
       <PageHero
@@ -444,6 +458,7 @@ export default function EodPage() {
         today={todayIso}
         isWebsiteTeam={isWebsiteTeam}
         isMarketingTalha={isMarketingTalha}
+        isFacebookTeam={isFacebookTeam}
         prior={myPrior}
         onClose={() => setTypeformOpen(false)}
         onComplete={() => { void load(); }}

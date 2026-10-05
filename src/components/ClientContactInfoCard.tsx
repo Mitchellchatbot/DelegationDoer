@@ -73,6 +73,7 @@ export function ClientContactInfoCard(props: Props) {
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [draft, setDraft] = useState<Draft>(() => fromProps(props));
+  const [briefOpen, setBriefOpen] = useState(false);
 
   function startEdit() {
     setDraft(fromProps(props));
@@ -339,9 +340,31 @@ export function ClientContactInfoCard(props: Props) {
 
           <ReadCell icon={<FileText className="w-3 h-3" />} label="Business info">
             {props.businessInformation ? (
-              <div className="text-[12.5px] text-ink/80 leading-relaxed whitespace-pre-wrap line-clamp-4">
-                {props.businessInformation}
-              </div>
+              <>
+                {/* Clamped by default so one long brief does not push the rest of
+                    the card off the screen — but a brief that runs to four
+                    paragraphs is mostly invisible without a way to open it. */}
+                <div
+                  className={cn(
+                    "text-[12.5px] text-ink/80 leading-relaxed whitespace-pre-wrap",
+                    !briefOpen && "line-clamp-4"
+                  )}
+                >
+                  {props.businessInformation}
+                </div>
+                {/* Roughly "longer than the four lines we show". Offering to
+                    expand a brief that is already fully visible reads as a
+                    broken button. */}
+                {props.businessInformation.length > 240 && (
+                  <button
+                    type="button"
+                    onClick={() => setBriefOpen((v) => !v)}
+                    className="text-[11px] text-accent/80 hover:text-accent font-medium mt-1"
+                  >
+                    {briefOpen ? "Show less" : "Show more"}
+                  </button>
+                )}
+              </>
             ) : (
               <EmptyHint canEdit={props.canEdit} onClick={startEdit}>No info yet</EmptyHint>
             )}

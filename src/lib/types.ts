@@ -4,6 +4,9 @@ export type TaskStatus =
   | "in_progress"
   | "urgent"
   | "waiting_on_client"
+  // Facebook proofing: an FB-team member finished the task and submitted proof;
+  // it's waiting for a manager (FB department_head) to approve before "done".
+  | "pending_approval"
   | "done"
   // Soft-delete state for denied drafts: keeps the row (and its
   // routing_decisions back-reference) intact for audit instead of

@@ -65,6 +65,14 @@ const COLUMNS: ColumnDef[] = [
     emptyHint: "Nothing blocked."
   },
   {
+    id: "pending_approval",
+    label: "Waiting for approval",
+    ring: "border-violet-200/70",
+    countBg: "bg-violet-100",
+    countText: "text-violet-700",
+    emptyHint: "Nothing awaiting a manager."
+  },
+  {
     id: "done",
     label: "Done",
     ring: "border-emerald-200/70",
@@ -85,6 +93,7 @@ export function MyTasksKanban({ initialTasks }: { initialTasks: Task[] }) {
     urgent: [],
     in_progress: [],
     waiting_on_client: [],
+    pending_approval: [],
     done: [],
     // 'rejected' isn't a kanban column — the bucket is here only to
     // satisfy the exhaustive Record<TaskStatus, …> type. Rejected

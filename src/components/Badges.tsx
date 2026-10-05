@@ -16,6 +16,7 @@ const STATUS_COPY: Record<TaskStatus, string> = {
   in_progress: "In Progress",
   urgent: "Urgent",
   waiting_on_client: "Waiting on Client",
+  pending_approval: "Waiting for approval",
   done: "Done",
   rejected: "Rejected"
 };
@@ -26,6 +27,7 @@ export function StatusPill({ status }: { status: TaskStatus }) {
     in_progress: "text-accent border-accent/30 bg-accent/10",
     urgent: "text-urgent border-urgent/40 bg-urgent/10",
     waiting_on_client: "text-warn border-warn/30 bg-warn/10",
+    pending_approval: "text-violet-700 border-violet-200 bg-violet-50",
     done: "text-ok border-ok/30 bg-ok/10",
     rejected: "text-rose-700 border-rose-200 bg-rose-50"
   };

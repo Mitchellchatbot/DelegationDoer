@@ -59,6 +59,7 @@ const STATUS_COLS: Column[] = [
   { id: "urgent",             label: "Urgent",             tone: "border-urgent/40" },
   { id: "in_progress",        label: "In Progress",        tone: "border-accent/30" },
   { id: "waiting_on_client",  label: "Waiting on Client",  tone: "border-warn/30" },
+  { id: "pending_approval",   label: "Waiting for approval", tone: "border-violet-300/50" },
   { id: "done",               label: "Done",               tone: "border-ok/30" }
 ];
 

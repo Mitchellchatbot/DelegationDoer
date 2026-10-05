@@ -39,6 +39,22 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     if (beErr) return NextResponse.json({ error: beErr.message }, { status: 500 });
     if (!before) return NextResponse.json({ error: "task not found" }, { status: 404 });
 
+    // Facebook proofing gate: an FB-team member can't mark an FB task Done
+    // directly — it must go through "Submit for approval" (photo + notes) and a
+    // manager's review. Leaders/managers reviewing go through the proof route.
+    if (
+      body.status === "done" &&
+      before.status !== "done" &&
+      before.department_id === "dep_facebook" &&
+      (access.viewer?.departmentIds ?? []).includes("dep_facebook") &&
+      access.viewer?.role !== "leader"
+    ) {
+      return NextResponse.json(
+        { error: "Facebook tasks need a proof submission — use “Submit for approval” on the task." },
+        { status: 400 }
+      );
+    }
+
     const update: Record<string, unknown> = { last_activity_at: new Date().toISOString() };
     if (typeof body.title === "string" && body.title.trim()) update.title = body.title.trim();
     if (typeof body.description === "string") update.description = body.description.trim() || null;

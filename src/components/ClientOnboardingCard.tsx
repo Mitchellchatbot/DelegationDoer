@@ -33,7 +33,10 @@ export interface OnboardingAnswerView {
   linkId: string;
   stepTitle: string;
   label: string;
+  /** Masked, for secrets. For ordinary answers it is a 160-character preview —
+   *  display `value` instead, or a long multi-select reads as cut off. */
   hint: string;
+  value: string;
   isSecret: boolean;
 }
 
@@ -116,6 +119,7 @@ function Secret({ answerId, mask, canReveal }: { answerId: string; mask: string;
 export function ClientOnboardingCard({ links, answers, files, canReveal }: Props) {
   const router = useRouter();
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [copiedAnswers, setCopiedAnswers] = useState<string | null>(null);
   const [openId, setOpenId] = useState<string | null>(
     // Open the most recent one by default — on almost every client there is
     // exactly one, and making them click to see it is a click for nothing.
@@ -132,6 +136,37 @@ export function ClientOnboardingCard({ links, answers, files, canReveal }: Props
       setTimeout(() => setCopiedId(null), 1800);
     } catch {
       toast.error("Couldn't copy — open the link and copy it from the address bar.");
+    }
+  }
+
+  /** The whole set of answers as plain text, for pasting into a doc or a reply.
+   *
+   *  Secrets are named but not included. The reveal control exists so that
+   *  reading one is a deliberate act by somebody entitled to; a bulk copy that
+   *  quietly swept them up would route around it. */
+  async function copyAnswers(
+    linkId: string,
+    groups: { title: string; rows: OnboardingAnswerView[] }[]
+  ) {
+    const text = groups
+      .map((g) =>
+        [
+          g.title,
+          ...g.rows.map(
+            (a) =>
+              `${a.label}\n${
+                a.isSecret ? "[encrypted — reveal it on the client page]" : a.value || a.hint || "—"
+              }`
+          )
+        ].join("\n\n")
+      )
+      .join("\n\n———\n\n");
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedAnswers(linkId);
+      setTimeout(() => setCopiedAnswers(null), 1800);
+    } catch {
+      toast.error("Couldn't copy — select the answers and copy them by hand.");
     }
   }
 
@@ -224,12 +259,27 @@ export function ClientOnboardingCard({ links, answers, files, canReveal }: Props
             </div>
 
             {(mine.length > 0 || myFiles.length > 0) && (
-              <button
-                onClick={() => setOpenId(isOpen ? null : l.id)}
-                className="text-[11px] text-accent/80 hover:text-accent font-medium pt-2"
-              >
-                {isOpen ? "Hide answers" : `Show ${mine.length} answer${mine.length === 1 ? "" : "s"}`}
-              </button>
+              <div className="flex items-center gap-3 pt-2">
+                <button
+                  onClick={() => setOpenId(isOpen ? null : l.id)}
+                  className="text-[11px] text-accent/80 hover:text-accent font-medium"
+                >
+                  {isOpen ? "Hide answers" : `Show ${mine.length} answer${mine.length === 1 ? "" : "s"}`}
+                </button>
+                {mine.length > 0 && (
+                  <button
+                    onClick={() => copyAnswers(l.id, groups)}
+                    className="inline-flex items-center gap-1 text-[11px] text-ink/50 hover:text-accent font-medium transition-colors"
+                  >
+                    {copiedAnswers === l.id ? (
+                      <ClipboardCheck className="w-3 h-3" />
+                    ) : (
+                      <Copy className="w-3 h-3" />
+                    )}
+                    {copiedAnswers === l.id ? "Copied" : "Copy answers"}
+                  </button>
+                )}
+              </div>
             )}
 
             {isOpen && (
@@ -247,7 +297,7 @@ export function ClientOnboardingCard({ links, answers, files, canReveal }: Props
                             {a.isSecret ? (
                               <Secret answerId={a.id} mask={a.hint} canReveal={canReveal} />
                             ) : (
-                              a.hint || <span className="text-ink/40 italic">blank</span>
+                              a.value || a.hint || <span className="text-ink/40 italic">blank</span>
                             )}
                           </dd>
                         </div>

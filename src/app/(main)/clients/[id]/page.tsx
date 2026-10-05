@@ -452,6 +452,7 @@ export default async function ClientDetailPage({ params }: { params: { id: strin
           stepTitle: a.stepTitle,
           label: a.label,
           hint: a.hint,
+          value: a.value,
           isSecret: a.isSecret
         }))}
         files={onboarding.files.map((f) => ({

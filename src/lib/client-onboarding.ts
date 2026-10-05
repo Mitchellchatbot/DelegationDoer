@@ -40,6 +40,11 @@ export interface OnboardingAnswer {
   /** Readable for ordinary answers, masked for secrets. Never the plaintext of
    *  a secret — that only ever comes back through revealAnswer. */
   hint: string;
+  /** The answer in full, for ordinary answers only. `hint` is a 160-character
+   *  preview, so a long multi-select reads as truncated wherever it is shown;
+   *  anything displaying an answer wants this and falls back to `hint`.
+   *  Empty for secrets — their plaintext only comes back via revealAnswer. */
+  value: string;
   isSecret: boolean;
   submittedAt: string;
 }
@@ -410,7 +415,7 @@ export async function listAnswers(linkId: string): Promise<OnboardingAnswer[]> {
   const supabase = getSupabaseAdmin();
   const { data, error } = await supabase
     .from("client_onboarding_answers")
-    .select("id, step_id, field_key, label, hint, is_secret, submitted_at")
+    .select("id, step_id, field_key, label, value, hint, is_secret, submitted_at")
     .eq("link_id", linkId)
     .order("submitted_at", { ascending: true });
   if (error) throw new Error(error.message);
@@ -420,6 +425,9 @@ export async function listAnswers(linkId: string): Promise<OnboardingAnswer[]> {
     fieldKey: r.field_key as string,
     label: r.label as string,
     hint: (r.hint as string | null) ?? "",
+    // Guarded on is_secret rather than trusting the column to be null: a secret
+    // must not leak its plaintext into a list view under any circumstance.
+    value: r.is_secret ? "" : ((r.value as string | null) ?? ""),
     isSecret: !!r.is_secret,
     submittedAt: r.submitted_at as string
   }));

@@ -26,6 +26,8 @@ interface Submission {
   blockers: string | null;
   leadsMessaged: string | null;
   linkedinComments: string | null;
+  ideas: string | null;
+  leftWhereOff: string | null;
   note: string | null;
   clientWork: Array<{ clientName: string; workedOn: string; results: string | null }>;
   submittedAt: string;
@@ -416,13 +418,16 @@ function SubmissionCard({
             <SectionCell label="Accomplished" value={s.accomplished} />
             <SectionCell label="Plan for tomorrow" value={s.planTomorrow} />
             <SectionCell label="Blockers / questions" value={s.blockers} />
+            {/* Facebook flow extras — only rendered when present. */}
+            {s.ideas && <SectionCell label="Ideas" value={s.ideas} />}
+            {s.leftWhereOff && <SectionCell label="Left off / submitted" value={s.leftWhereOff} />}
           </>
         )}
       </div>
 
       {/* Legacy free-form note — only if there's nothing in the
           structured fields. */}
-      {s.note && !s.workedOn && !s.accomplished && !s.planTomorrow && !s.blockers && !s.leadsMessaged && !s.linkedinComments && (
+      {s.note && !s.workedOn && !s.accomplished && !s.planTomorrow && !s.blockers && !s.leadsMessaged && !s.linkedinComments && !s.ideas && !s.leftWhereOff && (
         <div className="text-[13px] bg-slate-50/70 border border-slate-200/60 rounded-lg px-3 py-2 whitespace-pre-wrap">
           {s.note}
         </div>

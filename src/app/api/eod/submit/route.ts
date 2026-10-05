@@ -69,7 +69,9 @@ export async function POST(req: NextRequest) {
       plan_tomorrow:     STRING_OR_EMPTY(body.planTomorrow),
       blockers:          STRING_OR_EMPTY(body.blockers),
       leads_messaged:    STRING_OR_EMPTY(body.leadsMessaged),
-      linkedin_comments: STRING_OR_EMPTY(body.linkedinComments)
+      linkedin_comments: STRING_OR_EMPTY(body.linkedinComments),
+      ideas:             STRING_OR_EMPTY(body.ideas),
+      left_where_off:    STRING_OR_EMPTY(body.leftWhereOff)
     };
     const hasInline = Object.values(inlineFields).some((v) => v !== null);
 
@@ -84,7 +86,7 @@ export async function POST(req: NextRequest) {
         .maybeSingle(),
       supabase
         .from("eod_notes")
-        .select("id, worked_on, accomplished, plan_tomorrow, blockers, leads_messaged, linkedin_comments, note, submitted_at")
+        .select("id, worked_on, accomplished, plan_tomorrow, blockers, leads_messaged, linkedin_comments, ideas, left_where_off, note, submitted_at")
         .eq("user_id", userId)
         .eq("note_date", dateStr)
         .maybeSingle()
@@ -135,13 +137,13 @@ export async function POST(req: NextRequest) {
       };
       // Only overwrite columns the caller actually sent so a partial
       // body doesn't blow away other autosaved fields.
-      for (const k of ["worked_on", "accomplished", "plan_tomorrow", "blockers", "leads_messaged", "linkedin_comments"] as const) {
+      for (const k of ["worked_on", "accomplished", "plan_tomorrow", "blockers", "leads_messaged", "linkedin_comments", "ideas", "left_where_off"] as const) {
         if (inlineFields[k] !== null) upsertRow[k] = inlineFields[k];
       }
       const { data: upserted, error: upsertErr } = await supabase
         .from("eod_notes")
         .upsert(upsertRow, { onConflict: "user_id,note_date" })
-        .select("id, worked_on, accomplished, plan_tomorrow, blockers, leads_messaged, linkedin_comments, note, submitted_at")
+        .select("id, worked_on, accomplished, plan_tomorrow, blockers, leads_messaged, linkedin_comments, ideas, left_where_off, note, submitted_at")
         .maybeSingle();
       if (upsertErr) {
         return NextResponse.json({
@@ -167,6 +169,8 @@ export async function POST(req: NextRequest) {
     const noteRowExt = noteRow as typeof noteRow & {
       leads_messaged: string | null;
       linkedin_comments: string | null;
+      ideas: string | null;
+      left_where_off: string | null;
     };
     const hasAny = !!(
       noteRow.worked_on
@@ -175,6 +179,8 @@ export async function POST(req: NextRequest) {
       || noteRow.blockers
       || noteRowExt.leads_messaged
       || noteRowExt.linkedin_comments
+      || noteRowExt.ideas
+      || noteRowExt.left_where_off
       || noteRow.note
     );
     if (!hasAny) {
@@ -247,6 +253,8 @@ export async function POST(req: NextRequest) {
     if (noteRowExt.linkedin_comments) sections.push(`*LinkedIn comments:*\n${quote(noteRowExt.linkedin_comments)}`);
     if (noteRow.plan_tomorrow) sections.push(`*Plan for tomorrow:*\n${quote(noteRow.plan_tomorrow)}`);
     if (noteRow.blockers) sections.push(`*Blockers / questions:*\n${quote(noteRow.blockers)}`);
+    if (noteRowExt.ideas) sections.push(`*Ideas:*\n${quote(noteRowExt.ideas)}`);
+    if (noteRowExt.left_where_off) sections.push(`*Left off / submitted:*\n${quote(noteRowExt.left_where_off)}`);
     if (sections.length === 0 && noteRow.note) {
       sections.push(`_Notes:_\n${quote(noteRow.note)}`);
     }

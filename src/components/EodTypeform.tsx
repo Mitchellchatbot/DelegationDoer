@@ -38,6 +38,9 @@ interface PriorState {
   // else — the standard flows ignore them entirely.
   leadsMessaged: string | null;
   linkedinComments: string | null;
+  // Facebook-flow extras. Null for every other flow.
+  ideas: string | null;
+  leftWhereOff: string | null;
 }
 
 // One logged "what I did for this client today" entry (persisted to
@@ -59,12 +62,14 @@ interface Props {
   // Talha's EOD asks five marketing-flavoured questions instead of the
   // generic four. Takes precedence over the client flow.
   isMarketingTalha: boolean;
+  // Facebook team gets a lean, health-check-flavoured EOD.
+  isFacebookTeam: boolean;
   prior: PriorState;
   onClose: () => void;
   onComplete: () => void;
 }
 
-type FlowKind = "client" | "marketing" | "default";
+type FlowKind = "client" | "marketing" | "facebook" | "default";
 
 type StructuredStep = {
   key: keyof PriorState;
@@ -91,6 +96,16 @@ const TALHA_STRUCTURED_STEPS: StructuredStep[] = [
   { key: "blockers", title: "Anything I can help with?", subtitle: "Questions, blockers, or anything you'd like leadership to weigh in on tonight.", required: false }
 ];
 
+// Facebook flow: lean + a light end-of-day check. Storage reuses worked_on /
+// plan_tomorrow / blockers and adds ideas + left_where_off.
+const FACEBOOK_STRUCTURED_STEPS: StructuredStep[] = [
+  { key: "workedOn", title: "What did you do today?", subtitle: "The work — what you got through.", required: true },
+  { key: "planTomorrow", title: "What's on for tomorrow?", subtitle: "Top things you'll pick up first.", required: true },
+  { key: "blockers", title: "Any blockers?", subtitle: "Anything stuck or slowing you down.", required: false },
+  { key: "ideas", title: "Any ideas?", subtitle: "Something you'd test, improve, or try — big or small.", required: false },
+  { key: "leftWhereOff", title: "Did you comment on your tasks where you left off, and submit?", subtitle: "Note where each task stands so tomorrow's pickup is clean.", required: true }
+];
+
 // Client flow wrap-up — the per-client loop carries the "what got done"
 // content, so all that's left is the forward look + blockers.
 const CLIENT_WRAPUP_STEPS: StructuredStep[] = [
@@ -99,12 +114,13 @@ const CLIENT_WRAPUP_STEPS: StructuredStep[] = [
 ];
 
 export function EodTypeform({
-  open, today, isWebsiteTeam, isMarketingTalha, prior, onClose, onComplete
+  open, today, isWebsiteTeam, isMarketingTalha, isFacebookTeam, prior, onClose, onComplete
 }: Props) {
-  const flow: FlowKind = isMarketingTalha ? "marketing" : isWebsiteTeam ? "client" : "default";
+  const flow: FlowKind = isMarketingTalha ? "marketing" : isFacebookTeam ? "facebook" : isWebsiteTeam ? "client" : "default";
 
   const structuredSteps =
     flow === "marketing" ? TALHA_STRUCTURED_STEPS :
+    flow === "facebook" ? FACEBOOK_STRUCTURED_STEPS :
     flow === "client" ? CLIENT_WRAPUP_STEPS :
     DEFAULT_STRUCTURED_STEPS;
 
@@ -208,7 +224,9 @@ export function EodTypeform({
           planTomorrow: answers.planTomorrow ?? "",
           blockers: answers.blockers ?? "",
           leadsMessaged: answers.leadsMessaged ?? "",
-          linkedinComments: answers.linkedinComments ?? ""
+          linkedinComments: answers.linkedinComments ?? "",
+          ideas: answers.ideas ?? "",
+          leftWhereOff: answers.leftWhereOff ?? ""
         })
       });
       const data = await res.json();

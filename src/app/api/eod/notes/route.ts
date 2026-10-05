@@ -61,6 +61,8 @@ export async function PUT(req: NextRequest) {
     if ("blockers" in body) row.blockers = STRING_OR_EMPTY(body.blockers);
     if ("leadsMessaged" in body) row.leads_messaged = STRING_OR_EMPTY(body.leadsMessaged);
     if ("linkedinComments" in body) row.linkedin_comments = STRING_OR_EMPTY(body.linkedinComments);
+    if ("ideas" in body) row.ideas = STRING_OR_EMPTY(body.ideas);
+    if ("leftWhereOff" in body) row.left_where_off = STRING_OR_EMPTY(body.leftWhereOff);
 
     const { error } = await supabase
       .from("eod_notes")

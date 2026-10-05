@@ -5,9 +5,9 @@ import { postMessage } from "@/lib/slack";
 
 export const dynamic = "force-dynamic";
 const FB_DEPT = "dep_facebook";
-// The Facebook "dream team" channel — submissions are announced here for a
-// manager to pick up and proof.
-const DREAM_TEAM_CHANNEL = "C08J1G9CUTA";
+// The Facebook "dream team" channel (#dream-team-, the active private one) —
+// submissions are announced here for a manager to pick up and proof.
+const DREAM_TEAM_CHANNEL = "C0ARTB0UD6V";
 
 // POST { photoUrl, workDone, testDone } — a Facebook-team member submits a
 // completed FB task for manager approval. Requires a photo of the finished work

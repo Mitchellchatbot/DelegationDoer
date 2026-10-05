@@ -437,7 +437,12 @@ function CollectForm({
       .filter((f) => f.kind !== "files")
       .map((f) => ({ key: f.key, value: valsRef.current[f.key] ?? "" }))
       .filter((v) => v.value.trim());
-    if (!values.length) return;
+    // Nothing to write — but the chip handler has already said "Saving…", and
+    // leaving that up forever is how unticking the last option looks like a hang.
+    if (!values.length) {
+      if (mounted.current) setState("idle");
+      return;
+    }
 
     if (preview) {
       // Behaves exactly as a real save does, so the walkthrough being previewed
@@ -467,11 +472,48 @@ function CollectForm({
     }
   }, [fields, step.id, token, onSaved, preview]);
 
+  // Every save posts the whole step, so two in flight at once is a lost answer
+  // waiting to happen: the replies can land in either order, and the loser
+  // overwrites the winner with an older, smaller set of ticks. Running them
+  // through one chain means the last save to start is the last to be written.
+  const chain = useRef<Promise<void>>(Promise.resolve());
+  const queueSave = useCallback(() => {
+    chain.current = chain.current.catch(() => {}).then(() => persist());
+    return chain.current;
+  }, [persist]);
+
+  // Chips save on click, and a client working through fifteen options fires
+  // fifteen writes for an answer only the last of which is correct. Collapsing a
+  // burst into one write is what stops a half-finished selection reaching the
+  // database — the chain alone would still order them, but it would also still
+  // send them.
+  const chipTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const saveChips = useCallback(() => {
+    // Shown straight away rather than when the timer fires: a tick that reports
+    // nothing for half a second reads as a tick that did not register, which is
+    // what makes people click it again.
+    setState("saving");
+    if (chipTimer.current) clearTimeout(chipTimer.current);
+    chipTimer.current = setTimeout(() => {
+      chipTimer.current = null;
+      void queueSave();
+    }, 500);
+  }, [queueSave]);
+
+  useEffect(() => () => { if (chipTimer.current) clearTimeout(chipTimer.current); }, []);
+
   // Re-registered each render so the parent always holds a saver bound to the
   // step actually on screen; cleared on unmount so it cannot flush a step the
   // client has already left.
   useEffect(() => {
-    registerSave(() => persist());
+    registerSave(() => {
+      // Moving on must not outrun a debounce still counting down.
+      if (chipTimer.current) {
+        clearTimeout(chipTimer.current);
+        chipTimer.current = null;
+      }
+      return queueSave();
+    });
     return () => registerSave(null);
   });
 
@@ -514,11 +556,11 @@ function CollectForm({
                     // click. Waiting for the finish button would lose the pick
                     // of anyone who closed the tab straight after making it.
                     //
-                    // The timeout is load-bearing, not a shrug: persist() reads
-                    // valsRef, which is assigned during render, so calling it
-                    // inline would post the value from BEFORE this click. A
-                    // macrotask runs after React has flushed the update.
-                    setTimeout(() => void persist(), 0);
+                    // The delay inside saveChips is load-bearing, not a shrug:
+                    // persist() reads valsRef, which is assigned during render,
+                    // so saving inline would post the value from BEFORE this
+                    // click.
+                    saveChips();
                   }}
                 />
               ) : f.kind === "multi" ? (
@@ -527,7 +569,7 @@ function CollectForm({
                   value={vals[f.key] ?? ""}
                   onChange={(v) => {
                     setVals((p) => ({ ...p, [f.key]: v }));
-                    setTimeout(() => void persist(), 0);
+                    saveChips();
                   }}
                 />
               ) : f.kind === "long" ? (
@@ -536,7 +578,7 @@ function CollectForm({
                   rows={3}
                   value={vals[f.key] ?? ""}
                   onChange={(e) => setVals((p) => ({ ...p, [f.key]: e.target.value }))}
-                  onBlur={() => void persist()}
+                  onBlur={() => void queueSave()}
                   placeholder={placeholder}
                   className={cn(inputClass, "min-h-[92px] resize-y leading-relaxed")}
                 />
@@ -553,7 +595,7 @@ function CollectForm({
                   autoComplete={f.kind === "email" ? "email" : "off"}
                   value={vals[f.key] ?? ""}
                   onChange={(e) => setVals((p) => ({ ...p, [f.key]: e.target.value }))}
-                  onBlur={() => void persist()}
+                  onBlur={() => void queueSave()}
                   placeholder={placeholder}
                   className={inputClass}
                 />

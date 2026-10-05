@@ -6,7 +6,9 @@ import { PersonAvatar } from "@/components/PersonAvatar";
 import { TaskActions } from "@/components/TaskActions";
 import { TaskTimerButton } from "@/components/TaskTimerButton";
 import { NotifyTeammatesDialog } from "@/components/NotifyTeammatesDialog";
-import { canNotifyOnTask, canViewTask, canManageTask, canDeleteTask, canClaimTask } from "@/lib/access";
+import { canNotifyOnTask, canViewTask, canManageTask, canDeleteTask, canClaimTask, isLeader } from "@/lib/access";
+import { getFbProof } from "@/lib/fb-proof";
+import { FbProofPanel } from "@/components/FbProofPanel";
 import { isTeamTask } from "@/lib/task-team";
 import { ClaimTaskButton } from "@/components/ClaimTaskButton";
 import { DeleteTaskButton } from "@/components/DeleteTaskButton";
@@ -148,6 +150,14 @@ export default async function TaskDetailPage({ params }: { params: { id: string 
   const fbOnboarding = task.departmentId === "dep_facebook" ? await getOnboarding(task.id) : null;
   const fbProgress = fbOnboarding ? progress(fbOnboarding.state) : null;
 
+  // Facebook proofing: FB-team members submit a photo + notes for a manager to
+  // approve before the task counts as done.
+  const isFb = task.departmentId === "dep_facebook";
+  const fbProof = isFb ? await getFbProof(task.id) : null;
+  const isFbMember = isFb && (me?.departmentIds ?? []).includes("dep_facebook");
+  const isFbProofer = isFb && !!me && (((me.departmentIds ?? []).includes("dep_facebook") && me.role === "department_head") || isLeader(me));
+  const submitterName = fbProof?.submittedBy ? (allUsers.find((u) => u.id === fbProof.submittedBy)?.name ?? null) : null;
+
   return (
     <div className="space-y-5 max-w-5xl">
       <BackPill href="/tasks" label="Back to tasks" />
@@ -248,6 +258,18 @@ export default async function TaskDetailPage({ params }: { params: { id: string 
                 Open workspace <ArrowUpRight className="w-3.5 h-3.5" />
               </span>
             </Link>
+          )}
+
+          {isFb && me && (
+            <FbProofPanel
+              taskId={task.id}
+              taskStatus={task.status}
+              isFbMember={!!isFbMember}
+              isProofer={!!isFbProofer}
+              viewerId={currentUserId}
+              proof={fbProof}
+              submitterName={submitterName}
+            />
           )}
 
           {(task.mediaUrls?.length ?? 0) > 0 && (

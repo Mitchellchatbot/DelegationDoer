@@ -1299,7 +1299,7 @@ export function OnboardingFlow({
       {/* The progress rail. One segment per step, filled for what is done — a
           count that visibly shortens is most of what keeps somebody going through
           a long form. How many segments there are is the script's business:
-          eight on the Website form, nine on the SEO one. */}
+          eight on each form today, and not a number to rely on. */}
       <div className="sticky top-0 z-30 bg-bg/90 backdrop-blur border-b border-border/60">
         <div className="max-w-[860px] mx-auto px-5 sm:px-8 py-3">
           <div className="flex items-center gap-1.5">

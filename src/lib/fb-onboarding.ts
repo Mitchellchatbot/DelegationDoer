@@ -525,6 +525,36 @@ export const MAIN_ZAP_STEPS: MainZapStep[] = [
     copies: [{ label: "22 headers (paste into A1)", text: LEAD_SHEET_HEADERS.join("\t") }]
   },
   {
+    id: "fallback", step: "Fallback", title: "Catch the leads neither path matched",
+    blurb: "Path A needs both cards and Path B needs neither, so a lead that uploads exactly one matches neither and stops dead at Step 11. The fallback is the branch that catches it. Build it last, once Path B is finished, by duplicating Path B's four actions.",
+    checks: [
+      { key: "enabled", label: "Third branch added at Step 11, then its Path rules set to Fallback — Zapier's built-in rule type, not a third set of conditions", hint: "Zapier renames the branch to Fallback, moves it to the far right and allows one per path group. It still shows a Path conditions step of its own: that is where the rule type lives, not a third VOB test." },
+      { key: "dup", label: "Duplicated the finished Path B into it rather than building it fresh", hint: "Path B, not Path A: Step 14a expects a matched pair, so a copied Path A half-fails on the card that never arrived. Same discipline as Path A → Path B, and a branch built by hand picks up whatever app version is current, so it drifts from the other two." },
+      { key: "slack", label: "Slack header says the path could not be determined, so nobody works it as a clean VOB lead", hint: "With Autoreplay on a fallback branch only runs once every replay attempt has failed — expect a delay, not a miss." },
+      { key: "ctm", label: "CTM first text still fires — the lead is real even when its path is not" },
+      { key: "crm", label: "CRM lead still created, VOB flag False, with a note that no path matched" },
+      { key: "sheet", label: "Sheet row still appended, VOB column left blank rather than Yes or No" }
+    ],
+    choices: [
+      {
+        key: "channel", label: "Where the fallback posts",
+        options: [
+          { value: "non_vob", label: "The non-VOB leads channel" },
+          { value: "own", label: "Its own channel" },
+          { value: "errors", label: "The zap-errors channel" }
+        ]
+      },
+      {
+        key: "card", label: "The one card a fallback lead did upload",
+        options: [
+          { value: "attached", label: "Attached to the lead" },
+          { value: "dropped", label: "Not carried over" }
+        ]
+      }
+    ],
+    warn: "A fallback that only posts to Slack still loses the lead — it has to create the CRM record and the sheet row like every other path."
+  },
+  {
     id: "qc", step: "QC", title: "Before going live",
     checks: [
       { key: "single", label: "One full live submission → exactly one deduplicator row, clears both filters" },
@@ -548,7 +578,10 @@ export const MAIN_ZAP_FAILURES: { symptom: string; cause: string }[] = [
   { symptom: "Every run passes the filter", cause: "Conditions were added as OR when they should have been AND inside Group B" },
   { symptom: "No runs pass the filter", cause: "Group A and Group B were built as one AND group instead of two OR groups" },
   { symptom: "Duplicates still get through", cause: "The mapped submission token is unique per entry rather than shared across partial and complete" },
-  { symptom: "Lead vanishes after Step 11", cause: "Only one of the two insurance card images was uploaded, so neither path matched" },
+  { symptom: "Lead vanishes after Step 11", cause: "Only one of the two insurance card images was uploaded, so neither path matched, and no fallback path is enabled to catch it" },
+  { symptom: "Every lead lands in the fallback", cause: "Path A and Path B test a Typeform field that has since been renamed, so neither set of conditions can match any more" },
+  { symptom: "Fallback leads reach Slack but never the CRM or the sheet", cause: "Only the Slack step was copied into the fallback path; the rest of the branch was never built" },
+  { symptom: "Fallback lead reaches the CRM with no insurance card", cause: "The fallback was copied from Path B, which carries no upload step, and nobody decided what the one card that did arrive should do" },
   { symptom: "CTM sends nothing but Zapier shows success", cause: "Posted to a FormReactor that does not have first text enabled" },
   { symptom: "Insurance images missing from the CRM record", cause: "Step 14a ran before the Lead was created, or the Lead ID was not mapped from Step 14" },
   { symptom: "Slack message shows blanks", cause: "Field IDs were copied from another client's Zap instead of re-picked" },

@@ -444,11 +444,11 @@ export default function EodPage() {
           <button
             type="button"
             onClick={() => setTypeformOpen(true)}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-semibold text-white shadow-sm hover:-translate-y-0.5 active:scale-95 transition-all"
+            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full text-xs font-semibold text-white shadow-sm hover:-translate-y-0.5 active:scale-95 transition-all"
             style={{ background: "linear-gradient(135deg, #ec4899 0%, #7c3aed 100%)" }}
-            title="Force-open the end-of-day typeform flow (normally auto-opens within 60 min of your scheduled shift end)"
+            title="Open your end-of-day form (also auto-opens within 60 min of your scheduled shift end)"
           >
-            <Sparkles className="w-3 h-3" /> Simulate shift end
+            <Sparkles className="w-3.5 h-3.5" /> Submit EOD
           </button>
         )}
       </div>

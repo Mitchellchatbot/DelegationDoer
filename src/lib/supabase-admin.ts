@@ -78,6 +78,28 @@ export function isMissingColumnError(
 // Same rule as isMissingColumnError: fall through on THIS and nothing else. A
 // transient 5xx or a statement timeout must not silently re-enable the legacy
 // path the migration existed to replace.
+// And for the stage CHECK constraint specifically. Adding a Phase to
+// fb-onboarding.ts teaches stage() a value the live constraint does not accept
+// until its migration is hand-applied, and those migrations are applied by hand
+// (20260923150000 says so in its own header). Postgres answers 23514, which is
+// neither of the two cases above, so without this the FIRST tick that moves a
+// client into the new stage 500s — and keeps 500ing, because stage() goes on
+// computing that value until the tab is finished and it cannot be finished
+// while every tick fails.
+//
+// Narrow on purpose, and narrower than its siblings: the code AND the
+// constraint name. Any other 23514 is a real violation and must still surface.
+// Degrading here loses only stage_entered_at (the day-count chip), which
+// 20260923120000's own comment already treats as absent-not-broken.
+export function isStageConstraintError(
+  error: { code?: string | null; message?: string | null } | null | undefined
+): boolean {
+  if (!error) return false;
+  const m = error.message ?? "";
+  if (!/fb_onboarding_stage_check/i.test(m)) return false;
+  return error.code === "23514" || /violates check constraint/i.test(m);
+}
+
 export function isMissingFunctionError(
   error: { code?: string | null; message?: string | null } | null | undefined
 ): boolean {

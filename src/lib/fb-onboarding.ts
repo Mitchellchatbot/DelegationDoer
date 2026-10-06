@@ -29,7 +29,7 @@ export type OnboardingState = Record<string, Entry>;
 
 export type TestResult = "pass" | "fail" | "na";
 
-interface Choice { key: string; label: string; options: { value: string; label: string }[] }
+interface Choice { key: string; label: string; options: { value: string; label: string }[]; optional?: boolean }
 interface Check { key: string; label: string; hint?: string; optional?: boolean }
 // `url` renders copy + open actions beside the field. `optional` keeps a
 // field out of accessStatus's cleared test — it still renders and still
@@ -534,18 +534,18 @@ export const MAIN_ZAP_STEPS: SopStep[] = [
   },
   {
     id: "fallback", step: "Fallback", title: "Catch the leads neither path matched",
-    blurb: "Path A needs both cards and Path B needs neither, so a lead that uploads exactly one matches neither and stops dead at Step 11. The fallback is the branch that catches it. Build it last, once Path B is finished, by duplicating Path B's four actions.",
+    blurb: "Path A needs both cards and Path B needs neither, so a lead that uploads exactly one matches neither and stops dead at Step 11. The fallback is the branch that catches it. Build it last, once Path B is finished, by duplicating Path B's four actions. Every box here is deliberately uncounted — not every client agrees to a third branch, and counting them would un-complete every onboarding that finished before this step existed. QC still tests the one-image case.",
     checks: [
-      { key: "enabled", label: "Third branch added at Step 11, then its Path rules set to Fallback — Zapier's built-in rule type, not a third set of conditions", hint: "Zapier renames the branch to Fallback, moves it to the far right and allows one per path group. It still shows a Path conditions step of its own: that is where the rule type lives, not a third VOB test." },
-      { key: "dup", label: "Duplicated the finished Path B into it rather than building it fresh", hint: "Path B, not Path A: Step 14a expects a matched pair, so a copied Path A half-fails on the card that never arrived. Same discipline as Path A → Path B, and a branch built by hand picks up whatever app version is current, so it drifts from the other two." },
-      { key: "slack", label: "Slack header says the path could not be determined, so nobody works it as a clean VOB lead", hint: "With Autoreplay on a fallback branch only runs once every replay attempt has failed — expect a delay, not a miss." },
-      { key: "ctm", label: "CTM first text still fires — the lead is real even when its path is not" },
-      { key: "crm", label: "CRM lead still created, VOB flag False, with a note that no path matched" },
-      { key: "sheet", label: "Sheet row still appended, VOB column left blank rather than Yes or No" }
+      { key: "enabled", optional: true, label: "Third branch added at Step 11, then its Path rules set to Fallback — Zapier's built-in rule type, not a third set of conditions", hint: "Zapier renames the branch to Fallback, moves it to the far right and allows one per path group. It still shows a Path conditions step of its own: that is where the rule type lives, not a third VOB test." },
+      { key: "dup", optional: true, label: "Duplicated the finished Path B into it rather than building it fresh", hint: "Path B, not Path A: Step 14a expects a matched pair, so a copied Path A half-fails on the card that never arrived. Same discipline as Path A → Path B, and a branch built by hand picks up whatever app version is current, so it drifts from the other two." },
+      { key: "slack", optional: true, label: "Slack header says the path could not be determined, so nobody works it as a clean VOB lead", hint: "With Autoreplay on a fallback branch only runs once every replay attempt has failed — expect a delay, not a miss." },
+      { key: "ctm", optional: true, label: "CTM first text still fires — the lead is real even when its path is not" },
+      { key: "crm", optional: true, label: "CRM lead still created, VOB flag False, with a note that no path matched" },
+      { key: "sheet", optional: true, label: "Sheet row still appended, VOB column left blank rather than Yes or No" }
     ],
     choices: [
       {
-        key: "channel", label: "Where the fallback posts",
+        key: "channel", optional: true, label: "Where the fallback posts",
         options: [
           { value: "non_vob", label: "The non-VOB leads channel" },
           { value: "own", label: "Its own channel" },
@@ -553,7 +553,7 @@ export const MAIN_ZAP_STEPS: SopStep[] = [
         ]
       },
       {
-        key: "card", label: "The one card a fallback lead did upload",
+        key: "card", optional: true, label: "The one card a fallback lead did upload",
         options: [
           { value: "attached", label: "Attached to the lead" },
           { value: "dropped", label: "Not carried over" }
@@ -858,7 +858,7 @@ export function stepKeys(
 ): { key: string; kind: "check" | "text" }[] {
   return [
     ...st.checks.filter((c) => !c.optional).map((c) => ({ key: keyFor(st.id, c.key), kind: "check" as const })),
-    ...(st.choices ?? []).map((c) => ({ key: keyFor(st.id, c.key), kind: "text" as const })),
+    ...(st.choices ?? []).filter((c) => !c.optional).map((c) => ({ key: keyFor(st.id, c.key), kind: "text" as const })),
     ...(st.inputs ?? []).filter((i) => !i.optional).map((i) => ({ key: keyFor(st.id, i.key), kind: "text" as const }))
   ];
 }

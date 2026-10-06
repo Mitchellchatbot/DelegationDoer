@@ -221,6 +221,20 @@ check("sync sits between launch and build",
   M.STAGES.indexOf("sync") === M.STAGES.indexOf("main") - 1, M.STAGES.join(","));
 
 // 8. `optional` has to keep working, and must not have moved what already shipped.
+// The Fallback step is present and fully rendered but deliberately counts
+// NOTHING. Counting its 6 checks + 2 choices moves mainTotal to 79, and every
+// Facebook client that already finished then reads 71/79, loses completed_at on
+// its next tick and drops from Live back to Build. If this assertion fails,
+// someone removed an `optional` -- read the step's blurb before "fixing" it.
+const fallback = M.MAIN_ZAP_STEPS.find((st) => st.id === "fallback");
+check("the Fallback step still exists", !!fallback);
+if (fallback) {
+  check("Fallback renders its boxes",
+    fallback.checks.length === 6 && (fallback.choices || []).length === 2,
+    `${fallback.checks.length} checks, ${(fallback.choices || []).length} choices`);
+  check("Fallback counts nothing", M.stepKeys(fallback, M.mainKey).length === 0,
+    `counts ${M.stepKeys(fallback, M.mainKey).length}`);
+}
 check("MAIN_ZAP_STEPS still totals 71", M.progress({}).mainTotal === 71, `got ${M.progress({}).mainTotal}`);
 const allOptional = M.SYNC_STEPS.find((st) =>
   st.checks.length > 0 && st.checks.every((c) => c.optional) && !st.choices && !st.inputs);

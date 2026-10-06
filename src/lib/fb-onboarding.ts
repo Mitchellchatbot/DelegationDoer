@@ -29,7 +29,7 @@ export type OnboardingState = Record<string, Entry>;
 
 export type TestResult = "pass" | "fail" | "na";
 
-interface Choice { key: string; label: string; options: { value: string; label: string }[] }
+interface Choice { key: string; label: string; options: { value: string; label: string }[]; optional?: boolean }
 interface Check { key: string; label: string; hint?: string; optional?: boolean }
 // `url` renders copy + open actions beside the field. `optional` keeps a
 // field out of accessStatus's cleared test — it still renders and still
@@ -281,7 +281,14 @@ export const zapUrlKey = (id: string) => `setup.zap.${id}.url`;
 // Labels and copy blocks may carry {Provider} / {slug}; the panel fills them.
 // ---------------------------------------------------------------------------
 
-export interface MainZapStep {
+// A step that only applies down one branch. The keys of a step whose condition
+// is unmet are not counted AT ALL — the conditional-keys idiom setupKeys() uses
+// for the notify channel — which is what lets the two delivery routes coexist:
+// neither strands the other, and whichever one was actually chosen is genuinely
+// required rather than merely suggested. `key` is a full state key.
+export interface StepWhen { key: string; anyOf: string[] }
+
+export interface SopStep {
   id: string;
   step: string;           // "Step 3", "Before you start", "QC"…
   title: string;
@@ -291,6 +298,7 @@ export interface MainZapStep {
   inputs?: TextInput[];
   copies?: { label: string; text: string }[];
   warn?: string;
+  when?: StepWhen;
 }
 
 const DEDUP_HEADERS = ["submission token", "submission time", "name"].join("\t");
@@ -355,7 +363,7 @@ export const LEAD_SHEET_HEADERS = [
   "VOB"
 ];
 
-export const MAIN_ZAP_STEPS: MainZapStep[] = [
+export const MAIN_ZAP_STEPS: SopStep[] = [
   {
     id: "pre", step: "Before you start", title: "Prerequisites",
     checks: [
@@ -525,6 +533,36 @@ export const MAIN_ZAP_STEPS: MainZapStep[] = [
     copies: [{ label: "22 headers (paste into A1)", text: LEAD_SHEET_HEADERS.join("\t") }]
   },
   {
+    id: "fallback", step: "Fallback", title: "Catch the leads neither path matched",
+    blurb: "Path A needs both cards and Path B needs neither, so a lead that uploads exactly one matches neither and stops dead at Step 11. The fallback is the branch that catches it. Build it last, once Path B is finished, by duplicating Path B's four actions. Every box here is deliberately uncounted — not every client agrees to a third branch, and counting them would un-complete every onboarding that finished before this step existed. QC still tests the one-image case.",
+    checks: [
+      { key: "enabled", optional: true, label: "Third branch added at Step 11, then its Path rules set to Fallback — Zapier's built-in rule type, not a third set of conditions", hint: "Zapier renames the branch to Fallback, moves it to the far right and allows one per path group. It still shows a Path conditions step of its own: that is where the rule type lives, not a third VOB test." },
+      { key: "dup", optional: true, label: "Duplicated the finished Path B into it rather than building it fresh", hint: "Path B, not Path A: Step 14a expects a matched pair, so a copied Path A half-fails on the card that never arrived. Same discipline as Path A → Path B, and a branch built by hand picks up whatever app version is current, so it drifts from the other two." },
+      { key: "slack", optional: true, label: "Slack header says the path could not be determined, so nobody works it as a clean VOB lead", hint: "With Autoreplay on a fallback branch only runs once every replay attempt has failed — expect a delay, not a miss." },
+      { key: "ctm", optional: true, label: "CTM first text still fires — the lead is real even when its path is not" },
+      { key: "crm", optional: true, label: "CRM lead still created, VOB flag False, with a note that no path matched" },
+      { key: "sheet", optional: true, label: "Sheet row still appended, VOB column left blank rather than Yes or No" }
+    ],
+    choices: [
+      {
+        key: "channel", optional: true, label: "Where the fallback posts",
+        options: [
+          { value: "non_vob", label: "The non-VOB leads channel" },
+          { value: "own", label: "Its own channel" },
+          { value: "errors", label: "The zap-errors channel" }
+        ]
+      },
+      {
+        key: "card", optional: true, label: "The one card a fallback lead did upload",
+        options: [
+          { value: "attached", label: "Attached to the lead" },
+          { value: "dropped", label: "Not carried over" }
+        ]
+      }
+    ],
+    warn: "A fallback that only posts to Slack still loses the lead — it has to create the CRM record and the sheet row like every other path."
+  },
+  {
     id: "qc", step: "QC", title: "Before going live",
     checks: [
       { key: "single", label: "One full live submission → exactly one deduplicator row, clears both filters" },
@@ -548,23 +586,284 @@ export const MAIN_ZAP_FAILURES: { symptom: string; cause: string }[] = [
   { symptom: "Every run passes the filter", cause: "Conditions were added as OR when they should have been AND inside Group B" },
   { symptom: "No runs pass the filter", cause: "Group A and Group B were built as one AND group instead of two OR groups" },
   { symptom: "Duplicates still get through", cause: "The mapped submission token is unique per entry rather than shared across partial and complete" },
-  { symptom: "Lead vanishes after Step 11", cause: "Only one of the two insurance card images was uploaded, so neither path matched" },
+  { symptom: "Lead vanishes after Step 11", cause: "Only one of the two insurance card images was uploaded, so neither path matched, and no fallback path is enabled to catch it" },
+  { symptom: "Every lead lands in the fallback", cause: "Path A and Path B test a Typeform field that has since been renamed, so neither set of conditions can match any more" },
+  { symptom: "Fallback leads reach Slack but never the CRM or the sheet", cause: "Only the Slack step was copied into the fallback path; the rest of the branch was never built" },
+  { symptom: "Fallback lead reaches the CRM with no insurance card", cause: "The fallback was copied from Path B, which carries no upload step, and nobody decided what the one card that did arrive should do" },
   { symptom: "CTM sends nothing but Zapier shows success", cause: "Posted to a FormReactor that does not have first text enabled" },
   { symptom: "Insurance images missing from the CRM record", cause: "Step 14a ran before the Lead was created, or the Lead ID was not mapped from Step 14" },
   { symptom: "Slack message shows blanks", cause: "Field IDs were copied from another client's Zap instead of re-picked" },
   { symptom: "Leads from two clients in one sheet", cause: "The Zap was duplicated for a new client without repointing Steps 1 and 15 at the new client's spreadsheets" }
 ];
 
+// ---------------------------------------------------------------------------
+// Scaled Sync — standing the client's CRM up, and pointing their Typeform at it.
+//
+// Only for clients whose CRM *is* Scaled Sync (crm.scaledai.org). That is the
+// whole reason this phase is gated on SYNC_PLATFORM_KEY rather than always
+// counted: plenty of Facebook clients run Kipu, BestNotes or a sheet, and a
+// phase they can never finish would hold `progress().complete` false forever —
+// which the API route turns into a CLEARED completed_at on the next PATCH
+// (route.ts's reconcileCompletedAt), knocking a live client back off the board.
+// An unanswered gate contributes zero keys, so adding this phase cannot move
+// any onboarding that already exists. Same conditional-keys idiom as
+// setupKeys()'s notify channel.
+//
+// Two halves, in dependency order: the org has to exist before there is a
+// webhook URL to give Typeform.
+// ---------------------------------------------------------------------------
+
+export const SYNC_PLATFORM_KEY = "sync.platform";
+
+// The gate. "other" is a real answer, not a skip — it records that somebody
+// checked, which is why it reads differently from the unanswered state.
+export const SYNC_PLATFORM_OPTIONS = [
+  { value: "scaled_sync", label: "Scaled Sync" },
+  { value: "other", label: "Another CRM" }
+] as const;
+
+export const syncKey = (stepId: string, key: string) => `sync.${stepId}.${key}`;
+
+const SYNC_URL_SHAPE = `https://<project-ref>.supabase.co/functions/v1/typeform-intake/<hook-id>`;
+
+// Everything a Typeform has to ask to fill a lead the way the Facebook build
+// expects. Not a paste-in block like the zap's sheet headers — Typeform
+// questions are authored in Typeform — so it is a checklist to read against
+// the client's live form before mapping.
+export const SYNC_REQUIRED_ANSWERS = [
+  "First name",
+  "Last name",
+  "Phone number",
+  "Email",
+  "Date of birth",
+  "What substance are you seeking help for?",
+  "How do you receive your insurance?",
+  "Please Select Your Insurance Provider",
+  "Front of insurance card (file upload)",
+  "Back of insurance card (file upload)"
+];
+
+export const SYNC_STEPS: SopStep[] = [
+  {
+    id: "pre", step: "Before you start", title: "Prerequisites",
+    blurb: "All of this is Scaled Sync's own admin — none of it touches Zapier yet.",
+    checks: [
+      { key: "email", label: "A mailbox you control for the owner login, and you can open mail sent to it" },
+      { key: "form", label: "The client's live Typeform is published and you can edit its Connect panel" },
+      { key: "number", label: "Know the sending number this client will text from, or that it is not ready yet", hint: "Not having one is fine — the automated first text stays off until it is." }
+    ]
+  },
+  {
+    id: "a1", step: "Step 1", title: "Sign up the owner account",
+    blurb: "Self-serve at /signup on the CRM. A brand-new account can see nothing at all until it has an org, so this is safe to do before anything else exists.",
+    checks: [
+      { key: "signed_up", label: "Signed up at the CRM's /signup (email + password, or Google)" },
+      { key: "confirmed", label: "Confirmed the address from the email before going further", hint: "Open the link in the email itself — it decides which host your session lands on." }
+    ],
+    inputs: [
+      { key: "crm_url", label: "CRM sign-in URL used", placeholder: "the host you actually signed in on", url: true },
+      { key: "owner_email", label: "Owner login", placeholder: "who the org will belong to" }
+    ],
+    warn: "create_organization refuses an unconfirmed account. Confirm the address first or Step 2 fails with no useful error."
+  },
+  {
+    id: "a2", step: "Step 2", title: "Create the organization",
+    blurb: "The wizard's first screen asks for the business name. Whoever runs it becomes the owner of the new org, whatever role they hold anywhere else.",
+    checks: [
+      { key: "created", label: "Created the org and it is named as the client wants to be known" },
+      { key: "name_check", label: "Name is what leads should see in an automated text, not an internal shorthand" }
+    ],
+    inputs: [{ key: "org_url", label: "Org (paste the URL once you are inside)", placeholder: "https://crm.scaledai.org/…", url: true }],
+    choices: [{
+      key: "route", label: "How you got to the wizard",
+      options: [
+        { value: "first_org", label: "First org on a fresh login" },
+        { value: "additional", label: "Additional org (/onboarding?new=1)" }
+      ]
+    }],
+    warn: "ONE LOGIN CAN OWN ONLY THREE ORGS. The fourth fails with a bare “organization limit reached”, and suspended orgs still count — so don't create every client under the same personal login. Also: already a member somewhere? /onboarding bounces you to the dashboard; /onboarding?new=1 is the only way to start another tenant."
+  },
+  {
+    id: "a3", step: "Step 3", title: "The essentials",
+    blurb: "Second wizard screen. Every field is optional and editable later in Settings; pipeline stages, lead sources and dispositions are already seeded.",
+    checks: [
+      { key: "line", label: "Sending number entered, or deliberately left blank" },
+      { key: "auto_text_known", label: "Know that the automated first text is OFF until somebody turns it on" }
+    ],
+    warn: "auto_first_text_enabled defaults false on purpose — a new org has no verified line and no carrier registration. Nothing you do in this wizard starts sending SMS."
+  },
+  {
+    id: "a4", step: "Step 4", title: "Add the people",
+    blurb: "Settings > Team. Everyone gets their own login; nobody shares the owner account.",
+    checks: [
+      { key: "team", label: "Invited the client's staff who need the CRM, each with the right role", hint: "Settings > Team > Create invitation." },
+      { key: "us", label: "Whoever on our side supports this client is in too" },
+      { key: "owner_kept", label: "At least one owner login we control is kept" }
+    ],
+    warn: "Invitations are the only way in: “Add account with password” is not released yet, so don't go looking for it. Roles are owner, admin and member. Settings > Integrations is OWNER-ONLY — an admin cannot connect the Typeform, so the person doing the next half has to be an owner of this org."
+  },
+  {
+    id: "b1", step: "Step 5", title: "Copy the webhook URL",
+    blurb: "Settings > Integrations, the “Intake form (Typeform)” card. The URL is already there — org creation mints the routing id up front precisely so you have somewhere to point Typeform before any secret exists.",
+    checks: [
+      { key: "found", label: "Opened Settings > Integrations as an owner and found the Typeform card" },
+      { key: "copied", label: "Copied the Webhook URL from that card — not typed from this page" }
+    ],
+    inputs: [{ key: "hook_url", label: "Webhook URL for this org", placeholder: SYNC_URL_SHAPE, url: true }],
+    copies: [{ label: "Shape (yours is on the card — copy that one)", text: SYNC_URL_SHAPE }],
+    warn: "A bare /typeform-intake with no id on the end is the one URL that breaks as soon as a second client exists. The URL must end in this org's hook id."
+  },
+  {
+    id: "b2", step: "Step 6", title: "Save the signing secret — in the CRM first",
+    blurb: "You choose this value; Typeform does not generate it. Saving it here before you touch Typeform is what stops the first real submissions from being thrown away.",
+    checks: [
+      { key: "generated", label: "Generated a long random string (20+ bytes of hex, nothing guessable)" },
+      { key: "saved_crm", label: "Pasted it into “Webhook signing secret” on the Typeform card and saved", optional: true, hint: "Direct route only — the Zap route’s secret lives on its own card, in Step 7b." },
+      { key: "stored", label: "Kept a copy where the team can find it — it is never readable back out of the CRM" }
+    ],
+    warn: "Until a signing secret exists the endpoint answers 401 and the submission is GONE — not queued, not retried into the CRM. Secret first, webhook second.",
+    choices: [{
+      key: "route", label: "How submissions will reach us",
+      options: [
+        { value: "native", label: "Typeform posts to us directly" },
+        { value: "zap", label: "Forwarded by a Zap" },
+        { value: "both", label: "Both" }
+      ]
+    }]
+  },
+  {
+    id: "b3", step: "Step 7", title: "Add the webhook in Typeform",
+    blurb: "Only when Typeform posts to us directly — pick that route in Step 6 and this step starts counting. In the form's Connect panel > Webhooks > Add a webhook: paste the URL, then open the webhook again and put the SAME secret in its Secret field.",
+    checks: [
+      { key: "added", label: "Webhook added with this org's URL as the destination" },
+      { key: "secret_match", label: "Secret field holds the identical string saved in Step 6" },
+      { key: "enabled", label: "Webhook toggled on, and SSL verification left on" },
+      { key: "real_test", label: "Proved it with a real submission, not Typeform's Test button", hint: "Test sends sample data that need not match the live form, so it can pass while real entries fail — and fail while they would work." }
+    ],
+    when: { key: "sync.b2.route", anyOf: ["native", "both"] },
+    warn: "A secret that differs by one character fails exactly like a missing one: a 401 on every submission, with nothing in the CRM to show it happened."
+  },
+  {
+    id: "b3z", step: "Step 7b", title: "Forwarded by a Zap instead",
+    blurb: "Only when a Zap forwards the submissions — pick that route in Step 6. A Zap cannot compute Typeform's signature, so it authenticates with a bearer secret on a SEPARATE card: “Intake form via Zapier (Typeform)”.",
+    checks: [
+      { key: "own_card", label: "Used the Zapier card, NOT the Typeform card above" },
+      { key: "partner_secret", label: "Saved any long random string as the partner secret, which creates that card's private URL" },
+      { key: "posts_to", label: "Zap POSTs to that private URL" },
+      { key: "bearer", label: "Zap sends an Authorization header reading Bearer <the partner secret>" }
+    ],
+    inputs: [{ key: "url", label: "Private URL (Zapier)", placeholder: "the card's private URL", url: true }],
+    when: { key: "sync.b2.route", anyOf: ["zap", "both"] },
+    warn: "Saving the partner secret on the Typeform card instead REPLACES the signing secret, and the direct webhook starts answering 401 on every submission with nothing to show why. Two cards, two secrets, rotated independently."
+  },
+  {
+    id: "b4", step: "Step 8", title: "Personal access token — only for file uploads",
+    blurb: "Typeform posts a LINK to an uploaded file, not the file. Without a token the CRM cannot fetch an insurance card, so the lead arrives with no images.",
+    checks: [
+      { key: "created", label: "Token created in Typeform: Account > Personal tokens > Generate a new token" },
+      { key: "scope", label: "Scope includes responses:read" },
+      { key: "saved", label: "Pasted into “Personal access token” on the same Typeform card and saved" }
+    ],
+    warn: "Typeform shows the token once. Lose it before saving it here and you generate a new one — there is no way to read it back."
+  },
+  {
+    id: "b5", step: "Step 9", title: "Send one real test response",
+    blurb: "Do this BEFORE mapping. The field list the mapper offers is built from what a submission actually carried — the catalogue is empty until the form has been submitted at least once.",
+    checks: [
+      { key: "submitted", label: "Submitted the live form once, answering every question including both card uploads" },
+      { key: "landed", label: "The lead appeared in the CRM" },
+      { key: "questions", label: "Read the client's form against the answer list below and know what is missing" }
+    ],
+    copies: [{ label: "Answers the Facebook build expects", text: SYNC_REQUIRED_ANSWERS.join("\n") }],
+    warn: "No submission yet means the mapping screen shows an empty list and there is nothing to map. This is the step people skip and then report the mapper as broken."
+  },
+  {
+    id: "b6", step: "Step 10", title: "Map the fields",
+    blurb: "Bottom of Settings > Integrations. One list of the form's questions, each pointed at where it should land on the lead.",
+    checks: [
+      { key: "identity", label: "First name, last name, phone, email and date of birth all mapped" },
+      { key: "clinical", label: "Substance, insurance type and insurance provider mapped" },
+      { key: "files", label: "Both insurance card uploads mapped" },
+      { key: "unmapped", label: "Looked at what is left unmapped and confirmed none of it matters" },
+      { key: "saved", label: "Saved, then reloaded and confirmed the choices stuck" },
+      { key: "form_id", label: "Left the form-ID field alone unless you have a reason to pin it", hint: "A pinned ID that stops matching the form rejects every submission as “invalid signature” — pointing at the secret, which is fine." }
+    ],
+    warn: "Mapping is per-question-reference. Rebuilding or duplicating the Typeform gives its questions new references and silently un-maps everything — re-map after any form rebuild."
+  },
+  {
+    id: "b7", step: "Step 11", title: "Consent and partial responses",
+    blurb: "Whether a submission on its own counts as permission to text is an org setting with no UI. It is off for every new org, so hand this to engineering with a decision from the client.",
+    checks: [
+      { key: "asked", label: "Asked the client whether the form itself carries an SMS-consent question" },
+      { key: "decided", label: "Got a decision on whether submitting the form counts as consent" },
+      { key: "handed_over", label: "Handed the decision to engineering — it is a SQL change, not a toggle" }
+    ],
+    choices: [{
+      key: "policy", label: "What was agreed",
+      options: [
+        { value: "form_asks", label: "The form asks for consent — nothing to set" },
+        { value: "implied", label: "Submitting implies consent — needs the setting on" },
+        { value: "none", label: "No automated texts from this form" }
+      ]
+    }],
+    warn: "A consent question the form really asks always wins, in BOTH directions — a recorded “No” is honoured no matter what the org setting says. And a partial response with no phone number is dropped, by design."
+  },
+  {
+    id: "qc", step: "QC", title: "Before handing over",
+    checks: [
+      { key: "end_to_end", label: "A fresh submission creates a lead with every mapped field populated" },
+      { key: "images", label: "Both insurance card images are attached to that lead and open" },
+      { key: "once", label: "Exactly ONE lead per submission — no duplicate from a second delivery route" },
+      { key: "phone_format", label: "Phone landed in a shape the team can dial" },
+      { key: "intake_ticked", label: "“Connect lead intake” is ticked on the CRM's own setup checklist" },
+      { key: "owner_access", label: "The client can sign in, see the lead, and knows who to ask for help" },
+      { key: "zap_crm_step", label: "If the main zap also writes to this CRM, Step 14 points at THIS org" }
+    ],
+    warn: "Wiring the native webhook AND a Zap for the same form means two deliveries of every submission. Only do both deliberately."
+  }
+];
+
+export const SYNC_FAILURES: { symptom: string; cause: string }[] = [
+  { symptom: "Every submission 401s", cause: "No signing secret saved yet, or the string in Typeform does not match the one in the CRM" },
+  { symptom: "Nothing arrives and there is no error anywhere", cause: "The webhook URL is missing this org's hook id on the end" },
+  { symptom: "Leads arrive but the mapping screen is empty", cause: "The form has never been submitted, so there is no captured field catalogue to map from" },
+  { symptom: "Mapping was correct and silently stopped working", cause: "The Typeform was rebuilt or duplicated, giving every question a new reference" },
+  { symptom: "Lead arrives with no insurance card images", cause: "No personal access token saved, or its scope is missing responses:read" },
+  { symptom: "The native webhook starts 401ing right after wiring up Zapier", cause: "The Zap's partner secret was saved on the Typeform card instead of the separate Zapier card, replacing the signing secret" },
+  { symptom: "Two leads, or two copies of each photo, per submission", cause: "Typeform posts directly AND a Zap forwards the same submission" },
+  { symptom: "No first text on any lead", cause: "The form asks no consent question and the org's submission-implies-consent setting was never turned on" },
+  { symptom: "401 invalid signature, and the secret is definitely right", cause: "A form ID is pinned on the org and no longer matches the form being submitted — the same 401 covers both" },
+  { symptom: "Typeform's Test webhook passes but real entries never arrive", cause: "Test posts sample data; it proves the URL and secret, not the field mapping" },
+  { symptom: "The webhook silently turned itself off", cause: "Typeform disables a webhook after a 404 or 410 — usually the URL lost its hook id or the function was removed" },
+  { symptom: "Someone on the client side cannot open Integrations", cause: "They are an admin, not an owner — that screen is owner-only" },
+  { symptom: "The wizard will not let you create the client's org", cause: "You are already a member of one; reach it at /onboarding?new=1" },
+  { symptom: "organization limit reached", cause: "That login already owns three orgs — suspended ones still count; create it from a different login" }
+];
+
 export const mainKey = (stepId: string, key: string) => `main.${stepId}.${key}`;
 
-// Every key a step needs filled for it to count as done.
-export function mainStepKeys(st: MainZapStep): { key: string; kind: "check" | "text" }[] {
+// Every key a step needs filled for it to count as done. Parameterised by the
+// key builder so the two step-by-step SOPs cannot drift on what "done" means —
+// a choice counts as text because an unanswered one is the empty string.
+// `optional` is honoured here for the same reason accessStatus honours it: a
+// step that only applies on one route (Typeform posting to us vs a Zap
+// forwarding it) would otherwise strand every client on the other route, hold
+// progress().complete false and let the API route clear a completed_at. Before
+// this the flag existed on Check/TextInput but did nothing inside a
+// step-by-step SOP — only accessStatus read it. An optional entry still renders
+// and still saves; it just never counts.
+export function stepKeys(
+  st: SopStep,
+  keyFor: (stepId: string, key: string) => string
+): { key: string; kind: "check" | "text" }[] {
   return [
-    ...st.checks.map((c) => ({ key: mainKey(st.id, c.key), kind: "check" as const })),
-    ...(st.choices ?? []).map((c) => ({ key: mainKey(st.id, c.key), kind: "text" as const })),
-    ...(st.inputs ?? []).map((i) => ({ key: mainKey(st.id, i.key), kind: "text" as const }))
+    ...st.checks.filter((c) => !c.optional).map((c) => ({ key: keyFor(st.id, c.key), kind: "check" as const })),
+    ...(st.choices ?? []).filter((c) => !c.optional).map((c) => ({ key: keyFor(st.id, c.key), kind: "text" as const })),
+    ...(st.inputs ?? []).filter((i) => !i.optional).map((i) => ({ key: keyFor(st.id, i.key), kind: "text" as const }))
   ];
 }
+
+export const mainStepKeys = (st: SopStep) => stepKeys(st, mainKey);
 
 export function fillTokens(text: string, provider: string): string {
   return text
@@ -841,6 +1140,12 @@ function buildRegistry(): Map<string, KeyKind> {
     for (const c of st.choices ?? []) r.set(mainKey(st.id, c.key), { kind: "choice", options: c.options.map((o) => o.value) });
     for (const i of st.inputs ?? []) r.set(mainKey(st.id, i.key), { kind: "text" });
   }
+  r.set(SYNC_PLATFORM_KEY, { kind: "choice", options: [...SYNC_PLATFORM_OPTIONS.map((o) => o.value), ""] });
+  for (const st of SYNC_STEPS) {
+    for (const c of st.checks) r.set(syncKey(st.id, c.key), { kind: "check" });
+    for (const c of st.choices ?? []) r.set(syncKey(st.id, c.key), { kind: "choice", options: c.options.map((o) => o.value) });
+    for (const i of st.inputs ?? []) r.set(syncKey(st.id, i.key), { kind: "text" });
+  }
   for (const c of SLACK_CHANNELS) r.set(slackKey(c.id), { kind: "check" });
   for (const ch of ["slack", "email"]) for (const s of CLIENT_STREAMS) r.set(clientKey(ch, s.id), { kind: "check" });
   r.set(CLIENT_OTHER_KEY, { kind: "check" });
@@ -915,6 +1220,19 @@ export function setupKeys(s: OnboardingState): string[] {
   return keys;
 }
 
+// Whether a step applies to this client at all.
+export function stepApplies(s: OnboardingState, st: SopStep): boolean {
+  return !st.when || st.when.anyOf.includes(str(s, st.when.key));
+}
+
+// The Scaled Sync phase's countable keys. Empty for a client who is not on
+// Scaled Sync, which is what stops this phase from un-completing every
+// onboarding that predates it — see the SYNC_STEPS header.
+export function syncKeys(s: OnboardingState): { key: string; kind: "check" | "text" }[] {
+  if (str(s, SYNC_PLATFORM_KEY) !== "scaled_sync") return [];
+  return SYNC_STEPS.filter((st) => stepApplies(s, st)).flatMap((st) => stepKeys(st, syncKey));
+}
+
 export function progress(s: OnboardingState) {
   const access = ACCESS_ITEMS.map((it) => accessStatus(s, it));
   const accessCleared = access.filter((a) => a === "cleared").length;
@@ -931,6 +1249,10 @@ export function progress(s: OnboardingState) {
   const setupTotal = 1 + sKeys.length + (channelMissing ? 1 : 0);
   const setupDone = (str(s, PROVIDER_KEY) ? 1 : 0) + sKeys.filter((k) => isOn(s, k)).length;
 
+  const sync = syncKeys(s);
+  const syncTotal = sync.length;
+  const syncDone = sync.filter(({ key, kind }) => (kind === "check" ? isOn(s, key) : str(s, key) !== "")).length;
+
   const mainKeys = MAIN_ZAP_STEPS.flatMap(mainStepKeys);
   const mainTotal = mainKeys.length;
   const mainDone = mainKeys.filter(({ key, kind }) => (kind === "check" ? isOn(s, key) : str(s, key) !== "")).length;
@@ -945,6 +1267,7 @@ export function progress(s: OnboardingState) {
   const complete =
     accessCleared === ACCESS_ITEMS.length &&
     launchDone === launchTotal &&
+    syncDone === syncTotal &&
     mainDone === mainTotal &&
     setupDone === setupTotal &&
     testsDone === cases.length;
@@ -952,6 +1275,7 @@ export function progress(s: OnboardingState) {
   return {
     accessCleared, accessTotal: ACCESS_ITEMS.length, blocked,
     launchDone, launchTotal,
+    syncDone, syncTotal,
     mainDone, mainTotal,
     setupDone, setupTotal,
     testsDone, testsTotal: cases.length, testsFailed,
@@ -975,15 +1299,16 @@ export type Progress = ReturnType<typeof progress>;
 // `state`, and renaming it would create a second id vocabulary needing
 // translation at every filter and stored value.
 
-export type Phase = "access" | "launch" | "main" | "setup" | "test";
+export type Phase = "access" | "launch" | "sync" | "main" | "setup" | "test";
 export type Stage = Phase | "live";
 
-export const PHASES: Phase[] = ["access", "launch", "main", "setup", "test"];
-export const STAGES: Stage[] = ["access", "launch", "main", "setup", "test", "live"];
+export const PHASES: Phase[] = ["access", "launch", "sync", "main", "setup", "test"];
+export const STAGES: Stage[] = ["access", "launch", "sync", "main", "setup", "test", "live"];
 
 export const STAGE_LABEL: Record<Stage, string> = {
   access: "Access",
   launch: "Launch",
+  sync: "Scaled Sync",
   main: "Build",
   setup: "Setup",
   test: "Testing",
@@ -993,6 +1318,7 @@ export const STAGE_LABEL: Record<Stage, string> = {
 export const STAGE_BLURB: Record<Stage, string> = {
   access: "Waiting on the client to clear us.",
   launch: "Cities, starting budget and the ad creatives.",
+  sync: "Their CRM account, and their Typeform pointed at it.",
   main: "The main zap, step by step.",
   setup: "The other zaps, our channels and the client's delivery.",
   test: "Live Typeform runs. All must pass.",
@@ -1012,6 +1338,9 @@ export function stage(p: Progress, completedAt: string | null): Stage {
   if (completedAt) return "live";
   if (p.accessCleared < p.accessTotal) return "access";
   if (p.launchDone < p.launchTotal) return "launch";
+  // 0/0 for a client who is not on Scaled Sync, so this rung is simply absent
+  // for them rather than being something to skip.
+  if (p.syncDone < p.syncTotal) return "sync";
   if (p.mainDone < p.mainTotal) return "main";
   if (p.setupDone < p.setupTotal) return "setup";
   return "test";
@@ -1022,6 +1351,7 @@ export function stage(p: Progress, completedAt: string | null): Stage {
 export function stageProgress(p: Progress, st: Stage): { done: number; total: number } {
   if (st === "access") return { done: p.accessCleared, total: p.accessTotal };
   if (st === "launch") return { done: p.launchDone, total: p.launchTotal };
+  if (st === "sync") return { done: p.syncDone, total: p.syncTotal };
   if (st === "main") return { done: p.mainDone, total: p.mainTotal };
   if (st === "setup") return { done: p.setupDone, total: p.setupTotal };
   if (st === "test") return { done: p.testsDone, total: p.testsTotal };
@@ -1039,6 +1369,9 @@ export function stageProgress(p: Progress, st: Stage): { done: number; total: nu
 export const STAGE_AGING: Record<Stage, { amber: number; red: number } | null> = {
   access: { amber: 9, red: 12 },
   launch: { amber: 3, red: 5 },
+  // Our own admin, and short: the only wait inside it is the client confirming
+  // an email, which is minutes.
+  sync: { amber: 3, red: 5 },
   main: { amber: 6, red: 8 },
   setup: { amber: 3, red: 4 },
   test: { amber: 5, red: 6 },

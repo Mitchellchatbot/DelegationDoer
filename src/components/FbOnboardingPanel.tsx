@@ -14,14 +14,15 @@ import {
   parseChannels, serialiseChannels, MAX_SLACK_CHANNELS, type SlackChannel,
   accessStatus, blockedKey, noteKey, zapBuiltKey, zapUrlKey, slackKey, clientKey, channelSlug,
   testCases, testResultKey, testNoteKey, caseAnswers, progress,
-  MAIN_ZAP_STEPS, MAIN_ZAP_FAILURES, mainKey, mainStepKeys, fillTokens,
+  MAIN_ZAP_STEPS, MAIN_ZAP_FAILURES, mainKey, mainStepKeys, fillTokens, stepKeys,
+  SYNC_STEPS, SYNC_FAILURES, syncKey, SYNC_PLATFORM_KEY, SYNC_PLATFORM_OPTIONS, stepApplies,
   stage, stagePhase, WAITING_ON_KEY, WAITING_NOTE_KEY, HOLD_KEY, HOLD_NOTE_KEY,
-  type OnboardingState, type EntryValue, type AccessStatus, type TestCase, type AccessItem, type MainZapStep,
+  type OnboardingState, type EntryValue, type AccessStatus, type TestCase, type AccessItem, type SopStep,
   type Phase
 } from "@/lib/fb-onboarding";
 
 // Facebook client onboarding checklist on a Facebook task. Access → Launch →
-// Main Zap → Setup → Test. Everything after Access is soft-locked: editable
+// Scaled Sync → Main Zap → Setup → Test. Everything after Access is soft-locked: editable
 // early, but bannered until the phase before is done. Nothing here notifies
 // anyone — blocked items are recorded for the onboarder to escalate themselves.
 
@@ -128,6 +129,7 @@ export function FbOnboardingPanel({
   const tabs: { id: Phase; label: string; done: number; total: number; warn?: boolean }[] = [
     { id: "access", label: "Access", done: p.accessCleared, total: p.accessTotal, warn: p.blocked > 0 },
     { id: "launch", label: "Launch", done: p.launchDone, total: p.launchTotal },
+    { id: "sync", label: "Scaled Sync", done: p.syncDone, total: p.syncTotal },
     { id: "main", label: "Main Zap", done: p.mainDone, total: p.mainTotal },
     { id: "setup", label: "Setup", done: p.setupDone, total: p.setupTotal },
     { id: "test", label: "Test", done: p.testsDone, total: p.testsTotal, warn: p.testsFailed > 0 }
@@ -136,6 +138,10 @@ export function FbOnboardingPanel({
   const phaseTitle: Record<Phase, { title: string; sub: string }> = {
     access: { title: "Access", sub: "Everything the client has to clear before the build starts." },
     launch: { title: "Launch details", sub: "Where the campaign runs, what it starts with, and the creative to launch." },
+    sync: {
+      title: "Scaled Sync",
+      sub: "Their CRM account, their people in it, and their Typeform posting leads straight into it."
+    },
     main: { title: ZAPS[0].name(provider || "{Provider}"), sub: "Typeform Client Intake SOP — dedup, filter, enrich and route each entry. About 60 minutes; work top to bottom." },
     setup: { title: "Setup", sub: "Calendly and Failsafe zaps, our Slack channels and the client's notifications." },
     test: { title: "Test", sub: "Live Typeform submissions through the finished build. Every case must pass before onboarding is complete." }
@@ -186,14 +192,15 @@ export function FbOnboardingPanel({
             </button>
           );
         })}
-        {phase === "main" && (
+        {(phase === "main" || phase === "sync") && (
           <div className="pt-2 mt-1 border-t border-border/60">
-            {MAIN_ZAP_STEPS.map((st) => {
-              const keys = mainStepKeys(st);
-              const done = keys.filter(({ key, kind }) => (kind === "check" ? state[key]?.v === true : str(state, key) !== "")).length;
+            {(phase === "main" ? MAIN_ZAP_STEPS : SYNC_STEPS).map((st) => {
+              const keys = stepKeys(st, phase === "main" ? mainKey : syncKey);
+              const applies = stepApplies(state, st);
+              const done = applies ? keys.filter(({ key, kind }) => (kind === "check" ? state[key]?.v === true : str(state, key) !== "")).length : 0;
               return (
                 <a key={st.id} href={`#step-${st.id}`} className="flex items-center gap-2 px-2.5 py-1 rounded-lg text-xs hover:bg-surface2 transition-colors">
-                  <span className={cn("w-1.5 h-1.5 rounded-full shrink-0", done === keys.length ? "bg-ok" : done > 0 ? "bg-accent" : "bg-slate-300")} />
+                  <span className={cn("w-1.5 h-1.5 rounded-full shrink-0", !applies ? "bg-slate-200" : done === keys.length ? "bg-ok" : done > 0 ? "bg-accent" : "bg-slate-300")} />
                   <span className="flex-1 truncate text-ink/80">{st.step === st.title ? st.step : `${st.step} · ${st.title}`}</span>
                 </a>
               );
@@ -241,14 +248,43 @@ export function FbOnboardingPanel({
         </div>
       )}
 
+      {phase === "sync" && (
+        <div className="space-y-3">
+          {/* The gate, not a step. Until it is answered this phase counts
+              nothing at all (see SYNC_STEPS' header), which is what keeps it
+              from un-completing every onboarding that predates it. */}
+          <Group title="Which CRM is this client on?">
+            <div className="text-[11px] text-muted mb-1">
+              The rest of this tab only applies to a client on Scaled Sync. Leave it unanswered and
+              nothing here counts towards the onboarding.
+            </div>
+            <Segmented ctx={ctx} k={SYNC_PLATFORM_KEY} options={SYNC_PLATFORM_OPTIONS.map((o) => ({ ...o }))} />
+          </Group>
+
+          {str(state, SYNC_PLATFORM_KEY) === "other" && (
+            <SoftLock>Not on Scaled Sync — nothing to do on this tab. The main zap still writes leads into whatever CRM they do use.</SoftLock>
+          )}
+
+          {str(state, SYNC_PLATFORM_KEY) === "scaled_sync" && (
+            <>
+              <TextField ctx={ctx} k={syncKey("a2", "org_url")} placeholder="Org URL once it exists" small />
+              {SYNC_STEPS.map((st) => (
+                <SopStepCard key={st.id} st={st} ctx={ctx} provider={provider} keyFor={syncKey} />
+              ))}
+              <FailureModes rows={SYNC_FAILURES} />
+            </>
+          )}
+        </div>
+      )}
+
       {phase === "main" && (
         <div className="space-y-3">
           {p.accessCleared < p.accessTotal && (
             <SoftLock>Access isn&apos;t fully cleared ({p.accessCleared}/{p.accessTotal}). You can build ahead, but don&apos;t go live yet.</SoftLock>
           )}
           <TextField ctx={ctx} k={zapUrlKey("main")} placeholder="Zap URL once it exists" small />
-          {MAIN_ZAP_STEPS.map((st) => <MainStepCard key={st.id} st={st} ctx={ctx} provider={provider} />)}
-          <FailureModes />
+          {MAIN_ZAP_STEPS.map((st) => <SopStepCard key={st.id} st={st} ctx={ctx} provider={provider} keyFor={mainKey} />)}
+          <FailureModes rows={MAIN_ZAP_FAILURES} />
         </div>
       )}
 
@@ -497,40 +533,58 @@ function TestCard({ n, tc, ctx }: { n: number; tc: TestCase; ctx: Ctx }) {
   );
 }
 
-function MainStepCard({ st, ctx, provider }: { st: MainZapStep; ctx: Ctx; provider: string }) {
-  const keys = mainStepKeys(st);
+// One renderer for both step-by-step SOPs. `keyFor` is the only difference
+// between them, so the two cannot drift on how a step is drawn or counted.
+function SopStepCard({ st, ctx, provider, keyFor }: {
+  st: SopStep;
+  ctx: Ctx;
+  provider: string;
+  keyFor: (stepId: string, key: string) => string;
+}) {
+  // A step on the branch this client isn't taking still renders — reading it is
+  // how you decide — but it counts nothing, so it must not claim to be done
+  // either. progress() makes the same call via stepApplies.
+  const applies = stepApplies(ctx.state, st);
+  const keys = stepKeys(st, keyFor);
   const done = keys.filter(({ key, kind }) => (kind === "check" ? ctx.state[key]?.v === true : str(ctx.state, key) !== "")).length;
-  const full = done === keys.length;
+  const full = applies && done === keys.length;
   // Open the steps still in play; finished ones fold away.
   const [open, setOpen] = useState(!full);
 
   return (
-    <div id={`step-${st.id}`} className={cn("rounded-xl border scroll-mt-4 transition-colors", full ? "border-ok/30" : "border-border")}>
+    <div id={`step-${st.id}`} className={cn("rounded-xl border scroll-mt-4 transition-colors", full ? "border-ok/30" : "border-border", !applies && "opacity-60")}>
       <button type="button" onClick={() => setOpen(!open)} className="w-full flex items-center gap-2 p-3 text-left">
         <ChevronDown className={cn("w-4 h-4 text-muted shrink-0 transition-transform", !open && "-rotate-90")} />
         <span className="text-[11px] uppercase tracking-wide text-muted w-24 shrink-0">{st.step}</span>
         <span className="text-sm font-medium flex-1 min-w-0 truncate">{st.title}</span>
         <span className={cn("text-[11px] shrink-0 inline-flex items-center gap-1", full ? "text-ok" : "text-muted")}>
-          {full && <Check className="w-3.5 h-3.5" />}{done}/{keys.length}
+          {applies
+            ? <>{full && <Check className="w-3.5 h-3.5" />}{done}/{keys.length}</>
+            : "n/a"}
         </span>
       </button>
 
       {open && (
         <div className="px-3 pb-3 pl-9 space-y-2.5">
           {st.blurb && <div className="text-xs text-muted">{fillTokens(st.blurb, provider)}</div>}
+          {!applies && <SoftLock>Not this client&apos;s route, so nothing here counts. Change the route in Step 6 if that&apos;s wrong.</SoftLock>}
           {st.checks.map((c) => (
-            <CheckRow key={c.key} ctx={ctx} k={mainKey(st.id, c.key)} label={fillTokens(c.label, provider)} hint={c.hint} />
+            <CheckRow key={c.key} ctx={ctx} k={keyFor(st.id, c.key)} label={fillTokens(c.label, provider)} hint={c.hint} />
           ))}
           {st.choices?.map((c) => (
             <div key={c.key}>
               <div className="text-[11px] text-muted mb-1">{c.label}</div>
-              <Segmented ctx={ctx} k={mainKey(st.id, c.key)} options={c.options} />
+              <Segmented ctx={ctx} k={keyFor(st.id, c.key)} options={c.options} />
             </div>
           ))}
           {st.inputs?.map((i) => (
             <div key={i.key}>
-              <div className="text-[11px] text-muted mb-1">{i.label}</div>
-              <TextField ctx={ctx} k={mainKey(st.id, i.key)} placeholder={i.placeholder} small />
+              {/* Copy + Open beside the label, exactly as AccessCard does it. */}
+              <div className="flex items-center justify-between gap-2 mb-1">
+                <div className="text-[11px] text-muted">{i.label}</div>
+                {i.url && <LinkActions value={str(ctx.state, keyFor(st.id, i.key))} label={i.label} />}
+              </div>
+              <TextField ctx={ctx} k={keyFor(st.id, i.key)} placeholder={i.placeholder} small />
             </div>
           ))}
           {st.copies?.map((c) => <CopyBlock key={c.label} label={c.label} text={fillTokens(c.text, provider)} />)}
@@ -563,7 +617,7 @@ function CopyBlock({ label, text }: { label: string; text: string }) {
   );
 }
 
-function FailureModes() {
+function FailureModes({ rows }: { rows: { symptom: string; cause: string }[] }) {
   const [open, setOpen] = useState(false);
   return (
     <div className="rounded-xl border border-dashed border-border">
@@ -575,7 +629,7 @@ function FailureModes() {
       {open && (
         <div className="px-3 pb-3 pl-9">
           <div className="rounded-lg border border-border divide-y divide-border/60 text-xs">
-            {MAIN_ZAP_FAILURES.map((f) => (
+            {rows.map((f) => (
               <div key={f.symptom} className="grid grid-cols-[minmax(0,2fr)_minmax(0,3fr)] gap-3 px-2.5 py-1.5">
                 <span className="font-medium">{f.symptom}</span>
                 <span className="text-muted">{f.cause}</span>

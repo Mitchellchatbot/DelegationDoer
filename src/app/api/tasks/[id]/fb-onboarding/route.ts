@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSupabaseAdmin, isMissingColumnError, isMissingFunctionError } from "@/lib/supabase-admin";
+import { getSupabaseAdmin, isMissingColumnError, isMissingFunctionError, isStageConstraintError } from "@/lib/supabase-admin";
 import { loadTaskForViewer } from "@/lib/task-access";
 import { canManageTask } from "@/lib/access";
 import { normaliseValue, progress, stage, PROVIDER_KEY, FB_ONBOARDING_TAG, type OnboardingState } from "@/lib/fb-onboarding";
@@ -96,11 +96,17 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     p_now: now
   });
 
-  if (recErr && (isMissingFunctionError(recErr) || isMissingColumnError(recErr))) {
+  if (recErr && (isMissingFunctionError(recErr) || isMissingColumnError(recErr) || isStageConstraintError(recErr))) {
     // Migration not applied yet, or only half of it — a 42703 raised inside
     // the function surfaces here too, so one branch covers both. Completion
     // still works and the stage is still named (it is pure TypeScript); only
     // its age is unavailable.
+    //
+    // The third case is the same situation one migration later: the column is
+    // there but its CHECK predates a Phase this code knows about, so the write
+    // is rejected rather than missing. Treating it as a 500 would make merging
+    // a new Phase before hand-applying its migration brick that client's
+    // onboarding on the first tick. Same degradation, same lost chip.
     completedAt = await reconcileCompletedAt(supabase, params.id, prog.complete, now);
   } else if (recErr) {
     return NextResponse.json({ error: recErr.message }, { status: 500 });

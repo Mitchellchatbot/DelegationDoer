@@ -309,7 +309,12 @@ export function Sidebar({ user }: { user: User }) {
   //   4. Knowledge (Clients, Updates, SOPs)
   //   5. People/Manage
   //   6. Settings
-  const submitsDailies = !isLeaderRole;
+  // Everyone gets the daily-ritual links (Start day / Wrap day). Non-leaders
+  // fill them in; leaders use the same /sod + /eod pages for oversight — the
+  // aggregated team submissions + history live there — and can still submit
+  // their own if they want. Previously these were hidden from leaders, which
+  // left leaders with no sidebar path to the EOD surface at all.
+  const submitsDailies = true;
   // Group the sidebar into AA-style sections with small bullet-dot
   // headers. The flat NAV array still drives every render below (badges,
   // active pill, etc.) — NAV_GROUPS is just a parallel view that maps

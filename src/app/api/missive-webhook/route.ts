@@ -6,6 +6,7 @@ import { fanOutInboxEvent } from "@/lib/email-notifications";
 import { autoLabelByClients } from "@/lib/auto-label-by-client";
 import { loadClientMatcher } from "@/lib/client-thread-match";
 import { markClientWeeklyUpdateReported } from "@/lib/eod-digest";
+import { handleDazosMessage, DAZOS_SENDER } from "@/lib/dazos-reports";
 
 export const dynamic = "force-dynamic";
 
@@ -176,6 +177,26 @@ export async function POST(req: NextRequest) {
       .catch((err) => {
         console.error("[missive-webhook] auto-label", err);
       });
+  }
+  // Dazos daily VOB reports → the AWFMP dashboard. The sender check here is
+  // the cheap gate (the payload carries from_addr); the subject match and the
+  // CSV lookup happen inside, and nothing else is ever forwarded.
+  // Fire-and-forget like the rest — the cron sweep retries what this misses.
+  if (event.event === "message:new") {
+    const from = ((payload as { from_addr?: string | null }).from_addr ?? "").toLowerCase();
+    // message_id is optional on InboxEvent; without it there's no message to
+    // look at, and the sweep will catch the report anyway.
+    if (from.includes(DAZOS_SENDER) && event.message_id) {
+      void handleDazosMessage(event.thread_id, event.message_id)
+        .then((r) => {
+          if (r.pushed || r.failed) {
+            console.log("[missive-webhook] dazos", { thread: event.thread_id, ...r });
+          }
+        })
+        .catch((err) => {
+          console.error("[missive-webhook] dazos", err);
+        });
+    }
   }
   return NextResponse.json({ ok: true });
 }

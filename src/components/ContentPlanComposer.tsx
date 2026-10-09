@@ -5,6 +5,7 @@ import { Sparkles, Loader2, ArrowRight, Send, RefreshCw, Calendar } from "lucide
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { MediaPicker } from "@/components/MediaPicker";
+import { MAX_ATTACHMENTS_PER_EMAIL, tooManyAttachmentsMessage } from "@/lib/email-attachments";
 import type { TaskMedia } from "@/lib/types";
 
 // Content Plan composer for SEO team. Worker picks a client, types raw
@@ -99,6 +100,11 @@ export function ContentPlanComposer({ lockedClient }: { lockedClient?: LockedCli
     const toArr = draftTo.split(/[,;\s]+/).map((s) => s.trim()).filter(Boolean);
     if (toArr.length === 0) {
       return toast.error("Add at least one recipient email");
+    }
+    // Checked at draft time too: an over-limit draft would otherwise sit in
+    // the approvals queue and only fail once an approver presses Send.
+    if (attachments.length > MAX_ATTACHMENTS_PER_EMAIL) {
+      return toast.error(tooManyAttachmentsMessage(attachments.length));
     }
     setSubmitting(true);
     try {
@@ -290,6 +296,7 @@ export function ContentPlanComposer({ lockedClient }: { lockedClient?: LockedCli
               label="Attach files"
               compact
               hint={scheduledFor ? "Attachments are dropped on scheduled sends — clear the send date to keep them." : undefined}
+              maxFiles={MAX_ATTACHMENTS_PER_EMAIL}
             />
           </div>
 

@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { Tooltip } from "@/components/Tooltip";
 import { MediaPicker } from "@/components/MediaPicker";
+import { MAX_ATTACHMENTS_PER_EMAIL, tooManyAttachmentsMessage } from "@/lib/email-attachments";
 import { formatBytes } from "@/lib/email-format";
 import type { TaskMedia } from "@/lib/types";
 
@@ -147,6 +148,10 @@ export function BulkEmailComposer({
       );
       return;
     }
+    if (attachments.length > MAX_ATTACHMENTS_PER_EMAIL) {
+      toast.error(tooManyAttachmentsMessage(attachments.length));
+      return;
+    }
 
     // Resolve schedule the same way ComposeButton does: datetime-local is
     // local time; convert to a UTC ISO string the backend can compare.
@@ -267,6 +272,7 @@ export function BulkEmailComposer({
             onChange={setAttachments}
             label="Attach files"
             compact
+            maxFiles={MAX_ATTACHMENTS_PER_EMAIL}
           />
 
           {attachedBytes > WARN_TOTAL_BYTES && (

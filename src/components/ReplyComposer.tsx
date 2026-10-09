@@ -7,6 +7,7 @@ import { Reply, Send, Loader2, X, CalendarClock, Sparkles, Check, Maximize2, Min
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { MediaPicker } from "@/components/MediaPicker";
+import { MAX_ATTACHMENTS_PER_EMAIL, tooManyAttachmentsMessage } from "@/lib/email-attachments";
 import { EmailEditor, EmailFormatButtons, useEmailBody, useFormattingBar } from "@/components/email-editor";
 import { RecipientAutocomplete } from "@/components/RecipientAutocomplete";
 import { useInboxFocus } from "@/components/InboxFocusProvider";
@@ -465,6 +466,10 @@ export function ReplyComposer({
       toast.error("Attachments aren't supported on scheduled sends — remove them or send now.");
       return;
     }
+    if (attachments.length > MAX_ATTACHMENTS_PER_EMAIL) {
+      toast.error(tooManyAttachmentsMessage(attachments.length));
+      return;
+    }
     // Guardrail: block a reply addressed to someone who isn't part of this
     // thread until the user explicitly confirms via "Send anyway". Prevents the
     // Chris Barnes → Charles Smellie class of misfire. `strangerRecipients` is
@@ -882,6 +887,7 @@ export function ReplyComposer({
                 label="Attach files"
                 compact
                 hint={scheduleOpen ? "Attachments are not supported on scheduled sends." : undefined}
+                maxFiles={MAX_ATTACHMENTS_PER_EMAIL}
                 uploadRef={uploadRef}
               />
             </div>

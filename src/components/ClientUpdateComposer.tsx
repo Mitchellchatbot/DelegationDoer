@@ -10,6 +10,7 @@ import { getDepartmentMeta } from "@/lib/departments";
 import { useCurrentUser } from "@/lib/user-context";
 import { renderBlueEmail, type BrandedEmailContent } from "@/lib/email-template";
 import { MediaPicker } from "@/components/MediaPicker";
+import { MAX_ATTACHMENTS_PER_EMAIL, tooManyAttachmentsMessage } from "@/lib/email-attachments";
 import { RecipientAutocomplete, type ClientSuggestion } from "@/components/RecipientAutocomplete";
 import type { TaskMedia } from "@/lib/types";
 
@@ -508,6 +509,12 @@ export function ClientUpdateComposer({
       toast.error(`${d.departmentName}: add at least one recipient email`);
       return null;
     }
+    // Checked at draft time too: an over-limit draft would otherwise sit in
+    // the approvals queue and only fail once an approver presses Send.
+    if (attachments.length > MAX_ATTACHMENTS_PER_EMAIL) {
+      toast.error(`${d.departmentName}: ${tooManyAttachmentsMessage(attachments.length)}`);
+      return null;
+    }
     return {
       clientId: lockedClient.id,
       clientName: lockedClient.name,
@@ -914,6 +921,7 @@ export function ClientUpdateComposer({
               label="Attach files"
               compact
               hint={scheduledFor ? "Attachments are dropped on scheduled sends — clear the send date to keep them." : undefined}
+              maxFiles={MAX_ATTACHMENTS_PER_EMAIL}
             />
           </div>
 

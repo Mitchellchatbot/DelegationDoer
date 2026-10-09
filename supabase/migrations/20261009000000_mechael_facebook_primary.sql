@@ -19,6 +19,16 @@
 --      (src/app/(main)/tasks/[id]/page.tsx:155-158 and the 400 "not a Facebook
 --      task" guard in api/tasks/[id]/submit-proof/route.ts:71-72).
 --
+--   3. Her task announcements stay in the Software channel. Announcements
+--      route on the task's department, so without this (1) and (2) would drag
+--      them into Facebook's. users.task_slack_channel_id pins them; see
+--      20261009000100_user_task_slack_channel.sql, whose column this file
+--      creates too (add column if not exists) so the two can run in either
+--      order. Only NEW tasks are affected in practice: the announcement fires
+--      at creation, the claim path needs an unassigned task, and the
+--      inactivity digest only covers unassigned team tasks -- so moving her
+--      existing five posts nothing at all.
+--
 -- WHAT THIS DOES NOT DO, deliberately:
 --   * It does not remove her from dep_software. She keeps visibility of the
 --     Software team's work; only the ORDER changes. Drop the membership later
@@ -46,6 +56,11 @@
 -- Top-of-file drop, not a trailing one: a trailing drop would hide the report,
 -- and this makes a re-run after an aborted attempt clean.
 drop table if exists _mechael_move;
+
+-- Idempotent, and also in 20261009000100_user_task_slack_channel.sql. Repeated
+-- here so neither file depends on the other having run first.
+alter table public.users
+  add column if not exists task_slack_channel_id text;
 
 -- -----------------------------------------------------------------------------
 -- Stage the targets. DD emails are aliases that drift and do not resemble the
@@ -83,6 +98,7 @@ declare
   v_user    text;
   v_other   timestamptz;
   v_tasks   int;
+  v_channel text;
 begin
   select count(distinct user_id) into v_users from _mechael_move;
   if v_users <> 1 then
@@ -133,6 +149,24 @@ begin
    where t.id = m.task_id;
   get diagnostics v_tasks = row_count;
 
+  -- 3. Keep her announcements in Software's channel. Read from the department
+  --    rather than pasted as a literal, so this cannot drift from whatever the
+  --    Software channel actually is. If Software has no task channel
+  --    configured there is nothing to pin and the department route (now
+  --    Facebook) stands -- say so rather than leaving it silently unset.
+  select task_channel_id into v_channel
+    from public.departments
+   where id = 'dep_software';
+
+  if v_channel is null then
+    raise exception
+      'dep_software has no task_channel_id, so there is no Software channel to pin her announcements to. Set it (Leader Console -> Departments) and re-run, or drop step 3 from this file.';
+  end if;
+
+  update public.users
+     set task_slack_channel_id = v_channel
+   where id = v_user;
+
   raise notice 'Applied: % task(s) moved to dep_facebook.', v_tasks;
 end $$;
 
@@ -156,6 +190,10 @@ select
      where dm.user_id = m.user_id
      order by dm.created_at, dm.department_id
      limit 1
-  ) as primary_department_now
+  ) as primary_department_now,
+  (select u2.task_slack_channel_id from public.users u2 where u2.id = m.user_id)
+    as task_slack_channel_now,
+  (select d2.task_channel_id from public.departments d2 where d2.id = 'dep_software')
+    as software_channel
 from _mechael_move m
 order by m.task_title nulls first;

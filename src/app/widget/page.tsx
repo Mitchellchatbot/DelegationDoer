@@ -2876,11 +2876,17 @@ function CreateTaskView({ onClose, onCreated }: { onClose: () => void; onCreated
   //   - department heads may switch among the departments they lead,
   //   - workers are locked to their own department and self-assign only.
   const canDelegate = me ? (isLeader(me as unknown as User) || isHead(me as unknown as User)) : false;
-  const canPickDept = me ? canChooseDepartment(me as unknown as User) : false;
+  // Mirrors NewTaskForm: "may I target someone else's department" and "do I
+  // have more than one of my own to choose between" are different questions.
+  const canPickAnyDept = me ? canChooseDepartment(me as unknown as User) : false;
   const selectableDepartments = useMemo(
     () => (me ? assignableDepartments(me as unknown as User, departments as unknown as Department[]) : []),
     [me, departments]
   );
+  // A worker on two teams gets the picker too: the task's department is what
+  // decides whether the work needs a manager's sign-off, so it is theirs to
+  // choose. POST /api/tasks already accepts any department they belong to.
+  const canPickDept = canPickAnyDept || selectableDepartments.length > 1;
   const hasNoDepartment = !!me && !isLeader(me as unknown as User) && me.departmentIds.length === 0;
 
   // Auto-pick the caller's home department on open, clamped to what they're
@@ -2942,7 +2948,7 @@ function CreateTaskView({ onClose, onCreated }: { onClose: () => void; onCreated
       if (f.description && !description.trim()) { setDescription(f.description); filled.push("description"); }
       // Department is permission-clamped server-side too; only apply it when
       // the caller can actually change it (workers are locked to their own).
-      if (f.department && canPickDept) { setDepartmentId(f.department); filled.push("department"); }
+      if (f.department && canPickAnyDept) { setDepartmentId(f.department); filled.push("department"); }
       if (f.priority && PRIORITY_OPTIONS.some((p) => p.value === f.priority)) {
         setPriority(f.priority as typeof PRIORITY_OPTIONS[number]["value"]);
         filled.push("priority");

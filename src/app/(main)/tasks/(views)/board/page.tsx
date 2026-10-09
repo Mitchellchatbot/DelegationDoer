@@ -15,6 +15,7 @@ import { NewTaskForm } from "@/components/NewTaskForm";
 import { canAssignTaskTo, canCreateTaskInDepartment } from "@/lib/access";
 import { useCurrentUser } from "@/lib/user-context";
 import { cn, formatDate } from "@/lib/utils";
+import { getDepartmentMeta } from "@/lib/departments";
 import { useHorizontalDragAutoScroll } from "@/lib/useHorizontalDragAutoScroll";
 import type { Task, TaskStatus, User } from "@/lib/types";
 import {
@@ -305,13 +306,51 @@ export default function BoardPage() {
     [tasks]
   );
 
+  // The people who get a column in person mode: everyone in a selected
+  // department, or the whole roster when no chip is on. Hoisted above
+  // `visible` because the task filter below needs the very same set.
+  const deptPeople = useMemo(() => (
+    selectedDepts.size === 0
+      ? users
+      : users.filter((u) => u.departmentIds.some((d) => selectedDepts.has(d)))
+  ), [users, selectedDepts]);
+  const deptPeopleIds = useMemo(() => new Set(deptPeople.map((u) => u.id)), [deptPeople]);
+
+  // Department scoping reads two different fields, and person mode needs BOTH
+  // or it lies. A task carries its own `departmentId`; a person carries
+  // `departmentIds` memberships. Filtering tasks on the first while building
+  // columns from the second rendered a column for anyone who merely *belongs*
+  // to the picked department and then emptied it — choosing Facebook gave a
+  // Software engineer a column reading "No tasks" while he had five open. On a
+  // board that defaults to grouping by person an empty column asserts "this
+  // person is free", so dropping the work was worse than noise. Person mode
+  // therefore also admits a task whose ASSIGNEE sits in a selected department;
+  // the card then labels itself with its real department (the out-of-department
+  // chip further down) so the board never passes another team's work off as
+  // this one's. Status and client mode keep the strict task-department test —
+  // their columns aren't person-scoped, so widening there would only blunt the
+  // filter.
   const visible = useMemo(() => tasks.filter((t) =>
-    (selectedDepts.size === 0 || (t.departmentId !== null && selectedDepts.has(t.departmentId))) &&
+    (selectedDepts.size === 0
+      || (t.departmentId !== null && selectedDepts.has(t.departmentId))
+      || (groupBy === "person" && t.assigneeId !== null && deptPeopleIds.has(t.assigneeId))) &&
     (filterUser === "all" || t.assigneeId === filterUser) &&
     (filterStatus === "all" || t.status === filterStatus) &&
     (filterClient === "all" || (filterClient === "__internal" ? !t.clientName : t.clientName === filterClient)) &&
     (filterWebsite === "all" || (filterWebsite === "__internal" ? !t.website : t.website === filterWebsite))
-  ), [tasks, selectedDepts, filterUser, filterStatus, filterClient, filterWebsite]);
+  ), [tasks, selectedDepts, groupBy, deptPeopleIds, filterUser, filterStatus, filterClient, filterWebsite]);
+
+  // How many cards on screen are here on their assignee rather than their own
+  // department. Surfaced in the header so the count explains itself — and so
+  // that flipping By person -> By status, which re-applies the strict
+  // department test, doesn't drop N cards with nothing on screen accounting
+  // for it. The chip row is not part of activeFilterCount below and never has
+  // been, so this is the only place that number is answerable.
+  const outOfSliceCount = useMemo(() => (
+    groupBy !== "person" || selectedDepts.size === 0
+      ? 0
+      : visible.filter((t) => t.departmentId === null || !selectedDepts.has(t.departmentId)).length
+  ), [visible, selectedDepts, groupBy]);
 
   // How many of the collapsible filters are actually doing something. Shown on
   // the "More filters" button so a filter left on — by a deep link, or restored
@@ -351,12 +390,35 @@ export default function BoardPage() {
     // Past behavior was to render every user even when filtering tasks
     // to a single dept, which left a wall of empty columns for people
     // unrelated to the slice the user picked.
-    let people = users;
-    if (selectedDepts.size > 0) {
-      people = people.filter((u) =>
-        u.departmentIds.some((d) => selectedDepts.has(d))
-      );
-    }
+    // `deptPeople` is the single source for that set, and that matters:
+    // `visible` admits a task because its assignee is in it, so deriving the
+    // columns from anything else would admit tasks with no column to land in.
+    //
+    // The strays below close the same hole from the other side. `visible` also
+    // admits a task on its OWN departmentId, so a Facebook ticket assigned to
+    // someone off the Facebook team had nowhere to land — and `grouped` drops
+    // a task whose key has no column without a trace, leaving the header count
+    // higher than the cards on screen. Reassignment is how they get that way:
+    // the board PATCHes assigneeId alone, and PATCH /api/tasks/[id] only
+    // touches department_id when it is explicitly sent, so a task's department
+    // never follows its assignee. Losing a department membership strands them
+    // the same way.
+    //
+    // Only tasks that key to a PERSON column count here — done and
+    // pending_approval have their own buckets, so counting those would conjure
+    // an empty column for someone whose only visible task is already finished,
+    // which is the "wall of empty columns" the paragraph above exists to stop.
+    const strays: User[] = [];
+    const strayIds = new Set<string>();
+    visible.forEach((t) => {
+      if (!t.assigneeId || deptPeopleIds.has(t.assigneeId) || strayIds.has(t.assigneeId)) return;
+      if (t.status === "done" || t.status === "pending_approval") return;
+      // users.find, not userById: useTeam rebuilds userById every render, so
+      // depending on it here would defeat this memo.
+      const u = users.find((x) => x.id === t.assigneeId);
+      if (u) { strayIds.add(u.id); strays.push(u); }
+    });
+    const people = strays.length > 0 ? [...deptPeople, ...strays] : deptPeople;
     // Pipeline order, left → right: Unassigned, Needs approval (kept on the left
     // so it's visible on load, not buried past the people columns), each person,
     // then Completed.
@@ -372,7 +434,7 @@ export default function BoardPage() {
       ...people.map((u) => ({ id: u.id, label: u.name, tone: "border-indigo-300/50", user: u }))
     ];
     return cols;
-  }, [groupBy, visible, users, selectedDepts, filterStatus]);
+  }, [groupBy, visible, deptPeople, deptPeopleIds, users, filterStatus]);
 
   // Group visible tasks by the column they belong to.
   const grouped: Record<string, Task[]> = useMemo(() => {
@@ -498,7 +560,20 @@ export default function BoardPage() {
         if (reopening) {
           toast.success(target ? `Reopened & assigned to ${target.name}` : "Reopened (unassigned)");
         } else {
-          toast.success(target ? `Reassigned to ${target.name}` : "Unassigned");
+          // A card admitted by its ASSIGNEE rather than by its own department
+          // has nothing holding it on a filtered board once it is unassigned,
+          // so it leaves the instant this lands. Name that, because a card
+          // vanishing right after a drop the toast called a success is the
+          // very silent disappearance the rest of this filter work exists to
+          // stop. (It is not lost — clear the chips, or pick its own
+          // department, and it is there.)
+          const leavesBoard = !target && groupBy === "person" && selectedDepts.size > 0
+            && (before.departmentId === null || !selectedDepts.has(before.departmentId));
+          toast.success(
+            target ? `Reassigned to ${target.name}`
+              : leavesBoard ? `Unassigned · ${outOfSliceLabel(before)} work, so it has left this board`
+              : "Unassigned"
+          );
         }
       } catch (err) {
         toast.error(`Move failed: ${err instanceof Error ? err.message : "network error"}`);
@@ -535,12 +610,28 @@ export default function BoardPage() {
 
   const allDeptsSelected = selectedDepts.size === 0;
 
+  // What the out-of-department chip should read. A task can genuinely have no
+  // department — PATCH /api/tasks/[id] writes department_id null when asked —
+  // and getDepartmentMeta's generic "Team" fallback would say nothing useful,
+  // so name that case outright.
+  function outOfSliceLabel(t: Task): string {
+    if (!t.departmentId) return "No department";
+    // Live catalog first. Departments are rows, not an enum, and one added
+    // from the Leader Console has no entry in departments.ts's hardcoded META
+    // map — getDepartmentMeta would label it a generic "Team", which on a chip
+    // whose whole job is naming the owning team says nothing at all. META is
+    // still right for the colours; it just can't be trusted for the name.
+    return departments.find((d) => d.id === t.departmentId)?.name
+      ?? getDepartmentMeta(t.departmentId).label;
+  }
+
   // Which department a task created from this person's column should land in.
-  // Prefer one the chip row is currently showing: `visible` filters tasks by
-  // selectedDepts, so seeding a department that's filtered out means the card
-  // never appears on the board that just created it (and POST /api/tasks
-  // announces it in that other department's Slack channel). Only bites people
-  // who belong to several departments — for everyone else both passes agree.
+  // Prefer one the chip row is currently showing: the new card would still
+  // land in this column (person mode admits a task by its assignee), but it
+  // would wear an out-of-department chip it never needed, and POST /api/tasks
+  // would announce it in that other department's Slack channel. Only bites
+  // people who belong to several departments — for everyone else both passes
+  // agree.
   // Falls back to any department the caller may create in; undefined when the
   // target has none (leaders), where NewTaskForm's own default takes over.
   function deptHintFor(u: User): string | undefined {
@@ -555,7 +646,14 @@ export default function BoardPage() {
     <ClockGate fallbackSubtitle="The board unlocks once you've clocked in. Tap below to start your shift.">
     <div className="space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-3">
-        <h1 className="text-lg font-medium">Board <span className="text-muted text-sm">· {visible.length}</span></h1>
+        <h1 className="text-lg font-medium">
+          Board <span className="text-muted text-sm">· {visible.length}</span>
+          {outOfSliceCount > 0 && (
+            <span className="text-muted text-sm font-normal">
+              {" "}· {outOfSliceCount} from other departments
+            </span>
+          )}
+        </h1>
 
         <div className="flex items-center gap-2 flex-wrap">
           {/* Scope axis — which slice of tasks is shown. "Update board counts
@@ -843,6 +941,28 @@ export default function BoardPage() {
                                 <div className="mt-1.5 flex flex-wrap gap-1 items-center">
                                   {t.tags.slice(0, 2).map((x) => <Tag key={x}>{x}</Tag>)}
                                   {t.inactiveFlag && <StalledBadge />}
+                                  {/* This card is on screen only because its
+                                      assignee is on the filtered department's
+                                      team — the work itself belongs to another
+                                      one. Name that department, so a Software
+                                      ticket sitting on the Facebook board is
+                                      self-explanatory rather than a mistake.
+                                      Unreachable outside person mode: the other
+                                      groupings never admit an out-of-slice
+                                      task in the first place. */}
+                                  {selectedDepts.size > 0
+                                   && (t.departmentId === null || !selectedDepts.has(t.departmentId)) && (
+                                    <span
+                                      title={`${outOfSliceLabel(t)} task — shown because its assignee is on this team`}
+                                      className={cn(
+                                        "inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full border",
+                                        getDepartmentMeta(t.departmentId ?? undefined).chip
+                                      )}
+                                    >
+                                      <FolderKanban className="w-2.5 h-2.5" />
+                                      {outOfSliceLabel(t)}
+                                    </span>
+                                  )}
                                   {/* Archived indicator + archive date — shown
                                       in the Archived/All scopes. */}
                                   {t.archivedAt && (

@@ -49,10 +49,16 @@ export interface MediaPickerProps {
   // Receives this picker's upload function, so a host can attach files the
   // picker didn't see itself (pasted or dropped into a rich email body).
   uploadRef?: MutableRefObject<((files: File[]) => void) | null>;
+  // Ceiling on how many files may be held at once, shown next to the label
+  // and enforced at pick time. Opt-in — undefined means no limit, because
+  // most mounts are task media, which is allowed far more than an email is.
+  // Advisory: see the note in uploadFiles.
+  maxFiles?: number;
 }
 
 export function MediaPicker({
-  value, onChange, taskId, label = "Add files", compact, hint, disabled, capturePaste = true, uploadRef
+  value, onChange, taskId, label = "Add files", compact, hint, disabled, capturePaste = true, uploadRef,
+  maxFiles
 }: MediaPickerProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
@@ -69,10 +75,32 @@ export function MediaPicker({
     if (disabled) return;
     const list = Array.from(files);
     if (list.length === 0) return;
+    // Advisory, not a guarantee: this closes over `value`, so two overlapping
+    // ingests (drop a batch, then paste another before the first resolves)
+    // both read the same pre-drop count and can land more than maxFiles
+    // between them. It exists so the ordinary case is caught here, while the
+    // user is still looking at the picker, rather than at Send. The gate that
+    // actually holds is server-side — MAX_ATTACHMENTS_PER_EMAIL, enforced in
+    // sendReply/composeNewThread.
+    let queue = list;
+    if (maxFiles !== undefined) {
+      const room = Math.max(0, maxFiles - value.length);
+      if (room === 0) {
+        toast.error(`You can attach at most ${maxFiles} files — remove one first.`);
+        return;
+      }
+      if (list.length > room) {
+        queue = list.slice(0, room);
+        const dropped = list.length - room;
+        toast.error(
+          `You can attach at most ${maxFiles} files — ${dropped} ${dropped === 1 ? "was" : "were"} not added.`
+        );
+      }
+    }
     setBusy(true);
     const added: TaskMedia[] = [];
     try {
-      for (const file of list) {
+      for (const file of queue) {
         const fd = new FormData();
         fd.append("file", file);
         if (taskId) fd.append("taskId", taskId);
@@ -94,7 +122,7 @@ export function MediaPicker({
       setBusy(false);
       if (inputRef.current) inputRef.current.value = "";
     }
-  }, [disabled, onChange, taskId, value]);
+  }, [disabled, onChange, taskId, value, maxFiles]);
 
   useEffect(() => {
     if (!uploadRef) return;
@@ -222,7 +250,15 @@ export function MediaPicker({
             ? "Uploading…"
             : dragOver
               ? "Drop to upload"
-              : <span><span className="font-medium">{label}</span><span className="text-ink/50"> · drop or paste here</span></span>}
+              : (
+                <span>
+                  <span className="font-medium">{label}</span>
+                  {maxFiles !== undefined && (
+                    <span className="text-ink/50 tabular-nums"> · {value.length}/{maxFiles}</span>
+                  )}
+                  <span className="text-ink/50"> · drop or paste here</span>
+                </span>
+              )}
         </span>
         <input
           ref={inputRef}

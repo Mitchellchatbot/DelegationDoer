@@ -8,6 +8,7 @@ import { Forward, Send, X, Loader2, Paperclip } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { MediaPicker } from "@/components/MediaPicker";
+import { MAX_ATTACHMENTS_PER_EMAIL } from "@/lib/email-attachments";
 import { EmailEditor, EmailFormatButtons, useEmailBody, useFormattingBar } from "@/components/email-editor";
 import type { TaskMedia } from "@/lib/types";
 
@@ -51,6 +52,12 @@ export function ForwardButton({
   // Files pasted or dropped into the note are uploaded by the attachment picker.
   const uploadRef = useRef<((files: File[]) => void) | null>(null);
   const [includeAttachments, setIncludeAttachments] = useState(true);
+  // A forward carries the original message's files AND whatever the user
+  // adds here (the forward route concatenates the two), so the extras only
+  // get what the originals leave behind. Unticking the checkbox hands the
+  // whole budget back.
+  const carriedOver = includeAttachments ? attachmentCount : 0;
+  const extraFileBudget = Math.max(0, MAX_ATTACHMENTS_PER_EMAIL - carriedOver);
   // Extra files the user adds on top of the original attachments. Same wire
   // shape as compose/reply; the route fetches each URL and forwards it.
   const [attachments, setAttachments] = useState<TaskMedia[]>([]);
@@ -74,6 +81,15 @@ export function ForwardButton({
     }
     if (!subject.trim()) {
       toast.error("Add a subject");
+      return;
+    }
+    if (carriedOver + attachments.length > MAX_ATTACHMENTS_PER_EMAIL) {
+      // Name the checkbox, not "remove some attachments" — most of these
+      // files are ones the user never picked.
+      toast.error(
+        `${carriedOver + attachments.length} attachments — ${MAX_ATTACHMENTS_PER_EMAIL} is the most one email can carry. `
+        + `Untick "Include ${attachmentCount} original attachment${attachmentCount === 1 ? "" : "s"}" or remove some of your own.`
+      );
       return;
     }
 
@@ -260,6 +276,7 @@ export function ForwardButton({
                     onChange={setAttachments}
                     label="Attach more files"
                     compact
+                    maxFiles={extraFileBudget}
                     uploadRef={uploadRef}
                   />
                 </div>

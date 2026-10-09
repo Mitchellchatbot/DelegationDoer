@@ -11,6 +11,7 @@ import {
   type MissiveMessage
 } from "@/lib/missive-client";
 import { sanitizeMediaUrls, fetchMediaAsAttachments } from "@/lib/media";
+import { MAX_ATTACHMENTS_PER_EMAIL } from "@/lib/email-attachments";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -135,6 +136,25 @@ export async function POST(
     const extraItems = sanitizeMediaUrls(body.attachmentUrls);
     if (extraItems.length > 0) {
       attachments.push(...(await fetchMediaAsAttachments(extraItems)));
+    }
+
+    // composeNewThread refuses an over-limit send on its own, but by then the
+    // only remedy it can name is "remove some attachments" — useless here,
+    // where most of the files came off the original message and the user never
+    // picked them. Counted on the RESOLVED array (both loops above skip what
+    // they cannot fetch) so this agrees with the gate downstream.
+    if (attachments.length > MAX_ATTACHMENTS_PER_EMAIL) {
+      const originals = attachments.length - extraItems.length;
+      return NextResponse.json(
+        {
+          error:
+            `${attachments.length} attachments — ${MAX_ATTACHMENTS_PER_EMAIL} is the most one email can carry. `
+            + (originals > 0
+              ? `${originals} came from the message being forwarded — turn off "include original attachments", or remove some of your own.`
+              : "Remove some and send them in a second email.")
+        },
+        { status: 400 }
+      );
     }
 
     const result = await composeNewThread({

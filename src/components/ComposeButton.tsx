@@ -8,6 +8,7 @@ import { PenSquare, Send, X, Loader2, Clock, Check, Maximize2, Minimize2 } from 
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { MediaPicker } from "@/components/MediaPicker";
+import { MAX_ATTACHMENTS_PER_EMAIL, tooManyAttachmentsMessage } from "@/lib/email-attachments";
 import { EmailEditor, EmailFormatButtons, useEmailBody, useFormattingBar } from "@/components/email-editor";
 import { EMPTY_EMAIL_BODY, emailBodyFields } from "@/lib/email-doc";
 import { RecipientAutocomplete, type ClientSuggestion } from "@/components/RecipientAutocomplete";
@@ -277,6 +278,10 @@ export function ComposeButton({
       toast.error("Write something before sending");
       return;
     }
+    if (attachments.length > MAX_ATTACHMENTS_PER_EMAIL) {
+      toast.error(tooManyAttachmentsMessage(attachments.length));
+      return;
+    }
     // Resolve schedule. datetime-local is interpreted in the user's
     // local timezone — we convert to a UTC ISO string before sending
     // so the backend's "is it in the future?" check is unambiguous.
@@ -511,6 +516,7 @@ export function ComposeButton({
                     onChange={setAttachments}
                     label="Attach files"
                     compact
+                    maxFiles={MAX_ATTACHMENTS_PER_EMAIL}
                     uploadRef={uploadRef}
                   />
                 </div>

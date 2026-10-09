@@ -8,6 +8,7 @@
 //                        account. Pull from missive UI's localStorage for now.
 
 import { cache } from "@/lib/safe-cache";
+import { MAX_ATTACHMENTS_PER_EMAIL, tooManyAttachmentsMessage } from "@/lib/email-attachments";
 import { unstable_cache } from "next/cache";
 
 export interface MissiveAccount {
@@ -495,7 +496,7 @@ export interface ReplyArgs {
   subject?: string;        // Defaults to "Re: <original subject>" on the clone side.
   inReplyTo?: string;      // Message-id to thread on.
   // Optional file attachments to forward as `files[]` multipart fields.
-  // The clone limits to 10 files / 25 MB each.
+  // Capped at MAX_ATTACHMENTS_PER_EMAIL, enforced in sendReply below.
   attachments?: MissiveAttachment[];
 }
 
@@ -535,6 +536,18 @@ export async function sendReply(args: ReplyArgs): Promise<{ messageId: string }>
   //
   // The clone returns `{ ok, message_id }` (not a full message object) —
   // callers refresh the thread afterward, so the id is all we need.
+  // The real gate on attachment count. Every send path — the inbox composers,
+  // the approvals queue, the scheduled runner, bulk email, the brain — funnels
+  // through sendReply/composeNewThread, and this is the last point that still
+  // knows the RESOLVED count: callers hand us URLs, and fetchMediaAsAttachments
+  // drops the ones it can't read, so an item list is not the number of parts
+  // that go on the wire. Refusing here throws inside whatever try the caller
+  // already has, so /api/email-drafts/[id]/approve records status='failed' with
+  // a readable send_error instead of stranding the row half-approved.
+  if ((args.attachments?.length ?? 0) > MAX_ATTACHMENTS_PER_EMAIL) {
+    throw new Error(tooManyAttachmentsMessage(args.attachments!.length));
+  }
+
   const payload = {
     account_id: args.fromAccountId,
     body_text: args.bodyText,
@@ -602,6 +615,18 @@ export async function composeNewThread(args: ComposeArgs): Promise<{
   // Mounted at /api/compose (NOT /api/messages). Multipart with a single
   // `payload` JSON string; the clone expects `to`/`cc`/`bcc` as scalar
   // strings (joined), not arrays.
+  // The real gate on attachment count. Every send path — the inbox composers,
+  // the approvals queue, the scheduled runner, bulk email, the brain — funnels
+  // through sendReply/composeNewThread, and this is the last point that still
+  // knows the RESOLVED count: callers hand us URLs, and fetchMediaAsAttachments
+  // drops the ones it can't read, so an item list is not the number of parts
+  // that go on the wire. Refusing here throws inside whatever try the caller
+  // already has, so /api/email-drafts/[id]/approve records status='failed' with
+  // a readable send_error instead of stranding the row half-approved.
+  if ((args.attachments?.length ?? 0) > MAX_ATTACHMENTS_PER_EMAIL) {
+    throw new Error(tooManyAttachmentsMessage(args.attachments!.length));
+  }
+
   const payload: Record<string, unknown> = {
     account_id: args.fromAccountId,
     to: args.to.join(", "),

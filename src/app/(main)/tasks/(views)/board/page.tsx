@@ -324,12 +324,11 @@ export default function BoardPage() {
   // Software engineer a column reading "No tasks" while he had five open. On a
   // board that defaults to grouping by person an empty column asserts "this
   // person is free", so dropping the work was worse than noise. Person mode
-  // therefore also admits a task whose ASSIGNEE sits in a selected department;
-  // the card then labels itself with its real department (the out-of-department
-  // chip further down) so the board never passes another team's work off as
-  // this one's. Status and client mode keep the strict task-department test —
-  // their columns aren't person-scoped, so widening there would only blunt the
-  // filter.
+  // therefore also admits a task whose ASSIGNEE sits in a selected department.
+  // Those cards are deliberately NOT badged per-card — the count beside the
+  // board title carries that, and a tag on every card was noise. Status and
+  // client mode keep the strict task-department test — their columns aren't
+  // person-scoped, so widening there would only blunt the filter.
   const visible = useMemo(() => tasks.filter((t) =>
     (selectedDepts.size === 0
       || (t.departmentId !== null && selectedDepts.has(t.departmentId))
@@ -610,17 +609,18 @@ export default function BoardPage() {
 
   const allDeptsSelected = selectedDepts.size === 0;
 
-  // What the out-of-department chip should read. A task can genuinely have no
-  // department — PATCH /api/tasks/[id] writes department_id null when asked —
-  // and getDepartmentMeta's generic "Team" fallback would say nothing useful,
-  // so name that case outright.
+  // Names the department a card actually belongs to, for the one place that
+  // still says it out loud: the toast shown when unassigning drops a card off
+  // a filtered board. A task can genuinely have no department — PATCH
+  // /api/tasks/[id] writes department_id null when asked — and
+  // getDepartmentMeta's generic "Team" fallback would say nothing useful, so
+  // name that case outright.
   function outOfSliceLabel(t: Task): string {
     if (!t.departmentId) return "No department";
     // Live catalog first. Departments are rows, not an enum, and one added
     // from the Leader Console has no entry in departments.ts's hardcoded META
-    // map — getDepartmentMeta would label it a generic "Team", which on a chip
-    // whose whole job is naming the owning team says nothing at all. META is
-    // still right for the colours; it just can't be trusted for the name.
+    // map — getDepartmentMeta would label it a generic "Team", which in a
+    // sentence whose whole job is naming the owning team says nothing at all.
     return departments.find((d) => d.id === t.departmentId)?.name
       ?? getDepartmentMeta(t.departmentId).label;
   }
@@ -628,10 +628,10 @@ export default function BoardPage() {
   // Which department a task created from this person's column should land in.
   // Prefer one the chip row is currently showing: the new card would still
   // land in this column (person mode admits a task by its assignee), but it
-  // would wear an out-of-department chip it never needed, and POST /api/tasks
-  // would announce it in that other department's Slack channel. Only bites
-  // people who belong to several departments — for everyone else both passes
-  // agree.
+  // would count against the "from other departments" tally it never belonged
+  // in, and POST /api/tasks would announce it in that other department's
+  // Slack channel. Only bites people who belong to several departments — for
+  // everyone else both passes agree.
   // Falls back to any department the caller may create in; undefined when the
   // target has none (leaders), where NewTaskForm's own default takes over.
   function deptHintFor(u: User): string | undefined {
@@ -941,28 +941,6 @@ export default function BoardPage() {
                                 <div className="mt-1.5 flex flex-wrap gap-1 items-center">
                                   {t.tags.slice(0, 2).map((x) => <Tag key={x}>{x}</Tag>)}
                                   {t.inactiveFlag && <StalledBadge />}
-                                  {/* This card is on screen only because its
-                                      assignee is on the filtered department's
-                                      team — the work itself belongs to another
-                                      one. Name that department, so a Software
-                                      ticket sitting on the Facebook board is
-                                      self-explanatory rather than a mistake.
-                                      Unreachable outside person mode: the other
-                                      groupings never admit an out-of-slice
-                                      task in the first place. */}
-                                  {selectedDepts.size > 0
-                                   && (t.departmentId === null || !selectedDepts.has(t.departmentId)) && (
-                                    <span
-                                      title={`${outOfSliceLabel(t)} task — shown because its assignee is on this team`}
-                                      className={cn(
-                                        "inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full border",
-                                        getDepartmentMeta(t.departmentId ?? undefined).chip
-                                      )}
-                                    >
-                                      <FolderKanban className="w-2.5 h-2.5" />
-                                      {outOfSliceLabel(t)}
-                                    </span>
-                                  )}
                                   {/* Archived indicator + archive date — shown
                                       in the Archived/All scopes. */}
                                   {t.archivedAt && (

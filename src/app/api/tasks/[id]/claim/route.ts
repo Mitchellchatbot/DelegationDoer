@@ -24,16 +24,36 @@ export const dynamic = "force-dynamic";
 // fail because Slack is unreachable or the channel was never configured.
 async function announceToDeptChannel(
   departmentId: string | null,
-  text: string
+  text: string,
+  // The user the task now belongs to. A channel pinned on them wins over the
+  // department's, so that someone moved between departments for a reason
+  // unrelated to Slack keeps their announcements where their team reads them.
+  // See 20261009000100_user_task_slack_channel.sql.
+  assigneeId?: string | null
 ): Promise<void> {
-  if (!departmentId) return;
-  try {
-    const { data: dept } = await getSupabaseAdmin()
-      .from("departments")
-      .select("task_channel_id")
-      .eq("id", departmentId)
+  let pinned: string | null = null;
+  if (assigneeId) {
+    // supabase-js reports a missing column in `error` rather than throwing,
+    // so an unmigrated database leaves this null and the department route
+    // below still applies.
+    const { data: pin } = await getSupabaseAdmin()
+      .from("users")
+      .select("task_slack_channel_id")
+      .eq("id", assigneeId)
       .maybeSingle();
-    const channel = dept?.task_channel_id as string | undefined;
+    pinned = (pin?.task_slack_channel_id as string | null) ?? null;
+  }
+  // Only the department route needs an id to resolve; a pin is enough on its own.
+  if (!departmentId && !pinned) return;
+  try {
+    const { data: dept } = departmentId
+      ? await getSupabaseAdmin()
+          .from("departments")
+          .select("task_channel_id")
+          .eq("id", departmentId)
+          .maybeSingle()
+      : { data: null };
+    const channel = (pinned ?? dept?.task_channel_id) as string | undefined;
     if (!channel) return;
     await postMessage(channel, text, [
       { type: "section", text: { type: "mrkdwn", text } }
@@ -156,7 +176,11 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
     // "up for grabs" forever and two people work the same task.
     await announceToDeptChannel(
       claimed.department_id as string | null,
-      `🙌 *${viewer?.name ?? "Someone"}* claimed <${taskUrl(params.id)}|${claimed.title as string}>`
+      `🙌 *${viewer?.name ?? "Someone"}* claimed <${taskUrl(params.id)}|${claimed.title as string}>`,
+      // The claimer now holds it, so their pin applies. The release path
+      // below deliberately passes none: a task back in the pool belongs to
+      // the department again, not to whoever last touched it.
+      viewerId
     );
 
     // Mirror onto their calendar, same as any other assignment.

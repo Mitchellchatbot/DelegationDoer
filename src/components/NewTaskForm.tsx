@@ -79,6 +79,13 @@ function isoToLocalInput(iso: string | null | undefined): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+// Only Facebook gates completion behind a proof today. Declared here rather
+// than imported from lib/fb-onboarding-data, which is server-side — the same
+// thing FbOnboardingBrowser does with this id.
+const FB_DEPT = "dep_facebook";
+const FB_PICK_NOTE =
+  "Facebook tasks go to a manager for sign-off before they can be closed; Software tasks close when you finish them.";
+
 export function NewTaskForm({ onCreated, onCancel, hideCancel, initialValues, lockAssignee }: Props) {
   const currentUser = useCurrentUser();
   // Live workspace data — replaces every former mock-data import.
@@ -92,11 +99,30 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel, initialValues, lo
   //   - Leaders/admins may target any department.
   //   - Workers + department heads are scoped to their own department(s);
   //     workers can't change it at all, heads can switch among theirs.
-  const canPickDepartment = canChooseDepartment(currentUser);
   const selectableDepartments = useMemo(
     () => assignableDepartments(currentUser, departments),
     [currentUser, departments]
   );
+  // Two different questions, previously answered by one flag.
+  //
+  // canPickAnyDepartment — may this person target a department that is not
+  // theirs? Leaders, heads and scoped delegates may; a worker may not, and
+  // that stays true.
+  //
+  // canPickOwnDepartment — does this person have a choice to make at all?
+  // Someone who belongs to two departments does, and locking them to
+  // departmentIds[0] silently answered it for them. Facebook work and
+  // Software work are the same person's work but not the same KIND of task:
+  // the proof/approval flow keys off the TASK's department, so a pin to the
+  // wrong one quietly decides whether the work needs sign-off.
+  //
+  // Nothing new is permitted here. assignableDepartments already lists
+  // exactly the departments they belong to, and POST /api/tasks already
+  // accepts any of them — "the form's locked picker is a convenience, not
+  // the security boundary" (api/tasks/route.ts). This only stops hiding a
+  // choice the server was always willing to honour.
+  const canPickAnyDepartment = canChooseDepartment(currentUser);
+  const canPickOwnDepartment = canPickAnyDepartment || selectableDepartments.length > 1;
   // Non-leaders with no department can't create any valid task — we block
   // the form and show a clear message instead of letting them try.
   const hasNoDepartment = !isLeader(currentUser) && currentUser.departmentIds.length === 0;
@@ -315,11 +341,11 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel, initialValues, lo
     // members are assignable here (mirrors the routing-review dropdown and
     // the ranker's in-dept rule). Workers can't switch departments, so their
     // pool (self + direct reports) is left intact.
-    if (canPickDepartment && departmentId) {
+    if (canPickAnyDepartment && departmentId) {
       return pool.filter((u) => u.departmentIds.includes(departmentId));
     }
     return pool;
-  }, [currentUser, users, canPickDepartment, departmentId]);
+  }, [currentUser, users, canPickAnyDepartment, departmentId]);
   const targetIds = useMemo(() => new Set(targets.map((u) => u.id)), [targets]);
 
   // Build skill rank: combine the manual+auto skill matrix with the
@@ -583,7 +609,7 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel, initialValues, lo
       // Department is already permission-clamped server-side. Only apply it
       // when the user can actually change the department (workers are locked
       // and the form clamps them to their own dept regardless).
-      if (f.department && canPickDepartment) { setDepartmentId(f.department); filled.push("department"); }
+      if (f.department && canPickAnyDepartment) { setDepartmentId(f.department); filled.push("department"); }
       if (f.priority) { setPriority(f.priority); filled.push("priority"); }
       if (typeof f.estimatedHours === "number") { setEstimate(f.estimatedHours); filled.push("estimate"); }
       if (Array.isArray(f.tags) && f.tags.length > 0) {
@@ -755,15 +781,15 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel, initialValues, lo
                 className="input flex-1 disabled:opacity-70 disabled:cursor-not-allowed"
                 value={departmentId}
                 onChange={(e) => setDepartmentId(e.target.value)}
-                disabled={!canPickDepartment}
-                title={canPickDepartment ? undefined : "Workers create tasks within their own department"}
+                disabled={!canPickOwnDepartment}
+                title={canPickOwnDepartment ? undefined : "Workers create tasks within their own department"}
               >
                 {selectableDepartments.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
               </select>
               {/* Ask-AI department classify only helps when the user can
                   actually change the department. Workers are locked, so
                   hide it for them. */}
-              {canPickDepartment && (
+              {canPickAnyDepartment && (
                 <button
                   onClick={askAI}
                   disabled={aiThinking}
@@ -775,9 +801,15 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel, initialValues, lo
                 </button>
               )}
             </div>
-            {!canPickDepartment && (
+            {!canPickOwnDepartment && (
               <div className="mt-1.5 text-[11px] text-muted">
                 Locked to your department — only leaders and heads can change it.
+              </div>
+            )}
+            {canPickOwnDepartment && !canPickAnyDepartment && (
+              <div className="mt-1.5 text-[11px] text-muted">
+                You&rsquo;re on more than one team — pick which one this task belongs to.
+                {departmentId === FB_DEPT ? ` ${FB_PICK_NOTE}` : ""}
               </div>
             )}
             {aiReason && (

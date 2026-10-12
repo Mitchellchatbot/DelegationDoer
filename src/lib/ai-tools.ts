@@ -9,8 +9,9 @@ import { userCapacity } from "@/lib/capacity";
 import { listUserEvents } from "@/lib/google-calendar";
 import { embedQuery } from "@/lib/sop-ingest";
 import { coerceMeetingBrief } from "@/lib/meeting-brief";
-import { listLabels, listThreads, getThread, listAccounts } from "@/lib/missive-client";
+import { listLabels, listThreads, listThreadsPaged, getThread, fetchMessageBody, listAccounts } from "@/lib/missive-client";
 import { visibleAccountIdsFor } from "@/lib/inbox-access";
+import { restrictionsFor } from "@/lib/restricted-senders";
 import { rankCandidates, buildLoadSignals } from "@/lib/skill-rank";
 import { getOutboundBoard } from "@/lib/outbound-board";
 import { getOutboundMeta, metaDays } from "@/lib/outbound-meta";
@@ -393,12 +394,31 @@ export const AI_TOOLS = [
   {
     name: "search_inbox",
     description:
-      "OWNER-ONLY. Read Mitchell's email inbox (Missive). Pass `query` to find specific mail by keyword, sender, company or subject (e.g. 'OpenAI', 'invoice', a person's name) — leave it out to get the most recent open threads. Returns matching threads with the sender, subject, date, participants, and the latest message's text so you can READ the conversation. Use this whenever Mitchell refers to his inbox or specific emails ('respond to the OpenAI emails', 'what did X say', 'anything from Deel'). To DRAFT a reply after reading, call propose_email (to = the sender, subject 'Re: …', body = your drafted reply) — nothing sends until he clicks Send. Returns { error } for non-owners.",
+      "OWNER-ONLY. Search and read Mitchell's email (Missive). Searches ALL of his mail however old — archived and done threads included, not just what is currently open. " +
+      "WHAT IS SEARCHABLE: thread SUBJECT lines, SENDER/RECIPIENT addresses, and the thread's date. Message BODY text is NOT indexed and can never be matched — so never search for a phrase from inside an email. Find the thread by sender, subject or date, then READ the body out of the result (full message text comes back). " +
+      "Pass STRUCTURED filters, never Gmail syntax: `from` (sender name, address or domain fragment — by far the most reliable filter), `to`, `subject` (substring, so real phrases work), `after`/`before` (YYYY-MM-DD) or `withinDays` to bracket a period, and `query` only for loose subject/participant words (AND-ed, no stemming — keep it to one or two distinctive words). " +
+      "Omit every filter for a plain browse of his newest open inbox threads — that is the 'what needs a reply' view. The moment you pass ANY filter it switches to a full lookup: every status (archived included) across his inbox AND sent mail. " +
+      "Results are newest-first. `alsoMatched` lists further hits as headlines only — read one by calling again with its `threadId`, which also works for archived threads. If `searched.stoppedAtPageCap` is true, call again with the `offset` named in the note to reach older mail. " +
+      "Every result carries a `searched` block stating exactly what was and was not searched. Ground your answer in it. NEVER explain a miss by guessing — do not say an email was 'probably archived', 'marked as done' or 'too old': archived and old mail ARE searched, and you cannot see why something is absent. " +
+      "Some mail is withheld by sender-privacy rules (`searched.excludedRestricted` > 0); say it exists but can't be shown, never speculate about its contents. " +
+      "To reply after reading, call propose_email (to = the sender, subject 'Re: …', body = your draft) — nothing sends until he clicks Send. Returns { error } for non-owners.",
     input_schema: {
       type: "object",
       properties: {
-        query: { type: "string", description: "Keyword / sender / company / subject to search for. Omit for the latest open threads." },
-        limit: { type: "number", description: "Max threads to return (default 6, max 10)." }
+        query: { type: "string", description: "Loose words matched against the subject + participant addresses ONLY (AND-ed, no stemming, never the body). Prefer `from`/`subject` where you can." },
+        from: { type: "string", description: "Sender name, address or domain fragment, e.g. 'deel', 'billing@stripe.com', 'openai.com'. Substring match — the single most reliable way to find an old email." },
+        to: { type: "string", description: "Recipient name / address fragment. Substring match." },
+        subject: { type: "string", description: "Words or a phrase from the subject line. Substring match, so multi-word phrases work here." },
+        after: { type: "string", description: "Only threads whose most recent message is after this calendar date (YYYY-MM-DD)." },
+        before: { type: "string", description: "Only threads whose most recent message is before this calendar date (YYYY-MM-DD). Combine with `after` to search one month or year." },
+        withinDays: { type: "number", description: "Shorthand for 'in the last N days'. Ignored when `after` is given." },
+        hasAttachment: { type: "boolean", description: "Only threads carrying an attachment." },
+        status: { type: "string", enum: ["any", "open", "pending", "closed"], description: "Defaults to 'open' for a plain browse and 'any' as soon as a filter is passed. 'any' INCLUDES archived/done mail; 'closed' means archived/done only. Only narrow this when the question is specifically about what is still outstanding." },
+        folder: { type: "string", enum: ["INBOX", "SENT", "BOTH"], description: "Defaults to INBOX for a plain browse and BOTH for a filtered lookup. 'SENT' = mail Mitchell sent." },
+        allInboxes: { type: "boolean", description: "Search every inbox he can see rather than starting with his own. Usually leave this off — the tool widens automatically when his own inbox has no match." },
+        threadId: { type: "string", description: "Read one specific thread in full, by id from a previous result or from alsoMatched. Works for archived threads. All other filters are ignored." },
+        offset: { type: "number", description: "Skip this many newer matches to page further back in time. Max 500." },
+        limit: { type: "number", description: "How many threads to read in full (default 6, max 10)." }
       },
       required: []
     }
@@ -2361,69 +2381,386 @@ async function forgetFact(input: Record<string, unknown>, ctx: ToolContext) {
   return ok ? { forgotten: true, id } : { error: "could not forget (bad id?)" };
 }
 
-// OWNER-ONLY: stage a drafted new email as a "Send email" action card. The
-// send itself happens only when Mitchell clicks Send (see /api/brain/compose).
+// ---- search_inbox: composing the mail service's `q` operator string --------
+//
+// missiveclone parses `q` as a Gmail-style operator string with this exact
+// tokenizer:  /(\w+):"([^"]*)"|(\w+):(\S+)|"([^"]*)"|(\S+)/g
+// DD builds that string, never the model, because every failure mode here is
+// SILENT — a malformed operator returns a wrong result set, never an error:
+//   - a value containing whitespace MUST be quoted, or its tail leaks into the
+//     free-text match (`from:John Smith` becomes from=John AND tsvector 'Smith');
+//   - a value can never CONTAIN a quote (the quoted branch stops at the first
+//     one), so quotes are stripped, never escaped;
+//   - an empty value (`from:`) falls through to the bare-word branch and
+//     poisons the free-text match, so an empty term is omitted entirely;
+//   - an unsupported key is parsed and then DROPPED, so a typo silently
+//     WIDENS the search instead of erroring.
+function inboxQueryValue(raw: unknown): string {
+  if (typeof raw !== "string") return "";
+  return raw.replace(/"/g, " ").replace(/[\r\n\t]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+// Always quoted. The tokenizer tries the quoted alternative first, so it
+// consumes the whole value and nothing can tail-inject another operator.
+function inboxQueryTerm(key: string, raw: unknown): string {
+  const v = inboxQueryValue(raw);
+  return v ? `${key}:"${v}"` : "";
+}
+
+// before:/after: are Date.parse'd server-side against thread.last_message_at.
+// Only a plain calendar date is accepted; an ISO datetime is truncated to its
+// date part. Anything else is DROPPED rather than left to leak into free text —
+// the clone ignores an unparseable date silently, which would widen the search.
+function inboxQueryDate(raw: unknown): string {
+  if (typeof raw !== "string") return "";
+  const m = /^(\d{4}-\d{2}-\d{2})/.exec(raw.trim());
+  if (!m) return "";
+  return Number.isNaN(Date.parse(`${m[1]}T00:00:00Z`)) ? "" : m[1];
+}
+
+// UTC, deliberately. The model is handed `new Date().toLocaleString()` in the
+// server's locale, so letting it compute dates lands a day off either side.
+function inboxDateUtc(ms: number): string {
+  return new Date(ms).toISOString().slice(0, 10);
+}
+
+// Operator-shaped tokens inside free text would be parsed as filters: a URL
+// ("https://acme.com/x" becomes filters.https) or a time ("3:30" becomes
+// filters['3']) vanishes entirely, and a literal "is:snoozed" contradicts the
+// clone's always-applied not-snoozed clause and returns ZERO rows, no error.
+function sanitizeInboxFreeText(raw: unknown): string {
+  return inboxQueryValue(raw).replace(/\b(from|to|subject|has|is|label|before|after)\s*:\s*/gi, "$1 ");
+}
+
 // Read Mitchell's inbox so the brain can find + read specific emails and draft
-// replies (via propose_email). Owner-only. Prefers his own connected inbox; the
-// `q` search hits subject/body server-side. getThread returns full message text.
+// replies (via propose_email). Owner-only.
+//
+// Finding OLD mail is the entire point of the shape below, which runs in two
+// modes:
+//
+//   BROWSE (no filters) — unchanged from the original tool: INBOX, status
+//     "open", newest first. This is the "scan my inbox / what needs a reply"
+//     path. Closed threads keep their original last_message_at, so admitting
+//     them here would float already-handled mail above genuinely unanswered
+//     mail. It is also the only query shape the clone can serve from an index
+//     (idx_threads_workspace_status) — there is NO index on last_message_at.
+//
+//   LOOKUP (any filter supplied) — sends NO status, so archived/done ("closed")
+//     threads are searched too, and walks INBOX + SENT as two explicitly scoped
+//     passes merged by thread id. SENT matters more than it sounds: ~456 known
+//     split threads keep their outbound half in SENT only, invisible to an
+//     INBOX-pinned query. `folder` is never OMITTED, because that drops the
+//     folder clause altogether and pulls Junk Email into a tool loop that can
+//     write persistent memory and stage one-click sends.
+//
+// What `q` can match is thread IDENTITY only — subject and from/to/cc. The
+// clone's threads.search_text deliberately holds no message body (its PR #39
+// rebuild purged it), so BODY TEXT IS NOT SEARCHABLE. Bodies still come back on
+// the threads we surface; we just cannot search them. The result states all of
+// this in `searched` so the model stops inventing reasons for a miss.
 export async function searchInbox(input: Record<string, unknown>, ctx: ToolContext) {
   if (!isOwner(ctx.actor)) return { error: "access denied — the inbox is owner-only" };
-  const query = typeof input.query === "string" ? input.query.trim() : "";
-  const limit = Math.min(10, Math.max(1, Number(input.limit) || 6));
+
+  const limit = clampNumber(input.limit, 1, 10, 6);
+  const startOffset = clampNumber(input.offset, 0, 500, 0);
+  const threadIdIn = typeof input.threadId === "string" ? input.threadId.trim() : "";
+
+  const from = inboxQueryValue(input.from);
+  const to = inboxQueryValue(input.to);
+  const subject = inboxQueryValue(input.subject);
+  const freeText = sanitizeInboxFreeText(input.query);
+  const hasAttachment = input.hasAttachment === true;
+
+  // withinDays is the model-friendly form; an explicit `after` wins over it.
+  const withinDays = clampNumber(input.withinDays, 0, 3650, 0);
+  const after = inboxQueryDate(input.after)
+    || (withinDays > 0 ? inboxDateUtc(Date.now() - withinDays * 86400000) : "");
+  let before = inboxQueryDate(input.before);
+  if (after && before && after === before) {
+    // after:D before:D is "> midnight AND < midnight" — always zero rows, with
+    // no error. One calendar day means the half-open range [D, D+1).
+    before = inboxDateUtc(Date.parse(`${before}T00:00:00Z`) + 86400000);
+  }
+
+  const hasFilters = Boolean(from || to || subject || freeText || hasAttachment || after || before);
+
+  const q = [
+    inboxQueryTerm("from", from),
+    inboxQueryTerm("to", to),
+    inboxQueryTerm("subject", subject),
+    after ? `after:${after}` : "",
+    before ? `before:${before}` : "",
+    hasAttachment ? "has:attachment" : "",
+    // Quoted so stray punctuation cannot be re-read as an operator.
+    freeText ? `"${freeText}"` : ""
+  ].filter(Boolean).join(" ");
+
+  const statusIn = typeof input.status === "string" ? input.status.trim().toLowerCase() : "";
+  const status: "open" | "pending" | "closed" | undefined =
+    statusIn === "open" || statusIn === "pending" || statusIn === "closed"
+      ? statusIn
+      : hasFilters ? undefined : "open";
+
+  const folderIn = typeof input.folder === "string" ? input.folder.trim().toUpperCase() : "";
+  const folders: ("INBOX" | "SENT")[] =
+    folderIn === "INBOX" ? ["INBOX"]
+      : folderIn === "SENT" ? ["SENT"]
+        : folderIn === "BOTH" ? ["INBOX", "SENT"]
+          : hasFilters ? ["INBOX", "SENT"] : ["INBOX"];
 
   let accounts: Awaited<ReturnType<typeof listAccounts>>;
   let visibleIds: Set<string> | null;
+  let restrict: Awaited<ReturnType<typeof restrictionsFor>>;
   try {
-    [accounts, visibleIds] = await Promise.all([listAccounts(), visibleAccountIdsFor(ctx.actor)]);
+    [accounts, visibleIds, restrict] = await Promise.all([
+      listAccounts(),
+      visibleAccountIdsFor(ctx.actor),
+      // Sender-scoped mail privacy (Deel / Stripe / bill.com / RM Reyes). Those
+      // rules carry NO viewers on purpose, so they hide that mail from every DD
+      // user, Mitchell included — at his own request. Every other read surface
+      // enforces this; the AI tools never did, and widening the search here
+      // would have widened that leak.
+      restrictionsFor(ctx.actor)
+    ]);
   } catch (err) {
     return { error: `inbox unreachable: ${err instanceof Error ? err.message : String(err)}` };
   }
   const visible = visibleIds === null ? accounts : accounts.filter((a) => visibleIds!.has(a.id));
+  if (visible.length === 0) return { error: "no inbox connected for you" };
+
   const ownerEmail = (ctx.actor.email ?? "").toLowerCase();
   const own = visible.filter((a) => a.email.toLowerCase() === ownerEmail);
-  const mailboxIds = (own.length ? own : visible).map((a) => a.id);
-  if (mailboxIds.length === 0) return { error: "no inbox connected for you" };
+  // His own mailbox first, then every inbox he can see. The original stopped at
+  // his own and NEVER widened, so a thread living only in a shared/team inbox
+  // was unfindable no matter what he searched for.
+  const wantAll = input.allInboxes === true || own.length === 0;
+  const primary = wantAll ? visible : own;
+  const fallback = !wantAll && visible.length > own.length ? visible : null;
 
-  let threads: Awaited<ReturnType<typeof listThreads>>;
-  try {
-    threads = await listThreads({ folder: "INBOX", status: "open", q: query || undefined, limit: Math.min(20, limit * 2), mailboxIds });
-  } catch (err) {
-    return { error: `inbox search failed: ${err instanceof Error ? err.message : String(err)}` };
-  }
-  if (threads.length === 0) {
-    return { query: query || null, threads: [], note: query ? `No open inbox threads match "${query}".` : "No open inbox threads." };
+  let excludedRestricted = 0;
+  let fetchFailed = 0;
+
+  const PAGE = 50;
+  const MAX_PAGES = 3;
+  const CANDIDATE_CAP = limit + 15;
+  type Row = Awaited<ReturnType<typeof listThreadsPaged>>["threads"][number];
+
+  async function walk(mailboxIds: string[]) {
+    const rows: Row[] = [];
+    const seen = new Set<string>();
+    let pages = 0;
+    let stoppedAtPageCap = false;
+    // Per-folder budget as well as the global cap: a busy INBOX must not eat the
+    // whole allowance and starve the SENT pass, which is exactly where the
+    // outbound half of a split thread lives.
+    const perFolder = Math.max(limit, Math.ceil(CANDIDATE_CAP / folders.length));
+    for (const folder of folders) {
+      let offset = startOffset;
+      let pagesThisFolder = 0;
+      let kept = 0;
+      let more = false;
+      while (pagesThisFolder < MAX_PAGES && kept < perFolder && rows.length < CANDIDATE_CAP) {
+        const page = await listThreadsPaged({
+          mailboxIds, folder, status, q: q || undefined, limit: PAGE, offset
+        });
+        pages += 1;
+        pagesThisFolder += 1;
+        for (const t of page.threads) {
+          if (seen.has(t.id)) continue;
+          seen.add(t.id);
+          // Drop restricted threads BEFORE spending a getThread on one.
+          if (restrict?.blocksThread(t)) { excludedRestricted += 1; continue; }
+          rows.push(t);
+          kept += 1;
+          if (kept >= perFolder || rows.length >= CANDIDATE_CAP) break;
+        }
+        // hasMore is `rows.length === limit` server-side, so a perfectly full
+        // last page reports true — advisory only, never a user-facing claim.
+        more = page.hasMore && page.threads.length > 0;
+        if (!more) break;
+        // Advance by the page size the SERVER used, never by survivors:
+        // recomputing the cursor from a filtered length truncates at the first
+        // fully-restricted page and hides everything beyond it.
+        offset += page.limit || PAGE;
+      }
+      if (more) stoppedAtPageCap = true;
+    }
+    // Each folder comes back newest-first on its own, so a concatenation of two
+    // folders is NOT newest-first. Re-sort before anything slices it, or the
+    // "top matches" we read in full would just be whichever folder ran first.
+    rows.sort((a, b) => Date.parse(b.last_message_at || "") - Date.parse(a.last_message_at || ""));
+    return { rows, pages, stoppedAtPageCap };
   }
 
   const clip = (s: string | null | undefined) => (s ?? "").replace(/\s+/g, " ").trim().slice(0, 1500);
-  const out = [];
-  for (const t of threads.slice(0, limit)) {
+
+  async function readThread(id: string) {
     let detail: Awaited<ReturnType<typeof getThread>>;
-    try { detail = await getThread(t.id); } catch { continue; }
+    try {
+      // deferBodies: the newest message keeps its full body (all `latest`
+      // needs); the rest arrive as metadata + snippet. Production carries
+      // threads over 600 messages — pulling every body_html across the
+      // cross-region link for a two-message answer is what made this slow.
+      detail = await getThread(id, { deferBodies: true });
+    } catch { fetchFailed += 1; return null; }
     const msgs = detail.messages ?? [];
-    if (msgs.length === 0) continue;
+    if (msgs.length === 0) { fetchFailed += 1; return null; }
+    // Authoritative restriction check — per-message from/to/cc, the same order
+    // loadThreadDetail uses (visibility first, then restricted senders).
+    if (restrict?.blocksMessages(msgs)) { excludedRestricted += 1; return null; }
     const last = msgs[msgs.length - 1];
     const lastInbound = [...msgs].reverse().find((m) => m.direction === "inbound");
-    out.push({
-      threadId: t.id,
-      subject: t.subject || last.subject || "(no subject)",
+    let themText = "";
+    if (lastInbound && lastInbound.id !== last.id) {
+      // Order matters. Under defer_bodies the clone nulls body_text and sets a
+      // 200-char snippet, and a snippet is TRUTHY — so falling back to it first
+      // would silently cut the message we most need (the one he has to reply
+      // to) from 1500 chars down to 200. Always try the real body first, pay
+      // one targeted fetch when it was withheld, and keep the snippet as a
+      // last resort only.
+      themText = clip(lastInbound.body_text);
+      if (!themText && lastInbound.body_deferred) {
+        try { themText = clip((await fetchMessageBody(lastInbound.id)).body_text); } catch { /* fall through to the snippet */ }
+      }
+      if (!themText) themText = clip(lastInbound.snippet);
+    }
+    return {
+      threadId: detail.thread.id,
+      subject: detail.thread.subject || last.subject || "(no subject)",
+      status: detail.thread.status,
       from: last.from_addr,
       participants: [...new Set(msgs.map((m) => m.from_addr).filter(Boolean))].slice(0, 6),
-      lastAt: last.sent_at ?? t.last_message_at ?? null,
+      // The conversation's age, so the model can state it rather than guess.
+      firstAt: msgs[0].sent_at ?? null,
+      lastAt: last.sent_at ?? detail.thread.last_message_at ?? null,
       messageCount: msgs.length,
-      awaitingReply: last.direction === "inbound",
+      // Only meaningful while open — a closed thread was filed on purpose.
+      awaitingReply: last.direction === "inbound" && detail.thread.status === "open",
+      // No inbound message at all: a thread we only ever sent into, often the
+      // SENT half of a split conversation. Flagged so the model does not draft
+      // a "reply" addressed to Mitchell himself.
+      outboundOnly: !lastInbound,
       latest: { direction: last.direction, from: last.from_addr, to: last.to_addrs, at: last.sent_at, text: clip(last.body_text) || clip(last.snippet) },
       // The last message they sent you — the one to respond to, if the latest is your own reply.
-      lastFromThem: lastInbound && lastInbound.id !== last.id ? { from: lastInbound.from_addr, at: lastInbound.sent_at, text: clip(lastInbound.body_text) || clip(lastInbound.snippet) } : null
-    });
+      lastFromThem: lastInbound && lastInbound.id !== last.id
+        ? { from: lastInbound.from_addr, at: lastInbound.sent_at, text: themText }
+        : null
+    };
   }
+
+  const REPLY_NOTE = "To draft a reply, call propose_email with to = the sender's address, subject 'Re: …', and body = your drafted reply in Mitchell's voice. Nothing sends until he clicks Send.";
+
+  // Direct read of one thread — short-circuits every filter. The clone's
+  // GET /api/threads/:id has no status or folder gate, so this reaches an
+  // archived thread by id even where a list query would not.
+  if (threadIdIn) {
+    const row = await readThread(threadIdIn);
+    if (!row) {
+      return excludedRestricted > 0
+        ? { error: "that thread is from a restricted sender and can't be shown in Scaled Operations" }
+        : { error: `thread ${threadIdIn} could not be read (bad id, no messages, or an inbox you can't see)` };
+    }
+    return {
+      searched: { threadId: threadIdIn, mode: "direct read of one thread — no filters applied" },
+      count: 1, threads: [row], alsoMatched: [], note: REPLY_NOTE
+    };
+  }
+
+  let found: Awaited<ReturnType<typeof walk>>;
+  let searchedInboxes = primary.map((a) => a.email);
+  let widened = false;
+  try {
+    found = await walk(primary.map((a) => a.id));
+    if (found.rows.length === 0 && fallback) {
+      found = await walk(fallback.map((a) => a.id));
+      searchedInboxes = fallback.map((a) => a.email);
+      widened = true;
+    }
+  } catch (err) {
+    return { error: `inbox search failed: ${err instanceof Error ? err.message : String(err)}` };
+  }
+
+  // Read the top matches in full. Batched rather than serial, but capped at
+  // DETAIL_CONCURRENCY: each read is a getThread plus (sometimes) a body fetch,
+  // and the mail service's connection pool has been starved by bursts before.
+  const DETAIL_CONCURRENCY = 4;
+  const picked = found.rows.slice(0, limit);
+  const out: NonNullable<Awaited<ReturnType<typeof readThread>>>[] = [];
+  for (let i = 0; i < picked.length; i += DETAIL_CONCURRENCY) {
+    const batch = picked.slice(i, i + DETAIL_CONCURRENCY);
+    const settled = await Promise.allSettled(batch.map((t) => readThread(t.id)));
+    for (const r of settled) {
+      if (r.status === "fulfilled" && r.value) out.push(r.value);
+      else if (r.status === "rejected") fetchFailed += 1;
+    }
+  }
+
+  // Everything else that matched, headline-only — free, since it is already in
+  // the list response, and it is what stops the model guessing about the rest.
+  const alsoMatched = found.rows.slice(picked.length, picked.length + 15).map((t) => ({
+    threadId: t.id,
+    subject: t.subject || "(no subject)",
+    from: t.last_from ?? null,
+    lastAt: t.last_message_at || null,
+    status: t.status,
+    snippet: clip(t.last_snippet).slice(0, 200)
+  }));
+
+  const searched = {
+    mode: hasFilters ? "lookup" : "browse",
+    q: q || null,
+    filters: {
+      from: from || null, to: to || null, subject: subject || null,
+      after: after || null, before: before || null,
+      freeText: freeText || null, hasAttachment: hasAttachment || null
+    },
+    status: status ?? "any",
+    includes: status
+      ? `ONLY threads with status "${status}". Archived/done mail was excluded — re-run with a filter (or status "any") to include it.`
+      : "EVERY status, archived and done (closed) threads included. Currently-snoozed threads are hidden by the mail service and cannot be reached from here.",
+    folders,
+    inboxes: searchedInboxes,
+    widenedToAllInboxes: widened,
+    matchedOn: "thread SUBJECT and sender/recipient ADDRESSES and the thread date. Message BODY text is not indexed and was NOT searched.",
+    dateFieldNote: "after/before compare the thread's MOST RECENT message date, not individual messages — a 2024 thread with a 2026 reply will not match before:2025-01-01.",
+    freeTextNote: "free text is AND-ed with no stemming: every word must appear verbatim in the subject or in a participant address.",
+    offset: startOffset,
+    pagesScanned: found.pages,
+    threadsScanned: found.rows.length,
+    stoppedAtPageCap: found.stoppedAtPageCap,
+    excludedRestricted,
+    fetchFailed
+  };
+
+  if (out.length === 0) {
+    return {
+      searched, count: 0, threads: [], alsoMatched: [],
+      note:
+        "No match. Do NOT attribute this to the email being archived, closed or too old — "
+        + (status ? "" : "every status including archived was searched, ")
+        + "and the mail service keeps mail indefinitely. Real causes of a miss, in order: message BODY text is not searchable; free text must match the subject or an address word for word; after/before filter the thread's newest message date. "
+        + "Retry ONCE with just `from` (a name, address or domain fragment) and no other filter, or with a wider date window. If that also comes back empty, say exactly what you searched and what cannot be searched — do not speculate about why."
+        + (excludedRestricted > 0 ? " Some matches were withheld as restricted-sender mail; say they exist but can't be shown here." : "")
+    };
+  }
+
   return {
-    query: query || null,
+    searched,
     count: out.length,
     threads: out,
-    note: "To draft a reply, call propose_email with to = the sender's address, subject 'Re: …', and body = your drafted reply in Mitchell's voice. Nothing sends until he clicks Send."
+    alsoMatched,
+    note:
+      (found.stoppedAtPageCap ? `Stopped at the ${MAX_PAGES}-page scan cap; call again with offset ${startOffset + found.rows.length} and the same filters to reach older mail. ` : "")
+      + (alsoMatched.length ? "alsoMatched lists further hits as headlines only — pass one of their threadId values back as `threadId` to read it in full. " : "")
+      + (widened ? "Mitchell's own inbox had no match, so this searched every inbox he can see. " : "")
+      + (excludedRestricted > 0 ? "Some matching threads were withheld as restricted-sender mail and are not included. " : "")
+      + "Answer from what these messages actually say. Only subjects and sender/recipient addresses were searched, so describe the search honestly and never claim a thread is missing because it was archived or old. "
+      + REPLY_NOTE
   };
 }
 
+// OWNER-ONLY: stage a drafted new email as a "Send email" action card. The
+// send itself happens only when Mitchell clicks Send (see /api/brain/compose).
 function proposeEmail(input: Record<string, unknown>, ctx: ToolContext) {
   if (!isOwner(ctx.actor)) {
     return { error: "access denied — sending email is owner-only" };

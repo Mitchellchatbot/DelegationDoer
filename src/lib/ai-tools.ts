@@ -2612,11 +2612,17 @@ export async function searchInbox(input: Record<string, unknown>, ctx: ToolConte
     const lastInbound = [...msgs].reverse().find((m) => m.direction === "inbound");
     let themText = "";
     if (lastInbound && lastInbound.id !== last.id) {
-      themText = clip(lastInbound.body_text) || clip(lastInbound.snippet);
+      // Order matters. Under defer_bodies the clone nulls body_text and sets a
+      // 200-char snippet, and a snippet is TRUTHY — so falling back to it first
+      // would silently cut the message we most need (the one he has to reply
+      // to) from 1500 chars down to 200. Always try the real body first, pay
+      // one targeted fetch when it was withheld, and keep the snippet as a
+      // last resort only.
+      themText = clip(lastInbound.body_text);
       if (!themText && lastInbound.body_deferred) {
-        // One targeted fetch to recover what defer_bodies withheld.
-        try { themText = clip((await fetchMessageBody(lastInbound.id)).body_text); } catch { /* survivable */ }
+        try { themText = clip((await fetchMessageBody(lastInbound.id)).body_text); } catch { /* fall through to the snippet */ }
       }
+      if (!themText) themText = clip(lastInbound.snippet);
     }
     return {
       threadId: detail.thread.id,
@@ -2674,12 +2680,20 @@ export async function searchInbox(input: Record<string, unknown>, ctx: ToolConte
     return { error: `inbox search failed: ${err instanceof Error ? err.message : String(err)}` };
   }
 
-  // Read the top matches in full, in one batch rather than serially.
+  // Read the top matches in full. Batched rather than serial, but capped at
+  // DETAIL_CONCURRENCY: each read is a getThread plus (sometimes) a body fetch,
+  // and the mail service's connection pool has been starved by bursts before.
+  const DETAIL_CONCURRENCY = 4;
   const picked = found.rows.slice(0, limit);
-  const settled = await Promise.allSettled(picked.map((t) => readThread(t.id)));
-  const out = settled
-    .map((r) => (r.status === "fulfilled" ? r.value : null))
-    .filter((r): r is NonNullable<typeof r> => r !== null);
+  const out: NonNullable<Awaited<ReturnType<typeof readThread>>>[] = [];
+  for (let i = 0; i < picked.length; i += DETAIL_CONCURRENCY) {
+    const batch = picked.slice(i, i + DETAIL_CONCURRENCY);
+    const settled = await Promise.allSettled(batch.map((t) => readThread(t.id)));
+    for (const r of settled) {
+      if (r.status === "fulfilled" && r.value) out.push(r.value);
+      else if (r.status === "rejected") fetchFailed += 1;
+    }
+  }
 
   // Everything else that matched, headline-only — free, since it is already in
   // the list response, and it is what stops the model guessing about the rest.

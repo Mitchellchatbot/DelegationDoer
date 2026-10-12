@@ -1102,6 +1102,12 @@ export type WaitingOn = "" | "us" | "client";
 export const HOLD_KEY = "hold.active";
 export const HOLD_NOTE_KEY = "hold.note";
 
+// Campaigns are live for this client. Flipped by hand on the list — it is
+// about the ads actually running, which no checklist tick can know, so it is
+// deliberately NOT derived from the stage. Like HOLD_KEY, "not launched" is
+// { v: false }, and .at / .by are when it was flipped and by whom.
+export const LAUNCHED_KEY = "launched.active";
+
 // Answers for one case, question order preserved, ready to paste or read off.
 export function caseAnswers(tc: TestCase): { q: string; a: string }[] {
   return TYPEFORM_BASE.map(({ q, a }) => ({ q, a: tc.answers?.[q] ?? a }));
@@ -1161,6 +1167,7 @@ function buildRegistry(): Map<string, KeyKind> {
   r.set(WAITING_NOTE_KEY, { kind: "text" });
   r.set(HOLD_KEY, { kind: "check" });
   r.set(HOLD_NOTE_KEY, { kind: "text" });
+  r.set(LAUNCHED_KEY, { kind: "check" });
   return r;
 }
 
@@ -1437,4 +1444,10 @@ export function holdSince(s: OnboardingState): string | null {
 }
 export function holdNote(s: OnboardingState): string {
   return str(s, HOLD_NOTE_KEY);
+}
+export function launched(s: OnboardingState): boolean {
+  return isOn(s, LAUNCHED_KEY);
+}
+export function launchedSince(s: OnboardingState): string | null {
+  return launched(s) ? s[LAUNCHED_KEY]?.at ?? null : null;
 }

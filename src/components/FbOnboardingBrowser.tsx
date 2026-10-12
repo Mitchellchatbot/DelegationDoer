@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
-  AlertTriangle, PartyPopper, Check, Pause, Hourglass, Clock, ChevronLeft, ChevronRight
+  AlertTriangle, PartyPopper, Check, Pause, Hourglass, Clock, ChevronLeft, ChevronRight, Rocket
 } from "lucide-react";
 import { PersonAvatar } from "@/components/PersonAvatar";
 import { DeleteFbOnboardingButton } from "@/components/DeleteFbOnboardingButton";
@@ -11,6 +11,7 @@ import { FbOnboardingNotesButton } from "@/components/FbOnboardingNotesButton";
 import { DueDateInline } from "@/components/DueDateInline";
 import { PriorityInline } from "@/components/PriorityInline";
 import { AccessQuickFields } from "@/components/AccessQuickFields";
+import { LaunchToggle } from "@/components/LaunchToggle";
 import { canDeleteTask, canManageTask } from "@/lib/access";
 import { STAGE_LABEL, STAGE_BLURB, type Stage } from "@/lib/fb-onboarding";
 import type { OnboardingSummary } from "@/lib/fb-onboarding-data";
@@ -121,16 +122,22 @@ export function FbOnboardingBrowser({
                     onClick={() => go(idx)}
                     className={cn(
                       "snap-start shrink-0 rounded-xl border px-3 py-2 text-left transition-colors",
-                      active ? "border-accent bg-accent/10" : "border-border bg-surface hover:bg-surface2",
+                      // Launched clients stay green in the strip whether or not
+                      // they are the selected one — that contrast is the whole
+                      // point of the flag.
+                      active
+                        ? o.launched ? "border-ok bg-ok/15" : "border-accent bg-accent/10"
+                        : o.launched ? "border-ok/40 bg-ok/[0.07] hover:bg-ok/15" : "border-border bg-surface hover:bg-surface2",
                       o.onHold && !active && "opacity-60"
                     )}
                   >
                     <div className="flex items-center gap-1.5">
-                      <span className={cn("text-sm font-semibold truncate max-w-[18ch]", active && "text-accent")}>
+                      <span className={cn("text-sm font-semibold truncate max-w-[18ch]", o.launched ? "text-ok" : active && "text-accent")}>
                         {o.provider}
                       </span>
                       {hot && <span className="w-1.5 h-1.5 rounded-full bg-urgent shrink-0" aria-label="needs attention" />}
                       {o.onHold && <Pause className="w-3 h-3 text-muted shrink-0" />}
+                      {o.launched && <Rocket className="w-3 h-3 text-ok shrink-0" aria-label="launched" />}
                     </div>
                     <div className="text-[11px] text-muted tabular-nums">
                       {o.stage === "live"
@@ -209,7 +216,11 @@ function OnboardingDetail({
   ]), [p]);
 
   return (
-    <section className={cn("card p-5", o.onHold && "bg-surface2/40")}>
+    <section className={cn(
+      "card p-5 transition-colors",
+      o.launched && "border-ok/40 bg-ok/[0.04]",
+      o.onHold && "bg-surface2/40"
+    )}>
       <header className="flex items-start justify-between gap-4 flex-wrap">
         <div className="flex items-center gap-2 min-w-0">
           <NavButton onClick={onPrev} label="Previous client"><ChevronLeft className="w-4 h-4" /></NavButton>
@@ -230,6 +241,7 @@ function OnboardingDetail({
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
+          <LaunchToggle taskId={o.taskId} initialLaunched={o.launched} canEdit={canEdit} />
           <span className="text-[11px] text-muted tabular-nums">{position}</span>
           {o.completedAt ? (
             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium border border-ok/30 bg-ok/10 text-ok">

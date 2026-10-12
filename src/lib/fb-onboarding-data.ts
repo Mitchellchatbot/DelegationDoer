@@ -2,7 +2,7 @@ import { getSupabaseAdmin, isMissingColumnError } from "@/lib/supabase-admin";
 import {
   progress, accessStatus, ACCESS_ITEMS, PROVIDER_KEY,
   stage, stageProgress, stageAgeDays, ageBand,
-  onHold, holdNote, holdSince, waitingOn, waitingNote, waitingSince,
+  onHold, holdNote, holdSince, waitingOn, waitingNote, waitingSince, launched, launchedSince,
   type OnboardingState, type AccessStatus, type Stage, type AgeBand, type WaitingOn
 } from "@/lib/fb-onboarding";
 import type { User, Priority } from "@/lib/types";
@@ -77,6 +77,10 @@ export interface OnboardingSummary {
   waitingOn: WaitingOn;
   waitingNote: string;
   waitingSince: string | null;
+
+  // Campaigns live for this client — a hand-flipped flag, not a derived one.
+  launched: boolean;
+  launchedSince: string | null;
 }
 
 export async function listOnboardings(): Promise<OnboardingSummary[]> {
@@ -180,6 +184,8 @@ export async function listOnboardings(): Promise<OnboardingSummary[]> {
       waitingOn: waitingOn(state),
       waitingNote: waitingNote(state),
       waitingSince: waitingSince(state),
+      launched: launched(state),
+      launchedSince: launchedSince(state),
       noteCount: notes.get(r.task_id as string)?.count ?? 0,
       notes: notes.get(r.task_id as string)?.items ?? []
     }];

@@ -89,6 +89,7 @@ export default async function FbOnboardingListPage({ searchParams }: { searchPar
     ...liveShown
   ];
 
+  const launchedCount = onboardings.filter((o) => o.launched).length;
   const waitingClient = inFlight.filter((o) => o.waitingOn === "client").length;
   const onHoldCount = inFlight.filter((o) => o.onHold).length;
 
@@ -104,6 +105,7 @@ export default async function FbOnboardingListPage({ searchParams }: { searchPar
         metaLabel="On the plate:"
         meta={[
           { count: inFlight.length, label: "in flight" },
+          { count: launchedCount, label: "launched", tone: "emerald" as const },
           { count: waitingClient, label: "waiting on the client", tone: "amber" as const },
           { count: onHoldCount, label: "on hold" },
           { count: unstartedTasks.length, label: "FB tasks not started" }

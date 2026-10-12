@@ -7,7 +7,8 @@ import { StatusPill } from "@/components/Badges";
 import { FbOnboardingPanel } from "@/components/FbOnboardingPanel";
 import { TaskConversation } from "@/components/TaskConversation";
 import { DeleteFbOnboardingButton } from "@/components/DeleteFbOnboardingButton";
-import { PROVIDER_KEY } from "@/lib/fb-onboarding";
+import { LaunchToggle } from "@/components/LaunchToggle";
+import { PROVIDER_KEY, launched } from "@/lib/fb-onboarding";
 import { MessagesSquare } from "lucide-react";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById, getAllUsersLight, getLeaderIds } from "@/lib/server-data";
@@ -67,6 +68,14 @@ export default async function FbOnboardingPage({ params }: { params: { id: strin
           <Link href={`/tasks/${t.id}`} className="inline-flex items-center gap-1 text-accent hover:underline">
             Task &amp; conversation <ArrowUpRight className="w-3.5 h-3.5" />
           </Link>
+          {onboarding && (
+            <LaunchToggle
+              taskId={params.id}
+              initialLaunched={launched(onboarding.state)}
+              canEdit={canEdit}
+              size="sm"
+            />
+          )}
           {onboarding && (
             <DeleteFbOnboardingButton
               taskId={params.id}

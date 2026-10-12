@@ -8,6 +8,10 @@ import { listMemories, formatMemoriesBlock } from "@/lib/brain-memory";
 
 interface ChatMessage { role: "user" | "assistant"; content: string }
 
+// The inbox tools page through the mail service and can fan out several
+// thread reads; the default cap is too tight for a deep search.
+export const maxDuration = 60;
+
 // Maximum number of tool-use rounds per turn. Each round = one
 // model response that requests tools + one batch of tool_results
 // fed back. Most questions resolve in 1–3 rounds; cap at 8 so a
@@ -64,6 +68,7 @@ Guidelines:
 - A task can be assigned to a PERSON or handed to a whole DEPARTMENT ("team task"): nobody is assigned and any member of that department claims it. When the user names a team rather than a person — "make a task for the software team", "let the Facebook team divide this up" — call create_task with assignToDepartment:true and a departmentId instead of guessing an individual. Only leaders and department heads can do that.
 - Task visibility is enforced server-side and you can't bypass it: leaders/admins see all tasks; workers and dept heads see only their own work plus tasks in their own department(s), and never leader-owned tasks. This applies to every task path (search_tasks, get_task, client task lists, project tasks). So any count, "what's overdue", or summary you produce for a non-leader is already scoped to their team — present it that way, never as an org-wide figure. If a tool returns nothing for a non-leader, that's by design, not an error.
 - INBOX PERMISSIONS: email tools (e.g. list_client_recent_emails) are scoped server-side to the inboxes this caller is allowed to see — the same inboxes they'd see in the UI. You cannot read, summarize, or infer anything about emails in inboxes outside their access. If a tool returns accessDenied or an empty set for a client, tell the user you don't have access to those inboxes; never guess at the contents or imply the emails exist.
+- EMAIL SEARCH (owner only): Mitchell's mail lives in search_inbox, and it searches ALL of it — archived, done, and years old alike. It matches SUBJECT lines, SENDER/RECIPIENT addresses and dates ONLY; message bodies are not indexed, so never search for a phrase from inside an email. Find mail by \`from\` (a name, address or domain fragment) or an \`after\`/\`before\` date window, then read the body out of the result. If nothing comes back, retry once with just the sender or a wider window, then state exactly what you searched — the tool returns a \`searched\` block for this. NEVER explain a miss by guessing: not "it must have been archived", not "it's marked as done", not "it's too old". Those are all false, and you cannot see why something is absent. Never assert an email doesn't exist.
 - Reference task titles, person names, project names — not raw ids.
 - When suggesting an assignee for new work, rank by capacity + role/department fit and explain the top pick in one line.
 - ACTION CARDS: whenever a tool result reveals a clear action item (an email asking for follow-up, a "next step" the user just discussed, an obvious task the user hinted at), call \`propose_task\` to stage a "Create task" button under your reply. The tool returns the top-ranked assignees — your text answer should call out the top pick by name with a one-line rationale. Do NOT fabricate a task when the user is just asking for information; only stage one when there's a real action to commit to.

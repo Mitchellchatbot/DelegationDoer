@@ -19,7 +19,8 @@
 //   - Clients already on the right team are skipped (no-op writes).
 //   - A client in the DB that the sheet does NOT mention is left completely
 //     alone. The sheet is treated as "these 43 belong to these leads", not as
-//     "everything else is unassigned".
+//     "everything else is unassigned". The one exception is UNASSIGN below:
+//     clients someone explicitly said to take off a lead.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -87,6 +88,8 @@ const SHEET = {
 // the script makes at runtime. Keeping them here (rather than loosening the
 // matcher) means the write path stays exact-match-only, and the reason each
 // pair is considered the same client is reviewable in the diff.
+// A value may be an ARRAY when one site on the sheet is several clients in DD;
+// each name in it is matched (exactly) and moved on its own.
 const ALIASES = {
   "Villa Wellness Center": "Villa Wellness",
   "Dynamic Behavioral Health LA": "Dynamic Behavioral Health",
@@ -94,8 +97,21 @@ const ALIASES = {
   "Chimney Guard": "Chimney Guard USA",              // currently on team_seo_sam
   "Simonds Recovery Center": "Simonds Recovery Centers",
   "Vive Treatment": "Vive Treatment Centers",
-  "Doctors Finders": "Doctor Finder"
+  "Doctors Finders": "Doctor Finder",
+  // Confirmed 2026-10-16 by whoever sent the roster.
+  "Tampa Outpatient Detox": "Tampa Outpatient",
+  "Lotus Recovery Services": ["Lotus Recovery"]
 };
+
+// Clients the roster explicitly takes OFF every lead (team_id -> null). Kept
+// separate from "not on the sheet", which is still never touched: a client
+// lands here only when someone said so. Same exact matching as the sheet.
+//   2026-10-16: Santa Barbara Recovery came off Saif's list.
+const UNASSIGN = ["Santa Barbara Recovery"];
+
+function lookupsFor(name) {
+  return [].concat(ALIASES[name] ?? name);
+}
 
 const SEO_TEAMS = new Set([
   "team_seo_sam", "team_seo_bismah", "team_seo_samir", "team_seo_saif"
@@ -161,6 +177,8 @@ const TEAM_LABEL = {
   team_seo_saif: "Saif", team_seo_samir: "Samir",
   team_seo_bismah: "Bismah", team_seo_sam: "Sam"
 };
+// Destination label; null is an UNASSIGN target.
+const toLabel = (teamId) => (teamId ? TEAM_LABEL[teamId] ?? teamId : "Unassigned");
 
 async function main() {
   const clients = await sb("clients?select=id,name,team_id&order=name.asc");
@@ -186,22 +204,26 @@ async function main() {
   const ambiguous = [];  // sheet name hitting >1 DB row
   const missing = [];    // sheet name with no exact match (+ suggestions)
 
-  for (const [teamId, names] of Object.entries(SHEET)) {
-    for (const name of names) {
-      const lookup = ALIASES[name] ?? name;
+  // [teamId, sheet name] pairs; UNASSIGN entries carry teamId null.
+  const targets = [
+    ...Object.entries(SHEET).flatMap(([teamId, names]) => names.map((name) => [teamId, name])),
+    ...UNASSIGN.map((name) => [null, name])
+  ];
+  for (const [teamId, name] of targets) {
+    for (const lookup of lookupsFor(name)) {
       const hits = byNorm.get(norm(lookup)) ?? [];
       if (hits.length === 0) {
         const suggestions = clients
-          .map((c) => ({ c, s: similarity(name, c.name) }))
+          .map((c) => ({ c, s: similarity(lookup, c.name) }))
           .filter((x) => x.s >= 0.34)
           .sort((a, b) => b.s - a.s)
           .slice(0, 3);
-        missing.push({ teamId, name, suggestions });
+        missing.push({ teamId, name, lookup, suggestions });
       } else if (hits.length > 1) {
         ambiguous.push({ teamId, name, hits });
       } else {
         const c = hits[0];
-        if (c.team_id === teamId) alreadyOk.push({ teamId, c });
+        if ((c.team_id ?? null) === teamId) alreadyOk.push({ teamId, c });
         else writes.push({ client: c, from: c.team_id, to: teamId });
       }
     }
@@ -210,7 +232,7 @@ async function main() {
   // SEO-owned clients in the DB that the sheet never mentions. Reported so a
   // human can decide; never touched automatically.
   const sheetNorms = new Set(
-    Object.values(SHEET).flat().map((n) => norm(ALIASES[n] ?? n))
+    targets.flatMap(([, n]) => lookupsFor(n)).map(norm)
   );
   const orphans = clients.filter(
     (c) => SEO_TEAMS.has(c.team_id ?? "") && !sheetNorms.has(norm(c.name))
@@ -221,13 +243,13 @@ async function main() {
   console.log(`\n= Will set team_id (${writes.length}):`);
   for (const w of writes) {
     const from = w.from ? (TEAM_LABEL[w.from] ?? w.from) : "unassigned";
-    console.log(`   ${w.client.name}  [${from}] -> ${TEAM_LABEL[w.to]}`);
+    console.log(`   ${w.client.name}  [${from}] -> ${toLabel(w.to)}`);
   }
 
   if (ambiguous.length) {
     console.log(`\n! Ambiguous — multiple clients share this name (${ambiguous.length}), SKIPPED:`);
     for (const a of ambiguous) {
-      console.log(`   "${a.name}" -> ${TEAM_LABEL[a.teamId]}`);
+      console.log(`   "${a.name}" -> ${toLabel(a.teamId)}`);
       for (const h of a.hits) console.log(`       id=${h.id} team=${h.team_id ?? "-"}`);
     }
   }
@@ -235,7 +257,8 @@ async function main() {
   if (missing.length) {
     console.log(`\n! In the sheet but NOT found in DB (${missing.length}), SKIPPED:`);
     for (const m of missing) {
-      console.log(`   "${m.name}" -> ${TEAM_LABEL[m.teamId]}`);
+      const alias = m.lookup !== m.name ? ` (alias "${m.lookup}")` : "";
+      console.log(`   "${m.name}"${alias} -> ${toLabel(m.teamId)}`);
       for (const s of m.suggestions) {
         console.log(`       did you mean? "${s.c.name}" (${Math.round(s.s * 100)}%, team=${s.c.team_id ?? "-"})`);
       }
@@ -256,11 +279,12 @@ async function main() {
   }
 
   // Only the truly-absent ones are creatable. A sheet row that merely
-  // matched ambiguously must NOT be duplicated into a new row.
-  const creatable = CREATE_MISSING ? missing : [];
+  // matched ambiguously must NOT be duplicated into a new row, and an UNASSIGN
+  // target that isn't there has nothing to create.
+  const creatable = CREATE_MISSING ? missing.filter((m) => m.teamId) : [];
   if (CREATE_MISSING) {
     console.log(`\n+ Will CREATE ${creatable.length} new client(s):`);
-    for (const m of creatable) console.log(`   ${m.name} -> ${TEAM_LABEL[m.teamId]}`);
+    for (const m of creatable) console.log(`   ${m.name} -> ${toLabel(m.teamId)}`);
   }
 
   if (!APPLY) {
@@ -303,7 +327,7 @@ async function main() {
           notes: "Created from the SEO Teams & Sites sheet — needs a website and contacts."
         })
       });
-      console.log(`   + ${m.name} -> ${TEAM_LABEL[m.teamId]} (${id})`);
+      console.log(`   + ${m.name} -> ${toLabel(m.teamId)} (${id})`);
       made++;
     }
     console.log(`Done. ${made}/${creatable.length} created.`);

@@ -12,14 +12,14 @@ import { Avatar } from "@/components/Avatar";
 import { PersonAvatar } from "@/components/PersonAvatar";
 import { Countdown } from "@/components/Countdown";
 import { NewTaskForm } from "@/components/NewTaskForm";
-import { canAssignTaskTo, canCreateTaskInDepartment } from "@/lib/access";
+import { canAssignTaskTo, canCreateTaskInDepartment, isFbProofer } from "@/lib/access";
 import { useCurrentUser } from "@/lib/user-context";
 import { cn, formatDate } from "@/lib/utils";
 import { useHorizontalDragAutoScroll } from "@/lib/useHorizontalDragAutoScroll";
 import type { Task, TaskStatus, User } from "@/lib/types";
 import {
   Clock, Globe2, Building2, Users as UsersIcon, FolderKanban,
-  Layers, Briefcase, Layout, CheckCircle2, CheckSquare, Square, Trash2, Archive, Plus, X
+  Layers, Briefcase, Layout, CheckCircle2, CheckSquare, CheckCheck, Square, Trash2, Archive, Plus, X
 } from "lucide-react";
 import { toast } from "sonner";
 import { ClockGate } from "@/components/ClockGate";
@@ -120,6 +120,8 @@ export default function BoardPage() {
   // forces the empty-set view if someone explicitly wants everyone.
   const initialDept = searchParams.get("dept");
   const isLeaderOrAdmin = currentUser.role === "leader" || currentUser.isAdmin === true;
+  // FB department head or a leader — the people allowed to proof FB work.
+  const canProof = isFbProofer(currentUser);
   const primaryUserDept = currentUser.departmentIds?.[0] ?? null;
   const [selectedDepts, setSelectedDepts] = useState<Set<string>>(() => {
     if (initialDept === "all") return new Set();
@@ -184,6 +186,61 @@ export default function BoardPage() {
     setSelecting(false);
     setSelectedIds(new Set());
   }
+
+  // Approve every submitted FB task in `ids`. Used by both the bulk bar and
+  // the "Approve all" button on the Needs approval column.
+  //
+  // Your own submissions are refused server-side, so they come back in
+  // `skipped` with a reason rather than failing the batch — which is exactly
+  // what a manager approving a column of work needs to hear about.
+  async function approveTasks(ids: string[]) {
+    if (bulkBusy || ids.length === 0) return;
+    if (!window.confirm(
+      `Approve ${ids.length} task${ids.length === 1 ? "" : "s"}? Each one is marked Done.`
+    )) return;
+    setBulkBusy(true);
+    const prior = tasks;
+    const idSet = new Set(ids);
+    setTasks((cur) => cur.map((t) => idSet.has(t.id) ? { ...t, status: "done" as TaskStatus } : t));
+    try {
+      const res = await fetch("/api/tasks/bulk-approve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ taskIds: ids })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error ?? `failed (${res.status})`);
+      const approvedIds: string[] = Array.isArray(data.approvedIds) ? data.approvedIds : [];
+      const skipped: { title: string | null; reason: string }[] = Array.isArray(data.skipped) ? data.skipped : [];
+      // Only the ones that actually went through stay Done.
+      const okSet = new Set(approvedIds);
+      setTasks((cur) => cur.map((t) => (idSet.has(t.id) && !okSet.has(t.id))
+        ? prior.find((p) => p.id === t.id) ?? t
+        : t));
+      if (approvedIds.length > 0) {
+        toast.success(`Approved ${approvedIds.length} task${approvedIds.length === 1 ? "" : "s"}.`);
+      }
+      if (skipped.length > 0) {
+        const first = skipped[0];
+        toast.warning(
+          skipped.length === 1
+            ? `Skipped ${first.title ?? "1 task"} — ${first.reason}.`
+            : `Skipped ${skipped.length} tasks — e.g. ${first.title ?? "one"}: ${first.reason}.`
+        );
+      }
+      exitSelecting();
+    } catch (err) {
+      setTasks(prior); // revert
+      toast.error(`Bulk approve failed: ${err instanceof Error ? err.message : "network error"}`);
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
+  // Of what's selected, the ones actually waiting for approval.
+  const selectedApprovable = tasks
+    .filter((t) => selectedIds.has(t.id) && t.status === "pending_approval")
+    .map((t) => t.id);
 
   async function bulkDelete() {
     if (bulkBusy || selectedIds.size === 0) return;
@@ -586,8 +643,9 @@ export default function BoardPage() {
             Archived view
           </Link>
 
-          {/* Admin-only: bulk-select toggle + recovery link. */}
-          {isLeaderOrAdmin && (
+          {/* Bulk select. Admins get it for delete; an FB manager gets it to
+              approve submitted work (the bar only offers what they may do). */}
+          {(isLeaderOrAdmin || canProof) && (
             <>
               <button
                 type="button"
@@ -602,13 +660,13 @@ export default function BoardPage() {
                 <CheckSquare className="w-3.5 h-3.5" />
                 {selecting ? "Cancel select" : "Select"}
               </button>
-              <Link
+              {isLeaderOrAdmin && <Link
                 href="/tasks/deleted"
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium border border-border bg-white text-muted hover:text-ink hover:border-accent/40 transition-colors"
               >
                 <Trash2 className="w-3.5 h-3.5" />
                 Recently deleted
-              </Link>
+              </Link>}
             </>
           )}
         </div>
@@ -743,6 +801,22 @@ export default function BoardPage() {
                     {col.user && !selecting && scope !== "archived" &&
                      canAssignTaskTo(currentUser, col.user) && (
                       <AddTaskButton user={col.user} onOpen={openAddFor} />
+                    )}
+                    {/* Approve the whole column in one go. Anything the viewer
+                        may not approve (their own submissions) is reported
+                        back as skipped rather than silently dropped. */}
+                    {col.id === "__needs_approval" && canProof && !selecting &&
+                     (grouped[col.id]?.length ?? 0) > 0 && (
+                      <button
+                        type="button"
+                        disabled={bulkBusy}
+                        onClick={() => approveTasks((grouped[col.id] ?? []).map((t) => t.id))}
+                        title="Approve every task in this column"
+                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-600 text-white hover:bg-emerald-700 transition-colors disabled:opacity-50"
+                      >
+                        <CheckCheck className="w-3 h-3" />
+                        {bulkBusy ? "Approving…" : "Approve all"}
+                      </button>
                     )}
                   </div>
                 </div>
@@ -929,15 +1003,28 @@ export default function BoardPage() {
           <span className="text-sm tabular-nums">
             {selectedIds.size} selected
           </span>
-          <button
-            type="button"
-            onClick={bulkDelete}
-            disabled={bulkBusy || selectedIds.size === 0}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-rose-600 hover:bg-rose-700 transition-colors disabled:opacity-50"
-          >
-            <Trash2 className="w-3.5 h-3.5" />
-            {bulkBusy ? "Deleting…" : "Delete selected"}
-          </button>
+          {canProof && selectedApprovable.length > 0 && (
+            <button
+              type="button"
+              onClick={() => approveTasks(selectedApprovable)}
+              disabled={bulkBusy}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 transition-colors disabled:opacity-50"
+            >
+              <CheckCheck className="w-3.5 h-3.5" />
+              {bulkBusy ? "Approving…" : `Approve ${selectedApprovable.length}`}
+            </button>
+          )}
+          {isLeaderOrAdmin && (
+            <button
+              type="button"
+              onClick={bulkDelete}
+              disabled={bulkBusy || selectedIds.size === 0}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-rose-600 hover:bg-rose-700 transition-colors disabled:opacity-50"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              {bulkBusy ? "Deleting…" : "Delete selected"}
+            </button>
+          )}
           <button
             type="button"
             onClick={exitSelecting}

@@ -209,6 +209,17 @@ export function canDeleteTask(
   return false;
 }
 
+// Who may proof a Facebook task: the FB department head, or any leader/admin.
+// Here rather than in lib/fb-proof (server-only) because the board needs it to
+// decide whether to offer bulk approve.
+export function isFbProofer(
+  u: Pick<User, "role" | "isAdmin" | "departmentIds"> | null | undefined
+): boolean {
+  if (!u) return false;
+  if (isLeader(u)) return true;
+  return (u.departmentIds ?? []).includes("dep_facebook") && u.role === "department_head";
+}
+
 export function canManageProject(
   actor: User | null | undefined,
   project: { departmentId: string | null } | null | undefined

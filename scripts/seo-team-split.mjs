@@ -18,7 +18,7 @@
 //     client to the wrong lead.
 //   - Clients already on the right team are skipped (no-op writes).
 //   - A client in the DB that the sheet does NOT mention is left completely
-//     alone. The sheet is treated as "these 39 belong to these leads", not as
+//     alone. The sheet is treated as "these 43 belong to these leads", not as
 //     "everything else is unassigned".
 
 import fs from "node:fs";
@@ -50,28 +50,35 @@ const LIST = process.argv.includes("--list");
 // contacts, or onboarding date). Requires --apply; on its own it only reports.
 const CREATE_MISSING = process.argv.includes("--create-missing");
 
-// --- the sheet, transcribed from ScaledAI_Teams_Sites.xlsx -------------------
-// Team ids match src/lib/client-teams.ts. "Bisma" in the sheet is Bismah
-// (bella@scaledai.org) => team_seo_bismah.
+// --- the sheet: the SEO team split as sent on 2026-10-15 ----------------------
+// Replaces the 2026-09-02 transcription of ScaledAI_Teams_Sites.xlsx. Same
+// order as the list that was sent, so the two can be compared line by line.
+// Team ids match src/lib/client-teams.ts. "Bisma" / "Bisma Habib" is Bismah
+// (bella@scaledai.org) => team_seo_bismah; "Saifullah" is Saif (steve@).
+// The team MEMBERS on that list are not set here: /client-teams reads them
+// from the org chart, which supabase/migrations/20261016000000_seo_team_rosters.sql
+// rewires.
 const SHEET = {
   team_seo_saif: [
-    "Villa Healing Center", "Villa Treatment Center", "Villa Wellness Center",
-    "Villa Behavioral Health", "Dynamic Behavioral Health LA", "Quest 2 Recovery",
-    "Quest IOP", "Changes Treatment", "Santa Barbara Recovery", "NATC",
-    "Path2Purpose", "Creative Closet Design", "Chimney Guard", "V&F Paving"
+    "Villa Healing Center", "Villa Behavioral Health", "Dynamic Behavioral Health LA",
+    "Villa Serena Recovery Center", "Villa Treatment Center", "Villa Wellness Center",
+    "Quest 2 Recovery", "Quest IOP", "Changes Treatment", "Chimney Guard",
+    "V&F Paving", "Creative Closet Design"
   ],
   team_seo_samir: [
     "Fortify Wellness", "Simonds Recovery Center", "Eleve Wellness",
-    "Pathways Recovery", "Vive Treatment", "Cobb Defense", "Play Steppa",
+    "Pathways Recovery", "Vive Treatment", "Fountain Hills Recovery",
+    "Path2Purpose", "NATC", "Cobb Defense", "Play Steppa",
     "Florida Addiction Resource", "Florida Sober Living Homes",
-    "Miami Outpatient Detox"
+    "Miami Outpatient Detox", "Tampa Outpatient Detox"
   ],
   team_seo_bismah: [
-    "The Hope Institute", "DJ Housing", "Get Holas", "Hopeful Estates",
-    "Allocation Assist", "Doctors Finders", "National Mental Health Support",
-    "Alcohol Awareness", "National Depression Hotline", "Cristallo Pools",
-    "Innovative Outdoor Living", "Innovative Storm Defense", "Schiller Pools",
-    "Pool Doctor", "Prime Pool Market"
+    "The Hope Institute", "DJ Housing", "Hopeful Estates", "Get Holas",
+    "National Mental Health Support", "National Depression Hotline",
+    "Alcohol Awareness", "Allocation Assist", "Doctors Finders",
+    "Sobriety and Beyond", "Lotus Recovery Services", "Cristallo Pools",
+    "Schiller Pools", "Pool Doctor", "Prime Pool Market",
+    "Innovative Outdoor Living", "Innovative Storm Defense"
   ]
 };
 

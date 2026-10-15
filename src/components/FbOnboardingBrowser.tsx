@@ -164,7 +164,13 @@ export function FbOnboardingBrowser({
           if (Math.abs(dx) > 60) go(index + (dx < 0 ? 1 : -1));
         }}
       >
+        {/* Keyed by client, so switching clients REMOUNTS the card. Without
+            this the card keeps one instance and every field that seeds state
+            from props on first render — the quick fields, go-live, priority,
+            the launch toggle — keeps showing whichever client was opened
+            first, while the name and progress bars update around them. */}
         <OnboardingDetail
+          key={current.taskId}
           o={current}
           me={me}
           noteUsers={noteUsers}

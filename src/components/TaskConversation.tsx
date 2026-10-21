@@ -213,7 +213,7 @@ export function TaskConversation({
             }}
             placeholder="Comment… use @ to ping a teammate. ⌘↵ to send."
             rows={2}
-            className="w-full px-3 py-2.5 text-sm outline-none bg-transparent resize-none placeholder:text-ink/40"
+            className="w-full px-3 py-2.5 text-sm outline-none bg-transparent resize-y min-h-[60px] placeholder:text-ink/40"
           />
           {Object.keys(mentioned).length > 0 && (
             <div className="px-3 pb-1 flex flex-wrap gap-1">
@@ -298,13 +298,13 @@ function Entry({
   return (
     <div className={`flex items-start gap-2 ${mine ? "flex-row-reverse" : ""}`}>
       {u && <PersonAvatar userId={u.id} name={u.name} imageUrl={u.avatarUrl} size={26} />}
-      <div className={`max-w-[80%] flex flex-col ${mine ? "items-end" : ""}`}>
+      <div className={`max-w-[80%] min-w-0 flex flex-col ${mine ? "items-end" : "items-start"}`}>
         <div className="text-[10px] text-muted px-1">
           <span className="font-medium text-ink/75">{u?.name ?? "—"}</span>
           <span className="ml-1.5">{relativeTime(entry.createdAt)}</span>
         </div>
         <div
-          className={`mt-0.5 inline-block rounded-2xl px-3 py-1.5 text-sm whitespace-pre-wrap text-left ${
+          className={`mt-0.5 inline-block max-w-full rounded-2xl px-3 py-1.5 text-sm whitespace-pre-wrap break-words text-left ${
             mine
               ? "bg-gradient-to-br from-blue-500 to-indigo-500 text-white"
               : "bg-white/85 border border-slate-200/80 text-ink"

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { motion, LayoutGroup } from "framer-motion";
-import { ListTodo, Columns3, ListChecks } from "lucide-react";
+import { ListTodo, Columns3, ListChecks, Archive } from "lucide-react";
 import { useCurrentUser } from "@/lib/user-context";
 import { isLeader } from "@/lib/auth";
 import { cn } from "@/lib/utils";
@@ -18,7 +18,11 @@ type Tab = {
 const TABS: readonly Tab[] = [
   { href: "/tasks/todos", label: "Todos", icon: ListChecks, leaderOnly: true },
   { href: "/tasks/mine",  label: "Mine",  icon: ListTodo },
-  { href: "/tasks/board", label: "Board", icon: Columns3 }
+  { href: "/tasks/board", label: "Board", icon: Columns3 },
+  // Finished work swept off the live board. Everyone may open it (the page
+  // applies the same leader-privacy filter as the live list), so no
+  // leaderOnly flag.
+  { href: "/tasks/archived", label: "Archived", icon: Archive }
 ] as const;
 
 // Segmented control with a framer-motion blob that slides between

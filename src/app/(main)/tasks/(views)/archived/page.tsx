@@ -3,11 +3,11 @@ import { Archive, Building2, Globe2, CheckCircle2 } from "lucide-react";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById, getArchivedTasks, getAllUsersLight, getLeaderIds } from "@/lib/server-data";
 import { canViewTask, canManageTask, isLeader } from "@/lib/access";
-import { BackPill } from "@/components/BackPill";
 import { PriorityBadge } from "@/components/Badges";
 import { PersonAvatar } from "@/components/PersonAvatar";
 import { UnarchiveTaskButton } from "@/components/UnarchiveTaskButton";
 import { RunArchiveSweepButton } from "@/components/RunArchiveSweepButton";
+import { ClockGate } from "@/components/ClockGate";
 import { ARCHIVE_AFTER_DAYS } from "@/lib/task-archive";
 import { relativeTime, formatDate } from "@/lib/utils";
 
@@ -16,6 +16,10 @@ import { relativeTime, formatDate } from "@/lib/utils";
 // assignee, client, deadline, completion date, history. Anyone may see the
 // archived tasks they'd otherwise be allowed to view (same leader-privacy
 // rule as the live list); managers get a one-click Unarchive.
+//
+// Lives in the (views) route group so it renders under the Tasks tab strip
+// (Todos / Mine / Board / Archived) like its siblings; the URL is still
+// /tasks/archived.
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
@@ -35,9 +39,8 @@ export default async function ArchivedTasksPage() {
     id ? users.find((u) => u.id === id) ?? null : null;
 
   return (
+    <ClockGate fallbackSubtitle="Archived tasks unlock once you've clocked in. Tap below to start your shift.">
     <div className="space-y-5 max-w-4xl">
-      <BackPill href="/tasks/board" label="Back to board" />
-
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-xl font-medium flex items-center gap-2">
@@ -114,5 +117,6 @@ export default async function ArchivedTasksPage() {
         </div>
       )}
     </div>
+    </ClockGate>
   );
 }

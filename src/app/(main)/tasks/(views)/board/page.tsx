@@ -632,17 +632,6 @@ export default function BoardPage() {
             <ViewBtn active={groupBy === "person"} onClick={() => setGroupBy("person")} icon={<UsersIcon className="w-3.5 h-3.5" />} label="By person" />
           </div>
 
-          {/* Dedicated Archived view — the managed list with Unarchive +
-              "Run sweep now". Distinct from the Archived scope tab above, which
-              just shows archived tasks in the board layout. */}
-          <Link
-            href="/tasks/archived"
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium border border-border bg-white text-muted hover:text-ink hover:border-accent/40 transition-colors"
-          >
-            <Archive className="w-3.5 h-3.5" />
-            Archived view
-          </Link>
-
           {/* Bulk select. Admins get it for delete; an FB manager gets it to
               approve submitted work (the bar only offers what they may do). */}
           {(isLeaderOrAdmin || canProof) && (

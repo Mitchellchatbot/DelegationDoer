@@ -13,6 +13,9 @@ type Tab = {
   label: string;
   icon: typeof ListTodo;
   leaderOnly?: boolean;
+  // false = don't prefetch this tab's page while the strip is on screen;
+  // it loads on click instead. Default true.
+  prefetch?: boolean;
 };
 
 const TABS: readonly Tab[] = [
@@ -21,8 +24,14 @@ const TABS: readonly Tab[] = [
   { href: "/tasks/board", label: "Board", icon: Columns3 },
   // Finished work swept off the live board. Everyone may open it (the page
   // applies the same leader-privacy filter as the live list), so no
-  // leaderOnly flag.
-  { href: "/tasks/archived", label: "Archived", icon: Archive }
+  // leaderOnly flag. prefetch: false because a bare <Link prefetch> is a
+  // FULL prefetch in Next 14 - a complete server render of the target page.
+  // The archived page is force-dynamic and reads every archived task
+  // (no limit), and this strip is on screen for every Tasks view, so
+  // prefetching it would run that query for every user on every Mine /
+  // Board / Todos load. Clicking the tab still feels instant: the route
+  // has its own loading.tsx.
+  { href: "/tasks/archived", label: "Archived", icon: Archive, prefetch: false }
 ] as const;
 
 // Segmented control with a framer-motion blob that slides between
@@ -38,13 +47,13 @@ export function TasksTabs() {
   return (
     <LayoutGroup id="tasks-tabs">
       <div className="inline-flex items-center rounded-xl border border-border bg-surface p-0.5">
-        {tabs.map(({ href, label, icon: Icon }) => {
+        {tabs.map(({ href, label, icon: Icon, prefetch }) => {
           const active = pathname === href || pathname.startsWith(href + "/");
           return (
             <Link
               key={href}
               href={href}
-              prefetch
+              prefetch={prefetch ?? true}
               className={cn(
                 "relative inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs transition-colors z-0",
                 active ? "text-white" : "text-muted hover:text-ink"

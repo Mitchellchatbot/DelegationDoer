@@ -6,9 +6,6 @@ import { resolveSlackId } from "@/lib/slack-resolve";
 
 export const dynamic = "force-dynamic";
 const FB_DEPT = "dep_facebook";
-// The Facebook "dream team" channel (#dream-team-, the active private one) —
-// submissions are announced here for a manager to pick up and proof.
-const DREAM_TEAM_CHANNEL = "C0ARTB0UD6V";
 
 // Who to @-mention on the announcement.
 //
@@ -117,11 +114,23 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     image_url: photoUrl
   }).select("id").maybeSingle();
 
-  // Announce in the #dream-team channel so a manager can pick it up and proof it.
-  // Best-effort — a Slack hiccup must not fail the submission — but the outcome
-  // is logged either way: the silent catch this replaced made "did it post?"
-  // unanswerable from the logs, which cost hours of guesswork.
+  // Announce in the Facebook department's Tasks channel (Leader Console →
+  // Department Slack channels) so a manager can pick it up and proof it.
+  // Best-effort — a Slack hiccup or an unset channel must not fail the
+  // submission — but the outcome is logged either way: the silent catch this
+  // replaced made "did it post?" unanswerable from the logs, which cost hours
+  // of guesswork.
   try {
+    const { data: dept } = await supabase
+      .from("departments")
+      .select("task_channel_id")
+      .eq("id", FB_DEPT)
+      .maybeSingle();
+    const channel = dept?.task_channel_id as string | undefined;
+    if (!channel) {
+      console.warn(`[fb-proof] no Tasks channel set for Facebook — skipped announcing task=${params.id}`);
+      return NextResponse.json({ ok: true });
+    }
     const { data: t } = await supabase.from("tasks").select("title").eq("id", params.id).maybeSingle();
     const title = (t?.title as string | null) ?? "a task";
     const who = access.viewer?.name ?? "Someone";
@@ -131,7 +140,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const mentionLine = mentions.map((id) => `<@${id}>`).join(" ");
 
     const { ts } = await postMessage(
-      DREAM_TEAM_CHANNEL,
+      channel,
       `🔵 ${who} submitted "${title}" for approval`,
       [
         { type: "section", text: { type: "mrkdwn", text: `🔵 *${who}* submitted *<${taskUrl}|${title}>* for approval` } },
@@ -144,7 +153,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       ]
     );
     console.log(
-      `[fb-proof] announced task=${params.id} channel=${DREAM_TEAM_CHANNEL} ts=${ts} mentions=${mentions.length}`
+      `[fb-proof] announced task=${params.id} channel=${channel} ts=${ts} mentions=${mentions.length}`
     );
     if (mentions.length === 0) {
       console.warn("[fb-proof] no proofer could be resolved to a Slack account — posted without a mention");

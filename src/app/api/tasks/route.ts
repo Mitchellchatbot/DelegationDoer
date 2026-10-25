@@ -339,7 +339,27 @@ export async function POST(req: NextRequest) {
             .select("name, task_channel_id")
             .eq("id", row.department_id)
             .maybeSingle();
-          const channel = dept?.task_channel_id as string | undefined;
+          // A pin on the assignee wins over their department's channel. It
+          // exists so that moving someone between departments for a reason
+          // unrelated to Slack — onto the Facebook team to pick up the
+          // proof/approval flow, which keys off the task's department — does
+          // not silently redirect announcements about their work. Nobody has
+          // one set by default, so this reads as the old behavior until
+          // someone opts in. Best-effort like everything in this block: if
+          // the column has not migrated yet, fall through to the department.
+          let pinned: string | null = null;
+          if (row.assignee_id) {
+            // supabase-js reports a missing column in `error` rather than
+            // throwing, so an unmigrated database leaves data null and this
+            // falls through to the department — no special-casing needed.
+            const { data: pin } = await supabase
+              .from("users")
+              .select("task_slack_channel_id")
+              .eq("id", row.assignee_id)
+              .maybeSingle();
+            pinned = (pin?.task_slack_channel_id as string | null) ?? null;
+          }
+          const channel = (pinned ?? dept?.task_channel_id) as string | undefined;
           if (!channel) return;
           const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? "";
           const taskUrl = baseUrl ? `${baseUrl}/tasks/${id}` : `/tasks/${id}`;

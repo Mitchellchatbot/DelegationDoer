@@ -35,12 +35,16 @@ export async function GET() {
     ] = await Promise.all([
       // is_draft=true means the task is a routing draft awaiting
       // dept-head approval — never surface those in the widget; the
-      // approver sees them on /approvals instead.
+      // approver sees them on /approvals instead. Archived and soft-deleted
+      // tasks are hidden too, matching listTasks in lib/server-data.ts — a
+      // task can be archived without ever reaching "done".
       supabase.from("tasks").select(SELECT_COLS)
         .eq("assignee_id", userId).neq("status", "done").eq("is_draft", false)
+        .is("archived_at", null).is("deleted_at", null)
         .order("created_at", { ascending: false }),
       supabase.from("tasks").select(SELECT_COLS)
         .contains("tags", ["incident"]).neq("status", "done").eq("is_draft", false)
+        .is("archived_at", null).is("deleted_at", null)
         .order("created_at", { ascending: false }),
       supabase.from("assignment_acknowledgements").select("task_id")
         .eq("user_id", userId)
@@ -72,7 +76,9 @@ export async function GET() {
           // department_id + tags feed the shared canViewTask gate below.
           .select("id, title, priority, status, due_date, assignee_id, creator_id, department_id, tags")
           .in("id", notifTaskIds)
-          .eq("is_draft", false),
+          .eq("is_draft", false)
+          .is("archived_at", null)
+          .is("deleted_at", null),
         fromIds.length > 0
           ? supabase.from("users").select("id, name, avatar_url").in("id", fromIds)
           : Promise.resolve({ data: [] as { id: string; name: string; avatar_url: string | null }[] })

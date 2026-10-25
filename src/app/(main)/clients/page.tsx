@@ -7,7 +7,7 @@ import { getUserById } from "@/lib/server-data";
 import { canManageAssignments } from "@/lib/inbox-access";
 import { isApprover } from "@/lib/email-approvers";
 import { getClients, getOpenTaskCountsByClient } from "@/lib/clients-data";
-import { manageableForms } from "@/lib/client-onboarding-access";
+import { canViewOnboardingBoard, manageableForms } from "@/lib/client-onboarding-access";
 import { FORMS } from "@/lib/client-onboarding-forms";
 import { getAllUsers } from "@/lib/server-data";
 import { NewClientDialog } from "@/components/NewClientDialog";
@@ -125,7 +125,7 @@ export default async function ClientsPage({ searchParams }: { searchParams: { li
               </Link>
             )}
             {canEdit && <RescanClientMailButton />}
-            {onboardingForms.length > 0 && (
+            {canViewOnboardingBoard(me) && (
               <Link
                 href="/clients/onboarding"
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-white border border-slate-200 text-ink/75 hover:text-accent hover:border-accent/40 transition-colors"

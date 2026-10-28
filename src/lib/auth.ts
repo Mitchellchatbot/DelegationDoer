@@ -36,8 +36,10 @@ export function assignableTargets(actor: User, pool: User[] = users): User[] {
   if (isLeader(actor)) {
     candidates = pool.slice();
   } else if (actor.role === "department_head") {
+    const delegated = actor.delegateDepartmentIds ?? [];
     candidates = pool.filter((u) =>
-      u.id === actor.id || u.departmentIds.some((d) => actor.departmentIds.includes(d))
+      u.id === actor.id ||
+      u.departmentIds.some((d) => actor.departmentIds.includes(d) || delegated.includes(d))
     );
   } else {
     const delegated = actor.delegateDepartmentIds ?? [];

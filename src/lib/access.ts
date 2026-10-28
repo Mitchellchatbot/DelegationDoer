@@ -415,7 +415,11 @@ export function canAssignTaskTo(
   if (target.id === actor.id) return true; // always allowed to self-assign
   if (isLeader(actor)) return true;
   if (isDepartmentHead(actor)) {
-    return target.departmentIds.some((d) => actor.departmentIds.includes(d));
+    // A head can also hold a delegate grant for a department they don't
+    // lead (e.g. Talha: heads Marketing, delegated Software).
+    return target.departmentIds.some(
+      (d) => actor.departmentIds.includes(d) || (actor.delegateDepartmentIds?.includes(d) ?? false)
+    );
   }
   // Scoped delegates get department-head-style reach, but only WITHIN the
   // department(s) they've been delegated (delegate_department_ids), and

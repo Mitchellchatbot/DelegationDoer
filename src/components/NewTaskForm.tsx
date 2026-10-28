@@ -733,7 +733,7 @@ export function NewTaskForm({ onCreated, onCancel, hideCancel, initialValues, lo
   const delegateBlurb = (() => {
     if (currentUser.role === "leader") return "As Leader you can assign to anyone in the org.";
     if (currentUser.role === "department_head") {
-      const deptNames = currentUser.departmentIds
+      const deptNames = [...new Set([...currentUser.departmentIds, ...(currentUser.delegateDepartmentIds ?? [])])]
         .map((d) => departments.find((x) => x.id === d)?.name)
         .filter(Boolean)
         .join(", ");

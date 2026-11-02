@@ -306,6 +306,38 @@ export async function getArchivedTasks(): Promise<Task[]> {
   return (data ?? []).map((r) => taskFromRow(r as unknown as TaskRow));
 }
 
+// What a board card needs, plus the rest of Task's required fields. Leaves out
+// the task body, custom fields and the free-text project links (hosting access
+// and so on), which can run to kilobytes and which no card shows. taskFromRow
+// maps the missing columns to empty values.
+const TASK_CARD_COLS =
+  "id,title,status,priority,estimated_hours,actual_hours,actual_hours_override,tags," +
+  "department_id,assignee_id,creator_id,project_id,due_date,inactive_flag," +
+  "last_activity_at,created_at,blocks_task_ids,client_name,website," +
+  "completed_at,archived_at,archived_by";
+
+// The newest slice of the archive, for the board's Archived column. Unlike
+// getArchivedTasks this runs on an ordinary board load, so it is capped, can be
+// scoped to departments, and throws on a DB error: the column has to be able to
+// say "couldn't load" rather than show an outage as an empty archive.
+export async function getRecentArchivedTasks(opts: {
+  limit: number;
+  departmentIds?: string[];
+}): Promise<Task[]> {
+  let q = getSupabaseAdmin()
+    .from("tasks")
+    .select(TASK_CARD_COLS)
+    .eq("is_draft", false)
+    .not("archived_at", "is", null)
+    .is("deleted_at", null);
+  if (opts.departmentIds?.length) q = q.in("department_id", opts.departmentIds);
+  const { data, error } = await q
+    .order("archived_at", { ascending: false })
+    .limit(opts.limit);
+  if (error) throw new Error(error.message);
+  return (data ?? []).map((r) => taskFromRow(r as unknown as TaskRow));
+}
+
 // Lightweight users-list, used when components only need to render avatars +
 // names (e.g. handoff dropdown, thread author resolution). Skips the
 // per-user department-members join.

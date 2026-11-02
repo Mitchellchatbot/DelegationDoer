@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useTeam } from "@/lib/team-context";
 import { createPortal } from "react-dom";
@@ -80,6 +80,12 @@ const SORTS: Record<string, (a: Task, b: Task) => number> = {
   longestOpen:  (a, b) => +new Date(a.createdAt) - +new Date(b.createdAt),
   stalledFirst: (a, b) => Number(b.inactiveFlag) - Number(a.inactiveFlag) || +new Date(a.lastActivityAt) - +new Date(b.lastActivityAt)
 };
+
+// The Archived column ignores the Sort control. It only holds the most recently
+// archived cards, so recency is the one order that explains what's in it, and a
+// card dropped in lands at the top, where you just put it.
+const newestArchivedFirst = (a: Task, b: Task) =>
+  +new Date(b.archivedAt ?? 0) - +new Date(a.archivedAt ?? 0);
 
 export default function BoardPage() {
   const currentUser = useCurrentUser();
@@ -167,6 +173,17 @@ export default function BoardPage() {
   })();
   const [scope, setScope] = useState<Scope>(initialScope);
 
+  // The Archived column (By person + Active only). It has its own capped feed
+  // rather than widening `tasks`: this is the default view, so pulling the
+  // archive into the main fetch would read all of it on every board load.
+  // Archived cards therefore stay out of the "Board · N" count, which remains
+  // live work. In the Archived and All scopes they already sit in their normal
+  // columns, so a dedicated column would only duplicate them.
+  const showArchivedColumn = groupBy === "person" && scope === "active";
+  const [archivedTasks, setArchivedTasks] = useState<Task[]>([]);
+  const [archivedHasMore, setArchivedHasMore] = useState(false);
+  const [archivedFeed, setArchivedFeed] = useState<"loading" | "ready" | "failed">("loading");
+
   // Bulk-select (admins only). When `selecting` is on, clicking a card
   // toggles its selection instead of navigating, and a bulk action bar
   // offers a one-shot delete of everything selected.
@@ -251,7 +268,9 @@ export default function BoardPage() {
     setBulkBusy(true);
     // Optimistically drop the selected cards.
     const prior = tasks;
+    const priorArchived = archivedTasks;
     setTasks((cur) => cur.filter((t) => !selectedIds.has(t.id)));
+    setArchivedTasks((cur) => cur.filter((t) => !selectedIds.has(t.id)));
     try {
       const res = await fetch("/api/tasks/bulk-delete", {
         method: "POST",
@@ -264,6 +283,7 @@ export default function BoardPage() {
       exitSelecting();
     } catch (err) {
       setTasks(prior); // revert
+      setArchivedTasks(priorArchived);
       toast.error(`Bulk delete failed: ${err instanceof Error ? err.message : "network error"}`);
     } finally {
       setBulkBusy(false);
@@ -341,6 +361,35 @@ export default function BoardPage() {
     return () => { cancelled = true; };
   }, [scope, refreshKey]);
 
+  // Re-read when the department chips change: the feed is capped, so the server
+  // has to do the scoping (see /api/tasks/archived-recent). Sorted so the same
+  // chips picked in a different order don't count as a new scope.
+  const archivedDeptKey = Array.from(selectedDepts).sort().join(",");
+  useEffect(() => {
+    if (!showArchivedColumn) return;
+    let cancelled = false;
+    setArchivedFeed("loading");
+    const qs = archivedDeptKey ? `?departmentIds=${encodeURIComponent(archivedDeptKey)}` : "";
+    fetch(`/api/tasks/archived-recent${qs}`, { cache: "no-store" })
+      .then((r) => {
+        if (!r.ok) throw new Error(`failed (${r.status})`);
+        return r.json();
+      })
+      .then((data) => {
+        if (cancelled) return;
+        setArchivedTasks(data.tasks ?? []);
+        setArchivedHasMore(data.hasMore === true);
+        setArchivedFeed("ready");
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setArchivedTasks([]);
+        setArchivedHasMore(false);
+        setArchivedFeed("failed");
+      });
+    return () => { cancelled = true; };
+  }, [showArchivedColumn, archivedDeptKey]);
+
   function toggleDept(deptId: string) {
     setSelectedDepts((cur) => {
       const next = new Set(cur);
@@ -362,13 +411,23 @@ export default function BoardPage() {
     [tasks]
   );
 
-  const visible = useMemo(() => tasks.filter((t) =>
+  const matchesFilters = useCallback((t: Task) =>
     (selectedDepts.size === 0 || (t.departmentId !== null && selectedDepts.has(t.departmentId))) &&
     (filterUser === "all" || t.assigneeId === filterUser) &&
     (filterStatus === "all" || t.status === filterStatus) &&
     (filterClient === "all" || (filterClient === "__internal" ? !t.clientName : t.clientName === filterClient)) &&
     (filterWebsite === "all" || (filterWebsite === "__internal" ? !t.website : t.website === filterWebsite))
-  ), [tasks, selectedDepts, filterUser, filterStatus, filterClient, filterWebsite]);
+  , [selectedDepts, filterUser, filterStatus, filterClient, filterWebsite]);
+
+  const visible = useMemo(() => tasks.filter((t) => matchesFilters(t)), [tasks, matchesFilters]);
+
+  const visibleArchived = useMemo(() => {
+    if (!showArchivedColumn) return [];
+    // A sweep landing between the two fetches can return a task in both feeds,
+    // and a duplicate draggableId breaks drag-and-drop for the whole board.
+    const live = new Set(tasks.map((t) => t.id));
+    return archivedTasks.filter((t) => !live.has(t.id) && matchesFilters(t));
+  }, [showArchivedColumn, archivedTasks, tasks, matchesFilters]);
 
   // How many of the collapsible filters are actually doing something. Shown on
   // the "More filters" button so a filter left on — by a deep link, or restored
@@ -414,22 +473,25 @@ export default function BoardPage() {
         u.departmentIds.some((d) => selectedDepts.has(d))
       );
     }
-    // Pipeline order, left → right: Unassigned, Needs approval (kept on the left
-    // so it's visible on load, not buried past the people columns), each person,
-    // then Completed.
-    // Order, left → right: Completed, Needs approval, Unassigned, then each team
-    // member. Each bucket a distinct colour (emerald / amber / slate; people indigo).
+    // Order, left → right: Completed, Needs approval, Archived, Unassigned, then
+    // each team member. Each bucket a distinct colour (emerald / amber / violet /
+    // slate; people indigo).
     const cols: Column[] = [
       // Finished work — drag out onto a person to reopen + reassign.
       { id: "__completed", label: "Completed", tone: "border-emerald-400", head: "bg-emerald-100 text-emerald-900" },
       // Facebook tasks submitted for manager approval land here (not in the
       // submitter's column) so a manager can pick them up and proof them.
       { id: "__needs_approval", label: "Needs approval", tone: "border-amber-400", head: "bg-amber-100 text-amber-900" },
+      // Work swept or shelved off the board. Drag a card in to archive it, or
+      // out to bring it back.
+      ...(showArchivedColumn
+        ? [{ id: "__archived", label: "Archived", tone: "border-violet-400", head: "bg-violet-100 text-violet-900" }]
+        : []),
       { id: "__unassigned", label: "Unassigned", tone: "border-slate-400", head: "bg-slate-200 text-slate-800" },
       ...people.map((u) => ({ id: u.id, label: u.name, tone: "border-indigo-300/50", user: u }))
     ];
     return cols;
-  }, [groupBy, visible, users, selectedDepts, filterStatus]);
+  }, [groupBy, visible, users, selectedDepts, filterStatus, showArchivedColumn]);
 
   // Group visible tasks by the column they belong to.
   const grouped: Record<string, Task[]> = useMemo(() => {
@@ -449,11 +511,56 @@ export default function BoardPage() {
       }
       if (key && map[key] !== undefined) map[key].push(t);
     });
+    visibleArchived.forEach((t) => { map["__archived"]?.push(t); });
 
     const sorter = SORTS[sort] ?? SORTS.priority;
-    Object.values(map).forEach((arr) => arr.sort(sorter));
+    Object.entries(map).forEach(([colId, arr]) =>
+      arr.sort(colId === "__archived" ? newestArchivedFirst : sorter)
+    );
     return map;
-  }, [columns, visible, groupBy, sort]);
+  }, [columns, visible, visibleArchived, groupBy, sort]);
+
+  // The Archived column's two moves. Archived cards live in their own feed, so
+  // a card moves between lists here rather than changing a field in place.
+  async function archiveCard(task: Task) {
+    setTasks((cur) => cur.filter((t) => t.id !== task.id));
+    setArchivedTasks((cur) => [{ ...task, archivedAt: new Date().toISOString() }, ...cur]);
+    try {
+      const res = await fetch(`/api/tasks/${task.id}/archive`, { method: "POST" });
+      if (!res.ok) {
+        const d = await res.json().catch(() => null);
+        throw new Error(d?.error ?? `failed (${res.status})`);
+      }
+      toast.success(`Archived · ${task.title}`);
+    } catch (err) {
+      toast.error(`Couldn't archive: ${err instanceof Error ? err.message : "network error"}`);
+      setArchivedTasks((cur) => cur.filter((t) => t.id !== task.id));
+      setTasks((cur) => [task, ...cur]);
+    }
+  }
+
+  // `placed` is where the card is headed. It goes there straight away; without
+  // it the card would sit in its old column until this call came back. Resolves
+  // to whether it worked, so the caller knows if the rest of the move should go
+  // ahead.
+  async function unarchiveCard(task: Task, placed: Pick<Task, "assigneeId" | "status">): Promise<boolean> {
+    setArchivedTasks((cur) => cur.filter((t) => t.id !== task.id));
+    setTasks((cur) => [{ ...task, ...placed, archivedAt: null, archivedBy: null }, ...cur]);
+    try {
+      const res = await fetch(`/api/tasks/${task.id}/unarchive`, { method: "POST" });
+      if (!res.ok) {
+        const d = await res.json().catch(() => null);
+        throw new Error(d?.error ?? `failed (${res.status})`);
+      }
+      toast.success(`Unarchived · ${task.title}`);
+      return true;
+    } catch (err) {
+      toast.error(`Couldn't unarchive: ${err instanceof Error ? err.message : "network error"}`);
+      setTasks((cur) => cur.filter((t) => t.id !== task.id));
+      setArchivedTasks((cur) => [task, ...cur]);
+      return false;
+    }
+  }
 
   async function onDragEnd(result: DropResult) {
     if (!result.destination) return;
@@ -462,7 +569,7 @@ export default function BoardPage() {
     // pre-scroll destination).
     const dest = resolveDroppableId(result.destination.droppableId);
     const id = result.draggableId;
-    const before = tasks.find((t) => t.id === id);
+    const before = tasks.find((t) => t.id === id) ?? archivedTasks.find((t) => t.id === id);
     if (!before) return;
 
     if (groupBy === "status") {
@@ -507,6 +614,29 @@ export default function BoardPage() {
       // and a task already awaiting approval is approved/sent-back from the
       // task's proof panel, not by dragging. Snap those back.
       if (dest === "__needs_approval" || before.status === "pending_approval") return;
+      // Drag into Archived → archive it, keeping its status and assignee. The
+      // server allows this for anyone who can manage the task, same as the
+      // Archive button on the task page, and refuses everyone else.
+      if (dest === "__archived") {
+        if (!before.archivedAt) await archiveCard(before);
+        return;
+      }
+      // Where the card is headed: onto a person reassigns (and reopens it if it
+      // was done), onto Completed marks it done.
+      const reopening = dest !== "__completed" && before.status === "done";
+      const nextAssignee = dest === "__completed" ? before.assigneeId
+        : dest === "__unassigned" ? null
+        : dest;
+      const nextStatus: TaskStatus = dest === "__completed" ? "done"
+        : reopening ? "in_progress"
+        : before.status;
+      // Drag out of Archived → bring it back first, then let the normal move
+      // below apply. Gated on the column so the Archived and All scopes, where
+      // archived cards sit in normal columns, are unchanged.
+      if (
+        showArchivedColumn && before.archivedAt &&
+        !(await unarchiveCard(before, { assigneeId: nextAssignee, status: nextStatus }))
+      ) return;
       // Drag into Completed → mark task done (keep assignee).
       if (dest === "__completed") {
         if (before.status === "done") return;
@@ -529,10 +659,7 @@ export default function BoardPage() {
         return;
       }
       // Drag out of Completed onto a person → reopen + reassign in one go.
-      const reopening = before.status === "done";
-      const nextAssignee = dest === "__unassigned" ? null : dest;
       if (!reopening && before.assigneeId === nextAssignee) return;
-      const nextStatus: TaskStatus = reopening ? "in_progress" : before.status;
       setTasks((cur) => cur.map((t) => t.id === id ? {
         ...t,
         assigneeId: nextAssignee,
@@ -775,7 +902,9 @@ export default function BoardPage() {
                     <div className="text-sm font-medium truncate">{col.label}</div>
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
-                    <div className={cn("text-xs tabular-nums", col.head ? "font-bold" : "text-muted")}>{grouped[col.id]?.length ?? 0}</div>
+                    <div className={cn("text-xs tabular-nums", col.head ? "font-bold" : "text-muted")}>
+                      {grouped[col.id]?.length ?? 0}{col.id === "__archived" && archivedHasMore && "+"}
+                    </div>
                     {/* Per-person quick-add. `col.user` is set only in person
                         mode, so this never appears on status/client columns
                         nor on the Unassigned / Completed buckets (a task has
@@ -950,12 +1079,27 @@ export default function BoardPage() {
                       ))}
                       {prov.placeholder}
                       {(grouped[col.id]?.length ?? 0) === 0 && (
-                        <div className="text-[11px] text-muted italic text-center py-4">No tasks</div>
+                        <div className="text-[11px] text-muted italic text-center py-4">
+                          {col.id === "__archived" && archivedFeed === "loading" ? "Loading…"
+                            : col.id === "__archived" && archivedFeed === "failed" ? "Couldn't load archived tasks"
+                            : "No tasks"}
+                        </div>
                       )}
                     </div>
                     );
                   }}
                 </Droppable>
+                {/* The column only holds the newest cards, so point at the full
+                    list when there's more. prefetch off for the same reason as
+                    the Archived tab: that page reads the whole archive. */}
+                {col.id === "__archived" && archivedHasMore && (
+                  <div className="px-3 py-2 border-t border-border flex items-center justify-between gap-2 text-[11px] text-muted">
+                    <span>Most recent only</span>
+                    <Link href="/tasks/archived" prefetch={false} className="font-medium text-accent hover:underline">
+                      View all
+                    </Link>
+                  </div>
+                )}
               </div>
             ))}
             {columns.length === 0 && (

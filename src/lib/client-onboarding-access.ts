@@ -33,6 +33,28 @@ export function canManageOnboardingLinks(
   return formKey ? forms.includes(formKey) : forms.length > 0;
 }
 
+// People who may watch /clients/onboarding without being able to send a form.
+// Read-only by construction: the page gives them no copy links (each row's url
+// is still canManageOnboardingLinks(me, formKey)), no previews (manageableForms
+// is empty for them) and no mailbox picker.
+//
+// Keyed by EXACT email, like the other per-person grants in lib/access.ts and
+// lib/email-approvers.ts. A department membership would carry far more than
+// this page, and a name match would collide ("sam" also matches "Samir G").
+//
+// To add/remove a viewer, change this list and only this list.
+const ONBOARDING_BOARD_VIEWER_EMAILS = [
+  "bella@scaledai.org" // Bismah, SEO team lead
+];
+
+/** Can this user open the onboarding progress board? Everyone who can send a
+ *  form, plus the read-only viewers above. */
+export function canViewOnboardingBoard(u: User | null | undefined): boolean {
+  if (canManageOnboardingLinks(u)) return true;
+  if (!u?.email) return false;
+  return ONBOARDING_BOARD_VIEWER_EMAILS.includes(u.email.trim().toLowerCase());
+}
+
 /** Reveal a stored credential in plaintext.
  *
  *  Narrower than everything above, and intentionally so: a department head can

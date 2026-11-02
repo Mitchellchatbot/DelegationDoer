@@ -7,7 +7,11 @@ import { getUserById } from "@/lib/server-data";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { listAccounts } from "@/lib/missive-client";
 import { listAllOnboardingLinks } from "@/lib/client-onboarding";
-import { canManageOnboardingLinks, manageableForms } from "@/lib/client-onboarding-access";
+import {
+  canManageOnboardingLinks,
+  canViewOnboardingBoard,
+  manageableForms
+} from "@/lib/client-onboarding-access";
 import { FORMS } from "@/lib/client-onboarding-forms";
 import { OnboardingBoard, type BoardRow } from "@/components/OnboardingBoard";
 
@@ -23,9 +27,10 @@ export default async function OnboardingBoardPage() {
   const userId = await requireCurrentUserId();
   const me = await getUserById(userId);
   if (!me) redirect("/login");
-  // Same gate as the button that creates these. Anyone who cannot send a form
-  // has no reason to see a page of them.
-  if (!canManageOnboardingLinks(me)) redirect("/clients");
+  // Everyone who can send a form, plus a short list of read-only viewers (see
+  // canViewOnboardingBoard). A viewer gets the progress and nothing to act on.
+  if (!canViewOnboardingBoard(me)) redirect("/clients");
+  const canSend = canManageOnboardingLinks(me);
 
   // Wrapped: this page must still render before the migration lands, and before
   // anyone has sent a single link.
@@ -43,9 +48,13 @@ export default async function OnboardingBoardPage() {
   // to take it down: a clone that is briefly unreachable, or a workspace_settings
   // column that does not exist yet, just means no mailbox picker.
   const [mailboxes, fromAccountId] = await Promise.all([
-    listAccounts()
-      .then((a) => a.map((x) => ({ id: x.id, email: x.email })))
-      .catch(() => []),
+    // A viewer is not offered the picker: PUT /api/workspace/onboarding-mailbox
+    // would refuse them anyway.
+    canSend
+      ? listAccounts()
+          .then((a) => a.map((x) => ({ id: x.id, email: x.email })))
+          .catch(() => [])
+      : [],
     // An async IIFE rather than .then().catch(): Supabase's query builder is a
     // PromiseLike, so it has no .catch of its own once .then has been chained.
     (async () => {

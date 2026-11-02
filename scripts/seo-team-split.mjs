@@ -18,7 +18,7 @@
 //     client to the wrong lead.
 //   - Clients already on the right team are skipped (no-op writes).
 //   - A client in the DB that the sheet does NOT mention is left completely
-//     alone. The sheet is treated as "these 39 belong to these leads", not as
+//     alone. The sheet is treated as "these 44 belong to these leads", not as
 //     "everything else is unassigned".
 
 import fs from "node:fs";
@@ -50,28 +50,37 @@ const LIST = process.argv.includes("--list");
 // contacts, or onboarding date). Requires --apply; on its own it only reports.
 const CREATE_MISSING = process.argv.includes("--create-missing");
 
-// --- the sheet, transcribed from ScaledAI_Teams_Sites.xlsx -------------------
-// Team ids match src/lib/client-teams.ts. "Bisma" in the sheet is Bismah
-// (bella@scaledai.org) => team_seo_bismah.
+// --- the sheet: the SEO team split as sent on 2026-10-15 ----------------------
+// Replaces the 2026-09-02 transcription of ScaledAI_Teams_Sites.xlsx. Same
+// order as the list that was sent, so the two can be compared line by line.
+// Team ids match src/lib/client-teams.ts. "Bisma" / "Bisma Habib" is Bismah
+// (bella@scaledai.org) => team_seo_bismah; "Saifullah" is Saif (steve@).
+// The team MEMBERS on that list are not set here: /client-teams reads them
+// from the org chart, which supabase/migrations/20261016000000_seo_team_rosters.sql
+// rewires.
 const SHEET = {
   team_seo_saif: [
-    "Villa Healing Center", "Villa Treatment Center", "Villa Wellness Center",
-    "Villa Behavioral Health", "Dynamic Behavioral Health LA", "Quest 2 Recovery",
-    "Quest IOP", "Changes Treatment", "Santa Barbara Recovery", "NATC",
-    "Path2Purpose", "Creative Closet Design", "Chimney Guard", "V&F Paving"
+    "Villa Healing Center", "Villa Behavioral Health", "Dynamic Behavioral Health LA",
+    "Villa Serena Recovery Center", "Villa Treatment Center", "Villa Wellness Center",
+    "Quest 2 Recovery", "Quest IOP", "Changes Treatment", "Chimney Guard",
+    "V&F Paving", "Creative Closet Design",
+    // Not on the list as sent; confirmed 2026-10-16 that it stays with Saif.
+    "Santa Barbara Recovery"
   ],
   team_seo_samir: [
     "Fortify Wellness", "Simonds Recovery Center", "Eleve Wellness",
-    "Pathways Recovery", "Vive Treatment", "Cobb Defense", "Play Steppa",
+    "Pathways Recovery", "Vive Treatment", "Fountain Hills Recovery",
+    "Path2Purpose", "NATC", "Cobb Defense", "Play Steppa",
     "Florida Addiction Resource", "Florida Sober Living Homes",
-    "Miami Outpatient Detox"
+    "Miami Outpatient Detox", "Tampa Outpatient Detox"
   ],
   team_seo_bismah: [
-    "The Hope Institute", "DJ Housing", "Get Holas", "Hopeful Estates",
-    "Allocation Assist", "Doctors Finders", "National Mental Health Support",
-    "Alcohol Awareness", "National Depression Hotline", "Cristallo Pools",
-    "Innovative Outdoor Living", "Innovative Storm Defense", "Schiller Pools",
-    "Pool Doctor", "Prime Pool Market"
+    "The Hope Institute", "DJ Housing", "Hopeful Estates", "Get Holas",
+    "National Mental Health Support", "National Depression Hotline",
+    "Alcohol Awareness", "Allocation Assist", "Doctors Finders",
+    "Sobriety and Beyond", "Lotus Recovery Services", "Cristallo Pools",
+    "Schiller Pools", "Pool Doctor", "Prime Pool Market",
+    "Innovative Outdoor Living", "Innovative Storm Defense"
   ]
 };
 
@@ -80,6 +89,8 @@ const SHEET = {
 // the script makes at runtime. Keeping them here (rather than loosening the
 // matcher) means the write path stays exact-match-only, and the reason each
 // pair is considered the same client is reviewable in the diff.
+// A value may be an ARRAY when one site on the sheet is several clients in DD;
+// each name in it is matched (exactly) and moved on its own.
 const ALIASES = {
   "Villa Wellness Center": "Villa Wellness",
   "Dynamic Behavioral Health LA": "Dynamic Behavioral Health",
@@ -87,8 +98,15 @@ const ALIASES = {
   "Chimney Guard": "Chimney Guard USA",              // currently on team_seo_sam
   "Simonds Recovery Center": "Simonds Recovery Centers",
   "Vive Treatment": "Vive Treatment Centers",
-  "Doctors Finders": "Doctor Finder"
+  "Doctors Finders": "Doctor Finder",
+  // Confirmed 2026-10-16 by whoever sent the roster.
+  "Tampa Outpatient Detox": "Tampa Outpatient",
+  "Lotus Recovery Services": ["Lotus Recovery", "Lotus Recovery San Diego"]
 };
+
+function lookupsFor(name) {
+  return [].concat(ALIASES[name] ?? name);
+}
 
 const SEO_TEAMS = new Set([
   "team_seo_sam", "team_seo_bismah", "team_seo_samir", "team_seo_saif"
@@ -180,16 +198,15 @@ async function main() {
   const missing = [];    // sheet name with no exact match (+ suggestions)
 
   for (const [teamId, names] of Object.entries(SHEET)) {
-    for (const name of names) {
-      const lookup = ALIASES[name] ?? name;
+    for (const name of names) for (const lookup of lookupsFor(name)) {
       const hits = byNorm.get(norm(lookup)) ?? [];
       if (hits.length === 0) {
         const suggestions = clients
-          .map((c) => ({ c, s: similarity(name, c.name) }))
+          .map((c) => ({ c, s: similarity(lookup, c.name) }))
           .filter((x) => x.s >= 0.34)
           .sort((a, b) => b.s - a.s)
           .slice(0, 3);
-        missing.push({ teamId, name, suggestions });
+        missing.push({ teamId, name, lookup, suggestions });
       } else if (hits.length > 1) {
         ambiguous.push({ teamId, name, hits });
       } else {
@@ -203,7 +220,7 @@ async function main() {
   // SEO-owned clients in the DB that the sheet never mentions. Reported so a
   // human can decide; never touched automatically.
   const sheetNorms = new Set(
-    Object.values(SHEET).flat().map((n) => norm(ALIASES[n] ?? n))
+    Object.values(SHEET).flat().flatMap(lookupsFor).map(norm)
   );
   const orphans = clients.filter(
     (c) => SEO_TEAMS.has(c.team_id ?? "") && !sheetNorms.has(norm(c.name))
@@ -228,7 +245,8 @@ async function main() {
   if (missing.length) {
     console.log(`\n! In the sheet but NOT found in DB (${missing.length}), SKIPPED:`);
     for (const m of missing) {
-      console.log(`   "${m.name}" -> ${TEAM_LABEL[m.teamId]}`);
+      const alias = m.lookup !== m.name ? ` (alias "${m.lookup}")` : "";
+      console.log(`   "${m.name}"${alias} -> ${TEAM_LABEL[m.teamId]}`);
       for (const s of m.suggestions) {
         console.log(`       did you mean? "${s.c.name}" (${Math.round(s.s * 100)}%, team=${s.c.team_id ?? "-"})`);
       }

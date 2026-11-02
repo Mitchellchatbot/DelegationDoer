@@ -4,10 +4,11 @@
 -- it also works if the inbox is private (privateExclusionsFor spares assignees,
 -- src/lib/inbox-access.ts). No role change is needed.
 --
--- The Missive account id lives in the clone, so it is never typed from memory:
--- it is read from inbox_assignments.inbox_email. If nobody holds this inbox yet,
--- the run aborts. Read the id from the clone's GET /api/accounts, set
--- v_account_override below, and re-run.
+-- The Missive account id comes from missive.email_accounts, the clone's own
+-- table in this same Supabase project. inbox_assignments can't supply it because
+-- nobody holds software@ yet. The lookup only accepts an account in a clone
+-- workspace DD already uses, since DD can't list inboxes from any other. It reads
+-- non-secret columns only: this table also holds mailbox passwords and OAuth tokens.
 --
 -- Idempotent. Apply by hand in the Supabase SQL editor.
 do $$
@@ -17,7 +18,10 @@ declare
   v_user_id    text;
   v_count      int;
   v_account_id text;
+  v_email      text;
   v_label      text;
+  v_total      int;
+  v_near       text;
 begin
   -- 1. Resolve Leizel: exact email first, then a name match only if it is unique.
   select id into v_user_id
@@ -43,21 +47,31 @@ begin
   if v_account_override is not null then
     v_account_id := v_account_override;
   else
-    select count(distinct missive_account_id) into v_count
-      from public.inbox_assignments
-     where lower(inbox_email) = 'software@scaledai.org';
-
-    if v_count = 0 then
-      raise exception 'software@scaledai.org is not in public.inbox_assignments, so its Missive account id cannot be resolved from DD. Read the id from the clone''s GET /api/accounts, set v_account_override at the top of this block, and re-run. Do not guess the id.';
-    elsif v_count > 1 then
-      raise exception 'software@scaledai.org maps to % Missive account ids in inbox_assignments. Pick the right one from the clone''s GET /api/accounts and set v_account_override.', v_count;
+    if to_regclass('missive.email_accounts') is null then
+      raise exception 'missive.email_accounts is not in this database. Sign in to DD as a leader, open https://operations.scaledai.org/api/inboxes, copy the id for software@scaledai.org into v_account_override, and re-run.';
     end if;
 
-    select missive_account_id, inbox_label
-      into v_account_id, v_label
-      from public.inbox_assignments
-     where lower(inbox_email) = 'software@scaledai.org'
-     limit 1;
+    select count(*), min(ea.id), min(ea.email), min(ea.display_name)
+      into v_count, v_account_id, v_email, v_label
+      from missive.email_accounts ea
+     where lower(ea.email) = 'software@scaledai.org'
+       and ea.workspace_id in (
+         select a.workspace_id
+           from missive.email_accounts a
+           join public.inbox_assignments ia on ia.missive_account_id = a.id
+       );
+
+    if v_count = 0 then
+      select count(*),
+             string_agg(a.email, ', ' order by a.email)
+               filter (where a.email ilike '%soft%' or a.display_name ilike '%soft%')
+        into v_total, v_near
+        from missive.email_accounts a;
+
+      raise exception 'software@scaledai.org is not a connected inbox in DD, so there is nothing to grant. The clone has % inboxes; addresses or names containing "soft": %. If it is a mailing list or alias, add Leizel in the email admin console. If it should be an inbox, connect it first.', v_total, coalesce(v_near, 'none');
+    elsif v_count > 1 then
+      raise exception 'software@scaledai.org matches % connected inboxes. Copy the right id from https://operations.scaledai.org/api/inboxes into v_account_override and re-run.', v_count;
+    end if;
   end if;
 
   -- 3. Grant. assigned_by stays null, as syncMissiveOwnership() writes it.
@@ -65,7 +79,7 @@ begin
     (id, user_id, missive_account_id, inbox_email, inbox_label, assigned_by)
   values
     (gen_random_uuid()::text, v_user_id, v_account_id,
-     'software@scaledai.org', v_label, null)
+     coalesce(v_email, 'software@scaledai.org'), v_label, null)
   on conflict (user_id, missive_account_id) do nothing;
 end $$;
 

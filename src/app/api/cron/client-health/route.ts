@@ -19,8 +19,8 @@ export const maxDuration = 60;
 // never shows up under folder=INBOX. INBOX-only walks would silently
 // miss every outbound that didn't get answered.
 //
-// Auth: Vercel cron Bearer token, or ?secret= query param (mirrors
-// /api/cron/email-intake).
+// Auth: `Authorization: Bearer <CRON_SECRET>` only; 503 when CRON_SECRET is
+// unset (fail closed) — see src/lib/cron-auth.ts.
 //
 // One-time historical backfill lives at
 // /api/admin/scan-mail-satisfaction — this one's just the keep-up

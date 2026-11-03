@@ -12,8 +12,8 @@ export const maxDuration = 60;
 // failing in prod), this scans every opted-in account's INBOX via the
 // missive REST API and writes notification rows for anything new.
 //
-// Auth: same Vercel-cron convention as the other crons —
-// `Authorization: Bearer <CRON_SECRET>` or `?secret=`.
+// Auth: `Authorization: Bearer <CRON_SECRET>` only; 503 when CRON_SECRET is
+// unset (fail closed) — see src/lib/cron-auth.ts.
 //
 // Cadence: every minute. Each pass is bounded by THREADS_PER_ACCOUNT
 // in the poller so a busy workspace can't blow the 60s maxDuration.

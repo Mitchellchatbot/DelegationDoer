@@ -15,10 +15,9 @@ import { NextResponse } from "next/server";
 //     of running for anyone. The in-process schedulers (cron-bootstrap and the
 //     *-bootstrap files) call the runner functions directly, never these
 //     routes, so a missing secret only disables manual/external triggers.
-//   - Accepts `Authorization: Bearer <CRON_SECRET>` (Vercel cron, GitHub
-//     Actions, curl) and, for compatibility with the existing convention, the
-//     `?secret=` query parameter. Prefer the header: query strings end up in
-//     access logs and browser history.
+//   - Accepts ONLY `Authorization: Bearer <CRON_SECRET>` (Vercel cron, GitHub
+//     Actions, curl -H). The old `?secret=` query form is gone: query strings
+//     land in access logs, proxies and browser history.
 //   - Compares SHA-256 digests with timingSafeEqual, so neither the secret's
 //     length nor its prefix leaks through response timing.
 //
@@ -30,11 +29,6 @@ function digest(value: string): Buffer {
   return crypto.createHash("sha256").update(value, "utf8").digest();
 }
 
-function matches(presented: string, expected: Buffer): boolean {
-  if (!presented) return false;
-  return crypto.timingSafeEqual(digest(presented), expected);
-}
-
 export function cronAuthError(req: Request): NextResponse | null {
   const secret = process.env.CRON_SECRET;
   if (!secret || !secret.trim()) {
@@ -44,20 +38,9 @@ export function cronAuthError(req: Request): NextResponse | null {
     );
   }
 
-  const expected = digest(secret);
   const header = req.headers.get("authorization") ?? "";
   const bearer = header.startsWith("Bearer ") ? header.slice("Bearer ".length) : "";
-  let querySecret = "";
-  try {
-    querySecret = new URL(req.url).searchParams.get("secret") ?? "";
-  } catch {
-    querySecret = "";
-  }
-
-  // Evaluate both so the response time doesn't reveal which form was tried.
-  const headerOk = matches(bearer, expected);
-  const queryOk = matches(querySecret, expected);
-  if (headerOk || queryOk) return null;
+  if (bearer && crypto.timingSafeEqual(digest(bearer), digest(secret))) return null;
 
   return NextResponse.json({ error: "forbidden" }, { status: 403 });
 }

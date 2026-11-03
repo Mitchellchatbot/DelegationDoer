@@ -6,9 +6,8 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 // GET /api/cron/email-intake — scheduled poll handler.
-// Auth: Vercel cron sends `Authorization: Bearer <CRON_SECRET>` (also
-// supports our existing `?secret=` query-string convention so the route
-// is debuggable from a browser).
+// Auth: `Authorization: Bearer <CRON_SECRET>` only; 503 when CRON_SECRET is
+// unset (fail closed) — see src/lib/cron-auth.ts.
 //
 // Real-time intake also runs via email-intake-bootstrap (webhook +
 // socket → classify within seconds). This poll is the safety net for

@@ -15,10 +15,8 @@ export const maxDuration = 60;
 // task-archive-bootstrap (which stands down on Vercel so the two never
 // double-run). This route remains the manual / debug entrypoint either way.
 //
-// Auth: same convention as the other crons — Vercel sends
-// `Authorization: Bearer <CRON_SECRET>`; we also accept `?secret=` so the
-// route is debuggable from a browser. When CRON_SECRET is unset the route
-// answers 503 (fail closed) — see src/lib/cron-auth.ts.
+// Auth: `Authorization: Bearer <CRON_SECRET>` only; 503 when CRON_SECRET is
+// unset (fail closed) — see src/lib/cron-auth.ts.
 //
 // Safety / observability:
 //   - `?dryRun=true` returns the tasks that WOULD be archived without writing

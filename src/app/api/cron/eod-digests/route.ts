@@ -10,9 +10,8 @@ export const maxDuration = 60;
 //   composer from /approvals and presses Generate. The route stays mounted
 //   so any existing scheduler gets a clean 200 instead of a 404.
 //
-// Auth: same convention as the other crons — Authorization: Bearer
-// <CRON_SECRET> or ?secret=. When CRON_SECRET is unset the route answers
-// 503 (fail closed) — see src/lib/cron-auth.ts.
+// Auth: `Authorization: Bearer <CRON_SECRET>` only; 503 when CRON_SECRET is
+// unset (fail closed) — see src/lib/cron-auth.ts.
 
 export async function GET(req: NextRequest) {
   const url = new URL(req.url);

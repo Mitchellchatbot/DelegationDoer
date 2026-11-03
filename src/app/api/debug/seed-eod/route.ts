@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
+import { debugRouteAuthError, postRequired } from "@/lib/debug-route-auth";
 
 export const dynamic = "force-dynamic";
 
@@ -49,7 +50,20 @@ function pickN<T>(arr: T[], n: number): T[] {
   return out;
 }
 
-export async function GET(req: Request) {
+// Leaders only, and POST-only because every call writes data.
+export async function GET() {
+  const denied = await debugRouteAuthError();
+  if (denied) return denied;
+  return postRequired("POST /api/debug/seed-eod (same query params) to run it");
+}
+
+export async function POST(req: Request) {
+  const denied = await debugRouteAuthError();
+  if (denied) return denied;
+  return run(req);
+}
+
+async function run(req: Request) {
   const supabase = getSupabaseAdmin();
   const url = new URL(req.url);
   const clear = url.searchParams.get("clear") === "1";

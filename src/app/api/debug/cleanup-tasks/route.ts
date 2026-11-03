@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
+import { debugRouteAuthError, postRequired } from "@/lib/debug-route-auth";
 
 export const dynamic = "force-dynamic";
 
@@ -11,8 +12,9 @@ export const dynamic = "force-dynamic";
 //      manual run-once retries, etc.). Keeps the OLDEST instance per
 //      title so any human-edited follow-up survives.
 //
-// Dry-run by default — returns the matching tasks but doesn't delete.
-// Pass ?confirm=1 to actually drop them.
+// Leaders only. GET is a dry run — returns the matching tasks but doesn't
+// delete. POST with ?confirm=1 actually drops them (POST-only so a link or a
+// crawler can't trigger the delete).
 
 const DIAG_PATTERNS = [
   /\bdiag(nostic)?\b/i,
@@ -33,9 +35,24 @@ interface TaskLite {
 }
 
 export async function GET(req: Request) {
+  const denied = await debugRouteAuthError();
+  if (denied) return denied;
+  if (new URL(req.url).searchParams.get("confirm") === "1") {
+    return postRequired("POST /api/debug/cleanup-tasks?confirm=1 deletes; GET lists what would be deleted");
+  }
+  return run(req, false);
+}
+
+export async function POST(req: Request) {
+  const denied = await debugRouteAuthError();
+  if (denied) return denied;
+  return run(req, true);
+}
+
+async function run(req: Request, allowDelete: boolean) {
   const supabase = getSupabaseAdmin();
   const url = new URL(req.url);
-  const confirm = url.searchParams.get("confirm") === "1";
+  const confirm = allowDelete && url.searchParams.get("confirm") === "1";
 
   const { data, error } = await supabase
     .from("tasks")
@@ -76,7 +93,7 @@ export async function GET(req: Request) {
   if (!confirm) {
     return NextResponse.json({
       mode: "dry-run",
-      hint: "append ?confirm=1 to actually delete",
+      hint: "POST with ?confirm=1 to actually delete",
       total: all.length,
       matched: ids.length,
       diagnostic: diagnosticTasks.map((t) => ({ id: t.id, title: t.title, status: t.status })),

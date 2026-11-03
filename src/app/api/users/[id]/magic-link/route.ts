@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
-import { isLeader } from "@/lib/access";
+import { isLeader, isOwner } from "@/lib/access";
 import { lookupUserByEmail, openDm, postMessage } from "@/lib/slack";
 
 export const dynamic = "force-dynamic";
@@ -30,6 +30,17 @@ export async function POST(
     const target = await getUserById(params.id);
     if (!target) {
       return NextResponse.json({ error: "user not found" }, { status: 404 });
+    }
+    // A sign-in link IS a session for its target, and this route returns it
+    // to the caller. Minting one for the owner would hand any leader or
+    // stealth admin a session on the owner-only surfaces (finance, the Scale
+    // Room, the executive assistant). Only the owner may mint their own; the
+    // redemption route enforces the same rule for claims made earlier.
+    if (isOwner(target) && !isOwner(actor)) {
+      return NextResponse.json(
+        { error: "Only the owner can create a sign-in link for the owner account." },
+        { status: 403 }
+      );
     }
     if (!target.email) {
       return NextResponse.json(

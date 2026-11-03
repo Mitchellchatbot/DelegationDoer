@@ -16,7 +16,9 @@ const PUBLIC_PREFIXES = [
   "/signin",
   "/api/auth",
   "/api/signin",
-  "/api/debug",
+  // /api/debug is deliberately NOT here: those routes can DM members, seed
+  // data and delete tasks, so they need a verified session (and each one
+  // checks for a leader on top).
   // Cron routes carry their own CRON_SECRET check inside the handler.
   // Don't gate on a Supabase session — Vercel cron has no cookies.
   "/api/cron",
@@ -74,9 +76,18 @@ const PUBLIC_PREFIXES = [
   "/api/mcp"
 ];
 
+// Prefixes match whole path segments only: "/api/cron" covers "/api/cron" and
+// "/api/cron/x", never "/api/cron-anything". A bare startsWith() would make any
+// future route that merely shares a prefix's spelling silently public.
+// Session-gated routes that live under a public prefix. /api/cron/status reads
+// the caller's identity (requireCurrentUserId), which trusts the cookie only
+// because middleware verified it — so it must not skip the session check.
+const SESSION_ONLY_UNDER_PUBLIC_PREFIX = new Set(["/api/cron/status"]);
+
 function isPublic(pathname: string): boolean {
+  if (SESSION_ONLY_UNDER_PUBLIC_PREFIX.has(pathname)) return false;
   if (pathname === "/login" || pathname === "/signup") return true;
-  return PUBLIC_PREFIXES.some((p) => pathname.startsWith(p));
+  return PUBLIC_PREFIXES.some((p) => pathname === p || pathname.startsWith(p + "/"));
 }
 
 /**
@@ -205,6 +216,18 @@ export async function middleware(req: NextRequest) {
 }
 
 export const config = {
-  // Skip static assets, images, favicons. Anything that would 404 anyway.
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|.*\\.(?:png|jpg|jpeg|svg|gif|webp|ico)$).*)"]
+  // Skip build assets, the favicon, and image files at the top level of
+  // /public (e.g. /widget-icon.png) — the login page needs those without a
+  // session.
+  //
+  // The image exemption is limited to a SINGLE path segment on purpose. It
+  // used to be `.*\.(png|…)$`, which also skipped `/api/users/abc.png` and
+  // `/clients/abc.png`: any dynamic [id] route called with an image-looking
+  // id bypassed the auth gate, and the handlers behind it trust the session
+  // cookie because they assume this middleware already verified it. Keep
+  // public images at the top level of /public (or add their folder here).
+  //
+  // `[.]`, not `\\.`: Next's matcher compiler turns `\\.` into a bare `.`
+  // (any character), so the old pattern also skipped paths like `/xapng`.
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|[^/]+[.](?:png|jpg|jpeg|svg|gif|webp|ico)$).*)"]
 };

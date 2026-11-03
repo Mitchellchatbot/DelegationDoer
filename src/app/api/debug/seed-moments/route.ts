@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
+import { debugRouteAuthError, postRequired } from "@/lib/debug-route-auth";
 
 export const dynamic = "force-dynamic";
 
@@ -25,7 +26,20 @@ const STOCK = [
   { url: "https://images.unsplash.com/photo-1531297484001-80022131f5a1?w=1280&q=70", caption: "On-call kit" }
 ];
 
-export async function GET(req: Request) {
+// Leaders only, and POST-only because every call writes data.
+export async function GET() {
+  const denied = await debugRouteAuthError();
+  if (denied) return denied;
+  return postRequired("POST /api/debug/seed-moments (same query params) to run it");
+}
+
+export async function POST(req: Request) {
+  const denied = await debugRouteAuthError();
+  if (denied) return denied;
+  return run(req);
+}
+
+async function run(req: Request) {
   const supabase = getSupabaseAdmin();
   const url = new URL(req.url);
   const clear = url.searchParams.get("clear") === "1";

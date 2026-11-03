@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
+import { OWNER_EMAIL } from "@/lib/access";
 
 export const dynamic = "force-dynamic";
 
@@ -16,12 +17,30 @@ export async function POST(
 
   const { data: claim, error: claimErr } = await supabase
     .from("magic_link_claims")
-    .select("id, email, expires_at, used_at")
+    .select("id, email, expires_at, used_at, created_by")
     .eq("id", params.claimId)
     .maybeSingle();
 
   if (claimErr || !claim) {
     return signinErrorRedirect(req, "Link not found.");
+  }
+
+  // Owner sign-in links are only honoured when the owner minted them. The
+  // mint route now refuses anyone else, and this check also defuses claims
+  // that a leader or admin created before that rule existed.
+  if ((claim.email ?? "").trim().toLowerCase() === OWNER_EMAIL) {
+    let mintedByOwner = false;
+    if (claim.created_by) {
+      const { data: creator } = await supabase
+        .from("users")
+        .select("email")
+        .eq("id", claim.created_by)
+        .maybeSingle();
+      mintedByOwner = (creator?.email ?? "").trim().toLowerCase() === OWNER_EMAIL;
+    }
+    if (!mintedByOwner) {
+      return signinErrorRedirect(req, "This sign-in link can't be used. Sign in with your password instead.");
+    }
   }
   if (claim.used_at) {
     return signinErrorRedirect(req, "This link has already been used.");

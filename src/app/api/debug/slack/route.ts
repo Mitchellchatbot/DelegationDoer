@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { debugRouteAuthError, postRequired } from "@/lib/debug-route-auth";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -7,6 +8,9 @@ export const runtime = "nodejs";
 // Takes ?email=...  Walks through every step (token check, auth.test,
 // lookupByEmail, conversations.open, chat.postMessage) and reports.
 // Delete this route once Slack notifications are working.
+//
+// Leaders only. A bare GET runs the read-only token check + auth.test; the
+// ?email= variant DMs a real person, so it is POST-only.
 
 const SLACK_API = "https://slack.com/api";
 
@@ -24,6 +28,21 @@ async function call(method: string, body: Record<string, unknown> | null, token:
 }
 
 export async function GET(req: NextRequest) {
+  const denied = await debugRouteAuthError();
+  if (denied) return denied;
+  if (req.nextUrl.searchParams.get("email")) {
+    return postRequired("POST /api/debug/slack?email=... sends test DMs; GET only runs auth.test");
+  }
+  return run(req);
+}
+
+export async function POST(req: NextRequest) {
+  const denied = await debugRouteAuthError();
+  if (denied) return denied;
+  return run(req);
+}
+
+async function run(req: NextRequest) {
   const email = req.nextUrl.searchParams.get("email") ?? "";
   const token = process.env.SLACK_BOT_TOKEN;
 

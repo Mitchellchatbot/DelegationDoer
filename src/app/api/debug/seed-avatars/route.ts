@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
+import { debugRouteAuthError, postRequired } from "@/lib/debug-route-auth";
 
 export const dynamic = "force-dynamic";
 
@@ -7,7 +8,20 @@ export const dynamic = "force-dynamic";
 // photo seeded by their user id, so the same person keeps the same face
 // across re-runs. Skips anyone whose avatar_url is already set unless
 // `?force=1` is passed (use that to overwrite e.g. logo placeholders).
-export async function GET(req: Request) {
+// Leaders only, and POST-only because every call writes data.
+export async function GET() {
+  const denied = await debugRouteAuthError();
+  if (denied) return denied;
+  return postRequired("POST /api/debug/seed-avatars (same query params) to run it");
+}
+
+export async function POST(req: Request) {
+  const denied = await debugRouteAuthError();
+  if (denied) return denied;
+  return run(req);
+}
+
+async function run(req: Request) {
   const supabase = getSupabaseAdmin();
   const url = new URL(req.url);
   const force = url.searchParams.get("force") === "1";

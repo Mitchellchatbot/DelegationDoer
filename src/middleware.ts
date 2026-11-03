@@ -79,7 +79,13 @@ const PUBLIC_PREFIXES = [
 // Prefixes match whole path segments only: "/api/cron" covers "/api/cron" and
 // "/api/cron/x", never "/api/cron-anything". A bare startsWith() would make any
 // future route that merely shares a prefix's spelling silently public.
+// Session-gated routes that live under a public prefix. /api/cron/status reads
+// the caller's identity (requireCurrentUserId), which trusts the cookie only
+// because middleware verified it — so it must not skip the session check.
+const SESSION_ONLY_UNDER_PUBLIC_PREFIX = new Set(["/api/cron/status"]);
+
 function isPublic(pathname: string): boolean {
+  if (SESSION_ONLY_UNDER_PUBLIC_PREFIX.has(pathname)) return false;
   if (pathname === "/login" || pathname === "/signup") return true;
   return PUBLIC_PREFIXES.some((p) => pathname === p || pathname.startsWith(p + "/"));
 }

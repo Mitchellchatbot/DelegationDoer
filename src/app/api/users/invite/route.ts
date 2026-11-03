@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
-import { isLeader } from "@/lib/access";
+import { isLeader, isOwner } from "@/lib/access";
 import { lookupUserByEmail, openDm, postMessage } from "@/lib/slack";
 
 export const dynamic = "force-dynamic";
@@ -50,6 +50,15 @@ export async function POST(req: NextRequest) {
         { status: 400 }
       );
     }
+    // Re-inviting rewrites the matched row's name, role and departments and
+    // mints a sign-in claim, so the owner account is off limits to everyone
+    // but the owner (same rule as /api/users/[id]/magic-link).
+    if (isOwner({ email }) && !isOwner(actor)) {
+      return NextResponse.json(
+        { error: "Only the owner can re-invite the owner account." },
+        { status: 403 }
+      );
+    }
 
     const supabase = getSupabaseAdmin();
 
@@ -59,10 +68,19 @@ export async function POST(req: NextRequest) {
     let authUserId: string | null = null;
     let invitedNew = false;
 
+    // Case-insensitive EXACT match: escape LIKE wildcards first. A raw ilike
+    // let "mitchel_@scaledai.org" match the owner's row, and the upsert below
+    // would then overwrite that row's email and strip its owner identity.
+    // PostgREST also treats `*` as a wildcard in like/ilike and it can't be
+    // escaped, so refuse such addresses outright.
+    if (email.includes("*")) {
+      return NextResponse.json({ error: "email may not contain *" }, { status: 400 });
+    }
+    const emailPattern = email.replace(/[\\%_]/g, (c: string) => `\\${c}`);
     const { data: existing } = await supabase
       .from("users")
       .select("id")
-      .ilike("email", email)
+      .ilike("email", emailPattern)
       .maybeSingle();
     if (existing) {
       authUserId = existing.id as string;

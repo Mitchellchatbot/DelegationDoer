@@ -54,19 +54,34 @@ export async function POST(
     "https://delegationdoer-production.up.railway.app"
   ).replace(/\/$/, "");
 
+  // Claim it atomically BEFORE minting: the conditional update succeeds for
+  // exactly one request, so two concurrent POSTs can't both get a session.
+  const usedAt = new Date().toISOString();
+  const { data: claimed } = await supabase
+    .from("magic_link_claims")
+    .update({ used_at: usedAt })
+    .eq("id", claim.id)
+    .is("used_at", null)
+    .gt("expires_at", usedAt)
+    .select("id");
+  if (!claimed || claimed.length !== 1) {
+    return signinErrorRedirect(req, "This link has already been used.");
+  }
+
   const { data: linkData, error: linkErr } = await supabase.auth.admin.generateLink({
     type: "magiclink",
     email: claim.email,
     options: { redirectTo: `${baseUrl}/auth/finish` }
   });
   if (linkErr || !linkData?.properties?.action_link) {
+    // Nothing was handed out, so give the claim back for a retry.
+    await supabase
+      .from("magic_link_claims")
+      .update({ used_at: null })
+      .eq("id", claim.id)
+      .eq("used_at", usedAt);
     return signinErrorRedirect(req, "Couldn't generate a sign-in token.");
   }
-
-  await supabase
-    .from("magic_link_claims")
-    .update({ used_at: new Date().toISOString() })
-    .eq("id", claim.id);
 
   return NextResponse.redirect(linkData.properties.action_link, { status: 302 });
 }

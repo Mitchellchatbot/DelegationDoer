@@ -6,8 +6,14 @@
 --   2. again right before EXEC_ENABLED=true for the executive assistant.
 --
 -- Tell Mitchell first: he will have to sign in again everywhere (web + desktop
--- widget). An already-issued access token can stay valid until it expires
--- (Supabase default: 1 hour); every refresh after this fails.
+-- widget). DD's middleware calls getUser(), which rejects an access token as
+-- soon as its session row is gone, and every refresh fails. (A raw access JWT
+-- stays signature-valid until it expires — Supabase default 1 hour — but after
+-- the P0.1 lockdown the `authenticated` role can't read any table with it.)
+--
+-- If 20261104_p0_owner_session_audit.sql showed a REDEEMED claim minted by
+-- someone else, also have the owner reset his password and check the MFA /
+-- identity / email-change rows that script lists: those survive this script.
 --
 -- Also marks any unredeemed owner sign-in claims as used, so a link someone
 -- else minted earlier can never be redeemed (the app now refuses them anyway).

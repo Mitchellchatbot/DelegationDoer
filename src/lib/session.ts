@@ -67,10 +67,16 @@ async function _getCurrentUserId(): Promise<string | null> {
   // auth-link migration hasn't been applied yet). Try to link by email.
   // This is self-healing — first authed visit fixes the link permanently.
   if (!authEmail) return null;
+  // Case-insensitive EXACT match: escape LIKE wildcards, otherwise an auth
+  // account like "j_hn@…" could claim the unlinked row of "john@…".
+  // PostgREST also turns `*` into `%` in like/ilike filters and it can't be
+  // escaped, so an address containing `*` never links by email.
+  if (authEmail.includes("*")) return null;
+  const emailPattern = authEmail.replace(/[\\%_]/g, (c) => `\\${c}`);
   const byEmail = await admin
     .from("users")
     .select("id, auth_user_id")
-    .ilike("email", authEmail)
+    .ilike("email", emailPattern)
     .maybeSingle();
   if (!byEmail.data) return null;
   if (byEmail.data.auth_user_id && byEmail.data.auth_user_id !== authUserId) {

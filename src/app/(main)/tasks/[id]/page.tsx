@@ -160,7 +160,7 @@ export default async function TaskDetailPage({ params }: { params: { id: string 
 
   return (
     <div className="space-y-5 max-w-5xl">
-      <BackPill href="/tasks" label="Back to tasks" />
+      <BackPill href="/tasks/board" label="Back to tasks" />
 
       <div className="flex items-start justify-between gap-4">
         <div>

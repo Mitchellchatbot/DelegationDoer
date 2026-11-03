@@ -5,14 +5,13 @@ import type { DragStart } from "@hello-pangea/dnd";
 
 // Horizontal auto-scroll for @hello-pangea/dnd boards.
 //
-// Why this exists: the library auto-scrolls the window plus each
-// Droppable's *closest* scrollable ancestor. Our Kanban columns wrap
-// their Droppable in a per-column `overflow-y-auto` (the vertical cap
-// that keeps the board's horizontal scrollbar reachable), so that
-// vertical container is what the library scrolls — the outer
-// `overflow-x-auto` board wrapper never gets driven, and you can't drag
-// a card past the visible edge into an off-screen column. This hook adds
-// the missing horizontal axis without touching the vertical caps.
+// Why this exists: the library only auto-scrolls the window and each
+// Droppable's *closest* scrollable ancestor. On most of our boards that
+// ancestor is the column's own `overflow-y-auto` list (the vertical cap that
+// keeps the board's horizontal scrollbar reachable), so the outer
+// `overflow-x-auto` board wrapper never gets driven, and you can't drag a card
+// past the visible edge into an off-screen column. This hook adds the missing
+// horizontal axis without touching the vertical caps.
 //
 // It tracks the pointer at the window level (the library uses synthetic
 // mouse/touch sensors and listens there too, so we see the same
@@ -21,11 +20,34 @@ import type { DragStart } from "@hello-pangea/dnd";
 // Scrolling via `scrollLeft` — never `transform` — keeps the
 // position:fixed drag clone working (a transformed ancestor would become
 // its containing block and break mid-flight positioning).
+//
+// Boards come in two layouts, chosen with `hitTest`:
+// - Each column's list is the Droppable (hitTest: true, the default). The
+//   wrapper is then a second scroll container the library can't see, so after
+//   this hook scrolls, the library's idea of where every column sits is stale.
+//   The hook works out the column from the live DOM instead: activeDroppableId
+//   for the highlight, resolveDroppableId for the drop.
+// - Each Droppable sits straight inside the wrapper, with its list scrolling
+//   inside it (hitTest: false). The wrapper is then the Droppables' one scroll
+//   container, which the library re-measures as it scrolls, so its own target,
+//   highlight and drop animation are right and nothing needs correcting. Such a
+//   board needs three props, all for the library's habits at the wrapper's
+//   edges:
+//   * autoScrollerOptions={{ disabled: true }} on the DragDropContext. The
+//     library would otherwise drive the wrapper too, by the card's centre, and
+//     stop as soon as that centre is pushed past the edge.
+//   * ignoreContainerClipping on each Droppable. Clipped, a column scrolled
+//     partly out of view counts only its visible sliver, and a card hanging over
+//     half of that sliver wins it from the column the card is actually over.
+//   * isDropDisabled={hiddenDroppableIds.has(id)}. Unclipped, a column
+//     scrolled entirely out of view would still take a card held over the area
+//     it sits under, like the sidebar.
 
 const EDGE_PX = 60; // start scrolling within this many px of an edge
 const MAX_SPEED_PX = 18; // max px per frame at the very edge
+const NONE: ReadonlySet<string> = new Set();
 
-export function useHorizontalDragAutoScroll() {
+export function useHorizontalDragAutoScroll({ hitTest = true }: { hitTest?: boolean } = {}) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const draggingRef = useRef(false);
   const pointerXRef = useRef(0);
@@ -39,13 +61,34 @@ export function useHorizontalDragAutoScroll() {
   // library's own isDraggingOver doesn't — same stale-model reason as the drop
   // target; see resolveDroppableId). Null when no pointer drag is active.
   const [activeDroppableId, setActiveDroppableId] = useState<string | null>(null);
+  // Droppables scrolled entirely out of the wrapper during a drag (hitTest:
+  // false only; see the layouts above). Re-measured whenever the wrapper's
+  // scroll moves, so the board re-renders only when a column enters or leaves.
+  const [hiddenDroppableIds, setHiddenDroppableIds] = useState<ReadonlySet<string>>(NONE);
+  const measuredScrollRef = useRef<number | null>(null);
+
+  const measureHidden = useCallback(() => {
+    const el = containerRef.current;
+    if (hitTest || !el || el.scrollLeft === measuredScrollRef.current) return;
+    measuredScrollRef.current = el.scrollLeft;
+    const box = el.getBoundingClientRect();
+    const hidden: string[] = [];
+    el.querySelectorAll("[data-rfd-droppable-id]").forEach((d) => {
+      const r = d.getBoundingClientRect();
+      const id = d.getAttribute("data-rfd-droppable-id");
+      if (id && (r.right <= box.left || r.left >= box.right)) hidden.push(id);
+    });
+    setHiddenDroppableIds((prev) =>
+      prev.size === hidden.length && hidden.every((id) => prev.has(id)) ? prev : new Set(hidden)
+    );
+  }, [hitTest]);
 
   // Hit-test the live DOM for the droppable under the last pointer position.
   // Returns null for keyboard drags (no pointer) or when nothing resolves. The
   // portaled drag clone sits on document.body (not inside a droppable), so it's
   // skipped via closest() and we land on the column beneath.
   const hitTestDroppableId = useCallback((): string | null => {
-    if (!sawPointerRef.current || typeof document === "undefined") return null;
+    if (!hitTest || !sawPointerRef.current || typeof document === "undefined") return null;
     const hits = document.elementsFromPoint(pointerXRef.current, pointerYRef.current);
     for (const el of hits) {
       const drop = el instanceof Element ? el.closest("[data-rfd-droppable-id]") : null;
@@ -53,7 +96,7 @@ export function useHorizontalDragAutoScroll() {
       if (id) return id;
     }
     return null;
-  }, []);
+  }, [hitTest]);
 
   const onPointerMove = useCallback((e: MouseEvent | TouchEvent) => {
     if (!draggingRef.current) return;
@@ -108,11 +151,35 @@ export function useHorizontalDragAutoScroll() {
     // Keep the drag-over highlight in sync with the real column under the
     // cursor — recomputed every frame so it stays correct while only the board
     // scrolls (cursor stationary). Dedupe so we re-render only on a change.
-    const over = hitTestDroppableId();
-    setActiveDroppableId((prev) => (prev === over ? prev : over));
+    if (hitTest) {
+      const over = hitTestDroppableId();
+      setActiveDroppableId((prev) => (prev === over ? prev : over));
+    } else {
+      measureHidden();
+    }
 
     rafRef.current = requestAnimationFrame(tick);
-  }, [hitTestDroppableId]);
+  }, [hitTest, hitTestDroppableId, measureHidden]);
+
+  // Stop scrolling, and stop following the pointer, the moment the user lets
+  // go. The library fixes its drop target then, starts its drop animation and
+  // stops tracking scroll, but onDragEnd only fires once that animation ends,
+  // up to about half a second later. Scrolling on until then moved the board
+  // out from under the card: it flew to where its column had been, and the
+  // hit-test picked whichever column had scrolled under the pointer by then,
+  // or wherever the mouse had moved on to.
+  const onRelease = useCallback(() => {
+    draggingRef.current = false;
+    if (rafRef.current != null) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
+  }, []);
+
+  // Escape cancels a mouse drag, and the card animates home: same reason.
+  const onKeyDown = useCallback((e: KeyboardEvent) => {
+    if (e.key === "Escape") onRelease();
+  }, [onRelease]);
 
   const onDragStart = useCallback((start?: DragStart) => {
     if (draggingRef.current) return;
@@ -121,6 +188,10 @@ export function useHorizontalDragAutoScroll() {
     // never inherit a `true` left behind by the previous mouse drag.
     sawPointerRef.current = false;
     setActiveDroppableId(null);
+    // Keyboard drags too: they can't scroll the board, but they could still
+    // step into a column hidden under the sidebar.
+    measuredScrollRef.current = null;
+    measureHidden();
 
     // Keyboard drags ('SNAP') never involve a pointer, and the library does NOT
     // cancel them on mousemove — getDraggingBindings cancels on mousedown /
@@ -136,19 +207,24 @@ export function useHorizontalDragAutoScroll() {
     // preventDefault (doing so would fight its touch sensor).
     window.addEventListener("mousemove", onPointerMove, { passive: true });
     window.addEventListener("touchmove", onPointerMove, { passive: true });
+    window.addEventListener("mouseup", onRelease, true);
+    window.addEventListener("touchend", onRelease, true);
+    window.addEventListener("touchcancel", onRelease, true);
+    window.addEventListener("keydown", onKeyDown, true);
     if (rafRef.current == null) rafRef.current = requestAnimationFrame(tick);
-  }, [onPointerMove, tick]);
+  }, [onPointerMove, onRelease, onKeyDown, tick, measureHidden]);
 
   const onDragEnd = useCallback(() => {
-    draggingRef.current = false;
+    onRelease();
     setActiveDroppableId(null);
+    setHiddenDroppableIds(NONE);
     window.removeEventListener("mousemove", onPointerMove);
     window.removeEventListener("touchmove", onPointerMove);
-    if (rafRef.current != null) {
-      cancelAnimationFrame(rafRef.current);
-      rafRef.current = null;
-    }
-  }, [onPointerMove]);
+    window.removeEventListener("mouseup", onRelease, true);
+    window.removeEventListener("touchend", onRelease, true);
+    window.removeEventListener("touchcancel", onRelease, true);
+    window.removeEventListener("keydown", onKeyDown, true);
+  }, [onPointerMove, onRelease, onKeyDown]);
 
   // Resolve the droppable actually under the cursor at drop time. The library's
   // result.destination is computed from a droppable-position model that doesn't
@@ -156,7 +232,7 @@ export function useHorizontalDragAutoScroll() {
   // droppables' registered scrollable — each column's own overflow-y-auto is),
   // so after auto-scroll it points at the pre-scroll column. We re-resolve from
   // the live DOM instead. Keyboard drags (no pointer) keep the library's
-  // destination via the fallback.
+  // destination via the fallback, as does every drag when hitTest is off.
   const resolveDroppableId = useCallback(
     (fallback: string): string => hitTestDroppableId() ?? fallback,
     [hitTestDroppableId]
@@ -166,5 +242,5 @@ export function useHorizontalDragAutoScroll() {
   // onDragEnd may never fire — tear down listeners and the RAF loop.
   useEffect(() => onDragEnd, [onDragEnd]);
 
-  return { containerRef, onDragStart, onDragEnd, resolveDroppableId, activeDroppableId };
+  return { containerRef, onDragStart, onDragEnd, resolveDroppableId, activeDroppableId, hiddenDroppableIds };
 }

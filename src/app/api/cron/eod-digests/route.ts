@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { cronAuthError } from "@/lib/cron-auth";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -10,17 +11,13 @@ export const maxDuration = 60;
 //   so any existing scheduler gets a clean 200 instead of a 404.
 //
 // Auth: same convention as the other crons — Authorization: Bearer
-// <CRON_SECRET> or ?secret=. When CRON_SECRET is unset, open to anyone.
+// <CRON_SECRET> or ?secret=. When CRON_SECRET is unset the route answers
+// 503 (fail closed) — see src/lib/cron-auth.ts.
 
 export async function GET(req: NextRequest) {
   const url = new URL(req.url);
-  const secret = process.env.CRON_SECRET;
-  if (secret) {
-    const auth = req.headers.get("authorization") ?? "";
-    const querySecret = url.searchParams.get("secret");
-    const ok = auth === `Bearer ${secret}` || querySecret === secret;
-    if (!ok) return NextResponse.json({ error: "forbidden" }, { status: 403 });
-  }
+  const denied = cronAuthError(req);
+  if (denied) return denied;
 
   // Auto-drafting on a cron is DISABLED. Client update drafts are created
   // on demand only — an approver opens the composer from the /approvals

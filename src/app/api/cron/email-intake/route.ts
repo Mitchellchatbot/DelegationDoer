@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { pollEmailIntake, DEFAULT_THREADS_PER_RUN } from "@/lib/email-intake-runner";
+import { cronAuthError } from "@/lib/cron-auth";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -14,13 +15,8 @@ export const maxDuration = 60;
 // missed events and backlog drain.
 export async function GET(req: NextRequest) {
   const url = new URL(req.url);
-  const secret = process.env.CRON_SECRET;
-  if (secret) {
-    const auth = req.headers.get("authorization") ?? "";
-    const querySecret = url.searchParams.get("secret");
-    const ok = auth === `Bearer ${secret}` || querySecret === secret;
-    if (!ok) return NextResponse.json({ error: "forbidden" }, { status: 403 });
-  }
+  const denied = cronAuthError(req);
+  if (denied) return denied;
 
   const silent = url.searchParams.get("silent") === "true";
   const limitParam = parseInt(url.searchParams.get("limit") ?? "", 10);

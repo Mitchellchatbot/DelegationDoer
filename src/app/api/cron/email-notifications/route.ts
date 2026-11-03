@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { pollEmailNotifications } from "@/lib/email-notifications-poller";
+import { cronAuthError } from "@/lib/cron-auth";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -19,13 +20,8 @@ export const maxDuration = 60;
 
 export async function GET(req: NextRequest) {
   const url = new URL(req.url);
-  const secret = process.env.CRON_SECRET;
-  if (secret) {
-    const auth = req.headers.get("authorization") ?? "";
-    const querySecret = url.searchParams.get("secret");
-    const ok = auth === `Bearer ${secret}` || querySecret === secret;
-    if (!ok) return NextResponse.json({ error: "forbidden" }, { status: 403 });
-  }
+  const denied = cronAuthError(req);
+  if (denied) return denied;
 
   try {
     const result = await pollEmailNotifications();

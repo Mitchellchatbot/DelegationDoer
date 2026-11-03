@@ -4,10 +4,14 @@ name: Daily Briefing
 #
 # Why this exists: on Railway the app's in-process cron (setInterval) only runs
 # while the container is awake, so the morning brief was getting missed. GitHub
-# Actions runs this on its own infrastructure and simply pings the (public,
-# auth-exempt) cron endpoint, which generates + DMs the brief. The endpoint
-# dedupes to one delivery per day, so firing twice is safe — the second run is
-# a no-op ("already-sent-today"), acting as a safety net if the first is delayed.
+# Actions runs this on its own infrastructure and simply pings the cron
+# endpoint, which generates + DMs the brief. The endpoint dedupes to one
+# delivery per day, so firing twice is safe — the second run is a no-op
+# ("already-sent-today"), acting as a safety net if the first is delayed.
+#
+# Auth: /api/cron/* requires `Authorization: Bearer <CRON_SECRET>` (see
+# src/lib/cron-auth.ts). Set the repository secret CRON_SECRET to the same
+# value as the Railway service's CRON_SECRET env var.
 
 on:
   schedule:
@@ -21,12 +25,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Ping daily-briefing endpoint
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
         run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::Repository secret CRON_SECRET is not set; the cron endpoint rejects unauthenticated calls."
+            exit 1
+          fi
           URL="https://delegationdoer-production.up.railway.app/api/cron/daily-briefing"
           # Retry a few times in case Railway is cold-starting.
           for attempt in 1 2 3 4 5; do
-            echo "Attempt $attempt: POST $URL"
-            body="$(curl -sS -m 120 "$URL" || true)"
+            echo "Attempt $attempt: GET $URL"
+            body="$(curl -sS -m 120 -H "Authorization: Bearer $CRON_SECRET" "$URL" || true)"
             echo "Response: $body"
             case "$body" in
               *'"ok":true'*) echo "Brief endpoint responded ok."; exit 0 ;;

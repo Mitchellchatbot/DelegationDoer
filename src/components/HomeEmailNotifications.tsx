@@ -236,15 +236,16 @@ export function HomeEmailNotifications({ onboarded: initialOnboarded }: Props) {
     return () => document.removeEventListener("visibilitychange", onVis);
   }, [onboarded, refresh]);
 
-  // Manual "Poll now" button — hits the cron endpoint directly, then
-  // refreshes the local list. Useful for debugging on prod when you
-  // don't want to wait the 5-minute safety-net cadence.
+  // Manual "Poll now" button — runs the poller through the session-gated
+  // route (the cron endpoint now requires CRON_SECRET), then refreshes the
+  // local list. Useful for debugging on prod when you don't want to wait
+  // the 5-minute safety-net cadence.
   async function pollNow() {
     if (polling) return;
     setPolling(true);
-    console.log("[email-notif] pollNow → hitting cron endpoint");
+    console.log("[email-notif] pollNow → hitting poll endpoint");
     try {
-      const res = await fetch("/api/cron/email-notifications");
+      const res = await fetch("/api/email-notifications/poll", { method: "POST" });
       const data = await res.json().catch(() => ({}));
       console.log("[email-notif] pollNow result", { status: res.status, data });
     } catch (err) {

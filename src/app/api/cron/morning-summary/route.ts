@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { postMessage } from "@/lib/slack";
 import type { HealthLabel } from "@/lib/client-health";
+import { cronAuthError } from "@/lib/cron-auth";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -28,7 +29,10 @@ const SEVERITY: Record<HealthLabel, number> = {
   at_risk: 3
 };
 
-export async function GET() {
+export async function GET(req: Request) {
+  const denied = cronAuthError(req);
+  if (denied) return denied;
+
   const supabase = getSupabaseAdmin();
 
   const { data: ws } = await supabase

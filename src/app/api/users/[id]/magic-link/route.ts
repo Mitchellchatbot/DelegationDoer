@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUserId } from "@/lib/session";
 import { getUserById } from "@/lib/server-data";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
-import { isLeader, isOwner } from "@/lib/access";
+import { isLeader } from "@/lib/access";
 import { lookupUserByEmail, openDm, postMessage } from "@/lib/slack";
 
 export const dynamic = "force-dynamic";
@@ -31,17 +31,10 @@ export async function POST(
     if (!target) {
       return NextResponse.json({ error: "user not found" }, { status: 404 });
     }
-    // A sign-in link IS a session for its target, and this route returns it
-    // to the caller. Minting one for the owner would hand any leader or
-    // stealth admin a session on the owner-only surfaces (finance, the Scale
-    // Room, the executive assistant). Only the owner may mint their own; the
-    // redemption route enforces the same rule for claims made earlier.
-    if (isOwner(target) && !isOwner(actor)) {
-      return NextResponse.json(
-        { error: "Only the owner can create a sign-in link for the owner account." },
-        { status: 403 }
-      );
-    }
+    // Leaders may mint links for ANY account, the owner's included. That is
+    // deliberate: the team signs in as the owner by agreement with him
+    // (#517 briefly restricted this; restored on request). A link is a full
+    // session for its target and the response returns it to the caller.
     if (!target.email) {
       return NextResponse.json(
         { error: "user has no email on file" },

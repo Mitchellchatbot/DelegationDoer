@@ -87,13 +87,17 @@ const SORTS: Record<string, (a: Task, b: Task) => number> = {
 const newestArchivedFirst = (a: Task, b: Task) =>
   +new Date(b.archivedAt ?? 0) - +new Date(a.archivedAt ?? 0);
 
+const LIBRARY_AUTO_SCROLL_OFF = { disabled: true };
+
 export default function BoardPage() {
   const currentUser = useCurrentUser();
   const { users, departments, userById } = useTeam();
   const searchParams = useSearchParams();
   const router = useRouter();
-  const { containerRef, onDragStart, onDragEnd: stopAutoScroll, resolveDroppableId, activeDroppableId } =
-    useHorizontalDragAutoScroll();
+  // hitTest off: each column is a Droppable straight inside the scroller, so the
+  // library tracks the board's scroll itself (see the column markup below).
+  const { containerRef, onDragStart, onDragEnd: stopAutoScroll, hiddenDroppableIds } =
+    useHorizontalDragAutoScroll({ hitTest: false });
   const [tasks, setTasks] = useState<Task[]>([]);
   const [, setLoading] = useState(true);
   // Bumped after an inline create so the tasks fetch below re-runs. The
@@ -564,10 +568,7 @@ export default function BoardPage() {
 
   async function onDragEnd(result: DropResult) {
     if (!result.destination) return;
-    // Re-resolve against the live DOM so a drop after horizontal auto-scroll
-    // lands in the column actually under the cursor (not the library's
-    // pre-scroll destination).
-    const dest = resolveDroppableId(result.destination.droppableId);
+    const dest = result.destination.droppableId;
     const id = result.draggableId;
     const before = tasks.find((t) => t.id === id) ?? archivedTasks.find((t) => t.id === id);
     if (!before) return;
@@ -882,73 +883,87 @@ export default function BoardPage() {
       <DragDropContext
         onDragStart={onDragStart}
         onDragEnd={(r) => { stopAutoScroll(); void onDragEnd(r); }}
+        // The hook above scrolls the board sideways. The library's own
+        // auto-scroll would drive it too, faster, and only while the card's
+        // centre is inside the board, so pushing a card to the screen edge
+        // would stop it.
+        autoScrollerOptions={LIBRARY_AUTO_SCROLL_OFF}
       >
         {/* Horizontal scroll once column count exceeds what fits. Person
             mode regularly has 10+ columns; status mode always has 5. */}
         <div ref={containerRef} className="overflow-x-auto pb-2">
           <div className="flex gap-3 min-w-max">
             {columns.map((col, colIdx) => (
-              <div
+              // The whole column is the Droppable, header included, and its
+              // list scrolls inside it. That leaves the scroller above as every
+              // Droppable's one scroll container, which the library re-measures
+              // as it scrolls, so its target, highlight and drop animation follow
+              // the column actually under the card. With the list itself as the
+              // Droppable, the board's scroll was a second container the library
+              // can't see: after an auto-scroll it kept aiming at whichever column
+              // had been under the card before, and a drop on a header or below a
+              // short list went nowhere or to that old column. The other two
+              // props cover the board's edges; useHorizontalDragAutoScroll says
+              // why.
+              <Droppable
+                droppableId={col.id}
                 key={col.id}
-                className={cn("rounded-2xl bg-surface/40 overflow-hidden anim-fade-in shrink-0 w-72", col.head ? "border-2" : "border", col.tone)}
-                style={{ animationDelay: `${colIdx * 30}ms` }}
+                ignoreContainerClipping
+                isDropDisabled={hiddenDroppableIds.has(col.id)}
               >
-                <div className={cn("px-3 py-2 flex items-center justify-between gap-2", col.head)}>
-                  <div className="flex items-center gap-2 min-w-0">
-                    {col.user && <PersonAvatar userId={col.user.id} name={col.user.name} imageUrl={col.user.avatarUrl} size={20} />}
-                    {groupBy === "client" && col.id !== "__internal" && (
-                      <Briefcase className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
-                    )}
-                    <div className="text-sm font-medium truncate">{col.label}</div>
-                  </div>
-                  <div className="flex items-center gap-1 shrink-0">
-                    <div className={cn("text-xs tabular-nums", col.head ? "font-bold" : "text-muted")}>
-                      {grouped[col.id]?.length ?? 0}{col.id === "__archived" && archivedHasMore && "+"}
+                {(prov, snap) => (
+                  <div
+                    ref={prov.innerRef}
+                    {...prov.droppableProps}
+                    className={cn("rounded-2xl bg-surface/40 overflow-hidden anim-fade-in shrink-0 w-72", col.head ? "border-2" : "border", col.tone)}
+                    style={{ animationDelay: `${colIdx * 30}ms` }}
+                  >
+                    <div className={cn("px-3 py-2 flex items-center justify-between gap-2", col.head)}>
+                      <div className="flex items-center gap-2 min-w-0">
+                        {col.user && <PersonAvatar userId={col.user.id} name={col.user.name} imageUrl={col.user.avatarUrl} size={20} />}
+                        {groupBy === "client" && col.id !== "__internal" && (
+                          <Briefcase className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
+                        )}
+                        <div className="text-sm font-medium truncate">{col.label}</div>
+                      </div>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <div className={cn("text-xs tabular-nums", col.head ? "font-bold" : "text-muted")}>
+                          {grouped[col.id]?.length ?? 0}{col.id === "__archived" && archivedHasMore && "+"}
+                        </div>
+                        {/* Per-person quick-add. `col.user` is set only in person
+                            mode, so this never appears on status/client columns
+                            nor on the Unassigned / Completed buckets (a task has
+                            to have an assignee). canAssignTaskTo is the same
+                            predicate POST /api/tasks applies to the assignee, so
+                            the button never offers a person you'd be refused.
+                            It does NOT cover that route's separate clock-in gate,
+                            which exempts only leaders/admins while ClockGate also
+                            exempts clock_enabled=false users — so those users can
+                            still be refused on submit, exactly as they are from
+                            the Topbar's "New task". */}
+                        {col.user && !selecting && scope !== "archived" &&
+                         canAssignTaskTo(currentUser, col.user) && (
+                          <AddTaskButton user={col.user} onOpen={openAddFor} />
+                        )}
+                        {/* Approve the whole column in one go. Anything the viewer
+                            may not approve (their own submissions) is reported
+                            back as skipped rather than silently dropped. */}
+                        {col.id === "__needs_approval" && canProof && !selecting &&
+                         (grouped[col.id]?.length ?? 0) > 0 && (
+                          <button
+                            type="button"
+                            disabled={bulkBusy}
+                            onClick={() => approveTasks((grouped[col.id] ?? []).map((t) => t.id))}
+                            title="Approve every task in this column"
+                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-600 text-white hover:bg-emerald-700 transition-colors disabled:opacity-50"
+                          >
+                            <CheckCheck className="w-3 h-3" />
+                            {bulkBusy ? "Approving…" : "Approve all"}
+                          </button>
+                        )}
+                      </div>
                     </div>
-                    {/* Per-person quick-add. `col.user` is set only in person
-                        mode, so this never appears on status/client columns
-                        nor on the Unassigned / Completed buckets (a task has
-                        to have an assignee). canAssignTaskTo is the same
-                        predicate POST /api/tasks applies to the assignee, so
-                        the button never offers a person you'd be refused.
-                        It does NOT cover that route's separate clock-in gate,
-                        which exempts only leaders/admins while ClockGate also
-                        exempts clock_enabled=false users — so those users can
-                        still be refused on submit, exactly as they are from
-                        the Topbar's "New task". */}
-                    {col.user && !selecting && scope !== "archived" &&
-                     canAssignTaskTo(currentUser, col.user) && (
-                      <AddTaskButton user={col.user} onOpen={openAddFor} />
-                    )}
-                    {/* Approve the whole column in one go. Anything the viewer
-                        may not approve (their own submissions) is reported
-                        back as skipped rather than silently dropped. */}
-                    {col.id === "__needs_approval" && canProof && !selecting &&
-                     (grouped[col.id]?.length ?? 0) > 0 && (
-                      <button
-                        type="button"
-                        disabled={bulkBusy}
-                        onClick={() => approveTasks((grouped[col.id] ?? []).map((t) => t.id))}
-                        title="Approve every task in this column"
-                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-600 text-white hover:bg-emerald-700 transition-colors disabled:opacity-50"
-                      >
-                        <CheckCheck className="w-3 h-3" />
-                        {bulkBusy ? "Approving…" : "Approve all"}
-                      </button>
-                    )}
-                  </div>
-                </div>
-                <Droppable droppableId={col.id}>
-                  {(prov, snap) => {
-                    // Prefer the live hit-tested column (correct during horizontal
-                    // auto-scroll); fall back to the library snapshot for keyboard drags.
-                    const over = activeDroppableId !== null
-                      ? activeDroppableId === col.id
-                      : snap.isDraggingOver;
-                    return (
                     <div
-                      ref={prov.innerRef}
-                      {...prov.droppableProps}
                       // Cap column height so tasks scroll vertically WITHIN
                       // the column. Without the cap, a busy column pushes the
                       // board's horizontal scrollbar off-screen and you have
@@ -957,7 +972,7 @@ export default function BoardPage() {
                       // the viewport's lower edge regardless of column size.
                       className={cn(
                         "p-2 space-y-2 min-h-[300px] max-h-[70vh] overflow-y-auto transition-colors",
-                        over && "bg-surface2/50"
+                        snap.isDraggingOver && "bg-surface2/50"
                       )}
                     >
                       {(grouped[col.id] ?? []).map((t, i) => (
@@ -1086,21 +1101,20 @@ export default function BoardPage() {
                         </div>
                       )}
                     </div>
-                    );
-                  }}
-                </Droppable>
-                {/* The column only holds the newest cards, so point at the full
-                    list when there's more. prefetch off for the same reason as
-                    the Archived tab: that page reads the whole archive. */}
-                {col.id === "__archived" && archivedHasMore && (
-                  <div className="px-3 py-2 border-t border-border flex items-center justify-between gap-2 text-[11px] text-muted">
-                    <span>Most recent only</span>
-                    <Link href="/tasks/archived" prefetch={false} className="font-medium text-accent hover:underline">
-                      View all
-                    </Link>
+                    {/* The column only holds the newest cards, so point at the full
+                        list when there's more. prefetch off for the same reason as
+                        the Archived tab: that page reads the whole archive. */}
+                    {col.id === "__archived" && archivedHasMore && (
+                      <div className="px-3 py-2 border-t border-border flex items-center justify-between gap-2 text-[11px] text-muted">
+                        <span>Most recent only</span>
+                        <Link href="/tasks/archived" prefetch={false} className="font-medium text-accent hover:underline">
+                          View all
+                        </Link>
+                      </div>
+                    )}
                   </div>
                 )}
-              </div>
+              </Droppable>
             ))}
             {columns.length === 0 && (
               <div className="card p-10 text-center text-sm text-muted w-full">

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { pollEmailNotifications } from "@/lib/email-notifications-poller";
+import { cronAuthError } from "@/lib/cron-auth";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -11,21 +12,16 @@ export const maxDuration = 60;
 // failing in prod), this scans every opted-in account's INBOX via the
 // missive REST API and writes notification rows for anything new.
 //
-// Auth: same Vercel-cron convention as the other crons —
-// `Authorization: Bearer <CRON_SECRET>` or `?secret=`.
+// Auth: `Authorization: Bearer <CRON_SECRET>` only; 503 when CRON_SECRET is
+// unset (fail closed) — see src/lib/cron-auth.ts.
 //
 // Cadence: every minute. Each pass is bounded by THREADS_PER_ACCOUNT
 // in the poller so a busy workspace can't blow the 60s maxDuration.
 
 export async function GET(req: NextRequest) {
   const url = new URL(req.url);
-  const secret = process.env.CRON_SECRET;
-  if (secret) {
-    const auth = req.headers.get("authorization") ?? "";
-    const querySecret = url.searchParams.get("secret");
-    const ok = auth === `Bearer ${secret}` || querySecret === secret;
-    if (!ok) return NextResponse.json({ error: "forbidden" }, { status: 403 });
-  }
+  const denied = cronAuthError(req);
+  if (denied) return denied;
 
   try {
     const result = await pollEmailNotifications();

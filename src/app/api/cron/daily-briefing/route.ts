@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { runDailyBriefing } from "@/lib/daily-briefing-runner";
+import { cronAuthError } from "@/lib/cron-auth";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -14,6 +15,9 @@ export const maxDuration = 60;
 //     ?dryRun=1  render + return the briefing without storing or DMing
 //     ?force=1   bypass the 9am-NY-hour guard and same-day dedupe
 export async function GET(req: NextRequest) {
+  const denied = cronAuthError(req);
+  if (denied) return denied;
+
   const { searchParams } = new URL(req.url);
   const dryRun = searchParams.get("dryRun") === "1" || searchParams.get("dryRun") === "true";
   const force = searchParams.get("force") === "1" || searchParams.get("force") === "true";

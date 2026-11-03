@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { syncWebsiteBuildStatuses } from "@/lib/website-builder-integration";
+import { cronAuthError } from "@/lib/cron-auth";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -11,7 +12,10 @@ export const maxDuration = 60;
 // (locked auto-deploy: DD users never block on human approval). All
 // per-lead failures are returned in the payload but never throw — one
 // bad row doesn't poison the tick.
-export async function GET() {
+export async function GET(req: Request) {
+  const denied = cronAuthError(req);
+  if (denied) return denied;
+
   try {
     const outcome = await syncWebsiteBuildStatuses();
     return NextResponse.json({ ok: true, ...outcome });

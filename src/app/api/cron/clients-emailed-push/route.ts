@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { runClientsEmailedPush } from "@/lib/clients-emailed-push-runner";
+import { cronAuthError } from "@/lib/cron-auth";
 
 // 7pm America/New_York, every day — DMs Sam & Mitchell the day's "clients
 // emailed" summary, with the week's roll-up folded into Friday's DM. Vercel cron
@@ -15,6 +16,9 @@ import { runClientsEmailedPush } from "@/lib/clients-emailed-push-runner";
 export const dynamic = "force-dynamic";
 
 export async function GET(req: Request) {
+  const denied = cronAuthError(req);
+  if (denied) return denied;
+
   try {
     const params = new URL(req.url).searchParams;
     const force = params.get("force") === "1";

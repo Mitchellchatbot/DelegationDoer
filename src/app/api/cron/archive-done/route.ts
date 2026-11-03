@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { runArchiveSweep } from "@/lib/task-archive-runner";
+import { cronAuthError } from "@/lib/cron-auth";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -14,10 +15,8 @@ export const maxDuration = 60;
 // task-archive-bootstrap (which stands down on Vercel so the two never
 // double-run). This route remains the manual / debug entrypoint either way.
 //
-// Auth: same convention as the other crons — Vercel sends
-// `Authorization: Bearer <CRON_SECRET>`; we also accept `?secret=` so the
-// route is debuggable from a browser. When CRON_SECRET is unset (local dev)
-// the gate is skipped.
+// Auth: `Authorization: Bearer <CRON_SECRET>` only; 503 when CRON_SECRET is
+// unset (fail closed) — see src/lib/cron-auth.ts.
 //
 // Safety / observability:
 //   - `?dryRun=true` returns the tasks that WOULD be archived without writing
@@ -27,13 +26,8 @@ export const maxDuration = 60;
 //     via the Archived view's Unarchive button.
 export async function GET(req: NextRequest) {
   const url = new URL(req.url);
-  const secret = process.env.CRON_SECRET;
-  if (secret) {
-    const auth = req.headers.get("authorization") ?? "";
-    const querySecret = url.searchParams.get("secret");
-    const ok = auth === `Bearer ${secret}` || querySecret === secret;
-    if (!ok) return NextResponse.json({ error: "forbidden" }, { status: 403 });
-  }
+  const denied = cronAuthError(req);
+  if (denied) return denied;
 
   const dryRun = url.searchParams.get("dryRun") === "true";
   try {

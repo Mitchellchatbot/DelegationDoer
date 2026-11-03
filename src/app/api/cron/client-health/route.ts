@@ -4,6 +4,7 @@ import { listThreadsPaged, getThread } from "@/lib/missive-client";
 import { loadClientMatcher } from "@/lib/client-thread-match";
 import { scoreAndStore, recomputeClientHealth } from "@/lib/satisfaction-scoring";
 import { syncClientTouchpointsFromMissive } from "@/lib/touchpoint-sync";
+import { cronAuthError } from "@/lib/cron-auth";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -18,20 +19,15 @@ export const maxDuration = 60;
 // never shows up under folder=INBOX. INBOX-only walks would silently
 // miss every outbound that didn't get answered.
 //
-// Auth: Vercel cron Bearer token, or ?secret= query param (mirrors
-// /api/cron/email-intake).
+// Auth: `Authorization: Bearer <CRON_SECRET>` only; 503 when CRON_SECRET is
+// unset (fail closed) — see src/lib/cron-auth.ts.
 //
 // One-time historical backfill lives at
 // /api/admin/scan-mail-satisfaction — this one's just the keep-up
 // job that runs every night.
 export async function GET(req: NextRequest) {
-  const secret = process.env.CRON_SECRET;
-  if (secret) {
-    const auth = req.headers.get("authorization") ?? "";
-    const querySecret = new URL(req.url).searchParams.get("secret");
-    const ok = auth === `Bearer ${secret}` || querySecret === secret;
-    if (!ok) return NextResponse.json({ error: "forbidden" }, { status: 403 });
-  }
+  const denied = cronAuthError(req);
+  if (denied) return denied;
 
   const supabase = getSupabaseAdmin();
   const matcher = await loadClientMatcher();

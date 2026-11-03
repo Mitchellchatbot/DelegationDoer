@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { runSupportInboxPoll } from "@/lib/support-inbox-poller";
+import { cronAuthError } from "@/lib/cron-auth";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -27,6 +28,9 @@ export const maxDuration = 60;
 // backfill included. That is deliberate, not a bug: the Blooio org is shared
 // with the New Life CRM, so a sweep would ingest their conversations too.
 export async function GET(req: Request) {
+  const denied = cronAuthError(req);
+  if (denied) return denied;
+
   try {
     const days = Number(new URL(req.url).searchParams.get("days")) || 0;
     const opts =

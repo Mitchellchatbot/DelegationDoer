@@ -1,0 +1,218 @@
+import "server-only";
+
+import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
+
+// AES-256-GCM for the credentials the assistant stores: the Slack bot and user
+// tokens in exec_slack_installations (P6). The pattern is onboarding-vault.ts
+// with three additions:
+//
+//   - Every blob names the key that sealed it (kid = first 8 hex chars of
+//     sha256(key)). A rotation can then tell old blobs from new ones instead
+//     of guessing.
+//   - EXEC_TOKEN_KEY seals. EXEC_TOKEN_KEY_PREVIOUS, while set, can still open
+//     what the old key sealed, and needsReseal() finds those blobs so they can
+//     be re-sealed under the current key.
+//   - A context string is bound in as GCM additional data, e.g.
+//     "exec_slack_installations.user_token:<principalId>". A blob copied to
+//     another row or column then fails to open instead of handing the wrong
+//     principal a working token.
+//
+// Keys are 32 random bytes, base64 or base64url (`openssl rand -base64 32`).
+// Anything else is a misconfiguration and every call throws. There is no
+// plaintext fallback, ever: without a valid key nothing is sealed or opened.
+
+export type SecretUnavailableReason =
+  /** EXEC_TOKEN_KEY is unset */
+  | "not_configured"
+  /** a key is set but isn't base64 of exactly 32 bytes */
+  | "misconfigured"
+  /** not a blob sealSecret wrote (format, version, encoding or lengths) */
+  | "malformed"
+  /** sealed under a key that is neither EXEC_TOKEN_KEY nor EXEC_TOKEN_KEY_PREVIOUS */
+  | "unknown_key"
+  /** GCM authentication failed: tampered with, or opened with the wrong context */
+  | "auth_failed";
+
+/** A stored secret can't be sealed or opened. Messages never contain key material or plaintext. */
+export class SecretUnavailableError extends Error {
+  readonly reason: SecretUnavailableReason;
+  constructor(reason: SecretUnavailableReason, message: string) {
+    super(message);
+    this.name = "SecretUnavailableError";
+    this.reason = reason;
+  }
+}
+
+const VERSION = "v1";
+const ALG = "aes-256-gcm";
+const KEY_BYTES = 32;
+const IV_BYTES = 12;
+const TAG_BYTES = 16;
+
+// Key env values: the standard or the URL-safe base64 alphabet, optional padding.
+const KEY_B64 = /^[A-Za-z0-9+/_-]+={0,2}$/;
+// Blob parts: unpadded base64url, exactly what sealSecret writes.
+const PART_B64URL = /^[A-Za-z0-9_-]+$/;
+const KID = /^[0-9a-f]{8}$/;
+// Buffer.from(s, "utf8") turns a lone surrogate into U+FFFD, so such a string
+// wouldn't come back out of openSecret unchanged.
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
+interface Key {
+  kid: string;
+  bytes: Buffer;
+}
+
+function decodeKey(envName: "EXEC_TOKEN_KEY" | "EXEC_TOKEN_KEY_PREVIOUS"): Key | null {
+  const raw = process.env[envName]?.trim();
+  if (!raw) return null;
+  // Buffer.from(…, "base64") skips characters it doesn't recognise instead of
+  // failing, so check the alphabet first. A typo must not quietly become a
+  // different key.
+  if (!KEY_B64.test(raw)) {
+    throw new SecretUnavailableError("misconfigured", `${envName} is not base64/base64url`);
+  }
+  // The "base64" decoder accepts the URL-safe alphabet as well.
+  const bytes = Buffer.from(raw, "base64");
+  if (bytes.length !== KEY_BYTES) {
+    throw new SecretUnavailableError(
+      "misconfigured",
+      `${envName} must decode to exactly ${KEY_BYTES} bytes, got ${bytes.length}`
+    );
+  }
+  return { kid: createHash("sha256").update(bytes).digest("hex").slice(0, 8), bytes };
+}
+
+// Read on every call. That costs two env reads and two hashes, and means a
+// fixed env never leaves a stale key behind in a long-lived process.
+function keyring(): { current: Key; all: Key[] } {
+  const current = decodeKey("EXEC_TOKEN_KEY");
+  const previous = decodeKey("EXEC_TOKEN_KEY_PREVIOUS");
+  if (!current) {
+    throw new SecretUnavailableError(
+      "not_configured",
+      previous
+        ? "EXEC_TOKEN_KEY is not set (EXEC_TOKEN_KEY_PREVIOUS alone is not a usable configuration)"
+        : "EXEC_TOKEN_KEY is not set"
+    );
+  }
+  return { current, all: previous ? [current, previous] : [current] };
+}
+
+function assertContext(context: string, fn: string): void {
+  if (typeof context !== "string" || context.trim().length === 0) {
+    throw new TypeError(`${fn}: a non-empty context is required (it binds the secret to its row and column)`);
+  }
+}
+
+function malformed(detail: string): SecretUnavailableError {
+  return new SecretUnavailableError("malformed", `not a sealed secret: ${detail}`);
+}
+
+interface ParsedBlob {
+  kid: string;
+  iv: Buffer;
+  tag: Buffer;
+  ct: Buffer;
+}
+
+// Error messages here never echo the blob. A plaintext token stored by
+// mistake would otherwise end up in a log line.
+function parseSealed(sealed: string): ParsedBlob {
+  if (typeof sealed !== "string") throw malformed("not a string");
+  const parts = sealed.split(".");
+  if (parts.length !== 5) throw malformed("wrong number of parts");
+  const [version, kid, iv64, tag64, ct64] = parts;
+  if (version !== VERSION) throw malformed("unsupported version");
+  if (!KID.test(kid)) throw malformed("bad key id");
+  if (!PART_B64URL.test(iv64) || !PART_B64URL.test(tag64) || !PART_B64URL.test(ct64)) {
+    throw malformed("bad encoding");
+  }
+  const iv = Buffer.from(iv64, "base64url");
+  const tag = Buffer.from(tag64, "base64url");
+  const ct = Buffer.from(ct64, "base64url");
+  if (iv.length !== IV_BYTES || tag.length !== TAG_BYTES || ct.length === 0) throw malformed("bad lengths");
+  return { kid, iv, tag, ct };
+}
+
+/** True when EXEC_TOKEN_KEY is set and valid, and EXEC_TOKEN_KEY_PREVIOUS is unset or valid. */
+export function cryptoConfigured(): boolean {
+  try {
+    keyring();
+    return true;
+  } catch {
+    // The answer IS the failure. A health check calls this, and the reason
+    // shows up when sealSecret/openSecret throw.
+    return false;
+  }
+}
+
+/**
+ * Encrypt `plain` under EXEC_TOKEN_KEY, bound to `context`:
+ * `v1.<kid>.<iv>.<tag>.<ciphertext>` (base64url parts, 12-byte random IV).
+ * Throws SecretUnavailableError when the key is missing or invalid.
+ */
+export function sealSecret(plain: string, context: string): string {
+  if (typeof plain !== "string" || plain.length === 0) throw new TypeError("sealSecret: refusing to seal an empty secret");
+  if (LONE_SURROGATE.test(plain)) throw new TypeError("sealSecret: the secret is not well-formed UTF-16 and would not round-trip");
+  assertContext(context, "sealSecret");
+  const { current } = keyring();
+  const iv = randomBytes(IV_BYTES);
+  const cipher = createCipheriv(ALG, current.bytes, iv, { authTagLength: TAG_BYTES });
+  cipher.setAAD(Buffer.from(context, "utf8"));
+  const ct = Buffer.concat([cipher.update(plain, "utf8"), cipher.final()]);
+  return [
+    VERSION,
+    current.kid,
+    iv.toString("base64url"),
+    cipher.getAuthTag().toString("base64url"),
+    ct.toString("base64url")
+  ].join(".");
+}
+
+/**
+ * Decrypt a blob from sealSecret with the same `context`. Throws
+ * SecretUnavailableError (see `reason`) instead of ever returning garbage.
+ */
+export function openSecret(sealed: string, context: string): string {
+  assertContext(context, "openSecret");
+  const { all } = keyring();
+  const blob = parseSealed(sealed);
+  // Normally one candidate. Two only if both keys share a kid (a 1-in-2^32
+  // collision), in which case both get tried.
+  const candidates = all.filter((k) => k.kid === blob.kid);
+  if (candidates.length === 0) {
+    throw new SecretUnavailableError(
+      "unknown_key",
+      `sealed under key ${blob.kid}, which is neither EXEC_TOKEN_KEY nor EXEC_TOKEN_KEY_PREVIOUS`
+    );
+  }
+  for (const key of candidates) {
+    try {
+      const decipher = createDecipheriv(ALG, key.bytes, blob.iv, { authTagLength: TAG_BYTES });
+      decipher.setAAD(Buffer.from(context, "utf8"));
+      decipher.setAuthTag(blob.tag);
+      return Buffer.concat([decipher.update(blob.ct), decipher.final()]).toString("utf8");
+    } catch {
+      // final() throws when GCM authentication fails. Try the next candidate.
+      // If none opens it, the throw below reports it.
+    }
+  }
+  throw new SecretUnavailableError(
+    "auth_failed",
+    "sealed secret failed authentication (tampered with, or opened with the wrong context)"
+  );
+}
+
+/**
+ * True when `sealed` isn't a v1 blob under the CURRENT key: sealed under
+ * EXEC_TOKEN_KEY_PREVIOUS (or an older key), or not a blob at all. Open it and
+ * seal it again to move it to the current key. Throws SecretUnavailableError
+ * when the keys are missing or invalid.
+ */
+export function needsReseal(sealed: string): boolean {
+  const { current } = keyring();
+  if (typeof sealed !== "string") return true;
+  const parts = sealed.split(".");
+  return !(parts.length === 5 && parts[0] === VERSION && parts[1] === current.kid);
+}

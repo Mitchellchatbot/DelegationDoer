@@ -28,7 +28,7 @@ function cut(s: string, n: number): string {
   return s.slice(0, code >= 0xd800 && code <= 0xdbff ? n - 1 : n);
 }
 
-function redact(value: unknown, depth = 0): unknown {
+export function redact(value: unknown, depth = 0): unknown {
   if (depth > 6) return "[truncated]";
   if (typeof value === "string") return value.length > MAX_STRING ? `${cut(value, MAX_STRING)}…[truncated]` : value;
   if (Array.isArray(value)) return value.slice(0, 200).map((v) => redact(v, depth + 1));
@@ -44,7 +44,7 @@ function redact(value: unknown, depth = 0): unknown {
 
 // A regenerated brief or a long instructions text shouldn't bloat the table;
 // keep a bounded copy that still shows what happened.
-function bounded(value: unknown): unknown {
+export function bounded(value: unknown): unknown {
   const safe = redact(value);
   const json = JSON.stringify(safe ?? null);
   return json.length <= MAX_JSON ? safe : { truncated: true, preview: cut(json, MAX_JSON) };

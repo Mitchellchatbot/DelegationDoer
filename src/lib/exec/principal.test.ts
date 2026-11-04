@@ -1,0 +1,386 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { SupabaseClient } from "@supabase/supabase-js";
+
+vi.mock("@/lib/supabase-admin", () => ({ getSupabaseAdmin: vi.fn() }));
+
+import { getSupabaseAdmin } from "@/lib/supabase-admin";
+import {
+  DEFAULT_SETTINGS,
+  DEFAULT_TIMEZONE,
+  isValidTimeZone,
+  listEnabledPrincipals,
+  loadPrincipalById,
+  loadPrincipalForUser,
+  loadSettings,
+  principalFromRows,
+  resolveTimezone,
+  settingsFromRow
+} from "@/lib/exec/principal";
+
+// ---------------------------------------------------------------------------
+// A chainable stand-in for the service-role client: from().select().eq()...
+// then .maybeSingle() or a plain await. Rows are filtered by every .eq().
+// ---------------------------------------------------------------------------
+
+type Row = Record<string, unknown>;
+interface Query {
+  table: string;
+  columns: string | null;
+  filters: [string, unknown][];
+}
+
+function fakeDb(tables: Record<string, Row[]>, errors: Record<string, string> = {}) {
+  const queries: Query[] = [];
+  const client = {
+    from(table: string) {
+      const q: Query = { table, columns: null, filters: [] };
+      queries.push(q);
+      const run = () => {
+        if (errors[table]) return { data: null, error: { message: errors[table] } };
+        const rows = (tables[table] ?? []).filter((r) => q.filters.every(([k, v]) => r[k] === v));
+        return { data: rows, error: null };
+      };
+      const builder = {
+        select(columns: string) {
+          q.columns = columns;
+          return builder;
+        },
+        eq(column: string, value: unknown) {
+          q.filters.push([column, value]);
+          return builder;
+        },
+        async maybeSingle() {
+          const r = run();
+          if (r.error) return r;
+          if (r.data.length > 1) return { data: null, error: { message: "multiple rows" } };
+          return { data: r.data[0] ?? null, error: null };
+        },
+        then<A, B>(onFulfilled?: (v: ReturnType<typeof run>) => A, onRejected?: (e: unknown) => B) {
+          return Promise.resolve(run()).then(onFulfilled, onRejected);
+        }
+      };
+      return builder;
+    }
+  };
+  vi.mocked(getSupabaseAdmin).mockReturnValue(client as unknown as SupabaseClient);
+  return { queries, tablesQueried: () => queries.map((q) => q.table) };
+}
+
+const principalRow = (over: Row = {}): Row => ({
+  id: "ep_1",
+  user_id: "u_1",
+  enabled: true,
+  mail_account_ids: ["acc_1"],
+  slack_team_id: null,
+  slack_user_id: null,
+  ...over
+});
+const userRow = (over: Row = {}): Row => ({
+  id: "u_1",
+  email: "Mitchell@ScaledAI.org",
+  name: "Mitchell",
+  work_timezone: "America/Chicago",
+  ...over
+});
+const settingsRow = (over: Row = {}): Row => ({
+  principal_id: "ep_1",
+  brief_enabled: true,
+  brief_local_time: "07:30",
+  brief_timezone: "Asia/Karachi",
+  supersede_legacy_brief: true,
+  checkins_enabled: false,
+  restricted_policy: "dd_only",
+  watch_mode: "member_only",
+  muted_channel_ids: ["C1", "C2"],
+  retention_days_slack: 30,
+  retention_days_email: 60,
+  retention_days_chat: 45,
+  daily_cost_cap_usd: "12.50",
+  ...over
+});
+
+// principalFromRows takes the module's private row types; tests build them as plain objects.
+type PRow = Parameters<typeof principalFromRows>[0];
+type URow = Parameters<typeof principalFromRows>[1];
+type SRow = NonNullable<Parameters<typeof principalFromRows>[2]>;
+
+beforeEach(() => {
+  vi.mocked(getSupabaseAdmin).mockReset();
+});
+
+describe("isValidTimeZone / resolveTimezone", () => {
+  it("accepts IANA zones and rejects everything else", () => {
+    expect(isValidTimeZone("America/New_York")).toBe(true);
+    expect(isValidTimeZone("UTC")).toBe(true);
+    expect(isValidTimeZone("Not/AZone")).toBe(false);
+    expect(isValidTimeZone("")).toBe(false);
+    expect(isValidTimeZone(null)).toBe(false);
+    expect(isValidTimeZone(undefined)).toBe(false);
+  });
+
+  it("prefers the settings zone, then the user's zone, then New York", () => {
+    expect(resolveTimezone("Asia/Karachi", "Europe/London")).toBe("Asia/Karachi");
+    expect(resolveTimezone(null, "Europe/London")).toBe("Europe/London");
+    expect(resolveTimezone(undefined, undefined)).toBe(DEFAULT_TIMEZONE);
+    expect(DEFAULT_TIMEZONE).toBe("America/New_York");
+  });
+
+  it("skips invalid zones instead of failing", () => {
+    expect(resolveTimezone("Mars/Olympus", "Europe/London")).toBe("Europe/London");
+    expect(resolveTimezone("Mars/Olympus", "Also/Bad")).toBe(DEFAULT_TIMEZONE);
+    expect(resolveTimezone("", "")).toBe(DEFAULT_TIMEZONE);
+  });
+});
+
+describe("settingsFromRow", () => {
+  it("returns the defaults when there is no row, without sharing the defaults' array", () => {
+    const s = settingsFromRow(null, "ep_9");
+    expect(s).toEqual({ principalId: "ep_9", ...DEFAULT_SETTINGS });
+    s.mutedChannelIds.push("C_MUTATED");
+    expect(DEFAULT_SETTINGS.mutedChannelIds).toEqual([]);
+  });
+
+  it("maps every column of a full row", () => {
+    expect(settingsFromRow(settingsRow() as unknown as SRow, "ep_1")).toEqual({
+      principalId: "ep_1",
+      briefEnabled: true,
+      briefLocalTime: "07:30",
+      briefTimezone: "Asia/Karachi",
+      supersedeLegacyBrief: true,
+      checkinsEnabled: false,
+      restrictedPolicy: "dd_only",
+      watchMode: "member_only",
+      mutedChannelIds: ["C1", "C2"],
+      retentionDaysSlack: 30,
+      retentionDaysEmail: 60,
+      retentionDaysChat: 45,
+      dailyCostCapUsd: 12.5
+    });
+  });
+
+  it("fills every null column with its default", () => {
+    const nulls = Object.fromEntries(Object.keys(settingsRow()).map((k) => [k, null]));
+    const s = settingsFromRow({ ...nulls, principal_id: "ep_1" } as unknown as SRow, "ep_1");
+    expect(s).toEqual({ principalId: "ep_1", ...DEFAULT_SETTINGS });
+  });
+
+  it("only accepts a 24h HH:MM brief time", () => {
+    const at = (v: unknown) => settingsFromRow(settingsRow({ brief_local_time: v }) as unknown as SRow, "ep_1").briefLocalTime;
+    expect(at("23:59")).toBe("23:59");
+    expect(at("00:00")).toBe("00:00");
+    expect(at("7:00")).toBe("08:00");
+    expect(at("24:00")).toBe("08:00");
+    expect(at("12:60")).toBe("08:00");
+    expect(at("08:00 ")).toBe("08:00");
+    expect(at("")).toBe("08:00");
+  });
+
+  it("coerces unknown enum values to the safe default", () => {
+    const s = (over: Row) => settingsFromRow(settingsRow(over) as unknown as SRow, "ep_1");
+    expect(s({ restricted_policy: "show_everything" }).restrictedPolicy).toBe("hidden");
+    expect(s({ restricted_policy: "hidden" }).restrictedPolicy).toBe("hidden");
+    expect(s({ watch_mode: "everything" }).watchMode).toBe("active_public");
+    expect(s({ watch_mode: "active_public" }).watchMode).toBe("active_public");
+  });
+
+  it("parses numeric strings, keeps a 0 cost cap and falls back on garbage", () => {
+    const s = (over: Row) => settingsFromRow(settingsRow(over) as unknown as SRow, "ep_1");
+    expect(s({ daily_cost_cap_usd: "0" }).dailyCostCapUsd).toBe(0);
+    expect(s({ daily_cost_cap_usd: 0 }).dailyCostCapUsd).toBe(0);
+    expect(s({ daily_cost_cap_usd: "abc" }).dailyCostCapUsd).toBe(DEFAULT_SETTINGS.dailyCostCapUsd);
+    expect(s({ daily_cost_cap_usd: Number.NaN }).dailyCostCapUsd).toBe(DEFAULT_SETTINGS.dailyCostCapUsd);
+    expect(s({ retention_days_email: Number.POSITIVE_INFINITY }).retentionDaysEmail).toBe(DEFAULT_SETTINGS.retentionDaysEmail);
+  });
+
+  it("copies the muted channel list and ignores a non-array", () => {
+    const muted = ["C1"];
+    const s = settingsFromRow(settingsRow({ muted_channel_ids: muted }) as unknown as SRow, "ep_1");
+    muted.push("C_LATER");
+    expect(s.mutedChannelIds).toEqual(["C1"]);
+    expect(settingsFromRow(settingsRow({ muted_channel_ids: "C1" }) as unknown as SRow, "ep_1").mutedChannelIds).toEqual([]);
+  });
+
+  it("passes brief_timezone through untouched (principalFromRows validates it)", () => {
+    expect(settingsFromRow(settingsRow({ brief_timezone: "Mars/Olympus" }) as unknown as SRow, "ep_1").briefTimezone).toBe("Mars/Olympus");
+  });
+});
+
+describe("principalFromRows", () => {
+  const build = (p: Row = {}, u: Row = {}, s: Row | null = null) =>
+    principalFromRows(principalRow(p) as unknown as PRow, userRow(u) as unknown as URow, s as unknown as SRow | null);
+
+  it("returns null for a disabled principal", () => {
+    expect(build({ enabled: false })).toBeNull();
+  });
+
+  it("returns null when the user has no email", () => {
+    expect(build({}, { email: null })).toBeNull();
+    expect(build({}, { email: "" })).toBeNull();
+  });
+
+  it("maps ids, trims and lowercases the email, and trims the name", () => {
+    const p = build({ slack_team_id: "T1", slack_user_id: "U1" }, { email: "  Mitchell@ScaledAI.org ", name: "  Mitchell  " });
+    expect(p).toMatchObject({
+      id: "ep_1",
+      userId: "u_1",
+      email: "mitchell@scaledai.org",
+      name: "Mitchell",
+      slackTeamId: "T1",
+      slackUserId: "U1"
+    });
+  });
+
+  it("falls back to the trimmed email when the name is blank", () => {
+    expect(build({}, { name: "   " })?.name).toBe("Mitchell@ScaledAI.org");
+    expect(build({}, { name: null })?.name).toBe("Mitchell@ScaledAI.org");
+  });
+
+  it("resolves the timezone: settings, then user, then New York", () => {
+    expect(build({}, {}, settingsRow())?.timezone).toBe("Asia/Karachi");
+    expect(build({}, {}, settingsRow({ brief_timezone: "Mars/Olympus" }))?.timezone).toBe("America/Chicago");
+    expect(build({}, { work_timezone: null }, null)?.timezone).toBe(DEFAULT_TIMEZONE);
+  });
+
+  it("keeps only non-empty string mail account ids", () => {
+    expect(build({ mail_account_ids: ["acc_1", "", null, 5, "acc_2"] })?.mailAccountIds).toEqual(["acc_1", "acc_2"]);
+    expect(build({ mail_account_ids: null })?.mailAccountIds).toEqual([]);
+  });
+
+  it("returns a frozen principal with its own frozen copy of the account ids", () => {
+    const ids = ["acc_1"];
+    const p = build({ mail_account_ids: ids });
+    expect(p).not.toBeNull();
+    if (!p) return;
+    ids.push("acc_injected");
+    expect(p.mailAccountIds).toEqual(["acc_1"]);
+    expect(Object.isFrozen(p)).toBe(true);
+    expect(Object.isFrozen(p.mailAccountIds)).toBe(true);
+    expect(() => {
+      (p as unknown as { email: string }).email = "attacker@example.com";
+    }).toThrow(TypeError);
+    expect(() => {
+      (p.mailAccountIds as string[]).push("acc_x");
+    }).toThrow(TypeError);
+  });
+
+  it("defaults missing slack ids to null", () => {
+    const p = principalFromRows(
+      { id: "ep_1", user_id: "u_1", enabled: true, mail_account_ids: [] } as unknown as PRow,
+      userRow() as unknown as URow,
+      null
+    );
+    expect(p?.slackTeamId).toBeNull();
+    expect(p?.slackUserId).toBeNull();
+  });
+});
+
+describe("loadPrincipalForUser", () => {
+  it("loads the enabled principal for a user, with settings applied", async () => {
+    const db = fakeDb({ exec_principals: [principalRow()], users: [userRow()], exec_settings: [settingsRow()] });
+    const p = await loadPrincipalForUser("u_1");
+    expect(p).toMatchObject({ id: "ep_1", userId: "u_1", email: "mitchell@scaledai.org", timezone: "Asia/Karachi" });
+    expect(db.queries[0]).toMatchObject({ table: "exec_principals", filters: [["user_id", "u_1"]] });
+    expect(db.queries[0].columns).toContain("mail_account_ids");
+    expect(db.queries.find((q) => q.table === "users")?.filters).toEqual([["id", "u_1"]]);
+    expect(db.queries.find((q) => q.table === "exec_settings")?.filters).toEqual([["principal_id", "ep_1"]]);
+  });
+
+  it("returns null for a user without a principal, without reading further", async () => {
+    const db = fakeDb({ exec_principals: [principalRow()], users: [userRow({ id: "u_2" })] });
+    expect(await loadPrincipalForUser("u_2")).toBeNull();
+    expect(db.tablesQueried()).toEqual(["exec_principals"]);
+  });
+
+  it("returns null for a disabled principal, without reading the user", async () => {
+    const db = fakeDb({ exec_principals: [principalRow({ enabled: false })], users: [userRow()] });
+    expect(await loadPrincipalForUser("u_1")).toBeNull();
+    expect(db.tablesQueried()).toEqual(["exec_principals"]);
+  });
+
+  it("returns null when the users row is gone or has no email", async () => {
+    fakeDb({ exec_principals: [principalRow()], users: [] });
+    expect(await loadPrincipalForUser("u_1")).toBeNull();
+    fakeDb({ exec_principals: [principalRow()], users: [userRow({ email: null })] });
+    expect(await loadPrincipalForUser("u_1")).toBeNull();
+  });
+
+  it("throws (never returns null) when any read fails", async () => {
+    fakeDb({}, { exec_principals: "boom" });
+    await expect(loadPrincipalForUser("u_1")).rejects.toThrow("exec_principals read failed: boom");
+    fakeDb({ exec_principals: [principalRow()] }, { users: "down" });
+    await expect(loadPrincipalForUser("u_1")).rejects.toThrow("users read failed: down");
+    fakeDb({ exec_principals: [principalRow()], users: [userRow()] }, { exec_settings: "gone" });
+    await expect(loadPrincipalForUser("u_1")).rejects.toThrow("exec_settings read failed: gone");
+  });
+});
+
+describe("loadPrincipalById", () => {
+  it("loads by principal id", async () => {
+    const db = fakeDb({ exec_principals: [principalRow()], users: [userRow()], exec_settings: [] });
+    const p = await loadPrincipalById("ep_1");
+    expect(p).toMatchObject({ id: "ep_1", timezone: "America/Chicago" });
+    expect(db.queries[0]).toMatchObject({ table: "exec_principals", filters: [["id", "ep_1"]] });
+  });
+
+  it("returns null for an unknown or disabled principal", async () => {
+    fakeDb({ exec_principals: [principalRow()] });
+    expect(await loadPrincipalById("ep_missing")).toBeNull();
+    fakeDb({ exec_principals: [principalRow({ enabled: false })], users: [userRow()] });
+    expect(await loadPrincipalById("ep_1")).toBeNull();
+  });
+
+  it("throws when the read fails", async () => {
+    fakeDb({}, { exec_principals: "timeout" });
+    await expect(loadPrincipalById("ep_1")).rejects.toThrow("exec_principals read failed: timeout");
+  });
+});
+
+describe("listEnabledPrincipals", () => {
+  it("returns every enabled principal that maps to a usable user", async () => {
+    const db = fakeDb({
+      exec_principals: [
+        principalRow(),
+        principalRow({ id: "ep_2", user_id: "u_2" }),
+        principalRow({ id: "ep_3", user_id: "u_3", enabled: false }),
+        principalRow({ id: "ep_4", user_id: "u_4" })
+      ],
+      users: [
+        userRow(),
+        userRow({ id: "u_2", email: "exec2@scaledai.org", name: "Second" }),
+        userRow({ id: "u_3", email: "off@scaledai.org" }),
+        userRow({ id: "u_4", email: null })
+      ],
+      exec_settings: []
+    });
+    const list = await listEnabledPrincipals();
+    expect(list.map((p) => p.id)).toEqual(["ep_1", "ep_2"]);
+    expect(db.queries[0]).toMatchObject({ table: "exec_principals", filters: [["enabled", true]] });
+  });
+
+  it("returns an empty list when there are none", async () => {
+    fakeDb({ exec_principals: [] });
+    expect(await listEnabledPrincipals()).toEqual([]);
+  });
+
+  it("throws when the read fails", async () => {
+    fakeDb({}, { exec_principals: "nope" });
+    await expect(listEnabledPrincipals()).rejects.toThrow("exec_principals read failed: nope");
+  });
+});
+
+describe("loadSettings", () => {
+  it("maps the stored row", async () => {
+    fakeDb({ exec_settings: [settingsRow()] });
+    expect(await loadSettings("ep_1")).toMatchObject({ principalId: "ep_1", briefLocalTime: "07:30", dailyCostCapUsd: 12.5 });
+  });
+
+  it("returns defaults when there is no row", async () => {
+    fakeDb({ exec_settings: [] });
+    expect(await loadSettings("ep_1")).toEqual({ principalId: "ep_1", ...DEFAULT_SETTINGS });
+  });
+
+  it("throws when the read fails", async () => {
+    fakeDb({}, { exec_settings: "down" });
+    await expect(loadSettings("ep_1")).rejects.toThrow("exec_settings read failed: down");
+  });
+});

@@ -30,6 +30,11 @@
 // Every job's underlying runner is idempotent (claim-before-send, "not yet
 // flagged" filters, same-day dedupe), so overlapping ticks, restarts, or a
 // Vercel cron firing alongside this loop never create duplicate work.
+//
+// exec-worker and exec-scheduler drive the Executive AI Assistant's job queue
+// (src/lib/exec). They have no vercel.json entry; /api/cron/exec-tick is
+// their external-cron path. Both tick often and sit idle (or off behind
+// EXEC_ENABLED) most of the time, so they're `quiet`.
 
 import { runInactivitySweep } from "@/lib/inactivity-runner";
 import { runEodRecap } from "@/lib/eod-recap-runner";
@@ -77,8 +82,25 @@ interface CronJob {
   intervalMs: number;
   bootCatchupDelayMs: number;
   disableEnv: string;
+  /**
+   * Don't log ticks whose summary is "idle" or "disabled". For loops that tick
+   * every few seconds and usually have nothing to do, where a line per tick
+   * would bury everything else in the log. Failures always log.
+   */
+  quiet?: boolean;
+  /**
+   * /api/cron/status is readable by every signed-in user. For a loop whose
+   * counts would reveal one person's activity (the owner-only Executive AI
+   * Assistant: a claim per question he asks), the shared heartbeat keeps only
+   * "disabled" or "ok", and a failure as a generic line. The full summary and
+   * error still go to the server log.
+   */
+  privateSummary?: boolean;
   run: () => Promise<string>;
 }
+
+const QUIET_SUMMARIES: ReadonlySet<string> = new Set(["idle", "disabled"]);
+const PRIVATE_FAILURE = "failed (details in the server log)";
 
 const JOBS: CronJob[] = [
   {
@@ -206,6 +228,53 @@ const JOBS: CronJob[] = [
       if (r.skipped) return `skipped=${r.skipped}`;
       return `scanned=${r.scanned} ingested=${r.ingested} classified=${r.classified} reconciled=${r.reconciled}`;
     }
+  },
+  {
+    // Executive AI Assistant worker: claims due exec_jobs rows into this
+    // process's free lane slots and starts them without waiting, so a long
+    // brief never holds the tick open (or trips the overlap guard). Enqueuing
+    // interactive work also kicks the queue in-process; this loop is the
+    // backstop. Returns "disabled" until EXEC_ENABLED=true.
+    //
+    // The exec layer is imported lazily, inside a compile-time branch. Next
+    // also builds the instrumentation hook (which imports this file) for the
+    // Edge runtime, where webpack drops a `process.env.NEXT_RUNTIME ===
+    // "nodejs"` branch, so the Node-only exec modules (node:crypto, node:os)
+    // never enter that bundle. An early return wouldn't be pruned. Loading it
+    // lazily also means an exec module that fails to load fails only these
+    // two jobs' ticks, not the import of this file and every loop above.
+    name: "exec-worker",
+    intervalMs: 10_000,
+    bootCatchupDelayMs: 40_000,
+    disableEnv: "EXEC_WORKER_INTERNAL_CRON",
+    quiet: true,
+    privateSummary: true,
+    run: async () => {
+      if (process.env.NEXT_RUNTIME === "nodejs") {
+        const { runExecWorkerTick } = await import("@/lib/exec/runtime");
+        return runExecWorkerTick();
+      }
+      return "disabled";
+    }
+  },
+  {
+    // Executive AI Assistant scheduler: reaps expired job leases, then
+    // enqueues each enabled principal's due work under a time-bucket dedupe
+    // key (DST-safe, in the principal's zone), so overlapping ticks or two
+    // processes never double-enqueue. Same lazy, Node-only import as above.
+    name: "exec-scheduler",
+    intervalMs: MINUTE,
+    bootCatchupDelayMs: 65_000,
+    disableEnv: "EXEC_SCHEDULER_INTERNAL_CRON",
+    quiet: true,
+    privateSummary: true,
+    run: async () => {
+      if (process.env.NEXT_RUNTIME === "nodejs") {
+        const { runExecSchedulerTick } = await import("@/lib/exec/runtime");
+        return runExecSchedulerTick();
+      }
+      return "disabled";
+    }
   }
 ];
 
@@ -227,6 +296,11 @@ function disabledReason(job: CronJob): string | null {
     return "running on Vercel (vercel.json cron owns this job)";
   }
   return null;
+}
+
+// Seconds below a minute: rounding a 10 s loop to minutes printed "every 0 min".
+function describeInterval(ms: number): string {
+  return ms < MINUTE ? `${Math.round(ms / 1_000)} s` : `${Math.round(ms / MINUTE)} min`;
 }
 
 function scheduleJob(job: CronJob, heartbeats: Heartbeats): void {
@@ -261,11 +335,13 @@ function scheduleJob(job: CronJob, heartbeats: Heartbeats): void {
       const summary = await job.run();
       hb.lastRunOk = true;
       hb.lastRunError = null;
-      hb.lastRunSummary = summary;
-      console.log(`[cron:${job.name}] (${trigger}) complete — ${summary}`);
+      hb.lastRunSummary = job.privateSummary && summary !== "disabled" ? "ok" : summary;
+      if (!(job.quiet && QUIET_SUMMARIES.has(summary))) {
+        console.log(`[cron:${job.name}] (${trigger}) complete — ${summary}`);
+      }
     } catch (err) {
       hb.lastRunOk = false;
-      hb.lastRunError = err instanceof Error ? err.message : String(err);
+      hb.lastRunError = job.privateSummary ? PRIVATE_FAILURE : err instanceof Error ? err.message : String(err);
       console.error(`[cron:${job.name}] (${trigger}) failed:`, err);
     } finally {
       hb.lastRunFinishedAt = new Date().toISOString();
@@ -285,7 +361,7 @@ function scheduleJob(job: CronJob, heartbeats: Heartbeats): void {
   setInterval(() => void runOnce("interval"), job.intervalMs);
   hb.schedulerActive = true;
   hb.disabledReason = null;
-  console.log(`[cron:${job.name}] internal loop scheduled (every ${Math.round(job.intervalMs / MINUTE)} min)`);
+  console.log(`[cron:${job.name}] internal loop scheduled (every ${describeInterval(job.intervalMs)})`);
   // Drain whatever came due while the server was down / since the last deploy.
   setTimeout(() => void runOnce("boot-catchup"), job.bootCatchupDelayMs);
 }

@@ -72,15 +72,18 @@ describe("ExecTabs", () => {
   it("marks the active tab and links each tab to its page", () => {
     const tabs = [...EXEC_TABS, { key: "team", href: "/executive/team", label: "Team" }];
     const out = html(createElement(ExecTabs, { active: "team", tabs }));
-    expect(hrefs(out)).toEqual(["/executive", "/executive/team"]);
+    expect(hrefs(out)).toEqual(["/executive", "/executive/email", "/executive/team"]);
     expect(out.match(/aria-current="page"/g)).toHaveLength(1);
     expect(out).toMatch(/<a[^>]*aria-current="page"[^>]*href="\/executive\/team"|<a[^>]*href="\/executive\/team"[^>]*aria-current="page"/);
   });
 
-  it("ships only the Overview tab in P2b, so it never links to a page that doesn't exist", () => {
-    expect(EXEC_TABS).toEqual([{ key: "overview", href: "/executive", label: "Overview" }]);
+  it("ships Overview and Email (P3), the pages that exist, so it never links to a 404", () => {
+    expect(EXEC_TABS).toEqual([
+      { key: "overview", href: "/executive", label: "Overview" },
+      { key: "email", href: "/executive/email", label: "Email" }
+    ]);
     const out = html(createElement(ExecTabs, { active: "overview", tabs: EXEC_TABS }));
-    expect(textOf(out)).toBe("Overview");
+    expect(textOf(out)).toBe("OverviewEmail");
     expect(out).toContain('aria-current="page"');
   });
 

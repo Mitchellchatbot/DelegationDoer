@@ -10,7 +10,9 @@ import { NonRetryableError } from "@/lib/exec/types";
 // factors the producer knows (how overdue, how old, how many, task priority,
 // client-facing, about the executive himself, severity), clamped to 0..100.
 // The reasons spell out every contribution, so the band shown on an item can
-// always be traced back to plain facts. No model is involved anywhere.
+// always be traced back to plain facts. The scoring itself involves no model:
+// an AI-assessed input (an email's urgency, P3) is just a factor, named as
+// such in its reason, so the item says where its band came from.
 
 export type AttentionKind =
   | "unanswered_mention"
@@ -21,13 +23,23 @@ export type AttentionKind =
   | "stalled_tasks"
   | "waiting_on_client"
   | "recurring_issue"
-  | "missed_deadlines";
+  | "missed_deadlines"
+  // Email intelligence (P3, producers/email.ts).
+  | "important_email"
+  | "client_escalation"
+  | "decision_ask"
+  | "overdue_commitment"
+  | "client_satisfaction_drop"
+  | "client_health_drop";
+
+/** An email's urgency as triage assessed it (email-types Urgency). */
+export type UrgencyFactor = "critical" | "high" | "normal" | "low";
 
 export interface PriorityFactors {
   kind: AttentionKind;
   /** Whole days past due (of the oldest item, for a group). */
   overdueDays?: number;
-  /** Whole days the situation has been waiting. Counts only for mentions, approvals and waiting-on-client. */
+  /** Whole days the situation has been waiting. Counts only for mentions, approvals, waiting-on-client and the email thread kinds. */
   ageDays?: number;
   /** Items in a grouped situation. */
   count?: number;
@@ -36,6 +48,10 @@ export interface PriorityFactors {
   /** The item is about the executive himself (he was mentioned, he owns it). */
   aboutPrincipal?: boolean;
   severity?: "low" | "medium" | "high";
+  /** The AI-assessed urgency of an email (P3). */
+  urgency?: UrgencyFactor;
+  /** He flagged the email in Outlook (a stored CL1 signal, P3). */
+  flagged?: boolean;
 }
 
 const BASE: Readonly<Record<AttentionKind, number>> = Object.freeze({
@@ -47,7 +63,13 @@ const BASE: Readonly<Record<AttentionKind, number>> = Object.freeze({
   pending_approval: 20,
   stalled_tasks: 12,
   waiting_on_client: 10,
-  missed_deadlines: 8
+  missed_deadlines: 8,
+  client_escalation: 45,
+  decision_ask: 35,
+  client_health_drop: 35,
+  important_email: 30,
+  overdue_commitment: 30,
+  client_satisfaction_drop: 30
 });
 
 const KIND_LABEL: Readonly<Record<AttentionKind, string>> = Object.freeze({
@@ -59,7 +81,13 @@ const KIND_LABEL: Readonly<Record<AttentionKind, string>> = Object.freeze({
   pending_approval: "Pending approval",
   stalled_tasks: "Stalled tasks",
   waiting_on_client: "Waiting on client",
-  missed_deadlines: "Missed deadlines"
+  missed_deadlines: "Missed deadlines",
+  client_escalation: "Client escalation",
+  decision_ask: "Decision asked of you",
+  client_health_drop: "Client health drop",
+  important_email: "Important email",
+  overdue_commitment: "Overdue commitment",
+  client_satisfaction_drop: "Client satisfaction drop"
 });
 
 interface Contribution {
@@ -80,6 +108,16 @@ const SEVERITY: Readonly<Record<NonNullable<PriorityFactors["severity"]>, Contri
   low: { text: "Low severity", points: 0 }
 });
 
+// The reason names the basis: the urgency is the model's call, not a record.
+const URGENCY: Readonly<Record<UrgencyFactor, Contribution>> = Object.freeze({
+  critical: { text: "Critical urgency (AI-assessed)", points: 25 },
+  high: { text: "High urgency (AI-assessed)", points: 12 },
+  normal: { text: "Normal urgency (AI-assessed)", points: 0 },
+  low: { text: "Low urgency (AI-assessed)", points: 0 }
+});
+
+const FLAGGED: Contribution = Object.freeze({ text: "Flagged in Outlook", points: 8 });
+
 const CRITICAL_AT = 75;
 const HIGH_AT = 50;
 
@@ -95,7 +133,7 @@ function days(n: number): string {
   return n === 1 ? "1 day" : `${n} days`;
 }
 
-/** The age addition, which depends on the kind: only waiting matters for these three. */
+/** The age addition, which depends on the kind: only waiting matters for these. */
 function ageContribution(kind: AttentionKind, ageDays: number): Contribution | null {
   switch (kind) {
     case "unanswered_mention":
@@ -105,6 +143,13 @@ function ageContribution(kind: AttentionKind, ageDays: number): Contribution | n
     case "waiting_on_client":
       // A week of waiting on a client is normal; only the time past that counts.
       return { text: `Waiting on the client for ${days(ageDays)}`, points: Math.min(15, Math.max(0, ageDays - 7)) };
+    case "important_email":
+      return { text: `Waiting ${days(ageDays)}`, points: Math.min(15, 2 * ageDays) };
+    case "decision_ask":
+      return { text: `Decision waiting ${days(ageDays)}`, points: Math.min(15, 2 * ageDays) };
+    case "client_escalation":
+      // An unhappy client gets angrier faster than an ordinary email ages.
+      return { text: `Client waiting ${days(ageDays)}`, points: Math.min(15, 3 * ageDays) };
     default:
       return null;
   }
@@ -139,6 +184,8 @@ export function scorePriority(f: PriorityFactors): PriorityResult {
   if (f.clientFacing === true) parts.push({ text: "Client-facing", points: 8 });
   if (f.aboutPrincipal === true) parts.push({ text: "Involves you", points: 10 });
   if (f.severity && Object.hasOwn(SEVERITY, f.severity)) parts.push(SEVERITY[f.severity]);
+  if (f.urgency && Object.hasOwn(URGENCY, f.urgency)) parts.push(URGENCY[f.urgency]);
+  if (f.flagged === true) parts.push(FLAGGED);
 
   const contributing = parts.filter((p) => p.points !== 0);
   const raw = contributing.reduce((sum, p) => sum + p.points, base);

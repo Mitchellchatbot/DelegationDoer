@@ -1,5 +1,5 @@
 import { io, type Socket } from "socket.io-client";
-import { publish, type InboxEvent } from "@/lib/inbox-event-bus";
+import { inboxEventExtras, publish, type InboxEvent } from "@/lib/inbox-event-bus";
 
 // Bridge between missiveclone's socket.io server and DD's in-process
 // inbox-event-bus. Connect once per Node process, listen on the
@@ -147,18 +147,25 @@ export function startMissiveSocketBridge(): void {
   // missiveclone was updated alongside this bridge to include
   // account_id so DD's per-user SSE filter can scope events to a
   // worker's visible accounts.
-  socket.on("message:new", (payload: { thread_id?: string; message_id?: string; account_id?: string }) => {
-    if (!payload?.thread_id || !payload?.account_id) return;
-    if (payload.message_id && seenRecently(payload.message_id)) return;
-    const event: InboxEvent = {
-      event: "message:new",
-      account_id: payload.account_id,
-      thread_id: payload.thread_id,
-      message_id: payload.message_id,
-      ts: Date.now()
-    };
-    publish(event);
-  });
+  // A CL1 clone also sends direction + folder; they are copied through
+  // (validated) so a subscriber can skip Junk or route outbound mail without
+  // re-fetching the thread. Subscribers that don't read them are unaffected.
+  socket.on(
+    "message:new",
+    (payload: { thread_id?: string; message_id?: string; account_id?: string; direction?: unknown; folder?: unknown }) => {
+      if (!payload?.thread_id || !payload?.account_id) return;
+      if (payload.message_id && seenRecently(payload.message_id)) return;
+      const event: InboxEvent = {
+        event: "message:new",
+        account_id: payload.account_id,
+        thread_id: payload.thread_id,
+        message_id: payload.message_id,
+        ts: Date.now(),
+        ...inboxEventExtras(payload)
+      };
+      publish(event);
+    }
+  );
 
   socket.on("thread:updated", (payload: { thread_id?: string; account_id?: string }) => {
     if (!payload?.thread_id || !payload?.account_id) return;

@@ -5,6 +5,36 @@ import { dailyCounts, isAutoArchived, isIncident, isOverdue, upcomingDeadlines, 
 import { lastAttentionRefresh, listAttention } from "@/lib/exec/attention";
 import type { AttentionItem } from "@/lib/exec/attention-types";
 import {
+  listBucketRows,
+  listCommitments,
+  listSignalsForMessages,
+  listThreadScreenRows,
+  listTombstonedThreadIds,
+  type BucketRow
+} from "@/lib/exec/email-store";
+import {
+  bucketize,
+  commitmentView,
+  emailItemThreadIds,
+  loadEmailGate,
+  pinnedRowMap,
+  pinnedRows,
+  screenCommitments,
+  screenEmailAttention,
+  screenRows,
+  signalMessageIds,
+  summarizeMail,
+  type CommitmentView,
+  type EmailGate,
+  type EmailItemScreen,
+  type MailSummary,
+  type ScreeningPolicy
+} from "@/lib/exec/email-view";
+import type { ThreadScreenRow } from "@/lib/exec/email-types";
+import { EMAIL_ATTENTION_JOB_KIND, EMAIL_RECONCILE_JOB_KIND, EMAIL_TRIAGE_JOB_KIND } from "@/lib/exec/jobs";
+import { listAllReplyArtifacts, loadScreeningPolicy } from "@/lib/exec/sources/mail";
+import { getSyncState, parseAccountsState, parseSocketState } from "@/lib/exec/sync-state";
+import {
   getPendingApprovals,
   listActivitySince,
   listDepartments,
@@ -93,9 +123,54 @@ export interface OverviewAttention {
   /** Highest priority first, at most `limit`. */
   items: AttentionItem[];
   limit: number;
-  /** When the DD feed was last known to be checked (ISO), or null if never. */
+  /**
+   * When the feed was last known to be checked (ISO), or null if never: the
+   * DD pass's time, or while email is on the older of it and the email pass's.
+   */
   checkedAt: string | null;
+  /**
+   * Email items were left out because the restricted-sender check couldn't
+   * run (settings, rules or thread rows unreadable). They are hidden, not
+   * shown unchecked; the card says so.
+   */
+  emailUnchecked: boolean;
 }
+
+/** The Email tab's bucket counts, after the restricted-sender screen. */
+export interface OverviewEmailCounts {
+  reply: number;
+  urgent: number;
+  important: number;
+  waiting: number;
+  filtered: number;
+  /** Threads asking him for a decision, still awaiting his reply (AI-assessed). */
+  decisionAsks: number;
+}
+
+export interface OverviewEmailCommitments {
+  /** Open commitments due within `days` (overdue ones included), overdue first, at most `limit`. */
+  items: CommitmentView[];
+  total: number;
+  days: number;
+  limit: number;
+}
+
+/**
+ * Email on the Overview (P3). "off" and "no_pin" read no email table at all.
+ * When on, each part stands alone, like the Overview's sections.
+ */
+export type OverviewEmail =
+  | { state: "off" }
+  | { state: "no_pin" }
+  | {
+      state: "on";
+      counts: OverviewSection<OverviewEmailCounts>;
+      /** Tombstones plus stored rows the screen dropped. */
+      restricted: OverviewSection<number>;
+      commitments: OverviewSection<OverviewEmailCommitments>;
+      /** Mail sync health for the System card. */
+      mail: OverviewSection<MailSummary>;
+    };
 
 export interface OverviewApprovals {
   /** All six mechanisms in display order, zero counts included. */
@@ -161,6 +236,7 @@ export interface OverviewSections {
   deadlines: OverviewSection<OverviewDeadlines>;
   projects: OverviewSection<OverviewProjects>;
   system: OverviewSection<OverviewSystem>;
+  email: OverviewSection<OverviewEmail>;
 }
 
 export interface ExecOverview {
@@ -174,6 +250,12 @@ export interface ExecOverview {
 const HOUR_MS = 3_600_000;
 
 const ATTENTION_LIMIT = 20;
+// The feed is read deeper than it is shown: email items the restricted-sender
+// screen takes out (or every email item while email is off) must not leave
+// the card short of DD items that rank below them.
+const ATTENTION_READ_LIMIT = 40;
+const EMAIL_COMMITMENT_DAYS = 7;
+const EMAIL_COMMITMENT_LIMIT = 6;
 const DEADLINE_DAYS = 7;
 const DEADLINE_LIMIT = 10;
 const PROJECT_LIMIT = 8;
@@ -199,6 +281,8 @@ const JOB_MAX_PAGES = 20;
 // kinds (handlers/dd-attention.ts, handlers/purge.ts PURGE_JOB_KIND).
 const DD_ATTENTION_JOB = "exec.dd-attention";
 export const TRACKED_JOB_KINDS: readonly string[] = [DD_ATTENTION_JOB, "exec.purge"];
+// Listed too while email is on (P3): its triage, reconcile and attention jobs.
+export const EMAIL_TRACKED_JOB_KINDS: readonly string[] = [EMAIL_TRIAGE_JOB_KIND, EMAIL_RECONCILE_JOB_KIND, EMAIL_ATTENTION_JOB_KIND];
 
 // The principal id goes into a PostgREST or() filter, where a comma or a
 // parenthesis would change the filter; ids are "ep_" plus hex.
@@ -469,7 +553,7 @@ function lastSuccessByKind(rows: JobRows): Map<string, string> {
   return latest;
 }
 
-function systemHealth(rows: JobRows, now: Date): OverviewSystem {
+function systemHealth(rows: JobRows, now: Date, trackedKinds: readonly string[] = TRACKED_JOB_KINDS): OverviewSystem {
   const lastSuccess = lastSuccessByKind(rows);
   const deadByKind = new Map<string, number>();
   for (const job of rows.dead) deadByKind.set(job.kind, (deadByKind.get(job.kind) ?? 0) + 1);
@@ -479,12 +563,12 @@ function systemHealth(rows: JobRows, now: Date): OverviewSystem {
   let oldestDueAt: string | null = null;
   for (const job of due) if (oldestDueAt === null || Date.parse(job.at) < Date.parse(oldestDueAt)) oldestDueAt = job.at;
 
-  const tracked = new Set(TRACKED_JOB_KINDS);
+  const tracked = new Set(trackedKinds);
   const others = [...new Set([...lastSuccess.keys(), ...deadByKind.keys(), ...rows.queued.map((job) => job.kind)])]
     .filter((kind) => !tracked.has(kind))
     .sort();
   return {
-    kinds: [...TRACKED_JOB_KINDS, ...others].map((kind) => ({
+    kinds: [...trackedKinds, ...others].map((kind) => ({
       kind,
       lastSuccessAt: lastSuccess.get(kind) ?? null,
       dead24h: deadByKind.get(kind) ?? 0
@@ -502,6 +586,12 @@ function laterIso(a: string | null, b: string | null): string | null {
   if (a === null) return b;
   if (b === null) return a;
   return Date.parse(b) > Date.parse(a) ? b : a;
+}
+
+/** The older of two ISO instants; null (never checked) when either is. */
+function olderIso(a: string | null, b: string | null): string | null {
+  if (a === null || b === null) return null;
+  return Date.parse(b) < Date.parse(a) ? b : a;
 }
 
 // ---------------------------------------------------------------------------
@@ -537,9 +627,12 @@ export async function getOverview(principal: ExecPrincipal, now: Date = new Date
   const departments = read("departments", (o) => listDepartments(principal, o));
   const projects = read("projects", (o) => listProjects(principal, o));
   const approvals = read("approvals", (o) => getPendingApprovals(principal, now, o));
-  const attentionItems = read("attention items", () => listAttention(principal, { limit: ATTENTION_LIMIT, now }));
+  const attentionItems = read("attention items", () => listAttention(principal, { limit: ATTENTION_READ_LIMIT, now }));
   const attentionRefresh = read("attention refresh", () => lastAttentionRefresh(principal, "dd"));
   const jobs = read("jobs", (o) => readJobs(principal, now, o.signal));
+  // Email (P3): the gate first; no email table is read unless it says on.
+  const emailGate = read("email settings", () => loadEmailGate(principal));
+  const email = emailReads(principal, now, read, emailGate);
 
   const tiles = (async (): Promise<OverviewSection<OverviewTiles>> => {
     const nowMs = now.getTime();
@@ -598,12 +691,27 @@ export async function getOverview(principal: ExecPrincipal, now: Date = new Date
   const attention = build("attention", async (): Promise<OverviewAttention> => {
     const items = need(await attentionItems);
     const refreshedAt = need(await attentionRefresh);
+    // Email items are screened at render time (A2): one whose thread is now
+    // a tombstone, gone, or matched by a current rule is never shown, even
+    // in the minutes before the attention pass removes it.
+    const screened = screenEmailAttention(items, await email.itemScreen(items));
     // A refresh that finds nothing stamps no row, so the item timestamps alone
     // can't say a check ran. The refresh job's last success can; without the
     // job history the feed falls back to its own timestamps (older, never newer).
     const jobsRead = await jobs;
     const lastRun = jobsRead.ok ? (lastSuccessByKind(jobsRead.value).get(DD_ATTENTION_JOB) ?? null) : null;
-    return { items, limit: ATTENTION_LIMIT, checkedAt: laterIso(refreshedAt, lastRun) };
+    // While email is on, its items share this feed and come from their own
+    // pass: the card is only as fresh as the older of the two, so a stalled
+    // email pass shows as "may be behind" instead of hiding behind the DD
+    // pass's time (ui-10).
+    const emailCheckedAt = await email.itemsCheckedAt(jobsRead);
+    const ddCheckedAt = laterIso(refreshedAt, lastRun);
+    return {
+      items: screened.items.slice(0, ATTENTION_LIMIT),
+      limit: ATTENTION_LIMIT,
+      checkedAt: emailCheckedAt === undefined ? ddCheckedAt : olderIso(ddCheckedAt, emailCheckedAt),
+      emailUnchecked: screened.unchecked
+    };
   });
 
   const approvalsSection = build("approvals", async (): Promise<OverviewApprovals> => {
@@ -643,15 +751,20 @@ export async function getOverview(principal: ExecPrincipal, now: Date = new Date
     return { items: health.slice(0, PROJECT_LIMIT), total: health.length, limit: PROJECT_LIMIT };
   });
 
-  const system = build("system", async (): Promise<OverviewSystem> => systemHealth(need(await jobs), now));
+  const system = build("system", async (): Promise<OverviewSystem> => {
+    const rows = need(await jobs);
+    const gate = await emailGate;
+    return systemHealth(rows, now, gate.ok && gate.value.kind === "on" ? [...TRACKED_JOB_KINDS, ...EMAIL_TRACKED_JOB_KINDS] : TRACKED_JOB_KINDS);
+  });
 
-  const [tilesResult, attentionResult, approvalsResult, deadlinesResult, projectsResult, systemResult] = await Promise.all([
+  const [tilesResult, attentionResult, approvalsResult, deadlinesResult, projectsResult, systemResult, emailResult] = await Promise.all([
     tiles,
     attention,
     approvalsSection,
     deadlines,
     projectsSection,
-    system
+    system,
+    email.section
   ]);
   return {
     generatedAt: nowIso,
@@ -662,7 +775,119 @@ export async function getOverview(principal: ExecPrincipal, now: Date = new Date
       approvals: approvalsResult,
       deadlines: deadlinesResult,
       projects: projectsResult,
-      system: systemResult
+      system: systemResult,
+      email: emailResult
     }
   };
+}
+
+// ---------------------------------------------------------------------------
+// Email (P3)
+// ---------------------------------------------------------------------------
+
+type OverviewRead = <T>(what: string, run: (opts: { signal: AbortSignal }) => Promise<T>) => Promise<Settled<T>>;
+
+interface OverviewEmailReads {
+  /** The email section. */
+  section: Promise<OverviewSection<OverviewEmail>>;
+  /** What screenEmailAttention needs for these feed items. Never rejects. */
+  itemScreen: (items: readonly AttentionItem[]) => Promise<EmailItemScreen>;
+  /**
+   * When the email attention pass last refreshed the feed's email items
+   * (ISO, null = never), or undefined while email is off (its items aren't
+   * shown). Rejects (via need) when that read failed.
+   */
+  itemsCheckedAt: (jobs: Settled<JobRows>) => Promise<string | null | undefined>;
+}
+
+const SKIPPED: Settled<never> = { ok: false };
+
+/**
+ * The Overview's email reads (contract §3.14, A2, coherence-9), all under
+ * the page's deadline. Nothing past exec_settings is read unless the gate
+ * says email is on; when it is, each part fails on its own, and the feed's
+ * email items are screened against the rules and their threads' rows. A
+ * failed gate, rules or row read hides every email item (never shown
+ * unchecked) and leaves the rest of the page alone.
+ */
+function emailReads(principal: ExecPrincipal, now: Date, read: OverviewRead, gateRead: Promise<Settled<EmailGate>>): OverviewEmailReads {
+  const on = gateRead.then((g) => g.ok && g.value.kind === "on");
+  const when = <T>(what: string, run: (opts: { signal: AbortSignal }) => Promise<T>): Promise<Settled<T>> =>
+    on.then((yes) => (yes ? read(what, run) : SKIPPED));
+
+  const policy = when("email rules", (o): Promise<ScreeningPolicy> => loadScreeningPolicy(principal, o));
+  const rows = when("email threads", (o) => listBucketRows(principal, now, o));
+  const artifacts = when("email reply artifacts", (o) => listAllReplyArtifacts(principal, o));
+  const tombstones = when("email tombstones", (o) => listTombstonedThreadIds(principal, o));
+  const dueBefore = new Date(now.getTime() + EMAIL_COMMITMENT_DAYS * 86_400_000).toISOString();
+  const commitments = when("email commitments", (o) => listCommitments(principal, { statuses: ["open"], dueBefore }, o));
+  const accounts = when("mail accounts", (o) => getSyncState(principal, "mail", "accounts", parseAccountsState, o));
+  const socket = when("mail socket", (o) => getSyncState(principal, "mail", "socket", parseSocketState, o));
+
+  // Only the mailboxes pinned to him now count (ui-3): a row of an account he
+  // no longer has pinned would be counted and linked here, and 404 there.
+  const screened = Promise.all([policy, rows]).then(([p, r]): Settled<{ kept: BucketRow[]; dropped: number }> =>
+    p.ok && r.ok ? { ok: true, value: screenRows(pinnedRows(principal, r.value), p.value) } : SKIPPED
+  );
+  const signals = screened.then((s) => (s.ok ? read("email signals", (o) => listSignalsForMessages(principal, signalMessageIds(s.value.kept), o)) : SKIPPED));
+  const commitmentRows = commitments.then((c) =>
+    c.ok
+      ? read("email commitment threads", async (o) => pinnedRowMap(principal, await listThreadScreenRows(principal, [...new Set(c.value.map((x) => x.threadId))], o)))
+      : SKIPPED
+  );
+  // How fresh the feed's email items are (ui-10): the email attention pass's own last refresh.
+  const refresh = when("email attention refresh", () => lastAttentionRefresh(principal, "email"));
+
+  const section = build("email", async (): Promise<OverviewEmail> => {
+    const gate = need(await gateRead);
+    if (gate.kind !== "on") return { state: gate.kind };
+    const [counts, restricted, due, mail] = await Promise.all([
+      build("email counts", async (): Promise<OverviewEmailCounts> => {
+        const kept = need(await screened).kept;
+        const b = bucketize(kept, need(await signals), need(await artifacts), now);
+        return { ...b.counts, decisionAsks: b.decisionAsks };
+      }),
+      build("email restricted", async (): Promise<number> => need(await tombstones).length + need(await screened).dropped),
+      build("email commitments", async (): Promise<OverviewEmailCommitments> => {
+        const p = need(await policy);
+        const s = await screened;
+        const subjects = new Map<string, string | null>(s.ok ? s.value.kept.map((r) => [r.threadId, r.subject]) : []);
+        const views = screenCommitments(need(await commitments), need(await commitmentRows), p)
+          .kept.map((c) => commitmentView(c, now, subjects, false))
+          .sort((a, b) => (a.overdue === b.overdue ? 0 : a.overdue ? -1 : 1));
+        return { items: views.slice(0, EMAIL_COMMITMENT_LIMIT), total: views.length, days: EMAIL_COMMITMENT_DAYS, limit: EMAIL_COMMITMENT_LIMIT };
+      }),
+      build("mail health", async (): Promise<MailSummary> => {
+        const a = need(await accounts);
+        const s = need(await socket);
+        return summarizeMail(a?.value ?? null, s?.value ?? null, gate.pinned, now);
+      })
+    ]);
+    return { state: "on", counts, restricted, commitments: due, mail };
+  });
+
+  const itemScreen = async (items: readonly AttentionItem[]): Promise<EmailItemScreen> => {
+    const gate = await gateRead;
+    // An unreadable gate can't say email is off: treat its items as unchecked.
+    if (!gate.ok) return { emailOn: true, policy: null, rowsByThread: null };
+    if (gate.value.kind !== "on") return { emailOn: false, policy: null, rowsByThread: null };
+    const ids = emailItemThreadIds(items);
+    const [p, r] = await Promise.all([
+      policy,
+      ids.length === 0
+        ? Promise.resolve<Settled<Map<string, ThreadScreenRow>>>({ ok: true, value: new Map<string, ThreadScreenRow>() })
+        : // An item about a thread of a mailbox no longer pinned links to a 404: left out like one with no row (ui-3).
+          read("email item threads", async (o) => pinnedRowMap(principal, await listThreadScreenRows(principal, ids, o)))
+    ]);
+    return { emailOn: true, policy: p.ok ? p.value : null, rowsByThread: r.ok ? r.value : null };
+  };
+
+  const itemsCheckedAt = async (jobs: Settled<JobRows>): Promise<string | null | undefined> => {
+    const gate = await gateRead;
+    if (!gate.ok || gate.value.kind !== "on") return undefined;
+    const lastRun = jobs.ok ? (lastSuccessByKind(jobs.value).get(EMAIL_ATTENTION_JOB_KIND) ?? null) : null;
+    return laterIso(need(await refresh), lastRun);
+  };
+
+  return { section, itemScreen, itemsCheckedAt };
 }

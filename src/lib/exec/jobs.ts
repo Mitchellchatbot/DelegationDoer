@@ -1,14 +1,17 @@
 import "server-only";
 
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { hostname } from "node:os";
 import { isExecEnabled } from "@/lib/exec/access";
 import { sanitizeForAudit } from "@/lib/exec/audit";
+import type { TriageReason } from "@/lib/exec/email-types";
 import { notifyOps, type OpsAlert } from "@/lib/exec/ops";
 import { loadPrincipalById } from "@/lib/exec/principal";
+import { casSyncState, getSyncState, parseStaggerState, putSyncState } from "@/lib/exec/sync-state";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import {
   BudgetExceededError,
+  NonRetryableError,
   type EnqueueJobInput,
   type ErrorClass,
   type ExecJobRow,
@@ -209,6 +212,13 @@ function safeDescribe(err: unknown): string {
   const scrubbed = sanitizeForAudit(clip(describeError(err), MAX_ERROR_CHARS * 2));
   return typeof scrubbed === "string" ? clip(scrubbed, MAX_ERROR_CHARS) : "error description withheld (could not be sanitized)";
 }
+
+/**
+ * safeDescribe for code outside this file (the mail hook, the email
+ * handlers): an error as one clipped, secret-scrubbed line for a log. The
+ * unscrubbed describeError stays private (contract §3.11).
+ */
+export const describeErrorSafe: (err: unknown) => string = safeDescribe;
 
 // What a result summary may keep as a string: an id (Graph ids are base64, so
 // "=", "+" and "/" too), a kind, a status, a date, an address. No whitespace,
@@ -1124,5 +1134,619 @@ export async function purgeFinishedJobs(olderThanDays: number, signal?: AbortSig
   const { count, error } = await query;
   if (error) throw new Error(`exec_jobs purge failed: ${error.message}`);
   return count ?? 0;
+}
+
+// ---------------------------------------------------------------------------
+// P3: the email pipeline's jobs (contract §3.11, L5, L6, L10, L20, v3.1 A7,
+// round-4 addenda §1.2 and §1.8)
+// ---------------------------------------------------------------------------
+//
+// Every email enqueue site builds its job here, so each one carries the
+// attempts budget, key shape and payload shape the contract fixes: a site
+// that forgot maxAttempts would run with the column default (6), and a key
+// spelled two ways would let the same work run twice. Payloads hold ids and
+// codes only.
+//
+// Bulk-lane triage is throttled per principal. The bulk lane has two slots
+// in each process and also carries the scheduled reconcile and attention
+// passes (whose safety nets close restricted-sender races), so a replayed
+// backlog of hundreds of triage jobs must never queue ahead of them. Every
+// bulk triage enqueue therefore (1) skips work whose key already has a job,
+// (2) adds at most BULK_TRIAGE_CAP minus the jobs already due within
+// BULK_TRIAGE_WINDOW_MS, and (3) takes its run_after from the one shared
+// stagger position (mail/stagger), BULK_STAGGER_SPACING_MS apart. Work the
+// cap turns away is reported back, never dropped silently: reconcile keeps
+// its cursor in front of it and finds it again on its next run.
+
+export const EMAIL_TRIAGE_JOB_KIND = "exec.email-triage";
+export const EMAIL_RECONCILE_JOB_KIND = "exec.email-reconcile";
+export const EMAIL_ATTENTION_JOB_KIND = "exec.email-attention";
+
+/** L6 retry limits: triage 10; reconcile 3 and attention 3, scheduled or kicked. */
+export const EMAIL_TRIAGE_MAX_ATTEMPTS = 10;
+export const EMAIL_RECONCILE_MAX_ATTEMPTS = 3;
+export const EMAIL_ATTENTION_MAX_ATTEMPTS = 3;
+
+/** Shared bulk stagger: one triage job per 20 s per principal (3 a minute). */
+export const BULK_STAGGER_SPACING_MS = 20_000;
+/** At most this many bulk triage jobs may be due within BULK_TRIAGE_WINDOW_MS of now (addenda §1.8). */
+export const BULK_TRIAGE_CAP = 12;
+export const BULK_TRIAGE_WINDOW_MS = 5 * 60_000;
+
+const STAGGER_ATTEMPTS = 8;
+// A stagger position further out than this can't have come from the capped
+// producers above; it is treated as corrupt and restarted from now rather than
+// parking every new job for days.
+const MAX_STAGGER_AHEAD_MS = DAY_MS;
+const MAX_STAGGER_SLOTS = 1_000;
+const MAX_BATCH_ROWS = 200;
+const URL_LIST_BUDGET = 6_000;
+
+// Every TriageReason, checked against the union both ways by `satisfies`.
+const TRIAGE_REASON_FLAGS = {
+  event: true,
+  reconcile: true,
+  backfill: true,
+  assess: true,
+  budget_retry: true,
+  policy: true,
+  version: true,
+  flag: true,
+  dead_letter: true,
+  runbook: true
+} as const satisfies Record<TriageReason, true>;
+
+/** The exact payload.reason values a triage job may carry (addenda §1.8: no catch-all). */
+export const TRIAGE_REASONS: readonly TriageReason[] = Object.freeze(Object.keys(TRIAGE_REASON_FLAGS) as TriageReason[]);
+
+export function isTriageReason(v: unknown): v is TriageReason {
+  return typeof v === "string" && Object.prototype.hasOwnProperty.call(TRIAGE_REASON_FLAGS, v);
+}
+
+// --- dedupe keys (L20, L5, addenda §1.2/§1.3/§1.6/§1.7) ---------------------------
+
+/**
+ * A dedupe key from its parts, ":"-joined. Clone ids are UUIDs, so keys are
+ * short; a key that would pass the 300-character limit keeps its first two
+ * parts (the family and the principal) and replaces the rest by their sha256,
+ * so the same work still always gets the same key.
+ */
+export function emailJobKey(...parts: (string | number)[]): string {
+  const key = parts.map(String).join(":");
+  if (key.length <= MAX_DEDUPE_KEY_CHARS) return key;
+  const head = parts.slice(0, 2).map(String).join(":").slice(0, 100);
+  const digest = createHash("sha256").update(JSON.stringify(parts.slice(2).map(String)), "utf8").digest("hex");
+  return `${head}:#${digest}`;
+}
+
+/** The hook's event job: `mail:<p>:<messageId>`. */
+export const mailEventKey = (principalId: string, messageId: string): string => emailJobKey("mail", principalId, messageId);
+/** A backlog event moved to the bulk lane: `mail:<p>:<messageId>:bulk`. */
+export const mailBacklogKey = (principalId: string, messageId: string): string => emailJobKey("mail", principalId, messageId, "bulk");
+/** Reconcile: `recon:<p>:<threadId>:<messageId>` (feed passes) or `…:<lastMessageAtMs>` (list mode). */
+export const reconKey = (principalId: string, threadId: string, disc: string | number): string =>
+  emailJobKey("recon", principalId, threadId, disc);
+
+/** The <kind> segment of a re-triage key. */
+export type RetriageKind = "assess" | "policy" | "version" | "budget" | "flag" | "dead" | "runbook";
+
+/**
+ * `retriage:<p>:<threadId>:<kind>:<disc>`, with <disc>:
+ *   assess  m<epochMinute>          policy  g<generation>.l<lap>
+ *   version <TRIAGE_VERSION>        budget  <his local YYYY-MM-DD>
+ *   flag    <messageId>             dead    <originalJobId>
+ *   runbook <YYYY-MM-DD>
+ */
+export const retriageKey = (principalId: string, threadId: string, kind: RetriageKind, disc: string | number): string =>
+  emailJobKey("retriage", principalId, threadId, kind, disc);
+
+// --- triage jobs -------------------------------------------------------------------
+
+export interface TriageJobInput {
+  principalId: string;
+  lane: JobLane;
+  threadId: string;
+  /** Exactly why this triage runs; payload.reason (addenda §1.8). */
+  reason: TriageReason;
+  /** One of the key builders above. */
+  dedupeKey: string;
+  /** The message that triggered it (event, reconcile, flag). */
+  messageId?: string | null;
+  /** The pinned account the work came from; the handler skips it when that account isn't usable. */
+  accountId?: string | null;
+  /** Assess: skip the prefilter and the unchanged short-cut. */
+  force?: boolean;
+  /** Dead-letter re-enqueues: the dead job this repeats. */
+  originalJobId?: number | null;
+  runAfter?: Date;
+}
+
+/** exec.email-triage's payload, as the handler reads it back. */
+export interface TriageJobPayload {
+  threadId: string;
+  reason: TriageReason;
+  messageId?: string;
+  accountId?: string;
+  force?: true;
+  originalJobId?: number;
+}
+
+const MAX_REF_CHARS = 200;
+const isRef = (v: unknown): v is string => typeof v === "string" && v.length > 0 && v.length <= MAX_REF_CHARS && !/[\x00-\x1f\x7f]/.test(v);
+
+/** An exec.email-triage job (L6: 10 attempts). Throws NonRetryableError for a malformed input: a bug, not a retry. */
+export function triageJob(input: TriageJobInput): EnqueueJobInput {
+  if (!isRef(input.threadId)) throw new NonRetryableError(`triageJob: threadId is malformed`);
+  if (!isTriageReason(input.reason)) throw new NonRetryableError(`triageJob: reason ${JSON.stringify(input.reason)} is not a TriageReason`);
+  if (typeof input.dedupeKey !== "string" || input.dedupeKey.length === 0) throw new NonRetryableError("triageJob: a dedupe key is required");
+  const payload: Record<string, unknown> = { threadId: input.threadId, reason: input.reason };
+  if (input.messageId !== undefined && input.messageId !== null) {
+    if (!isRef(input.messageId)) throw new NonRetryableError("triageJob: messageId is malformed");
+    payload.messageId = input.messageId;
+  }
+  if (input.accountId !== undefined && input.accountId !== null) {
+    if (!isRef(input.accountId)) throw new NonRetryableError("triageJob: accountId is malformed");
+    payload.accountId = input.accountId;
+  }
+  if (input.force === true) payload.force = true;
+  if (input.originalJobId !== undefined && input.originalJobId !== null) {
+    if (!Number.isSafeInteger(input.originalJobId) || input.originalJobId < 1) throw new NonRetryableError("triageJob: originalJobId is malformed");
+    payload.originalJobId = input.originalJobId;
+  }
+  const job: EnqueueJobInput = {
+    kind: EMAIL_TRIAGE_JOB_KIND,
+    lane: input.lane,
+    principalId: input.principalId,
+    payload,
+    dedupeKey: input.dedupeKey,
+    maxAttempts: EMAIL_TRIAGE_MAX_ATTEMPTS
+  };
+  if (input.runAfter !== undefined) job.runAfter = input.runAfter;
+  return job;
+}
+
+/** A triage job's payload, or null when it isn't one (an old or hand-made row). */
+export function parseTriagePayload(raw: unknown): TriageJobPayload | null {
+  if (!isRecord(raw) || Array.isArray(raw)) return null;
+  if (!isRef(raw.threadId) || !isTriageReason(raw.reason)) return null;
+  const out: TriageJobPayload = { threadId: raw.threadId, reason: raw.reason };
+  if (raw.messageId !== undefined && raw.messageId !== null) {
+    if (!isRef(raw.messageId)) return null;
+    out.messageId = raw.messageId;
+  }
+  if (raw.accountId !== undefined && raw.accountId !== null) {
+    if (!isRef(raw.accountId)) return null;
+    out.accountId = raw.accountId;
+  }
+  if (raw.force !== undefined && raw.force !== null && raw.force !== false) {
+    if (raw.force !== true) return null;
+    out.force = true;
+  }
+  if (raw.originalJobId !== undefined && raw.originalJobId !== null) {
+    if (typeof raw.originalJobId !== "number" || !Number.isSafeInteger(raw.originalJobId) || raw.originalJobId < 1) return null;
+    out.originalJobId = raw.originalJobId;
+  }
+  return out;
+}
+
+// --- attention kicks (L5) ------------------------------------------------------------
+
+/**
+ * The exec.email-attention kick after a thread write: key
+ * `email-attn:<p>:m<M+1>` and run_after = the start of minute M+1 plus 2 s,
+ * where M is now's epoch minute, so every write in one minute shares one pass
+ * a moment after the minute ends. On the writing job's lane; 3 attempts.
+ * payload.kick tells the handler it wasn't scheduled (a held lease re-kicks
+ * instead of skipping).
+ */
+export function attentionKick(principal: Pick<ExecPrincipal, "id">, lane: JobLane, now: Date): EnqueueJobInput {
+  const ms = now.getTime();
+  if (!Number.isFinite(ms)) throw new NonRetryableError("attentionKick: now must be a valid Date");
+  const next = Math.floor(ms / 60_000) + 1;
+  return {
+    kind: EMAIL_ATTENTION_JOB_KIND,
+    lane,
+    principalId: principal.id,
+    payload: { kick: true },
+    dedupeKey: `email-attn:${principal.id}:m${next}`,
+    runAfter: new Date(next * 60_000 + 2_000),
+    maxAttempts: EMAIL_ATTENTION_MAX_ATTEMPTS
+  };
+}
+
+/** True for an attentionKick job (as opposed to the 10-minute scheduled pass). */
+export function isAttentionKick(job: Pick<ExecJobRow, "dedupe_key" | "payload">): boolean {
+  return (isRecord(job.payload) && job.payload.kick === true) || (typeof job.dedupe_key === "string" && job.dedupe_key.startsWith("email-attn:"));
+}
+
+/** Enqueue attentionKick, best-effort: a failure is logged, never thrown (the 10-minute pass covers it). */
+export async function kickAttention(principal: Pick<ExecPrincipal, "id">, lane: JobLane, now: Date = new Date()): Promise<boolean> {
+  try {
+    return (await enqueueJob(attentionKick(principal, lane, now))).enqueued;
+  } catch (err) {
+    console.warn(`[exec-jobs] attention kick for ${principal.id} failed; the scheduled pass covers it: ${safeDescribe(err)}`);
+    return false;
+  }
+}
+
+// --- batches -------------------------------------------------------------------------
+
+export interface EnqueueJobsResult {
+  /** Rows newly inserted; a dedupe key that already had a row inserts nothing. */
+  enqueued: number;
+  inserted: { id: number; dedupeKey: string | null }[];
+}
+
+function chunked<T>(items: readonly T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+  return out;
+}
+
+/** `.in(...)` lists travel in the URL: at most MAX_BATCH_ROWS values and URL_LIST_BUDGET characters each. */
+function urlChunks(values: readonly string[]): string[][] {
+  const out: string[][] = [];
+  let current: string[] = [];
+  let size = 0;
+  for (const value of values) {
+    const cost = encodeURIComponent(value).length + 3;
+    if (current.length > 0 && (current.length >= MAX_BATCH_ROWS || size + cost > URL_LIST_BUDGET)) {
+      out.push(current);
+      current = [];
+      size = 0;
+    }
+    current.push(value);
+    size += cost;
+  }
+  if (current.length > 0) out.push(current);
+  return out;
+}
+
+/**
+ * enqueueJob for many jobs: insert-if-absent on dedupe_key, at most 200 rows
+ * per request. Every row of one request has the identical key set (contract
+ * §0): postgrest-js sends the union of the rows' keys and fills the missing
+ * ones with NULL, which would null run_after (NOT NULL) or max_attempts. So
+ * rows are grouped by the keys they set, and each group goes separately. Every
+ * input is validated before anything is written. A repeated key in the batch
+ * keeps its first row. Interactive work kicks the lane, as enqueueJob does.
+ */
+export async function enqueueJobs(inputs: readonly EnqueueJobInput[], opts: { signal?: AbortSignal } = {}): Promise<EnqueueJobsResult> {
+  const rows = inputs.map((input) => ({ row: enqueueRow(input), lane: input.lane }));
+  const seen = new Set<string>();
+  const groups = new Map<string, { row: Record<string, unknown>; lane: JobLane }[]>();
+  for (const r of rows) {
+    const key = r.row.dedupe_key;
+    if (typeof key === "string") {
+      if (seen.has(key)) continue;
+      seen.add(key);
+    }
+    const shape = Object.keys(r.row).sort().join(",");
+    const group = groups.get(shape) ?? [];
+    group.push(r);
+    groups.set(shape, group);
+  }
+
+  const result: EnqueueJobsResult = { enqueued: 0, inserted: [] };
+  let kick = false;
+  for (const group of groups.values()) {
+    for (const chunk of chunked(group, MAX_BATCH_ROWS)) {
+      opts.signal?.throwIfAborted();
+      let query = getSupabaseAdmin()
+        .from("exec_jobs")
+        .upsert(
+          chunk.map((c) => c.row),
+          { onConflict: "dedupe_key", ignoreDuplicates: true }
+        )
+        .select("id,dedupe_key");
+      if (opts.signal) query = query.abortSignal(opts.signal);
+      const { data, error } = await query;
+      if (error) {
+        opts.signal?.throwIfAborted();
+        throw new Error(`exec_jobs batch enqueue failed (${chunk.length} rows): ${error.message}`);
+      }
+      const added = (Array.isArray(data) ? data : []).flatMap((d: unknown) => {
+        const id = insertedId([d]);
+        if (id === null) return [];
+        const key = isRecord(d) && typeof d.dedupe_key === "string" ? d.dedupe_key : null;
+        return [{ id, dedupeKey: key }];
+      });
+      result.inserted.push(...added);
+      result.enqueued += added.length;
+      if (added.length > 0 && chunk.some((c) => c.lane === "interactive")) kick = true;
+    }
+  }
+  if (kick && isExecEnabled()) kickInteractive();
+  return result;
+}
+
+/** Which of these dedupe keys already have a job row (any status). Throws on a database error. */
+export async function existingJobKeys(keys: readonly string[], opts: { signal?: AbortSignal } = {}): Promise<Set<string>> {
+  const out = new Set<string>();
+  const unique = [...new Set(keys.filter((k) => typeof k === "string" && k.length > 0))];
+  for (const chunk of urlChunks(unique)) {
+    opts.signal?.throwIfAborted();
+    let query = getSupabaseAdmin().from("exec_jobs").select("dedupe_key").in("dedupe_key", chunk);
+    if (opts.signal) query = query.abortSignal(opts.signal);
+    const { data, error } = await query;
+    if (error) {
+      opts.signal?.throwIfAborted();
+      throw new Error(`exec_jobs key read failed: ${error.message}`);
+    }
+    for (const row of Array.isArray(data) ? data : []) {
+      if (isRecord(row) && typeof row.dedupe_key === "string") out.add(row.dedupe_key);
+    }
+  }
+  return out;
+}
+
+export interface QueuedJobsQuery {
+  principalId: string;
+  kind: string;
+  lane?: JobLane;
+  /** Only jobs whose payload.reason is one of these. Absent: any reason (what the bulk cap counts). */
+  reasons?: readonly string[];
+  /** Count jobs due at or before this instant. */
+  runAfterBefore: Date;
+}
+
+/**
+ * How many queued (not running, not finished) jobs match. Throws on a
+ * database error or a missing count: a cap that read a failure as zero would
+ * let a whole batch through.
+ */
+export async function countQueuedJobs(q: QueuedJobsQuery, opts: { signal?: AbortSignal } = {}): Promise<number> {
+  const before = q.runAfterBefore instanceof Date ? q.runAfterBefore.getTime() : NaN;
+  if (!Number.isFinite(before)) throw new NonRetryableError("countQueuedJobs: runAfterBefore must be a valid Date");
+  let query = getSupabaseAdmin()
+    .from("exec_jobs")
+    .select("id", { count: "exact", head: true })
+    .eq("status", "queued")
+    .eq("principal_id", q.principalId)
+    .eq("kind", q.kind)
+    .lte("run_after", new Date(before).toISOString());
+  if (q.lane) query = query.eq("lane", q.lane);
+  if (q.reasons) query = query.in("payload->>reason", [...q.reasons]);
+  if (opts.signal) query = query.abortSignal(opts.signal);
+  const { count, error } = await query;
+  if (error) {
+    opts.signal?.throwIfAborted();
+    throw new Error(`exec_jobs queued count failed: ${error.message}`);
+  }
+  if (typeof count !== "number" || !Number.isSafeInteger(count) || count < 0) throw new Error("exec_jobs queued count failed: no count came back");
+  return count;
+}
+
+// --- the shared stagger (mail/stagger) -----------------------------------------------
+
+/**
+ * Reserve `n` bulk run times for this principal: the first at
+ * max(now, lastRunAfter + 20 s), each next one 20 s later, stored back as
+ * the new lastRunAfter by compare-and-set on mail/stagger, so two writers
+ * (reconcile, the attention pass, a re-routing triage job, the hook) never
+ * hand out the same slots. Throws (retryable) when the row keeps changing
+ * under it, or on a database error.
+ */
+export async function reserveStagger(principal: ExecPrincipal, n: number, now: Date, opts: { signal?: AbortSignal } = {}): Promise<Date[]> {
+  if (!Number.isSafeInteger(n) || n < 0 || n > MAX_STAGGER_SLOTS) {
+    throw new NonRetryableError(`reserveStagger: n must be a whole number from 0 to ${MAX_STAGGER_SLOTS}`);
+  }
+  const nowMs = now.getTime();
+  if (!Number.isFinite(nowMs)) throw new NonRetryableError("reserveStagger: now must be a valid Date");
+  if (n === 0) return [];
+  let unreadable = 0;
+  for (let attempt = 1; attempt <= STAGGER_ATTEMPTS; attempt += 1) {
+    opts.signal?.throwIfAborted();
+    const current = await getSyncState(principal, "mail", "stagger", parseStaggerState, opts);
+    const lastMs = current?.value.lastRunAfter ? Date.parse(current.value.lastRunAfter) : NaN;
+    const usable = Number.isFinite(lastMs) && lastMs <= nowMs + MAX_STAGGER_AHEAD_MS;
+    const first = usable ? Math.max(nowMs, lastMs + BULK_STAGGER_SPACING_MS) : nowMs;
+    const slots = Array.from({ length: n }, (_, i) => new Date(first + i * BULK_STAGGER_SPACING_MS));
+    const value = { lastRunAfter: slots[slots.length - 1].toISOString() };
+    if (current === null && unreadable >= 1) {
+      // No row parsed twice and the insert lost both times: the stored row
+      // is there but unreadable. Replace it rather than wedge every writer.
+      await putSyncState(principal, "mail", "stagger", value, opts);
+      return slots;
+    }
+    if (await casSyncState(principal, "mail", "stagger", current?.rev ?? null, value, opts)) return slots;
+    if (current === null) unreadable += 1;
+  }
+  throw new Error(`reserveStagger: mail/stagger kept changing for principal ${principal.id} (${STAGGER_ATTEMPTS} attempts)`);
+}
+
+// --- bulk triage under the cap ---------------------------------------------------------
+
+/** One bulk triage job to enqueue: a TriageJobInput without the lane, principal and run time, which enqueueBulkTriage sets. */
+export type BulkTriageItem = Omit<TriageJobInput, "principalId" | "lane" | "runAfter">;
+
+export interface BulkTriageResult {
+  /** Jobs newly inserted. */
+  enqueued: number;
+  /** Items whose key already had a job: nothing left to do for them. */
+  duplicates: number;
+  /** Items turned away by the cap. The caller must treat them as NOT done (and come back). */
+  blocked: number;
+  blockedKeys: string[];
+  /** The run times handed out, in item order. */
+  runAfter: Date[];
+}
+
+/**
+ * Enqueue bulk-lane triage jobs the throttled way (addenda §1.8): items whose
+ * key already has a job are dropped, at most BULK_TRIAGE_CAP minus the bulk
+ * triage jobs already due within BULK_TRIAGE_WINDOW_MS go in (any reason, all
+ * of the principal's), in the order given, each at its own slot of the shared
+ * stagger. The rest come back as blocked. Throws on a database error.
+ */
+export async function enqueueBulkTriage(
+  principal: ExecPrincipal,
+  items: readonly BulkTriageItem[],
+  now: Date,
+  opts: { signal?: AbortSignal } = {}
+): Promise<BulkTriageResult> {
+  const result: BulkTriageResult = { enqueued: 0, duplicates: 0, blocked: 0, blockedKeys: [], runAfter: [] };
+  const unique: BulkTriageItem[] = [];
+  const keys = new Set<string>();
+  for (const item of items) {
+    if (keys.has(item.dedupeKey)) {
+      result.duplicates += 1;
+      continue;
+    }
+    keys.add(item.dedupeKey);
+    unique.push(item);
+  }
+  if (unique.length === 0) return result;
+
+  const existing = await existingJobKeys([...keys], opts);
+  const fresh = unique.filter((item) => !existing.has(item.dedupeKey));
+  result.duplicates += unique.length - fresh.length;
+  if (fresh.length === 0) return result;
+
+  const near = await countQueuedJobs(
+    {
+      principalId: principal.id,
+      kind: EMAIL_TRIAGE_JOB_KIND,
+      lane: "bulk",
+      runAfterBefore: new Date(now.getTime() + BULK_TRIAGE_WINDOW_MS)
+    },
+    opts
+  );
+  const room = Math.max(0, BULK_TRIAGE_CAP - near);
+  const take = fresh.slice(0, room);
+  const turnedAway = fresh.slice(room);
+  result.blocked = turnedAway.length;
+  result.blockedKeys = turnedAway.map((item) => item.dedupeKey);
+  if (take.length === 0) return result;
+
+  const slots = await reserveStagger(principal, take.length, now, opts);
+  result.runAfter = slots;
+  const jobs = take.map((item, i) => triageJob({ ...item, principalId: principal.id, lane: "bulk", runAfter: slots[i] }));
+  const r = await enqueueJobs(jobs, opts);
+  result.enqueued = r.enqueued;
+  // A key another writer took between the check and the insert: nothing left to do for it either.
+  result.duplicates += take.length - r.enqueued;
+  return result;
+}
+
+/**
+ * enqueueBulkTriage for the mail hook, which runs outside any job and holds
+ * only a principal id (it may not mint a principal: boundary rule 1). The
+ * principal is loaded here, by this file's trusted loader, exactly as the job
+ * runner loads one for every job; a disabled or missing principal enqueues
+ * nothing.
+ */
+export async function enqueueBacklogTriage(principalId: string, items: readonly BulkTriageItem[], now: Date): Promise<BulkTriageResult> {
+  const principal = await loadPrincipalById(principalId);
+  if (!principal) return { enqueued: 0, duplicates: 0, blocked: items.length, blockedKeys: items.map((i) => i.dedupeKey), runAfter: [] };
+  return enqueueBulkTriage(principal, items, now);
+}
+
+// --- dead letters (addenda §1.2) -------------------------------------------------------
+
+/** listDeadJobs' keyset position: (finished_at exactly as the database rendered it, id). */
+export interface DeadJobCursor {
+  finishedAt: string;
+  id: number;
+}
+
+export interface DeadJob {
+  id: number;
+  lane: JobLane;
+  principalId: string | null;
+  /** References only (job payloads never hold content). */
+  payload: Record<string, unknown>;
+  finishedAt: string;
+}
+
+export interface DeadJobsQuery {
+  principalId: string;
+  kind: string;
+  /** Resume after this position; null = from the oldest. */
+  after: DeadJobCursor | null;
+  limit: number;
+  /**
+   * Only jobs that died at or before this instant. exec_finish_job stamps
+   * finished_at with the transaction's start, so a death can commit just
+   * after a later one was read; a cursor that never passes "a minute ago"
+   * can't step over it.
+   */
+  finishedBefore?: Date;
+}
+
+const DEAD_COLUMNS = "id,lane,principal_id,payload,finished_at";
+
+function deadJobOf(raw: unknown): DeadJob | null {
+  if (!isRecord(raw)) return null;
+  const id = insertedId([raw]);
+  if (id === null || !isLane(raw.lane) || typeof raw.finished_at !== "string" || !Number.isFinite(Date.parse(raw.finished_at))) return null;
+  return {
+    id,
+    lane: raw.lane,
+    principalId: typeof raw.principal_id === "string" ? raw.principal_id : null,
+    payload: isRecord(raw.payload) && !Array.isArray(raw.payload) ? raw.payload : {},
+    finishedAt: raw.finished_at
+  };
+}
+
+/**
+ * The principal's dead jobs of one kind, oldest death first: keyset on
+ * (finished_at, id) ascending, so a job that dies later (a retrying triage
+ * job dies hours after it was enqueued) always lands after the cursor. Jobs
+ * that are themselves dead-letter re-runs (payload.reason "dead_letter") are
+ * skipped: each original job is retried once, never in a loop. `next` is the
+ * position of the last row read, skipped ones included (null when none was).
+ * Throws on a database error.
+ */
+export async function listDeadJobs(
+  q: DeadJobsQuery,
+  opts: { signal?: AbortSignal } = {}
+): Promise<{ jobs: DeadJob[]; next: DeadJobCursor | null }> {
+  if (!Number.isSafeInteger(q.limit) || q.limit < 1 || q.limit > 1000) throw new NonRetryableError("listDeadJobs: limit must be 1-1000");
+  if (q.after !== null && (!Number.isSafeInteger(q.after.id) || typeof q.after.finishedAt !== "string" || q.after.finishedAt === "")) {
+    throw new NonRetryableError("listDeadJobs: the cursor is malformed");
+  }
+  const base = () => {
+    let query = getSupabaseAdmin()
+      .from("exec_jobs")
+      .select(DEAD_COLUMNS)
+      .eq("status", "dead")
+      .eq("principal_id", q.principalId)
+      .eq("kind", q.kind);
+    if (q.finishedBefore) query = query.lte("finished_at", q.finishedBefore.toISOString());
+    return query;
+  };
+  const read = async (query: ReturnType<typeof base>): Promise<unknown[]> => {
+    if (opts.signal) query = query.abortSignal(opts.signal);
+    const { data, error } = await query;
+    if (error) {
+      opts.signal?.throwIfAborted();
+      throw new Error(`exec_jobs dead-letter read failed: ${error.message}`);
+    }
+    return Array.isArray(data) ? data : [];
+  };
+
+  // Two plain filters instead of one or(): the cursor's finished_at keeps the
+  // database's own text (microseconds, its offset), which is matched exactly.
+  const rows: unknown[] = [];
+  if (q.after !== null) {
+    rows.push(...(await read(base().eq("finished_at", q.after.finishedAt).gt("id", q.after.id).order("id", { ascending: true }).limit(q.limit))));
+  }
+  if (rows.length < q.limit) {
+    let later = base();
+    if (q.after !== null) later = later.gt("finished_at", q.after.finishedAt);
+    rows.push(...(await read(later.order("finished_at", { ascending: true }).order("id", { ascending: true }).limit(q.limit - rows.length))));
+  }
+
+  const jobs: DeadJob[] = [];
+  let next: DeadJobCursor | null = null;
+  for (const raw of rows) {
+    const job = deadJobOf(raw);
+    if (!job) throw new Error("exec_jobs dead-letter read failed: a row is malformed");
+    next = { finishedAt: job.finishedAt, id: job.id };
+    if (job.payload.reason === "dead_letter") continue;
+    jobs.push(job);
+  }
+  return { jobs, next };
 }
 

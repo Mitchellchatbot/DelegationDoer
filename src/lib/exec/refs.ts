@@ -134,6 +134,26 @@ function isAllowedLocation(url: URL): boolean {
 }
 
 /**
+ * True when `host` is one DD itself is served on: the fixed DD hosts or the
+ * host of appOrigin(). Compared lowercased and without a trailing dot
+ * ("Operations.ScaledAI.org." is DD), because a browser resolves those
+ * spellings to the same site, and so sends it the same cookies.
+ *
+ * The email frame's "show images" allow-list (L15, A7) keeps an image URL
+ * only when its host is NOT one of these: an <img> pointing at DD would make
+ * the browser send a cookie-bearing request to DD on the sender's behalf.
+ * Anything that isn't a plain host name counts as DD, so a malformed value
+ * can only remove an image, never let one through.
+ */
+export function isDdHost(host: string): boolean {
+  if (typeof host !== "string") return true;
+  const normalized = host.trim().toLowerCase().replace(/\.+$/, "");
+  if (normalized === "" || /[\s/\\@:?#[\]]/.test(normalized)) return true;
+  const app = hostOf(appOrigin())?.replace(/\.+$/, "") ?? null;
+  return DD_HOSTS.includes(normalized) || normalized === app;
+}
+
+/**
  * True only for an https link, with no userinfo, on the default port, to DD
  * (any page), Outlook on the web (the mailbox or one item) or Slack (a
  * message, file, channel or the web client). Everything else is false:
@@ -230,6 +250,41 @@ export function outlookMessageRef(msg: {
     url: safeUrl(msg.webLink),
     label: label(msg.subject, "(no subject)"),
     class: msg.restricted ? "restricted" : "public"
+  };
+}
+
+/**
+ * One of his email threads in Outlook on the web (P3). Class "private"
+ * always: his mail is never a public source, whatever it is about (contract
+ * §3.13: no email ref is public). Built here directly, never through
+ * outlookMessageRef, whose default class is "public". The link is the stored
+ * CL1 webLink when it passes the Outlook allowlist (one item, no compose
+ * action), else null. `label` is the thread's subject.
+ */
+export function execEmailRef(ref: { threadId: string; webLink?: string | null; label?: string | null }): SourceRef {
+  return {
+    system: "outlook",
+    id: ref.threadId,
+    url: safeUrl(ref.webLink),
+    label: label(ref.label, "Email"),
+    class: "private"
+  };
+}
+
+/**
+ * The assistant's own page for one of his email threads,
+ * /executive/email/<threadId> (P3). Class "private", like every email ref.
+ * The path is the ref's id, as for ddPageRef; an empty thread id gets no link.
+ */
+export function execEmailThreadRef(threadId: string, threadLabel?: string | null): SourceRef {
+  const valid = typeof threadId === "string" && threadId.length > 0;
+  const path = `/executive/email/${valid ? encodeURIComponent(threadId) : ""}`;
+  return {
+    system: "dd",
+    id: path,
+    url: valid ? ddPageUrl(path) : null,
+    label: label(threadLabel, "Email thread"),
+    class: "private"
   };
 }
 

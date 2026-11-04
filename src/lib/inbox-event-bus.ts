@@ -14,6 +14,36 @@ export interface InboxEvent {
   thread_id: string;
   message_id?: string;
   ts: number;
+  // Sent by a CL1 clone on message:new (socket and webhook), so a subscriber
+  // can tell inbound from outbound and Junk from Inbox without fetching the
+  // message. Absent from older clones; only set when valid (inboxEventExtras).
+  direction?: "inbound" | "outbound";
+  folder?: string;
+}
+
+const MAX_FOLDER_CHARS = 200;
+
+/**
+ * The validated direction/folder of a clone event payload, ready to spread
+ * into an InboxEvent: a field that is missing or malformed is left out rather
+ * than passed through, since subscribers act on it (Junk is skipped, outbound
+ * is routed differently).
+ */
+export function inboxEventExtras(
+  payload: { direction?: unknown; folder?: unknown } | null | undefined
+): Pick<InboxEvent, "direction" | "folder"> {
+  const out: Pick<InboxEvent, "direction" | "folder"> = {};
+  const direction = payload?.direction;
+  if (direction === "inbound" || direction === "outbound") out.direction = direction;
+  const folder = payload?.folder;
+  if (typeof folder === "string") {
+    const trimmed = folder.trim();
+    // No control characters: a folder label is shown and matched, never parsed.
+    if (trimmed.length > 0 && trimmed.length <= MAX_FOLDER_CHARS && !/[\x00-\x1f\x7f]/.test(trimmed)) {
+      out.folder = trimmed;
+    }
+  }
+  return out;
 }
 
 export type InboxEventListener = (e: InboxEvent) => void;

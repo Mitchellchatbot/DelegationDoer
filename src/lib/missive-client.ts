@@ -21,6 +21,12 @@ export interface MissiveAccount {
   user_id: string | null;
   last_synced_at: string | null;
   provider: string | null;
+  // The clone's last sync failure for this mailbox (an AADSTS / invalid_grant
+  // text for a revoked grant), and when it happened as ISO (the clone sends a
+  // BIGINT epoch-ms string; fetchAccounts converts it). Null once a sync
+  // succeeds; undefined from a clone that doesn't send them.
+  last_sync_error?: string | null;
+  last_sync_error_at?: string | null;
 }
 
 export interface MissiveTeamMember {
@@ -58,6 +64,10 @@ export interface MissiveThread {
   // client replies too). Only present from an upgraded clone; undefined/null on
   // older builds, so consumers fall back to last_message_at.
   last_outbound_at?: string | null;
+  // ISO timestamp of the newest inbound, non-junk message ever ingested into
+  // the thread (CL1). Thread-wide across every account, and a high-water mark
+  // the clone never lowers. Undefined from a pre-CL1 clone.
+  last_inbound_at?: string | null;
 }
 
 // Per-message attachment metadata as returned by the clone's
@@ -103,6 +113,14 @@ export interface MissiveMessage {
   // were withheld (null) and must be fetched on demand via fetchMessageBody.
   snippet?: string | null;
   body_deferred?: boolean;
+  // Passed through raw by normalizeMessage's spread (typed here, never
+  // converted): created_at is the clone's ingest time as a BIGINT epoch-ms
+  // digit string, is_automated its INTEGER 0/1 bulk-send flag (a boolean from
+  // some builds), account_email / account_name the owning mailbox.
+  created_at?: string | number | null;
+  is_automated?: number | boolean | null;
+  account_email?: string | null;
+  account_name?: string | null;
 }
 
 export interface MissiveThreadDetail {
@@ -110,16 +128,62 @@ export interface MissiveThreadDetail {
   messages: MissiveMessage[];
 }
 
+// A missing endpoint or token is a configuration fault: retrying can't fix it.
+// The message is unchanged; errorClass "auth" makes the exec job runner (which
+// reads errorClass first) dead-letter the job and raise its credentials alert
+// instead of retrying it for hours.
+function configError(message: string): Error {
+  return Object.assign(new Error(message), { errorClass: "auth" as const });
+}
+
 function baseUrl(): string {
   const url = process.env.MISSIVE_API_URL;
-  if (!url) throw new Error("MISSIVE_API_URL not set");
+  if (!url) throw configError("MISSIVE_API_URL not set");
   return url.replace(/\/$/, "");
 }
 
 function token(): string {
   const t = process.env.MISSIVE_API_TOKEN;
-  if (!t) throw new Error("MISSIVE_API_TOKEN not set");
+  if (!t) throw configError("MISSIVE_API_TOKEN not set");
   return t;
+}
+
+/**
+ * A non-2xx answer from the clone. The message is exactly the text
+ * missiveFetch always threw ("missive <path> → <status> <body…>"), so callers
+ * that show or match it see no change. `status` is what callers that classify
+ * failures read: the exec job runner turns 401/403 into "auth", 429/5xx into
+ * "retryable" and any other 4xx into "fatal".
+ */
+export class MissiveHttpError extends Error {
+  readonly status: number;
+  /** The request path, query string included. */
+  readonly path: string;
+  /** From a Retry-After header (429/503), in ms. */
+  readonly retryAfterMs?: number;
+  /**
+   * The error body was JSON: the clone's own `{ error }` answers. A non-JSON
+   * 404 is Express's default "Cannot GET" page, i.e. this clone build has no
+   * such route (how listMessagesFeed detects a pre-CL1 clone).
+   */
+  readonly jsonBody: boolean;
+  constructor(message: string, init: { status: number; path: string; retryAfterMs?: number; jsonBody: boolean }) {
+    super(message);
+    this.name = "MissiveHttpError";
+    this.status = init.status;
+    this.path = init.path;
+    this.jsonBody = init.jsonBody;
+    if (init.retryAfterMs !== undefined) this.retryAfterMs = init.retryAfterMs;
+  }
+}
+
+// Retry-After is either delta-seconds or an HTTP date.
+function retryAfterMsOf(header: string | null, now = Date.now()): number | undefined {
+  if (!header) return undefined;
+  const value = header.trim();
+  if (/^\d{1,9}$/.test(value)) return Number(value) * 1000;
+  const at = Date.parse(value);
+  return Number.isFinite(at) && at > now ? at - now : undefined;
 }
 
 async function missiveFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -139,7 +203,12 @@ async function missiveFetch<T>(path: string, init: RequestInit = {}): Promise<T>
   });
   if (!res.ok) {
     const body = await res.text().catch(() => "");
-    throw new Error(`missive ${path} → ${res.status} ${body.slice(0, 200)}`);
+    throw new MissiveHttpError(`missive ${path} → ${res.status} ${body.slice(0, 200)}`, {
+      status: res.status,
+      path,
+      retryAfterMs: retryAfterMsOf(res.headers.get("retry-after")),
+      jsonBody: /\bjson\b/i.test(res.headers.get("content-type") ?? "")
+    });
   }
   return (await res.json()) as T;
 }
@@ -154,12 +223,29 @@ async function missiveFetch<T>(path: string, init: RequestInit = {}): Promise<T>
 // unstable_cache's callback is unsafe, since revalidation can run outside a
 // request scope where cache() isn't valid.
 async function fetchAccounts(): Promise<MissiveAccount[]> {
+  return fetchAccountsWith({});
+}
+
+async function fetchAccountsWith(init: RequestInit): Promise<MissiveAccount[]> {
   // The clone returns { accounts: [...] }. If you've extended it, adjust here.
-  const data = await missiveFetch<{ accounts: MissiveAccount[] }>("/api/accounts");
+  const data = await missiveFetch<{ accounts: MissiveAccount[] }>("/api/accounts", init);
   return (data.accounts ?? []).map((a) => ({
     ...a,
-    last_synced_at: a.last_synced_at ? toIsoString(a.last_synced_at) : null
+    last_synced_at: a.last_synced_at ? toIsoString(a.last_synced_at) : null,
+    // BIGINT epoch-ms from pg, like last_synced_at. An unparseable value
+    // becomes null rather than "", so "is there an error time" stays a null check.
+    last_sync_error_at: a.last_sync_error_at ? toIsoString(a.last_sync_error_at) || null : null
   }));
+}
+
+/**
+ * listAccounts without any caching, for background jobs: one fresh clone
+ * round trip per call, cancellable through `signal` (React's cache() is a
+ * pass-through outside a request anyway, and unstable_cache doesn't belong in
+ * the instrumentation layer).
+ */
+export async function listAccountsFresh(opts: { signal?: AbortSignal } = {}): Promise<MissiveAccount[]> {
+  return fetchAccountsWith(opts.signal ? { signal: opts.signal } : {});
 }
 
 // `cache` here is the runtime-safe wrapper (see safe-cache): the real React
@@ -268,6 +354,11 @@ export interface ListThreadsOpts {
   // client (one label per client, backfilled by the labels backfill
   // job and auto-applied by the webhook on new mail).
   labelId?: string;
+  // The clone hides currently-snoozed threads from every list unless asked;
+  // snoozed: true asks for ONLY the snoozed ones (snoozed=true).
+  snoozed?: boolean;
+  // Cancels the request (a job's timeout, a page's deadline).
+  signal?: AbortSignal;
 }
 
 export type InboxCategory = NonNullable<ListThreadsOpts["category"]>;
@@ -283,7 +374,9 @@ export interface ListThreadsResult {
 // participants, ", " for message to_addrs / cc_addrs). UI is much happier
 // with string[]; we normalize at the lib boundary so callers don't care.
 
-function toStringArray(raw: unknown): string[] {
+// Exported so readers of other clone payloads (the CL1 messages feed, whose
+// address fields are raw TEXT) split them exactly the way getThread's are.
+export function toStringArray(raw: unknown): string[] {
   if (Array.isArray(raw)) return raw.filter((s): s is string => typeof s === "string");
   if (typeof raw === "string") return raw.split(/[;,]\s*/).map((s) => s.trim()).filter(Boolean);
   return [];
@@ -306,11 +399,26 @@ function toIsoString(raw: unknown): string {
   return "";
 }
 
-function normalizeThread<T extends { participants: unknown; last_message_at?: unknown; snoozed_until?: unknown; automated?: unknown; last_outbound_at?: unknown }>(
+function normalizeThread<
+  T extends { participants: unknown; last_message_at?: unknown; snoozed_until?: unknown; automated?: unknown; last_outbound_at?: unknown; last_inbound_at?: unknown }
+>(
   t: T
-): T & { participants: string[]; last_message_at: string; snoozed_until: string | null; automated: boolean; last_outbound_at: string | null } {
+): T & {
+  participants: string[];
+  last_message_at: string;
+  snoozed_until: string | null;
+  automated: boolean;
+  last_outbound_at: string | null;
+  last_inbound_at?: string | null;
+} {
+  // CL1's thread-wide inbound high-water mark (BIGINT epoch-ms) → ISO. Only
+  // set when the clone sent the field, so `"last_inbound_at" in thread` still
+  // tells a CL1 clone from an older one.
+  const lastInbound =
+    t.last_inbound_at === undefined ? undefined : t.last_inbound_at ? toIsoString(t.last_inbound_at) || null : null;
   return {
     ...t,
+    ...(lastInbound === undefined ? {} : { last_inbound_at: lastInbound }),
     participants: toStringArray(t.participants),
     last_message_at: toIsoString(t.last_message_at),
     snoozed_until: t.snoozed_until ? toIsoString(t.snoozed_until) : null,
@@ -356,13 +464,14 @@ export async function listThreadsPaged(opts: ListThreadsOpts = {}): Promise<List
   if (opts.category) params.set("category", opts.category);
   if (opts.teamSpaceId) params.set("team_space_id", opts.teamSpaceId);
   if (opts.labelId) params.set("label_id", opts.labelId);
+  if (opts.snoozed) params.set("snoozed", "true");
   const qs = params.toString() ? `?${params}` : "";
   const data = await missiveFetch<{
     threads: MissiveThread[];
     limit?: number;
     offset?: number;
     hasMore?: boolean;
-  }>(`/api/threads${qs}`);
+  }>(`/api/threads${qs}`, opts.signal ? { signal: opts.signal } : {});
   return {
     threads: (data.threads ?? []).map(normalizeThread),
     limit: data.limit ?? opts.limit ?? 50,
@@ -380,11 +489,12 @@ export async function listThreadsPaged(opts: ListThreadsOpts = {}): Promise<List
 // bodies, so this stays safe before the clone is deployed.
 export async function getThread(
   threadId: string,
-  opts: { deferBodies?: boolean } = {}
+  opts: { deferBodies?: boolean; signal?: AbortSignal } = {}
 ): Promise<MissiveThreadDetail> {
   const qs = opts.deferBodies ? "?defer_bodies=1" : "";
   const data = await missiveFetch<MissiveThreadDetail>(
-    `/api/threads/${encodeURIComponent(threadId)}${qs}`
+    `/api/threads/${encodeURIComponent(threadId)}${qs}`,
+    opts.signal ? { signal: opts.signal } : {}
   );
   return {
     ...data,
@@ -398,10 +508,12 @@ export async function getThread(
 // returns parsed JSON. Caller is responsible for per-user access control before
 // invoking — this carries the workspace-wide service token.
 export async function fetchMessageBody(
-  messageId: string
+  messageId: string,
+  opts: { signal?: AbortSignal } = {}
 ): Promise<{ body_html: string | null; body_text: string | null }> {
   const data = await missiveFetch<{ body_html: string | null; body_text: string | null }>(
-    `/api/messages/${encodeURIComponent(messageId)}/body`
+    `/api/messages/${encodeURIComponent(messageId)}/body`,
+    opts.signal ? { signal: opts.signal } : {}
   );
   return { body_html: data.body_html ?? null, body_text: data.body_text ?? null };
 }
@@ -411,11 +523,148 @@ export async function fetchMessageBody(
 // proxy route can pipe it straight to the browser. Unlike missiveFetch this
 // does NOT parse JSON. Caller is responsible for access control before
 // invoking — this carries the service token, which is workspace-wide.
-export async function fetchAttachment(attachmentId: string): Promise<Response> {
+export async function fetchAttachment(attachmentId: string, opts: { signal?: AbortSignal } = {}): Promise<Response> {
   return fetch(`${baseUrl()}/api/attachments/${encodeURIComponent(attachmentId)}`, {
     headers: { Authorization: `Bearer ${token()}` },
-    cache: "no-store"
+    cache: "no-store",
+    ...(opts.signal ? { signal: opts.signal } : {})
   });
+}
+
+// ---------------------------------------------------------------------------
+// CL1 messages feed: GET /api/messages
+// ---------------------------------------------------------------------------
+
+/** Query for CL1's GET /api/messages (missiveclone backend/src/routes/messages.js). */
+export interface MessagesFeedOpts {
+  /** Required; the clone answers a JSON 404 when the account isn't in its workspace. */
+  accountId: string;
+  /** "created" (default): keyset on created_at, new rows only. "changed": keyset on COALESCE(signals_updated_at, created_at). */
+  order?: "created" | "changed";
+  /** ISO 8601 with Z or an offset; inclusive. Ignored when `cursor` is given (the clone lets a cursor win anyway). */
+  since?: string | null;
+  /** A previous page's next_cursor (opaque, tagged by order). */
+  cursor?: string | null;
+  direction?: "inbound" | "outbound";
+  /** Clone default: true. */
+  includeRemoved?: boolean;
+  /** 1..200; the clone defaults to 100 and caps larger values. */
+  limit?: number;
+  signal?: AbortSignal;
+}
+
+/**
+ * One feed row exactly as the clone sends it. Metadata only: no bodies, no
+ * snippet. Every time is a BIGINT epoch-ms digit string; the address fields
+ * are raw TEXT ("Name <a@x>, b@y").
+ */
+export interface MissiveFeedMessage {
+  id: string;
+  thread_id: string;
+  account_id: string;
+  direction: string;
+  folder: string | null;
+  message_id: string | null;
+  in_reply_to: string | null;
+  from_addr: string | null;
+  to_addrs: string | null;
+  cc_addrs: string | null;
+  subject: string | null;
+  sent_at: string | number | null;
+  created_at: string | number | null;
+  has_attachments: number | boolean | null;
+  graph_id: string | null;
+  web_link: string | null;
+  is_read: boolean | null;
+  importance: string | null;
+  flag_status: string | null;
+  categories: string[] | null;
+  parent_folder_id: string | null;
+  inference_classification: string | null;
+  change_key: string | null;
+  removed_at: string | number | null;
+  removed_reason: string | null;
+  signals_updated_at: string | number | null;
+}
+
+/**
+ * `{ supported: false }` when the clone has no feed (pre-CL1). Otherwise CL1's
+ * page: next_cursor is never null (page while has_more, then poll again from
+ * it later) and settled_through is the settle horizon, epoch ms as a string.
+ */
+export type MessagesFeedResult =
+  | { supported: false }
+  | { supported: true; messages: MissiveFeedMessage[]; next_cursor: string; has_more: boolean; settled_through: string };
+
+// How long a "no feed here" answer is believed before asking again: long
+// enough not to probe on every reconcile run, short enough that a CL1 deploy
+// is picked up without a restart.
+const FEED_PROBE_TTL_MS = 10 * 60_000;
+let feedUnsupportedUntil = 0;
+
+/** Test seam: forget a cached "this clone has no feed" answer. */
+export function __resetMessagesFeedProbeForTests(): void {
+  feedUnsupportedUntil = 0;
+}
+
+/**
+ * One page of CL1's per-account messages feed, as the clone sends it.
+ *
+ * A pre-CL1 clone has no GET /api/messages route: Express answers its default
+ * HTML 404 ("Cannot GET"). That answer is cached for 10 minutes per process
+ * and comes back as `{ supported: false }` without a request. Every other
+ * failure throws: a JSON 404 (the account isn't the clone's) or any other
+ * status as MissiveHttpError, a malformed page as an Error.
+ */
+export async function listMessagesFeed(opts: MessagesFeedOpts): Promise<MessagesFeedResult> {
+  if (Date.now() < feedUnsupportedUntil) return { supported: false };
+  const params = new URLSearchParams();
+  params.set("account_id", opts.accountId);
+  if (opts.order) params.set("order", opts.order);
+  if (opts.cursor) params.set("cursor", opts.cursor);
+  else if (opts.since) params.set("since", opts.since);
+  if (opts.direction) params.set("direction", opts.direction);
+  if (opts.includeRemoved !== undefined) params.set("include_removed", opts.includeRemoved ? "true" : "false");
+  if (opts.limit !== undefined) params.set("limit", String(opts.limit));
+
+  let data: unknown;
+  try {
+    data = await missiveFetch<unknown>(`/api/messages?${params}`, opts.signal ? { signal: opts.signal } : {});
+  } catch (err) {
+    if (err instanceof MissiveHttpError && err.status === 404 && !err.jsonBody) {
+      feedUnsupportedUntil = Date.now() + FEED_PROBE_TTL_MS;
+      return { supported: false };
+    }
+    throw err;
+  }
+  feedUnsupportedUntil = 0;
+
+  const page = (typeof data === "object" && data !== null ? data : {}) as Record<string, unknown>;
+  const settled = page.settled_through;
+  const settledThrough =
+    typeof settled === "string" && /^\d{1,16}$/.test(settled)
+      ? settled
+      : typeof settled === "number" && Number.isSafeInteger(settled) && settled >= 0
+        ? String(settled)
+        : null;
+  const bad =
+    !Array.isArray(page.messages) || page.messages.some((m) => typeof m !== "object" || m === null)
+      ? "messages"
+      : typeof page.next_cursor !== "string" || page.next_cursor.length === 0
+        ? "next_cursor"
+        : typeof page.has_more !== "boolean"
+          ? "has_more"
+          : settledThrough === null
+            ? "settled_through"
+            : null;
+  if (bad) throw new Error(`missive /api/messages: malformed feed page (${bad})`);
+  return {
+    supported: true,
+    messages: page.messages as MissiveFeedMessage[],
+    next_cursor: page.next_cursor as string,
+    has_more: page.has_more as boolean,
+    settled_through: settledThrough as string
+  };
 }
 
 // Create a new inbox connection on the Missive clone. Body shape mirrors

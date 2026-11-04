@@ -1,5 +1,6 @@
 import { ServerCog } from "lucide-react";
 import { formatCount } from "@/lib/exec/format";
+import type { MailSummary } from "@/lib/exec/email-view";
 import type { JobKindHealth, OverviewSection, OverviewSystem } from "@/lib/exec/overview";
 import { cn } from "@/lib/utils";
 import { SectionCard } from "../SectionCard";
@@ -12,8 +13,34 @@ import { ago } from "./labels";
 
 const JOB_LABELS: Readonly<Record<string, string>> = {
   "exec.dd-attention": "Needs Attention refresh",
-  "exec.purge": "Retention cleanup"
+  "exec.purge": "Retention cleanup",
+  "exec.email-triage": "Email assessment",
+  "exec.email-reconcile": "Mail sync check",
+  "exec.email-attention": "Email Needs Attention refresh"
 };
+
+/** The mail sync line (P3, when email is on): what reconcile and the live socket last reported. */
+function MailLine({ mail, now }: { mail: OverviewSection<MailSummary>; now: string }) {
+  if (!mail.ok) {
+    return <p className="border-t border-slate-100 px-4 py-2.5 text-[11.5px] font-medium text-amber-700">Couldn&apos;t load the mail sync status.</p>;
+  }
+  const m = mail.data;
+  let text: string;
+  let alarm = false;
+  if (m.checkedAt === null) text = "Mail: not synced yet";
+  else if (m.problems > 0) {
+    text = `Mail: ${m.problems === 1 ? "a mailbox connection needs" : `${formatCount(m.problems)} mailbox connections need`} attention`;
+    alarm = true;
+  } else if (m.failingSince !== null) {
+    text = `Mail: sync failing since ${ago(m.failingSince, now)}`;
+    alarm = true;
+  } else text = m.lastSyncedAt ? `Mail: synced ${ago(m.lastSyncedAt, now)}` : "Mail: the mail service hasn't synced yet";
+  const live =
+    m.socket === null ? "live updates not reported" : m.socket.stale ? "live updates not reporting" : m.socket.connected ? "live updates connected" : "live updates disconnected";
+  return (
+    <p className={cn("border-t border-slate-100 px-4 py-2.5 text-[11.5px]", alarm ? "font-medium text-rose-700" : "text-muted")}>{`${text} · ${live}`}</p>
+  );
+}
 
 function KindRow({ job, lookbackHours, now }: { job: JobKindHealth; lookbackHours: number; now: string }) {
   // A kind with no label (a later phase's) shows its id, which is what the logs use.
@@ -50,7 +77,16 @@ function Figure({ label, value, title, alarm = false }: { label: string; value: 
   );
 }
 
-export function SystemSection({ system, now }: { system: OverviewSection<OverviewSystem>; now: string }) {
+export function SystemSection({
+  system,
+  now,
+  mail = null
+}: {
+  system: OverviewSection<OverviewSystem>;
+  now: string;
+  /** Mail sync health while email is on; null otherwise. */
+  mail?: OverviewSection<MailSummary> | null;
+}) {
   if (!system.ok) return <SectionCard title="System" icon={ServerCog} error />;
   const { kinds, successLookbackHours, dead24h, queued, due, oldestDueAt } = system.data;
   return (
@@ -69,6 +105,7 @@ export function SystemSection({ system, now }: { system: OverviewSection<Overvie
         <Figure label="Oldest due" value={oldestDueAt ? ago(oldestDueAt, now) : "None"} title="How long the longest-waiting due job has waited" />
         <Figure label="Failed, 24 h" value={formatCount(dead24h)} title="Jobs that ran out of retries in the last 24 hours" alarm={dead24h > 0} />
       </dl>
+      {mail !== null && <MailLine mail={mail} now={now} />}
     </SectionCard>
   );
 }

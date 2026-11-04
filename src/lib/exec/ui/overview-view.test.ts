@@ -94,7 +94,7 @@ const TILES: OverviewTiles = {
   hoursLogged: ok({ hours: 23.5, clockedIn: 3, basis: "derived" })
 };
 
-const ATTENTION: OverviewAttention = { items: [item("ea_1"), item("ea_2")], limit: 20, checkedAt: "2026-11-04T14:50:00Z" };
+const ATTENTION: OverviewAttention = { items: [item("ea_1"), item("ea_2")], limit: 20, checkedAt: "2026-11-04T14:50:00Z", emailUnchecked: false };
 
 const APPROVALS: OverviewApprovals = {
   total: 7,
@@ -205,6 +205,7 @@ function overview(sections: Partial<ExecOverview["sections"]> = {}): ExecOvervie
       deadlines: ok(DEADLINES),
       projects: ok(PROJECTS),
       system: ok(SYSTEM),
+      email: ok({ state: "off" }),
       ...sections
     }
   };
@@ -224,7 +225,7 @@ const EMPTY = overview({
     eodSubmitted: ok({ count: 0, basis: "record" }),
     hoursLogged: ok({ hours: 0, clockedIn: 0, basis: "derived" })
   }),
-  attention: ok({ items: [], limit: 20, checkedAt: null }),
+  attention: ok({ items: [], limit: 20, checkedAt: null, emailUnchecked: false }),
   approvals: ok({ total: 0, buckets: APPROVALS.buckets.map((b) => ({ ...b, count: 0, oldestAt: null })) }),
   deadlines: ok({ items: [], total: 0, days: 7, limit: 10 }),
   projects: ok({ items: [], total: 0, limit: 8 }),
@@ -393,7 +394,7 @@ describe("OverviewView: empty", () => {
   });
 
   it("says nothing needs him only when a check has run", () => {
-    const checked = textOf(render(overview({ attention: ok({ items: [], limit: 20, checkedAt: "2026-11-04T14:55:00Z" }) })));
+    const checked = textOf(render(overview({ attention: ok({ items: [], limit: 20, checkedAt: "2026-11-04T14:55:00Z", emailUnchecked: false }) })));
     expect(checked).toContain("Nothing needs you right now.");
     expect(checked).toContain("Checked 5 min ago");
   });

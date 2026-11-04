@@ -34,7 +34,7 @@ function overview(timezone: string): ExecOverview {
   return {
     generatedAt: "2026-11-04T15:00:00.000Z",
     timezone,
-    sections: { tiles: FAILED, attention: FAILED, approvals: FAILED, deadlines: FAILED, projects: FAILED, system: FAILED }
+    sections: { tiles: FAILED, attention: FAILED, approvals: FAILED, deadlines: FAILED, projects: FAILED, system: FAILED, email: FAILED }
   };
 }
 

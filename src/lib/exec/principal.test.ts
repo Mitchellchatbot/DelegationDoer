@@ -28,16 +28,31 @@ interface Query {
   columns: string | null;
   filters: [string, unknown][];
 }
+type DbError = { message: string; code?: string };
 
-function fakeDb(tables: Record<string, Row[]>, errors: Record<string, string> = {}) {
+/**
+ * `errors` fails every query to a table; `failSelect` fails a query by its
+ * table and selected columns (a column the database doesn't have yet).
+ * Selected rows are projected to the selected columns, like PostgREST.
+ */
+function fakeDb(
+  tables: Record<string, Row[]>,
+  errors: Record<string, string> = {},
+  failSelect?: (table: string, columns: string) => DbError | null
+) {
   const queries: Query[] = [];
   const client = {
     from(table: string) {
       const q: Query = { table, columns: null, filters: [] };
       queries.push(q);
       const run = () => {
-        if (errors[table]) return { data: null, error: { message: errors[table] } };
-        const rows = (tables[table] ?? []).filter((r) => q.filters.every(([k, v]) => r[k] === v));
+        if (errors[table]) return { data: null, error: { message: errors[table] } as DbError };
+        const failed = q.columns !== null ? failSelect?.(table, q.columns) : null;
+        if (failed) return { data: null, error: failed };
+        const cols = q.columns?.split(",").map((c) => c.trim());
+        const rows = (tables[table] ?? [])
+          .filter((r) => q.filters.every(([k, v]) => r[k] === v))
+          .map((r) => (cols ? Object.fromEntries(cols.filter((c) => c in r).map((c) => [c, r[c]])) : r));
         return { data: rows, error: null };
       };
       const builder = {
@@ -96,6 +111,7 @@ const settingsRow = (over: Row = {}): Row => ({
   retention_days_email: 60,
   retention_days_chat: 45,
   daily_cost_cap_usd: "12.50",
+  email_enabled: true,
   ...over
 });
 
@@ -154,14 +170,41 @@ describe("settingsFromRow", () => {
       retentionDaysSlack: 30,
       retentionDaysEmail: 60,
       retentionDaysChat: 45,
-      dailyCostCapUsd: 12.5
+      dailyCostCapUsd: 12.5,
+      emailEnabled: true,
+      emailSchemaReady: true
     });
   });
 
-  it("fills every null column with its default", () => {
+  it("fills every null column with its default (a NULL email_enabled is off, but the column is there)", () => {
     const nulls = Object.fromEntries(Object.keys(settingsRow()).map((k) => [k, null]));
     const s = settingsFromRow({ ...nulls, principal_id: "ep_1" } as unknown as SRow, "ep_1");
-    expect(s).toEqual({ principalId: "ep_1", ...DEFAULT_SETTINGS });
+    expect(s).toEqual({ principalId: "ep_1", ...DEFAULT_SETTINGS, emailSchemaReady: true });
+    expect(s.emailEnabled).toBe(false);
+  });
+
+  it("email: on only when the schema is ready and the column is exactly true", () => {
+    const s = (over: Row, opts?: { emailSchemaReady?: boolean }) =>
+      settingsFromRow(settingsRow(over) as unknown as SRow, "ep_1", opts);
+    expect(s({ email_enabled: true })).toMatchObject({ emailEnabled: true, emailSchemaReady: true });
+    expect(s({ email_enabled: false })).toMatchObject({ emailEnabled: false, emailSchemaReady: true });
+    expect(s({ email_enabled: null })).toMatchObject({ emailEnabled: false, emailSchemaReady: true });
+    expect(s({ email_enabled: "true" })).toMatchObject({ emailEnabled: false, emailSchemaReady: true });
+    expect(s({ email_enabled: 1 })).toMatchObject({ emailEnabled: false, emailSchemaReady: true });
+    // A row read without the column (the fallback) is never enabled, whatever it holds.
+    const { email_enabled: _dropped, ...withoutColumn } = settingsRow();
+    void _dropped;
+    expect(settingsFromRow(withoutColumn as unknown as SRow, "ep_1")).toMatchObject({ emailEnabled: false, emailSchemaReady: false });
+    // The loader's explicit answer wins over the row's shape.
+    expect(s({ email_enabled: true }, { emailSchemaReady: false })).toMatchObject({ emailEnabled: false, emailSchemaReady: false });
+    // No row: off, and ready only when the caller says the column was read.
+    expect(settingsFromRow(null, "ep_1")).toMatchObject({ emailEnabled: false, emailSchemaReady: false });
+    expect(settingsFromRow(null, "ep_1", { emailSchemaReady: true })).toMatchObject({ emailEnabled: false, emailSchemaReady: true });
+  });
+
+  it("the defaults keep email off and not installed", () => {
+    expect(DEFAULT_SETTINGS.emailEnabled).toBe(false);
+    expect(DEFAULT_SETTINGS.emailSchemaReady).toBe(false);
   });
 
   it("only accepts a 24h HH:MM brief time", () => {
@@ -369,14 +412,90 @@ describe("listEnabledPrincipals", () => {
 });
 
 describe("loadSettings", () => {
-  it("maps the stored row", async () => {
-    fakeDb({ exec_settings: [settingsRow()] });
-    expect(await loadSettings("ep_1")).toMatchObject({ principalId: "ep_1", briefLocalTime: "07:30", dailyCostCapUsd: 12.5 });
+  // What the database answers for a select naming a column it doesn't have,
+  // in the forms the loader must recognise (L1).
+  const missingColumn: Record<string, DbError> = {
+    "42703": { code: "42703", message: "column exec_settings.email_enabled does not exist" },
+    PGRST204: { code: "PGRST204", message: "Could not find the column in the schema cache" },
+    "message only": { message: "column \"email_enabled\" does not exist" }
+  };
+  const failWhenEmailSelected = (err: DbError) => (table: string, columns: string) =>
+    table === "exec_settings" && columns.includes("email_enabled") ? err : null;
+
+  it("maps the stored row, email column included", async () => {
+    const db = fakeDb({ exec_settings: [settingsRow()] });
+    expect(await loadSettings("ep_1")).toMatchObject({
+      principalId: "ep_1",
+      briefLocalTime: "07:30",
+      dailyCostCapUsd: 12.5,
+      emailEnabled: true,
+      emailSchemaReady: true
+    });
+    expect(db.queries).toHaveLength(1);
+    expect(db.queries[0].columns).toContain("email_enabled");
   });
 
-  it("returns defaults when there is no row", async () => {
+  it("column present: false and NULL are off, and the schema is ready", async () => {
+    fakeDb({ exec_settings: [settingsRow({ email_enabled: false })] });
+    expect(await loadSettings("ep_1")).toMatchObject({ emailEnabled: false, emailSchemaReady: true });
+    fakeDb({ exec_settings: [settingsRow({ email_enabled: null })] });
+    expect(await loadSettings("ep_1")).toMatchObject({ emailEnabled: false, emailSchemaReady: true });
+  });
+
+  it("returns defaults when there is no row (the column was read, so the schema is ready)", async () => {
     fakeDb({ exec_settings: [] });
+    expect(await loadSettings("ep_1")).toEqual({ principalId: "ep_1", ...DEFAULT_SETTINGS, emailSchemaReady: true });
+  });
+
+  for (const [form, err] of Object.entries(missingColumn)) {
+    it(`column missing (${form}): retries once without it; email off and not installed, the rest still loads`, async () => {
+      const { email_enabled: _dropped, ...p2aRow } = settingsRow();
+      void _dropped;
+      const db = fakeDb({ exec_settings: [p2aRow] }, {}, failWhenEmailSelected(err));
+      expect(await loadSettings("ep_1")).toMatchObject({
+        principalId: "ep_1",
+        briefLocalTime: "07:30",
+        retentionDaysEmail: 60,
+        emailEnabled: false,
+        emailSchemaReady: false
+      });
+      const reads = db.queries.filter((q) => q.table === "exec_settings");
+      expect(reads).toHaveLength(2);
+      expect(reads[0].columns).toContain("email_enabled");
+      expect(reads[1].columns).not.toContain("email_enabled");
+      expect(reads[1].columns).toContain("retention_days_email");
+    });
+  }
+
+  it("column missing and no row: defaults, not installed", async () => {
+    fakeDb({ exec_settings: [] }, {}, failWhenEmailSelected(missingColumn["42703"]));
     expect(await loadSettings("ep_1")).toEqual({ principalId: "ep_1", ...DEFAULT_SETTINGS });
+  });
+
+  it("any other error does not fall back: it throws, and nothing reads as 'email off'", async () => {
+    const db = fakeDb({ exec_settings: [settingsRow()] }, {}, (table) =>
+      table === "exec_settings" ? { code: "57014", message: "canceling statement due to statement timeout" } : null
+    );
+    await expect(loadSettings("ep_1")).rejects.toThrow("exec_settings read failed: canceling statement due to statement timeout");
+    expect(db.queries.filter((q) => q.table === "exec_settings")).toHaveLength(1);
+  });
+
+  it("throws when the fallback read fails too", async () => {
+    fakeDb({ exec_settings: [settingsRow()] }, {}, (table, columns) =>
+      table !== "exec_settings"
+        ? null
+        : columns.includes("email_enabled")
+          ? missingColumn["42703"]
+          : { message: "connection reset" }
+    );
+    await expect(loadSettings("ep_1")).rejects.toThrow("exec_settings read failed: connection reset");
+  });
+
+  it("a principal still loads before the P3 migration (its timezone comes from settings)", async () => {
+    const { email_enabled: _dropped, ...p2aRow } = settingsRow();
+    void _dropped;
+    fakeDb({ exec_principals: [principalRow()], users: [userRow()], exec_settings: [p2aRow] }, {}, failWhenEmailSelected(missingColumn.PGRST204));
+    expect(await loadPrincipalById("ep_1")).toMatchObject({ id: "ep_1", timezone: "Asia/Karachi" });
   });
 
   it("throws when the read fails", async () => {

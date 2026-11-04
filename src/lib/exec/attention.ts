@@ -806,6 +806,262 @@ export async function syncAttention(
   return result;
 }
 
+// ---------------------------------------------------------------------------
+// Email items (P3): fingerprints, the per-thread read, hard deletes
+// ---------------------------------------------------------------------------
+//
+// Email items are keyed by the thread (or client) they are about (L4):
+//   email:thread:<threadId>:<anchorMessageId>
+//   email:commitment:<threadId>:<commitmentId>
+//   email:satisfaction:<clientId>
+//   email:health:<clientId>
+// The anchor message id and the commitment id never hold a ":" (clone ids are
+// UUIDs, commitment ids "ec_<hex>"), so the thread id is everything between
+// the prefix and the LAST ":". The builders refuse any part that would break
+// that, so every fingerprint they make parses back to the parts it was made
+// from (the store's purge and the render-time screens rely on it).
+//
+// Restricted mail (L2): a thread that becomes a tombstone must not keep an
+// item anywhere, in any status. A resolved item keeps its title and facts for
+// 90 days, so resolving isn't enough: these rows are hard-deleted
+// (deleteEmailAttentionForThreads, from the tombstone procedure and the
+// attention pass's safety nets).
+
+export type EmailFingerprintKind = "thread" | "commitment" | "satisfaction" | "health";
+
+export interface ParsedEmailFingerprint {
+  kind: EmailFingerprintKind;
+  /** The clone thread a thread or commitment item hangs off; null for the client-level kinds. */
+  threadId: string | null;
+  /** thread: the anchor message id; commitment: the commitment id; satisfaction, health: the client id. */
+  key: string;
+}
+
+const EMAIL_FINGERPRINT_PREFIXES: readonly (readonly [string, EmailFingerprintKind])[] = [
+  ["email:thread:", "thread"],
+  ["email:commitment:", "commitment"],
+  ["email:satisfaction:", "satisfaction"],
+  ["email:health:", "health"]
+];
+
+/**
+ * The parts of an email item's fingerprint, or null for anything that isn't
+ * one of the four email shapes (a DD fingerprint, a malformed one). A consumer
+ * that screens email items treats null as "can't tell which thread": drop it.
+ */
+export function parseEmailFingerprint(fp: string): ParsedEmailFingerprint | null {
+  if (typeof fp !== "string") return null;
+  for (const [prefix, kind] of EMAIL_FINGERPRINT_PREFIXES) {
+    if (!fp.startsWith(prefix)) continue;
+    const rest = fp.slice(prefix.length);
+    if (kind === "satisfaction" || kind === "health") {
+      return rest.length > 0 && !rest.includes(":") ? { kind, threadId: null, key: rest } : null;
+    }
+    const cut = rest.lastIndexOf(":");
+    if (cut <= 0 || cut === rest.length - 1) return null;
+    return { kind, threadId: rest.slice(0, cut), key: rest.slice(cut + 1) };
+  }
+  return null;
+}
+
+/** A fingerprint part: clean, and free of the characters a fingerprint or PostgREST filter can't hold. */
+function fingerprintPart(v: unknown, allowColon: boolean): v is string {
+  return (
+    typeof v === "string" &&
+    v.length > 0 &&
+    isCleanId(v, MAX_FINGERPRINT) &&
+    FINGERPRINT_CHARS.test(v) &&
+    (allowColon || !v.includes(":"))
+  );
+}
+
+function builtFingerprint(fp: string): string | null {
+  return isCleanId(fp, MAX_FINGERPRINT) && FINGERPRINT_CHARS.test(fp) ? fp : null;
+}
+
+/** email:thread:<threadId>:<anchorMessageId>, or null when a part can't be keyed (the item is then not made). */
+export function emailThreadFingerprint(threadId: string, anchorMessageId: string): string | null {
+  if (!fingerprintPart(threadId, true) || !fingerprintPart(anchorMessageId, false)) return null;
+  return builtFingerprint(`email:thread:${threadId}:${anchorMessageId}`);
+}
+
+/** email:commitment:<threadId>:<commitmentId>, or null when a part can't be keyed. */
+export function emailCommitmentFingerprint(threadId: string, commitmentId: string): string | null {
+  if (!fingerprintPart(threadId, true) || !fingerprintPart(commitmentId, false)) return null;
+  return builtFingerprint(`email:commitment:${threadId}:${commitmentId}`);
+}
+
+/** email:satisfaction:<clientId> / email:health:<clientId>, or null when the id can't be keyed. */
+export function emailClientFingerprint(kind: "satisfaction" | "health", clientId: string): string | null {
+  if (kind !== "satisfaction" && kind !== "health") return null;
+  if (!fingerprintPart(clientId, false)) return null;
+  return builtFingerprint(`email:${kind}:${clientId}`);
+}
+
+/** One email item's identity, as the safety nets and the per-thread read need it. */
+export interface EmailAttentionRow {
+  id: string;
+  fingerprint: string;
+  kind: string;
+  status: AttentionStatus;
+}
+
+const EMAIL_ROW_COLUMNS = "id,fingerprint,kind,status";
+const MAX_ROW_ID = 100;
+
+/** A row id as the table makes them ("ea_<hex>"): clean, and nothing a filter would have to quote. */
+const isRowId = (v: unknown): v is string => isCleanId(v, MAX_ROW_ID) && FINGERPRINT_CHARS.test(v);
+
+function emailRowFrom(raw: unknown): EmailAttentionRow {
+  if (!isRecord(raw) || typeof raw.id !== "string" || typeof raw.fingerprint !== "string" || typeof raw.kind !== "string") {
+    throw new Error(`${TABLE} read failed: malformed row`);
+  }
+  return { id: raw.id, fingerprint: raw.fingerprint, kind: raw.kind, status: oneOf<AttentionStatus>(STATUSES, raw.status, "status") };
+}
+
+/**
+ * One keyset page of the principal's email items, every status, ordered by
+ * id: pass the last id as `afterId` for the next page. Identity columns only
+ * (no title, no facts). limit is 1..1000. Throws on a database error.
+ */
+export async function listEmailAttentionRows(
+  principal: ExecPrincipal,
+  q: { afterId: string | null; limit: number },
+  opts: { signal?: AbortSignal } = {}
+): Promise<EmailAttentionRow[]> {
+  if (!Number.isSafeInteger(q.limit) || q.limit < 1 || q.limit > PAGE_SIZE) invalid(`listEmailAttentionRows limit must be 1-${PAGE_SIZE}`);
+  if (q.afterId !== null && !isRowId(q.afterId)) invalid("listEmailAttentionRows afterId is malformed");
+  opts.signal?.throwIfAborted();
+  let query = getSupabaseAdmin().from(TABLE).select(EMAIL_ROW_COLUMNS).eq("principal_id", principal.id).eq("source", "email");
+  if (q.afterId !== null) query = query.gt("id", q.afterId);
+  query = query.order("id", { ascending: true }).limit(q.limit);
+  if (opts.signal) query = query.abortSignal(opts.signal);
+  const { data, error } = await query;
+  if (error) throw failure("read", error, opts.signal);
+  if (!Array.isArray(data)) throw new Error(`${TABLE} read failed: no rows array in the response`);
+  return data.map(emailRowFrom);
+}
+
+/** Every email item of the principal (identity columns), page by page. Throws past MAX_PAGES pages and on a database error. */
+export async function listAllEmailAttentionRows(principal: ExecPrincipal, opts: { signal?: AbortSignal } = {}): Promise<EmailAttentionRow[]> {
+  return allEmailAttentionRows(principal, opts.signal);
+}
+
+async function allEmailAttentionRows(principal: ExecPrincipal, signal: AbortSignal | undefined): Promise<EmailAttentionRow[]> {
+  const out: EmailAttentionRow[] = [];
+  let afterId: string | null = null;
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const rows = await listEmailAttentionRows(principal, { afterId, limit: PAGE_SIZE }, { signal });
+    out.push(...rows);
+    if (rows.length < PAGE_SIZE) return out;
+    afterId = rows[rows.length - 1].id;
+  }
+  throw new Error(`${TABLE} read failed: more than ${MAX_PAGES * PAGE_SIZE} email items`);
+}
+
+/**
+ * Hard-delete these items of the principal, whatever their status, limited to
+ * one source when `source` is given (the email code always passes "email", so
+ * a stray id can never take a DD item with it). Returns how many went.
+ * Throws on a database error.
+ */
+export async function deleteAttentionItemsByIds(
+  principal: ExecPrincipal,
+  ids: readonly string[],
+  opts: { source?: AttentionSource; signal?: AbortSignal } = {}
+): Promise<number> {
+  if (!Array.isArray(ids)) invalid("deleteAttentionItemsByIds needs a list of ids");
+  if (opts.source !== undefined) oneOf<AttentionSource>(SOURCES, opts.source, "source");
+  const unique = [...new Set(ids)];
+  for (const id of unique) if (!isRowId(id)) invalid("deleteAttentionItemsByIds: an id is malformed");
+  let deleted = 0;
+  for (const chunk of urlListChunks(unique)) {
+    opts.signal?.throwIfAborted();
+    let query = getSupabaseAdmin().from(TABLE).delete({ count: "exact" }).eq("principal_id", principal.id).in("id", chunk);
+    if (opts.source !== undefined) query = query.eq("source", opts.source);
+    if (opts.signal) query = query.abortSignal(opts.signal);
+    const { count, error } = await query;
+    if (error) throw failure("delete", error, opts.signal);
+    deleted += count ?? 0;
+  }
+  return deleted;
+}
+
+/**
+ * Hard-delete every email item about these threads, in every status: the
+ * thread items (email:thread:<id>:…) and the commitment items
+ * (email:commitment:<id>:…). The tombstone procedure (email-store.ts) and the
+ * attention pass's safety nets call it; a restricted thread must leave no
+ * title, summary or promise behind, not even on a resolved row. Returns how
+ * many rows went. Throws on a database error, so a tombstone that couldn't
+ * finish this step is retried.
+ */
+export async function deleteEmailAttentionForThreads(
+  principal: ExecPrincipal,
+  threadIds: readonly string[],
+  opts: { signal?: AbortSignal } = {}
+): Promise<number> {
+  if (!Array.isArray(threadIds)) invalid("deleteEmailAttentionForThreads needs a list of thread ids");
+  const wanted = new Set(threadIds.filter((id) => typeof id === "string" && id.length > 0));
+  if (wanted.size === 0) return 0;
+  const rows = await allEmailAttentionRows(principal, opts.signal);
+  const doomed = rows
+    .filter((row) => {
+      const parsed = parseEmailFingerprint(row.fingerprint);
+      return parsed !== null && parsed.threadId !== null && wanted.has(parsed.threadId);
+    })
+    .map((row) => row.id);
+  if (doomed.length === 0) return 0;
+  const deleted = await deleteAttentionItemsByIds(principal, doomed, { source: "email", signal: opts.signal });
+  console.log(`[exec-attention] deleted ${deleted} email item(s) of ${wanted.size} thread(s) for ${principal.id}`);
+  return deleted;
+}
+
+// The thread page shows what the feed knows about the thread, put away or not.
+const THREAD_DEFAULT_STATUSES: readonly AttentionStatus[] = ["open", "seen", "snoozed", "dismissed"];
+
+/**
+ * The items about one email thread (its thread item and its commitment
+ * items), highest priority first, for the thread page. By default every
+ * status but resolved; a snoozed item whose snooze has run out counts as
+ * open, as in listAttention. The caller still screens them (A2): this only
+ * finds them. Throws on a database error.
+ */
+export async function listAttentionForThread(
+  principal: ExecPrincipal,
+  threadId: string,
+  opts: { statuses?: readonly AttentionStatus[]; now?: Date; signal?: AbortSignal } = {}
+): Promise<AttentionItem[]> {
+  if (typeof threadId !== "string" || threadId.length === 0) invalid("listAttentionForThread needs a thread id");
+  const now = validNow(opts.now ?? new Date());
+  const statuses = opts.statuses ?? THREAD_DEFAULT_STATUSES;
+  if (!Array.isArray(statuses) || statuses.length === 0) invalid("listAttentionForThread needs at least one status");
+  const wanted = new Set(statuses.map((s) => oneOf<AttentionStatus>(STATUSES, s, "status")));
+
+  const ids = (await allEmailAttentionRows(principal, opts.signal))
+    .filter((row) => parseEmailFingerprint(row.fingerprint)?.threadId === threadId)
+    .map((row) => row.id);
+  const items: AttentionItem[] = [];
+  for (const chunk of urlListChunks(ids)) {
+    opts.signal?.throwIfAborted();
+    let query = getSupabaseAdmin().from(TABLE).select(ITEM_COLUMNS).eq("principal_id", principal.id).eq("source", "email").in("id", chunk).order("id");
+    if (opts.signal) query = query.abortSignal(opts.signal);
+    const { data, error } = await query;
+    if (error) throw failure("read", error, opts.signal);
+    items.push(...itemsFrom(data));
+  }
+  const nowMs = now.getTime();
+  return items
+    .map((item) => effective(item, nowMs))
+    .filter((item) => wanted.has(item.status))
+    .sort(
+      (a, b) =>
+        b.priority.score - a.priority.score ||
+        Date.parse(b.lastSeenAt) - Date.parse(a.lastSeenAt) ||
+        (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
+    );
+}
+
 /** The status he sees: a snoozed item whose snooze has run out is open again (no snooze shown). */
 function effective(item: AttentionItem, nowMs: number): AttentionItem {
   if (item.status === "snoozed" && item.snoozeUntil !== null && Date.parse(item.snoozeUntil) <= nowMs) {

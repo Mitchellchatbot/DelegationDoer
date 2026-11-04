@@ -239,3 +239,48 @@ export interface DdEodNote {
   submittedAt: string | null;
   reviewedAt: string | null;
 }
+
+// ---------------------------------------------------------------------------
+// Added by P3 Area E (email correlation and the email producers). Same rules:
+// ids, enums, numbers and timestamps, plus the match signals the client
+// matcher needs. No notes, summaries, email subjects or score reasons.
+// ---------------------------------------------------------------------------
+
+/**
+ * What the client matcher needs from a client (correlate.ts, L14): the exact
+ * contact addresses and the website hosts. Every client is returned; the
+ * matcher keeps the active ones (status null or "active").
+ */
+export interface DdClientMatchSignals {
+  id: string;
+  name: string;
+  /** Free text, as stored (NULL stays NULL here: the matcher decides what is active). */
+  status: string | null;
+  website: string | null;
+  websites: string[];
+  contactEmails: string[];
+  /** low / medium / high bucket, free text in the DB. */
+  priority: string | null;
+}
+
+/**
+ * One inbound email_satisfaction_scores row reduced to numbers (L13): which
+ * client, the AI score (0-100) and when. The sender and thread were used to
+ * screen the row and are never part of it; the subject and the model's reason
+ * are never read at all.
+ */
+export interface DdSatisfactionSignal {
+  clientId: string;
+  /** satisfaction_score, an AI assessment (Haiku): 0 hostile … 100 delighted. */
+  score: number;
+  deliveredAt: string;
+  scoredAt: string;
+}
+
+/** A client meeting record without its transcript, summary or brief. */
+export interface DdClientMeeting {
+  id: string;
+  title: string;
+  /** client_meetings.meeting_date: when the meeting happened. */
+  meetingAt: string;
+}

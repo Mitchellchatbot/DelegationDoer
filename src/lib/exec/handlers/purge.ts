@@ -1,5 +1,6 @@
 import "server-only";
 
+import { purgeExpiredEmailRows } from "@/lib/exec/email-store";
 import { purgeFinishedJobs } from "@/lib/exec/jobs";
 import type { ScheduledWork } from "@/lib/exec/scheduler";
 import type { JobHandler } from "@/lib/exec/types";
@@ -12,15 +13,20 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 //   exec_audit_log        older than 400 days
 //   exec_ai_usage         older than 400 days
 //   exec_attention_items  resolved, and last seen, more than 90 days ago
+//   email (P3)            exec_email_threads / exec_commitments / exec_email_signals
+//                         past their own expires_at (activity + retention_days_email,
+//                         set when written), and email attention rows whose thread
+//                         or commitment is gone: see purgeExpiredEmailRows. Tolerates
+//                         the P3 migration not being applied yet (counts 0).
 //
 // The deletes are global, not per principal. Rows with no principal (system
 // jobs, access attempts that never resolved to a principal) have to age out
-// too. The schedule is per principal (key exec.purge:<principal>:<local date>),
-// so with several principals it runs several times a day; every delete is
-// idempotent, so the extra runs find nothing to delete.
+// too, and so does a disabled principal's mail. The schedule is per principal
+// (key exec.purge:<principal>:<local date>), so with several principals it
+// runs several times a day; every delete is idempotent, so the extra runs
+// find nothing to delete.
 //
-// Later phases add the principal-scoped retention (Slack, email and chat days
-// from exec_settings) to this job.
+// Later phases add the Slack and chat retention to this job.
 
 export const PURGE_JOB_KIND = "exec.purge";
 
@@ -43,6 +49,11 @@ export interface PurgeCounts {
   auditLog: number;
   aiUsage: number;
   resolvedAttention: number;
+  /** P3 email retention (purgeExpiredEmailRows). */
+  emailThreads: number;
+  emailCommitments: number;
+  emailSignals: number;
+  emailAttentionRows: number;
 }
 
 function errMessage(err: unknown): string {
@@ -91,20 +102,38 @@ async function deleteResolvedAttention(days: number, now: Date, signal?: AbortSi
  * lost lease) stops it between steps.
  */
 export async function runPurge(signal?: AbortSignal, now: Date = new Date()): Promise<PurgeCounts> {
-  const counts: PurgeCounts = { finishedJobs: 0, accessLog: 0, auditLog: 0, aiUsage: 0, resolvedAttention: 0 };
-  const steps: readonly [keyof PurgeCounts, () => Promise<number>][] = [
-    ["finishedJobs", () => purgeFinishedJobs(RETENTION_DAYS.finishedJobs, signal)],
-    ["accessLog", () => deleteCreatedBefore("exec_access_log", RETENTION_DAYS.accessLog, now, signal)],
-    ["auditLog", () => deleteCreatedBefore("exec_audit_log", RETENTION_DAYS.auditLog, now, signal)],
-    ["aiUsage", () => deleteCreatedBefore("exec_ai_usage", RETENTION_DAYS.aiUsage, now, signal)],
-    ["resolvedAttention", () => deleteResolvedAttention(RETENTION_DAYS.resolvedAttention, now, signal)]
+  const counts: PurgeCounts = {
+    finishedJobs: 0,
+    accessLog: 0,
+    auditLog: 0,
+    aiUsage: 0,
+    resolvedAttention: 0,
+    emailThreads: 0,
+    emailCommitments: 0,
+    emailSignals: 0,
+    emailAttentionRows: 0
+  };
+  const one = (key: keyof PurgeCounts, run: () => Promise<number>) => async (): Promise<Partial<PurgeCounts>> => ({ [key]: await run() });
+  const steps: readonly [string, () => Promise<Partial<PurgeCounts>>][] = [
+    ["finishedJobs", one("finishedJobs", () => purgeFinishedJobs(RETENTION_DAYS.finishedJobs, signal))],
+    ["accessLog", one("accessLog", () => deleteCreatedBefore("exec_access_log", RETENTION_DAYS.accessLog, now, signal))],
+    ["auditLog", one("auditLog", () => deleteCreatedBefore("exec_audit_log", RETENTION_DAYS.auditLog, now, signal))],
+    ["aiUsage", one("aiUsage", () => deleteCreatedBefore("exec_ai_usage", RETENTION_DAYS.aiUsage, now, signal))],
+    ["resolvedAttention", one("resolvedAttention", () => deleteResolvedAttention(RETENTION_DAYS.resolvedAttention, now, signal))],
+    [
+      "email",
+      async () => {
+        const c = await purgeExpiredEmailRows(now, { signal });
+        return { emailThreads: c.threads, emailCommitments: c.commitments, emailSignals: c.signals, emailAttentionRows: c.attentionRows };
+      }
+    ]
   ];
 
   const failures: string[] = [];
   for (const [name, step] of steps) {
     signal?.throwIfAborted();
     try {
-      counts[name] = await step();
+      Object.assign(counts, await step());
     } catch (err) {
       failures.push(`${name}: ${errMessage(err)}`);
       console.error(`[exec-purge] ${name} step failed: ${errMessage(err)}`);
@@ -113,7 +142,9 @@ export async function runPurge(signal?: AbortSignal, now: Date = new Date()): Pr
 
   console.log(
     `[exec-purge] deleted finishedJobs=${counts.finishedJobs} accessLog=${counts.accessLog} ` +
-      `auditLog=${counts.auditLog} aiUsage=${counts.aiUsage} resolvedAttention=${counts.resolvedAttention}` +
+      `auditLog=${counts.auditLog} aiUsage=${counts.aiUsage} resolvedAttention=${counts.resolvedAttention} ` +
+      `emailThreads=${counts.emailThreads} emailCommitments=${counts.emailCommitments} emailSignals=${counts.emailSignals} ` +
+      `emailAttentionRows=${counts.emailAttentionRows}` +
       `${failures.length > 0 ? ` failed=${failures.length}` : ""}`
   );
   if (failures.length > 0) {

@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 import {
   ListTodo, Users, Sparkles, Crown, Mail, Home as HomeIcon, Sunrise, Moon, Briefcase,
   CalendarDays, FolderKanban, ClipboardCheck, BookOpen, Settings, LifeBuoy, LayoutGrid,
-  Users2, Lock, Rocket, Megaphone, ListChecks
+  Users2, Lock, Rocket, Megaphone, ListChecks, BrainCircuit
 } from "lucide-react";
 // Sparkles is reused for both Ask AI and Updates — same icon, different context.
 import { useEffect, useState } from "react";
@@ -59,6 +59,15 @@ const SCALE_ITEM: NavItem = { href: "/scale", label: "Scale Room", icon: Rocket,
 // account, framed. Its own row so it's one click away, not a tab inside a tab.
 const SCALE_OUTBOUND_ITEM: NavItem = { href: "/scale/outbound", label: "Outbound", icon: Megaphone, tone: "fuchsia" };
 
+// An owner row the server adds for this request only, label and link
+// included ((main)/layout.tsx decides). This file is in the bundle every
+// signed-in browser downloads, so the row's name and link are never written
+// here: they reach a browser only when the server draws the row for it.
+export interface ServerNavItem {
+  href: string;
+  label: string;
+}
+
 // Sidebar lives on a soft slate-blue panel now. Per-row tones drive:
 //   - idle: a low-saturation glyph that reads on the dark background
 //     without competing with the active row
@@ -83,7 +92,7 @@ const TONE_STYLES: Record<Tone, {
   sky:     { idle: "text-sky-100/80",     activeBg: "bg-white/15", activeFg: "text-white", chipBg: "bg-sky-400",     chipFg: "text-white" }
 };
 
-export function Sidebar({ user }: { user: User }) {
+export function Sidebar({ user, ownerItem = null }: { user: User; ownerItem?: ServerNavItem | null }) {
   const path = usePathname();
   // Off-canvas drawer state (mobile only; the aside is `md:static` on desktop).
   const { open: navOpen } = useNavDrawer();
@@ -315,6 +324,10 @@ export function Sidebar({ user }: { user: User }) {
   // their own if they want. Previously these were hidden from leaders, which
   // left leaders with no sidebar path to the EOD surface at all.
   const submitsDailies = true;
+  // The server's owner row leads the owner's group. isOwner is checked here
+  // as well, so a stray prop can't draw it for anyone else.
+  const ownerRow: NavItem | null =
+    ownerItem && isOwner(user) ? { href: ownerItem.href, label: ownerItem.label, icon: BrainCircuit, tone: "teal" } : null;
   // Group the sidebar into AA-style sections with small bullet-dot
   // headers. The flat NAV array still drives every render below (badges,
   // active pill, etc.) — NAV_GROUPS is just a parallel view that maps
@@ -339,7 +352,7 @@ export function Sidebar({ user }: { user: User }) {
     UPDATES_ITEM,
     SOPS_ITEM,
     manageOrPeople,
-    ...(isOwner(user) ? [SCALE_ITEM, SCALE_OUTBOUND_ITEM, FINANCE_ITEM] : []),
+    ...(isOwner(user) ? [...(ownerRow ? [ownerRow] : []), SCALE_ITEM, SCALE_OUTBOUND_ITEM, FINANCE_ITEM] : []),
     SETTINGS_ITEM
   ];
   // Section partition. Each entry pairs a label with the hrefs that
@@ -351,7 +364,9 @@ export function Sidebar({ user }: { user: User }) {
     { label: "Work", hrefs: ["/tasks", "/fb-onboarding", "/schedule", "/projects"] },
     { label: "Communication", hrefs: ["/inboxes", "/approvals", "/customer-support"] },
     { label: "Knowledge", hrefs: ["/clients", "/client-teams", "/updates", "/sops"] },
-    { label: "Account", hrefs: ["/people", "/leader", "/scale", "/scale/outbound", "/finance", "/settings"] }
+    // The server's owner row joins Account at render time; an href missing
+    // from its group would split the group and print the header twice.
+    { label: "Account", hrefs: ["/people", "/leader", ...(ownerRow ? [ownerRow.href] : []), "/scale", "/scale/outbound", "/finance", "/settings"] }
   ];
   // The one row to highlight: the LONGEST href the path sits under, so
   // /scale/outbound lights its own row and not Scale Room's as well.

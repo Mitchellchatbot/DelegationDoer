@@ -199,6 +199,24 @@ export function ddProjectRef(project: { id: string; name?: string | null }): Sou
   };
 }
 
+function ddPageUrl(path: string): string | null {
+  if (typeof path !== "string" || !path.startsWith("/") || path.startsWith("//")) return null;
+  const url = safeUrl(`${appOrigin()}${path}`);
+  // Dot segments can still collapse the path to "//host" ("/..//evil.io"),
+  // which reads as another host wherever the link is written back as a path.
+  return url !== null && new URL(url).pathname.startsWith("//") ? null : url;
+}
+
+/**
+ * A DD page that isn't one record, e.g. "/approvals?tab=emails". The path
+ * must be DD-relative: "/" first and not "//", which a browser would read as
+ * another host. Anything else gets no link, like a ref built from a broken
+ * origin. The path is the ref's id.
+ */
+export function ddPageRef(path: string, pageLabel: string): SourceRef {
+  return { system: "dd", id: path, url: ddPageUrl(path), label: label(pageLabel, path), class: "internal" };
+}
+
 /** An email in the principal's mailbox. Restricted-sender mail is tagged so it stays inside DD (decision R). */
 export function outlookMessageRef(msg: {
   id: string;

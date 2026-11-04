@@ -3,6 +3,7 @@ import {
   appOrigin,
   clipExcerpt,
   ddClientRef,
+  ddPageRef,
   ddProjectRef,
   ddTaskRef,
   isAllowedLinkUrl,
@@ -238,6 +239,63 @@ describe("DD refs", () => {
 
   it("caps labels at 200 characters", () => {
     const label = ddTaskRef({ id: "t_1", title: "w ".repeat(300) }).label;
+    expect(label.length).toBeLessThanOrEqual(200);
+    expect(label.endsWith("…")).toBe(true);
+  });
+});
+
+describe("ddPageRef", () => {
+  it("links a DD-relative path on the app origin, query string included", () => {
+    expect(ddPageRef("/approvals?tab=emails", "Approvals: Emails")).toEqual({
+      system: "dd",
+      id: "/approvals?tab=emails",
+      url: "https://operations.scaledai.org/approvals?tab=emails",
+      label: "Approvals: Emails",
+      class: "internal"
+    });
+    expect(ddPageRef("/eod/history", "EOD history").url).toBe("https://operations.scaledai.org/eod/history");
+    expect(ddPageRef("/", "Home").url).toBe("https://operations.scaledai.org/");
+  });
+
+  it("follows NEXT_PUBLIC_APP_URL, and drops the link when that origin isn't allowed", () => {
+    vi.stubEnv("NEXT_PUBLIC_APP_URL", "https://staging.example.com/");
+    expect(ddPageRef("/tasks/board?status=pending_approval", "Board").url).toBe(
+      "https://staging.example.com/tasks/board?status=pending_approval"
+    );
+    vi.stubEnv("NEXT_PUBLIC_APP_URL", "http://localhost:3000");
+    expect(ddPageRef("/approvals", "Approvals").url).toBeNull();
+  });
+
+  // "//evil.io/x" is protocol-relative: a browser reads it as another host.
+  it.each(["approvals", "//evil.io/x", "///evil.io", "https://evil.io/approvals", "javascript:alert(1)", ""])(
+    "gives %j no link: the path must start with one /",
+    (path) => {
+      const ref = ddPageRef(path, "x");
+      expect(ref.url).toBeNull();
+      expect(ref).toMatchObject({ system: "dd", class: "internal" });
+    }
+  );
+
+  it.each(["/a b", "/approvals\n", "/\\evil.io", "/x\u0000"])("gives %j no link: the URL check refuses it", (path) => {
+    expect(ddPageRef(path, "x").url).toBeNull();
+  });
+
+  // Written back as a path (SafeMarkdown does that for DD links), these would
+  // be "//evil.io": another host.
+  it.each(["/..//evil.io", "/x/../..//evil.io", "/.//evil.io"])("gives %j no link: it normalizes to //", (path) => {
+    expect(ddPageRef(path, "x").url).toBeNull();
+  });
+
+  it("stays on the DD host whatever else the path holds", () => {
+    expect(ddPageRef("/@evil.io", "x").url).toBe("https://operations.scaledai.org/@evil.io");
+    expect(ddPageRef("/%2F%2Fevil.io", "x").url).toBe("https://operations.scaledai.org/%2F%2Fevil.io");
+    expect(ddPageRef("/tasks/../approvals", "x").url).toBe("https://operations.scaledai.org/approvals");
+  });
+
+  it("labels from the text given, else the path, capped at 200 characters", () => {
+    expect(ddPageRef("/eod/history", "  EOD\nhistory ").label).toBe("EOD history");
+    expect(ddPageRef("/eod/history", "   ").label).toBe("/eod/history");
+    const label = ddPageRef("/eod", "w ".repeat(300)).label;
     expect(label.length).toBeLessThanOrEqual(200);
     expect(label.endsWith("…")).toBe(true);
   });

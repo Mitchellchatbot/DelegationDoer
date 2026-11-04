@@ -5,12 +5,13 @@ import type { ScheduledWork } from "@/lib/exec/scheduler";
 import type { JobHandler } from "@/lib/exec/types";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 
-// exec.purge: the daily retention sweep for the P2a tables.
+// exec.purge: the daily retention sweep for the exec tables.
 //
-//   exec_jobs        finished (succeeded / dead / cancelled) more than 14 days ago
-//   exec_access_log  older than 90 days (plan §5)
-//   exec_audit_log   older than 400 days
-//   exec_ai_usage    older than 400 days
+//   exec_jobs             finished (succeeded / dead / cancelled) more than 14 days ago
+//   exec_access_log       older than 90 days (plan §5)
+//   exec_audit_log        older than 400 days
+//   exec_ai_usage         older than 400 days
+//   exec_attention_items  resolved, and last seen, more than 90 days ago
 //
 // The deletes are global, not per principal. Rows with no principal (system
 // jobs, access attempts that never resolved to a principal) have to age out
@@ -27,7 +28,8 @@ export const RETENTION_DAYS = Object.freeze({
   finishedJobs: 14,
   accessLog: 90,
   auditLog: 400,
-  aiUsage: 400
+  aiUsage: 400,
+  resolvedAttention: 90
 });
 
 const PURGE_TIMEOUT_MS = 120_000;
@@ -40,6 +42,7 @@ export interface PurgeCounts {
   accessLog: number;
   auditLog: number;
   aiUsage: number;
+  resolvedAttention: number;
 }
 
 function errMessage(err: unknown): string {
@@ -55,6 +58,30 @@ async function deleteCreatedBefore(table: string, days: number, now: Date, signa
   return count ?? 0;
 }
 
+// Needs Attention rows age out only once resolved, and only once their
+// situation has been gone for the whole window too. An open, seen, snoozed or
+// dismissed row still stands for a live situation, whatever its age, and
+// deleting it would bring the situation back as a new item. So would deleting
+// a row he resolved himself while its situation is still there: each refresh
+// that still finds it moves last_seen_at, and a deleted row would come back
+// as a brand-new open item although nothing changed. An auto-resolved row was
+// last seen before it was resolved, so last_seen_at changes nothing for those.
+// The partial index exec_attention_items_purge_idx (resolved_at, where
+// status = 'resolved') serves the delete; last_seen_at is checked on its rows.
+async function deleteResolvedAttention(days: number, now: Date, signal?: AbortSignal): Promise<number> {
+  const cutoff = new Date(now.getTime() - days * DAY_MS).toISOString();
+  let query = getSupabaseAdmin()
+    .from("exec_attention_items")
+    .delete({ count: "exact" })
+    .eq("status", "resolved")
+    .lt("resolved_at", cutoff)
+    .lt("last_seen_at", cutoff);
+  if (signal) query = query.abortSignal(signal);
+  const { count, error } = await query;
+  if (error) throw new Error(`exec_attention_items purge failed: ${error.message}`);
+  return count ?? 0;
+}
+
 /**
  * Run every retention delete and return how many rows each removed.
  *
@@ -64,12 +91,13 @@ async function deleteCreatedBefore(table: string, days: number, now: Date, signa
  * lost lease) stops it between steps.
  */
 export async function runPurge(signal?: AbortSignal, now: Date = new Date()): Promise<PurgeCounts> {
-  const counts: PurgeCounts = { finishedJobs: 0, accessLog: 0, auditLog: 0, aiUsage: 0 };
+  const counts: PurgeCounts = { finishedJobs: 0, accessLog: 0, auditLog: 0, aiUsage: 0, resolvedAttention: 0 };
   const steps: readonly [keyof PurgeCounts, () => Promise<number>][] = [
     ["finishedJobs", () => purgeFinishedJobs(RETENTION_DAYS.finishedJobs, signal)],
     ["accessLog", () => deleteCreatedBefore("exec_access_log", RETENTION_DAYS.accessLog, now, signal)],
     ["auditLog", () => deleteCreatedBefore("exec_audit_log", RETENTION_DAYS.auditLog, now, signal)],
-    ["aiUsage", () => deleteCreatedBefore("exec_ai_usage", RETENTION_DAYS.aiUsage, now, signal)]
+    ["aiUsage", () => deleteCreatedBefore("exec_ai_usage", RETENTION_DAYS.aiUsage, now, signal)],
+    ["resolvedAttention", () => deleteResolvedAttention(RETENTION_DAYS.resolvedAttention, now, signal)]
   ];
 
   const failures: string[] = [];
@@ -85,7 +113,8 @@ export async function runPurge(signal?: AbortSignal, now: Date = new Date()): Pr
 
   console.log(
     `[exec-purge] deleted finishedJobs=${counts.finishedJobs} accessLog=${counts.accessLog} ` +
-      `auditLog=${counts.auditLog} aiUsage=${counts.aiUsage}${failures.length > 0 ? ` failed=${failures.length}` : ""}`
+      `auditLog=${counts.auditLog} aiUsage=${counts.aiUsage} resolvedAttention=${counts.resolvedAttention}` +
+      `${failures.length > 0 ? ` failed=${failures.length}` : ""}`
   );
   if (failures.length > 0) {
     throw new Error(`exec.purge: ${failures.length} of ${steps.length} steps failed: ${failures.join("; ")}`);

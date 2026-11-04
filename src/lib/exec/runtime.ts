@@ -1,6 +1,7 @@
 import "server-only";
 
 import { isExecEnabled } from "@/lib/exec/access";
+import { ddAttentionJobHandler, ddAttentionScheduledWork } from "@/lib/exec/handlers/dd-attention";
 import { purgeJobHandler, purgeScheduledWork } from "@/lib/exec/handlers/purge";
 import { JOB_LANES, getJobHandler, registerJobHandler, runWorkerPass, type WorkerPassSummary } from "@/lib/exec/jobs";
 import { getScheduledWork, registerScheduledWork, runSchedulerTick, type ScheduledWork } from "@/lib/exec/scheduler";
@@ -14,8 +15,8 @@ import type { JobHandler, JobLane } from "@/lib/exec/types";
 // during a deploy. That is safe: enqueues are deduped by key, claims are
 // leased, and the in-flight limits are shared process-wide (jobs.ts).
 
-const BUILT_IN_HANDLERS: readonly JobHandler[] = [purgeJobHandler];
-const BUILT_IN_SCHEDULE: readonly ScheduledWork[] = [purgeScheduledWork];
+const BUILT_IN_HANDLERS: readonly JobHandler[] = [purgeJobHandler, ddAttentionJobHandler];
+const BUILT_IN_SCHEDULE: readonly ScheduledWork[] = [purgeScheduledWork, ddAttentionScheduledWork];
 
 // The cron route's whole run has to fit well inside its 60 s maxDuration.
 const MAX_CRON_BUDGET_MS = 45_000;

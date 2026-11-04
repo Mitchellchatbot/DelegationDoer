@@ -77,7 +77,10 @@ const LOADER_IMPORTERS = new Set([
   "src/lib/exec/scheduler.ts"
 ]);
 // "file#export": what a trusted file may export that hands a principal out.
-const PRINCIPAL_EXPORTS = new Set(["src/lib/exec/access.ts#requireExecPrincipal"]);
+const PRINCIPAL_EXPORTS = new Set([
+  "src/lib/exec/access.ts#requireExecPrincipal",
+  "src/lib/exec/access.ts#requireExecPrincipalForPage"
+]);
 
 const SOURCE_FILE = /\.(?:tsx?|jsx?|mjs|cjs)$/;
 const relPath = (abs: string) => path.relative(ROOT, abs).split(path.sep).join("/");

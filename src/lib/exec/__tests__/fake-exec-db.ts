@@ -5,7 +5,7 @@
 //   rpc("exec_claim_jobs" | "exec_heartbeat_job" | "exec_finish_job" | "exec_reap_expired_leases", args)
 //     [.abortSignal(signal)]
 //   from("exec_jobs").upsert(row, opts).select("id")
-//   from(table).delete({ count }).in(...).lt(...).abortSignal(signal)
+//   from(table).delete({ count }).in(...).eq(...).lt(...).abortSignal(signal)
 //
 // Every call is recorded. RPC behaviour can be replaced per test through
 // `rpc`; the defaults claim from `queue` by lane, keep every lease, accept
@@ -135,6 +135,7 @@ export function createFakeExecDb(): FakeExecDb {
           db.deletes.push(rec);
           const builder = {
             in: (...args: unknown[]) => (rec.filters.push(["in", ...args]), builder),
+            eq: (...args: unknown[]) => (rec.filters.push(["eq", ...args]), builder),
             lt: (...args: unknown[]) => (rec.filters.push(["lt", ...args]), builder),
             abortSignal: (signal: AbortSignal) => ((rec.signal = signal), builder),
             then: <A, B>(onFulfilled?: (v: FakeResult) => A, onRejected?: (e: unknown) => B) =>

@@ -12,6 +12,7 @@ vi.mock("@/lib/exec/principal", async (importOriginal) => {
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { listEnabledPrincipals, loadPrincipalById, loadSettings, principalFromRows, settingsFromRow } from "@/lib/exec/principal";
 import { createFakeExecDb, jobRow, type FakeExecDb } from "@/lib/exec/__tests__/fake-exec-db";
+import { DD_ATTENTION_JOB_KIND, ddAttentionJobHandler, ddAttentionScheduledWork } from "@/lib/exec/handlers/dd-attention";
 import { PURGE_JOB_KIND, RETENTION_DAYS, purgeJobHandler, purgeScheduledWork, runPurge } from "@/lib/exec/handlers/purge";
 import { __resetJobsForTests, getJobHandler, jobsInFlight, registerJobHandler } from "@/lib/exec/jobs";
 import { __resetSchedulerForTests, dueDedupeKey, getScheduledWork, listScheduledWork, registerScheduledWork } from "@/lib/exec/scheduler";
@@ -22,6 +23,7 @@ import {
   runExecTickForCron,
   runExecWorkerTick
 } from "@/lib/exec/runtime";
+import { intervalBucket } from "@/lib/exec/time";
 import type { ExecPrincipal, JobContext } from "@/lib/exec/types";
 
 let db: FakeExecDb;
@@ -85,12 +87,14 @@ describe("while EXEC_ENABLED is not 'true'", () => {
 });
 
 describe("ensureExecRuntime", () => {
-  it("registers the built-in handler and schedule once, however often it's called", () => {
+  it("registers the built-in handlers and schedules once, however often it's called", () => {
     ensureExecRuntime();
     ensureExecRuntime();
     expect(getJobHandler(PURGE_JOB_KIND)).toBe(purgeJobHandler);
+    expect(getJobHandler(DD_ATTENTION_JOB_KIND)).toBe(ddAttentionJobHandler);
     expect(getScheduledWork(PURGE_JOB_KIND)).toBe(purgeScheduledWork);
-    expect(listScheduledWork()).toHaveLength(1);
+    expect(getScheduledWork(DD_ATTENTION_JOB_KIND)).toBe(ddAttentionScheduledWork);
+    expect(listScheduledWork()).toEqual([purgeScheduledWork, ddAttentionScheduledWork]);
   });
 
   it("tolerates a kind another copy of the module already registered", () => {
@@ -103,7 +107,7 @@ describe("ensureExecRuntime", () => {
   it("tolerates a schedule that is already registered", () => {
     registerScheduledWork(purgeScheduledWork);
     expect(() => ensureExecRuntime()).not.toThrow();
-    expect(listScheduledWork()).toEqual([purgeScheduledWork]);
+    expect(listScheduledWork()).toEqual([purgeScheduledWork, ddAttentionScheduledWork]);
     expect(getJobHandler(PURGE_JOB_KIND)).toBe(purgeJobHandler);
   });
 
@@ -162,31 +166,47 @@ describe("runExecSchedulerTick", () => {
     vi.useFakeTimers({ toFake: ["Date"] });
   });
 
-  it("is idle when nothing is due", async () => {
-    vi.setSystemTime(new Date("2026-11-04T07:00:00Z")); // 02:00 EST, before the 03:30 purge
+  it("enqueues only the 10-minute DD refresh before the purge's time, and is idle on a repeat in the same bucket", async () => {
+    const at = new Date("2026-11-04T07:00:00Z"); // 02:00 EST, before the 03:30 purge
+    vi.setSystemTime(at);
     vi.mocked(listEnabledPrincipals).mockResolvedValue([principal]);
-    await expect(runExecSchedulerTick()).resolves.toBe("idle");
-    expect(db.upserts).toEqual([]);
+    await expect(runExecSchedulerTick()).resolves.toBe("principals=1 enqueued=1 reaped=0");
+    expect(db.upserts.map((u) => u.row)).toEqual([
+      {
+        kind: DD_ATTENTION_JOB_KIND,
+        lane: "bulk",
+        principal_id: "ep_1",
+        payload: {},
+        dedupe_key: `exec.dd-attention:ep_1:i${intervalBucket(at, 10)}`,
+        max_attempts: 3
+      }
+    ]);
     expect(db.callsTo("exec_reap_expired_leases")).toHaveLength(1);
+
+    // Same 10-minute bucket: the key dedupes, nothing is due, the tick is idle.
+    vi.setSystemTime(new Date("2026-11-04T07:09:00Z"));
+    await expect(runExecSchedulerTick()).resolves.toBe("idle");
   });
 
   it("enqueues the daily purge once its local time has passed, deduped by local date", async () => {
     vi.mocked(listEnabledPrincipals).mockResolvedValue([principal]);
+    const purges = () => db.upserts.filter((u) => u.row.kind === PURGE_JOB_KIND);
 
     vi.setSystemTime(new Date("2026-11-04T08:29:00Z")); // 03:29 EST
-    await expect(runExecSchedulerTick()).resolves.toBe("idle");
-    expect(db.upserts).toEqual([]);
+    await runExecSchedulerTick();
+    expect(purges()).toEqual([]);
 
+    // The purge, plus the DD refresh of a new 10-minute bucket.
     vi.setSystemTime(new Date("2026-11-04T08:30:00Z")); // 03:30 EST
-    await expect(runExecSchedulerTick()).resolves.toBe("principals=1 enqueued=1 reaped=0");
-    expect(db.upserts.map((u) => u.row)).toEqual([
+    await expect(runExecSchedulerTick()).resolves.toBe("principals=1 enqueued=2 reaped=0");
+    expect(purges().map((u) => u.row)).toEqual([
       { kind: PURGE_JOB_KIND, lane: "bulk", principal_id: "ep_1", payload: {}, dedupe_key: "exec.purge:ep_1:2026-11-04" }
     ]);
 
     vi.setSystemTime(new Date("2026-11-04T20:00:00Z")); // later the same local day
-    await expect(runExecSchedulerTick()).resolves.toBe("idle");
-    expect(db.upserts).toHaveLength(2);
-    expect(db.upserts[1].row.dedupe_key).toBe("exec.purge:ep_1:2026-11-04");
+    await runExecSchedulerTick();
+    expect(purges()).toHaveLength(2);
+    expect(purges()[1].row.dedupe_key).toBe("exec.purge:ep_1:2026-11-04");
   });
 
   it("reports reaped leases", async () => {
@@ -240,11 +260,17 @@ describe("runExecTickForCron", () => {
     const out = await runExecTickForCron(40_000);
     expect(out.ok).toBe(true);
     expect(out.bulk).toMatchObject({ claimed: 1, succeeded: 1, running: 0 });
-    expect(db.deletes.map((d) => d.table)).toEqual(["exec_jobs", "exec_access_log", "exec_audit_log", "exec_ai_usage"]);
+    expect(db.deletes.map((d) => d.table)).toEqual([
+      "exec_jobs",
+      "exec_access_log",
+      "exec_audit_log",
+      "exec_ai_usage",
+      "exec_attention_items"
+    ]);
     expect(db.callsTo("exec_finish_job")).toEqual([
       expect.objectContaining({
         p_outcome: "succeeded",
-        p_result: { finishedJobs: 5, accessLog: 1, auditLog: 1, aiUsage: 1 }
+        p_result: { finishedJobs: 5, accessLog: 1, auditLog: 1, aiUsage: 1, resolvedAttention: 1 }
       })
     ]);
   });
@@ -313,12 +339,18 @@ describe("exec.purge", () => {
   });
 
   it("deletes past each table's retention and returns the counts", async () => {
-    expect(RETENTION_DAYS).toEqual({ finishedJobs: 14, accessLog: 90, auditLog: 400, aiUsage: 400 });
-    const counts: Record<string, number> = { exec_jobs: 7, exec_access_log: 30, exec_audit_log: 2, exec_ai_usage: 11 };
+    expect(RETENTION_DAYS).toEqual({ finishedJobs: 14, accessLog: 90, auditLog: 400, aiUsage: 400, resolvedAttention: 90 });
+    const counts: Record<string, number> = {
+      exec_jobs: 7,
+      exec_access_log: 30,
+      exec_audit_log: 2,
+      exec_ai_usage: 11,
+      exec_attention_items: 4
+    };
     db.deleteResult = (d) => ({ count: counts[d.table], error: null });
     const signal = new AbortController().signal;
 
-    await expect(runPurge(signal)).resolves.toEqual({ finishedJobs: 7, accessLog: 30, auditLog: 2, aiUsage: 11 });
+    await expect(runPurge(signal)).resolves.toEqual({ finishedJobs: 7, accessLog: 30, auditLog: 2, aiUsage: 11, resolvedAttention: 4 });
 
     expect(db.deletes).toEqual([
       {
@@ -332,17 +364,81 @@ describe("exec.purge", () => {
       },
       { table: "exec_access_log", opts: { count: "exact" }, filters: [["lt", "created_at", isoDaysBefore(90)]], signal },
       { table: "exec_audit_log", opts: { count: "exact" }, filters: [["lt", "created_at", isoDaysBefore(400)]], signal },
-      { table: "exec_ai_usage", opts: { count: "exact" }, filters: [["lt", "created_at", isoDaysBefore(400)]], signal }
+      { table: "exec_ai_usage", opts: { count: "exact" }, filters: [["lt", "created_at", isoDaysBefore(400)]], signal },
+      // Only resolved items, by when they were resolved and last seen: a live,
+      // snoozed or dismissed item stays however old it is, and so does one he
+      // resolved while its situation is still around.
+      {
+        table: "exec_attention_items",
+        opts: { count: "exact" },
+        filters: [
+          ["eq", "status", "resolved"],
+          ["lt", "resolved_at", isoDaysBefore(90)],
+          ["lt", "last_seen_at", isoDaysBefore(90)]
+        ],
+        signal
+      }
     ]);
-    expect(console.log).toHaveBeenCalledWith("[exec-purge] deleted finishedJobs=7 accessLog=30 auditLog=2 aiUsage=11");
+    expect(console.log).toHaveBeenCalledWith(
+      "[exec-purge] deleted finishedJobs=7 accessLog=30 auditLog=2 aiUsage=11 resolvedAttention=4"
+    );
+  });
+
+  it("keeps a row he resolved himself while refreshes still see its situation", async () => {
+    await runPurge();
+    const purge = db.deletes.find((d) => d.table === "exec_attention_items");
+    if (!purge) throw new Error("no attention purge");
+    // The delete's filters, applied to rows as Postgres would.
+    const deletes = (row: Record<string, string | null>) =>
+      purge.filters.every(([op, column, value]) => {
+        const cell = row[column as string];
+        if (op === "eq") return cell === value;
+        if (op === "lt") return cell !== null && Date.parse(cell) < Date.parse(String(value));
+        throw new Error(`unexpected filter ${String(op)}`);
+      });
+    const rows: Record<string, Record<string, string | null>> = {
+      // Gone 101 days ago, auto-resolved the next refresh.
+      autoResolvedLongAgo: { status: "resolved", resolved_at: isoDaysBefore(100), last_seen_at: isoDaysBefore(101) },
+      // He marked it done 100 days ago; yesterday's refresh still found the same situation.
+      ownerResolvedStillSeen: { status: "resolved", resolved_at: isoDaysBefore(100), last_seen_at: isoDaysBefore(1) },
+      // He marked it done 100 days ago, and the situation itself ended 95 days ago.
+      ownerResolvedGoneLongAgo: { status: "resolved", resolved_at: isoDaysBefore(100), last_seen_at: isoDaysBefore(95) },
+      resolvedRecently: { status: "resolved", resolved_at: isoDaysBefore(10), last_seen_at: isoDaysBefore(11) },
+      dismissedLongAgo: { status: "dismissed", resolved_at: null, last_seen_at: isoDaysBefore(400) }
+    };
+    expect(Object.keys(rows).filter((name) => deletes(rows[name]))).toEqual(["autoResolvedLongAgo", "ownerResolvedGoneLongAgo"]);
   });
 
   it("runs every step even when one fails, then fails the run", async () => {
     db.deleteResult = (d) =>
       d.table === "exec_access_log" ? { count: null, error: { message: "statement timeout" } } : { count: 1, error: null };
-    await expect(runPurge()).rejects.toThrow("exec.purge: 1 of 4 steps failed: accessLog: exec_access_log purge failed: statement timeout");
-    expect(db.deletes.map((d) => d.table)).toEqual(["exec_jobs", "exec_access_log", "exec_audit_log", "exec_ai_usage"]);
+    await expect(runPurge()).rejects.toThrow("exec.purge: 1 of 5 steps failed: accessLog: exec_access_log purge failed: statement timeout");
+    expect(db.deletes.map((d) => d.table)).toEqual([
+      "exec_jobs",
+      "exec_access_log",
+      "exec_audit_log",
+      "exec_ai_usage",
+      "exec_attention_items"
+    ]);
     expect(console.error).toHaveBeenCalledWith(expect.stringContaining("accessLog step failed"));
+  });
+
+  it("fails the run when the resolved-attention step fails, after the other steps ran", async () => {
+    db.deleteResult = (d) =>
+      d.table === "exec_attention_items" ? { count: null, error: { message: "permission denied" } } : { count: 2, error: null };
+    await expect(runPurge()).rejects.toThrow(
+      "exec.purge: 1 of 5 steps failed: resolvedAttention: exec_attention_items purge failed: permission denied"
+    );
+    expect(db.deletes.map((d) => d.table)).toEqual([
+      "exec_jobs",
+      "exec_access_log",
+      "exec_audit_log",
+      "exec_ai_usage",
+      "exec_attention_items"
+    ]);
+    expect(console.log).toHaveBeenCalledWith(
+      "[exec-purge] deleted finishedJobs=2 accessLog=2 auditLog=2 aiUsage=2 resolvedAttention=0 failed=1"
+    );
   });
 
   it("stops between steps once its signal aborts", async () => {
@@ -365,7 +461,13 @@ describe("exec.purge", () => {
   it("passes the job's signal through when the runner calls it", async () => {
     const controller = new AbortController();
     const ctx = { job: jobRow({ kind: PURGE_JOB_KIND }), principal, signal: controller.signal, workerId: "w" } satisfies JobContext;
-    await expect(purgeJobHandler.run(ctx)).resolves.toEqual({ finishedJobs: 0, accessLog: 0, auditLog: 0, aiUsage: 0 });
+    await expect(purgeJobHandler.run(ctx)).resolves.toEqual({
+      finishedJobs: 0,
+      accessLog: 0,
+      auditLog: 0,
+      aiUsage: 0,
+      resolvedAttention: 0
+    });
     expect(db.deletes.every((d) => d.signal === controller.signal)).toBe(true);
   });
 });

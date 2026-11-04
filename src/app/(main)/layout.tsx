@@ -17,6 +17,7 @@ import { NavDrawerProvider } from "@/components/NavDrawerProvider";
 import { ToastSuccessIcon, ToastErrorIcon, ToastWarningIcon } from "@/components/ToastIcons";
 import { MultitaskBubbles } from "@/components/multitask/MultitaskBubbles";
 import { primaryDepartment } from "@/lib/departments";
+import { execNavItemFor } from "@/lib/exec/access";
 
 export default async function MainLayout({ children }: { children: React.ReactNode }) {
   // Three legitimate states:
@@ -45,6 +46,11 @@ export default async function MainLayout({ children }: { children: React.ReactNo
     await getSupabaseServer().auth.signOut({ scope: "local" });
     redirect("/login");
   }
+  // The Executive AI row, or null: EXEC_ENABLED, the owner, and a session the
+  // page gate would admit. It only decides whether the row is drawn (it never
+  // throws); the page's own gate is what keeps everyone else out. Its label
+  // and link exist only in this value, so no other browser receives them.
+  const ownerNavItem = await execNavItemFor(user);
 
   return (
     <UserProvider user={user}>
@@ -61,7 +67,7 @@ export default async function MainLayout({ children }: { children: React.ReactNo
           a static rail on md+). It also renders the scrim + owns scroll-lock. */}
       <NavDrawerProvider>
       <div className="app-shell flex gap-3 p-3 min-h-screen">
-        <Sidebar user={user} />
+        <Sidebar user={user} ownerItem={ownerNavItem} />
         <div className="flex-1 min-w-0 flex flex-col gap-3">
           {user.role !== "leader" && (() => {
             const dept = primaryDepartment(user.departmentIds);

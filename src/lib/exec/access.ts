@@ -1,7 +1,10 @@
 import "server-only";
 
+import { headers } from "next/headers";
+import { notFound as renderNotFound } from "next/navigation";
 import { NextResponse } from "next/server";
 import { isOwner } from "@/lib/access";
+import { cache } from "@/lib/safe-cache";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { getSupabaseServer } from "@/lib/supabase-server";
 import { loadPrincipalForUser } from "@/lib/exec/principal";
@@ -19,16 +22,37 @@ import type { ExecPrincipal, ExecSurface } from "@/lib/exec/types";
 // have verified it, and the plan's P0 list shows the middleware skips some
 // paths, which is not good enough in front of CEO data.
 //
-// The chain is session → users row → v1 owner guard → enabled exec principal.
-// Anyone who isn't the owner gets the same 404 a missing route would, so other
-// signed-in staff can't confirm the feature exists. Every failure denies.
+// The chain is session → users row → v1 owner guard → (step-up) → enabled exec
+// principal. Anyone who isn't the owner gets a 404, the status a missing route
+// gets, and nothing of the feature: no data and no wording that names it.
+// How far that hides the routes themselves is spelled out at
+// requireExecPrincipalForPage and in next.config.mjs. Every failure denies.
 // Nothing here falls back to "allow".
+//
+// The step-up: any leader can mint a one-time sign-in link for the owner's
+// account (users/[id]/magic-link; the team signs in as him by agreement), and
+// the session it opens passes every identity check above. GoTrue records how
+// each session was signed in, so a surface that asks for it
+// (requireStrongSignIn) admits only a password sign-in or a session verified
+// with a second factor (signInIsStrong). The page gate always asks.
 
 export function isExecEnabled(): boolean {
   return process.env.EXEC_ENABLED === "true";
 }
 
 export type ExecAccessResult = { ok: true; principal: ExecPrincipal } | { ok: false; response: NextResponse };
+
+export interface ExecGateOptions {
+  /**
+   * Refuse a session that wasn't signed in with a password or verified with a
+   * second factor (signInIsStrong), with the same 404 (a 503 when the session
+   * can't be read for an outage). requireExecPrincipalForPage always sets it.
+   * It is opt-in only because requireExecPrincipal predates it and P2a's tests
+   * pin its behaviour without it; the first /api/exec route (P5) has to set it
+   * too, or make it the default.
+   */
+  requireStrongSignIn?: boolean;
+}
 
 export interface AccessLogEntry {
   principalId: string | null;
@@ -85,7 +109,7 @@ function clip(value: string | null | undefined, n: number): string | null {
  * Who the request is from, as an ExecPrincipal, or the response to send instead.
  * `route` names the endpoint in the access log, e.g. "GET /api/exec/overview".
  */
-export async function requireExecPrincipal(req: Request, route: string): Promise<ExecAccessResult> {
+export async function requireExecPrincipal(req: Request, route: string, opts: ExecGateOptions = {}): Promise<ExecAccessResult> {
   // 1. Feature flag. Off looks exactly like a route that doesn't exist.
   if (!isExecEnabled()) return notFound();
 
@@ -146,7 +170,22 @@ export async function requireExecPrincipal(req: Request, route: string): Promise
   // later means changing this line and nothing downstream.
   if (!isOwner({ email: userRow.email ?? "" })) return notFound();
 
-  // 5. The enabled principal for that user.
+  // 5. Step-up, when asked for: how this session was signed in. Only the
+  // owner's account gets this far, so only a session on it ever sees these
+  // answers: 404 for a link sign-in (or one that can't be read), 503 when the
+  // session can't be read for an outage.
+  let checkedToken: string | null = null;
+  if (opts.requireStrongSignIn) {
+    const session = await readAccessToken(supabase, route);
+    if (!session.ok) return session.outage ? authUnavailable() : notFound();
+    if (!signInIsStrong(session.token, authUserId)) {
+      console.warn(`[exec-access] ${route}: step-up refused a session on the owner's account (sign-in: ${signInMethods(session.token, authUserId)})`);
+      return notFound();
+    }
+    checkedToken = session.token;
+  }
+
+  // 6. The enabled principal for that user.
   let principal: ExecPrincipal | null;
   try {
     principal = await loadPrincipalForUser(userRow.id);
@@ -156,9 +195,10 @@ export async function requireExecPrincipal(req: Request, route: string): Promise
   }
   if (!principal) return notFound();
 
-  // 6–7. Record the access. Both steps are best-effort and never deny: the
+  // 7–8. Record the access. Both steps are best-effort and never deny: the
   // caller is already verified, and losing a log row must not lock the owner out.
-  const sessionId = await readSessionId(supabase, authUserId, route);
+  const sessionId =
+    checkedToken !== null ? sessionIdFromAccessToken(checkedToken, authUserId) : await readSessionId(supabase, authUserId, route);
   await logAccess({
     principalId: principal.id,
     authUserId,
@@ -170,6 +210,153 @@ export async function requireExecPrincipal(req: Request, route: string): Promise
   });
 
   return { ok: true, principal };
+}
+
+// A server-component page has no Request, so the page gate builds one from
+// the incoming headers. requireExecPrincipal reads exactly these off it (the
+// client IP and user agent, for the access log) and never its URL; identity
+// comes from the session cookie through getSupabaseServer().
+const PAGE_FORWARDED_HEADERS = ["user-agent", "x-forwarded-for", "x-real-ip"] as const;
+
+/**
+ * The gate for an exec page, called first, before the page renders anything:
+ *
+ *   const principal = await requireExecPrincipalForPage("GET /executive");
+ *
+ * Same checks as requireExecPrincipal, with the step-up on: a session on the
+ * owner's account opened by a one-time sign-in link gets the 404 too, so he
+ * opens these pages from a password sign-in. A 401 or 404 renders Next's
+ * not-found page, the one a missing route gets (a signed-out browser was
+ * already sent to /login by the middleware, so a 401 here is a session
+ * GoTrue refused). It doesn't hide that the route exists from signed-in
+ * staff: the segment's loading.tsx has streamed by then, so the not-found
+ * page arrives in a 200 response (a soft 404, as on /scale). What never
+ * reaches them is the feature itself: no text, data or nav row. A 503
+ * throws to the segment's error.tsx instead: during an outage a 404 would
+ * tell the owner his page is gone. Anything else also 404s, so a new deny
+ * status can't fall through to rendering.
+ *
+ * Memoized per request: every caller in one render shares the first call, so
+ * a page costs one auth check and one access-log row however many components
+ * ask.
+ */
+export const requireExecPrincipalForPage: (route: string) => Promise<ExecPrincipal> = cache(
+  async (route: string): Promise<ExecPrincipal> => {
+    const incoming = headers();
+    const forwarded = new Headers();
+    for (const name of PAGE_FORWARDED_HEADERS) {
+      const value = incoming.get(name);
+      if (value !== null) forwarded.set(name, value);
+    }
+    // The URL is a placeholder (.internal is reserved and never resolves).
+    const gate = await requireExecPrincipal(new Request("https://exec.internal/", { headers: forwarded }), route, {
+      requireStrongSignIn: true
+    });
+    if (gate.ok) return gate.principal;
+    if (gate.response.status === 503) throw new Error("exec: temporarily unavailable");
+    renderNotFound();
+  }
+);
+
+/** The Sidebar row for the exec pages. */
+export interface ExecNavItem {
+  href: string;
+  label: string;
+}
+
+const EXEC_NAV_ITEM: ExecNavItem = Object.freeze({ href: "/executive", label: "Executive AI" });
+
+/**
+ * The Sidebar row for the exec pages, or null when this request shouldn't see
+ * it: the flag is off, the user isn't the owner, or the session isn't one the
+ * page gate admits (signInIsStrong). The Sidebar is a client component, so
+ * the row's label and link reach a browser only in this value, sent with the
+ * page the server drew it on. Visibility only: the page gate is the control.
+ * Never throws; a session it can't read gets no row.
+ */
+export async function execNavItemFor(user: Parameters<typeof isOwner>[0]): Promise<ExecNavItem | null> {
+  if (!isExecEnabled() || !isOwner(user)) return null;
+  try {
+    const { data, error } = await getSupabaseServer().auth.getSession();
+    const token = error ? undefined : data.session?.access_token;
+    return typeof token === "string" && signInIsStrong(token) ? EXEC_NAV_ITEM : null;
+  } catch {
+    // The row is a convenience; a broken read just leaves it out.
+    return null;
+  }
+}
+
+type AccessTokenRead = { ok: true; token: string } | { ok: false; outage: boolean };
+
+/**
+ * The session's access token, for the step-up. getUser() has already had
+ * GoTrue verify the session these cookies hold, and getSession() reads the
+ * same cookies; signInIsStrong also binds the token to the verified user.
+ */
+async function readAccessToken(supabase: ReturnType<typeof getSupabaseServer>, route: string): Promise<AccessTokenRead> {
+  try {
+    const { data, error } = await supabase.auth.getSession();
+    if (error) {
+      if (isAuthOutage(error)) {
+        console.error(`[exec-access] ${route}: session unreadable for the sign-in check: ${error.name}: ${error.message}`);
+        return { ok: false, outage: true };
+      }
+      console.warn(`[exec-access] ${route}: session unreadable for the sign-in check: ${error.message}`);
+      return { ok: false, outage: false };
+    }
+    const token = data.session?.access_token;
+    return typeof token === "string" && token.length > 0 ? { ok: true, token } : { ok: false, outage: false };
+  } catch (err) {
+    // As with getUser: a throw means the client broke, not a verdict on the caller.
+    console.error(`[exec-access] ${route}: getSession threw: ${errMessage(err)}`);
+    return { ok: false, outage: true };
+  }
+}
+
+// One-time sign-in links and codes, as GoTrue names them in the amr claim.
+// DD's admin-minted links (signin/[claimId], generateLink) use the implicit
+// flow, which GoTrue records as "otp"; the PKCE flow records "magiclink". A
+// recovery, invite, signup or email-change link opens a session too.
+const ONE_TIME_SIGN_IN_METHODS: ReadonlySet<string> = new Set(["otp", "magiclink", "recovery", "invite", "email/signup", "email_change"]);
+
+/**
+ * True when the session behind `token` was signed in with a password and no
+ * one-time link, or has passed a second factor (aal "aal2"). GoTrue writes
+ * both into every access token: `amr` lists how the session was
+ * authenticated ([{ method, timestamp }], and a refresh keeps the list), `aal`
+ * the assurance level. Anything else is false, a token that doesn't say
+ * included.
+ *
+ * Reads the payload WITHOUT verifying the signature, so call it only on a
+ * token whose session GoTrue already confirmed; with `expectedSub`, a token
+ * for anyone else is false.
+ */
+export function signInIsStrong(token: string, expectedSub?: string): boolean {
+  const claims = accessTokenClaims(token, expectedSub);
+  if (!claims) return false;
+  // A second factor is the one thing a borrowed session can't bring with it.
+  if (claims.aal === "aal2") return true;
+  const methods = amrMethods(claims);
+  if (methods === null || methods.length === 0) return false;
+  if (methods.some((method) => method === null || ONE_TIME_SIGN_IN_METHODS.has(method))) return false;
+  return methods.includes("password");
+}
+
+/** Each amr entry's method (null for an entry without one), or null when amr isn't a list. */
+function amrMethods(claims: Record<string, unknown>): (string | null)[] | null {
+  if (!Array.isArray(claims.amr)) return null;
+  return claims.amr.map((entry: unknown) => {
+    const method = typeof entry === "object" && entry !== null ? (entry as { method?: unknown }).method : undefined;
+    return typeof method === "string" ? method : null;
+  });
+}
+
+/** How a token says its session was signed in, for a log line ("otp"); nothing else from the token. */
+function signInMethods(token: string, expectedSub: string): string {
+  const claims = accessTokenClaims(token, expectedSub);
+  if (!claims) return "unreadable, or not the verified user's token";
+  const methods = amrMethods(claims) ?? [];
+  return methods.length > 0 ? (clip(methods.map((method) => method ?? "?").join(", "), 80) ?? "") : "none recorded";
 }
 
 // The session id is for the access log only (which device/session made the
@@ -232,13 +419,10 @@ export function clientIp(req: Request): string | null {
 }
 
 /**
- * The `session_id` claim of a Supabase access token, or null. Never throws.
- *
- * Reads the payload WITHOUT verifying the signature, so call it only on a
- * token whose identity GoTrue already confirmed. With `expectedSub`, a token
- * whose `sub` isn't that user yields null.
+ * The payload of an access token, or null when it can't be read or, with
+ * `expectedSub`, belongs to someone else. Unverified: see the callers.
  */
-export function sessionIdFromAccessToken(token: string, expectedSub?: string): string | null {
+function accessTokenClaims(token: string, expectedSub?: string): Record<string, unknown> | null {
   if (typeof token !== "string") return null;
   const parts = token.split(".");
   if (parts.length !== 3 || !parts[1]) return null;
@@ -247,11 +431,23 @@ export function sessionIdFromAccessToken(token: string, expectedSub?: string): s
     claims = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8"));
   } catch {
     // Not JSON: there is no claim to read. null is the documented answer and
-    // readSessionId logs it, so nothing is hidden here.
+    // every caller treats it as "doesn't say", so nothing is hidden here.
     return null;
   }
   if (!claims || typeof claims !== "object" || Array.isArray(claims)) return null;
-  const { sub, session_id: sessionId } = claims as Record<string, unknown>;
-  if (expectedSub !== undefined && sub !== expectedSub) return null;
+  const record = claims as Record<string, unknown>;
+  if (expectedSub !== undefined && record.sub !== expectedSub) return null;
+  return record;
+}
+
+/**
+ * The `session_id` claim of a Supabase access token, or null. Never throws.
+ *
+ * Reads the payload WITHOUT verifying the signature, so call it only on a
+ * token whose identity GoTrue already confirmed. With `expectedSub`, a token
+ * whose `sub` isn't that user yields null.
+ */
+export function sessionIdFromAccessToken(token: string, expectedSub?: string): string | null {
+  const sessionId = accessTokenClaims(token, expectedSub)?.session_id;
   return typeof sessionId === "string" && sessionId.length > 0 ? sessionId : null;
 }

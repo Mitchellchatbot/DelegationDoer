@@ -24,9 +24,16 @@ vi.mock("@/lib/exec/attention", () => ({
   listAttention: vi.fn(),
   syncAttention: vi.fn()
 }));
+// P3: the email gate. These P2b tests run with email off (no email table is
+// read); overview-email.test.ts covers the email parts.
+vi.mock("@/lib/exec/email-view", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/exec/email-view")>()),
+  loadEmailGate: vi.fn()
+}));
 
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { lastAttentionRefresh, listAttention, syncAttention } from "@/lib/exec/attention";
+import { loadEmailGate } from "@/lib/exec/email-view";
 import type { AttentionItem } from "@/lib/exec/attention-types";
 import { DD_ATTENTION_JOB_KIND } from "@/lib/exec/handlers/dd-attention";
 import { PURGE_JOB_KIND } from "@/lib/exec/handlers/purge";
@@ -403,6 +410,7 @@ function wireAll() {
   vi.mocked(getPendingApprovals).mockResolvedValue(APPROVALS);
   vi.mocked(listAttention).mockResolvedValue(ITEMS);
   vi.mocked(lastAttentionRefresh).mockResolvedValue("2026-11-04T14:40:00Z");
+  vi.mocked(loadEmailGate).mockResolvedValue({ kind: "off", settings: {} as never });
   jobs = createFakeJobs([...JOBS]);
   vi.mocked(getSupabaseAdmin).mockReturnValue(jobs.client as SupabaseClient);
 }
@@ -549,10 +557,10 @@ describe("getOverview: a full read", () => {
 
   it("lists the top 20 of the feed and dates the last check from the refresh job when it is newer", async () => {
     const o = await getOverview(principal, NOW);
-    expect(listAttention).toHaveBeenCalledWith(principal, { limit: 20, now: NOW });
+    expect(listAttention).toHaveBeenCalledWith(principal, { limit: 40, now: NOW });
     expect(lastAttentionRefresh).toHaveBeenCalledWith(principal, "dd");
     // The job succeeded at 14:50, after the newest item stamp (14:40). The other principal's 14:59 run doesn't count.
-    expect(data(o.sections.attention)).toEqual({ items: ITEMS, limit: 20, checkedAt: "2026-11-04T14:50:00Z" });
+    expect(data(o.sections.attention)).toEqual({ items: ITEMS, limit: 20, checkedAt: "2026-11-04T14:50:00Z", emailUnchecked: false });
   });
 
   it("keeps the item stamps when they are newer than the last job success", async () => {

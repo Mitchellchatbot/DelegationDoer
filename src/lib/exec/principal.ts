@@ -30,15 +30,23 @@ export const DEFAULT_SETTINGS: Omit<ExecSettings, "principalId"> = {
   retentionDaysSlack: 90,
   retentionDaysEmail: 180,
   retentionDaysChat: 90,
-  dailyCostCapUsd: 15
+  dailyCostCapUsd: 15,
+  // Email stays off until the owner's team runs the enable script (L1), and a
+  // settings read that never saw the P3 column can't vouch for the schema.
+  emailEnabled: false,
+  emailSchemaReady: false
 };
 
 const PRINCIPAL_COLS = "id,user_id,enabled,mail_account_ids,slack_team_id,slack_user_id";
 const USER_COLS = "id,email,name,work_timezone";
-const SETTINGS_COLS =
+// The P2a columns. email_enabled is added by the P3 migration, which is
+// applied by hand, so deployed code can meet a database without it: the
+// loader asks for it and falls back to these columns alone (L1).
+const SETTINGS_BASE_COLS =
   "principal_id,brief_enabled,brief_local_time,brief_timezone,supersede_legacy_brief,checkins_enabled," +
   "restricted_policy,watch_mode,muted_channel_ids,retention_days_slack,retention_days_email," +
   "retention_days_chat,daily_cost_cap_usd";
+const SETTINGS_COLS = `${SETTINGS_BASE_COLS},email_enabled`;
 
 interface PrincipalRow {
   id: string;
@@ -70,6 +78,8 @@ interface SettingsRow {
   retention_days_email: number | null;
   retention_days_chat: number | null;
   daily_cost_cap_usd: number | string | null;
+  /** Absent when the P3 migration isn't applied (the fallback read leaves it out). */
+  email_enabled?: boolean | null;
 }
 
 /** True when `tz` is an IANA zone this runtime understands. */
@@ -95,10 +105,23 @@ function num(v: number | string | null | undefined, fallback: number): number {
   return typeof n === "number" && Number.isFinite(n) ? n : fallback;
 }
 
-/** exec_settings row (or none) → ExecSettings, filling every gap with DEFAULT_SETTINGS. */
-export function settingsFromRow(row: SettingsRow | null, principalId: string): ExecSettings {
+/**
+ * exec_settings row (or none) → ExecSettings, filling every gap with DEFAULT_SETTINGS.
+ *
+ * `emailSchemaReady` says whether the read that produced `row` selected the
+ * P3 email_enabled column. The loader always says; when a caller doesn't, the
+ * row itself answers (it has the key only if the column was selected), and no
+ * row means not ready. Email is on only when the schema is ready and the
+ * column is exactly true: NULL or a missing column is off.
+ */
+export function settingsFromRow(
+  row: SettingsRow | null,
+  principalId: string,
+  opts: { emailSchemaReady?: boolean } = {}
+): ExecSettings {
   const d = DEFAULT_SETTINGS;
-  if (!row) return { principalId, ...d, mutedChannelIds: [] };
+  const emailSchemaReady = opts.emailSchemaReady ?? (row !== null && Object.prototype.hasOwnProperty.call(row, "email_enabled"));
+  if (!row) return { principalId, ...d, mutedChannelIds: [], emailEnabled: false, emailSchemaReady };
   const policy: RestrictedPolicy = row.restricted_policy === "dd_only" ? "dd_only" : "hidden";
   const watch: WatchMode = row.watch_mode === "member_only" ? "member_only" : "active_public";
   return {
@@ -114,7 +137,9 @@ export function settingsFromRow(row: SettingsRow | null, principalId: string): E
     retentionDaysSlack: num(row.retention_days_slack, d.retentionDaysSlack),
     retentionDaysEmail: num(row.retention_days_email, d.retentionDaysEmail),
     retentionDaysChat: num(row.retention_days_chat, d.retentionDaysChat),
-    dailyCostCapUsd: num(row.daily_cost_cap_usd, d.dailyCostCapUsd)
+    dailyCostCapUsd: num(row.daily_cost_cap_usd, d.dailyCostCapUsd),
+    emailEnabled: emailSchemaReady && row.email_enabled === true,
+    emailSchemaReady
   };
 }
 
@@ -141,14 +166,35 @@ export function principalFromRows(p: PrincipalRow, u: UserRow, s: SettingsRow | 
   });
 }
 
-async function fetchSettingsRow(principalId: string): Promise<SettingsRow | null> {
-  const { data, error } = await getSupabaseAdmin()
-    .from("exec_settings")
-    .select(SETTINGS_COLS)
-    .eq("principal_id", principalId)
-    .maybeSingle();
-  if (error) throw new Error(`exec_settings read failed: ${error.message}`);
-  return (data as SettingsRow | null) ?? null;
+/**
+ * The error a select of email_enabled gets before the P3 migration: Postgres'
+ * "column does not exist" (42703), PostgREST's schema-cache miss (PGRST204),
+ * or any message that names the column. Nothing else falls back: a timeout
+ * or a 5xx must fail the read, not quietly turn email off.
+ */
+function isMissingEmailColumn(error: { code?: string | null; message?: string | null }): boolean {
+  if (error.code === "42703" || error.code === "PGRST204") return true;
+  return /email_enabled/.test(error.message ?? "");
+}
+
+interface SettingsRead {
+  row: SettingsRow | null;
+  /** The read selected email_enabled (the P3 migration is applied). */
+  emailSchemaReady: boolean;
+}
+
+async function fetchSettingsRow(principalId: string): Promise<SettingsRead> {
+  const read = (columns: string) =>
+    getSupabaseAdmin().from("exec_settings").select(columns).eq("principal_id", principalId).maybeSingle();
+  const first = await read(SETTINGS_COLS);
+  if (!first.error) return { row: (first.data as SettingsRow | null) ?? null, emailSchemaReady: true };
+  if (!isMissingEmailColumn(first.error)) throw new Error(`exec_settings read failed: ${first.error.message}`);
+  // P3 code ahead of its migration: retry once without the column. Email is
+  // then off and not installed, so P2a/P2b keep working and nothing email
+  // runs (L1).
+  const second = await read(SETTINGS_BASE_COLS);
+  if (second.error) throw new Error(`exec_settings read failed: ${second.error.message}`);
+  return { row: (second.data as SettingsRow | null) ?? null, emailSchemaReady: false };
 }
 
 async function fetchUserRow(userId: string): Promise<UserRow | null> {
@@ -165,7 +211,7 @@ async function fromPrincipalRow(p: PrincipalRow | null): Promise<ExecPrincipal |
   if (!p || !p.enabled) return null;
   const [u, s] = await Promise.all([fetchUserRow(p.user_id), fetchSettingsRow(p.id)]);
   if (!u) return null;
-  return principalFromRows(p, u, s);
+  return principalFromRows(p, u, s.row);
 }
 
 /** The enabled principal for a DD user, or null. Caller must already have authenticated that user. */
@@ -205,7 +251,12 @@ export async function listEnabledPrincipals(): Promise<ExecPrincipal[]> {
   return out;
 }
 
-/** exec_settings for a principal, defaults filled in. */
+/**
+ * exec_settings for a principal, defaults filled in. Before the P3 migration
+ * is applied it still loads (emailEnabled and emailSchemaReady false); any
+ * other read failure throws.
+ */
 export async function loadSettings(principalId: string): Promise<ExecSettings> {
-  return settingsFromRow(await fetchSettingsRow(principalId), principalId);
+  const read = await fetchSettingsRow(principalId);
+  return settingsFromRow(read.row, principalId, { emailSchemaReady: read.emailSchemaReady });
 }

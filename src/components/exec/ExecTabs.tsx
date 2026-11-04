@@ -3,8 +3,9 @@ import { cn } from "@/lib/utils";
 
 // The exec page tabs (ScaleTabs' pattern): each page passes the tab it is,
 // so this stays a server component with no hooks. Only tabs whose page exists
-// are listed, so it never links to a 404: P2b ships Overview, and P5 adds
-// Email, Team, Projects and Chat to EXEC_TABS.
+// are listed, so it never links to a 404: P2b shipped Overview, P3 adds Email,
+// and later phases add Team, Projects and Chat to EXEC_TABS. The Email tab
+// shows even while email intelligence is off; its page says so.
 
 export interface ExecTab {
   key: string;
@@ -13,7 +14,10 @@ export interface ExecTab {
   label: string;
 }
 
-export const EXEC_TABS: readonly ExecTab[] = [{ key: "overview", href: "/executive", label: "Overview" }];
+export const EXEC_TABS: readonly ExecTab[] = [
+  { key: "overview", href: "/executive", label: "Overview" },
+  { key: "email", href: "/executive/email", label: "Email" }
+];
 
 export function ExecTabs({ active, tabs }: { active: string; tabs: readonly ExecTab[] }) {
   return (

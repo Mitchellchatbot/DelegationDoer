@@ -1,4 +1,5 @@
-import type { ExecOverview } from "@/lib/exec/overview";
+import type { ExecOverview, OverviewSection } from "@/lib/exec/overview";
+import { OverviewEmailSection } from "../email/OverviewEmailSection";
 import { EXEC_TABS, ExecTabs } from "../ExecTabs";
 import { ExecHeader } from "../ExecHeader";
 import { ApprovalsSection } from "./ApprovalsSection";
@@ -21,7 +22,16 @@ import { TodayGlance } from "./TodayGlance";
 export function OverviewView({ overview, principalTz }: { overview: ExecOverview; principalTz: string }) {
   const now = overview.generatedAt;
   const tz = principalTz;
-  const { tiles, attention, approvals, deadlines, projects, system } = overview.sections;
+  const { tiles, attention, approvals, deadlines, projects, system, email } = overview.sections;
+  // Email (P3): its card, the decision asks next to the approvals and the
+  // mail line on the System card appear only while email is on; off says so
+  // in the email card alone.
+  const emailOn = email.ok && email.data.state === "on" ? email.data : null;
+  const decisionAsks: OverviewSection<number> | null = emailOn
+    ? emailOn.counts.ok
+      ? { ok: true, data: emailOn.counts.data.decisionAsks }
+      : { ok: false, error: "unavailable" }
+    : null;
   return (
     <div className="space-y-5">
       <ExecHeader updatedAt={now} tz={tz} trailing={<ExecTabs active="overview" tabs={EXEC_TABS} />} />
@@ -30,8 +40,9 @@ export function OverviewView({ overview, principalTz }: { overview: ExecOverview
       <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
         <AttentionSection attention={attention} tz={tz} now={now} />
         <div className="flex min-w-0 flex-col gap-5">
-          <ApprovalsSection approvals={approvals} now={now} />
-          <SystemSection system={system} now={now} />
+          <ApprovalsSection approvals={approvals} now={now} decisionAsks={decisionAsks} />
+          <OverviewEmailSection email={email} tz={tz} now={now} />
+          <SystemSection system={system} now={now} mail={emailOn ? emailOn.mail : null} />
         </div>
       </div>
       <div className="grid items-start gap-5 lg:grid-cols-2">

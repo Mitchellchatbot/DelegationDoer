@@ -58,7 +58,9 @@ import { beforeAll, describe, expect, it } from "vitest";
 //     makes adding one a visible change, not a safe one.
 //   - Jobs. They carry a principal id and the runner loads that principal
 //     for the handler, so code that can enqueue a job can act for any
-//     principal.
+//     principal. jobs.ts's enqueueBacklogTriage(principalId, …) (P3, the
+//     mail hook's backlog path) is the same: it acts by principal id and
+//     loads the principal through jobs.ts's own trusted loader.
 
 const SRC = fileURLToPath(new URL("../../", import.meta.url));
 const ROOT = path.dirname(path.resolve(SRC));
@@ -420,6 +422,458 @@ function principalExports(sf: ts.SourceFile, checker: ts.TypeChecker, brand: Bra
     .map((exported) => exported.name);
 }
 
+// --- rules 6-9 (P3): exec code's mail boundary, read from the syntax tree ----------------
+//
+//   6. Exec code (src/lib/exec, src/components/exec, the /executive pages and the
+//      exec API routes) never imports the modules DD's own inbox, the legacy owner
+//      surfaces and the old mail pipelines live in, and never names the functions
+//      that fail open on restricted senders, publish bus events or write mail.
+//   7. Within exec code, only sources/mail.ts imports missive-client, and only
+//      mail-hook.ts imports the inbox bus and the socket bridge.
+//   8. The raw-id code is allow-listed: only principal.ts and mail-hook.ts name
+//      the exec_principals table, and only mail-hook.ts imports the raw-id writer
+//      putSyncStateByPrincipalId (and nothing takes sync-state.ts whole, which
+//      would hide the name).
+//   9. The email files never pass a subject, body, summary, address or evidence
+//      value to console.* or notifyOps(), and an email job handler never returns
+//      one. Names decide: a value whose name ends in a content word, or holds one
+//      and doesn't end in a count-like word (subjectLength, emailsEnqueued), is
+//      content. It is a guard on what code says, not a proof about values.
+
+const isExecCode = (p: string) =>
+  p.startsWith("src/lib/exec/") ||
+  p.startsWith("src/components/exec/") ||
+  p.startsWith("src/app/api/exec/") ||
+  p.startsWith("src/app/api/cron/exec-") ||
+  /^src\/app\/(?:[^/]+\/)*executive(?:\/|$)/.test(p);
+const isEmailFile = (p: string) => isExecCode(p) && /email|mail|triage|correlate|sync-state/i.test(p);
+const isEmailHandler = (p: string) => /^src\/lib\/exec\/handlers\/[^/]*(?:email|mail)[^/]*$/i.test(p);
+
+const BANNED_MODULES: ReadonlySet<string> = new Set(
+  [
+    "inbox-access",
+    "thread-detail",
+    "thread-cache",
+    "thread-read-state",
+    "inbox-drafts",
+    "message-body-cache",
+    "owner-inbox",
+    "ai-tools",
+    "daily-briefing-runner",
+    "scale-actions",
+    "client-email-slack",
+    "email-classifier",
+    "client-health",
+    "satisfaction-scoring"
+  ].map((m) => `src/lib/${m}`)
+);
+// Every @/lib/email-intake* and @/lib/email-notifications*, except the pure filters.
+const BANNED_MODULE_PREFIXES = ["src/lib/email-intake", "src/lib/email-notifications"];
+const ALLOWED_DESPITE_PREFIX: ReadonlySet<string> = new Set(["src/lib/email-intake-filters"]);
+const BANNED_SYMBOLS: ReadonlySet<string> = new Set([
+  "getRestrictedSenderRules",
+  "restrictionsFor",
+  "viewerIdsForAddresses",
+  "publish",
+  "sendReply",
+  "composeNewThread",
+  "createAccount",
+  "deleteAccount",
+  "rescanAllAccounts",
+  "applyLabel",
+  "createLabel"
+]);
+// module → the one exec file allowed to import it
+const ONLY_IMPORTER: ReadonlyMap<string, string> = new Map([
+  ["src/lib/missive-client", "src/lib/exec/sources/mail.ts"],
+  ["src/lib/inbox-event-bus", "src/lib/exec/mail-hook.ts"],
+  ["src/lib/missive-socket", "src/lib/exec/mail-hook.ts"]
+]);
+const MAIL_HOOK = "src/lib/exec/mail-hook.ts";
+const SYNC_STATE_MODULE = "src/lib/exec/sync-state";
+const SYNC_STATE_FILE = "src/lib/exec/sync-state.ts";
+const RAW_ID_WRITER = "putSyncStateByPrincipalId";
+const PRINCIPAL_TABLE = "exec_principals";
+const PRINCIPAL_TABLE_FILES: ReadonlySet<string> = new Set([PRINCIPAL_FILE, MAIL_HOOK]);
+
+function isBannedModule(target: string): boolean {
+  if (BANNED_MODULES.has(target)) return true;
+  if (ALLOWED_DESPITE_PREFIX.has(target)) return false;
+  return BANNED_MODULE_PREFIXES.some((prefix) => target.startsWith(prefix));
+}
+
+const CONTENT_WORDS: ReadonlySet<string> = new Set([
+  "subject",
+  "subjects",
+  "body",
+  "bodies",
+  "html",
+  "text",
+  "texts",
+  "snippet",
+  "snippets",
+  "summary",
+  "summaries",
+  "evidence",
+  "excerpt",
+  "excerpts",
+  "address",
+  "addresses",
+  "addr",
+  "addrs",
+  "email",
+  "emails",
+  "sender",
+  "senders",
+  "recipient",
+  "recipients",
+  "correspondent",
+  "correspondents",
+  "counterpart",
+  "counterparts",
+  "participant",
+  "participants",
+  "question",
+  "questions",
+  "transcript",
+  "preview",
+  "previews",
+  "content",
+  "contents"
+]);
+// Exact names that are address fields on a message (m.from, m.to, m.cc).
+const CONTENT_NAMES: ReadonlySet<string> = new Set(["from", "to", "cc", "bcc"]);
+// A name holding a content word but ending in one of these is about the content, not the content.
+const COUNT_WORDS: ReadonlySet<string> = new Set([
+  "length",
+  "size",
+  "count",
+  "counts",
+  "chars",
+  "bytes",
+  "id",
+  "ids",
+  "hash",
+  "hashes",
+  "kind",
+  "kinds",
+  "source",
+  "deferred",
+  "truncated",
+  "enabled",
+  "ready",
+  "state",
+  "states",
+  "status",
+  "verdict",
+  "at",
+  "ms",
+  "ok",
+  "present",
+  "missing",
+  "match",
+  "matched",
+  "matches",
+  "type",
+  "types",
+  "error",
+  "errors",
+  "reason",
+  "reasons",
+  "code",
+  "codes",
+  "version",
+  "key",
+  "keys",
+  "enqueued",
+  "skipped",
+  "written",
+  "sent",
+  "seen",
+  "total",
+  "totals",
+  "index",
+  "limit",
+  "max",
+  "min",
+  "policy",
+  "screened",
+  "flag",
+  "flags",
+  "flagged",
+  "known",
+  "valid",
+  "removed",
+  "changed"
+]);
+
+function nameWords(name: string): string[] {
+  return name
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
+    .split(/[^A-Za-z0-9]+/)
+    .filter(Boolean)
+    .map((w) => w.toLowerCase());
+}
+
+function isContentName(name: string): boolean {
+  if (CONTENT_NAMES.has(name.toLowerCase())) return true;
+  const words = nameWords(name);
+  if (words.length === 0) return false;
+  const last = words[words.length - 1];
+  if (CONTENT_WORDS.has(last)) return true;
+  return words.some((w) => CONTENT_WORDS.has(w)) && !COUNT_WORDS.has(last);
+}
+
+function propertyNameText(name: ts.PropertyName): string | null {
+  if (ts.isIdentifier(name) || ts.isPrivateIdentifier(name) || ts.isStringLiteralLike(name) || ts.isNumericLiteral(name)) return name.text;
+  return null;
+}
+
+/**
+ * Content-named values an expression would hand over: identifiers, property
+ * names, object keys. `x.length` / `x.size` only say how much, so they stop
+ * the walk. A call contributes its receiver and its arguments (not its own
+ * name); `onCall` sees every call, so a handler's return can be followed into
+ * the local function it delegates to.
+ */
+function contentRefs(root: ts.Node, onCall?: (call: ts.CallExpression) => void): string[] {
+  const found: string[] = [];
+  const visit = (n: ts.Node): void => {
+    if (ts.isTypeNode(n)) return;
+    if (ts.isPropertyAccessExpression(n)) {
+      if (n.name.text === "length" || n.name.text === "size") return;
+      if (isContentName(n.name.text)) found.push(n.name.text);
+      visit(n.expression);
+      return;
+    }
+    if (ts.isElementAccessExpression(n)) {
+      const arg = n.argumentExpression;
+      if (ts.isStringLiteralLike(arg)) {
+        if (isContentName(arg.text)) found.push(arg.text);
+      } else {
+        visit(arg);
+      }
+      visit(n.expression);
+      return;
+    }
+    if (ts.isIdentifier(n)) {
+      if (isContentName(n.text)) found.push(n.text);
+      return;
+    }
+    if (ts.isPropertyAssignment(n)) {
+      const key = propertyNameText(n.name);
+      if (key !== null && isContentName(key)) found.push(key);
+      visit(n.initializer);
+      return;
+    }
+    if (ts.isShorthandPropertyAssignment(n)) {
+      if (isContentName(n.name.text)) found.push(n.name.text);
+      return;
+    }
+    if (ts.isCallExpression(n)) {
+      onCall?.(n);
+      if (ts.isPropertyAccessExpression(n.expression)) visit(n.expression.expression);
+      else if (!ts.isIdentifier(n.expression)) visit(n.expression);
+      for (const arg of n.arguments) visit(arg);
+      return;
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(root);
+  return found;
+}
+
+function logCallee(call: ts.CallExpression): string | null {
+  const callee = call.expression;
+  if (ts.isPropertyAccessExpression(callee) && ts.isIdentifier(callee.expression) && callee.expression.text === "console") {
+    return `console.${callee.name.text}`;
+  }
+  if (ts.isIdentifier(callee) && callee.text === "notifyOps") return "notifyOps";
+  if (ts.isPropertyAccessExpression(callee) && callee.name.text === "notifyOps") return "notifyOps";
+  return null;
+}
+
+type FunctionNode = ts.FunctionDeclaration | ts.FunctionExpression | ts.ArrowFunction | ts.MethodDeclaration;
+const isFunctionNode = (n: ts.Node): n is FunctionNode =>
+  ts.isFunctionDeclaration(n) || ts.isFunctionExpression(n) || ts.isArrowFunction(n) || ts.isMethodDeclaration(n);
+
+/** The expressions a function returns, not counting functions nested inside it. */
+function returnedExpressions(fn: FunctionNode): ts.Expression[] {
+  if (ts.isArrowFunction(fn) && !ts.isBlock(fn.body)) return [fn.body];
+  const out: ts.Expression[] = [];
+  const visit = (n: ts.Node): void => {
+    if (n !== fn.body && ts.isFunctionLike(n)) return;
+    if (ts.isReturnStatement(n) && n.expression) out.push(n.expression);
+    ts.forEachChild(n, visit);
+  };
+  if (fn.body) visit(fn.body);
+  return out;
+}
+
+/**
+ * What a job handler in this file returns: the `run` of every object literal
+ * that has both `kind` and `run`, followed into the file's own functions it
+ * returns the result of (`run: (ctx) => runTriage(ctx)`).
+ */
+function handlerReturnOffenses(sf: ts.SourceFile): string[] {
+  const lineOf = (n: ts.Node) => sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1;
+  const locals = new Map<string, FunctionNode>();
+  const handlers: FunctionNode[] = [];
+  const collect = (n: ts.Node): void => {
+    if (ts.isFunctionDeclaration(n) && n.name) locals.set(n.name.text, n);
+    if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.initializer && (ts.isArrowFunction(n.initializer) || ts.isFunctionExpression(n.initializer))) {
+      locals.set(n.name.text, n.initializer);
+    }
+    if (ts.isObjectLiteralExpression(n)) {
+      const named = (key: string) => n.properties.find((p) => p.name !== undefined && propertyNameText(p.name) === key);
+      const run = named("run");
+      if (named("kind") && run) {
+        if (ts.isMethodDeclaration(run)) handlers.push(run);
+        else if (ts.isPropertyAssignment(run)) {
+          const init = run.initializer;
+          if (ts.isArrowFunction(init) || ts.isFunctionExpression(init)) handlers.push(init);
+          else if (ts.isIdentifier(init)) handlers.push(...(locals.has(init.text) ? [locals.get(init.text) as FunctionNode] : []));
+        } else if (ts.isShorthandPropertyAssignment(run) && locals.has("run")) handlers.push(locals.get("run") as FunctionNode);
+      }
+    }
+    ts.forEachChild(n, collect);
+  };
+  collect(sf);
+  // A `run: runTriage` declared after the handler object resolves on a second look.
+  collect(sf);
+
+  const offenses: string[] = [];
+  const seen = new Set<FunctionNode>();
+  const queue = [...new Set(handlers)];
+  while (queue.length > 0) {
+    const fn = queue.shift() as FunctionNode;
+    if (seen.has(fn)) continue;
+    seen.add(fn);
+    for (const expr of returnedExpressions(fn)) {
+      const names = contentRefs(expr, (call) => {
+        if (ts.isIdentifier(call.expression) && locals.has(call.expression.text)) queue.push(locals.get(call.expression.text) as FunctionNode);
+      });
+      if (names.length > 0) offenses.push(`${lineOf(expr)}: returns ${[...new Set(names)].join(", ")}`);
+    }
+  }
+  return [...new Set(offenses)];
+}
+
+interface ModuleRef {
+  /** Resolved path relative to the repo, without extension, lowercased. */
+  target: string;
+  line: number;
+  /** Original names imported or re-exported by name ("default" for a default import). */
+  names: string[];
+  /** Namespace import, export *, import(), require(), import type("…"). */
+  whole: boolean;
+}
+
+interface MailFacts {
+  modules: ModuleRef[];
+  /** "name:line" for every banned symbol named in code */
+  bannedSymbols: string[];
+  /** 1-based lines naming the exec_principals table in code */
+  principalTable: number[];
+  /** "line: callee(names)" for console.* / notifyOps calls handed content-named values */
+  contentLogs: string[];
+  /** "line: returns names" for a job handler returning content-named values */
+  contentReturns: string[];
+}
+
+function analyzeMail(sf: ts.SourceFile): MailFacts {
+  const lineOf = (n: ts.Node) => sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1;
+  const facts: MailFacts = { modules: [], bannedSymbols: [], principalTable: [], contentLogs: [], contentReturns: [] };
+  const addModule = (spec: string, node: ts.Node, names: string[], whole: boolean) => {
+    const abs = resolveSpecifier(sf.fileName, spec);
+    if (abs === null) return;
+    facts.modules.push({ target: relPath(stripExt(abs)).toLowerCase(), line: lineOf(node), names, whole });
+  };
+
+  const visit = (node: ts.Node): void => {
+    if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
+      const clause = node.importClause;
+      const bindings = clause?.namedBindings;
+      const names = [
+        ...(clause?.name ? ["default"] : []),
+        ...(bindings && ts.isNamedImports(bindings) ? bindings.elements.map((el) => (el.propertyName ?? el.name).text) : [])
+      ];
+      addModule(node.moduleSpecifier.text, node, names, !!bindings && ts.isNamespaceImport(bindings));
+    } else if (ts.isExportDeclaration(node) && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) {
+      const clause = node.exportClause;
+      const names = clause && ts.isNamedExports(clause) ? clause.elements.map((el) => (el.propertyName ?? el.name).text) : [];
+      addModule(node.moduleSpecifier.text, node, names, !clause || ts.isNamespaceExport(clause));
+    } else if (
+      ts.isImportEqualsDeclaration(node) &&
+      ts.isExternalModuleReference(node.moduleReference) &&
+      ts.isStringLiteral(node.moduleReference.expression)
+    ) {
+      addModule(node.moduleReference.expression.text, node, [], true);
+    } else if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument) && ts.isStringLiteral(node.argument.literal)) {
+      addModule(node.argument.literal.text, node, [], true);
+    } else if (ts.isCallExpression(node)) {
+      const callee = node.expression;
+      const isLoader = callee.kind === ts.SyntaxKind.ImportKeyword || (ts.isIdentifier(callee) && callee.text === "require");
+      const [arg] = node.arguments;
+      if (isLoader && arg && ts.isStringLiteralLike(arg)) addModule(arg.text, node, [], true);
+      const logged = logCallee(node);
+      if (logged) {
+        const names = node.arguments.flatMap((a) => contentRefs(a));
+        if (names.length > 0) facts.contentLogs.push(`${lineOf(node)}: ${logged}(${[...new Set(names)].join(", ")})`);
+      }
+    }
+
+    if (ts.isIdentifier(node) && BANNED_SYMBOLS.has(node.text)) facts.bannedSymbols.push(`${node.text}:${lineOf(node)}`);
+    if (ts.isElementAccessExpression(node) && ts.isStringLiteralLike(node.argumentExpression) && BANNED_SYMBOLS.has(node.argumentExpression.text)) {
+      facts.bannedSymbols.push(`${node.argumentExpression.text}:${lineOf(node)}`);
+    }
+    if ((ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) && node.text === PRINCIPAL_TABLE) {
+      // An import path that happens to spell it isn't a read of the table.
+      if (!ts.isImportDeclaration(node.parent) && !ts.isExportDeclaration(node.parent)) facts.principalTable.push(lineOf(node));
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  facts.contentReturns = handlerReturnOffenses(sf);
+  return facts;
+}
+
+/** Rule 6: banned modules and symbols, in exec code. */
+function bannedOffenses(file: string, f: MailFacts): string[] {
+  if (!isExecCode(file)) return [];
+  return [
+    ...f.modules.filter((m) => isBannedModule(m.target)).map((m) => `${file}:${m.line}: imports ${m.target}`),
+    ...f.bannedSymbols.map((at) => `${file}: names ${at}`)
+  ];
+}
+
+/** Rule 7: the one exec file allowed to import missive-client, the bus and the socket bridge. */
+function importerOffenses(file: string, f: MailFacts): string[] {
+  if (!isExecCode(file)) return [];
+  return f.modules
+    .filter((m) => ONLY_IMPORTER.has(m.target) && ONLY_IMPORTER.get(m.target) !== file)
+    .map((m) => `${file}:${m.line}: imports ${m.target} (only ${ONLY_IMPORTER.get(m.target)} may)`);
+}
+
+/** Rule 8: the raw-id allow-list, everywhere in src. */
+function rawIdOffenses(file: string, f: MailFacts): string[] {
+  const out: string[] = [];
+  for (const m of f.modules) {
+    if (m.target !== SYNC_STATE_MODULE || file === SYNC_STATE_FILE) continue;
+    if (m.whole) out.push(`${file}:${m.line}: takes sync-state.ts whole`);
+    if (m.names.includes(RAW_ID_WRITER) && file !== MAIL_HOOK) out.push(`${file}:${m.line}: imports ${RAW_ID_WRITER}`);
+  }
+  if (!PRINCIPAL_TABLE_FILES.has(file)) out.push(...f.principalTable.map((line) => `${file}:${line}: names ${PRINCIPAL_TABLE}`));
+  return out;
+}
+
+/** Rule 9: content in logs, ops alerts and handler returns, in the email files. */
+function contentOffenses(file: string, f: MailFacts): string[] {
+  if (!isEmailFile(file)) return [];
+  return [...f.contentLogs.map((at) => `${file}:${at}`), ...(isEmailHandler(file) ? f.contentReturns.map((at) => `${file}:${at}`) : [])];
+}
+
 // --- the program --------------------------------------------------------------------
 
 function compilerOptions(): ts.CompilerOptions {
@@ -458,6 +912,8 @@ interface FileFacts extends ImportFacts {
   mints: number[];
   /** 1-based lines holding a raw bidi control character (Trojan Source) */
   bidi: number[];
+  /** rules 6-9 */
+  mail: MailFacts;
 }
 
 interface Scan {
@@ -502,7 +958,12 @@ function scanTree(probes: ReadonlyMap<string, string>, exportProbes: readonly st
   const facts = new Map<string, FileFacts>();
   for (const abs of absFiles) {
     const sf = sourceOf(abs);
-    facts.set(relPath(abs), { ...analyzeImports(sf), mints: findMints(sf, checker, brand), bidi: bidiLines(sf.text) });
+    facts.set(relPath(abs), {
+      ...analyzeImports(sf),
+      mints: findMints(sf, checker, brand),
+      bidi: bidiLines(sf.text),
+      mail: analyzeMail(sf)
+    });
   }
   const trustedExports = new Map<string, string[]>();
   for (const file of LOADER_IMPORTERS) {
@@ -826,5 +1287,205 @@ describe("boundary detector: imports (rules 2, 3, 5)", () => {
     expect(tests('import { helper } from "@/lib/exec/jobs.test";')).toBe(1);
     expect(tests('const f = require("./__tests__/server-only-stub");')).toBe(1);
     expect(tests('import { x } from "./jobs";')).toBe(0);
+  });
+});
+
+// --- rules 6-9 (P3) ---------------------------------------------------------------------
+
+const p3Offenses = (check: (file: string, f: MailFacts) => string[]) =>
+  [...scan.facts].flatMap(([file, facts]) => check(file, facts.mail));
+
+describe("mail boundary (real source tree)", () => {
+  it("knows which files are exec code and which are email files", () => {
+    expect(isExecCode("src/lib/exec/sources/mail.ts")).toBe(true);
+    expect(isExecCode("src/components/exec/email/EmailFrame.tsx")).toBe(true);
+    expect(isExecCode("src/app/(main)/executive/email/page.tsx")).toBe(true);
+    expect(isExecCode("src/app/api/exec/email/threads/[threadId]/assess/route.ts")).toBe(true);
+    expect(isExecCode("src/app/api/cron/exec-tick/route.ts")).toBe(true);
+    expect(isExecCode("src/lib/missive-client.ts")).toBe(false);
+    expect(isExecCode("src/app/(main)/inboxes/page.tsx")).toBe(false);
+    expect(isEmailFile("src/lib/exec/sources/mail.ts")).toBe(true);
+    expect(isEmailFile("src/lib/exec/sync-state.ts")).toBe(true);
+    expect(isEmailFile("src/lib/exec/handlers/email-triage.ts")).toBe(true);
+    expect(isEmailFile("src/lib/exec/triage/email-text.ts")).toBe(true);
+    expect(isEmailFile("src/lib/exec/jobs.ts")).toBe(false);
+    expect(isEmailHandler("src/lib/exec/handlers/email-reconcile.ts")).toBe(true);
+    expect(isEmailHandler("src/lib/exec/handlers/dd-attention.ts")).toBe(false);
+    // The scan covers the P3 files that exist.
+    expect(scan.files).toContain("src/lib/exec/sources/mail.ts");
+    expect(scan.files).toContain(SYNC_STATE_FILE);
+  });
+
+  it("sees sources/mail.ts importing missive-client (the module detector works on real code)", () => {
+    expect(factsOf("src/lib/exec/sources/mail.ts").mail.modules.map((m) => m.target)).toContain("src/lib/missive-client");
+  });
+
+  it("exec code imports none of the banned modules and names none of the banned functions", () => {
+    expect(p3Offenses(bannedOffenses)).toEqual([]);
+  });
+
+  it("only sources/mail.ts imports missive-client; only mail-hook.ts imports the inbox bus and the socket bridge", () => {
+    expect(p3Offenses(importerOffenses)).toEqual([]);
+  });
+
+  it("the raw-id code is allow-listed: exec_principals in principal.ts and mail-hook.ts only, the raw-id writer in mail-hook.ts only", () => {
+    expect(factsOf(PRINCIPAL_FILE).mail.principalTable.length).toBeGreaterThan(0);
+    expect(p3Offenses(rawIdOffenses)).toEqual([]);
+  });
+
+  it("no email file logs, alerts or (from a job handler) returns a subject, body, summary, address or evidence value", () => {
+    expect(p3Offenses(contentOffenses)).toEqual([]);
+  });
+});
+
+describe("mail boundary detectors (rules 6-9)", () => {
+  const factsAt = (file: string, code: string) =>
+    analyzeMail(ts.createSourceFile(path.join(ROOT, file), code, ts.ScriptTarget.Latest, true, file.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS));
+  const EXEC_FILE = "src/lib/exec/handlers/email-triage.ts";
+  const banned = (code: string, file = EXEC_FILE) => bannedOffenses(file, factsAt(file, code));
+
+  it.each([
+    'import { visibleAccountIdsFor } from "@/lib/inbox-access";',
+    'import type { ThreadDetail } from "@/lib/thread-detail";',
+    'import * as owner from "@/lib/owner-inbox";',
+    'export { searchInbox } from "@/lib/ai-tools";',
+    'const m = await import("@/lib/client-email-slack");',
+    'const r = require("../../email-intake-runner");',
+    'import x = require("@/lib/email-intake");',
+    'import { fanOutInboxEvent } from "@/lib/email-notifications";',
+    'import "@/lib/email-notifications-bootstrap";',
+    'type T = import("@/lib/satisfaction-scoring").Score;',
+    'import { a } from "src/lib/thread-cache";',
+    'import { b } from "@/lib/message-body-cache.ts";'
+  ])("flags the banned module in %s", (code) => {
+    expect(banned(code)).toHaveLength(1);
+  });
+
+  it.each([
+    'import { looksAutomated } from "@/lib/email-intake-filters";',
+    'import { messagesMatch } from "@/lib/restricted-senders";',
+    'import { buildClientSignals } from "@/lib/client-thread-match";',
+    'import { getSupabaseAdmin } from "@/lib/supabase-admin";',
+    'import { thing } from "@/lib/inbox-access-extra";'
+  ])("does not flag %s", (code) => {
+    expect(banned(code)).toEqual([]);
+  });
+
+  it("only checks exec code for banned modules", () => {
+    expect(banned('import { visibleAccountIdsFor } from "@/lib/inbox-access";', "src/app/(main)/inboxes/layout.tsx")).toEqual([]);
+    expect(banned('import { visibleAccountIdsFor } from "@/lib/inbox-access";', "src/components/exec/email/List.tsx")).toHaveLength(1);
+    expect(banned('import { visibleAccountIdsFor } from "@/lib/inbox-access";', "src/app/(main)/executive/email/page.tsx")).toHaveLength(1);
+  });
+
+  it.each([
+    'import { restrictionsFor } from "@/lib/restricted-senders";',
+    'import { getRestrictedSenderRules as rules } from "@/lib/restricted-senders";',
+    'import { viewerIdsForAddresses } from "@/lib/restricted-senders";',
+    "bus.publish(event);",
+    'bus["publish"](event);',
+    'import { sendReply } from "@/lib/missive-client";',
+    "await client.composeNewThread(args);",
+    "createAccount(x);",
+    "deleteAccount(x);",
+    "rescanAllAccounts();",
+    "applyLabel(t, l);",
+    "createLabel(n);"
+  ])("flags the banned symbol in %s", (code) => {
+    expect(banned(code)).toHaveLength(1);
+  });
+
+  it("doesn't count banned names in comments or strings", () => {
+    expect(banned('// never call publish or restrictionsFor here\nconst s = "sendReply";')).toEqual([]);
+  });
+
+  it("allows missive-client only in sources/mail.ts, the bus and socket only in mail-hook.ts", () => {
+    const importers = (file: string, code: string) => importerOffenses(file, factsAt(file, code));
+    expect(importers("src/lib/exec/sources/mail.ts", 'import { getThread } from "@/lib/missive-client";')).toEqual([]);
+    expect(importers("src/lib/exec/handlers/email-triage.ts", 'import { getThread } from "@/lib/missive-client";')).toHaveLength(1);
+    expect(importers("src/lib/exec/handlers/email-triage.ts", 'import type { MissiveThread } from "../../missive-client";')).toHaveLength(1);
+    expect(importers("src/lib/exec/mail-hook.ts", 'import { subscribe } from "@/lib/inbox-event-bus";\nimport "@/lib/missive-socket";')).toEqual([]);
+    expect(importers("src/lib/exec/runtime.ts", 'import { subscribe } from "@/lib/inbox-event-bus";')).toHaveLength(1);
+    expect(importers("src/lib/exec/sources/mail.ts", 'import { startMissiveSocketBridge } from "@/lib/missive-socket";')).toHaveLength(1);
+    // Outside exec code these rules don't apply.
+    expect(importers("src/app/api/missive-webhook/route.ts", 'import { publish } from "@/lib/inbox-event-bus";')).toEqual([]);
+  });
+
+  it("allows the raw-id writer only in mail-hook.ts, and the exec_principals table only in principal.ts and mail-hook.ts", () => {
+    const raw = (file: string, code: string) => rawIdOffenses(file, factsAt(file, code));
+    const writer = 'import { putSyncStateByPrincipalId } from "@/lib/exec/sync-state";';
+    expect(raw(MAIL_HOOK, writer)).toEqual([]);
+    expect(raw("src/lib/exec/handlers/email-reconcile.ts", writer)).toHaveLength(1);
+    expect(raw("src/app/api/exec/x/route.ts", 'import { putSyncStateByPrincipalId as put } from "../../../../lib/exec/sync-state";')).toHaveLength(1);
+    expect(raw("src/lib/exec/handlers/email-reconcile.ts", 'export { putSyncStateByPrincipalId } from "./../sync-state";')).toHaveLength(1);
+    expect(raw("src/lib/exec/handlers/email-reconcile.ts", 'import * as state from "@/lib/exec/sync-state";')).toHaveLength(1);
+    expect(raw("src/lib/exec/handlers/email-reconcile.ts", 'const s = await import("@/lib/exec/sync-state");')).toHaveLength(1);
+    expect(raw("src/lib/exec/handlers/email-reconcile.ts", 'import { getSyncState, casSyncState } from "@/lib/exec/sync-state";')).toEqual([]);
+    const table = 'const { data } = await db.from("exec_principals").select("id");';
+    expect(raw(MAIL_HOOK, table)).toEqual([]);
+    expect(raw(PRINCIPAL_FILE, table)).toEqual([]);
+    expect(raw("src/lib/exec/handlers/email-reconcile.ts", table)).toHaveLength(1);
+    expect(raw("src/lib/some-dd-module.ts", "db.from(`exec_principals`);")).toHaveLength(1);
+    expect(raw("src/lib/exec/x.ts", 'const t = "exec_principals_audit";')).toEqual([]);
+  });
+
+  it.each([
+    "console.log(subject);",
+    "console.warn(`thread ${threadId}: ${t.his[0].subject}`);",
+    "console.error({ from: m.from });",
+    'console.info("x", { counterpartEmail });',
+    "console.log(row.summary.trim());",
+    "console.log(c.evidenceExcerpt);",
+    'console.log(m["bodyHtml"]);',
+    "console.debug(addrs.join());",
+    "console.log(t.his.map((m) => m.subject));",
+    "await notifyOps({ key: 'k', title: 'refused', detail: `${thread.subject}` });",
+    "void notifyOps({ key, title, detail: decisionQuestion });",
+    "console.log(senderAddress);"
+  ])("flags content handed to a log or ops alert: %s", (code) => {
+    expect(factsAt(EXEC_FILE, code).contentLogs).toHaveLength(1);
+  });
+
+  it.each([
+    "console.log(`thread ${threadId}`, { messageId, accountId, count: rows.length });",
+    "console.warn(subject.length, body.length, addresses.size);",
+    'console.log({ subjectLength: s.length, emailsEnqueued: 3, bodySource: "html", emailEnabled: true });',
+    "console.error(`[exec] ${describeErrorSafe(err)}`);",
+    'await notifyOps({ key: `triage-refusal:${principal.id}`, title: "triage refused", detail: `thread ${threadId} (${category})` });',
+    "console.log(windowFrom, windowTo);",
+    "console.warn(`${err.name}: ${err.message}`);",
+    "const subject = t.subject; doSomething(subject);"
+  ])("does not flag %s", (code) => {
+    expect(factsAt(EXEC_FILE, code).contentLogs).toEqual([]);
+  });
+
+  it("only checks the email files", () => {
+    expect(contentOffenses("src/lib/exec/jobs.ts", factsAt("src/lib/exec/jobs.ts", "console.log(subject);"))).toEqual([]);
+    expect(contentOffenses("src/lib/exec/sources/mail.ts", factsAt("src/lib/exec/sources/mail.ts", "console.log(subject);"))).toHaveLength(1);
+  });
+
+  it("flags a job handler returning content, directly or through a local function", () => {
+    const returns = (code: string) => factsAt(EXEC_FILE, code).contentReturns;
+    expect(returns('export const h = { kind: "exec.email-triage", lane: "bulk", timeoutMs: 1, run: async (ctx) => ({ subject: t.subject }) };')).toHaveLength(1);
+    expect(returns('export const h = { kind: K, run: async (ctx) => { if (x) return { skipped: "junk_only" }; return { summary }; } };')).toHaveLength(1);
+    expect(
+      returns(
+        'export const h = { kind: K, run: (ctx) => runTriage(ctx) };\n' +
+          "async function runTriage(ctx) { const r = await go(); return finish(r); }\n" +
+          "function finish(r) { return { triaged: 1, counterpart: r.counterpartEmail }; }"
+      )
+    ).toHaveLength(1);
+    expect(returns("export const h = { kind: K, run };\nasync function run(ctx) { return { evidence: c.evidenceExcerpt }; }")).toHaveLength(1);
+    expect(returns("export const h = { kind: K, async run(ctx) { return m.bodyText; } };")).toHaveLength(1);
+  });
+
+  it("does not flag handlers that return ids, counts and codes, or helpers that aren't the handler's return", () => {
+    const returns = (code: string) => factsAt(EXEC_FILE, code).contentReturns;
+    expect(
+      returns(
+        'export const h = { kind: K, lane: "bulk", timeoutMs: 1, run: async (ctx) => { const facts = buildFacts(t); await write(facts); return { triaged: 1, threadId, outcome: "triaged", emailsEnqueued: 2 }; } };\n' +
+          "function buildFacts(t) { return { subject: t.subject, correspondents: t.his.map((m) => m.from) }; }"
+      )
+    ).toEqual([]);
+    expect(returns("const config = { kind: 1, other: () => ({ subject }) };")).toEqual([]);
   });
 });

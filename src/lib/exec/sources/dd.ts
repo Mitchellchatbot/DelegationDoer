@@ -1,5 +1,6 @@
 import "server-only";
 
+import { addressMatches, type RestrictedSenderRule } from "@/lib/restricted-senders";
 import { addDaysToYmd, eodToday } from "@/lib/shift";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import type {
@@ -8,11 +9,14 @@ import type {
   ClientHealthLabel,
   DdActivity,
   DdClient,
+  DdClientMatchSignals,
+  DdClientMeeting,
   DdDepartment,
   DdEodNote,
   DdIncidentLog,
   DdProject,
   DdProjectStage,
+  DdSatisfactionSignal,
   DdSiteHealthAlert,
   DdStatusEntry,
   DdTask,
@@ -976,4 +980,233 @@ export async function getPendingApprovals(principal: ExecPrincipal, now: Date, o
     ),
     checkinBucket(etToday, signal)
   ]);
+}
+
+// ---------------------------------------------------------------------------
+// Email correlation and the email producers (P3, contract §3.12)
+// ---------------------------------------------------------------------------
+
+const MATCH_COLS = "id,name,status,website,websites,contact_emails,priority";
+
+interface MatchRow {
+  id: string;
+  name: string;
+  status: string | null;
+  website: string | null;
+  websites: string[] | null;
+  contact_emails: string[] | null;
+  priority: string | null;
+}
+
+const stringList = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
+
+/**
+ * Every client's match signals: exact contact addresses and website hosts
+ * (L14). DD's own loadClientMatcher reads the same columns unpaged, unordered
+ * and without an error check (an outage there reads as "no clients"); this
+ * read pages by id and throws instead. Inactive clients come back too, so the
+ * matcher can say why it skipped one; it keeps status null or "active".
+ */
+export async function listClientMatchSignals(principal: ExecPrincipal, opts: DdReadOptions = {}): Promise<DdClientMatchSignals[]> {
+  requirePrincipal(principal);
+  const rows = await pageAll<MatchRow>("clients", () => from("clients", MATCH_COLS), opts);
+  return rows.map((r) => ({
+    id: r.id,
+    name: r.name,
+    status: typeof r.status === "string" ? r.status : null,
+    website: typeof r.website === "string" ? r.website : null,
+    websites: stringList(r.websites),
+    contactEmails: stringList(r.contact_emails),
+    priority: typeof r.priority === "string" ? r.priority : null
+  }));
+}
+
+// satisfaction-scoring stores a reply it couldn't parse as a 75 with this
+// reason. It is no reading at all, and would pull every median toward
+// "steady", so it is never a signal (L13).
+const NO_SCORE_REASON = "(model returned no score)";
+// The reason column is never selected (it is model text about the client's
+// mail); it is only compared, here, inside the filter. The value is quoted
+// because PostgREST reserves the parentheses in a logic tree.
+const SCORED_REASON_FILTER = `reason.is.null,reason.neq."${NO_SCORE_REASON}"`;
+// email_satisfaction_scores has no id column: (message_id, client_id) is its key.
+const SATISFACTION_ORDER = ["message_id", "client_id"] as const;
+
+interface SatisfactionRow {
+  client_id: string | null;
+  satisfaction_score: number | string | null;
+  delivered_at: string | null;
+  scored_at: string | null;
+  from_address: string | null;
+  thread_id: string | null;
+}
+
+function isoOrNull(v: unknown): string | null {
+  return typeof v === "string" && Number.isFinite(Date.parse(v)) ? v : null;
+}
+
+/**
+ * Inbound satisfaction scores delivered since `sinceIso`, reduced to numbers
+ * (L13), company-wide: client, score, delivered and scored times.
+ *
+ * Screened here, before anything leaves: a row whose sender matches one of
+ * `rules` (the strict, applicable restricted-sender rules) or whose thread is
+ * one of his tombstones is dropped, and so is a row with no sender to screen.
+ * The sender and thread id are read for that and never returned; the subject
+ * and the model's reason are never read. Unparseable scores ("(model returned
+ * no score)") are left out. Throws DdReadError on a failed read.
+ */
+export async function listSatisfactionSignals(
+  principal: ExecPrincipal,
+  sinceIso: string,
+  screen: { rules: readonly RestrictedSenderRule[]; tombstonedThreadIds: ReadonlySet<string> | readonly string[] },
+  opts: DdReadOptions = {}
+): Promise<DdSatisfactionSignal[]> {
+  requirePrincipal(principal);
+  const since = isoParam("sinceIso", sinceIso);
+  if (!screen || !Array.isArray(screen.rules)) throw new TypeError("sources/dd: listSatisfactionSignals needs the restricted-sender rules");
+  const rules = [...screen.rules];
+  const tombstones = new Set(screen.tombstonedThreadIds);
+  const rows = await pageAll<SatisfactionRow>(
+    "email_satisfaction_scores",
+    () =>
+      from("email_satisfaction_scores", "client_id,satisfaction_score,delivered_at,scored_at,from_address,thread_id")
+        .eq("direction", "inbound")
+        .gte("delivered_at", since)
+        .or(SCORED_REASON_FILTER),
+    { ...opts, orderBy: SATISFACTION_ORDER }
+  );
+  const out: DdSatisfactionSignal[] = [];
+  for (const r of rows) {
+    const score = numOrNull(r.satisfaction_score);
+    const deliveredAt = isoOrNull(r.delivered_at);
+    const scoredAt = isoOrNull(r.scored_at);
+    if (typeof r.client_id !== "string" || !r.client_id || score === null || !Number.isFinite(score) || !deliveredAt || !scoredAt) continue;
+    // Fail closed: a row we can't screen is a row we don't use.
+    if (typeof r.from_address !== "string" || !r.from_address.includes("@")) continue;
+    if (typeof r.thread_id !== "string" || !r.thread_id || tombstones.has(r.thread_id)) continue;
+    if (addressMatches(r.from_address, rules) !== null) continue;
+    out.push({ clientId: r.client_id, score, deliveredAt, scoredAt });
+  }
+  return out;
+}
+
+const DAY_MS = 86_400_000;
+const LATEST_SCORED_LOOKBACK_DAYS = 30;
+
+/**
+ * When each client's newest usable inbound score was taken (max scored_at),
+ * among rows scored in the last `lookbackDays` (default 30): the freshness
+ * gate of the satisfaction producer (an item only for clients scored in the
+ * last 3 days) and the Email tab's "fresh for N of M" line. A client with no
+ * score in the lookback is absent. Numbers and times only; nothing is
+ * screened because nothing about the mail leaves. Throws on a failed read.
+ */
+export async function latestScoredInboundByClient(
+  principal: ExecPrincipal,
+  opts: DdReadOptions & { now?: Date; lookbackDays?: number } = {}
+): Promise<Map<string, string>> {
+  requirePrincipal(principal);
+  const now = opts.now ?? new Date();
+  if (!(now instanceof Date) || Number.isNaN(now.getTime())) throw new TypeError("sources/dd: now must be a valid Date");
+  const days = opts.lookbackDays ?? LATEST_SCORED_LOOKBACK_DAYS;
+  if (!Number.isFinite(days) || days <= 0 || days > 3_650) throw new TypeError("sources/dd: lookbackDays must be 1-3650");
+  const since = new Date(now.getTime() - days * DAY_MS).toISOString();
+  const rows = await pageAll<{ client_id: string | null; scored_at: string | null }>(
+    "email_satisfaction_scores",
+    () =>
+      from("email_satisfaction_scores", "client_id,scored_at").eq("direction", "inbound").gte("scored_at", since).or(SCORED_REASON_FILTER),
+    { signal: opts.signal, orderBy: SATISFACTION_ORDER }
+  );
+  const newest = new Map<string, { iso: string; ms: number }>();
+  for (const r of rows) {
+    const ms = typeof r.scored_at === "string" ? Date.parse(r.scored_at) : Number.NaN;
+    if (typeof r.client_id !== "string" || !r.client_id || !Number.isFinite(ms)) continue;
+    const seen = newest.get(r.client_id);
+    if (!seen || ms > seen.ms) newest.set(r.client_id, { iso: r.scored_at as string, ms });
+  }
+  return new Map([...newest].map(([clientId, v]) => [clientId, v.iso]));
+}
+
+const MAX_THREAD_ID = 200;
+
+function threadIdParam(threadId: string): string {
+  if (typeof threadId !== "string" || threadId.length === 0 || threadId.length > MAX_THREAD_ID || /[\x00-\x1f\x7f]/.test(threadId)) {
+    throw new TypeError("sources/dd: threadId is malformed");
+  }
+  return threadId;
+}
+
+// LIKE's own wildcards, escaped with its default escape character. PostgREST
+// also reads "*" as "%", which can only widen the match; the exact suffix is
+// re-checked on every row that comes back.
+const likeLiteral = (s: string) => s.replace(/[\\%_]/g, (c) => `\\${c}`);
+
+/**
+ * DD tasks linked to one clone thread (the thread page's "linked tasks"):
+ *   - tasks whose missive_thread_url ends with exactly "?thread=<id>" (the
+ *     URL email intake writes: missiveThreadUrl, encodeURIComponent'd id);
+ *   - the task email_intake_log recorded for the thread.
+ * DdTask columns only. Deleted tasks are left out; drafts stay (with isDraft),
+ * since an intake draft is the task the thread produced. Newest first.
+ * Throws on a failed read.
+ */
+export async function listTasksForThread(principal: ExecPrincipal, threadId: string, opts: DdReadOptions = {}): Promise<DdTask[]> {
+  requirePrincipal(principal);
+  const id = threadIdParam(threadId);
+  const suffix = `?thread=${encodeURIComponent(id)}`;
+  const byUrl = await pageAll<TaskRow & { missive_thread_url: string | null }>(
+    "tasks",
+    () => from("tasks", `${TASK_COLS},missive_thread_url`).like("missive_thread_url", `%${likeLiteral(suffix)}`),
+    opts
+  );
+  const tasks = new Map<string, DdTask>();
+  for (const r of byUrl) {
+    if (typeof r.missive_thread_url === "string" && r.missive_thread_url.endsWith(suffix)) tasks.set(r.id, taskFromRow(r));
+  }
+
+  const intake = await pageAll<{ thread_id: string; task_id: string | null }>(
+    "email_intake_log",
+    () => from("email_intake_log", "thread_id,task_id").eq("thread_id", id).not("task_id", "is", null),
+    { ...opts, orderBy: ["thread_id"] }
+  );
+  const missing = uniqueIds(intake.map((r) => r.task_id ?? "")).filter((taskId) => !tasks.has(taskId));
+  if (missing.length > 0) {
+    for (const t of await listTasksByIds(principal, missing, opts)) tasks.set(t.id, t);
+  }
+
+  return [...tasks.values()]
+    .filter((t) => t.deletedAt === null)
+    .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+}
+
+const MAX_MEETINGS = 50;
+
+/**
+ * A client's most recent meetings (id, title, when), newest first, at most
+ * `limit` (1-50). The transcript, summary and brief are never read. Throws on
+ * a failed read.
+ */
+export async function listClientMeetings(
+  principal: ExecPrincipal,
+  clientId: string,
+  limit: number,
+  opts: DdReadOptions = {}
+): Promise<DdClientMeeting[]> {
+  requirePrincipal(principal);
+  if (typeof clientId !== "string" || clientId.length === 0) throw new TypeError("sources/dd: clientId is required");
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_MEETINGS) throw new TypeError(`sources/dd: limit must be 1-${MAX_MEETINGS}`);
+  let query = from("client_meetings", "id,title,meeting_date")
+    .eq("client_id", clientId)
+    .order("meeting_date", { ascending: false })
+    .order("id", { ascending: false })
+    .limit(limit);
+  if (opts.signal) query = query.abortSignal(opts.signal);
+  const { data, error } = await query;
+  if (error) throw new DdReadError("client_meetings", error.message);
+  if (!Array.isArray(data)) throw new DdReadError("client_meetings", "the response carried no rows");
+  return (data as unknown as { id: unknown; title: unknown; meeting_date: unknown }[]).map((r) => {
+    if (typeof r.id !== "string" || typeof r.meeting_date !== "string") throw new DdReadError("client_meetings", "a row is malformed");
+    return { id: r.id, title: typeof r.title === "string" ? r.title : "", meetingAt: r.meeting_date };
+  });
 }

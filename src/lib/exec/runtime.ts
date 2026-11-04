@@ -2,8 +2,12 @@ import "server-only";
 
 import { isExecEnabled } from "@/lib/exec/access";
 import { ddAttentionJobHandler, ddAttentionScheduledWork } from "@/lib/exec/handlers/dd-attention";
+import { emailAttentionJobHandler, emailAttentionScheduledWork } from "@/lib/exec/handlers/email-attention";
+import { emailReconcileJobHandler, emailReconcileScheduledWork } from "@/lib/exec/handlers/email-reconcile";
+import { emailTriageJobHandler } from "@/lib/exec/handlers/email-triage";
 import { purgeJobHandler, purgeScheduledWork } from "@/lib/exec/handlers/purge";
 import { JOB_LANES, getJobHandler, registerJobHandler, runWorkerPass, type WorkerPassSummary } from "@/lib/exec/jobs";
+import { ensureMailHook, recordSocketHealth } from "@/lib/exec/mail-hook";
 import { getScheduledWork, registerScheduledWork, runSchedulerTick, type ScheduledWork } from "@/lib/exec/scheduler";
 import type { JobHandler, JobLane } from "@/lib/exec/types";
 
@@ -15,8 +19,17 @@ import type { JobHandler, JobLane } from "@/lib/exec/types";
 // during a deploy. That is safe: enqueues are deduped by key, claims are
 // leased, and the in-flight limits are shared process-wide (jobs.ts).
 
-const BUILT_IN_HANDLERS: readonly JobHandler[] = [purgeJobHandler, ddAttentionJobHandler];
-const BUILT_IN_SCHEDULE: readonly ScheduledWork[] = [purgeScheduledWork, ddAttentionScheduledWork];
+// P3 email intelligence: triage (event, reconcile, re-triage), reconcile
+// (every 5 minutes, only once email is installed and on) and the attention
+// pass (every 10 minutes, ungated: off resolves, not installed skips; L24).
+const BUILT_IN_HANDLERS: readonly JobHandler[] = [
+  purgeJobHandler,
+  ddAttentionJobHandler,
+  emailTriageJobHandler,
+  emailReconcileJobHandler,
+  emailAttentionJobHandler
+];
+const BUILT_IN_SCHEDULE: readonly ScheduledWork[] = [purgeScheduledWork, ddAttentionScheduledWork, emailReconcileScheduledWork, emailAttentionScheduledWork];
 
 // The cron route's whole run has to fit well inside its 60 s maxDuration.
 const MAX_CRON_BUDGET_MS = 45_000;
@@ -60,6 +73,14 @@ export function __resetExecRuntimeForTests(): void {
 export async function runExecWorkerTick(): Promise<string> {
   if (!isExecEnabled()) return "disabled";
   ensureExecRuntime();
+  // The mail hook (L19). Installed here and nowhere else: this tick runs in
+  // the instrumentation layer, whose inbox-bus copy the socket bridge
+  // publishes into. /api/cron/exec-tick runs in a route bundle whose bus
+  // copy only hears webhooks, and ensureExecRuntime's globalThis flag could
+  // let that copy claim the install first. Both calls never throw, and the
+  // health write is throttled to once a minute.
+  ensureMailHook();
+  recordSocketHealth();
 
   const claimed: Record<JobLane, number> = { interactive: 0, bulk: 0 };
   const failures: string[] = [];

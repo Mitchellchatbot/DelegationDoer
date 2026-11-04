@@ -11,6 +11,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const { refresh } = vi.hoisted(() => ({ refresh: vi.fn() }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh }) }));
 
+import EmailLoading from "@/app/(main)/executive/email/loading";
 import SegmentError from "@/app/(main)/executive/error";
 import OwnerSegmentLayout, * as layoutModule from "@/app/(main)/executive/layout";
 import Loading from "@/app/(main)/executive/loading";
@@ -31,7 +32,7 @@ beforeEach(() => {
 });
 
 describe("segment files that render before the gate", () => {
-  for (const file of ["layout.tsx", "loading.tsx", "error.tsx"]) {
+  for (const file of ["layout.tsx", "loading.tsx", "error.tsx", "email/loading.tsx"]) {
     it(`${file} never names the feature in its source`, () => {
       expect(source(file)).not.toMatch(FEATURE_WORDS);
     });
@@ -53,6 +54,17 @@ describe("segment files that render before the gate", () => {
     expect(out).toContain('aria-busy="true"');
     expect(out).toContain("dd-skeleton");
     expect(out).not.toMatch(FEATURE_WORDS);
+  });
+
+  it("the email list's loading is shapes only too (P3)", () => {
+    const out = renderToStaticMarkup(createElement(EmailLoading));
+    expect(textOf(out).trim()).toBe("");
+    expect(out).toContain('aria-busy="true"');
+    expect(out).toContain("dd-skeleton");
+    expect(out).not.toMatch(FEATURE_WORDS);
+    // It is only the shapes: no data, no awaits, no imports from the app.
+    const src = source("email/loading.tsx");
+    expect(src).not.toMatch(/\bawait\b|\basync\b|^import /m);
   });
 
   it("error is a client component with generic copy that never shows error.message", () => {
@@ -136,5 +148,25 @@ describe("exec kit source rules", () => {
       const src = readFileSync(path.join(KIT, file), "utf8");
       expect(src, file).not.toMatch(/^\s*["']use client["']/);
     }
+  });
+
+  it("keeps the email surfaces on the server except their three islands (P3)", () => {
+    const islands = filesUnder(path.join(KIT, "email"))
+      .filter((file) => /^\s*["']use client["']/.test(readFileSync(file, "utf8")))
+      .map((file) => path.basename(file))
+      .sort();
+    expect(islands).toEqual(["AssessButton.tsx", "BucketTabs.tsx", "EmailFrame.tsx"]);
+  });
+
+  it("never sets srcdoc from markup or adds allow-scripts to the email frame (P3)", () => {
+    const frame = readFileSync(path.join(KIT, "email", "EmailFrame.tsx"), "utf8");
+    // The code, without its line comments (which explain why allow-scripts is never there).
+    const code = frame
+      .split("\n")
+      .filter((line) => !line.trim().startsWith("//"))
+      .join("\n");
+    expect(code).not.toMatch(/srcDoc=/);
+    expect(code).not.toContain("allow-scripts");
+    expect(frame).toContain('EMAIL_FRAME_SANDBOX = "allow-popups allow-popups-to-escape-sandbox allow-same-origin"');
   });
 });

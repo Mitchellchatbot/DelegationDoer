@@ -54,11 +54,30 @@ export type ThreadLike = Pick<MissiveThread, "participants"> & {
 };
 export type MessageLike = Pick<MissiveMessage, "from_addr" | "to_addrs" | "cc_addrs">;
 
-interface RuleRow {
+/** A restricted_senders row as fetchRules selects it. */
+export interface RestrictedRuleRow {
   id: string;
   pattern: string;
   match_kind: string;
   label: string;
+}
+
+type RuleRow = RestrictedRuleRow;
+
+/**
+ * The one mapping from a restricted_senders row to a rule: the pattern is
+ * trimmed and lowercased, and any kind other than "exact" matches as
+ * "domain". Exported so a stricter loader (the exec assistant's, which must
+ * throw instead of failing open) builds exactly the rules fetchRules builds.
+ */
+export function ruleFromRow(r: RestrictedRuleRow, viewerUserIds: Set<string>): RestrictedSenderRule {
+  return {
+    id: r.id,
+    pattern: r.pattern.trim().toLowerCase(),
+    matchKind: r.match_kind === "exact" ? "exact" : "domain",
+    label: r.label,
+    viewerUserIds
+  };
 }
 
 // Best-effort load of the enabled rules + their viewers. See the fail-open
@@ -103,13 +122,7 @@ async function fetchRules(): Promise<RestrictedSenderRule[]> {
     set.add(v.user_id);
   }
 
-  return rows.map((r) => ({
-    id: r.id,
-    pattern: r.pattern.trim().toLowerCase(),
-    matchKind: r.match_kind === "exact" ? "exact" : "domain",
-    label: r.label,
-    viewerUserIds: viewersByRule.get(r.id) ?? new Set<string>()
-  }));
+  return rows.map((r) => ruleFromRow(r, viewersByRule.get(r.id) ?? new Set<string>()));
 }
 
 // Request-scoped memoization. Deliberately NOT unstable_cache: a deny rule
@@ -135,12 +148,24 @@ export const getRestrictedSenderRules: () => Promise<RestrictedSenderRule[]> =
 // A display name containing a comma ("Toledo, Lívia" <l@deel.com>) splits into
 // a junk fragment with no "@" (dropped) plus the fragment carrying the real
 // address — so the address is still found. Same trade-off toStringArray makes.
-function normalizeAddresses(addr: string | null | undefined): string[] {
+//
+// Exported (unchanged) so the exec assistant's stored screening hashes are
+// derived from exactly the addresses this module matches on.
+export function normalizeAddresses(addr: string | null | undefined): string[] {
   if (!addr) return [];
   return String(addr)
     .split(/[;,]/)
     .map((part) => rawEmail(part).trim().toLowerCase())
     .filter((e) => e.includes("@"));
+}
+
+/**
+ * The domain addressMatches compares a normalized address by: everything after
+ * the LAST "@", or "" when there is no "@" past the first character ("@x").
+ */
+export function addressDomain(email: string): string {
+  const at = email.lastIndexOf("@");
+  return at > 0 ? email.slice(at + 1) : "";
 }
 
 /**
@@ -153,8 +178,7 @@ export function addressMatches(
 ): RestrictedSenderRule | null {
   if (rules.length === 0) return null;
   for (const email of normalizeAddresses(addr)) {
-    const at = email.lastIndexOf("@");
-    const domain = at > 0 ? email.slice(at + 1) : "";
+    const domain = addressDomain(email);
     for (const r of rules) {
       if (r.matchKind === "exact") {
         if (email === r.pattern) return r;

@@ -26,10 +26,16 @@ function Freshness({ checkedAt, now }: { checkedAt: string | null; now: string }
 
 export function AttentionSection({ attention, tz, now }: { attention: OverviewSection<OverviewAttention>; tz: string; now: string }) {
   if (!attention.ok) return <SectionCard title="Needs attention" icon={BellRing} error />;
-  const { items, limit, checkedAt } = attention.data;
+  const { items, limit, checkedAt, emailUnchecked } = attention.data;
   const count = items.length >= limit ? `Top ${limit} by priority` : items.length > 0 ? pluralize(items.length, "item") : undefined;
   return (
     <SectionCard title="Needs attention" icon={BellRing} subtitle={<Freshness checkedAt={checkedAt} now={now} />} action={count} padded={false}>
+      {emailUnchecked && (
+        // Email items are hidden rather than shown unchecked: the restricted-sender check couldn't run (A2).
+        <p role="status" className="border-b border-amber-100 bg-amber-50 px-4 py-2 text-[12px] text-amber-900">
+          Email items are hidden right now: the check that keeps restricted senders out couldn&apos;t run. Reload to try again.
+        </p>
+      )}
       <AttentionFeed items={items} now={now} tz={tz} checkedAt={checkedAt} />
     </SectionCard>
   );

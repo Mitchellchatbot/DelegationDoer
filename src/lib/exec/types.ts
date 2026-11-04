@@ -58,6 +58,17 @@ export interface ExecSettings {
   retentionDaysEmail: number;
   retentionDaysChat: number;
   dailyCostCapUsd: number;
+  /**
+   * exec_settings.email_enabled (P3, L1). Email work runs only when this,
+   * emailSchemaReady, EXEC_ENABLED and a non-empty mail pin all hold.
+   */
+  emailEnabled: boolean;
+  /**
+   * The P3 migration is applied: the settings read found the email_enabled
+   * column. False means P3 code is running ahead of its hand-applied
+   * migration, so every email path skips instead of failing (L1).
+   */
+  emailSchemaReady: boolean;
 }
 
 // ---------------------------------------------------------------------------

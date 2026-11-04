@@ -4,6 +4,7 @@ import { formatCount } from "@/lib/exec/format";
 import type { OverviewApprovals, OverviewSection } from "@/lib/exec/overview";
 import type { ApprovalBucket, ApprovalMechanism } from "@/lib/exec/sources/dd-types";
 import { cn } from "@/lib/utils";
+import { BasisLabel } from "../BasisLabel";
 import { SectionCard } from "../SectionCard";
 import { ago } from "./labels";
 
@@ -67,22 +68,78 @@ function ApprovalRow({ bucket, now }: { bucket: ApprovalBucket; now: string }) {
   );
 }
 
-export function ApprovalsSection({ approvals, now }: { approvals: OverviewSection<OverviewApprovals>; now: string }) {
+/**
+ * The decisions his email asks of him (P3, while email is on): an AI
+ * reading, so it is labeled as one and kept out of the approval total.
+ */
+function DecisionAsksRow({ decisionAsks }: { decisionAsks: OverviewSection<number> }) {
+  return (
+    <li className="flex items-center gap-3 border-t border-slate-100 px-4 py-2.5">
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="text-[13px] font-medium text-ink">Decisions asked by email</span>
+          <BasisLabel basis="ai" />
+        </div>
+        <div className="mt-0.5 text-[11.5px] text-muted">
+          {decisionAsks.ok ? (
+            <Link href="/executive/email" prefetch={false} className="font-medium text-accent underline-offset-2 hover:underline">
+              Email
+            </Link>
+          ) : (
+            <span className="font-medium text-amber-700">Couldn&apos;t load</span>
+          )}
+        </div>
+      </div>
+      <span className="shrink-0 text-[16px] font-semibold tabular-nums text-ink">{decisionAsks.ok ? formatCount(decisionAsks.data) : "—"}</span>
+    </li>
+  );
+}
+
+export function ApprovalsSection({
+  approvals,
+  now,
+  decisionAsks = null
+}: {
+  approvals: OverviewSection<OverviewApprovals>;
+  now: string;
+  /** Email decision asks, while email is on; null otherwise. */
+  decisionAsks?: OverviewSection<number> | null;
+}) {
   if (!approvals.ok) return <SectionCard title="Pending approvals" icon={ClipboardCheck} error />;
   const { buckets, total } = approvals.data;
+  if (decisionAsks === null) {
+    return (
+      <SectionCard
+        title="Pending approvals"
+        icon={ClipboardCheck}
+        basis="record"
+        action={`${formatCount(total)} waiting`}
+        empty={total === 0 ? "Nothing is waiting on an approval." : undefined}
+        padded={false}
+      >
+        <ul className="divide-y divide-slate-100">
+          {buckets.map((bucket) => (
+            <ApprovalRow key={bucket.mechanism} bucket={bucket} now={now} />
+          ))}
+        </ul>
+      </SectionCard>
+    );
+  }
+  // With email on, the decision asks sit under the approvals, so the card
+  // keeps its body even when no approval waits.
   return (
-    <SectionCard
-      title="Pending approvals"
-      icon={ClipboardCheck}
-      basis="record"
-      action={`${formatCount(total)} waiting`}
-      empty={total === 0 ? "Nothing is waiting on an approval." : undefined}
-      padded={false}
-    >
-      <ul className="divide-y divide-slate-100">
-        {buckets.map((bucket) => (
-          <ApprovalRow key={bucket.mechanism} bucket={bucket} now={now} />
-        ))}
+    <SectionCard title="Pending approvals" icon={ClipboardCheck} basis="record" action={`${formatCount(total)} waiting`} padded={false}>
+      {total === 0 ? (
+        <p className="px-4 py-4 text-center text-[13px] font-medium text-slate-600">Nothing is waiting on an approval.</p>
+      ) : (
+        <ul className="divide-y divide-slate-100">
+          {buckets.map((bucket) => (
+            <ApprovalRow key={bucket.mechanism} bucket={bucket} now={now} />
+          ))}
+        </ul>
+      )}
+      <ul>
+        <DecisionAsksRow decisionAsks={decisionAsks} />
       </ul>
     </SectionCard>
   );

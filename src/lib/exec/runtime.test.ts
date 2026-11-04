@@ -8,13 +8,33 @@ vi.mock("@/lib/exec/principal", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/exec/principal")>();
   return { ...actual, listEnabledPrincipals: vi.fn(), loadSettings: vi.fn(), loadPrincipalById: vi.fn() };
 });
+// The mail hook has its own suite (mail-hook.test.ts); here we only see where it is installed.
+vi.mock("@/lib/exec/mail-hook", () => ({ ensureMailHook: vi.fn(), recordSocketHealth: vi.fn() }));
+// P3's email retention step has its own suites (email-store, purge); here it finds nothing to delete.
+vi.mock("@/lib/exec/email-store", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/exec/email-store")>();
+  return { ...actual, purgeExpiredEmailRows: vi.fn() };
+});
 
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { listEnabledPrincipals, loadPrincipalById, loadSettings, principalFromRows, settingsFromRow } from "@/lib/exec/principal";
 import { createFakeExecDb, jobRow, type FakeExecDb } from "@/lib/exec/__tests__/fake-exec-db";
+import { purgeExpiredEmailRows } from "@/lib/exec/email-store";
 import { DD_ATTENTION_JOB_KIND, ddAttentionJobHandler, ddAttentionScheduledWork } from "@/lib/exec/handlers/dd-attention";
+import { emailAttentionJobHandler, emailAttentionScheduledWork } from "@/lib/exec/handlers/email-attention";
+import { emailReconcileJobHandler, emailReconcileScheduledWork } from "@/lib/exec/handlers/email-reconcile";
+import { emailTriageJobHandler } from "@/lib/exec/handlers/email-triage";
 import { PURGE_JOB_KIND, RETENTION_DAYS, purgeJobHandler, purgeScheduledWork, runPurge } from "@/lib/exec/handlers/purge";
-import { __resetJobsForTests, getJobHandler, jobsInFlight, registerJobHandler } from "@/lib/exec/jobs";
+import {
+  EMAIL_ATTENTION_JOB_KIND,
+  EMAIL_RECONCILE_JOB_KIND,
+  EMAIL_TRIAGE_JOB_KIND,
+  __resetJobsForTests,
+  getJobHandler,
+  jobsInFlight,
+  registerJobHandler
+} from "@/lib/exec/jobs";
+import { ensureMailHook, recordSocketHealth } from "@/lib/exec/mail-hook";
 import { __resetSchedulerForTests, dueDedupeKey, getScheduledWork, listScheduledWork, registerScheduledWork } from "@/lib/exec/scheduler";
 import {
   __resetExecRuntimeForTests,
@@ -41,6 +61,7 @@ const principal: ExecPrincipal = (() => {
 const NOW = new Date("2026-11-04T12:00:00.000Z"); // 07:00 EST
 const DAY_MS = 86_400_000;
 const isoDaysBefore = (days: number) => new Date(NOW.getTime() - days * DAY_MS).toISOString();
+const NO_EMAIL_PURGED = { emailThreads: 0, emailCommitments: 0, emailSignals: 0, emailAttentionRows: 0 };
 
 function resetAll(): void {
   __resetExecRuntimeForTests();
@@ -55,6 +76,7 @@ beforeEach(() => {
   vi.mocked(listEnabledPrincipals).mockResolvedValue([]);
   vi.mocked(loadSettings).mockImplementation(async (id: string) => settingsFromRow(null, id));
   vi.mocked(loadPrincipalById).mockResolvedValue(principal);
+  vi.mocked(purgeExpiredEmailRows).mockResolvedValue({ threads: 0, commitments: 0, attentionRows: 0, signals: 0 });
   vi.spyOn(console, "log").mockImplementation(() => {});
   vi.spyOn(console, "warn").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
@@ -86,6 +108,8 @@ describe("while EXEC_ENABLED is not 'true'", () => {
   });
 });
 
+const ALL_SCHEDULES = [purgeScheduledWork, ddAttentionScheduledWork, emailReconcileScheduledWork, emailAttentionScheduledWork];
+
 describe("ensureExecRuntime", () => {
   it("registers the built-in handlers and schedules once, however often it's called", () => {
     ensureExecRuntime();
@@ -94,7 +118,27 @@ describe("ensureExecRuntime", () => {
     expect(getJobHandler(DD_ATTENTION_JOB_KIND)).toBe(ddAttentionJobHandler);
     expect(getScheduledWork(PURGE_JOB_KIND)).toBe(purgeScheduledWork);
     expect(getScheduledWork(DD_ATTENTION_JOB_KIND)).toBe(ddAttentionScheduledWork);
-    expect(listScheduledWork()).toEqual([purgeScheduledWork, ddAttentionScheduledWork]);
+    expect(listScheduledWork()).toEqual(ALL_SCHEDULES);
+  });
+
+  it("registers the three email kinds (P3) and their two schedules", () => {
+    ensureExecRuntime();
+    expect(getJobHandler(EMAIL_TRIAGE_JOB_KIND)).toBe(emailTriageJobHandler);
+    expect(getJobHandler(EMAIL_RECONCILE_JOB_KIND)).toBe(emailReconcileJobHandler);
+    expect(getJobHandler(EMAIL_ATTENTION_JOB_KIND)).toBe(emailAttentionJobHandler);
+    expect(emailTriageJobHandler).toMatchObject({ kind: "exec.email-triage", timeoutMs: 120_000 });
+    expect(emailReconcileJobHandler).toMatchObject({ kind: "exec.email-reconcile", lane: "bulk", timeoutMs: 240_000 });
+    expect(emailAttentionJobHandler).toMatchObject({ kind: "exec.email-attention", timeoutMs: 120_000 });
+    // Reconcile: every 5 minutes, bulk, 3 attempts, only once email is installed and on.
+    expect(getScheduledWork(EMAIL_RECONCILE_JOB_KIND)).toMatchObject({ lane: "bulk", cadence: { kind: "interval", minutes: 5 }, maxAttempts: 3 });
+    const gate = emailReconcileScheduledWork.enabled as (s: ReturnType<typeof settingsFromRow>) => boolean;
+    const base = settingsFromRow(null, "ep_1");
+    expect(gate({ ...base, emailEnabled: true, emailSchemaReady: true })).toBe(true);
+    expect(gate({ ...base, emailEnabled: true, emailSchemaReady: false })).toBe(false);
+    expect(gate({ ...base, emailEnabled: false, emailSchemaReady: true })).toBe(false);
+    // Attention: every 10 minutes, bulk, 3 attempts, ungated (L24).
+    expect(getScheduledWork(EMAIL_ATTENTION_JOB_KIND)).toMatchObject({ lane: "bulk", cadence: { kind: "interval", minutes: 10 }, maxAttempts: 3 });
+    expect(emailAttentionScheduledWork.enabled).toBeUndefined();
   });
 
   it("tolerates a kind another copy of the module already registered", () => {
@@ -107,7 +151,7 @@ describe("ensureExecRuntime", () => {
   it("tolerates a schedule that is already registered", () => {
     registerScheduledWork(purgeScheduledWork);
     expect(() => ensureExecRuntime()).not.toThrow();
-    expect(listScheduledWork()).toEqual([purgeScheduledWork, ddAttentionScheduledWork]);
+    expect(listScheduledWork()).toEqual(ALL_SCHEDULES);
     expect(getJobHandler(PURGE_JOB_KIND)).toBe(purgeJobHandler);
   });
 
@@ -160,17 +204,42 @@ describe("runExecWorkerTick", () => {
   });
 });
 
+describe("the mail hook's placement (L19)", () => {
+  it("is installed, and socket health recorded, by the worker tick (the instrumentation layer)", async () => {
+    vi.stubEnv("EXEC_ENABLED", "true");
+    await runExecWorkerTick();
+    expect(ensureMailHook).toHaveBeenCalledTimes(1);
+    expect(recordSocketHealth).toHaveBeenCalledTimes(1);
+  });
+
+  it("is never installed by the cron route's tick or the scheduler tick", async () => {
+    vi.stubEnv("EXEC_ENABLED", "true");
+    await runExecTickForCron(1_000);
+    await runExecSchedulerTick();
+    ensureExecRuntime();
+    expect(ensureMailHook).not.toHaveBeenCalled();
+    expect(recordSocketHealth).not.toHaveBeenCalled();
+  });
+
+  it("is not installed while EXEC_ENABLED is off", async () => {
+    vi.stubEnv("EXEC_ENABLED", "false");
+    await runExecWorkerTick();
+    expect(ensureMailHook).not.toHaveBeenCalled();
+  });
+});
+
 describe("runExecSchedulerTick", () => {
   beforeEach(() => {
     vi.stubEnv("EXEC_ENABLED", "true");
     vi.useFakeTimers({ toFake: ["Date"] });
   });
 
-  it("enqueues only the 10-minute DD refresh before the purge's time, and is idle on a repeat in the same bucket", async () => {
+  it("enqueues only the 10-minute DD and email-attention refreshes before the purge's time, and is idle on a repeat in the same bucket", async () => {
     const at = new Date("2026-11-04T07:00:00Z"); // 02:00 EST, before the 03:30 purge
     vi.setSystemTime(at);
     vi.mocked(listEnabledPrincipals).mockResolvedValue([principal]);
-    await expect(runExecSchedulerTick()).resolves.toBe("principals=1 enqueued=1 reaped=0");
+    // Email is off (the default settings): the attention pass still runs (L24), reconcile doesn't.
+    await expect(runExecSchedulerTick()).resolves.toBe("principals=1 enqueued=2 reaped=0");
     expect(db.upserts.map((u) => u.row)).toEqual([
       {
         kind: DD_ATTENTION_JOB_KIND,
@@ -178,6 +247,14 @@ describe("runExecSchedulerTick", () => {
         principal_id: "ep_1",
         payload: {},
         dedupe_key: `exec.dd-attention:ep_1:i${intervalBucket(at, 10)}`,
+        max_attempts: 3
+      },
+      {
+        kind: EMAIL_ATTENTION_JOB_KIND,
+        lane: "bulk",
+        principal_id: "ep_1",
+        payload: {},
+        dedupe_key: `exec.email-attention:ep_1:i${intervalBucket(at, 10)}`,
         max_attempts: 3
       }
     ]);
@@ -188,6 +265,22 @@ describe("runExecSchedulerTick", () => {
     await expect(runExecSchedulerTick()).resolves.toBe("idle");
   });
 
+  it("enqueues the 5-minute email reconcile once email is installed and on", async () => {
+    const at = new Date("2026-11-04T07:00:00Z");
+    vi.setSystemTime(at);
+    vi.mocked(listEnabledPrincipals).mockResolvedValue([principal]);
+    vi.mocked(loadSettings).mockImplementation(async (id: string) => ({ ...settingsFromRow(null, id), emailEnabled: true, emailSchemaReady: true }));
+    await runExecSchedulerTick();
+    expect(db.upserts.map((u) => u.row).find((r) => r.kind === EMAIL_RECONCILE_JOB_KIND)).toEqual({
+      kind: EMAIL_RECONCILE_JOB_KIND,
+      lane: "bulk",
+      principal_id: "ep_1",
+      payload: {},
+      dedupe_key: `exec.email-reconcile:ep_1:i${intervalBucket(at, 5)}`,
+      max_attempts: 3
+    });
+  });
+
   it("enqueues the daily purge once its local time has passed, deduped by local date", async () => {
     vi.mocked(listEnabledPrincipals).mockResolvedValue([principal]);
     const purges = () => db.upserts.filter((u) => u.row.kind === PURGE_JOB_KIND);
@@ -196,9 +289,9 @@ describe("runExecSchedulerTick", () => {
     await runExecSchedulerTick();
     expect(purges()).toEqual([]);
 
-    // The purge, plus the DD refresh of a new 10-minute bucket.
+    // The purge, plus the DD and email-attention refreshes of a new 10-minute bucket.
     vi.setSystemTime(new Date("2026-11-04T08:30:00Z")); // 03:30 EST
-    await expect(runExecSchedulerTick()).resolves.toBe("principals=1 enqueued=2 reaped=0");
+    await expect(runExecSchedulerTick()).resolves.toBe("principals=1 enqueued=3 reaped=0");
     expect(purges().map((u) => u.row)).toEqual([
       { kind: PURGE_JOB_KIND, lane: "bulk", principal_id: "ep_1", payload: {}, dedupe_key: "exec.purge:ep_1:2026-11-04" }
     ]);
@@ -270,7 +363,7 @@ describe("runExecTickForCron", () => {
     expect(db.callsTo("exec_finish_job")).toEqual([
       expect.objectContaining({
         p_outcome: "succeeded",
-        p_result: { finishedJobs: 5, accessLog: 1, auditLog: 1, aiUsage: 1, resolvedAttention: 1 }
+        p_result: { finishedJobs: 5, accessLog: 1, auditLog: 1, aiUsage: 1, resolvedAttention: 1, ...NO_EMAIL_PURGED }
       })
     ]);
   });
@@ -350,7 +443,7 @@ describe("exec.purge", () => {
     db.deleteResult = (d) => ({ count: counts[d.table], error: null });
     const signal = new AbortController().signal;
 
-    await expect(runPurge(signal)).resolves.toEqual({ finishedJobs: 7, accessLog: 30, auditLog: 2, aiUsage: 11, resolvedAttention: 4 });
+    await expect(runPurge(signal)).resolves.toEqual({ finishedJobs: 7, accessLog: 30, auditLog: 2, aiUsage: 11, resolvedAttention: 4, ...NO_EMAIL_PURGED });
 
     expect(db.deletes).toEqual([
       {
@@ -380,7 +473,8 @@ describe("exec.purge", () => {
       }
     ]);
     expect(console.log).toHaveBeenCalledWith(
-      "[exec-purge] deleted finishedJobs=7 accessLog=30 auditLog=2 aiUsage=11 resolvedAttention=4"
+      "[exec-purge] deleted finishedJobs=7 accessLog=30 auditLog=2 aiUsage=11 resolvedAttention=4 " +
+        "emailThreads=0 emailCommitments=0 emailSignals=0 emailAttentionRows=0"
     );
   });
 
@@ -412,7 +506,7 @@ describe("exec.purge", () => {
   it("runs every step even when one fails, then fails the run", async () => {
     db.deleteResult = (d) =>
       d.table === "exec_access_log" ? { count: null, error: { message: "statement timeout" } } : { count: 1, error: null };
-    await expect(runPurge()).rejects.toThrow("exec.purge: 1 of 5 steps failed: accessLog: exec_access_log purge failed: statement timeout");
+    await expect(runPurge()).rejects.toThrow("exec.purge: 1 of 6 steps failed: accessLog: exec_access_log purge failed: statement timeout");
     expect(db.deletes.map((d) => d.table)).toEqual([
       "exec_jobs",
       "exec_access_log",
@@ -427,7 +521,7 @@ describe("exec.purge", () => {
     db.deleteResult = (d) =>
       d.table === "exec_attention_items" ? { count: null, error: { message: "permission denied" } } : { count: 2, error: null };
     await expect(runPurge()).rejects.toThrow(
-      "exec.purge: 1 of 5 steps failed: resolvedAttention: exec_attention_items purge failed: permission denied"
+      "exec.purge: 1 of 6 steps failed: resolvedAttention: exec_attention_items purge failed: permission denied"
     );
     expect(db.deletes.map((d) => d.table)).toEqual([
       "exec_jobs",
@@ -437,7 +531,8 @@ describe("exec.purge", () => {
       "exec_attention_items"
     ]);
     expect(console.log).toHaveBeenCalledWith(
-      "[exec-purge] deleted finishedJobs=2 accessLog=2 auditLog=2 aiUsage=2 resolvedAttention=0 failed=1"
+      "[exec-purge] deleted finishedJobs=2 accessLog=2 auditLog=2 aiUsage=2 resolvedAttention=0 " +
+        "emailThreads=0 emailCommitments=0 emailSignals=0 emailAttentionRows=0 failed=1"
     );
   });
 
@@ -466,7 +561,8 @@ describe("exec.purge", () => {
       accessLog: 0,
       auditLog: 0,
       aiUsage: 0,
-      resolvedAttention: 0
+      resolvedAttention: 0,
+      ...NO_EMAIL_PURGED
     });
     expect(db.deletes.every((d) => d.signal === controller.signal)).toBe(true);
   });

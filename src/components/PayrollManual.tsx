@@ -62,7 +62,7 @@ export function PayrollManual({ initial }: { initial: PayrollEntry[] }) {
       else if (r.status === "owner-draw") { drawMo += monthlyOf(r); }
       else otherCount++;
     }
-    return { activeMo, activeCount, otherCount, drawMo, fbMo };
+    return { activeMo, activeCount, otherCount, drawMo, fbMo, fullMo: activeMo + drawMo };
   }, [rows]);
 
   async function patch(id: string, field: Partial<PayrollEntry>) {
@@ -116,10 +116,15 @@ export function PayrollManual({ initial }: { initial: PayrollEntry[] }) {
           <div className="text-right">
             <div className="text-2xl font-bold tabular-nums text-ink leading-none">{money(totals.activeMo)}<span className="text-[12px] font-medium text-muted">/mo</span></div>
             <div className="text-[10px] text-muted mt-0.5">
-              {totals.activeCount} active · {money(totals.activeMo * 12)}/yr{totals.otherCount ? ` · ${totals.otherCount} inactive/pending` : ""}
+              {totals.activeCount} active team · {money(totals.activeMo * 12)}/yr{totals.otherCount ? ` · ${totals.otherCount} inactive/pending` : ""}
               {totals.fbMo > 0 && <> · <span className="text-blue-600">{money(totals.fbMo)}/mo Facebook</span></>}
-              {totals.drawMo > 0 && <> · <span className="text-violet-600">+{money(totals.drawMo)}/mo owner draw</span></>}
             </div>
+            {totals.drawMo > 0 && (
+              <div className="text-[11px] text-slate-600 mt-1 font-medium">
+                Full payroll: <span className="tabular-nums font-bold text-ink">{money(totals.fullMo)}/mo</span>
+                <span className="text-[10px] text-muted font-normal"> (team + your {money(totals.drawMo)} draw)</span>
+              </div>
+            )}
           </div>
           <button
             type="button"

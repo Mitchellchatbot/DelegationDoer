@@ -14,6 +14,10 @@ import {
   type BucketRow
 } from "@/lib/exec/email-store";
 import { buildEmailSrcdoc } from "@/lib/exec/email-srcdoc";
+import { listDraftItems } from "@/lib/exec/drafts";
+import { draftPageHref, draftReplyHref } from "@/lib/exec/drafts-links";
+import { countDraftsForCard, getActiveDraftForThread } from "@/lib/exec/drafts-store";
+import type { DraftListItem, ExecDraftStatus } from "@/lib/exec/drafts-types";
 import type {
   AnsweredState,
   ClientMatchVia,
@@ -432,6 +436,8 @@ export interface EmailRowView {
   lastAttemptError: LastAttemptError | null;
   /** Filtered, failed or deferred, on a mailbox triage can read: Assess can run the model on it. */
   assessable: boolean;
+  /** P4 (L15): the thread's active assistant draft, for the list chip. Absent when there is none. */
+  execDraft?: { id: string; status: ExecDraftStatus };
 }
 
 const ASSESSABLE: ReadonlySet<EmailThreadState> = new Set<EmailThreadState>(["filtered", "triage_failed", "deferred_budget"]);
@@ -485,7 +491,9 @@ export function rowView(
     filterReason: row.filterReason,
     triageError: row.triageError,
     lastAttemptError: row.lastAttemptError,
-    assessable: isAssessableState(row.state) && opts.accountUsable !== false
+    assessable: isAssessableState(row.state) && opts.accountUsable !== false,
+    // Chips only (C73): set when the exec artifacts named an active draft for this thread.
+    ...(artifacts?.execDraft ? { execDraft: { id: artifacts.execDraft.id, status: artifacts.execDraft.status } } : {})
   };
 }
 
@@ -763,6 +771,23 @@ export interface EmailCommitmentsView {
 export interface EmailDraftsView {
   draftsPending: number;
   scheduledReplies: number;
+  /** P4 (X7): his assistant drafts that are open, and those needing him; null = not set up or couldn't load. */
+  execDraftsActive: number | null;
+  execDraftsAttention: number | null;
+}
+
+/** P4 (X7, §3.13.5): the Email tab's Drafts view, a section of its own. */
+export interface EmailDraftsBucketView {
+  state: "ok" | "unavailable" | "off" | "not_installed";
+  /** Open drafts (attention first), then the ones sent in the last 7 days. Empty unless `ok`. */
+  items: DraftListItem[];
+  /** Drafting is switched on (the "New email" link shows). */
+  draftsOn: boolean;
+}
+
+/** Whether assistant drafting is on (C25): the drafts schema, the switch, and email itself. */
+export function draftsOnFor(settings: Pick<ExecSettings, "draftsSchemaReady" | "draftsEnabled" | "emailEnabled" | "emailSchemaReady">): boolean {
+  return settings.draftsSchemaReady && settings.draftsEnabled && settings.emailEnabled && settings.emailSchemaReady;
 }
 
 export type EmailTabView =
@@ -778,6 +803,8 @@ export type EmailTabView =
       restricted: ViewSection<number>;
       drafts: ViewSection<EmailDraftsView>;
       commitments: ViewSection<EmailCommitmentsView>;
+      /** P4: the Drafts view (?bucket=drafts). Absent before the drafts schema exists. */
+      draftsBucket?: EmailDraftsBucketView;
     };
 
 /**
@@ -798,6 +825,27 @@ export async function getEmailTab(principal: ExecPrincipal, now: Date = new Date
   const artifactsRead = settle("reply artifacts", () => listAllReplyArtifacts(principal, { signal }));
   const tombstonesRead = settle("tombstones", () => listTombstonedThreadIds(principal, { signal }));
   const draftsRead = settle("draft counts", () => countPendingReplyArtifacts(principal, { signal }));
+  // P4: the assistant drafts' counts and list, each failing on its own (X7); nothing is read before the schema exists.
+  const draftsInstalled = gate.settings.draftsSchemaReady;
+  const draftsOn = draftsOnFor(gate.settings);
+  const execCountsRead = draftsInstalled ? settle("assistant draft counts", () => countDraftsForCard(principal, { signal })) : null;
+  const execItemsRead =
+    draftsInstalled && draftsOn
+      ? settle("assistant drafts", async () => {
+          const [active, recent] = await Promise.all([
+            listDraftItems(principal, { view: "active" }),
+            listDraftItems(principal, { view: "recent" })
+          ]);
+          const seen = new Set<string>();
+          const out: DraftListItem[] = [];
+          for (const item of [...active.items, ...recent.items]) {
+            if (seen.has(item.id)) continue;
+            seen.add(item.id);
+            out.push(item);
+          }
+          return out;
+        })
+      : null;
   const commitmentsRead = settle("commitments", () => listCommitments(principal, { statuses: ["open"] }, { signal }));
   const accountsRead = settle("mail/accounts", () => getSyncState(principal, "mail", "accounts", parseAccountsState, { signal }));
 
@@ -837,7 +885,22 @@ export async function getEmailTab(principal: ExecPrincipal, now: Date = new Date
     return { ok: true, data: t.value.length + s.value.dropped };
   })();
 
-  const draftsSection = draftsRead.then((d): ViewSection<EmailDraftsView> => (d.ok ? { ok: true, data: d.value } : UNAVAILABLE));
+  const draftsSection = (async (): Promise<ViewSection<EmailDraftsView>> => {
+    const [d, e] = await Promise.all([draftsRead, execCountsRead]);
+    if (!d.ok) return UNAVAILABLE;
+    const exec = e !== null && e.ok ? e.value : null;
+    return {
+      ok: true,
+      data: { ...d.value, execDraftsActive: exec?.active ?? null, execDraftsAttention: exec?.attention ?? null }
+    };
+  })();
+
+  const draftsBucketSection = (async (): Promise<EmailDraftsBucketView | undefined> => {
+    if (!draftsInstalled) return undefined;
+    if (!draftsOn || execItemsRead === null) return { state: "off", items: [], draftsOn: false };
+    const r = await execItemsRead;
+    return r.ok ? { state: "ok", items: r.value, draftsOn: true } : { state: "unavailable", items: [], draftsOn: true };
+  })();
 
   const commitmentsSection = (async (): Promise<ViewSection<EmailCommitmentsView>> => {
     const [c, rows, s] = await Promise.all([commitmentsRead, commitmentRowsRead, screened]);
@@ -852,14 +915,15 @@ export async function getEmailTab(principal: ExecPrincipal, now: Date = new Date
     };
   })();
 
-  const [freshness, buckets, restricted, drafts, commitments] = await Promise.all([
+  const [freshness, buckets, restricted, drafts, commitments, draftsBucket] = await Promise.all([
     readFreshness(principal, gate.pinned, now, signal, accountsRead),
     bucketsSection,
     restrictedSection,
     draftsSection,
-    commitmentsSection
+    commitmentsSection,
+    draftsBucketSection
   ]);
-  return { state: "on", generatedAt, timezone, freshness, buckets, restricted, drafts, commitments };
+  return { state: "on", generatedAt, timezone, freshness, buckets, restricted, drafts, commitments, ...(draftsBucket ? { draftsBucket } : {}) };
 }
 
 // ---------------------------------------------------------------------------
@@ -948,6 +1012,12 @@ export interface EmailThreadView {
   tasks: ViewSection<TaskView[]>;
   client: ViewSection<ClientContextView | null>;
   attention: ViewSection<AttentionItem[]>;
+  /**
+   * P4 (X7): "Draft reply" (no active assistant draft) or "Open draft" (one is
+   * active). Absent while drafts are off or not set up, and when a reply can't
+   * be started from this page.
+   */
+  draft?: { kind: "reply"; href: string } | { kind: "open"; href: string; status: ExecDraftStatus };
 }
 
 export type EmailThreadPage = { kind: "not_found" } | { kind: "ok"; view: EmailThreadView };
@@ -1134,10 +1204,21 @@ export async function getEmailThreadPage(
     }),
     settle("thread attention", () => listAttentionForThread(principal, threadId, { now, signal: sectionSignal }))
   ]);
-  const [[signalsRead, artifactsRead, commitmentsRead, tasksRead, clientRead, attentionRead], bodies] = await Promise.all([
+  // P4: the thread's active assistant draft, only while drafting is on (X7). A failed lookup still offers
+  // "Draft reply": the new-draft page opens the active draft itself when there is one.
+  const replyHref = draftsOnFor(gate.settings) ? draftReplyHref(threadId) : null;
+  const activeDraftRead = replyHref !== null ? settle("active draft", () => getActiveDraftForThread(principal, threadId, { signal: sectionSignal })) : null;
+  const [[signalsRead, artifactsRead, commitmentsRead, tasksRead, clientRead, attentionRead], bodies, activeDraft] = await Promise.all([
     sides,
-    t === null ? Promise.resolve(null) : liveMessages(principal, threadId, t)
+    t === null ? Promise.resolve(null) : liveMessages(principal, threadId, t),
+    activeDraftRead
   ]);
+  const draft: EmailThreadView["draft"] =
+    replyHref === null
+      ? undefined
+      : activeDraft !== null && activeDraft.ok && activeDraft.value !== null
+        ? { kind: "open", href: draftPageHref(activeDraft.value.id), status: activeDraft.value.status }
+        : { kind: "reply", href: replyHref };
   const messages = bodies?.messages ?? null;
   const bodiesFailed = bodies?.failed ?? false;
   const livePartial = t !== null && isPartialThread(t.his, t.all);
@@ -1177,7 +1258,8 @@ export async function getEmailThreadPage(
         : UNAVAILABLE,
       tasks: tasksRead.ok ? { ok: true, data: tasksRead.value.map(taskView) } : UNAVAILABLE,
       client: clientRead.ok ? { ok: true, data: clientRead.value } : UNAVAILABLE,
-      attention: attentionItems !== null ? { ok: true, data: attentionItems } : UNAVAILABLE
+      attention: attentionItems !== null ? { ok: true, data: attentionItems } : UNAVAILABLE,
+      ...(draft ? { draft } : {})
     }
   };
 }

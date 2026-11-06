@@ -1,5 +1,6 @@
 import "server-only";
 
+import type { EaReadinessReason, SendTokenReason } from "@/lib/exec/drafts-types";
 import { NonRetryableError, type ExecPrincipal } from "@/lib/exec/types";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 
@@ -29,7 +30,8 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 //   - Every write sets updated_at itself: the column default only applies to
 //     an insert.
 
-export type SyncSource = "mail" | "email";
+/** mail (P3 reconcile), email (P3 attention), clone-ea (P4: the EA and send token verdicts, §2.3). */
+export type SyncSource = "mail" | "email" | "clone-ea";
 
 export interface SyncStateOptions {
   signal?: AbortSignal;
@@ -69,7 +71,7 @@ function parseRev(text: string | null): number | null {
 }
 
 function checkRow(source: unknown, key: unknown): asserts source is SyncSource {
-  if (source !== "mail" && source !== "email") {
+  if (source !== "mail" && source !== "email" && source !== "clone-ea") {
     throw new NonRetryableError(`exec_sync_state: unknown source ${JSON.stringify(source)}`);
   }
   if (typeof key !== "string" || key.length === 0 || key.length > MAX_KEY_CHARS) {
@@ -663,4 +665,76 @@ export interface LeaseState {
 
 export function parseLeaseState(raw: unknown): LeaseState | null {
   return parsed(raw, (o) => ({ holder: textOrNull(o.holder, 200), leaseUntil: isoOrNull(o.leaseUntil) }));
+}
+
+// --- clone-ea / ea-token, clone-ea / send-token (P4, contract §2.3; Area B) ------------
+
+/**
+ * The last EA (draft) token readiness verdict, written by sources/mail.ts's
+ * getEaReadiness on each fresh check. Codes and timestamps only: never a token,
+ * a claim other than the expiry, or content. As with every state here, `rev`
+ * is added by the write and isn't part of the value.
+ */
+export interface EaTokenState {
+  ok: boolean;
+  reason: EaReadinessReason | null;
+  checkedAt: string;
+  cl2Ready: boolean | null;
+  cl2Send: "off" | "all" | "some" | null;
+  sendEnabled: boolean | null;
+  expiresAt: string | null;
+  /** First 12 hex of sha256(token), or null. */
+  tokenFp: string | null;
+}
+
+/** The last send-token readiness verdict, written by send.ts's sendTokenReadiness on each call. */
+export interface SendTokenState {
+  ok: boolean;
+  reason: SendTokenReason | null;
+  checkedAt: string;
+  expiresAt: string | null;
+  tokenFp: string | null;
+}
+
+const EA_READINESS_REASONS: ReadonlySet<string> = new Set<EaReadinessReason>([
+  "no_pin", "multiple_principals", "token_missing", "base_url_missing", "clone_unreachable", "cl2_missing", "cl2_not_ready",
+  "me_failed", "me_no_auth", "not_scoped", "wrong_scopes", "wrong_accounts", "token_expired"
+]);
+const SEND_TOKEN_REASONS: ReadonlySet<string> = new Set<SendTokenReason>([
+  "token_missing", "malformed", "not_scoped", "wrong_scopes", "wrong_accounts", "token_expired"
+]);
+const TOKEN_FP = /^[0-9a-f]{12}$/;
+
+const eaReason = (v: unknown): EaReadinessReason | null =>
+  absent(v) ? null : typeof v === "string" && EA_READINESS_REASONS.has(v) ? (v as EaReadinessReason) : reject();
+const sendReason = (v: unknown): SendTokenReason | null =>
+  absent(v) ? null : typeof v === "string" && SEND_TOKEN_REASONS.has(v) ? (v as SendTokenReason) : reject();
+const boolOrNull = (v: unknown): boolean | null => (absent(v) ? null : bool(v));
+const tokenFpOrNull = (v: unknown): string | null => (absent(v) ? null : typeof v === "string" && TOKEN_FP.test(v) ? v : reject());
+const cl2SendOrNull = (v: unknown): "off" | "all" | "some" | null =>
+  absent(v) ? null : v === "off" || v === "all" || v === "some" ? v : reject();
+
+/** The stored ea-token verdict, or null when anything present is malformed (an unknown reason included). */
+export function parseEaTokenState(raw: unknown): EaTokenState | null {
+  return parsed(raw, (o) => ({
+    ok: bool(o.ok),
+    reason: eaReason(o.reason),
+    checkedAt: iso(o.checkedAt),
+    cl2Ready: boolOrNull(o.cl2Ready),
+    cl2Send: cl2SendOrNull(o.cl2Send),
+    sendEnabled: boolOrNull(o.sendEnabled),
+    expiresAt: isoOrNull(o.expiresAt),
+    tokenFp: tokenFpOrNull(o.tokenFp)
+  }));
+}
+
+/** The stored send-token verdict, or null when anything present is malformed. */
+export function parseSendTokenState(raw: unknown): SendTokenState | null {
+  return parsed(raw, (o) => ({
+    ok: bool(o.ok),
+    reason: sendReason(o.reason),
+    checkedAt: iso(o.checkedAt),
+    expiresAt: isoOrNull(o.expiresAt),
+    tokenFp: tokenFpOrNull(o.tokenFp)
+  }));
 }

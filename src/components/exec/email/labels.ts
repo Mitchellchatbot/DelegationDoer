@@ -94,7 +94,8 @@ export const ANSWERED_LABEL: Readonly<Record<AnsweredState, string>> = Object.fr
   no_inbound: "Only your messages",
   handled_in_outlook: "Archived in Outlook",
   reply_scheduled: "Reply scheduled",
-  draft_pending: "Draft awaiting approval"
+  draft_pending: "Draft awaiting approval",
+  reply_sent_pending: "Reply sent, syncing"
 });
 
 type AnsweredRow = { answered: AnsweredState | null; state: EmailThreadState; needsReply: boolean | null };

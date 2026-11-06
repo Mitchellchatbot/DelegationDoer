@@ -237,7 +237,11 @@ export function ddPageRef(path: string, pageLabel: string): SourceRef {
   return { system: "dd", id: path, url: ddPageUrl(path), label: label(pageLabel, path), class: "internal" };
 }
 
-/** An email in the principal's mailbox. Restricted-sender mail is tagged so it stays inside DD (decision R). */
+/**
+ * An email in the principal's mailbox. Class "private" (P4 Y10, C43): his
+ * mail is never a public source, whatever it is about; restricted-sender
+ * mail is "restricted" so it stays inside DD (decision R).
+ */
 export function outlookMessageRef(msg: {
   id: string;
   webLink?: string | null;
@@ -249,15 +253,15 @@ export function outlookMessageRef(msg: {
     id: msg.id,
     url: safeUrl(msg.webLink),
     label: label(msg.subject, "(no subject)"),
-    class: msg.restricted ? "restricted" : "public"
+    class: msg.restricted ? "restricted" : "private"
   };
 }
 
 /**
  * One of his email threads in Outlook on the web (P3). Class "private"
  * always: his mail is never a public source, whatever it is about (contract
- * §3.13: no email ref is public). Built here directly, never through
- * outlookMessageRef, whose default class is "public". The link is the stored
+ * §3.13: no email ref is public). Built here directly (outlookMessageRef is
+ * per message and tags restricted mail on its own). The link is the stored
  * CL1 webLink when it passes the Outlook allowlist (one item, no compose
  * action), else null. `label` is the thread's subject.
  */

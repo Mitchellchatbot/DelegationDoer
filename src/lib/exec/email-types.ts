@@ -15,6 +15,7 @@
 //   both sides (v3.1 A4); the stored columns are timestamptz and are converted on
 //   read.
 
+import type { ExecDraftStatus } from "@/lib/exec/drafts-types";
 import type { SourceRef } from "@/lib/exec/types";
 
 // ---------------------------------------------------------------------------
@@ -64,7 +65,8 @@ export type ClientMatchVia = "exact" | "domain";
 /** What the row stores: derived from the clone thread only (L3). */
 export type StoredAnsweredState = "awaiting_reply" | "answered" | "no_inbound";
 /** What readers show: the stored state plus the read-time overlay (L3, A3). */
-export type AnsweredState = StoredAnsweredState | "handled_in_outlook" | "reply_scheduled" | "draft_pending";
+/** The read-time overlay states: P3's three plus P4's reply_sent_pending (an exec draft sent from DD, its Sent copy not yet in the feed; L15). */
+export type AnsweredState = StoredAnsweredState | "handled_in_outlook" | "reply_scheduled" | "draft_pending" | "reply_sent_pending";
 export type BodySource = "html" | "text" | "preview_stub" | "mixed" | "empty";
 export type CommitmentDirection = "mitchell_owes" | "owed_to_mitchell";
 export type CommitmentStatus = "open" | "followed_up" | "expired";
@@ -374,4 +376,8 @@ export interface EmailBucketCounts {
 export interface ReplyArtifacts {
   scheduledFor: string | null;
   draftPending: boolean;
+  /** P4 (X1): the thread's active exec draft, for the list chips only; absent when the exec table isn't installed or wasn't read. */
+  execDraft?: { id: string; status: ExecDraftStatus } | null;
+  /** P4 (X1): parent message ids of exec drafts in sending / sent_pending / sent / sent_external whose send is at most 7 days old. */
+  execSentParents?: readonly string[];
 }

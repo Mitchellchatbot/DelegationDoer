@@ -23,6 +23,7 @@ import {
   listBucketRows,
   listCommitmentMessageIds,
   listCommitments,
+  listCorrespondentRows,
   listProducerThreads,
   listRescreenBatch,
   listSignalsForMessages,
@@ -378,7 +379,7 @@ describe("applyThreadProposal: writes", () => {
 });
 
 describe("applyThreadProposal: the tombstone procedure", () => {
-  it("runs in order: commitments, the whitelist row by CAS, commitments again, signals, attention (fake E)", async () => {
+  it("runs in order: commitments, the whitelist row by CAS, commitments again, signals, the drafts purge (P4), attention (fake E)", async () => {
     useDb({
       tables: {
         exec_email_threads: [threadRow({ version: 3 })],
@@ -395,8 +396,11 @@ describe("applyThreadProposal: the tombstone procedure", () => {
       "update exec_email_threads",
       "delete exec_commitments",
       "delete exec_email_signals",
+      "rpc exec_drafts_purge_restricted",
       "attention delete"
     ]);
+    const purge = db.requests.find((r) => r.kind === "rpc" && r.target === "exec_drafts_purge_restricted");
+    expect(purge?.payload).toEqual({ p_principal: "ep_1", p_thread_ids: ["th_1"] });
     expect(fakeE.deleteEmailAttentionForThreads).toHaveBeenCalledWith(P, ["th_1"], expect.anything());
     // Tombstones need no rules: the loader is never called.
     expect(rules).not.toHaveBeenCalled();
@@ -504,8 +508,53 @@ describe("applyThreadProposal: the tombstone procedure", () => {
     });
     const out = await applyThreadProposal(P, SETTINGS, "th_1", { kind: "tombstone", snapshot: null, hashes: null, truncated: null, policyHash: H }, ctx);
     expect(out).toEqual({ result: "skipped", reason: "noop", commitments: [] });
-    expect(db.log).toEqual(["select exec_email_threads", "delete exec_commitments", "delete exec_email_signals", "attention delete"]);
+    expect(db.log).toEqual(["select exec_email_threads", "delete exec_commitments", "delete exec_email_signals", "rpc exec_drafts_purge_restricted", "attention delete"]);
     expect(db.tables.exec_email_signals).toEqual([]);
+  });
+
+  // P4 contract §2.7, X4 (PX04): the drafts step sits after the signals delete and before the attention delete.
+  it("PX04: the drafts purge empties the thread's exec_drafts rows; the RPC missing lets the tombstone complete; an RPC error throws (retryable)", async () => {
+    const draft = (id: string, threadId: string, over: Row = {}) => ({
+      id, principal_id: "ep_1", account_id: "acc_1", kind: "reply", origin: "web", status: "saved", prior_status: null, version: 1, saved_version: 1, generation_seq: 1,
+      thread_id: threadId, parent_message_id: "m1", reply_mode: "reply", thread_subject: "Renewal", reply_candidates: null, thread_addresses: ["a@client.com"],
+      to_recipients: [{ address: "a@client.com", name: null }], cc_recipients: [], bcc_recipients: [], subject: null, body_doc: null, body_html: "<p>x</p>", body_text: "x",
+      instruction: "x", note_for_mitchell: null, placeholders: [], review_recipients: null, recipients_sig: null, screen_hashes: [], screen_truncated: false,
+      screened_policy_hash: null, render_nonce: "abcdefabcdefabcdef012345", model: null, usage: null, generation_error: null, generation_flags: [], facts_status: null,
+      client_id: null, generated_at: null, outlook_graph_id: "AAMk=", internet_message_id: null, conversation_id: null, web_link: null, content_hash: null,
+      observed_content_hash: null, review_hash: null, review_at: null, review_blockers: [], confirm_hash: null, save_attempt_key: null, save_version: null,
+      save_timezone: null, save_if_content_hash: null, save_started_at: null, discard_attempt_key: null, discard_started_at: null, send_attempt_key: null,
+      send_started_at: null, send_accepted_at: null, sent_at: null, sent_audit_id: null, sent_mismatch: false, unverified: false, gone_unconfirmed: false,
+      signature_skipped: false, outlook_edited: false, restricted_purged: false, uses_private_refs: false, clone_flags: [], owner_resolution: null,
+      opened_in_outlook_at: null, last_error_code: null, last_error_at: null, next_check_at: null, check_count: 0, gone_at: null, created_at: iso(T0),
+      updated_at: iso(T0), terminal_at: null, content_purged_at: null, expires_at: null, ...over
+    });
+    useDb({ tables: { exec_email_threads: [threadRow({ version: 3 })], exec_drafts: [draft("ed_1", "th_1"), draft("ed_2", "th_other")] } });
+    const tombstone: ThreadProposal = { kind: "tombstone", snapshot: null, hashes: RESTRICTED, truncated: false, policyHash: H };
+    expect((await applyThreadProposal(P, SETTINGS, "th_1", tombstone, ctx)).result).toBe("tombstoned");
+    expect(db.tables.exec_drafts[0]).toMatchObject({ status: "saved", restricted_purged: true, body_html: null, instruction: null, to_recipients: [], version: 2 });
+    expect(db.tables.exec_drafts[1]).toMatchObject({ restricted_purged: false, instruction: "x" });
+    expect(db.log.indexOf("rpc exec_drafts_purge_restricted")).toBeGreaterThan(db.log.lastIndexOf("delete exec_email_signals"));
+    expect(db.log.indexOf("rpc exec_drafts_purge_restricted")).toBeLessThan(db.log.indexOf("attention delete"));
+
+    // The P4 migration not applied: the RPC is missing and the procedure still finishes.
+    useDb({ tables: { exec_email_threads: [threadRow({ version: 3 })] }, missing: ["exec_drafts_purge_restricted"] });
+    expect((await applyThreadProposal(P, SETTINGS, "th_1", tombstone, ctx)).result).toBe("tombstoned");
+    expect(db.log).toContain("rpc exec_drafts_purge_restricted");
+    expect(db.log).toContain("attention delete");
+
+    // Any other RPC failure throws after the row is tombstoned, and the retry finishes the steps.
+    useDb({
+      tables: { exec_email_threads: [threadRow({ version: 3 })] },
+      fail: (r) => (r.kind === "rpc" && r.target === "exec_drafts_purge_restricted" && db.log.filter((l) => l === "rpc exec_drafts_purge_restricted").length === 1 ? { message: "lock timeout", code: "55P03" } : null)
+    });
+    const err = await applyThreadProposal(P, SETTINGS, "th_1", tombstone, ctx).catch((e: unknown) => e);
+    expect(String(err)).toMatch(/exec_drafts_purge_restricted failed: lock timeout/);
+    expect(err).not.toBeInstanceOf(NonRetryableError);
+    expect(thread()?.state).toBe("restricted_hidden");
+    expect(db.log).not.toContain("attention delete");
+    const retry = await applyThreadProposal(P, SETTINGS, "th_1", tombstone, ctx);
+    expect(retry).toEqual({ result: "skipped", reason: "noop", commitments: [] });
+    expect(db.log.slice(-2)).toEqual(["rpc exec_drafts_purge_restricted", "attention delete"]);
   });
 
   it("dd_only behaves exactly as hidden: the default loader screens under the hidden policy hash and the restricted read tombstones", async () => {
@@ -545,8 +594,35 @@ describe("the attention step (Area E's deleteEmailAttentionForThreads)", () => {
     db.log.length = 0;
     const retry = await applyThreadProposal(P, SETTINGS, "th_1", tombstone, ctx);
     expect(retry).toEqual({ result: "skipped", reason: "noop", commitments: [] });
-    expect(db.log).toEqual(["select exec_email_threads", "delete exec_commitments", "delete exec_email_signals", "attention delete"]);
+    expect(db.log).toEqual(["select exec_email_threads", "delete exec_commitments", "delete exec_email_signals", "rpc exec_drafts_purge_restricted", "attention delete"]);
     expect(fakeE.deleteEmailAttentionForThreads).toHaveBeenLastCalledWith(P, ["th_1"], expect.anything());
+  });
+});
+
+describe("listCorrespondentRows (P4 X4 (b))", () => {
+  it("every non-tombstone row of the principal with its screen columns and correspondents; not installed -> []", async () => {
+    useDb({
+      tables: {
+        exec_email_threads: [
+          threadRow({ correspondents: ["a@client.com", "b@client.com"] }, "th_1"),
+          tombstoneDbRow({}, "th_t"),
+          threadRow({ state: "filtered", correspondents: ["c@x.com"] }, "th_2"),
+          { ...threadRow({ correspondents: ["z@other.com"] }, "th_3"), principal_id: "ep_other" }
+        ]
+      }
+    });
+    const rows = await listCorrespondentRows(P);
+    expect(rows.map((r) => [r.threadId, r.state, r.correspondents])).toEqual([
+      ["th_1", "triaged", ["a@client.com", "b@client.com"]],
+      ["th_2", "filtered", ["c@x.com"]]
+    ]);
+    expect(rows[0].accountId).toBe("acc_1");
+    expect(Object.keys(rows[0]).sort()).toEqual(["accountId", "correspondents", "screenHashes", "screenTruncated", "screenedPolicyHash", "state", "threadId"]);
+    expect(db.requests[0].columns).toBe("thread_id,account_id,state,screen_hashes,screen_truncated,screened_policy_hash,correspondents");
+    useDb({ missing: ["exec_email_threads"] });
+    expect(await listCorrespondentRows(P)).toEqual([]);
+    useDb({ fail: () => ({ message: "down" }) });
+    await expect(listCorrespondentRows(P)).rejects.toThrow(/correspondents read failed: down/);
   });
 });
 

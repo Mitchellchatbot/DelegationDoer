@@ -26,7 +26,7 @@ describe("feature tables", () => {
       chat: "claude-opus-5-5",
       draft: "claude-opus-5-5",
       brief: "claude-opus-5-5",
-      voice: "claude-opus-5-5",
+      voice: "claude-haiku-5-5",
       spike: "claude-opus-5-5",
       triage: "claude-haiku-5-5",
       digest: "claude-haiku-5-5"
@@ -37,14 +37,14 @@ describe("feature tables", () => {
       spike: "low",
       chat: "medium",
       draft: "medium",
-      voice: "medium",
+      voice: "low",
       brief: "high"
     });
     expect(FEATURE_MAX_TOKENS).toEqual({
       chat: 16000,
       draft: 16000,
       brief: 32000,
-      voice: 8000,
+      voice: 4000,
       triage: 4000,
       digest: 4000,
       spike: 4000

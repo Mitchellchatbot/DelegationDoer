@@ -3,6 +3,7 @@ import "server-only";
 import { createHash } from "node:crypto";
 
 import { deleteEmailAttentionForThreads } from "@/lib/exec/attention";
+import { purgeDraftsForThreads } from "@/lib/exec/drafts-store";
 import {
   commitmentExpiresAt,
   planThreadWrite,
@@ -41,7 +42,8 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 // job ran still turns its write into a tombstone. A tombstone runs the
 // tombstone procedure: delete the thread's commitments, write the whitelist
 // row, delete its commitments again (one may have landed in between), its
-// signals and its email attention rows.
+// signals, purge its assistant drafts (P4: content emptied, the row kept so
+// an Outlook draft stays tracked) and delete its email attention rows.
 //
 // Reads fail closed: a database error throws, never an empty list, because
 // an empty Email tab or commitments card must mean "nothing", not "couldn't
@@ -509,18 +511,22 @@ async function casWrite(
 }
 
 /**
- * Steps 3-5 of the tombstone procedure: whatever about the thread could have
- * landed or survived around the CAS. Step 5 is Area E's
- * deleteEmailAttentionForThreads (attention.ts, contract §3.13), which parses
- * email:thread:/email:commitment: fingerprints and hard-deletes the thread's
- * email attention rows in every status. A step that fails throws after the
- * tombstone has landed; on a transient failure the job retries, and the retry
- * finds the tombstone already in place and runs these steps again
+ * Steps 3-6 of the tombstone procedure: whatever about the thread could have
+ * landed or survived around the CAS. Step 5 (P4 contract §2.7, X4) empties the
+ * thread's assistant drafts through exec_drafts_purge_restricted: a null
+ * answer means the P4 migration isn't applied and is fine; any other failure
+ * throws (retryable), so the procedure never finishes without it. Step 6 is
+ * Area E's deleteEmailAttentionForThreads (attention.ts, contract §3.13),
+ * which parses email:thread:/email:commitment: fingerprints and hard-deletes
+ * the thread's email attention rows in every status. A step that fails throws
+ * after the tombstone has landed; on a transient failure the job retries, and
+ * the retry finds the tombstone already in place and runs these steps again
  * (applyThreadProposal's noop branch).
  */
 async function deleteTombstoneLeftovers(principal: ExecPrincipal, threadId: string, signal: AbortSignal | undefined): Promise<void> {
   await deleteCommitmentsForThreads(principal, [threadId], { signal });
   await deleteSignalsForThreads(principal, [threadId], { signal });
+  await purgeDraftsForThreads(principal, [threadId], { signal });
   await deleteEmailAttentionForThreads(principal, [threadId], { signal });
 }
 
@@ -528,8 +534,8 @@ async function deleteTombstoneLeftovers(principal: ExecPrincipal, threadId: stri
  * The tombstone procedure (coherence-18): (1) delete the thread's
  * commitments, (2) write the whitelist row by CAS, (3) delete its commitments
  * again (a write plan's insert may have raced the CAS), (4) delete its signal
- * rows, (5) delete its email attention rows (Area E). Steps 3-5 run only
- * after the CAS landed.
+ * rows, (5) purge its assistant drafts (P4), (6) delete its email attention
+ * rows (Area E). Steps 3-6 run only after the CAS landed.
  */
 async function tombstoneProcedure(
   principal: ExecPrincipal,
@@ -922,6 +928,30 @@ export async function listThreadScreenRows(
     }
   }
   return out;
+}
+
+const CORRESPONDENT_ROW_KEYS = ["threadId", "accountId", "state", "screenHashes", "screenTruncated", "screenedPolicyHash", "correspondents"] as const;
+
+/**
+ * P4 (contract §3.14 X4 (b)): every non-tombstone row of the principal with
+ * its screen columns and `correspondents`. Callers screen each row with
+ * screenStoredRow and use the survivors' correspondents as the "screened P3
+ * correspondents" a new draft may address (L8). Not installed -> []. Throws
+ * on a database error.
+ */
+export async function listCorrespondentRows(
+  principal: ExecPrincipal,
+  opts: StoreOptions = {}
+): Promise<Array<ThreadScreenRow & { correspondents: string[] }>> {
+  const columns = threadColumnsOf(CORRESPONDENT_ROW_KEYS);
+  const rows = await pageAll(
+    `${THREADS} correspondents read`,
+    () => sel(THREADS, columns.join(",")).eq("principal_id", principal.id).neq("state", "restricted_hidden"),
+    ["thread_id"],
+    opts.signal
+  );
+  if (rows === null) return [];
+  return rows.map((r) => mapRow<ThreadScreenRow & { correspondents: string[] }>(r, THREAD_COLUMNS, columns, THREADS));
 }
 
 /**

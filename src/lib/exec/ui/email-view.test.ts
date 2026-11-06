@@ -32,6 +32,13 @@ vi.mock("@/lib/exec/attention", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/exec/attention")>()),
   listAttentionForThread: vi.fn()
 }));
+// P4 (X7): the assistant drafts' reads. Unused while the drafts schema isn't there (every P3 test below).
+vi.mock("@/lib/exec/drafts-store", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/exec/drafts-store")>()),
+  countDraftsForCard: vi.fn(),
+  getActiveDraftForThread: vi.fn()
+}));
+vi.mock("@/lib/exec/drafts", () => ({ listDraftItems: vi.fn() }));
 vi.mock("@/lib/exec/sources/dd", () => ({
   listTasksForThread: vi.fn(),
   listClients: vi.fn(),
@@ -80,7 +87,10 @@ import {
 import { getSyncState } from "@/lib/exec/sync-state";
 import type { ExecPrincipal, ExecSettings } from "@/lib/exec/types";
 import { ruleFromRow } from "@/lib/restricted-senders";
-import { BUCKET_ORDER } from "@/components/exec/email/labels";
+import { ANSWERED_LABEL, BUCKET_ORDER } from "@/components/exec/email/labels";
+import { listDraftItems } from "@/lib/exec/drafts";
+import { countDraftsForCard, getActiveDraftForThread } from "@/lib/exec/drafts-store";
+import type { DraftListItem, ExecDraftRow } from "@/lib/exec/drafts-types";
 
 // The email pages' reads (contract §3.14, L2, A2, §5 F): gating, the
 // render-time screen on every stored surface, the live screen before any
@@ -582,7 +592,115 @@ describe("getEmailTab: buckets and the render-time screen", () => {
     expect(view.drafts).toEqual(UNAVAILABLE);
     expect(view.buckets.ok).toBe(true);
     wire();
-    expect((await tabOn()).drafts).toEqual({ ok: true, data: { draftsPending: 2, scheduledReplies: 1 } });
+    expect((await tabOn()).drafts).toEqual({ ok: true, data: { draftsPending: 2, scheduledReplies: 1, execDraftsActive: null, execDraftsAttention: null } });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P4 (X7, PX16): the assistant drafts on the Email tab and the thread page
+// ---------------------------------------------------------------------------
+
+describe("PX16: getEmailTab carries the assistant drafts on their own reads", () => {
+  const draftsOn = () => settings({ draftsSchemaReady: true, draftsEnabled: true });
+  const listItem = (id: string, over: Partial<DraftListItem> = {}): DraftListItem => ({
+    id,
+    kind: "reply",
+    status: "draft",
+    threadId: "t_reply",
+    label: "Re: hello",
+    toSummary: "jane@acme.com",
+    updatedAt: daysAgo(0.1),
+    sentAt: null,
+    restricted: false,
+    attention: null,
+    ...over
+  });
+
+  it("not installed: no exec reads, both exec counts null, no Drafts view; the legacy counts unchanged", async () => {
+    const view = await tabOn();
+    expect(countDraftsForCard).not.toHaveBeenCalled();
+    expect(listDraftItems).not.toHaveBeenCalled();
+    expect(view.drafts).toEqual({ ok: true, data: { draftsPending: 2, scheduledReplies: 1, execDraftsActive: null, execDraftsAttention: null } });
+    expect(view.draftsBucket).toBeUndefined();
+  });
+
+  it("installed and on: EmailDraftsView carries countDraftsForCard's counts; the Drafts view lists active then recent", async () => {
+    vi.mocked(loadSettings).mockResolvedValue(draftsOn());
+    vi.mocked(countDraftsForCard).mockResolvedValue({ active: 3, attention: 1 });
+    vi.mocked(listDraftItems).mockImplementation(async (_p, q) =>
+      q.view === "active" ? { items: [listItem("ed_a"), listItem("ed_b")], nextCursor: null } : { items: [listItem("ed_s", { status: "sent" }), listItem("ed_b")], nextCursor: null }
+    );
+    const view = await tabOn();
+    expect(view.drafts).toEqual({ ok: true, data: { draftsPending: 2, scheduledReplies: 1, execDraftsActive: 3, execDraftsAttention: 1 } });
+    expect(view.draftsBucket?.state).toBe("ok");
+    expect(view.draftsBucket?.items.map((i) => i.id)).toEqual(["ed_a", "ed_b", "ed_s"]);
+    expect(view.draftsBucket?.draftsOn).toBe(true);
+    expect(vi.mocked(listDraftItems).mock.calls.map((c) => c[1])).toEqual([{ view: "active" }, { view: "recent" }]);
+  });
+
+  it("a countDraftsForCard error (or null: not installed) gives both null while the legacy counts and the rest of the tab render", async () => {
+    vi.mocked(loadSettings).mockResolvedValue(draftsOn());
+    vi.mocked(countDraftsForCard).mockRejectedValue(failure());
+    vi.mocked(listDraftItems).mockResolvedValue({ items: [], nextCursor: null });
+    const view = await tabOn();
+    expect(view.drafts).toEqual({ ok: true, data: { draftsPending: 2, scheduledReplies: 1, execDraftsActive: null, execDraftsAttention: null } });
+    expect(view.buckets.ok).toBe(true);
+    expect(view.commitments.ok).toBe(true);
+    vi.mocked(countDraftsForCard).mockResolvedValue(null);
+    expect((await tabOn()).drafts).toEqual({ ok: true, data: { draftsPending: 2, scheduledReplies: 1, execDraftsActive: null, execDraftsAttention: null } });
+  });
+
+  it("a failed drafts list fails only the Drafts view; drafts off reads no list", async () => {
+    vi.mocked(loadSettings).mockResolvedValue(draftsOn());
+    vi.mocked(countDraftsForCard).mockResolvedValue({ active: 1, attention: 0 });
+    vi.mocked(listDraftItems).mockRejectedValue(failure());
+    const view = await tabOn();
+    expect(view.draftsBucket).toEqual({ state: "unavailable", items: [], draftsOn: true });
+    expect(view.buckets.ok).toBe(true);
+    vi.mocked(listDraftItems).mockClear();
+    vi.mocked(loadSettings).mockResolvedValue(settings({ draftsSchemaReady: true, draftsEnabled: false }));
+    expect((await tabOn()).draftsBucket).toEqual({ state: "off", items: [], draftsOn: false });
+    expect(listDraftItems).not.toHaveBeenCalled();
+  });
+
+  it("the list row carries the thread's active exec draft for the chip, only when the artifacts name one", async () => {
+    vi.mocked(listAllReplyArtifacts).mockResolvedValue(
+      new Map([["t_reply", { scheduledFor: null, draftPending: false, execDraft: { id: "ed_1", status: "saved" }, execSentParents: [] }]])
+    );
+    const view = await tabOn();
+    if (!view.buckets.ok) throw new Error("buckets");
+    expect(view.buckets.data.lists.reply[0].execDraft).toEqual({ id: "ed_1", status: "saved" });
+    vi.mocked(listAllReplyArtifacts).mockResolvedValue(new Map());
+    const plain = await tabOn();
+    if (!plain.buckets.ok) throw new Error("buckets");
+    expect("execDraft" in plain.buckets.data.lists.reply[0]).toBe(false);
+  });
+
+  it("ANSWERED_LABEL has reply_sent_pending (the stage-0 seed)", () => {
+    expect(ANSWERED_LABEL.reply_sent_pending).toBe("Reply sent, syncing");
+  });
+});
+
+describe("X7: the thread page's Draft reply / Open draft", () => {
+  it("absent while drafts are off or not set up (no lookup)", async () => {
+    expect((await threadOk()).draft).toBeUndefined();
+    vi.mocked(loadSettings).mockResolvedValue(settings({ draftsSchemaReady: true, draftsEnabled: false }));
+    expect((await threadOk()).draft).toBeUndefined();
+    expect(getActiveDraftForThread).not.toHaveBeenCalled();
+  });
+
+  it("drafts on: Draft reply, or Open draft (<status>) when the thread has an active draft", async () => {
+    vi.mocked(loadSettings).mockResolvedValue(settings({ draftsSchemaReady: true, draftsEnabled: true }));
+    vi.mocked(getActiveDraftForThread).mockResolvedValue(null);
+    expect((await threadOk()).draft).toEqual({ kind: "reply", href: "/executive/email/drafts/new?threadId=t_reply" });
+    vi.mocked(getActiveDraftForThread).mockResolvedValue({ id: "ed_9", status: "saved" } as ExecDraftRow);
+    expect((await threadOk()).draft).toEqual({ kind: "open", href: "/executive/email/drafts/ed_9", status: "saved" });
+  });
+
+  it("a failed lookup still offers Draft reply (the new-draft page opens an active draft itself)", async () => {
+    vi.mocked(loadSettings).mockResolvedValue(settings({ draftsSchemaReady: true, draftsEnabled: true }));
+    vi.mocked(getActiveDraftForThread).mockRejectedValue(failure());
+    expect((await threadOk()).draft).toEqual({ kind: "reply", href: "/executive/email/drafts/new?threadId=t_reply" });
   });
 });
 

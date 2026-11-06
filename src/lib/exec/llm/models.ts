@@ -6,8 +6,10 @@ import type { Effort, ExecLlmFeature } from "@/lib/exec/types";
 //
 // Exec keeps its own model map so the shared MODELS constant in
 // anthropic-client.ts (used by the other AI call sites) stays untouched. Opus
-// 5.5 does the work a person reads (chat, drafts, the brief, voice); Haiku 5.5
-// does the high-volume sorting (triage, digests).
+// 5.5 does the work a person reads (chat, drafts, the brief); Haiku 5.5 does
+// the high-volume sorting (triage, digests) and the voice profile, whose
+// answer is six style enums and one short phrase (P4 C35: Haiku, effort low,
+// 4 000 tokens).
 //
 // Prices are list prices per million tokens from the Claude API reference. They
 // feed exec_ai_usage.cost_usd and so the daily cost cap, which is why an
@@ -22,7 +24,7 @@ export const EXEC_MODELS: Readonly<Record<ExecLlmFeature, ExecModelId>> = Object
   chat: OPUS_MODEL,
   draft: OPUS_MODEL,
   brief: OPUS_MODEL,
-  voice: OPUS_MODEL,
+  voice: HAIKU_MODEL,
   spike: OPUS_MODEL,
   triage: HAIKU_MODEL,
   digest: HAIKU_MODEL
@@ -36,7 +38,7 @@ export const FEATURE_EFFORT: Readonly<Record<ExecLlmFeature, Effort>> = Object.f
   spike: "low",
   chat: "medium",
   draft: "medium",
-  voice: "medium",
+  voice: "low",
   brief: "high"
 });
 
@@ -44,13 +46,14 @@ export const FEATURE_EFFORT: Readonly<Record<ExecLlmFeature, Effort>> = Object.f
 // always on for the 5.5 models and counts toward max_tokens, so a tight cap
 // cuts an answer off mid-sentence (stop_reason "max_tokens") on a heavy day.
 // That matters most for the brief, at effort "high" over a whole day of work.
-// The streamed features (chat, draft, brief, voice) get room; the daily cost
-// cap is what bounds money.
+// The streamed features (chat, draft, brief) get room; the daily cost cap is
+// what bounds money. The voice profile is a handful of enums, so it gets the
+// sorting features' cap (C35).
 export const FEATURE_MAX_TOKENS: Readonly<Record<ExecLlmFeature, number>> = Object.freeze({
   chat: 16000,
   draft: 16000,
   brief: 32000,
-  voice: 8000,
+  voice: 4000,
   triage: 4000,
   digest: 4000,
   spike: 4000

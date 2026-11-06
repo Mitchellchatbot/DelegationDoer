@@ -62,7 +62,7 @@ describe("buildExecRequest", () => {
     ["chat", "claude-opus-5-5", "medium", 16000],
     ["draft", "claude-opus-5-5", "medium", 16000],
     ["brief", "claude-opus-5-5", "high", 32000],
-    ["voice", "claude-opus-5-5", "medium", 8000],
+    ["voice", "claude-haiku-5-5", "low", 4000],
     ["spike", "claude-opus-5-5", "low", 4000],
     ["triage", "claude-haiku-5-5", "low", 4000],
     ["digest", "claude-haiku-5-5", "low", 4000]

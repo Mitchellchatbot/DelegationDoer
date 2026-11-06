@@ -12,9 +12,12 @@ import {
   listTombstonedThreadIds,
   type BucketRow
 } from "@/lib/exec/email-store";
+import { countDraftsForSystem, getVoiceProfile, type DraftSystemCounts } from "@/lib/exec/drafts-store";
+import { DRAFT_JOB_KINDS } from "@/lib/exec/drafts-types";
 import {
   bucketize,
   commitmentView,
+  draftsOnFor,
   emailItemThreadIds,
   loadEmailGate,
   pinnedRowMap,
@@ -33,7 +36,7 @@ import {
 import type { ThreadScreenRow } from "@/lib/exec/email-types";
 import { EMAIL_ATTENTION_JOB_KIND, EMAIL_RECONCILE_JOB_KIND, EMAIL_TRIAGE_JOB_KIND } from "@/lib/exec/jobs";
 import { listAllReplyArtifacts, loadScreeningPolicy } from "@/lib/exec/sources/mail";
-import { getSyncState, parseAccountsState, parseSocketState } from "@/lib/exec/sync-state";
+import { getSyncState, parseAccountsState, parseEaTokenState, parseSendTokenState, parseSocketState } from "@/lib/exec/sync-state";
 import {
   getPendingApprovals,
   listActivitySince,
@@ -134,6 +137,8 @@ export interface OverviewAttention {
    * shown unchecked; the card says so.
    */
   emailUnchecked: boolean;
+  /** P4 (Y9): assistant drafting is on, so email items offer "Draft reply". Absent while it isn't. */
+  draftsEnabled?: boolean;
 }
 
 /** The Email tab's bucket counts, after the restricted-sender screen. */
@@ -227,6 +232,41 @@ export interface OverviewSystem {
   due: number;
   /** run_after of the due job that has waited longest, or null when none is due. */
   oldestDueAt: string | null;
+  /**
+   * P4 (Y7): the assistant drafts' health. Absent before the drafts schema
+   * exists; null when the settings couldn't be read (the card says so).
+   */
+  drafts?: OverviewDraftsSystem | null;
+}
+
+/** A token's last self-check as the System card shows it. reason "not_checked": no verdict stored yet. */
+export interface OverviewTokenVerdict {
+  ok: boolean;
+  reason: string | null;
+  checkedAt: string | null;
+  expiresAt: string | null;
+}
+
+/**
+ * Y7. Each part fails on its own (PX12): a null token verdict, count or voice
+ * row is "couldn't load", never a zero. TRACKED_JOB_KINDS doesn't list the
+ * reconcile or voice jobs (they run only while a row is due, or weekly), so
+ * their health shows here instead: `reconcile.overdueSince` is the oldest
+ * check still due; the "Draft checks" row is amber once that is more than
+ * 15 minutes old with no reconcile success since.
+ */
+export interface OverviewDraftsSystem {
+  installed: boolean;
+  draftsEnabled: boolean;
+  sendEnabled: boolean;
+  voiceEnabled: boolean;
+  eaToken: OverviewTokenVerdict | null;
+  sendToken: OverviewTokenVerdict | null;
+  cl2: { ready: boolean | null; send: "off" | "all" | "some" | null };
+  counts: DraftSystemCounts | null;
+  reconcile: { lastSucceededAt: string | null; overdueSince: string | null } | null;
+  /** null = the voice profile couldn't be read (additive: the frozen shape had no "couldn't load"). */
+  voice: { status: "ready" | "insufficient" | "failed" | null; builtAt: string | null; lastAttemptAt: string | null; lastAttemptError: string | null } | null;
 }
 
 export interface OverviewSections {
@@ -706,11 +746,14 @@ export async function getOverview(principal: ExecPrincipal, now: Date = new Date
     // pass's time (ui-10).
     const emailCheckedAt = await email.itemsCheckedAt(jobsRead);
     const ddCheckedAt = laterIso(refreshedAt, lastRun);
+    const gate = await emailGate;
+    const draftsEnabled = gate.ok && gate.value.kind === "on" && draftsOnFor(gate.value.settings);
     return {
       items: screened.items.slice(0, ATTENTION_LIMIT),
       limit: ATTENTION_LIMIT,
       checkedAt: emailCheckedAt === undefined ? ddCheckedAt : olderIso(ddCheckedAt, emailCheckedAt),
-      emailUnchecked: screened.unchecked
+      emailUnchecked: screened.unchecked,
+      ...(draftsEnabled ? { draftsEnabled: true } : {})
     };
   });
 
@@ -751,10 +794,14 @@ export async function getOverview(principal: ExecPrincipal, now: Date = new Date
     return { items: health.slice(0, PROJECT_LIMIT), total: health.length, limit: PROJECT_LIMIT };
   });
 
+  const draftsSystem = draftsSystemReads(principal, now, read, emailGate, jobs);
+
   const system = build("system", async (): Promise<OverviewSystem> => {
     const rows = need(await jobs);
     const gate = await emailGate;
-    return systemHealth(rows, now, gate.ok && gate.value.kind === "on" ? [...TRACKED_JOB_KINDS, ...EMAIL_TRACKED_JOB_KINDS] : TRACKED_JOB_KINDS);
+    const health = systemHealth(rows, now, gate.ok && gate.value.kind === "on" ? [...TRACKED_JOB_KINDS, ...EMAIL_TRACKED_JOB_KINDS] : TRACKED_JOB_KINDS);
+    const drafts = await draftsSystem;
+    return drafts === undefined ? health : { ...health, drafts };
   });
 
   const [tilesResult, attentionResult, approvalsResult, deadlinesResult, projectsResult, systemResult, emailResult] = await Promise.all([
@@ -778,6 +825,63 @@ export async function getOverview(principal: ExecPrincipal, now: Date = new Date
       system: systemResult,
       email: emailResult
     }
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Assistant drafts on the System card (P4, Y7)
+// ---------------------------------------------------------------------------
+
+function tokenVerdict(read: Settled<{ value: { ok: boolean; reason: string | null; checkedAt: string; expiresAt: string | null } } | null>): OverviewTokenVerdict | null {
+  if (!read.ok) return null;
+  const v = read.value?.value;
+  if (!v) return { ok: false, reason: "not_checked", checkedAt: null, expiresAt: null };
+  return { ok: v.ok, reason: v.reason, checkedAt: v.checkedAt, expiresAt: v.expiresAt };
+}
+
+/**
+ * The System card's drafts rows (Y7): nothing is read before the drafts
+ * schema exists (undefined: the card is P3's), and each read fails on its
+ * own. Codes, counts and times only: no draft content is read here.
+ */
+async function draftsSystemReads(
+  principal: ExecPrincipal,
+  now: Date,
+  read: OverviewRead,
+  gateRead: Promise<Settled<EmailGate>>,
+  jobsRead: Promise<Settled<JobRows>>
+): Promise<OverviewDraftsSystem | null | undefined> {
+  const gate = await gateRead;
+  if (!gate.ok) return null;
+  const settings = gate.value.settings;
+  if (!settings.draftsSchemaReady) return undefined;
+  const [ea, send, counts, voice, jobs] = await Promise.all([
+    read("draft token state", (o) => getSyncState(principal, "clone-ea", "ea-token", parseEaTokenState, o)),
+    read("send token state", (o) => getSyncState(principal, "clone-ea", "send-token", parseSendTokenState, o)),
+    read("draft counts", (o) => countDraftsForSystem(principal, now, o)),
+    read("voice profile", (o) => getVoiceProfile(principal, o)),
+    jobsRead
+  ]);
+  const eaState = ea.ok ? (ea.value?.value ?? null) : null;
+  const countsValue = counts.ok ? counts.value : null;
+  const lastReconcile = jobs.ok ? (lastSuccessByKind(jobs.value).get(DRAFT_JOB_KINDS.reconcile) ?? null) : null;
+  const v = voice.ok ? voice.value : undefined;
+  return {
+    installed: true,
+    draftsEnabled: draftsOnFor(settings),
+    sendEnabled: draftsOnFor(settings) && settings.sendEnabled,
+    voiceEnabled: settings.voiceEnabled,
+    eaToken: tokenVerdict(ea),
+    sendToken: tokenVerdict(send),
+    cl2: { ready: eaState?.cl2Ready ?? null, send: eaState?.cl2Send ?? null },
+    counts: countsValue,
+    reconcile: countsValue === null ? null : { lastSucceededAt: lastReconcile, overdueSince: countsValue.oldestDueAt },
+    voice:
+      v === undefined
+        ? null
+        : v === null
+          ? { status: null, builtAt: null, lastAttemptAt: null, lastAttemptError: null }
+          : { status: v.status, builtAt: v.status === "ready" ? v.builtAt : null, lastAttemptAt: v.lastAttemptAt, lastAttemptError: v.lastAttemptError }
   };
 }
 

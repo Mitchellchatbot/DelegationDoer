@@ -7,6 +7,7 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import {
   DEFAULT_SETTINGS,
   DEFAULT_TIMEZONE,
+  countEnabledMailPinnedPrincipals,
   isValidTimeZone,
   listEnabledPrincipals,
   loadPrincipalById,
@@ -112,8 +113,20 @@ const settingsRow = (over: Row = {}): Row => ({
   retention_days_chat: 45,
   daily_cost_cap_usd: "12.50",
   email_enabled: true,
+  drafts_enabled: true,
+  send_enabled: false,
+  voice_enabled: true,
   ...over
 });
+const P4_COLUMNS = ["drafts_enabled", "send_enabled", "voice_enabled"] as const;
+/** The P3-era row: the P4 switches never read. */
+function p3Row(over: Row = {}): Row {
+  const { drafts_enabled: _d, send_enabled: _s, voice_enabled: _v, ...rest } = settingsRow(over);
+  void _d;
+  void _s;
+  void _v;
+  return rest;
+}
 
 // principalFromRows takes the module's private row types; tests build them as plain objects.
 type PRow = Parameters<typeof principalFromRows>[0];
@@ -172,15 +185,40 @@ describe("settingsFromRow", () => {
       retentionDaysChat: 45,
       dailyCostCapUsd: 12.5,
       emailEnabled: true,
-      emailSchemaReady: true
+      emailSchemaReady: true,
+      draftsEnabled: true,
+      sendEnabled: false,
+      voiceEnabled: true,
+      draftsSchemaReady: true
     });
   });
 
-  it("fills every null column with its default (a NULL email_enabled is off, but the column is there)", () => {
+  it("fills every null column with its default (a NULL switch is off, but the column is there)", () => {
     const nulls = Object.fromEntries(Object.keys(settingsRow()).map((k) => [k, null]));
     const s = settingsFromRow({ ...nulls, principal_id: "ep_1" } as unknown as SRow, "ep_1");
-    expect(s).toEqual({ principalId: "ep_1", ...DEFAULT_SETTINGS, emailSchemaReady: true });
+    expect(s).toEqual({ principalId: "ep_1", ...DEFAULT_SETTINGS, emailSchemaReady: true, draftsSchemaReady: true });
     expect(s.emailEnabled).toBe(false);
+    expect(s.draftsEnabled).toBe(false);
+    expect(s.voiceEnabled).toBe(false);
+  });
+
+  it("drafts, send and voice (Y2): on only when the P4 schema is ready and the column is exactly true", () => {
+    const s = (over: Row, opts?: { emailSchemaReady?: boolean; draftsSchemaReady?: boolean }) =>
+      settingsFromRow(settingsRow(over) as unknown as SRow, "ep_1", opts);
+    expect(s({})).toMatchObject({ draftsEnabled: true, sendEnabled: false, voiceEnabled: true, draftsSchemaReady: true });
+    expect(s({ send_enabled: true })).toMatchObject({ sendEnabled: true });
+    expect(s({ drafts_enabled: null, voice_enabled: null })).toMatchObject({ draftsEnabled: false, voiceEnabled: false, draftsSchemaReady: true });
+    expect(s({ drafts_enabled: "true", voice_enabled: 1 })).toMatchObject({ draftsEnabled: false, voiceEnabled: false });
+    // A row read without the P4 columns (the P3 or base tier) is never on, whatever it holds.
+    expect(settingsFromRow(p3Row() as unknown as SRow, "ep_1")).toMatchObject({ draftsEnabled: false, sendEnabled: false, voiceEnabled: false, draftsSchemaReady: false, emailSchemaReady: true, emailEnabled: true });
+    // The loader's explicit answer wins over the row's shape.
+    expect(s({}, { draftsSchemaReady: false })).toMatchObject({ draftsEnabled: false, voiceEnabled: false, draftsSchemaReady: false, emailEnabled: true });
+    expect(settingsFromRow(null, "ep_1")).toMatchObject({ draftsEnabled: false, draftsSchemaReady: false });
+    expect(settingsFromRow(null, "ep_1", { emailSchemaReady: true, draftsSchemaReady: true })).toMatchObject({ draftsEnabled: false, voiceEnabled: false, draftsSchemaReady: true });
+    // All three P4 columns must have been read for the schema to count as ready.
+    const { voice_enabled: _v, ...twoOfThree } = settingsRow();
+    void _v;
+    expect(settingsFromRow(twoOfThree as unknown as SRow, "ep_1")).toMatchObject({ draftsSchemaReady: false, draftsEnabled: false });
   });
 
   it("email: on only when the schema is ready and the column is exactly true", () => {
@@ -202,9 +240,10 @@ describe("settingsFromRow", () => {
     expect(settingsFromRow(null, "ep_1", { emailSchemaReady: true })).toMatchObject({ emailEnabled: false, emailSchemaReady: true });
   });
 
-  it("the defaults keep email off and not installed", () => {
+  it("the defaults keep email, drafts, send and voice off and not installed", () => {
     expect(DEFAULT_SETTINGS.emailEnabled).toBe(false);
     expect(DEFAULT_SETTINGS.emailSchemaReady).toBe(false);
+    expect(DEFAULT_SETTINGS).toMatchObject({ draftsEnabled: false, sendEnabled: false, voiceEnabled: false, draftsSchemaReady: false });
   });
 
   it("only accepts a 24h HH:MM brief time", () => {
@@ -422,17 +461,56 @@ describe("loadSettings", () => {
   const failWhenEmailSelected = (err: DbError) => (table: string, columns: string) =>
     table === "exec_settings" && columns.includes("email_enabled") ? err : null;
 
-  it("maps the stored row, email column included", async () => {
+  it("maps the stored row, email and P4 columns included (one read, the widest tier)", async () => {
     const db = fakeDb({ exec_settings: [settingsRow()] });
     expect(await loadSettings("ep_1")).toMatchObject({
       principalId: "ep_1",
       briefLocalTime: "07:30",
       dailyCostCapUsd: 12.5,
       emailEnabled: true,
-      emailSchemaReady: true
+      emailSchemaReady: true,
+      draftsEnabled: true,
+      sendEnabled: false,
+      voiceEnabled: true,
+      draftsSchemaReady: true
     });
     expect(db.queries).toHaveLength(1);
     expect(db.queries[0].columns).toContain("email_enabled");
+    for (const c of P4_COLUMNS) expect(db.queries[0].columns).toContain(c);
+  });
+
+  // PX07: the three column tiers.
+  const missingP4: Record<string, DbError> = {
+    "42703": { code: "42703", message: "column exec_settings.drafts_enabled does not exist" },
+    PGRST204: { code: "PGRST204", message: "Could not find the 'voice_enabled' column of 'exec_settings' in the schema cache" },
+    "message only": { message: "column \"send_enabled\" does not exist" }
+  };
+  const failWhenP4Selected = (err: DbError) => (table: string, columns: string) =>
+    table === "exec_settings" && P4_COLUMNS.some((c) => columns.includes(c)) ? err : null;
+
+  for (const [form, err] of Object.entries(missingP4)) {
+    it(`PX07: P4 columns missing (${form}): the P3 tier answers; drafts off and not installed, email still read`, async () => {
+      const db = fakeDb({ exec_settings: [p3Row()] }, {}, failWhenP4Selected(err));
+      expect(await loadSettings("ep_1")).toMatchObject({
+        emailEnabled: true,
+        emailSchemaReady: true,
+        draftsEnabled: false,
+        sendEnabled: false,
+        voiceEnabled: false,
+        draftsSchemaReady: false,
+        retentionDaysEmail: 60
+      });
+      const reads = db.queries.filter((q) => q.table === "exec_settings");
+      expect(reads).toHaveLength(2);
+      expect(reads[0].columns).toContain("drafts_enabled");
+      expect(reads[1].columns).toContain("email_enabled");
+      expect(reads[1].columns).not.toContain("drafts_enabled");
+    });
+  }
+
+  it("PX07: a NULL switch reads as off while the schema counts as ready", async () => {
+    fakeDb({ exec_settings: [settingsRow({ drafts_enabled: null, send_enabled: null, voice_enabled: null })] });
+    expect(await loadSettings("ep_1")).toMatchObject({ draftsEnabled: false, sendEnabled: false, voiceEnabled: false, draftsSchemaReady: true });
   });
 
   it("column present: false and NULL are off, and the schema is ready", async () => {
@@ -442,14 +520,14 @@ describe("loadSettings", () => {
     expect(await loadSettings("ep_1")).toMatchObject({ emailEnabled: false, emailSchemaReady: true });
   });
 
-  it("returns defaults when there is no row (the column was read, so the schema is ready)", async () => {
+  it("returns defaults when there is no row (the columns were read, so both schemas are ready)", async () => {
     fakeDb({ exec_settings: [] });
-    expect(await loadSettings("ep_1")).toEqual({ principalId: "ep_1", ...DEFAULT_SETTINGS, emailSchemaReady: true });
+    expect(await loadSettings("ep_1")).toEqual({ principalId: "ep_1", ...DEFAULT_SETTINGS, emailSchemaReady: true, draftsSchemaReady: true });
   });
 
   for (const [form, err] of Object.entries(missingColumn)) {
-    it(`column missing (${form}): retries once without it; email off and not installed, the rest still loads`, async () => {
-      const { email_enabled: _dropped, ...p2aRow } = settingsRow();
+    it(`column missing (${form}): moves down the tiers to the base columns; email and drafts off and not installed, the rest still loads`, async () => {
+      const { email_enabled: _dropped, ...p2aRow } = p3Row();
       void _dropped;
       const db = fakeDb({ exec_settings: [p2aRow] }, {}, failWhenEmailSelected(err));
       expect(await loadSettings("ep_1")).toMatchObject({
@@ -457,13 +535,17 @@ describe("loadSettings", () => {
         briefLocalTime: "07:30",
         retentionDaysEmail: 60,
         emailEnabled: false,
-        emailSchemaReady: false
+        emailSchemaReady: false,
+        draftsEnabled: false,
+        draftsSchemaReady: false
       });
       const reads = db.queries.filter((q) => q.table === "exec_settings");
-      expect(reads).toHaveLength(2);
-      expect(reads[0].columns).toContain("email_enabled");
-      expect(reads[1].columns).not.toContain("email_enabled");
-      expect(reads[1].columns).toContain("retention_days_email");
+      expect(reads).toHaveLength(3);
+      expect(reads[0].columns).toContain("drafts_enabled");
+      expect(reads[1].columns).toContain("email_enabled");
+      expect(reads[1].columns).not.toContain("drafts_enabled");
+      expect(reads[2].columns).not.toContain("email_enabled");
+      expect(reads[2].columns).toContain("retention_days_email");
     });
   }
 
@@ -492,7 +574,7 @@ describe("loadSettings", () => {
   });
 
   it("a principal still loads before the P3 migration (its timezone comes from settings)", async () => {
-    const { email_enabled: _dropped, ...p2aRow } = settingsRow();
+    const { email_enabled: _dropped, ...p2aRow } = p3Row();
     void _dropped;
     fakeDb({ exec_principals: [principalRow()], users: [userRow()], exec_settings: [p2aRow] }, {}, failWhenEmailSelected(missingColumn.PGRST204));
     expect(await loadPrincipalById("ep_1")).toMatchObject({ id: "ep_1", timezone: "Asia/Karachi" });
@@ -501,5 +583,30 @@ describe("loadSettings", () => {
   it("throws when the read fails", async () => {
     fakeDb({}, { exec_settings: "down" });
     await expect(loadSettings("ep_1")).rejects.toThrow("exec_settings read failed: down");
+  });
+});
+
+describe("countEnabledMailPinnedPrincipals (PX08)", () => {
+  it("counts only enabled principals with a non-empty pin", async () => {
+    const db = fakeDb({
+      exec_principals: [
+        principalRow(),
+        principalRow({ id: "ep_2", user_id: "u_2", mail_account_ids: [] }),
+        principalRow({ id: "ep_3", user_id: "u_3", mail_account_ids: null }),
+        principalRow({ id: "ep_4", user_id: "u_4", enabled: false, mail_account_ids: ["acc_4"] }),
+        principalRow({ id: "ep_5", user_id: "u_5", mail_account_ids: ["", null] }),
+        principalRow({ id: "ep_6", user_id: "u_6", mail_account_ids: ["acc_6", "acc_7"] })
+      ]
+    });
+    expect(await countEnabledMailPinnedPrincipals()).toBe(2);
+    expect(db.queries[0]).toMatchObject({ table: "exec_principals", filters: [["enabled", true]] });
+    expect(db.queries[0].columns).toBe("id,mail_account_ids");
+  });
+
+  it("is 0 with none, and throws on a read failure", async () => {
+    fakeDb({ exec_principals: [] });
+    expect(await countEnabledMailPinnedPrincipals()).toBe(0);
+    fakeDb({}, { exec_principals: "down" });
+    await expect(countEnabledMailPinnedPrincipals()).rejects.toThrow("exec_principals read failed: down");
   });
 });

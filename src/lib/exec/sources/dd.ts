@@ -3,6 +3,7 @@ import "server-only";
 import { addressMatches, type RestrictedSenderRule } from "@/lib/restricted-senders";
 import { addDaysToYmd, eodToday } from "@/lib/shift";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
+import { DEFAULT_TIMEZONE, isValidTimeZone } from "@/lib/exec/principal";
 import type {
   ApprovalBucket,
   ApprovalMechanism,
@@ -1209,4 +1210,43 @@ export async function listClientMeetings(
     if (typeof r.id !== "string" || typeof r.meeting_date !== "string") throw new DdReadError("client_meetings", "a row is malformed");
     return { id: r.id, title: typeof r.title === "string" ? r.title : "", meetingAt: r.meeting_date };
   });
+}
+
+// ---------------------------------------------------------------------------
+// P4 (contract §3.15 Y11; Area C)
+// ---------------------------------------------------------------------------
+
+/**
+ * The zone CL2 quotes times in (L19): users.work_timezone of principal.userId
+ * when isValidTimeZone, else "America/New_York". Cosmetic, so unlike every
+ * other read here it fails soft: a read error (or a missing user) gives the
+ * default and one log line, never a thrown DdReadError.
+ */
+export async function getMailTimezone(principal: ExecPrincipal, opts: DdReadOptions = {}): Promise<string> {
+  requirePrincipal(principal);
+  try {
+    let query = from("users", "work_timezone").eq("id", principal.userId).limit(1);
+    if (opts.signal) query = query.abortSignal(opts.signal);
+    const { data, error } = await query;
+    if (error) throw new DdReadError("users", error.message);
+    const row = Array.isArray(data) && data.length > 0 ? (data[0] as { work_timezone?: unknown }) : null;
+    const tz = row !== null && typeof row.work_timezone === "string" ? row.work_timezone.trim() : null;
+    return isValidTimeZone(tz) ? tz : DEFAULT_TIMEZONE;
+  } catch (err) {
+    console.warn(`[exec-dd] users.work_timezone read failed, using ${DEFAULT_TIMEZONE}: ${err instanceof Error ? err.message : String(err)}`);
+    return DEFAULT_TIMEZONE;
+  }
+}
+
+/**
+ * Open tasks (the whereOpenTask predicate) whose client_name equals
+ * `clientName` exactly, paged by id, DdTask columns (ids, enums, dates: no
+ * description). An empty name reads nothing. Fails closed like every other
+ * list here (a DD error throws DdReadError).
+ */
+export async function listOpenTasksForClient(principal: ExecPrincipal, clientName: string, opts: DdReadOptions = {}): Promise<DdTask[]> {
+  requirePrincipal(principal);
+  if (typeof clientName !== "string" || clientName.trim() === "") return [];
+  const rows = await pageAll<TaskRow>("tasks", () => whereOpenTask(from("tasks", TASK_COLS)).eq("client_name", clientName), opts);
+  return rows.map(taskFromRow);
 }

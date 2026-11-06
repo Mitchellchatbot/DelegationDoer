@@ -1,5 +1,6 @@
 import "server-only";
 
+import { purgeExpiredDrafts } from "@/lib/exec/drafts-store";
 import { purgeExpiredEmailRows } from "@/lib/exec/email-store";
 import { purgeFinishedJobs } from "@/lib/exec/jobs";
 import type { ScheduledWork } from "@/lib/exec/scheduler";
@@ -18,6 +19,12 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 //                         set when written), and email attention rows whose thread
 //                         or commitment is gone: see purgeExpiredEmailRows. Tolerates
 //                         the P3 migration not being applied yet (counts 0).
+//   drafts (P4)           exec_drafts: content 30 days after a terminal status, whole
+//                         rows retention_days_email after it, idle DD-only drafts closed
+//                         and idle linked ones re-checked after 30 days: see
+//                         purgeExpiredDrafts (exec_drafts_purge_expired). Tolerates the
+//                         P4 migration not being applied yet (counts 0). The voice
+//                         profile has no purge (one row per principal, replaced weekly).
 //
 // The deletes are global, not per principal. Rows with no principal (system
 // jobs, access attempts that never resolved to a principal) have to age out
@@ -54,6 +61,11 @@ export interface PurgeCounts {
   emailCommitments: number;
   emailSignals: number;
   emailAttentionRows: number;
+  /** P4 drafts retention (purgeExpiredDrafts, contract §2.8). */
+  draftsContentPurged: number;
+  draftsDeleted: number;
+  draftsClosedIdle: number;
+  draftsChecksScheduled: number;
 }
 
 function errMessage(err: unknown): string {
@@ -111,7 +123,11 @@ export async function runPurge(signal?: AbortSignal, now: Date = new Date()): Pr
     emailThreads: 0,
     emailCommitments: 0,
     emailSignals: 0,
-    emailAttentionRows: 0
+    emailAttentionRows: 0,
+    draftsContentPurged: 0,
+    draftsDeleted: 0,
+    draftsClosedIdle: 0,
+    draftsChecksScheduled: 0
   };
   const one = (key: keyof PurgeCounts, run: () => Promise<number>) => async (): Promise<Partial<PurgeCounts>> => ({ [key]: await run() });
   const steps: readonly [string, () => Promise<Partial<PurgeCounts>>][] = [
@@ -125,6 +141,13 @@ export async function runPurge(signal?: AbortSignal, now: Date = new Date()): Pr
       async () => {
         const c = await purgeExpiredEmailRows(now, { signal });
         return { emailThreads: c.threads, emailCommitments: c.commitments, emailSignals: c.signals, emailAttentionRows: c.attentionRows };
+      }
+    ],
+    [
+      "drafts",
+      async () => {
+        const c = await purgeExpiredDrafts(now, { signal });
+        return { draftsContentPurged: c.contentPurged, draftsDeleted: c.deleted, draftsClosedIdle: c.closedIdle, draftsChecksScheduled: c.checksScheduled };
       }
     ]
   ];
@@ -144,7 +167,9 @@ export async function runPurge(signal?: AbortSignal, now: Date = new Date()): Pr
     `[exec-purge] deleted finishedJobs=${counts.finishedJobs} accessLog=${counts.accessLog} ` +
       `auditLog=${counts.auditLog} aiUsage=${counts.aiUsage} resolvedAttention=${counts.resolvedAttention} ` +
       `emailThreads=${counts.emailThreads} emailCommitments=${counts.emailCommitments} emailSignals=${counts.emailSignals} ` +
-      `emailAttentionRows=${counts.emailAttentionRows}` +
+      `emailAttentionRows=${counts.emailAttentionRows} ` +
+      `draftsContentPurged=${counts.draftsContentPurged} draftsDeleted=${counts.draftsDeleted} ` +
+      `draftsClosedIdle=${counts.draftsClosedIdle} draftsChecksScheduled=${counts.draftsChecksScheduled}` +
       `${failures.length > 0 ? ` failed=${failures.length}` : ""}`
   );
   if (failures.length > 0) {

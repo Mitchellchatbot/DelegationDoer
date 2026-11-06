@@ -1,8 +1,11 @@
-import { EyeOff, FileClock, Handshake, Inbox, MailX, PlugZap } from "lucide-react";
+import Link from "next/link";
+import { EyeOff, FileClock, FilePen, Handshake, Inbox, MailX, PlugZap } from "lucide-react";
 import type { EmailBucket } from "@/lib/exec/email-types";
 import type { EmailBucketsView, EmailFreshness, EmailTabView as EmailTabData } from "@/lib/exec/email-view";
 import { formatCount, pluralize } from "@/lib/exec/format";
+import { NEW_EMAIL_HREF } from "@/lib/exec/drafts-links";
 import { BasisLabel } from "../BasisLabel";
+import { DraftsBucket } from "../drafts/DraftsBucket";
 import { EmptyState } from "../EmptyState";
 import { EXEC_TABS, ExecTabs } from "../ExecTabs";
 import { ExecHeader } from "../ExecHeader";
@@ -82,6 +85,16 @@ function WholePage({ icon, message, detail }: { icon: typeof Inbox; message: str
   );
 }
 
+/** "N (M need attention)", or "couldn't load" for a count that wasn't read (never a zero). */
+export function execDraftCountLabel(active: number | null, attention: number | null): string {
+  if (active === null) return "couldn't load";
+  if (attention === null) return `${formatCount(active)} (attention couldn't load)`;
+  return attention > 0 ? `${formatCount(active)} (${formatCount(attention)} need attention)` : formatCount(active);
+}
+
+const LINK_PILL =
+  "inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[12px] font-semibold text-slate-700 hover:border-slate-300 hover:text-ink";
+
 export function EmailTabView({ view, bucket }: { view: EmailTabData; bucket?: string }) {
   const now = view.generatedAt;
   const tz = view.timezone;
@@ -113,6 +126,9 @@ export function EmailTabView({ view, bucket }: { view: EmailTabData; bucket?: st
   }
 
   const { buckets, restricted, drafts, commitments } = view;
+  // P4: the Drafts view is its own section, picked by ?bucket=drafts (not an email bucket).
+  const draftsBucket = view.draftsBucket;
+  const showDrafts = bucket === "drafts";
   const coverage = mailCoverage(view.freshness);
   // Before the first sync there is nothing to count: a "0" there would be an unknown shown as a fact (ui-5).
   const notSynced = view.freshness.accounts.ok && view.freshness.accounts.data.checkedAt === null;
@@ -126,8 +142,43 @@ export function EmailTabView({ view, bucket }: { view: EmailTabData; bucket?: st
       {header}
       <EmailStatusPanel freshness={view.freshness} now={now} tz={tz} />
       <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
-        {buckets.ok ? (
-          <SectionCard title="Email" icon={Inbox} subtitle="Your mail from the last 30 days, sorted by the assistant" padded={false}>
+        {showDrafts ? (
+          <SectionCard
+            title="Assistant drafts"
+            icon={FilePen}
+            subtitle="Replies and new emails the assistant drafted with you"
+            action={
+              <Link href="/executive/email" prefetch={false} className={LINK_PILL}>
+                <Inbox className="h-3.5 w-3.5" aria-hidden />
+                All email
+              </Link>
+            }
+            padded={false}
+          >
+            <DraftsBucket
+              state={draftsBucket?.state ?? "not_installed"}
+              items={draftsBucket?.items ?? []}
+              tz={tz}
+              nowIso={now}
+              newEmailHref={NEW_EMAIL_HREF}
+              draftsOn={draftsBucket?.draftsOn ?? false}
+            />
+          </SectionCard>
+        ) : buckets.ok ? (
+          <SectionCard
+            title="Email"
+            icon={Inbox}
+            subtitle="Your mail from the last 30 days, sorted by the assistant"
+            action={
+              draftsBucket ? (
+                <Link href="/executive/email?bucket=drafts" prefetch={false} className={LINK_PILL}>
+                  <FilePen className="h-3.5 w-3.5" aria-hidden />
+                  Assistant drafts
+                </Link>
+              ) : undefined
+            }
+            padded={false}
+          >
             <BucketTabs tabs={tabs} panels={panels} initial={bucket ?? "reply"} />
           </SectionCard>
         ) : (
@@ -156,7 +207,27 @@ export function EmailTabView({ view, bucket }: { view: EmailTabData; bucket?: st
           )}
 
           {drafts.ok ? (
-            <SectionCard title="Drafts" icon={FileClock} basis="record" subtitle="Replies waiting in DD for your mailbox">
+            <SectionCard
+              title="Drafts"
+              icon={FileClock}
+              basis="record"
+              subtitle="Replies waiting in DD for your mailbox"
+              action={
+                draftsBucket && !showDrafts ? (
+                  <Link href="/executive/email?bucket=drafts" prefetch={false} className="text-[12px] font-semibold text-indigo-700 hover:text-indigo-900">
+                    Open drafts
+                  </Link>
+                ) : undefined
+              }
+            >
+              {draftsBucket && (
+                <div data-exec-drafts-count className="mb-3 border-b border-slate-100 pb-3">
+                  <div className="text-[10.5px] font-semibold uppercase tracking-wide text-muted">Assistant drafts</div>
+                  <div className="mt-0.5 text-[18px] font-semibold tabular-nums text-ink">
+                    {execDraftCountLabel(drafts.data.execDraftsActive, drafts.data.execDraftsAttention)}
+                  </div>
+                </div>
+              )}
               <dl className="grid grid-cols-2 gap-3">
                 <div>
                   <dt className="text-[10.5px] font-semibold uppercase tracking-wide text-muted">Awaiting approval</dt>

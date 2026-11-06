@@ -69,6 +69,21 @@ export interface ExecSettings {
    * migration, so every email path skips instead of failing (L1).
    */
   emailSchemaReady: boolean;
+  /**
+   * exec_settings.drafts_enabled (P4, L1): reply and new drafts, generation,
+   * save to Outlook. On only with draftsSchemaReady, email on and a pin.
+   */
+  draftsEnabled: boolean;
+  /** exec_settings.send_enabled (P4, L1, L23): Send from DD, on top of draftsEnabled. */
+  sendEnabled: boolean;
+  /** exec_settings.voice_enabled (P4, L17): the weekly style profile. */
+  voiceEnabled: boolean;
+  /**
+   * The P4 migration is applied: the settings read found the drafts_enabled,
+   * send_enabled and voice_enabled columns. False means P4 code is running
+   * ahead of its hand-applied migration, so every drafts path skips (L1).
+   */
+  draftsSchemaReady: boolean;
 }
 
 // ---------------------------------------------------------------------------

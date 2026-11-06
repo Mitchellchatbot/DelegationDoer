@@ -6,6 +6,8 @@ import {
   ddPageRef,
   ddProjectRef,
   ddTaskRef,
+  execEmailRef,
+  execEmailThreadRef,
   isAllowedLinkUrl,
   outlookMessageRef,
   slackMessageRef
@@ -304,19 +306,33 @@ describe("ddPageRef", () => {
 describe("outlookMessageRef", () => {
   const webLink = "https://outlook.office365.com/owa/?ItemID=AAMkAD%2BZ&exvsurl=1&viewmodel=ReadMessageItem";
 
-  it("links to Outlook on the web and is public by default", () => {
+  it("links to Outlook on the web and is private by default (P4 Y10, C43)", () => {
     expect(outlookMessageRef({ id: "AAMk1", webLink, subject: "Re: proposal" })).toEqual({
       system: "outlook",
       id: "AAMk1",
       url: webLink,
       label: "Re: proposal",
-      class: "public"
+      class: "private"
     });
   });
 
-  it("is restricted when the sender is restricted", () => {
+  it("is restricted when the sender is restricted, else private (PX13)", () => {
     expect(outlookMessageRef({ id: "AAMk1", webLink, subject: "Invoice", restricted: true }).class).toBe("restricted");
-    expect(outlookMessageRef({ id: "AAMk1", webLink, subject: "Invoice", restricted: false }).class).toBe("public");
+    expect(outlookMessageRef({ id: "AAMk1", webLink, subject: "Invoice", restricted: false }).class).toBe("private");
+  });
+
+  it("PX13: no exported email ref builder returns a public ref", () => {
+    const cases = [
+      outlookMessageRef({ id: "m", webLink, subject: "s" }),
+      outlookMessageRef({ id: "m", webLink: null, subject: null }),
+      outlookMessageRef({ id: "m", webLink, subject: "s", restricted: false }),
+      outlookMessageRef({ id: "m", webLink, subject: "s", restricted: true }),
+      execEmailRef({ threadId: "t1", webLink, label: "s" }),
+      execEmailRef({ threadId: "t1" }),
+      execEmailThreadRef("t1", "s"),
+      execEmailThreadRef("")
+    ];
+    for (const ref of cases) expect(ref.class).not.toBe("public");
   });
 
   it("drops a webLink that isn't on an allowed host", () => {

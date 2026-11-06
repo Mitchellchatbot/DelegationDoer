@@ -35,4 +35,26 @@ export interface EmailEditorProps {
   contentClassName?: string;
   // Grow to fill a flex column (maximized compose).
   fill?: boolean;
+  // No attachments here (the assistant's drafts): a dropped or pasted file is
+  // ignored without a toast, and so is the pasted-images note. Default false.
+  hideAttachmentHint?: boolean;
+}
+
+// The editor's two attachment toasts, as a pure function so they can be
+// tested: a file pasted or dropped where nothing takes attachments, and
+// images left out of pasted content. null = no toast.
+export type AttachmentHintEvent = { kind: "files" } | { kind: "pasted_images"; count: number };
+
+export const ATTACHMENT_HINTS = Object.freeze({
+  useAttachFiles: "Use Attach files to add attachments.",
+  pastedImagesDropped: "Images in pasted content aren't included — attach them as files instead."
+});
+
+export function attachmentHintFor(
+  props: Pick<EmailEditorProps, "hideAttachmentHint" | "onAttachFiles">,
+  event: AttachmentHintEvent
+): string | null {
+  if (props.hideAttachmentHint === true) return null;
+  if (event.kind === "files") return props.onAttachFiles ? null : ATTACHMENT_HINTS.useAttachFiles;
+  return event.count > 0 ? ATTACHMENT_HINTS.pastedImagesDropped : null;
 }

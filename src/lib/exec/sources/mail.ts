@@ -4,6 +4,22 @@ import { createHash } from "node:crypto";
 import { GENERIC_EMAIL_DOMAINS } from "@/lib/calendar-client-match";
 import { sanitizeForAudit } from "@/lib/exec/audit";
 import {
+  CLONE_GRAPH_ID_RE,
+  CloneEaError,
+  decodeTokenClaims,
+  parseCloneAuthMe,
+  parseCloneDeleted,
+  parseCloneDraftRead,
+  parseCloneReadBack,
+  parseCloneStatus,
+  type CloneDeleted,
+  type CloneDraftRead,
+  type CloneEaRoute,
+  type CloneReadBack
+} from "@/lib/exec/clone-ea-types";
+import { listDraftArtifacts } from "@/lib/exec/drafts-store";
+import type { DraftAddress, DraftKind, EaReadinessReason, SentCopyResult } from "@/lib/exec/drafts-types";
+import {
   SCREEN_HASH_LIMIT,
   type AnsweredState,
   type ExecEmailSignal,
@@ -22,7 +38,10 @@ import {
   type ThreadScreenRow,
   type ThreadSnapshot
 } from "@/lib/exec/email-types";
-import type { MailAccountProblem, MailAccountStatus } from "@/lib/exec/sync-state";
+import { notifyOps } from "@/lib/exec/ops";
+import { countEnabledMailPinnedPrincipals } from "@/lib/exec/principal";
+import { CLONE_EA_PATHS, cloneEaBaseUrl, cloneEaFetch, type CloneEaCall, type CloneEaResponse } from "@/lib/exec/sources/clone-ea";
+import { getSyncState, parseEaTokenState, putSyncState, type EaTokenState, type MailAccountProblem, type MailAccountStatus } from "@/lib/exec/sync-state";
 import { NonRetryableError, type ExecPrincipal, type RestrictedPolicy } from "@/lib/exec/types";
 import { cidPattern } from "@/lib/inline-cid";
 import {
@@ -1102,16 +1121,22 @@ function feedRowOf(m: MissiveFeedMessage, accountId: string): FeedRow {
  * "changed": rows whose signals changed too). `cursor` wins over `sinceIso`.
  * `{ supported: false }` from a pre-CL1 clone (cached by missive-client). A
  * row that isn't well-formed, or belongs to another account, throws: the
- * cursor must not move past a row that couldn't be read.
+ * cursor must not move past a row that couldn't be read. `direction` (P4,
+ * X2(c)) asks the clone for one direction only and is omitted from the
+ * request when absent.
  */
 export async function listPrincipalMessagesFeed(
   principal: ExecPrincipal,
   accountId: string,
-  opts: { order: "created" | "changed"; cursor: string | null; sinceIso: string | null; limit: number } & CloneCallOptions
+  opts: { order: "created" | "changed"; cursor: string | null; sinceIso: string | null; limit: number; direction?: "inbound" | "outbound" } &
+    CloneCallOptions
 ): Promise<FeedPage> {
   requirePinnedAccount(principal, accountId, "listPrincipalMessagesFeed");
   if (opts.order !== "created" && opts.order !== "changed") {
     throw new NonRetryableError("listPrincipalMessagesFeed: order must be created or changed");
+  }
+  if (opts.direction !== undefined && opts.direction !== "inbound" && opts.direction !== "outbound") {
+    throw new NonRetryableError("listPrincipalMessagesFeed: direction must be inbound or outbound");
   }
   if (opts.cursor !== null && (typeof opts.cursor !== "string" || !opts.cursor || opts.cursor.length > MAX_CURSOR_CHARS)) {
     throw new NonRetryableError("listPrincipalMessagesFeed: cursor is malformed");
@@ -1119,7 +1144,15 @@ export async function listPrincipalMessagesFeed(
   const since = opts.cursor || opts.sinceIso === null ? null : isoParam(opts.sinceIso, "listPrincipalMessagesFeed", "sinceIso");
   const limit = pageLimit(opts.limit, "listPrincipalMessagesFeed");
   const page = await cloneCall("messages feed", opts, (signal) =>
-    listMessagesFeed({ accountId, order: opts.order, cursor: opts.cursor, since, limit, signal })
+    listMessagesFeed({
+      accountId,
+      order: opts.order,
+      cursor: opts.cursor,
+      since,
+      limit,
+      ...(opts.direction === undefined ? {} : { direction: opts.direction }),
+      signal
+    })
   );
   if (!page.supported) return { supported: false };
   const settledThroughMs = cloneTimeToMs(page.settled_through);
@@ -1304,6 +1337,12 @@ export function computeAnswered(his: readonly HisMessage[], opts: { ownAddresses
  * archive is awaiting again) says it left his folders; reply_scheduled when a
  * DD reply is scheduled; draft_pending when a draft awaits approval. null for
  * a row with no answered state (a tombstone).
+ *
+ * P4 (X2(a), L15, C45): reply_sent_pending comes right after
+ * handled_in_outlook: an exec draft replying to the row's newest inbound
+ * message (and only that message: a newer inbound is awaiting again) was sent
+ * from DD or from Outlook within 7 days and the feed hasn't shown the Sent
+ * copy yet. A ready or saved exec draft never changes the overlay.
  */
 export function overlayAnswered(
   row: Pick<ExecEmailThread, "answeredState" | "newestInboundMessageId">,
@@ -1322,6 +1361,7 @@ export function overlayAnswered(
   ) {
     return "handled_in_outlook";
   }
+  if (row.newestInboundMessageId !== null && artifacts?.execSentParents?.includes(row.newestInboundMessageId)) return "reply_sent_pending";
   if (artifacts?.scheduledFor) return "reply_scheduled";
   if (artifacts?.draftPending) return "draft_pending";
   return "awaiting_reply";
@@ -1362,6 +1402,46 @@ function scheduleInto(out: Map<string, ReplyArtifacts>, rows: readonly Record<st
 
 function draftsInto(out: Map<string, ReplyArtifacts>, rows: readonly Record<string, unknown>[]): void {
   for (const r of rows) addArtifact(out, r.source_thread_id, (a) => (a.draftPending = true));
+}
+
+/** A short code for a failed read: the error's `code` property, else its name. Never a message. */
+function errorCodeOf(err: unknown): string {
+  if (typeof err === "object" && err !== null) {
+    const code = (err as { code?: unknown }).code;
+    if (typeof code === "string" && code.length > 0) return code.slice(0, 64);
+    if (err instanceof Error && err.name) return err.name;
+  }
+  return "unknown";
+}
+
+/**
+ * P4 (X2(b), C73): merge the exec drafts' artifacts (the thread's active draft
+ * and the parents of drafts sent from DD in the last 7 days) into `out`. The
+ * exec table not being installed is already "no exec fields" (listDraftArtifacts
+ * answers an empty map). Any other exec read error fails OPEN: one log line
+ * with the code and the legacy artifacts without exec fields, never a throw,
+ * because P3's attention pass reads artifacts where "any failure throws" and
+ * the Email tab drops its whole bucket section on an artifacts failure.
+ */
+async function mergeExecArtifacts(
+  principal: ExecPrincipal,
+  out: Map<string, ReplyArtifacts>,
+  threadIds: readonly string[] | "all",
+  signal: AbortSignal | undefined
+): Promise<void> {
+  let exec: Awaited<ReturnType<typeof listDraftArtifacts>>;
+  try {
+    exec = await listDraftArtifacts(principal, threadIds, new Date(), { signal });
+  } catch (err) {
+    console.warn(`[exec-drafts] artifacts unavailable ${errorCodeOf(err)}`);
+    return;
+  }
+  for (const [threadId, a] of exec) {
+    addArtifact(out, threadId, (artifacts) => {
+      artifacts.execDraft = a.execDraft;
+      artifacts.execSentParents = a.execSentParents;
+    });
+  }
 }
 
 /**
@@ -1405,6 +1485,7 @@ export async function listReplyArtifacts(
       )
     );
   }
+  await mergeExecArtifacts(principal, out, ids, opts.signal);
   return out;
 }
 
@@ -1437,6 +1518,7 @@ export async function listAllReplyArtifacts(principal: ExecPrincipal, opts: { si
       readFail
     )
   );
+  await mergeExecArtifacts(principal, out, "all", opts.signal);
   return out;
 }
 
@@ -1469,4 +1551,429 @@ export async function countPendingReplyArtifacts(
     headCount(() => from("scheduled_emails", "id", head).eq("status", "pending").in("account_id", pinned), "scheduled_emails", opts.signal)
   ]);
   return { draftsPending, scheduledReplies };
+}
+
+// ---------------------------------------------------------------------------
+// P4: Outlook drafts through CL2 (contract §3.3; Area B implements)
+// ---------------------------------------------------------------------------
+//
+// This file is the ONLY reader of the EA (draft) token (boundary B2) and never
+// falls back to the legacy clone token (L3). Every draft function, in this
+// order: requirePinnedAccount (a foreign account is a MailScopeError before
+// any I/O), getEaReadiness (not ok → EaUnavailableError), the token (empty →
+// EaUnavailableError("token_missing")), the CL2 body exactly per §3.3's table
+// (recipients as { address, name } with the name omitted when empty),
+// cloneEaFetch with the C4 timeout (an own AbortController, never a caller's
+// signal), the clone-ea-types parser (a read-back whose accountId isn't
+// pinned → MailScopeError), and on an `auth` error the readiness cache is
+// invalidated before the error is rethrown. Nothing here logs a token, a
+// body or an address: log lines carry codes.
+
+// C4: the per-call timeouts of the CL2 routes.
+const EA_PROBE_TIMEOUT_MS = 10_000;
+const EA_CREATE_TIMEOUT_MS = 200_000;
+const EA_RECREATE_TIMEOUT_MS = 340_000;
+const EA_DELETE_TIMEOUT_MS = 200_000;
+const EA_READ_TIMEOUT_MS = 60_000;
+// C37: the readiness cache.
+const EA_OK_TTL_MS = 300_000;
+const EA_FAIL_TTL_MS = 60_000;
+// §2.3: where the verdict is persisted.
+const EA_SOURCE = "clone-ea" as const;
+const EA_TOKEN_KEY = "ea-token";
+// L4: the scopes the draft token must carry, sorted and joined.
+const EA_SCOPES = "draft,read";
+// C54: the Sent-copy search.
+const SENT_COPY_PAGE_TIMEOUT_MS = 15_000;
+const SENT_COPY_MARGIN_MS = 300_000;
+const SENT_COPY_MAX_PAGES = 5;
+const SENT_COPY_PAGE_LIMIT = 200;
+
+/** The only reader of the EA token (B2): trimmed; null when unset or blank. Never MISSIVE_API_TOKEN. */
+function readEaToken(): string | null {
+  const raw = process.env.MISSIVE_EA_TOKEN;
+  const token = typeof raw === "string" ? raw.trim() : "";
+  return token.length > 0 ? token : null;
+}
+
+/** First 12 hex of sha256(token): what logs, verdicts and the cache key carry instead of the token. */
+const tokenFingerprint = (token: string): string => createHash("sha256").update(token, "utf8").digest("hex").slice(0, 12);
+const hasOwn = (o: object, key: string): boolean => Object.prototype.hasOwnProperty.call(o, key);
+
+function sameSet(a: readonly string[], b: readonly string[]): boolean {
+  const left = new Set(a);
+  const right = new Set(b);
+  if (left.size !== right.size) return false;
+  for (const x of left) if (!right.has(x)) return false;
+  return true;
+}
+
+interface CachedReadiness {
+  verdict: EaReadiness;
+  until: number;
+}
+const readinessCache = new Map<string, CachedReadiness>();
+const readinessKey = (principal: ExecPrincipal, tokenFp: string | null): string => `${principal.id}:${tokenFp ?? "-"}`;
+
+/** One CL2 probe for the readiness check: the parsed answer, or null on any clone answer or failure. */
+async function probeClone<T>(route: CloneEaRoute, path: string, token: string | null, parse: (body: unknown) => T): Promise<T | null> {
+  try {
+    const res = await cloneEaFetch({ route, method: "GET", path, token, timeoutMs: EA_PROBE_TIMEOUT_MS });
+    return parse(res.body);
+  } catch (err) {
+    if (err instanceof CloneEaError) return null;
+    throw err;
+  }
+}
+
+/** L4's checks, in the contract's order (§3.3 "getEaReadiness"); the first failed check is the reason. */
+async function computeEaReadiness(principal: ExecPrincipal, token: string | null, tokenFp: string | null, nowMs: number): Promise<EaReadiness> {
+  const checkedAt = new Date(nowMs).toISOString();
+  let expiresAt: string | null = null;
+  let cl2Ready: boolean | null = null;
+  let cl2Send: EaReadiness["cl2Send"] = null;
+  const fail = (reason: EaReadinessReason): EaReadiness => ({ ok: false, reason, cl2Ready, cl2Send, sendEnabled: false, expiresAt, checkedAt, tokenFp });
+
+  const pinned = pinnedAccounts(principal);
+  if (pinned.length === 0) return fail("no_pin");
+  if ((await countEnabledMailPinnedPrincipals()) > 1) return fail("multiple_principals");
+  if (token === null) return fail("token_missing");
+  try {
+    cloneEaBaseUrl();
+  } catch {
+    return fail("base_url_missing");
+  }
+  const claims = decodeTokenClaims(token);
+  if (claims === null || !hasOwn(claims, "scope")) return fail("not_scoped");
+  const exp = typeof claims.exp === "number" && Number.isFinite(claims.exp) && Math.abs(claims.exp * 1000) <= MAX_DATE_MS ? claims.exp * 1000 : null;
+  if (exp !== null) expiresAt = new Date(exp).toISOString();
+  if (exp !== null && exp <= nowMs) return fail("token_expired");
+
+  const status = await probeClone("status", CLONE_EA_PATHS.status(), null, parseCloneStatus);
+  if (status === null) return fail("clone_unreachable");
+  if (status.cl2 === null) return fail("cl2_missing");
+  cl2Ready = status.cl2.ready;
+  cl2Send = status.cl2.send;
+  if (status.cl2.ready !== true) return fail("cl2_not_ready");
+
+  const me = await probeClone("auth_me", CLONE_EA_PATHS.authMe(), token, parseCloneAuthMe);
+  if (me === null) return fail("me_failed");
+  if (me.auth === null) return fail("me_no_auth");
+  if (me.auth.kind !== "scoped") return fail("not_scoped");
+  if ([...me.auth.scopes].sort().join(",") !== EA_SCOPES) return fail("wrong_scopes");
+  if (!sameSet(me.auth.accounts, pinned)) return fail("wrong_accounts");
+  const meExp = me.auth.expiresAt === null ? NaN : Date.parse(me.auth.expiresAt);
+  if (Number.isFinite(meExp)) {
+    expiresAt = new Date(meExp).toISOString();
+    if (meExp <= nowMs) return fail("token_expired");
+  }
+  return { ok: true, reason: null, cl2Ready, cl2Send, sendEnabled: me.auth.sendEnabled === true, expiresAt, checkedAt, tokenFp };
+}
+
+/** §2.3: the verdict as clone-ea/ea-token, best-effort (a failed write is logged with the key and never fails the check). */
+async function persistEaVerdict(principal: ExecPrincipal, verdict: EaReadiness): Promise<void> {
+  const state: EaTokenState = {
+    ok: verdict.ok,
+    reason: verdict.reason,
+    checkedAt: verdict.checkedAt,
+    cl2Ready: verdict.cl2Ready,
+    cl2Send: verdict.cl2Send,
+    sendEnabled: verdict.ok ? verdict.sendEnabled : null,
+    expiresAt: verdict.expiresAt,
+    tokenFp: verdict.tokenFp
+  };
+  try {
+    await putSyncState(principal, EA_SOURCE, EA_TOKEN_KEY, state);
+  } catch (err) {
+    console.warn(`[exec-drafts] ${EA_SOURCE}/${EA_TOKEN_KEY} verdict not written: ${err instanceof Error ? err.name : "error"}`);
+  }
+}
+
+function readinessFromState(state: EaTokenState): EaReadiness {
+  return {
+    ok: state.ok,
+    reason: state.reason,
+    cl2Ready: state.cl2Ready,
+    cl2Send: state.cl2Send,
+    sendEnabled: state.sendEnabled === true,
+    expiresAt: state.expiresAt,
+    checkedAt: state.checkedAt,
+    tokenFp: state.tokenFp
+  };
+}
+
+/** Drafting is unavailable for a configuration reason (L4); never retried (errorClass "fatal"). */
+export class EaUnavailableError extends NonRetryableError {
+  readonly reason: EaReadinessReason;
+  constructor(reason: EaReadinessReason) {
+    super(`EA drafting unavailable: ${reason}`, "fatal");
+    this.name = "EaUnavailableError";
+    this.reason = reason;
+  }
+}
+export interface EaReadiness {
+  ok: boolean; reason: EaReadinessReason | null;
+  cl2Ready: boolean | null; cl2Send: "off" | "all" | "some" | null;
+  /** /api/auth/me auth.sendEnabled: the clone's EA_SEND_ENABLED covers his accounts. */
+  sendEnabled: boolean;
+  expiresAt: string | null; checkedAt: string; tokenFp: string | null;
+}
+/**
+ * L4 + C37: cached per process (ok 5 min, failure 60 s), keyed by principal id
+ * + token fp, so a rotated token misses. `fresh` bypasses the cache. Each fresh
+ * check writes clone-ea/ea-token and, when it fails, raises the rate-limited ops
+ * alert clone-ea-readiness:<reason> (the reason only). A failed DB read of the
+ * principal count throws (nothing is cached): the caller's operation fails
+ * closed instead of reporting a verdict that wasn't computed.
+ */
+export async function getEaReadiness(principal: ExecPrincipal, opts: { fresh?: boolean } = {}): Promise<EaReadiness> {
+  const token = readEaToken();
+  const tokenFp = token === null ? null : tokenFingerprint(token);
+  const key = readinessKey(principal, tokenFp);
+  const nowMs = Date.now();
+  if (opts.fresh !== true) {
+    const hit = readinessCache.get(key);
+    if (hit !== undefined && hit.until > nowMs) return hit.verdict;
+  }
+  const verdict = await computeEaReadiness(principal, token, tokenFp, nowMs);
+  readinessCache.set(key, { verdict, until: nowMs + (verdict.ok ? EA_OK_TTL_MS : EA_FAIL_TTL_MS) });
+  await persistEaVerdict(principal, verdict);
+  if (!verdict.ok && verdict.reason !== null) {
+    void notifyOps({ key: `clone-ea-readiness:${verdict.reason}`, title: `EA drafting unavailable: ${verdict.reason}` });
+  }
+  return verdict;
+}
+/** The cached verdict (expired or not), else the persisted clone-ea/ea-token verdict; never a network call (C19). */
+export async function peekEaReadiness(principal: ExecPrincipal): Promise<EaReadiness | null> {
+  const token = readEaToken();
+  const hit = readinessCache.get(readinessKey(principal, token === null ? null : tokenFingerprint(token)));
+  if (hit !== undefined) return hit.verdict;
+  const stored = await getSyncState(principal, EA_SOURCE, EA_TOKEN_KEY, parseEaTokenState);
+  return stored === null ? null : readinessFromState(stored.value);
+}
+/** Forget every cached verdict: after an auth answer from the clone, and in tests. */
+export function invalidateEaReadiness(): void {
+  readinessCache.clear();
+}
+
+function checkGraphId(graphId: unknown, operation: string): asserts graphId is string {
+  if (typeof graphId !== "string" || !CLONE_GRAPH_ID_RE.test(graphId)) throw new NonRetryableError(`${operation}: the Outlook draft id is malformed`);
+}
+
+/** CL2's recipient shape: `name` only when there is one (CL2C §3.0.3). */
+function wireAddresses(list: readonly DraftAddress[]): { address: string; name?: string }[] {
+  return list.map((a) => (a.name !== null && a.name.length > 0 ? { address: a.address, name: a.name } : { address: a.address }));
+}
+
+/** A parser's invalid_body error rethrown with the answer's real HTTP status and replay flag. */
+function parseAnswer<T>(route: CloneEaRoute, res: CloneEaResponse, parse: (body: unknown) => T): T {
+  try {
+    return parse(res.body);
+  } catch (err) {
+    if (err instanceof CloneEaError && err.kind === "invalid_body") {
+      throw new CloneEaError({ route, status: res.status, body: null, code: "invalid_body", replay: res.replay });
+    }
+    throw err;
+  }
+}
+
+/** A live read-back must be for one of his pinned accounts; the clone's own token scoping is not trusted on its own. */
+function assertReadBackPinned(principal: ExecPrincipal, read: CloneDraftRead, operation: string): void {
+  if (read.live && !isPinnedAccount(principal, read.accountId)) {
+    throw new MailScopeError(`${operation}: the read-back is for account ${read.accountId}, which is not pinned for principal ${principal.id}`);
+  }
+}
+
+/** §3.3's order for every draft function: pin, readiness, token, the call, the parse; an auth answer drops the cache. */
+async function eaCall<T>(
+  principal: ExecPrincipal,
+  operation: string,
+  accountId: string,
+  call: Omit<CloneEaCall, "token">,
+  parse: (body: unknown) => T
+): Promise<{ value: T; replay: boolean }> {
+  requirePinnedAccount(principal, accountId, operation);
+  const readiness = await getEaReadiness(principal);
+  if (!readiness.ok) throw new EaUnavailableError(readiness.reason ?? "token_missing");
+  const token = readEaToken();
+  if (token === null) throw new EaUnavailableError("token_missing");
+  try {
+    const res = await cloneEaFetch({ ...call, token });
+    return { value: parseAnswer(call.route, res, parse), replay: res.replay };
+  } catch (err) {
+    if (err instanceof CloneEaError && err.kind === "auth") invalidateEaReadiness();
+    throw err;
+  }
+}
+
+export interface ReplyDraftInput {
+  threadId: string; parentMessageId: string; accountId: string;
+  to: DraftAddress[]; cc: DraftAddress[]; bodyHtml: string; timezone: string; idempotencyKey: string;
+}
+export interface NewDraftInput {
+  accountId: string; to: DraftAddress[]; cc: DraftAddress[]; bcc: DraftAddress[];
+  subject: string; bodyHtml: string; timezone: string; idempotencyKey: string;
+}
+export interface RecreateInput {
+  accountId: string; graphId: string; kind: DraftKind;
+  to: DraftAddress[]; cc: DraftAddress[]; bcc: DraftAddress[]; subject: string | null;
+  bodyHtml: string; timezone: string; ifContentHash: string | null; idempotencyKey: string;
+}
+/** POST /api/threads/:threadId/outlook-draft: { parentMessageId, to, cc, bodyHtml, timezone }; never accountId, bcc or subject (C23). */
+export async function createReplyDraft(principal: ExecPrincipal, input: ReplyDraftInput): Promise<{ readBack: CloneReadBack; replay: boolean }> {
+  requirePinnedAccount(principal, input.accountId, "createReplyDraft");
+  checkThreadId(input.threadId, "createReplyDraft");
+  const { value, replay } = await eaCall(
+    principal,
+    "createReplyDraft",
+    input.accountId,
+    {
+      route: "create_reply",
+      method: "POST",
+      path: CLONE_EA_PATHS.createReply(input.threadId),
+      json: { parentMessageId: input.parentMessageId, to: wireAddresses(input.to), cc: wireAddresses(input.cc), bodyHtml: input.bodyHtml, timezone: input.timezone },
+      idempotencyKey: input.idempotencyKey,
+      timeoutMs: EA_CREATE_TIMEOUT_MS
+    },
+    (body) => parseCloneReadBack("create_reply", body)
+  );
+  assertReadBackPinned(principal, value, "createReplyDraft");
+  return { readBack: value, replay };
+}
+/** POST /api/compose/outlook-draft: { accountId, to, cc, bcc, subject, bodyHtml, timezone }. */
+export async function createNewDraft(principal: ExecPrincipal, input: NewDraftInput): Promise<{ readBack: CloneReadBack; replay: boolean }> {
+  const { value, replay } = await eaCall(
+    principal,
+    "createNewDraft",
+    input.accountId,
+    {
+      route: "create_new",
+      method: "POST",
+      path: CLONE_EA_PATHS.createNew(),
+      json: {
+        accountId: input.accountId,
+        to: wireAddresses(input.to),
+        cc: wireAddresses(input.cc),
+        bcc: wireAddresses(input.bcc),
+        subject: input.subject,
+        bodyHtml: input.bodyHtml,
+        timezone: input.timezone
+      },
+      idempotencyKey: input.idempotencyKey,
+      timeoutMs: EA_CREATE_TIMEOUT_MS
+    },
+    (body) => parseCloneReadBack("create_new", body)
+  );
+  assertReadBackPinned(principal, value, "createNewDraft");
+  return { readBack: value, replay };
+}
+/** GET /api/outlook-drafts/:graphId: the live read-back, or the registry view (live: false) when the live read failed on a non-saved row. */
+export async function getOutlookDraft(principal: ExecPrincipal, input: { accountId: string; graphId: string }): Promise<CloneDraftRead> {
+  requirePinnedAccount(principal, input.accountId, "getOutlookDraft");
+  checkGraphId(input.graphId, "getOutlookDraft");
+  const { value } = await eaCall(
+    principal,
+    "getOutlookDraft",
+    input.accountId,
+    { route: "get_draft", method: "GET", path: CLONE_EA_PATHS.draft(input.graphId), timeoutMs: EA_READ_TIMEOUT_MS },
+    (body) => parseCloneDraftRead("get_draft", body)
+  );
+  assertReadBackPinned(principal, value, "getOutlookDraft");
+  return value;
+}
+/** PATCH /api/outlook-drafts/:graphId: reply { to, cc, bodyHtml, timezone, ifContentHash? }; new { to, cc, bcc, subject, bodyHtml, timezone, ifContentHash? }. */
+export async function recreateOutlookDraft(principal: ExecPrincipal, input: RecreateInput): Promise<{ readBack: CloneReadBack; replay: boolean }> {
+  requirePinnedAccount(principal, input.accountId, "recreateOutlookDraft");
+  checkGraphId(input.graphId, "recreateOutlookDraft");
+  if (input.kind !== "reply" && input.kind !== "new") throw new NonRetryableError("recreateOutlookDraft: kind must be reply or new");
+  // CL2 checks the kind-specific rules after the claim and stores a 400 under the key: refuse a body it would refuse before any I/O.
+  if (input.kind === "new" && typeof input.subject !== "string") throw new NonRetryableError("recreateOutlookDraft: a new draft needs a subject");
+  const ifContentHash = input.ifContentHash === null ? {} : { ifContentHash: input.ifContentHash };
+  const json =
+    input.kind === "reply"
+      ? { to: wireAddresses(input.to), cc: wireAddresses(input.cc), bodyHtml: input.bodyHtml, timezone: input.timezone, ...ifContentHash }
+      : {
+          to: wireAddresses(input.to),
+          cc: wireAddresses(input.cc),
+          bcc: wireAddresses(input.bcc),
+          subject: input.subject,
+          bodyHtml: input.bodyHtml,
+          timezone: input.timezone,
+          ...ifContentHash
+        };
+  const { value, replay } = await eaCall(
+    principal,
+    "recreateOutlookDraft",
+    input.accountId,
+    { route: "recreate", method: "PATCH", path: CLONE_EA_PATHS.draft(input.graphId), json, idempotencyKey: input.idempotencyKey, timeoutMs: EA_RECREATE_TIMEOUT_MS },
+    (body) => parseCloneReadBack("recreate", body)
+  );
+  assertReadBackPinned(principal, value, "recreateOutlookDraft");
+  return { readBack: value, replay };
+}
+/** DELETE /api/outlook-drafts/:graphId: {} or { ifContentHash }. */
+export async function deleteOutlookDraft(principal: ExecPrincipal,
+  input: { accountId: string; graphId: string; ifContentHash: string | null; idempotencyKey: string }): Promise<{ deleted: CloneDeleted; replay: boolean }> {
+  requirePinnedAccount(principal, input.accountId, "deleteOutlookDraft");
+  checkGraphId(input.graphId, "deleteOutlookDraft");
+  const { value, replay } = await eaCall(
+    principal,
+    "deleteOutlookDraft",
+    input.accountId,
+    {
+      route: "delete",
+      method: "DELETE",
+      path: CLONE_EA_PATHS.draft(input.graphId),
+      json: input.ifContentHash === null ? {} : { ifContentHash: input.ifContentHash },
+      idempotencyKey: input.idempotencyKey,
+      timeoutMs: EA_DELETE_TIMEOUT_MS
+    },
+    parseCloneDeleted
+  );
+  return { deleted: value, replay };
+}
+
+export type { SentCopyResult } from "@/lib/exec/drafts-types";
+/**
+ * C54 (legacy-token reads, L3). A reply draft (a thread id, or `thread`: the
+ * thread already read by the caller, C63, used instead of a new read) is found
+ * when one of his outbound messages in the thread carries the draft's
+ * internetMessageId (brackets and case ignored); a thread that can't be read
+ * as his is not_found. A new draft is searched in his outbound CL1 feed from
+ * 5 minutes before `sinceMs` (the row's send_started_at ?? opened_in_outlook_at
+ * ?? created_at), at most 5 pages of 200; a pre-CL1 clone is `unsupported`.
+ * A read error throws (the caller never treats it as "not found").
+ */
+export async function findSentCopy(principal: ExecPrincipal,
+  input: { accountId: string; internetMessageId: string; threadId: string | null; sinceMs: number; thread?: PrincipalMailThread }): Promise<SentCopyResult> {
+  requirePinnedAccount(principal, input.accountId, "findSentCopy");
+  const wanted = rfcKey(typeof input.internetMessageId === "string" ? input.internetMessageId : null);
+  if (wanted === null) throw new NonRetryableError("findSentCopy: internetMessageId is empty");
+  if (input.thread !== undefined || input.threadId !== null) {
+    let thread = input.thread ?? null;
+    if (thread === null) {
+      const read = await readPrincipalThread(principal, input.threadId as string, { timeoutMs: SENT_COPY_PAGE_TIMEOUT_MS });
+      if (read.kind !== "ok") return "not_found";
+      thread = read.thread;
+    }
+    return thread.his.some((m) => m.direction === "outbound" && rfcKey(m.rfcMessageId) === wanted) ? "found" : "not_found";
+  }
+  if (typeof input.sinceMs !== "number" || !Number.isFinite(input.sinceMs)) throw new NonRetryableError("findSentCopy: sinceMs must be a number");
+  const sinceIso = new Date(Math.max(0, input.sinceMs - SENT_COPY_MARGIN_MS)).toISOString();
+  let cursor: string | null = null;
+  for (let page = 0; page < SENT_COPY_MAX_PAGES; page += 1) {
+    const feed = await listPrincipalMessagesFeed(principal, input.accountId, {
+      order: "created",
+      cursor,
+      sinceIso,
+      limit: SENT_COPY_PAGE_LIMIT,
+      direction: "outbound",
+      timeoutMs: SENT_COPY_PAGE_TIMEOUT_MS
+    });
+    if (!feed.supported) return "unsupported";
+    if (feed.rows.some((r) => r.direction === "outbound" && rfcKey(r.rfcMessageId) === wanted)) return "found";
+    if (!feed.hasMore) break;
+    cursor = feed.nextCursor;
+  }
+  return "not_found";
 }

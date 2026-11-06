@@ -42,7 +42,7 @@ export function OverviewView({ overview, principalTz }: { overview: ExecOverview
         <div className="flex min-w-0 flex-col gap-5">
           <ApprovalsSection approvals={approvals} now={now} decisionAsks={decisionAsks} />
           <OverviewEmailSection email={email} tz={tz} now={now} />
-          <SystemSection system={system} now={now} mail={emailOn ? emailOn.mail : null} />
+          <SystemSection system={system} now={now} mail={emailOn ? emailOn.mail : null} tz={tz} />
         </div>
       </div>
       <div className="grid items-start gap-5 lg:grid-cols-2">

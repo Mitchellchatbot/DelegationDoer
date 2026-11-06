@@ -7,6 +7,7 @@ import {
   parseEmailFingerprint,
   syncAttention
 } from "@/lib/exec/attention";
+import { purgeDraftsForThreads } from "@/lib/exec/drafts-store";
 import { stampDecision } from "@/lib/exec/email-state";
 import {
   applyThreadProposal,
@@ -150,6 +151,8 @@ export interface SafetyNetCounts {
   threads: number;
   attentionRows: number;
   commitments: number;
+  /** P4 (X5): assistant drafts emptied for those threads; null = the P4 migration isn't applied. */
+  drafts: number | null;
   signals: number;
   orphanItems: number;
 }
@@ -465,17 +468,20 @@ async function deleteOrphanCommitmentItems(principal: ExecPrincipal, signal: Abo
 
 /**
  * Hard-delete what must not survive a restricted thread (A6): its email items
- * in every status, its commitments and its signal rows, for every tombstoned
- * thread plus `alsoRestricted` (rows the screen found matching a rule that
- * aren't tombstones yet); then orphaned commitment items.
+ * in every status, its commitments, its assistant drafts' content (P4 X5: the
+ * restricted purge, after the commitments delete, over the same threads) and
+ * its signal rows, for every tombstoned thread plus `alsoRestricted` (rows the
+ * screen found matching a rule that aren't tombstones yet); then orphaned
+ * commitment items.
  */
 async function safetyNet(principal: ExecPrincipal, alsoRestricted: readonly string[], signal: AbortSignal): Promise<SafetyNetCounts & { tombstoned: string[] }> {
   const tombstoned = await listTombstonedThreadIds(principal, { signal });
   const threads = unique([...tombstoned, ...alsoRestricted]);
-  const counts = { threads: threads.length, attentionRows: 0, commitments: 0, signals: 0, orphanItems: 0 };
+  const counts: SafetyNetCounts = { threads: threads.length, attentionRows: 0, commitments: 0, drafts: null, signals: 0, orphanItems: 0 };
   if (threads.length > 0) {
     counts.attentionRows = await deleteEmailAttentionForThreads(principal, threads, { signal });
     counts.commitments = await deleteCommitmentsForThreads(principal, threads, { signal });
+    counts.drafts = await purgeDraftsForThreads(principal, threads, { signal });
     counts.signals = await deleteSignalsForThreads(principal, threads, { signal });
   }
   counts.orphanItems = await deleteOrphanCommitmentItems(principal, signal);
@@ -486,6 +492,7 @@ const netCounts = (n: SafetyNetCounts): SafetyNetCounts => ({
   threads: n.threads,
   attentionRows: n.attentionRows,
   commitments: n.commitments,
+  drafts: n.drafts,
   signals: n.signals,
   orphanItems: n.orphanItems
 });

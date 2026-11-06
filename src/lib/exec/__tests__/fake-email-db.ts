@@ -5,16 +5,21 @@
 //   from(t).upsert(row, { onConflict, ignoreDuplicates }).select(cols)
 //   from(t).update(patch) …filters… [.select(cols)]
 //   from(t).delete({ count }) …filters… [.select(cols)]
-//   rpc("exec_email_stamp_screened" | "exec_email_upsert_signals" | "exec_email_insert_commitments", args)
+//   rpc("exec_email_stamp_screened" | "exec_email_upsert_signals" | "exec_email_insert_commitments"
+//       | "exec_drafts_purge_restricted", args)
 //
 // Filters follow SQL: a comparison with NULL is never true; timestamps compare
 // as instants ("Z" and "+00:00" alike). `.or()` understands the forms the
-// store sends: col.op.value terms and and(...) groups. The three RPCs mirror
-// the migration's SQL (the SQL suite checks the real ones). Every request is
-// logged in order, so a test can assert the order of a procedure's steps.
+// store sends: col.op.value terms and and(...) groups. The three email RPCs
+// mirror the migration's SQL (the SQL suite checks the real ones); the P4
+// drafts purge is fake-drafts-db's mirror over this fake's exec_drafts rows,
+// so the tombstone procedure's drafts step (X4) runs here too. Every request
+// is logged in order, so a test can assert the order of a procedure's steps.
 //
 //   const db = createFakeEmailDb({ tables: { exec_email_threads: [row] } });
 //   vi.mocked(getSupabaseAdmin).mockReturnValue(db.client as SupabaseClient);
+
+import { purgeRestrictedRows } from "./fake-drafts-db";
 
 export type Row = Record<string, unknown>;
 export type DbError = { message: string; code?: string };
@@ -284,6 +289,9 @@ export function createFakeEmailDb(cfg: FakeEmailDbConfig = {}): FakeEmailDb {
       const max = out.map((r) => Date.parse(r.expires_at as string)).reduce((a, b) => Math.max(a, b), Number.NEGATIVE_INFINITY);
       if (Number.isFinite(max) && Date.parse(thread.expires_at as string) < max) thread.expires_at = new Date(max).toISOString();
       return out;
+    },
+    exec_drafts_purge_restricted(args) {
+      return purgeRestrictedRows(tables, args, now());
     }
   };
 

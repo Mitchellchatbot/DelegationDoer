@@ -44,6 +44,13 @@ export interface ScheduledWork {
   /** Job payload: references only (see enqueueJob). Absent = {}. */
   payload?: (p: ExecPrincipal) => Record<string, unknown>;
   maxAttempts?: number;
+  /**
+   * P4 (contract §3.15 Y4): a second, asynchronous gate evaluated after
+   * `enabled` and a non-null dedupe key, e.g. "a draft row is due". `false`
+   * skips this tick; a throw is counted as an error, logged, and enqueues
+   * nothing. Absent = always due.
+   */
+  when?: (principal: ExecPrincipal, settings: ExecSettings, now: Date) => Promise<boolean>;
 }
 
 export interface SchedulerTickResult {
@@ -182,6 +189,8 @@ export async function runSchedulerTick(now: Date = new Date()): Promise<Schedule
         if (work.enabled && !work.enabled(settings)) continue;
         const dedupeKey = dueDedupeKey(work, principal, settings, now);
         if (!dedupeKey) continue;
+        // Y4: the asynchronous gate; a throw lands in the catch below (counted, logged, nothing enqueued).
+        if (work.when && !(await work.when(principal, settings, now))) continue;
         const r = await enqueueJob({
           kind: work.kind,
           lane: work.lane,

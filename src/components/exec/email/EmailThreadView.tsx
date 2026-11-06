@@ -1,11 +1,12 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
-import { ArrowLeft, BellRing, Building2, ExternalLink, Handshake, ListChecks, Mail, ShieldAlert, Sparkles } from "lucide-react";
+import { ArrowLeft, BellRing, Building2, ExternalLink, FilePen, Handshake, ListChecks, Mail, ShieldAlert, Sparkles } from "lucide-react";
 import type { EmailThreadView as EmailThreadData } from "@/lib/exec/email-view";
 import { formatCount, formatInZone, pluralize } from "@/lib/exec/format";
 import { safeLink } from "@/lib/exec/safe-markdown";
 import { AttentionRow } from "../AttentionRow";
 import { BasisLabel } from "../BasisLabel";
+import { openDraftLabel } from "../drafts/copy";
 import { EXEC_TABS, ExecTabs } from "../ExecTabs";
 import { ExecHeader } from "../ExecHeader";
 import { SectionCard } from "../SectionCard";
@@ -140,6 +141,17 @@ export function EmailThreadView({ view }: { view: EmailThreadData }) {
                 </a>
                 <span className="mt-0.5 text-[10.5px] text-muted">needs DD inbox access</span>
               </span>
+            )}
+            {view.draft && (
+              <Link
+                href={view.draft.href}
+                prefetch={false}
+                data-draft-entry={view.draft.kind}
+                className="inline-flex items-center gap-1 rounded-lg border border-indigo-200 bg-indigo-50 px-2.5 py-1 text-[12px] font-semibold text-indigo-700 hover:border-indigo-300 hover:text-indigo-900"
+              >
+                <FilePen className="h-3.5 w-3.5" aria-hidden />
+                {view.draft.kind === "open" ? openDraftLabel(view.draft.status) : "Draft reply"}
+              </Link>
             )}
             {t.assessable && <AssessButton threadId={view.threadId} size="md" />}
           </div>

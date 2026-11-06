@@ -2,10 +2,13 @@ import "server-only";
 
 import { isExecEnabled } from "@/lib/exec/access";
 import { ddAttentionJobHandler, ddAttentionScheduledWork } from "@/lib/exec/handlers/dd-attention";
+import { draftGenerateJobHandler } from "@/lib/exec/handlers/draft-generate";
+import { draftReconcileJobHandler, draftReconcileScheduledWork } from "@/lib/exec/handlers/draft-reconcile";
 import { emailAttentionJobHandler, emailAttentionScheduledWork } from "@/lib/exec/handlers/email-attention";
 import { emailReconcileJobHandler, emailReconcileScheduledWork } from "@/lib/exec/handlers/email-reconcile";
 import { emailTriageJobHandler } from "@/lib/exec/handlers/email-triage";
 import { purgeJobHandler, purgeScheduledWork } from "@/lib/exec/handlers/purge";
+import { voiceRefreshJobHandler, voiceRefreshScheduledWork } from "@/lib/exec/handlers/voice-refresh";
 import { JOB_LANES, getJobHandler, registerJobHandler, runWorkerPass, type WorkerPassSummary } from "@/lib/exec/jobs";
 import { ensureMailHook, recordSocketHealth } from "@/lib/exec/mail-hook";
 import { getScheduledWork, registerScheduledWork, runSchedulerTick, type ScheduledWork } from "@/lib/exec/scheduler";
@@ -22,14 +25,27 @@ import type { JobHandler, JobLane } from "@/lib/exec/types";
 // P3 email intelligence: triage (event, reconcile, re-triage), reconcile
 // (every 5 minutes, only once email is installed and on) and the attention
 // pass (every 10 minutes, ungated: off resolves, not installed skips; L24).
+// P4 drafts (contract §3.11, §3.15 Y5): generation (event, interactive), the
+// draft reconcile sweep (every 5 minutes while the drafts schema is installed
+// and a row is due; kicks run interactive) and the weekly voice refresh.
 const BUILT_IN_HANDLERS: readonly JobHandler[] = [
   purgeJobHandler,
   ddAttentionJobHandler,
   emailTriageJobHandler,
   emailReconcileJobHandler,
-  emailAttentionJobHandler
+  emailAttentionJobHandler,
+  draftGenerateJobHandler,
+  draftReconcileJobHandler,
+  voiceRefreshJobHandler
 ];
-const BUILT_IN_SCHEDULE: readonly ScheduledWork[] = [purgeScheduledWork, ddAttentionScheduledWork, emailReconcileScheduledWork, emailAttentionScheduledWork];
+const BUILT_IN_SCHEDULE: readonly ScheduledWork[] = [
+  purgeScheduledWork,
+  ddAttentionScheduledWork,
+  emailReconcileScheduledWork,
+  emailAttentionScheduledWork,
+  draftReconcileScheduledWork,
+  voiceRefreshScheduledWork
+];
 
 // The cron route's whole run has to fit well inside its 60 s maxDuration.
 const MAX_CRON_BUDGET_MS = 45_000;

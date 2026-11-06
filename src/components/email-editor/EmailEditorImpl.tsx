@@ -12,7 +12,7 @@ import { createEmailExtensions } from "./extensions";
 import { EmailToolbar } from "./EmailToolbar";
 import { LinkChip } from "./LinkChip";
 import { LinkDialog, linkTargetFromSelection, type LinkTarget } from "./LinkDialog";
-import type { EmailBodySeed, EmailEditorApi, EmailEditorProps } from "./types";
+import { attachmentHintFor, type EmailBodySeed, type EmailEditorApi, type EmailEditorProps } from "./types";
 
 // The rich email body (TipTap). Loaded lazily through ./index.tsx — import
 // EmailEditor from there, never this file directly.
@@ -55,7 +55,11 @@ export default function EmailEditorImpl(props: EmailEditorProps) {
     const attach = (files: File[]) => {
       const onAttach = propsRef.current.onAttachFiles;
       if (onAttach) onAttach(files);
-      else toast("Use Attach files to add attachments.");
+      else {
+        // No attachments here: a toast says where they go, unless hideAttachmentHint (the file is then ignored).
+        const hint = attachmentHintFor(propsRef.current, { kind: "files" });
+        if (hint) toast(hint);
+      }
     };
     return {
       immediatelyRender: true,
@@ -98,7 +102,8 @@ export default function EmailEditorImpl(props: EmailEditorProps) {
             attach(files);
             return true;
           }
-          if (droppedImages > 0) toast("Images in pasted content aren't included — attach them as files instead.");
+          const imagesHint = attachmentHintFor(propsRef.current, { kind: "pasted_images", count: droppedImages });
+          if (imagesHint) toast(imagesHint);
           return false;
         },
         handleDrop(_view, event, _slice, moved) {

@@ -134,7 +134,7 @@ function onView(over: Partial<Extract<TabData, { state: "on" }>> = {}): TabData 
       })
     },
     restricted: { ok: true, data: 2 },
-    drafts: { ok: true, data: { draftsPending: 4, scheduledReplies: 1 } },
+    drafts: { ok: true, data: { draftsPending: 4, scheduledReplies: 1, execDraftsActive: null, execDraftsAttention: null } },
     commitments: { ok: true, data: { items: [commitmentView({ id: "ec_2", overdue: true, dueAt: hoursAgo(20) }), commitmentView()], total: 2, overdue: 1, limit: 20 } },
     ...over
   };

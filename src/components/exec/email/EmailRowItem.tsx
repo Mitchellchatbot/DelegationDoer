@@ -1,8 +1,10 @@
 import Link from "next/link";
 import { ShieldAlert } from "lucide-react";
+import { draftPageHref } from "@/lib/exec/drafts-links";
 import type { EmailRowView } from "@/lib/exec/email-view";
 import { pluralize } from "@/lib/exec/format";
 import { BasisLabel } from "../BasisLabel";
+import { draftChipLabel } from "../drafts/copy";
 import { AssessButton } from "./AssessButton";
 import {
   ATTEMPT_ERROR_LABEL,
@@ -38,7 +40,8 @@ const ANSWERED_TONE: Readonly<Record<string, ChipTone>> = {
   no_inbound: "slate",
   handled_in_outlook: "slate",
   reply_scheduled: "sky",
-  draft_pending: "sky"
+  draft_pending: "sky",
+  reply_sent_pending: "emerald"
 };
 
 /** Why a filtered, failed or deferred thread wasn't assessed, as words. */
@@ -54,6 +57,8 @@ export function EmailRowItem({ row, tz, now }: { row: EmailRowView; tz: string; 
   const who = personLabel(row.counterpartName, row.counterpartEmail);
   const showAddress = row.counterpartName && row.counterpartEmail;
   const answered = answeredChipLabel(row);
+  // P4 (L15): the thread's active assistant draft, as a chip that opens it.
+  const draftChip = row.execDraft ? draftChipLabel(row.execDraft.status) : null;
   const assessed = row.state === "triaged";
   const aiChips: { text: string; tone: ChipTone }[] = [];
   const category = labelOf(CATEGORY_LABEL, row.category);
@@ -82,10 +87,15 @@ export function EmailRowItem({ row, tz, now }: { row: EmailRowView; tz: string; 
         {row.flagged && <Chip tone="amber">Flagged in Outlook</Chip>}
       </div>
 
-      {(answered || row.client || row.partialThread) && (
+      {(answered || draftChip || row.client || row.partialThread) && (
         <div className="mt-1 flex flex-wrap items-center gap-1.5">
           <BasisLabel basis="derived" />
           {answered && <Chip tone={row.answered === "awaiting_reply" && row.needsReply !== true ? "slate" : (ANSWERED_TONE[row.answered ?? ""] ?? "slate")}>{answered}</Chip>}
+          {draftChip && row.execDraft && (
+            <Link href={draftPageHref(row.execDraft.id)} prefetch={false} data-draft-chip={row.execDraft.status} className="inline-flex max-w-full">
+              <Chip tone={row.execDraft.status === "unknown" ? "rose" : "violet"}>{draftChip}</Chip>
+            </Link>
+          )}
           {row.client && (
             <Chip
               tone="amber"

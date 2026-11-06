@@ -986,7 +986,13 @@ export interface RenderTriageArgs {
   client?: TriageClientContext | null;
   /** Prompt hint only (addenda §1.4): messages that already have stored commitments. */
   alreadyExtractedMessageIds?: readonly string[];
-  /** Tests only: a fixed nonce ([A-Za-z0-9], 16-64 characters). */
+  /**
+   * A fixed nonce ([A-Za-z0-9], 16-64 characters) instead of a fresh random
+   * one. Used by tests, and by P4's draft generation, which passes the draft
+   * row's stable render_nonce so that regenerations of one draft render a
+   * byte-identical thread block and reuse the cached prompt prefix (P4 C30).
+   * Triage never passes one: each triage run gets its own random nonce.
+   */
   nonce?: string;
 }
 

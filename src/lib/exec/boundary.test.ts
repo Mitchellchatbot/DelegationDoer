@@ -1,8 +1,10 @@
-import { readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { beforeAll, describe, expect, it } from "vitest";
+
+import { AUDIT_INPUT_KEYS } from "@/lib/exec/drafts-types";
 
 // The principal boundary, checked against the real source tree: every
 // src/**/*.{ts,tsx,js,jsx,mjs,cjs} except tests. "Services take a principal,
@@ -616,13 +618,39 @@ function nameWords(name: string): string[] {
     .map((w) => w.toLowerCase());
 }
 
-function isContentName(name: string): boolean {
-  if (CONTENT_NAMES.has(name.toLowerCase())) return true;
+/**
+ * Rule 9's vocabulary. P3's files keep P3's sets; the P4 file class (B8,
+ * security-4) adds the words of the draft content (instruction, note,
+ * paragraphs, placeholders, facts, titles, samples, candidates, prompt, lines,
+ * doc) and the exact names of the draft's content fields, so P3's verdicts
+ * don't move while P4's files are held to the wider list.
+ */
+interface Vocabulary {
+  words: ReadonlySet<string>;
+  /** Lowercased exact names. */
+  names: ReadonlySet<string>;
+}
+const P3_VOCAB: Vocabulary = { words: CONTENT_WORDS, names: CONTENT_NAMES };
+const P4_VOCAB: Vocabulary = {
+  words: new Set([
+    ...CONTENT_WORDS,
+    "instruction", "instructions", "note", "notes", "paragraph", "paragraphs", "placeholder", "placeholders", "fact", "facts",
+    "title", "titles", "sample", "samples", "candidate", "candidates", "prompt", "line", "lines", "doc"
+  ]),
+  names: new Set([...CONTENT_NAMES, "signoff", "sign_off", "readback", "replyto", "noteformitchell", "bodydoc", "rendernonce"])
+};
+// An ops alert's own fields (OpsAlert.key, OpsAlert.title) are schema, not content: the
+// values under them are still checked. Only the key names of an object literal handed to
+// notifyOps are skipped, never a shorthand property (whose name is the value).
+const ALERT_SCHEMA_KEYS: ReadonlySet<string> = new Set(["key", "title"]);
+
+function isContentName(name: string, vocab: Vocabulary = P3_VOCAB): boolean {
+  if (vocab.names.has(name.toLowerCase())) return true;
   const words = nameWords(name);
   if (words.length === 0) return false;
   const last = words[words.length - 1];
-  if (CONTENT_WORDS.has(last)) return true;
-  return words.some((w) => CONTENT_WORDS.has(w)) && !COUNT_WORDS.has(last);
+  if (vocab.words.has(last)) return true;
+  return words.some((w) => vocab.words.has(w)) && !COUNT_WORDS.has(last);
 }
 
 function propertyNameText(name: ts.PropertyName): string | null {
@@ -637,20 +665,25 @@ function propertyNameText(name: ts.PropertyName): string | null {
  * name); `onCall` sees every call, so a handler's return can be followed into
  * the local function it delegates to.
  */
-function contentRefs(root: ts.Node, onCall?: (call: ts.CallExpression) => void): string[] {
+function contentRefs(
+  root: ts.Node,
+  onCall?: (call: ts.CallExpression) => void,
+  vocab: Vocabulary = P3_VOCAB,
+  skipKeys?: ReadonlySet<string>
+): string[] {
   const found: string[] = [];
   const visit = (n: ts.Node): void => {
     if (ts.isTypeNode(n)) return;
     if (ts.isPropertyAccessExpression(n)) {
       if (n.name.text === "length" || n.name.text === "size") return;
-      if (isContentName(n.name.text)) found.push(n.name.text);
+      if (isContentName(n.name.text, vocab)) found.push(n.name.text);
       visit(n.expression);
       return;
     }
     if (ts.isElementAccessExpression(n)) {
       const arg = n.argumentExpression;
       if (ts.isStringLiteralLike(arg)) {
-        if (isContentName(arg.text)) found.push(arg.text);
+        if (isContentName(arg.text, vocab)) found.push(arg.text);
       } else {
         visit(arg);
       }
@@ -658,17 +691,17 @@ function contentRefs(root: ts.Node, onCall?: (call: ts.CallExpression) => void):
       return;
     }
     if (ts.isIdentifier(n)) {
-      if (isContentName(n.text)) found.push(n.text);
+      if (isContentName(n.text, vocab)) found.push(n.text);
       return;
     }
     if (ts.isPropertyAssignment(n)) {
       const key = propertyNameText(n.name);
-      if (key !== null && isContentName(key)) found.push(key);
+      if (key !== null && !skipKeys?.has(key) && isContentName(key, vocab)) found.push(key);
       visit(n.initializer);
       return;
     }
     if (ts.isShorthandPropertyAssignment(n)) {
-      if (isContentName(n.name.text)) found.push(n.name.text);
+      if (isContentName(n.name.text, vocab)) found.push(n.name.text);
       return;
     }
     if (ts.isCallExpression(n)) {
@@ -716,7 +749,7 @@ function returnedExpressions(fn: FunctionNode): ts.Expression[] {
  * that has both `kind` and `run`, followed into the file's own functions it
  * returns the result of (`run: (ctx) => runTriage(ctx)`).
  */
-function handlerReturnOffenses(sf: ts.SourceFile): string[] {
+function handlerReturnOffenses(sf: ts.SourceFile, vocab: Vocabulary = P3_VOCAB): string[] {
   const lineOf = (n: ts.Node) => sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1;
   const locals = new Map<string, FunctionNode>();
   const handlers: FunctionNode[] = [];
@@ -751,9 +784,13 @@ function handlerReturnOffenses(sf: ts.SourceFile): string[] {
     if (seen.has(fn)) continue;
     seen.add(fn);
     for (const expr of returnedExpressions(fn)) {
-      const names = contentRefs(expr, (call) => {
-        if (ts.isIdentifier(call.expression) && locals.has(call.expression.text)) queue.push(locals.get(call.expression.text) as FunctionNode);
-      });
+      const names = contentRefs(
+        expr,
+        (call) => {
+          if (ts.isIdentifier(call.expression) && locals.has(call.expression.text)) queue.push(locals.get(call.expression.text) as FunctionNode);
+        },
+        vocab
+      );
       if (names.length > 0) offenses.push(`${lineOf(expr)}: returns ${[...new Set(names)].join(", ")}`);
     }
   }
@@ -782,7 +819,7 @@ interface MailFacts {
   contentReturns: string[];
 }
 
-function analyzeMail(sf: ts.SourceFile): MailFacts {
+function analyzeMail(sf: ts.SourceFile, vocab: Vocabulary = P3_VOCAB): MailFacts {
   const lineOf = (n: ts.Node) => sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1;
   const facts: MailFacts = { modules: [], bannedSymbols: [], principalTable: [], contentLogs: [], contentReturns: [] };
   const addModule = (spec: string, node: ts.Node, names: string[], whole: boolean) => {
@@ -819,7 +856,7 @@ function analyzeMail(sf: ts.SourceFile): MailFacts {
       if (isLoader && arg && ts.isStringLiteralLike(arg)) addModule(arg.text, node, [], true);
       const logged = logCallee(node);
       if (logged) {
-        const names = node.arguments.flatMap((a) => contentRefs(a));
+        const names = node.arguments.flatMap((a) => contentRefs(a, undefined, vocab, logged === "notifyOps" ? ALERT_SCHEMA_KEYS : undefined));
         if (names.length > 0) facts.contentLogs.push(`${lineOf(node)}: ${logged}(${[...new Set(names)].join(", ")})`);
       }
     }
@@ -835,7 +872,7 @@ function analyzeMail(sf: ts.SourceFile): MailFacts {
     ts.forEachChild(node, visit);
   };
   visit(sf);
-  facts.contentReturns = handlerReturnOffenses(sf);
+  facts.contentReturns = handlerReturnOffenses(sf, vocab);
   return facts;
 }
 
@@ -872,6 +909,470 @@ function rawIdOffenses(file: string, f: MailFacts): string[] {
 function contentOffenses(file: string, f: MailFacts): string[] {
   if (!isEmailFile(file)) return [];
   return [...f.contentLogs.map((at) => `${file}:${at}`), ...(isEmailHandler(file) ? f.contentReturns.map((at) => `${file}:${at}`) : [])];
+}
+
+// --- P4 rules B1-B13, BD14-BD16 (contract §0.4, §5.10) ---------------------------------------
+//
+//   B1/B2 The env names of the EA tokens (MISSIVE_EA_SEND_TOKEN, MISSIVE_EA_TOKEN) appear,
+//         as an identifier, a string, a template or an element-access key, only in their
+//         one reader (send.ts, sources/mail.ts); next.config.mjs holds no MISSIVE_EA string.
+//   B3/B4 send.ts is imported only by the send route; sources/clone-ea.ts only by
+//         sources/mail.ts and send.ts: any reference form, `import type` included, paths
+//         compared lowercased with extensions stripped, plus a specifier whose tail names
+//         the module (so a relative path that resolves elsewhere is still caught).
+//   B5    No file imports an app route.ts or page.tsx.
+//   B6    send.ts imports only server-only, node:crypto and five exec modules.
+//   B8    Rule 9 over the P4 file class with the wider vocabulary (P4_VOCAB above).
+//   B9    In exec code process.env is read with a literal name only (crypto.ts's one keyed
+//         read excepted), never enumerated, spread or passed around; no NEXT_PUBLIC_MISSIVE
+//         string anywhere in src; next.config.mjs's default export has no top-level `env`.
+//   B10   The pack files import none of the private-data modules, name none of the private
+//         tables, and take only the listed names from sources/dd.
+//   B11   Every drafts route handler calls requireExecPrincipal(…, { requireStrongSignIn:
+//         true }) as its first statement; a mutation checks isSameOriginRequest in the next
+//         statement, or the one after a `return` guard on the gate's result.
+//   B12   No file under the drafts routes reads req.signal / request.signal.
+//   BD14  Every P4 audit entry's `input` and `result` are object literals over
+//         AUDIT_INPUT_KEYS; `error` is a string literal, undefined or an auditCode(…) call.
+//   BD15  Every P4 job payload literal uses draftId, seq, kick only.
+//
+// What this scan can't see (as P2a's header says): names built at runtime, that
+// process.env is process-wide, and that both Railway services may receive the env var
+// (the EA tokens go on the serving service only).
+
+const isP4ContentFile = (p: string) =>
+  /^src\/lib\/exec\/drafts[^/]*\.tsx?$/.test(p) ||
+  p === "src/lib/exec/send.ts" ||
+  p === "src/lib/exec/voice.ts" ||
+  p === "src/lib/exec/recipients.ts" ||
+  /^src\/lib\/exec\/(?:sources\/)?clone-ea[^/]*\.ts$/.test(p) ||
+  /^src\/lib\/exec\/handlers\/(?:draft|voice)-[^/]*\.ts$/.test(p) ||
+  p.startsWith("src/components/exec/drafts/") ||
+  p.startsWith("src/app/api/exec/drafts/") ||
+  p.startsWith("src/app/(main)/executive/email/drafts/");
+const isP4Handler = (p: string) => /^src\/lib\/exec\/handlers\/(?:draft|voice)-[^/]*\.ts$/.test(p);
+const vocabFor = (p: string): Vocabulary => (isP4ContentFile(p) ? P4_VOCAB : P3_VOCAB);
+
+/** B8: rule 9 over the P4 file class with the P4 vocabulary; the handler-return check covers the P4 handlers. */
+function p4ContentOffenses(file: string, f: MailFacts): string[] {
+  if (!isP4ContentFile(file)) return [];
+  return [...f.contentLogs.map((at) => `${file}:${at}`), ...(isP4Handler(file) ? f.contentReturns.map((at) => `${file}:${at}`) : [])];
+}
+
+const SEND_FILE = "src/lib/exec/send.ts";
+const SEND_MODULE = "src/lib/exec/send";
+const SEND_ROUTE = "src/app/api/exec/drafts/[id]/send/route.ts";
+const CLONE_EA_FILE = "src/lib/exec/sources/clone-ea.ts";
+const CLONE_EA_MODULE = "src/lib/exec/sources/clone-ea";
+const MAIL_FILE = "src/lib/exec/sources/mail.ts";
+const CLONE_EA_IMPORTERS: ReadonlySet<string> = new Set([MAIL_FILE, SEND_FILE]);
+const EA_SEND_TOKEN = "MISSIVE_EA_SEND_TOKEN";
+const EA_TOKEN = "MISSIVE_EA_TOKEN";
+const EA_PREFIX = "MISSIVE_EA";
+const PUBLIC_MISSIVE = "NEXT_PUBLIC_MISSIVE";
+const NEXT_CONFIG_FILE = "next.config.mjs";
+// The tail of a specifier that names a guarded module, for paths that don't resolve to it.
+const MODULE_TAILS: ReadonlyMap<string, string> = new Map([
+  [SEND_MODULE, "exec/send"],
+  [CLONE_EA_MODULE, "exec/sources/clone-ea"]
+]);
+const SEND_ALLOWED_BARE: ReadonlySet<string> = new Set(["server-only", "node:crypto"]);
+const SEND_ALLOWED_TARGETS: ReadonlySet<string> = new Set([
+  "src/lib/exec/types",
+  "src/lib/exec/drafts-types",
+  "src/lib/exec/clone-ea-types",
+  CLONE_EA_MODULE,
+  SYNC_STATE_MODULE
+]);
+// file → how many keyed process.env reads it may keep (the existing crypto.ts decodeKey).
+const ENV_KEYED_READS_ALLOWED: ReadonlyMap<string, number> = new Map([["src/lib/exec/crypto.ts", 1]]);
+const PACK_FILES: ReadonlySet<string> = new Set(["src/lib/exec/drafts-pack.ts", "src/lib/exec/drafts-generate.ts", "src/lib/exec/voice.ts"]);
+const PACK_BANNED_TARGET = /^src\/lib\/(?:brain-|growth-brain|finance-|facebook-revenue|stripe(?:\/|$)|pnl-parse|[^/]*slack|meeting-|tldv-|owner-inbox)/;
+const PACK_BANNED_TABLES: ReadonlySet<string> = new Set(["brain_memories", "mrr_entries", "client_meetings", "task_messages", "activity_logs", "eod_notes", "sod_notes"]);
+const DD_MODULE = "src/lib/exec/sources/dd";
+const PACK_DD_NAMES: ReadonlySet<string> = new Set(["listOpenTasksForClient", "listProjects", "listProjectStages", "listUsers", "listClientMatchSignals", "getMailTimezone"]);
+const DRAFTS_ROUTE_DIR = "src/app/api/exec/drafts/";
+const isDraftsRouteFile = (p: string) => p.startsWith(DRAFTS_ROUTE_DIR) && /\/route\.[cm]?[jt]sx?$/.test(p);
+const HTTP_METHODS: ReadonlySet<string> = new Set(["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]);
+const MUTATING_METHODS: ReadonlySet<string> = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+const AUDIT_CALLS: ReadonlySet<string> = new Set(["auditStart", "auditEvent", "withAudit", "auditFinish"]);
+const AUDIT_KEYS: ReadonlySet<string> = new Set(AUDIT_INPUT_KEYS);
+const PAYLOAD_KEYS: ReadonlySet<string> = new Set(["draftId", "seq", "kick"]);
+const REQUEST_NAME = /^(?:req|request)$/i;
+
+interface SpecRef {
+  spec: string;
+  /** Resolved path relative to the repo, without extension, lowercased; null for a bare specifier. */
+  target: string | null;
+  line: number;
+  whole: boolean;
+  names: string[];
+}
+interface RouteExport {
+  name: string;
+  line: number;
+  gateFirst: boolean;
+  strongSignIn: boolean;
+  sameOriginNext: boolean;
+}
+interface P4Facts {
+  /** Every appearance of a guarded env name (B1, B2, B9) with the name matched. */
+  tokens: { name: string; line: number }[];
+  /** process.env uses that aren't a literal-name read (B9). */
+  envReads: { line: number; how: string }[];
+  /** Every module reference, bare specifiers included (B3-B6, B10). */
+  specifiers: SpecRef[];
+  /** Lines reading .signal of req / request (B12). */
+  reqSignal: number[];
+  /** The exported HTTP handlers and their statement order (B11). */
+  routeExports: RouteExport[];
+  /** "line: what" for audit calls outside the key allow-list (BD14). */
+  auditOffenses: string[];
+  /** "line: what" for job payload literals outside draftId/seq/kick (BD15). */
+  payloadOffenses: string[];
+  /** String literals naming a private table (B10). */
+  tableNames: { name: string; line: number }[];
+  /** next.config.mjs only: whether its default-exported config has a top-level `env`; null when the shape couldn't be read. */
+  topLevelEnv: boolean | null;
+}
+
+function calleeName(call: ts.CallExpression): string | null {
+  const callee = call.expression;
+  if (ts.isIdentifier(callee)) return callee.text;
+  if (ts.isPropertyAccessExpression(callee)) return callee.name.text;
+  return null;
+}
+
+function findCall(node: ts.Node, name: string): ts.CallExpression | null {
+  let found: ts.CallExpression | null = null;
+  const visit = (n: ts.Node): void => {
+    if (found) return;
+    if (ts.isCallExpression(n) && calleeName(n) === name) {
+      found = n;
+      return;
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(node);
+  return found;
+}
+
+function hasTrueProperty(arg: ts.Expression, key: string): boolean {
+  return (
+    ts.isObjectLiteralExpression(arg) &&
+    arg.properties.some((p) => ts.isPropertyAssignment(p) && propertyNameText(p.name) === key && p.initializer.kind === ts.SyntaxKind.TrueKeyword)
+  );
+}
+
+/** `if (!gate.ok) return gate.response;` (a block with one return included), with no else. */
+function isReturnGuard(s: ts.Statement): boolean {
+  if (!ts.isIfStatement(s) || s.elseStatement) return false;
+  const then = s.thenStatement;
+  return ts.isReturnStatement(then) || (ts.isBlock(then) && then.statements.length === 1 && ts.isReturnStatement(then.statements[0]));
+}
+
+function routeExportOf(name: string, line: number, body: ts.Node | undefined): RouteExport {
+  const statements = body !== undefined && ts.isBlock(body) ? [...body.statements] : [];
+  const gate = statements.length > 0 ? findCall(statements[0], "requireExecPrincipal") : null;
+  const strongSignIn = gate !== null && gate.arguments.some((a) => hasTrueProperty(a, "requireStrongSignIn"));
+  const sameOriginAt = statements.findIndex((s) => findCall(s, "isSameOriginRequest") !== null);
+  const sameOriginNext = sameOriginAt === 1 || (sameOriginAt === 2 && isReturnGuard(statements[1]));
+  return { name, line, gateFirst: gate !== null, strongSignIn, sameOriginNext };
+}
+
+function hasExportModifier(node: ts.Node): boolean {
+  return ts.canHaveModifiers(node) && (ts.getModifiers(node) ?? []).some((m) => m.kind === ts.SyntaxKind.ExportKeyword);
+}
+
+/** The literal keys of an object literal; `opaque` when a spread or a computed key hides some. */
+function literalKeys(obj: ts.ObjectLiteralExpression): { keys: string[]; opaque: boolean } {
+  const keys: string[] = [];
+  let opaque = false;
+  for (const p of obj.properties) {
+    if (ts.isSpreadAssignment(p)) {
+      opaque = true;
+      continue;
+    }
+    const key = p.name === undefined ? null : propertyNameText(p.name);
+    if (key === null) opaque = true;
+    else keys.push(key);
+  }
+  return { keys, opaque };
+}
+
+/** An audit `error`: a string literal, `undefined`, an auditCode(…) call, or a conditional over those. */
+function isAuditErrorValue(e: ts.Expression): boolean {
+  if (ts.isStringLiteral(e) || ts.isNoSubstitutionTemplateLiteral(e)) return true;
+  if (ts.isIdentifier(e) && e.text === "undefined") return true;
+  if (ts.isCallExpression(e) && calleeName(e) === "auditCode") return true;
+  if (ts.isParenthesizedExpression(e)) return isAuditErrorValue(e.expression);
+  if (ts.isConditionalExpression(e)) return isAuditErrorValue(e.whenTrue) && isAuditErrorValue(e.whenFalse);
+  return false;
+}
+
+/** How a `process.env` expression is used; null when it is a literal-name read (allowed). */
+function envUse(node: ts.PropertyAccessExpression): string | null {
+  const parent = node.parent;
+  if (ts.isPropertyAccessExpression(parent) && parent.expression === node) return null;
+  if (ts.isElementAccessExpression(parent) && parent.expression === node) {
+    const arg = parent.argumentExpression;
+    return ts.isStringLiteral(arg) || ts.isNoSubstitutionTemplateLiteral(arg) ? null : "a computed property name";
+  }
+  if (ts.isVariableDeclaration(parent) && parent.initializer === node && ts.isObjectBindingPattern(parent.name)) {
+    return parent.name.elements.some((e) => e.dotDotDotToken !== undefined) ? "a rest spread" : null;
+  }
+  if (ts.isSpreadAssignment(parent) || ts.isSpreadElement(parent)) return "a spread";
+  if (ts.isCallExpression(parent) && parent.arguments.includes(node)) {
+    const callee = parent.expression;
+    if (ts.isPropertyAccessExpression(callee) && ts.isIdentifier(callee.expression) && callee.expression.text === "Object") return `Object.${callee.name.text}`;
+    return "passed as a value";
+  }
+  return "used as a value";
+}
+
+/** next.config.mjs: does the default-exported config object carry a top-level `env`? null when the shape isn't an object literal. */
+function topLevelEnvOf(sf: ts.SourceFile): boolean | null {
+  let exported: ts.Expression | undefined;
+  const consts = new Map<string, ts.Expression>();
+  for (const s of sf.statements) {
+    if (ts.isVariableStatement(s)) {
+      for (const d of s.declarationList.declarations) if (ts.isIdentifier(d.name) && d.initializer) consts.set(d.name.text, d.initializer);
+    } else if (ts.isExportAssignment(s) && !s.isExportEquals) {
+      exported = s.expression;
+    } else if (ts.isExpressionStatement(s) && ts.isBinaryExpression(s.expression) && s.expression.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+      const left = s.expression.left;
+      if (ts.isPropertyAccessExpression(left) && ts.isIdentifier(left.expression) && left.expression.text === "module" && left.name.text === "exports") {
+        exported = s.expression.right;
+      }
+    }
+  }
+  if (exported === undefined) return null;
+  const obj = ts.isIdentifier(exported) ? consts.get(exported.text) : exported;
+  if (obj === undefined || !ts.isObjectLiteralExpression(obj)) return null;
+  return obj.properties.some((p) => p.name !== undefined && propertyNameText(p.name) === "env");
+}
+
+function analyzeP4(sf: ts.SourceFile): P4Facts {
+  const lineOf = (n: ts.Node) => sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1;
+  const facts: P4Facts = {
+    tokens: [],
+    envReads: [],
+    specifiers: [],
+    reqSignal: [],
+    routeExports: [],
+    auditOffenses: [],
+    payloadOffenses: [],
+    tableNames: [],
+    topLevelEnv: null
+  };
+  // The two token names match an identifier exactly and a literal anywhere inside it; the two
+  // prefixes (MISSIVE_EA for next.config.mjs, NEXT_PUBLIC_MISSIVE for src) match anywhere.
+  const noteText = (text: string, line: number, exact: boolean): void => {
+    for (const name of [EA_SEND_TOKEN, EA_TOKEN]) {
+      if (exact ? text === name : text.includes(name)) facts.tokens.push({ name, line });
+    }
+    for (const prefix of [EA_PREFIX, PUBLIC_MISSIVE]) if (text.includes(prefix)) facts.tokens.push({ name: prefix, line });
+  };
+  const addSpec = (spec: string, node: ts.Node, names: string[], whole: boolean): void => {
+    const abs = resolveSpecifier(sf.fileName, spec);
+    facts.specifiers.push({ spec, target: abs === null ? null : relPath(stripExt(abs)).toLowerCase(), line: lineOf(node), whole, names });
+  };
+  const checkKeys = (prop: ts.ObjectLiteralElementLike | undefined, label: string, allowed: ReadonlySet<string>, line: number, out: string[]): void => {
+    if (prop === undefined) return;
+    if (!ts.isPropertyAssignment(prop) || !ts.isObjectLiteralExpression(prop.initializer)) {
+      out.push(`${line}: ${label} is not an object literal`);
+      return;
+    }
+    const { keys, opaque } = literalKeys(prop.initializer);
+    if (opaque) out.push(`${line}: ${label} has a spread or computed key`);
+    for (const key of keys) if (!allowed.has(key)) out.push(`${line}: ${label} key ${key}`);
+  };
+  const named = (obj: ts.ObjectLiteralExpression, key: string) => obj.properties.find((p) => p.name !== undefined && propertyNameText(p.name) === key);
+
+  const visit = (node: ts.Node): void => {
+    if (ts.isIdentifier(node) || ts.isPrivateIdentifier(node)) noteText(node.text, lineOf(node), true);
+    else if (ts.isStringLiteralLike(node) || ts.isTemplateHead(node) || ts.isTemplateMiddle(node) || ts.isTemplateTail(node)) noteText(node.text, lineOf(node), false);
+    if (ts.isStringLiteralLike(node) && PACK_BANNED_TABLES.has(node.text)) facts.tableNames.push({ name: node.text, line: lineOf(node) });
+
+    if (ts.isPropertyAccessExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "process" && node.name.text === "env") {
+      const how = envUse(node);
+      if (how !== null) facts.envReads.push({ line: lineOf(node), how });
+    }
+    if (ts.isPropertyAccessExpression(node) && node.name.text === "signal" && ts.isIdentifier(node.expression) && REQUEST_NAME.test(node.expression.text)) {
+      facts.reqSignal.push(lineOf(node));
+    }
+    if (
+      ts.isElementAccessExpression(node) &&
+      ts.isStringLiteralLike(node.argumentExpression) &&
+      node.argumentExpression.text === "signal" &&
+      ts.isIdentifier(node.expression) &&
+      REQUEST_NAME.test(node.expression.text)
+    ) {
+      facts.reqSignal.push(lineOf(node));
+    }
+
+    if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
+      const clause = node.importClause;
+      const bindings = clause?.namedBindings;
+      const names = [
+        ...(clause?.name ? ["default"] : []),
+        ...(bindings && ts.isNamedImports(bindings) ? bindings.elements.map((el) => (el.propertyName ?? el.name).text) : [])
+      ];
+      addSpec(node.moduleSpecifier.text, node, names, !!bindings && ts.isNamespaceImport(bindings));
+    } else if (ts.isExportDeclaration(node) && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) {
+      const clause = node.exportClause;
+      const names = clause && ts.isNamedExports(clause) ? clause.elements.map((el) => (el.propertyName ?? el.name).text) : [];
+      addSpec(node.moduleSpecifier.text, node, names, !clause || ts.isNamespaceExport(clause));
+    } else if (
+      ts.isImportEqualsDeclaration(node) &&
+      ts.isExternalModuleReference(node.moduleReference) &&
+      ts.isStringLiteral(node.moduleReference.expression)
+    ) {
+      addSpec(node.moduleReference.expression.text, node, [], true);
+    } else if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument) && ts.isStringLiteral(node.argument.literal)) {
+      addSpec(node.argument.literal.text, node, [], true);
+    } else if (ts.isCallExpression(node)) {
+      const callee = node.expression;
+      const isLoader = callee.kind === ts.SyntaxKind.ImportKeyword || (ts.isIdentifier(callee) && callee.text === "require");
+      const [arg] = node.arguments;
+      if (isLoader && arg && ts.isStringLiteralLike(arg)) addSpec(arg.text, node, [], true);
+      const name = calleeName(node);
+      if (name !== null && AUDIT_CALLS.has(name)) {
+        const entry = node.arguments[1];
+        const line = lineOf(node);
+        if (entry === undefined || !ts.isObjectLiteralExpression(entry)) {
+          facts.auditOffenses.push(`${line}: ${name} entry is not an object literal`);
+        } else {
+          if (name !== "auditFinish") checkKeys(named(entry, "input"), `${name} input`, AUDIT_KEYS, line, facts.auditOffenses);
+          if (name === "auditFinish" || name === "auditEvent") {
+            checkKeys(named(entry, "result"), `${name} result`, AUDIT_KEYS, line, facts.auditOffenses);
+            const error = named(entry, "error");
+            if (error !== undefined && (!ts.isPropertyAssignment(error) || !isAuditErrorValue(error.initializer))) {
+              facts.auditOffenses.push(`${line}: ${name} error is not a string literal or auditCode(...)`);
+            }
+          }
+        }
+      }
+      if (name === "enqueueJob") {
+        const [input] = node.arguments;
+        if (input !== undefined && ts.isObjectLiteralExpression(input)) checkKeys(named(input, "payload"), "payload", PAYLOAD_KEYS, lineOf(node), facts.payloadOffenses);
+      }
+    }
+
+    if (ts.isObjectLiteralExpression(node)) {
+      const payload = named(node, "payload");
+      const insideEnqueue = ts.isCallExpression(node.parent) && calleeName(node.parent) === "enqueueJob";
+      if (payload !== undefined && named(node, "kind") !== undefined && !insideEnqueue) {
+        checkKeys(payload, "payload", PAYLOAD_KEYS, lineOf(node), facts.payloadOffenses);
+      }
+    }
+
+    if (ts.isFunctionDeclaration(node) && node.name && HTTP_METHODS.has(node.name.text) && hasExportModifier(node)) {
+      facts.routeExports.push(routeExportOf(node.name.text, lineOf(node), node.body));
+    }
+    if (ts.isVariableStatement(node) && hasExportModifier(node)) {
+      for (const d of node.declarationList.declarations) {
+        if (ts.isIdentifier(d.name) && HTTP_METHODS.has(d.name.text) && d.initializer && (ts.isArrowFunction(d.initializer) || ts.isFunctionExpression(d.initializer))) {
+          facts.routeExports.push(routeExportOf(d.name.text, lineOf(d), d.initializer.body));
+        }
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  facts.topLevelEnv = topLevelEnvOf(sf);
+  return facts;
+}
+
+function hitsModule(s: SpecRef, module: string): boolean {
+  if (s.target === module) return true;
+  const tail = MODULE_TAILS.get(module);
+  if (tail === undefined) return false;
+  const spec = stripExt(s.spec).replace(/\\/g, "/").toLowerCase();
+  return spec === tail || spec.endsWith(`/${tail}`);
+}
+
+/** B1, B2, B9's NEXT_PUBLIC_MISSIVE: a guarded name anywhere but its one reader. */
+function tokenOffenses(file: string, f: P4Facts, name: string, allowed: string | null): string[] {
+  if (allowed !== null && file === allowed) return [];
+  return f.tokens.filter((t) => t.name === name).map((t) => `${file}:${t.line}: ${name}`);
+}
+
+/** B3, B4: a guarded module referenced from a file that isn't one of its importers. */
+function importerOffensesOf(file: string, f: P4Facts, module: string, allowed: ReadonlySet<string>): string[] {
+  if (allowed.has(file)) return [];
+  return f.specifiers.filter((s) => hitsModule(s, module)).map((s) => `${file}:${s.line}: imports ${module}`);
+}
+
+/** B5: an app route or page imported from anywhere. */
+function routeImportOffenses(file: string, f: P4Facts): string[] {
+  return f.specifiers
+    .filter((s) => s.target !== null && /^src\/app\/.*\/(?:route|page)$/.test(s.target))
+    .map((s) => `${file}:${s.line}: imports ${s.target}`);
+}
+
+/** B6: send.ts's imports outside its allow-list. */
+function sendImportOffenses(file: string, f: P4Facts): string[] {
+  if (file !== SEND_FILE) return [];
+  return f.specifiers
+    .filter((s) => (s.target === null ? !SEND_ALLOWED_BARE.has(s.spec) : !SEND_ALLOWED_TARGETS.has(s.target)))
+    .map((s) => `${file}:${s.line}: imports ${s.spec}`);
+}
+
+/** B9: process.env outside a literal-name read, in exec code, minus the allowed keyed reads. */
+function envOffenses(file: string, f: P4Facts): string[] {
+  if (!isExecCode(file)) return [];
+  let allowance = ENV_KEYED_READS_ALLOWED.get(file) ?? 0;
+  const out: string[] = [];
+  for (const read of f.envReads) {
+    if (read.how === "a computed property name" && allowance > 0) {
+      allowance -= 1;
+      continue;
+    }
+    out.push(`${file}:${read.line}: process.env ${read.how}`);
+  }
+  return out;
+}
+
+/** B10: the pack files' imports, table names and sources/dd names. */
+function packOffenses(file: string, f: P4Facts): string[] {
+  if (!PACK_FILES.has(file)) return [];
+  const out: string[] = [];
+  for (const s of f.specifiers) {
+    if (s.target !== null && PACK_BANNED_TARGET.test(s.target)) out.push(`${file}:${s.line}: imports ${s.target}`);
+    if (s.target === DD_MODULE) {
+      if (s.whole) out.push(`${file}:${s.line}: takes sources/dd whole`);
+      for (const name of s.names) if (!PACK_DD_NAMES.has(name)) out.push(`${file}:${s.line}: imports ${name} from sources/dd`);
+    }
+  }
+  for (const t of f.tableNames) out.push(`${file}:${t.line}: names ${t.name}`);
+  return out;
+}
+
+/** B11: every drafts route handler's statement order. */
+function routeOffenses(file: string, f: P4Facts): string[] {
+  if (!isDraftsRouteFile(file)) return [];
+  return f.routeExports.flatMap((e) => {
+    const out: string[] = [];
+    if (!e.gateFirst) out.push(`${file}:${e.line}: ${e.name} does not call requireExecPrincipal in its first statement`);
+    else if (!e.strongSignIn) out.push(`${file}:${e.line}: ${e.name} gates without requireStrongSignIn: true`);
+    if (MUTATING_METHODS.has(e.name) && !e.sameOriginNext) out.push(`${file}:${e.line}: ${e.name} does not check isSameOriginRequest right after the gate`);
+    return out;
+  });
+}
+
+/** B12: req.signal under the drafts routes. */
+function signalOffenses(file: string, f: P4Facts): string[] {
+  if (!file.startsWith(DRAFTS_ROUTE_DIR)) return [];
+  return f.reqSignal.map((line) => `${file}:${line}: reads the request's signal`);
+}
+
+/** BD14 and BD15 over the P4 file class. */
+function auditOffensesOf(file: string, f: P4Facts): string[] {
+  return isP4ContentFile(file) ? f.auditOffenses.map((at) => `${file}:${at}`) : [];
+}
+function payloadOffensesOf(file: string, f: P4Facts): string[] {
+  return isP4ContentFile(file) ? f.payloadOffenses.map((at) => `${file}:${at}`) : [];
 }
 
 // --- the program --------------------------------------------------------------------
@@ -914,6 +1415,8 @@ interface FileFacts extends ImportFacts {
   bidi: number[];
   /** rules 6-9 */
   mail: MailFacts;
+  /** P4 rules B1-B13, BD14, BD15 */
+  p4: P4Facts;
 }
 
 interface Scan {
@@ -923,6 +1426,8 @@ interface Scan {
   trustedExports: Map<string, string[]>;
   probeMints: Map<string, number[]>;
   probeExports: Map<string, string[]>;
+  /** The repo-root next.config.mjs through the P4 analyzer (B1, B2, B9); null when the file is missing. */
+  nextConfig: P4Facts | null;
 }
 
 // U+202A–U+202E and U+2066–U+2069 reorder how a line displays, so code can
@@ -958,20 +1463,26 @@ function scanTree(probes: ReadonlyMap<string, string>, exportProbes: readonly st
   const facts = new Map<string, FileFacts>();
   for (const abs of absFiles) {
     const sf = sourceOf(abs);
-    facts.set(relPath(abs), {
+    const file = relPath(abs);
+    facts.set(file, {
       ...analyzeImports(sf),
       mints: findMints(sf, checker, brand),
       bidi: bidiLines(sf.text),
-      mail: analyzeMail(sf)
+      mail: analyzeMail(sf, vocabFor(file)),
+      p4: analyzeP4(sf)
     });
   }
+  const nextConfigPath = path.join(ROOT, NEXT_CONFIG_FILE);
+  const nextConfig = existsSync(nextConfigPath)
+    ? analyzeP4(ts.createSourceFile(nextConfigPath, readFileSync(nextConfigPath, "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.JS))
+    : null;
   const trustedExports = new Map<string, string[]>();
   for (const file of LOADER_IMPORTERS) {
     if (file !== PRINCIPAL_FILE) trustedExports.set(file, principalExports(sourceOf(path.join(ROOT, file)), checker, brand));
   }
   const probeMints = new Map([...probes.keys()].map((file) => [file, findMints(sourceOf(file), checker, brand)]));
   const probeExports = new Map(exportProbes.map((file) => [file, principalExports(sourceOf(file), checker, brand)]));
-  return { files: absFiles.map(relPath), facts, trustedExports, probeMints, probeExports };
+  return { files: absFiles.map(relPath), facts, trustedExports, probeMints, probeExports, nextConfig };
 }
 
 // --- detector probes (in-memory files next to principal.ts) ---------------------------
@@ -1487,5 +1998,420 @@ describe("mail boundary detectors (rules 6-9)", () => {
       )
     ).toEqual([]);
     expect(returns("const config = { kind: 1, other: () => ({ subject }) };")).toEqual([]);
+  });
+});
+
+// --- P4 rules B1-B13, BD14-BD16 (real source tree) -------------------------------------------
+
+const p4Offenses = (check: (file: string, f: P4Facts) => string[]) => [...scan.facts].flatMap(([file, facts]) => check(file, facts.p4));
+const nextConfigFacts = (): P4Facts => {
+  if (!scan.nextConfig) throw new Error(`boundary test: ${NEXT_CONFIG_FILE} was not scanned`);
+  return scan.nextConfig;
+};
+const importersOf = (module: string): string[] =>
+  [...scan.facts].filter(([, facts]) => facts.p4.specifiers.some((s) => hitsModule(s, module))).map(([file]) => file);
+
+describe("P4 boundary (real source tree)", () => {
+  it("knows the P4 file class, the P4 handlers and the drafts routes", () => {
+    for (const file of [
+      "src/lib/exec/drafts-types.ts",
+      "src/lib/exec/drafts-state.ts",
+      "src/lib/exec/drafts.ts",
+      "src/lib/exec/send.ts",
+      "src/lib/exec/voice.ts",
+      "src/lib/exec/recipients.ts",
+      "src/lib/exec/clone-ea-types.ts",
+      "src/lib/exec/sources/clone-ea.ts",
+      "src/lib/exec/handlers/draft-generate.ts",
+      "src/lib/exec/handlers/voice-refresh.ts",
+      "src/components/exec/drafts/ReadBackFrame.tsx",
+      "src/app/api/exec/drafts/[id]/send/route.ts",
+      "src/app/(main)/executive/email/drafts/[id]/page.tsx"
+    ]) {
+      expect(isP4ContentFile(file), file).toBe(true);
+    }
+    for (const file of ["src/lib/exec/sources/mail.ts", "src/lib/exec/sync-state.ts", "src/lib/exec/handlers/email-triage.ts", "src/lib/exec/email-view.ts"]) {
+      expect(isP4ContentFile(file), file).toBe(false);
+    }
+    expect(isP4Handler("src/lib/exec/handlers/draft-reconcile.ts")).toBe(true);
+    expect(isP4Handler("src/lib/exec/handlers/email-reconcile.ts")).toBe(false);
+    expect(isDraftsRouteFile(SEND_ROUTE)).toBe(true);
+    expect(isDraftsRouteFile("src/app/api/exec/email/threads/[threadId]/assess/route.ts")).toBe(false);
+    // The P4 files that exist at stage 1 were scanned.
+    for (const file of [SEND_FILE, CLONE_EA_FILE, MAIL_FILE, "src/lib/exec/clone-ea-types.ts", "src/lib/exec/recipients.ts"]) expect(scan.files).toContain(file);
+  });
+
+  it("BD01 the send token's name appears only in send.ts, and next.config.mjs holds no MISSIVE_EA string", () => {
+    expect(factsOf(SEND_FILE).p4.tokens.some((t) => t.name === EA_SEND_TOKEN)).toBe(true);
+    expect(p4Offenses((file, f) => tokenOffenses(file, f, EA_SEND_TOKEN, SEND_FILE))).toEqual([]);
+    expect(nextConfigFacts().tokens.filter((t) => t.name === EA_PREFIX)).toEqual([]);
+  });
+
+  it("BD02 the draft token's name appears only in sources/mail.ts", () => {
+    expect(factsOf(MAIL_FILE).p4.tokens.some((t) => t.name === EA_TOKEN)).toBe(true);
+    expect(p4Offenses((file, f) => tokenOffenses(file, f, EA_TOKEN, MAIL_FILE))).toEqual([]);
+  });
+
+  it("BD03 send.ts is imported only by the send route", () => {
+    expect(p4Offenses((file, f) => importerOffensesOf(file, f, SEND_MODULE, new Set([SEND_ROUTE])))).toEqual([]);
+    expect(importersOf(SEND_MODULE).filter((file) => file !== SEND_ROUTE)).toEqual([]);
+  });
+
+  it("BD04 sources/clone-ea.ts is imported only by sources/mail.ts and send.ts", () => {
+    expect(importersOf(CLONE_EA_MODULE).sort()).toEqual([...CLONE_EA_IMPORTERS].sort());
+    expect(p4Offenses((file, f) => importerOffensesOf(file, f, CLONE_EA_MODULE, CLONE_EA_IMPORTERS))).toEqual([]);
+  });
+
+  it("BD05 no file imports a route.ts or a page.tsx", () => {
+    expect(p4Offenses(routeImportOffenses)).toEqual([]);
+  });
+
+  it("BD06 send.ts imports only its allow-list", () => {
+    const specs = factsOf(SEND_FILE).p4.specifiers;
+    expect(specs.map((s) => s.target ?? s.spec)).toContain(CLONE_EA_MODULE);
+    expect(specs.map((s) => s.target ?? s.spec)).toContain("server-only");
+    expect(p4Offenses(sendImportOffenses)).toEqual([]);
+  });
+
+  it("BD07 clone-ea.ts and send.ts use their own fetch: neither imports missive-client", () => {
+    for (const file of [CLONE_EA_FILE, SEND_FILE]) {
+      expect(factsOf(file).mail.modules.map((m) => m.target)).not.toContain("src/lib/missive-client");
+      expect(factsOf(file).p4.specifiers.map((s) => s.spec)).not.toContain("@/lib/missive-client");
+    }
+    expect(p3Offenses(importerOffenses)).toEqual([]);
+  });
+
+  it("BD08 no P4 file logs, alerts or (from a P4 handler) returns draft content, under the P4 vocabulary", () => {
+    expect(p4Offenses((file, facts) => (facts === factsOf(file).p4 ? p4ContentOffenses(file, factsOf(file).mail) : []))).toEqual([]);
+  });
+
+  it("BD09 process.env is read with literal names only; no NEXT_PUBLIC_MISSIVE anywhere; next.config.mjs has no top-level env", () => {
+    expect(factsOf("src/lib/exec/crypto.ts").p4.envReads.map((r) => r.how)).toEqual(["a computed property name"]);
+    expect(p4Offenses(envOffenses)).toEqual([]);
+    expect(p4Offenses((file, f) => tokenOffenses(file, f, PUBLIC_MISSIVE, null))).toEqual([]);
+    expect(nextConfigFacts().tokens.filter((t) => t.name === PUBLIC_MISSIVE)).toEqual([]);
+    expect(nextConfigFacts().topLevelEnv).toBe(false);
+  });
+
+  it("BD10 the pack files import none of the private-data modules and name none of the private tables", () => {
+    expect(p4Offenses(packOffenses)).toEqual([]);
+  });
+
+  it("BD11 every drafts route export gates first with a strong sign-in, mutations check same-origin next", () => {
+    expect(p4Offenses(routeOffenses)).toEqual([]);
+  });
+
+  it("BD12 no drafts route reads req.signal", () => {
+    expect(p4Offenses(signalOffenses)).toEqual([]);
+  });
+
+  it("BD13 the real send route is seen importing send.ts (the detector works on real code)", ({ skip }) => {
+    // The send route is Area D's; until it exists there is nothing to see. The probes below prove the detector.
+    if (!scan.files.includes(SEND_ROUTE)) skip();
+    expect(factsOf(SEND_ROUTE).p4.specifiers.some((s) => hitsModule(s, SEND_MODULE))).toBe(true);
+  });
+
+  it("BD14 every P4 audit input and result uses AUDIT_INPUT_KEYS only; errors are literals or auditCode()", () => {
+    expect(p4Offenses(auditOffensesOf)).toEqual([]);
+  });
+
+  it("BD15 every P4 job payload uses draftId, seq and kick only", () => {
+    expect(p4Offenses(payloadOffensesOf)).toEqual([]);
+  });
+});
+
+describe("P4 boundary detectors (B13 self-tests, BD14-BD16)", () => {
+  const kindOf = (file: string) => (file.endsWith(".tsx") ? ts.ScriptKind.TSX : /\.[cm]?js$/.test(file) ? ts.ScriptKind.JS : ts.ScriptKind.TS);
+  const sourceAt = (file: string, code: string) => ts.createSourceFile(path.join(ROOT, file), code, ts.ScriptTarget.Latest, true, kindOf(file));
+  const p4At = (file: string, code: string) => analyzeP4(sourceAt(file, code));
+  const mailAt = (file: string, code: string) => analyzeMail(sourceAt(file, code), vocabFor(file));
+  const sendImporters = (file: string, code: string) => importerOffensesOf(file, p4At(file, code), SEND_MODULE, new Set([SEND_ROUTE]));
+
+  it.each([
+    ["a named import", "src/lib/exec/drafts.ts", 'import { sendSavedDraft } from "@/lib/exec/send";'],
+    ["a require with a relative path", "src/app/api/brain/compose/route.ts", 'const s = require("../exec/send");'],
+    ["a dynamic import in a handler", "src/lib/exec/handlers/draft-reconcile.ts", 'export async function run() { const m = await import("@/lib/exec/send"); return m; }'],
+    ["a re-export", "src/lib/exec/index.ts", 'export * from "@/lib/exec/send";'],
+    ["a type-only import", "src/lib/exec/drafts.ts", 'import type { SendOutcome } from "@/lib/exec/send";'],
+    ["an import-equals", "src/lib/exec/drafts.ts", 'import send = require("@/lib/exec/send");'],
+    ["an import type node", "src/lib/exec/drafts.ts", 'type T = import("@/lib/exec/send").SendOutcome;'],
+    ["a sibling relative import", "src/lib/exec/drafts.ts", 'import { sendSavedDraft } from "./send";']
+  ])("B3 flags %s", (_what, file, code) => {
+    expect(sendImporters(file, code)).toHaveLength(1);
+    expect(sendImporters(SEND_ROUTE, code)).toEqual([]);
+  });
+
+  it("B3/B4 do not flag the modules next door", () => {
+    expect(sendImporters("src/lib/exec/drafts.ts", 'import { x } from "@/lib/exec/sender";\nimport { y } from "@/lib/exec/send-types";')).toEqual([]);
+    const cloneEa = (file: string, code: string) => importerOffensesOf(file, p4At(file, code), CLONE_EA_MODULE, CLONE_EA_IMPORTERS);
+    expect(cloneEa("src/lib/exec/drafts.ts", 'import { cloneEaFetch } from "@/lib/exec/sources/clone-ea";')).toHaveLength(1);
+    expect(cloneEa("src/lib/exec/drafts.ts", 'import { CloneEaError } from "@/lib/exec/clone-ea-types";')).toEqual([]);
+    expect(cloneEa(MAIL_FILE, 'import { cloneEaFetch } from "@/lib/exec/sources/clone-ea";')).toEqual([]);
+    expect(cloneEa(SEND_FILE, 'import { cloneEaFetch } from "./sources/clone-ea";')).toEqual([]);
+  });
+
+  it("B5 flags an import of a route or page", () => {
+    const routes = (file: string, code: string) => routeImportOffenses(file, p4At(file, code));
+    expect(routes("src/lib/exec/drafts.ts", 'import { POST } from "@/app/api/exec/drafts/route";')).toHaveLength(1);
+    expect(routes("src/lib/exec/drafts.ts", 'import Page from "@/app/(main)/executive/email/drafts/new/page";')).toHaveLength(1);
+    expect(routes("src/app/api/exec/drafts/[id]/send/route.ts", 'export { GET } from "../route";')).toHaveLength(1);
+    expect(routes("src/lib/exec/drafts.ts", 'import { x } from "@/lib/exec/drafts-state";')).toEqual([]);
+  });
+
+  it("B6 flags an import outside send.ts's allow-list", () => {
+    const allowed = [
+      'import "server-only";',
+      'import { createHash } from "node:crypto";',
+      'import type { ExecPrincipal } from "@/lib/exec/types";',
+      'import type { SendTokenReason } from "@/lib/exec/drafts-types";',
+      'import { CloneEaError } from "@/lib/exec/clone-ea-types";',
+      'import { cloneEaFetch } from "@/lib/exec/sources/clone-ea";',
+      'import { putSyncState } from "@/lib/exec/sync-state";'
+    ].join("\n");
+    expect(sendImportOffenses(SEND_FILE, p4At(SEND_FILE, allowed))).toEqual([]);
+    expect(sendImportOffenses(SEND_FILE, p4At(SEND_FILE, 'import { getDraft } from "@/lib/exec/drafts-store";'))).toHaveLength(1);
+    expect(sendImportOffenses(SEND_FILE, p4At(SEND_FILE, 'import { readPrincipalThread } from "./sources/mail";'))).toHaveLength(1);
+    expect(sendImportOffenses(SEND_FILE, p4At(SEND_FILE, 'import fs from "node:fs";'))).toHaveLength(1);
+    expect(sendImportOffenses("src/lib/exec/drafts.ts", p4At("src/lib/exec/drafts.ts", 'import fs from "node:fs";'))).toEqual([]);
+  });
+
+  it.each([
+    ["an element access with the name", "src/lib/exec/health.ts", 'const t = process.env["MISSIVE_EA_SEND_TOKEN"];'],
+    ["a property access", "src/lib/exec/health.ts", "const t = process.env.MISSIVE_EA_SEND_TOKEN;"],
+    ["a string literal", "src/lib/exec/overview.ts", 'const name = "MISSIVE_EA_SEND_TOKEN";'],
+    ["a template", "src/lib/exec/overview.ts", "const name = `${prefix} MISSIVE_EA_SEND_TOKEN`;"],
+    ["a destructuring", "src/lib/exec/health.ts", "const { MISSIVE_EA_SEND_TOKEN } = process.env;"],
+    ["a file outside exec code", "src/lib/mailer.ts", "const t = process.env.MISSIVE_EA_SEND_TOKEN;"]
+  ])("B1 flags %s", (_what, file, code) => {
+    expect(tokenOffenses(file, p4At(file, code), EA_SEND_TOKEN, SEND_FILE)).toHaveLength(1);
+    expect(tokenOffenses(SEND_FILE, p4At(SEND_FILE, code), EA_SEND_TOKEN, SEND_FILE)).toEqual([]);
+  });
+
+  it("B2 flags the draft token outside sources/mail.ts (MU14)", () => {
+    expect(tokenOffenses("src/lib/exec/drafts.ts", p4At("src/lib/exec/drafts.ts", "const t = process.env.MISSIVE_EA_TOKEN;"), EA_TOKEN, MAIL_FILE)).toHaveLength(1);
+    expect(tokenOffenses(MAIL_FILE, p4At(MAIL_FILE, "const t = process.env.MISSIVE_EA_TOKEN;"), EA_TOKEN, MAIL_FILE)).toEqual([]);
+    // The send token's name does not contain the draft token's.
+    expect(tokenOffenses(SEND_FILE, p4At(SEND_FILE, "const t = process.env.MISSIVE_EA_SEND_TOKEN;"), EA_TOKEN, MAIL_FILE)).toEqual([]);
+  });
+
+  it("B1/B2/B8 ignore the names in comments", () => {
+    const code = [
+      "// MISSIVE_EA_SEND_TOKEN and MISSIVE_EA_TOKEN are read elsewhere",
+      '/* import { sendSavedDraft } from "@/lib/exec/send"; console.log(row.instruction); */',
+      "export const x = 1;"
+    ].join("\n");
+    const facts = p4At("src/lib/exec/drafts.ts", code);
+    expect(facts.tokens).toEqual([]);
+    expect(facts.specifiers).toEqual([]);
+    expect(mailAt("src/lib/exec/drafts.ts", code).contentLogs).toEqual([]);
+  });
+
+  it.each([
+    ["a computed property name", "const t = process.env[name];"],
+    ["a computed property name", "const t = process.env[`MISSIVE_EA_${x}`];"],
+    ["Object.keys", "const names = Object.keys(process.env);"],
+    ["Object.entries", "for (const [k, v] of Object.entries(process.env)) use(k, v);"],
+    ["a spread", "const all = { ...process.env };"],
+    ["a rest spread", "const { NODE_ENV, ...rest } = process.env;"],
+    ["used as a value", "const env = process.env;"],
+    ["passed as a value", "configure(process.env);"]
+  ])("B9 flags %s", (how, code) => {
+    const offenses = envOffenses("src/lib/exec/health.ts", p4At("src/lib/exec/health.ts", code));
+    expect(offenses).toHaveLength(1);
+    expect(offenses[0]).toContain(how);
+    // Outside exec code B9 does not apply.
+    expect(envOffenses("src/lib/mailer.ts", p4At("src/lib/mailer.ts", code))).toEqual([]);
+  });
+
+  it.each([
+    "const t = process.env.EXEC_ENABLED;",
+    'const t = process.env["EXEC_ENABLED"];',
+    "const t = process.env[`EXEC_ENABLED`];",
+    "const { EXEC_ENABLED, MISSIVE_API_URL } = process.env;",
+    'const t = process.env.MISSIVE_API_URL?.trim() ?? "";',
+    'if (typeof process.env.X === "string") run();'
+  ])("B9 does not flag %s", (code) => {
+    expect(envOffenses("src/lib/exec/health.ts", p4At("src/lib/exec/health.ts", code))).toEqual([]);
+  });
+
+  it("B9 allows crypto.ts exactly one keyed read", () => {
+    const one = "const raw = process.env[envName]?.trim();";
+    expect(envOffenses("src/lib/exec/crypto.ts", p4At("src/lib/exec/crypto.ts", one))).toEqual([]);
+    expect(envOffenses("src/lib/exec/crypto.ts", p4At("src/lib/exec/crypto.ts", `${one}\n${one}`))).toHaveLength(1);
+    expect(envOffenses("src/lib/exec/crypto.ts", p4At("src/lib/exec/crypto.ts", "const all = { ...process.env };"))).toHaveLength(1);
+  });
+
+  it("B9 flags NEXT_PUBLIC_MISSIVE anywhere in src", () => {
+    for (const file of ["src/lib/exec/health.ts", "src/components/Inbox.tsx", "src/lib/missive-client.ts"]) {
+      expect(tokenOffenses(file, p4At(file, "const u = process.env.NEXT_PUBLIC_MISSIVE_URL;"), PUBLIC_MISSIVE, null)).toHaveLength(1);
+    }
+  });
+
+  it("B1/B9 flag a next.config.mjs that inlines the send token or carries a top-level env", () => {
+    const inlined = p4At(NEXT_CONFIG_FILE, [
+      "const nextConfig = { reactStrictMode: true, env: { MISSIVE_EA_SEND_TOKEN: process.env.MISSIVE_EA_SEND_TOKEN } };",
+      "export default nextConfig;"
+    ].join("\n"));
+    expect(inlined.tokens.filter((t) => t.name === EA_SEND_TOKEN).length).toBeGreaterThan(0);
+    expect(inlined.tokens.some((t) => t.name === EA_PREFIX)).toBe(true);
+    expect(inlined.topLevelEnv).toBe(true);
+    expect(p4At(NEXT_CONFIG_FILE, "export default { reactStrictMode: true, env: { A: process.env.A } };").topLevelEnv).toBe(true);
+    expect(p4At(NEXT_CONFIG_FILE, "module.exports = { reactStrictMode: true, env: {} };").topLevelEnv).toBe(true);
+    expect(p4At(NEXT_CONFIG_FILE, "const nextConfig = { reactStrictMode: true, experimental: { env: 1 } };\nexport default nextConfig;").topLevelEnv).toBe(false);
+    // A shape the check can't read is reported as null, which the real-tree test refuses.
+    expect(p4At(NEXT_CONFIG_FILE, "export default withPlugins({});").topLevelEnv).toBeNull();
+    expect(nextConfigFacts().topLevelEnv).not.toBeNull();
+  });
+
+  it("B10 flags the pack files' private imports, tables and sources/dd names", () => {
+    const pack = (code: string, file = "src/lib/exec/drafts-pack.ts") => packOffenses(file, p4At(file, code));
+    for (const module of [
+      "@/lib/brain-memory",
+      "@/lib/growth-brain",
+      "@/lib/finance-summary",
+      "@/lib/facebook-revenue",
+      "@/lib/stripe",
+      "@/lib/pnl-parse",
+      "@/lib/slack",
+      "@/lib/client-email-slack",
+      "@/lib/meeting-briefs",
+      "@/lib/tldv-client",
+      "@/lib/owner-inbox"
+    ]) {
+      expect(pack(`import { x } from "${module}";`), module).toHaveLength(1);
+    }
+    expect(pack('const { data } = await db.from("mrr_entries").select("id");')).toHaveLength(1);
+    expect(pack("db.from(`brain_memories`);")).toHaveLength(1);
+    expect(pack('import { listOpenTasks } from "@/lib/exec/sources/dd";')).toHaveLength(1);
+    expect(pack('import * as dd from "@/lib/exec/sources/dd";')).toHaveLength(1);
+    expect(pack('import { listClients } from "@/lib/exec/sources/dd";')).toHaveLength(1);
+    expect(pack('import { listOpenTasksForClient, getMailTimezone, listUsers } from "@/lib/exec/sources/dd";')).toEqual([]);
+    expect(pack('import { x } from "@/lib/exec/drafts-store";\nimport { callModel } from "@/lib/exec/llm/client";')).toEqual([]);
+    expect(pack('import { x } from "@/lib/slack";', "src/lib/exec/voice.ts")).toHaveLength(1);
+    expect(pack('import { x } from "@/lib/slack";', "src/lib/exec/drafts.ts")).toEqual([]);
+  });
+
+  it("B11 accepts the gate-first, same-origin-next shape and flags every other order", () => {
+    const route = (code: string) => routeOffenses(SEND_ROUTE, p4At(SEND_ROUTE, code));
+    const good = [
+      'export const dynamic = "force-dynamic";',
+      "export async function POST(req: Request, { params }: { params: { id: string } }) {",
+      "  const gate = await requireExecPrincipal(req, ROUTE, { requireStrongSignIn: true });",
+      "  if (!gate.ok) return gate.response;",
+      '  if (!isSameOriginRequest(req)) return jsonError(403, "forbidden");',
+      "  return handle(gate.principal, params.id);",
+      "}",
+      "export async function GET(req: Request) {",
+      "  const gate = await requireExecPrincipal(req, ROUTE, { requireStrongSignIn: true });",
+      "  if (!gate.ok) return gate.response;",
+      "  return view(gate.principal);",
+      "}",
+      "export const DELETE = async (req: Request) => {",
+      "  const gate = await requireExecPrincipal(req, ROUTE, { requireStrongSignIn: true });",
+      '  if (!isSameOriginRequest(req)) return jsonError(403, "forbidden");',
+      "  if (!gate.ok) return gate.response;",
+      "  return discard(gate.principal);",
+      "};"
+    ].join("\n");
+    expect(route(good)).toEqual([]);
+    // The gate is not the first statement, so the same-origin check isn't "right after the gate" either: two offenses.
+    expect(route("export async function POST(req: Request) {\n  const id = params.id;\n  const gate = await requireExecPrincipal(req, ROUTE, { requireStrongSignIn: true });\n  if (!isSameOriginRequest(req)) return x;\n  return y;\n}")).toHaveLength(2);
+    expect(route("export async function GET(req: Request) {\n  const id = params.id;\n  const gate = await requireExecPrincipal(req, ROUTE, { requireStrongSignIn: true });\n  return y;\n}")).toHaveLength(1);
+    expect(route("export async function GET(req: Request) {\n  const gate = await requireExecPrincipal(req, ROUTE);\n  return y;\n}")).toHaveLength(1);
+    expect(route("export async function GET(req: Request) {\n  const gate = await requireExecPrincipal(req, ROUTE, { requireStrongSignIn: false });\n  return y;\n}")).toHaveLength(1);
+    expect(route("export async function POST(req: Request) {\n  const gate = await requireExecPrincipal(req, ROUTE, { requireStrongSignIn: true });\n  if (!gate.ok) return gate.response;\n  return y;\n}")).toHaveLength(1);
+    expect(route("export async function POST(req: Request) {\n  if (!isSameOriginRequest(req)) return x;\n  const gate = await requireExecPrincipal(req, ROUTE, { requireStrongSignIn: true });\n  return y;\n}")).toHaveLength(2);
+    expect(route("export async function PATCH(req: Request) {\n  const gate = await requireExecPrincipal(req, ROUTE, { requireStrongSignIn: true });\n  if (!gate.ok) return gate.response;\n  const body = await req.json();\n  if (!isSameOriginRequest(req)) return x;\n  return y;\n}")).toHaveLength(1);
+    expect(route("export async function POST(req: Request) { return assessThread(req); }")).toHaveLength(2);
+    expect(route("export const GET = (req: Request) => view(req);")).toHaveLength(1);
+    // Only the drafts routes are checked.
+    expect(routeOffenses("src/app/api/exec/email/threads/[threadId]/assess/route.ts", p4At("src/app/api/exec/email/threads/[threadId]/assess/route.ts", "export async function POST(req: Request) { return assessThread(req); }"))).toEqual([]);
+  });
+
+  it("B12 flags req.signal in a drafts route file", () => {
+    const signal = (code: string, file = SEND_ROUTE) => signalOffenses(file, p4At(file, code));
+    expect(signal("const s = req.signal;")).toHaveLength(1);
+    expect(signal("await send(principal, { ...input, signal: request.signal });")).toHaveLength(1);
+    expect(signal('const s = req["signal"];')).toHaveLength(1);
+    expect(signal("const s = controller.signal;")).toEqual([]);
+    expect(signal("const s = AbortSignal.timeout(10_000);")).toEqual([]);
+    expect(signal("const s = req.signal;", "src/app/api/exec/email/threads/[threadId]/assess/route.ts")).toEqual([]);
+  });
+
+  it("BD14 flags audit entries outside AUDIT_INPUT_KEYS and errors that aren't literals or auditCode()", () => {
+    const audit = (code: string, file = "src/lib/exec/drafts.ts") => auditOffensesOf(file, p4At(file, code));
+    expect(audit('await auditStart(principal, { actor: "owner", action: "draft.save", target: id, input: { draftId: id, version: 2, graphIdFp: fp } });')).toEqual([]);
+    expect(audit('await withAudit(principal, { actor: "owner", action: "draft.send", input: { draftId, version, reviewHashPrefix } }, () => run());')).toEqual([]);
+    expect(audit('await auditFinish(auditId, { ok: false, result: { outcome: "error", httpStatus: 409, code: "changed" }, error: auditCode(err) });')).toEqual([]);
+    expect(audit('await auditEvent(principal, { actor: "owner", action: "draft.review", target: id, input: { draftId: id }, result: { flags: 2 }, error: ok ? undefined : "review_failed" });')).toEqual([]);
+    expect(audit('await auditFinish(auditId, { ok: true, error: undefined });')).toEqual([]);
+    expect(audit('await auditStart(principal, { actor: "owner", action: "draft.save", input: { draftId: id, subject: row.subject } });')).toEqual([
+      "src/lib/exec/drafts.ts:1: auditStart input key subject"
+    ]);
+    expect(audit('await auditStart(principal, { actor: "owner", action: "draft.save", input: { ...extra } });')).toHaveLength(1);
+    expect(audit('await auditStart(principal, { actor: "owner", action: "draft.save", input: buildInput(row) });')).toHaveLength(1);
+    expect(audit('await auditStart(principal, { actor: "owner", action: "draft.save", input });')).toHaveLength(1);
+    expect(audit("await auditStart(principal, entry);")).toHaveLength(1);
+    expect(audit('await auditFinish(auditId, { ok: false, result: { body: row.body_text } });')).toHaveLength(1);
+    expect(audit("await auditFinish(auditId, { ok: false, error: err.message });")).toHaveLength(1);
+    expect(audit("await auditFinish(auditId, { ok: false, error: `${code}` });")).toHaveLength(1);
+    expect(audit("await auditFinish(auditId, { ok: false, error });")).toHaveLength(1);
+    expect(audit('await auditEvent(principal, { actor: "job", action: "voice.refresh", result: summary });')).toHaveLength(1);
+    expect(audit('await auditEvent(principal, { actor: "job", action: "voice.refresh", result: { samples: 12 } });', "src/lib/exec/voice.ts")).toHaveLength(1);
+    // Outside the P4 file class the rule does not apply.
+    expect(audit("await auditFinish(auditId, { ok: false, error: err.message });", "src/lib/exec/email-assess.ts")).toEqual([]);
+  });
+
+  it("BD15 flags job payloads outside draftId, seq and kick", () => {
+    const payload = (code: string, file = "src/lib/exec/handlers/draft-generate.ts") => payloadOffensesOf(file, p4At(file, code));
+    expect(payload('await enqueueJob({ kind: K, lane: "interactive", principalId: p.id, payload: { draftId, seq }, maxAttempts: 1 });')).toEqual([]);
+    expect(payload("return { kind: K, lane, principalId: p.id, payload: { draftId: id, seq: 2, kick: true } };")).toEqual([]);
+    expect(payload("await enqueueJob(draftGenerateJob(principal, id, seq));")).toEqual([]);
+    expect(payload('await enqueueJob({ kind: K, lane: "interactive", principalId: p.id, payload: { draftId, instruction } });')).toEqual([
+      "src/lib/exec/handlers/draft-generate.ts:1: payload key instruction"
+    ]);
+    expect(payload('await enqueueJob({ kind: K, lane: "bulk", principalId: p.id, payload: buildPayload(row) });')).toHaveLength(1);
+    expect(payload("return { kind: K, lane, principalId: p.id, payload: { threadId } };")).toHaveLength(1);
+    expect(payload("return { kind: K, lane, principalId: p.id, payload: row };")).toHaveLength(1);
+    expect(payload("const call = { method: 'POST', payload: { bodyHtml } };")).toEqual([]);
+    expect(payload('await enqueueJob({ kind: K, payload: { threadId } });', "src/lib/exec/handlers/email-triage.ts")).toEqual([]);
+  });
+
+  it.each([
+    ["src/lib/exec/drafts.ts", "console.log(row.instruction);"],
+    ["src/lib/exec/drafts.ts", "console.warn(out.paragraphs);"],
+    ["src/lib/exec/voice.ts", 'notifyOps("x", { fact });'],
+    ["src/lib/exec/drafts.ts", "console.log(draft.noteForMitchell);"],
+    ["src/lib/exec/voice.ts", "console.log(sample);"],
+    ["src/lib/exec/drafts.ts", "console.log(signOff);"],
+    ["src/lib/exec/drafts.ts", "console.log(view.readBack);"],
+    ["src/lib/exec/drafts.ts", "console.log(renderNonce, bodyDoc);"],
+    ["src/lib/exec/drafts.ts", "console.log(`facts: ${factLines.join()}`);"],
+    ["src/lib/exec/drafts.ts", 'void notifyOps({ key: "k", title: taskTitle });'],
+    ["src/lib/exec/drafts.ts", "console.log(candidates.length, placeholders);"]
+  ])("BD16 flags content handed to a log or ops alert in %s: %s", (file, code) => {
+    expect(mailAt(file, code).contentLogs).toHaveLength(1);
+    expect(p4ContentOffenses(file, mailAt(file, code))).toHaveLength(1);
+  });
+
+  it.each([
+    ["src/lib/exec/drafts.ts", "// console.log(row.instruction); notifyOps('x', { fact });"],
+    ["src/lib/exec/drafts.ts", "console.log(draftId, version, code, placeholders.length, candidates.length);"],
+    ["src/lib/exec/drafts.ts", 'void notifyOps({ key: `draft-send-unknown:${principal.id}`, title: "send outcome unknown", detail: `draft ${draftId}` });'],
+    ["src/lib/exec/drafts.ts", "console.warn(`[exec-drafts] ${factsStatus} ${lineCount}`);"],
+    ["src/lib/exec/sources/mail.ts", "console.log(row.instruction);"],
+    ["src/lib/exec/handlers/email-triage.ts", "console.log(sample, out.paragraphs);"]
+  ])("BD16 does not flag %s: %s (comments, counts, the alert's own fields, and P3's files keep P3's vocabulary)", (file, code) => {
+    expect(mailAt(file, code).contentLogs).toEqual([]);
+    expect(p4ContentOffenses(file, mailAt(file, code))).toEqual([]);
+  });
+
+  it("BD16 keeps P3's verdicts: a P3 file still flags P3's words, and a P4 handler returning content is flagged", () => {
+    expect(mailAt("src/lib/exec/sources/mail.ts", "console.log(row.subject);").contentLogs).toHaveLength(1);
+    expect(contentOffenses("src/lib/exec/sources/mail.ts", mailAt("src/lib/exec/sources/mail.ts", "console.log(row.subject);"))).toHaveLength(1);
+    const handler = 'export const h = { kind: "exec.draft-generate", lane: "interactive", timeoutMs: 1, run: async (ctx) => ({ paragraphs: out.paragraphs }) };';
+    expect(p4ContentOffenses("src/lib/exec/handlers/draft-generate.ts", mailAt("src/lib/exec/handlers/draft-generate.ts", handler))).toHaveLength(1);
+    const clean = 'export const h = { kind: "exec.draft-generate", lane: "interactive", timeoutMs: 1, run: async (ctx) => ({ draftId, outcome: "ok", costUsd: 0.1 }) };';
+    expect(p4ContentOffenses("src/lib/exec/handlers/draft-generate.ts", mailAt("src/lib/exec/handlers/draft-generate.ts", clean))).toEqual([]);
   });
 });

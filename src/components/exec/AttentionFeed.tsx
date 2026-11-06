@@ -1,5 +1,6 @@
 import { CircleCheck, Inbox } from "lucide-react";
 import type { AttentionItem } from "@/lib/exec/attention-types";
+import { draftReplyHrefFor } from "@/lib/exec/drafts-links";
 import { formatInZone } from "@/lib/exec/format";
 import { AttentionRow } from "./AttentionRow";
 import { EmptyState } from "./EmptyState";
@@ -15,13 +16,16 @@ export function AttentionFeed({
   items,
   now,
   tz,
-  checkedAt
+  checkedAt,
+  draftsEnabled = false
 }: {
   items: readonly AttentionItem[];
   now: Date | string;
   tz: string;
   /** When the producers last refreshed the feed (ISO), or null if never. */
   checkedAt?: string | null;
+  /** P4 (Y9): assistant drafting is on, so email items offer "Draft reply". */
+  draftsEnabled?: boolean;
 }) {
   if (items.length === 0) {
     return checkedAt ? (
@@ -42,7 +46,7 @@ export function AttentionFeed({
     <ol className="divide-y divide-slate-100">
       {items.map((item) => (
         <li key={item.id}>
-          <AttentionRow item={item} now={now} tz={tz} />
+          <AttentionRow item={item} now={now} tz={tz} draftReplyHref={draftsEnabled ? draftReplyHrefFor(item) : null} />
         </li>
       ))}
     </ol>

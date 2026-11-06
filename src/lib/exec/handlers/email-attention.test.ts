@@ -36,6 +36,8 @@ vi.mock("@/lib/exec/email-store", async (importOriginal) => {
     stampScreened: vi.fn()
   };
 });
+// P4 (X5): the safety nets' drafts purge; its own suite is drafts-store.test.ts.
+vi.mock("@/lib/exec/drafts-store", () => ({ purgeDraftsForThreads: vi.fn() }));
 vi.mock("@/lib/exec/jobs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/exec/jobs")>();
   return { ...actual, enqueueJob: vi.fn(), enqueueBulkTriage: vi.fn() };
@@ -66,6 +68,7 @@ import {
   type EmailAttentionRow
 } from "@/lib/exec/attention";
 import type { AttentionCandidate } from "@/lib/exec/attention-types";
+import { purgeDraftsForThreads } from "@/lib/exec/drafts-store";
 import {
   applyThreadProposal,
   deleteCommitmentsForThreads,
@@ -347,6 +350,7 @@ beforeEach(() => {
   vi.mocked(listTombstonedThreadIds).mockResolvedValue([]);
   vi.mocked(deleteEmailAttentionForThreads).mockResolvedValue(0);
   vi.mocked(deleteCommitmentsForThreads).mockResolvedValue(0);
+  vi.mocked(purgeDraftsForThreads).mockResolvedValue(0);
   vi.mocked(deleteSignalsForThreads).mockResolvedValue(0);
   vi.mocked(listAllEmailAttentionRows).mockResolvedValue([]);
   vi.mocked(deleteAttentionItemsByIds).mockResolvedValue(0);
@@ -752,10 +756,11 @@ describe("the policy step", () => {
 // ---------------------------------------------------------------------------
 
 describe("the safety nets", () => {
-  it("delete every tombstoned thread's items, commitments and signals, before the reads and after the sync", async () => {
+  it("delete every tombstoned thread's items, commitments, drafts (P4 X5) and signals, before the reads and after the sync", async () => {
     vi.mocked(listTombstonedThreadIds).mockResolvedValue([TH(7), TH(8)]);
-    await run();
-    for (const fn of [deleteEmailAttentionForThreads, deleteCommitmentsForThreads, deleteSignalsForThreads]) {
+    vi.mocked(purgeDraftsForThreads).mockResolvedValue(2);
+    const out = await run();
+    for (const fn of [deleteEmailAttentionForThreads, deleteCommitmentsForThreads, purgeDraftsForThreads, deleteSignalsForThreads]) {
       expect(vi.mocked(fn).mock.calls.map((c) => c[1])).toEqual([
         [TH(7), TH(8)],
         [TH(7), TH(8)]
@@ -767,6 +772,33 @@ describe("the safety nets", () => {
     const sync = vi.mocked(syncAttention).mock.invocationCallOrder[0];
     expect(net1).toBeLessThan(reads);
     expect(sync).toBeLessThan(net2);
+    // PX05: in each net the drafts purge runs after the commitments delete and before the signals delete, with the same signal.
+    for (const i of [0, 1]) {
+      const commitments = vi.mocked(deleteCommitmentsForThreads).mock.invocationCallOrder[i];
+      const drafts = vi.mocked(purgeDraftsForThreads).mock.invocationCallOrder[i];
+      const signals = vi.mocked(deleteSignalsForThreads).mock.invocationCallOrder[i];
+      expect(commitments).toBeLessThan(drafts);
+      expect(drafts).toBeLessThan(signals);
+      expect(vi.mocked(purgeDraftsForThreads).mock.calls[i][2]).toEqual({ signal: expect.any(AbortSignal) });
+    }
+    expect((out as { net1?: { drafts: number | null } }).net1?.drafts).toBe(2);
+    expect((out as { net2?: { drafts: number | null } }).net2?.drafts).toBe(2);
+  });
+
+  it("PX05: the P4 migration not applied (null) is recorded as such; a drafts purge failure fails the net like any other step", async () => {
+    vi.mocked(listTombstonedThreadIds).mockResolvedValue([TH(7)]);
+    vi.mocked(purgeDraftsForThreads).mockResolvedValue(null);
+    const out = await run();
+    expect((out as { net1?: { drafts: number | null } }).net1?.drafts).toBeNull();
+    vi.mocked(purgeDraftsForThreads).mockRejectedValue(new Error("exec drafts store: exec_drafts_purge_restricted failed: lock timeout"));
+    await expect(run()).rejects.toThrow(/exec_drafts_purge_restricted failed/);
+    expect(syncAttention).toHaveBeenCalledTimes(1);
+  });
+
+  it("the safety nets skip every delete, the drafts purge included, when nothing is tombstoned or rule-matched", async () => {
+    await run();
+    expect(purgeDraftsForThreads).not.toHaveBeenCalled();
+    expect(deleteCommitmentsForThreads).not.toHaveBeenCalled();
   });
 
   it("a tombstone landing between the reads and the sync leaves no item (A6)", async () => {

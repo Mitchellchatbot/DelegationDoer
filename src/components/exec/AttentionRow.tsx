@@ -1,4 +1,5 @@
-import { Hash, Inbox, LayoutDashboard, Lightbulb, Mail, type LucideIcon } from "lucide-react";
+import Link from "next/link";
+import { FilePen, Hash, Inbox, LayoutDashboard, Lightbulb, Mail, type LucideIcon } from "lucide-react";
 import type { AttentionItem, AttentionSource, PriorityBand } from "@/lib/exec/attention-types";
 import { ageLabel, formatInZone } from "@/lib/exec/format";
 import { cn } from "@/lib/utils";
@@ -46,7 +47,18 @@ function Age({ item, now, tz }: { item: AttentionItem; now: Date | string; tz: s
   );
 }
 
-export function AttentionRow({ item, now, tz }: { item: AttentionItem; now: Date | string; tz: string }) {
+export function AttentionRow({
+  item,
+  now,
+  tz,
+  draftReplyHref = null
+}: {
+  item: AttentionItem;
+  now: Date | string;
+  tz: string;
+  /** P4 (Y9): a "Draft reply" link for an email item while drafts are on (AttentionFeed builds it). */
+  draftReplyHref?: string | null;
+}) {
   // A source this build doesn't know is named as stored, never passed off as DD.
   const { label: sourceLabel, Icon } = SOURCE_META[item.source] ?? { label: String(item.source), Icon: Inbox };
   const band = item.priority.band;
@@ -88,6 +100,17 @@ export function AttentionRow({ item, now, tz }: { item: AttentionItem; now: Date
         )}
         <FactList facts={item.facts} />
         <SourceLinks refs={item.refs} />
+        {draftReplyHref && (
+          <Link
+            href={draftReplyHref}
+            prefetch={false}
+            data-draft-reply
+            className="inline-flex items-center gap-1 rounded-md border border-indigo-200 bg-white px-2 py-0.5 text-[11.5px] font-semibold text-indigo-700 hover:border-indigo-300 hover:text-indigo-900"
+          >
+            <FilePen className="h-3 w-3" aria-hidden />
+            Draft reply
+          </Link>
+        )}
       </div>
     </article>
   );

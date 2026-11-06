@@ -15,16 +15,25 @@ vi.mock("@/lib/exec/email-store", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/exec/email-store")>();
   return { ...actual, purgeExpiredEmailRows: vi.fn() };
 });
+// P4's drafts retention step has its own suites (drafts-store, purge); here it finds nothing to delete.
+vi.mock("@/lib/exec/drafts-store", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/exec/drafts-store")>();
+  return { ...actual, purgeExpiredDrafts: vi.fn() };
+});
 
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { listEnabledPrincipals, loadPrincipalById, loadSettings, principalFromRows, settingsFromRow } from "@/lib/exec/principal";
 import { createFakeExecDb, jobRow, type FakeExecDb } from "@/lib/exec/__tests__/fake-exec-db";
 import { purgeExpiredEmailRows } from "@/lib/exec/email-store";
+import { purgeExpiredDrafts } from "@/lib/exec/drafts-store";
 import { DD_ATTENTION_JOB_KIND, ddAttentionJobHandler, ddAttentionScheduledWork } from "@/lib/exec/handlers/dd-attention";
+import { draftGenerateJobHandler } from "@/lib/exec/handlers/draft-generate";
+import { draftReconcileJobHandler, draftReconcileScheduledWork } from "@/lib/exec/handlers/draft-reconcile";
 import { emailAttentionJobHandler, emailAttentionScheduledWork } from "@/lib/exec/handlers/email-attention";
 import { emailReconcileJobHandler, emailReconcileScheduledWork } from "@/lib/exec/handlers/email-reconcile";
 import { emailTriageJobHandler } from "@/lib/exec/handlers/email-triage";
 import { PURGE_JOB_KIND, RETENTION_DAYS, purgeJobHandler, purgeScheduledWork, runPurge } from "@/lib/exec/handlers/purge";
+import { voiceRefreshJobHandler, voiceRefreshScheduledWork } from "@/lib/exec/handlers/voice-refresh";
 import {
   EMAIL_ATTENTION_JOB_KIND,
   EMAIL_RECONCILE_JOB_KIND,
@@ -61,7 +70,16 @@ const principal: ExecPrincipal = (() => {
 const NOW = new Date("2026-11-04T12:00:00.000Z"); // 07:00 EST
 const DAY_MS = 86_400_000;
 const isoDaysBefore = (days: number) => new Date(NOW.getTime() - days * DAY_MS).toISOString();
-const NO_EMAIL_PURGED = { emailThreads: 0, emailCommitments: 0, emailSignals: 0, emailAttentionRows: 0 };
+const NO_EMAIL_PURGED = {
+  emailThreads: 0,
+  emailCommitments: 0,
+  emailSignals: 0,
+  emailAttentionRows: 0,
+  draftsContentPurged: 0,
+  draftsDeleted: 0,
+  draftsClosedIdle: 0,
+  draftsChecksScheduled: 0
+};
 
 function resetAll(): void {
   __resetExecRuntimeForTests();
@@ -77,6 +95,7 @@ beforeEach(() => {
   vi.mocked(loadSettings).mockImplementation(async (id: string) => settingsFromRow(null, id));
   vi.mocked(loadPrincipalById).mockResolvedValue(principal);
   vi.mocked(purgeExpiredEmailRows).mockResolvedValue({ threads: 0, commitments: 0, attentionRows: 0, signals: 0 });
+  vi.mocked(purgeExpiredDrafts).mockResolvedValue({ contentPurged: 0, deleted: 0, closedIdle: 0, checksScheduled: 0 });
   vi.spyOn(console, "log").mockImplementation(() => {});
   vi.spyOn(console, "warn").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
@@ -108,9 +127,28 @@ describe("while EXEC_ENABLED is not 'true'", () => {
   });
 });
 
-const ALL_SCHEDULES = [purgeScheduledWork, ddAttentionScheduledWork, emailReconcileScheduledWork, emailAttentionScheduledWork];
+const ALL_SCHEDULES = [
+  purgeScheduledWork,
+  ddAttentionScheduledWork,
+  emailReconcileScheduledWork,
+  emailAttentionScheduledWork,
+  draftReconcileScheduledWork,
+  voiceRefreshScheduledWork
+];
 
 describe("ensureExecRuntime", () => {
+  it("registers the three P4 draft kinds and their two schedules (Y5)", () => {
+    ensureExecRuntime();
+    expect(getJobHandler("exec.draft-generate")).toBe(draftGenerateJobHandler);
+    expect(getJobHandler("exec.draft-reconcile")).toBe(draftReconcileJobHandler);
+    expect(getJobHandler("exec.voice-refresh")).toBe(voiceRefreshJobHandler);
+    expect(getScheduledWork("exec.draft-reconcile")).toBe(draftReconcileScheduledWork);
+    expect(getScheduledWork("exec.voice-refresh")).toBe(voiceRefreshScheduledWork);
+    // The reconcile schedule carries the Y4 `when` gate (a row is due); the voice schedule has none.
+    expect(typeof draftReconcileScheduledWork.when).toBe("function");
+    expect(voiceRefreshScheduledWork.when).toBeUndefined();
+  });
+
   it("registers the built-in handlers and schedules once, however often it's called", () => {
     ensureExecRuntime();
     ensureExecRuntime();
@@ -474,7 +512,8 @@ describe("exec.purge", () => {
     ]);
     expect(console.log).toHaveBeenCalledWith(
       "[exec-purge] deleted finishedJobs=7 accessLog=30 auditLog=2 aiUsage=11 resolvedAttention=4 " +
-        "emailThreads=0 emailCommitments=0 emailSignals=0 emailAttentionRows=0"
+        "emailThreads=0 emailCommitments=0 emailSignals=0 emailAttentionRows=0 " +
+        "draftsContentPurged=0 draftsDeleted=0 draftsClosedIdle=0 draftsChecksScheduled=0"
     );
   });
 
@@ -506,7 +545,7 @@ describe("exec.purge", () => {
   it("runs every step even when one fails, then fails the run", async () => {
     db.deleteResult = (d) =>
       d.table === "exec_access_log" ? { count: null, error: { message: "statement timeout" } } : { count: 1, error: null };
-    await expect(runPurge()).rejects.toThrow("exec.purge: 1 of 6 steps failed: accessLog: exec_access_log purge failed: statement timeout");
+    await expect(runPurge()).rejects.toThrow("exec.purge: 1 of 7 steps failed: accessLog: exec_access_log purge failed: statement timeout");
     expect(db.deletes.map((d) => d.table)).toEqual([
       "exec_jobs",
       "exec_access_log",
@@ -521,7 +560,7 @@ describe("exec.purge", () => {
     db.deleteResult = (d) =>
       d.table === "exec_attention_items" ? { count: null, error: { message: "permission denied" } } : { count: 2, error: null };
     await expect(runPurge()).rejects.toThrow(
-      "exec.purge: 1 of 6 steps failed: resolvedAttention: exec_attention_items purge failed: permission denied"
+      "exec.purge: 1 of 7 steps failed: resolvedAttention: exec_attention_items purge failed: permission denied"
     );
     expect(db.deletes.map((d) => d.table)).toEqual([
       "exec_jobs",
@@ -532,7 +571,8 @@ describe("exec.purge", () => {
     ]);
     expect(console.log).toHaveBeenCalledWith(
       "[exec-purge] deleted finishedJobs=2 accessLog=2 auditLog=2 aiUsage=2 resolvedAttention=0 " +
-        "emailThreads=0 emailCommitments=0 emailSignals=0 emailAttentionRows=0 failed=1"
+        "emailThreads=0 emailCommitments=0 emailSignals=0 emailAttentionRows=0 " +
+        "draftsContentPurged=0 draftsDeleted=0 draftsClosedIdle=0 draftsChecksScheduled=0 failed=1"
     );
   });
 

@@ -1,17 +1,28 @@
+import type { ReactNode } from "react";
 import Link from "next/link";
 import { FilePen, Hash, Inbox, LayoutDashboard, Lightbulb, Mail, type LucideIcon } from "lucide-react";
 import type { AttentionItem, AttentionSource, PriorityBand } from "@/lib/exec/attention-types";
+import { DDTEXT_AI_KINDS } from "@/lib/exec/ddtext-types";
 import { ageLabel, formatInZone } from "@/lib/exec/format";
 import { cn } from "@/lib/utils";
+import { BasisLabel } from "./BasisLabel";
 import { CategoryBadge } from "./CategoryBadge";
 import { FactList } from "./FactList";
-import { PriorityBandBadge } from "./PriorityBandBadge";
+import { BAND_META, PriorityBandBadge } from "./PriorityBandBadge";
 import { SourceLinks } from "./SourceLinks";
 
-// One Needs Attention item, read-only (the actions arrive in P5). Facts and
-// the suggestion are kept visibly apart: facts carry basis labels and sources,
-// and the recommended next step always sits under its own "Suggested" label,
-// so it can't be read as something that happened. Every string is React text.
+// One Needs Attention item. Facts and the suggestion are kept visibly apart:
+// facts carry basis labels and sources, and the recommended next step always
+// sits under its own "Suggested" label, so it can't be read as something that
+// happened. Every string is React text.
+//
+// It stays a server component with client-safe imports (P5a C24), so the
+// client FeedList renders it too: the row's actions arrive through the
+// `actions` slot (FeedList fills it only in a top-level window), the band's
+// reasons can open in place (`reasonsDisclosure`), and P4's `draftReplyHref`
+// stays the one Draft reply link. A DD text item whose substance is a model's
+// reading (DDTEXT_AI_KINDS) carries a visible AI-assessed label beside its
+// title, in the text and not only in a tooltip (a-correct-11).
 
 const SOURCE_META: Readonly<Record<AttentionSource, { label: string; Icon: LucideIcon }>> = {
   dd: { label: "DD", Icon: LayoutDashboard },
@@ -25,6 +36,8 @@ const BAND_TILE: Readonly<Record<PriorityBand, string>> = {
   high: "bg-amber-50 text-amber-700 ring-amber-200/70",
   normal: "bg-slate-100 text-slate-600 ring-slate-200/70"
 };
+
+const AI_KINDS: ReadonlySet<string> = new Set<string>(DDTEXT_AI_KINDS);
 
 function present(text: string | null | undefined): text is string {
   return typeof text === "string" && text.trim().length > 0;
@@ -47,18 +60,48 @@ function Age({ item, now, tz }: { item: AttentionItem; now: Date | string; tz: s
   );
 }
 
+/** The band's score and every reason behind it, as a native disclosure (no JS needed to open it). */
+function ReasonsDisclosure({ item }: { item: AttentionItem }) {
+  const band = item.priority.band;
+  const label = BAND_META[band]?.label ?? String(band);
+  const score = item.priority.score;
+  const reasons = item.priority.reasons ?? [];
+  return (
+    <details data-reasons className="text-[11.5px] text-slate-600">
+      <summary className="inline-flex cursor-pointer list-none items-center gap-1 font-medium text-muted hover:text-ink [&::-webkit-details-marker]:hidden">
+        {`Why ${label.toLowerCase()}`}
+      </summary>
+      <ul className="mt-1 space-y-0.5 border-l-2 border-slate-100 pl-2.5">
+        {typeof score === "number" && Number.isFinite(score) && <li>{`Priority score ${score} of 100`}</li>}
+        {reasons.map((reason, i) => (
+          <li key={i} className="break-words">
+            {reason}
+          </li>
+        ))}
+      </ul>
+    </details>
+  );
+}
+
 export function AttentionRow({
   item,
   now,
   tz,
-  draftReplyHref = null
+  draftReplyHref = null,
+  actions = null,
+  reasonsDisclosure = false
 }: {
   item: AttentionItem;
   now: Date | string;
   tz: string;
   /** P4 (Y9): a "Draft reply" link for an email item while drafts are on (AttentionFeed builds it). */
   draftReplyHref?: string | null;
+  /** P5a (C24): the row's controls, after the sources. FeedList passes them only in a top-level window. */
+  actions?: ReactNode;
+  /** P5a (C24): show the band's score and reasons as an expandable list under the row. */
+  reasonsDisclosure?: boolean;
 }) {
+  const aiAssessed = AI_KINDS.has(item.kind);
   // A source this build doesn't know is named as stored, never passed off as DD.
   const { label: sourceLabel, Icon } = SOURCE_META[item.source] ?? { label: String(item.source), Icon: Inbox };
   const band = item.priority.band;
@@ -79,7 +122,14 @@ export function AttentionRow({
             <Age item={item} now={now} tz={tz} />
           </span>
         </div>
-        <h3 className="break-words text-[14px] font-semibold leading-snug text-ink">{item.title}</h3>
+        {aiAssessed ? (
+          <div className="flex flex-wrap items-baseline gap-x-1.5 gap-y-1">
+            <h3 className="min-w-0 break-words text-[14px] font-semibold leading-snug text-ink">{item.title}</h3>
+            <BasisLabel basis="ai" />
+          </div>
+        ) : (
+          <h3 className="break-words text-[14px] font-semibold leading-snug text-ink">{item.title}</h3>
+        )}
         {present(item.whatHappened) && (
           <p className="break-words text-[12.5px] leading-relaxed text-slate-600">{item.whatHappened}</p>
         )}
@@ -111,6 +161,8 @@ export function AttentionRow({
             Draft reply
           </Link>
         )}
+        {reasonsDisclosure && <ReasonsDisclosure item={item} />}
+        {actions}
       </div>
     </article>
   );

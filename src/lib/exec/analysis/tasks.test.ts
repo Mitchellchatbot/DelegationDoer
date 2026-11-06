@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  closedWithStage,
   completedLate,
   completionStats,
   dailyCounts,
@@ -9,13 +10,15 @@ import {
   isIncident,
   isOpen,
   isOverdue,
+  isOverdueWork,
   isStalled,
+  isStalledWork,
   overdueDays,
   proofHandedInAt,
   upcomingDeadlines,
   workloadByPerson
 } from "@/lib/exec/analysis/tasks";
-import type { DdTask } from "@/lib/exec/sources/dd-types";
+import type { DdStatusTransition, DdTask } from "@/lib/exec/sources/dd-types";
 
 const NOW = new Date("2026-11-04T12:00:00.000Z");
 const DAY = 86_400_000;
@@ -204,7 +207,8 @@ describe("workloadByPerson", () => {
       open: 6,
       overdue: 2,
       dueNext7Days: 2,
-      stalled: 1,
+      // a4 is idle but waits on the client, a8 is archived: neither is stalled work (isStalledWork, P5a K11).
+      stalled: 0,
       waitingOnClient: 1,
       pendingApproval: 1
     });
@@ -227,6 +231,135 @@ describe("workloadByPerson", () => {
   it("counts an open incident as open work, not overdue work (it's due the minute it's reported)", () => {
     const incident = task({ id: "i1", assigneeId: "u_web", tags: ["urgent", "incident"], status: "urgent", priority: "critical", dueDate: at(-DAY) });
     expect(workloadByPerson([incident], NOW).get("u_web")).toMatchObject({ open: 1, overdue: 0 });
+  });
+  it("counts overdue idle and incident idle work as neither stalled twice nor stalled at all (P5a test 30)", () => {
+    const tasks = [
+      // Idle 10 days and overdue: overdue work, not stalled work.
+      task({ id: "o1", assigneeId: "u_3", dueDate: at(-2 * DAY), lastActivityAt: at(-10 * DAY) }),
+      // An idle incident: its own signal, neither overdue nor stalled.
+      task({ id: "i1", assigneeId: "u_3", tags: ["incident"], status: "urgent", dueDate: at(-12 * DAY), lastActivityAt: at(-12 * DAY) }),
+      // Idle 9 days with no due date: stalled.
+      task({ id: "s1", assigneeId: "u_3", lastActivityAt: at(-9 * DAY) }),
+      // A past-due proof waiting on its reviewer: not the assignee's overdue work.
+      task({ id: "p1", assigneeId: "u_3", status: "pending_approval", dueDate: at(-DAY), lastActivityAt: at(-9 * DAY) })
+    ];
+    expect(workloadByPerson(tasks, NOW).get("u_3")).toEqual({
+      userId: "u_3",
+      open: 4,
+      overdue: 1,
+      dueNext7Days: 0,
+      stalled: 1,
+      waitingOnClient: 0,
+      pendingApproval: 1
+    });
+  });
+});
+
+describe("isStalledWork (P5a test 29: the one stalled predicate)", () => {
+  const idle = { lastActivityAt: at(-8 * DAY) };
+  it.each<[string, Partial<DdTask>, boolean]>([
+    ["idle open work", idle, true],
+    ["idle in progress", { ...idle, status: "in_progress" }, true],
+    ["recently touched", { lastActivityAt: at(-6 * DAY) }, false],
+    ["overdue and idle", { ...idle, dueDate: at(-DAY) }, false],
+    ["an idle incident", { ...idle, tags: ["incident"], status: "urgent" }, false],
+    ["idle, waiting on the client", { ...idle, status: "waiting_on_client" }, false],
+    ["idle, waiting for its proof review", { ...idle, status: "pending_approval" }, false],
+    ["archived by the sweep", { ...idle, archivedAt: ARCHIVED, archivedBy: null }, false],
+    ["shelved by a person", { ...idle, archivedAt: ARCHIVED, archivedBy: "u_9" }, false],
+    ["done", { ...idle, status: "done" }, false],
+    ["a draft", { ...idle, isDraft: true }, false]
+  ])("%s → %s", (_label, over, expected) => {
+    expect(isStalledWork(task(over), NOW)).toBe(expected);
+  });
+
+  it("takes the idle threshold like isStalled", () => {
+    const t = task({ lastActivityAt: at(-4 * DAY) });
+    expect(isStalledWork(t, NOW, 3)).toBe(true);
+    expect(isStalledWork(t, NOW, 7)).toBe(false);
+    expect(isStalledWork(t, NOW, 3)).toBe(isStalled(t, NOW, 3));
+  });
+});
+
+describe("isOverdueWork (the per-person overdue predicate)", () => {
+  it.each<[string, Partial<DdTask>, boolean]>([
+    ["past due and open", { dueDate: at(-DAY) }, true],
+    ["past due, auto-archived", { dueDate: at(-DAY), archivedAt: ARCHIVED, archivedBy: null }, true],
+    ["past due, shelved by a person", { dueDate: at(-DAY), archivedAt: ARCHIVED, archivedBy: "u_9" }, false],
+    ["past due incident", { dueDate: at(-DAY), tags: ["incident"] }, false],
+    ["past due proof waiting for review", { dueDate: at(-DAY), status: "pending_approval" }, false],
+    ["past due, waiting on the client", { dueDate: at(-DAY), status: "waiting_on_client" }, true],
+    ["due later", { dueDate: at(DAY) }, false],
+    ["no due date", {}, false]
+  ])("%s → %s", (_label, over, expected) => {
+    expect(isOverdueWork(task(over), NOW)).toBe(expected);
+  });
+});
+
+describe("closedWithStage (C30, P5a test 41b)", () => {
+  const CLOSE = at(-3 * DAY);
+  const closeMs = Date.parse(CLOSE);
+  const stageTask = (id: string, over: Partial<DdTask> = {}) =>
+    task({ id, stageId: "stg_1", projectId: "proj_1", status: "done", completedAt: CLOSE, ...over });
+  const transition = (taskId: string, to: string, atIso: string, from = "in_progress"): DdStatusTransition => ({
+    id: `al_${taskId}_${to}_${atIso}`,
+    taskId,
+    userId: "u_1",
+    from,
+    to,
+    at: atIso
+  });
+
+  it("finds the tasks a manual close stamped together, with no transition of their own", () => {
+    const tasks = [stageTask("a"), stageTask("b"), stageTask("c")];
+    expect([...closedWithStage(tasks, [], [])].sort()).toEqual(["a", "b", "c"]);
+  });
+
+  it("keeps a task whose own transition to done sits within 2 minutes of its completion", () => {
+    const tasks = [stageTask("a"), stageTask("b")];
+    const inside = new Date(closeMs - 2 * 60_000).toISOString();
+    expect([...closedWithStage(tasks, [transition("a", "done", inside)], [])]).toEqual(["b"]);
+  });
+
+  it("doesn't count a transition 2 min 1 s away as covering the completion", () => {
+    const tasks = [stageTask("a"), stageTask("b")];
+    const outside = new Date(closeMs - 121_000).toISOString();
+    expect([...closedWithStage(tasks, [transition("a", "done", outside)], [])].sort()).toEqual(["a", "b"]);
+  });
+
+  it("keeps a task whose proof_approved row sits at its completion (FB approvals log no status change)", () => {
+    const tasks = [stageTask("a"), stageTask("b")];
+    expect([...closedWithStage(tasks, [], [{ taskId: "a", createdAt: CLOSE }])]).toEqual(["b"]);
+  });
+
+  it("counts a lone stage task with no status_change row at all as closed with its stage", () => {
+    expect([...closedWithStage([stageTask("solo")], [], [])]).toEqual(["solo"]);
+  });
+
+  it("keeps a lone stage task that has status changes (it was worked, then finished some other way)", () => {
+    const tasks = [stageTask("solo")];
+    expect([...closedWithStage(tasks, [transition("solo", "in_progress", at(-5 * DAY), "pending")], [])]).toEqual([]);
+  });
+
+  it("groups by the instant (Date.parse), not the string, and by stage", () => {
+    const sameInstant = new Date(closeMs).toISOString().replace("Z", "+00:00");
+    const tasks = [
+      stageTask("a", { completedAt: CLOSE }),
+      stageTask("b", { completedAt: sameInstant }),
+      // Same instant, other stage, with a transition of its own: not a sibling of a or b.
+      stageTask("c", { stageId: "stg_2" })
+    ];
+    const transitions = [transition("c", "in_progress", at(-5 * DAY), "pending")];
+    expect([...closedWithStage(tasks, transitions, [])].sort()).toEqual(["a", "b"]);
+  });
+
+  it("ignores tasks outside a stage, not done, or without a completion", () => {
+    const tasks = [
+      task({ id: "x", stageId: null, status: "done", completedAt: CLOSE }),
+      stageTask("y", { status: "in_progress", completedAt: null }),
+      stageTask("z", { completedAt: null })
+    ];
+    expect(closedWithStage(tasks, [], []).size).toBe(0);
   });
 });
 

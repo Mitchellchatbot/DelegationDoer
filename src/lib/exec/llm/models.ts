@@ -27,7 +27,9 @@ export const EXEC_MODELS: Readonly<Record<ExecLlmFeature, ExecModelId>> = Object
   voice: HAIKU_MODEL,
   spike: OPUS_MODEL,
   triage: HAIKU_MODEL,
-  digest: HAIKU_MODEL
+  digest: HAIKU_MODEL,
+  // P5a (contract §3.12.1): DD text triage.
+  ddtext: HAIKU_MODEL
 });
 
 // Set explicitly on every request: both 5.5 models default to "medium", and a
@@ -39,6 +41,7 @@ export const FEATURE_EFFORT: Readonly<Record<ExecLlmFeature, Effort>> = Object.f
   chat: "medium",
   draft: "medium",
   voice: "low",
+  ddtext: "low",
   brief: "high"
 });
 
@@ -56,7 +59,8 @@ export const FEATURE_MAX_TOKENS: Readonly<Record<ExecLlmFeature, number>> = Obje
   voice: 4000,
   triage: 4000,
   digest: 4000,
-  spike: 4000
+  spike: 4000,
+  ddtext: 4000
 });
 
 /** USD per million tokens. */

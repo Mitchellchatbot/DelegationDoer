@@ -250,6 +250,23 @@ describe("projectHealth: at_risk", () => {
     expect(h).toMatchObject({ status: "on_track", reasons: [], openTasks: 1, stalledTasks: 0 });
   });
 
+  it("no longer counts overdue idle work, or an idle incident, as stalled: each has its own rule (P5a test 31, K11)", () => {
+    // Two overdue tasks idle for 10 days among 8 active: overdue is 25% (under the
+    // 30% off-track share), and before P5a they were also 2 of 8 stalled (25%).
+    const overdueIdle = fresh(2, { dueDate: at(-2 * DAY), lastActivityAt: at(-10 * DAY) });
+    const h = projectHealth(project(), [stage()], [...overdueIdle, ...fresh(6)], NOW);
+    expect(h).toMatchObject({ status: "at_risk", overdueTasks: 2, stalledTasks: 0, reasons: ["2 overdue tasks"] });
+
+    // An incident idle for 12 days (due the minute it was reported): overdue, never stalled.
+    const incident = task({ tags: ["incident"], status: "urgent", dueDate: at(-12 * DAY), lastActivityAt: at(-12 * DAY) });
+    const h2 = projectHealth(project(), [stage()], [incident, ...fresh(4)], NOW);
+    expect(h2).toMatchObject({ status: "at_risk", overdueTasks: 1, stalledTasks: 0, reasons: ["1 overdue task"] });
+
+    // Idle work with no due date still counts.
+    const h3 = projectHealth(project(), [stage()], [task({ lastActivityAt: at(-10 * DAY) }), ...overdueIdle, ...fresh(5)], NOW);
+    expect(h3).toMatchObject({ status: "at_risk", stalledTasks: 1, reasons: ["2 overdue tasks"] });
+  });
+
   it("still measures the idle share over all active work, the waiting tasks included", () => {
     const tasks = [task({ lastActivityAt: at(-9 * DAY) }), task({ status: "waiting_on_client", lastActivityAt: at(-9 * DAY) }), ...fresh(3)];
     const h = projectHealth(project(), [stage()], tasks, NOW);

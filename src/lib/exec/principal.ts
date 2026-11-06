@@ -1,6 +1,7 @@
 import "server-only";
 
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
+import type { SettingsSchemaKey } from "@/lib/exec/settings-fields";
 import type { ExecPrincipal, ExecPrincipalData, ExecSettings, RestrictedPolicy, WatchMode } from "@/lib/exec/types";
 
 // The one place an ExecPrincipal is created.
@@ -41,22 +42,57 @@ export const DEFAULT_SETTINGS: Omit<ExecSettings, "principalId"> = {
   draftsEnabled: false,
   sendEnabled: false,
   voiceEnabled: false,
-  draftsSchemaReady: false
+  draftsSchemaReady: false,
+  // P5a (A5, A6): DD text triage stays off until he turns it on in Settings,
+  // and a read that never saw the P5a columns can't vouch for the schema.
+  // Stage -1 seed (contract §3.7.1); the column-group loader is Area B's.
+  ddtextEnabled: false,
+  retentionDaysDdtext: 90,
+  ddtextSchemaReady: false
 };
 
 const PRINCIPAL_COLS = "id,user_id,enabled,mail_account_ids,slack_team_id,slack_user_id";
 const USER_COLS = "id,email,name,work_timezone";
-// The P2a columns. email_enabled is added by the P3 migration and the three
-// P4 switches by the P4 migration, both applied by hand, so deployed code can
-// meet a database without them: the loader asks for the widest set and moves
-// down a tier only on a missing-column error (L1).
+// The P2a columns, plus updated_at (the Settings CAS token, P5a). Every other
+// settings column is added by a later migration, applied by hand, so deployed
+// code can meet a database without it: those come in optional groups
+// (SETTINGS_COLUMN_GROUPS) that the loader drops one at a time on a
+// missing-column error (L1, contract §3.7.1).
 const SETTINGS_BASE_COLS =
   "principal_id,brief_enabled,brief_local_time,brief_timezone,supersede_legacy_brief,checkins_enabled," +
   "restricted_policy,watch_mode,muted_channel_ids,retention_days_slack,retention_days_email," +
-  "retention_days_chat,daily_cost_cap_usd";
-const SETTINGS_P3_COLS = `${SETTINGS_BASE_COLS},email_enabled`;
+  "retention_days_chat,daily_cost_cap_usd,updated_at";
 const P4_SETTINGS_COLUMNS = ["drafts_enabled", "send_enabled", "voice_enabled"] as const;
-const SETTINGS_P4_COLS = `${SETTINGS_P3_COLS},${P4_SETTINGS_COLUMNS.join(",")}`;
+const DDTEXT_SETTINGS_COLUMNS = ["ddtext_enabled", "retention_days_ddtext"] as const;
+
+/**
+ * Optional exec_settings column groups, in migration order (contract §3.7.1,
+ * K15). A group is "schema ready" when the settings read selected it. P5b
+ * appends { key: "chat", columns: [...] }.
+ */
+export const SETTINGS_COLUMN_GROUPS: readonly { key: SettingsSchemaKey; columns: readonly string[] }[] = [
+  { key: "email", columns: ["email_enabled"] },
+  { key: "drafts", columns: P4_SETTINGS_COLUMNS },
+  { key: "ddtext", columns: DDTEXT_SETTINGS_COLUMNS }
+];
+
+/**
+ * A group that can't exist without another (bindings AM9): P4's migration
+ * refuses to run before P3's email_enabled column exists, so a read that
+ * finds email_enabled missing drops the drafts group with it. P5a's ddtext
+ * group needs only P2a and P2b, so it stands alone.
+ */
+const GROUP_REQUIRES: Readonly<Partial<Record<SettingsSchemaKey, SettingsSchemaKey>>> = Object.freeze({ drafts: "email" });
+
+/** Which optional column groups a settings read selected (= whose migration is applied). */
+export type SettingsSchemaFlags = Record<SettingsSchemaKey, boolean>;
+
+/** A settings read with its CAS token (contract §3.7.1). */
+export interface SettingsSnapshot {
+  settings: ExecSettings;
+  /** raw exec_settings.updated_at, or null without a row */
+  version: string | null;
+}
 
 interface PrincipalRow {
   id: string;
@@ -94,6 +130,11 @@ interface SettingsRow {
   drafts_enabled?: boolean | null;
   send_enabled?: boolean | null;
   voice_enabled?: boolean | null;
+  /** Absent when the P5a migration isn't applied. */
+  ddtext_enabled?: boolean | null;
+  retention_days_ddtext?: number | null;
+  /** The CAS token, exactly as PostgREST printed it (never parsed: microseconds matter). */
+  updated_at?: string | null;
 }
 
 /** True when `tz` is an IANA zone this runtime understands. */
@@ -123,22 +164,30 @@ function num(v: number | string | null | undefined, fallback: number): number {
  * exec_settings row (or none) → ExecSettings, filling every gap with DEFAULT_SETTINGS.
  *
  * `emailSchemaReady` says whether the read that produced `row` selected the
- * P3 email_enabled column, and `draftsSchemaReady` whether it selected the
- * three P4 switches. The loader always says; when a caller doesn't, the row
- * itself answers (it has the key only if the column was selected), and no row
- * means not ready. Each switch is on only when its schema is ready and the
- * column is exactly true: NULL or a missing column is off (L1).
+ * P3 email_enabled column, `draftsSchemaReady` whether it selected the three
+ * P4 switches, and `ddtextSchemaReady` whether it selected both P5a columns.
+ * The loader always says; when a caller doesn't, the row itself answers (it
+ * has the key only if the column was selected), and no row means not ready.
+ * Each switch is on only when its schema is ready and the column is exactly
+ * true: NULL or a missing column is off (L1). A missing or unreadable
+ * retention takes its default (retentionDaysDdtext 90).
  */
 export function settingsFromRow(
   row: SettingsRow | null,
   principalId: string,
-  opts: { emailSchemaReady?: boolean; draftsSchemaReady?: boolean } = {}
+  opts: { emailSchemaReady?: boolean; draftsSchemaReady?: boolean; ddtextSchemaReady?: boolean } = {}
 ): ExecSettings {
   const d = DEFAULT_SETTINGS;
   const has = (column: string) => row !== null && Object.prototype.hasOwnProperty.call(row, column);
   const emailSchemaReady = opts.emailSchemaReady ?? has("email_enabled");
   const draftsSchemaReady = opts.draftsSchemaReady ?? P4_SETTINGS_COLUMNS.every(has);
-  if (!row) return { principalId, ...d, mutedChannelIds: [], emailEnabled: false, emailSchemaReady, draftsEnabled: false, sendEnabled: false, voiceEnabled: false, draftsSchemaReady };
+  const ddtextSchemaReady = opts.ddtextSchemaReady ?? DDTEXT_SETTINGS_COLUMNS.every(has);
+  if (!row) {
+    return {
+      principalId, ...d, mutedChannelIds: [], emailEnabled: false, emailSchemaReady, draftsEnabled: false, sendEnabled: false, voiceEnabled: false,
+      draftsSchemaReady, ddtextEnabled: false, ddtextSchemaReady
+    };
+  }
   const policy: RestrictedPolicy = row.restricted_policy === "dd_only" ? "dd_only" : "hidden";
   const watch: WatchMode = row.watch_mode === "member_only" ? "member_only" : "active_public";
   return {
@@ -160,7 +209,10 @@ export function settingsFromRow(
     draftsEnabled: draftsSchemaReady && row.drafts_enabled === true,
     sendEnabled: draftsSchemaReady && row.send_enabled === true,
     voiceEnabled: draftsSchemaReady && row.voice_enabled === true,
-    draftsSchemaReady
+    draftsSchemaReady,
+    ddtextEnabled: ddtextSchemaReady && row.ddtext_enabled === true,
+    retentionDaysDdtext: num(row.retention_days_ddtext, d.retentionDaysDdtext),
+    ddtextSchemaReady
   };
 }
 
@@ -187,50 +239,90 @@ export function principalFromRows(p: PrincipalRow, u: UserRow, s: SettingsRow | 
   });
 }
 
+// ---------------------------------------------------------------------------
+// The tolerant settings read (contract §3.7.1, K15; bindings AM9)
+// ---------------------------------------------------------------------------
+
+/** The select for a read that includes exactly the optional groups `schema` marks ready, in migration order. */
+export function settingsColumnsFor(schema: Readonly<SettingsSchemaFlags>): string {
+  const optional = SETTINGS_COLUMN_GROUPS.filter((g) => schema[g.key] === true).flatMap((g) => g.columns);
+  return [SETTINGS_BASE_COLS, ...optional].join(",");
+}
+
+/** The schema flags a settings value carries, by column-group key (SettingsView.schema). */
+export function settingsSchemaFlags(s: Pick<ExecSettings, "emailSchemaReady" | "draftsSchemaReady" | "ddtextSchemaReady">): SettingsSchemaFlags {
+  return { email: s.emailSchemaReady === true, drafts: s.draftsSchemaReady === true, ddtext: s.ddtextSchemaReady === true };
+}
+
+function schemaOpts(schema: Readonly<SettingsSchemaFlags>): { emailSchemaReady: boolean; draftsSchemaReady: boolean; ddtextSchemaReady: boolean } {
+  return { emailSchemaReady: schema.email === true, draftsSchemaReady: schema.drafts === true, ddtextSchemaReady: schema.ddtext === true };
+}
+
 /**
- * The error a select of a hand-migrated column gets before its migration:
- * Postgres' "column does not exist" (42703), PostgREST's schema-cache miss
- * (PGRST204), or any message that names one of `columns`. Nothing else falls
- * back: a timeout or a 5xx must fail the read, not quietly turn a switch off.
+ * A settings row as read with the groups `schema` marks ready → the snapshot
+ * (settings + raw updated_at). settings.ts builds its write answers with it
+ * from the row its CAS returned, so they need no second read.
  */
-function isMissingColumn(error: { code?: string | null; message?: string | null }, columns: readonly string[]): boolean {
-  if (error.code === "42703" || error.code === "PGRST204") return true;
-  const message = error.message ?? "";
-  return columns.some((c) => message.includes(c));
+export function snapshotFromRow(row: Record<string, unknown> | null, principalId: string, schema: Readonly<SettingsSchemaFlags>): SettingsSnapshot {
+  const r = row !== null && typeof row === "object" && !Array.isArray(row) ? (row as unknown as SettingsRow) : null;
+  const version = r !== null && typeof r.updated_at === "string" && r.updated_at.length > 0 ? r.updated_at : null;
+  return { settings: settingsFromRow(r, principalId, schemaOpts(schema)), version };
+}
+
+type DbErrorLike = { code?: string | null; message?: string | null };
+
+/** `column` as a whole word of `message` (column names are [a-z0-9_], so nothing needs escaping). */
+function namesColumn(message: string, column: string): boolean {
+  return new RegExp(`(?<![A-Za-z0-9_])${column}(?![A-Za-z0-9_])`).test(message);
+}
+
+/** Drop `key`, and every group that can't exist without it (GROUP_REQUIRES). */
+function dropGroup(selected: Set<SettingsSchemaKey>, key: SettingsSchemaKey): void {
+  selected.delete(key);
+  for (const g of SETTINGS_COLUMN_GROUPS) {
+    if (selected.has(g.key) && GROUP_REQUIRES[g.key] === key) dropGroup(selected, g.key);
+  }
 }
 
 interface SettingsRead {
   row: SettingsRow | null;
-  /** The read selected email_enabled (the P3 migration is applied). */
-  emailSchemaReady: boolean;
-  /** The read selected the three P4 switches (the P4 migration is applied). */
-  draftsSchemaReady: boolean;
+  /** Each optional group: the successful read selected it (its migration is applied). */
+  schema: SettingsSchemaFlags;
 }
 
-/** The column tiers, widest first: P4 = P3 + the switches; P3 = base + email_enabled; base. */
-const SETTINGS_TIERS: readonly { columns: string; emailSchemaReady: boolean; draftsSchemaReady: boolean; missing: readonly string[] }[] = [
-  { columns: SETTINGS_P4_COLS, emailSchemaReady: true, draftsSchemaReady: true, missing: [...P4_SETTINGS_COLUMNS, "email_enabled"] },
-  { columns: SETTINGS_P3_COLS, emailSchemaReady: true, draftsSchemaReady: false, missing: ["email_enabled"] },
-  { columns: SETTINGS_BASE_COLS, emailSchemaReady: false, draftsSchemaReady: false, missing: [] }
-];
-
 /**
- * Code ahead of a hand-applied migration moves down one tier per
- * missing-column error (P4 -> P3 -> base); the features whose columns were
- * never read are then off and not installed, so everything else keeps working
- * (L1). Any other error throws.
+ * Select the base columns plus every optional group. On a missing-column
+ * error (Postgres 42703, PostgREST PGRST204, or a message naming a column of
+ * a still-selected group) drop the group whose column the message names, or,
+ * when it names none, the last still-selected group (migrations apply in
+ * order), and read again: at most one retry per group. A group's features
+ * are then off and not installed, and everything else keeps working (L1).
+ * Any other error, or a failure once every optional group is gone (a base
+ * column), throws: a timeout or a 5xx must fail the read, never quietly turn
+ * a switch off.
  */
 async function fetchSettingsRow(principalId: string): Promise<SettingsRead> {
   const read = (columns: string) =>
     getSupabaseAdmin().from("exec_settings").select(columns).eq("principal_id", principalId).maybeSingle();
-  for (let i = 0; i < SETTINGS_TIERS.length; i += 1) {
-    const tier = SETTINGS_TIERS[i];
-    const { data, error } = await read(tier.columns);
-    if (!error) return { row: (data as SettingsRow | null) ?? null, emailSchemaReady: tier.emailSchemaReady, draftsSchemaReady: tier.draftsSchemaReady };
-    const last = i === SETTINGS_TIERS.length - 1;
-    if (last || !isMissingColumn(error, tier.missing)) throw new Error(`exec_settings read failed: ${error.message}`);
+  const selected = new Set<SettingsSchemaKey>(SETTINGS_COLUMN_GROUPS.map((g) => g.key));
+  const flags = (): SettingsSchemaFlags => {
+    const out = {} as SettingsSchemaFlags;
+    for (const g of SETTINGS_COLUMN_GROUPS) out[g.key] = selected.has(g.key);
+    return out;
+  };
+  for (let attempt = 0; attempt <= SETTINGS_COLUMN_GROUPS.length; attempt += 1) {
+    const schema = flags();
+    const { data, error } = await read(settingsColumnsFor(schema));
+    if (!error) return { row: (data as SettingsRow | null) ?? null, schema };
+    const e = error as DbErrorLike;
+    const message = e.message ?? "";
+    const still = SETTINGS_COLUMN_GROUPS.filter((g) => selected.has(g.key));
+    const named = still.find((g) => g.columns.some((c) => namesColumn(message, c)));
+    const missingColumn = e.code === "42703" || e.code === "PGRST204" || named !== undefined;
+    if (!missingColumn || still.length === 0) throw new Error(`exec_settings read failed: ${message}`);
+    dropGroup(selected, (named ?? still[still.length - 1]).key);
   }
-  throw new Error("exec_settings read failed: no tier answered");
+  throw new Error("exec_settings read failed: no column set answered");
 }
 
 async function fetchUserRow(userId: string): Promise<UserRow | null> {
@@ -288,13 +380,21 @@ export async function listEnabledPrincipals(): Promise<ExecPrincipal[]> {
 }
 
 /**
- * exec_settings for a principal, defaults filled in. Before the P3 migration
- * is applied it still loads (emailEnabled and emailSchemaReady false); any
- * other read failure throws.
+ * exec_settings for a principal, defaults filled in. Before a later migration
+ * is applied it still loads (that group's switches off and its *SchemaReady
+ * false); any other read failure throws.
  */
 export async function loadSettings(principalId: string): Promise<ExecSettings> {
+  return (await loadSettingsSnapshot(principalId)).settings;
+}
+
+/**
+ * exec_settings with its raw updated_at (the Settings CAS token; null without
+ * a row), through the same tolerant read as loadSettings (contract §3.7.1).
+ */
+export async function loadSettingsSnapshot(principalId: string): Promise<SettingsSnapshot> {
   const read = await fetchSettingsRow(principalId);
-  return settingsFromRow(read.row, principalId, { emailSchemaReady: read.emailSchemaReady, draftsSchemaReady: read.draftsSchemaReady });
+  return snapshotFromRow(read.row as Record<string, unknown> | null, principalId, read.schema);
 }
 
 /**

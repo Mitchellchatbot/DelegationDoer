@@ -1,0 +1,13 @@
+-- OPTIONAL (A5). Speeds up the DD text triage's 10-minute scan of new activity_logs rows,
+-- which otherwise reads the table sequentially (it is indexed on task_id only:
+-- 20260505000000_init.sql:119, renamed by 20260507300000_rename_tickets_to_tasks.sql:14).
+-- No code depends on it. Apply at the team's discretion.
+-- RUN THIS FILE ON ITS OWN: one statement, not inside a transaction (CONCURRENTLY refuses
+-- a transaction block). If the editor reports a transaction block, paste the statement alone
+-- into a new query tab.
+create index concurrently if not exists activity_logs_created_at_idx on public.activity_logs (created_at);
+-- Afterwards, in a separate query, confirm it is valid (a failed CONCURRENTLY build leaves an
+-- INVALID index that IF NOT EXISTS then skips; drop it with
+-- `drop index concurrently activity_logs_created_at_idx;` and run this file again):
+-- select c.relname, i.indisvalid from pg_index i join pg_class c on c.oid = i.indexrelid
+--  where c.relname = 'activity_logs_created_at_idx';

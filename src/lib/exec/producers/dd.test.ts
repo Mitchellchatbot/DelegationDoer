@@ -30,7 +30,8 @@ import { normalizeCandidate, reconcile } from "@/lib/exec/attention";
 import type { AttentionCandidate } from "@/lib/exec/attention-types";
 import { principalFromRows } from "@/lib/exec/principal";
 import { scorePriority } from "@/lib/exec/priority";
-import { DD_ATTENTION_KINDS, produceDdAttention } from "@/lib/exec/producers/dd";
+import { isOverdueWork, isStalledWork } from "@/lib/exec/analysis/tasks";
+import { DD_ATTENTION_KINDS, ddFingerprintKey, ddMentionFingerprint, produceDdAttention } from "@/lib/exec/producers/dd";
 import { isAllowedLinkUrl } from "@/lib/exec/refs";
 import * as dd from "@/lib/exec/sources/dd";
 import type {
@@ -1503,5 +1504,59 @@ describe("identity across runs", () => {
     expect(await hash(2, ago(4), new Date(NOW.getTime() + DAY))).toBe(base);
     expect(await hash(3, ago(4))).not.toBe(base);
     expect(await hash(2, ago(7))).not.toBe(base);
+  });
+});
+
+describe("P5a exports and the shared predicates (contract §3.9.1, §3.12.7)", () => {
+  it("ddFingerprintKey is keyPart: id-like keys pass through, other keys become a slug plus a hash", async () => {
+    expect(ddFingerprintKey("t_m1")).toBe("t_m1");
+    expect(ddFingerprintKey("u_ana")).toBe("u_ana");
+    // The same key the waiting_on_client item uses for the client "Acme".
+    vi.mocked(dd.listOpenTasks).mockResolvedValue([
+      task("t_w1", { status: "waiting_on_client", clientName: "Acme", lastActivityAt: ago(12) })
+    ]);
+    const acme = [...(await kind("waiting_on_client")).values()][0];
+    expect(acme.fingerprint).toBe(`dd:waiting:client:${ddFingerprintKey("Acme")}`);
+    expect(ddFingerprintKey("Acme")).toMatch(/^acme-[0-9a-f]{12}$/);
+    expect(ddFingerprintKey("Acme, Inc.")).not.toBe(ddFingerprintKey("Acme Inc"));
+  });
+
+  it("ddMentionFingerprint is the unanswered_mention item's fingerprint", async () => {
+    vi.mocked(dd.listTaskNotificationsForUser).mockResolvedValue([note("n_1", "t_m1", ago(2))]);
+    vi.mocked(dd.listTasksByIds).mockResolvedValue([task("t_m1", { title: "Pricing page" })]);
+    const items = await kind("unanswered_mention");
+    expect([...items.keys()]).toEqual([ddMentionFingerprint("t_m1")]);
+    expect(ddMentionFingerprint("t_m1")).toBe("dd:mention:task:t_m1");
+  });
+
+  it("stalled_tasks keeps exactly the assigned tasks isStalledWork keeps (P5a test 30)", async () => {
+    const tasks = [
+      task("t_s1", { assigneeId: "u_ana", lastActivityAt: ago(9) }),
+      task("t_s2", { assigneeId: "u_ana", lastActivityAt: ago(10) }),
+      task("t_s3", { assigneeId: "u_ana", lastActivityAt: ago(10), dueDate: ago(1) }),
+      task("t_s4", { assigneeId: "u_ana", lastActivityAt: ago(10), tags: ["incident"] }),
+      task("t_s5", { assigneeId: "u_ana", lastActivityAt: ago(10), status: "waiting_on_client" }),
+      task("t_s6", { assigneeId: "u_ana", lastActivityAt: ago(10), status: "pending_approval" }),
+      task("t_s7", { lastActivityAt: ago(10) })
+    ];
+    vi.mocked(dd.listOpenTasks).mockResolvedValue(tasks);
+    const item = get(await kind("stalled_tasks"), "dd:stalled:assignee:u_ana");
+    const expected = tasks.filter((t) => t.assigneeId !== null && isStalledWork(t, NOW)).map((t) => t.id);
+    expect(expected).toEqual(["t_s1", "t_s2"]);
+    expect(item.refs.map((r) => r.id).sort()).toEqual(expected);
+  });
+
+  it("overdue_tasks keeps exactly the tasks isOverdueWork keeps", async () => {
+    const tasks = [
+      task("t_d1", { assigneeId: "u_ana", dueDate: ago(2) }),
+      task("t_d2", { assigneeId: "u_ana", dueDate: ago(3), archivedAt: ago(1), archivedBy: null }),
+      task("t_d3", { assigneeId: "u_ana", dueDate: ago(2), status: "pending_approval" }),
+      task("t_d4", { assigneeId: "u_ana", dueDate: ago(2), tags: ["incident"] })
+    ];
+    vi.mocked(dd.listOpenTasks).mockResolvedValue(tasks);
+    const items = await kind("overdue_tasks");
+    const ids = [...items.values()].flatMap((c) => c.refs.map((r) => r.id)).sort();
+    expect(ids).toEqual(tasks.filter((t) => isOverdueWork(t, NOW)).map((t) => t.id).sort());
+    expect(ids).toEqual(["t_d1", "t_d2"]);
   });
 });

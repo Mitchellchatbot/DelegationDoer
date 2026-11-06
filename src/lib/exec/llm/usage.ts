@@ -110,17 +110,26 @@ function dollars(v: unknown): number {
 /**
  * USD spent by this principal since local midnight in `tz`. Throws when the
  * spend can't be read, so callers fail closed.
+ *
+ * opts.feature (P5a C29) counts one feature's rows only (the DD text
+ * triage's daily ceiling; P5b's chat sub-cap): the query gains
+ * .eq("feature", feature). Without it the query is unchanged.
  */
-export async function spentTodayUsd(principalId: string, tz: string, now: Date = new Date()): Promise<number> {
+export async function spentTodayUsd(
+  principalId: string,
+  tz: string,
+  now: Date = new Date(),
+  opts: { feature?: ExecLlmFeature } = {}
+): Promise<number> {
   const since = startOfLocalDayUtc(now, tz).toISOString();
+  const feature = opts.feature;
   let total = 0;
   let afterId = 0;
   // Keyset pages on id: stable while rows are being inserted, unlike offsets.
   for (let page = 0; page < MAX_PAGES; page++) {
-    const { data, error } = await getSupabaseAdmin()
-      .from("exec_ai_usage")
-      .select("id,cost_usd")
-      .eq("principal_id", principalId)
+    let query = getSupabaseAdmin().from("exec_ai_usage").select("id,cost_usd").eq("principal_id", principalId);
+    if (feature !== undefined) query = query.eq("feature", feature);
+    const { data, error } = await query
       .gte("created_at", since)
       .gt("id", afterId)
       .order("id", { ascending: true })

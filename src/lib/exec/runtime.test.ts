@@ -20,13 +20,25 @@ vi.mock("@/lib/exec/drafts-store", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/exec/drafts-store")>();
   return { ...actual, purgeExpiredDrafts: vi.fn() };
 });
+// P5a's DD text and feedback retention steps have their own suites (ddtext-store, attention-feedback, purge); here they find nothing to delete.
+vi.mock("@/lib/exec/ddtext-store", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/exec/ddtext-store")>();
+  return { ...actual, purgeExpiredDdtext: vi.fn(), purgeOrphanDdtextAttention: vi.fn() };
+});
+vi.mock("@/lib/exec/attention-feedback", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/exec/attention-feedback")>();
+  return { ...actual, purgeOldFeedback: vi.fn() };
+});
 
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { listEnabledPrincipals, loadPrincipalById, loadSettings, principalFromRows, settingsFromRow } from "@/lib/exec/principal";
 import { createFakeExecDb, jobRow, type FakeExecDb } from "@/lib/exec/__tests__/fake-exec-db";
 import { purgeExpiredEmailRows } from "@/lib/exec/email-store";
 import { purgeExpiredDrafts } from "@/lib/exec/drafts-store";
+import { purgeExpiredDdtext, purgeOrphanDdtextAttention } from "@/lib/exec/ddtext-store";
+import { purgeOldFeedback } from "@/lib/exec/attention-feedback";
 import { DD_ATTENTION_JOB_KIND, ddAttentionJobHandler, ddAttentionScheduledWork } from "@/lib/exec/handlers/dd-attention";
+import { DDTEXT_JOB_KIND, ddtextJobHandler, ddtextScheduledWork } from "@/lib/exec/handlers/ddtext-triage";
 import { draftGenerateJobHandler } from "@/lib/exec/handlers/draft-generate";
 import { draftReconcileJobHandler, draftReconcileScheduledWork } from "@/lib/exec/handlers/draft-reconcile";
 import { emailAttentionJobHandler, emailAttentionScheduledWork } from "@/lib/exec/handlers/email-attention";
@@ -78,7 +90,10 @@ const NO_EMAIL_PURGED = {
   draftsContentPurged: 0,
   draftsDeleted: 0,
   draftsClosedIdle: 0,
-  draftsChecksScheduled: 0
+  draftsChecksScheduled: 0,
+  ddtextItems: 0,
+  ddtextAttention: 0,
+  attentionFeedback: 0
 };
 
 function resetAll(): void {
@@ -96,6 +111,9 @@ beforeEach(() => {
   vi.mocked(loadPrincipalById).mockResolvedValue(principal);
   vi.mocked(purgeExpiredEmailRows).mockResolvedValue({ threads: 0, commitments: 0, attentionRows: 0, signals: 0 });
   vi.mocked(purgeExpiredDrafts).mockResolvedValue({ contentPurged: 0, deleted: 0, closedIdle: 0, checksScheduled: 0 });
+  vi.mocked(purgeExpiredDdtext).mockResolvedValue(0);
+  vi.mocked(purgeOrphanDdtextAttention).mockResolvedValue(0);
+  vi.mocked(purgeOldFeedback).mockResolvedValue(0);
   vi.spyOn(console, "log").mockImplementation(() => {});
   vi.spyOn(console, "warn").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
@@ -133,10 +151,21 @@ const ALL_SCHEDULES = [
   emailReconcileScheduledWork,
   emailAttentionScheduledWork,
   draftReconcileScheduledWork,
-  voiceRefreshScheduledWork
+  voiceRefreshScheduledWork,
+  ddtextScheduledWork
 ];
 
 describe("ensureExecRuntime", () => {
+  // P5a (contract §3.12.8, K17): the DD text triage, its own kind on the DD refresh's 10-minute buckets, ungated.
+  it("registers the P5a DD text triage and its 10-minute, ungated schedule", () => {
+    ensureExecRuntime();
+    expect(getJobHandler(DDTEXT_JOB_KIND)).toBe(ddtextJobHandler);
+    expect(getScheduledWork(DDTEXT_JOB_KIND)).toBe(ddtextScheduledWork);
+    expect(ddtextJobHandler).toMatchObject({ kind: "exec.ddtext-triage", lane: "bulk", timeoutMs: 240_000 });
+    expect(ddtextScheduledWork).toMatchObject({ lane: "bulk", cadence: { kind: "interval", minutes: 10 }, maxAttempts: 3 });
+    expect(ddtextScheduledWork.enabled).toBeUndefined();
+  });
+
   it("registers the three P4 draft kinds and their two schedules (Y5)", () => {
     ensureExecRuntime();
     expect(getJobHandler("exec.draft-generate")).toBe(draftGenerateJobHandler);
@@ -276,8 +305,9 @@ describe("runExecSchedulerTick", () => {
     const at = new Date("2026-11-04T07:00:00Z"); // 02:00 EST, before the 03:30 purge
     vi.setSystemTime(at);
     vi.mocked(listEnabledPrincipals).mockResolvedValue([principal]);
-    // Email is off (the default settings): the attention pass still runs (L24), reconcile doesn't.
-    await expect(runExecSchedulerTick()).resolves.toBe("principals=1 enqueued=2 reaped=0");
+    // Email is off (the default settings): the attention pass still runs (L24), reconcile doesn't. The DD text
+    // triage is ungated too (P5a: off deletes, not installed skips).
+    await expect(runExecSchedulerTick()).resolves.toBe("principals=1 enqueued=3 reaped=0");
     expect(db.upserts.map((u) => u.row)).toEqual([
       {
         kind: DD_ATTENTION_JOB_KIND,
@@ -293,6 +323,14 @@ describe("runExecSchedulerTick", () => {
         principal_id: "ep_1",
         payload: {},
         dedupe_key: `exec.email-attention:ep_1:i${intervalBucket(at, 10)}`,
+        max_attempts: 3
+      },
+      {
+        kind: DDTEXT_JOB_KIND,
+        lane: "bulk",
+        principal_id: "ep_1",
+        payload: {},
+        dedupe_key: `exec.ddtext-triage:ep_1:i${intervalBucket(at, 10)}`,
         max_attempts: 3
       }
     ]);
@@ -327,9 +365,9 @@ describe("runExecSchedulerTick", () => {
     await runExecSchedulerTick();
     expect(purges()).toEqual([]);
 
-    // The purge, plus the DD and email-attention refreshes of a new 10-minute bucket.
+    // The purge, plus the DD and email-attention refreshes and the DD text triage of a new 10-minute bucket.
     vi.setSystemTime(new Date("2026-11-04T08:30:00Z")); // 03:30 EST
-    await expect(runExecSchedulerTick()).resolves.toBe("principals=1 enqueued=3 reaped=0");
+    await expect(runExecSchedulerTick()).resolves.toBe("principals=1 enqueued=4 reaped=0");
     expect(purges().map((u) => u.row)).toEqual([
       { kind: PURGE_JOB_KIND, lane: "bulk", principal_id: "ep_1", payload: {}, dedupe_key: "exec.purge:ep_1:2026-11-04" }
     ]);
@@ -470,7 +508,7 @@ describe("exec.purge", () => {
   });
 
   it("deletes past each table's retention and returns the counts", async () => {
-    expect(RETENTION_DAYS).toEqual({ finishedJobs: 14, accessLog: 90, auditLog: 400, aiUsage: 400, resolvedAttention: 90 });
+    expect(RETENTION_DAYS).toEqual({ finishedJobs: 14, accessLog: 90, auditLog: 400, aiUsage: 400, resolvedAttention: 90, attentionFeedback: 365 });
     const counts: Record<string, number> = {
       exec_jobs: 7,
       exec_access_log: 30,
@@ -513,7 +551,8 @@ describe("exec.purge", () => {
     expect(console.log).toHaveBeenCalledWith(
       "[exec-purge] deleted finishedJobs=7 accessLog=30 auditLog=2 aiUsage=11 resolvedAttention=4 " +
         "emailThreads=0 emailCommitments=0 emailSignals=0 emailAttentionRows=0 " +
-        "draftsContentPurged=0 draftsDeleted=0 draftsClosedIdle=0 draftsChecksScheduled=0"
+        "draftsContentPurged=0 draftsDeleted=0 draftsClosedIdle=0 draftsChecksScheduled=0 " +
+        "ddtextItems=0 ddtextAttention=0 attentionFeedback=0"
     );
   });
 
@@ -545,7 +584,7 @@ describe("exec.purge", () => {
   it("runs every step even when one fails, then fails the run", async () => {
     db.deleteResult = (d) =>
       d.table === "exec_access_log" ? { count: null, error: { message: "statement timeout" } } : { count: 1, error: null };
-    await expect(runPurge()).rejects.toThrow("exec.purge: 1 of 7 steps failed: accessLog: exec_access_log purge failed: statement timeout");
+    await expect(runPurge()).rejects.toThrow("exec.purge: 1 of 10 steps failed: accessLog: exec_access_log purge failed: statement timeout");
     expect(db.deletes.map((d) => d.table)).toEqual([
       "exec_jobs",
       "exec_access_log",
@@ -560,7 +599,7 @@ describe("exec.purge", () => {
     db.deleteResult = (d) =>
       d.table === "exec_attention_items" ? { count: null, error: { message: "permission denied" } } : { count: 2, error: null };
     await expect(runPurge()).rejects.toThrow(
-      "exec.purge: 1 of 7 steps failed: resolvedAttention: exec_attention_items purge failed: permission denied"
+      "exec.purge: 1 of 10 steps failed: resolvedAttention: exec_attention_items purge failed: permission denied"
     );
     expect(db.deletes.map((d) => d.table)).toEqual([
       "exec_jobs",
@@ -572,7 +611,8 @@ describe("exec.purge", () => {
     expect(console.log).toHaveBeenCalledWith(
       "[exec-purge] deleted finishedJobs=2 accessLog=2 auditLog=2 aiUsage=2 resolvedAttention=0 " +
         "emailThreads=0 emailCommitments=0 emailSignals=0 emailAttentionRows=0 " +
-        "draftsContentPurged=0 draftsDeleted=0 draftsClosedIdle=0 draftsChecksScheduled=0 failed=1"
+        "draftsContentPurged=0 draftsDeleted=0 draftsClosedIdle=0 draftsChecksScheduled=0 " +
+        "ddtextItems=0 ddtextAttention=0 attentionFeedback=0 failed=1"
     );
   });
 

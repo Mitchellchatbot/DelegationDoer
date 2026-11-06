@@ -7,15 +7,20 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import {
   DEFAULT_SETTINGS,
   DEFAULT_TIMEZONE,
+  SETTINGS_COLUMN_GROUPS,
   countEnabledMailPinnedPrincipals,
   isValidTimeZone,
   listEnabledPrincipals,
   loadPrincipalById,
   loadPrincipalForUser,
   loadSettings,
+  loadSettingsSnapshot,
   principalFromRows,
   resolveTimezone,
-  settingsFromRow
+  settingsColumnsFor,
+  settingsFromRow,
+  settingsSchemaFlags,
+  snapshotFromRow
 } from "@/lib/exec/principal";
 
 // ---------------------------------------------------------------------------
@@ -189,7 +194,11 @@ describe("settingsFromRow", () => {
       draftsEnabled: true,
       sendEnabled: false,
       voiceEnabled: true,
-      draftsSchemaReady: true
+      draftsSchemaReady: true,
+      // P5a stage -1 seed: this row has no P5a columns, so ddtext is off and not installed.
+      ddtextEnabled: false,
+      retentionDaysDdtext: 90,
+      ddtextSchemaReady: false
     });
   });
 
@@ -520,16 +529,28 @@ describe("loadSettings", () => {
     expect(await loadSettings("ep_1")).toMatchObject({ emailEnabled: false, emailSchemaReady: true });
   });
 
-  it("returns defaults when there is no row (the columns were read, so both schemas are ready)", async () => {
+  it("returns defaults when there is no row (the columns were read, so every schema is ready)", async () => {
     fakeDb({ exec_settings: [] });
-    expect(await loadSettings("ep_1")).toEqual({ principalId: "ep_1", ...DEFAULT_SETTINGS, emailSchemaReady: true, draftsSchemaReady: true });
+    expect(await loadSettings("ep_1")).toEqual({ principalId: "ep_1", ...DEFAULT_SETTINGS, emailSchemaReady: true, draftsSchemaReady: true, ddtextSchemaReady: true });
   });
 
+  // P5a (bindings AM9): the column-group loader replaces P4's three tiers. A
+  // message that names email_enabled drops the email group and, with it, the
+  // drafts group (P4's migration can't exist without P3's column); the ddtext
+  // group needs neither and stays. A message that names no column drops the
+  // last still-selected group each time, so PGRST204's bare form walks all the
+  // way down (ddtext, drafts, email) before the base read answers.
+  const emailMissingReads: Record<string, { reads: number; ddtextSchemaReady: boolean }> = {
+    "42703": { reads: 2, ddtextSchemaReady: true },
+    PGRST204: { reads: 4, ddtextSchemaReady: false },
+    "message only": { reads: 2, ddtextSchemaReady: true }
+  };
   for (const [form, err] of Object.entries(missingColumn)) {
-    it(`column missing (${form}): moves down the tiers to the base columns; email and drafts off and not installed, the rest still loads`, async () => {
+    it(`column missing (${form}): drops the email group and the drafts group with it; email and drafts off and not installed, the rest still loads`, async () => {
       const { email_enabled: _dropped, ...p2aRow } = p3Row();
       void _dropped;
       const db = fakeDb({ exec_settings: [p2aRow] }, {}, failWhenEmailSelected(err));
+      const expected = emailMissingReads[form];
       expect(await loadSettings("ep_1")).toMatchObject({
         principalId: "ep_1",
         briefLocalTime: "07:30",
@@ -537,21 +558,31 @@ describe("loadSettings", () => {
         emailEnabled: false,
         emailSchemaReady: false,
         draftsEnabled: false,
-        draftsSchemaReady: false
+        draftsSchemaReady: false,
+        ddtextSchemaReady: expected.ddtextSchemaReady
       });
       const reads = db.queries.filter((q) => q.table === "exec_settings");
-      expect(reads).toHaveLength(3);
+      expect(reads).toHaveLength(expected.reads);
       expect(reads[0].columns).toContain("drafts_enabled");
-      expect(reads[1].columns).toContain("email_enabled");
-      expect(reads[1].columns).not.toContain("drafts_enabled");
-      expect(reads[2].columns).not.toContain("email_enabled");
-      expect(reads[2].columns).toContain("retention_days_email");
+      expect(reads[0].columns).toContain("email_enabled");
+      const last = reads[reads.length - 1].columns ?? "";
+      expect(last).not.toContain("email_enabled");
+      expect(last).not.toContain("drafts_enabled");
+      expect(last).toContain("retention_days_email");
+      expect(last.includes("ddtext_enabled")).toBe(expected.ddtextSchemaReady);
+      if (form === "PGRST204") {
+        // Unnamed: the last group first (ddtext), then drafts, then email.
+        expect(reads[1].columns).not.toContain("ddtext_enabled");
+        expect(reads[1].columns).toContain("drafts_enabled");
+        expect(reads[2].columns).toContain("email_enabled");
+        expect(reads[2].columns).not.toContain("drafts_enabled");
+      }
     });
   }
 
-  it("column missing and no row: defaults, not installed", async () => {
+  it("column missing and no row: defaults; email and drafts not installed, ddtext read", async () => {
     fakeDb({ exec_settings: [] }, {}, failWhenEmailSelected(missingColumn["42703"]));
-    expect(await loadSettings("ep_1")).toEqual({ principalId: "ep_1", ...DEFAULT_SETTINGS });
+    expect(await loadSettings("ep_1")).toEqual({ principalId: "ep_1", ...DEFAULT_SETTINGS, ddtextSchemaReady: true });
   });
 
   it("any other error does not fall back: it throws, and nothing reads as 'email off'", async () => {
@@ -583,6 +614,173 @@ describe("loadSettings", () => {
   it("throws when the read fails", async () => {
     fakeDb({}, { exec_settings: "down" });
     await expect(loadSettings("ep_1")).rejects.toThrow("exec_settings read failed: down");
+  });
+});
+
+describe("loadSettings: the column-group loader (P5a test 22)", () => {
+  const P5A_ROW = { ddtext_enabled: true, retention_days_ddtext: 30, updated_at: "2026-11-06T12:00:00.123456+00:00" };
+  const fullRow = () => settingsRow(P5A_ROW);
+  const failWhen = (column: string, err: DbError) => (table: string, columns: string) =>
+    table === "exec_settings" && columns.split(",").includes(column) ? err : null;
+  const reads = (db: ReturnType<typeof fakeDb>) => db.queries.filter((q) => q.table === "exec_settings").map((q) => q.columns ?? "");
+
+  it("every group present: one read of every group's columns and updated_at; every flag true", async () => {
+    const db = fakeDb({ exec_settings: [fullRow()] });
+    expect(await loadSettings("ep_1")).toMatchObject({
+      emailEnabled: true,
+      emailSchemaReady: true,
+      draftsEnabled: true,
+      draftsSchemaReady: true,
+      ddtextEnabled: true,
+      retentionDaysDdtext: 30,
+      ddtextSchemaReady: true
+    });
+    const cols = reads(db);
+    expect(cols).toHaveLength(1);
+    expect(cols[0].split(",")).toEqual(expect.arrayContaining(["updated_at", ...SETTINGS_COLUMN_GROUPS.flatMap((g) => [...g.columns])]));
+    expect(cols[0]).toBe(settingsColumnsFor({ email: true, drafts: true, ddtext: true }));
+  });
+
+  const ddtextMissing: Record<string, DbError> = {
+    "42703 naming ddtext_enabled": { code: "42703", message: "column exec_settings.ddtext_enabled does not exist" },
+    "PGRST204 naming retention_days_ddtext": { code: "PGRST204", message: "Could not find the 'retention_days_ddtext' column of 'exec_settings' in the schema cache" },
+    "message only": { message: 'column "ddtext_enabled" does not exist' }
+  };
+  for (const [form, err] of Object.entries(ddtextMissing)) {
+    it(`ddtext columns missing (${form}): only ddtext is off and not installed; email and drafts still read`, async () => {
+      const db = fakeDb({ exec_settings: [settingsRow()] }, {}, failWhen("ddtext_enabled", err));
+      expect(await loadSettings("ep_1")).toMatchObject({
+        emailEnabled: true,
+        emailSchemaReady: true,
+        draftsEnabled: true,
+        draftsSchemaReady: true,
+        ddtextEnabled: false,
+        retentionDaysDdtext: 90,
+        ddtextSchemaReady: false
+      });
+      const cols = reads(db);
+      expect(cols).toHaveLength(2);
+      expect(cols[1]).toContain("drafts_enabled");
+      expect(cols[1]).toContain("email_enabled");
+      expect(cols[1]).not.toContain("ddtext");
+    });
+  }
+
+  it("the drafts group missing leaves the ddtext group alone (it doesn't need P4)", async () => {
+    const db = fakeDb({ exec_settings: [{ ...p3Row(), ...P5A_ROW }] }, {}, failWhen("drafts_enabled", { code: "42703", message: "column exec_settings.drafts_enabled does not exist" }));
+    expect(await loadSettings("ep_1")).toMatchObject({ emailSchemaReady: true, draftsSchemaReady: false, ddtextSchemaReady: true, ddtextEnabled: true });
+    expect(reads(db)).toHaveLength(2);
+  });
+
+  it("the email group missing (named) takes the drafts group with it, and the ddtext group stays", async () => {
+    const merged: Row = { ...p3Row(), ...P5A_ROW };
+    const { email_enabled: _e, ...row } = merged;
+    void _e;
+    const db = fakeDb({ exec_settings: [row] }, {}, failWhen("email_enabled", { code: "42703", message: "column exec_settings.email_enabled does not exist" }));
+    expect(await loadSettings("ep_1")).toMatchObject({ emailSchemaReady: false, draftsSchemaReady: false, ddtextSchemaReady: true, ddtextEnabled: true });
+    const cols = reads(db);
+    expect(cols).toHaveLength(2);
+    expect(cols[1]).not.toContain("email_enabled");
+    expect(cols[1]).not.toContain("drafts_enabled");
+    expect(cols[1]).toContain("ddtext_enabled");
+  });
+
+  it("an unnamed 42703 drops the last still-selected group first", async () => {
+    const unnamed = { code: "42703", message: "column does not exist" };
+    const db = fakeDb({ exec_settings: [fullRow()] }, {}, failWhen("ddtext_enabled", unnamed));
+    expect(await loadSettings("ep_1")).toMatchObject({ emailSchemaReady: true, draftsSchemaReady: true, ddtextSchemaReady: false });
+    expect(reads(db)).toHaveLength(2);
+    // The failing column belongs to an earlier group: the later (present) group goes first, then that one.
+    const db2 = fakeDb({ exec_settings: [fullRow()] }, {}, failWhen("send_enabled", unnamed));
+    expect(await loadSettings("ep_1")).toMatchObject({ emailSchemaReady: true, draftsSchemaReady: false, ddtextSchemaReady: false });
+    const cols = reads(db2);
+    expect(cols).toHaveLength(3);
+    expect(cols[1]).toContain("drafts_enabled");
+    expect(cols[1]).not.toContain("ddtext_enabled");
+    expect(cols[2]).toContain("email_enabled");
+    expect(cols[2]).not.toContain("drafts_enabled");
+  });
+
+  it("any other error throws after one read (a 500, a timeout, a connection failure)", async () => {
+    for (const err of [{ message: "Internal Server Error" }, { code: "57014", message: "canceling statement due to statement timeout" }, { code: "08006", message: "connection failure" }]) {
+      const db = fakeDb({ exec_settings: [fullRow()] }, {}, (table) => (table === "exec_settings" ? err : null));
+      await expect(loadSettings("ep_1")).rejects.toThrow(`exec_settings read failed: ${err.message}`);
+      expect(reads(db)).toHaveLength(1);
+    }
+  });
+
+  it("a base column failing throws once every optional group is dropped (one retry per group)", async () => {
+    const db = fakeDb({ exec_settings: [fullRow()] }, {}, (table) =>
+      table === "exec_settings" ? { code: "42703", message: "column exec_settings.updated_at does not exist" } : null
+    );
+    await expect(loadSettings("ep_1")).rejects.toThrow("exec_settings read failed: column exec_settings.updated_at does not exist");
+    const cols = reads(db);
+    expect(cols).toHaveLength(SETTINGS_COLUMN_GROUPS.length + 1);
+    expect(cols[cols.length - 1]).toBe(settingsColumnsFor({ email: false, drafts: false, ddtext: false }));
+  });
+
+  it("a principal's timezone still loads with only the base columns", async () => {
+    fakeDb({ exec_principals: [principalRow()], users: [userRow()], exec_settings: [p3Row()] }, {}, (table, columns) =>
+      table === "exec_settings" && /email_enabled|ddtext_enabled|drafts_enabled/.test(columns) ? { code: "PGRST204", message: "Could not find the column" } : null
+    );
+    expect(await loadPrincipalById("ep_1")).toMatchObject({ id: "ep_1", timezone: "Asia/Karachi" });
+  });
+});
+
+describe("loadSettingsSnapshot and the snapshot helpers (P5a test 23)", () => {
+  const RAW = "2026-11-06T12:00:00.123456+00:00";
+
+  it("version is exec_settings.updated_at exactly as the database printed it; settings are loadSettings'", async () => {
+    fakeDb({ exec_settings: [settingsRow({ ddtext_enabled: false, retention_days_ddtext: 45, updated_at: RAW })] });
+    const snap = await loadSettingsSnapshot("ep_1");
+    expect(snap.version).toBe(RAW);
+    expect(snap.settings).toEqual(await loadSettings("ep_1"));
+    expect(snap.settings).toMatchObject({ ddtextEnabled: false, retentionDaysDdtext: 45, ddtextSchemaReady: true });
+  });
+
+  it("no row: version null and defaults; a failed read throws", async () => {
+    fakeDb({ exec_settings: [] });
+    expect(await loadSettingsSnapshot("ep_1")).toEqual({
+      version: null,
+      settings: { principalId: "ep_1", ...DEFAULT_SETTINGS, emailSchemaReady: true, draftsSchemaReady: true, ddtextSchemaReady: true }
+    });
+    fakeDb({}, { exec_settings: "down" });
+    await expect(loadSettingsSnapshot("ep_1")).rejects.toThrow("exec_settings read failed: down");
+  });
+
+  it("settingsFromRow: ddtextEnabled only when the schema is ready and the column is exactly true; retention defaults to 90", () => {
+    const s = (over: Row, ready?: boolean) => settingsFromRow(settingsRow(over) as unknown as SRow, "ep_1", ready === undefined ? {} : { ddtextSchemaReady: ready });
+    expect(s({ ddtext_enabled: true, retention_days_ddtext: 30 })).toMatchObject({ ddtextEnabled: true, retentionDaysDdtext: 30, ddtextSchemaReady: true });
+    expect(s({ ddtext_enabled: "true", retention_days_ddtext: 30 })).toMatchObject({ ddtextEnabled: false, ddtextSchemaReady: true });
+    expect(s({ ddtext_enabled: 1, retention_days_ddtext: 30 })).toMatchObject({ ddtextEnabled: false });
+    expect(s({ ddtext_enabled: null, retention_days_ddtext: null })).toMatchObject({ ddtextEnabled: false, retentionDaysDdtext: 90, ddtextSchemaReady: true });
+    expect(s({ ddtext_enabled: true, retention_days_ddtext: "abc" })).toMatchObject({ retentionDaysDdtext: 90 });
+    expect(s({ ddtext_enabled: true, retention_days_ddtext: 30 }, false)).toMatchObject({ ddtextEnabled: false, ddtextSchemaReady: false });
+    // Only one of the two P5a columns read: not ready.
+    expect(s({ ddtext_enabled: true })).toMatchObject({ ddtextEnabled: false, ddtextSchemaReady: false });
+  });
+
+  it("snapshotFromRow takes the raw version, and none from a row without a usable updated_at", () => {
+    const schema = { email: true, drafts: true, ddtext: true };
+    expect(snapshotFromRow(settingsRow({ updated_at: RAW, ddtext_enabled: true, retention_days_ddtext: 7 }), "ep_1", schema)).toMatchObject({
+      version: RAW,
+      settings: { ddtextEnabled: true, retentionDaysDdtext: 7, ddtextSchemaReady: true, draftsSchemaReady: true }
+    });
+    expect(snapshotFromRow(settingsRow(), "ep_1", schema).version).toBeNull();
+    expect(snapshotFromRow(settingsRow({ updated_at: 12 }), "ep_1", schema).version).toBeNull();
+    expect(snapshotFromRow(null, "ep_1", { email: false, drafts: false, ddtext: true })).toEqual({
+      version: null,
+      settings: { principalId: "ep_1", ...DEFAULT_SETTINGS, ddtextSchemaReady: true }
+    });
+  });
+
+  it("settingsColumnsFor and settingsSchemaFlags", () => {
+    const base = settingsColumnsFor({ email: false, drafts: false, ddtext: false });
+    expect(base.split(",")).toContain("updated_at");
+    expect(base).not.toMatch(/email_enabled|drafts_enabled|ddtext_enabled/);
+    expect(settingsColumnsFor({ email: true, drafts: false, ddtext: true })).toBe(`${base},email_enabled,ddtext_enabled,retention_days_ddtext`);
+    expect(settingsSchemaFlags({ emailSchemaReady: true, draftsSchemaReady: false, ddtextSchemaReady: true })).toEqual({ email: true, drafts: false, ddtext: true });
+    expect(Object.keys(settingsSchemaFlags(DEFAULT_SETTINGS)).sort()).toEqual(SETTINGS_COLUMN_GROUPS.map((g) => g.key).sort());
   });
 });
 

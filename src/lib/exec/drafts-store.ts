@@ -948,3 +948,21 @@ export async function upsertVoiceProfile(principal: ExecPrincipal, row: Omit<Voi
   const { error } = await query;
   if (error) throw failure(`${VOICE} upsert`, error, opts.signal);
 }
+
+/**
+ * P5a (contract §3.14.2b, C20, K12): delete the principal's voice profile
+ * (the Settings "Reset"; the weekly voice job builds a new one). true = his
+ * row was deleted, false = he had none, null when the table is missing (as
+ * getVoiceProfile). Any other error throws. This module stays the only
+ * writer of the voice profile table.
+ */
+export async function resetVoiceProfile(principal: ExecPrincipal, opts: StoreOptions = {}): Promise<boolean | null> {
+  let query = db().from(VOICE).delete().eq("principal_id", principal.id).select("principal_id");
+  if (opts.signal) query = query.abortSignal(opts.signal);
+  const { data, error } = await query;
+  if (error) {
+    if (isNotInstalled(error)) return null;
+    throw failure(`${VOICE} delete`, error, opts.signal);
+  }
+  return Array.isArray(data) && data.length > 0;
+}

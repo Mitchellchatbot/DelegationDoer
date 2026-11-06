@@ -1,4 +1,4 @@
-import { isOpen, isOverdue, isStalled } from "@/lib/exec/analysis/tasks";
+import { isOpen, isOverdue, isStalledWork } from "@/lib/exec/analysis/tasks";
 import type { DdProject, DdProjectStage, DdTask } from "@/lib/exec/sources/dd-types";
 import { isTeamTask } from "@/lib/task-team";
 
@@ -29,7 +29,11 @@ export interface ProjectHealth {
    */
   undispatchedTasks: number;
   overdueTasks: number;
-  /** Active tasks idle for 7+ days, not counting ones waiting on the client or on a proof review. */
+  /**
+   * Active tasks idle for 7+ days by the feed's own rule (isStalledWork in
+   * analysis/tasks.ts): not counting overdue work, incidents, or tasks waiting
+   * on the client or on a proof review, which each have their own signal.
+   */
   stalledTasks: number;
   waitingOnClient: number;
   /** Latest known activity on the project's tasks and stages; null when none is known. */
@@ -78,16 +82,6 @@ function isUndispatched(t: DdTask): boolean {
 }
 
 /**
- * Stalled as the feed means it (producers/dd.ts): idle, and not parked on
- * someone outside the work. A task waiting on the client has the 14-day
- * waiting rule, and a proof waiting for review is on the approvals queue;
- * counting either as idle would mark a 9-day client wait at risk.
- */
-function isStalledWork(t: DdTask, now: Date): boolean {
-  return isStalled(t, now) && t.status !== "waiting_on_client" && t.status !== "pending_approval";
-}
-
-/**
  * The most recent activity on the project. The sweep stamps last_activity_at
  * on the rows it archives, so an archived task contributes only its real
  * completion time. Stage note edits and status flips count too.
@@ -105,6 +99,9 @@ function projectActivityAt(tasks: readonly DdTask[], stages: readonly DdProjectS
   }
   return latest;
 }
+
+/** The tail of the stuck-stage reason; analysis/project-detail.ts lists that reason as a derived blocker. */
+export const STUCK_STAGE_REASON = "is still locked although every stage before it is done";
 
 /**
  * The stage the flow is stuck at, if any: the first stage that isn't done is
@@ -126,10 +123,10 @@ function stuckStage(stages: readonly DdProjectStage[]): DdProjectStage | null {
  *   no_data    no tasks at all
  *   off_track  overdue ≥ 30% of active tasks (at least 2 overdue); any overdue
  *              critical task; no activity for 14 days while tasks are open
- *   at_risk    any overdue task; stalled ≥ 20% of active tasks (a task waiting
- *              on the client or on a proof review isn't stalled: see
- *              isStalledWork); a task waiting on the client more than 14
- *              days; a stage stuck locked
+ *   at_risk    any overdue task; stalled ≥ 20% of active tasks (isStalledWork,
+ *              the feed's rule: overdue work, incidents and tasks waiting on
+ *              the client or on a proof review aren't stalled); a task
+ *              waiting on the client more than 14 days; a stage stuck locked
  *   on_track   none of the above
  * "Active" is open work that has been handed out: every open task except the
  * stage placeholders the flow hasn't dispatched yet. A template project
@@ -213,7 +210,7 @@ export function projectHealth(
     atRisk.push(`${plural(waitingTooLong, "task", "tasks")} waiting on the client over ${WAITING_DAYS_AT_RISK} days (longest ${longest})`);
   }
   const stuck = stuckStage(ownStages);
-  if (stuck) atRisk.push(`Stage "${stuck.name}" is still locked although every stage before it is done`);
+  if (stuck) atRisk.push(`Stage "${stuck.name}" ${STUCK_STAGE_REASON}`);
 
   const status: ProjectHealthStatus = offTrack.length > 0 ? "off_track" : atRisk.length > 0 ? "at_risk" : "on_track";
   return { ...base, status, reasons: [...offTrack, ...atRisk] };

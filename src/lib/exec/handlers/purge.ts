@@ -1,5 +1,7 @@
 import "server-only";
 
+import { purgeOldFeedback } from "@/lib/exec/attention-feedback";
+import { purgeExpiredDdtext, purgeOrphanDdtextAttention } from "@/lib/exec/ddtext-store";
 import { purgeExpiredDrafts } from "@/lib/exec/drafts-store";
 import { purgeExpiredEmailRows } from "@/lib/exec/email-store";
 import { purgeFinishedJobs } from "@/lib/exec/jobs";
@@ -25,6 +27,23 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 //                         purgeExpiredDrafts (exec_drafts_purge_expired). Tolerates the
 //                         P4 migration not being applied yet (counts 0). The voice
 //                         profile has no purge (one row per principal, replaced weekly).
+//   DD text (P5a)         in this order (contract §3.12.8, a-correct-1):
+//                         1. ddtext items past their own expires_at (source time +
+//                            retention_days_ddtext, set when written); their signals,
+//                            the stored AI summaries, go with them: purgeExpiredDdtext;
+//                         2. then, for every principal, the ddtext Needs Attention rows
+//                            (exec_attention_items, source dd, kinds ddtext_*) of any
+//                            status that no stored signal backs any more or whose
+//                            occurred_at is past the 14-day liveness window:
+//                            purgeOrphanDdtextAttention. Running it after step 1 takes
+//                            the rows of items that expired in this same run. So a
+//                            ddtext attention row leaves with its signal or after 14
+//                            days, never by the 90-day resolved-row rule above (which
+//                            would only ever find nothing of theirs left).
+//   attention feedback    his thumbs on Needs Attention items, older than 365 days
+//   (P5a)                 (purgeOldFeedback; they outlive the items they rate).
+//                         All three tolerate the P5a migration not being applied yet
+//                         (counts 0).
 //
 // The deletes are global, not per principal. Rows with no principal (system
 // jobs, access attempts that never resolved to a principal) have to age out
@@ -42,7 +61,9 @@ export const RETENTION_DAYS = Object.freeze({
   accessLog: 90,
   auditLog: 400,
   aiUsage: 400,
-  resolvedAttention: 90
+  resolvedAttention: 90,
+  /** P5a (§2.6): his feedback votes (purgeOldFeedback applies it). */
+  attentionFeedback: 365
 });
 
 const PURGE_TIMEOUT_MS = 120_000;
@@ -66,6 +87,12 @@ export interface PurgeCounts {
   draftsDeleted: number;
   draftsClosedIdle: number;
   draftsChecksScheduled: number;
+  /** P5a DD text retention (purgeExpiredDdtext): expired items; their signals cascade. */
+  ddtextItems: number;
+  /** P5a (purgeOrphanDdtextAttention): ddtext attention rows with no backing signal, or past 14 days. */
+  ddtextAttention: number;
+  /** P5a (purgeOldFeedback): feedback votes older than 365 days. */
+  attentionFeedback: number;
 }
 
 function errMessage(err: unknown): string {
@@ -127,7 +154,10 @@ export async function runPurge(signal?: AbortSignal, now: Date = new Date()): Pr
     draftsContentPurged: 0,
     draftsDeleted: 0,
     draftsClosedIdle: 0,
-    draftsChecksScheduled: 0
+    draftsChecksScheduled: 0,
+    ddtextItems: 0,
+    ddtextAttention: 0,
+    attentionFeedback: 0
   };
   const one = (key: keyof PurgeCounts, run: () => Promise<number>) => async (): Promise<Partial<PurgeCounts>> => ({ [key]: await run() });
   const steps: readonly [string, () => Promise<Partial<PurgeCounts>>][] = [
@@ -149,7 +179,12 @@ export async function runPurge(signal?: AbortSignal, now: Date = new Date()): Pr
         const c = await purgeExpiredDrafts(now, { signal });
         return { draftsContentPurged: c.contentPurged, draftsDeleted: c.deleted, draftsClosedIdle: c.closedIdle, draftsChecksScheduled: c.checksScheduled };
       }
-    ]
+    ],
+    // P5a: expiry first, then the orphan sweep over every principal, so an
+    // attention row whose item expired just now goes in this same run.
+    ["ddtextItems", one("ddtextItems", () => purgeExpiredDdtext(now, { signal }))],
+    ["ddtextAttention", one("ddtextAttention", () => purgeOrphanDdtextAttention(now, { signal }))],
+    ["attentionFeedback", one("attentionFeedback", () => purgeOldFeedback(now, { signal }))]
   ];
 
   const failures: string[] = [];
@@ -169,7 +204,8 @@ export async function runPurge(signal?: AbortSignal, now: Date = new Date()): Pr
       `emailThreads=${counts.emailThreads} emailCommitments=${counts.emailCommitments} emailSignals=${counts.emailSignals} ` +
       `emailAttentionRows=${counts.emailAttentionRows} ` +
       `draftsContentPurged=${counts.draftsContentPurged} draftsDeleted=${counts.draftsDeleted} ` +
-      `draftsClosedIdle=${counts.draftsClosedIdle} draftsChecksScheduled=${counts.draftsChecksScheduled}` +
+      `draftsClosedIdle=${counts.draftsClosedIdle} draftsChecksScheduled=${counts.draftsChecksScheduled} ` +
+      `ddtextItems=${counts.ddtextItems} ddtextAttention=${counts.ddtextAttention} attentionFeedback=${counts.attentionFeedback}` +
       `${failures.length > 0 ? ` failed=${failures.length}` : ""}`
   );
   if (failures.length > 0) {

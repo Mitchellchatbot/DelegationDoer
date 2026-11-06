@@ -51,8 +51,8 @@ export const MAX_RENDERED_MESSAGES = 12;
 export const TOTAL_TEXT_CHARS = NEWEST_HEAD_CHARS + NEWEST_TAIL_CHARS + (MAX_RENDERED_MESSAGES - 1) * OLDER_MESSAGE_CHARS;
 /**
  * A plain-text body shorter than this, on one line, with no HTML beside it, is
- * labelled a possible preview stub: older Graph rows stored only the 255-char
- * bodyPreview in body_text (memory: email-intake-truncated-body-skip).
+ * labelled a possible preview stub (older Graph rows stored only the 255-char
+ * bodyPreview in body_text; memory: email-intake-truncated-body-skip).
  */
 export const PREVIEW_STUB_MAX_CHARS = 300;
 /** Raw body characters read per message. Far beyond what the budget keeps; it bounds the work a huge body causes. */

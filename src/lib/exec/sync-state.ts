@@ -30,8 +30,12 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 //   - Every write sets updated_at itself: the column default only applies to
 //     an insert.
 
-/** mail (P3 reconcile), email (P3 attention), clone-ea (P4: the EA and send token verdicts, §2.3). */
-export type SyncSource = "mail" | "email" | "clone-ea";
+/**
+ * mail (P3 reconcile), email (P3 attention), clone-ea (P4: the EA and send
+ * token verdicts, §2.3), ddtext (P5a: the DD text triage's cursor and lease,
+ * contract §2.5).
+ */
+export type SyncSource = "mail" | "email" | "clone-ea" | "ddtext";
 
 export interface SyncStateOptions {
   signal?: AbortSignal;
@@ -71,7 +75,7 @@ function parseRev(text: string | null): number | null {
 }
 
 function checkRow(source: unknown, key: unknown): asserts source is SyncSource {
-  if (source !== "mail" && source !== "email" && source !== "clone-ea") {
+  if (source !== "mail" && source !== "email" && source !== "clone-ea" && source !== "ddtext") {
     throw new NonRetryableError(`exec_sync_state: unknown source ${JSON.stringify(source)}`);
   }
   if (typeof key !== "string" || key.length === 0 || key.length > MAX_KEY_CHARS) {
@@ -277,10 +281,25 @@ export async function putSyncStateByPrincipalId(principalId: string, source: "ma
 }
 
 // ---------------------------------------------------------------------------
-// Leases (email/attention-lease): one holder at a time, taken over on expiry.
+// Leases: one holder at a time, taken over on expiry. email/attention-lease
+// (P3's attention pass) and ddtext/ddtext-lease (P5a's DD text triage).
 // ---------------------------------------------------------------------------
 
-const LEASE_SOURCE: SyncSource = "email";
+/** The leases there are, each stored under its own source (P5a §3.12.8). */
+export type LeaseKey = "attention-lease" | "ddtext-lease";
+
+const LEASE_SOURCES: Readonly<Record<LeaseKey, SyncSource>> = Object.freeze({
+  "attention-lease": "email",
+  "ddtext-lease": "ddtext"
+});
+
+/** The source a lease is stored under; an unknown key is a bug (NonRetryableError). */
+function leaseSource(key: unknown): SyncSource {
+  if (typeof key !== "string" || !Object.hasOwn(LEASE_SOURCES, key)) {
+    throw new NonRetryableError(`exec_sync_state: unknown lease ${JSON.stringify(key)}`);
+  }
+  return LEASE_SOURCES[key as LeaseKey];
+}
 
 /**
  * Take the lease for `holder` until now + ttlMs. true when it is now ours: no
@@ -291,12 +310,13 @@ const LEASE_SOURCE: SyncSource = "email";
  */
 export async function tryAcquireLease(
   principal: ExecPrincipal,
-  key: "attention-lease",
+  key: LeaseKey,
   holder: string,
   ttlMs: number,
   now: Date = new Date()
 ): Promise<boolean> {
-  checkRow(LEASE_SOURCE, key);
+  const source = leaseSource(key);
+  checkRow(source, key);
   if (typeof holder !== "string" || holder.length === 0 || holder.length > 200) {
     throw new NonRetryableError("tryAcquireLease: holder must be 1-200 characters");
   }
@@ -307,15 +327,15 @@ export async function tryAcquireLease(
   if (!Number.isFinite(nowMs)) throw new NonRetryableError("tryAcquireLease: now must be a valid Date");
   const mine: LeaseState = { holder, leaseUntil: new Date(nowMs + ttlMs).toISOString() };
 
-  const raw = await readRaw(principal.id, LEASE_SOURCE, key);
-  if (!raw) return insertIfAbsent(principal.id, LEASE_SOURCE, key, cursorFor(LEASE_SOURCE, key, mine, 1));
+  const raw = await readRaw(principal.id, source, key);
+  if (!raw) return insertIfAbsent(principal.id, source, key, cursorFor(source, key, mine, 1));
 
   const rev = parseRev(raw.revText);
   const lease = rev === null ? null : parseLeaseState(raw.cursor);
   if (lease && lease.holder !== null && lease.holder !== holder && lease.leaseUntil !== null && Date.parse(lease.leaseUntil) > nowMs) {
     return false;
   }
-  return updateIfRev(principal.id, LEASE_SOURCE, key, raw.revText, cursorFor(LEASE_SOURCE, key, mine, rev === null ? 1 : rev + 1));
+  return updateIfRev(principal.id, source, key, raw.revText, cursorFor(source, key, mine, rev === null ? 1 : rev + 1));
 }
 
 /**
@@ -323,21 +343,24 @@ export async function tryAcquireLease(
  * lease expired and was taken over must not release the new holder's).
  * Never throws: a failure is logged and the lease expires on its own.
  */
-export async function releaseLease(principal: ExecPrincipal, key: "attention-lease", holder: string): Promise<void> {
+export async function releaseLease(principal: ExecPrincipal, key: LeaseKey, holder: string): Promise<void> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(new Error("releaseLease timed out")), RELEASE_TIMEOUT_MS);
+  let source: SyncSource | "?" = "?";
   try {
-    checkRow(LEASE_SOURCE, key);
-    const raw = await readRaw(principal.id, LEASE_SOURCE, key, controller.signal);
+    const leased = leaseSource(key);
+    source = leased;
+    checkRow(leased, key);
+    const raw = await readRaw(principal.id, leased, key, controller.signal);
     if (!raw) return;
     const rev = parseRev(raw.revText);
     const lease = rev === null ? null : parseLeaseState(raw.cursor);
     if (!lease || lease.holder !== holder) return;
     const free: LeaseState = { holder: null, leaseUntil: null };
-    await updateIfRev(principal.id, LEASE_SOURCE, key, raw.revText, cursorFor(LEASE_SOURCE, key, free, (rev as number) + 1), controller.signal);
+    await updateIfRev(principal.id, leased, key, raw.revText, cursorFor(leased, key, free, (rev as number) + 1), controller.signal);
   } catch (err) {
     const why = err instanceof Error ? `${err.name}: ${err.message}` : "unknown error";
-    console.warn(`[exec-sync-state] could not release ${LEASE_SOURCE}/${key}; it will expire on its own: ${why}`);
+    console.warn(`[exec-sync-state] could not release ${source}/${key}; it will expire on its own: ${why}`);
   } finally {
     clearTimeout(timer);
   }

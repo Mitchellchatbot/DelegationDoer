@@ -284,3 +284,97 @@ export interface DdClientMeeting {
   /** client_meetings.meeting_date: when the meeting happened. */
   meetingAt: string;
 }
+
+// ---------------------------------------------------------------------------
+// Added by P5a (contract §3.1.3; lead seed). Same rules: ids, enums, numbers,
+// hours and timestamps. Never tokens, comment text, notes, reasons or mail
+// content. The fields above are untouched.
+// ---------------------------------------------------------------------------
+
+/** A user's schedule and ritual flags (A3). Never tokens. */
+export interface DdUserSchedule {
+  userId: string;
+  dailyCapacity: number;
+  /** users.weekly_schedule validated: day key → {start,end} ("HH:MM") or null; {} when unset or malformed. */
+  weeklySchedule: Partial<Record<"mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun", { start: string; end: string } | null>>;
+  workHoursStart: string | null;
+  workHoursEnd: string | null;
+  dailyPromptsEnabled: boolean;
+  dailyPromptsRequired: boolean;
+  clockEnabled: boolean;
+  createdAt: string;
+}
+
+/** A task's hour columns (capacity.ts's load math). */
+export interface DdTaskHours {
+  taskId: string;
+  estimatedHours: number;
+  actualHours: number;
+  actualHoursOverride: number | null;
+}
+
+/** A project task in any state (drafts, deleted and rejected rows included: check the flags). */
+export interface DdProjectTask extends DdTask {
+  parallelGroup: number | null;
+  stagePosition: number | null;
+}
+
+/** One status_change row, first line parsed; the text after it never leaves sources/dd.ts. */
+export interface DdStatusTransition {
+  id: string;
+  taskId: string;
+  userId: string;
+  from: string;
+  to: string;
+  at: string;
+}
+
+/** A reply on an update (EOD), metadata only. */
+export interface DdUpdateReply {
+  id: string;
+  targetId: string;
+  userId: string;
+  createdAt: string;
+}
+
+/** A task's links to its source mail (C25): the clone thread ids from tasks.missive_thread_url ("?thread=<id>") and from
+ *  email_intake_log rows with this task_id, and tasks.client_email (the sender intake recorded). Never logged. Tasks with
+ *  neither a thread nor a client_email are absent. */
+export interface DdTaskThreadLink {
+  taskId: string;
+  threadIds: string[];
+  clientEmail: string | null;
+}
+
+export type ApproverRule =
+  | { kind: "leaders_or_department_heads"; departmentIds: string[] } // draft tasks: canActOnDraft; EOD reviews: eod/review route
+  | { kind: "fb_managers_or_leaders"; excludeUserId: string | null } // FB proofs: isFbProofer, never the submitter
+  | { kind: "email_approvers_or_department_head"; departmentId: string | null } // email drafts: isApprover + dept head
+  | { kind: "leaders_or_any_department_head" }; // unrouted mail: routing-review route
+
+export interface ApprovalItem {
+  mechanism: ApprovalMechanism;
+  /** task id (draft_tasks, fb_proofs), email draft id, routing decision id, or EOD note id. */
+  id: string;
+  /** A task title, or a fixed label (C19). Never mail content. */
+  title: string;
+  requesterId: string | null;
+  /** ISO; null when unknown. */
+  waitingSince: string | null;
+  /** waitingSince is a lower bound (e.g. a proof with no fb_proof row: lastActivityAt). */
+  waitingSinceIsLowerBound: boolean;
+  approver: ApproverRule;
+  taskId: string | null;
+  clientName: string | null;
+  departmentId: string | null;
+}
+
+export interface ApprovalItemList {
+  mechanism: ApprovalMechanism;
+  mode: "items" | "count_only";
+  /** Oldest waiting first, at most `limit`. */
+  items: ApprovalItem[];
+  /** Everything pending under the same predicate as getPendingApprovals. */
+  total: number;
+  truncated: boolean;
+}

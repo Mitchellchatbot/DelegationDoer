@@ -1,3 +1,5 @@
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
@@ -21,9 +23,13 @@ vi.mock("@/lib/exec/sources/dd", () => ({
 }));
 vi.mock("@/lib/exec/attention", () => ({
   lastAttentionRefresh: vi.fn(),
-  listAttention: vi.fn(),
   syncAttention: vi.fn()
 }));
+// P5a (S3, K8): the feed is read through the screened accessor, mocked at its
+// module boundary (attention-read.test.ts covers the accessor itself).
+vi.mock("@/lib/exec/attention-read", () => ({ listScreenedAttention: vi.fn() }));
+// P5a (a-correct-16): the DD text job's last run, read only while triage is on.
+vi.mock("@/lib/exec/ddtext-store", () => ({ ddtextLastRunAt: vi.fn() }));
 // P3: the email gate. These P2b tests run with email off (no email table is
 // read); overview-email.test.ts covers the email parts.
 vi.mock("@/lib/exec/email-view", async (importOriginal) => ({
@@ -32,13 +38,18 @@ vi.mock("@/lib/exec/email-view", async (importOriginal) => ({
 }));
 
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
-import { lastAttentionRefresh, listAttention, syncAttention } from "@/lib/exec/attention";
+import { AttentionSection } from "@/components/exec/overview/AttentionSection";
+import { lastAttentionRefresh, syncAttention } from "@/lib/exec/attention";
+import { listScreenedAttention } from "@/lib/exec/attention-read";
+import { ddtextLastRunAt } from "@/lib/exec/ddtext-store";
 import { loadEmailGate } from "@/lib/exec/email-view";
-import type { AttentionItem } from "@/lib/exec/attention-types";
+import type { AttentionFeedItem, ScreenedAttentionPage } from "@/lib/exec/attention-types";
 import { DD_ATTENTION_JOB_KIND } from "@/lib/exec/handlers/dd-attention";
+import { DDTEXT_JOB_KIND } from "@/lib/exec/handlers/ddtext-triage";
 import { PURGE_JOB_KIND } from "@/lib/exec/handlers/purge";
-import { TRACKED_JOB_KINDS, getOverview, type ExecOverview, type OverviewSection } from "@/lib/exec/overview";
-import { principalFromRows } from "@/lib/exec/principal";
+import { TRACKED_JOB_KINDS, getAttentionFreshness, getOverview, type ExecOverview, type OverviewSection } from "@/lib/exec/overview";
+import { DEFAULT_SETTINGS, principalFromRows } from "@/lib/exec/principal";
+import { DD_ATTENTION_KINDS } from "@/lib/exec/producers/dd";
 import {
   getPendingApprovals,
   listActivitySince,
@@ -236,8 +247,9 @@ const APPROVALS: ApprovalBucket[] = [
   { mechanism: "checkins", count: 0, oldestAt: null }
 ];
 
-function attentionItem(id: string): AttentionItem {
+function attentionItem(id: string): AttentionFeedItem {
   return {
+    version: "2026-11-04T14:40:00.123456+00:00",
     id,
     principalId: principal.id,
     fingerprint: `dd:overdue:assignee:${id}`,
@@ -264,6 +276,7 @@ function attentionItem(id: string): AttentionItem {
 }
 
 const ITEMS = [attentionItem("ea_1"), attentionItem("ea_2")];
+const PAGE: ScreenedAttentionPage = { items: ITEMS, nextCursor: null, hiddenEmail: 0, emailScreen: "none" };
 
 // ---------------------------------------------------------------------------
 // exec_jobs: an in-memory stand-in for the reads overview.ts makes
@@ -408,7 +421,7 @@ function wireAll() {
   vi.mocked(listStatusChangeEntries).mockResolvedValue([{ taskId: "t_soon3", enteredAt: "2026-10-15T12:00:00Z" }]);
   vi.mocked(listTasksByIds).mockResolvedValue([]);
   vi.mocked(getPendingApprovals).mockResolvedValue(APPROVALS);
-  vi.mocked(listAttention).mockResolvedValue(ITEMS);
+  vi.mocked(listScreenedAttention).mockResolvedValue(PAGE);
   vi.mocked(lastAttentionRefresh).mockResolvedValue("2026-11-04T14:40:00Z");
   vi.mocked(loadEmailGate).mockResolvedValue({ kind: "off", settings: {} as never });
   jobs = createFakeJobs([...JOBS]);
@@ -557,10 +570,21 @@ describe("getOverview: a full read", () => {
 
   it("lists the top 20 of the feed and dates the last check from the refresh job when it is newer", async () => {
     const o = await getOverview(principal, NOW);
-    expect(listAttention).toHaveBeenCalledWith(principal, { limit: 40, now: NOW });
-    expect(lastAttentionRefresh).toHaveBeenCalledWith(principal, "dd");
+    expect(listScreenedAttention).toHaveBeenCalledWith(principal, { limit: 20 }, { now: NOW, signal: expect.any(AbortSignal) });
+    expect(lastAttentionRefresh).toHaveBeenCalledWith(principal, "dd", { kinds: DD_ATTENTION_KINDS });
     // The job succeeded at 14:50, after the newest item stamp (14:40). The other principal's 14:59 run doesn't count.
-    expect(data(o.sections.attention)).toEqual({ items: ITEMS, limit: 20, checkedAt: "2026-11-04T14:50:00Z", emailUnchecked: false });
+    expect(data(o.sections.attention)).toEqual({
+      items: ITEMS,
+      limit: 20,
+      checkedAt: "2026-11-04T14:50:00Z",
+      emailUnchecked: false,
+      hasMore: false,
+      hiddenEmail: 0,
+      emailScreen: "none",
+      ddtextCheckedAt: null,
+      // The settings row here has no P5a columns: exec_attention_feedback isn't there either (ui-5).
+      feedbackAvailable: false
+    });
   });
 
   it("keeps the item stamps when they are newer than the last job success", async () => {
@@ -676,6 +700,7 @@ describe("getOverview: a full read", () => {
       kinds: [
         { kind: "exec.dd-attention", lastSuccessAt: "2026-11-04T14:50:00Z", dead24h: 1 },
         { kind: "exec.purge", lastSuccessAt: "2026-11-04T08:30:00Z", dead24h: 0 },
+        { kind: "exec.ddtext-triage", lastSuccessAt: null, dead24h: 0 },
         { kind: "exec.system-check", lastSuccessAt: "2026-11-04T12:00:00Z", dead24h: 0 }
       ],
       successLookbackHours: 48,
@@ -718,13 +743,14 @@ describe("getOverview: a full read", () => {
     const s = data((await getOverview(principal, NOW)).sections.system);
     expect(s.kinds).toEqual([
       { kind: "exec.dd-attention", lastSuccessAt: null, dead24h: 0 },
-      { kind: "exec.purge", lastSuccessAt: null, dead24h: 0 }
+      { kind: "exec.purge", lastSuccessAt: null, dead24h: 0 },
+      { kind: "exec.ddtext-triage", lastSuccessAt: null, dead24h: 0 }
     ]);
     expect([s.dead24h, s.queued, s.due, s.oldestDueAt]).toEqual([0, 0, 0, null]);
   });
 
   it("tracks the kinds the handlers really use", () => {
-    expect(TRACKED_JOB_KINDS).toEqual([DD_ATTENTION_JOB_KIND, PURGE_JOB_KIND]);
+    expect(TRACKED_JOB_KINDS).toEqual([DD_ATTENTION_JOB_KIND, PURGE_JOB_KIND, DDTEXT_JOB_KIND]);
   });
 
   it("never runs the attention producers on page load", async () => {
@@ -806,7 +832,7 @@ describe("getOverview: failures stay in their sections", () => {
   });
 
   it("the attention list or its refresh time failing fails the feed", async () => {
-    vi.mocked(listAttention).mockRejectedValue(new Error("exec_attention_items read failed: relation does not exist"));
+    vi.mocked(listScreenedAttention).mockRejectedValue(new Error("exec_attention_items read failed: relation does not exist"));
     expect((await getOverview(principal, NOW)).sections.attention.ok).toBe(false);
     wireAll();
     vi.mocked(lastAttentionRefresh).mockRejectedValue(new Error("exec_attention_items read failed: timeout"));
@@ -884,7 +910,7 @@ describe("getOverview: failures stay in their sections", () => {
     const controller = new AbortController();
     const timeout = vi.spyOn(AbortSignal, "timeout").mockReturnValue(controller.signal);
     vi.mocked(listOpenTasks).mockImplementation(() => new Promise<DdTask[]>(() => {}));
-    vi.mocked(listAttention).mockImplementation(() => new Promise<AttentionItem[]>(() => {}));
+    vi.mocked(listScreenedAttention).mockImplementation(() => new Promise<ScreenedAttentionPage>(() => {}));
     const pending = getOverview(principal, NOW);
     // Let every read that does answer settle; then the deadline passes.
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -895,10 +921,91 @@ describe("getOverview: failures stay in their sections", () => {
     expect(tilesOf(o).openOverdue.ok).toBe(false);
     expect(o.sections.deadlines.ok).toBe(false);
     expect(o.sections.projects.ok).toBe(false);
-    // listAttention takes no signal; the page stops waiting for it anyway.
+    // The feed read gets the deadline's signal, and the page stops waiting for it anyway.
+    expect(listScreenedAttention).toHaveBeenCalledWith(principal, { limit: 20 }, { now: NOW, signal: controller.signal });
     expect(o.sections.attention.ok).toBe(false);
     expect(o.sections.approvals.ok).toBe(true);
     expect(logged()).toContain("[exec-overview] open tasks read failed: exec overview: reads took longer than 15 s");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P5a test 20: the screened feed, its new fields, and DD-only freshness
+// ---------------------------------------------------------------------------
+
+describe("getOverview: the Needs Attention card on the screened accessor (P5a test 20)", () => {
+  const minutesAgo = (m: number) => new Date(NOW.getTime() - m * 60_000).toISOString();
+  const ddtextOn = () =>
+    vi.mocked(loadEmailGate).mockResolvedValue({ kind: "off", settings: { principalId: principal.id, ...DEFAULT_SETTINGS, mutedChannelIds: [], ddtextEnabled: true, ddtextSchemaReady: true } });
+
+  it("passes hasMore, hiddenEmail and emailScreen through; emailUnchecked follows an unavailable screen", async () => {
+    vi.mocked(listScreenedAttention).mockResolvedValue({ items: ITEMS, nextCursor: "next.cursor", hiddenEmail: 3, emailScreen: "unavailable" });
+    const a = data((await getOverview(principal, NOW)).sections.attention);
+    expect(a).toMatchObject({ hasMore: true, hiddenEmail: 3, emailScreen: "unavailable", emailUnchecked: true, limit: 20 });
+    expect(a.items.map((i) => i.version)).toEqual([ITEMS[0].version, ITEMS[1].version]);
+  });
+
+  it("offers feedback only while the P5a migration is applied; an unreadable settings row leaves it on (ui-5)", async () => {
+    expect(data((await getOverview(principal, NOW)).sections.attention).feedbackAvailable).toBe(false);
+    ddtextOn();
+    expect(data((await getOverview(principal, NOW)).sections.attention)).not.toHaveProperty("feedbackAvailable");
+    vi.mocked(loadEmailGate).mockRejectedValue(new Error("settings down"));
+    expect(data((await getOverview(principal, NOW)).sections.attention)).not.toHaveProperty("feedbackAvailable");
+  });
+
+  it("tracks exec.ddtext-triage on the System card", async () => {
+    const kinds = data((await getOverview(principal, NOW)).sections.system).kinds.map((k) => k.kind);
+    expect(kinds.slice(0, 3)).toEqual(["exec.dd-attention", "exec.purge", "exec.ddtext-triage"]);
+  });
+
+  it("DD text checked: read only while triage is on, passed through, failing soft to null", async () => {
+    expect(data((await getOverview(principal, NOW)).sections.attention).ddtextCheckedAt).toBeNull();
+    expect(ddtextLastRunAt).not.toHaveBeenCalled();
+    ddtextOn();
+    vi.mocked(ddtextLastRunAt).mockResolvedValue(minutesAgo(4));
+    expect(data((await getOverview(principal, NOW)).sections.attention).ddtextCheckedAt).toBe(minutesAgo(4));
+    expect(ddtextLastRunAt).toHaveBeenCalledWith(principal, { signal: expect.any(AbortSignal) });
+    vi.mocked(ddtextLastRunAt).mockRejectedValue(new Error("exec_sync_state read failed"));
+    const o = await getOverview(principal, NOW);
+    expect(o.sections.attention.ok).toBe(true);
+    expect(data(o.sections.attention).ddtextCheckedAt).toBeNull();
+  });
+
+  describe("a dead exec.dd-attention while DD text triage keeps stamping (a-correct-16, a-build-14, M32)", () => {
+    beforeEach(() => {
+      // The DD refresh last succeeded 3 hours ago and its rows were last seen then; a ddtext row was seen 2 minutes ago.
+      jobs.rows = [job({ id: 1, kind: "exec.dd-attention", status: "succeeded", finished_at: minutesAgo(180) })];
+      vi.mocked(lastAttentionRefresh).mockImplementation(async (_p, _source, opts) => (opts?.kinds ? minutesAgo(180) : minutesAgo(2)));
+      ddtextOn();
+      vi.mocked(ddtextLastRunAt).mockResolvedValue(minutesAgo(2));
+    });
+
+    it("the card's check time is the DD pass's own (3 hours ago), never the DD text stamps", async () => {
+      const a = data((await getOverview(principal, NOW)).sections.attention);
+      expect(a.checkedAt).toBe(minutesAgo(180));
+      expect(a.ddtextCheckedAt).toBe(minutesAgo(2));
+      expect(vi.mocked(lastAttentionRefresh).mock.calls.filter((c) => c[1] === "dd")).toEqual([[principal, "dd", { kinds: DD_ATTENTION_KINDS }]]);
+    });
+
+    it("so the card still says the refresh may be behind", async () => {
+      const o = await getOverview(principal, NOW);
+      const html = renderToStaticMarkup(createElement(AttentionSection, { attention: o.sections.attention, tz: "America/New_York", now: o.generatedAt }));
+      expect(html.replace(/<[^>]*>/g, "")).toContain("The refresh may be behind.");
+    });
+
+    it("the full feed page computes the same values (getAttentionFreshness)", async () => {
+      const a = data((await getOverview(principal, NOW)).sections.attention);
+      const f = await getAttentionFreshness(principal, NOW);
+      expect(f).toEqual({ ok: true, data: { checkedAt: a.checkedAt, ddtextCheckedAt: a.ddtextCheckedAt } });
+      expect(vi.mocked(lastAttentionRefresh).mock.calls.filter((c) => c[1] === "dd").every((c) => c[2]?.kinds === DD_ATTENTION_KINDS)).toBe(true);
+    });
+  });
+
+  it("getAttentionFreshness agrees with the card in the ordinary case too, and fails closed", async () => {
+    const a = data((await getOverview(principal, NOW)).sections.attention);
+    expect(await getAttentionFreshness(principal, NOW)).toEqual({ ok: true, data: { checkedAt: a.checkedAt, ddtextCheckedAt: null } });
+    vi.mocked(lastAttentionRefresh).mockRejectedValue(new Error("exec_attention_items read failed"));
+    expect(await getAttentionFreshness(principal, NOW)).toEqual({ ok: false, error: "unavailable" });
   });
 });
 

@@ -84,6 +84,12 @@ export interface ExecSettings {
    * ahead of its hand-applied migration, so every drafts path skips (L1).
    */
   draftsSchemaReady: boolean;
+  /** exec_settings.ddtext_enabled (P5a, A5). DD text triage runs only when this and ddtextSchemaReady hold. */
+  ddtextEnabled: boolean;
+  /** exec_settings.retention_days_ddtext (P5a, A5), default 90. */
+  retentionDaysDdtext: number;
+  /** The P5a migration is applied: the settings read found its columns, so exec_attention_feedback and exec_ddtext_* exist too. */
+  ddtextSchemaReady: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -199,7 +205,7 @@ export interface SourceRef {
 // LLM
 // ---------------------------------------------------------------------------
 
-export type ExecLlmFeature = "chat" | "draft" | "brief" | "triage" | "digest" | "voice" | "spike";
+export type ExecLlmFeature = "chat" | "draft" | "brief" | "triage" | "digest" | "voice" | "spike" | "ddtext";
 export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
 
 // ---------------------------------------------------------------------------

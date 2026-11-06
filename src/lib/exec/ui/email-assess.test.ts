@@ -30,7 +30,8 @@ vi.mock("@/lib/exec/sync-state", async (importOriginal) => ({
 import * as routeModule from "@/app/api/exec/email/threads/[threadId]/assess/route";
 import { requireExecPrincipal } from "@/lib/exec/access";
 import { withAudit } from "@/lib/exec/audit";
-import { ASSESS_ACTION, ASSESS_LIMIT, ASSESS_ROUTE, assessThread, isSameOriginRequest } from "@/lib/exec/email-assess";
+import { ASSESS_ACTION, ASSESS_LIMIT, ASSESS_ROUTE, assessThread } from "@/lib/exec/email-assess";
+import { isSameOriginRequest } from "@/lib/exec/http";
 import { getEmailThread } from "@/lib/exec/email-store";
 import type { ExecEmailThread } from "@/lib/exec/email-types";
 import { loadEmailGate } from "@/lib/exec/email-view";
@@ -43,9 +44,12 @@ import { AuditUnavailableError, type ExecPrincipal, type ExecSettings } from "@/
 import { ruleFromRow } from "@/lib/restricted-senders";
 
 // POST /api/exec/email/threads/:id/assess (contract §3.14, coherence-21,
-// §5 F "every status"): the owner gate with the step-up, same origin, the id
-// shape, email on, a stored row he may see in an assessable state, the rate
-// limit, then the audit row and one forced, deduped triage job.
+// §5 F "every status"; P5a K9, test 21b): the route file runs the owner gate
+// with the step-up, same origin (403 forbidden) and the id shape; then
+// assessThread(principal, threadId, now) checks email on, a stored row he may
+// see in an assessable state, the rate limit (http.ts's rateLimit over the
+// audit log: 429 rate_limited with retryAfterSeconds + Retry-After, 503 when
+// it can't count), then the audit row and one forced, deduped triage job.
 
 const NOW = new Date("2026-11-04T15:00:30Z");
 const MINUTE = Math.floor(NOW.getTime() / 60_000);
@@ -70,23 +74,30 @@ const RESTRICTED = screenHashesFor({ all: [{ from: "x@restricted.example", to: [
 const row = (over: Partial<ExecEmailThread> = {}) =>
   ({ threadId: "t1", accountId: "acc_his", state: "filtered", screenHashes: CLEAN, screenTruncated: false, screenedPolicyHash: H, ...over }) as ExecEmailThread;
 
+// The rate limit's one read (RATE_BUCKETS.assess.nthNewestAt): the ASSESS_LIMIT-th
+// newest email.assess audit row in the window, if there is one.
 interface CountQuery {
   table: string;
+  columns: string | null;
   filters: [string, string, unknown][];
-  options: unknown;
+  order: [string, unknown] | null;
+  range: [number, number] | null;
 }
 let countQueries: CountQuery[];
-let countResult: { count: number | null; error: { message: string } | null };
+let countResult: { data: { created_at: string }[] | null; error: { message: string } | null };
 
 function fakeAdmin() {
   return {
     from(table: string) {
-      const q: CountQuery = { table, filters: [], options: null };
+      const q: CountQuery = { table, columns: null, filters: [], order: null, range: null };
       countQueries.push(q);
       const b = {
-        select: (_cols: string, options: unknown) => ((q.options = options), b),
+        select: (cols: string) => ((q.columns = cols), b),
         eq: (c: string, v: unknown) => (q.filters.push(["eq", c, v]), b),
         gte: (c: string, v: unknown) => (q.filters.push(["gte", c, v]), b),
+        in: (c: string, v: unknown) => (q.filters.push(["in", c, v]), b),
+        order: (c: string, o: unknown) => ((q.order = [c, o]), b),
+        range: (from: number, to: number) => ((q.range = [from, to]), b),
         then: <A, B>(ok?: (v: unknown) => A, bad?: (e: unknown) => B) => Promise.resolve(countResult).then(ok, bad)
       };
       return b;
@@ -99,7 +110,7 @@ const request = (headers: Record<string, string> = { "sec-fetch-site": "same-ori
 
 beforeEach(() => {
   countQueries = [];
-  countResult = { count: 3, error: null };
+  countResult = { data: [], error: null };
   vi.mocked(getSupabaseAdmin).mockReturnValue(fakeAdmin() as unknown as SupabaseClient);
   vi.mocked(requireExecPrincipal).mockResolvedValue({ ok: true, principal });
   vi.mocked(loadEmailGate).mockResolvedValue({ kind: "on", settings, pinned: ["acc_his"] });
@@ -126,11 +137,13 @@ async function status(res: Promise<NextResponse>): Promise<[number, unknown]> {
   return [r.status, await r.json()];
 }
 
-describe("assess: refusals", () => {
-  it("passes the gate's own answer through (404, 401, 503), with the step-up asked for", async () => {
+const post = (req: Request, threadId = "t1") => routeModule.POST(req, { params: { threadId } });
+
+describe("assess: the route file's own checks (K9: gate, then same-origin, then the id)", () => {
+  it("passes the gate's own answer through (404, 401, 503), with the step-up asked for, and calls nothing else", async () => {
     for (const code of [404, 401, 503] as const) {
       vi.mocked(requireExecPrincipal).mockResolvedValue({ ok: false, response: NextResponse.json({ error: "x" }, { status: code }) });
-      expect((await assessThread(request(), "t1", NOW)).status).toBe(code);
+      expect((await post(request({ "sec-fetch-site": "cross-site" }), "../bad")).status).toBe(code);
     }
     expect(requireExecPrincipal).toHaveBeenCalledWith(expect.any(Request), ASSESS_ROUTE, { requireStrongSignIn: true });
     expect(ASSESS_ROUTE).toBe("POST /api/exec/email/threads/:id/assess");
@@ -138,7 +151,7 @@ describe("assess: refusals", () => {
     expect(enqueueJob).not.toHaveBeenCalled();
   });
 
-  it("refuses another site (403) before reading anything", async () => {
+  it("refuses another site (403 forbidden, was cross_origin) before reading anything, the id included", async () => {
     const headerSets: Record<string, string>[] = [
       { "sec-fetch-site": "cross-site" },
       { "sec-fetch-site": "same-site" },
@@ -148,21 +161,42 @@ describe("assess: refusals", () => {
       { origin: "null", host: "x" }
     ];
     for (const headers of headerSets) {
-      expect(await status(assessThread(request(headers), "t1", NOW))).toEqual([403, { error: "cross_origin" }]);
+      const res = await post(request(headers), "../bad");
+      expect([res.status, await res.json()]).toEqual([403, { error: "forbidden" }]);
+      expect(res.headers.get("cache-control")).toBe("no-store");
     }
     expect(loadEmailGate).not.toHaveBeenCalled();
   });
 
-  it("refuses a malformed thread id (400)", async () => {
+  it("refuses a malformed thread id (400) after the same-origin check, before anything is read", async () => {
     for (const id of ["", "../x", "a/b", "t 1", "x".repeat(201)]) {
-      expect(await status(assessThread(request(), id, NOW))).toEqual([400, { error: "bad_thread_id" }]);
+      const res = await post(request(), id);
+      expect([res.status, await res.json()]).toEqual([400, { error: "bad_thread_id" }]);
     }
+    expect(loadEmailGate).not.toHaveBeenCalled();
+  });
+
+  it("then hands the gate's principal and the id to assessThread", async () => {
+    const res = await post(request(), "t1");
+    expect(res.status).toBe(202);
+    expect(vi.mocked(requireExecPrincipal).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(loadEmailGate).mock.invocationCallOrder[0]);
+    expect(loadEmailGate).toHaveBeenCalledWith(principal);
+    expect(withAudit).toHaveBeenCalledWith(principal, expect.objectContaining({ target: "exec_email_threads:t1" }), expect.any(Function));
+  });
+});
+
+describe("assess: refusals", () => {
+  it("assessThread still refuses a malformed thread id (400) on its own", async () => {
+    for (const id of ["", "../x", "a/b", "t 1", "x".repeat(201)]) {
+      expect(await status(assessThread(principal, id, NOW))).toEqual([400, { error: "bad_thread_id" }]);
+    }
+    expect(loadEmailGate).not.toHaveBeenCalled();
   });
 
   it("404s while email is off, not installed or unpinned", async () => {
     for (const kind of ["off", "no_pin"] as const) {
       vi.mocked(loadEmailGate).mockResolvedValue({ kind, settings });
-      expect(await status(assessThread(request(), "t1", NOW))).toEqual([404, { error: "email_off" }]);
+      expect(await status(assessThread(principal, "t1", NOW))).toEqual([404, { error: "email_off" }]);
     }
     expect(getEmailThread).not.toHaveBeenCalled();
   });
@@ -170,78 +204,94 @@ describe("assess: refusals", () => {
   it("404s for no row, a tombstone, a gone row, or a row the screen now catches", async () => {
     for (const r of [null, row({ state: "restricted_hidden" }), row({ state: "gone" }), row({ screenHashes: RESTRICTED }), row({ screenTruncated: true, screenedPolicyHash: "0".repeat(64) })]) {
       vi.mocked(getEmailThread).mockResolvedValue(r);
-      expect(await status(assessThread(request(), "t1", NOW))).toEqual([404, { error: "not_found" }]);
+      expect(await status(assessThread(principal, "t1", NOW))).toEqual([404, { error: "not_found" }]);
     }
     expect(enqueueJob).not.toHaveBeenCalled();
   });
 
   it("409s for a thread that was assessed already", async () => {
     vi.mocked(getEmailThread).mockResolvedValue(row({ state: "triaged" }));
-    expect(await status(assessThread(request(), "t1", NOW))).toEqual([409, { error: "not_assessable", state: "triaged" }]);
+    expect(await status(assessThread(principal, "t1", NOW))).toEqual([409, { error: "not_assessable", state: "triaged" }]);
     expect(enqueueJob).not.toHaveBeenCalled();
   });
 
   it("409s, queuing nothing, for a thread on a mailbox triage won't read: a problem account, or one no longer pinned (ui-2)", async () => {
     vi.mocked(getSyncState).mockResolvedValue(accountsState([{ accountId: "acc_his", reason: "not_found" }]) as never);
-    expect(await status(assessThread(request(), "t1", NOW))).toEqual([409, { error: "account_unusable" }]);
+    expect(await status(assessThread(principal, "t1", NOW))).toEqual([409, { error: "account_unusable" }]);
     expect(getSyncState).toHaveBeenCalledWith(principal, "mail", "accounts", expect.any(Function));
     vi.mocked(getSyncState).mockResolvedValue(null);
     vi.mocked(getEmailThread).mockResolvedValue(row({ accountId: "acc_old" }));
-    expect(await status(assessThread(request(), "t1", NOW))).toEqual([409, { error: "account_unusable" }]);
+    expect(await status(assessThread(principal, "t1", NOW))).toEqual([409, { error: "account_unusable" }]);
     expect(withAudit).not.toHaveBeenCalled();
     expect(enqueueJob).not.toHaveBeenCalled();
     // A problem on some other account doesn't stop it.
     vi.mocked(getEmailThread).mockResolvedValue(row());
     vi.mocked(getSyncState).mockResolvedValue(accountsState([{ accountId: "acc_two", reason: "not_found" }]) as never);
-    expect((await assessThread(request(), "t1", NOW)).status).toBe(202);
+    expect((await assessThread(principal, "t1", NOW)).status).toBe(202);
   });
 
-  it("429s past 20 in 10 minutes, counted from his audit rows", async () => {
-    countResult = { count: ASSESS_LIMIT, error: null };
-    expect(await status(assessThread(request(), "t1", NOW))).toEqual([429, { error: "rate_limited" }]);
+  it("429s past 20 in 10 minutes, counted from his audit rows, with retryAfterSeconds and Retry-After", async () => {
+    // The 20th newest assessment was 7 minutes ago: it leaves the window in 3 minutes.
+    countResult = { data: [{ created_at: "2026-11-04T14:53:30.000Z" }], error: null };
+    const res = await assessThread(principal, "t1", NOW);
+    expect([res.status, await res.json()]).toEqual([429, { error: "rate_limited", retryAfterSeconds: 180 }]);
+    expect(res.headers.get("retry-after")).toBe("180");
+    expect(res.headers.get("cache-control")).toBe("no-store");
     expect(countQueries).toEqual([
       {
         table: "exec_audit_log",
-        options: { count: "exact", head: true },
+        columns: "created_at",
         filters: [
           ["eq", "principal_id", "ep_owner"],
-          ["eq", "action", ASSESS_ACTION],
-          ["gte", "created_at", "2026-11-04T14:50:30.000Z"]
-        ]
+          ["gte", "created_at", "2026-11-04T14:50:30.000Z"],
+          ["in", "action", [ASSESS_ACTION]]
+        ],
+        order: ["created_at", { ascending: false }],
+        range: [ASSESS_LIMIT - 1, ASSESS_LIMIT - 1]
       }
     ]);
     expect(withAudit).not.toHaveBeenCalled();
   });
 
+  it("checks the limit after the state and mailbox checks and before the audit", async () => {
+    countResult = { data: [{ created_at: "2026-11-04T14:59:00.000Z" }], error: null };
+    vi.mocked(getEmailThread).mockResolvedValue(row({ state: "triaged" }));
+    expect((await assessThread(principal, "t1", NOW)).status).toBe(409);
+    expect(countQueries).toEqual([]);
+    vi.mocked(getEmailThread).mockResolvedValue(row());
+    expect((await assessThread(principal, "t1", NOW)).status).toBe(429);
+    expect(withAudit).not.toHaveBeenCalled();
+  });
+
   it("503s, queuing nothing, when the mailbox state can't be read (it can't tell whether triage would run)", async () => {
     vi.mocked(getSyncState).mockRejectedValue(new Error("exec_sync_state read failed"));
-    expect(await status(assessThread(request(), "t1", NOW))).toEqual([503, { error: "unavailable" }]);
+    expect(await status(assessThread(principal, "t1", NOW))).toEqual([503, { error: "unavailable" }]);
     expect(enqueueJob).not.toHaveBeenCalled();
   });
 
   it("503s, queuing nothing, when the count, the rules, the row or the settings can't be read", async () => {
     const breakers = [
-      () => (countResult = { count: null, error: { message: "timeout" } }),
+      () => (countResult = { data: null, error: { message: "timeout" } }),
       () => vi.mocked(loadScreeningPolicy).mockRejectedValue(new Error("rules unavailable")),
       () => vi.mocked(getEmailThread).mockRejectedValue(new Error("read failed")),
       () => vi.mocked(loadEmailGate).mockRejectedValue(new Error("settings read failed"))
     ];
     for (const breakIt of breakers) {
       breakIt();
-      expect(await status(assessThread(request(), "t1", NOW))).toEqual([503, { error: "unavailable" }]);
+      expect(await status(assessThread(principal, "t1", NOW))).toEqual([503, { error: "unavailable" }]);
     }
     expect(enqueueJob).not.toHaveBeenCalled();
   });
 
   it("503s and queues nothing when the audit row can't be written", async () => {
     vi.mocked(withAudit).mockRejectedValue(new AuditUnavailableError("audit log unavailable"));
-    expect(await status(assessThread(request(), "t1", NOW))).toEqual([503, { error: "audit_unavailable" }]);
+    expect(await status(assessThread(principal, "t1", NOW))).toEqual([503, { error: "audit_unavailable" }]);
     expect(enqueueJob).not.toHaveBeenCalled();
   });
 
   it("503s when the enqueue fails", async () => {
     vi.mocked(enqueueJob).mockRejectedValue(new Error("exec_jobs enqueue failed"));
-    expect(await status(assessThread(request(), "t1", NOW))).toEqual([503, { error: "unavailable" }]);
+    expect(await status(assessThread(principal, "t1", NOW))).toEqual([503, { error: "unavailable" }]);
   });
 });
 
@@ -249,7 +299,7 @@ describe("assess: accepted", () => {
   it("audits first, then queues one forced interactive triage keyed to the minute (202)", async () => {
     for (const state of ["filtered", "triage_failed", "deferred_budget"] as const) {
       vi.mocked(getEmailThread).mockResolvedValue(row({ state }));
-      expect(await status(assessThread(request(), "t1", NOW))).toEqual([202, { queued: true, duplicate: false }]);
+      expect(await status(assessThread(principal, "t1", NOW))).toEqual([202, { queued: true, duplicate: false }]);
     }
     expect(withAudit).toHaveBeenCalledWith(principal, { actor: "owner", action: "email.assess", target: "exec_email_threads:t1", input: { threadId: "t1" } }, expect.any(Function));
     expect(enqueueJob).toHaveBeenCalledWith({
@@ -265,12 +315,12 @@ describe("assess: accepted", () => {
 
   it("says a double click within the minute queued nothing new", async () => {
     vi.mocked(enqueueJob).mockResolvedValue({ enqueued: false, id: null });
-    expect(await status(assessThread(request(), "t1", NOW))).toEqual([202, { queued: true, duplicate: true }]);
+    expect(await status(assessThread(principal, "t1", NOW))).toEqual([202, { queued: true, duplicate: true }]);
   });
 
-  it("accepts the Origin check behind a proxy when Sec-Fetch-Site is absent", async () => {
-    expect((await assessThread(request({ origin: "https://operations.scaledai.org", host: "operations.scaledai.org" }), "t1", NOW)).status).toBe(202);
-    expect((await assessThread(request({ origin: "https://operations.scaledai.org", host: "internal:8080", "x-forwarded-host": "operations.scaledai.org" }), "t1", NOW)).status).toBe(202);
+  it("accepts the Origin check behind a proxy when Sec-Fetch-Site is absent (through the route file)", async () => {
+    expect((await post(request({ origin: "https://operations.scaledai.org", host: "operations.scaledai.org" }))).status).toBe(202);
+    expect((await post(request({ origin: "https://operations.scaledai.org", host: "internal:8080", "x-forwarded-host": "operations.scaledai.org" }))).status).toBe(202);
   });
 });
 
@@ -284,7 +334,7 @@ describe("assess: the route file", () => {
   });
 });
 
-describe("isSameOriginRequest", () => {
+describe("isSameOriginRequest (http.ts, the one implementation)", () => {
   const r = (headers: Record<string, string>) => new Request("https://x/", { method: "POST", headers });
   it("trusts Sec-Fetch-Site when the browser sends it", () => {
     expect(isSameOriginRequest(r({ "sec-fetch-site": "same-origin" }))).toBe(true);

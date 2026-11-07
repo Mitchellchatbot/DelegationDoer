@@ -101,18 +101,23 @@ describe("P5a seed: settings (§3.1.2, §3.7.1)", () => {
     expect(SETTINGS_COLUMN_GROUPS.map((g) => ({ key: g.key, columns: [...g.columns] }))).toEqual([
       { key: "email", columns: ["email_enabled"] },
       { key: "drafts", columns: ["drafts_enabled", "send_enabled", "voice_enabled"] },
-      { key: "ddtext", columns: ["ddtext_enabled", "retention_days_ddtext"] }
+      { key: "ddtext", columns: ["ddtext_enabled", "retention_days_ddtext"] },
+      // P5b (bindings AM4): appended.
+      { key: "chat", columns: ["chat_enabled", "ask_ai_uses_exec", "chat_daily_cap_usd"] }
     ]);
   });
 
-  it("SETTINGS_FIELDS holds the six editable fields with the C14 bounds", () => {
+  it("SETTINGS_FIELDS holds the six editable fields with the C14 bounds (and P5b's three, appended)", () => {
     expect(SETTINGS_FIELDS.map(({ key, column, group, kind, min, max }) => ({ key, column, group, kind, min, max }))).toEqual([
       { key: "ddtextEnabled", column: "ddtext_enabled", group: "ddtext", kind: "boolean", min: undefined, max: undefined },
       { key: "retentionDaysEmail", column: "retention_days_email", group: "base", kind: "int", min: 7, max: 730 },
       { key: "retentionDaysDdtext", column: "retention_days_ddtext", group: "ddtext", kind: "int", min: 7, max: 730 },
       { key: "retentionDaysChat", column: "retention_days_chat", group: "base", kind: "int", min: 7, max: 730 },
       { key: "dailyCostCapUsd", column: "daily_cost_cap_usd", group: "base", kind: "money", min: 1, max: 100 },
-      { key: "voiceEnabled", column: "voice_enabled", group: "drafts", kind: "boolean", min: undefined, max: undefined }
+      { key: "voiceEnabled", column: "voice_enabled", group: "drafts", kind: "boolean", min: undefined, max: undefined },
+      { key: "chatEnabled", column: "chat_enabled", group: "chat", kind: "boolean", min: undefined, max: undefined },
+      { key: "askAiUsesExec", column: "ask_ai_uses_exec", group: "chat", kind: "boolean", min: undefined, max: undefined },
+      { key: "chatDailyCapUsd", column: "chat_daily_cap_usd", group: "chat", kind: "money", min: 0, max: 100 }
     ]);
   });
 });
@@ -152,8 +157,8 @@ describe("P5a seed: constants (§3.1.4, §3.3.1, §3.9, §3.11.1, §3.12)", () =
     expect(ddtextScheduledWork.enabled).toBeUndefined();
   });
 
-  it("RATE_BUCKETS registers the four P5a buckets (and loading http.ts runs no stub)", () => {
-    expect(Object.keys(RATE_BUCKETS).sort()).toEqual(["assess", "attention_action", "attention_feedback", "settings_update"]);
+  it("RATE_BUCKETS registers the four P5a buckets and P5b's two (and loading http.ts runs no stub)", () => {
+    expect(Object.keys(RATE_BUCKETS).sort()).toEqual(["assess", "attention_action", "attention_feedback", "chat", "proposal", "settings_update"]);
     for (const def of Object.values(RATE_BUCKETS)) expect(typeof def.nthNewestAt).toBe("function");
   });
 

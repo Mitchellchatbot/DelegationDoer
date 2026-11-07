@@ -952,7 +952,9 @@ const isP4ContentFile = (p: string) =>
   p.startsWith("src/app/(main)/executive/email/drafts/");
 const isP4Handler = (p: string) => /^src\/lib\/exec\/handlers\/(?:draft|voice)-[^/]*\.ts$/.test(p);
 // P5a 9b: the DD text files take the wider DD text vocabulary (P5_VOCAB, below).
-const vocabFor = (p: string): Vocabulary => (isP4ContentFile(p) ? P4_VOCAB : isDdTextFile(p) ? P5_VOCAB : P3_VOCAB);
+// P5b B3: the chat files take the chat words on top of their own vocabulary (P5a's DD text words where 9b already
+// applies, agent/** and the chat route; P3's elsewhere), built below.
+const vocabFor = (p: string): Vocabulary => (isP4ContentFile(p) ? P4_VOCAB : isChatFile(p) ? chatVocabulary(isDdTextFile(p)) : isDdTextFile(p) ? P5_VOCAB : P3_VOCAB);
 
 /** B8: rule 9 over the P4 file class with the P4 vocabulary; the handler-return check covers the P4 handlers. */
 function p4ContentOffenses(file: string, f: MailFacts): string[] {
@@ -1383,9 +1385,10 @@ function payloadOffensesOf(file: string, f: P4Facts): string[] {
 //       content-named value to console.* or notifyOps, and the ddtext job handlers never return one,
 //       under P3's words plus DD text's (detail, comment, note, description, brief, risk, message,
 //       summary, client_email, …): P5_VOCAB.
-//   10  (S4, K3, K29) Only triage/ddtext.ts, handlers/ddtext-triage.ts, agent/** and projects-view.ts
-//       (value names ⊆ {listMeetingBriefRisks}) reference sources/dd-text, in any form but a type-only
-//       import (a type carries no text); nobody takes it whole.
+//   10  (S4, K3, K29) Only triage/ddtext.ts, handlers/ddtext-triage.ts, agent/tools.ts (P5b §3.20 item 1
+//       narrowed P5a's agent/** to that one file) and projects-view.ts (value names ⊆
+//       {listMeetingBriefRisks}) reference sources/dd-text, in any form but a type-only import (a type
+//       carries no text); nobody takes it whole.
 //   11  (S3) Only attention.ts and attention-read.ts name listAttention: every other feed read goes
 //       through the screened accessor.
 //   12  (A4) No exec file names projects_updates_seen_at or the string /api/projects/updates.
@@ -1397,7 +1400,9 @@ function payloadOffensesOf(file: string, f: P4Facts): string[] {
 //   14  (a-correct-1) Only ddtext-store.ts and handlers/purge.ts name exec_ddtext_*; only
 //       attention-feedback.ts names exec_attention_feedback; only settings.ts and principal.ts write
 //       exec_settings; only attention.ts, email-store.ts, handlers/purge.ts and ddtext-store.ts write
-//       exec_attention_items; only drafts-store.ts writes exec_voice_profile. A write is
+//       exec_attention_items; only drafts-store.ts writes exec_voice_profile; only proposals.ts writes the
+//       DD tables tasks and activity_logs (P5b, §0.2 rule 13: the confirmed task and its "created" row
+//       are the one DD write exec code makes; a P5b integrator addition at Area D's request). A write is
 //       .insert/.update/.upsert/.delete called on .from(<table>) (a literal, a const bound to one, or a
 //       local `() => ….from(<table>)` factory).
 //   15  (C25, S5) Only sources/dd.ts and intake-screen.ts name listTaskThreadLinks and
@@ -1430,9 +1435,22 @@ const isDdTextFile = (p: string) =>
     p.startsWith("src/lib/exec/agent/") ||
     p.startsWith("src/app/api/exec/chat/"));
 const isDdtextHandler = (p: string) => /^src\/lib\/exec\/handlers\/ddtext[^/]*\.ts$/.test(p);
+// P5b B3, built on first use (CHAT_WORDS is declared with the P5b rules further down).
+const chatVocabs = new Map<boolean, Vocabulary>();
+function chatVocabulary(ddText: boolean): Vocabulary {
+  let v = chatVocabs.get(ddText);
+  if (!v) {
+    const base = ddText ? P5_VOCAB : P3_VOCAB;
+    v = { words: new Set([...base.words, ...CHAT_WORDS]), names: base.names };
+    chatVocabs.set(ddText, v);
+  }
+  return v;
+}
 
 const DD_TEXT_MODULE = "src/lib/exec/sources/dd-text";
 const DD_TEXT_IMPORTERS: ReadonlySet<string> = new Set(["src/lib/exec/triage/ddtext.ts", "src/lib/exec/handlers/ddtext-triage.ts"]);
+// P5b §3.20 item 1: the one agent/** file that reads DD text.
+const AGENT_DD_TEXT_IMPORTER = "src/lib/exec/agent/tools.ts";
 const PROJECTS_VIEW_FILE = "src/lib/exec/projects-view.ts";
 const PROJECTS_VIEW_DD_TEXT_NAMES: ReadonlySet<string> = new Set(["listMeetingBriefRisks"]);
 const LIST_ATTENTION_FILES: ReadonlySet<string> = new Set(["src/lib/exec/attention.ts", "src/lib/exec/attention-read.ts"]);
@@ -1456,6 +1474,11 @@ const TABLE_WRITERS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
     new Set(["src/lib/exec/attention.ts", "src/lib/exec/email-store.ts", "src/lib/exec/handlers/purge.ts", "src/lib/exec/ddtext-store.ts"])
   ],
   ["exec_voice_profile", new Set(["src/lib/exec/drafts-store.ts"])]
+]);
+/** P5b (§0.2 rule 13): DD tables exec code may write, and the one exec file that writes each (DD's own code is out of scope). */
+const EXEC_DD_TABLE_WRITERS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ["tasks", new Set(["src/lib/exec/proposals.ts"])],
+  ["activity_logs", new Set(["src/lib/exec/proposals.ts"])]
 ]);
 const PROJECTS_UPDATES_TEXT = /projects_updates_seen_at|\/api\/projects\/updates/;
 const CLIENT_SAFE_MODULES = [
@@ -1641,7 +1664,7 @@ function ddTextImportOffenses(file: string, f: P5Facts): string[] {
       out.push(`${file}:${r.line}: takes sources/dd-text whole`);
       continue;
     }
-    if (DD_TEXT_IMPORTERS.has(file) || file.startsWith("src/lib/exec/agent/")) continue;
+    if (DD_TEXT_IMPORTERS.has(file) || file === AGENT_DD_TEXT_IMPORTER) continue;
     if (file === PROJECTS_VIEW_FILE) {
       for (const name of r.names) if (!PROJECTS_VIEW_DD_TEXT_NAMES.has(name)) out.push(`${file}:${r.line}: imports ${name} from sources/dd-text`);
       continue;
@@ -1692,7 +1715,7 @@ function tableOffenses(file: string, f: P5Facts): string[] {
     if (FEEDBACK_TABLE_TEXT.test(t.text) && !FEEDBACK_TABLE_FILES.has(file)) out.push(`${file}:${t.line}: names ${JSON.stringify(t.text)}`);
   }
   for (const w of f.writes) {
-    const writers = TABLE_WRITERS.get(w.table);
+    const writers = TABLE_WRITERS.get(w.table) ?? (isExecCode(file) ? EXEC_DD_TABLE_WRITERS.get(w.table) : undefined);
     if (writers !== undefined && !writers.has(file)) out.push(`${file}:${w.line}: ${w.method}s ${w.table}`);
   }
   return out;
@@ -1727,6 +1750,279 @@ function serverOnlyChain(start: string, startFacts: P5Facts, factsByFile: Readon
 function moduleIndex(files: Iterable<string>): Map<string, string> {
   const out = new Map<string, string>();
   for (const file of files) out.set(stripExt(file).toLowerCase(), file);
+  return out;
+}
+
+// --- P5b rules (P5b contract §3.20; Area B owns this section, other areas request additions) -----
+//
+//   B1  (item 1) Rule 10 above, narrowed: among agent/** files only agent/tools.ts reads DD text.
+//       agent/dd-text.ts and agent/untrusted.ts must not exist (one reader, one wrapping module).
+//   B2  (item 2) In exec code, a column list for a DD table names no DD text column, except in
+//       sources/dd-text.ts and sources/dd.ts (dd.ts only for its existing `detail` first-line
+//       parses and `messages` reads; integrator, so mutant M7 is caught). A column list is a string literal, a substitution-free
+//       template, a same-file const of those, or a "+" concatenation of them, passed to P2b's
+//       from("<table>", cols) helper or to .select(cols) right after .from("<table>"). A table that
+//       isn't a literal (or a const of one) isn't checked. Exec tables (exec_*) are outside the rule.
+//   B3  (item 3) The chat files log and alert no content-named value under the chat vocabulary
+//       (P3's words, or P5a's DD text words for agent/** and the chat route where 9b applies, plus
+//       answer, question, args, query, instruction, delta, title, description, label, prompt and
+//       their plurals), and call notifyOps not at all;
+//       llm/binding-alert.ts, the loop's one alert, passes P3's rule 9 with P3's words.
+//   B4  (item 4) src/lib/exec/chat/** is client-safe: it imports chat/**, refs, safe-markdown and
+//       format, plus types (type-only) from exec/types and agent/types; never server-only or supabase.
+//   B5  (item 5) components/exec/chat/** and components/AskAiRouting.tsx import no server module:
+//       agent/* (agent/types type-only aside), chat-store, proposals, access, audit, sources/*, text/*.
+//   B6  (item 6) AIAssistantDrawer.tsx and AskAiRouting.tsx reach exec code only through one
+//       dynamic import of components/exec/chat/ExecChatPanel, and no string in them reads
+//       /executive|exec /i.
+//   B7  (item 7) P3's bans hold for components/AskAiRouting.tsx too (it sits outside exec code).
+//   B8  (item 8, F11) createChatReplyDraft is named only in drafts.ts and agent/tools.ts;
+//       purgeDraftsByIds only in drafts-store.ts, email-store.ts, handlers/email-attention.ts and
+//       agent/turn.ts; P4's request schemas carry no origin, usesPrivateRefs or instructionBy key,
+//       and SaveBody holds only version, seenContentHash and confirmPrivate.
+
+const AGENT_FORBIDDEN_FILES = ["src/lib/exec/agent/dd-text.ts", "src/lib/exec/agent/untrusted.ts"];
+const DD_TEXT_TABLES: ReadonlySet<string> = new Set([
+  "tasks", "activity_logs", "task_messages", "task_handoffs", "task_extensions", "eod_notes", "sod_notes", "client_meetings", "clients", "users"
+]);
+const DD_TEXT_COLUMNS: ReadonlySet<string> = new Set([
+  "description", "detail", "body", "note", "notes", "worked_on", "accomplished", "plan_tomorrow", "blockers", "ideas", "left_where_off",
+  "leads_messaged", "linkedin_comments", "top_priority", "tasks_planned", "reason", "stage", "brief", "summary", "transcript", "messages",
+  "message", "business_information", "seo_brief", "health_summary", "touchpoint_summary"
+]);
+const TEXT_COLUMN_FILES: ReadonlySet<string> = new Set(["src/lib/exec/sources/dd-text.ts", "src/lib/exec/sources/dd.ts"]);
+/** §3.20 item 2: sources/dd.ts is on the allow-list for its EXISTING text reads only (the `detail` first-line parses and
+ *  the `messages` reads); any other DD text column there (e.g. tasks.description, mutant M7) fails like anywhere else. */
+const DD_TS_FILE = "src/lib/exec/sources/dd.ts";
+const DD_TS_TEXT_COLUMNS: ReadonlySet<string> = new Set(["detail", "messages"]);
+const isChatFile = (p: string) =>
+  p.startsWith("src/lib/exec/agent/") ||
+  p.startsWith("src/lib/exec/chat/") ||
+  p === "src/lib/exec/chat-store.ts" ||
+  p === "src/lib/exec/proposals.ts" ||
+  p.startsWith("src/app/api/exec/chat/") ||
+  p.startsWith("src/app/api/exec/conversations/") ||
+  p.startsWith("src/app/api/exec/tasks/") ||
+  p.startsWith("src/components/exec/chat/") ||
+  p.startsWith("src/app/(main)/executive/chat/");
+const CHAT_WORDS = [
+  "answer", "answers", "recommendation", "recommendations", "question", "args", "arguments", "query", "instruction", "delta", "title",
+  "titles", "description", "label", "labels", "prompt"
+];
+const BINDING_ALERT_FILE = "src/lib/exec/llm/binding-alert.ts";
+const CHAT_LIB_DIR = "src/lib/exec/chat/";
+const CHAT_LIB_VALUE_TARGETS: ReadonlySet<string> = new Set(["src/lib/exec/refs", "src/lib/exec/safe-markdown", "src/lib/exec/format"]);
+const CHAT_LIB_TYPE_TARGETS: ReadonlySet<string> = new Set(["src/lib/exec/types", "src/lib/exec/agent/types"]);
+const ASK_AI_ROUTING_FILE = "src/components/AskAiRouting.tsx";
+const DRAWER_FILE = "src/components/AIAssistantDrawer.tsx";
+const CHAT_PANEL_MODULE = "src/components/exec/chat/execchatpanel";
+const isChatComponentFile = (p: string) => p.startsWith("src/components/exec/chat/") || p === ASK_AI_ROUTING_FILE;
+const COMPONENT_SERVER_TARGET = /^src\/lib\/exec\/(?:agent\/|chat-store$|proposals$|access$|audit$|sources\/|text\/)/;
+const DRAWER_WORDING = /executive|exec /i;
+const F_ENTRY_POINTS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ["createChatReplyDraft", new Set(["src/lib/exec/drafts.ts", "src/lib/exec/agent/tools.ts"])],
+  [
+    "purgeDraftsByIds",
+    new Set(["src/lib/exec/drafts-store.ts", "src/lib/exec/email-store.ts", "src/lib/exec/handlers/email-attention.ts", "src/lib/exec/agent/turn.ts"])
+  ]
+]);
+const DRAFTS_FILE = "src/lib/exec/drafts.ts";
+const P4_REQUEST_SCHEMAS = ["CreateDraftBody", "EditDraftBody", "RegenerateBody", "SaveBody", "ReviewBody", "SendBody", "ResolveBody"];
+const SCHEMA_FORBIDDEN_KEYS: ReadonlySet<string> = new Set(["origin", "usesPrivateRefs", "instructionBy"]);
+const SAVE_BODY_KEYS: ReadonlySet<string> = new Set(["version", "seenContentHash", "confirmPrivate"]);
+
+interface P5bFacts {
+  /** Column lists handed to from("<table>", cols) or .from("<table>").select(cols), both resolved to text. */
+  columnLists: { table: string; columns: string[]; line: number }[];
+  /** 1-based lines of every notifyOps call. */
+  notifyOps: number[];
+  /** Every import or re-export with its raw specifier (bare ones have target null). */
+  imports: { spec: string; target: string | null; line: number; typeOnly: boolean; dynamic: boolean }[];
+  /** Strings and JSX text that aren't module specifiers. */
+  strings: { text: string; line: number }[];
+  /** F_ENTRY_POINTS names in code (identifiers and string keys of element access). */
+  entryPoints: { name: string; line: number }[];
+  /** const name → every property key of the object literals in its initializer (drafts.ts's zod bodies). */
+  objectKeys: Map<string, string[]>;
+}
+
+/** The parsed column names of a select list: aliases, JSON paths and embedded resources reduced to the column. */
+function columnNames(list: string): string[] {
+  return list
+    .split(",")
+    .map((c) => c.trim())
+    .filter(Boolean)
+    .map((c) => {
+      const colon = c.indexOf(":");
+      const ref = colon > 0 && !c.slice(0, colon).includes("(") ? c.slice(colon + 1) : c;
+      return ref.split(/->>|->|\(|!/)[0].trim().toLowerCase();
+    })
+    .filter(Boolean);
+}
+
+function analyzeP5b(sf: ts.SourceFile): P5bFacts {
+  const lineOf = (n: ts.Node) => sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1;
+  const facts: P5bFacts = { columnLists: [], notifyOps: [], imports: [], strings: [], entryPoints: [], objectKeys: new Map() };
+  const consts = new Map<string, ts.Expression>();
+  const collect = (n: ts.Node): void => {
+    if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.initializer) consts.set(n.name.text, n.initializer);
+    ts.forEachChild(n, collect);
+  };
+  collect(sf);
+  const textOf = (e: ts.Expression | undefined, depth = 0): string | null => {
+    if (e === undefined || depth > 8) return null;
+    if (ts.isStringLiteral(e) || ts.isNoSubstitutionTemplateLiteral(e)) return e.text;
+    if (ts.isParenthesizedExpression(e)) return textOf(e.expression, depth + 1);
+    if (ts.isAsExpression(e) || ts.isSatisfiesExpression(e)) return textOf(e.expression, depth + 1);
+    if (ts.isIdentifier(e)) return textOf(consts.get(e.text), depth + 1);
+    if (ts.isBinaryExpression(e) && e.operatorToken.kind === ts.SyntaxKind.PlusToken) {
+      const l = textOf(e.left, depth + 1);
+      const r = textOf(e.right, depth + 1);
+      return l === null || r === null ? null : l + r;
+    }
+    return null;
+  };
+  const addImport = (spec: string, node: ts.Node, typeOnly: boolean, dynamic: boolean) => {
+    const abs = resolveSpecifier(sf.fileName, spec);
+    facts.imports.push({ spec, target: abs === null ? null : relPath(stripExt(abs)).toLowerCase(), line: lineOf(node), typeOnly, dynamic });
+  };
+  const isSpecifier = (n: ts.Node): boolean => {
+    const p = n.parent;
+    if (!p) return false;
+    if (ts.isImportDeclaration(p) || ts.isExportDeclaration(p) || ts.isExternalModuleReference(p) || ts.isLiteralTypeNode(p)) return true;
+    return ts.isCallExpression(p) && (p.expression.kind === ts.SyntaxKind.ImportKeyword || (ts.isIdentifier(p.expression) && p.expression.text === "require"));
+  };
+  const visit = (node: ts.Node): void => {
+    if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
+      const clause = node.importClause;
+      const named = clause?.namedBindings && ts.isNamedImports(clause.namedBindings) ? clause.namedBindings.elements : undefined;
+      const typeOnly = !!clause && (clause.isTypeOnly || (!clause.name && named !== undefined && named.length > 0 && named.every((el) => el.isTypeOnly)));
+      addImport(node.moduleSpecifier.text, node, typeOnly, false);
+    } else if (ts.isExportDeclaration(node) && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) {
+      addImport(node.moduleSpecifier.text, node, node.isTypeOnly, false);
+    } else if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument) && ts.isStringLiteral(node.argument.literal)) {
+      addImport(node.argument.literal.text, node, true, false);
+    } else if (ts.isCallExpression(node)) {
+      const callee = node.expression;
+      const [arg] = node.arguments;
+      if ((callee.kind === ts.SyntaxKind.ImportKeyword || (ts.isIdentifier(callee) && callee.text === "require")) && arg && ts.isStringLiteralLike(arg)) {
+        addImport(arg.text, node, false, callee.kind === ts.SyntaxKind.ImportKeyword);
+      }
+      if (logCallee(node) === "notifyOps") facts.notifyOps.push(lineOf(node));
+      // from("<table>", cols): P2b's helper.
+      if (ts.isIdentifier(callee) && callee.text === "from" && node.arguments.length >= 2) {
+        const table = textOf(node.arguments[0]);
+        const cols = textOf(node.arguments[1]);
+        if (table !== null && cols !== null) facts.columnLists.push({ table, columns: columnNames(cols), line: lineOf(node) });
+      }
+      // .from("<table>").select(cols)
+      if (ts.isPropertyAccessExpression(callee) && callee.name.text === "select" && ts.isCallExpression(callee.expression)) {
+        const inner = callee.expression;
+        if (ts.isPropertyAccessExpression(inner.expression) && inner.expression.name.text === "from") {
+          const table = textOf(inner.arguments[0]);
+          const cols = textOf(node.arguments[0]);
+          if (table !== null && cols !== null) facts.columnLists.push({ table, columns: columnNames(cols), line: lineOf(node) });
+        }
+      }
+    }
+    if ((ts.isStringLiteralLike(node) && !isSpecifier(node)) || ts.isJsxText(node)) {
+      const text = node.text.trim();
+      if (text !== "") facts.strings.push({ text, line: lineOf(node) });
+    }
+    if (ts.isTemplateHead(node) || ts.isTemplateMiddle(node) || ts.isTemplateTail(node)) facts.strings.push({ text: node.text, line: lineOf(node) });
+    if (ts.isIdentifier(node) && F_ENTRY_POINTS.has(node.text)) facts.entryPoints.push({ name: node.text, line: lineOf(node) });
+    if (ts.isElementAccessExpression(node) && ts.isStringLiteralLike(node.argumentExpression) && F_ENTRY_POINTS.has(node.argumentExpression.text)) {
+      facts.entryPoints.push({ name: node.argumentExpression.text, line: lineOf(node) });
+    }
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
+      const keys: string[] = [];
+      const walk = (n: ts.Node): void => {
+        if (ts.isObjectLiteralExpression(n)) {
+          for (const p of n.properties) {
+            const key = p.name ? propertyNameText(p.name) : null;
+            if (key !== null) keys.push(key);
+          }
+        }
+        ts.forEachChild(n, walk);
+      };
+      walk(node.initializer);
+      facts.objectKeys.set(node.name.text, keys);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return facts;
+}
+
+/** B2: DD text columns in a DD table's column list, outside the allow-list. */
+function textColumnOffenses(file: string, f: P5bFacts): string[] {
+  if (!isExecCode(file) || (TEXT_COLUMN_FILES.has(file) && file !== DD_TS_FILE)) return [];
+  const out: string[] = [];
+  for (const list of f.columnLists) {
+    if (!DD_TEXT_TABLES.has(list.table)) continue;
+    const text = list.columns.filter((c) => DD_TEXT_COLUMNS.has(c) && !(file === DD_TS_FILE && DD_TS_TEXT_COLUMNS.has(c)));
+    if (text.length > 0) out.push(`${file}:${list.line}: selects ${text.join(", ")} from ${list.table}`);
+  }
+  return out;
+}
+
+/** B3: content in a chat file's logs and alerts (the chat vocabulary), and any notifyOps call in a chat file. */
+function chatContentOffenses(file: string, mail: MailFacts, f: P5bFacts): string[] {
+  if (!isChatFile(file)) return [];
+  return [...mail.contentLogs.map((at) => `${file}:${at}`), ...f.notifyOps.map((line) => `${file}:${line}: calls notifyOps (chat files report through llm/binding-alert.ts)`)];
+}
+
+/** B4: the chat lib's imports. */
+function chatLibOffenses(file: string, p5: P5Facts, f: P5bFacts): string[] {
+  if (!file.startsWith(CHAT_LIB_DIR)) return [];
+  const out: string[] = [];
+  if (p5.serverOnly) out.push(`${file}: imports server-only`);
+  for (const i of f.imports) {
+    if (i.target === null) {
+      if (i.spec === "server-only" || /supabase/i.test(i.spec)) out.push(`${file}:${i.line}: imports ${i.spec}`);
+      continue;
+    }
+    const inLib = i.target.startsWith(CHAT_LIB_DIR);
+    if (inLib || CHAT_LIB_VALUE_TARGETS.has(i.target)) continue;
+    if (i.typeOnly && CHAT_LIB_TYPE_TARGETS.has(i.target)) continue;
+    out.push(`${file}:${i.line}: imports ${i.target}${i.typeOnly ? " (types)" : ""}`);
+  }
+  return out;
+}
+
+/** B5: the chat components' server imports. */
+function chatComponentOffenses(file: string, f: P5bFacts): string[] {
+  if (!isChatComponentFile(file)) return [];
+  return f.imports
+    .filter((i) => i.target !== null && COMPONENT_SERVER_TARGET.test(i.target) && !(i.typeOnly && i.target === "src/lib/exec/agent/types"))
+    .map((i) => `${file}:${i.line}: imports ${i.target}`);
+}
+
+/** B6: the drawer's neutral import and wording. */
+function drawerOffenses(file: string, f: P5bFacts): string[] {
+  if (file !== DRAWER_FILE && file !== ASK_AI_ROUTING_FILE) return [];
+  const out: string[] = [];
+  const exec = f.imports.filter((i) => i.target !== null && (i.target.startsWith("src/lib/exec/") || i.target.startsWith("src/components/exec/")));
+  for (const i of exec) if (!(i.dynamic && i.target === CHAT_PANEL_MODULE)) out.push(`${file}:${i.line}: imports ${i.target} (only the one dynamic ExecChatPanel import may)`);
+  if (exec.filter((i) => i.dynamic).length > 1) out.push(`${file}: more than one dynamic ExecChatPanel import`);
+  for (const s of f.strings) if (DRAWER_WORDING.test(s.text)) out.push(`${file}:${s.line}: shows ${JSON.stringify(s.text.slice(0, 60))}`);
+  return out;
+}
+
+/** B8: Area F's server-only entry points and P4's request schemas. */
+function entryPointOffenses(file: string, f: P5bFacts): string[] {
+  const out = f.entryPoints.filter((e) => !(F_ENTRY_POINTS.get(e.name) ?? new Set()).has(file)).map((e) => `${file}:${e.line}: names ${e.name}`);
+  if (file === DRAFTS_FILE) {
+    for (const name of P4_REQUEST_SCHEMAS) {
+      const keys = f.objectKeys.get(name);
+      if (keys === undefined) {
+        out.push(`${file}: ${name} not found`);
+        continue;
+      }
+      for (const k of keys) if (SCHEMA_FORBIDDEN_KEYS.has(k)) out.push(`${file}: ${name} accepts ${k}`);
+      if (name === "SaveBody") for (const k of keys) if (!SAVE_BODY_KEYS.has(k)) out.push(`${file}: SaveBody accepts ${k}`);
+    }
+  }
   return out;
 }
 
@@ -1774,6 +2070,8 @@ interface FileFacts extends ImportFacts {
   p4: P4Facts;
   /** P5a rules 10-16 */
   p5: P5Facts;
+  /** P5b rules B1-B8 */
+  p5b: P5bFacts;
 }
 
 interface Scan {
@@ -1827,7 +2125,8 @@ function scanTree(probes: ReadonlyMap<string, string>, exportProbes: readonly st
       bidi: bidiLines(sf.text),
       mail: analyzeMail(sf, vocabFor(file)),
       p4: analyzeP4(sf),
-      p5: analyzeP5(sf)
+      p5: analyzeP5(sf),
+      p5b: analyzeP5b(sf)
     });
   }
   const nextConfigPath = path.join(ROOT, NEXT_CONFIG_FILE);
@@ -2812,7 +3111,7 @@ describe("P5a boundary (real source tree)", () => {
     expect(p3Offenses(ddTextContentOffenses)).toEqual([]);
   });
 
-  it("10 sources/dd-text is referenced only by the triage, its handler, agent/** and projects-view (listMeetingBriefRisks only)", () => {
+  it("10 sources/dd-text is referenced only by the triage, its handler, agent/tools.ts and projects-view (listMeetingBriefRisks only)", () => {
     expect(p5Offenses(ddTextImportOffenses)).toEqual([]);
   });
 
@@ -2847,6 +3146,13 @@ describe("P5a boundary (real source tree)", () => {
     expect(factsOf("src/lib/exec/drafts-store.ts").p5.writes.some((w) => w.table === "exec_voice_profile")).toBe(true);
     expect(factsOf("src/lib/exec/attention-feedback.ts").p5.texts.some((t) => t.text === "exec_attention_feedback")).toBe(true);
     expect(p5Offenses(tableOffenses)).toEqual([]);
+  });
+
+  it("14 (P5b, rule 13) the DD tables tasks and activity_logs are written by proposals.ts only", () => {
+    expect(factsOf("src/lib/exec/proposals.ts").p5.writes.map((w) => `${w.method} ${w.table}`)).toEqual(
+      expect.arrayContaining(["insert tasks", "insert activity_logs"])
+    );
+    expect(p5Offenses(tableOffenses).filter((o) => / (tasks|activity_logs)$/.test(o))).toEqual([]);
   });
 
   it("15 only sources/dd.ts and intake-screen.ts name listTaskThreadLinks and listPendingApprovalItems", () => {
@@ -2947,7 +3253,9 @@ describe("P5a boundary detectors (test 21: rules 9b-16 on probes)", () => {
     ["src/lib/exec/triage/ddtext.ts", 'import * as text from "@/lib/exec/sources/dd-text";'],
     ["src/lib/exec/overview.ts", 'const m = await import("./sources/dd-text");'],
     ["src/lib/exec/ddtext-store.ts", 'export { listActivityTextByIds } from "./sources/dd-text";'],
-    ["src/components/exec/X.tsx", 'import { listEarlierCommentText } from "../../lib/exec/sources/dd-text";']
+    ["src/components/exec/X.tsx", 'import { listEarlierCommentText } from "../../lib/exec/sources/dd-text";'],
+    ["src/lib/exec/agent/run.ts", 'import { listTaskTimelineText } from "@/lib/exec/sources/dd-text";'],
+    ["src/lib/exec/agent/turn.ts", 'import { listSubmittedNotesText } from "../sources/dd-text";']
   ])("10 flags %s: %s", (file, code) => {
     expect(ddTextImportOffenses(file, p5At(file, code))).toHaveLength(1);
   });
@@ -3043,6 +3351,18 @@ describe("P5a boundary detectors (test 21: rules 9b-16 on probes)", () => {
     expect(writes("src/lib/exec/overview.ts", 'await admin.from("exec_jobs").update({ status: "queued" });')).toEqual([]);
   });
 
+  it("14 (P5b, rule 13) flags a DD tasks or activity_logs write outside proposals.ts; reads stay allowed", () => {
+    const writes = (file: string, code: string) => tableOffenses(file, p5At(file, code));
+    expect(writes("src/lib/exec/agent/tools.ts", 'await getSupabaseAdmin().from("tasks").insert(row);')).toHaveLength(1);
+    expect(writes("src/lib/exec/chat-store.ts", 'const T = "activity_logs";\nawait admin.from(T).insert({ action: "created" });')).toHaveLength(1);
+    expect(writes("src/lib/exec/handlers/purge.ts", 'await admin.from("tasks").update({ status: "done" }).eq("id", id);')).toHaveLength(1);
+    expect(writes("src/lib/exec/proposals.ts", 'await getSupabaseAdmin().from("tasks").insert(row);')).toEqual([]);
+    expect(writes("src/lib/exec/proposals.ts", 'await getSupabaseAdmin().from("activity_logs").insert(row);')).toEqual([]);
+    expect(writes("src/lib/exec/agent/tools.ts", 'await admin.from("tasks").select("id").eq("id", id);')).toEqual([]);
+    expect(writes("src/app/api/tasks/route.ts", 'await admin.from("tasks").insert(row);')).toEqual([]);
+    expect(writes("src/app/api/exec/chat/route.ts", 'await admin.from("tasks").insert(row);')).toHaveLength(1);
+  });
+
   it("14 flags the P5a tables named outside their modules", () => {
     const named = (file: string, code: string) => tableOffenses(file, p5At(file, code));
     expect(named("src/lib/exec/team.ts", 'await admin.from("exec_ddtext_signals").select("summary");')).toHaveLength(1);
@@ -3078,5 +3398,236 @@ describe("P5a boundary detectors (test 21: rules 9b-16 on probes)", () => {
     expect(chainOf('"use client";\nimport "server-only";')).toEqual(["src/components/exec/settings/Probe.tsx"]);
     expect(p5At("src/components/exec/settings/Probe.tsx", '"use client";\nimport x from "y";').useClient).toBe(true);
     expect(p5At("src/components/exec/settings/Probe.tsx", 'import x from "y";\n"use client";').useClient).toBe(false);
+  });
+});
+
+const p5bFacts = () => [...scan.facts].map(([file, facts]) => [file, facts] as const);
+
+describe("P5b boundary (real source tree; contract §3.20, tests 101-105)", () => {
+  it("knows the chat file class and the client-safe chat lib", () => {
+    for (const p of [
+      "src/lib/exec/agent/tools.ts",
+      "src/lib/exec/agent/run.ts",
+      "src/lib/exec/chat/answer.ts",
+      "src/lib/exec/chat-store.ts",
+      "src/lib/exec/proposals.ts",
+      "src/app/api/exec/chat/route.ts",
+      "src/app/api/exec/conversations/[id]/route.ts",
+      "src/app/api/exec/tasks/proposals/[id]/confirm/route.ts",
+      "src/components/exec/chat/ExecChat.tsx",
+      "src/app/(main)/executive/chat/page.tsx"
+    ]) {
+      expect(isChatFile(p)).toBe(true);
+    }
+    for (const p of ["src/lib/exec/llm/binding-alert.ts", "src/lib/exec/chatter.ts", "src/lib/exec/drafts.ts", "src/app/api/exec/attention/route.ts"]) expect(isChatFile(p)).toBe(false);
+    for (const f of ["src/lib/exec/agent/tools.ts", "src/lib/exec/agent/refs.ts", "src/lib/exec/agent/serialize.ts", "src/lib/exec/agent/tool-defs.ts", "src/lib/exec/agent/resolve.ts"]) {
+      expect(scan.files).toContain(f);
+    }
+  });
+
+  it("101 sources/dd-text is imported by agent/tools.ts and P5a's importers only; agent/dd-text.ts and agent/untrusted.ts don't exist", () => {
+    const refs = factsOf(AGENT_DD_TEXT_IMPORTER).p5.refs.filter((r) => r.target === DD_TEXT_MODULE && !r.typeOnly);
+    expect(refs.length).toBeGreaterThan(0);
+    const importers = [...scan.facts]
+      .filter(([, f]) => f.p5.refs.some((r) => r.target === DD_TEXT_MODULE && !r.typeOnly))
+      .map(([file]) => file)
+      .sort();
+    const allowed = new Set([...DD_TEXT_IMPORTERS, AGENT_DD_TEXT_IMPORTER, PROJECTS_VIEW_FILE]);
+    expect(importers.filter((file) => !allowed.has(file))).toEqual([]);
+    expect(importers).toEqual(expect.arrayContaining([AGENT_DD_TEXT_IMPORTER, PROJECTS_VIEW_FILE]));
+    expect(importers.filter((file) => file.startsWith("src/lib/exec/agent/"))).toEqual([AGENT_DD_TEXT_IMPORTER]);
+    for (const file of AGENT_FORBIDDEN_FILES) expect(existsSync(path.join(ROOT, file))).toBe(false);
+    expect(p5Offenses(ddTextImportOffenses)).toEqual([]);
+  });
+
+  it("102 no exec file outside sources/dd-text.ts and sources/dd.ts selects a DD text column from a DD table", () => {
+    // The detector sees the real reads it allows.
+    expect(factsOf("src/lib/exec/sources/dd-text.ts").p5b.columnLists.some((l) => l.table === "tasks" && l.columns.includes("description"))).toBe(true);
+    expect(factsOf("src/lib/exec/sources/dd.ts").p5b.columnLists.some((l) => l.table === "activity_logs" && l.columns.includes("detail"))).toBe(true);
+    expect(factsOf("src/lib/exec/access.ts").p5b.columnLists.some((l) => l.table === "users")).toBe(true);
+    expect(p5bFacts().flatMap(([file, f]) => textColumnOffenses(file, f.p5b))).toEqual([]);
+  });
+
+  it("103 no chat file logs or alerts content under the chat vocabulary, none calls notifyOps; binding-alert.ts passes P3's rule 9", () => {
+    expect(p5bFacts().flatMap(([file, f]) => chatContentOffenses(file, f.mail, f.p5b))).toEqual([]);
+    const alert = scan.facts.get(BINDING_ALERT_FILE);
+    if (alert) {
+      expect(alert.mail.contentLogs).toEqual([]);
+      expect(analyzeMail(ts.createSourceFile(path.join(ROOT, BINDING_ALERT_FILE), readFileSync(path.join(ROOT, BINDING_ALERT_FILE), "utf8"), ts.ScriptTarget.Latest, true), P3_VOCAB).contentLogs).toEqual([]);
+    }
+  });
+
+  it("104 src/lib/exec/chat/** is client-safe; components/exec/chat/** import no server module; the drawer stays neutral", () => {
+    const lib = p5bFacts().filter(([file]) => file.startsWith(CHAT_LIB_DIR));
+    expect(lib.map(([file]) => file)).toEqual(expect.arrayContaining(["src/lib/exec/chat/copy.ts", "src/lib/exec/chat/view-types.ts"]));
+    expect(lib.flatMap(([file, f]) => chatLibOffenses(file, f.p5, f.p5b))).toEqual([]);
+    expect(p5bFacts().flatMap(([file, f]) => chatComponentOffenses(file, f.p5b))).toEqual([]);
+    expect(scan.files).toContain(DRAWER_FILE);
+    expect(p5bFacts().flatMap(([file, f]) => drawerOffenses(file, f.p5b))).toEqual([]);
+  });
+
+  it("105 P3's bans hold for every new file, AskAiRouting.tsx included; missive-client stays sources/mail.ts's", () => {
+    const routing = scan.facts.get(ASK_AI_ROUTING_FILE);
+    if (routing) {
+      expect(routing.mail.modules.filter((m) => isBannedModule(m.target) || ONLY_IMPORTER.has(m.target))).toEqual([]);
+      expect(routing.mail.bannedSymbols).toEqual([]);
+    }
+    const chat = p5bFacts().filter(([file]) => isChatFile(file));
+    expect(chat.length).toBeGreaterThan(5);
+    expect(chat.flatMap(([file, f]) => [...bannedOffenses(file, f.mail), ...importerOffenses(file, f.mail)])).toEqual([]);
+  });
+
+  it("F11 Area F's entry points are named only where §3.20 item 8 allows; P4's request schemas take no chat keys", () => {
+    expect(factsOf(DRAFTS_FILE).p5b.entryPoints.some((e) => e.name === "createChatReplyDraft")).toBe(true);
+    expect(factsOf(AGENT_DD_TEXT_IMPORTER).p5b.entryPoints.some((e) => e.name === "createChatReplyDraft")).toBe(true);
+    expect(p5bFacts().flatMap(([file, f]) => entryPointOffenses(file, f.p5b))).toEqual([]);
+    expect(p5bFacts().filter(([file]) => file.startsWith("src/app/")).flatMap(([, f]) => f.p5b.entryPoints)).toEqual([]);
+  });
+});
+
+describe("P5b boundary detectors (probes; tests 101-105)", () => {
+  const kindOf = (file: string) => (file.endsWith(".tsx") ? ts.ScriptKind.TSX : /\.[cm]?js$/.test(file) ? ts.ScriptKind.JS : ts.ScriptKind.TS);
+  const sourceAt = (file: string, code: string) => ts.createSourceFile(path.join(ROOT, file), code, ts.ScriptTarget.Latest, true, kindOf(file));
+  const p5bAt = (file: string, code: string) => analyzeP5b(sourceAt(file, code));
+  const p5At = (file: string, code: string) => analyzeP5(sourceAt(file, code));
+  const mailAt = (file: string, code: string) => analyzeMail(sourceAt(file, code), vocabFor(file));
+
+  // 102
+  it.each([
+    ["src/lib/exec/team.ts", 'await from("tasks", "id,description");'],
+    ["src/lib/exec/agent/tools.ts", 'await getSupabaseAdmin().from("activity_logs").select("id, detail");'],
+    ["src/lib/exec/overview.ts", 'const COLS = "id,title," + "notes";\nawait db.from("eod_notes").select(COLS);'],
+    ["src/lib/exec/projects-view.ts", 'await admin.from("client_meetings").select(`id,title,risks:brief->risks`);'],
+    ["src/components/exec/X.tsx", 'await supabase.from("clients").select("id,name,health_summary");'],
+    ["src/lib/exec/proposals.ts", 'const T = "users";\nawait admin.from(T).select("id,note");'],
+    // §3.20 item 2: sources/dd.ts is allow-listed for its existing detail/messages reads only (mutant M7).
+    ["src/lib/exec/sources/dd.ts", 'const TASK_COLS = "id,title,description,status";\nawait from("tasks", TASK_COLS);']
+  ])("102 flags a DD text column in %s: %s", (file, code) => {
+    expect(textColumnOffenses(file, p5bAt(file, code))).toHaveLength(1);
+  });
+
+  it.each([
+    ["src/lib/exec/attention-feedback.ts", 'await admin.from("exec_attention_feedback").select("kind, vote, reason");'],
+    ["src/lib/exec/ddtext-store.ts", 'await admin.from("exec_ddtext_signals").select("id,summary");'],
+    ["src/lib/exec/chat-store.ts", 'await admin.from("exec_task_proposals").select("id,title,description");'],
+    ["src/lib/exec/sources/dd-text.ts", 'await from("tasks", "id,description");'],
+    ["src/lib/exec/sources/dd.ts", 'await from("activity_logs", "task_id,detail,created_at");'],
+    ["src/lib/exec/sources/dd.ts", 'await from("client_meetings", "id,client_id,messages");'],
+    ["src/lib/exec/team.ts", 'await from(table, "id,description");'],
+    ["src/lib/exec/team.ts", 'await from("tasks", "id,title,status");'],
+    ["src/lib/brain-tools.ts", 'await admin.from("tasks").select("id,description");']
+  ])("102 allows %s: %s", (file, code) => {
+    expect(textColumnOffenses(file, p5bAt(file, code))).toEqual([]);
+  });
+
+  // 103
+  it.each([
+    ["src/lib/exec/agent/run.ts", "console.log(question);"],
+    ["src/lib/exec/agent/run.ts", "console.log(`[exec-chat] ${answer.length > 0 ? answer : ''}`);"],
+    ["src/lib/exec/chat-store.ts", "console.warn(row.title);"],
+    ["src/app/api/exec/chat/route.ts", "console.error(err, body.text, args);"],
+    ["src/components/exec/chat/ExecChat.tsx", "console.log(delta);"],
+    ["src/lib/exec/agent/tools.ts", "console.warn(instruction);"],
+    ["src/lib/exec/proposals.ts", 'void notifyOps({ key: "k", title: "t" });']
+  ])("103 flags %s: %s", (file, code) => {
+    expect(chatContentOffenses(file, mailAt(file, code), p5bAt(file, code))).toHaveLength(1);
+  });
+
+  it.each([
+    ["src/lib/exec/agent/run.ts", "console.log(`[exec-chat] turn ${turnId} status=${status} reason=${reason} calls=${modelCalls} cost=${costUsd.toFixed(2)} unknownMarkers=${unknownMarkers}`);"],
+    ["src/lib/exec/agent/tools.ts", "console.warn(`[exec-chat] tool audit write failed tool=${name}`);"],
+    ["src/lib/exec/chat-store.ts", "console.warn(`[exec-chat] finish CAS lost turn=${turnId} code=${error.code}`, { titleLength: title.length });"]
+  ])("103 allows %s: %s", (file, code) => {
+    expect(chatContentOffenses(file, mailAt(file, code), p5bAt(file, code))).toEqual([]);
+  });
+
+  it("103 the chat words apply on top of P3's words outside agent/** (P5a's DD words stay agent/**'s and the route's)", () => {
+    const store = "src/lib/exec/chat-store.ts";
+    expect(chatContentOffenses(store, mailAt(store, "console.warn(`[exec-chat-store] begin failed: ${error.message}`);"), p5bAt(store, ""))).toEqual([]);
+    expect(chatContentOffenses(store, mailAt(store, "console.warn(question);"), p5bAt(store, ""))).toHaveLength(1);
+    const run = "src/lib/exec/agent/run.ts";
+    expect(chatContentOffenses(run, mailAt(run, "console.warn(note);"), p5bAt(run, ""))).toHaveLength(1);
+  });
+
+  it("103 the binding alert passes P3's rule 9 with ids and counts, and a content value fails it", () => {
+    const ok = 'console.warn(`[exec-llm] binding transformations turn=${turnId} count=${count}`);\nvoid notifyOps({ key: "exec-chat-binding", title: "Chat dropped thinking blocks", detail: `turn ${turnId}: ${count}` });';
+    expect(analyzeMail(sourceAt(BINDING_ALERT_FILE, ok), P3_VOCAB).contentLogs).toEqual([]);
+    expect(chatContentOffenses(BINDING_ALERT_FILE, mailAt(BINDING_ALERT_FILE, ok), p5bAt(BINDING_ALERT_FILE, ok))).toEqual([]);
+    const bad = 'void notifyOps({ key: "exec-chat-binding", title: "t", detail: question });';
+    expect(analyzeMail(sourceAt(BINDING_ALERT_FILE, bad), P3_VOCAB).contentLogs).toHaveLength(1);
+  });
+
+  // 104
+  it.each([
+    ["src/lib/exec/chat/reducer.ts", 'import "server-only";'],
+    ["src/lib/exec/chat/reducer.ts", 'import { RefRegistry } from "@/lib/exec/agent/refs";'],
+    ["src/lib/exec/chat/reducer.ts", 'import { CHAT_TOOL_NAMES } from "@/lib/exec/agent/types";'],
+    ["src/lib/exec/chat/sse-parse.ts", 'import { createClient } from "@supabase/supabase-js";'],
+    ["src/lib/exec/chat/answer.ts", 'import type { ExecPrincipal } from "@/lib/exec/principal";'],
+    ["src/lib/exec/chat/markers.ts", 'import { listUsers } from "@/lib/exec/sources/dd";']
+  ])("104 flags the chat lib %s: %s", (file, code) => {
+    expect(chatLibOffenses(file, p5At(file, code), p5bAt(file, code)).length).toBeGreaterThan(0);
+  });
+
+  it.each([
+    ["src/lib/exec/chat/answer.ts", 'import type { RefEntry } from "@/lib/exec/agent/types";\nimport { validateMarkers } from "./markers";'],
+    ["src/lib/exec/chat/reducer.ts", 'import type { SourceRef } from "@/lib/exec/types";\nimport { isAllowedLinkUrl } from "@/lib/exec/refs";\nimport { formatInZone } from "@/lib/exec/format";'],
+    ["src/lib/exec/chat/markers.ts", 'import { SAFE_MARKDOWN_OPTIONS } from "@/lib/exec/safe-markdown";\nimport { REFUSED_TEXT } from "@/lib/exec/chat/copy";']
+  ])("104 allows the chat lib %s: %s", (file, code) => {
+    expect(chatLibOffenses(file, p5At(file, code), p5bAt(file, code))).toEqual([]);
+  });
+
+  it.each([
+    ["src/components/exec/chat/ExecChat.tsx", 'import { runPreparedTurn } from "@/lib/exec/agent/turn";'],
+    ["src/components/exec/chat/ProposalCard.tsx", 'import { getProposal } from "@/lib/exec/chat-store";'],
+    ["src/components/exec/chat/X.tsx", 'import type { ConfirmOutcome } from "@/lib/exec/proposals";'],
+    ["src/components/AskAiRouting.tsx", 'import { requireExecPrincipal } from "@/lib/exec/access";'],
+    ["src/components/exec/chat/X.tsx", 'import { neutralizeChatText } from "@/lib/exec/text/untrusted";']
+  ])("104 flags a chat component's server import %s: %s", (file, code) => {
+    expect(chatComponentOffenses(file, p5bAt(file, code))).toHaveLength(1);
+  });
+
+  it("104 allows a component's type-only agent/types import and the client-safe modules", () => {
+    const code = 'import type { ToolName } from "@/lib/exec/agent/types";\nimport { SourceLinks } from "@/components/exec/SourceLinks";\nimport type { CardView } from "@/lib/exec/chat/view-types";';
+    expect(chatComponentOffenses("src/components/exec/chat/ExecChat.tsx", p5bAt("src/components/exec/chat/ExecChat.tsx", code))).toEqual([]);
+  });
+
+  it("104 the drawer: one dynamic ExecChatPanel import and neutral wording pass; a static exec import or exec wording fails", () => {
+    const ok = 'const Panel = dynamic(() => import("@/components/exec/chat/ExecChatPanel"), { ssr: false });\nexport function D() { return <div title="Ask AI">Ask AI</div>; }';
+    expect(drawerOffenses(DRAWER_FILE, p5bAt(DRAWER_FILE, ok))).toEqual([]);
+    expect(drawerOffenses(DRAWER_FILE, p5bAt(DRAWER_FILE, 'import { ExecChatPanel } from "@/components/exec/chat/ExecChatPanel";'))).toHaveLength(1);
+    expect(drawerOffenses(DRAWER_FILE, p5bAt(DRAWER_FILE, 'import { isExecEnabled } from "@/lib/exec/access";'))).toHaveLength(1);
+    expect(drawerOffenses(ASK_AI_ROUTING_FILE, p5bAt(ASK_AI_ROUTING_FILE, "export function R() { return <p>Executive assistant</p>; }"))).toHaveLength(1);
+    expect(drawerOffenses(DRAWER_FILE, p5bAt(DRAWER_FILE, 'const s = "Ask the exec assistant";'))).toHaveLength(1);
+    const two = 'const A = dynamic(() => import("@/components/exec/chat/ExecChatPanel"));\nconst B = dynamic(() => import("@/components/exec/chat/ExecChatPanel"));';
+    expect(drawerOffenses(DRAWER_FILE, p5bAt(DRAWER_FILE, two))).toHaveLength(1);
+  });
+
+  // 105 (B7)
+  it("105 flags banned modules and symbols in AskAiRouting.tsx", () => {
+    const facts = analyzeMail(sourceAt(ASK_AI_ROUTING_FILE, 'import { runTool } from "@/lib/ai-tools";\nimport { listThreads } from "@/lib/missive-client";'), P3_VOCAB);
+    expect(facts.modules.filter((m) => isBannedModule(m.target) || ONLY_IMPORTER.has(m.target))).toHaveLength(2);
+  });
+
+  // F11
+  it("F11 flags Area F's entry points named elsewhere, and a chat key in P4's request schemas", () => {
+    expect(entryPointOffenses("src/app/api/exec/chat/route.ts", p5bAt("src/app/api/exec/chat/route.ts", 'import { createChatReplyDraft } from "@/lib/exec/drafts";'))).toHaveLength(1);
+    expect(entryPointOffenses("src/lib/exec/agent/run.ts", p5bAt("src/lib/exec/agent/run.ts", "await drafts.createChatReplyDraft(p, x);"))).toHaveLength(1);
+    expect(entryPointOffenses("src/lib/exec/proposals.ts", p5bAt("src/lib/exec/proposals.ts", 'await store["purgeDraftsByIds"](p, ids);'))).toHaveLength(1);
+    expect(entryPointOffenses("src/lib/exec/agent/turn.ts", p5bAt("src/lib/exec/agent/turn.ts", 'import { purgeDraftsByIds } from "@/lib/exec/drafts-store";'))).toEqual([]);
+    const schemas = (save: string, create = "") =>
+      [
+        `export const CreateDraftBody = z.discriminatedUnion("kind", [z.object({ kind: z.literal("reply"), threadId: z.string()${create} }).strict()]);`,
+        "export const EditDraftBody = z.object({ version: v }).strict();",
+        "export const RegenerateBody = z.object({ version: v, instruction: z.string().nullable().optional() }).strict();",
+        `export const SaveBody = z.object({ version: v, seenContentHash: h.optional()${save} }).strict();`,
+        "export const ReviewBody = z.object({ version: v }).strict();",
+        "export const SendBody = z.object({ reviewHash: h, acks: a }).strict();",
+        "export const ResolveBody = z.object({ action: x }).strict();"
+      ].join("\n");
+    expect(entryPointOffenses(DRAFTS_FILE, p5bAt(DRAFTS_FILE, schemas(", confirmPrivate: z.literal(true).optional()")))).toEqual([]);
+    expect(entryPointOffenses(DRAFTS_FILE, p5bAt(DRAFTS_FILE, schemas(", usesPrivateRefs: z.boolean()")))).toHaveLength(2);
+    expect(entryPointOffenses(DRAFTS_FILE, p5bAt(DRAFTS_FILE, schemas("", ", origin: z.string()")))).toHaveLength(1);
+    expect(entryPointOffenses(DRAFTS_FILE, p5bAt(DRAFTS_FILE, schemas(", instructionBy: z.string()")))).toHaveLength(2);
   });
 });

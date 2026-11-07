@@ -1,5 +1,6 @@
 import "server-only";
 
+import { effectiveChatCapUsd } from "@/lib/exec/agent/budget";
 import { feedbackTotals } from "@/lib/exec/attention-feedback";
 import { getVoiceProfile } from "@/lib/exec/drafts-store";
 import {
@@ -232,7 +233,9 @@ export async function getSettingsView(
     spend,
     recentAccess,
     feedback,
-    voice
+    voice,
+    // P5b (C30): pure, from the settings read (P5b's columns missing → chatDailyCapUsd is its default).
+    effectiveChatCapUsd: effectiveChatCapUsd(settings)
   };
 }
 

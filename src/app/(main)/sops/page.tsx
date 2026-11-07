@@ -191,10 +191,12 @@ export default function SopsPage() {
         />
       )}
 
+      {/* Always the current Ask AI here: it is the one that knows the SOPs. */}
       <AIAssistantDrawer
         open={aiOpen}
         onOpenChange={setAiOpen}
         starter="How do I "
+        routing="legacy"
       />
     </div>
   );

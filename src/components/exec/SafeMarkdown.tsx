@@ -82,10 +82,24 @@ const components: Components = {
   )
 };
 
-export function SafeMarkdown({ content, className }: { content: string; className?: string }) {
+// P5b (contract §3.19.9, B3, C9): links="none" for model text in chat, where
+// the only links are the source chips. Every <a> becomes a <span> holding its
+// text, whatever its href, so an answer can never show a link at all.
+const noLinkComponents: Components = { ...components, a: ({ children }) => <span>{children}</span> };
+
+export function SafeMarkdown({
+  content,
+  className,
+  links = "allowlist"
+}: {
+  content: string;
+  className?: string;
+  /** "allowlist" (the default): links that pass safeLink. "none": no link at all (chat). */
+  links?: "allowlist" | "none";
+}) {
   return (
     <div className={cn("min-w-0 break-words text-[13px] leading-relaxed text-ink", className)}>
-      <Markdown {...SAFE_MARKDOWN_OPTIONS} remarkPlugins={[remarkGfm]} components={components}>
+      <Markdown {...SAFE_MARKDOWN_OPTIONS} remarkPlugins={[remarkGfm]} components={links === "none" ? noLinkComponents : components}>
         {typeof content === "string" ? content : ""}
       </Markdown>
     </div>

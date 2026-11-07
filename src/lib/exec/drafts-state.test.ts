@@ -48,6 +48,7 @@ import { DRAFT_COLUMNS } from "@/lib/exec/drafts-store";
 import {
   DRAFT_LIMITS,
   DRAFT_STATUSES,
+  REVIEW_BLOCKERS,
   type CloneDraftStatus,
   type DraftErrorCode,
   type ExecDraftRow,
@@ -94,6 +95,8 @@ function base(over: Partial<ExecDraftRow> = {}): ExecDraftRow {
     restrictedPurged: false, usesPrivateRefs: false, cloneFlags: [], ownerResolution: null, openedInOutlookAt: null,
     lastErrorCode: null, lastErrorAt: null, nextCheckAt: null, checkCount: 0, goneAt: null,
     createdAt: at(-20 * MIN), updatedAt: at(-5 * MIN), terminalAt: null, contentPurgedAt: null, expiresAt: null,
+    instructionBy: "owner",
+    chatMessageId: null,
     ...over
   };
 }
@@ -1196,7 +1199,7 @@ describe("ST15 computeReviewBlockers", () => {
     draftCreatedAtMs: NOW.getTime() - 20 * MIN, generatedAtMs: NOW.getTime() - 15 * MIN, parentMessageId: "m_1", replyMode: "reply",
     parentSentAtMs: NOW.getTime() - 60 * MIN, thread: thread([parent]), ownAddresses: new Set(["mitchell@scaledai.org"]), legacyArtifacts: null,
     siblingDrafts: [], openedInOutlookAt: null, storedContentHash: HEX("c"), readBackContentHash: HEX("c"), storedSig: HEX("1"), readBackSig: HEX("1"),
-    readBackReplyToCount: 0, ownPartPlaceholders: [], ddPlaceholders: [], factsOutsideClient: false, generationFlags: [], ...over
+    readBackReplyToCount: 0, ownPartPlaceholders: [], ddPlaceholders: [], factsOutsideClient: false, generationFlags: [], usesPrivateRefs: false, ...over
   });
   it("no blockers on a clean review; new drafts produce no thread blockers", () => {
     expect(computeReviewBlockers(facts())).toEqual([]);
@@ -1255,6 +1258,19 @@ describe("ST15 computeReviewBlockers", () => {
     const all: ReviewBlocker[] = ["already_replied", "newer_inbound", "reply_scheduled", "legacy_draft_pending", "opened_in_outlook", "changed_in_outlook",
       "recipients_changed", "reply_to_present", "placeholder_in_outlook", "facts_outside_client", "unexpected_content"];
     expect(everything).toEqual(all);
+  });
+  // P5b F4 / F12 (C45): the second confirmation for a draft started in a chat that read other private material.
+  it("private_refs exactly when the row uses private refs, last in REVIEW_BLOCKERS order (TF4)", () => {
+    expect(computeReviewBlockers(facts({ usesPrivateRefs: true }))).toEqual(["private_refs"]);
+    expect(computeReviewBlockers(facts({ usesPrivateRefs: false }))).toEqual([]);
+    expect(computeReviewBlockers(facts({ thread: null, parentMessageId: null, replyMode: null, parentSentAtMs: null, usesPrivateRefs: true }))).toEqual(["private_refs"]);
+    expect(computeReviewBlockers(facts({ usesPrivateRefs: true, generationFlags: ["unexpected_url"], openedInOutlookAt: at(-MIN) })))
+      .toEqual(["opened_in_outlook", "unexpected_content", "private_refs"]);
+    expect(REVIEW_BLOCKERS).toHaveLength(13);
+    expect(REVIEW_BLOCKERS[12]).toBe("private_refs");
+    // The fake's CHECK subset (§2.1's re-added constraint) takes it, and still refuses an unknown value.
+    expect(checkDraftRow(snakeOf(base({ reviewBlockers: ["private_refs"] })))).toEqual([]);
+    expect(checkDraftRow({ ...snakeOf(base()), review_blockers: ["no_such_blocker"] })).toContain("exec_drafts_review_blockers_check");
   });
 });
 

@@ -29,6 +29,11 @@ vi.mock("@/lib/exec/attention-feedback", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/exec/attention-feedback")>();
   return { ...actual, purgeOldFeedback: vi.fn() };
 });
+// P5b's chat retention step has its own suites (chat-store, purge); here it finds nothing to delete.
+vi.mock("@/lib/exec/chat-store", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/exec/chat-store")>();
+  return { ...actual, purgeExpiredChatRows: vi.fn() };
+});
 
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { listEnabledPrincipals, loadPrincipalById, loadSettings, principalFromRows, settingsFromRow } from "@/lib/exec/principal";
@@ -37,6 +42,7 @@ import { purgeExpiredEmailRows } from "@/lib/exec/email-store";
 import { purgeExpiredDrafts } from "@/lib/exec/drafts-store";
 import { purgeExpiredDdtext, purgeOrphanDdtextAttention } from "@/lib/exec/ddtext-store";
 import { purgeOldFeedback } from "@/lib/exec/attention-feedback";
+import { purgeExpiredChatRows } from "@/lib/exec/chat-store";
 import { DD_ATTENTION_JOB_KIND, ddAttentionJobHandler, ddAttentionScheduledWork } from "@/lib/exec/handlers/dd-attention";
 import { DDTEXT_JOB_KIND, ddtextJobHandler, ddtextScheduledWork } from "@/lib/exec/handlers/ddtext-triage";
 import { draftGenerateJobHandler } from "@/lib/exec/handlers/draft-generate";
@@ -93,7 +99,10 @@ const NO_EMAIL_PURGED = {
   draftsChecksScheduled: 0,
   ddtextItems: 0,
   ddtextAttention: 0,
-  attentionFeedback: 0
+  attentionFeedback: 0,
+  chatConversations: 0,
+  chatMessages: 0,
+  chatStaleFailed: 0
 };
 
 function resetAll(): void {
@@ -114,6 +123,7 @@ beforeEach(() => {
   vi.mocked(purgeExpiredDdtext).mockResolvedValue(0);
   vi.mocked(purgeOrphanDdtextAttention).mockResolvedValue(0);
   vi.mocked(purgeOldFeedback).mockResolvedValue(0);
+  vi.mocked(purgeExpiredChatRows).mockResolvedValue({ conversations: 0, messages: 0, staleFailed: 0 });
   vi.spyOn(console, "log").mockImplementation(() => {});
   vi.spyOn(console, "warn").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
@@ -552,7 +562,7 @@ describe("exec.purge", () => {
       "[exec-purge] deleted finishedJobs=7 accessLog=30 auditLog=2 aiUsage=11 resolvedAttention=4 " +
         "emailThreads=0 emailCommitments=0 emailSignals=0 emailAttentionRows=0 " +
         "draftsContentPurged=0 draftsDeleted=0 draftsClosedIdle=0 draftsChecksScheduled=0 " +
-        "ddtextItems=0 ddtextAttention=0 attentionFeedback=0"
+        "ddtextItems=0 ddtextAttention=0 attentionFeedback=0 chatConversations=0 chatMessages=0 chatStaleFailed=0"
     );
   });
 
@@ -584,7 +594,7 @@ describe("exec.purge", () => {
   it("runs every step even when one fails, then fails the run", async () => {
     db.deleteResult = (d) =>
       d.table === "exec_access_log" ? { count: null, error: { message: "statement timeout" } } : { count: 1, error: null };
-    await expect(runPurge()).rejects.toThrow("exec.purge: 1 of 10 steps failed: accessLog: exec_access_log purge failed: statement timeout");
+    await expect(runPurge()).rejects.toThrow("exec.purge: 1 of 11 steps failed: accessLog: exec_access_log purge failed: statement timeout");
     expect(db.deletes.map((d) => d.table)).toEqual([
       "exec_jobs",
       "exec_access_log",
@@ -599,7 +609,7 @@ describe("exec.purge", () => {
     db.deleteResult = (d) =>
       d.table === "exec_attention_items" ? { count: null, error: { message: "permission denied" } } : { count: 2, error: null };
     await expect(runPurge()).rejects.toThrow(
-      "exec.purge: 1 of 10 steps failed: resolvedAttention: exec_attention_items purge failed: permission denied"
+      "exec.purge: 1 of 11 steps failed: resolvedAttention: exec_attention_items purge failed: permission denied"
     );
     expect(db.deletes.map((d) => d.table)).toEqual([
       "exec_jobs",
@@ -612,7 +622,7 @@ describe("exec.purge", () => {
       "[exec-purge] deleted finishedJobs=2 accessLog=2 auditLog=2 aiUsage=2 resolvedAttention=0 " +
         "emailThreads=0 emailCommitments=0 emailSignals=0 emailAttentionRows=0 " +
         "draftsContentPurged=0 draftsDeleted=0 draftsClosedIdle=0 draftsChecksScheduled=0 " +
-        "ddtextItems=0 ddtextAttention=0 attentionFeedback=0 failed=1"
+        "ddtextItems=0 ddtextAttention=0 attentionFeedback=0 chatConversations=0 chatMessages=0 chatStaleFailed=0 failed=1"
     );
   });
 

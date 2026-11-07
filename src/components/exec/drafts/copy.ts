@@ -51,7 +51,9 @@ export const ROUTE_CODE_SENTENCE: Readonly<Record<DraftErrorCode, string>> = Obj
   audit_unavailable: "Couldn't record this action, so nothing was done. Try again shortly.",
   unavailable: "Couldn't reach a service this needs. Try again shortly.",
   hold: "An earlier draft for this email may already have been sent. Check your Sent Items in Outlook, then confirm.",
-  sent_copy_found: "An earlier draft for this email was already sent."
+  sent_copy_found: "An earlier draft for this email was already sent.",
+  // P5b F3 (C45)
+  private_refs_unconfirmed: "Tick \"I've checked it\" first: this draft was started in a chat that also read other email, team notes or other clients' records."
 });
 
 /** A stored `throttled` (ui-5): the row keeps no wait time, so the notice names none. */
@@ -66,7 +68,9 @@ export const CLONE_CODES = [
   "idempotency_mismatch", "throttled", "mailbox_reconnect", "graph_error", "clone_not_ready", "timeout", "clone_error",
   "outlook_changed", "recreate_failed", "not_in_registry", "accepted", "changed", "already_sending", "already_sent",
   "sent_externally", "clone_anomaly", "send_disabled", "gone", "timeout_nothing_sent", "transport", "outlook_not_found",
-  "outlook_unknown", "outlook_unknown_restricted", "outlook_reappeared", "expired_idle", "generation_stopped", "copied"
+  "outlook_unknown", "outlook_unknown_restricted", "outlook_reappeared", "expired_idle", "generation_stopped", "copied",
+  // P5b F10: written by exec_drafts_purge_by_ids (RPC 5) on a chat draft whose chat used a now-restricted sender's mail.
+  "chat_source_restricted"
 ] as const;
 export type DraftCloneCode = (typeof CLONE_CODES)[number];
 
@@ -103,7 +107,8 @@ export const CLONE_CODE_SENTENCE: Readonly<Record<DraftCloneCode, string>> = Obj
   outlook_reappeared: "An older Outlook draft for this thread is back in your Drafts. Delete it in Outlook.",
   expired_idle: "Closed after 30 days without changes.",
   generation_stopped: "You stopped drafting. Your previous text is unchanged.",
-  copied: "A new draft was made from this one."
+  copied: "A new draft was made from this one.",
+  chat_source_restricted: "Content removed: the chat that started this draft used mail from a sender that is now restricted."
 });
 
 export const GENERATION_FAILED_SENTENCE: Readonly<Record<GenerationError, string>> = Object.freeze({
@@ -289,7 +294,9 @@ export const BLOCKER_COPY: Readonly<Record<ReviewBlocker, string>> = Object.free
   placeholder_in_outlook: "The Outlook version contains a [bracketed] placeholder. Send anyway",
   thread_unavailable: "The thread couldn't be checked for newer messages. Send anyway",
   facts_outside_client: "This draft uses internal status for <client>, and a recipient isn't at <client>. Send anyway",
-  unexpected_content: "The assistant added <kinds> that weren't in your instruction or the client facts. I've checked them"
+  unexpected_content: "The assistant added <kinds> that weren't in your instruction or the client facts. I've checked them",
+  // P5b F4 (C45)
+  private_refs: "This draft was started in a chat that also read other email, team notes or other clients' records. I've checked it shares nothing it shouldn't"
 });
 
 /** A blocker's checkbox label with its <client> / <kinds> parts filled from DD data. */
@@ -500,7 +507,11 @@ export const COPY = Object.freeze({
   outlookVersionTitle: "The draft as it is in Outlook now",
   pageUnavailable: "Couldn't check this email right now. Try again shortly.",
   viewThread: "View the thread",
-  backToDrafts: "Drafts"
+  backToDrafts: "Drafts",
+  // P5b F5 (C44, C45)
+  privateRefsNotice: "Started in a chat that also read other email, team notes or other clients' records. Check the draft doesn't share any of it.",
+  privateRefsCheck: "I've checked it",
+  instructionByAssistant: "Written by the assistant in Chat"
 });
 
 /** The new-reply banner (C75): "Draft a reply to <address> (<name>)." The address leads; the name is data. */

@@ -9,9 +9,12 @@ vi.mock("@/lib/exec/drafts-store", () => ({ purgeExpiredDrafts: vi.fn() }));
 // The P5a steps' own deletes are covered in ddtext-store's and attention-feedback's suites (and the SQL suite).
 vi.mock("@/lib/exec/ddtext-store", () => ({ purgeExpiredDdtext: vi.fn(), purgeOrphanDdtextAttention: vi.fn() }));
 vi.mock("@/lib/exec/attention-feedback", () => ({ purgeOldFeedback: vi.fn() }));
+// P5b's chat step's own deletes are covered in chat-store.test.ts (T71) and the SQL suite.
+vi.mock("@/lib/exec/chat-store", () => ({ purgeExpiredChatRows: vi.fn() }));
 
 import { createFakeExecDb, type FakeExecDb } from "@/lib/exec/__tests__/fake-exec-db";
 import { purgeOldFeedback } from "@/lib/exec/attention-feedback";
+import { purgeExpiredChatRows } from "@/lib/exec/chat-store";
 import { purgeExpiredDdtext, purgeOrphanDdtextAttention } from "@/lib/exec/ddtext-store";
 import { purgeExpiredDrafts } from "@/lib/exec/drafts-store";
 import { purgeExpiredEmailRows } from "@/lib/exec/email-store";
@@ -39,6 +42,8 @@ beforeEach(() => {
   vi.mocked(purgeOrphanDdtextAttention).mockResolvedValue(12);
   vi.mocked(purgeOldFeedback).mockReset();
   vi.mocked(purgeOldFeedback).mockResolvedValue(13);
+  vi.mocked(purgeExpiredChatRows).mockReset();
+  vi.mocked(purgeExpiredChatRows).mockResolvedValue({ conversations: 14, messages: 15, staleFailed: 16 });
   vi.spyOn(console, "log").mockImplementation(() => undefined);
   vi.spyOn(console, "error").mockImplementation(() => undefined);
 });
@@ -47,7 +52,8 @@ const FULL_LOG =
   "[exec-purge] deleted finishedJobs=1 accessLog=1 auditLog=1 aiUsage=1 resolvedAttention=1 " +
   "emailThreads=3 emailCommitments=4 emailSignals=5 emailAttentionRows=6 " +
   "draftsContentPurged=7 draftsDeleted=8 draftsClosedIdle=9 draftsChecksScheduled=10 " +
-  "ddtextItems=11 ddtextAttention=12 attentionFeedback=13";
+  "ddtextItems=11 ddtextAttention=12 attentionFeedback=13 " +
+  "chatConversations=14 chatMessages=15 chatStaleFailed=16";
 
 describe("exec.purge: the email and drafts steps", () => {
   it("run after the P2a/P2b steps with the run's clock and signal, and report their counts", async () => {
@@ -68,7 +74,10 @@ describe("exec.purge: the email and drafts steps", () => {
       draftsChecksScheduled: 10,
       ddtextItems: 11,
       ddtextAttention: 12,
-      attentionFeedback: 13
+      attentionFeedback: 13,
+      chatConversations: 14,
+      chatMessages: 15,
+      chatStaleFailed: 16
     });
     expect(purgeExpiredEmailRows).toHaveBeenCalledWith(NOW, { signal });
     expect(purgeExpiredDrafts).toHaveBeenCalledWith(NOW, { signal });
@@ -80,7 +89,7 @@ describe("exec.purge: the email and drafts steps", () => {
   it("an email step failure doesn't stop the others (the drafts step still runs), and still fails the run (the job retries)", async () => {
     vi.mocked(purgeExpiredEmailRows).mockRejectedValue(new Error("exec email store: exec_email_threads purge failed: lock timeout"));
     await expect(runPurge(undefined, NOW)).rejects.toThrow(
-      "exec.purge: 1 of 10 steps failed: email: exec email store: exec_email_threads purge failed: lock timeout"
+      "exec.purge: 1 of 11 steps failed: email: exec email store: exec_email_threads purge failed: lock timeout"
     );
     expect(db.deletes).toHaveLength(5);
     expect(purgeExpiredDrafts).toHaveBeenCalledTimes(1);
@@ -91,16 +100,16 @@ describe("exec.purge: the email and drafts steps", () => {
   it("PX11: a drafts step failure fails the run after every other step ran", async () => {
     vi.mocked(purgeExpiredDrafts).mockRejectedValue(new Error("exec drafts store: exec_drafts_purge_expired failed: lock timeout"));
     await expect(runPurge(undefined, NOW)).rejects.toThrow(
-      "exec.purge: 1 of 10 steps failed: drafts: exec drafts store: exec_drafts_purge_expired failed: lock timeout"
+      "exec.purge: 1 of 11 steps failed: drafts: exec drafts store: exec_drafts_purge_expired failed: lock timeout"
     );
     expect(db.deletes).toHaveLength(5);
     expect(purgeExpiredEmailRows).toHaveBeenCalledTimes(1);
-    expect(console.log).toHaveBeenCalledWith(expect.stringContaining("draftsContentPurged=0 draftsDeleted=0 draftsClosedIdle=0 draftsChecksScheduled=0 ddtextItems=11 ddtextAttention=12 attentionFeedback=13 failed=1"));
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining("draftsContentPurged=0 draftsDeleted=0 draftsClosedIdle=0 draftsChecksScheduled=0 ddtextItems=11 ddtextAttention=12 attentionFeedback=13 chatConversations=14 chatMessages=15 chatStaleFailed=16 failed=1"));
   });
 
   it("another step failing doesn't skip the email or drafts steps", async () => {
     db.deleteResult = (d) => (d.table === "exec_access_log" ? { count: null, error: { message: "statement timeout" } } : { count: 1, error: null });
-    await expect(runPurge(undefined, NOW)).rejects.toThrow("exec.purge: 1 of 10 steps failed: accessLog");
+    await expect(runPurge(undefined, NOW)).rejects.toThrow("exec.purge: 1 of 11 steps failed: accessLog");
     expect(purgeExpiredEmailRows).toHaveBeenCalledTimes(1);
     expect(purgeExpiredDrafts).toHaveBeenCalledTimes(1);
   });
@@ -126,6 +135,36 @@ describe("exec.purge: the email and drafts steps", () => {
     expect(purgeExpiredDdtext).not.toHaveBeenCalled();
     expect(purgeOrphanDdtextAttention).not.toHaveBeenCalled();
     expect(purgeOldFeedback).not.toHaveBeenCalled();
+  });
+});
+
+describe("exec.purge: the P5b chat step (T71, contract §3.21)", () => {
+  const order = (fn: unknown) => (fn as { mock: { invocationCallOrder: number[] } }).mock.invocationCallOrder[0];
+
+  it("runs last, with the run's clock and signal, and reports its three counts", async () => {
+    const signal = new AbortController().signal;
+    const counts = await runPurge(signal, NOW);
+    expect(purgeExpiredChatRows).toHaveBeenCalledWith(NOW, { signal });
+    expect(counts).toMatchObject({ chatConversations: 14, chatMessages: 15, chatStaleFailed: 16 });
+    expect(order(purgeOldFeedback)).toBeLessThan(order(purgeExpiredChatRows));
+  });
+
+  it("before the P5b migration the step reports zeros (the store tolerates missing tables)", async () => {
+    vi.mocked(purgeExpiredChatRows).mockResolvedValue({ conversations: 0, messages: 0, staleFailed: 0 });
+    await expect(runPurge(undefined, NOW)).resolves.toMatchObject({ chatConversations: 0, chatMessages: 0, chatStaleFailed: 0, attentionFeedback: 13 });
+  });
+
+  it("a chat step failure fails the run after every other step ran; another step failing doesn't skip it", async () => {
+    vi.mocked(purgeExpiredChatRows).mockRejectedValue(new Error("exec chat store: exec_conversations purge failed: lock timeout (55P03)"));
+    await expect(runPurge(undefined, NOW)).rejects.toThrow(
+      "exec.purge: 1 of 11 steps failed: chat: exec chat store: exec_conversations purge failed: lock timeout (55P03)"
+    );
+    expect(purgeOldFeedback).toHaveBeenCalledTimes(1);
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining("chatConversations=0 chatMessages=0 chatStaleFailed=0 failed=1"));
+    vi.mocked(purgeExpiredChatRows).mockResolvedValue({ conversations: 1, messages: 2, staleFailed: 3 });
+    vi.mocked(purgeOldFeedback).mockRejectedValue(new Error("exec_attention_feedback purge failed: down"));
+    await expect(runPurge(undefined, NOW)).rejects.toThrow("exec.purge: 1 of 11 steps failed: attentionFeedback");
+    expect(purgeExpiredChatRows).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -179,10 +218,10 @@ describe("exec.purge: the P5a DD text and feedback steps (test 28)", () => {
 
   it("a failing expiry step doesn't skip the orphan sweep or the feedback step, and still fails the run", async () => {
     vi.mocked(purgeExpiredDdtext).mockRejectedValue(new Error("exec ddtext store: purge failed: lock timeout"));
-    await expect(runPurge(undefined, NOW)).rejects.toThrow("exec.purge: 1 of 10 steps failed: ddtextItems: exec ddtext store: purge failed: lock timeout");
+    await expect(runPurge(undefined, NOW)).rejects.toThrow("exec.purge: 1 of 11 steps failed: ddtextItems: exec ddtext store: purge failed: lock timeout");
     expect(purgeOrphanDdtextAttention).toHaveBeenCalledTimes(1);
     expect(purgeOldFeedback).toHaveBeenCalledTimes(1);
-    expect(console.log).toHaveBeenCalledWith(expect.stringContaining("ddtextItems=0 ddtextAttention=12 attentionFeedback=13 failed=1"));
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining("ddtextItems=0 ddtextAttention=12 attentionFeedback=13 chatConversations=14 chatMessages=15 chatStaleFailed=16 failed=1"));
   });
 
   it("P2b's 90-day resolved-row step is unchanged: resolved rows of every kind, by resolved_at and last_seen_at only", async () => {

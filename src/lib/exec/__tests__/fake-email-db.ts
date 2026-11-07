@@ -6,7 +6,8 @@
 //   from(t).update(patch) …filters… [.select(cols)]
 //   from(t).delete({ count }) …filters… [.select(cols)]
 //   rpc("exec_email_stamp_screened" | "exec_email_upsert_signals" | "exec_email_insert_commitments"
-//       | "exec_drafts_purge_restricted", args)
+//       | "exec_drafts_purge_restricted" | "exec_drafts_purge_by_ids"
+//       | "exec_chat_redact_threads" | "exec_chat_draft_ids_for_threads", args)
 //
 // Filters follow SQL: a comparison with NULL is never true; timestamps compare
 // as instants ("Z" and "+00:00" alike). `.or()` understands the forms the
@@ -19,7 +20,7 @@
 //   const db = createFakeEmailDb({ tables: { exec_email_threads: [row] } });
 //   vi.mocked(getSupabaseAdmin).mockReturnValue(db.client as SupabaseClient);
 
-import { purgeRestrictedRows } from "./fake-drafts-db";
+import { purgeRestrictedRows, purgeRowsByIds } from "./fake-drafts-db";
 
 export type Row = Record<string, unknown>;
 export type DbError = { message: string; code?: string };
@@ -179,7 +180,34 @@ export function createFakeEmailDb(cfg: FakeEmailDbConfig = {}): FakeEmailDb {
   let nextId = 1;
 
   // --- RPCs, mirroring the migration ----------------------------------------
+  // P5b (contract §3.18): the tombstone procedure's chat steps. A small mirror of exec_chat_redact_threads and
+  // exec_chat_draft_ids_for_threads over an optional exec_messages table (the consulted arm only; the cited-source
+  // and later-answer arms are the SQL suite's, S9/S17). With no exec_messages rows (every P3/P4 suite) nothing is
+  // reached: 0 and [].
+  const reachedAnswers = (args: Row): Row[] => {
+    const ids = args.p_thread_ids as string[];
+    if (!Array.isArray(ids) || ids.length > 200) throw Object.assign(new Error("at most 200 thread ids per call"), { code: "P0001" });
+    return (tables.exec_messages ?? []).filter(
+      (m) => m.principal_id === args.p_principal && m.role === "assistant" && ((m.consulted_email_thread_ids as string[] | undefined) ?? []).some((t) => ids.includes(t))
+    );
+  };
   const rpcs: Record<string, (args: Row) => unknown> = {
+    exec_chat_redact_threads(args) {
+      let n = 0;
+      for (const m of reachedAnswers(args)) {
+        if (m.status === "running" || (m.redacted_at && m.text === args.p_text && ((m.sources as unknown[] | undefined) ?? []).length === 0)) continue;
+        Object.assign(m, { text: args.p_text, recommendations: "", sources: [], redacted_at: m.redacted_at ?? now().toISOString() });
+        n += 1;
+      }
+      return n;
+    },
+    exec_chat_draft_ids_for_threads(args) {
+      const out = new Set<string>();
+      for (const m of reachedAnswers(args)) {
+        for (const c of (m.cards as Row[] | undefined) ?? []) if (c.kind === "draft" && typeof c.id === "string" && /^ed_[0-9a-f]{32}$/.test(c.id)) out.add(c.id);
+      }
+      return [...out];
+    },
     exec_email_stamp_screened(args) {
       const hash = args.p_hash as string;
       if (typeof hash !== "string" || !/^[0-9a-f]{64}$/.test(hash)) throw Object.assign(new Error("p_hash must be a sha256 hex digest"), { code: "P0001" });
@@ -292,6 +320,11 @@ export function createFakeEmailDb(cfg: FakeEmailDbConfig = {}): FakeEmailDb {
     },
     exec_drafts_purge_restricted(args) {
       return purgeRestrictedRows(tables, args, now());
+    },
+    // P5b (§3.23 F8, RPC 5): fake-drafts-db's mirror of exec_drafts_purge_by_ids, so the chat-draft purge the
+    // tombstone procedure and the safety nets run reaches this fake's exec_drafts rows too.
+    exec_drafts_purge_by_ids(args) {
+      return purgeRowsByIds(tables, args, now());
     }
   };
 

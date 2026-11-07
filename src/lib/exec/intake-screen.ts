@@ -135,6 +135,26 @@ export async function restrictedIntakeTaskIds(
   return out;
 }
 
+/**
+ * P5b (C19, C25): the clone thread ids each task is linked to (tasks.missive_thread_url and email_intake_log.task_id),
+ * so chat can admit a shown task's threads to its consulted set. Thread ids only: the recorded sender never leaves this
+ * module. Tasks with no thread are absent (or map to []). A read failure throws (the caller withholds the text).
+ */
+export async function intakeThreadIdsForTasks(
+  principal: ExecPrincipal,
+  taskIds: readonly string[],
+  opts: { signal?: AbortSignal } = {}
+): Promise<ReadonlyMap<string, string[]>> {
+  const ids = [...new Set(taskIds.filter((id) => typeof id === "string" && id.length > 0))];
+  const out = new Map<string, string[]>();
+  if (ids.length === 0) return out;
+  const links = await listTaskThreadLinks(principal, ids, { signal: opts.signal });
+  for (const link of links) {
+    if (link.threadIds.length > 0) out.set(link.taskId, [...new Set(link.threadIds)]);
+  }
+  return out;
+}
+
 const TASK_MECHANISMS: ReadonlySet<ApprovalMechanism> = new Set(["draft_tasks", "fb_proofs"]);
 
 /**

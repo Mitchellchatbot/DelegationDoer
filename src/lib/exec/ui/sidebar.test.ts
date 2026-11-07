@@ -91,7 +91,8 @@ describe("Sidebar Executive AI row", () => {
 
   it("gets the row from the server, through execNavItemFor in (main)/layout.tsx", () => {
     const layout = source("app/(main)/layout.tsx");
-    expect(layout).toMatch(/const ownerNavItem = await execNavItemFor\(user\);/);
+    // P5b (contract §3.19.10) computes it beside the Ask AI routing signal, in one Promise.all.
+    expect(layout).toMatch(/const \[ownerNavItem, askAiRouting\] = await Promise\.all\(\[execNavItemFor\(user\), execAskAiRoutingStateFor\(user\)\]\);/);
     expect(layout).toMatch(/<Sidebar user=\{user\} ownerItem=\{ownerNavItem\} \/>/);
   });
 });

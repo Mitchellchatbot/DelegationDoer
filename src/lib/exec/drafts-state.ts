@@ -270,7 +270,7 @@ const transition = (to: ExecDraftStatus, patch: Record<string, unknown>, code: s
 const DRAFT_ERROR_CODES = ["not_found", "forbidden", "bad_request", "invalid", "drafts_off", "send_off", "drafts_unavailable",
   "send_unavailable", "rate_limited", "version_conflict", "state_conflict", "review_required", "review_expired", "acks_missing",
   "recipients_blocked", "placeholders", "empty_body", "unsafe_markup", "instruction_required", "subject_required",
-  "thread_unavailable", "mailbox_problem", "audit_unavailable", "unavailable", "hold", "sent_copy_found"] as const;
+  "thread_unavailable", "mailbox_problem", "audit_unavailable", "unavailable", "hold", "sent_copy_found", "private_refs_unconfirmed"] as const;
 const CLONE_KINDS = ["auth", "send_disabled", "mailbox_not_connected", "bad_request", "not_found", "gone", "changed", "already_sending",
   "already_sent", "sent_externally", "parent_missing", "idempotency_mismatch", "throttled", "mailbox_reconnect", "graph_error",
   "not_ready", "graph_timeout", "server_error", "edge", "unknown_code", "invalid_body", "transport", "timeout"] as const;
@@ -1157,12 +1157,14 @@ export interface ReviewFacts {
   factsOutsideClient: boolean;
   /** C65: the row's generation_flags. */
   generationFlags: readonly GenerationFlag[];
+  /** P5b (F4, C45): the row's uses_private_refs (a draft started in a chat that read other private material). */
+  usesPrivateRefs: boolean;
 }
 
 const sentMs = (m: HisMessage): number => toMs(m.sentAt) ?? 0;
 const byTime = (a: HisMessage, b: HisMessage) => sentMs(a) - sentMs(b) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 
-/** C20, C21, C48, C62, C65. */
+/** C20, C21, C48, C62, C65; P5b F4 (C45): private_refs exactly when the row uses private refs. */
 export function computeReviewBlockers(f: ReviewFacts): ReviewBlocker[] {
   const out = new Set<ReviewBlocker>();
   const thread = f.thread !== null && f.thread !== "unavailable" ? f.thread : null;
@@ -1195,6 +1197,7 @@ export function computeReviewBlockers(f: ReviewFacts): ReviewBlocker[] {
   if (f.ownPartPlaceholders.some((p) => !dd.has(p))) out.add("placeholder_in_outlook");
   if (f.factsOutsideClient) out.add("facts_outside_client");
   if (f.generationFlags.length > 0) out.add("unexpected_content");
+  if (f.usesPrivateRefs) out.add("private_refs");
   return REVIEW_BLOCKERS.filter((b) => out.has(b));
 }
 

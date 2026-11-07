@@ -7,8 +7,9 @@ import { isOwner } from "@/lib/access";
 import { cache } from "@/lib/safe-cache";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { getSupabaseServer } from "@/lib/supabase-server";
-import { loadPrincipalForUser } from "@/lib/exec/principal";
+import { loadPrincipalForUser, loadSettings } from "@/lib/exec/principal";
 import type { ExecPrincipal, ExecSurface } from "@/lib/exec/types";
+import { chatEmailOn } from "@/lib/exec/chat/email-on";
 
 // The gate in front of every Executive AI Assistant page and API route.
 //
@@ -283,6 +284,41 @@ export async function execNavItemFor(user: Parameters<typeof isOwner>[0]): Promi
   } catch {
     // The row is a convenience; a broken read just leaves it out.
     return null;
+  }
+}
+
+/**
+ * True when the AI drawer should answer through the assistant for this
+ * request (P5b contract §3.19.10, B10): EXEC_ENABLED, the owner, a strong
+ * session (signInIsStrong), an enabled principal, and chatSchemaReady ∧
+ * chatEnabled ∧ askAiUsesExec. Never throws (false on any error); never hands
+ * out a principal. Visibility only: /api/exec/chat gates for real. The
+ * (main) layout passes the answer to the drawer as one boolean, so link
+ * sessions, everyone else and the legacy route are unchanged.
+ */
+export async function execAskAiRoutingFor(user: Parameters<typeof isOwner>[0] & { id: string }): Promise<boolean> {
+  return (await execAskAiRoutingStateFor(user)).routed;
+}
+
+/**
+ * execAskAiRoutingFor's answer and, when routed, chatEmailOn for the drawer's copy (ui-10), from the same reads.
+ * Never throws ({ routed: false, emailOn: false } on any error).
+ */
+export async function execAskAiRoutingStateFor(user: Parameters<typeof isOwner>[0] & { id: string }): Promise<{ routed: boolean; emailOn: boolean }> {
+  const off = { routed: false, emailOn: false };
+  try {
+    if (!isExecEnabled() || !isOwner(user) || typeof user?.id !== "string" || user.id === "") return off;
+    const { data, error } = await getSupabaseServer().auth.getSession();
+    const token = error ? undefined : data.session?.access_token;
+    if (typeof token !== "string" || !signInIsStrong(token)) return off;
+    const principal = await loadPrincipalForUser(user.id);
+    if (!principal) return off;
+    const settings = await loadSettings(principal.id);
+    const routed = settings.chatSchemaReady === true && settings.chatEnabled === true && settings.askAiUsesExec === true;
+    return routed ? { routed, emailOn: chatEmailOn(settings, principal) } : off;
+  } catch {
+    // A convenience like the nav row: any failure keeps the drawer as it is.
+    return off;
   }
 }
 

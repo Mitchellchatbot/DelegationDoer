@@ -305,8 +305,8 @@ describe("rateLimit (S2, C11, test 2)", () => {
     expect(rateQueries[0].calls).toContainEqual(["abortSignal", signal]);
   });
 
-  it("registers the four buckets; auditNthNewestAt needs at least one action", () => {
-    expect(Object.keys(RATE_BUCKETS).sort()).toEqual(["assess", "attention_action", "attention_feedback", "settings_update"]);
+  it("registers the four buckets (and P5b's chat and proposal); auditNthNewestAt needs at least one action", () => {
+    expect(Object.keys(RATE_BUCKETS).sort()).toEqual(["assess", "attention_action", "attention_feedback", "chat", "proposal", "settings_update"]);
     expect(() => auditNthNewestAt([])).toThrow();
   });
 });

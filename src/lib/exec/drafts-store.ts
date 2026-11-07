@@ -6,6 +6,7 @@ import {
   DRAFT_LIMITS,
   DRAFT_STATUSES,
   GENERATION_FLAGS,
+  INSTRUCTION_BY,
   REVIEW_BLOCKERS,
   type DraftAddress,
   type ExecDraftRow,
@@ -123,11 +124,25 @@ export const DRAFT_COLUMNS: Readonly<Record<keyof ExecDraftRow, string>> = Objec
   updatedAt: "updated_at",
   terminalAt: "terminal_at",
   contentPurgedAt: "content_purged_at",
-  expiresAt: "expires_at"
+  expiresAt: "expires_at",
+  // P5b (F7): appended by P5b's migration (ALTER TABLE ADD COLUMN), so it is the last column.
+  instructionBy: "instruction_by",
+  // P5b (review security-2): appended by the same migration.
+  chatMessageId: "chat_message_id"
 });
 
 const DRAFT_FIELDS = Object.keys(DRAFT_COLUMNS) as (keyof ExecDraftRow)[];
 const ALL_DRAFT_COLUMNS = DRAFT_FIELDS.map((f) => DRAFT_COLUMNS[f]).join(",");
+/**
+ * P5b (F7, security-2): every column but P5b's two (instruction_by, chat_message_id), for a database where P5b's
+ * migration isn't applied yet. Every row there is one his web drafts wrote, so its instruction is his own and no
+ * answer wrote it: the columns' defaults, 'owner' and null. P4's drafts keep working when the code ships before the
+ * migration (chat needs the migration, so no 'assistant' row and no linked row exists yet).
+ */
+const LEGACY_DRAFT_COLUMNS = DRAFT_FIELDS.filter((f) => f !== "instructionBy" && f !== "chatMessageId").map((f) => DRAFT_COLUMNS[f]).join(",");
+const INSTRUCTION_BY_COLUMN = DRAFT_COLUMNS.instructionBy;
+const INSTRUCTION_BY_DEFAULT = "owner";
+const CHAT_MESSAGE_ID_COLUMN = DRAFT_COLUMNS.chatMessageId;
 /** The X2 artifact read (C73): only these columns, parsed tolerantly. */
 const ARTIFACT_COLUMNS = "id,status,thread_id,parent_message_id,send_started_at,sent_at,updated_at";
 /** The card and System counts: the columns draftAttention and the counters need. */
@@ -163,6 +178,39 @@ function isNotInstalled(error: DbError): boolean {
   const m = error.message ?? "";
   return /relation ".*exec_(drafts|voice_profile)" does not exist/i.test(m) ||
     /could not find the (table|function) '?public\.exec_(drafts|voice_profile)/i.test(m);
+}
+
+/** P5b (F7, security-2): one of P5b's columns isn't there (P5b's migration isn't applied): 42703 / PGRST204 naming it. */
+function missingInstructionBy(error: DbError | null | undefined): boolean {
+  if (!error) return false;
+  const code = error.code ?? "";
+  if (code !== "42703" && code !== "PGRST204") return false;
+  const text = `${error.message ?? ""} ${error.details ?? ""}`;
+  return [INSTRUCTION_BY_COLUMN, CHAT_MESSAGE_ID_COLUMN].some((c) => new RegExp(`(?<![A-Za-z0-9_])${c}(?![A-Za-z0-9_])`).test(text));
+}
+
+/** A row read with LEGACY_DRAFT_COLUMNS, with the columns' defaults filled in (draftFromDb stays strict). */
+function withDefaultInstructionBy(raw: unknown): unknown {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return raw;
+  const row = raw as Record<string, unknown>;
+  if (INSTRUCTION_BY_COLUMN in row && CHAT_MESSAGE_ID_COLUMN in row) return raw;
+  return { [INSTRUCTION_BY_COLUMN]: INSTRUCTION_BY_DEFAULT, [CHAT_MESSAGE_ID_COLUMN]: null, ...row };
+}
+
+type DraftAnswer = { data: unknown; error: DbError | null };
+
+/**
+ * A read of exec_drafts rows by the full column list; when only instruction_by is missing (P5b's migration isn't
+ * applied), the same read once more by the legacy list, its rows given the column's default. Errors come back as
+ * the read answered them, for the caller's own handling.
+ */
+async function readDraftRows(run: (columns: string) => PromiseLike<{ data: unknown; error: unknown }>): Promise<DraftAnswer> {
+  const first = (await run(ALL_DRAFT_COLUMNS)) as DraftAnswer;
+  if (!missingInstructionBy(first.error)) return first;
+  const legacy = (await run(LEGACY_DRAFT_COLUMNS)) as DraftAnswer;
+  if (legacy.error) return legacy;
+  const data = Array.isArray(legacy.data) ? legacy.data.map(withDefaultInstructionBy) : withDefaultInstructionBy(legacy.data);
+  return { data, error: null };
 }
 
 /** The database refused the request's shape: a bug, not a transient failure. */
@@ -222,7 +270,9 @@ const KINDS: Readonly<Record<keyof ExecDraftRow, Kind>> = {
   cloneFlags: { enumArray: CLONE_FLAGS },
   ownerResolution: { enum: ["sent", "not_sent"], nullable: true },
   openedInOutlookAt: "ts?", lastErrorCode: "text?", lastErrorAt: "ts?", nextCheckAt: "ts?", checkCount: "int", goneAt: "ts?",
-  createdAt: "ts", updatedAt: "ts", terminalAt: "ts?", contentPurgedAt: "ts?", expiresAt: "ts?"
+  createdAt: "ts", updatedAt: "ts", terminalAt: "ts?", contentPurgedAt: "ts?", expiresAt: "ts?",
+  instructionBy: { enum: INSTRUCTION_BY, nullable: false },
+  chatMessageId: "text?"
 };
 
 const isTs = (v: unknown): v is string => typeof v === "string" && Number.isFinite(Date.parse(v));
@@ -388,9 +438,21 @@ export async function insertDraft(principal: ExecPrincipal, row: NewDraftRow, op
   Promise<{ inserted: true; row: ExecDraftRow } | { inserted: false; existingId: string }> {
   if (row.principalId !== principal.id) refuse("a draft is inserted for its own principal only");
   const payload = toDb(row);
-  let query = db().from(DRAFTS).insert(payload).select(ALL_DRAFT_COLUMNS);
-  if (opts.signal) query = query.abortSignal(opts.signal);
-  const { data, error } = await query.single();
+  const insert = (body: Record<string, unknown>, columns: string) => {
+    let query = db().from(DRAFTS).insert(body).select(columns);
+    if (opts.signal) query = query.abortSignal(opts.signal);
+    return query.single();
+  };
+  let { data, error } = (await insert(payload, ALL_DRAFT_COLUMNS)) as DraftAnswer;
+  if (missingInstructionBy(error) && payload[INSTRUCTION_BY_COLUMN] === INSTRUCTION_BY_DEFAULT && payload[CHAT_MESSAGE_ID_COLUMN] === null) {
+    // P5b's migration isn't applied: an owner row with no linked answer is what the table's defaults would write
+    // anyway (F7). An assistant or linked row can't be stored there, so it fails below (chat needs the migration).
+    const legacyPayload = { ...payload };
+    delete legacyPayload[INSTRUCTION_BY_COLUMN];
+    delete legacyPayload[CHAT_MESSAGE_ID_COLUMN];
+    ({ data, error } = (await insert(legacyPayload, LEGACY_DRAFT_COLUMNS)) as DraftAnswer);
+    if (!error) data = withDefaultInstructionBy(data);
+  }
   if (error) {
     const text = `${error.message ?? ""} ${(error as DbError).details ?? ""}`;
     if (error.code === "23505" && /exec_drafts_one_active_per_thread/.test(text) && row.threadId !== null) {
@@ -404,9 +466,11 @@ export async function insertDraft(principal: ExecPrincipal, row: NewDraftRow, op
 
 export async function getDraft(principal: ExecPrincipal, id: string, opts: StoreOptions = {}): Promise<ExecDraftRow | null> {
   checkDraftId(id);
-  let query = sel(DRAFTS, ALL_DRAFT_COLUMNS).eq("id", id).eq("principal_id", principal.id);
-  if (opts.signal) query = query.abortSignal(opts.signal);
-  const { data, error } = await query.maybeSingle();
+  const { data, error } = await readDraftRows((columns) => {
+    let query = sel(DRAFTS, columns).eq("id", id).eq("principal_id", principal.id);
+    if (opts.signal) query = query.abortSignal(opts.signal);
+    return query.maybeSingle();
+  });
   if (error) {
     if (isNotInstalled(error)) return null;
     throw failure(`${DRAFTS} read`, error, opts.signal);
@@ -417,9 +481,11 @@ export async function getDraft(principal: ExecPrincipal, id: string, opts: Store
 /** The thread's active draft (the unique index allows one): non-terminal, or gone while unconfirmed. */
 export async function getActiveDraftForThread(principal: ExecPrincipal, threadId: string, opts: StoreOptions = {}): Promise<ExecDraftRow | null> {
   const [id] = checkIds([threadId], "threadId");
-  let query = sel(DRAFTS, ALL_DRAFT_COLUMNS).eq("principal_id", principal.id).eq("thread_id", id).or(ACTIVE_OR).order("id").limit(1);
-  if (opts.signal) query = query.abortSignal(opts.signal);
-  const { data, error } = await query;
+  const { data, error } = await readDraftRows((columns) => {
+    let query = sel(DRAFTS, columns).eq("principal_id", principal.id).eq("thread_id", id).or(ACTIVE_OR).order("id").limit(1);
+    if (opts.signal) query = query.abortSignal(opts.signal);
+    return query;
+  });
   if (error) {
     if (isNotInstalled(error)) return null;
     throw failure(`${DRAFTS} active read`, error, opts.signal);
@@ -443,19 +509,28 @@ export async function casDraft(principal: ExecPrincipal, id: string, expect: Cas
   checkDraftId(id);
   if ("id" in patch || "principal_id" in patch) refuse("a CAS patch may not write id or principal_id");
   const body: Record<string, unknown> = { updated_at: new Date().toISOString(), ...patch };
-  let query = db().from(DRAFTS).update(body).eq("id", id).eq("principal_id", principal.id);
   const statuses = typeof expect.status === "string" ? [expect.status] : [...expect.status];
   if (statuses.length === 0) refuse("a CAS expects at least one status");
-  query = statuses.length === 1 ? query.eq("status", statuses[0]) : query.in("status", statuses);
-  if (expect.version !== undefined) query = query.eq("version", expect.version);
-  if (expect.generationSeq !== undefined) query = query.eq("generation_seq", expect.generationSeq);
-  if (expect.reviewHash !== undefined) query = query.eq("review_hash", expect.reviewHash);
-  if (expect.saveAttemptKey !== undefined) query = query.eq("save_attempt_key", expect.saveAttemptKey);
-  if (expect.discardAttemptKey !== undefined) query = query.eq("discard_attempt_key", expect.discardAttemptKey);
-  if (expect.sendAttemptKey !== undefined) query = query.eq("send_attempt_key", expect.sendAttemptKey);
-  let selected = query.select("id");
-  if (opts.signal) selected = selected.abortSignal(opts.signal);
-  const { data, error } = await selected;
+  const update = (values: Record<string, unknown>) => {
+    let query = db().from(DRAFTS).update(values).eq("id", id).eq("principal_id", principal.id);
+    query = statuses.length === 1 ? query.eq("status", statuses[0]) : query.in("status", statuses);
+    if (expect.version !== undefined) query = query.eq("version", expect.version);
+    if (expect.generationSeq !== undefined) query = query.eq("generation_seq", expect.generationSeq);
+    if (expect.reviewHash !== undefined) query = query.eq("review_hash", expect.reviewHash);
+    if (expect.saveAttemptKey !== undefined) query = query.eq("save_attempt_key", expect.saveAttemptKey);
+    if (expect.discardAttemptKey !== undefined) query = query.eq("discard_attempt_key", expect.discardAttemptKey);
+    if (expect.sendAttemptKey !== undefined) query = query.eq("send_attempt_key", expect.sendAttemptKey);
+    let selected = query.select("id");
+    if (opts.signal) selected = selected.abortSignal(opts.signal);
+    return selected;
+  };
+  let { data, error } = (await update(body)) as DraftAnswer;
+  if (missingInstructionBy(error) && body[INSTRUCTION_BY_COLUMN] === INSTRUCTION_BY_DEFAULT) {
+    // P5b's migration isn't applied: every row there is already 'owner' (F7), so the write without it is the same.
+    const legacy = { ...body };
+    delete legacy[INSTRUCTION_BY_COLUMN];
+    ({ data, error } = (await update(legacy)) as DraftAnswer);
+  }
   if (error) throw failure(`${DRAFTS} update`, error, opts.signal);
   return Array.isArray(data) && data.length === 1;
 }
@@ -480,26 +555,33 @@ export async function listDrafts(principal: ExecPrincipal, q: { view: "active" |
   Promise<{ rows: ExecDraftRow[]; nextCursor: string | null }> {
   validNow(now);
   const limitOf = (cap: number) => (typeof q.limit === "number" && Number.isSafeInteger(q.limit) && q.limit >= 1 ? Math.min(q.limit, cap) : cap);
-  let query: Query;
+  let build: (columns: string) => Query;
   let limit: number;
   if (q.view === "active") {
     limit = limitOf(DRAFT_LIMITS.activeListLimit);
-    query = sel(DRAFTS, ALL_DRAFT_COLUMNS).eq("principal_id", principal.id).or(ACTIVE_OR)
-      .order("updated_at", { ascending: false }).order("id", { ascending: false }).limit(limit);
+    const n = limit;
+    build = (columns) => sel(DRAFTS, columns).eq("principal_id", principal.id).or(ACTIVE_OR)
+      .order("updated_at", { ascending: false }).order("id", { ascending: false }).limit(n);
   } else if (q.view === "recent") {
     limit = limitOf(DRAFT_LIMITS.activeListLimit);
+    const n = limit;
     const since = new Date(now.getTime() - DRAFT_LIMITS.recentSentDays * DAY_MS).toISOString();
-    query = sel(DRAFTS, ALL_DRAFT_COLUMNS).eq("principal_id", principal.id).in("status", ["sent", "sent_external"]).gte("terminal_at", since)
-      .order("terminal_at", { ascending: false }).order("id", { ascending: false }).limit(limit);
+    build = (columns) => sel(DRAFTS, columns).eq("principal_id", principal.id).in("status", ["sent", "sent_external"]).gte("terminal_at", since)
+      .order("terminal_at", { ascending: false }).order("id", { ascending: false }).limit(n);
   } else {
     limit = limitOf(DRAFT_LIMITS.pageLimit);
-    query = sel(DRAFTS, ALL_DRAFT_COLUMNS).eq("principal_id", principal.id);
+    const n = limit;
     const cursor = parseCursor(q.cursor);
-    if (cursor) query = query.or(`updated_at.lt."${cursor.updatedAt}",and(updated_at.eq."${cursor.updatedAt}",id.lt."${cursor.id}")`);
-    query = query.order("updated_at", { ascending: false }).order("id", { ascending: false }).limit(limit);
+    build = (columns) => {
+      let query = sel(DRAFTS, columns).eq("principal_id", principal.id);
+      if (cursor) query = query.or(`updated_at.lt."${cursor.updatedAt}",and(updated_at.eq."${cursor.updatedAt}",id.lt."${cursor.id}")`);
+      return query.order("updated_at", { ascending: false }).order("id", { ascending: false }).limit(n);
+    };
   }
-  if (opts.signal) query = query.abortSignal(opts.signal);
-  const { data, error } = await query;
+  const { data, error } = await readDraftRows((columns) => {
+    const query = build(columns);
+    return opts.signal ? query.abortSignal(opts.signal) : query;
+  });
   if (error) {
     if (isNotInstalled(error)) return { rows: [], nextCursor: null };
     throw failure(`${DRAFTS} list`, error, opts.signal);
@@ -518,10 +600,12 @@ export async function listDrafts(principal: ExecPrincipal, q: { view: "active" |
 export async function listDueDrafts(principal: ExecPrincipal, now: Date, limit: number, opts: StoreOptions = {}): Promise<ExecDraftRow[]> {
   const nowIso = validNow(now).toISOString();
   const n = Number.isSafeInteger(limit) && limit >= 1 ? limit : 20;
-  let query = sel(DRAFTS, ALL_DRAFT_COLUMNS).eq("principal_id", principal.id).lte("next_check_at", nowIso)
-    .order("next_check_at", { ascending: true }).order("id").limit(n);
-  if (opts.signal) query = query.abortSignal(opts.signal);
-  const { data, error } = await query;
+  const { data, error } = await readDraftRows((columns) => {
+    let query = sel(DRAFTS, columns).eq("principal_id", principal.id).lte("next_check_at", nowIso)
+      .order("next_check_at", { ascending: true }).order("id").limit(n);
+    if (opts.signal) query = query.abortSignal(opts.signal);
+    return query;
+  });
   if (error) {
     if (isNotInstalled(error)) return [];
     throw failure(`${DRAFTS} due read`, error, opts.signal);
@@ -544,11 +628,13 @@ export async function claimDueDraft(principal: ExecPrincipal, id: string, seenNe
 export async function getLatestDraftForParent(principal: ExecPrincipal, threadId: string, parentMessageId: string, opts: StoreOptions = {}): Promise<ExecDraftRow | null> {
   const [thread] = checkIds([threadId], "threadId");
   const [parent] = checkIds([parentMessageId], "parentMessageId");
-  let query = sel(DRAFTS, ALL_DRAFT_COLUMNS).eq("principal_id", principal.id).eq("thread_id", thread).eq("parent_message_id", parent)
-    .or("status.eq.discarded,and(status.eq.gone,gone_unconfirmed.is.false)")
-    .order("created_at", { ascending: false }).order("id", { ascending: false }).limit(1);
-  if (opts.signal) query = query.abortSignal(opts.signal);
-  const { data, error } = await query;
+  const { data, error } = await readDraftRows((columns) => {
+    let query = sel(DRAFTS, columns).eq("principal_id", principal.id).eq("thread_id", thread).eq("parent_message_id", parent)
+      .or("status.eq.discarded,and(status.eq.gone,gone_unconfirmed.is.false)")
+      .order("created_at", { ascending: false }).order("id", { ascending: false }).limit(1);
+    if (opts.signal) query = query.abortSignal(opts.signal);
+    return query;
+  });
   if (error) {
     if (isNotInstalled(error)) return null;
     throw failure(`${DRAFTS} parent read`, error, opts.signal);
@@ -965,4 +1051,38 @@ export async function resetVoiceProfile(principal: ExecPrincipal, opts: StoreOpt
     throw failure(`${VOICE} delete`, error, opts.signal);
   }
   return Array.isArray(data) && data.length > 0;
+}
+
+// ---------------------------------------------------------------------------
+// P5b (contract §3.23 F8; Area F): the chat-draft purge by id
+// ---------------------------------------------------------------------------
+
+/**
+ * F8 (C20, b-security-6): RPC 5 exec_drafts_purge_by_ids (P4's restricted purge applied by id, origin = 'chat' rows only)
+ * in chunks of 200. null when the function is missing (PGRST202 / 42883: P5b not installed); any other error throws.
+ * Callers: email-store.ts's tombstone procedure, handlers/email-attention.ts's safety net and agent/turn.ts's post-finish
+ * screen (F11). Ids are checked (`ed_` + 32 hex) and de-duplicated before any call; an empty list is 0 with no call.
+ * The RPC's own WHERE keeps it to his origin = 'chat' rows not yet purged, so a card that points at a web draft
+ * (existing: true) never purges it, and a second call counts 0.
+ */
+export async function purgeDraftsByIds(principal: ExecPrincipal, draftIds: readonly string[], opts: StoreOptions = {}): Promise<number | null> {
+  if (!Array.isArray(draftIds)) refuse("draftIds must be a list");
+  const ids = [...new Set(draftIds.map((id) => checkDraftId(id)))];
+  if (ids.length === 0) return 0;
+  let purged = 0;
+  for (let i = 0; i < ids.length; i += WRITE_CHUNK) {
+    opts.signal?.throwIfAborted();
+    let query = db().rpc("exec_drafts_purge_by_ids", { p_principal: principal.id, p_draft_ids: ids.slice(i, i + WRITE_CHUNK) });
+    if (opts.signal) query = query.abortSignal(opts.signal);
+    const { data, error } = await query;
+    if (error) {
+      if (isNotInstalled(error)) return null;
+      throw failure("exec_drafts_purge_by_ids", error, opts.signal);
+    }
+    if (typeof data !== "number" || !Number.isSafeInteger(data) || data < 0) {
+      throw new DraftStoreError("exec drafts store: exec_drafts_purge_by_ids failed: the answer is not a count", null, "retryable");
+    }
+    purged += data;
+  }
+  return purged;
 }

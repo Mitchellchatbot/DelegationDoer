@@ -167,6 +167,16 @@ async function queueVoiceRefresh(principal: ExecPrincipal, sources: PackSources,
   }
 }
 
+/** P5b F9 (C44): the code-written sentence a chat-started draft's note starts with while the assistant wrote its instruction. */
+export const CHAT_INSTRUCTION_NOTE = "Started from Chat: the assistant wrote this draft's instruction, not you.";
+
+/** T05's note_for_mitchell: the model's note (null when empty); F9 puts the provenance sentence first, clipped to P4's limit. */
+export function noteFor(row: Pick<ExecDraftRow, "instructionBy">, modelNote: string): string | null {
+  if (row.instructionBy !== "assistant") return modelNote === "" ? null : modelNote;
+  const note = modelNote === "" ? CHAT_INSTRUCTION_NOTE : `${CHAT_INSTRUCTION_NOTE} ${modelNote}`;
+  return note.length > DRAFT_LIMITS.noteChars ? note.slice(0, DRAFT_LIMITS.noteChars).trimEnd() : note;
+}
+
 const union = (a: readonly string[], b: readonly string[]) => [...new Set([...a, ...b])].sort();
 
 /**
@@ -282,7 +292,9 @@ export async function runDraftGeneration(input: {
   // 8b. The output scan (C65): codes only.
   const names = await scanNamesWithin(sources, principal, pack.clientId, draftId, SCAN_NAMES_TIMEOUT_MS);
   const ctx: ScanContext = {
-    instruction: row.instruction,
+    // P5b F6 (C44): only his own instruction allows what it names; one the chat assistant wrote allows nothing, so a
+    // link, address, phone, amount, number or name found only there is flagged (unexpected_content at review).
+    instruction: row.instructionBy === "owner" ? row.instruction : null,
     factLines: pack.facts.map((f) => f.line),
     ownDomains: new Set([domainOf(principal.email)].filter((d) => d !== "")),
     internalDomains: new Set(names.internalDomains),
@@ -301,7 +313,7 @@ export async function runDraftGeneration(input: {
     body_html: built.html,
     body_text: built.text,
     placeholders: findPlaceholders(`${built.text}\n${subject ?? ""}`),
-    note_for_mitchell: parsed.out.noteForMitchell === "" ? null : parsed.out.noteForMitchell,
+    note_for_mitchell: noteFor(row, parsed.out.noteForMitchell),
     ...(row.kind === "new" ? { subject } : {}),
     model: request.model,
     usage: usageOf(result),

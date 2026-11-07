@@ -51,10 +51,11 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { jobRow } from "@/lib/exec/__tests__/fake-exec-db";
 import { auditEvent } from "@/lib/exec/audit";
 import type { ThreadClientFacts } from "@/lib/exec/correlate";
-import { deadlineSignal, runDraftGeneration } from "@/lib/exec/drafts-generate";
+import { CHAT_INSTRUCTION_NOTE, deadlineSignal, noteFor, runDraftGeneration } from "@/lib/exec/drafts-generate";
 import type { PackSources } from "@/lib/exec/drafts-pack";
 import { casDraft, getDraft, getVoiceProfile, purgeDraftsForThreads, type VoiceProfileRow } from "@/lib/exec/drafts-store";
-import { AUDIT_INPUT_KEYS, type DraftAddress, type ExecDraftRow } from "@/lib/exec/drafts-types";
+import { computeReviewBlockers } from "@/lib/exec/drafts-state";
+import { AUDIT_INPUT_KEYS, DRAFT_LIMITS, type DraftAddress, type ExecDraftRow, type GenerationFlag } from "@/lib/exec/drafts-types";
 import { getEmailThread } from "@/lib/exec/email-store";
 import type { HisMessage, MessageMeta, PrincipalMailThread } from "@/lib/exec/email-types";
 import { draftGenerateJob, draftGenerateJobHandler, parseDraftGeneratePayload } from "@/lib/exec/handlers/draft-generate";
@@ -155,6 +156,8 @@ function rowOf(over: Partial<ExecDraftRow> = {}): ExecDraftRow {
     sentAuditId: null, sentMismatch: false, unverified: false, goneUnconfirmed: false, signatureSkipped: false, outlookEdited: false, restrictedPurged: false, usesPrivateRefs: false,
     cloneFlags: [], ownerResolution: null, openedInOutlookAt: null, lastErrorCode: null, lastErrorAt: null, nextCheckAt: iso(NOW.getTime() + 5 * MIN), checkCount: 0, goneAt: null,
     createdAt: iso(NOW.getTime() - 5 * MIN), updatedAt: iso(NOW.getTime() - MIN), terminalAt: null, contentPurgedAt: null, expiresAt: null,
+    instructionBy: "owner",
+    chatMessageId: null,
     ...over
   };
 }
@@ -833,5 +836,105 @@ describe("handlers/draft-generate.ts", () => {
     expect(result).toEqual({ draftId: DRAFT_ID, outcome: "ok", costUsd: 0.0123 });
     await expect(draftGenerateJobHandler.run(ctx({ draftId: DRAFT_ID, seq: 2 }, null))).rejects.toThrow(NonRetryableError);
     await expect(draftGenerateJobHandler.run(ctx({ draftId: DRAFT_ID }))).rejects.toThrow(/malformed payload/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TF6 and TF9 (P5b contract §3.23 F6, F9, C44): an instruction the chat assistant wrote is semi-trusted
+// ---------------------------------------------------------------------------
+
+describe("TF6 the output scan exempts nothing that is only in an assistant-written instruction", () => {
+  const URL = "https://pay.example-billing.com/invoice/77";
+  const IBAN = "DE89370400440532013000";
+  const PHONE = "(555) 123-4567";
+  const AMOUNT = "$2,450";
+  const instruction = `Send the invoice link ${URL}, the bank account ${IBAN}, my cell ${PHONE} and the price ${AMOUNT}.`;
+  const copied = answer({
+    paragraphs: ["Hi Ann,", `Here is the invoice: ${URL}. Please pay ${AMOUNT} to ${IBAN}.`, `Call me on ${PHONE} with questions.`]
+  });
+
+  it("flags the URL, the IBAN-like number, the phone and the amount, and the review then requires unexpected_content", async () => {
+    vi.mocked(getDraft).mockResolvedValue(rowOf({ origin: "chat", instructionBy: "assistant", instruction, generationFlags: [] }));
+    vi.mocked(callModel).mockResolvedValue(copied);
+    expect((await run()).outcome).toBe("ok");
+    const flags = patchOf().generation_flags as GenerationFlag[];
+    expect(flags).toEqual(["unexpected_url", "unexpected_phone", "unexpected_amount", "unexpected_number"]);
+    const blockers = computeReviewBlockers({
+      draftCreatedAtMs: NOW.getTime() - 5 * MIN, generatedAtMs: NOW.getTime(), parentMessageId: "m2", replyMode: "reply", parentSentAtMs: null,
+      thread: null, ownAddresses: new Set(["mitchell@scaledai.org"]), legacyArtifacts: null, siblingDrafts: [], openedInOutlookAt: null,
+      storedContentHash: null, readBackContentHash: "a".repeat(64), storedSig: null, readBackSig: "a".repeat(64), readBackReplyToCount: 0,
+      ownPartPlaceholders: [], ddPlaceholders: [], factsOutsideClient: false, generationFlags: flags, usesPrivateRefs: false
+    });
+    expect(blockers).toEqual(["unexpected_content"]);
+    // The flagged values never leave the scan.
+    for (const v of [URL, IBAN, PHONE, AMOUNT]) expect(JSON.stringify(auditInputs())).not.toContain(v);
+  });
+
+  it("the same tokens in his own instruction aren't flagged (a regenerated chat draft with his instruction included)", async () => {
+    vi.mocked(getDraft).mockResolvedValue(rowOf({ instructionBy: "owner", instruction, generationFlags: [] }));
+    vi.mocked(callModel).mockResolvedValue(copied);
+    await run();
+    expect(patchOf().generation_flags).toEqual([]);
+    vi.mocked(casDraft).mockClear();
+    vi.mocked(getDraft).mockResolvedValue(rowOf({ origin: "chat", instructionBy: "owner", instruction, generationFlags: [] }));
+    await run();
+    expect(patchOf().generation_flags).toEqual([]);
+  });
+
+  it("a name only in an assistant instruction is flagged too (the name checks see no instruction)", async () => {
+    vi.mocked(getDraft).mockResolvedValue(rowOf({ origin: "chat", instructionBy: "assistant", instruction: "Mention that Jane Doe will follow up.", generationFlags: [] }));
+    vi.mocked(callModel).mockResolvedValue(answer({ paragraphs: ["Hi Ann,", "Jane Doe will follow up."] }));
+    await run();
+    expect(patchOf().generation_flags).toEqual(["teammate_name"]);
+    vi.mocked(casDraft).mockClear();
+    vi.mocked(getDraft).mockResolvedValue(rowOf({ instructionBy: "owner", instruction: "Mention that Jane Doe will follow up.", generationFlags: [] }));
+    await run();
+    expect(patchOf().generation_flags).toEqual([]);
+  });
+});
+
+describe("TF9 a chat draft's note starts with the provenance sentence", () => {
+  const SENTENCE = "Started from Chat: the assistant wrote this draft's instruction, not you.";
+
+  it("T05 on an assistant-instruction draft writes the sentence first, then the model's note", async () => {
+    vi.mocked(getDraft).mockResolvedValue(rowOf({ origin: "chat", instructionBy: "assistant" }));
+    await run();
+    expect(patchOf().note_for_mitchell).toBe(`${SENTENCE} Confirms the page is on track.`);
+    expect(CHAT_INSTRUCTION_NOTE).toBe(SENTENCE);
+  });
+
+  it("clipped to P4's 400 characters; an empty model note leaves the sentence alone", async () => {
+    vi.mocked(getDraft).mockResolvedValue(rowOf({ origin: "chat", instructionBy: "assistant" }));
+    vi.mocked(callModel).mockResolvedValue(answer({ note_for_mitchell: "Check the date. ".repeat(30).trim() }));
+    await run();
+    const note = patchOf().note_for_mitchell as string;
+    expect(note.length).toBeLessThanOrEqual(DRAFT_LIMITS.noteChars);
+    expect(note.startsWith(`${SENTENCE} Check the date.`)).toBe(true);
+    vi.mocked(casDraft).mockClear();
+    vi.mocked(callModel).mockResolvedValue(answer({ note_for_mitchell: "" }));
+    await run();
+    expect(patchOf().note_for_mitchell).toBe(SENTENCE);
+  });
+
+  it("an owner draft's note is unchanged (and empty stays null); his own instruction on a chat draft drops the sentence", async () => {
+    await run();
+    expect(patchOf().note_for_mitchell).toBe("Confirms the page is on track.");
+    vi.mocked(casDraft).mockClear();
+    vi.mocked(callModel).mockResolvedValue(answer({ note_for_mitchell: "" }));
+    await run();
+    expect(patchOf().note_for_mitchell).toBeNull();
+    vi.mocked(casDraft).mockClear();
+    vi.mocked(callModel).mockResolvedValue(answer());
+    vi.mocked(getDraft).mockResolvedValue(rowOf({ origin: "chat", instructionBy: "owner" }));
+    await run();
+    expect(patchOf().note_for_mitchell).toBe("Confirms the page is on track.");
+  });
+
+  it("noteFor is the one rule", () => {
+    expect(noteFor({ instructionBy: "owner" }, "")).toBeNull();
+    expect(noteFor({ instructionBy: "owner" }, "x")).toBe("x");
+    expect(noteFor({ instructionBy: "assistant" }, "")).toBe(SENTENCE);
+    expect(noteFor({ instructionBy: "assistant" }, "x")).toBe(`${SENTENCE} x`);
+    expect(noteFor({ instructionBy: "assistant" }, "y".repeat(400))).toHaveLength(400);
   });
 });

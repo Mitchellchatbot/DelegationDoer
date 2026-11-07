@@ -70,23 +70,25 @@ describe("ExecHeader", () => {
 
 describe("ExecTabs", () => {
   it("marks the active tab and links each tab to its page, then Settings (P5a C23)", () => {
-    const tabs = [...EXEC_TABS, { key: "chat", href: "/executive/chat", label: "Chat" }];
+    // P5b ships the Chat tab in EXEC_TABS itself (contract §3.19.11).
+    const tabs = EXEC_TABS;
     const out = html(createElement(ExecTabs, { active: "chat", tabs }));
     expect(hrefs(out)).toEqual(["/executive", "/executive/email", "/executive/team", "/executive/projects", "/executive/chat", "/executive/settings"]);
     expect(out.match(/aria-current="page"/g)).toHaveLength(1);
     expect(out).toMatch(/<a[^>]*aria-current="page"[^>]*href="\/executive\/chat"|<a[^>]*href="\/executive\/chat"[^>]*aria-current="page"/);
   });
 
-  it("ships Overview, Email (P3), Team and Projects (P5a), the pages that exist, so it never links to a 404", () => {
+  it("ships Overview, Email (P3), Team and Projects (P5a) and Chat (P5b), the pages that exist, so it never links to a 404", () => {
     expect(EXEC_TABS).toEqual([
       { key: "overview", href: "/executive", label: "Overview" },
       { key: "email", href: "/executive/email", label: "Email" },
       { key: "team", href: "/executive/team", label: "Team" },
-      { key: "projects", href: "/executive/projects", label: "Projects" }
+      { key: "projects", href: "/executive/projects", label: "Projects" },
+      { key: "chat", href: "/executive/chat", label: "Chat" }
     ]);
     const out = html(createElement(ExecTabs, { active: "overview", tabs: EXEC_TABS }));
     // The Settings gear is an icon with an aria-label: no visible text.
-    expect(textOf(out)).toBe("OverviewEmailTeamProjects");
+    expect(textOf(out)).toBe("OverviewEmailTeamProjectsChat");
     expect(out).toContain('aria-current="page"');
   });
 

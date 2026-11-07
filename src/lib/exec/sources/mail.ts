@@ -1028,6 +1028,94 @@ export async function listPrincipalThreadsSince(
   };
 }
 
+// ---------------------------------------------------------------------------
+// The chat's live search (P5b contract §3.9; Area B)
+// ---------------------------------------------------------------------------
+
+export interface ThreadSearchOptions extends CloneCallOptions {
+  /** Free text matched against subjects and participants; '' for none. */
+  query: string;
+  /** '' or a sender name, address or domain (sent as from:"…"). */
+  from: string;
+  /** Lower bound on the thread's last message (sent as after:"YYYY-MM-DD", UTC date). */
+  sinceMs: number;
+  /** Explicit folders; never omitted (omitting pulls Junk). */
+  folders: readonly ("INBOX" | "SENT")[];
+  /** Per folder pass, 1..25. */
+  limit: number;
+  /** Accounts to search; each must be pinned (MailScopeError otherwise). */
+  usable: readonly string[];
+}
+
+export interface ThreadSearchHit {
+  threadId: string;
+  accountId: string;
+  folder: "INBOX" | "SENT";
+  lastMessageAtMs: number | null;
+}
+
+const SEARCH_MAX_LIMIT = 25;
+const SEARCH_FOLDERS: ReadonlySet<string> = new Set(["INBOX", "SENT"]);
+
+// The clone parses q as a Gmail-style operator string (ai-tools' builders, copied): a value with whitespace must be
+// quoted or its tail leaks into the free-text match; a value can't contain a quote (stripped, never escaped); an empty
+// value poisons the free-text match, so an empty term is left out; operator-shaped words inside free text are defused.
+function searchValue(raw: unknown): string {
+  if (typeof raw !== "string") return "";
+  return raw.replace(/"/g, " ").replace(/[\r\n\t]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function searchTerm(key: string, raw: unknown): string {
+  const v = searchValue(raw);
+  return v ? `${key}:"${v}"` : "";
+}
+
+function searchFreeText(raw: unknown): string {
+  const v = searchValue(raw).replace(/\b(from|to|subject|has|is|label|before|after)\s*:\s*/gi, "$1 ").trim();
+  return v ? `"${v}"` : "";
+}
+
+/**
+ * One listThreadsPaged call per (account, folder) with mailboxId, folder, q, limit, offset 0, no status and no snoozed
+ * pass (C36). Returns ids and times only (list aggregates span every account and are dropped), deduped by thread id
+ * keeping the newest lastMessageAt, newest first. The q string is built here only: quoted free text, from:"…" and
+ * after:"YYYY-MM-DD" (UTC). Nothing about the query is logged.
+ */
+export async function searchPrincipalThreads(principal: ExecPrincipal, opts: ThreadSearchOptions): Promise<ThreadSearchHit[]> {
+  const usable = [...new Set(opts.usable)];
+  for (const accountId of usable) requirePinnedAccount(principal, accountId, "searchPrincipalThreads");
+  const folders = [...new Set(opts.folders)];
+  if (folders.length === 0 || folders.some((f) => !SEARCH_FOLDERS.has(f))) {
+    throw new NonRetryableError("searchPrincipalThreads: folders must be INBOX and/or SENT");
+  }
+  if (typeof opts.limit !== "number" || !Number.isInteger(opts.limit) || opts.limit < 1 || opts.limit > SEARCH_MAX_LIMIT) {
+    throw new NonRetryableError(`searchPrincipalThreads: limit must be 1-${SEARCH_MAX_LIMIT}`);
+  }
+  if (typeof opts.sinceMs !== "number" || !Number.isFinite(opts.sinceMs) || Math.abs(opts.sinceMs) > MAX_DATE_MS) {
+    throw new NonRetryableError("searchPrincipalThreads: sinceMs must be a time");
+  }
+  const after = new Date(opts.sinceMs).toISOString().slice(0, 10);
+  const q = [searchFreeText(opts.query), searchTerm("from", opts.from), `after:"${after}"`].filter(Boolean).join(" ");
+
+  const best = new Map<string, ThreadSearchHit>();
+  for (const accountId of usable) {
+    for (const folder of folders as ("INBOX" | "SENT")[]) {
+      const page = await cloneCall("thread search", opts, (signal) =>
+        listThreadsPaged({ mailboxId: accountId, folder, q, limit: opts.limit, offset: 0, signal })
+      );
+      for (const t of Array.isArray(page.threads) ? page.threads : []) {
+        if (typeof t !== "object" || t === null || typeof t.id !== "string" || t.id.length === 0) continue;
+        const hit: ThreadSearchHit = { threadId: t.id, accountId, folder, lastMessageAtMs: cloneTimeToMs(t.last_message_at) };
+        const seen = best.get(t.id);
+        if (!seen || (hit.lastMessageAtMs ?? -Infinity) > (seen.lastMessageAtMs ?? -Infinity)) best.set(t.id, hit);
+      }
+    }
+  }
+  return [...best.values()].sort(
+    (a, b) => (b.lastMessageAtMs ?? -Infinity) - (a.lastMessageAtMs ?? -Infinity) || (a.threadId < b.threadId ? -1 : a.threadId > b.threadId ? 1 : 0)
+  );
+}
+
 /**
  * One row of his CL1 messages feed. Times are epoch ms (addenda §1.9);
  * signalsAtMs is COALESCE(signals_updated_at, created_at), the feed's own

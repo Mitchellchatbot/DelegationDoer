@@ -98,6 +98,8 @@ describe("UI03: ConfirmSendContent", () => {
     expect(text).toContain("I've closed this draft in Outlook and nobody else is editing it");
     expect(text).toContain("This draft uses internal status for Acme Dental, and a recipient isn't at Acme Dental. Send anyway");
     expect(text).toContain("The assistant added a link and an amount of money that weren't in your instruction or the client facts. I've checked them");
+    // P5b F4 / F12 (C45): the chat's second confirmation.
+    expect(text).toContain("This draft was started in a chat that also read other email, team notes or other clients' records. I've checked it shares nothing it shouldn't");
     for (const b of blockers) {
       if (b === "facts_outside_client" || b === "unexpected_content") continue;
       expect(text).toContain(BLOCKER_COPY[b]);

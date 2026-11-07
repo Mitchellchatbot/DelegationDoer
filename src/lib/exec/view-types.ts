@@ -204,4 +204,9 @@ export interface SettingsView {
   feedback: Section<FeedbackTotals | null>;
   /** C20: P4's VoiceProfileRow (drafts-store.ts). installed false = P4's table isn't there; profile null = none built yet. */
   voice: Section<{ installed: boolean; profile: VoiceProfileRow | null }>;
+  /**
+   * P5b (C30, coherence-21): the chat cap that actually applies, min(chatDailyCapUsd, 0.6 x dailyCostCapUsd) rounded
+   * down to the cent (agent/budget.ts effectiveChatCapUsd); shown beside the chat budget field. 0 = chat is paused.
+   */
+  effectiveChatCapUsd: number;
 }

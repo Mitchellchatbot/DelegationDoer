@@ -61,6 +61,8 @@ export default async function ExecutiveAttentionPage({ searchParams }: { searchP
   // Review ui-5: no feedback controls while exec_attention_feedback is missing (the P5a
   // migration not applied); an unreadable settings row leaves them on (the route answers).
   const feedbackAvailable = gate === null || gate.settings.ddtextSchemaReady;
+  // P5b (C33): Ask AI on every row while chat is installed and on; an unreadable settings row leaves it off.
+  const askAiEnabled = gate !== null && gate.settings.chatSchemaReady && gate.settings.chatEnabled;
   return (
     <AttentionPageView
       page={page}
@@ -73,6 +75,7 @@ export default async function ExecutiveAttentionPage({ searchParams }: { searchP
       ignoredParams={ignored}
       freshnessUnavailable={!freshness.ok}
       feedbackAvailable={feedbackAvailable}
+      askAiEnabled={askAiEnabled}
     />
   );
 }

@@ -9,8 +9,10 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 // D): comment, status-change, handoff and extension text from activity_logs,
 // submitted EOD/SOD blockers (only while unedited since submission, K28), and
 // meeting-brief risks. Importable only by triage/ddtext.ts,
-// handlers/ddtext-triage.ts, projects-view.ts (listMeetingBriefRisks only) and
-// agent/** (boundary rule 10). P5b adds its chat reads here.
+// handlers/ddtext-triage.ts, projects-view.ts (listMeetingBriefRisks only) and,
+// among agent/** files, agent/tools.ts alone (boundary rule 10, narrowed by
+// P5b §3.20 item 1). P5b's chat reads (task descriptions, a task's timeline
+// and legacy messages, submitted EOD/SOD text) are at the end of this file.
 //
 // The rules of sources/dd.ts hold: fail closed (an error throws DdReadError
 // naming the table, never an empty list), bounded (pages of 1000 by a unique
@@ -439,4 +441,217 @@ export async function listMeetingBriefRisks(
   return [...byId.values()]
     .sort((a, b) => cmpTime(b.meetingAt, a.meetingAt) || (a.meetingId < b.meetingId ? 1 : a.meetingId > b.meetingId ? -1 : 0))
     .slice(0, q.limit);
+}
+
+// ---------------------------------------------------------------------------
+// P5b's chat reads (P5b contract §3.7; Area B). Same rules as above: explicit
+// columns, the caller's signal, bounded, DdReadError naming the table, text
+// sanitized and clipped here, nothing logged. Never hosting_access,
+// staging_server, client_email, custom, missive_thread_url, transcript, a
+// token column, task_handoffs.reason or task_extensions.reason: handoff and
+// extension text comes from their activity_logs rows through the parse above.
+// ---------------------------------------------------------------------------
+
+const MAX_DESCRIPTION_IDS = 50;
+const MAX_TIMELINE_ROWS = 60;
+const MAX_TASK_MESSAGES = 20;
+const MAX_NOTE_PAIRS = 200;
+const ARROW = "\u{2192}";
+// P5a's STATUS_TRANSITION rule (sources/dd.ts): "{from} → {to}" on the first line.
+const STATUS_TRANSITION_LINE = new RegExp(`^\\s*([a-z_]+)\\s*${ARROW}\\s*([a-z_]+)`);
+const YMD = /^\d{4}-\d{2}-\d{2}$/;
+
+/** tasks.description for these ids (≤ 50 per call), any state. No other text column. A missing id is absent. */
+export async function getTaskDescriptions(principal: ExecPrincipal, taskIds: readonly string[], opts: DdReadOptions = {}): Promise<Map<string, string | null>> {
+  requirePrincipal(principal);
+  const ids = uniqueIds(taskIds);
+  if (ids.length > MAX_DESCRIPTION_IDS) throw new TypeError(`sources/dd-text: at most ${MAX_DESCRIPTION_IDS} task ids`);
+  const out = new Map<string, string | null>();
+  if (ids.length === 0) return out;
+  const rows = await run("tasks", from("tasks", "id,description").in("id", ids).limit(MAX_DESCRIPTION_IDS), opts.signal);
+  for (const raw of rows) {
+    const r = (typeof raw === "object" && raw !== null ? raw : {}) as Record<string, unknown>;
+    if (typeof r.id !== "string") throw new DdReadError("tasks", "a row is malformed");
+    const text = typeof r.description === "string" ? cleanText(r.description) : "";
+    out.set(r.id, text === "" ? null : text);
+  }
+  return out;
+}
+
+export type TimelineTextEntry =
+  /** comment → detail; status_change → the note after its first line (C26, coherence-13; P5a C28); handoff → the lines
+   *  after the first; extended → the reason after the first " — ". P5a's DdTextActivity parse, sanitized, ≤ 1,500. */
+  | { kind: "comment" | "status_change" | "handoff" | "extended"; id: string; userId: string; at: string; text: string;
+      /** status_change only: the first line parsed (P5a's STATUS_TRANSITION rule), else null. */
+      from: string | null; to: string | null }
+  /** Every other action: its name only, never its detail. */
+  | { kind: "action"; id: string; userId: string; at: string; action: string };
+
+const TIMELINE_COLS = "id,task_id,user_id,action,detail,created_at";
+const ACTION_NAME = /^[a-z][a-z0-9_]{0,63}$/;
+
+/** One task's activity_logs rows (activity_logs task_id index), newest first, ≤ 60. */
+export async function listTaskTimelineText(principal: ExecPrincipal, taskId: string, opts: DdReadOptions = {}): Promise<TimelineTextEntry[]> {
+  requirePrincipal(principal);
+  if (typeof taskId !== "string" || taskId.length === 0) throw new TypeError("sources/dd-text: taskId is required");
+  const rows = await run(
+    "activity_logs",
+    from("activity_logs", TIMELINE_COLS)
+      .eq("task_id", taskId)
+      .order("created_at", { ascending: false })
+      .order("id", { ascending: false })
+      .limit(MAX_TIMELINE_ROWS),
+    opts.signal
+  );
+  return rows.map((raw): TimelineTextEntry => {
+    const r = (typeof raw === "object" && raw !== null ? raw : {}) as Record<string, unknown>;
+    if (typeof r.id !== "string" || typeof r.user_id !== "string" || typeof r.created_at !== "string" || typeof r.action !== "string") {
+      throw new DdReadError("activity_logs", "a row is malformed");
+    }
+    if (isDdTextAction(r.action)) {
+      let fromStatus: string | null = null;
+      let toStatus: string | null = null;
+      if (r.action === "status_change" && typeof r.detail === "string") {
+        const match = STATUS_TRANSITION_LINE.exec(r.detail.split("\n", 1)[0]);
+        if (match) {
+          fromStatus = match[1];
+          toStatus = match[2];
+        }
+      }
+      return { kind: r.action, id: r.id, userId: r.user_id, at: r.created_at, text: freeText(r.action, r.detail), from: fromStatus, to: toStatus };
+    }
+    // Every other action is its name, never its detail.
+    return { kind: "action", id: r.id, userId: r.user_id, at: r.created_at, action: ACTION_NAME.test(r.action) ? r.action : "other" };
+  });
+}
+
+/** task_messages (id, user_id, body, created_at) of one task, newest first, ≤ 20. Legacy: no writer today (TP). */
+export async function listTaskMessagesText(
+  principal: ExecPrincipal,
+  taskId: string,
+  opts: DdReadOptions = {}
+): Promise<{ id: string; userId: string | null; at: string; text: string }[]> {
+  requirePrincipal(principal);
+  if (typeof taskId !== "string" || taskId.length === 0) throw new TypeError("sources/dd-text: taskId is required");
+  const rows = await run(
+    "task_messages",
+    from("task_messages", "id,user_id,body,created_at")
+      .eq("task_id", taskId)
+      .order("created_at", { ascending: false })
+      .order("id", { ascending: false })
+      .limit(MAX_TASK_MESSAGES),
+    opts.signal
+  );
+  return rows.map((raw) => {
+    const r = (typeof raw === "object" && raw !== null ? raw : {}) as Record<string, unknown>;
+    if (typeof r.id !== "string" || typeof r.created_at !== "string") throw new DdReadError("task_messages", "a row is malformed");
+    return { id: r.id, userId: typeof r.user_id === "string" ? r.user_id : null, at: r.created_at, text: typeof r.body === "string" ? cleanText(r.body) : "" };
+  });
+}
+
+export interface SubmittedNoteText {
+  kind: "eod" | "sod"; id: string; userId: string; noteDate: string; submittedAt: string; reviewedAt: string | null;
+  /** C52 (a-correct-9): !submittedTextIsCurrent({ submittedAt, updatedAt }). Then `fields` is empty: the text is never returned. */
+  editedAfterSubmit: boolean;
+  /** In display order, non-empty fields only. EOD: Worked on, Accomplished, Plan for tomorrow, Blockers, Notes, Ideas,
+   *  Left off at, Leads messaged, LinkedIn comments. SOD: Top priority, Tasks planned, Blockers. */
+  fields: { label: string; text: string }[];
+}
+
+const EOD_TEXT_FIELDS: readonly [string, string][] = [
+  ["worked_on", "Worked on"],
+  ["accomplished", "Accomplished"],
+  ["plan_tomorrow", "Plan for tomorrow"],
+  ["blockers", "Blockers"],
+  ["note", "Notes"],
+  ["ideas", "Ideas"],
+  ["left_where_off", "Left off at"],
+  ["leads_messaged", "Leads messaged"],
+  ["linkedin_comments", "LinkedIn comments"]
+];
+const SOD_TEXT_FIELDS: readonly [string, string][] = [
+  ["top_priority", "Top priority"],
+  ["tasks_planned", "Tasks planned"],
+  ["blockers", "Blockers"]
+];
+const EOD_TEXT_COLS =
+  "id,user_id,note_date,submitted_at,reviewed_at,updated_at,worked_on,accomplished,plan_tomorrow,blockers,note,ideas,left_where_off,leads_messaged,linkedin_comments";
+const SOD_TEXT_COLS = "id,user_id,note_date,submitted_at,updated_at,top_priority,tasks_planned,blockers";
+
+function noteTextFrom(kind: "eod" | "sod", table: string, raw: unknown): SubmittedNoteText {
+  const r = (typeof raw === "object" && raw !== null ? raw : {}) as Record<string, unknown>;
+  if (
+    typeof r.id !== "string" ||
+    typeof r.user_id !== "string" ||
+    typeof r.note_date !== "string" ||
+    typeof r.submitted_at !== "string" ||
+    typeof r.updated_at !== "string"
+  ) {
+    throw new DdReadError(table, "a row is malformed");
+  }
+  const editedAfterSubmit = !submittedTextIsCurrent({ submittedAt: r.submitted_at, updatedAt: r.updated_at });
+  const fields: { label: string; text: string }[] = [];
+  if (!editedAfterSubmit) {
+    for (const [column, label] of kind === "eod" ? EOD_TEXT_FIELDS : SOD_TEXT_FIELDS) {
+      const text = typeof r[column] === "string" ? cleanText(r[column] as string) : "";
+      if (text !== "") fields.push({ label, text });
+    }
+  }
+  return {
+    kind,
+    id: r.id,
+    userId: r.user_id,
+    noteDate: r.note_date,
+    submittedAt: r.submitted_at,
+    reviewedAt: kind === "eod" && typeof r.reviewed_at === "string" ? r.reviewed_at : null,
+    editedAfterSubmit,
+    fields
+  };
+}
+
+/** Submitted notes only (submitted_at is not null), selecting updated_at with the text columns. EOD: one ET date,
+ *  optionally one user (eod_notes_date_idx). SOD: (user, the user's own local date) pairs, ≤ 200. */
+export async function listSubmittedNotesText(
+  principal: ExecPrincipal,
+  q: { kind: "eod"; noteDate: string; userId: string | null } | { kind: "sod"; pairs: readonly { userId: string; noteDate: string }[] },
+  opts: DdReadOptions = {}
+): Promise<SubmittedNoteText[]> {
+  requirePrincipal(principal);
+  if (q.kind === "eod") {
+    if (typeof q.noteDate !== "string" || !YMD.test(q.noteDate)) throw new TypeError("sources/dd-text: noteDate must be YYYY-MM-DD");
+    const userId = q.userId;
+    if (userId !== null && (typeof userId !== "string" || userId.length === 0)) throw new TypeError("sources/dd-text: userId must be an id or null");
+    const raw = await pageAll(
+      "eod_notes",
+      () => {
+        const base = from("eod_notes", EOD_TEXT_COLS).eq("note_date", q.noteDate).not("submitted_at", "is", null);
+        return userId === null ? base : base.eq("user_id", userId);
+      },
+      ["id"],
+      opts.signal
+    );
+    return raw.map((row) => noteTextFrom("eod", "eod_notes", row));
+  }
+  if (q.kind !== "sod") throw new TypeError("sources/dd-text: kind must be eod or sod");
+  const pairs = q.pairs.filter((p) => p && typeof p.userId === "string" && p.userId.length > 0 && typeof p.noteDate === "string" && YMD.test(p.noteDate));
+  if (pairs.length > MAX_NOTE_PAIRS) throw new TypeError(`sources/dd-text: at most ${MAX_NOTE_PAIRS} (user, date) pairs`);
+  const wanted = new Set(pairs.map((p) => `${p.userId}|${p.noteDate}`));
+  const byDate = new Map<string, string[]>();
+  for (const p of pairs) byDate.set(p.noteDate, [...new Set([...(byDate.get(p.noteDate) ?? []), p.userId])]);
+  const out: SubmittedNoteText[] = [];
+  for (const [noteDate, users] of [...byDate].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
+    for (const chunk of chunked(users)) {
+      const raw = await pageAll(
+        "sod_notes",
+        () => from("sod_notes", SOD_TEXT_COLS).eq("note_date", noteDate).in("user_id", chunk).not("submitted_at", "is", null),
+        ["id"],
+        opts.signal
+      );
+      for (const row of raw) {
+        const note = noteTextFrom("sod", "sod_notes", row);
+        if (wanted.has(`${note.userId}|${note.noteDate}`)) out.push(note);
+      }
+    }
+  }
+  return out;
 }

@@ -198,7 +198,12 @@ describe("settingsFromRow", () => {
       // P5a stage -1 seed: this row has no P5a columns, so ddtext is off and not installed.
       ddtextEnabled: false,
       retentionDaysDdtext: 90,
-      ddtextSchemaReady: false
+      ddtextSchemaReady: false,
+      // P5b stage -1 seed: nor the P5b columns, so chat is off and not installed.
+      chatEnabled: false,
+      askAiUsesExec: false,
+      chatDailyCapUsd: 9,
+      chatSchemaReady: false
     });
   });
 
@@ -531,7 +536,7 @@ describe("loadSettings", () => {
 
   it("returns defaults when there is no row (the columns were read, so every schema is ready)", async () => {
     fakeDb({ exec_settings: [] });
-    expect(await loadSettings("ep_1")).toEqual({ principalId: "ep_1", ...DEFAULT_SETTINGS, emailSchemaReady: true, draftsSchemaReady: true, ddtextSchemaReady: true });
+    expect(await loadSettings("ep_1")).toEqual({ principalId: "ep_1", ...DEFAULT_SETTINGS, emailSchemaReady: true, draftsSchemaReady: true, ddtextSchemaReady: true, chatSchemaReady: true });
   });
 
   // P5a (bindings AM9): the column-group loader replaces P4's three tiers. A
@@ -539,10 +544,11 @@ describe("loadSettings", () => {
   // drafts group (P4's migration can't exist without P3's column); the ddtext
   // group needs neither and stays. A message that names no column drops the
   // last still-selected group each time, so PGRST204's bare form walks all the
-  // way down (ddtext, drafts, email) before the base read answers.
+  // way down (P5b's chat, ddtext, drafts, email) before the base read answers.
+  // P5b: the chat group needs drafts, so a named email column takes it too.
   const emailMissingReads: Record<string, { reads: number; ddtextSchemaReady: boolean }> = {
     "42703": { reads: 2, ddtextSchemaReady: true },
-    PGRST204: { reads: 4, ddtextSchemaReady: false },
+    PGRST204: { reads: 5, ddtextSchemaReady: false },
     "message only": { reads: 2, ddtextSchemaReady: true }
   };
   for (const [form, err] of Object.entries(missingColumn)) {
@@ -559,7 +565,9 @@ describe("loadSettings", () => {
         emailSchemaReady: false,
         draftsEnabled: false,
         draftsSchemaReady: false,
-        ddtextSchemaReady: expected.ddtextSchemaReady
+        ddtextSchemaReady: expected.ddtextSchemaReady,
+        chatEnabled: false,
+        chatSchemaReady: false
       });
       const reads = db.queries.filter((q) => q.table === "exec_settings");
       expect(reads).toHaveLength(expected.reads);
@@ -570,12 +578,15 @@ describe("loadSettings", () => {
       expect(last).not.toContain("drafts_enabled");
       expect(last).toContain("retention_days_email");
       expect(last.includes("ddtext_enabled")).toBe(expected.ddtextSchemaReady);
+      expect(last).not.toContain("chat_enabled");
       if (form === "PGRST204") {
-        // Unnamed: the last group first (ddtext), then drafts, then email.
-        expect(reads[1].columns).not.toContain("ddtext_enabled");
-        expect(reads[1].columns).toContain("drafts_enabled");
-        expect(reads[2].columns).toContain("email_enabled");
-        expect(reads[2].columns).not.toContain("drafts_enabled");
+        // Unnamed: the last group first (P5b's chat), then ddtext, then drafts, then email.
+        expect(reads[1].columns).not.toContain("chat_enabled");
+        expect(reads[1].columns).toContain("ddtext_enabled");
+        expect(reads[2].columns).not.toContain("ddtext_enabled");
+        expect(reads[2].columns).toContain("drafts_enabled");
+        expect(reads[3].columns).toContain("email_enabled");
+        expect(reads[3].columns).not.toContain("drafts_enabled");
       }
     });
   }
@@ -638,7 +649,7 @@ describe("loadSettings: the column-group loader (P5a test 22)", () => {
     const cols = reads(db);
     expect(cols).toHaveLength(1);
     expect(cols[0].split(",")).toEqual(expect.arrayContaining(["updated_at", ...SETTINGS_COLUMN_GROUPS.flatMap((g) => [...g.columns])]));
-    expect(cols[0]).toBe(settingsColumnsFor({ email: true, drafts: true, ddtext: true }));
+    expect(cols[0]).toBe(settingsColumnsFor({ email: true, drafts: true, ddtext: true, chat: true }));
   });
 
   const ddtextMissing: Record<string, DbError> = {
@@ -687,18 +698,21 @@ describe("loadSettings: the column-group loader (P5a test 22)", () => {
 
   it("an unnamed 42703 drops the last still-selected group first", async () => {
     const unnamed = { code: "42703", message: "column does not exist" };
+    // P5b: the chat group is now the last one, so it goes first (then ddtext, whose column fails).
     const db = fakeDb({ exec_settings: [fullRow()] }, {}, failWhen("ddtext_enabled", unnamed));
-    expect(await loadSettings("ep_1")).toMatchObject({ emailSchemaReady: true, draftsSchemaReady: true, ddtextSchemaReady: false });
-    expect(reads(db)).toHaveLength(2);
-    // The failing column belongs to an earlier group: the later (present) group goes first, then that one.
+    expect(await loadSettings("ep_1")).toMatchObject({ emailSchemaReady: true, draftsSchemaReady: true, ddtextSchemaReady: false, chatSchemaReady: false });
+    expect(reads(db)).toHaveLength(3);
+    // The failing column belongs to an earlier group: the later (present) groups go first, then that one.
     const db2 = fakeDb({ exec_settings: [fullRow()] }, {}, failWhen("send_enabled", unnamed));
-    expect(await loadSettings("ep_1")).toMatchObject({ emailSchemaReady: true, draftsSchemaReady: false, ddtextSchemaReady: false });
+    expect(await loadSettings("ep_1")).toMatchObject({ emailSchemaReady: true, draftsSchemaReady: false, ddtextSchemaReady: false, chatSchemaReady: false });
     const cols = reads(db2);
-    expect(cols).toHaveLength(3);
-    expect(cols[1]).toContain("drafts_enabled");
-    expect(cols[1]).not.toContain("ddtext_enabled");
-    expect(cols[2]).toContain("email_enabled");
-    expect(cols[2]).not.toContain("drafts_enabled");
+    expect(cols).toHaveLength(4);
+    expect(cols[1]).toContain("ddtext_enabled");
+    expect(cols[1]).not.toContain("chat_enabled");
+    expect(cols[2]).toContain("drafts_enabled");
+    expect(cols[2]).not.toContain("ddtext_enabled");
+    expect(cols[3]).toContain("email_enabled");
+    expect(cols[3]).not.toContain("drafts_enabled");
   });
 
   it("any other error throws after one read (a 500, a timeout, a connection failure)", async () => {
@@ -716,7 +730,7 @@ describe("loadSettings: the column-group loader (P5a test 22)", () => {
     await expect(loadSettings("ep_1")).rejects.toThrow("exec_settings read failed: column exec_settings.updated_at does not exist");
     const cols = reads(db);
     expect(cols).toHaveLength(SETTINGS_COLUMN_GROUPS.length + 1);
-    expect(cols[cols.length - 1]).toBe(settingsColumnsFor({ email: false, drafts: false, ddtext: false }));
+    expect(cols[cols.length - 1]).toBe(settingsColumnsFor({ email: false, drafts: false, ddtext: false, chat: false }));
   });
 
   it("a principal's timezone still loads with only the base columns", async () => {
@@ -742,7 +756,7 @@ describe("loadSettingsSnapshot and the snapshot helpers (P5a test 23)", () => {
     fakeDb({ exec_settings: [] });
     expect(await loadSettingsSnapshot("ep_1")).toEqual({
       version: null,
-      settings: { principalId: "ep_1", ...DEFAULT_SETTINGS, emailSchemaReady: true, draftsSchemaReady: true, ddtextSchemaReady: true }
+      settings: { principalId: "ep_1", ...DEFAULT_SETTINGS, emailSchemaReady: true, draftsSchemaReady: true, ddtextSchemaReady: true, chatSchemaReady: true }
     });
     fakeDb({}, { exec_settings: "down" });
     await expect(loadSettingsSnapshot("ep_1")).rejects.toThrow("exec_settings read failed: down");
@@ -761,25 +775,34 @@ describe("loadSettingsSnapshot and the snapshot helpers (P5a test 23)", () => {
   });
 
   it("snapshotFromRow takes the raw version, and none from a row without a usable updated_at", () => {
-    const schema = { email: true, drafts: true, ddtext: true };
+    const schema = { email: true, drafts: true, ddtext: true, chat: false };
     expect(snapshotFromRow(settingsRow({ updated_at: RAW, ddtext_enabled: true, retention_days_ddtext: 7 }), "ep_1", schema)).toMatchObject({
       version: RAW,
       settings: { ddtextEnabled: true, retentionDaysDdtext: 7, ddtextSchemaReady: true, draftsSchemaReady: true }
     });
     expect(snapshotFromRow(settingsRow(), "ep_1", schema).version).toBeNull();
     expect(snapshotFromRow(settingsRow({ updated_at: 12 }), "ep_1", schema).version).toBeNull();
-    expect(snapshotFromRow(null, "ep_1", { email: false, drafts: false, ddtext: true })).toEqual({
+    expect(snapshotFromRow(null, "ep_1", { email: false, drafts: false, ddtext: true, chat: false })).toEqual({
       version: null,
       settings: { principalId: "ep_1", ...DEFAULT_SETTINGS, ddtextSchemaReady: true }
     });
   });
 
   it("settingsColumnsFor and settingsSchemaFlags", () => {
-    const base = settingsColumnsFor({ email: false, drafts: false, ddtext: false });
+    const base = settingsColumnsFor({ email: false, drafts: false, ddtext: false, chat: false });
     expect(base.split(",")).toContain("updated_at");
-    expect(base).not.toMatch(/email_enabled|drafts_enabled|ddtext_enabled/);
-    expect(settingsColumnsFor({ email: true, drafts: false, ddtext: true })).toBe(`${base},email_enabled,ddtext_enabled,retention_days_ddtext`);
-    expect(settingsSchemaFlags({ emailSchemaReady: true, draftsSchemaReady: false, ddtextSchemaReady: true })).toEqual({ email: true, drafts: false, ddtext: true });
+    expect(base).not.toMatch(/email_enabled|drafts_enabled|ddtext_enabled|chat_enabled/);
+    expect(settingsColumnsFor({ email: true, drafts: false, ddtext: true, chat: false })).toBe(`${base},email_enabled,ddtext_enabled,retention_days_ddtext`);
+    expect(settingsColumnsFor({ email: true, drafts: true, ddtext: false, chat: true })).toBe(
+      `${base},email_enabled,drafts_enabled,send_enabled,voice_enabled,chat_enabled,ask_ai_uses_exec,chat_daily_cap_usd`
+    );
+    expect(settingsSchemaFlags({ emailSchemaReady: true, draftsSchemaReady: false, ddtextSchemaReady: true, chatSchemaReady: false })).toEqual({
+      email: true,
+      drafts: false,
+      ddtext: true,
+      chat: false
+    });
+    expect(settingsSchemaFlags({ emailSchemaReady: true, draftsSchemaReady: true, ddtextSchemaReady: true, chatSchemaReady: true }).chat).toBe(true);
     expect(Object.keys(settingsSchemaFlags(DEFAULT_SETTINGS)).sort()).toEqual(SETTINGS_COLUMN_GROUPS.map((g) => g.key).sort());
   });
 });

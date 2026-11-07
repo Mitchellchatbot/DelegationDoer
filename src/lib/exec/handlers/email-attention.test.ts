@@ -36,8 +36,10 @@ vi.mock("@/lib/exec/email-store", async (importOriginal) => {
     stampScreened: vi.fn()
   };
 });
-// P4 (X5): the safety nets' drafts purge; its own suite is drafts-store.test.ts.
-vi.mock("@/lib/exec/drafts-store", () => ({ purgeDraftsForThreads: vi.fn() }));
+// P4 (X5): the safety nets' drafts purge; its own suite is drafts-store.test.ts. P5b (§3.18): the chat
+// drafts' purge by id (Area F's) and the chat store's redaction and draft-id read (chat-store.test.ts).
+vi.mock("@/lib/exec/drafts-store", () => ({ purgeDraftsForThreads: vi.fn(), purgeDraftsByIds: vi.fn() }));
+vi.mock("@/lib/exec/chat-store", () => ({ redactChatForThreads: vi.fn(), listChatDraftIdsForThreads: vi.fn() }));
 vi.mock("@/lib/exec/jobs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/exec/jobs")>();
   return { ...actual, enqueueJob: vi.fn(), enqueueBulkTriage: vi.fn() };
@@ -68,7 +70,8 @@ import {
   type EmailAttentionRow
 } from "@/lib/exec/attention";
 import type { AttentionCandidate } from "@/lib/exec/attention-types";
-import { purgeDraftsForThreads } from "@/lib/exec/drafts-store";
+import { listChatDraftIdsForThreads, redactChatForThreads } from "@/lib/exec/chat-store";
+import { purgeDraftsByIds, purgeDraftsForThreads } from "@/lib/exec/drafts-store";
 import {
   applyThreadProposal,
   deleteCommitmentsForThreads,
@@ -351,6 +354,9 @@ beforeEach(() => {
   vi.mocked(deleteEmailAttentionForThreads).mockResolvedValue(0);
   vi.mocked(deleteCommitmentsForThreads).mockResolvedValue(0);
   vi.mocked(purgeDraftsForThreads).mockResolvedValue(0);
+  vi.mocked(redactChatForThreads).mockResolvedValue(0);
+  vi.mocked(listChatDraftIdsForThreads).mockResolvedValue([]);
+  vi.mocked(purgeDraftsByIds).mockResolvedValue(0);
   vi.mocked(deleteSignalsForThreads).mockResolvedValue(0);
   vi.mocked(listAllEmailAttentionRows).mockResolvedValue([]);
   vi.mocked(deleteAttentionItemsByIds).mockResolvedValue(0);
@@ -799,6 +805,97 @@ describe("the safety nets", () => {
     await run();
     expect(purgeDraftsForThreads).not.toHaveBeenCalled();
     expect(deleteCommitmentsForThreads).not.toHaveBeenCalled();
+    expect(redactChatForThreads).not.toHaveBeenCalled();
+    expect(listChatDraftIdsForThreads).not.toHaveBeenCalled();
+    expect(purgeDraftsByIds).not.toHaveBeenCalled();
+  });
+
+  // P5b (T73, contract §3.18, bindings AM13): one edit inside the shared net, after P4's X5 purge, over the
+  // same threads (tombstoned and rule-matched: both verified verdicts, so the redaction is principal-wide).
+  it("T73: each net redacts the threads' chat answers and purges their chat drafts by id, after P4's purge and before the signals", async () => {
+    vi.mocked(listTombstonedThreadIds).mockResolvedValue([TH(7), TH(8)]);
+    vi.mocked(redactChatForThreads).mockResolvedValue(3);
+    const ids = ["ed_00000000000000000000000000000001"];
+    vi.mocked(listChatDraftIdsForThreads).mockResolvedValue(ids);
+    vi.mocked(purgeDraftsByIds).mockResolvedValue(1);
+    const out = await run();
+    for (const fn of [redactChatForThreads, listChatDraftIdsForThreads]) {
+      expect(vi.mocked(fn).mock.calls.map((c) => c[1])).toEqual([
+        [TH(7), TH(8)],
+        [TH(7), TH(8)]
+      ]);
+    }
+    expect(vi.mocked(purgeDraftsByIds).mock.calls.map((c) => c[1])).toEqual([ids, ids]);
+    for (const i of [0, 1]) {
+      const order = [
+        vi.mocked(purgeDraftsForThreads).mock.invocationCallOrder[i],
+        vi.mocked(redactChatForThreads).mock.invocationCallOrder[i],
+        vi.mocked(listChatDraftIdsForThreads).mock.invocationCallOrder[i],
+        vi.mocked(purgeDraftsByIds).mock.invocationCallOrder[i],
+        vi.mocked(deleteSignalsForThreads).mock.invocationCallOrder[i]
+      ];
+      expect(order).toEqual([...order].sort((a, b) => a - b));
+      expect(vi.mocked(redactChatForThreads).mock.calls[i][2]).toEqual({ signal: expect.any(AbortSignal) });
+      expect(vi.mocked(listChatDraftIdsForThreads).mock.calls[i][2]).toEqual({ signal: expect.any(AbortSignal) });
+      expect(vi.mocked(purgeDraftsByIds).mock.calls[i][2]).toEqual({ signal: expect.any(AbortSignal) });
+    }
+    expect(out.net1).toMatchObject({ chatRedacted: 3, chatDrafts: 1 });
+    expect(out.net2).toMatchObject({ chatRedacted: 3, chatDrafts: 1 });
+  });
+
+  it("T73: a chat draft whose own thread is clean but whose answer consulted the tombstoned thread is purged; a web draft on a card is not", async () => {
+    // A small model of the two P5b reads and P4's purge by id (their SQL is chat-suite S19 / S16): answers with the
+    // threads they consulted and the drafts on their cards; drafts with their own thread and origin.
+    const answers = [
+      { consulted: [TH(9)], cards: ["ed_chat_clean", "ed_web_on_card"] },
+      { consulted: [TH(1)], cards: ["ed_chat_unrelated"] }
+    ];
+    const drafts = new Map([
+      ["ed_chat_clean", { threadId: TH(2), origin: "chat", purged: false }],
+      ["ed_web_on_card", { threadId: TH(3), origin: "web", purged: false }],
+      ["ed_chat_unrelated", { threadId: TH(4), origin: "chat", purged: false }]
+    ]);
+    vi.mocked(listTombstonedThreadIds).mockResolvedValue([TH(9)]);
+    vi.mocked(listChatDraftIdsForThreads).mockImplementation(async (_p, threads) =>
+      answers.filter((a) => a.consulted.some((t) => threads.includes(t))).flatMap((a) => a.cards)
+    );
+    vi.mocked(purgeDraftsByIds).mockImplementation(async (_p, ids) => {
+      let n = 0;
+      for (const id of ids) {
+        const d = drafts.get(id);
+        if (d && d.origin === "chat" && !d.purged) {
+          d.purged = true;
+          n += 1;
+        }
+      }
+      return n;
+    });
+    const out = await run();
+    expect(drafts.get("ed_chat_clean")?.purged).toBe(true);
+    expect(drafts.get("ed_web_on_card")?.purged).toBe(false);
+    expect(drafts.get("ed_chat_unrelated")?.purged).toBe(false);
+    // P4's own purge keys on the drafts' own threads: it was asked about TH(9) only, which no draft is on.
+    expect(vi.mocked(purgeDraftsForThreads).mock.calls[0][1]).toEqual([TH(9)]);
+    expect(out.net1).toMatchObject({ chatDrafts: 1 });
+  });
+
+  it("T73: no chat draft on the answers: no purge call (0); the purge RPC missing is null; a redaction failure fails the net", async () => {
+    vi.mocked(listTombstonedThreadIds).mockResolvedValue([TH(7)]);
+    const out = await run();
+    expect(purgeDraftsByIds).not.toHaveBeenCalled();
+    expect(out.net1).toMatchObject({ chatRedacted: 0, chatDrafts: 0 });
+    vi.mocked(listChatDraftIdsForThreads).mockResolvedValue(["ed_00000000000000000000000000000002"]);
+    vi.mocked(purgeDraftsByIds).mockResolvedValue(null);
+    expect((await run()).net1).toMatchObject({ chatDrafts: null });
+    vi.mocked(redactChatForThreads).mockRejectedValue(new Error("exec chat store: exec_chat_redact_threads failed: lock timeout (55P03)"));
+    await expect(run()).rejects.toThrow(/exec_chat_redact_threads failed/);
+  });
+
+  it("T73: the second net covers rule-matched rows that aren't tombstones yet (a verified verdict)", async () => {
+    vi.mocked(listProducerThreads).mockResolvedValue([producerRow(1), producerRow(2, { screenHashes: RESTRICTED, screenedPolicyHash: OLD_H })]);
+    await run();
+    expect(vi.mocked(redactChatForThreads).mock.calls.at(-1)?.[1]).toEqual([TH(2)]);
+    expect(vi.mocked(listChatDraftIdsForThreads).mock.calls.at(-1)?.[1]).toEqual([TH(2)]);
   });
 
   it("a tombstone landing between the reads and the sync leaves no item (A6)", async () => {

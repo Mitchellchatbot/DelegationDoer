@@ -6,6 +6,15 @@ vi.mock("@/lib/supabase-admin", () => ({ getSupabaseAdmin: vi.fn() }));
 // tombstone procedure is tested against this fake E.
 const fakeE = vi.hoisted(() => ({ deleteEmailAttentionForThreads: vi.fn() }));
 vi.mock("@/lib/exec/attention", () => fakeE);
+// P5b's chat store (contract §3.18; its own suite is chat-store.test.ts) and P4's purge by id (Area F's
+// drafts-store.test.ts) are fakes here: the tombstone procedure's chat steps are tested against them (T72).
+const fakeChat = vi.hoisted(() => ({ redactChatForThreads: vi.fn(), listChatDraftIdsForThreads: vi.fn() }));
+vi.mock("@/lib/exec/chat-store", () => fakeChat);
+const fakeF = vi.hoisted(() => ({ purgeDraftsByIds: vi.fn() }));
+vi.mock("@/lib/exec/drafts-store", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/exec/drafts-store")>()),
+  purgeDraftsByIds: fakeF.purgeDraftsByIds
+}));
 vi.mock("@/lib/exec/sources/mail", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/exec/sources/mail")>();
   return { ...actual, loadScreeningPolicy: vi.fn() };
@@ -205,6 +214,13 @@ beforeEach(() => {
   vi.mocked(loadScreeningPolicy).mockReset();
   vi.spyOn(console, "log").mockImplementation(() => undefined);
   vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  // Before P5b's migration both chat reads answer nothing; the P3/P4 suites below see no chat step in db.log.
+  fakeChat.redactChatForThreads.mockReset();
+  fakeChat.redactChatForThreads.mockResolvedValue(0);
+  fakeChat.listChatDraftIdsForThreads.mockReset();
+  fakeChat.listChatDraftIdsForThreads.mockResolvedValue([]);
+  fakeF.purgeDraftsByIds.mockReset();
+  fakeF.purgeDraftsByIds.mockResolvedValue(0);
 });
 
 // ---------------------------------------------------------------------------
@@ -567,6 +583,78 @@ describe("applyThreadProposal: the tombstone procedure", () => {
     // The loader takes the principal only: no policy argument, so nothing about dd_only can change the hash.
     expect(vi.mocked(loadScreeningPolicy).mock.calls[0][0]).toBe(P);
     expect(restrictedPolicyHash("dd_only", RULES)).toBe(restrictedPolicyHash("hidden", RULES));
+  });
+});
+
+describe("the P5b chat steps of the tombstone procedure (T72, contract §3.18)", () => {
+  const tombstone: ThreadProposal = { kind: "tombstone", snapshot: null, hashes: RESTRICTED, truncated: false, policyHash: H };
+  const chatDraftIds = ["ed_00000000000000000000000000000001", "ed_00000000000000000000000000000002"];
+  const logChat = () => {
+    fakeChat.redactChatForThreads.mockImplementation(async () => {
+      db.log.push("chat redact");
+      return 2;
+    });
+    fakeChat.listChatDraftIdsForThreads.mockImplementation(async () => {
+      db.log.push("chat draft ids");
+      return chatDraftIds;
+    });
+    fakeF.purgeDraftsByIds.mockImplementation(async () => {
+      db.log.push("chat drafts purge");
+      return 1;
+    });
+  };
+
+  it("after P4's X4 purge and the attention delete: redact the thread's chat answers, then purge the chat drafts on their cards by id", async () => {
+    useDb({ tables: { exec_email_threads: [threadRow({ version: 3 })] } });
+    logChat();
+    const signal = new AbortController().signal;
+    expect((await applyThreadProposal(P, SETTINGS, "th_1", tombstone, ctx, { signal })).result).toBe("tombstoned");
+    expect(db.log.slice(-5)).toEqual(["rpc exec_drafts_purge_restricted", "attention delete", "chat redact", "chat draft ids", "chat drafts purge"]);
+    expect(fakeChat.redactChatForThreads).toHaveBeenCalledWith(P, ["th_1"], { signal });
+    expect(fakeChat.listChatDraftIdsForThreads).toHaveBeenCalledWith(P, ["th_1"], { signal });
+    expect(fakeF.purgeDraftsByIds).toHaveBeenCalledWith(P, chatDraftIds, { signal });
+    expect(fakeChat.redactChatForThreads).toHaveBeenCalledTimes(1);
+  });
+
+  it("no chat draft on the reached answers: no purge call; P5b not installed (0 and []) still finishes the tombstone", async () => {
+    useDb({ tables: { exec_email_threads: [threadRow({ version: 3 })] } });
+    expect((await applyThreadProposal(P, SETTINGS, "th_1", tombstone, ctx)).result).toBe("tombstoned");
+    expect(fakeChat.redactChatForThreads).toHaveBeenCalledTimes(1);
+    expect(fakeChat.listChatDraftIdsForThreads).toHaveBeenCalledTimes(1);
+    expect(fakeF.purgeDraftsByIds).not.toHaveBeenCalled();
+    expect(db.log.at(-1)).toBe("attention delete");
+  });
+
+  it("a failing redaction (or draft purge) throws a retryable error after the tombstone landed; the noop re-run calls the chat steps again", async () => {
+    useDb({ tables: { exec_email_threads: [threadRow({ version: 3 })] } });
+    logChat();
+    fakeChat.redactChatForThreads.mockImplementationOnce(async () => {
+      throw new Error("exec chat store: exec_chat_redact_threads failed: lock timeout (55P03)");
+    });
+    const err = await applyThreadProposal(P, SETTINGS, "th_1", tombstone, ctx).catch((e: unknown) => e);
+    expect(String(err)).toMatch(/exec_chat_redact_threads failed/);
+    expect(err).not.toBeInstanceOf(NonRetryableError);
+    expect(thread()?.state).toBe("restricted_hidden");
+    expect(fakeF.purgeDraftsByIds).not.toHaveBeenCalled();
+    db.log.length = 0;
+    expect(await applyThreadProposal(P, SETTINGS, "th_1", tombstone, ctx)).toEqual({ result: "skipped", reason: "noop", commitments: [] });
+    expect(db.log.slice(-3)).toEqual(["chat redact", "chat draft ids", "chat drafts purge"]);
+
+    fakeF.purgeDraftsByIds.mockImplementationOnce(async () => {
+      throw new Error("exec drafts store: exec_drafts_purge_by_ids failed: lock timeout");
+    });
+    const again = await applyThreadProposal(P, SETTINGS, "th_1", tombstone, ctx).catch((e: unknown) => e);
+    expect(String(again)).toMatch(/exec_drafts_purge_by_ids failed/);
+    expect(again).not.toBeInstanceOf(NonRetryableError);
+  });
+
+  it("a write that isn't a tombstone never touches chat", async () => {
+    useDb({ tables: { exec_email_threads: [threadRow()] } });
+    vi.mocked(loadScreeningPolicy).mockResolvedValue(policy(RULES));
+    await applyThreadProposal(P, SETTINGS, "th_1", { kind: "gone", atMs: T0 + 100_000 }, ctx, { loadRules: loader() });
+    expect(fakeChat.redactChatForThreads).not.toHaveBeenCalled();
+    expect(fakeChat.listChatDraftIdsForThreads).not.toHaveBeenCalled();
+    expect(fakeF.purgeDraftsByIds).not.toHaveBeenCalled();
   });
 });
 

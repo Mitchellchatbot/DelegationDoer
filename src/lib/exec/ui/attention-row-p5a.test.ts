@@ -79,9 +79,9 @@ describe("ExecTabs (test 71)", () => {
   const html = (active: string) => renderToStaticMarkup(createElement(ExecTabs, { active, tabs: EXEC_TABS }));
   const hrefs = (markup: string) => [...markup.matchAll(/href="([^"]*)"/g)].map((m) => m[1]);
 
-  it("Overview, Email, Team, Projects, in order, then the Settings link", () => {
-    expect(EXEC_TABS.map((t) => t.label)).toEqual(["Overview", "Email", "Team", "Projects"]);
-    expect(hrefs(html("overview"))).toEqual(["/executive", "/executive/email", "/executive/team", "/executive/projects", "/executive/settings"]);
+  it("Overview, Email, Team, Projects, in order (and P5b's Chat after them), then the Settings link", () => {
+    expect(EXEC_TABS.map((t) => t.label)).toEqual(["Overview", "Email", "Team", "Projects", "Chat"]);
+    expect(hrefs(html("overview"))).toEqual(["/executive", "/executive/email", "/executive/team", "/executive/projects", "/executive/chat", "/executive/settings"]);
     expect(tagWith(html("overview"), 'href="/executive/settings"')).toContain('aria-label="Settings"');
     expect(tagWith(html("overview"), 'href="/executive/settings"')).not.toContain("aria-current");
   });

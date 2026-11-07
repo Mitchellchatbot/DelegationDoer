@@ -36,24 +36,35 @@ export interface ActionContext {
   instruction: string | null;
   /** The read-back the panel is showing (the Outlook version after a check or a 409 `changed`), or null. */
   shownReadBack: ReadBackView | null;
+  /**
+   * P5b F5 (C45, additive): he ticked "I've checked it" on a draft started in a chat that read other private
+   * material (view.usesPrivateRefs): a save posts confirmPrivate: true. Otherwise none is sent and the server asks.
+   */
+  confirmPrivate?: boolean;
+  /**
+   * P5b F5 (C44, additive): the box still holds the instruction the chat assistant wrote, unchanged. A regenerate then
+   * sends no instruction, so the stored one stays the assistant's (the server marks any instruction it is sent his own).
+   */
+  keepInstruction?: boolean;
 }
 
 /** The request an action sends on an existing draft, or null when it has none (open_in_outlook and the create actions). */
 export function requestFor(action: DraftUiAction, ctx: ActionContext): PanelRequest | null {
   const { view, version } = ctx;
   const seen = ctx.shownReadBack?.contentHash;
+  const confirmed = ctx.confirmPrivate === true ? { confirmPrivate: true } : {};
   const resolve = (body: Record<string, unknown>): PanelRequest => ({ method: "POST", path: draftPath(view.id, "/resolve"), body });
   switch (action) {
     case "generate":
     case "regenerate":
-      return { method: "POST", path: draftPath(view.id, "/regenerate"), body: { version, instruction: ctx.instruction } };
+      return { method: "POST", path: draftPath(view.id, "/regenerate"), body: ctx.keepInstruction === true ? { version } : { version, instruction: ctx.instruction } };
     case "write_myself":
       // generation_failed -> draft through an edit with a body (T15).
       return { method: "PATCH", path: draftPath(view.id), body: { version, bodyDoc: EMPTY_BODY_DOC } };
     case "save":
-      return { method: "POST", path: draftPath(view.id, "/save"), body: { version } };
+      return { method: "POST", path: draftPath(view.id, "/save"), body: { version, ...confirmed } };
     case "replace_with_dd":
-      return seen ? { method: "POST", path: draftPath(view.id, "/save"), body: { version, seenContentHash: seen } } : null;
+      return seen ? { method: "POST", path: draftPath(view.id, "/save"), body: { version, seenContentHash: seen, ...confirmed } } : null;
     case "review":
       return { method: "POST", path: draftPath(view.id, "/review"), body: { version } };
     case "discard":

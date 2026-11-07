@@ -1,6 +1,7 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
-import { ArrowLeft, BellRing, Building2, ExternalLink, FilePen, Handshake, ListChecks, Mail, ShieldAlert, Sparkles } from "lucide-react";
+import { ArrowLeft, BellRing, Building2, ExternalLink, FilePen, Handshake, ListChecks, Mail, MessageSquareText, ShieldAlert, Sparkles } from "lucide-react";
+import { ASK_ABOUT_THREAD_LINK } from "@/lib/exec/chat/copy";
 import type { EmailThreadView as EmailThreadData } from "@/lib/exec/email-view";
 import { formatCount, formatInZone, pluralize } from "@/lib/exec/format";
 import { safeLink } from "@/lib/exec/safe-markdown";
@@ -82,7 +83,14 @@ function AssessmentBody({ t }: { t: ThreadRow }) {
   );
 }
 
-export function EmailThreadView({ view }: { view: EmailThreadData }) {
+export function EmailThreadView({
+  view,
+  askHref = null
+}: {
+  view: EmailThreadData;
+  /** P5b (§3.19.11): "/executive/chat?context=thread:<id>" while chat is on; null shows no link. */
+  askHref?: string | null;
+}) {
   const now = view.generatedAt;
   const tz = view.timezone;
   const t = view.thread;
@@ -154,6 +162,17 @@ export function EmailThreadView({ view }: { view: EmailThreadData }) {
               </Link>
             )}
             {t.assessable && <AssessButton threadId={view.threadId} size="md" />}
+            {askHref && (
+              <Link
+                href={askHref}
+                prefetch={false}
+                data-ask-about="thread"
+                className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-1 text-[12px] font-semibold text-slate-700 hover:border-slate-300 hover:text-ink"
+              >
+                <MessageSquareText className="h-3.5 w-3.5" aria-hidden />
+                {ASK_ABOUT_THREAD_LINK}
+              </Link>
+            )}
           </div>
         </div>
       </section>

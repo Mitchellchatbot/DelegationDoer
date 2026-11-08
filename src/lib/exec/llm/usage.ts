@@ -143,6 +143,56 @@ export async function spentTodayUsd(
   throw new Error(`exec_ai_usage: over ${PAGE_SIZE * MAX_PAGES} rows today for ${principalId}; not guessing the spend`);
 }
 
+/**
+ * P7a (§3.20.1, C17): USD spent today (principal-local day, P2a's day rule) by the features in `features` (the Slack
+ * sub-cap sums SLACK_CAP_FEATURES): spentTodayUsd's keyset loop with .in("feature", features), on opts.signal. An empty
+ * list spends nothing (no query). Throws on a read error (callers fail closed); the error names the table only, never
+ * the database's text, the principal or a value.
+ */
+export async function featureSpentTodayUsd(
+  principalId: string,
+  tz: string,
+  features: readonly ExecLlmFeature[],
+  now: Date = new Date(),
+  opts: { signal?: AbortSignal } = {}
+): Promise<number> {
+  const list = Array.isArray(features) ? [...new Set(features.filter((f): f is ExecLlmFeature => typeof f === "string" && f.length > 0))] : [];
+  if (list.length === 0) return 0;
+  const since = startOfLocalDayUtc(now, tz).toISOString();
+  const signal = opts.signal;
+  let total = 0;
+  let afterId = 0;
+  for (let page = 0; page < MAX_PAGES; page++) {
+    signal?.throwIfAborted();
+    let query = getSupabaseAdmin()
+      .from("exec_ai_usage")
+      .select("id,cost_usd")
+      .eq("principal_id", principalId)
+      .in("feature", list)
+      .gte("created_at", since)
+      .gt("id", afterId)
+      .order("id", { ascending: true })
+      .limit(PAGE_SIZE);
+    if (signal) query = query.abortSignal(signal);
+    const { data, error } = await query;
+    if (error) {
+      signal?.throwIfAborted();
+      const code = typeof (error as { code?: unknown }).code === "string" && /^[A-Z0-9]{2,10}$/.test((error as { code: string }).code)
+        ? ` (${(error as { code: string }).code})`
+        : "";
+      throw new Error(`exec_ai_usage read failed${code}`);
+    }
+    const rows = (data ?? []) as { id: number | string; cost_usd: number | string | null }[];
+    for (const row of rows) total += dollars(row.cost_usd);
+    if (rows.length < PAGE_SIZE) return total;
+    const last = rows[rows.length - 1].id;
+    const id = typeof last === "string" && /^[0-9]+$/.test(last) ? Number(last) : last;
+    if (typeof id !== "number" || !Number.isSafeInteger(id)) throw new Error("exec_ai_usage read failed: a row id is malformed");
+    afterId = id;
+  }
+  throw new Error(`exec_ai_usage: over ${PAGE_SIZE * MAX_PAGES} rows today; not guessing the spend`);
+}
+
 export interface BudgetStatus {
   spentUsd: number;
   capUsd: number;

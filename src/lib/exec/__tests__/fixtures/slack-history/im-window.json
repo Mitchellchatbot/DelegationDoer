@@ -1,0 +1,143 @@
+{
+  "_doc": [
+    "conversations.history / conversations.replies response shapes (CH/CR in p7/slackdocs; ING §2.2): history pages newest first, replies parent first.",
+    "history[i] = { pass?, request (the parameters the sweep must send), response }; replies = { <thread ts>: [{ request, response }] }.",
+    "channelRow / threads / stored = the state before the run. sweepCtx = sweepVerdict's context (sets as arrays; hePostedInThread from `threads`).",
+    "expect.verdicts = sweepVerdict per message ts (role, reason or reasons). Lead-owned, frozen.",
+    "An IM with a colleague (AN01, WM09, WM10, C11): dm candidates of len >= 1, an emoji-only and a :shortcode: message (len 0), his later reply."
+  ],
+  "channel": "D0JANE",
+  "convType": "im",
+  "now": "2026-11-08T15:00:00.000Z",
+  "channelRow": {
+    "class": "standard",
+    "watchState": "watched",
+    "muteSource": null,
+    "isMember": true,
+    "isPrivate": true,
+    "imUserId": "U0JANE",
+    "isExtShared": false,
+    "extEver": false,
+    "histWatermarkTs": null,
+    "deepSweptAt": null,
+    "sweptAt": null,
+    "lastEventTs": null
+  },
+  "threads": [],
+  "stored": [],
+  "sweepCtx": {
+    "conv": "im",
+    "hisId": "U0MITCH",
+    "teamId": "T0SCALED",
+    "ddBot": {
+      "userId": "U0DDBOT",
+      "appId": "A0DDAPP"
+    },
+    "isHub": false,
+    "muted": false,
+    "muteSource": null,
+    "extConversation": false,
+    "optedOut": []
+  },
+  "history": [
+    {
+      "request": {
+        "channel": "D0JANE",
+        "oldest": "1793545200.000000",
+        "limit": 200,
+        "cursor": null
+      },
+      "response": {
+        "ok": true,
+        "messages": [
+          {
+            "type": "message",
+            "user": "U0JANE",
+            "text": "🎉🎉",
+            "ts": "1794149500.000500",
+            "team": "T0SCALED"
+          },
+          {
+            "type": "message",
+            "user": "U0JANE",
+            "text": "SENTINEL-SLACK-TEXT-7f3a also the hiring plan for next quarter",
+            "ts": "1794149000.000400",
+            "team": "T0SCALED"
+          },
+          {
+            "type": "message",
+            "user": "U0MITCH",
+            "text": "SENTINEL-SLACK-TEXT-7f3a yes, looking at it right now",
+            "ts": "1794148000.000300",
+            "team": "T0SCALED"
+          },
+          {
+            "type": "message",
+            "user": "U0JANE",
+            "text": ":thumbsup:",
+            "ts": "1794147500.000200",
+            "team": "T0SCALED"
+          },
+          {
+            "type": "message",
+            "user": "U0JANE",
+            "text": "SENTINEL-SLACK-TEXT-7f3a are you free to review the budget draft",
+            "ts": "1794147000.000100",
+            "team": "T0SCALED",
+            "reactions": [
+              {
+                "name": "eyes",
+                "users": [
+                  "U0MITCH"
+                ],
+                "count": 1
+              }
+            ]
+          }
+        ],
+        "has_more": false,
+        "pin_count": 0,
+        "response_metadata": {
+          "next_cursor": ""
+        }
+      }
+    }
+  ],
+  "replies": {},
+  "expect": {
+    "verdicts": {
+      "1794149500.000500": {
+        "role": "ignore",
+        "reason": "not_addressed"
+      },
+      "1794149000.000400": {
+        "role": "candidate",
+        "reasons": 1,
+        "authorExternal": false,
+        "ddPaths": []
+      },
+      "1794148000.000300": {
+        "role": "from_him",
+        "mentions": []
+      },
+      "1794147500.000200": {
+        "role": "ignore",
+        "reason": "not_addressed"
+      },
+      "1794147000.000100": {
+        "role": "candidate",
+        "reasons": 1,
+        "authorExternal": false,
+        "ddPaths": []
+      }
+    },
+    "acknowledged": [
+      "1794147000.000100"
+    ],
+    "fromHim": [
+      "1794148000.000300"
+    ],
+    "fullyPaged": true,
+    "newWatermarkTs": "1794149500.000500"
+  }
+}

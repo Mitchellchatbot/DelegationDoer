@@ -268,6 +268,8 @@ export interface OverviewSystem {
    * P6 (contract §3.15.3): the Slack app's state, one row on the card. Absent
    * before the P6 schema exists (it needs P5b's, so nothing is read while
    * chat isn't installed); null when it couldn't be read (the card says so).
+   * P7a (contract §3.20.4, M12): `slack.reading` is the reading half's row
+   * ("Slack reading"), filled by slackSystemSummary; absent or null = no row.
    */
   slack?: SlackSystemSummary | null;
 }

@@ -476,7 +476,7 @@ function normalizeForMatch(s: string): string {
  * (case and words exact; only typographic quotes and dashes fold). What is
  * stored is the message's own span, not the model's copy of it.
  */
-function verbatimEvidence(messageText: string, quote: string): { excerpt: string; code: null } | { excerpt: null; code: string } {
+export function verbatimEvidence(messageText: string, quote: string): { excerpt: string; code: null } | { excerpt: null; code: string } {
   const q = normalizeForMatch(quote);
   if (q.length < MIN_EVIDENCE_CHARS) return { excerpt: null, code: q === "" ? "empty" : "too_short" };
   const text = normalizeForMatch(messageText);
@@ -506,6 +506,13 @@ function dueAtFor(value: unknown, message: RenderedMessage, tz: string): { iso: 
   if (value === null) return { iso: null, code: null };
   if (value === undefined) return { iso: null, code: "missing" };
   if (typeof value !== "string") return { iso: null, code: "not_string" };
+  if (message.sentAtMs !== null) return dueDateCheck(value, message.sentAtMs, tz);
+  // No message date: the format is still checked first, so the code is the one it always was.
+  const shape = dueDateCheck(value, 0, "UTC");
+  return shape.code === "invalid_format" || shape.code === "invalid_date" ? shape : { iso: null, code: "no_message_date" };
+}
+
+function dueDateCheck(value: string, sentAtMs: number, tz: string): { iso: string | null; code: string | null } {
   const m = DUE_DATE.exec(value.trim());
   if (!m) return { iso: null, code: "invalid_format" };
   const [year, month, day] = [Number(m[1]), Number(m[2]), Number(m[3])];
@@ -514,11 +521,21 @@ function dueAtFor(value: unknown, message: RenderedMessage, tz: string): { iso: 
   if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) {
     return { iso: null, code: "invalid_date" };
   }
-  if (message.sentAtMs === null) return { iso: null, code: "no_message_date" };
-  const sent = zonedParts(new Date(message.sentAtMs), tz);
+  if (!Number.isFinite(sentAtMs)) return { iso: null, code: "no_message_date" };
+  const sent = zonedParts(new Date(sentAtMs), tz);
   const daysAfter = Math.round((date.getTime() - Date.UTC(sent.year, sent.month - 1, sent.day)) / DAY_MS);
   if (daysAfter < -DUE_WINDOW_DAYS_BEFORE || daysAfter > DUE_WINDOW_DAYS_AFTER) return { iso: null, code: "out_of_window" };
   return { iso: new Date(zonedWallTimeToUtcMs(year, month, day, DUE_LOCAL_HOUR, tz)).toISOString(), code: null };
+}
+
+/**
+ * P7a (contract §3.20.1): the due-window rule on its own, for Slack triage. A "YYYY-MM-DD" that is a real calendar day
+ * within [the message's local date - 1 day, + 400 days] in tz becomes 17:00 there, as an ISO instant; anything else
+ * (a bad format or date, out of the window, a non-finite sentAtMs) is null. dueAtFor uses the same check.
+ */
+export function dueDateToUtcIso(value: string, sentAtMs: number, tz: string): string | null {
+  if (typeof value !== "string") return null;
+  return dueDateCheck(value, sentAtMs, tz).iso;
 }
 
 function optionalLine(

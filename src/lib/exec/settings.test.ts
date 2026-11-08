@@ -15,7 +15,7 @@ import { createFakeDraftsDb, type FakeDraftsDb, type FakeRequest, type Row } fro
 import { feedbackTotals } from "@/lib/exec/attention-feedback";
 import { DraftStoreError, resetVoiceProfile } from "@/lib/exec/drafts-store";
 import { DEFAULT_SETTINGS, loadSettingsSnapshot, principalFromRows } from "@/lib/exec/principal";
-import { getSettingsView, listRecentAccess, spendTodayByFeature, updateSettings } from "@/lib/exec/settings";
+import { getSettingsView, listRecentAccess, spendTodayByFeature, updateSettings, updateWatchMode } from "@/lib/exec/settings";
 import { SETTINGS_FIELDS, isSettingsFieldInstalled, settingsFieldFor, validateSettingsField, type SettingsPatch } from "@/lib/exec/settings-fields";
 import { getSyncState } from "@/lib/exec/sync-state";
 import type { ExecPrincipal } from "@/lib/exec/types";
@@ -43,10 +43,11 @@ function mint(id = "ep_1", accounts: string[] = ["acc_1", "acc_2"]): ExecPrincip
 const P = mint();
 const OTHER = mint("ep_2");
 
-type Groups = { email?: boolean; drafts?: boolean; ddtext?: boolean; chat?: boolean };
-/** An exec_settings row holding the base columns, updated_at and the groups asked for (all by default; P5b's chat included). */
+type Groups = { email?: boolean; drafts?: boolean; ddtext?: boolean; chat?: boolean; slack?: boolean };
+/** An exec_settings row holding the base columns, updated_at and the groups asked for (all by default; P5b's chat and P7a's
+ *  slack included). */
 function settingsDbRow(over: Row = {}, groups: Groups = {}): Row {
-  const g = { email: true, drafts: true, ddtext: true, chat: true, ...groups };
+  const g = { email: true, drafts: true, ddtext: true, chat: true, slack: true, ...groups };
   const row: Row = {
     principal_id: "ep_1",
     brief_enabled: false,
@@ -67,6 +68,7 @@ function settingsDbRow(over: Row = {}, groups: Groups = {}): Row {
   if (g.drafts) Object.assign(row, { drafts_enabled: true, send_enabled: false, voice_enabled: true });
   if (g.ddtext) Object.assign(row, { ddtext_enabled: false, retention_days_ddtext: 90 });
   if (g.chat) Object.assign(row, { chat_enabled: false, ask_ai_uses_exec: false, chat_daily_cap_usd: "9.00" });
+  if (g.slack) Object.assign(row, { slack_reading_enabled: false, slack_daily_cap_usd: "2.00" });
   return { ...row, ...over };
 }
 
@@ -146,7 +148,8 @@ describe("updateSettings (test 24)", () => {
   it("an empty patch or an unknown key is invalid on the whole patch, before any read", async () => {
     useDb({ tables: { exec_settings: [settingsDbRow()] } });
     expect(await updateSettings(P, {}, { expectedVersion: V1 })).toMatchObject({ outcome: "invalid", field: "patch" });
-    expect(await updateSettings(P, { retentionDaysSlack: 30 } as unknown as SettingsPatch, { expectedVersion: V1 })).toMatchObject({ outcome: "invalid", field: "patch" });
+    // (P7a made retentionDaysSlack a registry field; briefLocalTime is still not one.)
+    expect(await updateSettings(P, { briefLocalTime: "09:00" } as unknown as SettingsPatch, { expectedVersion: V1 })).toMatchObject({ outcome: "invalid", field: "patch" });
     expect(await updateSettings(P, { ddtextEnabled: undefined }, { expectedVersion: V1 })).toMatchObject({ outcome: "invalid", field: "patch" });
     expect(db.requests).toEqual([]);
   });
@@ -306,11 +309,11 @@ describe("settings-fields.ts (test 25c)", () => {
       expect(def.label.length).toBeGreaterThan(3);
       expect(def.help.length).toBeGreaterThan(10);
       expect(`${def.label} ${def.help}`).not.toMatch(/stub/i);
-      expect(["base", "email", "drafts", "ddtext", "chat"]).toContain(def.group);
+      expect(["base", "email", "drafts", "ddtext", "chat", "slack"]).toContain(def.group);
       if (def.kind === "boolean") expect([def.min, def.max]).toEqual([undefined, undefined]);
       else expect(typeof def.min === "number" && typeof def.max === "number").toBe(true);
     }
-    expect(settingsFieldFor("retentionDaysSlack")).toBeUndefined();
+    expect(settingsFieldFor("briefLocalTime")).toBeUndefined();
     const retention = settingsFieldFor("retentionDaysDdtext");
     if (!retention) throw new Error("no field");
     expect(isSettingsFieldInstalled(retention, { ddtext: true })).toBe(true);
@@ -529,7 +532,7 @@ describe("getSettingsView", () => {
     useDb({ tables: { exec_settings: [settingsDbRow({}, { drafts: false, ddtext: false })] } });
     vi.mocked(getSyncState).mockResolvedValue(null);
     const view = await getSettingsView(P, NOW);
-    expect(view.schema).toEqual({ email: true, drafts: false, ddtext: false, chat: false });
+    expect(view.schema).toEqual({ email: true, drafts: false, ddtext: false, chat: false, slack: false });
     expect(view.feedback).toEqual({ ok: true, data: null });
     expect(view.voice).toEqual({ ok: true, data: { installed: false, profile: null } });
     expect(feedbackTotals).not.toHaveBeenCalled();
@@ -617,5 +620,68 @@ describe("resetVoiceProfile (test 25b)", () => {
     const signal = new AbortController().signal;
     await resetVoiceProfile(P, { signal });
     expect(db.requests[0].signal).toBe(signal);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P7a (contract §3.2, §3.10.7, N12, N20, C30): the slack group's fields, the reading notice, updateWatchMode.
+// ---------------------------------------------------------------------------
+
+describe("P7a: Slack reading settings", () => {
+  it("turning Slack reading on needs confirm: \"slack_reading_notice\" (the DD text notice doesn't count); turning it off writes only the flag", async () => {
+    useDb({ tables: { exec_settings: [settingsDbRow()] } });
+    expect(await updateSettings(P, { slackReadingEnabled: true }, { expectedVersion: V1, now: NOW })).toEqual({ outcome: "confirmation_required", field: "slackReadingEnabled" });
+    expect(await updateSettings(P, { slackReadingEnabled: true }, { expectedVersion: V1, confirm: "ddtext_notice", now: NOW })).toEqual({ outcome: "confirmation_required", field: "slackReadingEnabled" });
+    expect(writes()).toEqual([]);
+    const on = await updateSettings(P, { slackReadingEnabled: true }, { expectedVersion: V1, confirm: "slack_reading_notice", now: NOW });
+    expect(on.outcome).toBe("updated");
+    expect(writes()[0].payload).toEqual({ slack_reading_enabled: true, updated_at: NOW.toISOString() });
+    if (on.outcome !== "updated") return;
+    expect(on.snapshot.settings).toMatchObject({ slackReadingEnabled: true, slackReadingSchemaReady: true });
+    // Already on: no confirmation needed again; off: the flag only.
+    const off = await updateSettings(P, { slackReadingEnabled: false }, { expectedVersion: NOW.toISOString(), now: new Date(NOW.getTime() + 1000) });
+    expect(off.outcome).toBe("updated");
+    expect(writes()[1].payload).toEqual({ slack_reading_enabled: false, updated_at: new Date(NOW.getTime() + 1000).toISOString() });
+  });
+
+  it("the cap and the Slack retention: bounds from the registry; the slack group before the P7a migration is not_installed (retention is a base column)", async () => {
+    useDb({ tables: { exec_settings: [settingsDbRow()] } });
+    expect(await updateSettings(P, { slackDailyCapUsd: 100.01 }, { expectedVersion: V1 })).toMatchObject({ outcome: "invalid", field: "slackDailyCapUsd" });
+    expect(await updateSettings(P, { retentionDaysSlack: 6 }, { expectedVersion: V1 })).toMatchObject({ outcome: "invalid", field: "retentionDaysSlack" });
+    expect(await updateSettings(P, { retentionDaysSlack: 366 }, { expectedVersion: V1 })).toMatchObject({ outcome: "invalid", field: "retentionDaysSlack" });
+    const r = await updateSettings(P, { slackDailyCapUsd: 1.5, retentionDaysSlack: 30 }, { expectedVersion: V1, now: NOW });
+    expect(r.outcome).toBe("updated");
+    expect(writes()[0].payload).toEqual({ slack_daily_cap_usd: 1.5, retention_days_slack: 30, updated_at: NOW.toISOString() });
+    useDb({ tables: { exec_settings: [settingsDbRow({}, { slack: false })] } });
+    expect(await updateSettings(P, { slackReadingEnabled: true }, { expectedVersion: V1, confirm: "slack_reading_notice" })).toEqual({ outcome: "not_installed", field: "slackReadingEnabled" });
+    expect(await updateSettings(P, { slackDailyCapUsd: 1 }, { expectedVersion: V1 })).toEqual({ outcome: "not_installed", field: "slackDailyCapUsd" });
+    expect(writes()).toEqual([]);
+    expect((await updateSettings(P, { retentionDaysSlack: 30 }, { expectedVersion: V1, now: NOW })).outcome).toBe("updated");
+  });
+
+  it("updateWatchMode: the same CAS on updated_at, watch_mode and updated_at only; conflict, insert without a row, an unknown mode", async () => {
+    useDb({ tables: { exec_settings: [settingsDbRow({ watch_mode: "member_only" })] } });
+    const r = await updateWatchMode(P, "active_public", { expectedVersion: V1 });
+    expect(r.outcome).toBe("updated");
+    const w = writes();
+    expect(w).toHaveLength(1);
+    expect(Object.keys(w[0].payload as Row).sort()).toEqual(["updated_at", "watch_mode"]);
+    expect((w[0].payload as Row).watch_mode).toBe("active_public");
+    expect(w[0].filters).toEqual([{ op: "eq", column: "principal_id", value: "ep_1" }, { op: "eq", column: "updated_at", value: V1 }]);
+    if (r.outcome === "updated") expect(r.snapshot.settings.watchMode).toBe("active_public");
+    expect(await updateWatchMode(P, "member_only", { expectedVersion: V0 })).toMatchObject({ outcome: "conflict" });
+    expect(await updateWatchMode(P, "everything" as never, { expectedVersion: V1 })).toEqual({ outcome: "invalid", field: "patch", detail: "names a watch mode that doesn't exist" });
+    expect(await updateWatchMode(P, "member_only", { expectedVersion: null })).toMatchObject({ outcome: "conflict" });
+    let sent: unknown = null;
+    useDb({
+      tables: { exec_settings: [] },
+      before: (req: FakeRequest) => {
+        if (req.kind !== "upsert" || req.target !== "exec_settings") return;
+        sent = structuredClone(req.payload);
+        req.payload = { ...settingsDbRow(), ...(req.payload as Row) };
+      }
+    });
+    expect((await updateWatchMode(P, "member_only", { expectedVersion: null })).outcome).toBe("updated");
+    expect(Object.keys(sent as Row).sort()).toEqual(["principal_id", "updated_at", "watch_mode"]);
   });
 });

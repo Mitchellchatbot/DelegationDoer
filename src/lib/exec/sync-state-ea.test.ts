@@ -52,7 +52,7 @@ describe("PX06 clone-ea is a source", () => {
   });
 
   it("an unknown source is still refused", async () => {
-    await expect(getSyncState(principal, "slack" as "mail", "k", parseEaTokenState)).rejects.toBeInstanceOf(NonRetryableError);
+    await expect(getSyncState(principal, "bogus" as "mail", "k", parseEaTokenState)).rejects.toBeInstanceOf(NonRetryableError);
     await expect(putSyncState(principal, "clone-ea-x" as "mail", "k", EA_STATE)).rejects.toBeInstanceOf(NonRetryableError);
   });
 });

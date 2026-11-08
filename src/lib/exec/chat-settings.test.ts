@@ -42,12 +42,14 @@ const BASE: Row = {
   email_enabled: true, drafts_enabled: true, send_enabled: false, voice_enabled: true, ddtext_enabled: false, retention_days_ddtext: 90
 };
 const CHAT: Row = { chat_enabled: true, ask_ai_uses_exec: false, chat_daily_cap_usd: "4.50" };
+/** P7a's two columns: present whenever P5b's are (P7a's migration comes after), so the reads below stay single. */
+const SLACK: Row = { slack_reading_enabled: false, slack_daily_cap_usd: "2.00" };
 
 let db: ChatFakeDb;
-/** exec_settings with the P2a-P5a columns, plus P5b's when `chat` (the migration applied). */
+/** exec_settings with the P2a-P5a columns, plus P5b's (and P7a's) when `chat` (the migrations applied). */
 function useDb(row: Row | null, { chat = true, drop = [] as string[] } = {}): ChatFakeDb {
-  const columns = [...Object.keys(BASE), ...(chat ? Object.keys(CHAT) : [])].filter((c) => !drop.includes(c));
-  const full = row === null ? [] : [Object.fromEntries(Object.entries({ ...BASE, ...(chat ? CHAT : {}), ...row }).filter(([k]) => columns.includes(k)))];
+  const columns = [...Object.keys(BASE), ...(chat ? [...Object.keys(CHAT), ...Object.keys(SLACK)] : [])].filter((c) => !drop.includes(c));
+  const full = row === null ? [] : [Object.fromEntries(Object.entries({ ...BASE, ...(chat ? { ...CHAT, ...SLACK } : {}), ...row }).filter(([k]) => columns.includes(k)))];
   db = createChatFakeDb({
     tables: { exec_settings: full, exec_ai_usage: [], exec_access_log: [] },
     columns: { exec_settings: columns, exec_ai_usage: ["id", "principal_id", "feature", "cost_usd", "created_at"], exec_access_log: ["created_at", "route", "surface", "ip", "user_agent", "session_id", "principal_id"] }
@@ -65,9 +67,10 @@ beforeEach(() => {
 
 describe("the chat column group in the loader (T70)", () => {
   it("is the last group, needs the drafts group, and its flag is part of every settings value's schema flags", () => {
-    expect(SETTINGS_COLUMN_GROUPS.at(-1)).toEqual({ key: "chat", columns: ["chat_enabled", "ask_ai_uses_exec", "chat_daily_cap_usd"] });
+    // P7a appended its "slack" group after chat (C30): chat is now the last but one.
+    expect(SETTINGS_COLUMN_GROUPS.at(-2)).toEqual({ key: "chat", columns: ["chat_enabled", "ask_ai_uses_exec", "chat_daily_cap_usd"] });
     expect(settingsSchemaFlags({ ...DEFAULT_SETTINGS, emailSchemaReady: true, draftsSchemaReady: true, ddtextSchemaReady: true, chatSchemaReady: true })).toEqual({
-      email: true, drafts: true, ddtext: true, chat: true
+      email: true, drafts: true, ddtext: true, chat: true, slack: false
     });
   });
 
@@ -102,7 +105,10 @@ describe("the chat column group in the loader (T70)", () => {
     useDb({ ask_ai_uses_exec: true, chat_enabled: false, chat_daily_cap_usd: 0 });
     expect(await loadSettings("ep_1")).toMatchObject({ chatEnabled: false, askAiUsesExec: true, chatDailyCapUsd: 0 });
     useDb(null);
-    expect(await loadSettings("ep_1")).toEqual({ principalId: "ep_1", ...DEFAULT_SETTINGS, emailSchemaReady: true, draftsSchemaReady: true, ddtextSchemaReady: true, chatSchemaReady: true });
+    expect(await loadSettings("ep_1")).toEqual({
+      principalId: "ep_1", ...DEFAULT_SETTINGS, emailSchemaReady: true, draftsSchemaReady: true, ddtextSchemaReady: true, chatSchemaReady: true,
+      slackReadingSchemaReady: true
+    });
   });
 
   it("settingsFromRow: the switches only with the schema ready; told not ready, a stored true is still off", () => {
@@ -114,7 +120,8 @@ describe("the chat column group in the loader (T70)", () => {
 
 describe("the three registry fields (T70)", () => {
   it("chatEnabled, askAiUsesExec and chatDailyCapUsd: group chat, their columns, kinds, bounds and §3.19.12 copy", () => {
-    expect(SETTINGS_FIELDS.slice(-3).map(({ key, column, group, kind, min, max, label }) => ({ key, column, group, kind, min, max, label }))).toEqual([
+    // P7a appended its three fields after these (principal.test.ts pins them).
+    expect(SETTINGS_FIELDS.filter((d) => d.group === "chat").map(({ key, column, group, kind, min, max, label }) => ({ key, column, group, kind, min, max, label }))).toEqual([
       { key: "chatEnabled", column: "chat_enabled", group: "chat", kind: "boolean", min: undefined, max: undefined, label: "Chat" },
       { key: "askAiUsesExec", column: "ask_ai_uses_exec", group: "chat", kind: "boolean", min: undefined, max: undefined, label: "Use the assistant for Ask AI" },
       { key: "chatDailyCapUsd", column: "chat_daily_cap_usd", group: "chat", kind: "money", min: 0, max: 100, label: "Chat daily budget" }
@@ -183,7 +190,7 @@ describe("SettingsView: schema.chat and effectiveChatCapUsd (T70, C30)", () => {
   it("carries the chat flag and the effective cap computed from the settings it shows", async () => {
     useDb({});
     const view = await getSettingsView(P, NOW);
-    expect(view.schema).toEqual({ email: true, drafts: true, ddtext: true, chat: true });
+    expect(view.schema).toEqual({ email: true, drafts: true, ddtext: true, chat: true, slack: true });
     expect(view.effectiveChatCapUsd).toBe(7.77);
     expect(effectiveChatCapUsd).toHaveBeenCalledTimes(1);
     expect(effectiveChatCapUsd).toHaveBeenCalledWith(view.settings);

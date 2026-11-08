@@ -7,9 +7,31 @@ import { requireExecSession } from "@/lib/exec/access";
 import { auditEvent, auditFinish, auditStart } from "@/lib/exec/audit";
 import { SecretUnavailableError, cryptoConfigured, sealSecret, signState, verifyState } from "@/lib/exec/crypto";
 import { isSameOriginRequest, jsonError, rateLimit } from "@/lib/exec/http";
+import { enqueueJob } from "@/lib/exec/jobs";
+import { notifyOps } from "@/lib/exec/ops";
 import { appOrigin } from "@/lib/exec/refs";
 import { SLACK_REDIRECT_URI, slackConfig, type SlackConfig } from "@/lib/exec/slack-config";
-import { consumeOAuthState, isSlackSchemaMissing, issueOAuthState, saveInstallation, slackSchemaReady } from "@/lib/exec/slack-install";
+import {
+  SlackStoreError,
+  consumeOAuthState,
+  getReadingHalf,
+  isSlackSchemaMissing,
+  issueOAuthState,
+  openReadingInstallation,
+  recordUserTokenError,
+  saveInstallation,
+  saveReadingConsent,
+  slackReadingSchemaReady,
+  slackSchemaReady
+} from "@/lib/exec/slack-install";
+import { userRevoke } from "@/lib/exec/slack-read-store";
+import {
+  SLACK_READ_JOB_KINDS,
+  SLACK_USER_SCOPES_OPTIONAL,
+  SLACK_USER_SCOPES_REQUIRED,
+  type ReadingHalf,
+  type SlackUserScope
+} from "@/lib/exec/slack-read-types";
 import { SLACK_BOT_SCOPES, SLACK_LIMITS, SLACK_RE, type SlackConnectResult } from "@/lib/exec/slack-types";
 import { SlackApiError, authTest, exchangeOAuthCode, lookupUserByEmail, openDm, revokeToken, type OAuthAccessResult } from "@/lib/exec/sources/slack";
 import type { ExecPrincipal } from "@/lib/exec/types";
@@ -43,6 +65,24 @@ import type { ExecPrincipal } from "@/lib/exec/types";
 // query values are only ever held in variables named oauthCode / oauthState
 // (B-P6-5), and no token, email or Slack name reaches a log, an audit row or a
 // redirect.
+//
+// P7a (contract §3.10.3-4, §3.10.5, §3.10.8, N4, C25, C27, C47): the second
+// consent. start?purpose=read (only with the P7a migration and an active bot
+// installation) asks Slack for the bot's exact scopes plus the nine user scopes
+// (five required, four optional) under a state row marked purpose 'read'. Its
+// callback runs every check of the install, then: a user token Slack issued as
+// one (xoxp-, token_type user), the installation's own Slack member, the
+// required user scopes and nothing outside the nine, and auth.test of the user
+// token naming him in our workspace. Only then is the token sealed (its own
+// context, exec_slack_installations.user_token:<principal>) and saved with the
+// replaced bot token in one update; discovery is enqueued. Every failure after
+// the exchange revokes the user token Slack handed over (best-effort, never a
+// bot token) and stores nothing. The user token is held only in a local named
+// oauthUserToken. A plain install keeps K1 (a returned user token is revoked)
+// unless a live reading half exists (C27: then it is ignored, neither stored
+// nor revoked). withdrawReadingGrant is Stop reading's act and Disconnect's
+// first part: auth.revoke with the user token, then the revoke-and-purge RPC
+// whatever Slack answered (C47).
 
 const START_ROUTE = "GET /api/integrations/exec-slack/start";
 const CALLBACK_ROUTE = "GET /api/integrations/exec-slack/callback";
@@ -55,6 +95,18 @@ const QUERY_MAX = Object.freeze({ state: 400, code: 400, error: 100 });
 const CONNECT_LIMIT = 10;
 const CONNECT_WINDOW_MS = 600_000;
 const SLACK_CODE_RE = /^[a-z0-9_]{1,60}$/;
+/** P7a (§3.10.3 step 9r): the nine user scopes, required first, in the order Slack's consent screen lists them. */
+const USER_SCOPE_PARAM = [...SLACK_USER_SCOPES_REQUIRED, ...SLACK_USER_SCOPES_OPTIONAL].join(",");
+const USER_SCOPES_REQUIRED: ReadonlySet<string> = new Set(SLACK_USER_SCOPES_REQUIRED);
+const USER_SCOPES_ALLOWED: ReadonlySet<string> = new Set([...SLACK_USER_SCOPES_REQUIRED, ...SLACK_USER_SCOPES_OPTIONAL]);
+/** The two sealing contexts (each + the principal id): neither blob opens as the other. */
+const BOT_TOKEN_CONTEXT = "exec_slack_installations.bot_token:";
+const USER_TOKEN_CONTEXT = "exec_slack_installations.user_token:";
+/** A P7a column missing (42703 / PGRST204): the database is P6's, so there is no reading half. */
+const COLUMN_MISSING_CODES: ReadonlySet<string> = new Set(["42703", "PGRST204"]);
+
+/** What a start or a callback is for: P6's bot install, or P7a's read consent. */
+type OAuthPurpose = "install" | "read";
 
 // ---------------------------------------------------------------------------
 // Answers
@@ -120,7 +172,23 @@ export async function startSlackInstall(req: Request): Promise<Response> {
   }
 }
 
+/** §3.10.3 step 0: absent → install; exactly "read" → read; anything else or repeated → null (state_invalid). */
+function purposeOf(url: string): OAuthPurpose | null {
+  let all: string[];
+  try {
+    all = new URL(url).searchParams.getAll("purpose");
+  } catch {
+    return null;
+  }
+  if (all.length === 0) return "install";
+  return all.length === 1 && all[0] === "read" ? "read" : null;
+}
+
 async function start(req: Request): Promise<Response> {
+  // 0. What the flow is for (P7a): P6's install, or the read consent.
+  const purpose = purposeOf(req.url);
+  if (purpose === null) return settingsRedirect("state_invalid");
+
   // 1. The strong session.
   const session = await requireExecSession(req, START_ROUTE, { requireStrongSignIn: true });
   if (!session.ok) return guarded(session.response);
@@ -148,6 +216,17 @@ async function start(req: Request): Promise<Response> {
   const { principal, authUserId, sessionId } = session;
   if (sessionId === null) return settingsRedirect("session_unbound");
 
+  // 5r. The read consent needs the P7a migration and an active bot installation to add the user half to.
+  if (purpose === "read") {
+    try {
+      if (!(await slackReadingSchemaReady())) return settingsRedirect("not_installed");
+      if ((await readingHalfOrNone(principal)) === null) return settingsRedirect("read_not_connected");
+    } catch (err) {
+      console.error(`[exec-slack] oauth start: reading check failed (${errName(err)})`);
+      return settingsRedirect("unavailable");
+    }
+  }
+
   // 6. Ten starts per ten minutes (the slack.oauth.start audit rows). A count that can't be read fails closed.
   const limited = await rateLimit(principal, "slack_connect", CONNECT_LIMIT, CONNECT_WINDOW_MS);
   if (!limited.ok) return settingsRedirect(limited.response.status === 429 ? "rate_limited" : "unavailable");
@@ -155,7 +234,7 @@ async function start(req: Request): Promise<Response> {
   // 7. On record before the state exists.
   let auditId: number;
   try {
-    auditId = await auditStart(principal, { actor: "owner", action: "slack.oauth.start", target: "exec_oauth_states", input: {} });
+    auditId = await auditStart(principal, { actor: "owner", action: "slack.oauth.start", target: "exec_oauth_states", input: purpose === "read" ? { purpose } : {} });
   } catch {
     return settingsRedirect("unavailable");
   }
@@ -166,7 +245,13 @@ async function start(req: Request): Promise<Response> {
   let oauthState: string;
   try {
     oauthState = signState(STATE_PURPOSE, `s1.${nonce}.${exp}`);
-    await issueOAuthState(principal, { nonceHash: sha256hex(nonce), authUserId, sessionId, ttlSeconds: SLACK_LIMITS.oauthStateTtlSec });
+    await issueOAuthState(principal, {
+      nonceHash: sha256hex(nonce),
+      authUserId,
+      sessionId,
+      ttlSeconds: SLACK_LIMITS.oauthStateTtlSec,
+      ...(purpose === "read" ? { purpose } : {})
+    });
   } catch (err) {
     const result: SlackConnectResult = isSlackSchemaMissing(err) ? "not_installed" : "unavailable";
     await auditFinish(auditId, { ok: false, error: result });
@@ -175,10 +260,12 @@ async function start(req: Request): Promise<Response> {
   }
 
   // 9. To Slack: the six bot scopes, no user_scope (K1), the canonical redirect URL (K3), our workspace.
+  // 9r. The read consent: the same, plus the nine user scopes (the manifest marks the last four optional, P7-1).
   await auditFinish(auditId, { ok: true });
   const q = new URLSearchParams({
     client_id: cfg.clientId,
     scope: SLACK_BOT_SCOPES.join(","),
+    ...(purpose === "read" ? { user_scope: USER_SCOPE_PARAM } : {}),
     redirect_uri: SLACK_REDIRECT_URI,
     state: oauthState,
     team: cfg.teamId
@@ -267,6 +354,9 @@ async function finish(req: Request): Promise<Response> {
     return settingsRedirect("state_invalid");
   }
 
+  // P7a: a read consent's state continues on its own steps (§3.10.4), on record as slack.read_consent.
+  if (row.purpose === "read") return finishReadConsent(principal, oauthCode, oauthError);
+
   // 6-22. Every outcome from here on is on record as slack.install.
   const outcome = await install(principal, oauthCode, oauthError);
   if (outcome.result === "connected") {
@@ -325,8 +415,13 @@ async function install(principal: ExecPrincipal, oauthCode: string | null, oauth
     return { result: slackFailure(err, "exchange_failed") };
   }
 
-  // 10 (first, whatever else fails): a user token is never kept (K1).
-  if (access.authedUserToken !== null) await revokeUnexpected(access.authedUserToken);
+  // 10 (first, whatever else fails): a user token is never kept (K1). P7a C27: while a live reading half exists the
+  // returned user token is ignored instead (never stored, never revoked), so a Reconnect never kills his reading grant.
+  if (access.authedUserToken !== null) {
+    const live = await hasLiveUserHalf(principal);
+    if (live === false) await revokeUnexpected(access.authedUserToken);
+    else if (live === null) console.warn("[exec-slack] oauth callback: a returned user grant was left alone (the reading half couldn't be read)");
+  }
 
   // 9. A bot token.
   const botToken = access.accessToken;
@@ -397,4 +492,274 @@ async function install(principal: ExecPrincipal, oauthCode: string | null, oauth
     console.error(`[exec-slack] oauth callback: save failed (${errName(err)})`);
     return { result: "unavailable" };
   }
+}
+
+// ---------------------------------------------------------------------------
+// P7a: the read consent's callback (§3.10.4, purpose = read)
+// ---------------------------------------------------------------------------
+
+/** A reading half that is live: a user token and reading_state discovering|ready. */
+const isLiveReading = (r: ReadingHalf): boolean => r.hasToken && (r.state === "discovering" || r.state === "ready");
+
+/** getReadingHalf, with the P7a schema missing (its columns or tables: a P6-only database) read as "no reading half".
+ *  Any other error throws. */
+async function readingHalfOrNone(principal: ExecPrincipal): Promise<Awaited<ReturnType<typeof getReadingHalf>>> {
+  try {
+    return await getReadingHalf(principal);
+  } catch (err) {
+    if (isSlackSchemaMissing(err) || (err instanceof SlackStoreError && err.pgCode !== null && COLUMN_MISSING_CODES.has(err.pgCode))) return null;
+    throw err;
+  }
+}
+
+/** C27: does the principal hold a live reading half? false without one (or without the P7a schema); null when it can't be read. */
+async function hasLiveUserHalf(principal: ExecPrincipal): Promise<boolean | null> {
+  try {
+    const half = await readingHalfOrNone(principal);
+    return half !== null && isLiveReading(half.reading);
+  } catch (err) {
+    console.warn(`[exec-slack] oauth callback: reading half unreadable (${errName(err)})`);
+    return null;
+  }
+}
+
+/** A failed read consent: auth.revoke on the user grant Slack just made, best-effort. Only a user token (xoxp-) is ever
+ *  revoked here: anything else in that field could be the bot's own token, whose revoke would uninstall the app. */
+async function revokeUserGrant(oauthUserToken: string | null): Promise<void> {
+  if (oauthUserToken === null || !oauthUserToken.startsWith("xoxp-")) return;
+  await revokeUnexpected(oauthUserToken);
+}
+
+/** §3.10.4 step 18r2: the granted user scopes, deduplicated; the required five must be there and nothing outside the nine. */
+function userScopeVerdict(granted: readonly string[]): "missing_user_scopes" | "extra_user_scopes" | null {
+  const got = new Set(granted);
+  for (const s of USER_SCOPES_REQUIRED) if (!got.has(s)) return "missing_user_scopes";
+  for (const s of got) if (!USER_SCOPES_ALLOWED.has(s)) return "extra_user_scopes";
+  return null;
+}
+
+type ReadConsentOutcome =
+  | { result: "read_connected"; id: string; scopes: number; optional: number }
+  | { result: "wrong_user"; who: string }
+  | { result: Exclude<SlackConnectResult, "read_connected" | "wrong_user" | "connected"> };
+
+async function finishReadConsent(principal: ExecPrincipal, oauthCode: string | null, oauthError: string | null): Promise<Response> {
+  const outcome = await readConsent(principal, oauthCode, oauthError);
+  if (outcome.result === "read_connected") {
+    // Scope counts only: never the token, never a name (§0.3 rule 4).
+    await auditEvent(principal, {
+      actor: "owner",
+      action: "slack.read_consent",
+      target: `exec_slack_installations:${outcome.id}`,
+      input: { scopes: outcome.scopes, optional: outcome.optional }
+    });
+    console.info(`[exec-slack] oauth callback read_connected (${outcome.id}, ${outcome.scopes} user scopes)`);
+    return settingsRedirect("read_connected");
+  }
+  await auditEvent(principal, { actor: "owner", action: "slack.read_consent", target: "exec_slack_installations", input: {}, ok: false, error: outcome.result });
+  console.warn(`[exec-slack] oauth callback read consent ${outcome.result}`);
+  return outcome.result === "wrong_user" ? settingsRedirect("wrong_user", outcome.who) : settingsRedirect(outcome.result);
+}
+
+/** Steps 6-20r2 for purpose = read: Slack's answer, the user half's checks and the save. Never throws. */
+async function readConsent(principal: ExecPrincipal, oauthCode: string | null, oauthError: string | null): Promise<ReadConsentOutcome> {
+  // 6-7. Cancelled in Slack; a code and a configured app.
+  if (oauthError !== null) return { result: "denied" };
+  if (oauthCode === null) return { result: "state_invalid" };
+  const cfg: SlackConfig | null = slackConfig();
+  if (cfg === null || !cryptoConfigured()) return { result: "not_configured" };
+
+  // 8. The exchange (HTTP Basic, the canonical redirect URL).
+  let access: OAuthAccessResult;
+  try {
+    access = await exchangeOAuthCode({ clientId: cfg.clientId, clientSecret: cfg.clientSecret, code: oauthCode, redirectUri: SLACK_REDIRECT_URI });
+  } catch (err) {
+    console.warn(`[exec-slack] oauth callback: read exchange failed (${slackCode(err)})`);
+    return { result: slackFailure(err, "exchange_failed") };
+  }
+  // The one holder of the user token (B-P6-5). Every refusal below revokes it first: nothing is stored on any of them.
+  const oauthUserToken = access.authedUserToken;
+  const refuse = async (outcome: ReadConsentOutcome): Promise<ReadConsentOutcome> => {
+    await revokeUserGrant(oauthUserToken);
+    return outcome;
+  };
+
+  // 9. A bot token (K5's in-place replacement saves it with the user half).
+  const botToken = access.accessToken;
+  if (access.tokenType !== "bot" || !botToken.startsWith("xoxb-")) return refuse({ result: "exchange_failed" });
+  // 9r. A user token Slack issued as one. (10r: P6's step 10, which revokes it, is skipped.) An absent type reads as none.
+  if (oauthUserToken === null || !oauthUserToken.startsWith("xoxp-") || access.authedUserTokenType !== "user") {
+    return refuse({ result: "exchange_failed" });
+  }
+  // 11-13. The workspace, not an org-wide install, our app.
+  if (access.isEnterpriseInstall || access.enterprisePresent) return refuse({ result: "enterprise" });
+  if (access.teamId !== cfg.teamId) return refuse({ result: "wrong_team" });
+  if (access.appId !== cfg.appId) return refuse({ result: "wrong_app" });
+  // 14. Exactly the six bot scopes.
+  const botScopes = scopeVerdict(access.scope);
+  if (botScopes !== null) return refuse({ result: botScopes });
+  // 15. Well-formed ids.
+  const botUserId = access.botUserId;
+  const authedUserId = access.authedUserId;
+  if (botUserId === null || !SLACK_RE.user.test(botUserId) || authedUserId === null || !SLACK_RE.user.test(authedUserId)) {
+    return refuse({ result: "exchange_failed" });
+  }
+
+  // 16-17. The consenting member is the principal: his DD email's Slack member, as the new bot token sees it (K5).
+  if (typeof principal.email !== "string" || principal.email.length === 0) return refuse({ result: "identity_not_found" });
+  let member: Awaited<ReturnType<typeof lookupUserByEmail>>;
+  try {
+    member = await lookupUserByEmail(botToken, principal.email);
+  } catch (err) {
+    console.warn(`[exec-slack] oauth callback: read identity lookup failed (${slackCode(err)})`);
+    return refuse({ result: slackFailure(err, "exchange_failed") });
+  }
+  if (member === null || member.deleted || member.isBot) return refuse({ result: "identity_not_found" });
+  if (member.id !== authedUserId) return refuse({ result: "wrong_user", who: authedUserId });
+
+  // 18. The bot token is the bot user Slack named, in our workspace.
+  let me: Awaited<ReturnType<typeof authTest>>;
+  try {
+    me = await authTest(botToken);
+  } catch (err) {
+    console.warn(`[exec-slack] oauth callback: read bot auth check failed (${slackCode(err)})`);
+    return refuse({ result: slackFailure(err, "exchange_failed") });
+  }
+  const botId = me.botId;
+  if (me.teamId !== cfg.teamId || me.userId !== botUserId || botId === null || !SLACK_RE.bot.test(botId)) return refuse({ result: "exchange_failed" });
+
+  // 18r1. The user half belongs on his active installation, the one whose member he is.
+  let half: Awaited<ReturnType<typeof getReadingHalf>>;
+  try {
+    half = await readingHalfOrNone(principal);
+  } catch (err) {
+    console.error(`[exec-slack] oauth callback: reading half unreadable (${errName(err)})`);
+    return refuse({ result: "unavailable" });
+  }
+  if (half === null) return refuse({ result: "read_not_connected" });
+  if (half.row.userId !== authedUserId) return refuse({ result: "wrong_user", who: authedUserId });
+
+  // 18r2. Every required user scope, nothing outside the nine; the optional four may have been declined.
+  const granted = [...new Set(access.authedUserScope ?? [])];
+  const userScopes = userScopeVerdict(granted);
+  if (userScopes !== null) return refuse({ result: userScopes });
+
+  // 18r3. The user token is his, in our workspace.
+  try {
+    const mine = await authTest(oauthUserToken);
+    if (mine.teamId !== cfg.teamId || mine.userId !== authedUserId) return refuse({ result: "exchange_failed" });
+  } catch (err) {
+    console.warn(`[exec-slack] oauth callback: user auth check failed (${slackCode(err)})`);
+    return refuse({ result: slackFailure(err, "exchange_failed") });
+  }
+
+  // 19. The bot's DM with him (K11), as P6's install reads it.
+  let dmChannelId: string;
+  try {
+    dmChannelId = await openDm(botToken, authedUserId);
+  } catch (err) {
+    console.warn(`[exec-slack] oauth callback: read DM open failed (${slackCode(err)})`);
+    return refuse({ result: "slack_unavailable" });
+  }
+  if (!SLACK_RE.dm.test(dmChannelId)) return refuse({ result: "slack_unavailable" });
+
+  // 20r. Both tokens sealed for this principal under their own contexts, saved in one update of the active row.
+  const scopesGranted = granted.filter((x): x is SlackUserScope => USER_SCOPES_ALLOWED.has(x));
+  const optional = scopesGranted.filter((x) => !USER_SCOPES_REQUIRED.has(x)).length;
+  let saved: Awaited<ReturnType<typeof saveReadingConsent>>;
+  try {
+    const sealedBot = sealSecret(botToken, `${BOT_TOKEN_CONTEXT}${principal.id}`);
+    const sealedUser = sealSecret(oauthUserToken, `${USER_TOKEN_CONTEXT}${principal.id}`);
+    saved = await saveReadingConsent(principal, {
+      teamId: cfg.teamId,
+      appId: cfg.appId,
+      botUserId,
+      botId,
+      botTokenSealed: sealedBot,
+      keyId: sealedBot.split(".")[1] ?? "",
+      botScopes: [...SLACK_BOT_SCOPES],
+      userId: authedUserId,
+      dmChannelId,
+      userTokenSealed: sealedUser,
+      userKeyId: sealedUser.split(".")[1] ?? "",
+      userScopes: scopesGranted
+    });
+  } catch (err) {
+    console.error(`[exec-slack] oauth callback: read consent save failed (${errName(err)})`);
+    return refuse({ result: "unavailable" });
+  }
+  if (saved.outcome === "taken") return refuse({ result: "read_taken" });
+  if (saved.outcome === "no_installation") return refuse({ result: "read_not_connected" });
+
+  // 20r2. Discovery first (N2): metadata only, whatever the switch says (C8). A failed enqueue is covered by the daily run.
+  try {
+    await enqueueJob({
+      kind: SLACK_READ_JOB_KINDS.discover,
+      lane: "bulk",
+      principalId: principal.id,
+      payload: { installation_id: saved.id, reason: "consent" },
+      dedupeKey: `slack-discover:consent:${saved.id}:${saved.installedAtMs}`,
+      maxAttempts: 3
+    });
+  } catch (err) {
+    console.error(`[exec-slack] oauth callback: discovery not enqueued (${saved.id}, ${errName(err)})`);
+  }
+  return { result: "read_connected", id: saved.id, scopes: scopesGranted.length, optional };
+}
+
+// ---------------------------------------------------------------------------
+// P7a: withdrawing the read consent (§3.10.5 Stop reading, §3.10.8 Disconnect's first part; N4, C25, C47)
+// ---------------------------------------------------------------------------
+
+export type ReadingWithdrawal =
+  /** No live reading half on this installation (none, revoked, or another installation's id). */
+  | { kind: "no_half" }
+  /** The user half is revoked and its data purged (revoked: false when another call got there first). slack says what Slack
+   *  answered: the token revoked or already dead, not tried (the key can't open it here), or the revoke failed (C47). */
+  | { kind: "withdrawn"; slack: "revoked" | "already_invalid" | "local_only" | "revoke_failed"; revoked: boolean };
+
+/**
+ * The principal's live reading half on `installationId` (reading_state discovering|ready), withdrawn: auth.revoke with
+ * the user token (10 s), then exec_slack_user_revoke (marks the half revoked and purges every reading row in one
+ * transaction) WHATEVER Slack answered: withdrawing consent never waits for Slack (C47). A token the key can't open
+ * here (SecretUnavailableError) skips Slack ("local_only": the token is still live at Slack). A failed revoke, and a
+ * local-only withdrawal, are recorded as user_last_error_code 'revoke_failed' and sent to ops with ids and codes only
+ * (failedCode "key_unavailable" for the latter), so Settings asks him to remove the access in Slack. The bot token is never touched. Without the P7a schema (a P6-only database) there
+ * is no reading half. Other store errors throw (the routes answer 503).
+ */
+export async function withdrawReadingGrant(principal: ExecPrincipal, installationId: string, reason: "stopped" | "disconnected"): Promise<ReadingWithdrawal> {
+  const half = await readingHalfOrNone(principal);
+  if (half === null || half.row.id !== installationId) return { kind: "no_half" };
+  if (half.reading.state !== "discovering" && half.reading.state !== "ready") return { kind: "no_half" };
+
+  let open: Awaited<ReturnType<typeof openReadingInstallation>> = null;
+  try {
+    open = await openReadingInstallation(principal, installationId);
+  } catch (err) {
+    // The token can't be opened here (a rotated or missing key): withdraw locally only.
+    if (!(err instanceof SecretUnavailableError)) throw err;
+  }
+  let slack: "revoked" | "already_invalid" | "local_only" | "revoke_failed" = "local_only";
+  let failedCode = "network";
+  if (open === null) failedCode = "key_unavailable";
+  else {
+    try {
+      slack = await revokeToken(open.target.userToken, { timeoutMs: SLACK_LIMITS.httpTimeoutMs });
+    } catch (err) {
+      slack = "revoke_failed";
+      if (err instanceof SlackApiError) failedCode = SLACK_CODE_RE.test(err.code) ? err.code : "slack_error";
+    }
+  }
+  const { revoked } = await userRevoke(installationId, reason);
+  // P7a fixer ui-7: a token we couldn't even try to revoke is as live at Slack as one whose revoke failed.
+  if (slack === "revoke_failed" || slack === "local_only") {
+    await recordUserTokenError(installationId, "revoke_failed");
+    console.warn(`[exec-slack] reading ${reason} ${installationId}: the Slack revoke failed (${failedCode}); reading data purged`);
+    await notifyOps({
+      key: "exec-slack-read-revoke-failed",
+      title: "Executive Assistant: Slack reading token not revoked",
+      detail: "installation " + installationId + ": auth.revoke " + (slack === "local_only" ? "not attempted" : "failed") + " (" + failedCode + "); reading data was purged, the token may still be live in Slack"
+    });
+  }
+  return { kind: "withdrawn", slack, revoked };
 }

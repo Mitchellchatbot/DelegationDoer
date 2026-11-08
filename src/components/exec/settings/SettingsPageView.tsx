@@ -45,6 +45,7 @@ const FEATURE_LABEL: Readonly<Record<string, string>> = {
   digest: "Digest",
   chat: "Chat",
   ddtext: "DD text triage",
+  slack_triage: "Slack summaries",   // P7a (integrator): the Slack sub-cap's feature
   spike: "Tests"
 };
 
@@ -69,7 +70,12 @@ const KIND_LABEL: Readonly<Record<string, string>> = {
   ddtext_blocker: "Possible blocker in DD text",
   ddtext_waiting: "Possible wait in DD text",
   ddtext_decision: "Possible decision in DD text",
-  ddtext_mention: "Mention of you in a comment"
+  ddtext_mention: "Mention of you in a comment",
+  // P7a (integrator): the four Slack kinds, as priority.ts labels them.
+  slack_decision: "Decision asked of you in Slack",
+  slack_request: "Slack message to you",
+  slack_commitment: "Slack commitment",
+  slack_unassessed: "Slack message (not assessed)"
 };
 
 export function feedbackKindLabel(kind: string): string {

@@ -86,8 +86,15 @@ function checkNonce(nonce: string): string {
   return nonce;
 }
 
-const openTag = (nonce: string) => `<untrusted_dd_text nonce="${nonce}">\n`;
-const CLOSE_TAG = "</untrusted_dd_text>";
+/** P7a (contract §3.12, AM-P7a-10): the block's tag. Default untrusted_dd_text; Slack triage renders untrusted_slack. */
+export type UntrustedBlockTag = "untrusted_dd_text" | "untrusted_slack";
+export interface UntrustedBlockOptions { tag?: UntrustedBlockTag }
+
+function tagOf(opts: UntrustedBlockOptions | undefined): UntrustedBlockTag {
+  return opts?.tag === "untrusted_slack" ? "untrusted_slack" : "untrusted_dd_text";
+}
+const openTag = (nonce: string, tag: UntrustedBlockTag = "untrusted_dd_text") => `<${tag} nonce="${nonce}">\n`;
+const closeTag = (tag: UntrustedBlockTag = "untrusted_dd_text") => `</${tag}>`;
 
 // The header is code-written, but it carries names: one line, and no bracket or
 // angle bracket that could end it early or open a tag.
@@ -114,11 +121,13 @@ function entryText(nonce: string, entry: UntrustedEntry): string {
 export function renderUntrustedBlock(
   nonce: string,
   entries: readonly UntrustedEntry[],
-  maxTotal: number = DD_TEXT_RESULT_CHARS
+  maxTotal: number = DD_TEXT_RESULT_CHARS,
+  opts: UntrustedBlockOptions = {}
 ): { block: string; renderedEntries: number; droppedEntries: number } {
   checkNonce(nonce);
+  const tag = tagOf(opts);
   const limit = Number.isFinite(maxTotal) ? Math.floor(maxTotal) : DD_TEXT_RESULT_CHARS;
-  let size = untrustedBlockOverhead(nonce);
+  let size = untrustedBlockOverhead(nonce, { tag });
   const parts: string[] = [];
   for (const entry of entries) {
     const part = entryText(nonce, entry);
@@ -126,7 +135,7 @@ export function renderUntrustedBlock(
     size += part.length;
     parts.push(part);
   }
-  return { block: `${openTag(nonce)}${parts.join("")}${CLOSE_TAG}`, renderedEntries: parts.length, droppedEntries: entries.length - parts.length };
+  return { block: `${openTag(nonce, tag)}${parts.join("")}${closeTag(tag)}`, renderedEntries: parts.length, droppedEntries: entries.length - parts.length };
 }
 
 /** The characters one entry adds to a block (header line, text, separators), for packers. */
@@ -134,9 +143,10 @@ export function untrustedEntrySize(nonce: string, entry: UntrustedEntry): number
   return entryText(checkNonce(nonce), entry).length;
 }
 
-/** The fixed open+close tag overhead of a block, for packers. */
-export function untrustedBlockOverhead(nonce: string): number {
-  return openTag(checkNonce(nonce)).length + CLOSE_TAG.length;
+/** The fixed open+close tag overhead of a block, for packers (opts.tag as renderUntrustedBlock's). */
+export function untrustedBlockOverhead(nonce: string, opts: UntrustedBlockOptions = {}): number {
+  const tag = tagOf(opts);
+  return openTag(checkNonce(nonce), tag).length + closeTag(tag).length;
 }
 
 // ---------------------------------------------------------------------------

@@ -1,0 +1,267 @@
+{
+  "_doc": [
+    "conversations.history / conversations.replies response shapes (CH/CR in p7/slackdocs; ING §2.2): history pages newest first, replies parent first.",
+    "history[i] = { pass?, request (the parameters the sweep must send), response }; replies = { <thread ts>: [{ request, response }] }.",
+    "channelRow / threads / stored = the state before the run. sweepCtx = sweepVerdict's context (sets as arrays; hePostedInThread from `threads`).",
+    "expect.verdicts = sweepVerdict per message ts (role, reason or reasons). Lead-owned, frozen.",
+    "TS16 / C49: one thread's conversations.replies (the triage fetch for root = the thread ts). The parent is DD's as-user FYI template",
+    "(src/lib/slack.ts:823-845, the comment-mention / FYI DM shape), then an EOD digest by the DD bot user (src/lib/eod.ts:299-330), a post with the",
+    "DD app id, a bot message, an opted-out author's message, his candidate mention, a DD-template candidate (outcome skipped) and his own reply.",
+    "Every DD / bot / opted-out entry carries the text sentinel, which must never reach callModel's input; their placeholders do."
+  ],
+  "channel": "C0GENERAL",
+  "convType": "channel",
+  "now": "2026-11-08T15:00:00.000Z",
+  "root": "1794140000.000100",
+  "channelRow": {
+    "class": "standard",
+    "watchState": "watched",
+    "muteSource": null,
+    "isMember": true,
+    "isPrivate": false,
+    "isExtShared": false,
+    "extEver": false
+  },
+  "candidates": [
+    {
+      "ts": "1794145000.005000",
+      "threadTs": "1794140000.000100",
+      "authorUserId": "U0JANE",
+      "authorExternal": false,
+      "reasons": 2,
+      "triageState": "pending",
+      "contentHash": null,
+      "editedTs": null,
+      "respondedTs": null
+    },
+    {
+      "ts": "1794146000.006000",
+      "threadTs": "1794140000.000100",
+      "authorUserId": "U0JANE",
+      "authorExternal": false,
+      "reasons": 2,
+      "triageState": "pending",
+      "contentHash": null,
+      "editedTs": null,
+      "respondedTs": null
+    }
+  ],
+  "optedOut": [
+    "U0OPTOUT"
+  ],
+  "replies": {
+    "1794140000.000100": [
+      {
+        "request": {
+          "channel": "C0GENERAL",
+          "ts": "1794140000.000100",
+          "limit": 200,
+          "cursor": null
+        },
+        "response": {
+          "ok": true,
+          "messages": [
+            {
+              "type": "message",
+              "user": "U0JANE",
+              "text": "FYI: client call moved",
+              "ts": "1794140000.000100",
+              "team": "T0SCALED",
+              "app_id": "A0DDAPP",
+              "thread_ts": "1794140000.000100",
+              "reply_count": 7,
+              "reply_users_count": 5,
+              "latest_reply": "1794146600.000800",
+              "reply_users": [
+                "U0DDBOT",
+                "U0JANE",
+                "U0OPTOUT",
+                "U0MITCH"
+              ],
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*FYI: client call moved*\nSENTINEL-DD-TEXT-7f3a the client wants to talk pricing SENTINEL-SLACK-TEXT-7f3a"
+                  }
+                },
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*<https://operations.scaledai.org/tasks/t_88|Client call>*"
+                  }
+                },
+                {
+                  "type": "actions",
+                  "elements": [
+                    {
+                      "type": "button",
+                      "text": {
+                        "type": "plain_text",
+                        "text": "Open in Scaled Operations",
+                        "emoji": true
+                      },
+                      "url": "https://operations.scaledai.org/tasks/t_88"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "message",
+              "user": "U0DDBOT",
+              "text": "SEO EOD SENTINEL-SLACK-TEXT-7f3a",
+              "ts": "1794141000.001000",
+              "team": "T0SCALED",
+              "thread_ts": "1794140000.000100",
+              "parent_user_id": "U0JANE",
+              "bot_id": "B0DDBOT",
+              "app_id": "A0DDAPP",
+              "bot_profile": {
+                "id": "B0DDBOT",
+                "app_id": "A0DDAPP",
+                "name": "Scaled Operations",
+                "deleted": false,
+                "team_id": "T0SCALED"
+              },
+              "blocks": [
+                {
+                  "type": "header",
+                  "text": {
+                    "type": "plain_text",
+                    "text": "SEO · EOD · Nov 7"
+                  }
+                },
+                {
+                  "type": "context",
+                  "elements": [
+                    {
+                      "type": "mrkdwn",
+                      "text": "*4* tasks completed · *6.5h* logged across 2 people SENTINEL-SLACK-TEXT-7f3a"
+                    }
+                  ]
+                },
+                {
+                  "type": "divider"
+                }
+              ]
+            },
+            {
+              "type": "message",
+              "user": "U0JANE",
+              "text": "SENTINEL-SLACK-TEXT-7f3a logged through the DD app",
+              "ts": "1794142000.002000",
+              "team": "T0SCALED",
+              "thread_ts": "1794140000.000100",
+              "parent_user_id": "U0JANE",
+              "app_id": "A0DDAPP"
+            },
+            {
+              "type": "message",
+              "subtype": "bot_message",
+              "bot_id": "B0ZAP",
+              "username": "zapier",
+              "text": "SENTINEL-SLACK-TEXT-7f3a zap ran",
+              "ts": "1794143000.003000",
+              "thread_ts": "1794140000.000100",
+              "parent_user_id": "U0JANE"
+            },
+            {
+              "type": "message",
+              "user": "U0OPTOUT",
+              "text": "SENTINEL-SLACK-TEXT-7f3a my phone number changed",
+              "ts": "1794144000.004000",
+              "team": "T0SCALED",
+              "thread_ts": "1794140000.000100",
+              "parent_user_id": "U0JANE"
+            },
+            {
+              "type": "message",
+              "user": "U0JANE",
+              "text": "<@U0MITCH> SENTINEL-SLACK-TEXT-7f3a can you sign the new hire offer?",
+              "ts": "1794145000.005000",
+              "team": "T0SCALED",
+              "thread_ts": "1794140000.000100",
+              "parent_user_id": "U0JANE"
+            },
+            {
+              "type": "message",
+              "user": "U0JANE",
+              "text": "FYI: offer letter sent",
+              "ts": "1794146000.006000",
+              "team": "T0SCALED",
+              "thread_ts": "1794140000.000100",
+              "parent_user_id": "U0JANE",
+              "app_id": "A0DDAPP",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*FYI: offer letter sent*\nSENTINEL-DD-TEXT-7f3a the candidate accepted"
+                  }
+                },
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*<https://operations.scaledai.org/tasks/t_89|Offer letter>*"
+                  }
+                },
+                {
+                  "type": "actions",
+                  "elements": [
+                    {
+                      "type": "button",
+                      "text": {
+                        "type": "plain_text",
+                        "text": "Open in Scaled Operations",
+                        "emoji": true
+                      },
+                      "url": "https://operations.scaledai.org/tasks/t_89"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "message",
+              "user": "U0MITCH",
+              "text": "SENTINEL-SLACK-TEXT-7f3a thanks, on it",
+              "ts": "1794146600.006600",
+              "team": "T0SCALED",
+              "thread_ts": "1794140000.000100",
+              "parent_user_id": "U0JANE"
+            }
+          ],
+          "has_more": false
+        }
+      }
+    ]
+  },
+  "expect": {
+    "placeholders": {
+      "1794140000.000100": "dd",
+      "1794141000.001000": "dd",
+      "1794142000.002000": "dd",
+      "1794143000.003000": "app",
+      "1794144000.004000": "optout",
+      "1794146000.006000": "dd"
+    },
+    "plain": [
+      "1794145000.005000",
+      "1794146600.006600"
+    ],
+    "isHim": [
+      "1794146600.006600"
+    ],
+    "skippedCandidates": [
+      "1794146000.006000"
+    ],
+    "triagedCandidates": [
+      "1794145000.005000"
+    ]
+  }
+}

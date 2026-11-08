@@ -55,6 +55,7 @@ export interface ExecSettings {
   checkinsEnabled: boolean;
   restrictedPolicy: RestrictedPolicy;
   watchMode: WatchMode;
+  /** Unused (P7a N7): exec_slack_channels.watch_state is the one mute store. */
   mutedChannelIds: string[];
   retentionDaysSlack: number;
   retentionDaysEmail: number;
@@ -100,6 +101,12 @@ export interface ExecSettings {
   chatDailyCapUsd: number;
   /** The settings read found the P5b columns (the P5b migration is applied). */
   chatSchemaReady: boolean;
+  /** exec_settings.slack_reading_enabled (P7a, N20): Slack reading runs only when this and slackReadingSchemaReady hold. */
+  slackReadingEnabled: boolean;
+  /** exec_settings.slack_daily_cap_usd (P7a, N8, C17). Default 2. */
+  slackDailyCapUsd: number;
+  /** The settings read found the P7a columns (the P7a migration is applied). */
+  slackReadingSchemaReady: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -215,7 +222,7 @@ export interface SourceRef {
 // LLM
 // ---------------------------------------------------------------------------
 
-export type ExecLlmFeature = "chat" | "draft" | "brief" | "triage" | "digest" | "voice" | "spike" | "ddtext";
+export type ExecLlmFeature = "chat" | "draft" | "brief" | "triage" | "digest" | "voice" | "spike" | "ddtext" | "slack_triage";
 export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
 
 // ---------------------------------------------------------------------------

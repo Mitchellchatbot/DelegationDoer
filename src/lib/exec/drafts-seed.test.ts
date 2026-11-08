@@ -373,7 +373,7 @@ describe("stage-0 additive seeds", () => {
     vi.mocked(getSupabaseAdmin).mockReturnValue(db.client as SupabaseClient);
     const parseAny = (raw: unknown) => (typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>) : null);
     expect(await getSyncState(principal, "clone-ea", "ea-token", parseAny)).toBeNull();
-    await expect(getSyncState(principal, "slack" as "mail", "k", parseAny)).rejects.toBeInstanceOf(NonRetryableError);
+    await expect(getSyncState(principal, "bogus" as "mail", "k", parseAny)).rejects.toBeInstanceOf(NonRetryableError);
     expect(parseEaTokenState({})).toBeNull();
     expect(parseSendTokenState({})).toBeNull();
   });

@@ -40,6 +40,17 @@ vi.mock("@/lib/exec/slack-install", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/exec/slack-install")>();
   return { ...actual, deleteOldSlackEvents: vi.fn(), deleteExpiredOAuthStates: vi.fn(), getActiveInstallation: vi.fn(), listUnpurgedRevokedInstallations: vi.fn() };
 });
+// P7a's Slack reading retention step (purgeExpiredSlack, contract §3.15) has its own suites (slack-read-store, purge); here it
+// finds nothing to delete.
+vi.mock("@/lib/exec/slack-read-store", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/exec/slack-read-store")>();
+  return { ...actual, purgeExpiredSlack: vi.fn() };
+});
+// P7a (contract §3.11.12, RT02-RT03): the events route's gate cache is refreshed by the worker tick, not awaited.
+vi.mock("@/lib/exec/slack-gate-cache", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/exec/slack-gate-cache")>();
+  return { ...actual, refreshGateCache: vi.fn() };
+});
 
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { listEnabledPrincipals, loadPrincipalById, loadSettings, principalFromRows, settingsFromRow } from "@/lib/exec/principal";
@@ -50,6 +61,7 @@ import { purgeExpiredDdtext, purgeOrphanDdtextAttention } from "@/lib/exec/ddtex
 import { purgeOldFeedback } from "@/lib/exec/attention-feedback";
 import { purgeExpiredChatRows } from "@/lib/exec/chat-store";
 import { deleteExpiredOAuthStates, deleteOldSlackEvents, getActiveInstallation, listUnpurgedRevokedInstallations } from "@/lib/exec/slack-install";
+import { purgeExpiredSlack } from "@/lib/exec/slack-read-store";
 import { DD_ATTENTION_JOB_KIND, ddAttentionJobHandler, ddAttentionScheduledWork } from "@/lib/exec/handlers/dd-attention";
 import { DDTEXT_JOB_KIND, ddtextJobHandler, ddtextScheduledWork } from "@/lib/exec/handlers/ddtext-triage";
 import { draftGenerateJobHandler } from "@/lib/exec/handlers/draft-generate";
@@ -64,6 +76,16 @@ import { slackHomeJobHandler } from "@/lib/exec/handlers/slack-home";
 import { slackReplyJobHandler } from "@/lib/exec/handlers/slack-reply";
 import { slackDmPurgeJobHandler, slackDmPurgeScheduledWork, slackSweepJobHandler, slackSweepScheduledWork } from "@/lib/exec/handlers/slack-sweep";
 import { slackUninstallJobHandler } from "@/lib/exec/handlers/slack-uninstall";
+import { slackAttentionJobHandler, slackAttentionScheduledWork } from "@/lib/exec/handlers/slack-attention";
+import { slackClassifyJobHandler } from "@/lib/exec/handlers/slack-classify";
+import { slackDiscoverJobHandler, slackDiscoverScheduledWork } from "@/lib/exec/handlers/slack-discover";
+import { slackProbeJobHandler, slackProbeScheduledWork } from "@/lib/exec/handlers/slack-probe";
+import { slackReadPurgeJobHandler, slackReadRecheckJobHandler, slackReadRecheckScheduledWork } from "@/lib/exec/handlers/slack-read-purge";
+import { slackReadSweepJobHandler, slackReadSweepScheduledWork } from "@/lib/exec/handlers/slack-read-sweep";
+import { slackRekeyJobHandler } from "@/lib/exec/handlers/slack-rekey";
+import { slackTriageJobHandler } from "@/lib/exec/handlers/slack-triage";
+import { slackUserCheckJobHandler } from "@/lib/exec/handlers/slack-user-check";
+import { refreshGateCache } from "@/lib/exec/slack-gate-cache";
 import { voiceRefreshJobHandler, voiceRefreshScheduledWork } from "@/lib/exec/handlers/voice-refresh";
 import {
   EMAIL_ATTENTION_JOB_KIND,
@@ -118,7 +140,14 @@ const NO_EMAIL_PURGED = {
   chatStaleFailed: 0,
   slackEvents: 0,
   oauthStates: 0,
-  slackRevocationsPurged: 0
+  slackRevocationsPurged: 0,
+  slackItems: 0,
+  slackMessages: 0,
+  slackThreads: 0,
+  slackMarkers: 0,
+  slackLog: 0,
+  slackChannels: 0,
+  slackAttention: 0
 };
 
 function resetAll(): void {
@@ -145,6 +174,7 @@ beforeEach(() => {
   vi.mocked(getActiveInstallation).mockResolvedValue(null);
   // The C18 backstop (fixer correctness-5) finds no revocation waiting for its purge here.
   vi.mocked(listUnpurgedRevokedInstallations).mockResolvedValue([]);
+  vi.mocked(purgeExpiredSlack).mockResolvedValue({ items: 0, messages: 0, threads: 0, markers: 0, log: 0, channels: 0, attention: 0 });
   vi.spyOn(console, "log").mockImplementation(() => {});
   vi.spyOn(console, "warn").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
@@ -185,7 +215,12 @@ const ALL_SCHEDULES = [
   voiceRefreshScheduledWork,
   ddtextScheduledWork,
   slackSweepScheduledWork,
-  slackDmPurgeScheduledWork
+  slackDmPurgeScheduledWork,
+  slackDiscoverScheduledWork,
+  slackReadSweepScheduledWork,
+  slackProbeScheduledWork,
+  slackAttentionScheduledWork,
+  slackReadRecheckScheduledWork
 ];
 
 describe("ensureExecRuntime", () => {
@@ -292,6 +327,67 @@ describe("ensureExecRuntime", () => {
     __resetExecRuntimeForTests();
     ensureExecRuntime();
     expect(getJobHandler(PURGE_JOB_KIND)).toBe(purgeJobHandler);
+  });
+});
+
+describe("P7a Slack reading (contract §3.11.12): RT01-RT03", () => {
+  const P7A_HANDLERS = [slackDiscoverJobHandler, slackClassifyJobHandler, slackReadSweepJobHandler, slackProbeJobHandler, slackTriageJobHandler,
+    slackAttentionJobHandler, slackRekeyJobHandler, slackUserCheckJobHandler, slackReadPurgeJobHandler, slackReadRecheckJobHandler];
+
+  it("RT01 registers the ten handlers and the five schedules once, with the exact gates", () => {
+    ensureExecRuntime();
+    ensureExecRuntime();
+    for (const handler of P7A_HANDLERS) expect(getJobHandler(handler.kind)).toBe(handler);
+    expect(P7A_HANDLERS.map((h) => [h.kind, h.lane, h.timeoutMs])).toEqual([
+      ["exec.slack-discover", "bulk", 300_000],
+      ["exec.slack-classify", "interactive", 60_000],
+      ["exec.slack-read-sweep", "bulk", 180_000],
+      ["exec.slack-probe", "bulk", 90_000],
+      ["exec.slack-triage", "interactive", 90_000],
+      ["exec.slack-attention", "bulk", 120_000],
+      ["exec.slack-rekey", "interactive", 60_000],
+      ["exec.slack-user-check", "bulk", 30_000],
+      ["exec.slack-read-purge", "bulk", 120_000],
+      ["exec.slack-read-recheck", "bulk", 60_000]
+    ]);
+    const base = settingsFromRow(null, "ep_1");
+    const on = { ...base, slackReadingSchemaReady: true, slackReadingEnabled: true };
+    const gate = (w: { enabled?: (s: typeof base) => boolean }, s: typeof base) => w.enabled?.(s);
+    expect(getScheduledWork("exec.slack-discover")).toBe(slackDiscoverScheduledWork);
+    expect(slackDiscoverScheduledWork).toMatchObject({ lane: "bulk", cadence: { kind: "daily" }, maxAttempts: 3 });
+    expect(slackDiscoverScheduledWork.cadence.kind === "daily" && slackDiscoverScheduledWork.cadence.at(base)).toBe("05:10");
+    expect([gate(slackDiscoverScheduledWork, base), gate(slackDiscoverScheduledWork, { ...base, slackReadingSchemaReady: true })]).toEqual([false, true]);
+    expect(slackReadSweepScheduledWork).toMatchObject({ lane: "bulk", cadence: { kind: "interval", minutes: 30 }, maxAttempts: 1 });
+    expect([gate(slackReadSweepScheduledWork, { ...on, slackReadingEnabled: false }), gate(slackReadSweepScheduledWork, on)]).toEqual([false, true]);
+    expect(slackProbeScheduledWork).toMatchObject({ lane: "bulk", cadence: { kind: "interval", minutes: 15 }, maxAttempts: 1 });
+    expect([gate(slackProbeScheduledWork, on), gate(slackProbeScheduledWork, { ...on, watchMode: "active_public" })]).toEqual([false, true]);
+    expect(slackAttentionScheduledWork).toMatchObject({ lane: "bulk", cadence: { kind: "interval", minutes: 10 }, maxAttempts: 3 });
+    expect([gate(slackAttentionScheduledWork, base), gate(slackAttentionScheduledWork, { ...base, slackReadingSchemaReady: true })]).toEqual([false, true]);
+    expect(slackReadRecheckScheduledWork).toMatchObject({ lane: "bulk", cadence: { kind: "daily" }, maxAttempts: 2 });
+    expect(slackReadRecheckScheduledWork.cadence.kind === "daily" && slackReadRecheckScheduledWork.cadence.at(base)).toBe("04:20");
+    expect([gate(slackReadRecheckScheduledWork, base), gate(slackReadRecheckScheduledWork, { ...base, slackReadingSchemaReady: true })]).toEqual([false, true]);
+    expect(listScheduledWork().filter((w) => w.kind.startsWith("exec.slack-") && !["exec.slack-sweep", "exec.slack-dm-purge"].includes(w.kind)).map((w) => w.kind))
+      .toEqual(["exec.slack-discover", "exec.slack-read-sweep", "exec.slack-probe", "exec.slack-attention", "exec.slack-read-recheck"]);
+  });
+
+  it("RT02 runExecWorkerTick calls refreshGateCache without awaiting it", async () => {
+    vi.stubEnv("EXEC_ENABLED", "true");
+    let settle!: (v: "refreshed") => void;
+    vi.mocked(refreshGateCache).mockReturnValue(new Promise((r) => (settle = r)));
+    await expect(runExecWorkerTick()).resolves.toBe("idle");
+    expect(refreshGateCache).toHaveBeenCalledTimes(1);
+    settle("refreshed");
+  });
+
+  it("RT03 a throwing refresh (sync or async) doesn't fail the tick", async () => {
+    vi.stubEnv("EXEC_ENABLED", "true");
+    vi.mocked(refreshGateCache).mockImplementationOnce(() => {
+      throw new Error("boom");
+    });
+    await expect(runExecWorkerTick()).resolves.toBe("idle");
+    vi.mocked(refreshGateCache).mockRejectedValueOnce(new Error("later"));
+    await expect(runExecWorkerTick()).resolves.toBe("idle");
+    await new Promise((r) => setTimeout(r, 0));
   });
 });
 
@@ -613,7 +709,7 @@ describe("exec.purge", () => {
       "[exec-purge] deleted finishedJobs=7 accessLog=30 auditLog=2 aiUsage=11 resolvedAttention=4 " +
         "emailThreads=0 emailCommitments=0 emailSignals=0 emailAttentionRows=0 " +
         "draftsContentPurged=0 draftsDeleted=0 draftsClosedIdle=0 draftsChecksScheduled=0 " +
-        "ddtextItems=0 ddtextAttention=0 attentionFeedback=0 chatConversations=0 chatMessages=0 chatStaleFailed=0 slackEvents=0 oauthStates=0 slackRevocationsPurged=0"
+        "ddtextItems=0 ddtextAttention=0 attentionFeedback=0 chatConversations=0 chatMessages=0 chatStaleFailed=0 slackEvents=0 oauthStates=0 slackRevocationsPurged=0 slackItems=0 slackMessages=0 slackThreads=0 slackMarkers=0 slackLog=0 slackChannels=0 slackAttention=0"
     );
   });
 
@@ -645,7 +741,7 @@ describe("exec.purge", () => {
   it("runs every step even when one fails, then fails the run", async () => {
     db.deleteResult = (d) =>
       d.table === "exec_access_log" ? { count: null, error: { message: "statement timeout" } } : { count: 1, error: null };
-    await expect(runPurge()).rejects.toThrow("exec.purge: 1 of 14 steps failed: accessLog: exec_access_log purge failed: statement timeout");
+    await expect(runPurge()).rejects.toThrow("exec.purge: 1 of 15 steps failed: accessLog: exec_access_log purge failed: statement timeout");
     expect(db.deletes.map((d) => d.table)).toEqual([
       "exec_jobs",
       "exec_access_log",
@@ -660,7 +756,7 @@ describe("exec.purge", () => {
     db.deleteResult = (d) =>
       d.table === "exec_attention_items" ? { count: null, error: { message: "permission denied" } } : { count: 2, error: null };
     await expect(runPurge()).rejects.toThrow(
-      "exec.purge: 1 of 14 steps failed: resolvedAttention: exec_attention_items purge failed: permission denied"
+      "exec.purge: 1 of 15 steps failed: resolvedAttention: exec_attention_items purge failed: permission denied"
     );
     expect(db.deletes.map((d) => d.table)).toEqual([
       "exec_jobs",
@@ -673,7 +769,7 @@ describe("exec.purge", () => {
       "[exec-purge] deleted finishedJobs=2 accessLog=2 auditLog=2 aiUsage=2 resolvedAttention=0 " +
         "emailThreads=0 emailCommitments=0 emailSignals=0 emailAttentionRows=0 " +
         "draftsContentPurged=0 draftsDeleted=0 draftsClosedIdle=0 draftsChecksScheduled=0 " +
-        "ddtextItems=0 ddtextAttention=0 attentionFeedback=0 chatConversations=0 chatMessages=0 chatStaleFailed=0 slackEvents=0 oauthStates=0 slackRevocationsPurged=0 failed=1"
+        "ddtextItems=0 ddtextAttention=0 attentionFeedback=0 chatConversations=0 chatMessages=0 chatStaleFailed=0 slackEvents=0 oauthStates=0 slackRevocationsPurged=0 slackItems=0 slackMessages=0 slackThreads=0 slackMarkers=0 slackLog=0 slackChannels=0 slackAttention=0 failed=1"
     );
   });
 

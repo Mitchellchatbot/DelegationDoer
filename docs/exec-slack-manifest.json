@@ -3,7 +3,7 @@
   "display_information": {
     "name": "ScaledAI Executive Assistant",
     "description": "Private assistant for the CEO. Answers his questions in a direct message from DD and his email. Never posts as him.",
-    "long_description": "The ScaledAI Executive Assistant is a private, owner-only assistant connected to DelegationDoer (DD). Only the CEO can use it: it answers his questions in its direct message with him, using DD records and his email, and shows a short summary on its Home tab. It reads no channels and no conversations between other people, never posts in channels, and never posts as anyone. Other people who open it see that it is private. Conversations are kept in DD for a limited time and the bot deletes its own old messages. Support: the ScaledAI operations team."
+    "long_description": "The ScaledAI Executive Assistant is a private, owner-only assistant connected to DelegationDoer (DD). Only the CEO can use it: it answers his questions in its direct message with him, using DD records, his email and, once he allows it, the Slack conversations he can see. It never reads lead or patient-intake channels, DMs with bots, or conversations he isn't part of except public channels he chooses. It never posts in channels and never posts as anyone. Other people who open it see that it is private. Data is kept in DD for a limited time and deleted when reading stops or the app is removed. Support: the ScaledAI operations team."
   },
   "features": {
     "app_home": { "home_tab_enabled": true, "messages_tab_enabled": true, "messages_tab_read_only_enabled": false },
@@ -11,12 +11,22 @@
   },
   "oauth_config": {
     "redirect_urls": ["https://operations.scaledai.org/api/integrations/exec-slack/callback"],
-    "scopes": { "bot": ["chat:write", "im:history", "im:read", "im:write", "users:read", "users:read.email"] }
+    "scopes": {
+      "bot": ["chat:write", "im:history", "im:read", "im:write", "users:read", "users:read.email"],
+      "user": ["channels:history", "groups:history", "channels:read", "groups:read", "users:read", "im:history", "im:read", "mpim:history", "mpim:read"],
+      "user_optional": ["im:history", "im:read", "mpim:history", "mpim:read"]
+    }
   },
   "settings": {
     "event_subscriptions": {
       "request_url": "https://operations.scaledai.org/api/integrations/exec-slack/events",
-      "bot_events": ["message.im", "app_home_opened", "app_uninstalled", "tokens_revoked"]
+      "bot_events": ["message.im", "app_home_opened", "app_uninstalled", "tokens_revoked"],
+      "user_events": [
+        "message.channels", "message.groups", "message.im", "message.mpim",
+        "channel_created", "channel_shared", "channel_unshared", "channel_id_changed", "channel_archive", "channel_unarchive",
+        "channel_deleted", "channel_rename", "channel_left",
+        "group_archive", "group_unarchive", "group_deleted", "group_rename", "group_left"
+      ]
     },
     "interactivity": { "is_enabled": true, "request_url": "https://operations.scaledai.org/api/integrations/exec-slack/interactions" },
     "org_deploy_enabled": false,

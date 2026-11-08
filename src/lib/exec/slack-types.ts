@@ -1,9 +1,23 @@
-import type { ErrorClass } from "@/lib/exec/types";
+import type { ErrorClass, WatchMode } from "@/lib/exec/types";
+import type {
+  DenyReason,
+  MuteSource,
+  SlackReadingViewState,
+  UserRevokeReason,
+  WatchState
+} from "@/lib/exec/slack-read-types";
 
 // P6 Slack app: shared types and constants (P6 contract §3.1; stage 0, lead
 // seed, frozen). Pure and client-safe: one type-only import, no server-only,
 // no Supabase. Areas change nothing here; a signature changes only through
 // the lead.
+//
+// P7a stage -1 (lead, P7a contract §3.20.3, additive): SlackMethod gains the
+// seven read methods, SlackConnectResult the five read codes, and the views
+// gain the reading half (SlackSettingsView.reading?, SlackSystemSummary.reading?,
+// PickerRow, SlackReadingView, SlackReadingSummary; P7a §3.16). The two view
+// fields are optional so every P6 literal still compiles: absent = the P7a
+// pieces haven't filled them (treated as "not installed" / no row).
 
 export const SLACK_BOT_SCOPES = ["chat:write", "im:history", "im:read", "im:write", "users:read", "users:read.email"] as const;
 export type SlackBotScope = (typeof SLACK_BOT_SCOPES)[number];
@@ -26,10 +40,11 @@ export const SLACK_LIMITS = Object.freeze({
   inlineCodeSpanMaxChars: 1_000
 });
 
-/** Every Slack Web API method P6 calls (fake-slack-api.ts keys its handlers by these). */
+/** Every Slack Web API method P6 calls (fake-slack-api.ts keys its handlers by these); P7a (§3.6.1) adds the seven reads. */
 export type SlackMethod =
   | "oauth.v2.access" | "auth.test" | "auth.revoke" | "users.lookupByEmail" | "conversations.open"
-  | "conversations.history" | "conversations.replies" | "chat.postMessage" | "chat.update" | "chat.delete" | "views.publish";
+  | "conversations.history" | "conversations.replies" | "chat.postMessage" | "chat.update" | "chat.delete" | "views.publish"
+  | "conversations.list" | "users.conversations" | "conversations.info" | "users.list" | "users.info" | "bots.info" | "chat.getPermalink";
 
 /** C43: what a ledger row records about one bot post (no text). */
 export type SlackPostKind = "answer" | "note" | "draft" | "proposal";
@@ -127,7 +142,8 @@ export type SlackConnectResult =
   | "connected" | "denied" | "state_invalid" | "state_expired" | "not_configured" | "not_installed" | "session_unbound"
   | "rate_limited" | "unavailable" | "slack_unavailable" | "exchange_failed" | "enterprise" | "wrong_team" | "wrong_app"
   | "missing_scopes" | "identity_not_found" | "wrong_user"
-  | "wrong_host" | "extra_scopes";                                   // v2: C45, C44
+  | "wrong_host" | "extra_scopes"                                    // v2: C45, C44
+  | "read_connected" | "read_not_connected" | "missing_user_scopes" | "extra_user_scopes" | "read_taken";   // P7a §3.10.4, §3.17
 
 export interface SlackSettingsView {
   schema: boolean;                         // the P6 migration is applied
@@ -139,9 +155,41 @@ export interface SlackSettingsView {
   revokedAt: string | null; revokeReason: RevokeReason | null;
   /** (additive) The read failed: the section says so and offers nothing, rather than showing "not connected" (Connect). */
   readFailed?: true;
+  /** P7a (§3.16; Area E fills it in getSlackSettingsView): the reading half. Optional so P6 literals compile; absent = not filled. */
+  reading?: SlackReadingView;
 }
 export interface SlackSystemSummary {
   state: "connected" | "error" | "revoked" | "not_connected"; lastDmAt: string | null; lastErrorCode: string | null; revokedAt: string | null;
+  /** P7a (§3.20.3, M12; Area A fills it in slackSystemSummary): the System card's reading row. null = nothing to show or not
+   *  readable; optional so P6 literals compile (absent = null). */
+  reading?: SlackReadingSummary | null;
+}
+/** P7a §3.20.3: the reading half on the System card. v2Missing = v2MissingWithSchemaAt() within the last hour (C48). */
+export interface SlackReadingSummary {
+  state: SlackReadingViewState; lastEventAt: string | null; lastSweepAt: string | null; blockedMethods: number; pendingTriage: number;
+  userErrorCode: string | null; v2Missing: boolean;
+  /** Integrator (§3.20.4 "Stopped {date}"): when the reading half was stopped; set on the revoked state only. Additive, optional. */
+  revokedAt?: string | null;
+}
+
+/** P7a §3.16 (C29): one picker row (public and private channels; never a deny row). */
+export interface PickerRow { channelId: string; name: string; kind: "public" | "private"; class: "standard" | "external" | "finance" | "hub" | "unclassified";
+  financeName: boolean;   // C10: badgeFinance and the finance confirmation for class finance OR a Slack Connect finance-named channel
+  watchState: WatchState; muteSource: MuteSource | null; isMember: boolean; activity30d: number | null; lastActivityAt: string | null;
+  version: string; canChange: boolean }   // canChange false for hub/unclassified and for a left private conversation
+/** P7a §3.16: the Settings reading view (getSlackReadingView, slack-reading-settings.ts; fail soft). */
+export interface SlackReadingView {
+  state: SlackReadingViewState; switchOn: boolean; settingsVersion: string | null; watchMode: WatchMode;
+  installationId: string | null; scopes: string[]; dmsGranted: boolean; groupDmsGranted: boolean;
+  consentedAt: string | null; discoveredAt: string | null; revokedAt: string | null; revokeReason: UserRevokeReason | null; lastErrorCode: string | null;
+  counts: { watched: number; muted: number; unwatched: number; never: number; neverByReason: Partial<Record<DenyReason, number>>;
+            hubs: number; dms: { watched: number; total: number }; groupDms: { watched: number; total: number } };
+  channels: PickerRow[];   // ≤ 1,000: watched, then muted, then unwatched; by name
+  lastEventAt: string | null; lastSweepAt: string | null; pendingTriage: number; openItems: number;
+  capUsd: number; effectiveCapUsd: number; spentTodayUsd: number | null; retentionDaysSlack: number;
+  /** (additive, P7a fixer ui-3) DD couldn't read the view (a store error, a timeout, the page's deadline): state is "error" but
+   *  nothing was rejected by Slack; the section says so (readFailed) and offers at most Stop reading, never Allow. */
+  readFailed?: true;
 }
 export type SlackErrorClassOf = (code: string) => ErrorClass;
 export const slackClientTurnId = (ts: string): string => `slk_${ts.replace(".", "_")}`;

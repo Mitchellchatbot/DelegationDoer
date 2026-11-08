@@ -26,7 +26,8 @@ export const DEFAULT_SETTINGS: Omit<ExecSettings, "principalId"> = {
   // Decision R (plan): until the owner chooses, restricted-sender mail stays
   // hidden from the assistant, matching DD's zero-viewer rule.
   restrictedPolicy: "hidden",
-  watchMode: "active_public",
+  // P7a N12 (contract §3.2): member-only is the default; the P7a migration flips P2a's stored default once.
+  watchMode: "member_only",
   mutedChannelIds: [],
   retentionDaysSlack: 90,
   retentionDaysEmail: 180,
@@ -56,7 +57,13 @@ export const DEFAULT_SETTINGS: Omit<ExecSettings, "principalId"> = {
   chatEnabled: false,
   askAiUsesExec: false,
   chatDailyCapUsd: 9,
-  chatSchemaReady: false
+  chatSchemaReady: false,
+  // P7a (N20, N8, contract §3.2): Slack reading stays off until he turns it on
+  // in Settings after the checklist, and a read that never saw the P7a columns
+  // can't vouch for the schema.
+  slackReadingEnabled: false,
+  slackDailyCapUsd: 2,
+  slackReadingSchemaReady: false
 };
 
 const PRINCIPAL_COLS = "id,user_id,enabled,mail_account_ids,slack_team_id,slack_user_id";
@@ -74,17 +81,21 @@ const P4_SETTINGS_COLUMNS = ["drafts_enabled", "send_enabled", "voice_enabled"] 
 const DDTEXT_SETTINGS_COLUMNS = ["ddtext_enabled", "retention_days_ddtext"] as const;
 /** P5b's three columns (20261107100000_exec_chat.sql): the "chat" group. */
 const CHAT_SETTINGS_COLUMNS = ["chat_enabled", "ask_ai_uses_exec", "chat_daily_cap_usd"] as const;
+/** P7a's two columns (20261109100000_exec_slack_reading.sql, contract §3.2, C30): the "slack" group. */
+const SLACK_SETTINGS_COLUMNS = ["slack_reading_enabled", "slack_daily_cap_usd"] as const;
 
 /**
  * Optional exec_settings column groups, in migration order (contract §3.7.1,
  * K15). A group is "schema ready" when the settings read selected it. P5b
- * appended { key: "chat", columns: CHAT_SETTINGS_COLUMNS }.
+ * appended { key: "chat", columns: CHAT_SETTINGS_COLUMNS }; P7a appended
+ * { key: "slack", columns: SLACK_SETTINGS_COLUMNS } after it (C30).
  */
 export const SETTINGS_COLUMN_GROUPS: readonly { key: SettingsSchemaKey; columns: readonly string[] }[] = [
   { key: "email", columns: ["email_enabled"] },
   { key: "drafts", columns: P4_SETTINGS_COLUMNS },
   { key: "ddtext", columns: DDTEXT_SETTINGS_COLUMNS },
-  { key: "chat", columns: CHAT_SETTINGS_COLUMNS }
+  { key: "chat", columns: CHAT_SETTINGS_COLUMNS },
+  { key: "slack", columns: SLACK_SETTINGS_COLUMNS }
 ];
 
 /**
@@ -94,9 +105,11 @@ export const SETTINGS_COLUMN_GROUPS: readonly { key: SettingsSchemaKey; columns:
  * group needs only P2a and P2b, so it stands alone. P5b's migration refuses
  * to run before P4's exec_drafts (which comes with P4's switches), so a read
  * that finds the drafts group missing drops the chat group too (and email
- * missing takes drafts, then chat).
+ * missing takes drafts, then chat). P7a's migration refuses to run before
+ * P6's, which needs P5b's, so a read that finds the chat group missing drops
+ * the slack group too (AM-P7a-8).
  */
-const GROUP_REQUIRES: Readonly<Partial<Record<SettingsSchemaKey, SettingsSchemaKey>>> = Object.freeze({ drafts: "email", chat: "drafts" });
+const GROUP_REQUIRES: Readonly<Partial<Record<SettingsSchemaKey, SettingsSchemaKey>>> = Object.freeze({ drafts: "email", chat: "drafts", slack: "chat" });
 
 /** Which optional column groups a settings read selected (= whose migration is applied). */
 export type SettingsSchemaFlags = Record<SettingsSchemaKey, boolean>;
@@ -151,6 +164,9 @@ interface SettingsRow {
   chat_enabled?: boolean | null;
   ask_ai_uses_exec?: boolean | null;
   chat_daily_cap_usd?: number | string | null;
+  /** Absent when the P7a migration isn't applied. */
+  slack_reading_enabled?: boolean | null;
+  slack_daily_cap_usd?: number | string | null;
   /** The CAS token, exactly as PostgREST printed it (never parsed: microseconds matter). */
   updated_at?: string | null;
 }
@@ -184,17 +200,26 @@ function num(v: number | string | null | undefined, fallback: number): number {
  * `emailSchemaReady` says whether the read that produced `row` selected the
  * P3 email_enabled column, `draftsSchemaReady` whether it selected the three
  * P4 switches, `ddtextSchemaReady` whether it selected both P5a columns, and
- * `chatSchemaReady` whether it selected all three P5b columns.
+ * `chatSchemaReady` whether it selected all three P5b columns, and
+ * `slackReadingSchemaReady` whether it selected both P7a columns.
  * The loader always says; when a caller doesn't, the row itself answers (it
  * has the key only if the column was selected), and no row means not ready.
  * Each switch is on only when its schema is ready and the column is exactly
  * true: NULL or a missing column is off (L1). A missing or unreadable
- * retention or cap takes its default (retentionDaysDdtext 90, chatDailyCapUsd 9).
+ * retention or cap takes its default (retentionDaysDdtext 90, chatDailyCapUsd 9,
+ * slackDailyCapUsd 2). watch_mode: anything but exactly 'active_public' (NULL,
+ * unknown) is 'member_only', the smaller footprint (P7a N12).
  */
 export function settingsFromRow(
   row: SettingsRow | null,
   principalId: string,
-  opts: { emailSchemaReady?: boolean; draftsSchemaReady?: boolean; ddtextSchemaReady?: boolean; chatSchemaReady?: boolean } = {}
+  opts: {
+    emailSchemaReady?: boolean;
+    draftsSchemaReady?: boolean;
+    ddtextSchemaReady?: boolean;
+    chatSchemaReady?: boolean;
+    slackReadingSchemaReady?: boolean;
+  } = {}
 ): ExecSettings {
   const d = DEFAULT_SETTINGS;
   const has = (column: string) => row !== null && Object.prototype.hasOwnProperty.call(row, column);
@@ -202,14 +227,16 @@ export function settingsFromRow(
   const draftsSchemaReady = opts.draftsSchemaReady ?? P4_SETTINGS_COLUMNS.every(has);
   const ddtextSchemaReady = opts.ddtextSchemaReady ?? DDTEXT_SETTINGS_COLUMNS.every(has);
   const chatSchemaReady = opts.chatSchemaReady ?? CHAT_SETTINGS_COLUMNS.every(has);
+  const slackReadingSchemaReady = opts.slackReadingSchemaReady ?? SLACK_SETTINGS_COLUMNS.every(has);
   if (!row) {
     return {
       principalId, ...d, mutedChannelIds: [], emailEnabled: false, emailSchemaReady, draftsEnabled: false, sendEnabled: false, voiceEnabled: false,
-      draftsSchemaReady, ddtextEnabled: false, ddtextSchemaReady, chatEnabled: false, askAiUsesExec: false, chatSchemaReady
+      draftsSchemaReady, ddtextEnabled: false, ddtextSchemaReady, chatEnabled: false, askAiUsesExec: false, chatSchemaReady,
+      slackReadingEnabled: false, slackReadingSchemaReady
     };
   }
   const policy: RestrictedPolicy = row.restricted_policy === "dd_only" ? "dd_only" : "hidden";
-  const watch: WatchMode = row.watch_mode === "member_only" ? "member_only" : "active_public";
+  const watch: WatchMode = row.watch_mode === "active_public" ? "active_public" : "member_only";
   return {
     principalId,
     briefEnabled: row.brief_enabled ?? d.briefEnabled,
@@ -236,7 +263,11 @@ export function settingsFromRow(
     chatEnabled: chatSchemaReady && row.chat_enabled === true,
     askAiUsesExec: chatSchemaReady && row.ask_ai_uses_exec === true,
     chatDailyCapUsd: num(row.chat_daily_cap_usd, d.chatDailyCapUsd),
-    chatSchemaReady
+    chatSchemaReady,
+    // P7a (§3.2, N20): on only when the P7a columns were read and the column is exactly true.
+    slackReadingEnabled: slackReadingSchemaReady && row.slack_reading_enabled === true,
+    slackDailyCapUsd: num(row.slack_daily_cap_usd, d.slackDailyCapUsd),
+    slackReadingSchemaReady
   };
 }
 
@@ -275,24 +306,26 @@ export function settingsColumnsFor(schema: Readonly<SettingsSchemaFlags>): strin
 
 /** The schema flags a settings value carries, by column-group key (SettingsView.schema). */
 export function settingsSchemaFlags(
-  s: Pick<ExecSettings, "emailSchemaReady" | "draftsSchemaReady" | "ddtextSchemaReady" | "chatSchemaReady">
+  s: Pick<ExecSettings, "emailSchemaReady" | "draftsSchemaReady" | "ddtextSchemaReady" | "chatSchemaReady" | "slackReadingSchemaReady">
 ): SettingsSchemaFlags {
   return {
     email: s.emailSchemaReady === true,
     drafts: s.draftsSchemaReady === true,
     ddtext: s.ddtextSchemaReady === true,
-    chat: s.chatSchemaReady === true
+    chat: s.chatSchemaReady === true,
+    slack: s.slackReadingSchemaReady === true
   };
 }
 
 function schemaOpts(
   schema: Readonly<SettingsSchemaFlags>
-): { emailSchemaReady: boolean; draftsSchemaReady: boolean; ddtextSchemaReady: boolean; chatSchemaReady: boolean } {
+): { emailSchemaReady: boolean; draftsSchemaReady: boolean; ddtextSchemaReady: boolean; chatSchemaReady: boolean; slackReadingSchemaReady: boolean } {
   return {
     emailSchemaReady: schema.email === true,
     draftsSchemaReady: schema.drafts === true,
     ddtextSchemaReady: schema.ddtext === true,
-    chatSchemaReady: schema.chat === true
+    chatSchemaReady: schema.chat === true,
+    slackReadingSchemaReady: schema.slack === true
   };
 }
 

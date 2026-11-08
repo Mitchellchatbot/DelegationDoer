@@ -166,3 +166,19 @@ describe("scorePriority: contract", () => {
     expect(() => scorePriority({ kind: kind as AttentionKind })).toThrow(/scorePriority: unknown kind/);
   });
 });
+
+// P7a (contract §3.13, C19, AT07): the four Slack kinds' bases, labels and age lines.
+describe("the Slack kinds (P7a)", () => {
+  it.each([
+    ["slack_decision", 45, "Decision asked of you in Slack", "Decision waiting 4 days (+8)", 15],
+    ["slack_request", 40, "Slack message to you", "Unanswered for 4 days (+8)", 20],
+    ["slack_unassessed", 40, "Slack message (not assessed)", "Unanswered for 4 days (+8)", 20],
+    ["slack_commitment", 30, "Slack commitment", "Follow-up overdue 4 days (+8)", 15]
+  ] as const)("%s: base %i, its label, its age line and cap", (kind, base, label, ageLine, cap) => {
+    const r = scorePriority({ kind, ageDays: 4 });
+    expect(r.score).toBe(base + 8);
+    expect(r.reasons).toEqual([`${label} (base ${base})`, ageLine]);
+    expect(scorePriority({ kind, ageDays: 40 }).score).toBe(base + cap);
+    expect(scorePriority({ kind }).reasons).toEqual([`${label} (base ${base})`]);
+  });
+});

@@ -2,7 +2,7 @@ import { ServerCog } from "lucide-react";
 import { formatCount, formatInZone } from "@/lib/exec/format";
 import type { MailSummary } from "@/lib/exec/email-view";
 import type { JobKindHealth, OverviewDraftsSystem, OverviewSection, OverviewSystem, OverviewTokenVerdict } from "@/lib/exec/overview";
-import type { SlackSystemSummary } from "@/lib/exec/slack-types";
+import type { SlackReadingSummary, SlackSystemSummary } from "@/lib/exec/slack-types";
 import { reasonWords, sendTokenReasonWords, voiceErrorWords } from "../drafts/copy";
 import { cn } from "@/lib/utils";
 import { SectionCard } from "../SectionCard";
@@ -166,9 +166,78 @@ export function SlackRow({ slack, now, tz }: { slack: SlackSystemSummary | null 
   if (slack === undefined) return null;
   const line = slackSystemLine(slack, now, tz);
   return (
-    <ul data-slack-system className="border-t border-slate-100">
-      <li data-slack-row={slack === null ? "unavailable" : slack.state} className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 px-4 py-2 text-[12px]">
-        <span className="font-medium text-ink">Slack</span>
+    <>
+      <ul data-slack-system className="border-t border-slate-100">
+        <li data-slack-row={slack === null ? "unavailable" : slack.state} className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 px-4 py-2 text-[12px]">
+          <span className="font-medium text-ink">Slack</span>
+          <span className={cn("min-w-0 break-words text-right", TONE_CLASS[line.tone])}>{line.value}</span>
+        </li>
+      </ul>
+      <SlackReadingRow reading={slack?.reading ?? null} now={now} tz={tz} />
+    </>
+  );
+}
+
+/** C48: the suffix every reading state gets while reading events fall back to P6's handler. */
+export const READING_V2_MISSING_TEXT = "Needs attention: reading events are falling back to the old handler (apply or reload the P7a database update)";
+const READING_RATE_LIMITED_TEXT = "Slack is rate-limiting us";
+
+/**
+ * P7a (contract §3.20.4, M12, C48): the "Slack reading" row's words. on → "On · last check <relative> · <n> waiting";
+ * paused → "Set up, turned off"; discovering → "Sorting conversations"; error → "Needs attention: Slack rejected the
+ * reading permission (<code>)"; revoked → "Stopped <date>" (in his zone; "Stopped" without a date); a blocked method adds
+ * " · Slack is rate-limiting us"; v2Missing adds the fallback warning in every state, alone when the state has no
+ * words of its own; not_consented / bot_not_connected / not_installed / null → no row (null).
+ */
+export function slackReadingLine(reading: SlackReadingSummary | null | undefined, now: string, tz?: string): { value: string; tone: Tone } | null {
+  if (reading === null || reading === undefined) return null;
+  let base: string | null = null;
+  let tone: Tone = "muted";
+  switch (reading.state) {
+    case "on":
+      base = `On · last check ${reading.lastSweepAt ? ago(reading.lastSweepAt, now) : "not yet"} · ${formatCount(reading.pendingTriage)} waiting`;
+      tone = "ok";
+      break;
+    case "paused":
+      base = "Set up, turned off";
+      break;
+    case "discovering":
+      base = "Sorting conversations";
+      break;
+    case "error":
+      base = `Needs attention: Slack rejected the reading permission (${reading.userErrorCode ?? "unknown"})`;
+      tone = "rose";
+      break;
+    case "revoked":
+      // §3.20.4: "Stopped {date}" in his zone; the date is left out when the summary or the zone doesn't carry one.
+      base = typeof reading.revokedAt === "string" && typeof tz === "string" ? `Stopped ${formatInZone(reading.revokedAt, tz, "date", now)}` : "Stopped";
+      break;
+    default:
+      base = null;
+  }
+  const parts: string[] = [];
+  if (base !== null) {
+    parts.push(base);
+    if (reading.blockedMethods > 0) {
+      parts.push(READING_RATE_LIMITED_TEXT);
+      if (tone !== "rose") tone = "amber";
+    }
+  }
+  if (reading.v2Missing === true) {
+    parts.push(READING_V2_MISSING_TEXT);
+    tone = "rose";
+  }
+  return parts.length === 0 ? null : { value: parts.join(" · "), tone };
+}
+
+/** P7a: the System card's "Slack reading" row; nothing when the summary has no reading half to show. */
+export function SlackReadingRow({ reading, now, tz }: { reading: SlackReadingSummary | null | undefined; now: string; tz?: string }) {
+  const line = slackReadingLine(reading, now, tz);
+  if (line === null || reading === null || reading === undefined) return null;
+  return (
+    <ul data-slack-reading-system className="border-t border-slate-100">
+      <li data-slack-reading-row={reading.state} className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 px-4 py-2 text-[12px]">
+        <span className="font-medium text-ink">Slack reading</span>
         <span className={cn("min-w-0 break-words text-right", TONE_CLASS[line.tone])}>{line.value}</span>
       </li>
     </ul>

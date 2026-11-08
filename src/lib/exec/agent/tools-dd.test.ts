@@ -14,6 +14,8 @@ vi.mock("@/lib/exec/email-store", async (orig) =>
 );
 vi.mock("@/lib/exec/sync-state", async (orig) => (await import("./__tests__/b-stub")).stubOnly(await orig(), ["getSyncState"]));
 vi.mock("@/lib/exec/attention-read", () => ({ listScreenedAttention: vi.fn(), getScreenedAttentionItem: vi.fn() }));
+// P7a fixer ui-2: the Slack reading state (the chat's Slack source).
+vi.mock("@/lib/exec/slack-reading", () => ({ getSlackReadingState: vi.fn() }));
 vi.mock("@/lib/exec/team", () => ({ getTeamView: vi.fn(), getWorkingNow: vi.fn() }));
 vi.mock("@/lib/exec/projects-view", () => ({ getProjectsListView: vi.fn(), getProjectDetail: vi.fn() }));
 vi.mock("@/lib/exec/intake-screen", () => ({
@@ -26,7 +28,8 @@ vi.mock("@/lib/exec/drafts", () => ({ createChatReplyDraft: vi.fn() }));
 // Area C's real neutralizeTaskText (chat/answer.ts) runs unmocked.
 
 import { overviewWindow } from "@/lib/exec/agent/tools";
-import { listScreenedAttention } from "@/lib/exec/attention-read";
+import { getScreenedAttentionItem, listScreenedAttention } from "@/lib/exec/attention-read";
+import { getSlackReadingState } from "@/lib/exec/slack-reading";
 import { listBucketRows } from "@/lib/exec/email-store";
 import { intakeThreadIdsForTasks, listScreenedApprovalItems, restrictedIntakeTaskIds, loadIntakeScreeningPolicy } from "@/lib/exec/intake-screen";
 import { getOverview, type ExecOverview } from "@/lib/exec/overview";
@@ -55,6 +58,7 @@ import { DEPARTMENTS, feedItem, installDefaults, makeCtx, NOW, principal, runToo
 
 beforeEach(() => {
   installDefaults();
+  vi.mocked(getSlackReadingState).mockResolvedValue({ state: "not_consented", discoveredAt: null, lastSweepAt: null, lastEventAt: null });
 });
 
 const counts = (over: Partial<CountsValue> = {}): Cell<CountsValue> => ({
@@ -179,6 +183,11 @@ describe("get_overview (tests 19, 125)", () => {
     expect((activity.completed as { total: number }).total).toBe(1);
     expect(r.json.unavailable).toEqual(expect.arrayContaining(["created", "today.active_people"]));
     expect(r.json.sources).toEqual({ dd: "connected", email: "off", slack: "not_connected" });
+    // Fixer ui-2: the Slack source is the reading state's (set up → its state; unreadable → unavailable).
+    vi.mocked(getSlackReadingState).mockResolvedValueOnce({ state: "on", discoveredAt: null, lastSweepAt: null, lastEventAt: null });
+    expect((await runTool(makeCtx({ settings: settings({ emailEnabled: false }) }), "get_overview", { since: "today" })).json.sources).toMatchObject({ slack: "on" });
+    vi.mocked(getSlackReadingState).mockRejectedValueOnce(new Error("boom"));
+    expect((await runTool(makeCtx({ settings: settings({ emailEnabled: false }) }), "get_overview", { since: "today" })).json.sources).toMatchObject({ slack: "unavailable" });
     expect(now).not.toHaveProperty("email_buckets");
     expect(vi.mocked(listBucketRows)).not.toHaveBeenCalled();
     const projects = now.projects_needing_attention as { items: { name: string; status: string }[]; total: number };
@@ -231,6 +240,31 @@ describe("list_attention (tests 20, 122)", () => {
     expect(vi.mocked(listScreenedAttention)).not.toHaveBeenCalled();
     expect((r.json.items as { items: unknown[] }).items).toEqual([]);
     expect(r.json.notes).toContain("Slack isn't connected yet.");
+  });
+
+  it("(fixer ui-2) source slack once reading is set up → the Slack Needs Attention items through the screen, no 'isn't connected' note", async () => {
+    for (const state of ["on", "paused", "discovering", "error"] as const) {
+      vi.mocked(listScreenedAttention).mockClear();
+      vi.mocked(getSlackReadingState).mockResolvedValue({ state, discoveredAt: null, lastSweepAt: null, lastEventAt: null });
+      vi.mocked(listScreenedAttention).mockResolvedValue({ items: [], nextCursor: null, hiddenEmail: 0, emailScreen: "none" } as never);
+      const r = await runTool(makeCtx(), "list_attention", { status: "active", category: "any", band: "any", source: "slack", limit: 10 });
+      expect(vi.mocked(listScreenedAttention).mock.calls[0][1], state).toEqual({ source: "slack", limit: 10 });
+      expect(r.json.notes ?? [], state).not.toContain("Slack isn't connected yet.");
+    }
+  });
+
+  it("(fixer security-4) a Slack DM turn screens as surface slack (finance Slack items are never relayed into Slack); a web turn as web", async () => {
+    vi.mocked(listScreenedAttention).mockResolvedValue({ items: [], nextCursor: null, hiddenEmail: 0, emailScreen: "none" } as never);
+    await runTool({ ...makeCtx(), surface: "slack" }, "list_attention", { status: "active", category: "any", band: "any", source: "any", limit: 10 });
+    expect(vi.mocked(listScreenedAttention).mock.calls[0][2]).toMatchObject({ surface: "slack" });
+    await runTool(makeCtx(), "list_attention", { status: "active", category: "any", band: "any", source: "any", limit: 10 });
+    expect(vi.mocked(listScreenedAttention).mock.calls[1][2]).toMatchObject({ surface: "web" });
+    vi.mocked(getScreenedAttentionItem).mockResolvedValue({ ok: false, reason: "withheld" } as never);
+    const contexts = [{ ref: "r1", target: { type: "attention" as const, id: "ea_" + "a".repeat(32), threadId: null }, source: ddPageRef("/executive", "Needs Attention") }];
+    await runTool({ ...makeCtx({ refSeq: 1, contexts }), surface: "slack" }, "get_source", { ref: "r1" });
+    expect(vi.mocked(getScreenedAttentionItem).mock.calls[0][2]).toMatchObject({ surface: "slack" });
+    await runTool(makeCtx({ refSeq: 1, contexts }), "get_source", { ref: "r1" });
+    expect(vi.mocked(getScreenedAttentionItem).mock.calls[1][2]).toMatchObject({ surface: "web" });
   });
 
   it("email_screen unavailable passes through with its note; refs and excerpts", async () => {

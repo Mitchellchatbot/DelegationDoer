@@ -9,6 +9,7 @@ import { purgeFinishedJobs } from "@/lib/exec/jobs";
 import type { ScheduledWork } from "@/lib/exec/scheduler";
 import { purgeUnpurgedRevocations } from "@/lib/exec/handlers/slack-uninstall";
 import { deleteExpiredOAuthStates, deleteOldSlackEvents } from "@/lib/exec/slack-install";
+import { purgeExpiredSlack } from "@/lib/exec/slack-read-store";
 import { SLACK_LIMITS } from "@/lib/exec/slack-types";
 import type { JobHandler } from "@/lib/exec/types";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
@@ -66,6 +67,14 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 //                         installation revoked over an hour ago whose purge job never ran
 //                         (purged_at null) is purged here through the same step:
 //                         purgeUnpurgedRevocations (tolerates the P6 migration missing).
+//   Slack reading (P7a)   one step after P6's (contract §3.15, N13, M10): exec_slack_items,
+//                         exec_slack_messages and exec_slack_threads past their own expires_at
+//                         (5,000 per table per run), deleted markers past 26 h, purge-log rows
+//                         past 7 days, left conversations 30 days after left_at, and every Slack
+//                         message attention row no message row backs any more:
+//                         purgeExpiredSlack (exec_slack_purge_expired, principal-agnostic so P8
+//                         moves it to its system purge unchanged). Tolerates the P7a migration not
+//                         being applied yet (counts 0).
 //
 // The deletes are global, not per principal. Rows with no principal (system
 // jobs, access attempts that never resolved to a principal) have to age out
@@ -123,6 +132,15 @@ export interface PurgeCounts {
   oauthStates: number;
   /** P6 C18 backstop (purgeUnpurgedRevocations): revoked installations whose own purge never ran, purged now. */
   slackRevocationsPurged: number;
+  /** P7a (purgeExpiredSlack, contract §3.15): expired Slack items, message rows, thread rows, deleted markers, purge-log
+   *  rows, left conversations past 30 days, and orphaned Slack attention rows. */
+  slackItems: number;
+  slackMessages: number;
+  slackThreads: number;
+  slackMarkers: number;
+  slackLog: number;
+  slackChannels: number;
+  slackAttention: number;
 }
 
 function errMessage(err: unknown): string {
@@ -193,7 +211,14 @@ export async function runPurge(signal?: AbortSignal, now: Date = new Date()): Pr
     chatStaleFailed: 0,
     slackEvents: 0,
     oauthStates: 0,
-    slackRevocationsPurged: 0
+    slackRevocationsPurged: 0,
+    slackItems: 0,
+    slackMessages: 0,
+    slackThreads: 0,
+    slackMarkers: 0,
+    slackLog: 0,
+    slackChannels: 0,
+    slackAttention: 0
   };
   const one = (key: keyof PurgeCounts, run: () => Promise<number>) => async (): Promise<Partial<PurgeCounts>> => ({ [key]: await run() });
   const steps: readonly [string, () => Promise<Partial<PurgeCounts>>][] = [
@@ -231,7 +256,24 @@ export async function runPurge(signal?: AbortSignal, now: Date = new Date()): Pr
     // P6 (§2.6): after every earlier phase's step.
     ["slackEvents", one("slackEvents", () => deleteOldSlackEvents(now, SLACK_LIMITS.eventRetentionHours, { signal }))],
     ["oauthStates", one("oauthStates", () => deleteExpiredOAuthStates(now, { signal }))],
-    ["slackRevocationsPurged", one("slackRevocationsPurged", () => purgeUnpurgedRevocations(now, { signal }))]
+    ["slackRevocationsPurged", one("slackRevocationsPurged", () => purgeUnpurgedRevocations(now, { signal }))],
+    // P7a (§3.15): after P6's steps; the RPC answers zeros when the P7a migration isn't applied.
+    [
+      "slack",
+      async () => {
+        const c = await purgeExpiredSlack(now, { signal });
+        const n = (k: string) => (typeof c[k] === "number" && Number.isSafeInteger(c[k]) && c[k] > 0 ? c[k] : 0);
+        return {
+          slackItems: n("items"),
+          slackMessages: n("messages"),
+          slackThreads: n("threads"),
+          slackMarkers: n("markers"),
+          slackLog: n("log"),
+          slackChannels: n("channels"),
+          slackAttention: n("attention")
+        };
+      }
+    ]
   ];
 
   const failures: string[] = [];
@@ -254,7 +296,9 @@ export async function runPurge(signal?: AbortSignal, now: Date = new Date()): Pr
       `draftsClosedIdle=${counts.draftsClosedIdle} draftsChecksScheduled=${counts.draftsChecksScheduled} ` +
       `ddtextItems=${counts.ddtextItems} ddtextAttention=${counts.ddtextAttention} attentionFeedback=${counts.attentionFeedback} ` +
       `chatConversations=${counts.chatConversations} chatMessages=${counts.chatMessages} chatStaleFailed=${counts.chatStaleFailed} ` +
-      `slackEvents=${counts.slackEvents} oauthStates=${counts.oauthStates} slackRevocationsPurged=${counts.slackRevocationsPurged}` +
+      `slackEvents=${counts.slackEvents} oauthStates=${counts.oauthStates} slackRevocationsPurged=${counts.slackRevocationsPurged} ` +
+      `slackItems=${counts.slackItems} slackMessages=${counts.slackMessages} slackThreads=${counts.slackThreads} ` +
+      `slackMarkers=${counts.slackMarkers} slackLog=${counts.slackLog} slackChannels=${counts.slackChannels} slackAttention=${counts.slackAttention}` +
       `${failures.length > 0 ? ` failed=${failures.length}` : ""}`
   );
   if (failures.length > 0) {

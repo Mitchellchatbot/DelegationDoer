@@ -11,7 +11,7 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { notifyOps } from "@/lib/exec/ops";
 import { loadSettings, principalFromRows, settingsFromRow } from "@/lib/exec/principal";
 import { BudgetExceededError, type ExecPrincipal, type ExecSettings } from "@/lib/exec/types";
-import { assertWithinDailyCap, recordUsage, spentTodayUsd, usageRow, type UsageRecordInput } from "@/lib/exec/llm/usage";
+import { assertWithinDailyCap, featureSpentTodayUsd, recordUsage, spentTodayUsd, usageRow, type UsageRecordInput } from "@/lib/exec/llm/usage";
 
 // ---------------------------------------------------------------------------
 // A chainable stand-in for the bits of supabase-js this module uses.
@@ -363,5 +363,91 @@ describe("assertWithinDailyCap", () => {
   it("fails closed when settings can't be loaded", async () => {
     vi.mocked(loadSettings).mockRejectedValue(new Error("exec_settings read failed: boom"));
     await expect(assertWithinDailyCap(principal, undefined, now)).rejects.toThrow("exec_settings read failed");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P7a (contract §3.20.1, C17; AM-P7a-13): featureSpentTodayUsd, the Slack sub-cap's spend read.
+// ---------------------------------------------------------------------------
+
+describe("featureSpentTodayUsd (P7a C17)", () => {
+  type Q = { filters: unknown[][]; signal: AbortSignal | null };
+  function featureDb(rows: { id: number; feature: string; cost_usd: number | string; created_at: string; principal_id: string }[], error: { code?: string; message: string } | null = null) {
+    const queries: Q[] = [];
+    const client = {
+      from(table: string) {
+        expect(table).toBe("exec_ai_usage");
+        return {
+          select(cols: string) {
+            expect(cols).toBe("id,cost_usd");
+            const q: Q = { filters: [], signal: null };
+            queries.push(q);
+            let limit = Infinity;
+            const run = () => {
+              if (error) return { data: null, error };
+              let out = rows.filter((r) =>
+                q.filters.every(([op, col, v]) => {
+                  const x = (r as Record<string, unknown>)[col as string];
+                  if (op === "eq") return x === v;
+                  if (op === "in") return (v as unknown[]).includes(x);
+                  if (op === "gte") return Date.parse(String(x)) >= Date.parse(String(v));
+                  if (op === "gt") return Number(x) > Number(v);
+                  return true;
+                })
+              );
+              out = out.sort((x, y) => x.id - y.id).slice(0, limit);
+              return { data: out.map((r) => ({ id: r.id, cost_usd: r.cost_usd })), error: null };
+            };
+            const b = {
+              eq: (c: string, v: unknown) => (q.filters.push(["eq", c, v]), b),
+              in: (c: string, v: unknown[]) => (q.filters.push(["in", c, v]), b),
+              gte: (c: string, v: unknown) => (q.filters.push(["gte", c, v]), b),
+              gt: (c: string, v: unknown) => (q.filters.push(["gt", c, v]), b),
+              order: () => b,
+              limit: (n: number) => ((limit = n), b),
+              abortSignal: (sig: AbortSignal) => ((q.signal = sig), b),
+              then: (ok: (v: unknown) => unknown, bad?: (e: unknown) => unknown) => Promise.resolve(run()).then(ok, bad)
+            };
+            return b;
+          }
+        };
+      }
+    };
+    vi.mocked(getSupabaseAdmin).mockReturnValue(client as never);
+    return queries;
+  }
+  const NOW = new Date("2026-11-08T15:00:00Z");
+
+  it("sums today's rows of the listed features only (principal-local day), on the signal", async () => {
+    const queries = featureDb([
+      { id: 1, feature: "slack_triage", cost_usd: "0.010000", created_at: "2026-11-08T13:00:00Z", principal_id: "ep_1" },
+      { id: 2, feature: "triage", cost_usd: 0.5, created_at: "2026-11-08T13:00:00Z", principal_id: "ep_1" },
+      { id: 3, feature: "slack_triage", cost_usd: 0.02, created_at: "2026-11-08T04:00:00Z", principal_id: "ep_1" },
+      { id: 4, feature: "slack_triage", cost_usd: 0.04, created_at: "2026-11-08T14:00:00Z", principal_id: "ep_2" },
+      { id: 5, feature: "ddtext", cost_usd: 0.003, created_at: "2026-11-08T14:30:00Z", principal_id: "ep_1" }
+    ]);
+    const signal = new AbortController().signal;
+    expect(await featureSpentTodayUsd("ep_1", "America/New_York", ["slack_triage"], NOW, { signal })).toBeCloseTo(0.01, 9);
+    expect(queries[0].signal).toBe(signal);
+    expect(queries[0].filters).toContainEqual(["in", "feature", ["slack_triage"]]);
+    expect(await featureSpentTodayUsd("ep_1", "UTC", ["slack_triage", "ddtext"], NOW)).toBeCloseTo(0.033, 9);
+  });
+
+  it("an empty feature list spends nothing without a query; a read error throws without the database's text", async () => {
+    const queries = featureDb([]);
+    expect(await featureSpentTodayUsd("ep_1", "UTC", [], NOW)).toBe(0);
+    expect(queries).toEqual([]);
+    featureDb([], { code: "57014", message: "SENTINEL-SLACK-TEXT-7f3a" });
+    const err = await featureSpentTodayUsd("ep_1", "UTC", ["slack_triage"], NOW).then(() => null, (e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toBe("exec_ai_usage read failed (57014)");
+  });
+
+  it("pages by id past 1,000 rows", async () => {
+    const rows = Array.from({ length: 1500 }, (_, i) => ({ id: i + 1, feature: "slack_triage", cost_usd: 0.001, created_at: "2026-11-08T14:00:00Z", principal_id: "ep_1" }));
+    const queries = featureDb(rows);
+    expect(await featureSpentTodayUsd("ep_1", "UTC", ["slack_triage"], NOW)).toBeCloseTo(1.5, 6);
+    expect(queries).toHaveLength(2);
+    expect(queries[1].filters).toContainEqual(["gt", "id", 1000]);
   });
 });

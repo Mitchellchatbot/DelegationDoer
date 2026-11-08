@@ -22,7 +22,7 @@ import {
 import { getSlackSettingsView } from "@/lib/exec/slack-settings";
 import { getSyncState, parseAccountsState } from "@/lib/exec/sync-state";
 import { startOfLocalDayUtc } from "@/lib/exec/time";
-import { NonRetryableError, type ExecPrincipal, type ExecSettings, type ExecSurface } from "@/lib/exec/types";
+import { NonRetryableError, type ExecPrincipal, type ExecSettings, type ExecSurface, type WatchMode } from "@/lib/exec/types";
 import type { RecentAccessRow, Section, SettingsView, SpendToday } from "@/lib/exec/view-types";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 
@@ -39,7 +39,10 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 //     applied change needs no second read.
 //   * Turning DD text triage on needs the notice confirmation (C14); turning
 //     it off writes only the flag (the next ddtext run deletes its data,
-//     §3.12.6 step 1).
+//     §3.12.6 step 1). Turning Slack reading on (P7a N20) needs its own
+//     notice confirmation ("slack_reading_notice"); turning it off writes only
+//     the flag (reading pauses; stored items stay until their TTL, and
+//     deletes, edits and lifecycle purges keep applying, C43).
 //   * The page model's sections fail soft ({ ok: false }, never a zero); only
 //     the settings read itself fails the page.
 //   * Nothing here logs a value: errors name the section and the database's
@@ -63,7 +66,7 @@ export type UpdateSettingsResult =
   | { outcome: "conflict"; snapshot: SettingsSnapshot }
   | { outcome: "not_installed"; field: keyof SettingsPatch }
   | { outcome: "invalid"; field: keyof SettingsPatch | "patch"; detail: string }
-  | { outcome: "confirmation_required"; field: "ddtextEnabled" };
+  | { outcome: "confirmation_required"; field: "ddtextEnabled" | "slackReadingEnabled" };   // P7a §3.2 widens field
 
 function errMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -106,12 +109,14 @@ function checkPatch(patch: SettingsPatch): { ok: true; fields: { def: SettingsFi
  *   update exec_settings set <cols>, updated_at = now where principal_id = p and updated_at = expectedVersion
  *   (.select(...)); 0 rows → re-read → conflict. expectedVersion null and no row → insert … on conflict do nothing.
  * Turning ddtextEnabled false→true needs opts.confirm === "ddtext_notice".
+ * P7a (§3.2, N20): turning slackReadingEnabled false→true needs opts.confirm === "slack_reading_notice"; a P7a key
+ * ("slack" group) before the P7a migration is applied answers not_installed (the schema check above).
  * Throws on a database error (the route answers 503).
  */
 export async function updateSettings(
   principal: ExecPrincipal,
   patch: SettingsPatch,
-  opts: { expectedVersion: string | null; confirm?: "ddtext_notice"; now?: Date; signal?: AbortSignal }
+  opts: { expectedVersion: string | null; confirm?: "ddtext_notice" | "slack_reading_notice"; now?: Date; signal?: AbortSignal }
 ): Promise<UpdateSettingsResult> {
   requirePrincipal(principal);
   const now = validNow(opts.now);
@@ -129,6 +134,9 @@ export async function updateSettings(
   }
   if (patch.ddtextEnabled === true && current.settings.ddtextEnabled !== true && opts.confirm !== "ddtext_notice") {
     return { outcome: "confirmation_required", field: "ddtextEnabled" };
+  }
+  if (patch.slackReadingEnabled === true && current.settings.slackReadingEnabled !== true && opts.confirm !== "slack_reading_notice") {
+    return { outcome: "confirmation_required", field: "slackReadingEnabled" };
   }
 
   const columns: Record<string, unknown> = {};
@@ -303,6 +311,52 @@ function dollars(v: unknown): number {
 
 /** Sums of many numeric(12,6) costs, kept to the column's precision so float noise doesn't show. */
 const usd = (n: number) => Math.round(n * 1e6) / 1e6;
+
+const WATCH_MODES: readonly WatchMode[] = ["member_only", "active_public"];
+
+/**
+ * P7a (§3.2, §3.10.7, N12, C30): the watch mode, through its own route because P5a's field kinds have no choice type.
+ * The same CAS as updateSettings on exec_settings.updated_at, writing watch_mode and updated_at only; returns the row
+ * its CAS selected (an applied change needs no second read). A mode other than the two → invalid. Throws on a
+ * database error (the route answers 503).
+ */
+export async function updateWatchMode(principal: ExecPrincipal, mode: WatchMode, opts: { expectedVersion: string | null }): Promise<UpdateSettingsResult> {
+  requirePrincipal(principal);
+  if (!(WATCH_MODES as readonly unknown[]).includes(mode)) return { outcome: "invalid", field: "patch", detail: "names a watch mode that doesn't exist" };
+  const expected = opts?.expectedVersion ?? null;
+  if (expected !== null && (typeof expected !== "string" || expected.length === 0 || expected.length > VERSION_MAX_CHARS)) {
+    throw new NonRetryableError("exec settings: expectedVersion must be null or the version string the settings read returned");
+  }
+  const now = new Date();
+  const current = await loadSettingsSnapshot(principal.id);
+  const schema = settingsSchemaFlags(current.settings);
+  const previousMs = expected === null ? Number.NaN : Date.parse(expected);
+  const writeMs = Number.isFinite(previousMs) && previousMs >= now.getTime() ? previousMs + 1 : now.getTime();
+  const columns = { watch_mode: mode, updated_at: new Date(writeMs).toISOString() };
+  const returning = settingsColumnsFor(schema);
+  let rows: unknown;
+  if (expected === null) {
+    if (current.version !== null) return { outcome: "conflict", snapshot: current };
+    const { data, error } = await getSupabaseAdmin()
+      .from(SETTINGS_TABLE)
+      .upsert({ principal_id: principal.id, ...columns }, { onConflict: "principal_id", ignoreDuplicates: true })
+      .select(returning);
+    if (error) throw new Error(`exec_settings insert failed: ${error.message}`);
+    rows = data;
+  } else {
+    const { data, error } = await getSupabaseAdmin()
+      .from(SETTINGS_TABLE)
+      .update(columns)
+      .eq("principal_id", principal.id)
+      .eq("updated_at", expected)
+      .select(returning);
+    if (error) throw new Error(`exec_settings update failed: ${error.message}`);
+    rows = data;
+  }
+  const written = Array.isArray(rows) ? (rows as Record<string, unknown>[]) : [];
+  if (written.length !== 1) return { outcome: "conflict", snapshot: await loadSettingsSnapshot(principal.id) };
+  return { outcome: "updated", snapshot: snapshotFromRow(written[0], principal.id, schema) };
+}
 
 /**
  * His AI spend since local midnight (his zone), by feature, keyset-paged by id

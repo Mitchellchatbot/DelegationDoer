@@ -10,6 +10,14 @@ vi.mock("@/lib/exec/slack-install", async (orig) => {
   const actual = await orig<typeof import("@/lib/exec/slack-install")>();
   return { ...actual, acceptEvent: vi.fn(actual.acceptEvent), acceptAction: vi.fn(actual.acceptAction) };
 });
+// P7a (§3.9.2, C4): the route now asks v2 first. This file is P6's database, where v2 doesn't exist: the P7a store
+// answers v2_missing (no database call), the route falls back to v1 on the same controller and marks v2 absent, so
+// every assertion below is about P6's v1 exactly as before. slack-routes-events-v2.test.ts runs the real v2 (and
+// FB01-FB05 the real fallback against this same P6 fake).
+vi.mock("@/lib/exec/slack-read-store", async (orig) => {
+  const actual = await orig<typeof import("@/lib/exec/slack-read-store")>();
+  return { ...actual, acceptEventV2: vi.fn(async () => ({ outcome: "v2_missing" as const })) };
+});
 
 import * as eventsRoute from "@/app/api/integrations/exec-slack/events/route";
 import { ROUTING_INSTALLATION as RI, SENTINELS, findSentinel } from "@/lib/exec/__tests__/slack-assert";
@@ -26,6 +34,7 @@ import {
 } from "@/lib/exec/__tests__/slack-route-helpers";
 import { kickInteractive } from "@/lib/exec/jobs";
 import { ensureExecRuntime } from "@/lib/exec/runtime";
+import { __resetGateCacheForTests } from "@/lib/exec/slack-gate-cache";
 import { acceptAction, acceptEvent } from "@/lib/exec/slack-install";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 
@@ -34,6 +43,12 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 // store over fake-slack-db.ts (whose RPC 1 mirrors the SQL routing rule, RT-F),
 // with the runtime and the job kick as spies. Every request is signed with
 // node:crypto here, so the signature check is the real one too.
+//
+// P7a (§3.9.2, §1.4 #5; expectations only, counts unchanged): each log line ends
+// with path=<v1|v2|-> (here "-" before the RPC step, "v1 v2=missing" on a test's
+// first v1 call, "v1" after it); RT-V rows 5, 6 (bot posts that mention nobody)
+// and 10, 11 (the hidden message_replied shape) are dropped by the route's
+// pre-DB filter now, before any RPC; every other row reaches v1 as before.
 
 const P6_SCHEMA = [
   "exec_slack_installations", "exec_slack_events", "exec_oauth_states", "exec_chat_feedback", "exec_slack_posts",
@@ -79,6 +94,8 @@ beforeEach(() => {
   vi.mocked(kickInteractive).mockReset();
   vi.mocked(acceptEvent).mockClear();
   vi.mocked(acceptAction).mockClear();
+  // P7a: the per-process gate state starts empty in every test (no snapshot, v2 not yet known absent).
+  __resetGateCacheForTests();
   fetchSpy = vi.fn(async () => {
     throw new TypeError("no network in this test");
   });
@@ -114,7 +131,7 @@ describe("url_verification (K7)", () => {
     expect(acceptEvent).not.toHaveBeenCalled();
     expect(ensureExecRuntime).not.toHaveBeenCalled();
     expect(db.calls).toEqual([]);
-    expect(slackLines()).toEqual(["[exec-slack] events challenge reason=url_verification event=- type=- retry=0"]);
+    expect(slackLines()).toEqual(["[exec-slack] events challenge reason=url_verification event=- type=- retry=0 path=-"]);
     expect(findSentinel(consoleCalls())).toBeNull();
   });
 
@@ -130,7 +147,7 @@ describe("url_verification (K7)", () => {
     const body = await res.text();
     expect(JSON.parse(body)).toEqual({ error: "unauthorized" });
     expect(body).not.toContain(SENTINELS.challenge);
-    expect(slackLines()).toEqual(["[exec-slack] events rejected reason=missing_headers event=- type=- retry=0"]);
+    expect(slackLines()).toEqual(["[exec-slack] events rejected reason=missing_headers event=- type=- retry=0 path=-"]);
   });
 
   it("EV02 signed with another secret → 401, no challenge", async () => {
@@ -191,7 +208,7 @@ describe("route-level drops (200, no RPC)", () => {
     expect(db.calls).toEqual([]);
     const lines = slackLines();
     expect(lines).toHaveLength(1);
-    expect(lines[0]).toBe(`[exec-slack] events dropped reason=${n === 17 ? "wrong_app" : "wrong_team"} event=${String(env.event_id)} type=message retry=1`);
+    expect(lines[0]).toBe(`[exec-slack] events dropped reason=${n === 17 ? "wrong_app" : "wrong_team"} event=${String(env.event_id)} type=message retry=1 path=-`);
     expect(findSentinel(consoleCalls())).toBeNull();
   });
 
@@ -219,7 +236,7 @@ describe("route-level drops (200, no RPC)", () => {
     const res = await post(routingRow(30).envelope);
     expect(res.status).toBe(200);
     expect(acceptEvent).not.toHaveBeenCalled();
-    expect(slackLines()).toEqual(["[exec-slack] events dropped reason=other_type event=- type=app_rate_limited retry=0"]);
+    expect(slackLines()).toEqual(["[exec-slack] events dropped reason=other_type event=- type=app_rate_limited retry=0 path=-"]);
   });
 });
 
@@ -229,7 +246,7 @@ describe("the ack RPC", () => {
     const res = await post(dmEnvelope());
     expect(res.status).toBe(200);
     expect(acceptEvent).toHaveBeenCalledTimes(1);
-    expect(slackLines()).toEqual([`[exec-slack] events dropped reason=schema_missing event=${String(dmEnvelope().event_id)} type=message retry=0`]);
+    expect(slackLines()).toEqual([`[exec-slack] events dropped reason=schema_missing event=${String(dmEnvelope().event_id)} type=message retry=0 path=v1 v2=missing`]);
   });
 
   it("EV08 an RPC error → 500 { error: unavailable }", async () => {
@@ -291,7 +308,7 @@ describe("the ack RPC", () => {
     expect(order.every((n) => typeof n === "number")).toBe(true);
     expect([...order].sort((a, b) => a - b)).toEqual(order);
     expect(db.tables.exec_jobs.map((j) => [j.kind, j.lane, j.max_attempts])).toEqual([["exec.slack-reply", "interactive", 1]]);
-    expect(slackLines()).toEqual([`[exec-slack] events accepted reason=reply event=${String(dmEnvelope().event_id)} type=message retry=0`]);
+    expect(slackLines()).toEqual([`[exec-slack] events accepted reason=reply event=${String(dmEnvelope().event_id)} type=message retry=0 path=v1 v2=missing`]);
   });
 
   it("EV10 an accepted drop (a colleague's DM) → 200, no kick", async () => {
@@ -316,7 +333,7 @@ describe("the ack RPC", () => {
     expect(kickInteractive).not.toHaveBeenCalled();
     expect(db.tables.exec_slack_events).toHaveLength(1);
     expect(db.tables.exec_jobs).toHaveLength(1);
-    expect(slackLines()[1]).toBe(`[exec-slack] events duplicate reason=duplicate event=${String(dmEnvelope().event_id)} type=message retry=1`);
+    expect(slackLines()[1]).toBe(`[exec-slack] events duplicate reason=duplicate event=${String(dmEnvelope().event_id)} type=message retry=1 path=v1`);
   });
 });
 
@@ -374,13 +391,16 @@ describe("RT-V: the routing fixture through the events route", () => {
     expect(rows).toHaveLength(35);
   });
 
+  // P7a §1.4 #5 (C3): these shapes are bot or hidden noise, dropped by the pre-DB filter before any RPC (V233).
+  const P7A_PREFILTERED: Readonly<Record<string, string>> = { "05": "bot_no_mention", "06": "bot_no_mention", "10": "hidden", "11": "hidden" };
+
   for (const r of rows) {
     it(`RT-V route ${r.name}`, async () => {
       const seeded = r.installation === "owner" ? [installationRow()] : r.installation === "revoked" ? [revokedInstallationRow()] : [];
       useDb({ tables: { exec_slack_installations: seeded } });
       const res = await post(r.envelope, { headers: { "x-slack-retry-num": "2" } });
       expect(res.status).toBe(200);
-      const routeLevel = r.expect.routeLevel as string | undefined;
+      const routeLevel = P7A_PREFILTERED[r.name.slice(0, 2)] ?? (r.expect.routeLevel as string | undefined);
       if (routeLevel) {
         expect(acceptEvent).not.toHaveBeenCalled();
         expect(db.calls).toEqual([]);

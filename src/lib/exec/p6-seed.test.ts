@@ -116,7 +116,9 @@ describe("P6 seed: slack-copy.ts (§3.14)", () => {
 /** sha256 of JSON.stringify(SLACK_COPY) as the contract's §3.14 block evaluates (checked against the contract text at stage -1). */
 // Fixer amendments (lead copy, flagged in the fixer report): homeBrief (ui-7), aiAssessed (ui-2), settingsReadFailed (ui-8),
 // connectResult.wrong_host (ui-9). Before them: 4e0c72db47501447a956b434f7af6f0a568c60a13db92bb010c2157a9ea8807a.
-const SLACK_COPY_SHA256 = "0ea2f1cc6c0c1780c0ead58faeb11db9bd66720fa6d7cbe53cd1e96039627ec7";
+// P7a stage -1 (lead, P7a contract §3.17): connectResult spreads SLACK_READ_COPY.connectResult's five read codes after
+// P6's nineteen. P6's final value before them: 0ea2f1cc6c0c1780c0ead58faeb11db9bd66720fa6d7cbe53cd1e96039627ec7.
+const SLACK_COPY_SHA256 = "9535d534ec69e337c33974fab29235e2cdd3338caf5ccac9a6cd54e51585b435";
 
 interface RoutingRow {
   name: string;

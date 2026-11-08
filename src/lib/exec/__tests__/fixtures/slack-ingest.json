@@ -1,0 +1,6284 @@
+{
+  "_doc": [
+    "P7a contract §5.2 (slack-ingest.test.ts, Area B) and the envelope set the §5.3 V2 route tests (Area C) and the SQL suite's RQ12 (Area A) build on.",
+    "Lead-owned, frozen. Recorded Slack shapes (p7/slackdocs, ING §1.2-§2.2, PLAT §5); every message_changed / message_deleted event carries hidden: true.",
+    "Row: name; envelope (an event_callback for team T0SCALED / app A0EXEC, authorized for his user id unless the row says otherwise);",
+    "expectEventType = deriveIngestFacts(json).eventType; expectChannel = its channel (§2.5 for lifecycle);",
+    "expectPrefilter = prefilterIngest's answer; expectFacts = the IngestFacts (full for msg/edit rows, partial for delete/lifecycle: use toMatchObject);",
+    "expectDerive: null = deriveIngestFacts returns null (not a reading event; the route never calls prefilterIngest).",
+    "A row marked `unverified` uses a shape the docs don't record ([U]); §7.3 step 7 records it live.",
+    "No row puts a sentinel inside a DD URL. `channels` describes the exec_slack_channels rows the gate rows assume (seed them as needed).",
+    "candidateReasons: the IG20 table (also V220 through v2, and v2 step 15's SQL twin)."
+  ],
+  "installation": {
+    "teamId": "T0SCALED",
+    "appId": "A0EXEC",
+    "userId": "U0MITCH",
+    "dmChannelId": "D0MITCH",
+    "botUserId": "U0BOT",
+    "botId": "B0BOT",
+    "ddBotUserId": "U0DDBOT",
+    "ddBotId": "B0DDBOT",
+    "ddAppId": "A0DDAPP",
+    "partnerTeamId": "T0PARTNER",
+    "optedOutAuthors": [
+      "U0OPTOUT"
+    ]
+  },
+  "channels": {
+    "C0GENERAL": {
+      "convType": "channel",
+      "class": "standard",
+      "watchState": "watched",
+      "isMember": true,
+      "isPrivate": false,
+      "name": "general"
+    },
+    "G0PRIV": {
+      "convType": "group",
+      "class": "standard",
+      "watchState": "watched",
+      "isMember": true,
+      "isPrivate": true,
+      "name": "private-ops"
+    },
+    "D0JANE": {
+      "convType": "im",
+      "class": "standard",
+      "watchState": "watched",
+      "isMember": true,
+      "isPrivate": true,
+      "imUserId": "U0JANE"
+    },
+    "G0MPIM": {
+      "convType": "mpim",
+      "class": "standard",
+      "watchState": "watched",
+      "isMember": true,
+      "isPrivate": true
+    },
+    "C0OUT": {
+      "convType": "channel",
+      "class": "hub",
+      "hubKind": "outbound",
+      "watchState": "watched",
+      "isMember": true,
+      "isPrivate": false,
+      "name": "outbound-replies"
+    },
+    "C0EMAILN": {
+      "convType": "group",
+      "class": "hub",
+      "hubKind": "client_email",
+      "watchState": "watched",
+      "isMember": true,
+      "isPrivate": true,
+      "name": "email-notifs"
+    },
+    "C0SHARED": {
+      "convType": "channel",
+      "class": "external",
+      "watchState": "watched",
+      "isMember": true,
+      "isPrivate": false,
+      "isExtShared": true,
+      "extEver": true,
+      "name": "partner-collab"
+    },
+    "C0FINANCE": {
+      "convType": "channel",
+      "class": "finance",
+      "financeName": true,
+      "watchState": "muted",
+      "muteSource": "default_finance",
+      "isMember": true,
+      "isPrivate": false,
+      "name": "finance"
+    },
+    "C0MUTED": {
+      "convType": "channel",
+      "class": "standard",
+      "watchState": "muted",
+      "muteSource": "owner",
+      "isMember": true,
+      "isPrivate": false,
+      "name": "design"
+    },
+    "C0UNWATCH": {
+      "convType": "channel",
+      "class": "standard",
+      "watchState": "unwatched",
+      "isMember": false,
+      "isPrivate": false,
+      "name": "random-public"
+    },
+    "C0RESET": {
+      "convType": "channel",
+      "class": "unclassified",
+      "watchState": "unwatched",
+      "isMember": true,
+      "isPrivate": false
+    },
+    "G0BPVOB": {
+      "convType": "group",
+      "class": "deny",
+      "denyReason": "fb_list",
+      "watchState": "unwatched"
+    },
+    "D0OPT": {
+      "convType": "im",
+      "class": "standard",
+      "watchState": "watched",
+      "isMember": true,
+      "isPrivate": true,
+      "imUserId": "U0OPTOUT"
+    },
+    "(none)": "C0NEWCHAN and D0NEWIM have no row (unknown conversations)"
+  },
+  "rows": [
+    {
+      "name": "IG01 a plain channel message",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "message",
+          "channel": "C0GENERAL",
+          "user": "U0JANE",
+          "text": "SENTINEL-SLACK-TEXT-7f3a please review the board deck",
+          "ts": "1794150001.000101",
+          "event_ts": "1794150001.000101",
+          "channel_type": "channel",
+          "team": "T0SCALED",
+          "client_msg_id": "00000000-0000-4000-8000-000000000001",
+          "blocks": [
+            {
+              "type": "rich_text",
+              "block_id": "rt1",
+              "elements": [
+                {
+                  "type": "rich_text_section",
+                  "elements": [
+                    {
+                      "type": "text",
+                      "text": "SENTINEL-SLACK-TEXT-7f3a please review the board deck"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG001",
+        "event_time": 1794150601,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-001"
+      },
+      "expectEventType": "message",
+      "expectChannel": "C0GENERAL",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "msg",
+        "conv": "channel",
+        "ts": "1794150001.000101",
+        "threadTs": null,
+        "editedTs": null,
+        "deletedTs": null,
+        "author": "U0JANE",
+        "authorTeam": "T0SCALED",
+        "parentUser": null,
+        "mentions": [],
+        "isBot": false,
+        "appId": null,
+        "ddTemplate": false,
+        "broadcast": false,
+        "question": false,
+        "len": 2,
+        "hints": 0,
+        "files": false,
+        "extShared": false,
+        "authUser": "U0MITCH",
+        "authIsBot": false,
+        "lc": null,
+        "name": null,
+        "newChannel": null,
+        "isExtShared": null,
+        "ddPaths": []
+      }
+    },
+    {
+      "name": "IG02 an explicit mention of him",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "message",
+          "channel": "C0GENERAL",
+          "user": "U0JANE",
+          "text": "<@U0MITCH> SENTINEL-SLACK-TEXT-7f3a can you send the signed vendor contract?",
+          "ts": "1794150002.000102",
+          "event_ts": "1794150002.000102",
+          "channel_type": "channel",
+          "team": "T0SCALED",
+          "client_msg_id": "00000000-0000-4000-8000-000000000002",
+          "blocks": [
+            {
+              "type": "rich_text",
+              "block_id": "rt1",
+              "elements": [
+                {
+                  "type": "rich_text_section",
+                  "elements": [
+                    {
+                      "type": "user",
+                      "user_id": "U0MITCH"
+                    },
+                    {
+                      "type": "text",
+                      "text": " SENTINEL-SLACK-TEXT-7f3a can you send the signed vendor contract?"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG002",
+        "event_time": 1794150602,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-002"
+      },
+      "expectEventType": "message",
+      "expectChannel": "C0GENERAL",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "msg",
+        "conv": "channel",
+        "ts": "1794150002.000102",
+        "threadTs": null,
+        "editedTs": null,
+        "deletedTs": null,
+        "author": "U0JANE",
+        "authorTeam": "T0SCALED",
+        "parentUser": null,
+        "mentions": [
+          "U0MITCH"
+        ],
+        "isBot": false,
+        "appId": null,
+        "ddTemplate": false,
+        "broadcast": false,
+        "question": true,
+        "len": 2,
+        "hints": 0,
+        "files": false,
+        "extShared": false,
+        "authUser": "U0MITCH",
+        "authIsBot": false,
+        "lc": null,
+        "name": null,
+        "newChannel": null,
+        "isExtShared": null,
+        "ddPaths": []
+      }
+    },
+    {
+      "name": "IG03 a labelled mention <@U0MITCH|mitch>",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "message",
+          "channel": "C0GENERAL",
+          "user": "U0JANE",
+          "text": "<@U0MITCH|mitch> SENTINEL-SLACK-TEXT-7f3a the renewal deck is ready",
+          "ts": "1794150003.000103",
+          "event_ts": "1794150003.000103",
+          "channel_type": "channel",
+          "team": "T0SCALED",
+          "client_msg_id": "00000000-0000-4000-8000-000000000003",
+          "blocks": [
+            {
+              "type": "rich_text",
+              "block_id": "rt1",
+              "elements": [
+                {
+                  "type": "rich_text_section",
+                  "elements": [
+                    {
+                      "type": "user",
+                      "user_id": "U0MITCH"
+                    },
+                    {
+                      "type": "text",
+                      "text": " SENTINEL-SLACK-TEXT-7f3a the renewal deck is ready"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG003",
+        "event_time": 1794150603,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-003"
+      },
+      "expectEventType": "message",
+      "expectChannel": "C0GENERAL",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "msg",
+        "conv": "channel",
+        "ts": "1794150003.000103",
+        "threadTs": null,
+        "editedTs": null,
+        "deletedTs": null,
+        "author": "U0JANE",
+        "authorTeam": "T0SCALED",
+        "parentUser": null,
+        "mentions": [
+          "U0MITCH"
+        ],
+        "isBot": false,
+        "appId": null,
+        "ddTemplate": false,
+        "broadcast": false,
+        "question": false,
+        "len": 2,
+        "hints": 0,
+        "files": false,
+        "extShared": false,
+        "authUser": "U0MITCH",
+        "authIsBot": false,
+        "lc": null,
+        "name": null,
+        "newChannel": null,
+        "isExtShared": null,
+        "ddPaths": []
+      }
+    },
+    {
+      "name": "IG04 a rich_text user element (text lacks the mention)",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "message",
+          "channel": "C0GENERAL",
+          "user": "U0JANE",
+          "text": "SENTINEL-SLACK-TEXT-7f3a over to you on the renewal deck",
+          "ts": "1794150004.000104",
+          "event_ts": "1794150004.000104",
+          "channel_type": "channel",
+          "team": "T0SCALED",
+          "client_msg_id": "00000000-0000-4000-8000-000000000004",
+          "blocks": [
+            {
+              "type": "rich_text",
+              "block_id": "rt1",
+              "elements": [
+                {
+                  "type": "rich_text_section",
+                  "elements": [
+                    {
+                      "type": "text",
+                      "text": "SENTINEL-SLACK-TEXT-7f3a over to "
+                    },
+                    {
+                      "type": "user",
+                      "user_id": "U0MITCH"
+                    },
+                    {
+                      "type": "text",
+                      "text": " on the renewal deck"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG004",
+        "event_time": 1794150604,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-004"
+      },
+      "expectEventType": "message",
+      "expectChannel": "C0GENERAL",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "msg",
+        "conv": "channel",
+        "ts": "1794150004.000104",
+        "threadTs": null,
+        "editedTs": null,
+        "deletedTs": null,
+        "author": "U0JANE",
+        "authorTeam": "T0SCALED",
+        "parentUser": null,
+        "mentions": [
+          "U0MITCH"
+        ],
+        "isBot": false,
+        "appId": null,
+        "ddTemplate": false,
+        "broadcast": false,
+        "question": false,
+        "len": 2,
+        "hints": 0,
+        "files": false,
+        "extShared": false,
+        "authUser": "U0MITCH",
+        "authIsBot": false,
+        "lc": null,
+        "name": null,
+        "newChannel": null,
+        "isExtShared": null,
+        "ddPaths": []
+      }
+    },
+    {
+      "name": "IG05 <!here> is a broadcast, never a mention",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "message",
+          "channel": "C0GENERAL",
+          "user": "U0JANE",
+          "text": "<!here> SENTINEL-SLACK-TEXT-7f3a standup moved to the big room",
+          "ts": "1794150005.000105",
+          "event_ts": "1794150005.000105",
+          "channel_type": "channel",
+          "team": "T0SCALED",
+          "client_msg_id": "00000000-0000-4000-8000-000000000005",
+          "blocks": [
+            {
+              "type": "rich_text",
+              "block_id": "rt1",
+              "elements": [
+                {
+                  "type": "rich_text_section",
+                  "elements": [
+                    {
+                      "type": "broadcast",
+                      "range": "here"
+                    },
+                    {
+                      "type": "text",
+                      "text": " SENTINEL-SLACK-TEXT-7f3a standup moved to the big room"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG005",
+        "event_time": 1794150605,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-005"
+      },
+      "expectEventType": "message",
+      "expectChannel": "C0GENERAL",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "msg",
+        "conv": "channel",
+        "ts": "1794150005.000105",
+        "threadTs": null,
+        "editedTs": null,
+        "deletedTs": null,
+        "author": "U0JANE",
+        "authorTeam": "T0SCALED",
+        "parentUser": null,
+        "mentions": [],
+        "isBot": false,
+        "appId": null,
+        "ddTemplate": false,
+        "broadcast": true,
+        "question": false,
+        "len": 2,
+        "hints": 0,
+        "files": false,
+        "extShared": false,
+        "authUser": "U0MITCH",
+        "authIsBot": false,
+        "lc": null,
+        "name": null,
+        "newChannel": null,
+        "isExtShared": null,
+        "ddPaths": []
+      }
+    },
+    {
+      "name": "IG05 <!channel> is a broadcast, never a mention",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "message",
+          "channel": "C0GENERAL",
+          "user": "U0JANE",
+          "text": "<!channel> SENTINEL-SLACK-TEXT-7f3a standup moved to the big room",
+          "ts": "1794150006.000106",
+          "event_ts": "1794150006.000106",
+          "channel_type": "channel",
+          "team": "T0SCALED",
+          "client_msg_id": "00000000-0000-4000-8000-000000000006",
+          "blocks": [
+            {
+              "type": "rich_text",
+              "block_id": "rt1",
+              "elements": [
+                {
+                  "type": "rich_text_section",
+                  "elements": [
+                    {
+                      "type": "broadcast",
+                      "range": "channel"
+                    },
+                    {
+                      "type": "text",
+                      "text": " SENTINEL-SLACK-TEXT-7f3a standup moved to the big room"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG006",
+        "event_time": 1794150606,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-006"
+      },
+      "expectEventType": "message",
+      "expectChannel": "C0GENERAL",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "msg",
+        "conv": "channel",
+        "ts": "1794150006.000106",
+        "threadTs": null,
+        "editedTs": null,
+        "deletedTs": null,
+        "author": "U0JANE",
+        "authorTeam": "T0SCALED",
+        "parentUser": null,
+        "mentions": [],
+        "isBot": false,
+        "appId": null,
+        "ddTemplate": false,
+        "broadcast": true,
+        "question": false,
+        "len": 2,
+        "hints": 0,
+        "files": false,
+        "extShared": false,
+        "authUser": "U0MITCH",
+        "authIsBot": false,
+        "lc": null,
+        "name": null,
+        "newChannel": null,
+        "isExtShared": null,
+        "ddPaths": []
+      }
+    },
+    {
+      "name": "IG05 <!everyone> is a broadcast, never a mention",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "message",
+          "channel": "C0GENERAL",
+          "user": "U0JANE",
+          "text": "<!everyone> SENTINEL-SLACK-TEXT-7f3a standup moved to the big room",
+          "ts": "1794150007.000107",
+          "event_ts": "1794150007.000107",
+          "channel_type": "channel",
+          "team": "T0SCALED",
+          "client_msg_id": "00000000-0000-4000-8000-000000000007",
+          "blocks": [
+            {
+              "type": "rich_text",
+              "block_id": "rt1",
+              "elements": [
+                {
+                  "type": "rich_text_section",
+                  "elements": [
+                    {
+                      "type": "broadcast",
+                      "range": "everyone"
+                    },
+                    {
+                      "type": "text",
+                      "text": " SENTINEL-SLACK-TEXT-7f3a standup moved to the big room"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG007",
+        "event_time": 1794150607,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-007"
+      },
+      "expectEventType": "message",
+      "expectChannel": "C0GENERAL",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "msg",
+        "conv": "channel",
+        "ts": "1794150007.000107",
+        "threadTs": null,
+        "editedTs": null,
+        "deletedTs": null,
+        "author": "U0JANE",
+        "authorTeam": "T0SCALED",
+        "parentUser": null,
+        "mentions": [],
+        "isBot": false,
+        "appId": null,
+        "ddTemplate": false,
+        "broadcast": true,
+        "question": false,
+        "len": 2,
+        "hints": 0,
+        "files": false,
+        "extShared": false,
+        "authUser": "U0MITCH",
+        "authIsBot": false,
+        "lc": null,
+        "name": null,
+        "newChannel": null,
+        "isExtShared": null,
+        "ddPaths": []
+      }
+    },
+    {
+      "name": "IG06 a user-group mention is ignored",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "message",
+          "channel": "C0GENERAL",
+          "user": "U0JANE",
+          "text": "<!subteam^S0LEADERS|@leaders> SENTINEL-SLACK-TEXT-7f3a quarterly numbers posted",
+          "ts": "1794150008.000108",
+          "event_ts": "1794150008.000108",
+          "channel_type": "channel",
+          "team": "T0SCALED",
+          "client_msg_id": "00000000-0000-4000-8000-000000000008",
+          "blocks": [
+            {
+              "type": "rich_text",
+              "block_id": "rt1",
+              "elements": [
+                {
+                  "type": "rich_text_section",
+                  "elements": [
+                    {
+                      "type": "usergroup",
+                      "usergroup_id": "S0LEADERS"
+                    },
+                    {
+                      "type": "text",
+                      "text": " SENTINEL-SLACK-TEXT-7f3a quarterly numbers posted"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG008",
+        "event_time": 1794150608,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-008"
+      },
+      "expectEventType": "message",
+      "expectChannel": "C0GENERAL",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "msg",
+        "conv": "channel",
+        "ts": "1794150008.000108",
+        "threadTs": null,
+        "editedTs": null,
+        "deletedTs": null,
+        "author": "U0JANE",
+        "authorTeam": "T0SCALED",
+        "parentUser": null,
+        "mentions": [],
+        "isBot": false,
+        "appId": null,
+        "ddTemplate": false,
+        "broadcast": false,
+        "question": false,
+        "len": 2,
+        "hints": 0,
+        "files": false,
+        "extShared": false,
+        "authUser": "U0MITCH",
+        "authIsBot": false,
+        "lc": null,
+        "name": null,
+        "newChannel": null,
+        "isExtShared": null,
+        "ddPaths": []
+      }
+    },
+    {
+      "name": "IG07 message_changed in the recorded shape (hidden: true): facts from event.message",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "message",
+          "subtype": "message_changed",
+          "hidden": true,
+          "channel": "C0GENERAL",
+          "ts": "1794150010.000110",
+          "event_ts": "1794150010.000110",
+          "channel_type": "channel",
+          "message": {
+            "type": "message",
+            "user": "U0JANE",
+            "team": "T0SCALED",
+            "text": "<@U0MITCH> SENTINEL-SLACK-TEXT-7f3a updated numbers are attached",
+            "ts": "1794150009.000109",
+            "edited": {
+              "user": "U0JANE",
+              "ts": "1794150010.000110"
+            },
+            "blocks": [
+              {
+                "type": "rich_text",
+                "block_id": "rt1",
+                "elements": [
+                  {
+                    "type": "rich_text_section",
+                    "elements": [
+                      {
+                        "type": "user",
+                        "user_id": "U0MITCH"
+                      },
+                      {
+                        "type": "text",
+                        "text": " SENTINEL-SLACK-TEXT-7f3a updated numbers are attached"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ],
+            "client_msg_id": "00000000-0000-4000-8000-0000000000e9"
+          },
+          "previous_message": {
+            "type": "message",
+            "user": "U0JANE",
+            "team": "T0SCALED",
+            "text": "SENTINEL-SLACK-TEXT-7f3a old numbers SENTINEL-PREVIOUS",
+            "ts": "1794150009.000109",
+            "blocks": [
+              {
+                "type": "rich_text",
+                "block_id": "rt1",
+                "elements": [
+                  {
+                    "type": "rich_text_section",
+                    "elements": [
+                      {
+                        "type": "text",
+                        "text": "SENTINEL-SLACK-TEXT-7f3a old numbers SENTINEL-PREVIOUS"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ],
+            "client_msg_id": "00000000-0000-4000-8000-0000000000e9"
+          }
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG009",
+        "event_time": 1794150609,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-009"
+      },
+      "expectEventType": "message",
+      "expectChannel": "C0GENERAL",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "edit",
+        "conv": "channel",
+        "ts": "1794150009.000109",
+        "threadTs": null,
+        "editedTs": "1794150010.000110",
+        "deletedTs": null,
+        "author": "U0JANE",
+        "authorTeam": "T0SCALED",
+        "parentUser": null,
+        "mentions": [
+          "U0MITCH"
+        ],
+        "isBot": false,
+        "appId": null,
+        "ddTemplate": false,
+        "broadcast": false,
+        "question": false,
+        "len": 2,
+        "hints": 0,
+        "files": false,
+        "extShared": false,
+        "authUser": "U0MITCH",
+        "authIsBot": false,
+        "lc": null,
+        "name": null,
+        "newChannel": null,
+        "isExtShared": null,
+        "ddPaths": []
+      }
+    },
+    {
+      "name": "IG08 message_deleted in the recorded shape (hidden: true)",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "message",
+          "subtype": "message_deleted",
+          "hidden": true,
+          "channel": "C0GENERAL",
+          "ts": "1794150011.000111",
+          "deleted_ts": "1794150009.000109",
+          "event_ts": "1794150011.000111",
+          "channel_type": "channel",
+          "previous_message": {
+            "type": "message",
+            "user": "U0JANE",
+            "team": "T0SCALED",
+            "text": "SENTINEL-SLACK-TEXT-7f3a old numbers SENTINEL-PREVIOUS",
+            "ts": "1794150009.000109",
+            "blocks": [
+              {
+                "type": "rich_text",
+                "block_id": "rt1",
+                "elements": [
+                  {
+                    "type": "rich_text_section",
+                    "elements": [
+                      {
+                        "type": "text",
+                        "text": "SENTINEL-SLACK-TEXT-7f3a old numbers SENTINEL-PREVIOUS"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ],
+            "client_msg_id": "00000000-0000-4000-8000-0000000000e9"
+          }
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG010",
+        "event_time": 1794150610,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-010"
+      },
+      "expectEventType": "message",
+      "expectChannel": "C0GENERAL",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "delete",
+        "conv": "channel",
+        "deletedTs": "1794150009.000109",
+        "author": null,
+        "isBot": false,
+        "ddPaths": []
+      }
+    },
+    {
+      "name": "IG09 hidden: true with no subtype (the message_replied bug shape) → hidden",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "message",
+          "hidden": true,
+          "channel": "C0GENERAL",
+          "channel_type": "channel",
+          "ts": "1794150012.000112",
+          "event_ts": "1794150012.000112",
+          "message": {
+            "type": "message",
+            "user": "U0MITCH",
+            "text": "SENTINEL-SLACK-TEXT-7f3a thoughts on the plan",
+            "thread_ts": "1794150001.000101",
+            "reply_count": 1,
+            "replies": [
+              {
+                "user": "U0JANE",
+                "ts": "1794150012.000112"
+              }
+            ],
+            "ts": "1794150001.000101"
+          }
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG011",
+        "event_time": 1794150611,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-011"
+      },
+      "expectEventType": "message",
+      "expectChannel": "C0GENERAL",
+      "expectPrefilter": "hidden"
+    },
+    {
+      "name": "IG09b a message_deleted whose previous message is a bot's → pass (deletes never meet the bot rule)",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "message",
+          "subtype": "message_deleted",
+          "hidden": true,
+          "channel": "C0GENERAL",
+          "ts": "1794150014.000114",
+          "deleted_ts": "1794150013.000113",
+          "event_ts": "1794150014.000114",
+          "channel_type": "channel",
+          "previous_message": {
+            "type": "message",
+            "subtype": "bot_message",
+            "bot_id": "B0ZAP",
+            "username": "zapier",
+            "text": "SENTINEL-SLACK-TEXT-7f3a build passed",
+            "ts": "1794150013.000113"
+          }
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG012",
+        "event_time": 1794150612,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-012"
+      },
+      "expectEventType": "message",
+      "expectChannel": "C0GENERAL",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "delete",
+        "deletedTs": "1794150013.000113",
+        "author": null,
+        "isBot": false
+      }
+    },
+    {
+      "name": "IG09b a message_changed (hidden: true) whose new message is a bot's mentioning nobody → bot_no_mention",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "message",
+          "subtype": "message_changed",
+          "hidden": true,
+          "channel": "C0GENERAL",
+          "ts": "1794150016.000116",
+          "event_ts": "1794150016.000116",
+          "channel_type": "channel",
+          "message": {
+            "type": "message",
+            "subtype": "bot_message",
+            "bot_id": "B0ZAP",
+            "username": "zapier",
+            "text": "SENTINEL-SLACK-TEXT-7f3a build passed again",
+            "ts": "1794150015.000115",
+            "edited": {
+              "user": "B0ZAP",
+              "ts": "1794150016.000116"
+            }
+          },
+          "previous_message": {
+            "type": "message",
+            "subtype": "bot_message",
+            "bot_id": "B0ZAP",
+            "text": "SENTINEL-SLACK-TEXT-7f3a build passed",
+            "ts": "1794150015.000115"
+          }
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG013",
+        "event_time": 1794150613,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-013"
+      },
+      "expectEventType": "message",
+      "expectChannel": "C0GENERAL",
+      "expectPrefilter": "bot_no_mention"
+    },
+    {
+      "name": "IG15 an edit with equal old and new text and blocks (language detection) → edit_noop",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "message",
+          "subtype": "message_changed",
+          "hidden": true,
+          "channel": "C0GENERAL",
+          "ts": "1794150018.000118",
+          "event_ts": "1794150018.000118",
+          "channel_type": "channel",
+          "message": {
+            "type": "message",
+            "user": "U0JANE",
+            "team": "T0SCALED",
+            "text": "SENTINEL-SLACK-TEXT-7f3a please review the board deck",
+            "ts": "1794150017.000117",
+            "blocks": [
+              {
+                "type": "rich_text",
+                "block_id": "rt1",
+                "elements": [
+                  {
+                    "type": "rich_text_section",
+                    "elements": [
+                      {
+                        "type": "text",
+                        "text": "SENTINEL-SLACK-TEXT-7f3a please review the board deck"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ],
+            "edited": {
+              "user": "U0JANE",
+              "ts": "1794150018.000118"
+            }
+          },
+          "previous_message": {
+            "type": "message",
+            "user": "U0JANE",
+            "team": "T0SCALED",
+            "text": "SENTINEL-SLACK-TEXT-7f3a please review the board deck",
+            "ts": "1794150017.000117",
+            "blocks": [
+              {
+                "type": "rich_text",
+                "block_id": "rt1",
+                "elements": [
+                  {
+                    "type": "rich_text_section",
+                    "elements": [
+                      {
+                        "type": "text",
+                        "text": "SENTINEL-SLACK-TEXT-7f3a please review the board deck"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG014",
+        "event_time": 1794150614,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-014"
+      },
+      "expectEventType": "message",
+      "expectChannel": "C0GENERAL",
+      "expectPrefilter": "edit_noop"
+    },
+    {
+      "name": "IG10 subtype channel_join → noise_subtype",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "message",
+          "subtype": "channel_join",
+          "channel": "C0GENERAL",
+          "channel_type": "channel",
+          "ts": "1794150020.000120",
+          "event_ts": "1794150020.000120",
+          "user": "U0NEWBIE",
+          "text": "<@U0NEWBIE|newbie> has joined the channel",
+          "inviter": "U0JANE"
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG015",
+        "event_time": 1794150615,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-015"
+      },
+      "expectEventType": "message",
+      "expectChannel": "C0GENERAL",
+      "expectPrefilter": "noise_subtype"
+    },
+    {
+      "name": "IG10 subtype channel_leave → noise_subtype",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "message",
+          "subtype": "channel_leave",
+          "channel": "C0GENERAL",
+          "channel_type": "channel",
+          "ts": "1794150021.000121",
+          "event_ts": "1794150021.000121",
+          "user": "U0LEAVER",
+          "text": "<@U0LEAVER|leaver> has left the channel"
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG016",
+        "event_time": 1794150616,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-016"
+      },
+      "expectEventType": "message",
+      "expectChannel": "C0GENERAL",
+      "expectPrefilter": "noise_subtype"
+    },
+    {
+      "name": "IG10 subtype pinned_item → noise_subtype",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "message",
+          "subtype": "pinned_item",
+          "channel": "C0GENERAL",
+          "channel_type": "channel",
+          "ts": "1794150022.000122",
+          "event_ts": "1794150022.000122",
+          "user": "U0JANE",
+          "text": "<@U0JANE|jane> pinned a message: SENTINEL-SLACK-TEXT-7f3a",
+          "item_type": "C"
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG017",
+        "event_time": 1794150617,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-017"
+      },
+      "expectEventType": "message",
+      "expectChannel": "C0GENERAL",
+      "expectPrefilter": "noise_subtype"
+    },
+    {
+      "name": "IG10 subtype huddle_thread → noise_subtype",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "message",
+          "subtype": "huddle_thread",
+          "channel": "C0GENERAL",
+          "channel_type": "channel",
+          "ts": "1794150023.000123",
+          "event_ts": "1794150023.000123",
+          "user": "USLACKBOT",
+          "text": "",
+          "room": {
+            "id": "R0HUDDLE",
+            "participants": [
+              "U0JANE",
+              "U0MITCH"
+            ]
+          }
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG018",
+        "event_time": 1794150618,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-018"
+      },
+      "expectEventType": "message",
+      "expectChannel": "C0GENERAL",
+      "expectPrefilter": "noise_subtype"
+    },
+    {
+      "name": "IG10 subtype assistant_app_thread → noise_subtype",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "message",
+          "subtype": "assistant_app_thread",
+          "channel": "C0GENERAL",
+          "channel_type": "channel",
+          "ts": "1794150024.000124",
+          "event_ts": "1794150024.000124",
+          "user": "U0JANE",
+          "text": "SENTINEL-SLACK-TEXT-7f3a assistant thread"
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG019",
+        "event_time": 1794150619,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-019"
+      },
+      "expectEventType": "message",
+      "expectChannel": "C0GENERAL",
+      "expectPrefilter": "noise_subtype"
+    },
+    {
+      "name": "IG10 subtype ekm_access_denied → noise_subtype",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "message",
+          "subtype": "ekm_access_denied",
+          "channel": "C0GENERAL",
+          "channel_type": "channel",
+          "ts": "1794150025.000125",
+          "event_ts": "1794150025.000125",
+          "user": "U0JANE",
+          "text": "Your admins have suspended everyone's access to this content."
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG020",
+        "event_time": 1794150620,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-020"
+      },
+      "expectEventType": "message",
+      "expectChannel": "C0GENERAL",
+      "expectPrefilter": "noise_subtype"
+    },
+    {
+      "name": "IG10 subtype foo_bar → noise_subtype",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "message",
+          "subtype": "foo_bar",
+          "channel": "C0GENERAL",
+          "channel_type": "channel",
+          "ts": "1794150026.000126",
+          "event_ts": "1794150026.000126",
+          "user": "U0JANE",
+          "text": "SENTINEL-SLACK-TEXT-7f3a an invented subtype"
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG021",
+        "event_time": 1794150621,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-021"
+      },
+      "expectEventType": "message",
+      "expectChannel": "C0GENERAL",
+      "expectPrefilter": "noise_subtype"
+    },
+    {
+      "name": "IG10 subtype message_replied → noise_subtype",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "message",
+          "subtype": "message_replied",
+          "channel": "C0GENERAL",
+          "channel_type": "channel",
+          "ts": "1794150027.000127",
+          "event_ts": "1794150027.000127",
+          "message": {
+            "type": "message",
+            "user": "U0MITCH",
+            "text": "SENTINEL-SLACK-TEXT-7f3a thoughts",
+            "thread_ts": "1794150001.000101",
+            "reply_count": 2,
+            "ts": "1794150001.000101"
+          },
+          "hidden": true
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG022",
+        "event_time": 1794150622,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-022"
+      },
+      "expectEventType": "message",
+      "expectChannel": "C0GENERAL",
+      "expectPrefilter": "noise_subtype"
+    },
+    {
+      "name": "IG11 thread_broadcast passes (root's text never read)",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "message",
+          "channel": "C0GENERAL",
+          "user": "U0JANE",
+          "text": "SENTINEL-SLACK-TEXT-7f3a broadcasting the decision to everyone",
+          "ts": "1794150030.000130",
+          "event_ts": "1794150030.000130",
+          "channel_type": "channel",
+          "team": "T0SCALED",
+          "client_msg_id": "00000000-0000-4000-8000-000000000030",
+          "blocks": [
+            {
+              "type": "rich_text",
+              "block_id": "rt1",
+              "elements": [
+                {
+                  "type": "rich_text_section",
+                  "elements": [
+                    {
+                      "type": "text",
+                      "text": "SENTINEL-SLACK-TEXT-7f3a broadcasting the decision to everyone"
+                    }
+                  ]
+                }
+              ]
+            }
+          ],
+          "subtype": "thread_broadcast",
+          "thread_ts": "1794150001.000101",
+          "root": {
+            "type": "message",
+            "user": "U0MITCH",
+            "text": "SENTINEL-SLACK-TEXT-7f3a the original message",
+            "ts": "1794150001.000101",
+            "thread_ts": "1794150001.000101",
+            "reply_count": 1,
+            "latest_reply": "1794150030.000130",
+            "reply_users": [
+              "U0JANE"
+            ],
+            "team": "T0SCALED"
+          }
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG023",
+        "event_time": 1794150623,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-023"
+      },
+      "expectEventType": "message",
+      "expectChannel": "C0GENERAL",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "msg",
+        "conv": "channel",
+        "ts": "1794150030.000130",
+        "threadTs": "1794150001.000101",
+        "editedTs": null,
+        "deletedTs": null,
+        "author": "U0JANE",
+        "authorTeam": "T0SCALED",
+        "parentUser": null,
+        "mentions": [],
+        "isBot": false,
+        "appId": null,
+        "ddTemplate": false,
+        "broadcast": false,
+        "question": false,
+        "len": 2,
+        "hints": 0,
+        "files": false,
+        "extShared": false,
+        "authUser": "U0MITCH",
+        "authIsBot": false,
+        "lc": null,
+        "name": null,
+        "newChannel": null,
+        "isExtShared": null,
+        "ddPaths": []
+      }
+    },
+    {
+      "name": "IG11 file_share passes; IG13 bot_id: null is not a bot (the FSH shape); file names never reach facts",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "message",
+          "channel": "D0JANE",
+          "user": "U0JANE",
+          "text": "SENTINEL-SLACK-TEXT-7f3a here is the signed copy for the files",
+          "ts": "1794150031.000131",
+          "event_ts": "1794150031.000131",
+          "channel_type": "im",
+          "team": "T0SCALED",
+          "client_msg_id": "00000000-0000-4000-8000-000000000031",
+          "blocks": [
+            {
+              "type": "rich_text",
+              "block_id": "rt1",
+              "elements": [
+                {
+                  "type": "rich_text_section",
+                  "elements": [
+                    {
+                      "type": "text",
+                      "text": "SENTINEL-SLACK-TEXT-7f3a here is the signed copy for the files"
+                    }
+                  ]
+                }
+              ]
+            }
+          ],
+          "files": [
+            {
+              "id": "F0RDC39U1",
+              "created": 1794150031,
+              "timestamp": 1794150031,
+              "name": "SENTINEL-FILE-7f3a-termination-letter.pdf",
+              "title": "SENTINEL-FILE-7f3a-termination-letter.pdf",
+              "mimetype": "application/pdf",
+              "filetype": "pdf",
+              "user": "U0JANE",
+              "size": 196920,
+              "mode": "hosted",
+              "is_external": false,
+              "is_public": false,
+              "url_private": "https://files.slack.com/files-pri/T0SCALED-F0RDC39U1/x.pdf"
+            }
+          ],
+          "upload": true,
+          "display_as_bot": false,
+          "bot_id": null,
+          "subtype": "file_share"
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG024",
+        "event_time": 1794150624,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-024"
+      },
+      "expectEventType": "message",
+      "expectChannel": "D0JANE",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "msg",
+        "conv": "im",
+        "ts": "1794150031.000131",
+        "threadTs": null,
+        "editedTs": null,
+        "deletedTs": null,
+        "author": "U0JANE",
+        "authorTeam": "T0SCALED",
+        "parentUser": null,
+        "mentions": [],
+        "isBot": false,
+        "appId": null,
+        "ddTemplate": false,
+        "broadcast": false,
+        "question": false,
+        "len": 2,
+        "hints": 0,
+        "files": true,
+        "extShared": false,
+        "authUser": "U0MITCH",
+        "authIsBot": false,
+        "lc": null,
+        "name": null,
+        "newChannel": null,
+        "isExtShared": null,
+        "ddPaths": []
+      }
+    },
+    {
+      "name": "IG11 me_message passes",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "message",
+          "channel": "C0GENERAL",
+          "user": "U0JANE",
+          "text": "SENTINEL-SLACK-TEXT-7f3a is reading the quarterly numbers aloud",
+          "ts": "1794150032.000132",
+          "event_ts": "1794150032.000132",
+          "channel_type": "channel",
+          "team": "T0SCALED",
+          "client_msg_id": "00000000-0000-4000-8000-000000000032",
+          "blocks": [
+            {
+              "type": "rich_text",
+              "block_id": "rt1",
+              "elements": [
+                {
+                  "type": "rich_text_section",
+                  "elements": [
+                    {
+                      "type": "text",
+                      "text": "SENTINEL-SLACK-TEXT-7f3a is reading the quarterly numbers aloud"
+                    }
+                  ]
+                }
+              ]
+            }
+          ],
+          "subtype": "me_message"
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG025",
+        "event_time": 1794150625,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-025"
+      },
+      "expectEventType": "message",
+      "expectChannel": "C0GENERAL",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "msg",
+        "conv": "channel",
+        "ts": "1794150032.000132",
+        "threadTs": null,
+        "editedTs": null,
+        "deletedTs": null,
+        "author": "U0JANE",
+        "authorTeam": "T0SCALED",
+        "parentUser": null,
+        "mentions": [],
+        "isBot": false,
+        "appId": null,
+        "ddTemplate": false,
+        "broadcast": false,
+        "question": false,
+        "len": 2,
+        "hints": 0,
+        "files": false,
+        "extShared": false,
+        "authUser": "U0MITCH",
+        "authIsBot": false,
+        "lc": null,
+        "name": null,
+        "newChannel": null,
+        "isExtShared": null,
+        "ddPaths": []
+      }
+    },
+    {
+      "name": "IG12 bot_id truthy, no mention → bot_no_mention",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "message",
+          "channel": "C0GENERAL",
+          "user": "U0ZAPBOT",
+          "text": "SENTINEL-SLACK-TEXT-7f3a the nightly export finished",
+          "ts": "1794150033.000133",
+          "event_ts": "1794150033.000133",
+          "channel_type": "channel",
+          "team": "T0SCALED",
+          "client_msg_id": "00000000-0000-4000-8000-000000000033",
+          "blocks": [
+            {
+              "type": "rich_text",
+              "block_id": "rt1",
+              "elements": [
+                {
+                  "type": "rich_text_section",
+                  "elements": [
+                    {
+                      "type": "text",
+                      "text": "SENTINEL-SLACK-TEXT-7f3a the nightly export finished"
+                    }
+                  ]
+                }
+              ]
+            }
+          ],
+          "bot_id": "B0ZAP",
+          "app_id": "A0ZAP",
+          "bot_profile": {
+            "id": "B0ZAP",
+            "app_id": "A0ZAP",
+            "name": "zapier",
+            "team_id": "T0SCALED"
+          }
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG026",
+        "event_time": 1794150626,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-026"
+      },
+      "expectEventType": "message",
+      "expectChannel": "C0GENERAL",
+      "expectPrefilter": "bot_no_mention"
+    },
+    {
+      "name": "IG12 bot_profile only, no mention → bot_no_mention",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "message",
+          "channel": "C0GENERAL",
+          "user": "U0CALBOT",
+          "text": "SENTINEL-SLACK-TEXT-7f3a the nightly export finished",
+          "ts": "1794150034.000134",
+          "event_ts": "1794150034.000134",
+          "channel_type": "channel",
+          "team": "T0SCALED",
+          "client_msg_id": "00000000-0000-4000-8000-000000000034",
+          "blocks": [
+            {
+              "type": "rich_text",
+              "block_id": "rt1",
+              "elements": [
+                {
+                  "type": "rich_text_section",
+                  "elements": [
+                    {
+                      "type": "text",
+                      "text": "SENTINEL-SLACK-TEXT-7f3a the nightly export finished"
+                    }
+                  ]
+                }
+              ]
+            }
+          ],
+          "bot_profile": {
+            "id": "B0CAL",
+            "app_id": "A0CAL",
+            "name": "calendar",
+            "team_id": "T0SCALED"
+          }
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG027",
+        "event_time": 1794150627,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-027"
+      },
+      "expectEventType": "message",
+      "expectChannel": "C0GENERAL",
+      "expectPrefilter": "bot_no_mention"
+    },
+    {
+      "name": "IG12 the recorded bot_message shape (no user), no mention → bot_no_mention",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "message",
+          "subtype": "bot_message",
+          "ts": "1794150035.000135",
+          "event_ts": "1794150035.000135",
+          "channel": "C0GENERAL",
+          "channel_type": "channel",
+          "text": "SENTINEL-SLACK-TEXT-7f3a pushing is the answer",
+          "bot_id": "BB12033",
+          "username": "github",
+          "icons": {}
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG028",
+        "event_time": 1794150628,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-028"
+      },
+      "expectEventType": "message",
+      "expectChannel": "C0GENERAL",
+      "expectPrefilter": "bot_no_mention"
+    },
+    {
+      "name": "IG12 user USLACKBOT, no mention → bot_no_mention",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "message",
+          "channel": "C0GENERAL",
+          "user": "USLACKBOT",
+          "text": "SENTINEL-SLACK-TEXT-7f3a reminder: file the expense reports",
+          "ts": "1794150036.000136",
+          "event_ts": "1794150036.000136",
+          "channel_type": "channel",
+          "team": "T0SCALED",
+          "client_msg_id": "00000000-0000-4000-8000-000000000036",
+          "blocks": [
+            {
+              "type": "rich_text",
+              "block_id": "rt1",
+              "elements": [
+                {
+                  "type": "rich_text_section",
+                  "elements": [
+                    {
+                      "type": "text",
+                      "text": "SENTINEL-SLACK-TEXT-7f3a reminder: file the expense reports"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG029",
+        "event_time": 1794150629,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-029"
+      },
+      "expectEventType": "message",
+      "expectChannel": "C0GENERAL",
+      "expectPrefilter": "bot_no_mention"
+    },
+    {
+      "name": "IG12 / V218 a bot message mentioning him passes with isBot true",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "message",
+          "channel": "C0GENERAL",
+          "user": "U0ZAPBOT",
+          "text": "<@U0MITCH> SENTINEL-SLACK-TEXT-7f3a the nightly export finished",
+          "ts": "1794150037.000137",
+          "event_ts": "1794150037.000137",
+          "channel_type": "channel",
+          "team": "T0SCALED",
+          "client_msg_id": "00000000-0000-4000-8000-000000000037",
+          "blocks": [
+            {
+              "type": "rich_text",
+              "block_id": "rt1",
+              "elements": [
+                {
+                  "type": "rich_text_section",
+                  "elements": [
+                    {
+                      "type": "user",
+                      "user_id": "U0MITCH"
+                    },
+                    {
+                      "type": "text",
+                      "text": " SENTINEL-SLACK-TEXT-7f3a the nightly export finished"
+                    }
+                  ]
+                }
+              ]
+            }
+          ],
+          "bot_id": "B0ZAP",
+          "app_id": "A0ZAP",
+          "bot_profile": {
+            "id": "B0ZAP",
+            "app_id": "A0ZAP",
+            "name": "zapier",
+            "team_id": "T0SCALED"
+          }
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG030",
+        "event_time": 1794150630,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-030"
+      },
+      "expectEventType": "message",
+      "expectChannel": "C0GENERAL",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "msg",
+        "conv": "channel",
+        "ts": "1794150037.000137",
+        "threadTs": null,
+        "editedTs": null,
+        "deletedTs": null,
+        "author": "U0ZAPBOT",
+        "authorTeam": "T0SCALED",
+        "parentUser": null,
+        "mentions": [
+          "U0MITCH"
+        ],
+        "isBot": true,
+        "appId": "A0ZAP",
+        "ddTemplate": false,
+        "broadcast": false,
+        "question": false,
+        "len": 2,
+        "hints": 0,
+        "files": false,
+        "extShared": false,
+        "authUser": "U0MITCH",
+        "authIsBot": false,
+        "lc": null,
+        "name": null,
+        "newChannel": null,
+        "isExtShared": null,
+        "ddPaths": []
+      }
+    },
+    {
+      "name": "IG13 bot_id: null on a human message is not a bot",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "message",
+          "channel": "C0GENERAL",
+          "user": "U0JANE",
+          "text": "SENTINEL-SLACK-TEXT-7f3a please review the board deck",
+          "ts": "1794150038.000138",
+          "event_ts": "1794150038.000138",
+          "channel_type": "channel",
+          "team": "T0SCALED",
+          "client_msg_id": "00000000-0000-4000-8000-000000000038",
+          "blocks": [
+            {
+              "type": "rich_text",
+              "block_id": "rt1",
+              "elements": [
+                {
+                  "type": "rich_text_section",
+                  "elements": [
+                    {
+                      "type": "text",
+                      "text": "SENTINEL-SLACK-TEXT-7f3a please review the board deck"
+                    }
+                  ]
+                }
+              ]
+            }
+          ],
+          "bot_id": null
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG031",
+        "event_time": 1794150631,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-031"
+      },
+      "expectEventType": "message",
+      "expectChannel": "C0GENERAL",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "msg",
+        "conv": "channel",
+        "ts": "1794150038.000138",
+        "threadTs": null,
+        "editedTs": null,
+        "deletedTs": null,
+        "author": "U0JANE",
+        "authorTeam": "T0SCALED",
+        "parentUser": null,
+        "mentions": [],
+        "isBot": false,
+        "appId": null,
+        "ddTemplate": false,
+        "broadcast": false,
+        "question": false,
+        "len": 2,
+        "hints": 0,
+        "files": false,
+        "extShared": false,
+        "authUser": "U0MITCH",
+        "authIsBot": false,
+        "lc": null,
+        "name": null,
+        "newChannel": null,
+        "isExtShared": null,
+        "ddPaths": []
+      }
+    },
+    {
+      "name": "IG18 / V215 DD's task template (slack.ts:534 button) by the DD bot, mentioning someone, in a hub: an anchor's facts",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "message",
+          "channel": "C0EMAILN",
+          "user": "U0DDBOT",
+          "text": "<@U0JANE> just finished: Fix the intake form for the spring campaign",
+          "ts": "1794150040.000140",
+          "event_ts": "1794150040.000140",
+          "channel_type": "group",
+          "team": "T0SCALED",
+          "client_msg_id": "00000000-0000-4000-8000-000000000040",
+          "blocks": [
+            {
+              "type": "section",
+              "text": {
+                "type": "mrkdwn",
+                "text": "<@U0JANE> just finished:"
+              }
+            },
+            {
+              "type": "section",
+              "text": {
+                "type": "mrkdwn",
+                "text": "*<https://operations.scaledai.org/tasks/t_42|Fix the intake form for the spring campaign>*"
+              }
+            },
+            {
+              "type": "section",
+              "fields": [
+                {
+                  "type": "mrkdwn",
+                  "text": "*Client*\nSENTINEL-DD-TEXT-7f3a"
+                }
+              ]
+            },
+            {
+              "type": "actions",
+              "elements": [
+                {
+                  "type": "button",
+                  "text": {
+                    "type": "plain_text",
+                    "text": "Open in Scaled Operations",
+                    "emoji": true
+                  },
+                  "url": "https://operations.scaledai.org/tasks/t_42",
+                  "style": "primary"
+                }
+              ]
+            }
+          ],
+          "bot_id": "B0DDBOT",
+          "app_id": "A0DDAPP",
+          "bot_profile": {
+            "id": "B0DDBOT",
+            "app_id": "A0DDAPP",
+            "name": "Scaled Operations",
+            "deleted": false,
+            "team_id": "T0SCALED"
+          }
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG032",
+        "event_time": 1794150632,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-032"
+      },
+      "expectEventType": "message",
+      "expectChannel": "C0EMAILN",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "msg",
+        "conv": "group",
+        "ts": "1794150040.000140",
+        "threadTs": null,
+        "editedTs": null,
+        "deletedTs": null,
+        "author": "U0DDBOT",
+        "authorTeam": "T0SCALED",
+        "parentUser": null,
+        "mentions": [
+          "U0JANE"
+        ],
+        "isBot": true,
+        "appId": "A0DDAPP",
+        "ddTemplate": true,
+        "broadcast": false,
+        "question": false,
+        "len": 2,
+        "hints": 0,
+        "files": false,
+        "extShared": false,
+        "authUser": "U0MITCH",
+        "authIsBot": false,
+        "lc": null,
+        "name": null,
+        "newChannel": null,
+        "isExtShared": null,
+        "ddPaths": [
+          "/tasks/t_42"
+        ]
+      }
+    },
+    {
+      "name": "IG18 a URL button on operations.scaledai.org with another label is a DD template",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "message",
+          "channel": "C0GENERAL",
+          "user": "U0JANE",
+          "text": "SENTINEL-SLACK-TEXT-7f3a the client page for the renewal discussion",
+          "ts": "1794150041.000141",
+          "event_ts": "1794150041.000141",
+          "channel_type": "channel",
+          "team": "T0SCALED",
+          "client_msg_id": "00000000-0000-4000-8000-000000000041",
+          "blocks": [
+            {
+              "type": "section",
+              "text": {
+                "type": "mrkdwn",
+                "text": "SENTINEL-SLACK-TEXT-7f3a the client page for the renewal discussion"
+              }
+            },
+            {
+              "type": "actions",
+              "elements": [
+                {
+                  "type": "button",
+                  "text": {
+                    "type": "plain_text",
+                    "text": "Open the client",
+                    "emoji": true
+                  },
+                  "url": "https://operations.scaledai.org/clients/c_9",
+                  "style": "primary"
+                }
+              ]
+            }
+          ]
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG033",
+        "event_time": 1794150633,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-033"
+      },
+      "expectEventType": "message",
+      "expectChannel": "C0GENERAL",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "msg",
+        "conv": "channel",
+        "ts": "1794150041.000141",
+        "threadTs": null,
+        "editedTs": null,
+        "deletedTs": null,
+        "author": "U0JANE",
+        "authorTeam": "T0SCALED",
+        "parentUser": null,
+        "mentions": [],
+        "isBot": false,
+        "appId": null,
+        "ddTemplate": true,
+        "broadcast": false,
+        "question": false,
+        "len": 2,
+        "hints": 0,
+        "files": false,
+        "extShared": false,
+        "authUser": "U0MITCH",
+        "authIsBot": false,
+        "lc": null,
+        "name": null,
+        "newChannel": null,
+        "isExtShared": null,
+        "ddPaths": [
+          "/clients/c_9"
+        ]
+      }
+    },
+    {
+      "name": "IG18 a URL button on example.com with another label is not a DD template",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "message",
+          "channel": "C0GENERAL",
+          "user": "U0JANE",
+          "text": "SENTINEL-SLACK-TEXT-7f3a the vendor portal for the renewal discussion",
+          "ts": "1794150042.000142",
+          "event_ts": "1794150042.000142",
+          "channel_type": "channel",
+          "team": "T0SCALED",
+          "client_msg_id": "00000000-0000-4000-8000-000000000042",
+          "blocks": [
+            {
+              "type": "section",
+              "text": {
+                "type": "mrkdwn",
+                "text": "SENTINEL-SLACK-TEXT-7f3a the vendor portal for the renewal discussion"
+              }
+            },
+            {
+              "type": "actions",
+              "elements": [
+                {
+                  "type": "button",
+                  "text": {
+                    "type": "plain_text",
+                    "text": "Open the portal",
+                    "emoji": true
+                  },
+                  "url": "https://example.com/portal",
+                  "style": "primary"
+                }
+              ]
+            }
+          ]
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG034",
+        "event_time": 1794150634,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-034"
+      },
+      "expectEventType": "message",
+      "expectChannel": "C0GENERAL",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "msg",
+        "conv": "channel",
+        "ts": "1794150042.000142",
+        "threadTs": null,
+        "editedTs": null,
+        "deletedTs": null,
+        "author": "U0JANE",
+        "authorTeam": "T0SCALED",
+        "parentUser": null,
+        "mentions": [],
+        "isBot": false,
+        "appId": null,
+        "ddTemplate": false,
+        "broadcast": false,
+        "question": false,
+        "len": 2,
+        "hints": 0,
+        "files": false,
+        "extShared": false,
+        "authUser": "U0MITCH",
+        "authIsBot": false,
+        "lc": null,
+        "name": null,
+        "newChannel": null,
+        "isExtShared": null,
+        "ddPaths": []
+      }
+    },
+    {
+      "name": "IG18 a malformed button URL counts as DD (isDdHost fails toward DD; anchor, never triaged)",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "message",
+          "channel": "C0GENERAL",
+          "user": "U0JANE",
+          "text": "SENTINEL-SLACK-TEXT-7f3a the broken link for the renewal discussion",
+          "ts": "1794150043.000143",
+          "event_ts": "1794150043.000143",
+          "channel_type": "channel",
+          "team": "T0SCALED",
+          "client_msg_id": "00000000-0000-4000-8000-000000000043",
+          "blocks": [
+            {
+              "type": "section",
+              "text": {
+                "type": "mrkdwn",
+                "text": "SENTINEL-SLACK-TEXT-7f3a the broken link for the renewal discussion"
+              }
+            },
+            {
+              "type": "actions",
+              "elements": [
+                {
+                  "type": "button",
+                  "text": {
+                    "type": "plain_text",
+                    "text": "Open it",
+                    "emoji": true
+                  },
+                  "url": "https://[not a host/x",
+                  "style": "primary"
+                }
+              ]
+            }
+          ]
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG035",
+        "event_time": 1794150635,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-035"
+      },
+      "expectEventType": "message",
+      "expectChannel": "C0GENERAL",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "msg",
+        "conv": "channel",
+        "ts": "1794150043.000143",
+        "threadTs": null,
+        "editedTs": null,
+        "deletedTs": null,
+        "author": "U0JANE",
+        "authorTeam": "T0SCALED",
+        "parentUser": null,
+        "mentions": [],
+        "isBot": false,
+        "appId": null,
+        "ddTemplate": true,
+        "broadcast": false,
+        "question": false,
+        "len": 2,
+        "hints": 0,
+        "files": false,
+        "extShared": false,
+        "authUser": "U0MITCH",
+        "authIsBot": false,
+        "lc": null,
+        "name": null,
+        "newChannel": null,
+        "isExtShared": null,
+        "ddPaths": []
+      }
+    },
+    {
+      "name": "IG18 a legacy attachments[].actions DD button",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "message",
+          "channel": "C0GENERAL",
+          "user": "U0DDBOT",
+          "text": "<@U0JANE> SENTINEL-DD-TEXT-7f3a task updated with the new client brief",
+          "ts": "1794150044.000144",
+          "event_ts": "1794150044.000144",
+          "channel_type": "channel",
+          "team": "T0SCALED",
+          "client_msg_id": "00000000-0000-4000-8000-000000000044",
+          "bot_id": "B0DDBOT",
+          "app_id": "A0DDAPP",
+          "bot_profile": {
+            "id": "B0DDBOT",
+            "app_id": "A0DDAPP",
+            "name": "Scaled Operations",
+            "deleted": false,
+            "team_id": "T0SCALED"
+          },
+          "attachments": [
+            {
+              "fallback": "Open in Scaled Operations",
+              "actions": [
+                {
+                  "type": "button",
+                  "text": "Open in Scaled Operations",
+                  "url": "https://operations.scaledai.org/tasks/t_77"
+                }
+              ]
+            }
+          ]
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG036",
+        "event_time": 1794150636,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-036"
+      },
+      "expectEventType": "message",
+      "expectChannel": "C0GENERAL",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "msg",
+        "conv": "channel",
+        "ts": "1794150044.000144",
+        "threadTs": null,
+        "editedTs": null,
+        "deletedTs": null,
+        "author": "U0DDBOT",
+        "authorTeam": "T0SCALED",
+        "parentUser": null,
+        "mentions": [
+          "U0JANE"
+        ],
+        "isBot": true,
+        "appId": "A0DDAPP",
+        "ddTemplate": true,
+        "broadcast": false,
+        "question": false,
+        "len": 2,
+        "hints": 0,
+        "files": false,
+        "extShared": false,
+        "authUser": "U0MITCH",
+        "authIsBot": false,
+        "lc": null,
+        "name": null,
+        "newChannel": null,
+        "isExtShared": null,
+        "ddPaths": [
+          "/tasks/t_77"
+        ]
+      }
+    },
+    {
+      "name": "AN07 / V217 DD's as-user FYI template authored by HIS user id (slack.ts:823-845): a DD post, never an answer by him",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "message",
+          "channel": "C0GENERAL",
+          "user": "U0MITCH",
+          "text": "FYI: client call moved",
+          "ts": "1794150045.000145",
+          "event_ts": "1794150045.000145",
+          "channel_type": "channel",
+          "team": "T0SCALED",
+          "client_msg_id": "00000000-0000-4000-8000-000000000045",
+          "blocks": [
+            {
+              "type": "section",
+              "text": {
+                "type": "mrkdwn",
+                "text": "*FYI: client call moved*\nSENTINEL-DD-TEXT-7f3a the call is now at 3pm"
+              }
+            },
+            {
+              "type": "section",
+              "text": {
+                "type": "mrkdwn",
+                "text": "*<https://operations.scaledai.org/tasks/t_88|Client call>*"
+              }
+            },
+            {
+              "type": "actions",
+              "elements": [
+                {
+                  "type": "button",
+                  "text": {
+                    "type": "plain_text",
+                    "text": "Open in Scaled Operations",
+                    "emoji": true
+                  },
+                  "url": "https://operations.scaledai.org/tasks/t_88"
+                }
+              ]
+            }
+          ],
+          "app_id": "A0DDAPP"
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG037",
+        "event_time": 1794150637,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-037"
+      },
+      "expectEventType": "message",
+      "expectChannel": "C0GENERAL",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "msg",
+        "conv": "channel",
+        "ts": "1794150045.000145",
+        "threadTs": null,
+        "editedTs": null,
+        "deletedTs": null,
+        "author": "U0MITCH",
+        "authorTeam": "T0SCALED",
+        "parentUser": null,
+        "mentions": [],
+        "isBot": false,
+        "appId": "A0DDAPP",
+        "ddTemplate": true,
+        "broadcast": false,
+        "question": false,
+        "len": 1,
+        "hints": 0,
+        "files": false,
+        "extShared": false,
+        "authUser": "U0MITCH",
+        "authIsBot": false,
+        "lc": null,
+        "name": null,
+        "newChannel": null,
+        "isExtShared": null,
+        "ddPaths": [
+          "/tasks/t_88"
+        ]
+      }
+    },
+    {
+      "name": "V217 a post with the DD app id (no template) by his user id",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "message",
+          "channel": "C0GENERAL",
+          "user": "U0MITCH",
+          "text": "SENTINEL-SLACK-TEXT-7f3a posted through DD on his behalf",
+          "ts": "1794150046.000146",
+          "event_ts": "1794150046.000146",
+          "channel_type": "channel",
+          "team": "T0SCALED",
+          "client_msg_id": "00000000-0000-4000-8000-000000000046",
+          "blocks": [
+            {
+              "type": "rich_text",
+              "block_id": "rt1",
+              "elements": [
+                {
+                  "type": "rich_text_section",
+                  "elements": [
+                    {
+                      "type": "text",
+                      "text": "SENTINEL-SLACK-TEXT-7f3a posted through DD on his behalf"
+                    }
+                  ]
+                }
+              ]
+            }
+          ],
+          "app_id": "A0DDAPP"
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG038",
+        "event_time": 1794150638,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-038"
+      },
+      "expectEventType": "message",
+      "expectChannel": "C0GENERAL",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "msg",
+        "conv": "channel",
+        "ts": "1794150046.000146",
+        "threadTs": null,
+        "editedTs": null,
+        "deletedTs": null,
+        "author": "U0MITCH",
+        "authorTeam": "T0SCALED",
+        "parentUser": null,
+        "mentions": [],
+        "isBot": false,
+        "appId": "A0DDAPP",
+        "ddTemplate": false,
+        "broadcast": false,
+        "question": false,
+        "len": 2,
+        "hints": 0,
+        "files": false,
+        "extShared": false,
+        "authUser": "U0MITCH",
+        "authIsBot": false,
+        "lc": null,
+        "name": null,
+        "newChannel": null,
+        "isExtShared": null,
+        "ddPaths": []
+      }
+    },
+    {
+      "name": "V215 a human message in a hub (dropped hub by v2; the prefilter passes it)",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "message",
+          "channel": "C0OUT",
+          "user": "U0JANE",
+          "text": "SENTINEL-SLACK-TEXT-7f3a replying to the outbound thread here",
+          "ts": "1794150047.000147",
+          "event_ts": "1794150047.000147",
+          "channel_type": "channel",
+          "team": "T0SCALED",
+          "client_msg_id": "00000000-0000-4000-8000-000000000047",
+          "blocks": [
+            {
+              "type": "rich_text",
+              "block_id": "rt1",
+              "elements": [
+                {
+                  "type": "rich_text_section",
+                  "elements": [
+                    {
+                      "type": "text",
+                      "text": "SENTINEL-SLACK-TEXT-7f3a replying to the outbound thread here"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG039",
+        "event_time": 1794150639,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-039"
+      },
+      "expectEventType": "message",
+      "expectChannel": "C0OUT",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "msg",
+        "conv": "channel",
+        "ts": "1794150047.000147",
+        "threadTs": null,
+        "editedTs": null,
+        "deletedTs": null,
+        "author": "U0JANE",
+        "authorTeam": "T0SCALED",
+        "parentUser": null,
+        "mentions": [],
+        "isBot": false,
+        "appId": null,
+        "ddTemplate": false,
+        "broadcast": false,
+        "question": false,
+        "len": 2,
+        "hints": 0,
+        "files": false,
+        "extShared": false,
+        "authUser": "U0MITCH",
+        "authIsBot": false,
+        "lc": null,
+        "name": null,
+        "newChannel": null,
+        "isExtShared": null,
+        "ddPaths": []
+      }
+    },
+    {
+      "name": "V221 a DM to him (len 2): a dm candidate",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "message",
+          "channel": "D0JANE",
+          "user": "U0JANE",
+          "text": "SENTINEL-SLACK-TEXT-7f3a are you around for a quick call later",
+          "ts": "1794150050.000150",
+          "event_ts": "1794150050.000150",
+          "channel_type": "im",
+          "team": "T0SCALED",
+          "client_msg_id": "00000000-0000-4000-8000-000000000050",
+          "blocks": [
+            {
+              "type": "rich_text",
+              "block_id": "rt1",
+              "elements": [
+                {
+                  "type": "rich_text_section",
+                  "elements": [
+                    {
+                      "type": "text",
+                      "text": "SENTINEL-SLACK-TEXT-7f3a are you around for a quick call later"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG040",
+        "event_time": 1794150640,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-040"
+      },
+      "expectEventType": "message",
+      "expectChannel": "D0JANE",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "msg",
+        "conv": "im",
+        "ts": "1794150050.000150",
+        "threadTs": null,
+        "editedTs": null,
+        "deletedTs": null,
+        "author": "U0JANE",
+        "authorTeam": "T0SCALED",
+        "parentUser": null,
+        "mentions": [],
+        "isBot": false,
+        "appId": null,
+        "ddTemplate": false,
+        "broadcast": false,
+        "question": false,
+        "len": 2,
+        "hints": 0,
+        "files": false,
+        "extShared": false,
+        "authUser": "U0MITCH",
+        "authIsBot": false,
+        "lc": null,
+        "name": null,
+        "newChannel": null,
+        "isExtShared": null,
+        "ddPaths": []
+      }
+    },
+    {
+      "name": "IG16 a DM of 'ok' (len 0): not a candidate",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "message",
+          "channel": "D0JANE",
+          "user": "U0JANE",
+          "text": "ok",
+          "ts": "1794150051.000151",
+          "event_ts": "1794150051.000151",
+          "channel_type": "im",
+          "team": "T0SCALED",
+          "client_msg_id": "00000000-0000-4000-8000-000000000051",
+          "blocks": [
+            {
+              "type": "rich_text",
+              "block_id": "rt1",
+              "elements": [
+                {
+                  "type": "rich_text_section",
+                  "elements": [
+                    {
+                      "type": "text",
+                      "text": "ok"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG041",
+        "event_time": 1794150641,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-041"
+      },
+      "expectEventType": "message",
+      "expectChannel": "D0JANE",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "msg",
+        "conv": "im",
+        "ts": "1794150051.000151",
+        "threadTs": null,
+        "editedTs": null,
+        "deletedTs": null,
+        "author": "U0JANE",
+        "authorTeam": "T0SCALED",
+        "parentUser": null,
+        "mentions": [],
+        "isBot": false,
+        "appId": null,
+        "ddTemplate": false,
+        "broadcast": false,
+        "question": false,
+        "len": 0,
+        "hints": 0,
+        "files": false,
+        "extShared": false,
+        "authUser": "U0MITCH",
+        "authIsBot": false,
+        "lc": null,
+        "name": null,
+        "newChannel": null,
+        "isExtShared": null,
+        "ddPaths": []
+      }
+    },
+    {
+      "name": "IG16 an emoji-only DM (len 0)",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "message",
+          "channel": "D0JANE",
+          "user": "U0JANE",
+          "text": "🎉🎉",
+          "ts": "1794150052.000152",
+          "event_ts": "1794150052.000152",
+          "channel_type": "im",
+          "team": "T0SCALED",
+          "client_msg_id": "00000000-0000-4000-8000-000000000052",
+          "blocks": [
+            {
+              "type": "rich_text",
+              "block_id": "rt1",
+              "elements": [
+                {
+                  "type": "rich_text_section",
+                  "elements": [
+                    {
+                      "type": "text",
+                      "text": "🎉🎉"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG042",
+        "event_time": 1794150642,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-042"
+      },
+      "expectEventType": "message",
+      "expectChannel": "D0JANE",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "msg",
+        "conv": "im",
+        "ts": "1794150052.000152",
+        "threadTs": null,
+        "editedTs": null,
+        "deletedTs": null,
+        "author": "U0JANE",
+        "authorTeam": "T0SCALED",
+        "parentUser": null,
+        "mentions": [],
+        "isBot": false,
+        "appId": null,
+        "ddTemplate": false,
+        "broadcast": false,
+        "question": false,
+        "len": 0,
+        "hints": 0,
+        "files": false,
+        "extShared": false,
+        "authUser": "U0MITCH",
+        "authIsBot": false,
+        "lc": null,
+        "name": null,
+        "newChannel": null,
+        "isExtShared": null,
+        "ddPaths": []
+      }
+    },
+    {
+      "name": "V220 a group DM message of len 2: a dm candidate",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "message",
+          "channel": "G0MPIM",
+          "user": "U0BOB",
+          "text": "SENTINEL-SLACK-TEXT-7f3a lunch plans for the offsite next week",
+          "ts": "1794150053.000153",
+          "event_ts": "1794150053.000153",
+          "channel_type": "mpim",
+          "team": "T0SCALED",
+          "client_msg_id": "00000000-0000-4000-8000-000000000053",
+          "blocks": [
+            {
+              "type": "rich_text",
+              "block_id": "rt1",
+              "elements": [
+                {
+                  "type": "rich_text_section",
+                  "elements": [
+                    {
+                      "type": "text",
+                      "text": "SENTINEL-SLACK-TEXT-7f3a lunch plans for the offsite next week"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG043",
+        "event_time": 1794150643,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-043"
+      },
+      "expectEventType": "message",
+      "expectChannel": "G0MPIM",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "msg",
+        "conv": "mpim",
+        "ts": "1794150053.000153",
+        "threadTs": null,
+        "editedTs": null,
+        "deletedTs": null,
+        "author": "U0BOB",
+        "authorTeam": "T0SCALED",
+        "parentUser": null,
+        "mentions": [],
+        "isBot": false,
+        "appId": null,
+        "ddTemplate": false,
+        "broadcast": false,
+        "question": false,
+        "len": 2,
+        "hints": 0,
+        "files": false,
+        "extShared": false,
+        "authUser": "U0MITCH",
+        "authIsBot": false,
+        "lc": null,
+        "name": null,
+        "newChannel": null,
+        "isExtShared": null,
+        "ddPaths": []
+      }
+    },
+    {
+      "name": "V220 a group DM message of len 1, no question, no mention: not a candidate",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "message",
+          "channel": "G0MPIM",
+          "user": "U0BOB",
+          "text": "sounds good",
+          "ts": "1794150054.000154",
+          "event_ts": "1794150054.000154",
+          "channel_type": "mpim",
+          "team": "T0SCALED",
+          "client_msg_id": "00000000-0000-4000-8000-000000000054",
+          "blocks": [
+            {
+              "type": "rich_text",
+              "block_id": "rt1",
+              "elements": [
+                {
+                  "type": "rich_text_section",
+                  "elements": [
+                    {
+                      "type": "text",
+                      "text": "sounds good"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG044",
+        "event_time": 1794150644,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-044"
+      },
+      "expectEventType": "message",
+      "expectChannel": "G0MPIM",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "msg",
+        "conv": "mpim",
+        "ts": "1794150054.000154",
+        "threadTs": null,
+        "editedTs": null,
+        "deletedTs": null,
+        "author": "U0BOB",
+        "authorTeam": "T0SCALED",
+        "parentUser": null,
+        "mentions": [],
+        "isBot": false,
+        "appId": null,
+        "ddTemplate": false,
+        "broadcast": false,
+        "question": false,
+        "len": 1,
+        "hints": 0,
+        "files": false,
+        "extShared": false,
+        "authUser": "U0MITCH",
+        "authIsBot": false,
+        "lc": null,
+        "name": null,
+        "newChannel": null,
+        "isExtShared": null,
+        "ddPaths": []
+      }
+    },
+    {
+      "name": "V224 from him in an IM: stamps earlier candidates (no triage)",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "message",
+          "channel": "D0JANE",
+          "user": "U0MITCH",
+          "text": "SENTINEL-SLACK-TEXT-7f3a yes, sending the notes after this meeting",
+          "ts": "1794150055.000155",
+          "event_ts": "1794150055.000155",
+          "channel_type": "im",
+          "team": "T0SCALED",
+          "client_msg_id": "00000000-0000-4000-8000-000000000055",
+          "blocks": [
+            {
+              "type": "rich_text",
+              "block_id": "rt1",
+              "elements": [
+                {
+                  "type": "rich_text_section",
+                  "elements": [
+                    {
+                      "type": "text",
+                      "text": "SENTINEL-SLACK-TEXT-7f3a yes, sending the notes after this meeting"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG045",
+        "event_time": 1794150645,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-045"
+      },
+      "expectEventType": "message",
+      "expectChannel": "D0JANE",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "msg",
+        "conv": "im",
+        "ts": "1794150055.000155",
+        "threadTs": null,
+        "editedTs": null,
+        "deletedTs": null,
+        "author": "U0MITCH",
+        "authorTeam": "T0SCALED",
+        "parentUser": null,
+        "mentions": [],
+        "isBot": false,
+        "appId": null,
+        "ddTemplate": false,
+        "broadcast": false,
+        "question": false,
+        "len": 2,
+        "hints": 0,
+        "files": false,
+        "extShared": false,
+        "authUser": "U0MITCH",
+        "authIsBot": false,
+        "lc": null,
+        "name": null,
+        "newChannel": null,
+        "isExtShared": null,
+        "ddPaths": []
+      }
+    },
+    {
+      "name": "V222 a reply in a thread he started (parent_user_id = him)",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "message",
+          "channel": "C0GENERAL",
+          "user": "U0JANE",
+          "text": "SENTINEL-SLACK-TEXT-7f3a I think we should cut the scope",
+          "ts": "1794150056.000156",
+          "event_ts": "1794150056.000156",
+          "channel_type": "channel",
+          "team": "T0SCALED",
+          "client_msg_id": "00000000-0000-4000-8000-000000000056",
+          "blocks": [
+            {
+              "type": "rich_text",
+              "block_id": "rt1",
+              "elements": [
+                {
+                  "type": "rich_text_section",
+                  "elements": [
+                    {
+                      "type": "text",
+                      "text": "SENTINEL-SLACK-TEXT-7f3a I think we should cut the scope"
+                    }
+                  ]
+                }
+              ]
+            }
+          ],
+          "thread_ts": "1794150001.000101",
+          "parent_user_id": "U0MITCH"
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG046",
+        "event_time": 1794150646,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-046"
+      },
+      "expectEventType": "message",
+      "expectChannel": "C0GENERAL",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "msg",
+        "conv": "channel",
+        "ts": "1794150056.000156",
+        "threadTs": "1794150001.000101",
+        "editedTs": null,
+        "deletedTs": null,
+        "author": "U0JANE",
+        "authorTeam": "T0SCALED",
+        "parentUser": "U0MITCH",
+        "mentions": [],
+        "isBot": false,
+        "appId": null,
+        "ddTemplate": false,
+        "broadcast": false,
+        "question": false,
+        "len": 2,
+        "hints": 0,
+        "files": false,
+        "extShared": false,
+        "authUser": "U0MITCH",
+        "authIsBot": false,
+        "lc": null,
+        "name": null,
+        "newChannel": null,
+        "isExtShared": null,
+        "ddPaths": []
+      }
+    },
+    {
+      "name": "V222 a reply in someone else's thread (he may have posted in it: exec_slack_threads decides)",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "message",
+          "channel": "C0GENERAL",
+          "user": "U0BOB",
+          "text": "SENTINEL-SLACK-TEXT-7f3a agreed, the second option is better",
+          "ts": "1794150057.000157",
+          "event_ts": "1794150057.000157",
+          "channel_type": "channel",
+          "team": "T0SCALED",
+          "client_msg_id": "00000000-0000-4000-8000-000000000057",
+          "blocks": [
+            {
+              "type": "rich_text",
+              "block_id": "rt1",
+              "elements": [
+                {
+                  "type": "rich_text_section",
+                  "elements": [
+                    {
+                      "type": "text",
+                      "text": "SENTINEL-SLACK-TEXT-7f3a agreed, the second option is better"
+                    }
+                  ]
+                }
+              ]
+            }
+          ],
+          "thread_ts": "1794150002.000102",
+          "parent_user_id": "U0JANE"
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG047",
+        "event_time": 1794150647,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-047"
+      },
+      "expectEventType": "message",
+      "expectChannel": "C0GENERAL",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "msg",
+        "conv": "channel",
+        "ts": "1794150057.000157",
+        "threadTs": "1794150002.000102",
+        "editedTs": null,
+        "deletedTs": null,
+        "author": "U0BOB",
+        "authorTeam": "T0SCALED",
+        "parentUser": "U0JANE",
+        "mentions": [],
+        "isBot": false,
+        "appId": null,
+        "ddTemplate": false,
+        "broadcast": false,
+        "question": false,
+        "len": 2,
+        "hints": 0,
+        "files": false,
+        "extShared": false,
+        "authUser": "U0MITCH",
+        "authIsBot": false,
+        "lc": null,
+        "name": null,
+        "newChannel": null,
+        "isExtShared": null,
+        "ddPaths": []
+      }
+    },
+    {
+      "name": "a mention in a private channel",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "message",
+          "channel": "G0PRIV",
+          "user": "U0BOB",
+          "text": "<@U0MITCH> SENTINEL-SLACK-TEXT-7f3a the hiring plan needs your eyes",
+          "ts": "1794150058.000158",
+          "event_ts": "1794150058.000158",
+          "channel_type": "group",
+          "team": "T0SCALED",
+          "client_msg_id": "00000000-0000-4000-8000-000000000058",
+          "blocks": [
+            {
+              "type": "rich_text",
+              "block_id": "rt1",
+              "elements": [
+                {
+                  "type": "rich_text_section",
+                  "elements": [
+                    {
+                      "type": "user",
+                      "user_id": "U0MITCH"
+                    },
+                    {
+                      "type": "text",
+                      "text": " SENTINEL-SLACK-TEXT-7f3a the hiring plan needs your eyes"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG048",
+        "event_time": 1794150648,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-048"
+      },
+      "expectEventType": "message",
+      "expectChannel": "G0PRIV",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "msg",
+        "conv": "group",
+        "ts": "1794150058.000158",
+        "threadTs": null,
+        "editedTs": null,
+        "deletedTs": null,
+        "author": "U0BOB",
+        "authorTeam": "T0SCALED",
+        "parentUser": null,
+        "mentions": [
+          "U0MITCH"
+        ],
+        "isBot": false,
+        "appId": null,
+        "ddTemplate": false,
+        "broadcast": false,
+        "question": false,
+        "len": 2,
+        "hints": 0,
+        "files": false,
+        "extShared": false,
+        "authUser": "U0MITCH",
+        "authIsBot": false,
+        "lc": null,
+        "name": null,
+        "newChannel": null,
+        "isExtShared": null,
+        "ddPaths": []
+      }
+    },
+    {
+      "name": "XC01 a Slack Connect message from another team's author",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "message",
+          "channel": "C0SHARED",
+          "user": "U0EXT",
+          "text": "<@U0MITCH> SENTINEL-SLACK-TEXT-7f3a our legal team reviewed the draft",
+          "ts": "1794150059.000159",
+          "event_ts": "1794150059.000159",
+          "channel_type": "channel",
+          "team": "T0PARTNER",
+          "client_msg_id": "00000000-0000-4000-8000-000000000059",
+          "blocks": [
+            {
+              "type": "rich_text",
+              "block_id": "rt1",
+              "elements": [
+                {
+                  "type": "rich_text_section",
+                  "elements": [
+                    {
+                      "type": "user",
+                      "user_id": "U0MITCH"
+                    },
+                    {
+                      "type": "text",
+                      "text": " SENTINEL-SLACK-TEXT-7f3a our legal team reviewed the draft"
+                    }
+                  ]
+                }
+              ]
+            }
+          ],
+          "user_team": "T0PARTNER",
+          "source_team": "T0PARTNER"
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG049",
+        "event_time": 1794150649,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": true,
+        "event_context": "4-p7a-ig-049"
+      },
+      "expectEventType": "message",
+      "expectChannel": "C0SHARED",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "msg",
+        "conv": "channel",
+        "ts": "1794150059.000159",
+        "threadTs": null,
+        "editedTs": null,
+        "deletedTs": null,
+        "author": "U0EXT",
+        "authorTeam": "T0PARTNER",
+        "parentUser": null,
+        "mentions": [
+          "U0MITCH"
+        ],
+        "isBot": false,
+        "appId": null,
+        "ddTemplate": false,
+        "broadcast": false,
+        "question": false,
+        "len": 2,
+        "hints": 0,
+        "files": false,
+        "extShared": true,
+        "authUser": "U0MITCH",
+        "authIsBot": false,
+        "lc": null,
+        "name": null,
+        "newChannel": null,
+        "isExtShared": null,
+        "ddPaths": []
+      }
+    },
+    {
+      "name": "XC10 / V244 a Slack Connect message with no user_team or team: authorTeam null (counts as external there)",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "message",
+          "channel": "C0SHARED",
+          "user": "U0EXT2",
+          "text": "<@U0MITCH> SENTINEL-SLACK-TEXT-7f3a following up on the draft terms",
+          "ts": "1794150060.000160",
+          "event_ts": "1794150060.000160",
+          "channel_type": "channel",
+          "client_msg_id": "00000000-0000-4000-8000-000000000060",
+          "blocks": [
+            {
+              "type": "rich_text",
+              "block_id": "rt1",
+              "elements": [
+                {
+                  "type": "rich_text_section",
+                  "elements": [
+                    {
+                      "type": "user",
+                      "user_id": "U0MITCH"
+                    },
+                    {
+                      "type": "text",
+                      "text": " SENTINEL-SLACK-TEXT-7f3a following up on the draft terms"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG050",
+        "event_time": 1794150650,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": true,
+        "event_context": "4-p7a-ig-050"
+      },
+      "expectEventType": "message",
+      "expectChannel": "C0SHARED",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "msg",
+        "conv": "channel",
+        "ts": "1794150060.000160",
+        "threadTs": null,
+        "editedTs": null,
+        "deletedTs": null,
+        "author": "U0EXT2",
+        "authorTeam": null,
+        "parentUser": null,
+        "mentions": [
+          "U0MITCH"
+        ],
+        "isBot": false,
+        "appId": null,
+        "ddTemplate": false,
+        "broadcast": false,
+        "question": false,
+        "len": 2,
+        "hints": 0,
+        "files": false,
+        "extShared": true,
+        "authUser": "U0MITCH",
+        "authIsBot": false,
+        "lc": null,
+        "name": null,
+        "newChannel": null,
+        "isExtShared": null,
+        "ddPaths": []
+      }
+    },
+    {
+      "name": "V223b a mention in a default_finance-muted channel (v2 drops it: no bypass)",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "message",
+          "channel": "C0FINANCE",
+          "user": "U0JANE",
+          "text": "<@U0MITCH> SENTINEL-SLACK-TEXT-7f3a the payroll export is in the drive",
+          "ts": "1794150061.000161",
+          "event_ts": "1794150061.000161",
+          "channel_type": "channel",
+          "team": "T0SCALED",
+          "client_msg_id": "00000000-0000-4000-8000-000000000061",
+          "blocks": [
+            {
+              "type": "rich_text",
+              "block_id": "rt1",
+              "elements": [
+                {
+                  "type": "rich_text_section",
+                  "elements": [
+                    {
+                      "type": "user",
+                      "user_id": "U0MITCH"
+                    },
+                    {
+                      "type": "text",
+                      "text": " SENTINEL-SLACK-TEXT-7f3a the payroll export is in the drive"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG051",
+        "event_time": 1794150651,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-051"
+      },
+      "expectEventType": "message",
+      "expectChannel": "C0FINANCE",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "msg",
+        "conv": "channel",
+        "ts": "1794150061.000161",
+        "threadTs": null,
+        "editedTs": null,
+        "deletedTs": null,
+        "author": "U0JANE",
+        "authorTeam": "T0SCALED",
+        "parentUser": null,
+        "mentions": [
+          "U0MITCH"
+        ],
+        "isBot": false,
+        "appId": null,
+        "ddTemplate": false,
+        "broadcast": false,
+        "question": false,
+        "len": 2,
+        "hints": 0,
+        "files": false,
+        "extShared": false,
+        "authUser": "U0MITCH",
+        "authIsBot": false,
+        "lc": null,
+        "name": null,
+        "newChannel": null,
+        "isExtShared": null,
+        "ddPaths": []
+      }
+    },
+    {
+      "name": "V223 a mention in an owner-muted channel (bypass)",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "message",
+          "channel": "C0MUTED",
+          "user": "U0JANE",
+          "text": "<@U0MITCH> SENTINEL-SLACK-TEXT-7f3a the design review moved to Thursday",
+          "ts": "1794150062.000162",
+          "event_ts": "1794150062.000162",
+          "channel_type": "channel",
+          "team": "T0SCALED",
+          "client_msg_id": "00000000-0000-4000-8000-000000000062",
+          "blocks": [
+            {
+              "type": "rich_text",
+              "block_id": "rt1",
+              "elements": [
+                {
+                  "type": "rich_text_section",
+                  "elements": [
+                    {
+                      "type": "user",
+                      "user_id": "U0MITCH"
+                    },
+                    {
+                      "type": "text",
+                      "text": " SENTINEL-SLACK-TEXT-7f3a the design review moved to Thursday"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG052",
+        "event_time": 1794150652,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-052"
+      },
+      "expectEventType": "message",
+      "expectChannel": "C0MUTED",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "msg",
+        "conv": "channel",
+        "ts": "1794150062.000162",
+        "threadTs": null,
+        "editedTs": null,
+        "deletedTs": null,
+        "author": "U0JANE",
+        "authorTeam": "T0SCALED",
+        "parentUser": null,
+        "mentions": [
+          "U0MITCH"
+        ],
+        "isBot": false,
+        "appId": null,
+        "ddTemplate": false,
+        "broadcast": false,
+        "question": false,
+        "len": 2,
+        "hints": 0,
+        "files": false,
+        "extShared": false,
+        "authUser": "U0MITCH",
+        "authIsBot": false,
+        "lc": null,
+        "name": null,
+        "newChannel": null,
+        "isExtShared": null,
+        "ddPaths": []
+      }
+    },
+    {
+      "name": "V216 a message in an unwatched channel",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "message",
+          "channel": "C0UNWATCH",
+          "user": "U0JANE",
+          "text": "SENTINEL-SLACK-TEXT-7f3a nobody is watching this channel",
+          "ts": "1794150063.000163",
+          "event_ts": "1794150063.000163",
+          "channel_type": "channel",
+          "team": "T0SCALED",
+          "client_msg_id": "00000000-0000-4000-8000-000000000063",
+          "blocks": [
+            {
+              "type": "rich_text",
+              "block_id": "rt1",
+              "elements": [
+                {
+                  "type": "rich_text_section",
+                  "elements": [
+                    {
+                      "type": "text",
+                      "text": "SENTINEL-SLACK-TEXT-7f3a nobody is watching this channel"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG053",
+        "event_time": 1794150653,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-053"
+      },
+      "expectEventType": "message",
+      "expectChannel": "C0UNWATCH",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "msg",
+        "conv": "channel",
+        "ts": "1794150063.000163",
+        "threadTs": null,
+        "editedTs": null,
+        "deletedTs": null,
+        "author": "U0JANE",
+        "authorTeam": "T0SCALED",
+        "parentUser": null,
+        "mentions": [],
+        "isBot": false,
+        "appId": null,
+        "ddTemplate": false,
+        "broadcast": false,
+        "question": false,
+        "len": 2,
+        "hints": 0,
+        "files": false,
+        "extShared": false,
+        "authUser": "U0MITCH",
+        "authIsBot": false,
+        "lc": null,
+        "name": null,
+        "newChannel": null,
+        "isExtShared": null,
+        "ddPaths": []
+      }
+    },
+    {
+      "name": "V213 a message in a deny (lead) channel: nothing may be written",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "message",
+          "channel": "G0BPVOB",
+          "user": "U0JANE",
+          "text": "SENTINEL-SLACK-TEXT-7f3a new intake for the program",
+          "ts": "1794150064.000164",
+          "event_ts": "1794150064.000164",
+          "channel_type": "group",
+          "team": "T0SCALED",
+          "client_msg_id": "00000000-0000-4000-8000-000000000064",
+          "blocks": [
+            {
+              "type": "rich_text",
+              "block_id": "rt1",
+              "elements": [
+                {
+                  "type": "rich_text_section",
+                  "elements": [
+                    {
+                      "type": "text",
+                      "text": "SENTINEL-SLACK-TEXT-7f3a new intake for the program"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG054",
+        "event_time": 1794150654,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-054"
+      },
+      "expectEventType": "message",
+      "expectChannel": "G0BPVOB",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "msg",
+        "conv": "group",
+        "ts": "1794150064.000164",
+        "threadTs": null,
+        "editedTs": null,
+        "deletedTs": null,
+        "author": "U0JANE",
+        "authorTeam": "T0SCALED",
+        "parentUser": null,
+        "mentions": [],
+        "isBot": false,
+        "appId": null,
+        "ddTemplate": false,
+        "broadcast": false,
+        "question": false,
+        "len": 2,
+        "hints": 0,
+        "files": false,
+        "extShared": false,
+        "authUser": "U0MITCH",
+        "authIsBot": false,
+        "lc": null,
+        "name": null,
+        "newChannel": null,
+        "isExtShared": null,
+        "ddPaths": []
+      }
+    },
+    {
+      "name": "V212 a message in an unknown channel: id-only unclassified row and a classify job",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "message",
+          "channel": "C0NEWCHAN",
+          "user": "U0JANE",
+          "text": "SENTINEL-SLACK-TEXT-7f3a first message in a brand new channel",
+          "ts": "1794150065.000165",
+          "event_ts": "1794150065.000165",
+          "channel_type": "channel",
+          "team": "T0SCALED",
+          "client_msg_id": "00000000-0000-4000-8000-000000000065",
+          "blocks": [
+            {
+              "type": "rich_text",
+              "block_id": "rt1",
+              "elements": [
+                {
+                  "type": "rich_text_section",
+                  "elements": [
+                    {
+                      "type": "text",
+                      "text": "SENTINEL-SLACK-TEXT-7f3a first message in a brand new channel"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG055",
+        "event_time": 1794150655,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-055"
+      },
+      "expectEventType": "message",
+      "expectChannel": "C0NEWCHAN",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "msg",
+        "conv": "channel",
+        "ts": "1794150065.000165",
+        "threadTs": null,
+        "editedTs": null,
+        "deletedTs": null,
+        "author": "U0JANE",
+        "authorTeam": "T0SCALED",
+        "parentUser": null,
+        "mentions": [],
+        "isBot": false,
+        "appId": null,
+        "ddTemplate": false,
+        "broadcast": false,
+        "question": false,
+        "len": 2,
+        "hints": 0,
+        "files": false,
+        "extShared": false,
+        "authUser": "U0MITCH",
+        "authIsBot": false,
+        "lc": null,
+        "name": null,
+        "newChannel": null,
+        "isExtShared": null,
+        "ddPaths": []
+      }
+    },
+    {
+      "name": "V212 a DM in an unknown IM: interactive classify",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "message",
+          "channel": "D0NEWIM",
+          "user": "U0NEWBIE",
+          "text": "SENTINEL-SLACK-TEXT-7f3a hi, I just joined the team this week",
+          "ts": "1794150066.000166",
+          "event_ts": "1794150066.000166",
+          "channel_type": "im",
+          "team": "T0SCALED",
+          "client_msg_id": "00000000-0000-4000-8000-000000000066",
+          "blocks": [
+            {
+              "type": "rich_text",
+              "block_id": "rt1",
+              "elements": [
+                {
+                  "type": "rich_text_section",
+                  "elements": [
+                    {
+                      "type": "text",
+                      "text": "SENTINEL-SLACK-TEXT-7f3a hi, I just joined the team this week"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG056",
+        "event_time": 1794150656,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-056"
+      },
+      "expectEventType": "message",
+      "expectChannel": "D0NEWIM",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "msg",
+        "conv": "im",
+        "ts": "1794150066.000166",
+        "threadTs": null,
+        "editedTs": null,
+        "deletedTs": null,
+        "author": "U0NEWBIE",
+        "authorTeam": "T0SCALED",
+        "parentUser": null,
+        "mentions": [],
+        "isBot": false,
+        "appId": null,
+        "ddTemplate": false,
+        "broadcast": false,
+        "question": false,
+        "len": 2,
+        "hints": 0,
+        "files": false,
+        "extShared": false,
+        "authUser": "U0MITCH",
+        "authIsBot": false,
+        "lc": null,
+        "name": null,
+        "newChannel": null,
+        "isExtShared": null,
+        "ddPaths": []
+      }
+    },
+    {
+      "name": "V244 an opted-out author's DM (dropped opted_out by v2)",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "message",
+          "channel": "D0OPT",
+          "user": "U0OPTOUT",
+          "text": "SENTINEL-SLACK-TEXT-7f3a please call me back about the account",
+          "ts": "1794150067.000167",
+          "event_ts": "1794150067.000167",
+          "channel_type": "im",
+          "team": "T0SCALED",
+          "client_msg_id": "00000000-0000-4000-8000-000000000067",
+          "blocks": [
+            {
+              "type": "rich_text",
+              "block_id": "rt1",
+              "elements": [
+                {
+                  "type": "rich_text_section",
+                  "elements": [
+                    {
+                      "type": "text",
+                      "text": "SENTINEL-SLACK-TEXT-7f3a please call me back about the account"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG057",
+        "event_time": 1794150657,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-057"
+      },
+      "expectEventType": "message",
+      "expectChannel": "D0OPT",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "msg",
+        "conv": "im",
+        "ts": "1794150067.000167",
+        "threadTs": null,
+        "editedTs": null,
+        "deletedTs": null,
+        "author": "U0OPTOUT",
+        "authorTeam": "T0SCALED",
+        "parentUser": null,
+        "mentions": [],
+        "isBot": false,
+        "appId": null,
+        "ddTemplate": false,
+        "broadcast": false,
+        "question": false,
+        "len": 2,
+        "hints": 0,
+        "files": false,
+        "extShared": false,
+        "authUser": "U0MITCH",
+        "authIsBot": false,
+        "lc": null,
+        "name": null,
+        "newChannel": null,
+        "isExtShared": null,
+        "ddPaths": []
+      }
+    },
+    {
+      "name": "V210 an event only the bot sees outside its DM (auth_is_bot)",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "message",
+          "channel": "C0GENERAL",
+          "user": "U0JANE",
+          "text": "SENTINEL-SLACK-TEXT-7f3a please review the board deck",
+          "ts": "1794150068.000168",
+          "event_ts": "1794150068.000168",
+          "channel_type": "channel",
+          "team": "T0SCALED",
+          "client_msg_id": "00000000-0000-4000-8000-000000000068",
+          "blocks": [
+            {
+              "type": "rich_text",
+              "block_id": "rt1",
+              "elements": [
+                {
+                  "type": "rich_text_section",
+                  "elements": [
+                    {
+                      "type": "text",
+                      "text": "SENTINEL-SLACK-TEXT-7f3a please review the board deck"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG058",
+        "event_time": 1794150658,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0BOT",
+            "is_bot": true,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-058"
+      },
+      "expectEventType": "message",
+      "expectChannel": "C0GENERAL",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "msg",
+        "conv": "channel",
+        "ts": "1794150068.000168",
+        "threadTs": null,
+        "editedTs": null,
+        "deletedTs": null,
+        "author": "U0JANE",
+        "authorTeam": "T0SCALED",
+        "parentUser": null,
+        "mentions": [],
+        "isBot": false,
+        "appId": null,
+        "ddTemplate": false,
+        "broadcast": false,
+        "question": false,
+        "len": 2,
+        "hints": 0,
+        "files": false,
+        "extShared": false,
+        "authUser": "U0BOT",
+        "authIsBot": true,
+        "lc": null,
+        "name": null,
+        "newChannel": null,
+        "isExtShared": null,
+        "ddPaths": []
+      }
+    },
+    {
+      "name": "V211 an event authorized for another user",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "message",
+          "channel": "C0GENERAL",
+          "user": "U0JANE",
+          "text": "SENTINEL-SLACK-TEXT-7f3a please review the board deck",
+          "ts": "1794150069.000169",
+          "event_ts": "1794150069.000169",
+          "channel_type": "channel",
+          "team": "T0SCALED",
+          "client_msg_id": "00000000-0000-4000-8000-000000000069",
+          "blocks": [
+            {
+              "type": "rich_text",
+              "block_id": "rt1",
+              "elements": [
+                {
+                  "type": "rich_text_section",
+                  "elements": [
+                    {
+                      "type": "text",
+                      "text": "SENTINEL-SLACK-TEXT-7f3a please review the board deck"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG059",
+        "event_time": 1794150659,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0OTHER",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-059"
+      },
+      "expectEventType": "message",
+      "expectChannel": "C0GENERAL",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "msg",
+        "conv": "channel",
+        "ts": "1794150069.000169",
+        "threadTs": null,
+        "editedTs": null,
+        "deletedTs": null,
+        "author": "U0JANE",
+        "authorTeam": "T0SCALED",
+        "parentUser": null,
+        "mentions": [],
+        "isBot": false,
+        "appId": null,
+        "ddTemplate": false,
+        "broadcast": false,
+        "question": false,
+        "len": 2,
+        "hints": 0,
+        "files": false,
+        "extShared": false,
+        "authUser": "U0OTHER",
+        "authIsBot": false,
+        "lc": null,
+        "name": null,
+        "newChannel": null,
+        "isExtShared": null,
+        "ddPaths": []
+      }
+    },
+    {
+      "name": "V235 channel_type absent: conv null (v2 drops scope)",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "message",
+          "channel": "C0GENERAL",
+          "user": "U0JANE",
+          "text": "SENTINEL-SLACK-TEXT-7f3a please review the board deck",
+          "ts": "1794150070.000170",
+          "event_ts": "1794150070.000170",
+          "team": "T0SCALED",
+          "client_msg_id": "00000000-0000-4000-8000-000000000070",
+          "blocks": [
+            {
+              "type": "rich_text",
+              "block_id": "rt1",
+              "elements": [
+                {
+                  "type": "rich_text_section",
+                  "elements": [
+                    {
+                      "type": "text",
+                      "text": "SENTINEL-SLACK-TEXT-7f3a please review the board deck"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG060",
+        "event_time": 1794150660,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-060"
+      },
+      "expectEventType": "message",
+      "expectChannel": "C0GENERAL",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "msg",
+        "conv": null,
+        "ts": "1794150070.000170",
+        "threadTs": null,
+        "editedTs": null,
+        "deletedTs": null,
+        "author": "U0JANE",
+        "authorTeam": "T0SCALED",
+        "parentUser": null,
+        "mentions": [],
+        "isBot": false,
+        "appId": null,
+        "ddTemplate": false,
+        "broadcast": false,
+        "question": false,
+        "len": 2,
+        "hints": 0,
+        "files": false,
+        "extShared": false,
+        "authUser": "U0MITCH",
+        "authIsBot": false,
+        "lc": null,
+        "name": null,
+        "newChannel": null,
+        "isExtShared": null,
+        "ddPaths": []
+      }
+    },
+    {
+      "name": "V201 his DM to the assistant (P6's path: v2 delegates to v1)",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "message",
+          "channel": "D0MITCH",
+          "user": "U0MITCH",
+          "text": "What needs me today?",
+          "ts": "1794150071.000171",
+          "event_ts": "1794150071.000171",
+          "channel_type": "im",
+          "team": "T0SCALED",
+          "client_msg_id": "00000000-0000-4000-8000-000000000071",
+          "blocks": [
+            {
+              "type": "rich_text",
+              "block_id": "rt1",
+              "elements": [
+                {
+                  "type": "rich_text_section",
+                  "elements": [
+                    {
+                      "type": "text",
+                      "text": "What needs me today?"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG061",
+        "event_time": 1794150661,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-061"
+      },
+      "expectEventType": "message",
+      "expectChannel": "D0MITCH",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "msg",
+        "conv": "im",
+        "ts": "1794150071.000171",
+        "threadTs": null,
+        "editedTs": null,
+        "deletedTs": null,
+        "author": "U0MITCH",
+        "authorTeam": "T0SCALED",
+        "parentUser": null,
+        "mentions": [],
+        "isBot": false,
+        "appId": null,
+        "ddTemplate": false,
+        "broadcast": false,
+        "question": true,
+        "len": 1,
+        "hints": 4,
+        "files": false,
+        "extShared": false,
+        "authUser": "U0MITCH",
+        "authIsBot": false,
+        "lc": null,
+        "name": null,
+        "newChannel": null,
+        "isExtShared": null,
+        "ddPaths": []
+      }
+    },
+    {
+      "name": "IG21 / V243 a thread parent's tombstone ([U]: message_changed whose message.subtype is tombstone): a delete of that ts only",
+      "unverified": "§7.3 step 7 records the live shape",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "message",
+          "subtype": "message_changed",
+          "hidden": true,
+          "channel": "C0GENERAL",
+          "ts": "1794150075.000175",
+          "event_ts": "1794150075.000175",
+          "channel_type": "channel",
+          "message": {
+            "type": "message",
+            "subtype": "tombstone",
+            "hidden": true,
+            "user": "USLACKBOT",
+            "text": "This message was deleted.",
+            "ts": "1794150072.000172",
+            "thread_ts": "1794150072.000172",
+            "reply_count": 2,
+            "reply_users_count": 2,
+            "latest_reply": "1794150074.000174",
+            "reply_users": [
+              "U0JANE",
+              "U0MITCH"
+            ]
+          },
+          "previous_message": {
+            "type": "message",
+            "user": "U0JANE",
+            "team": "T0SCALED",
+            "text": "SENTINEL-SLACK-TEXT-7f3a the parent that will be deleted",
+            "ts": "1794150072.000172",
+            "thread_ts": "1794150072.000172",
+            "reply_count": 2
+          }
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG062",
+        "event_time": 1794150662,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-062"
+      },
+      "expectEventType": "message",
+      "expectChannel": "C0GENERAL",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "delete",
+        "conv": "channel",
+        "deletedTs": "1794150072.000172",
+        "author": null,
+        "isBot": false,
+        "ddPaths": []
+      }
+    },
+    {
+      "name": "V240 a delete in an unwatched channel (recorded shape)",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "message",
+          "subtype": "message_deleted",
+          "hidden": true,
+          "channel": "C0UNWATCH",
+          "ts": "1794150076.000176",
+          "deleted_ts": "1794150036.000136",
+          "event_ts": "1794150076.000176",
+          "channel_type": "channel",
+          "previous_message": {
+            "type": "message",
+            "user": "U0JANE",
+            "text": "SENTINEL-SLACK-TEXT-7f3a deleted words",
+            "ts": "1794150036.000136"
+          }
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG063",
+        "event_time": 1794150663,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-063"
+      },
+      "expectEventType": "message",
+      "expectChannel": "C0UNWATCH",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "delete",
+        "conv": "channel",
+        "deletedTs": "1794150036.000136",
+        "author": null,
+        "isBot": false
+      }
+    },
+    {
+      "name": "V240 a delete in a muted channel (recorded shape)",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "message",
+          "subtype": "message_deleted",
+          "hidden": true,
+          "channel": "C0MUTED",
+          "ts": "1794150077.000177",
+          "deleted_ts": "1794150037.000137",
+          "event_ts": "1794150077.000177",
+          "channel_type": "channel",
+          "previous_message": {
+            "type": "message",
+            "user": "U0JANE",
+            "text": "SENTINEL-SLACK-TEXT-7f3a deleted words",
+            "ts": "1794150037.000137"
+          }
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG064",
+        "event_time": 1794150664,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-064"
+      },
+      "expectEventType": "message",
+      "expectChannel": "C0MUTED",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "delete",
+        "conv": "channel",
+        "deletedTs": "1794150037.000137",
+        "author": null,
+        "isBot": false
+      }
+    },
+    {
+      "name": "V241 a delete in a deny channel (recorded shape)",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "message",
+          "subtype": "message_deleted",
+          "hidden": true,
+          "channel": "G0BPVOB",
+          "ts": "1794150078.000178",
+          "deleted_ts": "1794150038.000138",
+          "event_ts": "1794150078.000178",
+          "channel_type": "group",
+          "previous_message": {
+            "type": "message",
+            "user": "U0JANE",
+            "text": "SENTINEL-SLACK-TEXT-7f3a deleted words",
+            "ts": "1794150038.000138"
+          }
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG065",
+        "event_time": 1794150665,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-065"
+      },
+      "expectEventType": "message",
+      "expectChannel": "G0BPVOB",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "delete",
+        "conv": "group",
+        "deletedTs": "1794150038.000138",
+        "author": null,
+        "isBot": false
+      }
+    },
+    {
+      "name": "V241 a delete in an unknown channel (recorded shape)",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "message",
+          "subtype": "message_deleted",
+          "hidden": true,
+          "channel": "C0NEWCHAN",
+          "ts": "1794150079.000179",
+          "deleted_ts": "1794150039.000139",
+          "event_ts": "1794150079.000179",
+          "channel_type": "channel",
+          "previous_message": {
+            "type": "message",
+            "user": "U0JANE",
+            "text": "SENTINEL-SLACK-TEXT-7f3a deleted words",
+            "ts": "1794150039.000139"
+          }
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG066",
+        "event_time": 1794150666,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-066"
+      },
+      "expectEventType": "message",
+      "expectChannel": "C0NEWCHAN",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "delete",
+        "conv": "channel",
+        "deletedTs": "1794150039.000139",
+        "author": null,
+        "isBot": false
+      }
+    },
+    {
+      "name": "V239 a delete in a C23-reset unclassified channel (recorded shape)",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "message",
+          "subtype": "message_deleted",
+          "hidden": true,
+          "channel": "C0RESET",
+          "ts": "1794150080.000180",
+          "deleted_ts": "1794150040.000140",
+          "event_ts": "1794150080.000180",
+          "channel_type": "channel",
+          "previous_message": {
+            "type": "message",
+            "user": "U0JANE",
+            "text": "SENTINEL-SLACK-TEXT-7f3a deleted words",
+            "ts": "1794150040.000140"
+          }
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG067",
+        "event_time": 1794150667,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-067"
+      },
+      "expectEventType": "message",
+      "expectChannel": "C0RESET",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "delete",
+        "conv": "channel",
+        "deletedTs": "1794150040.000140",
+        "author": null,
+        "isBot": false
+      }
+    },
+    {
+      "name": "IG19 channel_created",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "channel_created",
+          "channel": {
+            "id": "C0NEWCHAN",
+            "name": "new-project",
+            "created": 1794150000,
+            "creator": "U0JANE"
+          }
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG068",
+        "event_time": 1794150668,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-068"
+      },
+      "expectEventType": "channel_created",
+      "expectChannel": "C0NEWCHAN",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "lifecycle",
+        "ddPaths": [],
+        "lc": "created",
+        "name": "new-project"
+      }
+    },
+    {
+      "name": "IG19 / V226 channel_rename: rename to a lead suffix",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "channel_rename",
+          "channel": {
+            "id": "C0GENERAL",
+            "name": "x-vob-leads",
+            "created": 1794063600
+          }
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG069",
+        "event_time": 1794150669,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-069"
+      },
+      "expectEventType": "channel_rename",
+      "expectChannel": "C0GENERAL",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "lifecycle",
+        "ddPaths": [],
+        "lc": "rename",
+        "name": "x-vob-leads"
+      }
+    },
+    {
+      "name": "IG19 / V226 channel_rename: rename to a legacy SOP suffix",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "channel_rename",
+          "channel": {
+            "id": "C0GENERAL",
+            "name": "x-calendly-call-booked",
+            "created": 1794063600
+          }
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG070",
+        "event_time": 1794150670,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-070"
+      },
+      "expectEventType": "channel_rename",
+      "expectChannel": "C0GENERAL",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "lifecycle",
+        "ddPaths": [],
+        "lc": "rename",
+        "name": "x-calendly-call-booked"
+      }
+    },
+    {
+      "name": "IG19 / V226 channel_rename: rename to an FB-listed name",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "channel_rename",
+          "channel": {
+            "id": "C0GENERAL",
+            "name": "bright-paths-vob-leads",
+            "created": 1794063600
+          }
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG071",
+        "event_time": 1794150671,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-071"
+      },
+      "expectEventType": "channel_rename",
+      "expectChannel": "C0GENERAL",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "lifecycle",
+        "ddPaths": [],
+        "lc": "rename",
+        "name": "bright-paths-vob-leads"
+      }
+    },
+    {
+      "name": "IG19 / V226 channel_rename: rename to a name containing leads",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "channel_rename",
+          "channel": {
+            "id": "C0GENERAL",
+            "name": "team-leads-sync",
+            "created": 1794063600
+          }
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG072",
+        "event_time": 1794150672,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-072"
+      },
+      "expectEventType": "channel_rename",
+      "expectChannel": "C0GENERAL",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "lifecycle",
+        "ddPaths": [],
+        "lc": "rename",
+        "name": "team-leads-sync"
+      }
+    },
+    {
+      "name": "IG19 / V226 channel_rename: a plain rename",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "channel_rename",
+          "channel": {
+            "id": "C0GENERAL",
+            "name": "general-2",
+            "created": 1794063600
+          }
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG073",
+        "event_time": 1794150673,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-073"
+      },
+      "expectEventType": "channel_rename",
+      "expectChannel": "C0GENERAL",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "lifecycle",
+        "ddPaths": [],
+        "lc": "rename",
+        "name": "general-2"
+      }
+    },
+    {
+      "name": "IG19 / V226 channel_rename: rename to a finance name",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "channel_rename",
+          "channel": {
+            "id": "C0GENERAL",
+            "name": "payroll-ops",
+            "created": 1794063600
+          }
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG074",
+        "event_time": 1794150674,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-074"
+      },
+      "expectEventType": "channel_rename",
+      "expectChannel": "C0GENERAL",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "lifecycle",
+        "ddPaths": [],
+        "lc": "rename",
+        "name": "payroll-ops"
+      }
+    },
+    {
+      "name": "IG19 group_rename",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "group_rename",
+          "channel": {
+            "id": "G0PRIV",
+            "name": "private-ops",
+            "created": 1794063600
+          }
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG075",
+        "event_time": 1794150675,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-075"
+      },
+      "expectEventType": "group_rename",
+      "expectChannel": "G0PRIV",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "lifecycle",
+        "ddPaths": [],
+        "lc": "rename",
+        "name": "private-ops"
+      }
+    },
+    {
+      "name": "IG19 a malformed name → name null",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "channel_rename",
+          "channel": {
+            "id": "C0GENERAL",
+            "name": "Bad Name!",
+            "created": 1794063600
+          }
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG076",
+        "event_time": 1794150676,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-076"
+      },
+      "expectEventType": "channel_rename",
+      "expectChannel": "C0GENERAL",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "lifecycle",
+        "ddPaths": [],
+        "lc": "rename",
+        "name": null
+      }
+    },
+    {
+      "name": "IG19 channel_archive",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "channel_archive",
+          "channel": "C0GENERAL",
+          "user": "U0JANE"
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG077",
+        "event_time": 1794150677,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-077"
+      },
+      "expectEventType": "channel_archive",
+      "expectChannel": "C0GENERAL",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "lifecycle",
+        "ddPaths": [],
+        "lc": "archive"
+      }
+    },
+    {
+      "name": "IG19 group_archive",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "group_archive",
+          "channel": "G0PRIV"
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG078",
+        "event_time": 1794150678,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-078"
+      },
+      "expectEventType": "group_archive",
+      "expectChannel": "G0PRIV",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "lifecycle",
+        "ddPaths": [],
+        "lc": "archive"
+      }
+    },
+    {
+      "name": "IG19 channel_unarchive",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "channel_unarchive",
+          "channel": "C0GENERAL",
+          "user": "U0JANE"
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG079",
+        "event_time": 1794150679,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-079"
+      },
+      "expectEventType": "channel_unarchive",
+      "expectChannel": "C0GENERAL",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "lifecycle",
+        "ddPaths": [],
+        "lc": "unarchive"
+      }
+    },
+    {
+      "name": "IG19 group_unarchive",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "group_unarchive",
+          "channel": "G0PRIV"
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG080",
+        "event_time": 1794150680,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-080"
+      },
+      "expectEventType": "group_unarchive",
+      "expectChannel": "G0PRIV",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "lifecycle",
+        "ddPaths": [],
+        "lc": "unarchive"
+      }
+    },
+    {
+      "name": "IG19 channel_deleted",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "channel_deleted",
+          "channel": "C0GENERAL"
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG081",
+        "event_time": 1794150681,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-081"
+      },
+      "expectEventType": "channel_deleted",
+      "expectChannel": "C0GENERAL",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "lifecycle",
+        "ddPaths": [],
+        "lc": "deleted"
+      }
+    },
+    {
+      "name": "IG19 group_deleted",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "group_deleted",
+          "channel": "G0PRIV"
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG082",
+        "event_time": 1794150682,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-082"
+      },
+      "expectEventType": "group_deleted",
+      "expectChannel": "G0PRIV",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "lifecycle",
+        "ddPaths": [],
+        "lc": "deleted"
+      }
+    },
+    {
+      "name": "IG19 / PG11 channel_left",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "channel_left",
+          "channel": "C0GENERAL"
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG083",
+        "event_time": 1794150683,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-083"
+      },
+      "expectEventType": "channel_left",
+      "expectChannel": "C0GENERAL",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "lifecycle",
+        "ddPaths": [],
+        "lc": "left"
+      }
+    },
+    {
+      "name": "IG19 / PG11 group_left",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "group_left",
+          "channel": "G0PRIV"
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG084",
+        "event_time": 1794150684,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-084"
+      },
+      "expectEventType": "group_left",
+      "expectChannel": "G0PRIV",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "lifecycle",
+        "ddPaths": [],
+        "lc": "left"
+      }
+    },
+    {
+      "name": "IG19 / XC03 channel_shared",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "channel_shared",
+          "connected_team_id": "E163Q94DX",
+          "channel": "C0GENERAL",
+          "event_ts": "1794150090.000190"
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG085",
+        "event_time": 1794150685,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-085"
+      },
+      "expectEventType": "channel_shared",
+      "expectChannel": "C0GENERAL",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "lifecycle",
+        "ddPaths": [],
+        "lc": "shared"
+      }
+    },
+    {
+      "name": "IG19 / XC04 channel_unshared (no longer shared)",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "channel_unshared",
+          "previously_connected_team_id": "E163Q94DX",
+          "channel": "C0SHARED",
+          "is_ext_shared": false,
+          "event_ts": "1794150091.000191"
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG086",
+        "event_time": 1794150686,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-086"
+      },
+      "expectEventType": "channel_unshared",
+      "expectChannel": "C0SHARED",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "lifecycle",
+        "ddPaths": [],
+        "lc": "unshared",
+        "isExtShared": false
+      }
+    },
+    {
+      "name": "IG19 / V226 channel_unshared while still shared with another team",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "channel_unshared",
+          "previously_connected_team_id": "E163Q94DX",
+          "channel": "C0SHARED",
+          "is_ext_shared": true,
+          "event_ts": "1794150092.000192"
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG087",
+        "event_time": 1794150687,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-087"
+      },
+      "expectEventType": "channel_unshared",
+      "expectChannel": "C0SHARED",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "lifecycle",
+        "ddPaths": [],
+        "lc": "unshared",
+        "isExtShared": true
+      }
+    },
+    {
+      "name": "IG19 / XC06 channel_id_changed (p_channel = old, newChannel = new)",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "channel_id_changed",
+          "old_channel_id": "G0PRIV",
+          "new_channel_id": "C0PRIVNEW",
+          "event_ts": "1794150693.000000"
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG088",
+        "event_time": 1794150688,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-088"
+      },
+      "expectEventType": "channel_id_changed",
+      "expectChannel": "G0PRIV",
+      "expectPrefilter": "pass",
+      "expectFacts": {
+        "kind": "lifecycle",
+        "ddPaths": [],
+        "lc": "id_changed",
+        "newChannel": "C0PRIVNEW"
+      }
+    },
+    {
+      "name": "V202 app_home_opened (P6's only)",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "app_home_opened",
+          "user": "U0MITCH",
+          "channel": "D0MITCH",
+          "tab": "home",
+          "event_ts": "1794150095.000195"
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG089",
+        "event_time": 1794150689,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-089"
+      },
+      "expectEventType": "app_home_opened",
+      "expectDerive": null
+    },
+    {
+      "name": "V203 app_uninstalled (P6's only)",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "app_uninstalled"
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG090",
+        "event_time": 1794150690,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-090"
+      },
+      "expectEventType": "app_uninstalled",
+      "expectDerive": null
+    },
+    {
+      "name": "V204 tokens_revoked naming him (P6's only)",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "tokens_revoked",
+          "tokens": {
+            "oauth": [
+              "U0MITCH"
+            ],
+            "bot": []
+          }
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG091",
+        "event_time": 1794150691,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-091"
+      },
+      "expectEventType": "tokens_revoked",
+      "expectDerive": null
+    },
+    {
+      "name": "an event P7a doesn't subscribe to",
+      "envelope": {
+        "team_id": "T0SCALED",
+        "api_app_id": "A0EXEC",
+        "event": {
+          "type": "reaction_added",
+          "user": "U0MITCH",
+          "reaction": "eyes",
+          "item": {
+            "type": "message",
+            "channel": "C0GENERAL",
+            "ts": "1794150001.000101"
+          },
+          "item_user": "U0JANE",
+          "event_ts": "1794150096.000196"
+        },
+        "type": "event_callback",
+        "event_id": "Ev0P7AIG092",
+        "event_time": 1794150692,
+        "authorizations": [
+          {
+            "enterprise_id": null,
+            "team_id": "T0SCALED",
+            "user_id": "U0MITCH",
+            "is_bot": false,
+            "is_enterprise_install": false
+          }
+        ],
+        "is_ext_shared_channel": false,
+        "event_context": "4-p7a-ig-092"
+      },
+      "expectEventType": "reaction_added",
+      "expectDerive": null
+    }
+  ],
+  "candidateReasons": [
+    {
+      "name": "IM len 0 → 0",
+      "input": {
+        "conv": "im",
+        "len": 0,
+        "question": false,
+        "mentionsHim": false,
+        "isReply": false,
+        "parentIsHim": false,
+        "hePostedInThread": false
+      },
+      "expect": 0
+    },
+    {
+      "name": "IM len 1 → dm",
+      "input": {
+        "conv": "im",
+        "len": 1,
+        "question": false,
+        "mentionsHim": false,
+        "isReply": false,
+        "parentIsHim": false,
+        "hePostedInThread": false
+      },
+      "expect": 1
+    },
+    {
+      "name": "IM len 2 mentioning him → dm + mention",
+      "input": {
+        "conv": "im",
+        "len": 2,
+        "question": false,
+        "mentionsHim": true,
+        "isReply": false,
+        "parentIsHim": false,
+        "hePostedInThread": false
+      },
+      "expect": 3
+    },
+    {
+      "name": "IM reply (not his thread) → dm",
+      "input": {
+        "conv": "im",
+        "len": 2,
+        "question": false,
+        "mentionsHim": false,
+        "isReply": true,
+        "parentIsHim": false,
+        "hePostedInThread": false
+      },
+      "expect": 1
+    },
+    {
+      "name": "MPIM len 1, no question, no mention → 0",
+      "input": {
+        "conv": "mpim",
+        "len": 1,
+        "question": false,
+        "mentionsHim": false,
+        "isReply": false,
+        "parentIsHim": false,
+        "hePostedInThread": false
+      },
+      "expect": 0
+    },
+    {
+      "name": "MPIM len 1 with a question → dm",
+      "input": {
+        "conv": "mpim",
+        "len": 1,
+        "question": true,
+        "mentionsHim": false,
+        "isReply": false,
+        "parentIsHim": false,
+        "hePostedInThread": false
+      },
+      "expect": 1
+    },
+    {
+      "name": "MPIM len 1 mentioning him → dm + mention",
+      "input": {
+        "conv": "mpim",
+        "len": 1,
+        "question": false,
+        "mentionsHim": true,
+        "isReply": false,
+        "parentIsHim": false,
+        "hePostedInThread": false
+      },
+      "expect": 3
+    },
+    {
+      "name": "MPIM len 2 → dm",
+      "input": {
+        "conv": "mpim",
+        "len": 2,
+        "question": false,
+        "mentionsHim": false,
+        "isReply": false,
+        "parentIsHim": false,
+        "hePostedInThread": false
+      },
+      "expect": 1
+    },
+    {
+      "name": "MPIM len 0 with a question → 0",
+      "input": {
+        "conv": "mpim",
+        "len": 0,
+        "question": true,
+        "mentionsHim": false,
+        "isReply": false,
+        "parentIsHim": false,
+        "hePostedInThread": false
+      },
+      "expect": 0
+    },
+    {
+      "name": "channel mention → mention",
+      "input": {
+        "conv": "channel",
+        "len": 2,
+        "question": false,
+        "mentionsHim": true,
+        "isReply": false,
+        "parentIsHim": false,
+        "hePostedInThread": false
+      },
+      "expect": 2
+    },
+    {
+      "name": "group mention, len 0 → mention",
+      "input": {
+        "conv": "group",
+        "len": 0,
+        "question": false,
+        "mentionsHim": true,
+        "isReply": false,
+        "parentIsHim": false,
+        "hePostedInThread": false
+      },
+      "expect": 2
+    },
+    {
+      "name": "channel len 3 question, not addressed → 0",
+      "input": {
+        "conv": "channel",
+        "len": 3,
+        "question": true,
+        "mentionsHim": false,
+        "isReply": false,
+        "parentIsHim": false,
+        "hePostedInThread": false
+      },
+      "expect": 0
+    },
+    {
+      "name": "reply with parentIsHim → hisThread",
+      "input": {
+        "conv": "channel",
+        "len": 2,
+        "question": false,
+        "mentionsHim": false,
+        "isReply": true,
+        "parentIsHim": true,
+        "hePostedInThread": false
+      },
+      "expect": 4
+    },
+    {
+      "name": "reply with hePostedInThread → hisThread",
+      "input": {
+        "conv": "group",
+        "len": 1,
+        "question": false,
+        "mentionsHim": false,
+        "isReply": true,
+        "parentIsHim": false,
+        "hePostedInThread": true
+      },
+      "expect": 4
+    },
+    {
+      "name": "top-level non-reply in a thread he posted in → 0",
+      "input": {
+        "conv": "channel",
+        "len": 2,
+        "question": false,
+        "mentionsHim": false,
+        "isReply": false,
+        "parentIsHim": false,
+        "hePostedInThread": true
+      },
+      "expect": 0
+    },
+    {
+      "name": "a mention in his thread → mention + hisThread",
+      "input": {
+        "conv": "channel",
+        "len": 2,
+        "question": false,
+        "mentionsHim": true,
+        "isReply": true,
+        "parentIsHim": true,
+        "hePostedInThread": true
+      },
+      "expect": 6
+    }
+  ],
+  "extractDdPaths": [
+    {
+      "name": "LK <url|label> in text",
+      "input": {
+        "text": "see <https://operations.scaledai.org/tasks/t_1|Task>",
+        "urls": []
+      },
+      "expect": [
+        "/tasks/t_1"
+      ]
+    },
+    {
+      "name": "LK bare <url> in text",
+      "input": {
+        "text": "<https://operations.scaledai.org/projects/p_2>",
+        "urls": []
+      },
+      "expect": [
+        "/projects/p_2"
+      ]
+    },
+    {
+      "name": "LK a URL button / block link element",
+      "input": {
+        "text": "",
+        "urls": [
+          "https://operations.scaledai.org/clients/c_9"
+        ]
+      },
+      "expect": [
+        "/clients/c_9"
+      ]
+    },
+    {
+      "name": "LK the legacy Railway host",
+      "input": {
+        "text": "<https://delegationdoer-production.up.railway.app/projects/p_3|P>",
+        "urls": []
+      },
+      "expect": [
+        "/projects/p_3"
+      ]
+    },
+    {
+      "name": "LK localhost ignored",
+      "input": {
+        "text": "<http://localhost:3000/tasks/t_2|T> <https://localhost/tasks/t_2|T>",
+        "urls": []
+      },
+      "expect": []
+    },
+    {
+      "name": "LK a look-alike host ignored",
+      "input": {
+        "text": "<https://operations.scaledai.org.evil.io/tasks/t_3|T>",
+        "urls": []
+      },
+      "expect": []
+    },
+    {
+      "name": "LK http (not https) ignored",
+      "input": {
+        "text": "",
+        "urls": [
+          "http://operations.scaledai.org/tasks/t_3"
+        ]
+      },
+      "expect": []
+    },
+    {
+      "name": "LK an inbox thread keeps its query",
+      "input": {
+        "text": "",
+        "urls": [
+          "https://operations.scaledai.org/inboxes/a1?thread=th_9&acct=a1"
+        ]
+      },
+      "expect": [
+        "/inboxes/a1?thread=th_9&acct=a1"
+      ]
+    },
+    {
+      "name": "LK a trailing slash is dropped",
+      "input": {
+        "text": "<https://operations.scaledai.org/tasks/t_4/|T>",
+        "urls": []
+      },
+      "expect": [
+        "/tasks/t_4"
+      ]
+    },
+    {
+      "name": "LK percent-encoding is decoded once",
+      "input": {
+        "text": "",
+        "urls": [
+          "https://operations.scaledai.org/tasks/t%5F5"
+        ]
+      },
+      "expect": [
+        "/tasks/t_5"
+      ]
+    },
+    {
+      "name": "LK a query is kept only for /inboxes",
+      "input": {
+        "text": "",
+        "urls": [
+          "https://operations.scaledai.org/tasks/t_6?ref=slack"
+        ]
+      },
+      "expect": [
+        "/tasks/t_6"
+      ]
+    },
+    {
+      "name": "LK duplicates collapse, order kept (text tokens first, then urls)",
+      "input": {
+        "text": "<https://operations.scaledai.org/tasks/t_7|A> <https://operations.scaledai.org/clients/c_1|B> <https://operations.scaledai.org/tasks/t_7|C>",
+        "urls": [
+          "https://operations.scaledai.org/clients/c_1"
+        ]
+      },
+      "expect": [
+        "/tasks/t_7",
+        "/clients/c_1"
+      ]
+    },
+    {
+      "name": "LK at most 20",
+      "input": {
+        "text": "",
+        "urls": [
+          "https://operations.scaledai.org/tasks/t_1",
+          "https://operations.scaledai.org/tasks/t_2",
+          "https://operations.scaledai.org/tasks/t_3",
+          "https://operations.scaledai.org/tasks/t_4",
+          "https://operations.scaledai.org/tasks/t_5",
+          "https://operations.scaledai.org/tasks/t_6",
+          "https://operations.scaledai.org/tasks/t_7",
+          "https://operations.scaledai.org/tasks/t_8",
+          "https://operations.scaledai.org/tasks/t_9",
+          "https://operations.scaledai.org/tasks/t_10",
+          "https://operations.scaledai.org/tasks/t_11",
+          "https://operations.scaledai.org/tasks/t_12",
+          "https://operations.scaledai.org/tasks/t_13",
+          "https://operations.scaledai.org/tasks/t_14",
+          "https://operations.scaledai.org/tasks/t_15",
+          "https://operations.scaledai.org/tasks/t_16",
+          "https://operations.scaledai.org/tasks/t_17",
+          "https://operations.scaledai.org/tasks/t_18",
+          "https://operations.scaledai.org/tasks/t_19",
+          "https://operations.scaledai.org/tasks/t_20",
+          "https://operations.scaledai.org/tasks/t_21",
+          "https://operations.scaledai.org/tasks/t_22",
+          "https://operations.scaledai.org/tasks/t_23",
+          "https://operations.scaledai.org/tasks/t_24",
+          "https://operations.scaledai.org/tasks/t_25"
+        ]
+      },
+      "expect": [
+        "/tasks/t_1",
+        "/tasks/t_2",
+        "/tasks/t_3",
+        "/tasks/t_4",
+        "/tasks/t_5",
+        "/tasks/t_6",
+        "/tasks/t_7",
+        "/tasks/t_8",
+        "/tasks/t_9",
+        "/tasks/t_10",
+        "/tasks/t_11",
+        "/tasks/t_12",
+        "/tasks/t_13",
+        "/tasks/t_14",
+        "/tasks/t_15",
+        "/tasks/t_16",
+        "/tasks/t_17",
+        "/tasks/t_18",
+        "/tasks/t_19",
+        "/tasks/t_20"
+      ]
+    },
+    {
+      "name": "LK non-matching paths ignored",
+      "input": {
+        "text": "<https://operations.scaledai.org/settings|S> <https://operations.scaledai.org/tasks/|T> <https://operations.scaledai.org/tasks/a%20b|U>",
+        "urls": [
+          "https://operations.scaledai.org/inboxes/a1"
+        ]
+      },
+      "expect": []
+    }
+  ]
+}

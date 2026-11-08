@@ -1,0 +1,2165 @@
+{
+  "_doc": [
+    "P7a contract §5.1 (slack-classes.test.ts, Area B; RQ08 replays it through exec_slack_apply_classes). Lead-owned, frozen.",
+    "Each row: meta = ConversationMeta; ctx = overrides of `base` (sets as arrays; null stays null); expect = the Classification;",
+    "expectClassRow = the toClassRow fields §3.5 fixes (compare with toMatchObject; im_user_id, is_member, is_private,",
+    "is_ext_shared and is_archived are not fixed here: a deny row is made bare by exec_slack_apply_classes, §2.6.1).",
+    "base.leadSlugs is leadSlugsFrom({ clientNames: inputs.clientNames, fbLeadNames: base.fbLeadNames }) (compare as a set).",
+    "Row ids repeat where §5.1 groups several cases under one id."
+  ],
+  "base": {
+    "principalSlackUserId": "U0MITCH",
+    "assistantDmChannelId": "D0EA",
+    "assistantBotUserId": "U0EABOT",
+    "ddBotUserId": "U0DDBOT",
+    "ddBotDmChannelIds": [
+      "D0DDBOT"
+    ],
+    "botUserIds": [
+      "U0ZAP",
+      "U0CAL"
+    ],
+    "fbLeadChannelIds": [
+      "G0BPVOB"
+    ],
+    "fbLeadNames": [
+      "bright-paths-vob-leads"
+    ],
+    "leadSlugs": [
+      "bright-paths-recovery",
+      "bright-paths",
+      "bright",
+      "summit-wellness",
+      "summit"
+    ],
+    "outboundChannelId": "C0OUT",
+    "clientEmailChannelId": "C0EMAILN",
+    "grantedTypes": [
+      "channel",
+      "group",
+      "im",
+      "mpim"
+    ],
+    "slackMutedIds": null
+  },
+  "inputs": {
+    "clientNames": [
+      "Bright Paths Recovery",
+      "Summit Wellness"
+    ]
+  },
+  "rows": [
+    {
+      "id": "CL01",
+      "name": "the assistant DM id",
+      "meta": {
+        "id": "D0EA",
+        "convType": "im",
+        "name": null,
+        "isMember": true,
+        "isPrivate": true,
+        "isExtShared": false,
+        "isPendingExtShared": false,
+        "isArchived": false,
+        "imUser": "U0EABOT"
+      },
+      "expect": {
+        "class": "deny",
+        "denyReason": "assistant_dm",
+        "hubKind": null,
+        "financeName": false,
+        "defaultWatch": "unwatched",
+        "defaultMute": null
+      },
+      "expectClassRow": {
+        "channel_id": "D0EA",
+        "conv_type": "im",
+        "class": "deny",
+        "deny_reason": "assistant_dm",
+        "hub_kind": null,
+        "finance_name": false,
+        "default_watch": "unwatched",
+        "default_mute": null,
+        "name": null
+      }
+    },
+    {
+      "id": "CL02",
+      "name": "an IM with the assistant bot (another id)",
+      "meta": {
+        "id": "D0EA2",
+        "convType": "im",
+        "name": null,
+        "isMember": true,
+        "isPrivate": true,
+        "isExtShared": false,
+        "isPendingExtShared": false,
+        "isArchived": false,
+        "imUser": "U0EABOT"
+      },
+      "expect": {
+        "class": "deny",
+        "denyReason": "assistant_dm",
+        "hubKind": null,
+        "financeName": false,
+        "defaultWatch": "unwatched",
+        "defaultMute": null
+      },
+      "expectClassRow": {
+        "channel_id": "D0EA2",
+        "conv_type": "im",
+        "class": "deny",
+        "deny_reason": "assistant_dm",
+        "hub_kind": null,
+        "finance_name": false,
+        "default_watch": "unwatched",
+        "default_mute": null,
+        "name": null
+      }
+    },
+    {
+      "id": "CL03",
+      "name": "D0DDBOT, a daily_briefings channel (its counterpart unknown to the bot set)",
+      "meta": {
+        "id": "D0DDBOT",
+        "convType": "im",
+        "name": null,
+        "isMember": true,
+        "isPrivate": true,
+        "isExtShared": false,
+        "isPendingExtShared": false,
+        "isArchived": false,
+        "imUser": "U0DDBOTX"
+      },
+      "expect": {
+        "class": "deny",
+        "denyReason": "dd_bot_dm",
+        "hubKind": null,
+        "financeName": false,
+        "defaultWatch": "unwatched",
+        "defaultMute": null
+      },
+      "expectClassRow": {
+        "channel_id": "D0DDBOT",
+        "conv_type": "im",
+        "class": "deny",
+        "deny_reason": "dd_bot_dm",
+        "hub_kind": null,
+        "finance_name": false,
+        "default_watch": "unwatched",
+        "default_mute": null,
+        "name": null
+      }
+    },
+    {
+      "id": "CL04",
+      "name": "an IM with the DD bot user",
+      "meta": {
+        "id": "D0DDB2",
+        "convType": "im",
+        "name": null,
+        "isMember": true,
+        "isPrivate": true,
+        "isExtShared": false,
+        "isPendingExtShared": false,
+        "isArchived": false,
+        "imUser": "U0DDBOT"
+      },
+      "expect": {
+        "class": "deny",
+        "denyReason": "dd_bot_dm",
+        "hubKind": null,
+        "financeName": false,
+        "defaultWatch": "unwatched",
+        "defaultMute": null
+      },
+      "expectClassRow": {
+        "channel_id": "D0DDB2",
+        "conv_type": "im",
+        "class": "deny",
+        "deny_reason": "dd_bot_dm",
+        "hub_kind": null,
+        "finance_name": false,
+        "default_watch": "unwatched",
+        "default_mute": null,
+        "name": null
+      }
+    },
+    {
+      "id": "CL05",
+      "name": "an IM with the DD bot while dd-bot.ts has no identity: still denied through the bot set",
+      "meta": {
+        "id": "D0DDB3",
+        "convType": "im",
+        "name": null,
+        "isMember": true,
+        "isPrivate": true,
+        "isExtShared": false,
+        "isPendingExtShared": false,
+        "isArchived": false,
+        "imUser": "U0DDBOT"
+      },
+      "ctx": {
+        "ddBotUserId": null,
+        "botUserIds": [
+          "U0ZAP",
+          "U0CAL",
+          "U0DDBOT"
+        ]
+      },
+      "expect": {
+        "class": "deny",
+        "denyReason": "bot_im",
+        "hubKind": null,
+        "financeName": false,
+        "defaultWatch": "unwatched",
+        "defaultMute": null
+      },
+      "expectClassRow": {
+        "channel_id": "D0DDB3",
+        "conv_type": "im",
+        "class": "deny",
+        "deny_reason": "bot_im",
+        "hub_kind": null,
+        "finance_name": false,
+        "default_watch": "unwatched",
+        "default_mute": null,
+        "name": null
+      }
+    },
+    {
+      "id": "CL06",
+      "name": "his self-DM",
+      "meta": {
+        "id": "D0SELF",
+        "convType": "im",
+        "name": null,
+        "isMember": true,
+        "isPrivate": true,
+        "isExtShared": false,
+        "isPendingExtShared": false,
+        "isArchived": false,
+        "imUser": "U0MITCH"
+      },
+      "expect": {
+        "class": "deny",
+        "denyReason": "self_dm",
+        "hubKind": null,
+        "financeName": false,
+        "defaultWatch": "unwatched",
+        "defaultMute": null
+      },
+      "expectClassRow": {
+        "channel_id": "D0SELF",
+        "conv_type": "im",
+        "class": "deny",
+        "deny_reason": "self_dm",
+        "hub_kind": null,
+        "finance_name": false,
+        "default_watch": "unwatched",
+        "default_mute": null,
+        "name": null
+      }
+    },
+    {
+      "id": "CL07",
+      "name": "an IM with Slackbot",
+      "meta": {
+        "id": "D0SLACKBOT",
+        "convType": "im",
+        "name": null,
+        "isMember": true,
+        "isPrivate": true,
+        "isExtShared": false,
+        "isPendingExtShared": false,
+        "isArchived": false,
+        "imUser": "USLACKBOT"
+      },
+      "expect": {
+        "class": "deny",
+        "denyReason": "bot_im",
+        "hubKind": null,
+        "financeName": false,
+        "defaultWatch": "unwatched",
+        "defaultMute": null
+      },
+      "expectClassRow": {
+        "channel_id": "D0SLACKBOT",
+        "conv_type": "im",
+        "class": "deny",
+        "deny_reason": "bot_im",
+        "hub_kind": null,
+        "finance_name": false,
+        "default_watch": "unwatched",
+        "default_mute": null,
+        "name": null
+      }
+    },
+    {
+      "id": "CL08",
+      "name": "an IM with a bot in the users.list bot set",
+      "meta": {
+        "id": "D0ZAP",
+        "convType": "im",
+        "name": null,
+        "isMember": true,
+        "isPrivate": true,
+        "isExtShared": false,
+        "isPendingExtShared": false,
+        "isArchived": false,
+        "imUser": "U0ZAP"
+      },
+      "expect": {
+        "class": "deny",
+        "denyReason": "bot_im",
+        "hubKind": null,
+        "financeName": false,
+        "defaultWatch": "unwatched",
+        "defaultMute": null
+      },
+      "expectClassRow": {
+        "channel_id": "D0ZAP",
+        "conv_type": "im",
+        "class": "deny",
+        "deny_reason": "bot_im",
+        "hub_kind": null,
+        "finance_name": false,
+        "default_watch": "unwatched",
+        "default_mute": null,
+        "name": null
+      }
+    },
+    {
+      "id": "CL09",
+      "name": "an IM with an unknown counterpart while users.list failed (fail closed)",
+      "meta": {
+        "id": "D0UNK",
+        "convType": "im",
+        "name": null,
+        "isMember": true,
+        "isPrivate": true,
+        "isExtShared": false,
+        "isPendingExtShared": false,
+        "isArchived": false,
+        "imUser": "U0STRANGER"
+      },
+      "ctx": {
+        "botUserIds": null
+      },
+      "expect": {
+        "class": "unclassified",
+        "denyReason": null,
+        "hubKind": null,
+        "financeName": false,
+        "defaultWatch": "unwatched",
+        "defaultMute": null
+      },
+      "expectClassRow": {
+        "channel_id": "D0UNK",
+        "conv_type": "im",
+        "class": "unclassified",
+        "deny_reason": null,
+        "hub_kind": null,
+        "finance_name": false,
+        "default_watch": "unwatched",
+        "default_mute": null,
+        "name": null
+      }
+    },
+    {
+      "id": "CL10",
+      "name": "an IM whose counterpart is null",
+      "meta": {
+        "id": "D0NULL",
+        "convType": "im",
+        "name": null,
+        "isMember": true,
+        "isPrivate": true,
+        "isExtShared": false,
+        "isPendingExtShared": false,
+        "isArchived": false,
+        "imUser": null
+      },
+      "expect": {
+        "class": "unclassified",
+        "denyReason": null,
+        "hubKind": null,
+        "financeName": false,
+        "defaultWatch": "unwatched",
+        "defaultMute": null
+      },
+      "expectClassRow": {
+        "channel_id": "D0NULL",
+        "conv_type": "im",
+        "class": "unclassified",
+        "deny_reason": null,
+        "hub_kind": null,
+        "finance_name": false,
+        "default_watch": "unwatched",
+        "default_mute": null,
+        "name": null
+      }
+    },
+    {
+      "id": "CL11",
+      "name": "an IM with a colleague",
+      "meta": {
+        "id": "D0JANE",
+        "convType": "im",
+        "name": null,
+        "isMember": true,
+        "isPrivate": true,
+        "isExtShared": false,
+        "isPendingExtShared": false,
+        "isArchived": false,
+        "imUser": "U0JANE"
+      },
+      "expect": {
+        "class": "standard",
+        "denyReason": null,
+        "hubKind": null,
+        "financeName": false,
+        "defaultWatch": "watched",
+        "defaultMute": null
+      },
+      "expectClassRow": {
+        "channel_id": "D0JANE",
+        "conv_type": "im",
+        "class": "standard",
+        "deny_reason": null,
+        "hub_kind": null,
+        "finance_name": false,
+        "default_watch": "watched",
+        "default_mute": null,
+        "name": null
+      }
+    },
+    {
+      "id": "CL12",
+      "name": "the FB-listed channel id, whatever its name",
+      "meta": {
+        "id": "G0BPVOB",
+        "convType": "group",
+        "name": "general-ops",
+        "isMember": true,
+        "isPrivate": true,
+        "isExtShared": false,
+        "isPendingExtShared": false,
+        "isArchived": false,
+        "imUser": null
+      },
+      "expect": {
+        "class": "deny",
+        "denyReason": "fb_list",
+        "hubKind": null,
+        "financeName": false,
+        "defaultWatch": "unwatched",
+        "defaultMute": null
+      },
+      "expectClassRow": {
+        "channel_id": "G0BPVOB",
+        "conv_type": "group",
+        "class": "deny",
+        "deny_reason": "fb_list",
+        "hub_kind": null,
+        "finance_name": false,
+        "default_watch": "unwatched",
+        "default_mute": null,
+        "name": null
+      }
+    },
+    {
+      "id": "CL13",
+      "name": "the FB-listed name on another id",
+      "meta": {
+        "id": "G0BPVOB2",
+        "convType": "group",
+        "name": "bright-paths-vob-leads",
+        "isMember": true,
+        "isPrivate": true,
+        "isExtShared": false,
+        "isPendingExtShared": false,
+        "isArchived": false,
+        "imUser": null
+      },
+      "expect": {
+        "class": "deny",
+        "denyReason": "fb_list",
+        "hubKind": null,
+        "financeName": false,
+        "defaultWatch": "unwatched",
+        "defaultMute": null
+      },
+      "expectClassRow": {
+        "channel_id": "G0BPVOB2",
+        "conv_type": "group",
+        "class": "deny",
+        "deny_reason": "fb_list",
+        "hub_kind": null,
+        "finance_name": false,
+        "default_watch": "unwatched",
+        "default_mute": null,
+        "name": null
+      }
+    },
+    {
+      "id": "CL14",
+      "name": "an FB-listed name written with # and upper case in the list: normalized, denied",
+      "meta": {
+        "id": "C0BPINTAKE",
+        "convType": "channel",
+        "name": "brightpaths-intake",
+        "isMember": true,
+        "isPrivate": false,
+        "isExtShared": false,
+        "isPendingExtShared": false,
+        "isArchived": false,
+        "imUser": null
+      },
+      "ctx": {
+        "fbLeadNames": [
+          "bright-paths-vob-leads",
+          "#Brightpaths-Intake"
+        ]
+      },
+      "expect": {
+        "class": "deny",
+        "denyReason": "fb_list",
+        "hubKind": null,
+        "financeName": false,
+        "defaultWatch": "unwatched",
+        "defaultMute": null
+      },
+      "expectClassRow": {
+        "channel_id": "C0BPINTAKE",
+        "conv_type": "channel",
+        "class": "deny",
+        "deny_reason": "fb_list",
+        "hub_kind": null,
+        "finance_name": false,
+        "default_watch": "unwatched",
+        "default_mute": null,
+        "name": null
+      }
+    },
+    {
+      "id": "CL15",
+      "name": "N1's suffix summit-vob-leads (not listed): the token rule",
+      "meta": {
+        "id": "C0SUMVOB",
+        "convType": "channel",
+        "name": "summit-vob-leads",
+        "isMember": true,
+        "isPrivate": false,
+        "isExtShared": false,
+        "isPendingExtShared": false,
+        "isArchived": false,
+        "imUser": null
+      },
+      "expect": {
+        "class": "deny",
+        "denyReason": "lead_name",
+        "hubKind": null,
+        "financeName": false,
+        "defaultWatch": "unwatched",
+        "defaultMute": null
+      },
+      "expectClassRow": {
+        "channel_id": "C0SUMVOB",
+        "conv_type": "channel",
+        "class": "deny",
+        "deny_reason": "lead_name",
+        "hub_kind": null,
+        "finance_name": false,
+        "default_watch": "unwatched",
+        "default_mute": null,
+        "name": null
+      }
+    },
+    {
+      "id": "CL15",
+      "name": "N1's suffix summit-nonvob-leads (not listed): the token rule",
+      "meta": {
+        "id": "C0SUMNV",
+        "convType": "channel",
+        "name": "summit-nonvob-leads",
+        "isMember": true,
+        "isPrivate": false,
+        "isExtShared": false,
+        "isPendingExtShared": false,
+        "isArchived": false,
+        "imUser": null
+      },
+      "expect": {
+        "class": "deny",
+        "denyReason": "lead_name",
+        "hubKind": null,
+        "financeName": false,
+        "defaultWatch": "unwatched",
+        "defaultMute": null
+      },
+      "expectClassRow": {
+        "channel_id": "C0SUMNV",
+        "conv_type": "channel",
+        "class": "deny",
+        "deny_reason": "lead_name",
+        "hub_kind": null,
+        "finance_name": false,
+        "default_watch": "unwatched",
+        "default_mute": null,
+        "name": null
+      }
+    },
+    {
+      "id": "CL15",
+      "name": "N1's suffix summit-non-vob-leads (not listed): the token rule",
+      "meta": {
+        "id": "C0SUMNNV",
+        "convType": "channel",
+        "name": "summit-non-vob-leads",
+        "isMember": true,
+        "isPrivate": false,
+        "isExtShared": false,
+        "isPendingExtShared": false,
+        "isArchived": false,
+        "imUser": null
+      },
+      "expect": {
+        "class": "deny",
+        "denyReason": "lead_name",
+        "hubKind": null,
+        "financeName": false,
+        "defaultWatch": "unwatched",
+        "defaultMute": null
+      },
+      "expectClassRow": {
+        "channel_id": "C0SUMNNV",
+        "conv_type": "channel",
+        "class": "deny",
+        "deny_reason": "lead_name",
+        "hub_kind": null,
+        "finance_name": false,
+        "default_watch": "unwatched",
+        "default_mute": null,
+        "name": null
+      }
+    },
+    {
+      "id": "CL15",
+      "name": "N1's suffix summit-calendly (not listed): the token rule",
+      "meta": {
+        "id": "C0SUMCAL",
+        "convType": "channel",
+        "name": "summit-calendly",
+        "isMember": true,
+        "isPrivate": false,
+        "isExtShared": false,
+        "isPendingExtShared": false,
+        "isArchived": false,
+        "imUser": null
+      },
+      "expect": {
+        "class": "deny",
+        "denyReason": "lead_name",
+        "hubKind": null,
+        "financeName": false,
+        "defaultWatch": "unwatched",
+        "defaultMute": null
+      },
+      "expectClassRow": {
+        "channel_id": "C0SUMCAL",
+        "conv_type": "channel",
+        "class": "deny",
+        "deny_reason": "lead_name",
+        "hub_kind": null,
+        "finance_name": false,
+        "default_watch": "unwatched",
+        "default_mute": null,
+        "name": null
+      }
+    },
+    {
+      "id": "CL15",
+      "name": "N1's suffix summit-zap-errors (not listed): the token rule",
+      "meta": {
+        "id": "C0SUMZAP",
+        "convType": "channel",
+        "name": "summit-zap-errors",
+        "isMember": true,
+        "isPrivate": false,
+        "isExtShared": false,
+        "isPendingExtShared": false,
+        "isArchived": false,
+        "imUser": null
+      },
+      "expect": {
+        "class": "deny",
+        "denyReason": "lead_name",
+        "hubKind": null,
+        "financeName": false,
+        "defaultWatch": "unwatched",
+        "defaultMute": null
+      },
+      "expectClassRow": {
+        "channel_id": "C0SUMZAP",
+        "conv_type": "channel",
+        "class": "deny",
+        "deny_reason": "lead_name",
+        "hub_kind": null,
+        "finance_name": false,
+        "default_watch": "unwatched",
+        "default_mute": null,
+        "name": null
+      }
+    },
+    {
+      "id": "CL15b",
+      "name": "legacy SOP / token-rule name smt-fb-leads-vob",
+      "meta": {
+        "id": "C0SMTVOB",
+        "convType": "channel",
+        "name": "smt-fb-leads-vob",
+        "isMember": true,
+        "isPrivate": false,
+        "isExtShared": false,
+        "isPendingExtShared": false,
+        "isArchived": false,
+        "imUser": null
+      },
+      "expect": {
+        "class": "deny",
+        "denyReason": "lead_name",
+        "hubKind": null,
+        "financeName": false,
+        "defaultWatch": "unwatched",
+        "defaultMute": null
+      },
+      "expectClassRow": {
+        "channel_id": "C0SMTVOB",
+        "conv_type": "channel",
+        "class": "deny",
+        "deny_reason": "lead_name",
+        "hub_kind": null,
+        "finance_name": false,
+        "default_watch": "unwatched",
+        "default_mute": null,
+        "name": null
+      }
+    },
+    {
+      "id": "CL15b",
+      "name": "legacy SOP / token-rule name smt-fb-leads-non-vob",
+      "meta": {
+        "id": "C0SMTNVOB",
+        "convType": "channel",
+        "name": "smt-fb-leads-non-vob",
+        "isMember": true,
+        "isPrivate": false,
+        "isExtShared": false,
+        "isPendingExtShared": false,
+        "isArchived": false,
+        "imUser": null
+      },
+      "expect": {
+        "class": "deny",
+        "denyReason": "lead_name",
+        "hubKind": null,
+        "financeName": false,
+        "defaultWatch": "unwatched",
+        "defaultMute": null
+      },
+      "expectClassRow": {
+        "channel_id": "C0SMTNVOB",
+        "conv_type": "channel",
+        "class": "deny",
+        "deny_reason": "lead_name",
+        "hub_kind": null,
+        "finance_name": false,
+        "default_watch": "unwatched",
+        "default_mute": null,
+        "name": null
+      }
+    },
+    {
+      "id": "CL15b",
+      "name": "legacy SOP / token-rule name smt-calendly-call-booked",
+      "meta": {
+        "id": "C0SMTCAL",
+        "convType": "channel",
+        "name": "smt-calendly-call-booked",
+        "isMember": true,
+        "isPrivate": false,
+        "isExtShared": false,
+        "isPendingExtShared": false,
+        "isArchived": false,
+        "imUser": null
+      },
+      "expect": {
+        "class": "deny",
+        "denyReason": "lead_name",
+        "hubKind": null,
+        "financeName": false,
+        "defaultWatch": "unwatched",
+        "defaultMute": null
+      },
+      "expectClassRow": {
+        "channel_id": "C0SMTCAL",
+        "conv_type": "channel",
+        "class": "deny",
+        "deny_reason": "lead_name",
+        "hub_kind": null,
+        "finance_name": false,
+        "default_watch": "unwatched",
+        "default_mute": null,
+        "name": null
+      }
+    },
+    {
+      "id": "CL15b",
+      "name": "legacy SOP / token-rule name smt-failsafe",
+      "meta": {
+        "id": "C0SMTFAIL",
+        "convType": "channel",
+        "name": "smt-failsafe",
+        "isMember": true,
+        "isPrivate": false,
+        "isExtShared": false,
+        "isPendingExtShared": false,
+        "isArchived": false,
+        "imUser": null
+      },
+      "expect": {
+        "class": "deny",
+        "denyReason": "lead_name",
+        "hubKind": null,
+        "financeName": false,
+        "defaultWatch": "unwatched",
+        "defaultMute": null
+      },
+      "expectClassRow": {
+        "channel_id": "C0SMTFAIL",
+        "conv_type": "channel",
+        "class": "deny",
+        "deny_reason": "lead_name",
+        "hub_kind": null,
+        "finance_name": false,
+        "default_watch": "unwatched",
+        "default_mute": null,
+        "name": null
+      }
+    },
+    {
+      "id": "CL15b",
+      "name": "legacy SOP / token-rule name west-zap-error",
+      "meta": {
+        "id": "C0WESTZAP",
+        "convType": "channel",
+        "name": "west-zap-error",
+        "isMember": true,
+        "isPrivate": false,
+        "isExtShared": false,
+        "isPendingExtShared": false,
+        "isArchived": false,
+        "imUser": null
+      },
+      "expect": {
+        "class": "deny",
+        "denyReason": "lead_name",
+        "hubKind": null,
+        "financeName": false,
+        "defaultWatch": "unwatched",
+        "defaultMute": null
+      },
+      "expectClassRow": {
+        "channel_id": "C0WESTZAP",
+        "conv_type": "channel",
+        "class": "deny",
+        "deny_reason": "lead_name",
+        "hub_kind": null,
+        "finance_name": false,
+        "default_watch": "unwatched",
+        "default_mute": null,
+        "name": null
+      }
+    },
+    {
+      "id": "CL15b",
+      "name": "legacy SOP / token-rule name fb-lead-intake",
+      "meta": {
+        "id": "C0FBLEAD",
+        "convType": "channel",
+        "name": "fb-lead-intake",
+        "isMember": true,
+        "isPrivate": false,
+        "isExtShared": false,
+        "isPendingExtShared": false,
+        "isArchived": false,
+        "imUser": null
+      },
+      "expect": {
+        "class": "deny",
+        "denyReason": "lead_name",
+        "hubKind": null,
+        "financeName": false,
+        "defaultWatch": "unwatched",
+        "defaultMute": null
+      },
+      "expectClassRow": {
+        "channel_id": "C0FBLEAD",
+        "conv_type": "channel",
+        "class": "deny",
+        "deny_reason": "lead_name",
+        "hub_kind": null,
+        "finance_name": false,
+        "default_watch": "unwatched",
+        "default_mute": null,
+        "name": null
+      }
+    },
+    {
+      "id": "CL15b",
+      "name": "legacy SOP / token-rule name leads-fb-west",
+      "meta": {
+        "id": "C0LEADSFB",
+        "convType": "channel",
+        "name": "leads-fb-west",
+        "isMember": true,
+        "isPrivate": false,
+        "isExtShared": false,
+        "isPendingExtShared": false,
+        "isArchived": false,
+        "imUser": null
+      },
+      "expect": {
+        "class": "deny",
+        "denyReason": "lead_name",
+        "hubKind": null,
+        "financeName": false,
+        "defaultWatch": "unwatched",
+        "defaultMute": null
+      },
+      "expectClassRow": {
+        "channel_id": "C0LEADSFB",
+        "conv_type": "channel",
+        "class": "deny",
+        "deny_reason": "lead_name",
+        "hub_kind": null,
+        "finance_name": false,
+        "default_watch": "unwatched",
+        "default_mute": null,
+        "name": null
+      }
+    },
+    {
+      "id": "CL15b",
+      "name": "negative: calendar is not a lead name",
+      "meta": {
+        "id": "C0CALENDAR",
+        "convType": "channel",
+        "name": "calendar",
+        "isMember": true,
+        "isPrivate": false,
+        "isExtShared": false,
+        "isPendingExtShared": false,
+        "isArchived": false,
+        "imUser": null
+      },
+      "expect": {
+        "class": "standard",
+        "denyReason": null,
+        "hubKind": null,
+        "financeName": false,
+        "defaultWatch": "watched",
+        "defaultMute": null
+      },
+      "expectClassRow": {
+        "channel_id": "C0CALENDAR",
+        "conv_type": "channel",
+        "class": "standard",
+        "deny_reason": null,
+        "hub_kind": null,
+        "finance_name": false,
+        "default_watch": "watched",
+        "default_mute": null,
+        "name": "calendar"
+      }
+    },
+    {
+      "id": "CL15b",
+      "name": "negative: vobis is not a lead name",
+      "meta": {
+        "id": "C0VOBIS",
+        "convType": "channel",
+        "name": "vobis",
+        "isMember": true,
+        "isPrivate": false,
+        "isExtShared": false,
+        "isPendingExtShared": false,
+        "isArchived": false,
+        "imUser": null
+      },
+      "expect": {
+        "class": "standard",
+        "denyReason": null,
+        "hubKind": null,
+        "financeName": false,
+        "defaultWatch": "watched",
+        "defaultMute": null
+      },
+      "expectClassRow": {
+        "channel_id": "C0VOBIS",
+        "conv_type": "channel",
+        "class": "standard",
+        "deny_reason": null,
+        "hub_kind": null,
+        "finance_name": false,
+        "default_watch": "watched",
+        "default_mute": null,
+        "name": "vobis"
+      }
+    },
+    {
+      "id": "CL15b",
+      "name": "negative: fbi-tools is not a lead name",
+      "meta": {
+        "id": "C0FBI",
+        "convType": "channel",
+        "name": "fbi-tools",
+        "isMember": true,
+        "isPrivate": false,
+        "isExtShared": false,
+        "isPendingExtShared": false,
+        "isArchived": false,
+        "imUser": null
+      },
+      "expect": {
+        "class": "standard",
+        "denyReason": null,
+        "hubKind": null,
+        "financeName": false,
+        "defaultWatch": "watched",
+        "defaultMute": null
+      },
+      "expectClassRow": {
+        "channel_id": "C0FBI",
+        "conv_type": "channel",
+        "class": "standard",
+        "deny_reason": null,
+        "hub_kind": null,
+        "finance_name": false,
+        "default_watch": "watched",
+        "default_mute": null,
+        "name": "fbi-tools"
+      }
+    },
+    {
+      "id": "CL15b",
+      "name": "negative: leadership-fb is not a lead name",
+      "meta": {
+        "id": "C0LEADERFB",
+        "convType": "channel",
+        "name": "leadership-fb",
+        "isMember": true,
+        "isPrivate": false,
+        "isExtShared": false,
+        "isPendingExtShared": false,
+        "isArchived": false,
+        "imUser": null
+      },
+      "expect": {
+        "class": "standard",
+        "denyReason": null,
+        "hubKind": null,
+        "financeName": false,
+        "defaultWatch": "watched",
+        "defaultMute": null
+      },
+      "expectClassRow": {
+        "channel_id": "C0LEADERFB",
+        "conv_type": "channel",
+        "class": "standard",
+        "deny_reason": null,
+        "hub_kind": null,
+        "finance_name": false,
+        "default_watch": "watched",
+        "default_mute": null,
+        "name": "leadership-fb"
+      }
+    },
+    {
+      "id": "CL15b",
+      "name": "negative: zap-tools is not a lead name",
+      "meta": {
+        "id": "C0ZAPTOOLS",
+        "convType": "channel",
+        "name": "zap-tools",
+        "isMember": true,
+        "isPrivate": false,
+        "isExtShared": false,
+        "isPendingExtShared": false,
+        "isArchived": false,
+        "imUser": null
+      },
+      "expect": {
+        "class": "standard",
+        "denyReason": null,
+        "hubKind": null,
+        "financeName": false,
+        "defaultWatch": "watched",
+        "defaultMute": null
+      },
+      "expectClassRow": {
+        "channel_id": "C0ZAPTOOLS",
+        "conv_type": "channel",
+        "class": "standard",
+        "deny_reason": null,
+        "hub_kind": null,
+        "finance_name": false,
+        "default_watch": "watched",
+        "default_mute": null,
+        "name": "zap-tools"
+      }
+    },
+    {
+      "id": "CL16",
+      "name": "leads + the FB prefix bright-paths",
+      "meta": {
+        "id": "C0BPNEW",
+        "convType": "channel",
+        "name": "bright-paths-new-leads",
+        "isMember": true,
+        "isPrivate": false,
+        "isExtShared": false,
+        "isPendingExtShared": false,
+        "isArchived": false,
+        "imUser": null
+      },
+      "expect": {
+        "class": "deny",
+        "denyReason": "lead_name",
+        "hubKind": null,
+        "financeName": false,
+        "defaultWatch": "unwatched",
+        "defaultMute": null
+      },
+      "expectClassRow": {
+        "channel_id": "C0BPNEW",
+        "conv_type": "channel",
+        "class": "deny",
+        "deny_reason": "lead_name",
+        "hub_kind": null,
+        "finance_name": false,
+        "default_watch": "unwatched",
+        "default_mute": null,
+        "name": null
+      }
+    },
+    {
+      "id": "CL17",
+      "name": "leads + a client slug",
+      "meta": {
+        "id": "C0SWLI",
+        "convType": "channel",
+        "name": "summit-wellness-leads-intake",
+        "isMember": true,
+        "isPrivate": false,
+        "isExtShared": false,
+        "isPendingExtShared": false,
+        "isArchived": false,
+        "imUser": null
+      },
+      "expect": {
+        "class": "deny",
+        "denyReason": "lead_name",
+        "hubKind": null,
+        "financeName": false,
+        "defaultWatch": "unwatched",
+        "defaultMute": null
+      },
+      "expectClassRow": {
+        "channel_id": "C0SWLI",
+        "conv_type": "channel",
+        "class": "deny",
+        "deny_reason": "lead_name",
+        "hub_kind": null,
+        "finance_name": false,
+        "default_watch": "unwatched",
+        "default_mute": null,
+        "name": null
+      }
+    },
+    {
+      "id": "CL18",
+      "name": "leads + a client's first token (>= 5 characters)",
+      "meta": {
+        "id": "C0SUMLEADS",
+        "convType": "channel",
+        "name": "summit-leads",
+        "isMember": true,
+        "isPrivate": false,
+        "isExtShared": false,
+        "isPendingExtShared": false,
+        "isArchived": false,
+        "imUser": null
+      },
+      "expect": {
+        "class": "deny",
+        "denyReason": "lead_name",
+        "hubKind": null,
+        "financeName": false,
+        "defaultWatch": "unwatched",
+        "defaultMute": null
+      },
+      "expectClassRow": {
+        "channel_id": "C0SUMLEADS",
+        "conv_type": "channel",
+        "class": "deny",
+        "deny_reason": "lead_name",
+        "hub_kind": null,
+        "finance_name": false,
+        "default_watch": "unwatched",
+        "default_mute": null,
+        "name": null
+      }
+    },
+    {
+      "id": "CL19",
+      "name": "leadership: no slug, no suffix",
+      "meta": {
+        "id": "C0LEADERSHIP",
+        "convType": "channel",
+        "name": "leadership",
+        "isMember": true,
+        "isPrivate": false,
+        "isExtShared": false,
+        "isPendingExtShared": false,
+        "isArchived": false,
+        "imUser": null
+      },
+      "expect": {
+        "class": "standard",
+        "denyReason": null,
+        "hubKind": null,
+        "financeName": false,
+        "defaultWatch": "watched",
+        "defaultMute": null
+      },
+      "expectClassRow": {
+        "channel_id": "C0LEADERSHIP",
+        "conv_type": "channel",
+        "class": "standard",
+        "deny_reason": null,
+        "hub_kind": null,
+        "finance_name": false,
+        "default_watch": "watched",
+        "default_mute": null,
+        "name": "leadership"
+      }
+    },
+    {
+      "id": "CL20",
+      "name": "sales-leads with no slug",
+      "meta": {
+        "id": "C0SALES",
+        "convType": "channel",
+        "name": "sales-leads",
+        "isMember": true,
+        "isPrivate": false,
+        "isExtShared": false,
+        "isPendingExtShared": false,
+        "isArchived": false,
+        "imUser": null
+      },
+      "expect": {
+        "class": "standard",
+        "denyReason": null,
+        "hubKind": null,
+        "financeName": false,
+        "defaultWatch": "watched",
+        "defaultMute": null
+      },
+      "expectClassRow": {
+        "channel_id": "C0SALES",
+        "conv_type": "channel",
+        "class": "standard",
+        "deny_reason": null,
+        "hub_kind": null,
+        "finance_name": false,
+        "default_watch": "watched",
+        "default_mute": null,
+        "name": "sales-leads"
+      }
+    },
+    {
+      "id": "CL21",
+      "name": "the outbound hub (member)",
+      "meta": {
+        "id": "C0OUT",
+        "convType": "channel",
+        "name": "outbound-replies",
+        "isMember": true,
+        "isPrivate": false,
+        "isExtShared": false,
+        "isPendingExtShared": false,
+        "isArchived": false,
+        "imUser": null
+      },
+      "expect": {
+        "class": "hub",
+        "denyReason": null,
+        "hubKind": "outbound",
+        "financeName": false,
+        "defaultWatch": "watched",
+        "defaultMute": null
+      },
+      "expectClassRow": {
+        "channel_id": "C0OUT",
+        "conv_type": "channel",
+        "class": "hub",
+        "deny_reason": null,
+        "hub_kind": "outbound",
+        "finance_name": false,
+        "default_watch": "watched",
+        "default_mute": null,
+        "name": "outbound-replies"
+      }
+    },
+    {
+      "id": "CL21",
+      "name": "the outbound hub (not a member)",
+      "meta": {
+        "id": "C0OUT",
+        "convType": "channel",
+        "name": "outbound-replies",
+        "isMember": false,
+        "isPrivate": false,
+        "isExtShared": false,
+        "isPendingExtShared": false,
+        "isArchived": false,
+        "imUser": null
+      },
+      "expect": {
+        "class": "hub",
+        "denyReason": null,
+        "hubKind": "outbound",
+        "financeName": false,
+        "defaultWatch": "unwatched",
+        "defaultMute": null
+      },
+      "expectClassRow": {
+        "channel_id": "C0OUT",
+        "conv_type": "channel",
+        "class": "hub",
+        "deny_reason": null,
+        "hub_kind": "outbound",
+        "finance_name": false,
+        "default_watch": "unwatched",
+        "default_mute": null,
+        "name": "outbound-replies"
+      }
+    },
+    {
+      "id": "CL22",
+      "name": "the client-email hub",
+      "meta": {
+        "id": "C0EMAILN",
+        "convType": "group",
+        "name": "email-notifs",
+        "isMember": true,
+        "isPrivate": true,
+        "isExtShared": false,
+        "isPendingExtShared": false,
+        "isArchived": false,
+        "imUser": null
+      },
+      "expect": {
+        "class": "hub",
+        "denyReason": null,
+        "hubKind": "client_email",
+        "financeName": false,
+        "defaultWatch": "watched",
+        "defaultMute": null
+      },
+      "expectClassRow": {
+        "channel_id": "C0EMAILN",
+        "conv_type": "group",
+        "class": "hub",
+        "deny_reason": null,
+        "hub_kind": "client_email",
+        "finance_name": false,
+        "default_watch": "watched",
+        "default_mute": null,
+        "name": "email-notifs"
+      }
+    },
+    {
+      "id": "CL23",
+      "name": "a lead-named Slack Connect channel: deny beats external",
+      "meta": {
+        "id": "C0PARTVOB",
+        "convType": "channel",
+        "name": "partner-vob-leads",
+        "isMember": true,
+        "isPrivate": false,
+        "isExtShared": true,
+        "isPendingExtShared": false,
+        "isArchived": false,
+        "imUser": null
+      },
+      "expect": {
+        "class": "deny",
+        "denyReason": "lead_name",
+        "hubKind": null,
+        "financeName": false,
+        "defaultWatch": "unwatched",
+        "defaultMute": null
+      },
+      "expectClassRow": {
+        "channel_id": "C0PARTVOB",
+        "conv_type": "channel",
+        "class": "deny",
+        "deny_reason": "lead_name",
+        "hub_kind": null,
+        "finance_name": false,
+        "default_watch": "unwatched",
+        "default_mute": null,
+        "name": null
+      }
+    },
+    {
+      "id": "CL24",
+      "name": "the outbound hub, shared: hub beats external",
+      "meta": {
+        "id": "C0OUT",
+        "convType": "channel",
+        "name": "outbound-replies",
+        "isMember": true,
+        "isPrivate": false,
+        "isExtShared": true,
+        "isPendingExtShared": false,
+        "isArchived": false,
+        "imUser": null
+      },
+      "expect": {
+        "class": "hub",
+        "denyReason": null,
+        "hubKind": "outbound",
+        "financeName": false,
+        "defaultWatch": "watched",
+        "defaultMute": null
+      },
+      "expectClassRow": {
+        "channel_id": "C0OUT",
+        "conv_type": "channel",
+        "class": "hub",
+        "deny_reason": null,
+        "hub_kind": "outbound",
+        "finance_name": false,
+        "default_watch": "watched",
+        "default_mute": null,
+        "name": "outbound-replies"
+      }
+    },
+    {
+      "id": "CL25",
+      "name": "is_ext_shared",
+      "meta": {
+        "id": "C0SHARED",
+        "convType": "channel",
+        "name": "partner-collab",
+        "isMember": true,
+        "isPrivate": false,
+        "isExtShared": true,
+        "isPendingExtShared": false,
+        "isArchived": false,
+        "imUser": null
+      },
+      "expect": {
+        "class": "external",
+        "denyReason": null,
+        "hubKind": null,
+        "financeName": false,
+        "defaultWatch": "watched",
+        "defaultMute": null
+      },
+      "expectClassRow": {
+        "channel_id": "C0SHARED",
+        "conv_type": "channel",
+        "class": "external",
+        "deny_reason": null,
+        "hub_kind": null,
+        "finance_name": false,
+        "default_watch": "watched",
+        "default_mute": null,
+        "name": "partner-collab"
+      }
+    },
+    {
+      "id": "CL26",
+      "name": "is_pending_ext_shared",
+      "meta": {
+        "id": "C0PENDING",
+        "convType": "channel",
+        "name": "partner-pending",
+        "isMember": true,
+        "isPrivate": false,
+        "isExtShared": false,
+        "isPendingExtShared": true,
+        "isArchived": false,
+        "imUser": null
+      },
+      "expect": {
+        "class": "external",
+        "denyReason": null,
+        "hubKind": null,
+        "financeName": false,
+        "defaultWatch": "watched",
+        "defaultMute": null
+      },
+      "expectClassRow": {
+        "channel_id": "C0PENDING",
+        "conv_type": "channel",
+        "class": "external",
+        "deny_reason": null,
+        "hub_kind": null,
+        "finance_name": false,
+        "default_watch": "watched",
+        "default_mute": null,
+        "name": "partner-pending"
+      }
+    },
+    {
+      "id": "CL27",
+      "name": "a shared finance-named channel (member): external with financeName, default muted",
+      "meta": {
+        "id": "C0EXTFIN",
+        "convType": "channel",
+        "name": "finance-team",
+        "isMember": true,
+        "isPrivate": false,
+        "isExtShared": true,
+        "isPendingExtShared": false,
+        "isArchived": false,
+        "imUser": null
+      },
+      "expect": {
+        "class": "external",
+        "denyReason": null,
+        "hubKind": null,
+        "financeName": true,
+        "defaultWatch": "muted",
+        "defaultMute": "default_finance"
+      },
+      "expectClassRow": {
+        "channel_id": "C0EXTFIN",
+        "conv_type": "channel",
+        "class": "external",
+        "deny_reason": null,
+        "hub_kind": null,
+        "finance_name": true,
+        "default_watch": "muted",
+        "default_mute": "default_finance",
+        "name": "finance-team"
+      }
+    },
+    {
+      "id": "CL27",
+      "name": "a shared finance-named channel (not a member): unwatched",
+      "meta": {
+        "id": "C0EXTFIN",
+        "convType": "channel",
+        "name": "finance-team",
+        "isMember": false,
+        "isPrivate": false,
+        "isExtShared": true,
+        "isPendingExtShared": false,
+        "isArchived": false,
+        "imUser": null
+      },
+      "expect": {
+        "class": "external",
+        "denyReason": null,
+        "hubKind": null,
+        "financeName": true,
+        "defaultWatch": "unwatched",
+        "defaultMute": null
+      },
+      "expectClassRow": {
+        "channel_id": "C0EXTFIN",
+        "conv_type": "channel",
+        "class": "external",
+        "deny_reason": null,
+        "hub_kind": null,
+        "finance_name": true,
+        "default_watch": "unwatched",
+        "default_mute": null,
+        "name": "finance-team"
+      }
+    },
+    {
+      "id": "CL27",
+      "name": "a shared general channel",
+      "meta": {
+        "id": "C0EXTGEN",
+        "convType": "channel",
+        "name": "general",
+        "isMember": true,
+        "isPrivate": false,
+        "isExtShared": true,
+        "isPendingExtShared": false,
+        "isArchived": false,
+        "imUser": null
+      },
+      "expect": {
+        "class": "external",
+        "denyReason": null,
+        "hubKind": null,
+        "financeName": false,
+        "defaultWatch": "watched",
+        "defaultMute": null
+      },
+      "expectClassRow": {
+        "channel_id": "C0EXTGEN",
+        "conv_type": "channel",
+        "class": "external",
+        "deny_reason": null,
+        "hub_kind": null,
+        "finance_name": false,
+        "default_watch": "watched",
+        "default_mute": null,
+        "name": "general"
+      }
+    },
+    {
+      "id": "CL28",
+      "name": "finance name finance (member): default muted",
+      "meta": {
+        "id": "C0FIN",
+        "convType": "channel",
+        "name": "finance",
+        "isMember": true,
+        "isPrivate": false,
+        "isExtShared": false,
+        "isPendingExtShared": false,
+        "isArchived": false,
+        "imUser": null
+      },
+      "expect": {
+        "class": "finance",
+        "denyReason": null,
+        "hubKind": null,
+        "financeName": true,
+        "defaultWatch": "muted",
+        "defaultMute": "default_finance"
+      },
+      "expectClassRow": {
+        "channel_id": "C0FIN",
+        "conv_type": "channel",
+        "class": "finance",
+        "deny_reason": null,
+        "hub_kind": null,
+        "finance_name": true,
+        "default_watch": "muted",
+        "default_mute": "default_finance",
+        "name": "finance"
+      }
+    },
+    {
+      "id": "CL28",
+      "name": "finance name team-payroll (member): default muted",
+      "meta": {
+        "id": "C0PAYROLL",
+        "convType": "channel",
+        "name": "team-payroll",
+        "isMember": true,
+        "isPrivate": false,
+        "isExtShared": false,
+        "isPendingExtShared": false,
+        "isArchived": false,
+        "imUser": null
+      },
+      "expect": {
+        "class": "finance",
+        "denyReason": null,
+        "hubKind": null,
+        "financeName": true,
+        "defaultWatch": "muted",
+        "defaultMute": "default_finance"
+      },
+      "expectClassRow": {
+        "channel_id": "C0PAYROLL",
+        "conv_type": "channel",
+        "class": "finance",
+        "deny_reason": null,
+        "hub_kind": null,
+        "finance_name": true,
+        "default_watch": "muted",
+        "default_mute": "default_finance",
+        "name": "team-payroll"
+      }
+    },
+    {
+      "id": "CL28",
+      "name": "finance name hr (member): default muted",
+      "meta": {
+        "id": "G0HR",
+        "convType": "group",
+        "name": "hr",
+        "isMember": true,
+        "isPrivate": true,
+        "isExtShared": false,
+        "isPendingExtShared": false,
+        "isArchived": false,
+        "imUser": null
+      },
+      "expect": {
+        "class": "finance",
+        "denyReason": null,
+        "hubKind": null,
+        "financeName": true,
+        "defaultWatch": "muted",
+        "defaultMute": "default_finance"
+      },
+      "expectClassRow": {
+        "channel_id": "G0HR",
+        "conv_type": "group",
+        "class": "finance",
+        "deny_reason": null,
+        "hub_kind": null,
+        "finance_name": true,
+        "default_watch": "muted",
+        "default_mute": "default_finance",
+        "name": "hr"
+      }
+    },
+    {
+      "id": "CL28",
+      "name": "finance name legal-contracts (member): default muted",
+      "meta": {
+        "id": "C0LEGAL",
+        "convType": "channel",
+        "name": "legal-contracts",
+        "isMember": true,
+        "isPrivate": false,
+        "isExtShared": false,
+        "isPendingExtShared": false,
+        "isArchived": false,
+        "imUser": null
+      },
+      "expect": {
+        "class": "finance",
+        "denyReason": null,
+        "hubKind": null,
+        "financeName": true,
+        "defaultWatch": "muted",
+        "defaultMute": "default_finance"
+      },
+      "expectClassRow": {
+        "channel_id": "C0LEGAL",
+        "conv_type": "channel",
+        "class": "finance",
+        "deny_reason": null,
+        "hub_kind": null,
+        "finance_name": true,
+        "default_watch": "muted",
+        "default_mute": "default_finance",
+        "name": "legal-contracts"
+      }
+    },
+    {
+      "id": "CL28",
+      "name": "finance name billing.ops (member): default muted",
+      "meta": {
+        "id": "C0BILLING",
+        "convType": "channel",
+        "name": "billing.ops",
+        "isMember": true,
+        "isPrivate": false,
+        "isExtShared": false,
+        "isPendingExtShared": false,
+        "isArchived": false,
+        "imUser": null
+      },
+      "expect": {
+        "class": "finance",
+        "denyReason": null,
+        "hubKind": null,
+        "financeName": true,
+        "defaultWatch": "muted",
+        "defaultMute": "default_finance"
+      },
+      "expectClassRow": {
+        "channel_id": "C0BILLING",
+        "conv_type": "channel",
+        "class": "finance",
+        "deny_reason": null,
+        "hub_kind": null,
+        "finance_name": true,
+        "default_watch": "muted",
+        "default_mute": "default_finance",
+        "name": "billing.ops"
+      }
+    },
+    {
+      "id": "CL28",
+      "name": "finance name taxes (member): default muted",
+      "meta": {
+        "id": "C0TAXES",
+        "convType": "channel",
+        "name": "taxes",
+        "isMember": true,
+        "isPrivate": false,
+        "isExtShared": false,
+        "isPendingExtShared": false,
+        "isArchived": false,
+        "imUser": null
+      },
+      "expect": {
+        "class": "finance",
+        "denyReason": null,
+        "hubKind": null,
+        "financeName": true,
+        "defaultWatch": "muted",
+        "defaultMute": "default_finance"
+      },
+      "expectClassRow": {
+        "channel_id": "C0TAXES",
+        "conv_type": "channel",
+        "class": "finance",
+        "deny_reason": null,
+        "hub_kind": null,
+        "finance_name": true,
+        "default_watch": "muted",
+        "default_mute": "default_finance",
+        "name": "taxes"
+      }
+    },
+    {
+      "id": "CL28",
+      "name": "finance name (not a member): unwatched",
+      "meta": {
+        "id": "C0FINNM",
+        "convType": "channel",
+        "name": "finance-ops",
+        "isMember": false,
+        "isPrivate": false,
+        "isExtShared": false,
+        "isPendingExtShared": false,
+        "isArchived": false,
+        "imUser": null
+      },
+      "expect": {
+        "class": "finance",
+        "denyReason": null,
+        "hubKind": null,
+        "financeName": true,
+        "defaultWatch": "unwatched",
+        "defaultMute": null
+      },
+      "expectClassRow": {
+        "channel_id": "C0FINNM",
+        "conv_type": "channel",
+        "class": "finance",
+        "deny_reason": null,
+        "hub_kind": null,
+        "finance_name": true,
+        "default_watch": "unwatched",
+        "default_mute": null,
+        "name": "finance-ops"
+      }
+    },
+    {
+      "id": "CL28",
+      "name": "negative (word boundaries): hrm-tools",
+      "meta": {
+        "id": "C0HRM",
+        "convType": "channel",
+        "name": "hrm-tools",
+        "isMember": true,
+        "isPrivate": false,
+        "isExtShared": false,
+        "isPendingExtShared": false,
+        "isArchived": false,
+        "imUser": null
+      },
+      "expect": {
+        "class": "standard",
+        "denyReason": null,
+        "hubKind": null,
+        "financeName": false,
+        "defaultWatch": "watched",
+        "defaultMute": null
+      },
+      "expectClassRow": {
+        "channel_id": "C0HRM",
+        "conv_type": "channel",
+        "class": "standard",
+        "deny_reason": null,
+        "hub_kind": null,
+        "finance_name": false,
+        "default_watch": "watched",
+        "default_mute": null,
+        "name": "hrm-tools"
+      }
+    },
+    {
+      "id": "CL28",
+      "name": "negative (word boundaries): shrink",
+      "meta": {
+        "id": "C0SHRINK",
+        "convType": "channel",
+        "name": "shrink",
+        "isMember": true,
+        "isPrivate": false,
+        "isExtShared": false,
+        "isPendingExtShared": false,
+        "isArchived": false,
+        "imUser": null
+      },
+      "expect": {
+        "class": "standard",
+        "denyReason": null,
+        "hubKind": null,
+        "financeName": false,
+        "defaultWatch": "watched",
+        "defaultMute": null
+      },
+      "expectClassRow": {
+        "channel_id": "C0SHRINK",
+        "conv_type": "channel",
+        "class": "standard",
+        "deny_reason": null,
+        "hub_kind": null,
+        "finance_name": false,
+        "default_watch": "watched",
+        "default_mute": null,
+        "name": "shrink"
+      }
+    },
+    {
+      "id": "CL28",
+      "name": "negative (word boundaries): paperwork",
+      "meta": {
+        "id": "C0PAPER",
+        "convType": "channel",
+        "name": "paperwork",
+        "isMember": true,
+        "isPrivate": false,
+        "isExtShared": false,
+        "isPendingExtShared": false,
+        "isArchived": false,
+        "imUser": null
+      },
+      "expect": {
+        "class": "standard",
+        "denyReason": null,
+        "hubKind": null,
+        "financeName": false,
+        "defaultWatch": "watched",
+        "defaultMute": null
+      },
+      "expectClassRow": {
+        "channel_id": "C0PAPER",
+        "conv_type": "channel",
+        "class": "standard",
+        "deny_reason": null,
+        "hub_kind": null,
+        "finance_name": false,
+        "default_watch": "watched",
+        "default_mute": null,
+        "name": "paperwork"
+      }
+    },
+    {
+      "id": "CL29",
+      "name": "a channel with a null name",
+      "meta": {
+        "id": "C0NONAME",
+        "convType": "channel",
+        "name": null,
+        "isMember": true,
+        "isPrivate": false,
+        "isExtShared": false,
+        "isPendingExtShared": false,
+        "isArchived": false,
+        "imUser": null
+      },
+      "expect": {
+        "class": "unclassified",
+        "denyReason": null,
+        "hubKind": null,
+        "financeName": false,
+        "defaultWatch": "unwatched",
+        "defaultMute": null
+      },
+      "expectClassRow": {
+        "channel_id": "C0NONAME",
+        "conv_type": "channel",
+        "class": "unclassified",
+        "deny_reason": null,
+        "hub_kind": null,
+        "finance_name": false,
+        "default_watch": "unwatched",
+        "default_mute": null,
+        "name": null
+      }
+    },
+    {
+      "id": "CL29",
+      "name": "a group DM (no name; toClassRow keeps it null)",
+      "meta": {
+        "id": "G0MPIM",
+        "convType": "mpim",
+        "name": null,
+        "isMember": true,
+        "isPrivate": true,
+        "isExtShared": false,
+        "isPendingExtShared": false,
+        "isArchived": false,
+        "imUser": null
+      },
+      "expect": {
+        "class": "standard",
+        "denyReason": null,
+        "hubKind": null,
+        "financeName": false,
+        "defaultWatch": "watched",
+        "defaultMute": null
+      },
+      "expectClassRow": {
+        "channel_id": "G0MPIM",
+        "conv_type": "mpim",
+        "class": "standard",
+        "deny_reason": null,
+        "hub_kind": null,
+        "finance_name": false,
+        "default_watch": "watched",
+        "default_mute": null,
+        "name": null
+      }
+    },
+    {
+      "id": "CL30",
+      "name": "C34: a standard member channel in his Slack mutes",
+      "meta": {
+        "id": "C0RANDOM",
+        "convType": "channel",
+        "name": "random",
+        "isMember": true,
+        "isPrivate": false,
+        "isExtShared": false,
+        "isPendingExtShared": false,
+        "isArchived": false,
+        "imUser": null
+      },
+      "ctx": {
+        "slackMutedIds": [
+          "C0RANDOM",
+          "D0SLACKBOT2",
+          "C0OUT"
+        ]
+      },
+      "expect": {
+        "class": "standard",
+        "denyReason": null,
+        "hubKind": null,
+        "financeName": false,
+        "defaultWatch": "muted",
+        "defaultMute": "slack"
+      },
+      "expectClassRow": {
+        "channel_id": "C0RANDOM",
+        "conv_type": "channel",
+        "class": "standard",
+        "deny_reason": null,
+        "hub_kind": null,
+        "finance_name": false,
+        "default_watch": "muted",
+        "default_mute": "slack",
+        "name": "random"
+      }
+    },
+    {
+      "id": "CL30",
+      "name": "C34: a deny conversation in his Slack mutes stays deny",
+      "meta": {
+        "id": "D0SLACKBOT2",
+        "convType": "im",
+        "name": null,
+        "isMember": true,
+        "isPrivate": true,
+        "isExtShared": false,
+        "isPendingExtShared": false,
+        "isArchived": false,
+        "imUser": "USLACKBOT"
+      },
+      "ctx": {
+        "slackMutedIds": [
+          "C0RANDOM",
+          "D0SLACKBOT2",
+          "C0OUT"
+        ]
+      },
+      "expect": {
+        "class": "deny",
+        "denyReason": "bot_im",
+        "hubKind": null,
+        "financeName": false,
+        "defaultWatch": "unwatched",
+        "defaultMute": null
+      },
+      "expectClassRow": {
+        "channel_id": "D0SLACKBOT2",
+        "conv_type": "im",
+        "class": "deny",
+        "deny_reason": "bot_im",
+        "hub_kind": null,
+        "finance_name": false,
+        "default_watch": "unwatched",
+        "default_mute": null,
+        "name": null
+      }
+    },
+    {
+      "id": "CL30",
+      "name": "C34: a hub in his Slack mutes stays watched",
+      "meta": {
+        "id": "C0OUT",
+        "convType": "channel",
+        "name": "outbound-replies",
+        "isMember": true,
+        "isPrivate": false,
+        "isExtShared": false,
+        "isPendingExtShared": false,
+        "isArchived": false,
+        "imUser": null
+      },
+      "ctx": {
+        "slackMutedIds": [
+          "C0RANDOM",
+          "D0SLACKBOT2",
+          "C0OUT"
+        ]
+      },
+      "expect": {
+        "class": "hub",
+        "denyReason": null,
+        "hubKind": "outbound",
+        "financeName": false,
+        "defaultWatch": "watched",
+        "defaultMute": null
+      },
+      "expectClassRow": {
+        "channel_id": "C0OUT",
+        "conv_type": "channel",
+        "class": "hub",
+        "deny_reason": null,
+        "hub_kind": "outbound",
+        "finance_name": false,
+        "default_watch": "watched",
+        "default_mute": null,
+        "name": "outbound-replies"
+      }
+    }
+  ]
+}

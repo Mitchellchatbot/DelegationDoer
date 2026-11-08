@@ -26,6 +26,7 @@ import { intakeThreadIdsForTasks, listScreenedApprovalItems, loadIntakeScreening
 import type { ExecTextBlockParam, ExecToolResultBlockParam, ExecToolUseBlock } from "@/lib/exec/llm/request";
 import { getOverview } from "@/lib/exec/overview";
 import { getProjectDetail, getProjectsListView } from "@/lib/exec/projects-view";
+import { getSlackReadingState } from "@/lib/exec/slack-reading";
 import { ddClientRef, ddPageRef, ddProjectRef, ddTaskRef, execEmailThreadRef } from "@/lib/exec/refs";
 import {
   DdReadError,
@@ -316,6 +317,22 @@ const activityMs = (t: DdTask) => Date.parse(t.lastActivityAt) || 0;
 const cmpId = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 
 /** Soft read: the value, or "unavailable" (named in out.unavailable) when it throws. */
+/** P7a (§3.20.2, fixer security-4): the screened accessor's surface for this turn. A Slack DM turn screens as "slack", so a
+ *  finance Slack item (C20, N1: withheld on every Slack surface) never reaches the model on a turn it may relay into Slack. */
+const screenSurface = (ctx: Pick<ToolContext, "surface">): "web" | "slack" => (ctx.surface === "slack" ? "slack" : "web");
+
+/** P7a (§3.20.2, fixer ui-2): whether the assistant reads his Slack, as a source value. Reading set up (discovering, paused, on)
+ *  or failing (error) is "connected" in the chat's sense: its Slack Needs Attention items exist. Unreadable → "unavailable". */
+async function slackSource(ctx: Pick<ToolContext, "principal" | "signal">): Promise<"on" | "paused" | "discovering" | "error" | "not_connected" | "unavailable"> {
+  try {
+    const { state } = await getSlackReadingState(ctx.principal);
+    return state === "on" || state === "paused" || state === "discovering" || state === "error" ? state : "not_connected";
+  } catch {
+    ctx.signal.throwIfAborted();
+    return "unavailable";
+  }
+}
+
 async function soft<T>(out: Out, name: string, read: () => Promise<T>, signal: AbortSignal): Promise<T | "unavailable"> {
   try {
     return await read();
@@ -752,7 +769,7 @@ async function getOverviewTool(args: J, ctx: ToolContext): Promise<ToolResultDra
   const toMs = to.getTime();
   const access = await soft(out, "email", () => ctx.memo.email(), ctx.signal);
 
-  const [overview, completed, created, attention, buckets, maps] = await Promise.all([
+  const [overview, completed, created, attention, buckets, maps, slack] = await Promise.all([
     soft(out, "overview", () => getOverview(ctx.principal, ctx.now), ctx.signal),
     soft(out, "completed", () => listTasksCompletedBetween(ctx.principal, fromIso, toIso, { signal: ctx.signal }), ctx.signal),
     soft(out, "created", () => listTasksCreatedBetween(ctx.principal, fromIso, toIso, { signal: ctx.signal }), ctx.signal),
@@ -766,7 +783,7 @@ async function getOverviewTool(args: J, ctx: ToolContext): Promise<ToolResultDra
         let cursor: string | null = null;
         for (let page = 0; page < OVERVIEW_ATTENTION_PAGES; page += 1) {
           const filters: AttentionFilters = { firstSeenAfter: fromIso, limit: ATTENTION_PAGE, ...(cursor ? { cursor } : {}) };
-          const res = await listScreenedAttention(ctx.principal, filters, { now: ctx.now, signal: ctx.signal });
+          const res = await listScreenedAttention(ctx.principal, filters, { now: ctx.now, signal: ctx.signal, surface: screenSurface(ctx) });
           items.push(...res.items.filter((i) => Date.parse(i.firstSeenAt) < toMs));
           screens.push(res.emailScreen);
           hidden += res.hiddenEmail;
@@ -780,7 +797,8 @@ async function getOverviewTool(args: J, ctx: ToolContext): Promise<ToolResultDra
     access !== "unavailable" && access.state === "on"
       ? soft(out, "email_buckets", () => screenedBucketRows(ctx, access), ctx.signal)
       : Promise.resolve(null),
-    soft(out, "roster", () => rosterMaps(ctx), ctx.signal)
+    soft(out, "roster", () => rosterMaps(ctx), ctx.signal),
+    slackSource(ctx)
   ]);
   const injected = await injectedThreadIds(ctx);
 
@@ -903,7 +921,7 @@ async function getOverviewTool(args: J, ctx: ToolContext): Promise<ToolResultDra
   return out.done(
     {
       window: { since, from: out.time(fromIso), to: out.time(toIso), label: `${formatInZone(fromIso, tz, "datetime", ctx.now)} to ${formatInZone(toIso, tz, "datetime", ctx.now)}` },
-      sources: { dd: "connected", email: emailSource, slack: "not_connected" },
+      sources: { dd: "connected", email: emailSource, slack },
       now: nowPart,
       window_activity: windowPart,
       system
@@ -924,7 +942,9 @@ async function listAttentionTool(args: J, ctx: ToolContext): Promise<ToolResultD
   const source = String(args.source);
   const limit = Number(args.limit);
   const filtersEcho = { status, category, band, source, limit };
-  if (source === "slack") {
+  // P7a (fixer ui-2): "Slack isn't connected" only while it isn't: once reading is set up, its Needs Attention items are read
+  // like any other source's (through the same screen).
+  if (source === "slack" && (await slackSource(ctx)) === "not_connected") {
     out.note("Slack isn't connected yet.");
     return out.done({ filters: filtersEcho, items: capList([], limit, 0), more: false, email_screen: "none", email_hidden: 0 });
   }
@@ -935,7 +955,7 @@ async function listAttentionTool(args: J, ctx: ToolContext): Promise<ToolResultD
     ...(source === "any" ? {} : { source: source as AttentionFilters["source"] }),
     limit
   };
-  const page = await listScreenedAttention(ctx.principal, filters, { now: ctx.now, signal: ctx.signal });
+  const page = await listScreenedAttention(ctx.principal, filters, { now: ctx.now, signal: ctx.signal, surface: screenSurface(ctx) });
   const injected = await injectedThreadIds(ctx);
   const items = page.items.map((i) => attentionSummary(out, i, injected)).filter((x): x is J => x !== null);
   if (page.emailScreen === "unavailable") out.note(SCREEN_UNAVAILABLE_NOTE);
@@ -1724,7 +1744,8 @@ async function clientDetail(out: Out, ctx: ToolContext, client: DdClient): Promi
         let cursor: string | null = null;
         const fingerprints = new Set([`email:satisfaction:${client.id}`, `email:health:${client.id}`]);
         for (let page = 0; page < 3; page += 1) {
-          const res = await listScreenedAttention(ctx.principal, { limit: ATTENTION_PAGE, ...(cursor ? { cursor } : {}) }, { now: ctx.now, signal: ctx.signal });
+          const res = await listScreenedAttention(ctx.principal, { limit: ATTENTION_PAGE, ...(cursor ? { cursor } : {}) },
+            { now: ctx.now, signal: ctx.signal, surface: screenSurface(ctx) });
           screens.push(res.emailScreen);
           hidden += res.hiddenEmail;
           for (const i of res.items) {
@@ -2520,7 +2541,7 @@ async function getSourceTool(args: J, ctx: ToolContext): Promise<ToolResultDraft
       return { ...draft, json: { ref, ...draft.json } };
     }
     case "attention": {
-      const res = await getScreenedAttentionItem(ctx.principal, t.id, { now: ctx.now, signal: ctx.signal });
+      const res = await getScreenedAttentionItem(ctx.principal, t.id, { now: ctx.now, signal: ctx.signal, surface: screenSurface(ctx) });
       if (!res.ok) {
         return wrap({ note: res.reason === "screen_unavailable" ? "This item couldn't be checked just now; say email wasn't checked." : "No longer available." });
       }

@@ -1,0 +1,377 @@
+{
+  "_doc": [
+    "conversations.history / conversations.replies response shapes (CH/CR in p7/slackdocs; ING §2.2): history pages newest first, replies parent first.",
+    "history[i] = { pass?, request (the parameters the sweep must send), response }; replies = { <thread ts>: [{ request, response }] }.",
+    "channelRow / threads / stored = the state before the run. sweepCtx = sweepVerdict's context (sets as arrays; hePostedInThread from `threads`).",
+    "expect.verdicts = sweepVerdict per message ts (role, reason or reasons). Lead-owned, frozen.",
+    "WM01-WM04, WM09-WM11: a deep first sweep (no watermark) of a watched public channel he is in; two pages; one thread of his."
+  ],
+  "channel": "C0GENERAL",
+  "convType": "channel",
+  "now": "2026-11-08T15:00:00.000Z",
+  "channelRow": {
+    "class": "standard",
+    "watchState": "watched",
+    "muteSource": null,
+    "isMember": true,
+    "isPrivate": false,
+    "isExtShared": false,
+    "extEver": false,
+    "histWatermarkTs": null,
+    "deepSweptAt": null,
+    "sweptAt": null,
+    "lastEventTs": null
+  },
+  "threads": [],
+  "stored": [],
+  "sweepCtx": {
+    "conv": "channel",
+    "hisId": "U0MITCH",
+    "teamId": "T0SCALED",
+    "ddBot": {
+      "userId": "U0DDBOT",
+      "appId": "A0DDAPP"
+    },
+    "isHub": false,
+    "muted": false,
+    "muteSource": null,
+    "extConversation": false,
+    "optedOut": []
+  },
+  "history": [
+    {
+      "request": {
+        "channel": "C0GENERAL",
+        "oldest": "1793545200.000000",
+        "limit": 200,
+        "cursor": null
+      },
+      "response": {
+        "ok": true,
+        "messages": [
+          {
+            "type": "message",
+            "user": "U0MITCH",
+            "text": "<@U0JANE> SENTINEL-SLACK-TEXT-7f3a sending it now",
+            "ts": "1794149700.000200",
+            "team": "T0SCALED"
+          },
+          {
+            "type": "message",
+            "user": "U0JANE",
+            "text": "<@U0MITCH> SENTINEL-SLACK-TEXT-7f3a can you send the signed SOW?",
+            "ts": "1794149400.000100",
+            "team": "T0SCALED"
+          },
+          {
+            "type": "message",
+            "user": "U0DDBOT",
+            "text": "<@U0JANE> just finished: Fix the intake form",
+            "ts": "1794149000.000300",
+            "team": "T0SCALED",
+            "bot_id": "B0DDBOT",
+            "app_id": "A0DDAPP",
+            "bot_profile": {
+              "id": "B0DDBOT",
+              "app_id": "A0DDAPP",
+              "name": "Scaled Operations",
+              "deleted": false,
+              "team_id": "T0SCALED"
+            },
+            "blocks": [
+              {
+                "type": "section",
+                "text": {
+                  "type": "mrkdwn",
+                  "text": "<@U0JANE> just finished:"
+                }
+              },
+              {
+                "type": "section",
+                "text": {
+                  "type": "mrkdwn",
+                  "text": "*<https://operations.scaledai.org/tasks/t_42|Fix the intake form>*"
+                }
+              },
+              {
+                "type": "section",
+                "fields": [
+                  {
+                    "type": "mrkdwn",
+                    "text": "*Client*\nSENTINEL-DD-TEXT-7f3a"
+                  }
+                ]
+              },
+              {
+                "type": "actions",
+                "elements": [
+                  {
+                    "type": "button",
+                    "text": {
+                      "type": "plain_text",
+                      "text": "Open in Scaled Operations",
+                      "emoji": true
+                    },
+                    "url": "https://operations.scaledai.org/tasks/t_42",
+                    "style": "primary"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "type": "message",
+            "subtype": "bot_message",
+            "bot_id": "B0ZAP",
+            "username": "zapier",
+            "text": "SENTINEL-SLACK-TEXT-7f3a build passed",
+            "ts": "1794148500.000400"
+          },
+          {
+            "type": "message",
+            "subtype": "channel_join",
+            "user": "U0NEWBIE",
+            "text": "<@U0NEWBIE> has joined the channel",
+            "ts": "1794148000.000500"
+          },
+          {
+            "type": "message",
+            "user": "U0MITCH",
+            "text": "SENTINEL-SLACK-TEXT-7f3a thoughts on the Q4 plan for the board",
+            "ts": "1794100000.000300",
+            "team": "T0SCALED",
+            "thread_ts": "1794100000.000300",
+            "reply_count": 2,
+            "reply_users_count": 2,
+            "latest_reply": "1794140000.000500",
+            "reply_users": [
+              "U0JANE",
+              "U0BOB"
+            ]
+          },
+          {
+            "type": "message",
+            "user": "U0BOB",
+            "text": "SENTINEL-SLACK-TEXT-7f3a anyone seen the new office keys?",
+            "ts": "1794090000.000600",
+            "team": "T0SCALED"
+          },
+          {
+            "type": "message",
+            "user": "U0JANE",
+            "text": "<@U0MITCH> SENTINEL-SLACK-TEXT-7f3a the vendor list is in the drive folder",
+            "ts": "1794080000.000700",
+            "team": "T0SCALED",
+            "reactions": [
+              {
+                "name": "eyes",
+                "users": [
+                  "U0MITCH",
+                  "U0BOB"
+                ],
+                "count": 2
+              }
+            ]
+          },
+          {
+            "type": "message",
+            "user": "U0BOB",
+            "text": "<@U0MITCH> SENTINEL-SLACK-TEXT-7f3a updated agenda for the offsite attached",
+            "ts": "1794070000.000800",
+            "team": "T0SCALED",
+            "edited": {
+              "user": "U0BOB",
+              "ts": "1794071000.000000"
+            }
+          }
+        ],
+        "has_more": true,
+        "pin_count": 0,
+        "response_metadata": {
+          "next_cursor": "bmV4dF90czoxNzk0MDcwMDAw"
+        }
+      }
+    },
+    {
+      "request": {
+        "channel": "C0GENERAL",
+        "oldest": "1793545200.000000",
+        "limit": 200,
+        "cursor": "bmV4dF90czoxNzk0MDcwMDAw"
+      },
+      "response": {
+        "ok": true,
+        "messages": [
+          {
+            "type": "message",
+            "user": "U0JANE",
+            "text": "<@U0MITCH> SENTINEL-SLACK-TEXT-7f3a contract attached for your records",
+            "ts": "1793990000.000900",
+            "team": "T0SCALED",
+            "bot_id": null,
+            "files": [
+              {
+                "id": "F0CONTRACT",
+                "name": "SENTINEL-FILE-7f3a-termination-letter.pdf",
+                "title": "SENTINEL-FILE-7f3a-termination-letter.pdf",
+                "mimetype": "application/pdf",
+                "filetype": "pdf",
+                "user": "U0JANE"
+              }
+            ],
+            "upload": true,
+            "display_as_bot": false,
+            "subtype": "file_share"
+          },
+          {
+            "type": "message",
+            "user": "U0BOB",
+            "text": "SENTINEL-SLACK-TEXT-7f3a lunch order for the team is in",
+            "ts": "1793600000.001000",
+            "team": "T0SCALED"
+          }
+        ],
+        "has_more": false,
+        "pin_count": 0,
+        "response_metadata": {
+          "next_cursor": ""
+        }
+      }
+    }
+  ],
+  "replies": {
+    "1794100000.000300": [
+      {
+        "request": {
+          "channel": "C0GENERAL",
+          "ts": "1794100000.000300",
+          "limit": 200,
+          "cursor": null
+        },
+        "response": {
+          "ok": true,
+          "messages": [
+            {
+              "type": "message",
+              "user": "U0MITCH",
+              "text": "SENTINEL-SLACK-TEXT-7f3a thoughts on the Q4 plan for the board",
+              "ts": "1794100000.000300",
+              "team": "T0SCALED",
+              "thread_ts": "1794100000.000300",
+              "reply_count": 2,
+              "reply_users_count": 2,
+              "latest_reply": "1794140000.000500",
+              "reply_users": [
+                "U0JANE",
+                "U0BOB"
+              ]
+            },
+            {
+              "type": "message",
+              "user": "U0JANE",
+              "text": "SENTINEL-SLACK-TEXT-7f3a I think we should cut the scope",
+              "ts": "1794120000.000400",
+              "team": "T0SCALED",
+              "thread_ts": "1794100000.000300",
+              "parent_user_id": "U0MITCH"
+            },
+            {
+              "type": "message",
+              "user": "U0BOB",
+              "text": "SENTINEL-SLACK-TEXT-7f3a agreed, cut it and ship sooner",
+              "ts": "1794140000.000500",
+              "team": "T0SCALED",
+              "thread_ts": "1794100000.000300",
+              "parent_user_id": "U0MITCH"
+            }
+          ],
+          "has_more": false
+        }
+      }
+    ]
+  },
+  "expect": {
+    "verdicts": {
+      "1794149700.000200": {
+        "role": "from_him",
+        "mentions": [
+          "U0JANE"
+        ]
+      },
+      "1794149400.000100": {
+        "role": "candidate",
+        "reasons": 2,
+        "authorExternal": false,
+        "ddPaths": []
+      },
+      "1794149000.000300": {
+        "role": "anchor",
+        "ddPaths": [
+          "/tasks/t_42"
+        ]
+      },
+      "1794148500.000400": {
+        "role": "ignore",
+        "reason": "bot"
+      },
+      "1794148000.000500": {
+        "role": "ignore",
+        "reason": "noise"
+      },
+      "1794100000.000300": {
+        "role": "from_him",
+        "mentions": []
+      },
+      "1794090000.000600": {
+        "role": "ignore",
+        "reason": "not_addressed"
+      },
+      "1794080000.000700": {
+        "role": "candidate",
+        "reasons": 2,
+        "authorExternal": false,
+        "ddPaths": []
+      },
+      "1794070000.000800": {
+        "role": "candidate",
+        "reasons": 2,
+        "authorExternal": false,
+        "ddPaths": []
+      },
+      "1793990000.000900": {
+        "role": "candidate",
+        "reasons": 2,
+        "authorExternal": false,
+        "ddPaths": []
+      },
+      "1793600000.001000": {
+        "role": "ignore",
+        "reason": "not_addressed"
+      },
+      "1794120000.000400": {
+        "role": "candidate",
+        "reasons": 4,
+        "authorExternal": false,
+        "ddPaths": []
+      },
+      "1794140000.000500": {
+        "role": "candidate",
+        "reasons": 4,
+        "authorExternal": false,
+        "ddPaths": []
+      }
+    },
+    "historyCalls": 2,
+    "fullyPaged": true,
+    "newWatermarkTs": "1794149700.000200",
+    "acknowledged": [
+      "1794080000.000700"
+    ],
+    "replyCallsFor": [
+      "1794100000.000300"
+    ],
+    "editedTs": {
+      "1794070000.000800": "1794071000.000000"
+    }
+  }
+}

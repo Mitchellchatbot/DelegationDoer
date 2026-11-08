@@ -45,7 +45,8 @@ const PatchBody = z
         }
       }),
     expectedVersion: z.string().max(64).regex(VERSION_RE).nullable(),
-    confirm: z.literal("ddtext_notice").optional()
+    // P7a (§3.2, N20; AM-P7a-9): turning Slack reading on takes its own notice confirmation.
+    confirm: z.enum(["ddtext_notice", "slack_reading_notice"]).optional()
   })
   .strict();
 
@@ -129,7 +130,7 @@ export async function PATCH(req: Request) {
     case "not_installed":
       return jsonError(409, "not_installed", { field: result.field });
     case "confirmation_required":
-      return jsonError(400, "confirmation_required", { field: "ddtextEnabled" });
+      return jsonError(400, "confirmation_required", { field: result.field });
     default:
       return jsonError(503, "unavailable");
   }

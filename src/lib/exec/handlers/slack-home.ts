@@ -142,7 +142,8 @@ async function runHome(ctx: JobContext): Promise<SlackHomeResult> {
   });
   const now = new Date();
   const [attention, email] = await Promise.all([
-    bounded("attention", (signal) => listScreenedAttention(principal, { status: "default", limit: SLACK_LIMITS.homeItems }, { now, signal }), SLACK_LIMITS.homeSectionTimeoutMs),
+    // P7a (§3.14, §3.20.3): App Home is a Slack surface, so finance items stay off it.
+    bounded("attention", (signal) => listScreenedAttention(principal, { status: "default", limit: SLACK_LIMITS.homeItems }, { now, signal, surface: "slack" }), SLACK_LIMITS.homeSectionTimeoutMs),
     bounded("email", emailRead(principal, now), SLACK_LIMITS.homeSectionTimeoutMs)
   ]);
   const input: OwnerHomeInput = {

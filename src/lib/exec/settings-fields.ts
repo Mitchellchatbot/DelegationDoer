@@ -5,11 +5,16 @@
 // from it. P5b appended its fields (chatEnabled, askAiUsesExec,
 // chatDailyCapUsd) and the "chat" key; the PATCH route's body schema is built
 // from this list, so an appended field is accepted without a route change.
+// P7a (contract §3.2, C30) appended the "slack" key and three fields with
+// section "slack" (rendered by the Slack reading controls, not the form). Their
+// copy is SLACK_READ_COPY's (slack-read-copy.ts), repeated here as literals
+// because this file imports nothing (principal.test.ts pins the equality).
 
-/** One optional exec_settings column group per migration (principal.ts SETTINGS_COLUMN_GROUPS). P5b added "chat". */
-export type SettingsSchemaKey = "email" | "drafts" | "ddtext" | "chat";
+/** One optional exec_settings column group per migration (principal.ts SETTINGS_COLUMN_GROUPS). P5b added "chat", P7a "slack". */
+export type SettingsSchemaKey = "email" | "drafts" | "ddtext" | "chat" | "slack";
 
-/** The fields the owner may change from Settings. P5b added chatEnabled, askAiUsesExec, chatDailyCapUsd. */
+/** The fields the owner may change from Settings. P5b added chatEnabled, askAiUsesExec, chatDailyCapUsd; P7a
+ *  slackReadingEnabled, slackDailyCapUsd and retentionDaysSlack. */
 export interface SettingsPatch {
   ddtextEnabled?: boolean;
   retentionDaysEmail?: number;
@@ -20,6 +25,9 @@ export interface SettingsPatch {
   chatEnabled?: boolean;
   askAiUsesExec?: boolean;
   chatDailyCapUsd?: number;
+  slackReadingEnabled?: boolean;
+  slackDailyCapUsd?: number;
+  retentionDaysSlack?: number;
 }
 
 export interface SettingsFieldDef {
@@ -33,6 +41,8 @@ export interface SettingsFieldDef {
   /** UI copy. */
   label: string;
   help: string;
+  /** P7a: rendered by the Slack reading controls (SlackReadingControls), not by P5a's SettingsForm. */
+  section?: "slack";
 }
 
 const RETENTION_HELP = "Days, 7 to 730. Applies to records written from now on.";
@@ -130,6 +140,40 @@ export const SETTINGS_FIELDS: readonly SettingsFieldDef[] = Object.freeze([
     max: 100,
     label: "Chat daily budget",
     help: "Chat pauses for the day once it has used this much. The daily AI budget still applies."
+  },
+  // P7a (contract §3.2, N8, N20, C30): the reading switch (turning it on needs the "slack_reading_notice"
+  // confirmation, settings.ts), the Slack sub-cap ($0 to $100 in cents; the effective cap is also held under a
+  // fifth of the daily AI budget) and the Slack retention (P2a's column). Copy = SLACK_READ_COPY's field strings.
+  {
+    key: "slackReadingEnabled",
+    column: "slack_reading_enabled",
+    group: "slack",
+    kind: "boolean",
+    section: "slack",
+    label: "Read Slack",
+    help: "Reads messages addressed to you and turns them into Needs Attention items."
+  },
+  {
+    key: "slackDailyCapUsd",
+    column: "slack_daily_cap_usd",
+    group: "slack",
+    kind: "money",
+    min: 0,
+    max: 100,
+    section: "slack",
+    label: "Slack daily budget",
+    help: "Slack summaries pause for the day at this amount (and at most a fifth of the daily AI budget). Direct messages and mentions still show, marked not assessed."
+  },
+  {
+    key: "retentionDaysSlack",
+    column: "retention_days_slack",
+    group: "base",
+    kind: "int",
+    min: 7,
+    max: 365,
+    section: "slack",
+    label: "Keep Slack items for (days)",
+    help: "Applies to items saved from now on."
   }
 ] satisfies SettingsFieldDef[]);
 

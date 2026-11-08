@@ -21,11 +21,14 @@ import type {
   EmailScreenState,
   PriorityBand,
   ScreenedAttentionPage,
-  ScreenedItemResult
+  ScreenedItemResult,
+  SlackScreenState
 } from "@/lib/exec/attention-types";
 import { listThreadScreenRows } from "@/lib/exec/email-store";
 import type { ThreadScreenRow } from "@/lib/exec/email-types";
 import { loadEmailGate, pinnedRowMap, type ScreeningPolicy } from "@/lib/exec/email-view";
+import { slackScreenRows, type SlackScreenRows } from "@/lib/exec/slack-read-store";
+import { parseSlackMsgFingerprint, slackMsgFingerprint } from "@/lib/exec/slack-read-types";
 import { loadScreeningPolicy, screenStoredRow } from "@/lib/exec/sources/mail";
 import { NonRetryableError, type ExecPrincipal } from "@/lib/exec/types";
 
@@ -46,7 +49,7 @@ import { NonRetryableError, type ExecPrincipal } from "@/lib/exec/types";
 // cursor (C5 documents it; the client dedupes by id).
 //
 // The screen (C7, K24, P3C A2, and P3's Overview screen it replaces, K8):
-//   - DD and Slack items pass as they are;
+//   - DD items pass as they are (Slack items: P7a's screen, below);
 //   - email items show only while email is on (installed, enabled, a pinned
 //     mailbox), as P3's Overview did; while it is off they are left out
 //     (not counted in hiddenEmail: no screen withheld them);
@@ -60,6 +63,28 @@ import { NonRetryableError, type ExecPrincipal } from "@/lib/exec/types";
 //     emailScreen: "unavailable" (fail closed, never shown unchecked); an
 //     unreadable settings read withholds every email item, since it can't
 //     tell whether email is on.
+//
+// P7a's Slack screen (P7a contract §3.14, C20, N1, N11, C10, C45; Area E),
+// after the email screen, for source "slack" items only (every other item is
+// untouched, and nothing Slack-side is read for a batch without one):
+//   - a "slack:msg:<channel>:<ts>" fingerprint is screened against one
+//     slackScreenRows read per batch; any other "slack:" fingerprint (P7b's
+//     kinds) passes (P7b adds its own rule); anything else is withheld;
+//   - withheld when: reading isn't live (no live reading half, or the switch
+//     is off); the conversation's row is missing or it is a never-read (deny),
+//     unclassified or hub conversation; the message row is missing or carries
+//     a deleted marker; no item backs the fingerprint any more; the
+//     conversation isn't watched, unless it is muted by him or by Slack
+//     (mute_source "owner" / "slack") and the item bypasses the mute (a DM or
+//     a mention, N11): a "default_finance" mute is part of N1 and never
+//     bypassed, whatever the stored flag; on surface "slack" (App Home, P8's
+//     DM) a finance item, an item of a finance-class channel or of a
+//     finance-named Slack Connect channel (its source_class may not be
+//     reconciled yet);
+//   - when the rows can't be read, every Slack item on the batch is withheld
+//     and the page says slackScreen: "unavailable" (fail closed).
+// opts.surface defaults to "web"; any other value than "web" screens as
+// "slack" (the stricter one).
 // Ids and counts only in logs.
 
 const DEFAULT_LIMIT = 50;
@@ -230,24 +255,149 @@ export function decodeAttentionCursor(cursor: string, filters: AttentionFilters)
 // ---------------------------------------------------------------------------
 
 type GateState = "on" | "off" | "unavailable";
+type Surface = "web" | "slack";
 
-interface Screened {
+interface EmailScreened {
   items: AttentionFeedItem[];
   hiddenEmail: number;
   emailScreen: EmailScreenState;
+}
+interface Screened extends EmailScreened {
+  hiddenSlack: number;
+  slackScreen: SlackScreenState;
 }
 
 function rethrowAbort(signal: AbortSignal | undefined): void {
   signal?.throwIfAborted();
 }
 
+/** §3.14: "web" unless the caller asked for anything else, which screens as the stricter "slack" (fail closed). */
+function surfaceOf(v: unknown): Surface {
+  return v === undefined || v === "web" ? "web" : "slack";
+}
+
+const SLACK_PREFIX = "slack:";
+const SLACK_MSG_PREFIX = "slack:msg:";
+
+/** What a Slack item's fingerprint asks of the screen: a message key, a later phase's own kind (passes), or nothing (withheld). */
+function slackKeyOf(fingerprint: unknown): { channelId: string; ts: string } | "pass" | null {
+  const fp = typeof fingerprint === "string" ? fingerprint : "";
+  const key = parseSlackMsgFingerprint(fp);
+  if (key !== null) return key;
+  return fp.startsWith(SLACK_PREFIX) && !fp.startsWith(SLACK_MSG_PREFIX) ? "pass" : null;
+}
+
 /**
- * One call's screen. The email gate and the rules are read at most once per
- * screener (they hold across the call's refill reads); the thread rows are
- * read per batch, for that batch's threads. An abort is rethrown, never
- * mistaken for an unreadable screen.
+ * C20 for one Slack message item (its own mute-bypass flag and source class) against a batch's screen rows (see the
+ * header). Pure. Exported (P7a integrator) so slack-reading.ts's listOpenSlackItems, which P7b and P8 read Slack items
+ * through, screens with exactly this rule: the feed (AS*) and the facade (AT14) can't drift.
  */
-function createScreener(principal: ExecPrincipal, signal: AbortSignal | undefined): (items: readonly AttentionFeedItem[]) => Promise<Screened> {
+export function slackScreenAllows(
+  rows: SlackScreenRows,
+  key: { channelId: string; ts: string },
+  item: { bypassMute: boolean; sourceClass: string } | null | undefined,
+  surface: "web" | "slack"
+): boolean {
+  if (rows.readingLive !== true) return false;
+  const channel = rows.channels.get(key.channelId);
+  if (!channel || channel.class === "deny" || channel.class === "unclassified" || channel.class === "hub") return false;
+  const fp = slackMsgFingerprint(key.channelId, key.ts);
+  if (!rows.messages.has(fp) || rows.markers.has(fp)) return false;
+  if (!item) return false;
+  if (channel.watchState !== "watched") {
+    // N11 + N1: only a mute he or Slack set is bypassed, and only by a DM or a mention; never "Don't watch", never a finance default
+    // mute, and never any mute on a finance channel (C10: only a confirmed Watch opens one; P7a fixer security-1).
+    const finance = channel.class === "finance" || channel.financeName === true;
+    const bypass = channel.watchState === "muted" && item.bypassMute === true && !finance && (channel.muteSource === "owner" || channel.muteSource === "slack");
+    if (!bypass) return false;
+  }
+  if (surface === "slack" && (item.sourceClass === "finance" || channel.financeName === true || channel.class === "finance")) return false;
+  return true;
+}
+
+/** C20 for one feed item: the batch's item of highest precedence for its message (see the header). */
+function slackItemShown(rows: SlackScreenRows, key: { channelId: string; ts: string }, surface: Surface): boolean {
+  return slackScreenAllows(rows, key, rows.items.get(slackMsgFingerprint(key.channelId, key.ts)), surface);
+}
+
+/**
+ * The Slack half of one call's screen: one slackScreenRows read per batch that holds a Slack message item, none
+ * otherwise. Never throws for the screen; rethrows an abort.
+ */
+function createSlackScreener(
+  principal: ExecPrincipal,
+  signal: AbortSignal | undefined,
+  surface: Surface
+): (items: readonly AttentionFeedItem[]) => Promise<{ items: AttentionFeedItem[]; hiddenSlack: number; slackScreen: SlackScreenState }> {
+  return async (items) => {
+    const slackCount = items.reduce((n, i) => (i.source === "slack" ? n + 1 : n), 0);
+    if (slackCount === 0) return { items: [...items], hiddenSlack: 0, slackScreen: "none" };
+
+    const keyOf = new Map<string, { channelId: string; ts: string } | "pass" | null>();
+    const wanted = new Map<string, { channelId: string; ts: string }>();
+    for (const item of items) {
+      if (item.source !== "slack") continue;
+      const key = slackKeyOf(item.fingerprint);
+      keyOf.set(item.id, key);
+      if (key !== null && key !== "pass") wanted.set(slackMsgFingerprint(key.channelId, key.ts), key);
+    }
+    let rows: SlackScreenRows | null = null;
+    let unavailable = false;
+    if (wanted.size > 0) {
+      try {
+        rows = await slackScreenRows(principal, [...wanted.values()], { signal });
+      } catch (err) {
+        rethrowAbort(signal);
+        console.error(`[exec-attention-read] Slack screen rows unreadable for ${principal.id}; ${slackCount} Slack item(s) withheld (${err instanceof Error ? err.name : "error"})`);
+        unavailable = true;
+      }
+    }
+
+    const kept: AttentionFeedItem[] = [];
+    let hidden = 0;
+    for (const item of items) {
+      if (item.source !== "slack") {
+        kept.push(item);
+        continue;
+      }
+      // An unscreenable batch withholds every Slack item on it (C20).
+      if (unavailable) {
+        hidden += 1;
+        continue;
+      }
+      const key = keyOf.get(item.id) ?? null;
+      if (key === "pass") {
+        kept.push(item);
+        continue;
+      }
+      if (key === null || rows === null || !slackItemShown(rows, key, surface)) {
+        hidden += 1;
+        continue;
+      }
+      kept.push(item);
+    }
+    return { items: kept, hiddenSlack: hidden, slackScreen: unavailable ? "unavailable" : "ok" };
+  };
+}
+
+/**
+ * One call's screen: the email screen, then the Slack screen over what it kept. The email gate and the rules are
+ * read at most once per screener (they hold across the call's refill reads); the thread rows and the Slack screen
+ * rows are read per batch, for that batch's threads and messages. An abort is rethrown, never mistaken for an
+ * unreadable screen.
+ */
+function createScreener(principal: ExecPrincipal, signal: AbortSignal | undefined, surface: Surface = "web"): (items: readonly AttentionFeedItem[]) => Promise<Screened> {
+  const screenEmail = createEmailScreener(principal, signal);
+  const screenSlack = createSlackScreener(principal, signal, surface);
+  return async (items) => {
+    const email = await screenEmail(items);
+    const slack = await screenSlack(email.items);
+    return { items: slack.items, hiddenEmail: email.hiddenEmail, emailScreen: email.emailScreen, hiddenSlack: slack.hiddenSlack, slackScreen: slack.slackScreen };
+  };
+}
+
+/** P5a's email screen (see the header); every non-email item passes it untouched. */
+function createEmailScreener(principal: ExecPrincipal, signal: AbortSignal | undefined): (items: readonly AttentionFeedItem[]) => Promise<EmailScreened> {
   let gate: Promise<GateState> | null = null;
   let policy: Promise<ScreeningPolicy | null> | null = null;
 
@@ -334,7 +484,7 @@ function createScreener(principal: ExecPrincipal, signal: AbortSignal | undefine
   };
 }
 
-/** "unavailable" outranks "ok", which outranks "none". */
+/** "unavailable" outranks "ok", which outranks "none" (EmailScreenState and SlackScreenState are the same union). */
 function mergeScreenState(a: EmailScreenState, b: EmailScreenState): EmailScreenState {
   if (a === "unavailable" || b === "unavailable") return "unavailable";
   if (a === "ok" || b === "ok") return "ok";
@@ -347,13 +497,16 @@ export function attentionFeedItem(row: AttentionPageRow, now: Date): AttentionFe
 }
 const feedItem = attentionFeedItem;
 
-/** Screen arbitrary items (the PATCH/feedback responses use it). Never throws for the screen; rethrows an abort. */
+/** Screen arbitrary items (the PATCH/feedback responses use it). Never throws for the screen; rethrows an abort.
+ *  P7a (§3.14, C20): opts.surface (default "web") and the Slack screen. The answer keeps P5a's shape (items and the
+ *  email counts): its callers only need the items, and a withheld Slack item is simply not among them. */
 export async function screenAttentionItems(
   principal: ExecPrincipal,
   items: readonly AttentionFeedItem[],
-  opts: { signal?: AbortSignal } = {}
+  opts: { signal?: AbortSignal; surface?: "web" | "slack" } = {}
 ): Promise<{ items: AttentionFeedItem[]; hiddenEmail: number; emailScreen: EmailScreenState }> {
-  return createScreener(principal, opts.signal)(items);
+  const s = await createScreener(principal, opts.signal, surfaceOf(opts.surface))(items);
+  return { items: s.items, hiddenEmail: s.hiddenEmail, emailScreen: s.emailScreen };
 }
 
 // ---------------------------------------------------------------------------
@@ -371,7 +524,7 @@ export async function screenAttentionItems(
 export async function listScreenedAttention(
   principal: ExecPrincipal,
   filters: AttentionFilters,
-  opts: { now?: Date; signal?: AbortSignal } = {}
+  opts: { now?: Date; signal?: AbortSignal; surface?: "web" | "slack" } = {}   // P7a §3.14: surface (default "web")
 ): Promise<ScreenedAttentionPage> {
   const checked = checkFilters(filters);
   if (!checked.ok) throw new NonRetryableError(`exec attention: invalid ${checked.detail}`);
@@ -385,10 +538,12 @@ export async function listScreenedAttention(
     if (after === null) throw new NonRetryableError("exec attention: invalid_cursor");
   }
 
-  const screen = createScreener(principal, opts.signal);
+  const screen = createScreener(principal, opts.signal, surfaceOf(opts.surface));
   const collected: AttentionFeedItem[] = [];
   let hiddenEmail = 0;
   let emailScreen: EmailScreenState = "none";
+  let hiddenSlack = 0;
+  let slackScreen: SlackScreenState = "none";
   let more = false;
   for (let read = 0; read < MAX_SCREENED_READS; read += 1) {
     const need = limit - collected.length;
@@ -416,6 +571,8 @@ export async function listScreenedAttention(
       collected.push(...s.items);
       hiddenEmail += s.hiddenEmail;
       emailScreen = mergeScreenState(emailScreen, s.emailScreen);
+      hiddenSlack += s.hiddenSlack;
+      slackScreen = mergeScreenState(slackScreen, s.slackScreen);
       const last = examined[examined.length - 1];
       after = { score: last.item.priority.score, firstSeenRaw: last.firstSeenRaw, id: last.item.id };
     }
@@ -425,29 +582,32 @@ export async function listScreenedAttention(
     items: collected,
     nextCursor: more && after !== null ? encodeAttentionCursor(after, f) : null,
     hiddenEmail,
-    emailScreen
+    emailScreen,
+    hiddenSlack,
+    slackScreen
   };
 }
 
 /**
- * One item by id, any status, screened (coherence-9): a DD, Slack,
- * satisfaction or health item as it is; an email thread or commitment item
- * through the same screen as the feed. { ok: false, reason } instead of a bare
- * null: "missing" (no such item, or a malformed id), "withheld" (restricted,
- * gone, no row, an unpinned mailbox, an unparseable fingerprint, or email
- * off), "screen_unavailable" (the settings, rules or thread rows couldn't be
- * read). Throws on a store read error.
+ * One item by id, any status, screened (coherence-9): a DD, satisfaction or
+ * health item as it is; an email thread or commitment item, and (P7a, C20) a
+ * Slack item, through the same screen as the feed (opts.surface as there).
+ * { ok: false, reason } instead of a bare null: "missing" (no such item, or a
+ * malformed id), "withheld" (restricted, gone, no row, an unpinned mailbox, an
+ * unparseable fingerprint, or email off; a Slack item the Slack screen
+ * withholds), "screen_unavailable" (the settings, rules or thread rows, or the
+ * Slack screen rows, couldn't be read). Throws on a store read error.
  */
 export async function getScreenedAttentionItem(
   principal: ExecPrincipal,
   itemId: string,
-  opts: { now?: Date; signal?: AbortSignal } = {}
+  opts: { now?: Date; signal?: AbortSignal; surface?: "web" | "slack" } = {}   // P7a §3.14: surface (default "web")
 ): Promise<ScreenedItemResult> {
   if (typeof itemId !== "string" || !ATTENTION_ITEM_ID.test(itemId)) return { ok: false, reason: "missing" };
   const row = await getAttentionItemRow(principal, itemId, { signal: opts.signal });
   if (row === null) return { ok: false, reason: "missing" };
   const item = feedItem(row, opts.now ?? new Date());
-  const s = await createScreener(principal, opts.signal)([item]);
+  const s = await createScreener(principal, opts.signal, surfaceOf(opts.surface))([item]);
   if (s.items.length === 1) return { ok: true, item: s.items[0] };
-  return { ok: false, reason: s.emailScreen === "unavailable" ? "screen_unavailable" : "withheld" };
+  return { ok: false, reason: s.emailScreen === "unavailable" || s.slackScreen === "unavailable" ? "screen_unavailable" : "withheld" };
 }

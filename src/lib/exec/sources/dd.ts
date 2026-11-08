@@ -1817,3 +1817,76 @@ export async function listPendingApprovalItems(
   });
   return { mechanism, mode: "items", items, total: rows.length, truncated: rows.length > items.length };
 }
+
+// ---------------------------------------------------------------------------
+// P7a (contract §3.6.4; Area D): the Slack-related DD reads the never-watch
+// classifier's context needs. Same rules as above (explicit columns, fail
+// closed with DdReadError). The lead-channel names are Slack metadata: they
+// never reach an error message or a log line (B-P7a-1), so a failure names
+// only the table and the database's own code.
+// ---------------------------------------------------------------------------
+
+const SLACK_CHANNEL_ID = /^[CG][A-Z0-9]{2,30}$/;
+const SLACK_DM_OR_CHANNEL_ID = /^[CDG][A-Z0-9]{2,30}$/;
+const SLACK_CHANNEL_NAME = /^[a-z0-9][a-z0-9._-]{0,79}$/;
+/** The newest daily_briefings rows read for the DD bot's DM ids (the five distinct ones come from these). */
+const BRIEFING_ROWS_READ = 200;
+const DD_BOT_DM_IDS_MAX = 5;
+
+/** A Supabase error's own code (never its message: a message may quote a value). */
+function codeOf(error: unknown): string {
+  const code = typeof error === "object" && error !== null ? (error as { code?: unknown }).code : undefined;
+  return typeof code === "string" && /^[A-Za-z0-9_]{1,20}$/.test(code) ? code : "error";
+}
+
+/** RPC exec_slack_fb_lead_channels() (§2.9.1). Any error → DdReadError (discovery aborts). The only exec caller of that function. */
+export async function listFbLeadChannels(principal: ExecPrincipal, opts?: DdReadOptions): Promise<{ name: string | null; channelId: string | null }[]> {
+  void principal;
+  let query = getSupabaseAdmin().rpc("exec_slack_fb_lead_channels");
+  if (opts?.signal) query = query.abortSignal(opts.signal);
+  const { data, error } = await query;
+  if (error) throw new DdReadError("exec_slack_fb_lead_channels", codeOf(error));
+  if (!Array.isArray(data)) throw new DdReadError("exec_slack_fb_lead_channels", "the response carried no rows");
+  const out: { name: string | null; channelId: string | null }[] = [];
+  for (const row of data as unknown[]) {
+    if (typeof row !== "object" || row === null) continue;
+    const r = row as { name?: unknown; channel_id?: unknown };
+    const name = typeof r.name === "string" && SLACK_CHANNEL_NAME.test(r.name) ? r.name : null;
+    const channelId = typeof r.channel_id === "string" && SLACK_CHANNEL_ID.test(r.channel_id) ? r.channel_id : null;
+    if (name !== null || channelId !== null) out.push({ name, channelId });
+  }
+  return out;
+}
+/** workspace_settings: client_email_channel_id where id = 'workspace' (20260814000000_client_email_slack_notifs.sql:12-21). */
+export async function getClientEmailChannelId(principal: ExecPrincipal, opts?: DdReadOptions): Promise<string | null> {
+  void principal;
+  let query = from("workspace_settings", "client_email_channel_id").eq("id", "workspace").limit(1);
+  if (opts?.signal) query = query.abortSignal(opts.signal);
+  const { data, error } = await query;
+  if (error) throw new DdReadError("workspace_settings", codeOf(error));
+  if (!Array.isArray(data)) throw new DdReadError("workspace_settings", "the response carried no rows");
+  const raw = (data[0] as { client_email_channel_id?: unknown } | undefined)?.client_email_channel_id;
+  const id = typeof raw === "string" ? raw.trim() : "";
+  return SLACK_CHANNEL_ID.test(id) ? id : null;
+}
+/** daily_briefings: distinct non-null slack_channel (20260831000000_daily_briefing.sql:20), newest 5 by created_at. */
+export async function listDdBotDmChannelIds(principal: ExecPrincipal, opts?: DdReadOptions): Promise<string[]> {
+  void principal;
+  let query = from("daily_briefings", "slack_channel,created_at")
+    .not("slack_channel", "is", null)
+    .order("created_at", { ascending: false })
+    .order("id", { ascending: true })
+    .limit(BRIEFING_ROWS_READ);
+  if (opts?.signal) query = query.abortSignal(opts.signal);
+  const { data, error } = await query;
+  if (error) throw new DdReadError("daily_briefings", codeOf(error));
+  if (!Array.isArray(data)) throw new DdReadError("daily_briefings", "the response carried no rows");
+  const out: string[] = [];
+  for (const row of data as { slack_channel?: unknown }[]) {
+    const id = typeof row?.slack_channel === "string" ? row.slack_channel.trim() : "";
+    if (!SLACK_DM_OR_CHANNEL_ID.test(id) || out.includes(id)) continue;
+    out.push(id);
+    if (out.length >= DD_BOT_DM_IDS_MAX) break;
+  }
+  return out;
+}

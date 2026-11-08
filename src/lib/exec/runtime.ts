@@ -10,8 +10,19 @@ import { emailReconcileJobHandler, emailReconcileScheduledWork } from "@/lib/exe
 import { emailTriageJobHandler } from "@/lib/exec/handlers/email-triage";
 import { purgeJobHandler, purgeScheduledWork } from "@/lib/exec/handlers/purge";
 import { slackActionJobHandler } from "@/lib/exec/handlers/slack-action";
+import { slackAttentionJobHandler, slackAttentionScheduledWork } from "@/lib/exec/handlers/slack-attention";
 import { slackCardJobHandler } from "@/lib/exec/handlers/slack-card";
+import { slackClassifyJobHandler } from "@/lib/exec/handlers/slack-classify";
+import { slackDiscoverJobHandler, slackDiscoverScheduledWork } from "@/lib/exec/handlers/slack-discover";
 import { slackHomeJobHandler } from "@/lib/exec/handlers/slack-home";
+import { slackProbeJobHandler, slackProbeScheduledWork } from "@/lib/exec/handlers/slack-probe";
+import {
+  slackReadPurgeJobHandler,
+  slackReadRecheckJobHandler,
+  slackReadRecheckScheduledWork
+} from "@/lib/exec/handlers/slack-read-purge";
+import { slackReadSweepJobHandler, slackReadSweepScheduledWork } from "@/lib/exec/handlers/slack-read-sweep";
+import { slackRekeyJobHandler } from "@/lib/exec/handlers/slack-rekey";
 import { slackReplyJobHandler } from "@/lib/exec/handlers/slack-reply";
 import {
   slackDmPurgeJobHandler,
@@ -19,11 +30,14 @@ import {
   slackSweepJobHandler,
   slackSweepScheduledWork
 } from "@/lib/exec/handlers/slack-sweep";
+import { slackTriageJobHandler } from "@/lib/exec/handlers/slack-triage";
 import { slackUninstallJobHandler } from "@/lib/exec/handlers/slack-uninstall";
+import { slackUserCheckJobHandler } from "@/lib/exec/handlers/slack-user-check";
 import { voiceRefreshJobHandler, voiceRefreshScheduledWork } from "@/lib/exec/handlers/voice-refresh";
 import { JOB_LANES, getJobHandler, registerJobHandler, runWorkerPass, type WorkerPassSummary } from "@/lib/exec/jobs";
 import { ensureMailHook, recordSocketHealth } from "@/lib/exec/mail-hook";
 import { getScheduledWork, registerScheduledWork, runSchedulerTick, type ScheduledWork } from "@/lib/exec/scheduler";
+import { refreshGateCache } from "@/lib/exec/slack-gate-cache";
 import type { JobHandler, JobLane } from "@/lib/exec/types";
 
 // Entry points the schedulers call: cron-bootstrap's exec-worker (10 s) and
@@ -49,6 +63,11 @@ import type { JobHandler, JobLane } from "@/lib/exec/types";
 // service without EXEC_TOKEN_KEY fails the jobs with the runner's ops alert.
 // Both schedules are gated (Y4 `when`) on an active installation, so a
 // principal without Slack enqueues nothing.
+// P7a Slack reading (contract §3.11.12): discovery, classify, the sweep, the
+// probe, triage, the attention pass, the re-key, the user check, the reading
+// purge and its daily recheck. Registered unconditionally (P6 C35); the
+// schedules are gated on the P7a schema (and the sweep and probe on the
+// reading switch, the probe also on active_public).
 const BUILT_IN_HANDLERS: readonly JobHandler[] = [
   purgeJobHandler,
   ddAttentionJobHandler,
@@ -65,7 +84,17 @@ const BUILT_IN_HANDLERS: readonly JobHandler[] = [
   slackHomeJobHandler,
   slackUninstallJobHandler,
   slackSweepJobHandler,
-  slackDmPurgeJobHandler
+  slackDmPurgeJobHandler,
+  slackDiscoverJobHandler,
+  slackClassifyJobHandler,
+  slackReadSweepJobHandler,
+  slackProbeJobHandler,
+  slackTriageJobHandler,
+  slackAttentionJobHandler,
+  slackRekeyJobHandler,
+  slackUserCheckJobHandler,
+  slackReadPurgeJobHandler,
+  slackReadRecheckJobHandler
 ];
 const BUILT_IN_SCHEDULE: readonly ScheduledWork[] = [
   purgeScheduledWork,
@@ -76,7 +105,12 @@ const BUILT_IN_SCHEDULE: readonly ScheduledWork[] = [
   voiceRefreshScheduledWork,
   ddtextScheduledWork,
   slackSweepScheduledWork,
-  slackDmPurgeScheduledWork
+  slackDmPurgeScheduledWork,
+  slackDiscoverScheduledWork,
+  slackReadSweepScheduledWork,
+  slackProbeScheduledWork,
+  slackAttentionScheduledWork,
+  slackReadRecheckScheduledWork
 ];
 
 // The cron route's whole run has to fit well inside its 60 s maxDuration.
@@ -129,6 +163,8 @@ export async function runExecWorkerTick(): Promise<string> {
   // health write is throttled to once a minute.
   ensureMailHook();
   recordSocketHealth();
+  // P7a (§3.11.12): the events route's gate cache, refreshed off the ack path. Not awaited, never fails the tick.
+  refreshSlackGate();
 
   const claimed: Record<JobLane, number> = { interactive: 0, bulk: 0 };
   const failures: string[] = [];
@@ -143,6 +179,18 @@ export async function runExecWorkerTick(): Promise<string> {
   const counts = `claimed interactive=${claimed.interactive} bulk=${claimed.bulk}`;
   if (failures.length > 0) throw new Error(`${failures.join("; ")} (${counts})`);
   return claimed.interactive === 0 && claimed.bulk === 0 ? "idle" : counts;
+}
+
+/** The gate-cache refresh, fire-and-forget: a throw (sync or async) is logged by its name only. */
+function refreshSlackGate(): void {
+  const label = (err: unknown) => (err instanceof Error && /^[A-Za-z]{1,40}$/.test(err.name) ? err.name : "error");
+  try {
+    void Promise.resolve(refreshGateCache()).catch((err: unknown) => {
+      console.warn(`[exec-runtime] slack gate cache refresh failed (${label(err)})`);
+    });
+  } catch (err) {
+    console.warn(`[exec-runtime] slack gate cache refresh failed (${label(err)})`);
+  }
 }
 
 /** cron-bootstrap's exec-scheduler tick. Returns "disabled", "idle" or the tick's counts. */

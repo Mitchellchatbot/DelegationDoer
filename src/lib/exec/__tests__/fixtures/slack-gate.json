@@ -1,0 +1,6377 @@
+{
+  "_doc": [
+    "P7a contract §5.3 (V2xx) and §5.13 RQ12 / RQ13 (Area A; AM-P7a-16): the V2 gate decision table.",
+    "Each row: name; ingest = the slack-ingest.json row whose envelope is sent (its expectFacts become p_ingest: nulls omitted, booleans and numbers kept, dd_paths only when non-empty; a row with expectDerive null goes to v2 with p_ingest null, the P6 path); state = what to seed on top of base; send: once (default) | twice (a Slack retry, retry_num 1) | again (the same envelope with event_id + 'X').",
+    "base: the installation (fixed id) with a live reading half and the nine scopes, slack_reading_enabled on, the DD bot row, the opted-out authors, the FB lead list (fb_onboarding) and every channel of slack-ingest.json's catalogue.",
+    "state keys: installation (reading: none | discovering, or column overrides), settings (column overrides), channels ({ id: overrides of the catalogue entry | null to remove }), messages / items / threads / markers (rows by channel and ts), attention (fingerprints), optouts, ddBot (false = none), fb (missing = no fb_onboarding table, empty = no list).",
+    "expect: v2's answer and the normalized snapshot after the event (pid → <p>; job dedupe keys' minute / hour buckets → *). SQL (RQ12, every engine) and fake-slack-read-db.ts (RQ13, slack-read-gate.test.ts) must both equal it.",
+    "Rows without a channel row change list nothing new; a drop writes nothing (C6)."
+  ],
+  "base": {
+    "installationId": "esi_00000000000000000000000000000a01",
+    "installation": {
+      "team_id": "T0SCALED",
+      "app_id": "A0EXEC",
+      "bot_user_id": "U0BOT",
+      "bot_id": "B0BOT",
+      "bot_token_enc": "v1.0123abcd.AAAAAAAAAAAAAAAA.BBBBBBBBBBBBBBBBBBBBBB.CCCCCCCC",
+      "key_id": "0123abcd",
+      "bot_scopes": [
+        "chat:write"
+      ],
+      "user_id": "U0MITCH",
+      "slack_dm_channel_id": "D0MITCH",
+      "installed_at": "2026-11-01T00:00:00.000Z",
+      "updated_at": "2026-11-01T00:00:00.000Z",
+      "user_token_enc": "v1.0123abcd.DDDDDDDDDDDDDDDD.EEEEEEEEEEEEEEEEEEEEEE.FFFFFFFF",
+      "user_key_id": "0123abcd",
+      "user_scopes": [
+        "channels:history",
+        "groups:history",
+        "channels:read",
+        "groups:read",
+        "users:read",
+        "im:history",
+        "im:read",
+        "mpim:history",
+        "mpim:read"
+      ],
+      "user_installed_at": "2026-11-01T00:00:00.000Z",
+      "reading_state": "ready",
+      "discovered_at": "2026-11-01T01:00:00.000Z"
+    },
+    "settings": {
+      "slack_reading_enabled": true,
+      "retention_days_slack": 90
+    },
+    "ddBot": {
+      "team_id": "T0SCALED",
+      "ok": true,
+      "user_id": "U0DDBOT",
+      "bot_id": "B0DDBOT",
+      "app_id": "A0DDAPP",
+      "error_code": null
+    },
+    "optouts": [
+      "U0OPTOUT"
+    ],
+    "fb": [
+      {
+        "name": "bright-paths-vob-leads",
+        "url": "https://scaledai.slack.com/archives/G0BPVOB"
+      }
+    ]
+  },
+  "rows": [
+    {
+      "name": "V201 his DM to the assistant: v2 delegates to v1 (reply)",
+      "ingest": "V201 his DM to the assistant (P6's path: v2 delegates to v1)",
+      "expect": {
+        "answer": {
+          "path": "v1",
+          "reason": null,
+          "outcome": "accepted",
+          "decision": "reply",
+          "enqueued": true,
+          "interactive": true
+        },
+        "added": {
+          "events": [
+            {
+              "event_id": "Ev0P7AIG061",
+              "decision": "reply",
+              "drop_reason": null,
+              "ingest_outcome": null,
+              "slack_user_id": "U0MITCH",
+              "channel_id": "D0MITCH",
+              "message_ts": "1794150071.000171"
+            }
+          ],
+          "jobs": [
+            {
+              "kind": "exec.slack-reply",
+              "lane": "interactive",
+              "has_principal": true,
+              "payload": {
+                "ts": "1794150071.000171",
+                "channel": "D0MITCH",
+                "event_id": "Ev0P7AIG061",
+                "thread_ts": null,
+                "event_time": 1794150661,
+                "installation_id": "esi_00000000000000000000000000000a01"
+              },
+              "dedupe_key": "slack-reply:Ev0P7AIG061",
+              "max_attempts": 1
+            }
+          ]
+        },
+        "removed": {}
+      }
+    },
+    {
+      "name": "V202 app_home_opened: v1 home",
+      "ingest": "V202 app_home_opened (P6's only)",
+      "expect": {
+        "answer": {
+          "path": "v1",
+          "reason": null,
+          "outcome": "accepted",
+          "decision": "home",
+          "enqueued": true,
+          "interactive": true
+        },
+        "added": {
+          "events": [
+            {
+              "event_id": "Ev0P7AIG089",
+              "decision": "home",
+              "drop_reason": null,
+              "ingest_outcome": null,
+              "slack_user_id": "U0MITCH",
+              "channel_id": null,
+              "message_ts": null
+            }
+          ],
+          "jobs": [
+            {
+              "kind": "exec.slack-home",
+              "lane": "interactive",
+              "has_principal": true,
+              "payload": {
+                "slack_user_id": "U0MITCH",
+                "installation_id": "esi_00000000000000000000000000000a01"
+              },
+              "dedupe_key": "slack-home:esi_00000000000000000000000000000a01:U0MITCH:*",
+              "max_attempts": 2
+            }
+          ]
+        },
+        "removed": {}
+      }
+    },
+    {
+      "name": "V203 app_uninstalled: v1 revokes, one read-purge job",
+      "ingest": "V203 app_uninstalled (P6's only)",
+      "expect": {
+        "answer": {
+          "path": "v1",
+          "reason": null,
+          "outcome": "accepted",
+          "decision": "revoke",
+          "enqueued": false,
+          "interactive": false
+        },
+        "installation": {
+          "revoked": true,
+          "revoke_reason": "app_uninstalled",
+          "reading_state": "ready",
+          "has_token": true
+        },
+        "added": {
+          "events": [
+            {
+              "event_id": "Ev0P7AIG090",
+              "decision": "revoke",
+              "drop_reason": null,
+              "ingest_outcome": null,
+              "slack_user_id": null,
+              "channel_id": null,
+              "message_ts": null
+            }
+          ],
+          "jobs": [
+            {
+              "kind": "exec.slack-read-purge",
+              "lane": "bulk",
+              "has_principal": false,
+              "payload": {
+                "reason": "app_uninstalled",
+                "installation_id": "esi_00000000000000000000000000000a01"
+              },
+              "dedupe_key": "slack-read-purge:esi_00000000000000000000000000000a01:1793491200",
+              "max_attempts": 6
+            },
+            {
+              "kind": "exec.slack-uninstall",
+              "lane": "bulk",
+              "has_principal": false,
+              "payload": {
+                "mode": "purge",
+                "installation_id": "esi_00000000000000000000000000000a01"
+              },
+              "dedupe_key": "slack-uninstall:esi_00000000000000000000000000000a01",
+              "max_attempts": 6
+            }
+          ]
+        },
+        "removed": {}
+      }
+    },
+    {
+      "name": "V203 app_uninstalled without a reading half: no read-purge job",
+      "ingest": "V203 app_uninstalled (P6's only)",
+      "state": {
+        "installation": {
+          "reading": "none"
+        }
+      },
+      "expect": {
+        "answer": {
+          "path": "v1",
+          "reason": null,
+          "outcome": "accepted",
+          "decision": "revoke",
+          "enqueued": false,
+          "interactive": false
+        },
+        "installation": {
+          "revoked": true,
+          "revoke_reason": "app_uninstalled",
+          "reading_state": "none",
+          "has_token": false
+        },
+        "added": {
+          "events": [
+            {
+              "event_id": "Ev0P7AIG090",
+              "decision": "revoke",
+              "drop_reason": null,
+              "ingest_outcome": null,
+              "slack_user_id": null,
+              "channel_id": null,
+              "message_ts": null
+            }
+          ],
+          "jobs": [
+            {
+              "kind": "exec.slack-uninstall",
+              "lane": "bulk",
+              "has_principal": false,
+              "payload": {
+                "mode": "purge",
+                "installation_id": "esi_00000000000000000000000000000a01"
+              },
+              "dedupe_key": "slack-uninstall:esi_00000000000000000000000000000a01",
+              "max_attempts": 6
+            }
+          ]
+        },
+        "removed": {}
+      }
+    },
+    {
+      "name": "V204 tokens_revoked naming him: a user check, then v1's user_tokens_only",
+      "ingest": "V204 tokens_revoked naming him (P6's only)",
+      "expect": {
+        "answer": {
+          "path": "v1",
+          "reason": "user_tokens_only",
+          "outcome": "accepted",
+          "decision": "drop",
+          "enqueued": false,
+          "interactive": false
+        },
+        "added": {
+          "events": [
+            {
+              "event_id": "Ev0P7AIG091",
+              "decision": "drop",
+              "drop_reason": "user_tokens_only",
+              "ingest_outcome": null,
+              "slack_user_id": null,
+              "channel_id": null,
+              "message_ts": null
+            }
+          ],
+          "jobs": [
+            {
+              "kind": "exec.slack-user-check",
+              "lane": "bulk",
+              "has_principal": false,
+              "payload": {
+                "event_time": 1794150691,
+                "installation_id": "esi_00000000000000000000000000000a01"
+              },
+              "dedupe_key": "slack-user-check:Ev0P7AIG091:esi_00000000000000000000000000000a01",
+              "max_attempts": 3
+            }
+          ]
+        },
+        "removed": {}
+      }
+    },
+    {
+      "name": "V204 the retry: duplicate, no second check",
+      "ingest": "V204 tokens_revoked naming him (P6's only)",
+      "send": "twice",
+      "expect": {
+        "answer": {
+          "path": "v1",
+          "outcome": "duplicate"
+        },
+        "added": {
+          "events": [
+            {
+              "event_id": "Ev0P7AIG091",
+              "decision": "drop",
+              "drop_reason": "user_tokens_only",
+              "ingest_outcome": null,
+              "slack_user_id": null,
+              "channel_id": null,
+              "message_ts": null
+            }
+          ],
+          "jobs": [
+            {
+              "kind": "exec.slack-user-check",
+              "lane": "bulk",
+              "has_principal": false,
+              "payload": {
+                "event_time": 1794150691,
+                "installation_id": "esi_00000000000000000000000000000a01"
+              },
+              "dedupe_key": "slack-user-check:Ev0P7AIG091:esi_00000000000000000000000000000a01",
+              "max_attempts": 3
+            }
+          ]
+        },
+        "removed": {}
+      }
+    },
+    {
+      "name": "V205 tokens_revoked before the consent: no check",
+      "ingest": "V204 tokens_revoked naming him (P6's only)",
+      "state": {
+        "installation": {
+          "user_installed_at": "2026-11-09T00:00:00.000Z"
+        }
+      },
+      "expect": {
+        "answer": {
+          "path": "v1",
+          "reason": "user_tokens_only",
+          "outcome": "accepted",
+          "decision": "drop",
+          "enqueued": false,
+          "interactive": false
+        },
+        "added": {
+          "events": [
+            {
+              "event_id": "Ev0P7AIG091",
+              "decision": "drop",
+              "drop_reason": "user_tokens_only",
+              "ingest_outcome": null,
+              "slack_user_id": null,
+              "channel_id": null,
+              "message_ts": null
+            }
+          ]
+        },
+        "removed": {}
+      }
+    },
+    {
+      "name": "an event P7a doesn't subscribe to: v1",
+      "ingest": "an event P7a doesn't subscribe to",
+      "expect": {
+        "answer": {
+          "path": "v1",
+          "reason": "unsupported_type",
+          "outcome": "accepted",
+          "decision": "drop",
+          "enqueued": false,
+          "interactive": false
+        },
+        "added": {
+          "events": [
+            {
+              "event_id": "Ev0P7AIG092",
+              "decision": "drop",
+              "drop_reason": "unsupported_type",
+              "ingest_outcome": null,
+              "slack_user_id": null,
+              "channel_id": null,
+              "message_ts": null
+            }
+          ]
+        },
+        "removed": {}
+      }
+    },
+    {
+      "name": "V206 no reading half: not_reading, nothing written",
+      "ingest": "IG02 an explicit mention of him",
+      "state": {
+        "installation": {
+          "reading": "none"
+        }
+      },
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "not_reading",
+          "outcome": "accepted",
+          "decision": "drop",
+          "recorded": false
+        },
+        "added": {},
+        "removed": {}
+      }
+    },
+    {
+      "name": "V207 discovering: dropped, nothing written",
+      "ingest": "IG02 an explicit mention of him",
+      "state": {
+        "installation": {
+          "reading": "discovering"
+        }
+      },
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "discovering",
+          "outcome": "accepted",
+          "decision": "drop",
+          "recorded": false
+        },
+        "added": {},
+        "removed": {}
+      }
+    },
+    {
+      "name": "V208 the switch off: reading_off",
+      "ingest": "IG02 an explicit mention of him",
+      "state": {
+        "settings": {
+          "slack_reading_enabled": false
+        }
+      },
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "reading_off",
+          "outcome": "accepted",
+          "decision": "drop",
+          "recorded": false
+        },
+        "added": {},
+        "removed": {}
+      }
+    },
+    {
+      "name": "V209 an IM without im:history: scope",
+      "ingest": "V221 a DM to him (len 2): a dm candidate",
+      "state": {
+        "installation": {
+          "user_scopes": [
+            "channels:history",
+            "groups:history",
+            "channels:read",
+            "groups:read",
+            "users:read"
+          ]
+        }
+      },
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "scope",
+          "outcome": "accepted",
+          "decision": "drop",
+          "recorded": false
+        },
+        "added": {},
+        "removed": {}
+      }
+    },
+    {
+      "name": "V210 auth_is_bot: not_his_view",
+      "ingest": "V210 an event only the bot sees outside its DM (auth_is_bot)",
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "not_his_view",
+          "outcome": "accepted",
+          "decision": "drop",
+          "recorded": false
+        },
+        "added": {},
+        "removed": {}
+      }
+    },
+    {
+      "name": "V211 another user's view: not_his_view",
+      "ingest": "V211 an event authorized for another user",
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "not_his_view",
+          "outcome": "accepted",
+          "decision": "drop",
+          "recorded": false
+        },
+        "added": {},
+        "removed": {}
+      }
+    },
+    {
+      "name": "V212 an unknown channel: an id-only row and a bulk classify job",
+      "ingest": "V212 a message in an unknown channel: id-only unclassified row and a classify job",
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "unclassified",
+          "outcome": "accepted",
+          "decision": "drop",
+          "enqueued": true,
+          "recorded": false,
+          "interactive": false
+        },
+        "added": {
+          "channels": [
+            {
+              "channel_id": "C0NEWCHAN",
+              "conv_type": "channel",
+              "class": "unclassified",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "unwatched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": null,
+              "im_user_id": null,
+              "is_member": false,
+              "is_private": false,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": null,
+              "hist_watermark_ts": null
+            }
+          ],
+          "jobs": [
+            {
+              "kind": "exec.slack-classify",
+              "lane": "bulk",
+              "has_principal": true,
+              "payload": {
+                "channel": "C0NEWCHAN",
+                "installation_id": "esi_00000000000000000000000000000a01"
+              },
+              "dedupe_key": "slack-classify:<p>:C0NEWCHAN:h*",
+              "max_attempts": 3
+            }
+          ]
+        },
+        "removed": {}
+      }
+    },
+    {
+      "name": "V212 an unknown IM: an interactive classify job",
+      "ingest": "V212 a DM in an unknown IM: interactive classify",
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "unclassified",
+          "outcome": "accepted",
+          "decision": "drop",
+          "enqueued": true,
+          "recorded": false,
+          "interactive": true
+        },
+        "added": {
+          "channels": [
+            {
+              "channel_id": "D0NEWIM",
+              "conv_type": "im",
+              "class": "unclassified",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "unwatched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": null,
+              "im_user_id": null,
+              "is_member": false,
+              "is_private": true,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": null,
+              "hist_watermark_ts": null
+            }
+          ],
+          "jobs": [
+            {
+              "kind": "exec.slack-classify",
+              "lane": "interactive",
+              "has_principal": true,
+              "payload": {
+                "channel": "D0NEWIM",
+                "installation_id": "esi_00000000000000000000000000000a01"
+              },
+              "dedupe_key": "slack-classify:<p>:D0NEWIM:h*",
+              "max_attempts": 3
+            }
+          ]
+        },
+        "removed": {}
+      }
+    },
+    {
+      "name": "V212 a second event the same hour: no second job",
+      "ingest": "V212 a message in an unknown channel: id-only unclassified row and a classify job",
+      "send": "again",
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "unclassified",
+          "outcome": "accepted",
+          "decision": "drop",
+          "enqueued": true,
+          "recorded": false,
+          "interactive": false
+        },
+        "added": {
+          "channels": [
+            {
+              "channel_id": "C0NEWCHAN",
+              "conv_type": "channel",
+              "class": "unclassified",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "unwatched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": null,
+              "im_user_id": null,
+              "is_member": false,
+              "is_private": false,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": null,
+              "hist_watermark_ts": null
+            }
+          ],
+          "jobs": [
+            {
+              "kind": "exec.slack-classify",
+              "lane": "bulk",
+              "has_principal": true,
+              "payload": {
+                "channel": "C0NEWCHAN",
+                "installation_id": "esi_00000000000000000000000000000a01"
+              },
+              "dedupe_key": "slack-classify:<p>:C0NEWCHAN:h*",
+              "max_attempts": 3
+            }
+          ]
+        },
+        "removed": {}
+      }
+    },
+    {
+      "name": "V213 a deny channel: nothing written anywhere",
+      "ingest": "V213 a message in a deny (lead) channel: nothing may be written",
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "deny",
+          "outcome": "accepted",
+          "decision": "drop",
+          "recorded": false
+        },
+        "added": {},
+        "removed": {}
+      }
+    },
+    {
+      "name": "V214 a delete in a watched channel: marker, rows, attention, one purge-log row, a kick",
+      "ingest": "IG08 message_deleted in the recorded shape (hidden: true)",
+      "state": {
+        "messages": [
+          {
+            "channel": "C0GENERAL",
+            "ts": "1794150009.000109"
+          }
+        ],
+        "items": [
+          {
+            "channel": "C0GENERAL",
+            "ts": "1794150009.000109"
+          }
+        ],
+        "attention": [
+          "slack:msg:C0GENERAL:1794150009.000109",
+          "slack:msg:C0GENERAL:1794150009.0001090"
+        ]
+      },
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "items": 1,
+          "reason": "deleted",
+          "outcome": "accepted",
+          "decision": "ingest",
+          "enqueued": false,
+          "messages": 1,
+          "recorded": true,
+          "attention": 1,
+          "interactive": false
+        },
+        "added": {
+          "events": [
+            {
+              "event_id": "Ev0P7AIG010",
+              "decision": "ingest",
+              "drop_reason": null,
+              "ingest_outcome": "deleted",
+              "slack_user_id": null,
+              "channel_id": null,
+              "message_ts": null
+            }
+          ],
+          "markers": [
+            {
+              "channel_id": "C0GENERAL",
+              "ts": "1794150009.000109",
+              "reason": "event"
+            }
+          ],
+          "purgeLog": [
+            {
+              "scope": "message",
+              "channel_id": "C0GENERAL",
+              "ts": "1794150009.000109",
+              "reason": "deleted_event"
+            }
+          ],
+          "jobs": [
+            {
+              "kind": "exec.slack-attention",
+              "lane": "bulk",
+              "has_principal": true,
+              "payload": {
+                "kick": true
+              },
+              "dedupe_key": "slack-attn:<p>:m*",
+              "max_attempts": 3
+            }
+          ]
+        },
+        "removed": {
+          "messages": [
+            {
+              "channel_id": "C0GENERAL",
+              "ts": "1794150009.000109",
+              "thread_ts": null,
+              "role": "candidate",
+              "author_user_id": "U0JANE",
+              "author_external": false,
+              "is_dd_post": false,
+              "dd_paths": [],
+              "reasons": 2,
+              "triage_state": "pending",
+              "edited_ts": null,
+              "responded_ts": null
+            }
+          ],
+          "items": [
+            {
+              "channel_id": "C0GENERAL",
+              "ts": "1794150009.000109",
+              "kind": "request",
+              "has_excerpt": true,
+              "source_class": "public",
+              "responded_ts": null
+            }
+          ],
+          "attention": [
+            "slack:msg:C0GENERAL:1794150009.000109"
+          ]
+        }
+      }
+    },
+    {
+      "name": "V214 the delete's retry: duplicate",
+      "ingest": "IG08 message_deleted in the recorded shape (hidden: true)",
+      "state": {
+        "messages": [
+          {
+            "channel": "C0GENERAL",
+            "ts": "1794150009.000109"
+          }
+        ]
+      },
+      "send": "twice",
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "outcome": "duplicate"
+        },
+        "added": {
+          "events": [
+            {
+              "event_id": "Ev0P7AIG010",
+              "decision": "ingest",
+              "drop_reason": null,
+              "ingest_outcome": "deleted",
+              "slack_user_id": null,
+              "channel_id": null,
+              "message_ts": null
+            }
+          ],
+          "markers": [
+            {
+              "channel_id": "C0GENERAL",
+              "ts": "1794150009.000109",
+              "reason": "event"
+            }
+          ],
+          "purgeLog": [
+            {
+              "scope": "message",
+              "channel_id": "C0GENERAL",
+              "ts": "1794150009.000109",
+              "reason": "deleted_event"
+            }
+          ]
+        },
+        "removed": {
+          "messages": [
+            {
+              "channel_id": "C0GENERAL",
+              "ts": "1794150009.000109",
+              "thread_ts": null,
+              "role": "candidate",
+              "author_user_id": "U0JANE",
+              "author_external": false,
+              "is_dd_post": false,
+              "dd_paths": [],
+              "reasons": 2,
+              "triage_state": "pending",
+              "edited_ts": null,
+              "responded_ts": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "V215 a DD post in a hub: an anchor with its paths",
+      "ingest": "IG18 / V215 DD's task template (slack.ts:534 button) by the DD bot, mentioning someone, in a hub: an anchor's facts",
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "anchor",
+          "outcome": "accepted",
+          "decision": "ingest",
+          "recorded": true
+        },
+        "added": {
+          "events": [
+            {
+              "event_id": "Ev0P7AIG032",
+              "decision": "ingest",
+              "drop_reason": null,
+              "ingest_outcome": "anchor",
+              "slack_user_id": null,
+              "channel_id": null,
+              "message_ts": null
+            }
+          ],
+          "messages": [
+            {
+              "channel_id": "C0EMAILN",
+              "ts": "1794150040.000140",
+              "thread_ts": null,
+              "role": "anchor",
+              "author_user_id": null,
+              "author_external": false,
+              "is_dd_post": true,
+              "dd_paths": [
+                "/tasks/t_42"
+              ],
+              "reasons": 0,
+              "triage_state": "none",
+              "edited_ts": null,
+              "responded_ts": null
+            }
+          ]
+        },
+        "removed": {}
+      }
+    },
+    {
+      "name": "V215 a human message in a hub: dropped",
+      "ingest": "V215 a human message in a hub (dropped hub by v2; the prefilter passes it)",
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "hub",
+          "outcome": "accepted",
+          "decision": "drop",
+          "recorded": false
+        },
+        "added": {},
+        "removed": {}
+      }
+    },
+    {
+      "name": "V216 an unwatched channel: dropped",
+      "ingest": "V216 a message in an unwatched channel",
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "unwatched",
+          "outcome": "accepted",
+          "decision": "drop",
+          "recorded": false
+        },
+        "added": {},
+        "removed": {}
+      }
+    },
+    {
+      "name": "V217 DD's as-user template by his id: an anchor, no stamp",
+      "ingest": "AN07 / V217 DD's as-user FYI template authored by HIS user id (slack.ts:823-845): a DD post, never an answer by him",
+      "state": {
+        "messages": [
+          {
+            "channel": "C0GENERAL",
+            "ts": "1794150001.000101",
+            "author": "U0JANE"
+          }
+        ]
+      },
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "anchor",
+          "outcome": "accepted",
+          "decision": "ingest",
+          "recorded": true
+        },
+        "added": {
+          "events": [
+            {
+              "event_id": "Ev0P7AIG037",
+              "decision": "ingest",
+              "drop_reason": null,
+              "ingest_outcome": "anchor",
+              "slack_user_id": null,
+              "channel_id": null,
+              "message_ts": null
+            }
+          ],
+          "messages": [
+            {
+              "channel_id": "C0GENERAL",
+              "ts": "1794150045.000145",
+              "thread_ts": null,
+              "role": "anchor",
+              "author_user_id": null,
+              "author_external": false,
+              "is_dd_post": true,
+              "dd_paths": [
+                "/tasks/t_88"
+              ],
+              "reasons": 0,
+              "triage_state": "none",
+              "edited_ts": null,
+              "responded_ts": null
+            }
+          ]
+        },
+        "removed": {}
+      }
+    },
+    {
+      "name": "V217 the DD app id by his id: an anchor",
+      "ingest": "V217 a post with the DD app id (no template) by his user id",
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "anchor",
+          "outcome": "accepted",
+          "decision": "ingest",
+          "recorded": true
+        },
+        "added": {
+          "events": [
+            {
+              "event_id": "Ev0P7AIG038",
+              "decision": "ingest",
+              "drop_reason": null,
+              "ingest_outcome": "anchor",
+              "slack_user_id": null,
+              "channel_id": null,
+              "message_ts": null
+            }
+          ],
+          "messages": [
+            {
+              "channel_id": "C0GENERAL",
+              "ts": "1794150046.000146",
+              "thread_ts": null,
+              "role": "anchor",
+              "author_user_id": null,
+              "author_external": false,
+              "is_dd_post": true,
+              "dd_paths": [],
+              "reasons": 0,
+              "triage_state": "none",
+              "edited_ts": null,
+              "responded_ts": null
+            }
+          ]
+        },
+        "removed": {}
+      }
+    },
+    {
+      "name": "V217 the DD bot's legacy attachment button: an anchor",
+      "ingest": "IG18 a legacy attachments[].actions DD button",
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "anchor",
+          "outcome": "accepted",
+          "decision": "ingest",
+          "recorded": true
+        },
+        "added": {
+          "events": [
+            {
+              "event_id": "Ev0P7AIG036",
+              "decision": "ingest",
+              "drop_reason": null,
+              "ingest_outcome": "anchor",
+              "slack_user_id": null,
+              "channel_id": null,
+              "message_ts": null
+            }
+          ],
+          "messages": [
+            {
+              "channel_id": "C0GENERAL",
+              "ts": "1794150044.000144",
+              "thread_ts": null,
+              "role": "anchor",
+              "author_user_id": null,
+              "author_external": false,
+              "is_dd_post": true,
+              "dd_paths": [
+                "/tasks/t_77"
+              ],
+              "reasons": 0,
+              "triage_state": "none",
+              "edited_ts": null,
+              "responded_ts": null
+            }
+          ]
+        },
+        "removed": {}
+      }
+    },
+    {
+      "name": "V218 a bot mentioning him: dropped bot",
+      "ingest": "IG12 / V218 a bot message mentioning him passes with isBot true",
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "bot",
+          "outcome": "accepted",
+          "decision": "drop",
+          "recorded": false
+        },
+        "added": {},
+        "removed": {}
+      }
+    },
+    {
+      "name": "V219 a marker on the ts: dropped deleted",
+      "ingest": "IG02 an explicit mention of him",
+      "state": {
+        "markers": [
+          {
+            "channel": "C0GENERAL",
+            "ts": "1794150002.000102"
+          }
+        ]
+      },
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "deleted",
+          "outcome": "accepted",
+          "decision": "drop",
+          "recorded": false
+        },
+        "added": {},
+        "removed": {}
+      }
+    },
+    {
+      "name": "V220 a group DM of len 2: a candidate",
+      "ingest": "V220 a group DM message of len 2: a dm candidate",
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "candidate",
+          "outcome": "accepted",
+          "decision": "ingest",
+          "enqueued": true,
+          "recorded": true,
+          "interactive": true
+        },
+        "added": {
+          "events": [
+            {
+              "event_id": "Ev0P7AIG043",
+              "decision": "ingest",
+              "drop_reason": null,
+              "ingest_outcome": "candidate",
+              "slack_user_id": null,
+              "channel_id": null,
+              "message_ts": null
+            }
+          ],
+          "channels": [
+            {
+              "channel_id": "G0MPIM",
+              "conv_type": "mpim",
+              "class": "standard",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "watched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": null,
+              "im_user_id": null,
+              "is_member": true,
+              "is_private": true,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": "1794150053.000153",
+              "hist_watermark_ts": null
+            }
+          ],
+          "messages": [
+            {
+              "channel_id": "G0MPIM",
+              "ts": "1794150053.000153",
+              "thread_ts": null,
+              "role": "candidate",
+              "author_user_id": "U0BOB",
+              "author_external": false,
+              "is_dd_post": false,
+              "dd_paths": [],
+              "reasons": 1,
+              "triage_state": "pending",
+              "edited_ts": null,
+              "responded_ts": null
+            }
+          ],
+          "jobs": [
+            {
+              "kind": "exec.slack-triage",
+              "lane": "interactive",
+              "has_principal": true,
+              "payload": {
+                "mode": "window",
+                "root": "c",
+                "channel": "G0MPIM",
+                "installation_id": "esi_00000000000000000000000000000a01"
+              },
+              "dedupe_key": "slack-triage:<p>:G0MPIM:c:m*",
+              "max_attempts": 6
+            }
+          ]
+        },
+        "removed": {
+          "channels": [
+            {
+              "channel_id": "G0MPIM",
+              "conv_type": "mpim",
+              "class": "standard",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "watched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": null,
+              "im_user_id": null,
+              "is_member": true,
+              "is_private": true,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": null,
+              "hist_watermark_ts": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "V220 a group DM of len 1: not addressed",
+      "ingest": "V220 a group DM message of len 1, no question, no mention: not a candidate",
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "not_addressed",
+          "outcome": "accepted",
+          "decision": "drop",
+          "recorded": false
+        },
+        "added": {
+          "channels": [
+            {
+              "channel_id": "G0MPIM",
+              "conv_type": "mpim",
+              "class": "standard",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "watched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": null,
+              "im_user_id": null,
+              "is_member": true,
+              "is_private": true,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": "1794150054.000154",
+              "hist_watermark_ts": null
+            }
+          ]
+        },
+        "removed": {
+          "channels": [
+            {
+              "channel_id": "G0MPIM",
+              "conv_type": "mpim",
+              "class": "standard",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "watched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": null,
+              "im_user_id": null,
+              "is_member": true,
+              "is_private": true,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": null,
+              "hist_watermark_ts": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "V221 a DM: a candidate and an interactive triage job (root c)",
+      "ingest": "V221 a DM to him (len 2): a dm candidate",
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "candidate",
+          "outcome": "accepted",
+          "decision": "ingest",
+          "enqueued": true,
+          "recorded": true,
+          "interactive": true
+        },
+        "added": {
+          "events": [
+            {
+              "event_id": "Ev0P7AIG040",
+              "decision": "ingest",
+              "drop_reason": null,
+              "ingest_outcome": "candidate",
+              "slack_user_id": null,
+              "channel_id": null,
+              "message_ts": null
+            }
+          ],
+          "channels": [
+            {
+              "channel_id": "D0JANE",
+              "conv_type": "im",
+              "class": "standard",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "watched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": null,
+              "im_user_id": "U0JANE",
+              "is_member": true,
+              "is_private": true,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": "1794150050.000150",
+              "hist_watermark_ts": null
+            }
+          ],
+          "messages": [
+            {
+              "channel_id": "D0JANE",
+              "ts": "1794150050.000150",
+              "thread_ts": null,
+              "role": "candidate",
+              "author_user_id": "U0JANE",
+              "author_external": false,
+              "is_dd_post": false,
+              "dd_paths": [],
+              "reasons": 1,
+              "triage_state": "pending",
+              "edited_ts": null,
+              "responded_ts": null
+            }
+          ],
+          "jobs": [
+            {
+              "kind": "exec.slack-triage",
+              "lane": "interactive",
+              "has_principal": true,
+              "payload": {
+                "mode": "window",
+                "root": "c",
+                "channel": "D0JANE",
+                "installation_id": "esi_00000000000000000000000000000a01"
+              },
+              "dedupe_key": "slack-triage:<p>:D0JANE:c:m*",
+              "max_attempts": 6
+            }
+          ]
+        },
+        "removed": {
+          "channels": [
+            {
+              "channel_id": "D0JANE",
+              "conv_type": "im",
+              "class": "standard",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "watched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": null,
+              "im_user_id": "U0JANE",
+              "is_member": true,
+              "is_private": true,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": null,
+              "hist_watermark_ts": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "IG16 a DM of 'ok': not addressed",
+      "ingest": "IG16 a DM of 'ok' (len 0): not a candidate",
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "not_addressed",
+          "outcome": "accepted",
+          "decision": "drop",
+          "recorded": false
+        },
+        "added": {
+          "channels": [
+            {
+              "channel_id": "D0JANE",
+              "conv_type": "im",
+              "class": "standard",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "watched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": null,
+              "im_user_id": "U0JANE",
+              "is_member": true,
+              "is_private": true,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": "1794150051.000151",
+              "hist_watermark_ts": null
+            }
+          ]
+        },
+        "removed": {
+          "channels": [
+            {
+              "channel_id": "D0JANE",
+              "conv_type": "im",
+              "class": "standard",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "watched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": null,
+              "im_user_id": "U0JANE",
+              "is_member": true,
+              "is_private": true,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": null,
+              "hist_watermark_ts": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "IG11 a file share DM: a candidate",
+      "ingest": "IG11 file_share passes; IG13 bot_id: null is not a bot (the FSH shape); file names never reach facts",
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "candidate",
+          "outcome": "accepted",
+          "decision": "ingest",
+          "enqueued": true,
+          "recorded": true,
+          "interactive": true
+        },
+        "added": {
+          "events": [
+            {
+              "event_id": "Ev0P7AIG024",
+              "decision": "ingest",
+              "drop_reason": null,
+              "ingest_outcome": "candidate",
+              "slack_user_id": null,
+              "channel_id": null,
+              "message_ts": null
+            }
+          ],
+          "channels": [
+            {
+              "channel_id": "D0JANE",
+              "conv_type": "im",
+              "class": "standard",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "watched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": null,
+              "im_user_id": "U0JANE",
+              "is_member": true,
+              "is_private": true,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": "1794150031.000131",
+              "hist_watermark_ts": null
+            }
+          ],
+          "messages": [
+            {
+              "channel_id": "D0JANE",
+              "ts": "1794150031.000131",
+              "thread_ts": null,
+              "role": "candidate",
+              "author_user_id": "U0JANE",
+              "author_external": false,
+              "is_dd_post": false,
+              "dd_paths": [],
+              "reasons": 1,
+              "triage_state": "pending",
+              "edited_ts": null,
+              "responded_ts": null
+            }
+          ],
+          "jobs": [
+            {
+              "kind": "exec.slack-triage",
+              "lane": "interactive",
+              "has_principal": true,
+              "payload": {
+                "mode": "window",
+                "root": "c",
+                "channel": "D0JANE",
+                "installation_id": "esi_00000000000000000000000000000a01"
+              },
+              "dedupe_key": "slack-triage:<p>:D0JANE:c:m*",
+              "max_attempts": 6
+            }
+          ]
+        },
+        "removed": {
+          "channels": [
+            {
+              "channel_id": "D0JANE",
+              "conv_type": "im",
+              "class": "standard",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "watched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": null,
+              "im_user_id": "U0JANE",
+              "is_member": true,
+              "is_private": true,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": null,
+              "hist_watermark_ts": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "V222 a mention in a channel: root = its ts",
+      "ingest": "IG02 an explicit mention of him",
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "candidate",
+          "outcome": "accepted",
+          "decision": "ingest",
+          "enqueued": true,
+          "recorded": true,
+          "interactive": true
+        },
+        "added": {
+          "events": [
+            {
+              "event_id": "Ev0P7AIG002",
+              "decision": "ingest",
+              "drop_reason": null,
+              "ingest_outcome": "candidate",
+              "slack_user_id": null,
+              "channel_id": null,
+              "message_ts": null
+            }
+          ],
+          "channels": [
+            {
+              "channel_id": "C0GENERAL",
+              "conv_type": "channel",
+              "class": "standard",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "watched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": "general",
+              "im_user_id": null,
+              "is_member": true,
+              "is_private": false,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": "1794150002.000102",
+              "hist_watermark_ts": null
+            }
+          ],
+          "messages": [
+            {
+              "channel_id": "C0GENERAL",
+              "ts": "1794150002.000102",
+              "thread_ts": null,
+              "role": "candidate",
+              "author_user_id": "U0JANE",
+              "author_external": false,
+              "is_dd_post": false,
+              "dd_paths": [],
+              "reasons": 2,
+              "triage_state": "pending",
+              "edited_ts": null,
+              "responded_ts": null
+            }
+          ],
+          "jobs": [
+            {
+              "kind": "exec.slack-triage",
+              "lane": "interactive",
+              "has_principal": true,
+              "payload": {
+                "mode": "window",
+                "root": "1794150002.000102",
+                "channel": "C0GENERAL",
+                "installation_id": "esi_00000000000000000000000000000a01"
+              },
+              "dedupe_key": "slack-triage:<p>:C0GENERAL:1794150002.000102:m*",
+              "max_attempts": 6
+            }
+          ]
+        },
+        "removed": {
+          "channels": [
+            {
+              "channel_id": "C0GENERAL",
+              "conv_type": "channel",
+              "class": "standard",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "watched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": "general",
+              "im_user_id": null,
+              "is_member": true,
+              "is_private": false,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": null,
+              "hist_watermark_ts": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "V222 a rich_text mention: a candidate",
+      "ingest": "IG04 a rich_text user element (text lacks the mention)",
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "candidate",
+          "outcome": "accepted",
+          "decision": "ingest",
+          "enqueued": true,
+          "recorded": true,
+          "interactive": true
+        },
+        "added": {
+          "events": [
+            {
+              "event_id": "Ev0P7AIG004",
+              "decision": "ingest",
+              "drop_reason": null,
+              "ingest_outcome": "candidate",
+              "slack_user_id": null,
+              "channel_id": null,
+              "message_ts": null
+            }
+          ],
+          "channels": [
+            {
+              "channel_id": "C0GENERAL",
+              "conv_type": "channel",
+              "class": "standard",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "watched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": "general",
+              "im_user_id": null,
+              "is_member": true,
+              "is_private": false,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": "1794150004.000104",
+              "hist_watermark_ts": null
+            }
+          ],
+          "messages": [
+            {
+              "channel_id": "C0GENERAL",
+              "ts": "1794150004.000104",
+              "thread_ts": null,
+              "role": "candidate",
+              "author_user_id": "U0JANE",
+              "author_external": false,
+              "is_dd_post": false,
+              "dd_paths": [],
+              "reasons": 2,
+              "triage_state": "pending",
+              "edited_ts": null,
+              "responded_ts": null
+            }
+          ],
+          "jobs": [
+            {
+              "kind": "exec.slack-triage",
+              "lane": "interactive",
+              "has_principal": true,
+              "payload": {
+                "mode": "window",
+                "root": "1794150004.000104",
+                "channel": "C0GENERAL",
+                "installation_id": "esi_00000000000000000000000000000a01"
+              },
+              "dedupe_key": "slack-triage:<p>:C0GENERAL:1794150004.000104:m*",
+              "max_attempts": 6
+            }
+          ]
+        },
+        "removed": {
+          "channels": [
+            {
+              "channel_id": "C0GENERAL",
+              "conv_type": "channel",
+              "class": "standard",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "watched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": "general",
+              "im_user_id": null,
+              "is_member": true,
+              "is_private": false,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": null,
+              "hist_watermark_ts": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "V222 a reply in a thread he started: root = the thread",
+      "ingest": "V222 a reply in a thread he started (parent_user_id = him)",
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "candidate",
+          "outcome": "accepted",
+          "decision": "ingest",
+          "enqueued": true,
+          "recorded": true,
+          "interactive": true
+        },
+        "added": {
+          "events": [
+            {
+              "event_id": "Ev0P7AIG046",
+              "decision": "ingest",
+              "drop_reason": null,
+              "ingest_outcome": "candidate",
+              "slack_user_id": null,
+              "channel_id": null,
+              "message_ts": null
+            }
+          ],
+          "channels": [
+            {
+              "channel_id": "C0GENERAL",
+              "conv_type": "channel",
+              "class": "standard",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "watched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": "general",
+              "im_user_id": null,
+              "is_member": true,
+              "is_private": false,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": "1794150056.000156",
+              "hist_watermark_ts": null
+            }
+          ],
+          "messages": [
+            {
+              "channel_id": "C0GENERAL",
+              "ts": "1794150056.000156",
+              "thread_ts": "1794150001.000101",
+              "role": "candidate",
+              "author_user_id": "U0JANE",
+              "author_external": false,
+              "is_dd_post": false,
+              "dd_paths": [],
+              "reasons": 4,
+              "triage_state": "pending",
+              "edited_ts": null,
+              "responded_ts": null
+            }
+          ],
+          "jobs": [
+            {
+              "kind": "exec.slack-triage",
+              "lane": "interactive",
+              "has_principal": true,
+              "payload": {
+                "mode": "window",
+                "root": "1794150001.000101",
+                "channel": "C0GENERAL",
+                "installation_id": "esi_00000000000000000000000000000a01"
+              },
+              "dedupe_key": "slack-triage:<p>:C0GENERAL:1794150001.000101:m*",
+              "max_attempts": 6
+            }
+          ]
+        },
+        "removed": {
+          "channels": [
+            {
+              "channel_id": "C0GENERAL",
+              "conv_type": "channel",
+              "class": "standard",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "watched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": "general",
+              "im_user_id": null,
+              "is_member": true,
+              "is_private": false,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": null,
+              "hist_watermark_ts": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "V222 a reply in a thread he posted in: his-thread",
+      "ingest": "V222 a reply in someone else's thread (he may have posted in it: exec_slack_threads decides)",
+      "state": {
+        "threads": [
+          {
+            "channel": "C0GENERAL",
+            "thread_ts": "1794150002.000102",
+            "he_posted_ts": "1794150002.500000"
+          }
+        ]
+      },
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "candidate",
+          "outcome": "accepted",
+          "decision": "ingest",
+          "enqueued": true,
+          "recorded": true,
+          "interactive": true
+        },
+        "added": {
+          "events": [
+            {
+              "event_id": "Ev0P7AIG047",
+              "decision": "ingest",
+              "drop_reason": null,
+              "ingest_outcome": "candidate",
+              "slack_user_id": null,
+              "channel_id": null,
+              "message_ts": null
+            }
+          ],
+          "channels": [
+            {
+              "channel_id": "C0GENERAL",
+              "conv_type": "channel",
+              "class": "standard",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "watched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": "general",
+              "im_user_id": null,
+              "is_member": true,
+              "is_private": false,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": "1794150057.000157",
+              "hist_watermark_ts": null
+            }
+          ],
+          "messages": [
+            {
+              "channel_id": "C0GENERAL",
+              "ts": "1794150057.000157",
+              "thread_ts": "1794150002.000102",
+              "role": "candidate",
+              "author_user_id": "U0BOB",
+              "author_external": false,
+              "is_dd_post": false,
+              "dd_paths": [],
+              "reasons": 4,
+              "triage_state": "pending",
+              "edited_ts": null,
+              "responded_ts": null
+            }
+          ],
+          "jobs": [
+            {
+              "kind": "exec.slack-triage",
+              "lane": "interactive",
+              "has_principal": true,
+              "payload": {
+                "mode": "window",
+                "root": "1794150002.000102",
+                "channel": "C0GENERAL",
+                "installation_id": "esi_00000000000000000000000000000a01"
+              },
+              "dedupe_key": "slack-triage:<p>:C0GENERAL:1794150002.000102:m*",
+              "max_attempts": 6
+            }
+          ]
+        },
+        "removed": {
+          "channels": [
+            {
+              "channel_id": "C0GENERAL",
+              "conv_type": "channel",
+              "class": "standard",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "watched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": "general",
+              "im_user_id": null,
+              "is_member": true,
+              "is_private": false,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": null,
+              "hist_watermark_ts": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "V222 a reply in a thread he never posted in: not addressed",
+      "ingest": "V222 a reply in someone else's thread (he may have posted in it: exec_slack_threads decides)",
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "not_addressed",
+          "outcome": "accepted",
+          "decision": "drop",
+          "recorded": false
+        },
+        "added": {
+          "channels": [
+            {
+              "channel_id": "C0GENERAL",
+              "conv_type": "channel",
+              "class": "standard",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "watched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": "general",
+              "im_user_id": null,
+              "is_member": true,
+              "is_private": false,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": "1794150057.000157",
+              "hist_watermark_ts": null
+            }
+          ]
+        },
+        "removed": {
+          "channels": [
+            {
+              "channel_id": "C0GENERAL",
+              "conv_type": "channel",
+              "class": "standard",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "watched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": "general",
+              "im_user_id": null,
+              "is_member": true,
+              "is_private": false,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": null,
+              "hist_watermark_ts": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "V222 a mention in a private channel",
+      "ingest": "a mention in a private channel",
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "candidate",
+          "outcome": "accepted",
+          "decision": "ingest",
+          "enqueued": true,
+          "recorded": true,
+          "interactive": true
+        },
+        "added": {
+          "events": [
+            {
+              "event_id": "Ev0P7AIG048",
+              "decision": "ingest",
+              "drop_reason": null,
+              "ingest_outcome": "candidate",
+              "slack_user_id": null,
+              "channel_id": null,
+              "message_ts": null
+            }
+          ],
+          "channels": [
+            {
+              "channel_id": "G0PRIV",
+              "conv_type": "group",
+              "class": "standard",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "watched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": "private-ops",
+              "im_user_id": null,
+              "is_member": true,
+              "is_private": true,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": "1794150058.000158",
+              "hist_watermark_ts": null
+            }
+          ],
+          "messages": [
+            {
+              "channel_id": "G0PRIV",
+              "ts": "1794150058.000158",
+              "thread_ts": null,
+              "role": "candidate",
+              "author_user_id": "U0BOB",
+              "author_external": false,
+              "is_dd_post": false,
+              "dd_paths": [],
+              "reasons": 2,
+              "triage_state": "pending",
+              "edited_ts": null,
+              "responded_ts": null
+            }
+          ],
+          "jobs": [
+            {
+              "kind": "exec.slack-triage",
+              "lane": "interactive",
+              "has_principal": true,
+              "payload": {
+                "mode": "window",
+                "root": "1794150058.000158",
+                "channel": "G0PRIV",
+                "installation_id": "esi_00000000000000000000000000000a01"
+              },
+              "dedupe_key": "slack-triage:<p>:G0PRIV:1794150058.000158:m*",
+              "max_attempts": 6
+            }
+          ]
+        },
+        "removed": {
+          "channels": [
+            {
+              "channel_id": "G0PRIV",
+              "conv_type": "group",
+              "class": "standard",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "watched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": "private-ops",
+              "im_user_id": null,
+              "is_member": true,
+              "is_private": true,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": null,
+              "hist_watermark_ts": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "IG05 a broadcast is no mention: not addressed",
+      "ingest": "IG05 <!here> is a broadcast, never a mention",
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "not_addressed",
+          "outcome": "accepted",
+          "decision": "drop",
+          "recorded": false
+        },
+        "added": {
+          "channels": [
+            {
+              "channel_id": "C0GENERAL",
+              "conv_type": "channel",
+              "class": "standard",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "watched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": "general",
+              "im_user_id": null,
+              "is_member": true,
+              "is_private": false,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": "1794150005.000105",
+              "hist_watermark_ts": null
+            }
+          ]
+        },
+        "removed": {
+          "channels": [
+            {
+              "channel_id": "C0GENERAL",
+              "conv_type": "channel",
+              "class": "standard",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "watched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": "general",
+              "im_user_id": null,
+              "is_member": true,
+              "is_private": false,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": null,
+              "hist_watermark_ts": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "V223 an owner-muted channel: a mention bypasses",
+      "ingest": "V223 a mention in an owner-muted channel (bypass)",
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "candidate",
+          "outcome": "accepted",
+          "decision": "ingest",
+          "enqueued": true,
+          "recorded": true,
+          "interactive": true
+        },
+        "added": {
+          "events": [
+            {
+              "event_id": "Ev0P7AIG052",
+              "decision": "ingest",
+              "drop_reason": null,
+              "ingest_outcome": "candidate",
+              "slack_user_id": null,
+              "channel_id": null,
+              "message_ts": null
+            }
+          ],
+          "channels": [
+            {
+              "channel_id": "C0MUTED",
+              "conv_type": "channel",
+              "class": "standard",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "muted",
+              "mute_source": "owner",
+              "finance_name": false,
+              "name": "design",
+              "im_user_id": null,
+              "is_member": true,
+              "is_private": false,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": "1794150062.000162",
+              "hist_watermark_ts": null
+            }
+          ],
+          "messages": [
+            {
+              "channel_id": "C0MUTED",
+              "ts": "1794150062.000162",
+              "thread_ts": null,
+              "role": "candidate",
+              "author_user_id": "U0JANE",
+              "author_external": false,
+              "is_dd_post": false,
+              "dd_paths": [],
+              "reasons": 2,
+              "triage_state": "pending",
+              "edited_ts": null,
+              "responded_ts": null
+            }
+          ],
+          "jobs": [
+            {
+              "kind": "exec.slack-triage",
+              "lane": "interactive",
+              "has_principal": true,
+              "payload": {
+                "mode": "window",
+                "root": "1794150062.000162",
+                "channel": "C0MUTED",
+                "installation_id": "esi_00000000000000000000000000000a01"
+              },
+              "dedupe_key": "slack-triage:<p>:C0MUTED:1794150062.000162:m*",
+              "max_attempts": 6
+            }
+          ]
+        },
+        "removed": {
+          "channels": [
+            {
+              "channel_id": "C0MUTED",
+              "conv_type": "channel",
+              "class": "standard",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "muted",
+              "mute_source": "owner",
+              "finance_name": false,
+              "name": "design",
+              "im_user_id": null,
+              "is_member": true,
+              "is_private": false,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": null,
+              "hist_watermark_ts": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "V223 an owner-muted channel: a his-thread reply is muted",
+      "ingest": "V222 a reply in a thread he started (parent_user_id = him)",
+      "state": {
+        "channels": {
+          "C0GENERAL": {
+            "watchState": "muted",
+            "muteSource": "owner"
+          }
+        }
+      },
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "muted",
+          "outcome": "accepted",
+          "decision": "drop",
+          "recorded": false
+        },
+        "added": {
+          "channels": [
+            {
+              "channel_id": "C0GENERAL",
+              "conv_type": "channel",
+              "class": "standard",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "muted",
+              "mute_source": "owner",
+              "finance_name": false,
+              "name": "general",
+              "im_user_id": null,
+              "is_member": true,
+              "is_private": false,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": "1794150056.000156",
+              "hist_watermark_ts": null
+            }
+          ]
+        },
+        "removed": {
+          "channels": [
+            {
+              "channel_id": "C0GENERAL",
+              "conv_type": "channel",
+              "class": "standard",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "muted",
+              "mute_source": "owner",
+              "finance_name": false,
+              "name": "general",
+              "im_user_id": null,
+              "is_member": true,
+              "is_private": false,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": null,
+              "hist_watermark_ts": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "V223 a Slack-muted channel: a mention bypasses",
+      "ingest": "IG02 an explicit mention of him",
+      "state": {
+        "channels": {
+          "C0GENERAL": {
+            "watchState": "muted",
+            "muteSource": "slack"
+          }
+        }
+      },
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "candidate",
+          "outcome": "accepted",
+          "decision": "ingest",
+          "enqueued": true,
+          "recorded": true,
+          "interactive": true
+        },
+        "added": {
+          "events": [
+            {
+              "event_id": "Ev0P7AIG002",
+              "decision": "ingest",
+              "drop_reason": null,
+              "ingest_outcome": "candidate",
+              "slack_user_id": null,
+              "channel_id": null,
+              "message_ts": null
+            }
+          ],
+          "channels": [
+            {
+              "channel_id": "C0GENERAL",
+              "conv_type": "channel",
+              "class": "standard",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "muted",
+              "mute_source": "slack",
+              "finance_name": false,
+              "name": "general",
+              "im_user_id": null,
+              "is_member": true,
+              "is_private": false,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": "1794150002.000102",
+              "hist_watermark_ts": null
+            }
+          ],
+          "messages": [
+            {
+              "channel_id": "C0GENERAL",
+              "ts": "1794150002.000102",
+              "thread_ts": null,
+              "role": "candidate",
+              "author_user_id": "U0JANE",
+              "author_external": false,
+              "is_dd_post": false,
+              "dd_paths": [],
+              "reasons": 2,
+              "triage_state": "pending",
+              "edited_ts": null,
+              "responded_ts": null
+            }
+          ],
+          "jobs": [
+            {
+              "kind": "exec.slack-triage",
+              "lane": "interactive",
+              "has_principal": true,
+              "payload": {
+                "mode": "window",
+                "root": "1794150002.000102",
+                "channel": "C0GENERAL",
+                "installation_id": "esi_00000000000000000000000000000a01"
+              },
+              "dedupe_key": "slack-triage:<p>:C0GENERAL:1794150002.000102:m*",
+              "max_attempts": 6
+            }
+          ]
+        },
+        "removed": {
+          "channels": [
+            {
+              "channel_id": "C0GENERAL",
+              "conv_type": "channel",
+              "class": "standard",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "muted",
+              "mute_source": "slack",
+              "finance_name": false,
+              "name": "general",
+              "im_user_id": null,
+              "is_member": true,
+              "is_private": false,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": null,
+              "hist_watermark_ts": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "V223b a default_finance mute: a mention is dropped, nothing written",
+      "ingest": "V223b a mention in a default_finance-muted channel (v2 drops it: no bypass)",
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "muted",
+          "outcome": "accepted",
+          "decision": "drop",
+          "recorded": false
+        },
+        "added": {
+          "channels": [
+            {
+              "channel_id": "C0FINANCE",
+              "conv_type": "channel",
+              "class": "finance",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "muted",
+              "mute_source": "default_finance",
+              "finance_name": true,
+              "name": "finance",
+              "im_user_id": null,
+              "is_member": true,
+              "is_private": false,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": "1794150061.000161",
+              "hist_watermark_ts": null
+            }
+          ]
+        },
+        "removed": {
+          "channels": [
+            {
+              "channel_id": "C0FINANCE",
+              "conv_type": "channel",
+              "class": "finance",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "muted",
+              "mute_source": "default_finance",
+              "finance_name": true,
+              "name": "finance",
+              "im_user_id": null,
+              "is_member": true,
+              "is_private": false,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": null,
+              "hist_watermark_ts": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "V223b a Slack Connect finance-named channel (default_finance): dropped",
+      "ingest": "XC01 a Slack Connect message from another team's author",
+      "state": {
+        "channels": {
+          "C0SHARED": {
+            "financeName": true,
+            "watchState": "muted",
+            "muteSource": "default_finance",
+            "name": "finance-team"
+          }
+        }
+      },
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "muted",
+          "outcome": "accepted",
+          "decision": "drop",
+          "recorded": false
+        },
+        "added": {
+          "channels": [
+            {
+              "channel_id": "C0SHARED",
+              "conv_type": "channel",
+              "class": "external",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "muted",
+              "mute_source": "default_finance",
+              "finance_name": true,
+              "name": "finance-team",
+              "im_user_id": null,
+              "is_member": true,
+              "is_private": false,
+              "is_ext_shared": true,
+              "ext_ever": true,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": "1794150059.000159",
+              "hist_watermark_ts": null
+            }
+          ]
+        },
+        "removed": {
+          "channels": [
+            {
+              "channel_id": "C0SHARED",
+              "conv_type": "channel",
+              "class": "external",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "muted",
+              "mute_source": "default_finance",
+              "finance_name": true,
+              "name": "finance-team",
+              "im_user_id": null,
+              "is_member": true,
+              "is_private": false,
+              "is_ext_shared": true,
+              "ext_ever": true,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": null,
+              "hist_watermark_ts": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "V224 from him in an IM: from_him (his id kept), earlier rows stamped, a kick",
+      "ingest": "V224 from him in an IM: stamps earlier candidates (no triage)",
+      "state": {
+        "messages": [
+          {
+            "channel": "D0JANE",
+            "ts": "1794150050.000150",
+            "reasons": 1
+          }
+        ],
+        "items": [
+          {
+            "channel": "D0JANE",
+            "ts": "1794150050.000150",
+            "source_class": "private"
+          }
+        ]
+      },
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "from_him",
+          "outcome": "accepted",
+          "skipped": 0,
+          "stamped": 1,
+          "decision": "ingest",
+          "recorded": true
+        },
+        "added": {
+          "events": [
+            {
+              "event_id": "Ev0P7AIG045",
+              "decision": "ingest",
+              "drop_reason": null,
+              "ingest_outcome": "from_him",
+              "slack_user_id": "U0MITCH",
+              "channel_id": null,
+              "message_ts": null
+            }
+          ],
+          "channels": [
+            {
+              "channel_id": "D0JANE",
+              "conv_type": "im",
+              "class": "standard",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "watched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": null,
+              "im_user_id": "U0JANE",
+              "is_member": true,
+              "is_private": true,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": "1794150055.000155",
+              "hist_watermark_ts": null
+            }
+          ],
+          "messages": [
+            {
+              "channel_id": "D0JANE",
+              "ts": "1794150050.000150",
+              "thread_ts": null,
+              "role": "candidate",
+              "author_user_id": "U0JANE",
+              "author_external": false,
+              "is_dd_post": false,
+              "dd_paths": [],
+              "reasons": 1,
+              "triage_state": "pending",
+              "edited_ts": null,
+              "responded_ts": "1794150055.000155"
+            }
+          ],
+          "items": [
+            {
+              "channel_id": "D0JANE",
+              "ts": "1794150050.000150",
+              "kind": "request",
+              "has_excerpt": true,
+              "source_class": "private",
+              "responded_ts": "1794150055.000155"
+            }
+          ],
+          "jobs": [
+            {
+              "kind": "exec.slack-attention",
+              "lane": "bulk",
+              "has_principal": true,
+              "payload": {
+                "kick": true
+              },
+              "dedupe_key": "slack-attn:<p>:m*",
+              "max_attempts": 3
+            }
+          ]
+        },
+        "removed": {
+          "channels": [
+            {
+              "channel_id": "D0JANE",
+              "conv_type": "im",
+              "class": "standard",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "watched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": null,
+              "im_user_id": "U0JANE",
+              "is_member": true,
+              "is_private": true,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": null,
+              "hist_watermark_ts": null
+            }
+          ],
+          "messages": [
+            {
+              "channel_id": "D0JANE",
+              "ts": "1794150050.000150",
+              "thread_ts": null,
+              "role": "candidate",
+              "author_user_id": "U0JANE",
+              "author_external": false,
+              "is_dd_post": false,
+              "dd_paths": [],
+              "reasons": 1,
+              "triage_state": "pending",
+              "edited_ts": null,
+              "responded_ts": null
+            }
+          ],
+          "items": [
+            {
+              "channel_id": "D0JANE",
+              "ts": "1794150050.000150",
+              "kind": "request",
+              "has_excerpt": true,
+              "source_class": "private",
+              "responded_ts": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "V225 an edit of a stored candidate: excerpts nulled, edited_ts, a retriage job",
+      "ingest": "IG07 message_changed in the recorded shape (hidden: true): facts from event.message",
+      "state": {
+        "messages": [
+          {
+            "channel": "C0GENERAL",
+            "ts": "1794150009.000109"
+          }
+        ],
+        "items": [
+          {
+            "channel": "C0GENERAL",
+            "ts": "1794150009.000109"
+          }
+        ]
+      },
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "edited",
+          "outcome": "accepted",
+          "decision": "ingest",
+          "enqueued": true,
+          "recorded": true,
+          "interactive": false
+        },
+        "added": {
+          "events": [
+            {
+              "event_id": "Ev0P7AIG009",
+              "decision": "ingest",
+              "drop_reason": null,
+              "ingest_outcome": "edited",
+              "slack_user_id": null,
+              "channel_id": null,
+              "message_ts": null
+            }
+          ],
+          "messages": [
+            {
+              "channel_id": "C0GENERAL",
+              "ts": "1794150009.000109",
+              "thread_ts": null,
+              "role": "candidate",
+              "author_user_id": "U0JANE",
+              "author_external": false,
+              "is_dd_post": false,
+              "dd_paths": [],
+              "reasons": 2,
+              "triage_state": "pending",
+              "edited_ts": "1794150010.000110",
+              "responded_ts": null
+            }
+          ],
+          "items": [
+            {
+              "channel_id": "C0GENERAL",
+              "ts": "1794150009.000109",
+              "kind": "request",
+              "has_excerpt": false,
+              "source_class": "public",
+              "responded_ts": null
+            }
+          ],
+          "jobs": [
+            {
+              "kind": "exec.slack-triage",
+              "lane": "bulk",
+              "has_principal": true,
+              "payload": {
+                "ts": "1794150009.000109",
+                "mode": "retriage",
+                "root": "1794150009.000109",
+                "channel": "C0GENERAL",
+                "installation_id": "esi_00000000000000000000000000000a01"
+              },
+              "dedupe_key": "slack-retriage:<p>:C0GENERAL:1794150009.000109:1794150010.000110",
+              "max_attempts": 6
+            }
+          ]
+        },
+        "removed": {
+          "messages": [
+            {
+              "channel_id": "C0GENERAL",
+              "ts": "1794150009.000109",
+              "thread_ts": null,
+              "role": "candidate",
+              "author_user_id": "U0JANE",
+              "author_external": false,
+              "is_dd_post": false,
+              "dd_paths": [],
+              "reasons": 2,
+              "triage_state": "pending",
+              "edited_ts": null,
+              "responded_ts": null
+            }
+          ],
+          "items": [
+            {
+              "channel_id": "C0GENERAL",
+              "ts": "1794150009.000109",
+              "kind": "request",
+              "has_excerpt": true,
+              "source_class": "public",
+              "responded_ts": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "V225 an edit of an unknown message newly mentioning him: a candidate",
+      "ingest": "IG07 message_changed in the recorded shape (hidden: true): facts from event.message",
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "candidate",
+          "outcome": "accepted",
+          "decision": "ingest",
+          "enqueued": true,
+          "recorded": true,
+          "interactive": true
+        },
+        "added": {
+          "events": [
+            {
+              "event_id": "Ev0P7AIG009",
+              "decision": "ingest",
+              "drop_reason": null,
+              "ingest_outcome": "candidate",
+              "slack_user_id": null,
+              "channel_id": null,
+              "message_ts": null
+            }
+          ],
+          "channels": [
+            {
+              "channel_id": "C0GENERAL",
+              "conv_type": "channel",
+              "class": "standard",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "watched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": "general",
+              "im_user_id": null,
+              "is_member": true,
+              "is_private": false,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": "1794150009.000109",
+              "hist_watermark_ts": null
+            }
+          ],
+          "messages": [
+            {
+              "channel_id": "C0GENERAL",
+              "ts": "1794150009.000109",
+              "thread_ts": null,
+              "role": "candidate",
+              "author_user_id": "U0JANE",
+              "author_external": false,
+              "is_dd_post": false,
+              "dd_paths": [],
+              "reasons": 2,
+              "triage_state": "pending",
+              "edited_ts": null,
+              "responded_ts": null
+            }
+          ],
+          "jobs": [
+            {
+              "kind": "exec.slack-triage",
+              "lane": "interactive",
+              "has_principal": true,
+              "payload": {
+                "mode": "window",
+                "root": "1794150009.000109",
+                "channel": "C0GENERAL",
+                "installation_id": "esi_00000000000000000000000000000a01"
+              },
+              "dedupe_key": "slack-triage:<p>:C0GENERAL:1794150009.000109:m*",
+              "max_attempts": 6
+            }
+          ]
+        },
+        "removed": {
+          "channels": [
+            {
+              "channel_id": "C0GENERAL",
+              "conv_type": "channel",
+              "class": "standard",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "watched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": "general",
+              "im_user_id": null,
+              "is_member": true,
+              "is_private": false,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": null,
+              "hist_watermark_ts": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "V226 channel_created: an unclassified row and a classify job",
+      "ingest": "IG19 channel_created",
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "classify",
+          "outcome": "accepted",
+          "decision": "lifecycle",
+          "enqueued": true,
+          "recorded": true,
+          "interactive": false
+        },
+        "added": {
+          "events": [
+            {
+              "event_id": "Ev0P7AIG068",
+              "decision": "lifecycle",
+              "drop_reason": null,
+              "ingest_outcome": "classify",
+              "slack_user_id": null,
+              "channel_id": null,
+              "message_ts": null
+            }
+          ],
+          "channels": [
+            {
+              "channel_id": "C0NEWCHAN",
+              "conv_type": "channel",
+              "class": "unclassified",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "unwatched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": null,
+              "im_user_id": null,
+              "is_member": false,
+              "is_private": false,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": null,
+              "hist_watermark_ts": null
+            }
+          ],
+          "jobs": [
+            {
+              "kind": "exec.slack-classify",
+              "lane": "bulk",
+              "has_principal": true,
+              "payload": {
+                "channel": "C0NEWCHAN",
+                "installation_id": "esi_00000000000000000000000000000a01"
+              },
+              "dedupe_key": "slack-classify:<p>:C0NEWCHAN:eEv0P7AIG068",
+              "max_attempts": 3
+            }
+          ]
+        },
+        "removed": {}
+      }
+    },
+    {
+      "name": "V226 rename to a lead suffix: denied and purged at once",
+      "ingest": "IG19 / V226 channel_rename: rename to a lead suffix",
+      "state": {
+        "messages": [
+          {
+            "channel": "C0GENERAL",
+            "ts": "1794150001.000101"
+          }
+        ],
+        "items": [
+          {
+            "channel": "C0GENERAL",
+            "ts": "1794150001.000101"
+          }
+        ],
+        "threads": [
+          {
+            "channel": "C0GENERAL",
+            "thread_ts": "1794150001.000101",
+            "he_posted_ts": "1794150001.500000"
+          }
+        ],
+        "attention": [
+          "slack:msg:C0GENERAL:1794150001.000101"
+        ]
+      },
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "denied",
+          "outcome": "accepted",
+          "decision": "lifecycle",
+          "enqueued": false,
+          "recorded": true,
+          "interactive": false
+        },
+        "added": {
+          "events": [
+            {
+              "event_id": "Ev0P7AIG069",
+              "decision": "lifecycle",
+              "drop_reason": null,
+              "ingest_outcome": "denied",
+              "slack_user_id": null,
+              "channel_id": null,
+              "message_ts": null
+            }
+          ],
+          "channels": [
+            {
+              "channel_id": "C0GENERAL",
+              "conv_type": "channel",
+              "class": "deny",
+              "deny_reason": "lead_name",
+              "hub_kind": null,
+              "watch_state": "unwatched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": null,
+              "im_user_id": null,
+              "is_member": true,
+              "is_private": false,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": null,
+              "hist_watermark_ts": null
+            }
+          ],
+          "purgeLog": [
+            {
+              "scope": "conversation",
+              "channel_id": "C0GENERAL",
+              "ts": null,
+              "reason": "deny"
+            }
+          ],
+          "jobs": [
+            {
+              "kind": "exec.slack-attention",
+              "lane": "bulk",
+              "has_principal": true,
+              "payload": {
+                "kick": true
+              },
+              "dedupe_key": "slack-attn:<p>:m*",
+              "max_attempts": 3
+            }
+          ]
+        },
+        "removed": {
+          "channels": [
+            {
+              "channel_id": "C0GENERAL",
+              "conv_type": "channel",
+              "class": "standard",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "watched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": "general",
+              "im_user_id": null,
+              "is_member": true,
+              "is_private": false,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": null,
+              "hist_watermark_ts": null
+            }
+          ],
+          "messages": [
+            {
+              "channel_id": "C0GENERAL",
+              "ts": "1794150001.000101",
+              "thread_ts": null,
+              "role": "candidate",
+              "author_user_id": "U0JANE",
+              "author_external": false,
+              "is_dd_post": false,
+              "dd_paths": [],
+              "reasons": 2,
+              "triage_state": "pending",
+              "edited_ts": null,
+              "responded_ts": null
+            }
+          ],
+          "items": [
+            {
+              "channel_id": "C0GENERAL",
+              "ts": "1794150001.000101",
+              "kind": "request",
+              "has_excerpt": true,
+              "source_class": "public",
+              "responded_ts": null
+            }
+          ],
+          "threads": [
+            {
+              "channel_id": "C0GENERAL",
+              "thread_ts": "1794150001.000101",
+              "he_posted_ts": "1794150001.500000"
+            }
+          ],
+          "attention": [
+            "slack:msg:C0GENERAL:1794150001.000101"
+          ]
+        }
+      }
+    },
+    {
+      "name": "V226 rename to a legacy SOP suffix: denied",
+      "ingest": "IG19 / V226 channel_rename: rename to a legacy SOP suffix",
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "denied",
+          "outcome": "accepted",
+          "decision": "lifecycle",
+          "enqueued": false,
+          "recorded": true,
+          "interactive": false
+        },
+        "added": {
+          "events": [
+            {
+              "event_id": "Ev0P7AIG070",
+              "decision": "lifecycle",
+              "drop_reason": null,
+              "ingest_outcome": "denied",
+              "slack_user_id": null,
+              "channel_id": null,
+              "message_ts": null
+            }
+          ],
+          "channels": [
+            {
+              "channel_id": "C0GENERAL",
+              "conv_type": "channel",
+              "class": "deny",
+              "deny_reason": "lead_name",
+              "hub_kind": null,
+              "watch_state": "unwatched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": null,
+              "im_user_id": null,
+              "is_member": true,
+              "is_private": false,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": null,
+              "hist_watermark_ts": null
+            }
+          ],
+          "purgeLog": [
+            {
+              "scope": "conversation",
+              "channel_id": "C0GENERAL",
+              "ts": null,
+              "reason": "deny"
+            }
+          ]
+        },
+        "removed": {
+          "channels": [
+            {
+              "channel_id": "C0GENERAL",
+              "conv_type": "channel",
+              "class": "standard",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "watched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": "general",
+              "im_user_id": null,
+              "is_member": true,
+              "is_private": false,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": null,
+              "hist_watermark_ts": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "V226 rename to an FB-listed name: deny fb_list",
+      "ingest": "IG19 / V226 channel_rename: rename to an FB-listed name",
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "denied",
+          "outcome": "accepted",
+          "decision": "lifecycle",
+          "enqueued": false,
+          "recorded": true,
+          "interactive": false
+        },
+        "added": {
+          "events": [
+            {
+              "event_id": "Ev0P7AIG071",
+              "decision": "lifecycle",
+              "drop_reason": null,
+              "ingest_outcome": "denied",
+              "slack_user_id": null,
+              "channel_id": null,
+              "message_ts": null
+            }
+          ],
+          "channels": [
+            {
+              "channel_id": "C0GENERAL",
+              "conv_type": "channel",
+              "class": "deny",
+              "deny_reason": "fb_list",
+              "hub_kind": null,
+              "watch_state": "unwatched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": null,
+              "im_user_id": null,
+              "is_member": true,
+              "is_private": false,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": null,
+              "hist_watermark_ts": null
+            }
+          ],
+          "purgeLog": [
+            {
+              "scope": "conversation",
+              "channel_id": "C0GENERAL",
+              "ts": null,
+              "reason": "deny"
+            }
+          ]
+        },
+        "removed": {
+          "channels": [
+            {
+              "channel_id": "C0GENERAL",
+              "conv_type": "channel",
+              "class": "standard",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "watched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": "general",
+              "im_user_id": null,
+              "is_member": true,
+              "is_private": false,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": null,
+              "hist_watermark_ts": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "V226 rename while fb_onboarding is missing: unclassified",
+      "ingest": "IG19 / V226 channel_rename: a plain rename",
+      "state": {
+        "fb": "missing"
+      },
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "classify",
+          "outcome": "accepted",
+          "decision": "lifecycle",
+          "enqueued": true,
+          "recorded": true,
+          "interactive": false
+        },
+        "added": {
+          "events": [
+            {
+              "event_id": "Ev0P7AIG073",
+              "decision": "lifecycle",
+              "drop_reason": null,
+              "ingest_outcome": "classify",
+              "slack_user_id": null,
+              "channel_id": null,
+              "message_ts": null
+            }
+          ],
+          "channels": [
+            {
+              "channel_id": "C0GENERAL",
+              "conv_type": "channel",
+              "class": "unclassified",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "unwatched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": null,
+              "im_user_id": null,
+              "is_member": true,
+              "is_private": false,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": null,
+              "hist_watermark_ts": null
+            }
+          ],
+          "jobs": [
+            {
+              "kind": "exec.slack-classify",
+              "lane": "bulk",
+              "has_principal": true,
+              "payload": {
+                "channel": "C0GENERAL",
+                "installation_id": "esi_00000000000000000000000000000a01"
+              },
+              "dedupe_key": "slack-classify:<p>:C0GENERAL:eEv0P7AIG073",
+              "max_attempts": 3
+            }
+          ]
+        },
+        "removed": {
+          "channels": [
+            {
+              "channel_id": "C0GENERAL",
+              "conv_type": "channel",
+              "class": "standard",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "watched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": "general",
+              "im_user_id": null,
+              "is_member": true,
+              "is_private": false,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": null,
+              "hist_watermark_ts": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "V226 rename to a name containing leads: unclassified",
+      "ingest": "IG19 / V226 channel_rename: rename to a name containing leads",
+      "state": {
+        "messages": [
+          {
+            "channel": "C0GENERAL",
+            "ts": "1794150001.000101"
+          }
+        ]
+      },
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "classify",
+          "outcome": "accepted",
+          "decision": "lifecycle",
+          "enqueued": true,
+          "recorded": true,
+          "interactive": false
+        },
+        "added": {
+          "events": [
+            {
+              "event_id": "Ev0P7AIG072",
+              "decision": "lifecycle",
+              "drop_reason": null,
+              "ingest_outcome": "classify",
+              "slack_user_id": null,
+              "channel_id": null,
+              "message_ts": null
+            }
+          ],
+          "channels": [
+            {
+              "channel_id": "C0GENERAL",
+              "conv_type": "channel",
+              "class": "unclassified",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "unwatched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": null,
+              "im_user_id": null,
+              "is_member": true,
+              "is_private": false,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": null,
+              "hist_watermark_ts": null
+            }
+          ],
+          "jobs": [
+            {
+              "kind": "exec.slack-classify",
+              "lane": "bulk",
+              "has_principal": true,
+              "payload": {
+                "channel": "C0GENERAL",
+                "installation_id": "esi_00000000000000000000000000000a01"
+              },
+              "dedupe_key": "slack-classify:<p>:C0GENERAL:eEv0P7AIG072",
+              "max_attempts": 3
+            }
+          ]
+        },
+        "removed": {
+          "channels": [
+            {
+              "channel_id": "C0GENERAL",
+              "conv_type": "channel",
+              "class": "standard",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "watched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": "general",
+              "im_user_id": null,
+              "is_member": true,
+              "is_private": false,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": null,
+              "hist_watermark_ts": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "V226 a plain rename: the name and a classify job",
+      "ingest": "IG19 / V226 channel_rename: a plain rename",
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "classify",
+          "outcome": "accepted",
+          "decision": "lifecycle",
+          "enqueued": true,
+          "recorded": true,
+          "interactive": false
+        },
+        "added": {
+          "events": [
+            {
+              "event_id": "Ev0P7AIG073",
+              "decision": "lifecycle",
+              "drop_reason": null,
+              "ingest_outcome": "classify",
+              "slack_user_id": null,
+              "channel_id": null,
+              "message_ts": null
+            }
+          ],
+          "channels": [
+            {
+              "channel_id": "C0GENERAL",
+              "conv_type": "channel",
+              "class": "standard",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "watched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": "general-2",
+              "im_user_id": null,
+              "is_member": true,
+              "is_private": false,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": null,
+              "hist_watermark_ts": null
+            }
+          ],
+          "jobs": [
+            {
+              "kind": "exec.slack-classify",
+              "lane": "bulk",
+              "has_principal": true,
+              "payload": {
+                "channel": "C0GENERAL",
+                "installation_id": "esi_00000000000000000000000000000a01"
+              },
+              "dedupe_key": "slack-classify:<p>:C0GENERAL:eEv0P7AIG073",
+              "max_attempts": 3
+            }
+          ]
+        },
+        "removed": {
+          "channels": [
+            {
+              "channel_id": "C0GENERAL",
+              "conv_type": "channel",
+              "class": "standard",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "watched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": "general",
+              "im_user_id": null,
+              "is_member": true,
+              "is_private": false,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": null,
+              "hist_watermark_ts": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "V226 rename an owner-watched channel to a finance name: finance, muted default_finance, owner flag cleared, items finance",
+      "ingest": "IG19 / V226 channel_rename: rename to a finance name",
+      "state": {
+        "channels": {
+          "C0GENERAL": {
+            "ownerSet": true
+          }
+        },
+        "messages": [
+          {
+            "channel": "C0GENERAL",
+            "ts": "1794150001.000101"
+          }
+        ],
+        "items": [
+          {
+            "channel": "C0GENERAL",
+            "ts": "1794150001.000101"
+          }
+        ]
+      },
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "classify",
+          "outcome": "accepted",
+          "decision": "lifecycle",
+          "enqueued": true,
+          "recorded": true,
+          "interactive": false
+        },
+        "added": {
+          "events": [
+            {
+              "event_id": "Ev0P7AIG074",
+              "decision": "lifecycle",
+              "drop_reason": null,
+              "ingest_outcome": "classify",
+              "slack_user_id": null,
+              "channel_id": null,
+              "message_ts": null
+            }
+          ],
+          "channels": [
+            {
+              "channel_id": "C0GENERAL",
+              "conv_type": "channel",
+              "class": "finance",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "muted",
+              "mute_source": "default_finance",
+              "finance_name": true,
+              "name": "payroll-ops",
+              "im_user_id": null,
+              "is_member": true,
+              "is_private": false,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": null,
+              "hist_watermark_ts": null
+            }
+          ],
+          "items": [
+            {
+              "channel_id": "C0GENERAL",
+              "ts": "1794150001.000101",
+              "kind": "request",
+              "has_excerpt": true,
+              "source_class": "finance",
+              "responded_ts": null
+            }
+          ],
+          "jobs": [
+            {
+              "kind": "exec.slack-classify",
+              "lane": "bulk",
+              "has_principal": true,
+              "payload": {
+                "channel": "C0GENERAL",
+                "installation_id": "esi_00000000000000000000000000000a01"
+              },
+              "dedupe_key": "slack-classify:<p>:C0GENERAL:eEv0P7AIG074",
+              "max_attempts": 3
+            }
+          ]
+        },
+        "removed": {
+          "channels": [
+            {
+              "channel_id": "C0GENERAL",
+              "conv_type": "channel",
+              "class": "standard",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "watched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": "general",
+              "im_user_id": null,
+              "is_member": true,
+              "is_private": false,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": false,
+              "left": false,
+              "owner_set": true,
+              "last_event_ts": null,
+              "hist_watermark_ts": null
+            }
+          ],
+          "items": [
+            {
+              "channel_id": "C0GENERAL",
+              "ts": "1794150001.000101",
+              "kind": "request",
+              "has_excerpt": true,
+              "source_class": "public",
+              "responded_ts": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "V226 a malformed rename: unclassified",
+      "ingest": "IG19 a malformed name → name null",
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "classify",
+          "outcome": "accepted",
+          "decision": "lifecycle",
+          "enqueued": true,
+          "recorded": true,
+          "interactive": false
+        },
+        "added": {
+          "events": [
+            {
+              "event_id": "Ev0P7AIG076",
+              "decision": "lifecycle",
+              "drop_reason": null,
+              "ingest_outcome": "classify",
+              "slack_user_id": null,
+              "channel_id": null,
+              "message_ts": null
+            }
+          ],
+          "channels": [
+            {
+              "channel_id": "C0GENERAL",
+              "conv_type": "channel",
+              "class": "unclassified",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "unwatched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": null,
+              "im_user_id": null,
+              "is_member": true,
+              "is_private": false,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": null,
+              "hist_watermark_ts": null
+            }
+          ],
+          "jobs": [
+            {
+              "kind": "exec.slack-classify",
+              "lane": "bulk",
+              "has_principal": true,
+              "payload": {
+                "channel": "C0GENERAL",
+                "installation_id": "esi_00000000000000000000000000000a01"
+              },
+              "dedupe_key": "slack-classify:<p>:C0GENERAL:eEv0P7AIG076",
+              "max_attempts": 3
+            }
+          ]
+        },
+        "removed": {
+          "channels": [
+            {
+              "channel_id": "C0GENERAL",
+              "conv_type": "channel",
+              "class": "standard",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "watched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": "general",
+              "im_user_id": null,
+              "is_member": true,
+              "is_private": false,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": null,
+              "hist_watermark_ts": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "V226 group_rename keeps the private class",
+      "ingest": "IG19 group_rename",
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "classify",
+          "outcome": "accepted",
+          "decision": "lifecycle",
+          "enqueued": true,
+          "recorded": true,
+          "interactive": false
+        },
+        "added": {
+          "events": [
+            {
+              "event_id": "Ev0P7AIG075",
+              "decision": "lifecycle",
+              "drop_reason": null,
+              "ingest_outcome": "classify",
+              "slack_user_id": null,
+              "channel_id": null,
+              "message_ts": null
+            }
+          ],
+          "jobs": [
+            {
+              "kind": "exec.slack-classify",
+              "lane": "bulk",
+              "has_principal": true,
+              "payload": {
+                "channel": "G0PRIV",
+                "installation_id": "esi_00000000000000000000000000000a01"
+              },
+              "dedupe_key": "slack-classify:<p>:G0PRIV:eEv0P7AIG075",
+              "max_attempts": 3
+            }
+          ]
+        },
+        "removed": {}
+      }
+    },
+    {
+      "name": "V226 channel_archive",
+      "ingest": "IG19 channel_archive",
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "archive",
+          "outcome": "accepted",
+          "decision": "lifecycle",
+          "enqueued": false,
+          "recorded": true,
+          "interactive": false
+        },
+        "added": {
+          "events": [
+            {
+              "event_id": "Ev0P7AIG077",
+              "decision": "lifecycle",
+              "drop_reason": null,
+              "ingest_outcome": "archive",
+              "slack_user_id": null,
+              "channel_id": null,
+              "message_ts": null
+            }
+          ],
+          "channels": [
+            {
+              "channel_id": "C0GENERAL",
+              "conv_type": "channel",
+              "class": "standard",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "watched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": "general",
+              "im_user_id": null,
+              "is_member": true,
+              "is_private": false,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": true,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": null,
+              "hist_watermark_ts": null
+            }
+          ]
+        },
+        "removed": {
+          "channels": [
+            {
+              "channel_id": "C0GENERAL",
+              "conv_type": "channel",
+              "class": "standard",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "watched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": "general",
+              "im_user_id": null,
+              "is_member": true,
+              "is_private": false,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": null,
+              "hist_watermark_ts": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "V226 group_unarchive",
+      "ingest": "IG19 group_unarchive",
+      "state": {
+        "channels": {
+          "G0PRIV": {
+            "isArchived": true
+          }
+        }
+      },
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "unarchive",
+          "outcome": "accepted",
+          "decision": "lifecycle",
+          "enqueued": false,
+          "recorded": true,
+          "interactive": false
+        },
+        "added": {
+          "events": [
+            {
+              "event_id": "Ev0P7AIG080",
+              "decision": "lifecycle",
+              "drop_reason": null,
+              "ingest_outcome": "unarchive",
+              "slack_user_id": null,
+              "channel_id": null,
+              "message_ts": null
+            }
+          ],
+          "channels": [
+            {
+              "channel_id": "G0PRIV",
+              "conv_type": "group",
+              "class": "standard",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "watched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": "private-ops",
+              "im_user_id": null,
+              "is_member": true,
+              "is_private": true,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": null,
+              "hist_watermark_ts": null
+            }
+          ]
+        },
+        "removed": {
+          "channels": [
+            {
+              "channel_id": "G0PRIV",
+              "conv_type": "group",
+              "class": "standard",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "watched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": "private-ops",
+              "im_user_id": null,
+              "is_member": true,
+              "is_private": true,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": true,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": null,
+              "hist_watermark_ts": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "V226 channel_deleted: purged, the row deleted",
+      "ingest": "IG19 channel_deleted",
+      "state": {
+        "messages": [
+          {
+            "channel": "C0GENERAL",
+            "ts": "1794150001.000101"
+          }
+        ],
+        "attention": [
+          "slack:msg:C0GENERAL:1794150001.000101"
+        ]
+      },
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "purged",
+          "outcome": "accepted",
+          "decision": "lifecycle",
+          "enqueued": false,
+          "recorded": true,
+          "interactive": false
+        },
+        "added": {
+          "events": [
+            {
+              "event_id": "Ev0P7AIG081",
+              "decision": "lifecycle",
+              "drop_reason": null,
+              "ingest_outcome": "purged",
+              "slack_user_id": null,
+              "channel_id": null,
+              "message_ts": null
+            }
+          ],
+          "purgeLog": [
+            {
+              "scope": "conversation",
+              "channel_id": "C0GENERAL",
+              "ts": null,
+              "reason": "deleted"
+            }
+          ],
+          "jobs": [
+            {
+              "kind": "exec.slack-attention",
+              "lane": "bulk",
+              "has_principal": true,
+              "payload": {
+                "kick": true
+              },
+              "dedupe_key": "slack-attn:<p>:m*",
+              "max_attempts": 3
+            }
+          ]
+        },
+        "removed": {
+          "channels": [
+            {
+              "channel_id": "C0GENERAL",
+              "conv_type": "channel",
+              "class": "standard",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "watched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": "general",
+              "im_user_id": null,
+              "is_member": true,
+              "is_private": false,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": null,
+              "hist_watermark_ts": null
+            }
+          ],
+          "messages": [
+            {
+              "channel_id": "C0GENERAL",
+              "ts": "1794150001.000101",
+              "thread_ts": null,
+              "role": "candidate",
+              "author_user_id": "U0JANE",
+              "author_external": false,
+              "is_dd_post": false,
+              "dd_paths": [],
+              "reasons": 2,
+              "triage_state": "pending",
+              "edited_ts": null,
+              "responded_ts": null
+            }
+          ],
+          "attention": [
+            "slack:msg:C0GENERAL:1794150001.000101"
+          ]
+        }
+      }
+    },
+    {
+      "name": "V226 / PG11 group_left: purged, left_at, unwatched, owner flag cleared",
+      "ingest": "IG19 / PG11 group_left",
+      "state": {
+        "channels": {
+          "G0PRIV": {
+            "ownerSet": true
+          }
+        },
+        "messages": [
+          {
+            "channel": "G0PRIV",
+            "ts": "1794150058.000158"
+          }
+        ],
+        "items": [
+          {
+            "channel": "G0PRIV",
+            "ts": "1794150058.000158",
+            "source_class": "private"
+          }
+        ],
+        "threads": [
+          {
+            "channel": "C0GENERAL",
+            "thread_ts": "1794150001.000101",
+            "he_posted_ts": "1794150001.500000"
+          }
+        ]
+      },
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "purged",
+          "outcome": "accepted",
+          "decision": "lifecycle",
+          "enqueued": false,
+          "recorded": true,
+          "interactive": false
+        },
+        "added": {
+          "events": [
+            {
+              "event_id": "Ev0P7AIG084",
+              "decision": "lifecycle",
+              "drop_reason": null,
+              "ingest_outcome": "purged",
+              "slack_user_id": null,
+              "channel_id": null,
+              "message_ts": null
+            }
+          ],
+          "channels": [
+            {
+              "channel_id": "G0PRIV",
+              "conv_type": "group",
+              "class": "standard",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "unwatched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": "private-ops",
+              "im_user_id": null,
+              "is_member": false,
+              "is_private": true,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": false,
+              "left": true,
+              "owner_set": false,
+              "last_event_ts": null,
+              "hist_watermark_ts": null
+            }
+          ],
+          "purgeLog": [
+            {
+              "scope": "conversation",
+              "channel_id": "G0PRIV",
+              "ts": null,
+              "reason": "left"
+            }
+          ]
+        },
+        "removed": {
+          "channels": [
+            {
+              "channel_id": "G0PRIV",
+              "conv_type": "group",
+              "class": "standard",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "watched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": "private-ops",
+              "im_user_id": null,
+              "is_member": true,
+              "is_private": true,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": false,
+              "left": false,
+              "owner_set": true,
+              "last_event_ts": null,
+              "hist_watermark_ts": null
+            }
+          ],
+          "messages": [
+            {
+              "channel_id": "G0PRIV",
+              "ts": "1794150058.000158",
+              "thread_ts": null,
+              "role": "candidate",
+              "author_user_id": "U0JANE",
+              "author_external": false,
+              "is_dd_post": false,
+              "dd_paths": [],
+              "reasons": 2,
+              "triage_state": "pending",
+              "edited_ts": null,
+              "responded_ts": null
+            }
+          ],
+          "items": [
+            {
+              "channel_id": "G0PRIV",
+              "ts": "1794150058.000158",
+              "kind": "request",
+              "has_excerpt": true,
+              "source_class": "private",
+              "responded_ts": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "V226 / XC03 channel_shared: external, ext_ever, public items private",
+      "ingest": "IG19 / XC03 channel_shared",
+      "state": {
+        "messages": [
+          {
+            "channel": "C0GENERAL",
+            "ts": "1794150001.000101"
+          }
+        ],
+        "items": [
+          {
+            "channel": "C0GENERAL",
+            "ts": "1794150001.000101"
+          }
+        ]
+      },
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "external",
+          "outcome": "accepted",
+          "decision": "lifecycle",
+          "enqueued": false,
+          "recorded": true,
+          "interactive": false
+        },
+        "added": {
+          "events": [
+            {
+              "event_id": "Ev0P7AIG085",
+              "decision": "lifecycle",
+              "drop_reason": null,
+              "ingest_outcome": "external",
+              "slack_user_id": null,
+              "channel_id": null,
+              "message_ts": null
+            }
+          ],
+          "channels": [
+            {
+              "channel_id": "C0GENERAL",
+              "conv_type": "channel",
+              "class": "external",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "watched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": "general",
+              "im_user_id": null,
+              "is_member": true,
+              "is_private": false,
+              "is_ext_shared": true,
+              "ext_ever": true,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": null,
+              "hist_watermark_ts": null
+            }
+          ],
+          "items": [
+            {
+              "channel_id": "C0GENERAL",
+              "ts": "1794150001.000101",
+              "kind": "request",
+              "has_excerpt": true,
+              "source_class": "private",
+              "responded_ts": null
+            }
+          ]
+        },
+        "removed": {
+          "channels": [
+            {
+              "channel_id": "C0GENERAL",
+              "conv_type": "channel",
+              "class": "standard",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "watched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": "general",
+              "im_user_id": null,
+              "is_member": true,
+              "is_private": false,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": null,
+              "hist_watermark_ts": null
+            }
+          ],
+          "items": [
+            {
+              "channel_id": "C0GENERAL",
+              "ts": "1794150001.000101",
+              "kind": "request",
+              "has_excerpt": true,
+              "source_class": "public",
+              "responded_ts": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "V226 / XC04 channel_unshared: not shared now, classify",
+      "ingest": "IG19 / XC04 channel_unshared (no longer shared)",
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "classify",
+          "outcome": "accepted",
+          "decision": "lifecycle",
+          "enqueued": true,
+          "recorded": true,
+          "interactive": false
+        },
+        "added": {
+          "events": [
+            {
+              "event_id": "Ev0P7AIG086",
+              "decision": "lifecycle",
+              "drop_reason": null,
+              "ingest_outcome": "classify",
+              "slack_user_id": null,
+              "channel_id": null,
+              "message_ts": null
+            }
+          ],
+          "channels": [
+            {
+              "channel_id": "C0SHARED",
+              "conv_type": "channel",
+              "class": "external",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "watched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": "partner-collab",
+              "im_user_id": null,
+              "is_member": true,
+              "is_private": false,
+              "is_ext_shared": false,
+              "ext_ever": true,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": null,
+              "hist_watermark_ts": null
+            }
+          ],
+          "jobs": [
+            {
+              "kind": "exec.slack-classify",
+              "lane": "bulk",
+              "has_principal": true,
+              "payload": {
+                "channel": "C0SHARED",
+                "installation_id": "esi_00000000000000000000000000000a01"
+              },
+              "dedupe_key": "slack-classify:<p>:C0SHARED:eEv0P7AIG086",
+              "max_attempts": 3
+            }
+          ]
+        },
+        "removed": {
+          "channels": [
+            {
+              "channel_id": "C0SHARED",
+              "conv_type": "channel",
+              "class": "external",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "watched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": "partner-collab",
+              "im_user_id": null,
+              "is_member": true,
+              "is_private": false,
+              "is_ext_shared": true,
+              "ext_ever": true,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": null,
+              "hist_watermark_ts": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "V226 channel_unshared while still shared: unchanged",
+      "ingest": "IG19 / V226 channel_unshared while still shared with another team",
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "still_shared",
+          "outcome": "accepted",
+          "decision": "lifecycle",
+          "enqueued": false,
+          "recorded": true,
+          "interactive": false
+        },
+        "added": {
+          "events": [
+            {
+              "event_id": "Ev0P7AIG087",
+              "decision": "lifecycle",
+              "drop_reason": null,
+              "ingest_outcome": "still_shared",
+              "slack_user_id": null,
+              "channel_id": null,
+              "message_ts": null
+            }
+          ]
+        },
+        "removed": {}
+      }
+    },
+    {
+      "name": "V226 / XC06 channel_id_changed: one interactive rekey job",
+      "ingest": "IG19 / XC06 channel_id_changed (p_channel = old, newChannel = new)",
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "rekey",
+          "outcome": "accepted",
+          "decision": "lifecycle",
+          "enqueued": true,
+          "recorded": true,
+          "interactive": true
+        },
+        "added": {
+          "events": [
+            {
+              "event_id": "Ev0P7AIG088",
+              "decision": "lifecycle",
+              "drop_reason": null,
+              "ingest_outcome": "rekey",
+              "slack_user_id": null,
+              "channel_id": null,
+              "message_ts": null
+            }
+          ],
+          "jobs": [
+            {
+              "kind": "exec.slack-rekey",
+              "lane": "interactive",
+              "has_principal": true,
+              "payload": {
+                "new_channel": "C0PRIVNEW",
+                "old_channel": "G0PRIV",
+                "installation_id": "esi_00000000000000000000000000000a01"
+              },
+              "dedupe_key": "slack-rekey:<p>:G0PRIV:C0PRIVNEW",
+              "max_attempts": 3
+            }
+          ]
+        },
+        "removed": {}
+      }
+    },
+    {
+      "name": "V227 a lifecycle event for an unknown channel: dropped",
+      "ingest": "IG19 channel_archive",
+      "state": {
+        "channels": {
+          "C0GENERAL": null
+        }
+      },
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "unknown_channel",
+          "outcome": "accepted",
+          "decision": "drop",
+          "recorded": false
+        },
+        "added": {},
+        "removed": {}
+      }
+    },
+    {
+      "name": "V227 a lifecycle retry: duplicate",
+      "ingest": "IG19 channel_archive",
+      "send": "twice",
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "outcome": "duplicate"
+        },
+        "added": {
+          "events": [
+            {
+              "event_id": "Ev0P7AIG077",
+              "decision": "lifecycle",
+              "drop_reason": null,
+              "ingest_outcome": "archive",
+              "slack_user_id": null,
+              "channel_id": null,
+              "message_ts": null
+            }
+          ],
+          "channels": [
+            {
+              "channel_id": "C0GENERAL",
+              "conv_type": "channel",
+              "class": "standard",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "watched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": "general",
+              "im_user_id": null,
+              "is_member": true,
+              "is_private": false,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": true,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": null,
+              "hist_watermark_ts": null
+            }
+          ]
+        },
+        "removed": {
+          "channels": [
+            {
+              "channel_id": "C0GENERAL",
+              "conv_type": "channel",
+              "class": "standard",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "watched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": "general",
+              "im_user_id": null,
+              "is_member": true,
+              "is_private": false,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": null,
+              "hist_watermark_ts": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "V235 channel_type absent: scope",
+      "ingest": "V235 channel_type absent: conv null (v2 drops scope)",
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "scope",
+          "outcome": "accepted",
+          "decision": "drop",
+          "recorded": false
+        },
+        "added": {},
+        "removed": {}
+      }
+    },
+    {
+      "name": "V237 a delete with the switch off: purged",
+      "ingest": "IG08 message_deleted in the recorded shape (hidden: true)",
+      "state": {
+        "settings": {
+          "slack_reading_enabled": false
+        },
+        "messages": [
+          {
+            "channel": "C0GENERAL",
+            "ts": "1794150009.000109"
+          }
+        ],
+        "items": [
+          {
+            "channel": "C0GENERAL",
+            "ts": "1794150009.000109"
+          }
+        ],
+        "attention": [
+          "slack:msg:C0GENERAL:1794150009.000109"
+        ]
+      },
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "items": 1,
+          "reason": "deleted",
+          "outcome": "accepted",
+          "decision": "ingest",
+          "enqueued": false,
+          "messages": 1,
+          "recorded": true,
+          "attention": 1,
+          "interactive": false
+        },
+        "added": {
+          "events": [
+            {
+              "event_id": "Ev0P7AIG010",
+              "decision": "ingest",
+              "drop_reason": null,
+              "ingest_outcome": "deleted",
+              "slack_user_id": null,
+              "channel_id": null,
+              "message_ts": null
+            }
+          ],
+          "markers": [
+            {
+              "channel_id": "C0GENERAL",
+              "ts": "1794150009.000109",
+              "reason": "event"
+            }
+          ],
+          "purgeLog": [
+            {
+              "scope": "message",
+              "channel_id": "C0GENERAL",
+              "ts": "1794150009.000109",
+              "reason": "deleted_event"
+            }
+          ],
+          "jobs": [
+            {
+              "kind": "exec.slack-attention",
+              "lane": "bulk",
+              "has_principal": true,
+              "payload": {
+                "kick": true
+              },
+              "dedupe_key": "slack-attn:<p>:m*",
+              "max_attempts": 3
+            }
+          ]
+        },
+        "removed": {
+          "messages": [
+            {
+              "channel_id": "C0GENERAL",
+              "ts": "1794150009.000109",
+              "thread_ts": null,
+              "role": "candidate",
+              "author_user_id": "U0JANE",
+              "author_external": false,
+              "is_dd_post": false,
+              "dd_paths": [],
+              "reasons": 2,
+              "triage_state": "pending",
+              "edited_ts": null,
+              "responded_ts": null
+            }
+          ],
+          "items": [
+            {
+              "channel_id": "C0GENERAL",
+              "ts": "1794150009.000109",
+              "kind": "request",
+              "has_excerpt": true,
+              "source_class": "public",
+              "responded_ts": null
+            }
+          ],
+          "attention": [
+            "slack:msg:C0GENERAL:1794150009.000109"
+          ]
+        }
+      }
+    },
+    {
+      "name": "V238 a delete while discovering: purged",
+      "ingest": "IG08 message_deleted in the recorded shape (hidden: true)",
+      "state": {
+        "installation": {
+          "reading": "discovering"
+        },
+        "messages": [
+          {
+            "channel": "C0GENERAL",
+            "ts": "1794150009.000109"
+          }
+        ],
+        "items": [
+          {
+            "channel": "C0GENERAL",
+            "ts": "1794150009.000109"
+          }
+        ]
+      },
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "items": 1,
+          "reason": "deleted",
+          "outcome": "accepted",
+          "decision": "ingest",
+          "enqueued": false,
+          "messages": 1,
+          "recorded": true,
+          "attention": 0,
+          "interactive": false
+        },
+        "added": {
+          "events": [
+            {
+              "event_id": "Ev0P7AIG010",
+              "decision": "ingest",
+              "drop_reason": null,
+              "ingest_outcome": "deleted",
+              "slack_user_id": null,
+              "channel_id": null,
+              "message_ts": null
+            }
+          ],
+          "markers": [
+            {
+              "channel_id": "C0GENERAL",
+              "ts": "1794150009.000109",
+              "reason": "event"
+            }
+          ],
+          "purgeLog": [
+            {
+              "scope": "message",
+              "channel_id": "C0GENERAL",
+              "ts": "1794150009.000109",
+              "reason": "deleted_event"
+            }
+          ],
+          "jobs": [
+            {
+              "kind": "exec.slack-attention",
+              "lane": "bulk",
+              "has_principal": true,
+              "payload": {
+                "kick": true
+              },
+              "dedupe_key": "slack-attn:<p>:m*",
+              "max_attempts": 3
+            }
+          ]
+        },
+        "removed": {
+          "messages": [
+            {
+              "channel_id": "C0GENERAL",
+              "ts": "1794150009.000109",
+              "thread_ts": null,
+              "role": "candidate",
+              "author_user_id": "U0JANE",
+              "author_external": false,
+              "is_dd_post": false,
+              "dd_paths": [],
+              "reasons": 2,
+              "triage_state": "pending",
+              "edited_ts": null,
+              "responded_ts": null
+            }
+          ],
+          "items": [
+            {
+              "channel_id": "C0GENERAL",
+              "ts": "1794150009.000109",
+              "kind": "request",
+              "has_excerpt": true,
+              "source_class": "public",
+              "responded_ts": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "V239 a delete in a C23-reset unclassified channel holding the row: purged",
+      "ingest": "V239 a delete in a C23-reset unclassified channel (recorded shape)",
+      "state": {
+        "messages": [
+          {
+            "channel": "C0RESET",
+            "ts": "1794150040.000140"
+          }
+        ],
+        "items": [
+          {
+            "channel": "C0RESET",
+            "ts": "1794150040.000140"
+          }
+        ]
+      },
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "items": 1,
+          "reason": "deleted",
+          "outcome": "accepted",
+          "decision": "ingest",
+          "enqueued": false,
+          "messages": 1,
+          "recorded": true,
+          "attention": 0,
+          "interactive": false
+        },
+        "added": {
+          "events": [
+            {
+              "event_id": "Ev0P7AIG067",
+              "decision": "ingest",
+              "drop_reason": null,
+              "ingest_outcome": "deleted",
+              "slack_user_id": null,
+              "channel_id": null,
+              "message_ts": null
+            }
+          ],
+          "markers": [
+            {
+              "channel_id": "C0RESET",
+              "ts": "1794150040.000140",
+              "reason": "event"
+            }
+          ],
+          "purgeLog": [
+            {
+              "scope": "message",
+              "channel_id": "C0RESET",
+              "ts": "1794150040.000140",
+              "reason": "deleted_event"
+            }
+          ],
+          "jobs": [
+            {
+              "kind": "exec.slack-attention",
+              "lane": "bulk",
+              "has_principal": true,
+              "payload": {
+                "kick": true
+              },
+              "dedupe_key": "slack-attn:<p>:m*",
+              "max_attempts": 3
+            }
+          ]
+        },
+        "removed": {
+          "messages": [
+            {
+              "channel_id": "C0RESET",
+              "ts": "1794150040.000140",
+              "thread_ts": null,
+              "role": "candidate",
+              "author_user_id": "U0JANE",
+              "author_external": false,
+              "is_dd_post": false,
+              "dd_paths": [],
+              "reasons": 2,
+              "triage_state": "pending",
+              "edited_ts": null,
+              "responded_ts": null
+            }
+          ],
+          "items": [
+            {
+              "channel_id": "C0RESET",
+              "ts": "1794150040.000140",
+              "kind": "request",
+              "has_excerpt": true,
+              "source_class": "public",
+              "responded_ts": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "V239 a delete in an unclassified channel without the row: dropped, no marker",
+      "ingest": "V239 a delete in a C23-reset unclassified channel (recorded shape)",
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "unclassified",
+          "outcome": "accepted",
+          "decision": "drop",
+          "recorded": false
+        },
+        "added": {},
+        "removed": {}
+      }
+    },
+    {
+      "name": "V240 a delete in an unwatched channel without a row: a marker and a purge-log row",
+      "ingest": "V240 a delete in an unwatched channel (recorded shape)",
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "items": 0,
+          "reason": "deleted",
+          "outcome": "accepted",
+          "decision": "ingest",
+          "enqueued": false,
+          "messages": 0,
+          "recorded": true,
+          "attention": 0,
+          "interactive": false
+        },
+        "added": {
+          "events": [
+            {
+              "event_id": "Ev0P7AIG063",
+              "decision": "ingest",
+              "drop_reason": null,
+              "ingest_outcome": "deleted",
+              "slack_user_id": null,
+              "channel_id": null,
+              "message_ts": null
+            }
+          ],
+          "markers": [
+            {
+              "channel_id": "C0UNWATCH",
+              "ts": "1794150036.000136",
+              "reason": "event"
+            }
+          ],
+          "purgeLog": [
+            {
+              "scope": "message",
+              "channel_id": "C0UNWATCH",
+              "ts": "1794150036.000136",
+              "reason": "deleted_event"
+            }
+          ]
+        },
+        "removed": {}
+      }
+    },
+    {
+      "name": "V240 a delete in a muted channel holding an item: purged",
+      "ingest": "V240 a delete in a muted channel (recorded shape)",
+      "state": {
+        "messages": [
+          {
+            "channel": "C0MUTED",
+            "ts": "1794150037.000137",
+            "reasons": 2
+          }
+        ],
+        "items": [
+          {
+            "channel": "C0MUTED",
+            "ts": "1794150037.000137"
+          }
+        ]
+      },
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "items": 1,
+          "reason": "deleted",
+          "outcome": "accepted",
+          "decision": "ingest",
+          "enqueued": false,
+          "messages": 1,
+          "recorded": true,
+          "attention": 0,
+          "interactive": false
+        },
+        "added": {
+          "events": [
+            {
+              "event_id": "Ev0P7AIG064",
+              "decision": "ingest",
+              "drop_reason": null,
+              "ingest_outcome": "deleted",
+              "slack_user_id": null,
+              "channel_id": null,
+              "message_ts": null
+            }
+          ],
+          "markers": [
+            {
+              "channel_id": "C0MUTED",
+              "ts": "1794150037.000137",
+              "reason": "event"
+            }
+          ],
+          "purgeLog": [
+            {
+              "scope": "message",
+              "channel_id": "C0MUTED",
+              "ts": "1794150037.000137",
+              "reason": "deleted_event"
+            }
+          ],
+          "jobs": [
+            {
+              "kind": "exec.slack-attention",
+              "lane": "bulk",
+              "has_principal": true,
+              "payload": {
+                "kick": true
+              },
+              "dedupe_key": "slack-attn:<p>:m*",
+              "max_attempts": 3
+            }
+          ]
+        },
+        "removed": {
+          "messages": [
+            {
+              "channel_id": "C0MUTED",
+              "ts": "1794150037.000137",
+              "thread_ts": null,
+              "role": "candidate",
+              "author_user_id": "U0JANE",
+              "author_external": false,
+              "is_dd_post": false,
+              "dd_paths": [],
+              "reasons": 2,
+              "triage_state": "pending",
+              "edited_ts": null,
+              "responded_ts": null
+            }
+          ],
+          "items": [
+            {
+              "channel_id": "C0MUTED",
+              "ts": "1794150037.000137",
+              "kind": "request",
+              "has_excerpt": true,
+              "source_class": "public",
+              "responded_ts": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "V240 a delete after the type's scope was withdrawn: purged",
+      "ingest": "IG08 message_deleted in the recorded shape (hidden: true)",
+      "state": {
+        "installation": {
+          "user_scopes": [
+            "channels:history",
+            "groups:history",
+            "channels:read",
+            "groups:read",
+            "users:read"
+          ]
+        },
+        "messages": [
+          {
+            "channel": "C0GENERAL",
+            "ts": "1794150009.000109"
+          }
+        ]
+      },
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "items": 0,
+          "reason": "deleted",
+          "outcome": "accepted",
+          "decision": "ingest",
+          "enqueued": false,
+          "messages": 1,
+          "recorded": true,
+          "attention": 0,
+          "interactive": false
+        },
+        "added": {
+          "events": [
+            {
+              "event_id": "Ev0P7AIG010",
+              "decision": "ingest",
+              "drop_reason": null,
+              "ingest_outcome": "deleted",
+              "slack_user_id": null,
+              "channel_id": null,
+              "message_ts": null
+            }
+          ],
+          "markers": [
+            {
+              "channel_id": "C0GENERAL",
+              "ts": "1794150009.000109",
+              "reason": "event"
+            }
+          ],
+          "purgeLog": [
+            {
+              "scope": "message",
+              "channel_id": "C0GENERAL",
+              "ts": "1794150009.000109",
+              "reason": "deleted_event"
+            }
+          ]
+        },
+        "removed": {
+          "messages": [
+            {
+              "channel_id": "C0GENERAL",
+              "ts": "1794150009.000109",
+              "thread_ts": null,
+              "role": "candidate",
+              "author_user_id": "U0JANE",
+              "author_external": false,
+              "is_dd_post": false,
+              "dd_paths": [],
+              "reasons": 2,
+              "triage_state": "pending",
+              "edited_ts": null,
+              "responded_ts": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "V241 a delete in a deny channel: dropped, nothing written",
+      "ingest": "V241 a delete in a deny channel (recorded shape)",
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "deny",
+          "outcome": "accepted",
+          "decision": "drop",
+          "recorded": false
+        },
+        "added": {},
+        "removed": {}
+      }
+    },
+    {
+      "name": "V241 a delete in an unknown channel: dropped, no row, no job",
+      "ingest": "V241 a delete in an unknown channel (recorded shape)",
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "unknown_channel",
+          "outcome": "accepted",
+          "decision": "drop",
+          "recorded": false
+        },
+        "added": {},
+        "removed": {}
+      }
+    },
+    {
+      "name": "V242 an edit of a stored candidate in an unwatched channel: no retriage",
+      "ingest": "IG07 message_changed in the recorded shape (hidden: true): facts from event.message",
+      "state": {
+        "channels": {
+          "C0GENERAL": {
+            "watchState": "unwatched"
+          }
+        },
+        "messages": [
+          {
+            "channel": "C0GENERAL",
+            "ts": "1794150009.000109"
+          }
+        ],
+        "items": [
+          {
+            "channel": "C0GENERAL",
+            "ts": "1794150009.000109"
+          }
+        ]
+      },
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "edited",
+          "outcome": "accepted",
+          "decision": "ingest",
+          "enqueued": false,
+          "recorded": true,
+          "interactive": false
+        },
+        "added": {
+          "events": [
+            {
+              "event_id": "Ev0P7AIG009",
+              "decision": "ingest",
+              "drop_reason": null,
+              "ingest_outcome": "edited",
+              "slack_user_id": null,
+              "channel_id": null,
+              "message_ts": null
+            }
+          ],
+          "messages": [
+            {
+              "channel_id": "C0GENERAL",
+              "ts": "1794150009.000109",
+              "thread_ts": null,
+              "role": "candidate",
+              "author_user_id": "U0JANE",
+              "author_external": false,
+              "is_dd_post": false,
+              "dd_paths": [],
+              "reasons": 2,
+              "triage_state": "pending",
+              "edited_ts": "1794150010.000110",
+              "responded_ts": null
+            }
+          ],
+          "items": [
+            {
+              "channel_id": "C0GENERAL",
+              "ts": "1794150009.000109",
+              "kind": "request",
+              "has_excerpt": false,
+              "source_class": "public",
+              "responded_ts": null
+            }
+          ]
+        },
+        "removed": {
+          "messages": [
+            {
+              "channel_id": "C0GENERAL",
+              "ts": "1794150009.000109",
+              "thread_ts": null,
+              "role": "candidate",
+              "author_user_id": "U0JANE",
+              "author_external": false,
+              "is_dd_post": false,
+              "dd_paths": [],
+              "reasons": 2,
+              "triage_state": "pending",
+              "edited_ts": null,
+              "responded_ts": null
+            }
+          ],
+          "items": [
+            {
+              "channel_id": "C0GENERAL",
+              "ts": "1794150009.000109",
+              "kind": "request",
+              "has_excerpt": true,
+              "source_class": "public",
+              "responded_ts": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "V242 an edit with the switch off: no retriage",
+      "ingest": "IG07 message_changed in the recorded shape (hidden: true): facts from event.message",
+      "state": {
+        "settings": {
+          "slack_reading_enabled": false
+        },
+        "messages": [
+          {
+            "channel": "C0GENERAL",
+            "ts": "1794150009.000109"
+          }
+        ]
+      },
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "edited",
+          "outcome": "accepted",
+          "decision": "ingest",
+          "enqueued": false,
+          "recorded": true,
+          "interactive": false
+        },
+        "added": {
+          "events": [
+            {
+              "event_id": "Ev0P7AIG009",
+              "decision": "ingest",
+              "drop_reason": null,
+              "ingest_outcome": "edited",
+              "slack_user_id": null,
+              "channel_id": null,
+              "message_ts": null
+            }
+          ],
+          "messages": [
+            {
+              "channel_id": "C0GENERAL",
+              "ts": "1794150009.000109",
+              "thread_ts": null,
+              "role": "candidate",
+              "author_user_id": "U0JANE",
+              "author_external": false,
+              "is_dd_post": false,
+              "dd_paths": [],
+              "reasons": 2,
+              "triage_state": "pending",
+              "edited_ts": "1794150010.000110",
+              "responded_ts": null
+            }
+          ]
+        },
+        "removed": {
+          "messages": [
+            {
+              "channel_id": "C0GENERAL",
+              "ts": "1794150009.000109",
+              "thread_ts": null,
+              "role": "candidate",
+              "author_user_id": "U0JANE",
+              "author_external": false,
+              "is_dd_post": false,
+              "dd_paths": [],
+              "reasons": 2,
+              "triage_state": "pending",
+              "edited_ts": null,
+              "responded_ts": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "V242 an edit in a default_finance-muted channel: no retriage",
+      "ingest": "IG07 message_changed in the recorded shape (hidden: true): facts from event.message",
+      "state": {
+        "channels": {
+          "C0GENERAL": {
+            "watchState": "muted",
+            "muteSource": "default_finance"
+          }
+        },
+        "messages": [
+          {
+            "channel": "C0GENERAL",
+            "ts": "1794150009.000109"
+          }
+        ]
+      },
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "edited",
+          "outcome": "accepted",
+          "decision": "ingest",
+          "enqueued": false,
+          "recorded": true,
+          "interactive": false
+        },
+        "added": {
+          "events": [
+            {
+              "event_id": "Ev0P7AIG009",
+              "decision": "ingest",
+              "drop_reason": null,
+              "ingest_outcome": "edited",
+              "slack_user_id": null,
+              "channel_id": null,
+              "message_ts": null
+            }
+          ],
+          "messages": [
+            {
+              "channel_id": "C0GENERAL",
+              "ts": "1794150009.000109",
+              "thread_ts": null,
+              "role": "candidate",
+              "author_user_id": "U0JANE",
+              "author_external": false,
+              "is_dd_post": false,
+              "dd_paths": [],
+              "reasons": 2,
+              "triage_state": "pending",
+              "edited_ts": "1794150010.000110",
+              "responded_ts": null
+            }
+          ]
+        },
+        "removed": {
+          "messages": [
+            {
+              "channel_id": "C0GENERAL",
+              "ts": "1794150009.000109",
+              "thread_ts": null,
+              "role": "candidate",
+              "author_user_id": "U0JANE",
+              "author_external": false,
+              "is_dd_post": false,
+              "dd_paths": [],
+              "reasons": 2,
+              "triage_state": "pending",
+              "edited_ts": null,
+              "responded_ts": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "V243 a tombstone: only the parent's rows purged, the replies stay",
+      "ingest": "IG21 / V243 a thread parent's tombstone ([U]: message_changed whose message.subtype is tombstone): a delete of that ts only",
+      "state": {
+        "messages": [
+          {
+            "channel": "C0GENERAL",
+            "ts": "1794150072.000172"
+          },
+          {
+            "channel": "C0GENERAL",
+            "ts": "1794150073.000173",
+            "thread_ts": "1794150072.000172",
+            "reasons": 4
+          }
+        ],
+        "items": [
+          {
+            "channel": "C0GENERAL",
+            "ts": "1794150072.000172"
+          },
+          {
+            "channel": "C0GENERAL",
+            "ts": "1794150073.000173",
+            "thread_ts": "1794150072.000172"
+          }
+        ]
+      },
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "items": 1,
+          "reason": "deleted",
+          "outcome": "accepted",
+          "decision": "ingest",
+          "enqueued": false,
+          "messages": 1,
+          "recorded": true,
+          "attention": 0,
+          "interactive": false
+        },
+        "added": {
+          "events": [
+            {
+              "event_id": "Ev0P7AIG062",
+              "decision": "ingest",
+              "drop_reason": null,
+              "ingest_outcome": "deleted",
+              "slack_user_id": null,
+              "channel_id": null,
+              "message_ts": null
+            }
+          ],
+          "markers": [
+            {
+              "channel_id": "C0GENERAL",
+              "ts": "1794150072.000172",
+              "reason": "event"
+            }
+          ],
+          "purgeLog": [
+            {
+              "scope": "message",
+              "channel_id": "C0GENERAL",
+              "ts": "1794150072.000172",
+              "reason": "deleted_event"
+            }
+          ],
+          "jobs": [
+            {
+              "kind": "exec.slack-attention",
+              "lane": "bulk",
+              "has_principal": true,
+              "payload": {
+                "kick": true
+              },
+              "dedupe_key": "slack-attn:<p>:m*",
+              "max_attempts": 3
+            }
+          ]
+        },
+        "removed": {
+          "messages": [
+            {
+              "channel_id": "C0GENERAL",
+              "ts": "1794150072.000172",
+              "thread_ts": null,
+              "role": "candidate",
+              "author_user_id": "U0JANE",
+              "author_external": false,
+              "is_dd_post": false,
+              "dd_paths": [],
+              "reasons": 2,
+              "triage_state": "pending",
+              "edited_ts": null,
+              "responded_ts": null
+            }
+          ],
+          "items": [
+            {
+              "channel_id": "C0GENERAL",
+              "ts": "1794150072.000172",
+              "kind": "request",
+              "has_excerpt": true,
+              "source_class": "public",
+              "responded_ts": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "V244 an opted-out author's DM: dropped, nothing written",
+      "ingest": "V244 an opted-out author's DM (dropped opted_out by v2)",
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "opted_out",
+          "outcome": "accepted",
+          "decision": "drop",
+          "recorded": false
+        },
+        "added": {
+          "channels": [
+            {
+              "channel_id": "D0OPT",
+              "conv_type": "im",
+              "class": "standard",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "watched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": null,
+              "im_user_id": "U0OPTOUT",
+              "is_member": true,
+              "is_private": true,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": "1794150067.000167",
+              "hist_watermark_ts": null
+            }
+          ]
+        },
+        "removed": {
+          "channels": [
+            {
+              "channel_id": "D0OPT",
+              "conv_type": "im",
+              "class": "standard",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "watched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": null,
+              "im_user_id": "U0OPTOUT",
+              "is_member": true,
+              "is_private": true,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": null,
+              "hist_watermark_ts": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "V244 / XC10 no author team in an external channel: author_external",
+      "ingest": "XC10 / V244 a Slack Connect message with no user_team or team: authorTeam null (counts as external there)",
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "candidate",
+          "outcome": "accepted",
+          "decision": "ingest",
+          "enqueued": true,
+          "recorded": true,
+          "interactive": true
+        },
+        "added": {
+          "events": [
+            {
+              "event_id": "Ev0P7AIG050",
+              "decision": "ingest",
+              "drop_reason": null,
+              "ingest_outcome": "candidate",
+              "slack_user_id": null,
+              "channel_id": null,
+              "message_ts": null
+            }
+          ],
+          "channels": [
+            {
+              "channel_id": "C0SHARED",
+              "conv_type": "channel",
+              "class": "external",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "watched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": "partner-collab",
+              "im_user_id": null,
+              "is_member": true,
+              "is_private": false,
+              "is_ext_shared": true,
+              "ext_ever": true,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": "1794150060.000160",
+              "hist_watermark_ts": null
+            }
+          ],
+          "messages": [
+            {
+              "channel_id": "C0SHARED",
+              "ts": "1794150060.000160",
+              "thread_ts": null,
+              "role": "candidate",
+              "author_user_id": "U0EXT2",
+              "author_external": true,
+              "is_dd_post": false,
+              "dd_paths": [],
+              "reasons": 2,
+              "triage_state": "pending",
+              "edited_ts": null,
+              "responded_ts": null
+            }
+          ],
+          "jobs": [
+            {
+              "kind": "exec.slack-triage",
+              "lane": "interactive",
+              "has_principal": true,
+              "payload": {
+                "mode": "window",
+                "root": "1794150060.000160",
+                "channel": "C0SHARED",
+                "installation_id": "esi_00000000000000000000000000000a01"
+              },
+              "dedupe_key": "slack-triage:<p>:C0SHARED:1794150060.000160:m*",
+              "max_attempts": 6
+            }
+          ]
+        },
+        "removed": {
+          "channels": [
+            {
+              "channel_id": "C0SHARED",
+              "conv_type": "channel",
+              "class": "external",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "watched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": "partner-collab",
+              "im_user_id": null,
+              "is_member": true,
+              "is_private": false,
+              "is_ext_shared": true,
+              "ext_ever": true,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": null,
+              "hist_watermark_ts": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "V244 / XC10 no author team in an ext_ever channel: author_external",
+      "ingest": "XC10 / V244 a Slack Connect message with no user_team or team: authorTeam null (counts as external there)",
+      "state": {
+        "channels": {
+          "C0SHARED": {
+            "class": "standard",
+            "isExtShared": false,
+            "extEver": true
+          }
+        }
+      },
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "candidate",
+          "outcome": "accepted",
+          "decision": "ingest",
+          "enqueued": true,
+          "recorded": true,
+          "interactive": true
+        },
+        "added": {
+          "events": [
+            {
+              "event_id": "Ev0P7AIG050",
+              "decision": "ingest",
+              "drop_reason": null,
+              "ingest_outcome": "candidate",
+              "slack_user_id": null,
+              "channel_id": null,
+              "message_ts": null
+            }
+          ],
+          "channels": [
+            {
+              "channel_id": "C0SHARED",
+              "conv_type": "channel",
+              "class": "standard",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "watched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": "partner-collab",
+              "im_user_id": null,
+              "is_member": true,
+              "is_private": false,
+              "is_ext_shared": false,
+              "ext_ever": true,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": "1794150060.000160",
+              "hist_watermark_ts": null
+            }
+          ],
+          "messages": [
+            {
+              "channel_id": "C0SHARED",
+              "ts": "1794150060.000160",
+              "thread_ts": null,
+              "role": "candidate",
+              "author_user_id": "U0EXT2",
+              "author_external": true,
+              "is_dd_post": false,
+              "dd_paths": [],
+              "reasons": 2,
+              "triage_state": "pending",
+              "edited_ts": null,
+              "responded_ts": null
+            }
+          ],
+          "jobs": [
+            {
+              "kind": "exec.slack-triage",
+              "lane": "interactive",
+              "has_principal": true,
+              "payload": {
+                "mode": "window",
+                "root": "1794150060.000160",
+                "channel": "C0SHARED",
+                "installation_id": "esi_00000000000000000000000000000a01"
+              },
+              "dedupe_key": "slack-triage:<p>:C0SHARED:1794150060.000160:m*",
+              "max_attempts": 6
+            }
+          ]
+        },
+        "removed": {
+          "channels": [
+            {
+              "channel_id": "C0SHARED",
+              "conv_type": "channel",
+              "class": "standard",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "watched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": "partner-collab",
+              "im_user_id": null,
+              "is_member": true,
+              "is_private": false,
+              "is_ext_shared": false,
+              "ext_ever": true,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": null,
+              "hist_watermark_ts": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "XC01 another team's author: author_external",
+      "ingest": "XC01 a Slack Connect message from another team's author",
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "candidate",
+          "outcome": "accepted",
+          "decision": "ingest",
+          "enqueued": true,
+          "recorded": true,
+          "interactive": true
+        },
+        "added": {
+          "events": [
+            {
+              "event_id": "Ev0P7AIG049",
+              "decision": "ingest",
+              "drop_reason": null,
+              "ingest_outcome": "candidate",
+              "slack_user_id": null,
+              "channel_id": null,
+              "message_ts": null
+            }
+          ],
+          "channels": [
+            {
+              "channel_id": "C0SHARED",
+              "conv_type": "channel",
+              "class": "external",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "watched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": "partner-collab",
+              "im_user_id": null,
+              "is_member": true,
+              "is_private": false,
+              "is_ext_shared": true,
+              "ext_ever": true,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": "1794150059.000159",
+              "hist_watermark_ts": null
+            }
+          ],
+          "messages": [
+            {
+              "channel_id": "C0SHARED",
+              "ts": "1794150059.000159",
+              "thread_ts": null,
+              "role": "candidate",
+              "author_user_id": "U0EXT",
+              "author_external": true,
+              "is_dd_post": false,
+              "dd_paths": [],
+              "reasons": 2,
+              "triage_state": "pending",
+              "edited_ts": null,
+              "responded_ts": null
+            }
+          ],
+          "jobs": [
+            {
+              "kind": "exec.slack-triage",
+              "lane": "interactive",
+              "has_principal": true,
+              "payload": {
+                "mode": "window",
+                "root": "1794150059.000159",
+                "channel": "C0SHARED",
+                "installation_id": "esi_00000000000000000000000000000a01"
+              },
+              "dedupe_key": "slack-triage:<p>:C0SHARED:1794150059.000159:m*",
+              "max_attempts": 6
+            }
+          ]
+        },
+        "removed": {
+          "channels": [
+            {
+              "channel_id": "C0SHARED",
+              "conv_type": "channel",
+              "class": "external",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "watched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": "partner-collab",
+              "im_user_id": null,
+              "is_member": true,
+              "is_private": false,
+              "is_ext_shared": true,
+              "ext_ever": true,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": null,
+              "hist_watermark_ts": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "V244 a DD URL button: an anchor with its paths",
+      "ingest": "IG18 a URL button on operations.scaledai.org with another label is a DD template",
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "anchor",
+          "outcome": "accepted",
+          "decision": "ingest",
+          "recorded": true
+        },
+        "added": {
+          "events": [
+            {
+              "event_id": "Ev0P7AIG033",
+              "decision": "ingest",
+              "drop_reason": null,
+              "ingest_outcome": "anchor",
+              "slack_user_id": null,
+              "channel_id": null,
+              "message_ts": null
+            }
+          ],
+          "messages": [
+            {
+              "channel_id": "C0GENERAL",
+              "ts": "1794150041.000141",
+              "thread_ts": null,
+              "role": "anchor",
+              "author_user_id": null,
+              "author_external": false,
+              "is_dd_post": true,
+              "dd_paths": [
+                "/clients/c_9"
+              ],
+              "reasons": 0,
+              "triage_state": "none",
+              "edited_ts": null,
+              "responded_ts": null
+            }
+          ]
+        },
+        "removed": {}
+      }
+    },
+    {
+      "name": "V244 a later sighting with paths fills an anchor's empty list",
+      "ingest": "IG18 a URL button on operations.scaledai.org with another label is a DD template",
+      "state": {
+        "messages": [
+          {
+            "channel": "C0GENERAL",
+            "ts": "1794150041.000141",
+            "role": "anchor",
+            "dd_paths": []
+          }
+        ]
+      },
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "anchor",
+          "outcome": "accepted",
+          "decision": "ingest",
+          "recorded": true
+        },
+        "added": {
+          "events": [
+            {
+              "event_id": "Ev0P7AIG033",
+              "decision": "ingest",
+              "drop_reason": null,
+              "ingest_outcome": "anchor",
+              "slack_user_id": null,
+              "channel_id": null,
+              "message_ts": null
+            }
+          ],
+          "messages": [
+            {
+              "channel_id": "C0GENERAL",
+              "ts": "1794150041.000141",
+              "thread_ts": null,
+              "role": "anchor",
+              "author_user_id": null,
+              "author_external": false,
+              "is_dd_post": true,
+              "dd_paths": [
+                "/clients/c_9"
+              ],
+              "reasons": 0,
+              "triage_state": "none",
+              "edited_ts": null,
+              "responded_ts": null
+            }
+          ]
+        },
+        "removed": {
+          "messages": [
+            {
+              "channel_id": "C0GENERAL",
+              "ts": "1794150041.000141",
+              "thread_ts": null,
+              "role": "anchor",
+              "author_user_id": null,
+              "author_external": false,
+              "is_dd_post": true,
+              "dd_paths": [],
+              "reasons": 0,
+              "triage_state": "none",
+              "edited_ts": null,
+              "responded_ts": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "IG18 an example.com button is no DD template: not addressed",
+      "ingest": "IG18 a URL button on example.com with another label is not a DD template",
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "not_addressed",
+          "outcome": "accepted",
+          "decision": "drop",
+          "recorded": false
+        },
+        "added": {
+          "channels": [
+            {
+              "channel_id": "C0GENERAL",
+              "conv_type": "channel",
+              "class": "standard",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "watched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": "general",
+              "im_user_id": null,
+              "is_member": true,
+              "is_private": false,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": "1794150042.000142",
+              "hist_watermark_ts": null
+            }
+          ]
+        },
+        "removed": {
+          "channels": [
+            {
+              "channel_id": "C0GENERAL",
+              "conv_type": "channel",
+              "class": "standard",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "watched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": "general",
+              "im_user_id": null,
+              "is_member": true,
+              "is_private": false,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": null,
+              "hist_watermark_ts": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "IG11 a thread broadcast by someone else: not addressed",
+      "ingest": "IG11 thread_broadcast passes (root's text never read)",
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "not_addressed",
+          "outcome": "accepted",
+          "decision": "drop",
+          "recorded": false
+        },
+        "added": {
+          "channels": [
+            {
+              "channel_id": "C0GENERAL",
+              "conv_type": "channel",
+              "class": "standard",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "watched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": "general",
+              "im_user_id": null,
+              "is_member": true,
+              "is_private": false,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": "1794150030.000130",
+              "hist_watermark_ts": null
+            }
+          ]
+        },
+        "removed": {
+          "channels": [
+            {
+              "channel_id": "C0GENERAL",
+              "conv_type": "channel",
+              "class": "standard",
+              "deny_reason": null,
+              "hub_kind": null,
+              "watch_state": "watched",
+              "mute_source": null,
+              "finance_name": false,
+              "name": "general",
+              "im_user_id": null,
+              "is_member": true,
+              "is_private": false,
+              "is_ext_shared": false,
+              "ext_ever": false,
+              "is_archived": false,
+              "left": false,
+              "owner_set": false,
+              "last_event_ts": null,
+              "hist_watermark_ts": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "a DD post without the DD bot row (template only): still an anchor",
+      "ingest": "IG18 a malformed button URL counts as DD (isDdHost fails toward DD; anchor, never triaged)",
+      "state": {
+        "ddBot": false
+      },
+      "expect": {
+        "answer": {
+          "path": "v2",
+          "reason": "anchor",
+          "outcome": "accepted",
+          "decision": "ingest",
+          "recorded": true
+        },
+        "added": {
+          "events": [
+            {
+              "event_id": "Ev0P7AIG035",
+              "decision": "ingest",
+              "drop_reason": null,
+              "ingest_outcome": "anchor",
+              "slack_user_id": null,
+              "channel_id": null,
+              "message_ts": null
+            }
+          ],
+          "messages": [
+            {
+              "channel_id": "C0GENERAL",
+              "ts": "1794150043.000143",
+              "thread_ts": null,
+              "role": "anchor",
+              "author_user_id": null,
+              "author_external": false,
+              "is_dd_post": true,
+              "dd_paths": [],
+              "reasons": 0,
+              "triage_state": "none",
+              "edited_ts": null,
+              "responded_ts": null
+            }
+          ]
+        },
+        "removed": {}
+      }
+    }
+  ]
+}

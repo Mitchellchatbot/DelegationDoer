@@ -1,0 +1,1613 @@
+[
+  {
+    "name": "01 his top-level DM to the bot",
+    "envelope": {
+      "team_id": "T0SCALED",
+      "api_app_id": "A0EXEC",
+      "event": {
+        "type": "message",
+        "channel": "D0MITCH",
+        "user": "U0MITCH",
+        "text": "What needs me today?",
+        "ts": "1793977201.000101",
+        "event_ts": "1793977201.000101",
+        "channel_type": "im",
+        "client_msg_id": "00000000-0000-4000-8000-000000000001",
+        "team": "T0SCALED",
+        "blocks": [
+          {
+            "type": "rich_text",
+            "block_id": "rt1",
+            "elements": [
+              {
+                "type": "rich_text_section",
+                "elements": [
+                  {
+                    "type": "text",
+                    "text": "What needs me today?"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "type": "event_callback",
+      "event_id": "Ev0ROUTE01AB",
+      "event_time": 1793977201,
+      "authorizations": [
+        {
+          "enterprise_id": null,
+          "team_id": "T0SCALED",
+          "user_id": "U0BOT",
+          "is_bot": true,
+          "is_enterprise_install": false
+        }
+      ],
+      "is_ext_shared_channel": false,
+      "event_context": "4-route-01"
+    },
+    "installation": "owner",
+    "expect": {
+      "decision": "reply",
+      "reason": null
+    }
+  },
+  {
+    "name": "02 his reply in a thread of the bot DM",
+    "envelope": {
+      "team_id": "T0SCALED",
+      "api_app_id": "A0EXEC",
+      "event": {
+        "type": "message",
+        "channel": "D0MITCH",
+        "user": "U0MITCH",
+        "text": "What needs me today?",
+        "ts": "1793977202.000102",
+        "event_ts": "1793977202.000102",
+        "channel_type": "im",
+        "client_msg_id": "00000000-0000-4000-8000-000000000002",
+        "team": "T0SCALED",
+        "blocks": [
+          {
+            "type": "rich_text",
+            "block_id": "rt1",
+            "elements": [
+              {
+                "type": "rich_text_section",
+                "elements": [
+                  {
+                    "type": "text",
+                    "text": "What needs me today?"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "thread_ts": "1793977200.000100"
+      },
+      "type": "event_callback",
+      "event_id": "Ev0ROUTE02AB",
+      "event_time": 1793977202,
+      "authorizations": [
+        {
+          "enterprise_id": null,
+          "team_id": "T0SCALED",
+          "user_id": "U0BOT",
+          "is_bot": true,
+          "is_enterprise_install": false
+        }
+      ],
+      "is_ext_shared_channel": false,
+      "event_context": "4-route-02"
+    },
+    "installation": "owner",
+    "expect": {
+      "decision": "reply",
+      "reason": null
+    }
+  },
+  {
+    "name": "03 a colleague DMs the bot",
+    "envelope": {
+      "team_id": "T0SCALED",
+      "api_app_id": "A0EXEC",
+      "event": {
+        "type": "message",
+        "channel": "D0OTHER",
+        "user": "U0JANE",
+        "text": "What needs me today?",
+        "ts": "1793977203.000103",
+        "event_ts": "1793977203.000103",
+        "channel_type": "im",
+        "client_msg_id": "00000000-0000-4000-8000-000000000003",
+        "team": "T0SCALED",
+        "blocks": [
+          {
+            "type": "rich_text",
+            "block_id": "rt1",
+            "elements": [
+              {
+                "type": "rich_text_section",
+                "elements": [
+                  {
+                    "type": "text",
+                    "text": "What needs me today?"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "type": "event_callback",
+      "event_id": "Ev0ROUTE03AB",
+      "event_time": 1793977203,
+      "authorizations": [
+        {
+          "enterprise_id": null,
+          "team_id": "T0SCALED",
+          "user_id": "U0BOT",
+          "is_bot": true,
+          "is_enterprise_install": false
+        }
+      ],
+      "is_ext_shared_channel": false,
+      "event_context": "4-route-03"
+    },
+    "installation": "owner",
+    "expect": {
+      "decision": "drop",
+      "reason": "other_channel"
+    }
+  },
+  {
+    "name": "04 a channel message",
+    "envelope": {
+      "team_id": "T0SCALED",
+      "api_app_id": "A0EXEC",
+      "event": {
+        "type": "message",
+        "channel": "C0GENERAL",
+        "user": "U0MITCH",
+        "text": "What needs me today?",
+        "ts": "1793977204.000104",
+        "event_ts": "1793977204.000104",
+        "channel_type": "channel",
+        "client_msg_id": "00000000-0000-4000-8000-000000000004",
+        "team": "T0SCALED",
+        "blocks": [
+          {
+            "type": "rich_text",
+            "block_id": "rt1",
+            "elements": [
+              {
+                "type": "rich_text_section",
+                "elements": [
+                  {
+                    "type": "text",
+                    "text": "What needs me today?"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "type": "event_callback",
+      "event_id": "Ev0ROUTE04AB",
+      "event_time": 1793977204,
+      "authorizations": [
+        {
+          "enterprise_id": null,
+          "team_id": "T0SCALED",
+          "user_id": "U0BOT",
+          "is_bot": true,
+          "is_enterprise_install": false
+        }
+      ],
+      "is_ext_shared_channel": false,
+      "event_context": "4-route-04"
+    },
+    "installation": "owner",
+    "expect": {
+      "decision": "drop",
+      "reason": "other_channel"
+    }
+  },
+  {
+    "name": "05 the bot's own answer in the DM",
+    "envelope": {
+      "team_id": "T0SCALED",
+      "api_app_id": "A0EXEC",
+      "event": {
+        "type": "message",
+        "channel": "D0MITCH",
+        "user": "U0BOT",
+        "text": "New reply from your assistant",
+        "ts": "1793977205.000105",
+        "event_ts": "1793977205.000105",
+        "channel_type": "im",
+        "team": "T0SCALED",
+        "blocks": [
+          {
+            "type": "rich_text",
+            "block_id": "rt1",
+            "elements": [
+              {
+                "type": "rich_text_section",
+                "elements": [
+                  {
+                    "type": "text",
+                    "text": "What needs me today?"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "bot_id": "B0BOT",
+        "app_id": "A0EXEC",
+        "bot_profile": {
+          "id": "B0BOT",
+          "app_id": "A0EXEC",
+          "name": "ScaledAI Executive Assistant",
+          "deleted": false,
+          "team_id": "T0SCALED"
+        }
+      },
+      "type": "event_callback",
+      "event_id": "Ev0ROUTE05AB",
+      "event_time": 1793977205,
+      "authorizations": [
+        {
+          "enterprise_id": null,
+          "team_id": "T0SCALED",
+          "user_id": "U0BOT",
+          "is_bot": true,
+          "is_enterprise_install": false
+        }
+      ],
+      "is_ext_shared_channel": false,
+      "event_context": "4-route-05"
+    },
+    "installation": "owner",
+    "expect": {
+      "decision": "drop",
+      "reason": "other_user"
+    }
+  },
+  {
+    "name": "06 a bot post with bot_id and his user id (forged shape)",
+    "envelope": {
+      "team_id": "T0SCALED",
+      "api_app_id": "A0EXEC",
+      "event": {
+        "type": "message",
+        "channel": "D0MITCH",
+        "user": "U0MITCH",
+        "text": "What needs me today?",
+        "ts": "1793977206.000106",
+        "event_ts": "1793977206.000106",
+        "channel_type": "im",
+        "client_msg_id": "00000000-0000-4000-8000-000000000006",
+        "team": "T0SCALED",
+        "blocks": [
+          {
+            "type": "rich_text",
+            "block_id": "rt1",
+            "elements": [
+              {
+                "type": "rich_text_section",
+                "elements": [
+                  {
+                    "type": "text",
+                    "text": "What needs me today?"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "bot_id": "B0OTHER"
+      },
+      "type": "event_callback",
+      "event_id": "Ev0ROUTE06AB",
+      "event_time": 1793977206,
+      "authorizations": [
+        {
+          "enterprise_id": null,
+          "team_id": "T0SCALED",
+          "user_id": "U0BOT",
+          "is_bot": true,
+          "is_enterprise_install": false
+        }
+      ],
+      "is_ext_shared_channel": false,
+      "event_context": "4-route-06"
+    },
+    "installation": "owner",
+    "expect": {
+      "decision": "drop",
+      "reason": "bot_message"
+    }
+  },
+  {
+    "name": "07 app_id present, no bot_id",
+    "envelope": {
+      "team_id": "T0SCALED",
+      "api_app_id": "A0EXEC",
+      "event": {
+        "type": "message",
+        "channel": "D0MITCH",
+        "user": "U0MITCH",
+        "text": "What needs me today?",
+        "ts": "1793977207.000107",
+        "event_ts": "1793977207.000107",
+        "channel_type": "im",
+        "client_msg_id": "00000000-0000-4000-8000-000000000007",
+        "team": "T0SCALED",
+        "blocks": [
+          {
+            "type": "rich_text",
+            "block_id": "rt1",
+            "elements": [
+              {
+                "type": "rich_text_section",
+                "elements": [
+                  {
+                    "type": "text",
+                    "text": "What needs me today?"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "app_id": "A0OTHER"
+      },
+      "type": "event_callback",
+      "event_id": "Ev0ROUTE07AB",
+      "event_time": 1793977207,
+      "authorizations": [
+        {
+          "enterprise_id": null,
+          "team_id": "T0SCALED",
+          "user_id": "U0BOT",
+          "is_bot": true,
+          "is_enterprise_install": false
+        }
+      ],
+      "is_ext_shared_channel": false,
+      "event_context": "4-route-07"
+    },
+    "installation": "owner",
+    "expect": {
+      "decision": "drop",
+      "reason": "app_message"
+    }
+  },
+  {
+    "name": "08 his edit (message_changed, hidden, nested message, no top-level user)",
+    "envelope": {
+      "team_id": "T0SCALED",
+      "api_app_id": "A0EXEC",
+      "event": {
+        "type": "message",
+        "subtype": "message_changed",
+        "hidden": true,
+        "channel": "D0MITCH",
+        "channel_type": "im",
+        "ts": "1793977208.000108",
+        "event_ts": "1793977208.000108",
+        "message": {
+          "type": "message",
+          "user": "U0MITCH",
+          "text": "What needs me this week?",
+          "ts": "1793977201.000101",
+          "edited": {
+            "user": "U0MITCH",
+            "ts": "1793977208.000108"
+          }
+        },
+        "previous_message": {
+          "type": "message",
+          "user": "U0MITCH",
+          "text": "What needs me today?",
+          "ts": "1793977201.000101"
+        }
+      },
+      "type": "event_callback",
+      "event_id": "Ev0ROUTE08AB",
+      "event_time": 1793977208,
+      "authorizations": [
+        {
+          "enterprise_id": null,
+          "team_id": "T0SCALED",
+          "user_id": "U0BOT",
+          "is_bot": true,
+          "is_enterprise_install": false
+        }
+      ],
+      "is_ext_shared_channel": false,
+      "event_context": "4-route-08"
+    },
+    "installation": "owner",
+    "expect": {
+      "decision": "drop",
+      "reason": "other_user"
+    }
+  },
+  {
+    "name": "09 message_deleted",
+    "envelope": {
+      "team_id": "T0SCALED",
+      "api_app_id": "A0EXEC",
+      "event": {
+        "type": "message",
+        "subtype": "message_deleted",
+        "hidden": true,
+        "channel": "D0MITCH",
+        "channel_type": "im",
+        "ts": "1793977209.000109",
+        "event_ts": "1793977209.000109",
+        "deleted_ts": "1793977201.000101",
+        "previous_message": {
+          "type": "message",
+          "user": "U0MITCH",
+          "text": "What needs me today?",
+          "ts": "1793977201.000101"
+        }
+      },
+      "type": "event_callback",
+      "event_id": "Ev0ROUTE09AB",
+      "event_time": 1793977209,
+      "authorizations": [
+        {
+          "enterprise_id": null,
+          "team_id": "T0SCALED",
+          "user_id": "U0BOT",
+          "is_bot": true,
+          "is_enterprise_install": false
+        }
+      ],
+      "is_ext_shared_channel": false,
+      "event_context": "4-route-09"
+    },
+    "installation": "owner",
+    "expect": {
+      "decision": "drop",
+      "reason": "other_user"
+    }
+  },
+  {
+    "name": "10 message_replied bug shape (no subtype, hidden, nested message, no user)",
+    "envelope": {
+      "team_id": "T0SCALED",
+      "api_app_id": "A0EXEC",
+      "event": {
+        "type": "message",
+        "hidden": true,
+        "channel": "D0MITCH",
+        "channel_type": "im",
+        "ts": "1793977210.000110",
+        "event_ts": "1793977210.000110",
+        "message": {
+          "type": "message",
+          "user": "U0MITCH",
+          "text": "What needs me today?",
+          "ts": "1793977200.000100",
+          "thread_ts": "1793977200.000100",
+          "reply_count": 1
+        }
+      },
+      "type": "event_callback",
+      "event_id": "Ev0ROUTE10AB",
+      "event_time": 1793977210,
+      "authorizations": [
+        {
+          "enterprise_id": null,
+          "team_id": "T0SCALED",
+          "user_id": "U0BOT",
+          "is_bot": true,
+          "is_enterprise_install": false
+        }
+      ],
+      "is_ext_shared_channel": false,
+      "event_context": "4-route-10"
+    },
+    "installation": "owner",
+    "expect": {
+      "decision": "drop",
+      "reason": "other_user"
+    }
+  },
+  {
+    "name": "11 the message_replied shape with his user injected",
+    "envelope": {
+      "team_id": "T0SCALED",
+      "api_app_id": "A0EXEC",
+      "event": {
+        "type": "message",
+        "hidden": true,
+        "user": "U0MITCH",
+        "channel": "D0MITCH",
+        "channel_type": "im",
+        "ts": "1793977211.000111",
+        "event_ts": "1793977211.000111",
+        "message": {
+          "type": "message",
+          "user": "U0MITCH",
+          "text": "What needs me today?",
+          "ts": "1793977200.000100",
+          "thread_ts": "1793977200.000100",
+          "reply_count": 1
+        }
+      },
+      "type": "event_callback",
+      "event_id": "Ev0ROUTE11AB",
+      "event_time": 1793977211,
+      "authorizations": [
+        {
+          "enterprise_id": null,
+          "team_id": "T0SCALED",
+          "user_id": "U0BOT",
+          "is_bot": true,
+          "is_enterprise_install": false
+        }
+      ],
+      "is_ext_shared_channel": false,
+      "event_context": "4-route-11"
+    },
+    "installation": "owner",
+    "expect": {
+      "decision": "drop",
+      "reason": "hidden"
+    }
+  },
+  {
+    "name": "12 file_share from him",
+    "envelope": {
+      "team_id": "T0SCALED",
+      "api_app_id": "A0EXEC",
+      "event": {
+        "type": "message",
+        "channel": "D0MITCH",
+        "user": "U0MITCH",
+        "text": "",
+        "ts": "1793977212.000112",
+        "event_ts": "1793977212.000112",
+        "channel_type": "im",
+        "client_msg_id": "00000000-0000-4000-8000-000000000012",
+        "team": "T0SCALED",
+        "blocks": [
+          {
+            "type": "rich_text",
+            "block_id": "rt1",
+            "elements": [
+              {
+                "type": "rich_text_section",
+                "elements": [
+                  {
+                    "type": "text",
+                    "text": "What needs me today?"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "subtype": "file_share",
+        "files": [
+          {
+            "id": "F0FILE01",
+            "name": "report.pdf"
+          }
+        ],
+        "upload": false
+      },
+      "type": "event_callback",
+      "event_id": "Ev0ROUTE12AB",
+      "event_time": 1793977212,
+      "authorizations": [
+        {
+          "enterprise_id": null,
+          "team_id": "T0SCALED",
+          "user_id": "U0BOT",
+          "is_bot": true,
+          "is_enterprise_install": false
+        }
+      ],
+      "is_ext_shared_channel": false,
+      "event_context": "4-route-12"
+    },
+    "installation": "owner",
+    "expect": {
+      "decision": "drop",
+      "reason": "subtype"
+    }
+  },
+  {
+    "name": "13 thread_broadcast from him",
+    "envelope": {
+      "team_id": "T0SCALED",
+      "api_app_id": "A0EXEC",
+      "event": {
+        "type": "message",
+        "channel": "D0MITCH",
+        "user": "U0MITCH",
+        "text": "What needs me today?",
+        "ts": "1793977213.000113",
+        "event_ts": "1793977213.000113",
+        "channel_type": "im",
+        "client_msg_id": "00000000-0000-4000-8000-000000000013",
+        "team": "T0SCALED",
+        "blocks": [
+          {
+            "type": "rich_text",
+            "block_id": "rt1",
+            "elements": [
+              {
+                "type": "rich_text_section",
+                "elements": [
+                  {
+                    "type": "text",
+                    "text": "What needs me today?"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "subtype": "thread_broadcast",
+        "thread_ts": "1793977200.000100",
+        "root": {
+          "type": "message",
+          "user": "U0MITCH",
+          "text": "Root",
+          "ts": "1793977200.000100"
+        }
+      },
+      "type": "event_callback",
+      "event_id": "Ev0ROUTE13AB",
+      "event_time": 1793977213,
+      "authorizations": [
+        {
+          "enterprise_id": null,
+          "team_id": "T0SCALED",
+          "user_id": "U0BOT",
+          "is_bot": true,
+          "is_enterprise_install": false
+        }
+      ],
+      "is_ext_shared_channel": false,
+      "event_context": "4-route-13"
+    },
+    "installation": "owner",
+    "expect": {
+      "decision": "drop",
+      "reason": "subtype"
+    }
+  },
+  {
+    "name": "14 his message with text missing",
+    "envelope": {
+      "team_id": "T0SCALED",
+      "api_app_id": "A0EXEC",
+      "event": {
+        "type": "message",
+        "channel": "D0MITCH",
+        "user": "U0MITCH",
+        "ts": "1793977214.000114",
+        "event_ts": "1793977214.000114",
+        "channel_type": "im",
+        "client_msg_id": "00000000-0000-4000-8000-000000000014",
+        "team": "T0SCALED",
+        "blocks": [
+          {
+            "type": "rich_text",
+            "block_id": "rt1",
+            "elements": [
+              {
+                "type": "rich_text_section",
+                "elements": [
+                  {
+                    "type": "text",
+                    "text": "What needs me today?"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "type": "event_callback",
+      "event_id": "Ev0ROUTE14AB",
+      "event_time": 1793977214,
+      "authorizations": [
+        {
+          "enterprise_id": null,
+          "team_id": "T0SCALED",
+          "user_id": "U0BOT",
+          "is_bot": true,
+          "is_enterprise_install": false
+        }
+      ],
+      "is_ext_shared_channel": false,
+      "event_context": "4-route-14"
+    },
+    "installation": "owner",
+    "expect": {
+      "decision": "drop",
+      "reason": "no_text"
+    }
+  },
+  {
+    "name": "15 his message with a nested message, no subtype, no hidden",
+    "envelope": {
+      "team_id": "T0SCALED",
+      "api_app_id": "A0EXEC",
+      "event": {
+        "type": "message",
+        "channel": "D0MITCH",
+        "user": "U0MITCH",
+        "text": "What needs me today?",
+        "ts": "1793977215.000115",
+        "event_ts": "1793977215.000115",
+        "channel_type": "im",
+        "client_msg_id": "00000000-0000-4000-8000-000000000015",
+        "team": "T0SCALED",
+        "blocks": [
+          {
+            "type": "rich_text",
+            "block_id": "rt1",
+            "elements": [
+              {
+                "type": "rich_text_section",
+                "elements": [
+                  {
+                    "type": "text",
+                    "text": "What needs me today?"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "message": {
+          "type": "message",
+          "user": "U0MITCH",
+          "text": "Nested",
+          "ts": "1793977200.000100"
+        }
+      },
+      "type": "event_callback",
+      "event_id": "Ev0ROUTE15AB",
+      "event_time": 1793977215,
+      "authorizations": [
+        {
+          "enterprise_id": null,
+          "team_id": "T0SCALED",
+          "user_id": "U0BOT",
+          "is_bot": true,
+          "is_enterprise_install": false
+        }
+      ],
+      "is_ext_shared_channel": false,
+      "event_context": "4-route-15"
+    },
+    "installation": "owner",
+    "expect": {
+      "decision": "drop",
+      "reason": "nested_message"
+    }
+  },
+  {
+    "name": "16 channel_type mpim in his DM channel id",
+    "envelope": {
+      "team_id": "T0SCALED",
+      "api_app_id": "A0EXEC",
+      "event": {
+        "type": "message",
+        "channel": "D0MITCH",
+        "user": "U0MITCH",
+        "text": "What needs me today?",
+        "ts": "1793977216.000116",
+        "event_ts": "1793977216.000116",
+        "channel_type": "mpim",
+        "client_msg_id": "00000000-0000-4000-8000-000000000016",
+        "team": "T0SCALED",
+        "blocks": [
+          {
+            "type": "rich_text",
+            "block_id": "rt1",
+            "elements": [
+              {
+                "type": "rich_text_section",
+                "elements": [
+                  {
+                    "type": "text",
+                    "text": "What needs me today?"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "type": "event_callback",
+      "event_id": "Ev0ROUTE16AB",
+      "event_time": 1793977216,
+      "authorizations": [
+        {
+          "enterprise_id": null,
+          "team_id": "T0SCALED",
+          "user_id": "U0BOT",
+          "is_bot": true,
+          "is_enterprise_install": false
+        }
+      ],
+      "is_ext_shared_channel": false,
+      "event_context": "4-route-16"
+    },
+    "installation": "owner",
+    "expect": {
+      "decision": "drop",
+      "reason": "not_im"
+    }
+  },
+  {
+    "name": "17 wrong api_app_id",
+    "envelope": {
+      "team_id": "T0SCALED",
+      "api_app_id": "A0OTHER",
+      "event": {
+        "type": "message",
+        "channel": "D0MITCH",
+        "user": "U0MITCH",
+        "text": "What needs me today?",
+        "ts": "1793977217.000117",
+        "event_ts": "1793977217.000117",
+        "channel_type": "im",
+        "client_msg_id": "00000000-0000-4000-8000-000000000017",
+        "team": "T0SCALED",
+        "blocks": [
+          {
+            "type": "rich_text",
+            "block_id": "rt1",
+            "elements": [
+              {
+                "type": "rich_text_section",
+                "elements": [
+                  {
+                    "type": "text",
+                    "text": "What needs me today?"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "type": "event_callback",
+      "event_id": "Ev0ROUTE17AB",
+      "event_time": 1793977217,
+      "authorizations": [
+        {
+          "enterprise_id": null,
+          "team_id": "T0SCALED",
+          "user_id": "U0BOT",
+          "is_bot": true,
+          "is_enterprise_install": false
+        }
+      ],
+      "is_ext_shared_channel": false,
+      "event_context": "4-route-17"
+    },
+    "installation": "owner",
+    "expect": {
+      "routeLevel": "wrong_app"
+    }
+  },
+  {
+    "name": "18 wrong team_id",
+    "envelope": {
+      "team_id": "T0OTHER",
+      "api_app_id": "A0EXEC",
+      "event": {
+        "type": "message",
+        "channel": "D0MITCH",
+        "user": "U0MITCH",
+        "text": "What needs me today?",
+        "ts": "1793977218.000118",
+        "event_ts": "1793977218.000118",
+        "channel_type": "im",
+        "client_msg_id": "00000000-0000-4000-8000-000000000018",
+        "team": "T0OTHER",
+        "blocks": [
+          {
+            "type": "rich_text",
+            "block_id": "rt1",
+            "elements": [
+              {
+                "type": "rich_text_section",
+                "elements": [
+                  {
+                    "type": "text",
+                    "text": "What needs me today?"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "type": "event_callback",
+      "event_id": "Ev0ROUTE18AB",
+      "event_time": 1793977218,
+      "authorizations": [
+        {
+          "enterprise_id": null,
+          "team_id": "T0OTHER",
+          "user_id": "U0BOT",
+          "is_bot": true,
+          "is_enterprise_install": false
+        }
+      ],
+      "is_ext_shared_channel": false,
+      "event_context": "4-route-18"
+    },
+    "installation": "owner",
+    "expect": {
+      "routeLevel": "wrong_team"
+    }
+  },
+  {
+    "name": "19 no installation",
+    "envelope": {
+      "team_id": "T0SCALED",
+      "api_app_id": "A0EXEC",
+      "event": {
+        "type": "message",
+        "channel": "D0MITCH",
+        "user": "U0MITCH",
+        "text": "What needs me today?",
+        "ts": "1793977219.000119",
+        "event_ts": "1793977219.000119",
+        "channel_type": "im",
+        "client_msg_id": "00000000-0000-4000-8000-000000000019",
+        "team": "T0SCALED",
+        "blocks": [
+          {
+            "type": "rich_text",
+            "block_id": "rt1",
+            "elements": [
+              {
+                "type": "rich_text_section",
+                "elements": [
+                  {
+                    "type": "text",
+                    "text": "What needs me today?"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "type": "event_callback",
+      "event_id": "Ev0ROUTE19AB",
+      "event_time": 1793977219,
+      "authorizations": [
+        {
+          "enterprise_id": null,
+          "team_id": "T0SCALED",
+          "user_id": "U0BOT",
+          "is_bot": true,
+          "is_enterprise_install": false
+        }
+      ],
+      "is_ext_shared_channel": false,
+      "event_context": "4-route-19"
+    },
+    "installation": null,
+    "expect": {
+      "decision": "drop",
+      "reason": "not_installed"
+    }
+  },
+  {
+    "name": "20 revoked installation",
+    "envelope": {
+      "team_id": "T0SCALED",
+      "api_app_id": "A0EXEC",
+      "event": {
+        "type": "message",
+        "channel": "D0MITCH",
+        "user": "U0MITCH",
+        "text": "What needs me today?",
+        "ts": "1793977220.000120",
+        "event_ts": "1793977220.000120",
+        "channel_type": "im",
+        "client_msg_id": "00000000-0000-4000-8000-000000000020",
+        "team": "T0SCALED",
+        "blocks": [
+          {
+            "type": "rich_text",
+            "block_id": "rt1",
+            "elements": [
+              {
+                "type": "rich_text_section",
+                "elements": [
+                  {
+                    "type": "text",
+                    "text": "What needs me today?"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "type": "event_callback",
+      "event_id": "Ev0ROUTE20AB",
+      "event_time": 1793977220,
+      "authorizations": [
+        {
+          "enterprise_id": null,
+          "team_id": "T0SCALED",
+          "user_id": "U0BOT",
+          "is_bot": true,
+          "is_enterprise_install": false
+        }
+      ],
+      "is_ext_shared_channel": false,
+      "event_context": "4-route-20"
+    },
+    "installation": "revoked",
+    "expect": {
+      "decision": "drop",
+      "reason": "not_installed"
+    }
+  },
+  {
+    "name": "21 app_home_opened, his user, tab home",
+    "envelope": {
+      "team_id": "T0SCALED",
+      "api_app_id": "A0EXEC",
+      "event": {
+        "type": "app_home_opened",
+        "user": "U0MITCH",
+        "channel": "D0MITCH",
+        "tab": "home",
+        "event_ts": "1793977221.000121",
+        "view": {
+          "id": "V0HOME21",
+          "type": "home"
+        }
+      },
+      "type": "event_callback",
+      "event_id": "Ev0ROUTE21AB",
+      "event_time": 1793977221,
+      "authorizations": [
+        {
+          "enterprise_id": null,
+          "team_id": "T0SCALED",
+          "user_id": "U0BOT",
+          "is_bot": true,
+          "is_enterprise_install": false
+        }
+      ],
+      "is_ext_shared_channel": false,
+      "event_context": "4-route-21"
+    },
+    "installation": "owner",
+    "expect": {
+      "decision": "home",
+      "reason": null
+    }
+  },
+  {
+    "name": "22 app_home_opened, tab messages",
+    "envelope": {
+      "team_id": "T0SCALED",
+      "api_app_id": "A0EXEC",
+      "event": {
+        "type": "app_home_opened",
+        "user": "U0MITCH",
+        "channel": "D0MITCH",
+        "tab": "messages",
+        "event_ts": "1793977222.000122",
+        "view": {
+          "id": "V0HOME22",
+          "type": "home"
+        }
+      },
+      "type": "event_callback",
+      "event_id": "Ev0ROUTE22AB",
+      "event_time": 1793977222,
+      "authorizations": [
+        {
+          "enterprise_id": null,
+          "team_id": "T0SCALED",
+          "user_id": "U0BOT",
+          "is_bot": true,
+          "is_enterprise_install": false
+        }
+      ],
+      "is_ext_shared_channel": false,
+      "event_context": "4-route-22"
+    },
+    "installation": "owner",
+    "expect": {
+      "decision": "drop",
+      "reason": "messages_tab"
+    }
+  },
+  {
+    "name": "23 app_home_opened, another user (neutral view)",
+    "envelope": {
+      "team_id": "T0SCALED",
+      "api_app_id": "A0EXEC",
+      "event": {
+        "type": "app_home_opened",
+        "user": "U0JANE",
+        "channel": "D0JANE",
+        "tab": "home",
+        "event_ts": "1793977223.000123",
+        "view": {
+          "id": "V0HOME23",
+          "type": "home"
+        }
+      },
+      "type": "event_callback",
+      "event_id": "Ev0ROUTE23AB",
+      "event_time": 1793977223,
+      "authorizations": [
+        {
+          "enterprise_id": null,
+          "team_id": "T0SCALED",
+          "user_id": "U0BOT",
+          "is_bot": true,
+          "is_enterprise_install": false
+        }
+      ],
+      "is_ext_shared_channel": false,
+      "event_context": "4-route-23"
+    },
+    "installation": "owner",
+    "expect": {
+      "decision": "home",
+      "reason": null
+    }
+  },
+  {
+    "name": "24 app_uninstalled",
+    "envelope": {
+      "team_id": "T0SCALED",
+      "api_app_id": "A0EXEC",
+      "event": {
+        "type": "app_uninstalled",
+        "event_ts": "1793977224.000124"
+      },
+      "type": "event_callback",
+      "event_id": "Ev0ROUTE24AB",
+      "event_time": 1793977224,
+      "authorizations": [
+        {
+          "enterprise_id": null,
+          "team_id": "T0SCALED",
+          "user_id": "U0BOT",
+          "is_bot": true,
+          "is_enterprise_install": false
+        }
+      ],
+      "is_ext_shared_channel": false,
+      "event_context": "4-route-24"
+    },
+    "installation": "owner",
+    "expect": {
+      "decision": "revoke",
+      "reason": null
+    }
+  },
+  {
+    "name": "25 app_uninstalled dispatched before installed_at",
+    "envelope": {
+      "team_id": "T0SCALED",
+      "api_app_id": "A0EXEC",
+      "event": {
+        "type": "app_uninstalled",
+        "event_ts": "1792929600.000125"
+      },
+      "type": "event_callback",
+      "event_id": "Ev0ROUTE25AB",
+      "event_time": 1792929600,
+      "authorizations": [
+        {
+          "enterprise_id": null,
+          "team_id": "T0SCALED",
+          "user_id": "U0BOT",
+          "is_bot": true,
+          "is_enterprise_install": false
+        }
+      ],
+      "is_ext_shared_channel": false,
+      "event_context": "4-route-25"
+    },
+    "installation": "owner",
+    "expect": {
+      "decision": "drop",
+      "reason": "stale_revoke"
+    }
+  },
+  {
+    "name": "26 tokens_revoked with tokens.bot [U0BOT]",
+    "envelope": {
+      "team_id": "T0SCALED",
+      "api_app_id": "A0EXEC",
+      "event": {
+        "type": "tokens_revoked",
+        "tokens": {
+          "oauth": [],
+          "bot": [
+            "U0BOT"
+          ]
+        },
+        "event_ts": "1793977226.000126"
+      },
+      "type": "event_callback",
+      "event_id": "Ev0ROUTE26AB",
+      "event_time": 1793977226,
+      "authorizations": [
+        {
+          "enterprise_id": null,
+          "team_id": "T0SCALED",
+          "user_id": "U0BOT",
+          "is_bot": true,
+          "is_enterprise_install": false
+        }
+      ],
+      "is_ext_shared_channel": false,
+      "event_context": "4-route-26"
+    },
+    "installation": "owner",
+    "expect": {
+      "decision": "revoke_check",
+      "reason": null
+    }
+  },
+  {
+    "name": "27 tokens_revoked with only tokens.oauth",
+    "envelope": {
+      "team_id": "T0SCALED",
+      "api_app_id": "A0EXEC",
+      "event": {
+        "type": "tokens_revoked",
+        "tokens": {
+          "oauth": [
+            "U0MITCH"
+          ]
+        },
+        "event_ts": "1793977227.000127"
+      },
+      "type": "event_callback",
+      "event_id": "Ev0ROUTE27AB",
+      "event_time": 1793977227,
+      "authorizations": [
+        {
+          "enterprise_id": null,
+          "team_id": "T0SCALED",
+          "user_id": "U0BOT",
+          "is_bot": true,
+          "is_enterprise_install": false
+        }
+      ],
+      "is_ext_shared_channel": false,
+      "event_context": "4-route-27"
+    },
+    "installation": "owner",
+    "expect": {
+      "decision": "drop",
+      "reason": "user_tokens_only"
+    }
+  },
+  {
+    "name": "28 member_joined_channel",
+    "envelope": {
+      "team_id": "T0SCALED",
+      "api_app_id": "A0EXEC",
+      "event": {
+        "type": "member_joined_channel",
+        "user": "U0BOT",
+        "channel": "C0GENERAL",
+        "channel_type": "C",
+        "team": "T0SCALED",
+        "event_ts": "1793977228.000128"
+      },
+      "type": "event_callback",
+      "event_id": "Ev0ROUTE28AB",
+      "event_time": 1793977228,
+      "authorizations": [
+        {
+          "enterprise_id": null,
+          "team_id": "T0SCALED",
+          "user_id": "U0BOT",
+          "is_bot": true,
+          "is_enterprise_install": false
+        }
+      ],
+      "is_ext_shared_channel": false,
+      "event_context": "4-route-28"
+    },
+    "installation": "owner",
+    "expect": {
+      "decision": "drop",
+      "reason": "unsupported_type"
+    }
+  },
+  {
+    "name": "29 malformed ts",
+    "envelope": {
+      "team_id": "T0SCALED",
+      "api_app_id": "A0EXEC",
+      "event": {
+        "type": "message",
+        "channel": "D0MITCH",
+        "user": "U0MITCH",
+        "text": "What needs me today?",
+        "ts": "1793977229",
+        "event_ts": "1793977229",
+        "channel_type": "im",
+        "client_msg_id": "00000000-0000-4000-8000-000000000029",
+        "team": "T0SCALED",
+        "blocks": [
+          {
+            "type": "rich_text",
+            "block_id": "rt1",
+            "elements": [
+              {
+                "type": "rich_text_section",
+                "elements": [
+                  {
+                    "type": "text",
+                    "text": "What needs me today?"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "type": "event_callback",
+      "event_id": "Ev0ROUTE29AB",
+      "event_time": 1793977229,
+      "authorizations": [
+        {
+          "enterprise_id": null,
+          "team_id": "T0SCALED",
+          "user_id": "U0BOT",
+          "is_bot": true,
+          "is_enterprise_install": false
+        }
+      ],
+      "is_ext_shared_channel": false,
+      "event_context": "4-route-29"
+    },
+    "installation": "owner",
+    "expect": {
+      "decision": "drop",
+      "reason": "bad_ts"
+    }
+  },
+  {
+    "name": "30 app_rate_limited (not an event_callback)",
+    "envelope": {
+      "token": "unused-verification-token",
+      "type": "app_rate_limited",
+      "team_id": "T0SCALED",
+      "minute_rate_limited": 1793977140,
+      "api_app_id": "A0EXEC"
+    },
+    "installation": "owner",
+    "expect": {
+      "routeLevel": "other_type"
+    }
+  },
+  {
+    "name": "31 tokens_revoked with neither list",
+    "envelope": {
+      "team_id": "T0SCALED",
+      "api_app_id": "A0EXEC",
+      "event": {
+        "type": "tokens_revoked",
+        "tokens": {},
+        "event_ts": "1793977231.000131"
+      },
+      "type": "event_callback",
+      "event_id": "Ev0ROUTE31AB",
+      "event_time": 1793977231,
+      "authorizations": [
+        {
+          "enterprise_id": null,
+          "team_id": "T0SCALED",
+          "user_id": "U0BOT",
+          "is_bot": true,
+          "is_enterprise_install": false
+        }
+      ],
+      "is_ext_shared_channel": false,
+      "event_context": "4-route-31"
+    },
+    "installation": "owner",
+    "expect": {
+      "decision": "drop",
+      "reason": "empty_revoke"
+    }
+  },
+  {
+    "name": "32 app_home_opened with a malformed user",
+    "envelope": {
+      "team_id": "T0SCALED",
+      "api_app_id": "A0EXEC",
+      "event": {
+        "type": "app_home_opened",
+        "user": "u0mitch",
+        "channel": "D0MITCH",
+        "tab": "home",
+        "event_ts": "1793977232.000132",
+        "view": {
+          "id": "V0HOME32",
+          "type": "home"
+        }
+      },
+      "type": "event_callback",
+      "event_id": "Ev0ROUTE32AB",
+      "event_time": 1793977232,
+      "authorizations": [
+        {
+          "enterprise_id": null,
+          "team_id": "T0SCALED",
+          "user_id": "U0BOT",
+          "is_bot": true,
+          "is_enterprise_install": false
+        }
+      ],
+      "is_ext_shared_channel": false,
+      "event_context": "4-route-32"
+    },
+    "installation": "owner",
+    "expect": {
+      "decision": "drop",
+      "reason": "bad_user"
+    }
+  },
+  {
+    "name": "33 his thread reply with a malformed thread_ts",
+    "envelope": {
+      "team_id": "T0SCALED",
+      "api_app_id": "A0EXEC",
+      "event": {
+        "type": "message",
+        "channel": "D0MITCH",
+        "user": "U0MITCH",
+        "text": "What needs me today?",
+        "ts": "1793977233.000133",
+        "event_ts": "1793977233.000133",
+        "channel_type": "im",
+        "client_msg_id": "00000000-0000-4000-8000-000000000033",
+        "team": "T0SCALED",
+        "blocks": [
+          {
+            "type": "rich_text",
+            "block_id": "rt1",
+            "elements": [
+              {
+                "type": "rich_text_section",
+                "elements": [
+                  {
+                    "type": "text",
+                    "text": "What needs me today?"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "thread_ts": "not-a-ts"
+      },
+      "type": "event_callback",
+      "event_id": "Ev0ROUTE33AB",
+      "event_time": 1793977233,
+      "authorizations": [
+        {
+          "enterprise_id": null,
+          "team_id": "T0SCALED",
+          "user_id": "U0BOT",
+          "is_bot": true,
+          "is_enterprise_install": false
+        }
+      ],
+      "is_ext_shared_channel": false,
+      "event_context": "4-route-33"
+    },
+    "installation": "owner",
+    "expect": {
+      "decision": "drop",
+      "reason": "bad_ts"
+    }
+  },
+  {
+    "name": "34 tokens_revoked naming another bot user",
+    "envelope": {
+      "team_id": "T0SCALED",
+      "api_app_id": "A0EXEC",
+      "event": {
+        "type": "tokens_revoked",
+        "tokens": {
+          "oauth": [],
+          "bot": [
+            "U0OTHERBOT"
+          ]
+        },
+        "event_ts": "1793977234.000134"
+      },
+      "type": "event_callback",
+      "event_id": "Ev0ROUTE34AB",
+      "event_time": 1793977234,
+      "authorizations": [
+        {
+          "enterprise_id": null,
+          "team_id": "T0SCALED",
+          "user_id": "U0BOT",
+          "is_bot": true,
+          "is_enterprise_install": false
+        }
+      ],
+      "is_ext_shared_channel": false,
+      "event_context": "4-route-34"
+    },
+    "installation": "owner",
+    "expect": {
+      "decision": "drop",
+      "reason": "not_installed"
+    }
+  },
+  {
+    "name": "35 tokens_revoked [U0BOT] dispatched before installed_at",
+    "envelope": {
+      "team_id": "T0SCALED",
+      "api_app_id": "A0EXEC",
+      "event": {
+        "type": "tokens_revoked",
+        "tokens": {
+          "oauth": [],
+          "bot": [
+            "U0BOT"
+          ]
+        },
+        "event_ts": "1792929600.000135"
+      },
+      "type": "event_callback",
+      "event_id": "Ev0ROUTE35AB",
+      "event_time": 1792929600,
+      "authorizations": [
+        {
+          "enterprise_id": null,
+          "team_id": "T0SCALED",
+          "user_id": "U0BOT",
+          "is_bot": true,
+          "is_enterprise_install": false
+        }
+      ],
+      "is_ext_shared_channel": false,
+      "event_context": "4-route-35"
+    },
+    "installation": "owner",
+    "expect": {
+      "decision": "drop",
+      "reason": "stale_revoke"
+    }
+  }
+]

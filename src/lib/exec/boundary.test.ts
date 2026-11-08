@@ -83,7 +83,9 @@ const LOADER_IMPORTERS = new Set([
 // "file#export": what a trusted file may export that hands a principal out.
 const PRINCIPAL_EXPORTS = new Set([
   "src/lib/exec/access.ts#requireExecPrincipal",
-  "src/lib/exec/access.ts#requireExecPrincipalForPage"
+  "src/lib/exec/access.ts#requireExecPrincipalForPage",
+  // P6 B-P6-7 (seeded at stage 0 with the requireExecSession stub): the OAuth routes' session gate.
+  "src/lib/exec/access.ts#requireExecSession"
 ]);
 
 const SOURCE_FILE = /\.(?:tsx?|jsx?|mjs|cjs)$/;
@@ -447,6 +449,8 @@ const isExecCode = (p: string) =>
   p.startsWith("src/components/exec/") ||
   p.startsWith("src/app/api/exec/") ||
   p.startsWith("src/app/api/cron/exec-") ||
+  // P6 B-P6-1 (K14): the Slack app's events, interactions and OAuth routes.
+  p.startsWith("src/app/api/integrations/exec-slack/") ||
   /^src\/app\/(?:[^/]+\/)*executive(?:\/|$)/.test(p);
 const isEmailFile = (p: string) => isExecCode(p) && /email|mail|triage|correlate|sync-state/i.test(p);
 const isEmailHandler = (p: string) => /^src\/lib\/exec\/handlers\/[^/]*(?:email|mail)[^/]*$/i.test(p);
@@ -466,7 +470,10 @@ const BANNED_MODULES: ReadonlySet<string> = new Set(
     "client-email-slack",
     "email-classifier",
     "client-health",
-    "satisfaction-scoring"
+    "satisfaction-scoring",
+    // P6 B-P6-2: DD's user-token Slack identity and status helpers.
+    "slack-resolve",
+    "slack-status-sync"
   ].map((m) => `src/lib/${m}`)
 );
 // Every @/lib/email-intake* and @/lib/email-notifications*, except the pure filters.
@@ -483,13 +490,20 @@ const BANNED_SYMBOLS: ReadonlySet<string> = new Set([
   "deleteAccount",
   "rescanAllAccounts",
   "applyLabel",
-  "createLabel"
+  "createLabel",
+  // P6 B-P6-3 (K5, K14): DD's Slack identity override; the installation row is the only binding.
+  "resolveSlackId"
 ]);
+// P6 B-P6-3 (K14): DD's user-token Slack helpers, by shape: findSlackUser* and *AsUser. Checked on the same walk.
+const BANNED_SYMBOL_PATTERNS: readonly RegExp[] = [/^findSlackUser/, /AsUser$/];
+const isBannedSymbol = (name: string): boolean => BANNED_SYMBOLS.has(name) || BANNED_SYMBOL_PATTERNS.some((re) => re.test(name));
 // module → the one exec file allowed to import it
 const ONLY_IMPORTER: ReadonlyMap<string, string> = new Map([
   ["src/lib/missive-client", "src/lib/exec/sources/mail.ts"],
   ["src/lib/inbox-event-bus", "src/lib/exec/mail-hook.ts"],
-  ["src/lib/missive-socket", "src/lib/exec/mail-hook.ts"]
+  ["src/lib/missive-socket", "src/lib/exec/mail-hook.ts"],
+  // P6 B-P6-2: ops.ts posts the ops alerts through DD's bot; no other exec file touches DD's Slack client.
+  ["src/lib/slack", "src/lib/exec/ops.ts"]
 ]);
 const MAIL_HOOK = "src/lib/exec/mail-hook.ts";
 const SYNC_STATE_MODULE = "src/lib/exec/sync-state";
@@ -861,8 +875,8 @@ function analyzeMail(sf: ts.SourceFile, vocab: Vocabulary = P3_VOCAB): MailFacts
       }
     }
 
-    if (ts.isIdentifier(node) && BANNED_SYMBOLS.has(node.text)) facts.bannedSymbols.push(`${node.text}:${lineOf(node)}`);
-    if (ts.isElementAccessExpression(node) && ts.isStringLiteralLike(node.argumentExpression) && BANNED_SYMBOLS.has(node.argumentExpression.text)) {
+    if (ts.isIdentifier(node) && isBannedSymbol(node.text)) facts.bannedSymbols.push(`${node.text}:${lineOf(node)}`);
+    if (ts.isElementAccessExpression(node) && ts.isStringLiteralLike(node.argumentExpression) && isBannedSymbol(node.argumentExpression.text)) {
       facts.bannedSymbols.push(`${node.argumentExpression.text}:${lineOf(node)}`);
     }
     if ((ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) && node.text === PRINCIPAL_TABLE) {
@@ -954,7 +968,9 @@ const isP4Handler = (p: string) => /^src\/lib\/exec\/handlers\/(?:draft|voice)-[
 // P5a 9b: the DD text files take the wider DD text vocabulary (P5_VOCAB, below).
 // P5b B3: the chat files take the chat words on top of their own vocabulary (P5a's DD text words where 9b already
 // applies, agent/** and the chat route; P3's elsewhere), built below.
-const vocabFor = (p: string): Vocabulary => (isP4ContentFile(p) ? P4_VOCAB : isChatFile(p) ? chatVocabulary(isDdTextFile(p)) : isDdTextFile(p) ? P5_VOCAB : P3_VOCAB);
+const baseVocabFor = (p: string): Vocabulary => (isP4ContentFile(p) ? P4_VOCAB : isChatFile(p) ? chatVocabulary(isDdTextFile(p)) : isDdTextFile(p) ? P5_VOCAB : P3_VOCAB);
+// P6 B-P6-5: a Slack file takes the Slack words and names on top of its class's vocabulary (slackVocabulary, below).
+const vocabFor = (p: string): Vocabulary => (isSlackFile(p) ? slackVocabulary(baseVocabFor(p)) : baseVocabFor(p));
 
 /** B8: rule 9 over the P4 file class with the P4 vocabulary; the handler-return check covers the P4 handlers. */
 function p4ContentOffenses(file: string, f: MailFacts): string[] {
@@ -2026,6 +2042,164 @@ function entryPointOffenses(file: string, f: P5bFacts): string[] {
   return out;
 }
 
+// --- P6 rules B-P6-1..8 (P6 contract §0.4; Area B owns this section, other areas request additions) -----------
+//
+//   B-P6-1 isExecCode covers src/app/api/integrations/exec-slack/ (above), so every exec rule holds there.
+//   B-P6-2 Exec code imports @/lib/slack only in ops.ts (ONLY_IMPORTER, above: the ops alerts post through DD's
+//          bot), and never slack-resolve or slack-status-sync (BANNED_MODULES, above; daily-briefing-runner and
+//          client-email-slack already were).
+//   B-P6-3 Exec code names no findSlackUser* or *AsUser identifier and no resolveSlackId (BANNED_SYMBOL_PATTERNS
+//          and BANNED_SYMBOLS, above). publish stays banned: the Home wrapper is setHomeView and names the method by
+//          the string "views.publish".
+//   B-P6-4 Within exec code only sources/slack.ts holds the Web API base URL or one of SLACK_METHOD_STRINGS in a
+//          string (a literal or a template part in a value position; a type's string literal calls nothing). Only
+//          slack-config.ts reads process.env.EXEC_SLACK_* (checked over all of src); exec code reads SLACK_BOT_TOKEN
+//          only in ops.ts and never SLACK_USER_TOKEN or SLACK_SIGNING_SECRET. A read is process.env.X,
+//          process.env["X"] or a destructuring of process.env (B9 already refuses the computed and enumerating
+//          forms in exec code).
+//   B-P6-5 Rule 9 over the Slack files (exec code whose path says slack): their vocabulary gains the words token(s),
+//          secret(s), signature, challenge and blocks and the exact names oauthcode, oauthstate, rawstate,
+//          triggerid, trigger_id, responseurl and response_url, on top of whatever their class already takes; and a
+//          slack-* job handler returns none of them. code and state are not content words: they end the names of
+//          the codes §0.3 rule 4 requires us to log (err.code, lastErrorCode, replyState), and isContentName reads
+//          the last word against the content words first.
+//   B-P6-6 Only slack-install.ts names the five P6 tables and the seven P6 RPCs in a string, anywhere in src (tests
+//          and the migration aside). A name counts as a whole token, so an index or constraint name
+//          (exec_slack_events_open_idx) doesn't; nor does one followed by "." or ":", the form of a sealed-token
+//          context ("exec_slack_installations.bot_token:<id>") and of an audit target ("exec_slack_installations:<id>");
+//          nor a string that is itself the value of a `target` key (the start route's audit target
+//          "exec_oauth_states"): those label the resource, they don't read or write it.
+//   B-P6-7 access.ts#requireExecSession is in PRINCIPAL_EXPORTS (above, seeded at stage 0); LOADER_IMPORTERS is
+//          unchanged: no new principal path.
+//   B-P6-8 The Slack client components under src/components/exec/settings/Slack* are held to P5a's rule 16.
+// Names decide in B-P6-5 as in rule 9; comments never count anywhere.
+
+const isSlackFile = (p: string) => isExecCode(p) && /slack/i.test(p);
+const isSlackHandler = (p: string) => /^src\/lib\/exec\/handlers\/slack-[^/]*\.ts$/.test(p);
+const SLACK_WORDS = ["token", "tokens", "secret", "secrets", "signature", "challenge", "blocks"];
+const SLACK_NAMES = ["oauthcode", "oauthstate", "rawstate", "triggerid", "trigger_id", "responseurl", "response_url"];
+const slackVocabs = new Map<Vocabulary, Vocabulary>();
+/** B-P6-5: a Slack file's vocabulary, built once per base vocabulary. */
+function slackVocabulary(base: Vocabulary): Vocabulary {
+  let v = slackVocabs.get(base);
+  if (!v) {
+    v = { words: new Set([...base.words, ...SLACK_WORDS]), names: new Set([...base.names, ...SLACK_NAMES]) };
+    slackVocabs.set(base, v);
+  }
+  return v;
+}
+
+const OPS_FILE = "src/lib/exec/ops.ts";
+const SLACK_CLIENT_FILE = "src/lib/exec/sources/slack.ts";
+const SLACK_CONFIG_FILE = "src/lib/exec/slack-config.ts";
+const SLACK_INSTALL_FILE = "src/lib/exec/slack-install.ts";
+const SLACK_API_TEXT = "slack.com/api";
+const SLACK_METHOD_STRINGS: ReadonlySet<string> = new Set([
+  "https://slack.com/api/",
+  "chat.postMessage",
+  "chat.update",
+  "chat.delete",
+  "views.publish",
+  "auth.revoke",
+  "oauth.v2.access",
+  "conversations.history",
+  "conversations.replies"
+]);
+const EXEC_SLACK_ENV = /^EXEC_SLACK_/;
+const P6_TABLES = ["exec_slack_installations", "exec_slack_events", "exec_oauth_states", "exec_chat_feedback", "exec_slack_posts"];
+const P6_RPCS = [
+  "exec_slack_accept_event",
+  "exec_slack_accept_action",
+  "exec_slack_revoke_installation",
+  "exec_slack_purge_installation",
+  "exec_slack_conversation_for_thread",
+  "exec_slack_reply_step",
+  "exec_slack_redaction_followups"
+];
+const P6_STORE_TEXT = new RegExp(`(?<![A-Za-z0-9_])(${[...P6_TABLES, ...P6_RPCS].join("|")})(?![A-Za-z0-9_.:])`, "g");
+const SLACK_CLIENT_ALLOWED_TARGETS: ReadonlySet<string> = new Set(["src/lib/exec/types", "src/lib/exec/slack-types"]);
+
+interface P6Facts {
+  /** B-P6-4: strings naming the Web API (the base URL, or one of SLACK_METHOD_STRINGS). */
+  slackStrings: { text: string; line: number }[];
+  /** B-P6-4: names read from process.env. */
+  envNames: { name: string; line: number }[];
+  /** B-P6-6: P6 table and RPC names in strings. */
+  storeNames: { name: string; line: number }[];
+}
+
+function analyzeP6(sf: ts.SourceFile): P6Facts {
+  const lineOf = (n: ts.Node) => sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1;
+  const facts: P6Facts = { slackStrings: [], envNames: [], storeNames: [] };
+  const isProcessEnv = (e: ts.Node): boolean =>
+    ts.isPropertyAccessExpression(e) && ts.isIdentifier(e.expression) && e.expression.text === "process" && e.name.text === "env";
+  const isTargetValue = (n: ts.Node): boolean =>
+    ts.isPropertyAssignment(n.parent) && n.parent.initializer === n && propertyNameText(n.parent.name) === "target";
+  const visit = (node: ts.Node): void => {
+    // A type's string literal names no call and reads no table; a module specifier is a path.
+    if (ts.isTypeNode(node) || ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) return;
+    if (ts.isStringLiteralLike(node) || ts.isTemplateHead(node) || ts.isTemplateMiddle(node) || ts.isTemplateTail(node)) {
+      const text = node.text;
+      if (SLACK_METHOD_STRINGS.has(text) || text.includes(SLACK_API_TEXT)) facts.slackStrings.push({ text, line: lineOf(node) });
+      if (!isTargetValue(node)) for (const m of text.matchAll(P6_STORE_TEXT)) facts.storeNames.push({ name: m[1], line: lineOf(node) });
+    }
+    if (ts.isPropertyAccessExpression(node) && isProcessEnv(node.expression)) facts.envNames.push({ name: node.name.text, line: lineOf(node) });
+    if (ts.isElementAccessExpression(node) && isProcessEnv(node.expression) && ts.isStringLiteralLike(node.argumentExpression)) {
+      facts.envNames.push({ name: node.argumentExpression.text, line: lineOf(node) });
+    }
+    if (ts.isVariableDeclaration(node) && node.initializer && isProcessEnv(node.initializer) && ts.isObjectBindingPattern(node.name)) {
+      for (const el of node.name.elements) {
+        const key = el.propertyName ?? el.name;
+        if (ts.isIdentifier(key) || ts.isStringLiteral(key)) facts.envNames.push({ name: key.text, line: lineOf(el) });
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return facts;
+}
+
+/** B-P6-4: the Web API's strings outside sources/slack.ts, in exec code. */
+function slackLiteralOffenses(file: string, f: P6Facts): string[] {
+  if (!isExecCode(file) || file === SLACK_CLIENT_FILE) return [];
+  return f.slackStrings.map((s) => `${file}:${s.line}: names the Slack Web API (${JSON.stringify(s.text.slice(0, 60))}); only ${SLACK_CLIENT_FILE} may`);
+}
+
+/** B-P6-4: EXEC_SLACK_* outside slack-config.ts (anywhere in src); SLACK_BOT_TOKEN outside ops.ts, SLACK_USER_TOKEN and SLACK_SIGNING_SECRET anywhere, in exec code. */
+function slackEnvOffenses(file: string, f: P6Facts): string[] {
+  const out: string[] = [];
+  for (const e of f.envNames) {
+    if (EXEC_SLACK_ENV.test(e.name)) {
+      if (file !== SLACK_CONFIG_FILE) out.push(`${file}:${e.line}: reads process.env.${e.name}; only ${SLACK_CONFIG_FILE} may`);
+    } else if (isExecCode(file) && e.name === "SLACK_BOT_TOKEN" && file !== OPS_FILE) {
+      out.push(`${file}:${e.line}: reads process.env.SLACK_BOT_TOKEN; only ${OPS_FILE} may`);
+    } else if (isExecCode(file) && (e.name === "SLACK_USER_TOKEN" || e.name === "SLACK_SIGNING_SECRET")) {
+      out.push(`${file}:${e.line}: reads process.env.${e.name}; exec code never does`);
+    }
+  }
+  return out;
+}
+
+/** B-P6-6: the P6 tables and RPCs named outside slack-install.ts. */
+function slackStoreOffenses(file: string, f: P6Facts): string[] {
+  if (file === SLACK_INSTALL_FILE) return [];
+  return f.storeNames.map((s) => `${file}:${s.line}: names ${s.name}; only ${SLACK_INSTALL_FILE} may`);
+}
+
+/** B-P6-5: rule 9 over the Slack files, with the handler-return check over the slack-* handlers. */
+function slackContentOffenses(file: string, f: MailFacts): string[] {
+  if (!isSlackFile(file)) return [];
+  return [...f.contentLogs.map((at) => `${file}:${at}`), ...(isSlackHandler(file) ? f.contentReturns.map((at) => `${file}:${at}`) : [])];
+}
+
+/** §3.5: sources/slack.ts imports only node: modules, server-only, exec/types and exec/slack-types. */
+function slackClientImportOffenses(file: string, f: P4Facts): string[] {
+  if (file !== SLACK_CLIENT_FILE) return [];
+  return f.specifiers
+    .filter((s) => !(s.spec === "server-only" || s.spec.startsWith("node:") || (s.target !== null && SLACK_CLIENT_ALLOWED_TARGETS.has(s.target))))
+    .map((s) => `${file}:${s.line}: imports ${s.spec}`);
+}
+
 // --- the program --------------------------------------------------------------------
 
 function compilerOptions(): ts.CompilerOptions {
@@ -2072,6 +2246,8 @@ interface FileFacts extends ImportFacts {
   p5: P5Facts;
   /** P5b rules B1-B8 */
   p5b: P5bFacts;
+  /** P6 rules B-P6-4, B-P6-6 */
+  p6: P6Facts;
 }
 
 interface Scan {
@@ -2126,7 +2302,8 @@ function scanTree(probes: ReadonlyMap<string, string>, exportProbes: readonly st
       mail: analyzeMail(sf, vocabFor(file)),
       p4: analyzeP4(sf),
       p5: analyzeP5(sf),
-      p5b: analyzeP5b(sf)
+      p5b: analyzeP5b(sf),
+      p6: analyzeP6(sf)
     });
   }
   const nextConfigPath = path.join(ROOT, NEXT_CONFIG_FILE);
@@ -3629,5 +3806,273 @@ describe("P5b boundary detectors (probes; tests 101-105)", () => {
     expect(entryPointOffenses(DRAFTS_FILE, p5bAt(DRAFTS_FILE, schemas(", usesPrivateRefs: z.boolean()")))).toHaveLength(2);
     expect(entryPointOffenses(DRAFTS_FILE, p5bAt(DRAFTS_FILE, schemas("", ", origin: z.string()")))).toHaveLength(1);
     expect(entryPointOffenses(DRAFTS_FILE, p5bAt(DRAFTS_FILE, schemas(", instructionBy: z.string()")))).toHaveLength(2);
+  });
+});
+
+// --- P6 (contract §0.4, §5.9 BD01-BD09) ----------------------------------------------------------------------
+
+const p6Offenses = (check: (file: string, f: P6Facts) => string[]) => [...scan.facts].flatMap(([file, facts]) => check(file, facts.p6));
+const SLACK_COMPONENT_FILES = ["src/components/exec/settings/SlackConnectControls.tsx", "src/components/exec/settings/SlackSection.tsx"];
+
+describe("P6 boundary (real source tree; contract §0.4, BD01-BD09)", () => {
+  it("BD01 isExecCode covers the Slack app's routes; the legacy DD Slack routes stay outside", () => {
+    expect(isExecCode("src/app/api/integrations/exec-slack/events/route.ts")).toBe(true);
+    expect(isExecCode("src/app/api/integrations/exec-slack/callback/route.ts")).toBe(true);
+    expect(isExecCode("src/app/api/exec/slack/disconnect/route.ts")).toBe(true);
+    expect(isExecCode("src/app/api/integrations/exec-slackx/events/route.ts")).toBe(false);
+    expect(isExecCode("src/app/api/integrations/slack/callback/route.ts")).toBe(false);
+    expect(isExecCode("src/app/api/slack/events/route.ts")).toBe(false);
+    expect(isSlackFile("src/lib/exec/slack-dm.ts")).toBe(true);
+    expect(isSlackFile("src/lib/exec/sources/slack.ts")).toBe(true);
+    expect(isSlackFile("src/app/api/integrations/exec-slack/events/route.ts")).toBe(true);
+    expect(isSlackFile("src/components/exec/settings/SlackSection.tsx")).toBe(true);
+    expect(isSlackFile("src/lib/slack.ts")).toBe(false);
+    expect(isSlackFile("src/lib/exec/jobs.ts")).toBe(false);
+    expect(isSlackHandler("src/lib/exec/handlers/slack-reply.ts")).toBe(true);
+    expect(isSlackHandler("src/lib/exec/handlers/purge.ts")).toBe(false);
+    expect(isSlackHandler("src/lib/exec/slack-dm.ts")).toBe(false);
+  });
+
+  it("BD02 exec code imports @/lib/slack only in ops.ts, and never slack-resolve or slack-status-sync", () => {
+    expect(factsOf(OPS_FILE).mail.modules.map((m) => m.target)).toContain("src/lib/slack");
+    expect(ONLY_IMPORTER.get("src/lib/slack")).toBe(OPS_FILE);
+    expect(BANNED_MODULES.has("src/lib/slack-resolve") && BANNED_MODULES.has("src/lib/slack-status-sync")).toBe(true);
+    expect(p3Offenses(importerOffenses)).toEqual([]);
+    expect(p3Offenses(bannedOffenses)).toEqual([]);
+  });
+
+  it("BD04 the Web API strings live in sources/slack.ts only; EXEC_SLACK_* only in slack-config.ts; SLACK_BOT_TOKEN only in ops.ts", () => {
+    // The detectors see the real code: the client's own strings, ops.ts's token check.
+    expect(factsOf(SLACK_CLIENT_FILE).p6.slackStrings.map((s) => s.text)).toEqual(expect.arrayContaining(["chat.postMessage", "views.publish", "https://slack.com/api/"]));
+    expect(factsOf(OPS_FILE).p6.envNames.map((e) => e.name)).toContain("SLACK_BOT_TOKEN");
+    expect(p6Offenses(slackLiteralOffenses)).toEqual([]);
+    expect(p6Offenses(slackEnvOffenses)).toEqual([]);
+  });
+
+  it("BD05 no Slack file logs, alerts or (from a slack-* handler) returns Slack text, tokens, secrets or query values", () => {
+    expect(scan.files.filter(isSlackFile).length).toBeGreaterThanOrEqual(10);
+    expect(p3Offenses(slackContentOffenses)).toEqual([]);
+  });
+
+  it("BD06 the P6 tables and RPCs are named only by slack-install.ts", () => {
+    expect(p6Offenses(slackStoreOffenses)).toEqual([]);
+  });
+
+  it("BD07 requireExecSession is in PRINCIPAL_EXPORTS, the export check sees it hand a principal out, LOADER_IMPORTERS is unchanged", () => {
+    expect(PRINCIPAL_EXPORTS.has("src/lib/exec/access.ts#requireExecSession")).toBe(true);
+    expect(scan.trustedExports.get("src/lib/exec/access.ts")).toContain("requireExecSession");
+    expect([...LOADER_IMPORTERS].sort()).toEqual(["src/lib/exec/access.ts", "src/lib/exec/jobs.ts", "src/lib/exec/principal.ts", "src/lib/exec/scheduler.ts"]);
+    const offenders = [...scan.trustedExports].flatMap(([file, names]) => names.map((name) => `${file}#${name}`)).filter((e) => !PRINCIPAL_EXPORTS.has(e));
+    expect(offenders).toEqual([]);
+  });
+
+  it("BD08 the real tree passes every P6 rule", () => {
+    expect([
+      ...p3Offenses(bannedOffenses),
+      ...p3Offenses(importerOffenses),
+      ...p3Offenses(slackContentOffenses),
+      ...p6Offenses(slackLiteralOffenses),
+      ...p6Offenses(slackEnvOffenses),
+      ...p6Offenses(slackStoreOffenses),
+      ...p4Offenses(envOffenses),
+      ...p4Offenses(slackClientImportOffenses)
+    ]).toEqual([]);
+  });
+
+  it("§3.5 sources/slack.ts imports only node: modules, server-only, exec/types and exec/slack-types", () => {
+    expect(factsOf(SLACK_CLIENT_FILE).p4.specifiers.map((s) => s.spec)).toEqual(expect.arrayContaining(["server-only", "@/lib/exec/slack-types"]));
+    expect(p4Offenses(slackClientImportOffenses)).toEqual([]);
+  });
+
+  it("BD09 the Slack settings components are rule-16 roots: scanned, and the client one reaches no server-only module", () => {
+    for (const file of SLACK_COMPONENT_FILES) expect(isClientRoot(file)).toBe(true);
+    const present = SLACK_COMPONENT_FILES.filter((file) => existsSync(path.join(ROOT, file)));
+    // Integrator (stage 2): both files exist, so the check is strict and never vacuous.
+    expect(present).toEqual(SLACK_COMPONENT_FILES);
+    const modules = moduleIndex(scan.facts.keys());
+    for (const file of present) {
+      expect(scan.files).toContain(file);
+      const facts = factsOf(file).p5;
+      if (facts.useClient) expect(serverOnlyChain(file, facts, scan.facts, modules)).toBeNull();
+    }
+    expect(factsOf("src/components/exec/settings/SlackConnectControls.tsx").p5.useClient).toBe(true);
+    expect(factsOf("src/components/exec/settings/SlackSection.tsx").p5.useClient).toBe(false);
+  });
+});
+
+describe("P6 boundary detectors (probes; BD02-BD06, BD09)", () => {
+  const kindOf = (file: string) => (file.endsWith(".tsx") ? ts.ScriptKind.TSX : /\.[cm]?js$/.test(file) ? ts.ScriptKind.JS : ts.ScriptKind.TS);
+  const sourceAt = (file: string, code: string) => ts.createSourceFile(path.join(ROOT, file), code, ts.ScriptTarget.Latest, true, kindOf(file));
+  const mailAt = (file: string, code: string) => analyzeMail(sourceAt(file, code), vocabFor(file));
+  const p6At = (file: string, code: string) => analyzeP6(sourceAt(file, code));
+  const p4At = (file: string, code: string) => analyzeP4(sourceAt(file, code));
+  const p5At = (file: string, code: string) => analyzeP5(sourceAt(file, code));
+  const DM_FILE = "src/lib/exec/slack-dm.ts";
+  const HANDLER = "src/lib/exec/handlers/slack-reply.ts";
+  const ROUTE = "src/app/api/integrations/exec-slack/events/route.ts";
+  const DD_FILE = "src/lib/some-dd-module.ts";
+
+  // BD02
+  it("BD02 flags @/lib/slack from exec code (the routes included) but not from ops.ts or DD code", () => {
+    const importers = (file: string, code: string) => importerOffenses(file, mailAt(file, code));
+    const legacy = 'import { postMessage } from "@/lib/slack";';
+    expect(importers(DM_FILE, legacy)).toHaveLength(1);
+    expect(importers(ROUTE, 'import { lookupUserByEmail } from "../../../../../lib/slack";')).toHaveLength(1);
+    expect(importers("src/lib/exec/handlers/slack-home.ts", 'const s = await import("@/lib/slack");')).toHaveLength(1);
+    expect(importers(OPS_FILE, legacy)).toEqual([]);
+    expect(importers("src/app/api/slack/events/route.ts", legacy)).toEqual([]);
+    expect(importers(DM_FILE, 'import { SLACK_LIMITS } from "@/lib/exec/slack-types";\nimport { postInDm } from "@/lib/exec/sources/slack";')).toEqual([]);
+  });
+
+  it.each([
+    'import { resolveSlackUserId } from "@/lib/slack-resolve";',
+    'import "@/lib/slack-status-sync";',
+    'export { runDailyBriefing } from "@/lib/daily-briefing-runner";',
+    'const m = await import("@/lib/client-email-slack");'
+  ])("BD02 flags the banned Slack module in %s", (code) => {
+    expect(bannedOffenses(DM_FILE, mailAt(DM_FILE, code))).toHaveLength(1);
+    expect(bannedOffenses(ROUTE, mailAt(ROUTE, code))).toHaveLength(1);
+    expect(bannedOffenses(DD_FILE, mailAt(DD_FILE, code))).toEqual([]);
+  });
+
+  // BD03
+  it.each(["findSlackUserByName(name);", "const u = await findSlackUserByEmail(e);", "await postMessageAsUser(x);", 'client["sendAsUser"](x);', "resolveSlackId(e);", "client.views.publish(v);", 'api["publish"](v);'])(
+    "BD03 flags the banned identifier in %s",
+    (code) => {
+      expect(bannedOffenses(DM_FILE, mailAt(DM_FILE, code))).toHaveLength(1);
+    }
+  );
+
+  it.each(["await setHomeView(token, user, view);", 'const m = "views.publish";', "// never findSlackUserByName or postAsUser here", "const userAsUserId = 1;", "const asUser = 2;"])(
+    "BD03 does not flag %s",
+    (code) => {
+      expect(bannedOffenses(DM_FILE, mailAt(DM_FILE, code))).toEqual([]);
+    }
+  );
+
+  // BD04
+  it.each([...SLACK_METHOD_STRINGS].map((m) => [m]))("BD04 flags the Web API string %s outside sources/slack.ts", (method) => {
+    const code = `await call(${JSON.stringify(method)}, {});`;
+    expect(slackLiteralOffenses(DM_FILE, p6At(DM_FILE, code))).toHaveLength(1);
+    expect(slackLiteralOffenses(ROUTE, p6At(ROUTE, code))).toHaveLength(1);
+    expect(slackLiteralOffenses(SLACK_CLIENT_FILE, p6At(SLACK_CLIENT_FILE, code))).toEqual([]);
+  });
+
+  it("BD04 flags the base URL in any string form, and not types, comments, other methods or DD code", () => {
+    const lit = (file: string, code: string) => slackLiteralOffenses(file, p6At(file, code));
+    expect(lit(DM_FILE, 'await fetch("https://slack.com/api/chat.postMessage", init);')).toHaveLength(1);
+    expect(lit(DM_FILE, "const url = `https://slack.com/api/${method}`;")).toHaveLength(1);
+    expect(lit(DM_FILE, "const c = `x ${a} chat.update`;")).toEqual([]);
+    expect(lit(DM_FILE, 'type M = "chat.update" | "views.publish";\nlet m: "chat.delete";')).toEqual([]);
+    expect(lit(DM_FILE, "// answer = chat.update on the placeholder (https://slack.com/api/)")).toEqual([]);
+    expect(lit(DM_FILE, 'const a = "auth.test"; const b = "https://slack.com/oauth/v2/authorize";')).toEqual([]);
+    expect(lit("src/lib/slack.ts", 'await slackCall("chat.postMessage", {});')).toEqual([]);
+  });
+
+  it("BD04 flags EXEC_SLACK_* outside slack-config.ts (anywhere in src), SLACK_BOT_TOKEN outside ops.ts, and the user token or signing secret", () => {
+    const env = (file: string, code: string) => slackEnvOffenses(file, p6At(file, code));
+    const secret = "const s = process.env.EXEC_SLACK_CLIENT_SECRET;";
+    expect(env("src/lib/exec/slack-oauth.ts", secret)).toHaveLength(1);
+    expect(env(DD_FILE, secret)).toHaveLength(1);
+    expect(env(SLACK_CONFIG_FILE, secret)).toEqual([]);
+    expect(env(ROUTE, 'const s = process.env["EXEC_SLACK_SIGNING_SECRET"];')).toHaveLength(1);
+    expect(env(DM_FILE, "const { EXEC_SLACK_TEAM_ID, EXEC_SLACK_APP_ID: app } = process.env;")).toHaveLength(2);
+    const bot = "if (!process.env.SLACK_BOT_TOKEN) return false;";
+    expect(env(DM_FILE, bot)).toHaveLength(1);
+    expect(env(OPS_FILE, bot)).toEqual([]);
+    expect(env("src/lib/slack.ts", bot)).toEqual([]);
+    expect(env(OPS_FILE, "const t = process.env.SLACK_USER_TOKEN;")).toHaveLength(1);
+    expect(env(ROUTE, "const t = process.env.SLACK_SIGNING_SECRET;")).toHaveLength(1);
+    expect(env("src/app/api/slack/events/route.ts", "const t = process.env.SLACK_SIGNING_SECRET;")).toEqual([]);
+    expect(env(OPS_FILE, "const c = process.env.EXEC_OPS_SLACK_CHANNEL;")).toEqual([]);
+  });
+
+  // BD05
+  it.each([
+    "console.log(text);",
+    'void notifyOps({ key: "k", title: "t", detail: token });',
+    "console.log(triggerId);",
+    "console.log(p.response_url);",
+    "console.log(responseUrl);",
+    "console.log(oauthCode);",
+    "console.log(oauthState);",
+    "console.warn(trigger_id);",
+    "console.log({ challenge });",
+    "console.error(`bad ${signature}`);",
+    "console.log(rawState);",
+    "console.log(cfg.clientSecret);",
+    "console.log(inst.target.token);",
+    "console.debug(parts.blocks);"
+  ])("BD05 flags in a Slack file: %s", (code) => {
+    expect(slackContentOffenses(DM_FILE, mailAt(DM_FILE, code))).toHaveLength(1);
+    expect(slackContentOffenses(HANDLER, mailAt(HANDLER, code))).toHaveLength(1);
+  });
+
+  it.each([
+    "console.log(eventId);",
+    "console.warn(err.code);",
+    "console.log(lastErrorCode);",
+    "console.log(replyState);",
+    "console.log(tokenType);",
+    "console.log(`[exec-slack] ${eventId} ${channel} ${ts}: ${count} posted`);",
+    "console.warn(`[exec-slack] auth.test failed: ${err.code}`, { installationId, status: err.status });",
+    "console.log(parts.blocks.length, tokenCount, secretLength);"
+  ])("BD05 does not flag in a Slack file: %s", (code) => {
+    expect(slackContentOffenses(DM_FILE, mailAt(DM_FILE, code))).toEqual([]);
+  });
+
+  it("BD05 a slack-* handler returning blocks or text is flagged; ids, counts and codes pass; non-handlers aren't checked for returns", () => {
+    const handler = (ret: string) => `export const h = { kind: "exec.slack-reply", lane: "interactive", timeoutMs: 1, run: async (ctx) => (${ret}) };`;
+    expect(slackContentOffenses(HANDLER, mailAt(HANDLER, handler("{ blocks }")))).toHaveLength(1);
+    expect(slackContentOffenses(HANDLER, mailAt(HANDLER, handler("{ outcome: \"answered\", text: msg.text }")))).toHaveLength(1);
+    expect(slackContentOffenses(HANDLER, mailAt(HANDLER, handler("{ outcome: \"answered\", eventId, replyState, posted: 2, lastErrorCode }")))).toEqual([]);
+    expect(slackContentOffenses(DM_FILE, mailAt(DM_FILE, handler("{ blocks }")))).toEqual([]);
+  });
+
+  it("BD05 the same probes in a non-Slack exec file keep P3's rule 9", () => {
+    const EMAIL = "src/lib/exec/handlers/email-triage.ts";
+    expect(contentOffenses(EMAIL, mailAt(EMAIL, "console.log(text);"))).toHaveLength(1);
+    for (const code of ['void notifyOps({ key: "k", title: "t", detail: token });', "console.log(triggerId);", "console.log(p.response_url);", "console.log(oauthCode);", "console.log(parts.blocks);"]) {
+      expect(contentOffenses(EMAIL, mailAt(EMAIL, code)), code).toEqual([]);
+      expect(slackContentOffenses(EMAIL, mailAt(EMAIL, code)), code).toEqual([]);
+    }
+    expect(vocabFor(EMAIL)).toBe(P3_VOCAB);
+    expect(vocabFor("src/lib/exec/jobs.ts")).toBe(P3_VOCAB);
+    expect(vocabFor(DM_FILE).words.has("token")).toBe(true);
+    expect(vocabFor(DM_FILE).words.has("code")).toBe(false);
+    expect(vocabFor(DM_FILE).words.has("state")).toBe(false);
+  });
+
+  // BD06
+  it.each([...P6_TABLES, ...P6_RPCS].map((name) => [name]))("BD06 flags %s named outside slack-install.ts", (name) => {
+    const code = `await db.from(${JSON.stringify(name)}).select("id");`;
+    expect(slackStoreOffenses(DM_FILE, p6At(DM_FILE, code))).toHaveLength(1);
+    expect(slackStoreOffenses(DD_FILE, p6At(DD_FILE, code))).toHaveLength(1);
+    expect(slackStoreOffenses(SLACK_INSTALL_FILE, p6At(SLACK_INSTALL_FILE, code))).toEqual([]);
+  });
+
+  it("BD06 flags RPC calls and SQL text; not index names, sealed-token contexts, audit targets, types or comments", () => {
+    const store = (file: string, code: string) => slackStoreOffenses(file, p6At(file, code));
+    expect(store(ROUTE, 'const { data } = await db.rpc("exec_slack_accept_event", args);')).toHaveLength(1);
+    expect(store(DM_FILE, "const sql = `delete from exec_slack_posts where ts = ${ts}`;")).toHaveLength(1);
+    expect(store(DM_FILE, 'if (error.message.includes("exec_slack_events_open_idx")) x();')).toEqual([]);
+    expect(store("src/lib/exec/slack-oauth.ts", "const sealed = sealSecret(token, `exec_slack_installations.bot_token:${principal.id}`);")).toEqual([]);
+    expect(store("src/lib/exec/slack-oauth.ts", 'await auditEvent(p, { actor: "owner", action: "slack.install", target: "exec_slack_installations:" + id });')).toEqual([]);
+    expect(store("src/lib/exec/slack-oauth.ts", 'const id = await auditStart(p, { actor: "owner", action: "slack.oauth.start", target: "exec_oauth_states", input: {} });')).toEqual([]);
+    expect(store(DM_FILE, 'type T = "exec_slack_posts";\n// exec_slack_events rows are kept 25 h')).toEqual([]);
+    expect(store(DM_FILE, 'const t = { table: "exec_oauth_states" };')).toHaveLength(1);
+  });
+
+  // BD09
+  it("BD09 rule 16 scans the Slack settings components' paths: a server import fails, the client-safe modules pass", () => {
+    const modules = moduleIndex(scan.facts.keys());
+    const file = "src/components/exec/settings/SlackConnectControls.tsx";
+    const chainOf = (code: string) => serverOnlyChain(file, p5At(file, code), scan.facts, modules);
+    expect(chainOf('"use client";\nimport { postInDm } from "@/lib/exec/sources/slack";')).toEqual([file, "src/lib/exec/sources/slack.ts"]);
+    expect(chainOf('"use client";\nimport { getSlackSettingsView } from "@/lib/exec/slack-settings";')).toEqual([file, "src/lib/exec/slack-settings.ts"]);
+    expect(chainOf('"use client";\nimport { SLACK_COPY } from "@/lib/exec/slack-copy";\nimport type { SlackSettingsView } from "@/lib/exec/slack-types";')).toBeNull();
+    expect(chainOf('"use client";\nimport type { SlackSettingsView } from "@/lib/exec/slack-settings";')).toBeNull();
+    expect(p4At(SLACK_CLIENT_FILE, 'import "server-only";\nimport { createHmac } from "node:crypto";\nimport { x } from "@/lib/exec/refs";').specifiers.map((s) => s.spec)).toEqual(["server-only", "node:crypto", "@/lib/exec/refs"]);
+    expect(slackClientImportOffenses(SLACK_CLIENT_FILE, p4At(SLACK_CLIENT_FILE, 'import "server-only";\nimport { x } from "@/lib/exec/refs";'))).toHaveLength(1);
   });
 });

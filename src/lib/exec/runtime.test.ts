@@ -34,6 +34,12 @@ vi.mock("@/lib/exec/chat-store", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/exec/chat-store")>();
   return { ...actual, purgeExpiredChatRows: vi.fn() };
 });
+// P6's Slack retention steps have their own suites (slack-install, purge); here they find nothing to delete. The two
+// Slack schedules' gate (slack-sweep.ts slackWorkDue) reads the active installation: none here unless a test says so.
+vi.mock("@/lib/exec/slack-install", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/exec/slack-install")>();
+  return { ...actual, deleteOldSlackEvents: vi.fn(), deleteExpiredOAuthStates: vi.fn(), getActiveInstallation: vi.fn(), listUnpurgedRevokedInstallations: vi.fn() };
+});
 
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { listEnabledPrincipals, loadPrincipalById, loadSettings, principalFromRows, settingsFromRow } from "@/lib/exec/principal";
@@ -43,6 +49,7 @@ import { purgeExpiredDrafts } from "@/lib/exec/drafts-store";
 import { purgeExpiredDdtext, purgeOrphanDdtextAttention } from "@/lib/exec/ddtext-store";
 import { purgeOldFeedback } from "@/lib/exec/attention-feedback";
 import { purgeExpiredChatRows } from "@/lib/exec/chat-store";
+import { deleteExpiredOAuthStates, deleteOldSlackEvents, getActiveInstallation, listUnpurgedRevokedInstallations } from "@/lib/exec/slack-install";
 import { DD_ATTENTION_JOB_KIND, ddAttentionJobHandler, ddAttentionScheduledWork } from "@/lib/exec/handlers/dd-attention";
 import { DDTEXT_JOB_KIND, ddtextJobHandler, ddtextScheduledWork } from "@/lib/exec/handlers/ddtext-triage";
 import { draftGenerateJobHandler } from "@/lib/exec/handlers/draft-generate";
@@ -51,6 +58,12 @@ import { emailAttentionJobHandler, emailAttentionScheduledWork } from "@/lib/exe
 import { emailReconcileJobHandler, emailReconcileScheduledWork } from "@/lib/exec/handlers/email-reconcile";
 import { emailTriageJobHandler } from "@/lib/exec/handlers/email-triage";
 import { PURGE_JOB_KIND, RETENTION_DAYS, purgeJobHandler, purgeScheduledWork, runPurge } from "@/lib/exec/handlers/purge";
+import { slackActionJobHandler } from "@/lib/exec/handlers/slack-action";
+import { slackCardJobHandler } from "@/lib/exec/handlers/slack-card";
+import { slackHomeJobHandler } from "@/lib/exec/handlers/slack-home";
+import { slackReplyJobHandler } from "@/lib/exec/handlers/slack-reply";
+import { slackDmPurgeJobHandler, slackDmPurgeScheduledWork, slackSweepJobHandler, slackSweepScheduledWork } from "@/lib/exec/handlers/slack-sweep";
+import { slackUninstallJobHandler } from "@/lib/exec/handlers/slack-uninstall";
 import { voiceRefreshJobHandler, voiceRefreshScheduledWork } from "@/lib/exec/handlers/voice-refresh";
 import {
   EMAIL_ATTENTION_JOB_KIND,
@@ -102,7 +115,10 @@ const NO_EMAIL_PURGED = {
   attentionFeedback: 0,
   chatConversations: 0,
   chatMessages: 0,
-  chatStaleFailed: 0
+  chatStaleFailed: 0,
+  slackEvents: 0,
+  oauthStates: 0,
+  slackRevocationsPurged: 0
 };
 
 function resetAll(): void {
@@ -124,6 +140,11 @@ beforeEach(() => {
   vi.mocked(purgeOrphanDdtextAttention).mockResolvedValue(0);
   vi.mocked(purgeOldFeedback).mockResolvedValue(0);
   vi.mocked(purgeExpiredChatRows).mockResolvedValue({ conversations: 0, messages: 0, staleFailed: 0 });
+  vi.mocked(deleteOldSlackEvents).mockResolvedValue(0);
+  vi.mocked(deleteExpiredOAuthStates).mockResolvedValue(0);
+  vi.mocked(getActiveInstallation).mockResolvedValue(null);
+  // The C18 backstop (fixer correctness-5) finds no revocation waiting for its purge here.
+  vi.mocked(listUnpurgedRevokedInstallations).mockResolvedValue([]);
   vi.spyOn(console, "log").mockImplementation(() => {});
   vi.spyOn(console, "warn").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
@@ -162,10 +183,40 @@ const ALL_SCHEDULES = [
   emailAttentionScheduledWork,
   draftReconcileScheduledWork,
   voiceRefreshScheduledWork,
-  ddtextScheduledWork
+  ddtextScheduledWork,
+  slackSweepScheduledWork,
+  slackDmPurgeScheduledWork
 ];
 
 describe("ensureExecRuntime", () => {
+  // P6 (contract §3.11.8, C35): the seven Slack kinds, registered unconditionally; both schedules gated on an active installation.
+  it("registers the seven P6 Slack kinds and their two gated schedules", async () => {
+    ensureExecRuntime();
+    for (const handler of [slackReplyJobHandler, slackActionJobHandler, slackCardJobHandler, slackHomeJobHandler, slackUninstallJobHandler, slackSweepJobHandler, slackDmPurgeJobHandler]) {
+      expect(getJobHandler(handler.kind)).toBe(handler);
+    }
+    expect([slackReplyJobHandler, slackActionJobHandler, slackCardJobHandler, slackHomeJobHandler, slackUninstallJobHandler, slackSweepJobHandler, slackDmPurgeJobHandler].map((h) => [h.kind, h.lane, h.timeoutMs])).toEqual([
+      ["exec.slack-reply", "interactive", 300_000],
+      ["exec.slack-action", "interactive", 420_000],
+      ["exec.slack-card", "interactive", 30_000],
+      ["exec.slack-home", "interactive", 30_000],
+      ["exec.slack-uninstall", "bulk", 60_000],
+      ["exec.slack-sweep", "bulk", 60_000],
+      ["exec.slack-dm-purge", "bulk", 120_000]
+    ]);
+    expect(getScheduledWork("exec.slack-sweep")).toBe(slackSweepScheduledWork);
+    expect(getScheduledWork("exec.slack-dm-purge")).toBe(slackDmPurgeScheduledWork);
+    expect(slackSweepScheduledWork).toMatchObject({ lane: "bulk", cadence: { kind: "interval", minutes: 5 }, maxAttempts: 1 });
+    expect(slackDmPurgeScheduledWork).toMatchObject({ lane: "bulk", cadence: { kind: "daily" }, maxAttempts: 2 });
+    const settings = settingsFromRow(null, "ep_1");
+    expect(slackDmPurgeScheduledWork.cadence.kind === "daily" && slackDmPurgeScheduledWork.cadence.at(settings)).toBe("04:10");
+    expect(slackSweepScheduledWork.enabled).toBeUndefined();
+    // The gate: no active installation → nothing enqueued; an active one → due.
+    await expect(slackSweepScheduledWork.when?.(principal, settings, NOW)).resolves.toBe(false);
+    vi.mocked(getActiveInstallation).mockResolvedValueOnce({ id: "esi_" + "1".repeat(32) } as never);
+    await expect(slackDmPurgeScheduledWork.when?.(principal, settings, NOW)).resolves.toBe(true);
+  });
+
   // P5a (contract §3.12.8, K17): the DD text triage, its own kind on the DD refresh's 10-minute buckets, ungated.
   it("registers the P5a DD text triage and its 10-minute, ungated schedule", () => {
     ensureExecRuntime();
@@ -562,7 +613,7 @@ describe("exec.purge", () => {
       "[exec-purge] deleted finishedJobs=7 accessLog=30 auditLog=2 aiUsage=11 resolvedAttention=4 " +
         "emailThreads=0 emailCommitments=0 emailSignals=0 emailAttentionRows=0 " +
         "draftsContentPurged=0 draftsDeleted=0 draftsClosedIdle=0 draftsChecksScheduled=0 " +
-        "ddtextItems=0 ddtextAttention=0 attentionFeedback=0 chatConversations=0 chatMessages=0 chatStaleFailed=0"
+        "ddtextItems=0 ddtextAttention=0 attentionFeedback=0 chatConversations=0 chatMessages=0 chatStaleFailed=0 slackEvents=0 oauthStates=0 slackRevocationsPurged=0"
     );
   });
 
@@ -594,7 +645,7 @@ describe("exec.purge", () => {
   it("runs every step even when one fails, then fails the run", async () => {
     db.deleteResult = (d) =>
       d.table === "exec_access_log" ? { count: null, error: { message: "statement timeout" } } : { count: 1, error: null };
-    await expect(runPurge()).rejects.toThrow("exec.purge: 1 of 11 steps failed: accessLog: exec_access_log purge failed: statement timeout");
+    await expect(runPurge()).rejects.toThrow("exec.purge: 1 of 14 steps failed: accessLog: exec_access_log purge failed: statement timeout");
     expect(db.deletes.map((d) => d.table)).toEqual([
       "exec_jobs",
       "exec_access_log",
@@ -609,7 +660,7 @@ describe("exec.purge", () => {
     db.deleteResult = (d) =>
       d.table === "exec_attention_items" ? { count: null, error: { message: "permission denied" } } : { count: 2, error: null };
     await expect(runPurge()).rejects.toThrow(
-      "exec.purge: 1 of 11 steps failed: resolvedAttention: exec_attention_items purge failed: permission denied"
+      "exec.purge: 1 of 14 steps failed: resolvedAttention: exec_attention_items purge failed: permission denied"
     );
     expect(db.deletes.map((d) => d.table)).toEqual([
       "exec_jobs",
@@ -622,7 +673,7 @@ describe("exec.purge", () => {
       "[exec-purge] deleted finishedJobs=2 accessLog=2 auditLog=2 aiUsage=2 resolvedAttention=0 " +
         "emailThreads=0 emailCommitments=0 emailSignals=0 emailAttentionRows=0 " +
         "draftsContentPurged=0 draftsDeleted=0 draftsClosedIdle=0 draftsChecksScheduled=0 " +
-        "ddtextItems=0 ddtextAttention=0 attentionFeedback=0 chatConversations=0 chatMessages=0 chatStaleFailed=0 failed=1"
+        "ddtextItems=0 ddtextAttention=0 attentionFeedback=0 chatConversations=0 chatMessages=0 chatStaleFailed=0 slackEvents=0 oauthStates=0 slackRevocationsPurged=0 failed=1"
     );
   });
 

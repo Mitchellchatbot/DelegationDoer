@@ -50,9 +50,9 @@ export function draftPrivateRefsText(kinds: readonly PrivateRefKind[]): string {
 // ---------------------------------------------------------------------------
 
 export const CHAT_EMPTY_HEADING = "Ask about the company";
-export const CHAT_EMPTY_SUB = "Answers come from DD and your mailbox, with sources. Slack isn't connected yet.";
+export const CHAT_EMPTY_SUB = "Answers come from DD and your mailbox, with sources. Slack messages aren't read yet.";
 /** ui-10 (a copy addition for the lead): the empty state when email intelligence is off or has no pinned mailbox. */
-export const CHAT_EMPTY_SUB_NO_EMAIL = "Answers come from DD, with sources. Email isn't turned on, and Slack isn't connected yet.";
+export const CHAT_EMPTY_SUB_NO_EMAIL = "Answers come from DD, with sources. Email isn't turned on, and Slack messages aren't read yet.";
 /** Starters for the rail and the page. */
 export const CHAT_STARTERS: readonly string[] = Object.freeze([
   "Give me an update on the entire team's progress",

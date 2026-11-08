@@ -63,7 +63,16 @@ export interface AccessLogEntry {
   userAgent: string | null;
   route: string;
   surface: ExecSurface;
+  /** P6 (§3.8): surface "slack" only (the exec_access_log_slack_surface_check CHECK). */
+  slackUserId?: string | null;
+  slackEventId?: string | null;
 }
+
+/** P6 (contract §3.8, C3): requireExecPrincipal's result plus the verified auth user id and session id (the OAuth binding). */
+export type ExecSessionResult =
+  | { ok: true; principal: ExecPrincipal; authUserId: string; sessionId: string | null }
+  | { ok: false; response: NextResponse };
+
 
 // Column caps for exec_access_log. Header values come from the client, so
 // none of them may grow a row without bound.
@@ -71,8 +80,12 @@ const MAX_USER_AGENT = 400;
 const MAX_IP = 64;
 const MAX_ID = 128;
 const MAX_ROUTE = 200;
+/** exec_access_log.slack_user_id / slack_event_id (P6 §3.8): Slack ids are far shorter; the CHECKs hold the shapes. */
+const MAX_SLACK_ID = 40;
 
-function deny(status: 401 | 404 | 503, error: string): ExecAccessResult {
+type ExecDenied = { ok: false; response: NextResponse };
+
+function deny(status: 401 | 404 | 503, error: string): ExecDenied {
   return { ok: false, response: NextResponse.json({ error }, { status }) };
 }
 
@@ -109,8 +122,23 @@ function clip(value: string | null | undefined, n: number): string | null {
 /**
  * Who the request is from, as an ExecPrincipal, or the response to send instead.
  * `route` names the endpoint in the access log, e.g. "GET /api/exec/overview".
+ * The gates are requireExecSession's; this keeps the result shape every exec
+ * route was written against.
  */
 export async function requireExecPrincipal(req: Request, route: string, opts: ExecGateOptions = {}): Promise<ExecAccessResult> {
+  const session = await requireExecSession(req, route, opts);
+  return session.ok ? { ok: true, principal: session.principal } : session;
+}
+
+/**
+ * P6 (contract §3.8, C3): requireExecPrincipal's gates 1–8 exactly, also
+ * returning the auth user id GoTrue verified and the session id the access log
+ * records (with requireStrongSignIn, the strong token's own session_id). The
+ * Slack OAuth start binds its state row to both, and the callback refuses a
+ * state issued to another sign-in (C1). Like requireExecPrincipal, it is a
+ * principal path (boundary PRINCIPAL_EXPORTS, B-P6-7).
+ */
+export async function requireExecSession(req: Request, route: string, opts: ExecGateOptions = {}): Promise<ExecSessionResult> {
   // 1. Feature flag. Off looks exactly like a route that doesn't exist.
   if (!isExecEnabled()) return notFound();
 
@@ -210,7 +238,7 @@ export async function requireExecPrincipal(req: Request, route: string, opts: Ex
     surface: "web"
   });
 
-  return { ok: true, principal };
+  return { ok: true, principal, authUserId, sessionId };
 }
 
 // A server-component page has no Request, so the page gate builds one from
@@ -422,20 +450,35 @@ async function readSessionId(
   }
 }
 
-/** Insert one exec_access_log row. Never throws; a failed write is logged and the request goes on. */
+/**
+ * Insert one exec_access_log row. Never throws; a failed write is logged and the request goes on.
+ *
+ * P6 (§3.8, K9): a surface "slack" row whose entry carries the Slack ids
+ * (slackUserId / slackEventId, either one set, null included) also writes
+ * slack_user_id and slack_event_id, each clipped to 40. No other row names
+ * those columns, so web rows (and P2a's Slack-surface rows without the ids)
+ * keep writing exactly as before, also before the P6 migration adds them.
+ * The Slack DM job passes null for the auth user, session, IP and user agent:
+ * the request came from Slack's servers, not from his browser (CODE §10).
+ */
 export async function logAccess(entry: AccessLogEntry): Promise<void> {
+  const row: Record<string, unknown> = {
+    principal_id: entry.principalId,
+    auth_user_id: clip(entry.authUserId, MAX_ID),
+    session_id: clip(entry.sessionId, MAX_ID),
+    ip: clip(entry.ip, MAX_IP),
+    user_agent: clip(entry.userAgent, MAX_USER_AGENT),
+    route: clip(entry.route, MAX_ROUTE) ?? "",
+    surface: entry.surface
+  };
+  if (entry.surface === "slack" && (entry.slackUserId !== undefined || entry.slackEventId !== undefined)) {
+    row.slack_user_id = clip(entry.slackUserId ?? null, MAX_SLACK_ID);
+    row.slack_event_id = clip(entry.slackEventId ?? null, MAX_SLACK_ID);
+  }
   try {
     const { error } = await getSupabaseAdmin()
       .from("exec_access_log")
-      .insert({
-        principal_id: entry.principalId,
-        auth_user_id: clip(entry.authUserId, MAX_ID),
-        session_id: clip(entry.sessionId, MAX_ID),
-        ip: clip(entry.ip, MAX_IP),
-        user_agent: clip(entry.userAgent, MAX_USER_AGENT),
-        route: clip(entry.route, MAX_ROUTE) ?? "",
-        surface: entry.surface
-      });
+      .insert(row);
     if (error) console.error(`[exec-access] access log write failed (${entry.route}): ${error.message}`);
   } catch (err) {
     console.error(`[exec-access] access log write failed (${entry.route}): ${errMessage(err)}`);

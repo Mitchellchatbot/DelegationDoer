@@ -83,7 +83,7 @@ const PAGES = [
   { name: "team", mod: teamPage, file: "team/page.tsx", gate: "GET /executive/team", run: () => teamPage.default(), service: getTeamView },
   { name: "projects", mod: projectsPage, file: "projects/page.tsx", gate: "GET /executive/projects", run: () => projectsPage.default({ searchParams: {} }), service: getProjectsListView },
   { name: "project", mod: projectPage, file: "projects/[id]/page.tsx", gate: "GET /executive/projects/:id", run: () => projectPage.default({ params: { id: "p_acme" } }), service: getProjectDetail },
-  { name: "settings", mod: settingsPage, file: "settings/page.tsx", gate: "GET /executive/settings", run: () => settingsPage.default(), service: getSettingsView }
+  { name: "settings", mod: settingsPage, file: "settings/page.tsx", gate: "GET /executive/settings", run: () => settingsPage.default({ searchParams: {} }), service: getSettingsView }
 ] as const;
 
 describe("P5a pages: the gate first (test 76)", () => {

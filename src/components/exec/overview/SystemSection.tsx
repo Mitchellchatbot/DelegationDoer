@@ -2,6 +2,7 @@ import { ServerCog } from "lucide-react";
 import { formatCount, formatInZone } from "@/lib/exec/format";
 import type { MailSummary } from "@/lib/exec/email-view";
 import type { JobKindHealth, OverviewDraftsSystem, OverviewSection, OverviewSystem, OverviewTokenVerdict } from "@/lib/exec/overview";
+import type { SlackSystemSummary } from "@/lib/exec/slack-types";
 import { reasonWords, sendTokenReasonWords, voiceErrorWords } from "../drafts/copy";
 import { cn } from "@/lib/utils";
 import { SectionCard } from "../SectionCard";
@@ -141,6 +142,39 @@ export function DraftsRows({ drafts, now, tz }: { drafts: OverviewDraftsSystem |
   );
 }
 
+/**
+ * P6 (contract §3.15.3): the Slack row's words. connected → "Connected · last message <relative time | none yet>";
+ * error → "Needs attention: Slack rejected a request (<code>)"; revoked → "Disconnected <date>"; not_connected →
+ * "Not connected"; null (the read failed) → "couldn't load", like the drafts rows.
+ */
+export function slackSystemLine(slack: SlackSystemSummary | null, now: string, tz: string): { value: string; tone: Tone } {
+  if (slack === null) return { value: "couldn't load", tone: "amber" };
+  switch (slack.state) {
+    case "connected":
+      return { value: `Connected · last message ${slack.lastDmAt ? ago(slack.lastDmAt, now) : "none yet"}`, tone: "ok" };
+    case "error":
+      return { value: `Needs attention: Slack rejected a request (${slack.lastErrorCode ?? "unknown"})`, tone: "rose" };
+    case "revoked":
+      return { value: `Disconnected ${formatInZone(slack.revokedAt, tz, "date", now)}`, tone: "muted" };
+    default:
+      return { value: "Not connected", tone: "muted" };
+  }
+}
+
+/** P6: the System card's one Slack row; nothing at all before the P6 schema exists (undefined). */
+export function SlackRow({ slack, now, tz }: { slack: SlackSystemSummary | null | undefined; now: string; tz: string }) {
+  if (slack === undefined) return null;
+  const line = slackSystemLine(slack, now, tz);
+  return (
+    <ul data-slack-system className="border-t border-slate-100">
+      <li data-slack-row={slack === null ? "unavailable" : slack.state} className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 px-4 py-2 text-[12px]">
+        <span className="font-medium text-ink">Slack</span>
+        <span className={cn("min-w-0 break-words text-right", TONE_CLASS[line.tone])}>{line.value}</span>
+      </li>
+    </ul>
+  );
+}
+
 /** The mail sync line (P3, when email is on): what reconcile and the live socket last reported. */
 function MailLine({ mail, now }: { mail: OverviewSection<MailSummary>; now: string }) {
   if (!mail.ok) {
@@ -232,6 +266,7 @@ export function SystemSection({
       </dl>
       {mail !== null && <MailLine mail={mail} now={now} />}
       {system.data.drafts !== undefined && <DraftsRows drafts={system.data.drafts} now={now} tz={tz} />}
+      <SlackRow slack={system.data.slack} now={now} tz={tz} />
     </SectionCard>
   );
 }

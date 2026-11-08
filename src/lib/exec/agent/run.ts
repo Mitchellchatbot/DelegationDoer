@@ -1,7 +1,7 @@
 import "server-only";
 
 import { chatSpentTodayUsd, effectiveChatCapUsd } from "@/lib/exec/agent/budget";
-import { CHAT_PROMPT_VERSION, CHAT_SYSTEM_PROMPT_V2, principalBlock } from "@/lib/exec/agent/prompt";
+import { CHAT_PROMPT_VERSION, CHAT_SYSTEM_PROMPT_V2, principalBlock, SLACK_SURFACE_PROMPT } from "@/lib/exec/agent/prompt";
 import { RefRegistry, threadOfTarget } from "@/lib/exec/agent/refs";
 import { ConsultedBudget } from "@/lib/exec/agent/serialize";
 import { linkSignals, semaphore, withOwnSignal, type LinkedSignal } from "@/lib/exec/agent/signal";
@@ -46,6 +46,8 @@ import {
   type ThinkingBindingBehavior
 } from "@/lib/exec/llm/request";
 import { isReplayable, messageText, toolUses, type ExecMessage } from "@/lib/exec/llm/stream";
+import { clipVerbatimRuns } from "@/lib/exec/slack-excerpt";
+import { SLACK_LIMITS } from "@/lib/exec/slack-types";
 import { BudgetExceededError, type ExecPrincipal, type ExecSettings } from "@/lib/exec/types";
 
 // The chat loop (P5b contract §3.14, B4, C1-C3, C11-C17, C39-C41, C55; Area
@@ -117,6 +119,9 @@ export interface AgentTurnResult {
   consultedClients: string[]; consultedDdText: boolean;   // C24
   refSeq: number; usage: TurnUsage; model: string;
   streamedText: boolean;
+  /** P6 X1 (additive): on a Slack turn, how many verbatim runs of tool output the answer, the recommendations and staged tasks had clipped.
+   *  Present only when > 0; a count for the turn's audit row, never persisted with the message (not in usage). */
+  slackVerbatimClipped?: number;
 }
 
 type ToolState = "running" | "done" | "error" | "skipped";
@@ -263,8 +268,51 @@ export async function runAgentTurn(principal: ExecPrincipal, input: AgentTurnInp
   let turnSignal: LinkedSignal | null = null;
   let streamed = false;
   let model: string = OPUS_MODEL;
+  // P6 X1: the text of every tool-result block the turn sent to the model (the corpus of the Slack clip).
+  const toolResultTexts: string[] = [];
+  // P6 X1: runs clipped from task proposals' text before propose_task staged it (counted with the answer's).
+  let stagedVerbatimClipped = 0;
+  const slackClipOpts = { maxRun: SLACK_LIMITS.verbatimRunChars, keep: SLACK_LIMITS.verbatimKeepChars };
 
-  const finish = (e: Ending): AgentTurnResult => {
+  /**
+   * P6 X1 (K12) for staged tasks: a proposal's title and description are model output that the Slack card shows in full
+   * and that the stored row, its content hash and the confirm all carry. On a Slack turn they get the answer's clip
+   * against every tool result the turn has delivered so far (a model can only copy what an earlier round returned)
+   * before propose_task stages them, so the DM, the stored row and what he confirms stay one text. The model's own
+   * tool_use block (its history) is unchanged.
+   */
+  const slackStagedUse = (use: ExecToolUseBlock): ExecToolUseBlock => {
+    if (input.surface !== "slack" || use?.name !== "propose_task" || toolResultTexts.length === 0) return use;
+    const args = use.input;
+    if (typeof args !== "object" || args === null || Array.isArray(args)) return use;
+    const next: Record<string, unknown> = { ...args };
+    let clipped = 0;
+    for (const field of ["title", "description"] as const) {
+      const value = args[field];
+      if (typeof value !== "string") continue;
+      const r = clipVerbatimRuns(value, toolResultTexts, slackClipOpts);
+      if (r.clipped > 0) {
+        next[field] = r.text;
+        clipped += r.clipped;
+      }
+    }
+    if (clipped === 0) return use;
+    stagedVerbatimClipped += clipped;
+    return { ...use, input: next };
+  };
+
+  const finish = (ending: Ending): AgentTurnResult => {
+    // P6 X1 (contract §3.15.1, C27, K12): on Slack, no verbatim run of more than 300 characters of any tool result
+    // leaves in the answer or the recommendations; the clipped text is what is stored, screened and shown.
+    let e = ending;
+    let slackVerbatimClipped = stagedVerbatimClipped;
+    if (input.surface === "slack" && toolResultTexts.length > 0) {
+      const answer = clipVerbatimRuns(e.answer, toolResultTexts, slackClipOpts);
+      const recommendations = clipVerbatimRuns(e.recommendations, toolResultTexts, slackClipOpts);
+      const outputClipped = answer.clipped + recommendations.clipped;
+      slackVerbatimClipped += outputClipped;
+      if (outputClipped > 0) e = { ...e, answer: answer.text, recommendations: recommendations.text };
+    }
     let citedThreads: string[] = [];
     let toolThreads: string[] = [];
     try {
@@ -291,7 +339,8 @@ export async function runAgentTurn(principal: ExecPrincipal, input: AgentTurnInp
       refSeq: registry?.refSeq ?? (Number.isSafeInteger(input.refSeq) ? input.refSeq : 0),
       usage: { ...usage, costUsd: Number(usage.costUsd.toFixed(6)) },
       model: model.slice(0, MODEL_CHARS),
-      streamedText: streamed
+      streamedText: streamed,
+      ...(slackVerbatimClipped > 0 ? { slackVerbatimClipped } : {})
     };
     // C12: a refused or failed answer takes back what was streamed (a refusal always sends it).
     if (e.status === "refused" || (e.status === "failed" && streamed)) sink.retract();
@@ -343,7 +392,9 @@ export async function runAgentTurn(principal: ExecPrincipal, input: AgentTurnInp
     const labelOf = (name: string) => labels.get(name) ?? "The tool";
     const system = [
       { type: "text" as const, text: CHAT_SYSTEM_PROMPT_V2 },
-      { type: "text" as const, text: principalBlock(principal) }
+      { type: "text" as const, text: principalBlock(principal) },
+      // P6 X2: the Slack surface block, constant per surface (the cached prefix holds).
+      ...(input.surface === "slack" ? [{ type: "text" as const, text: SLACK_SURFACE_PROMPT }] : [])
     ];
     const messages: ExecMessageParam[] = [...input.replay, { role: "user", content: [{ type: "text", text: input.userTurnText }] }];
     const shared = {
@@ -379,7 +430,7 @@ export async function runAgentTurn(principal: ExecPrincipal, input: AgentTurnInp
         executed.map((use, i) =>
           pool.run(async () => {
             emit(round, i, use, "running");
-            const out = await deps.executeToolCall(use, ctxFor(round));
+            const out = await deps.executeToolCall(slackStagedUse(use), ctxFor(round));
             blocks[i] = ensureContent(out?.block, use, labelOf(use.name));
             recs[i] = out?.record ?? skippedRecord(round, use, "internal");
             emit(round, i, use, blocks[i].is_error ? "error" : "done");
@@ -500,6 +551,7 @@ export async function runAgentTurn(principal: ExecPrincipal, input: AgentTurnInp
       }
       // Every tool_result, in tool_use order, and nothing else (parallel results go back in one message).
       messages.push({ role: "user", content: results });
+      if (input.surface === "slack") for (const block of results) toolResultTexts.push(...toolResultTextsOf(block));
       // An abort during the tools ends the turn: no further model call.
       if (turn.signal.aborted) return finish(abortEnding(roundText));
     }
@@ -518,6 +570,16 @@ export async function runAgentTurn(principal: ExecPrincipal, input: AgentTurnInp
   } finally {
     turnSignal?.dispose();
   }
+}
+
+/** P6 X1: a tool_result block's text (string content, or each text block; images carry none). */
+function toolResultTextsOf(block: ExecToolResultBlockParam): string[] {
+  const content = block?.content;
+  if (typeof content === "string") return content.length > 0 ? [content] : [];
+  if (!Array.isArray(content)) return [];
+  const out: string[] = [];
+  for (const c of content) if (c && c.type === "text" && typeof (c as { text?: unknown }).text === "string" && (c as { text: string }).text.length > 0) out.push((c as { text: string }).text);
+  return out;
 }
 
 function safeThreadOf(context: ResolvedContext): string | null {

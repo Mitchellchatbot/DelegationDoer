@@ -558,7 +558,7 @@ function noModelResult(status: "failed" | "aborted", reason: "internal" | "clien
 export async function runPreparedTurn(principal: ExecPrincipal, settings: ExecSettings,
   prepared: Extract<PreparedTurn, { kind: "started" }>, req: ChatTurnRequest,
   opts: { signal: AbortSignal; sink?: AgentEventSink; now: Date; binding?: ThinkingBindingBehavior }):
-  Promise<{ done: ChatDonePayload; audit: { status: string; statusReason: string | null; modelCalls: number; toolCalls: number; costUsd: number } }> {
+  Promise<{ done: ChatDonePayload; audit: { status: string; statusReason: string | null; modelCalls: number; toolCalls: number; costUsd: number; slackVerbatimClipped?: number } }> {
   const { begin } = prepared;
   const now = opts.now;
   const tz = principal.timezone;
@@ -702,7 +702,9 @@ export async function runPreparedTurn(principal: ExecPrincipal, settings: ExecSe
       statusReason: agent.statusReason,
       modelCalls: agent.usage.modelCalls,
       toolCalls: agent.usage.toolCalls,
-      costUsd: agent.usage.costUsd
+      costUsd: agent.usage.costUsd,
+      // P6 X1 (AM3, additive): the Slack clip's count for the turn's audit row; present only when > 0.
+      ...(typeof agent.slackVerbatimClipped === "number" && agent.slackVerbatimClipped > 0 ? { slackVerbatimClipped: agent.slackVerbatimClipped } : {})
     }
   };
 }

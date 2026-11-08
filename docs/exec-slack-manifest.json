@@ -1,0 +1,26 @@
+{
+  "_metadata": { "major_version": 2, "minor_version": 1 },
+  "display_information": {
+    "name": "ScaledAI Executive Assistant",
+    "description": "Private assistant for the CEO. Answers his questions in a direct message from DD and his email. Never posts as him.",
+    "long_description": "The ScaledAI Executive Assistant is a private, owner-only assistant connected to DelegationDoer (DD). Only the CEO can use it: it answers his questions in its direct message with him, using DD records and his email, and shows a short summary on its Home tab. It reads no channels and no conversations between other people, never posts in channels, and never posts as anyone. Other people who open it see that it is private. Conversations are kept in DD for a limited time and the bot deletes its own old messages. Support: the ScaledAI operations team."
+  },
+  "features": {
+    "app_home": { "home_tab_enabled": true, "messages_tab_enabled": true, "messages_tab_read_only_enabled": false },
+    "bot_user": { "display_name": "exec-assistant", "always_online": false }
+  },
+  "oauth_config": {
+    "redirect_urls": ["https://operations.scaledai.org/api/integrations/exec-slack/callback"],
+    "scopes": { "bot": ["chat:write", "im:history", "im:read", "im:write", "users:read", "users:read.email"] }
+  },
+  "settings": {
+    "event_subscriptions": {
+      "request_url": "https://operations.scaledai.org/api/integrations/exec-slack/events",
+      "bot_events": ["message.im", "app_home_opened", "app_uninstalled", "tokens_revoked"]
+    },
+    "interactivity": { "is_enabled": true, "request_url": "https://operations.scaledai.org/api/integrations/exec-slack/interactions" },
+    "org_deploy_enabled": false,
+    "socket_mode_enabled": false,
+    "token_rotation_enabled": false
+  }
+}

@@ -3,6 +3,7 @@ import { SettingsPageView } from "@/components/exec/settings/SettingsPageView";
 import { parseSlackResult, parseSlackWho } from "@/components/exec/settings/SlackSection";
 import { requireExecPrincipalForPage } from "@/lib/exec/access";
 import { getSettingsView } from "@/lib/exec/settings";
+import { getSlackPickerTags } from "@/lib/exec/slack-page";
 import { isCanonicalRequestHost } from "@/lib/exec/slack-oauth";
 
 // /executive/settings: the assistant's settings, today's AI spend, the
@@ -17,6 +18,10 @@ import { isCanonicalRequestHost } from "@/lib/exec/slack-oauth";
 // isn't a Slack user id is ignored) and shown only as fixed copy. Whether this
 // request came to the canonical host (C45) decides between the Connect link
 // and the "open DD at operations.scaledai.org" line.
+//
+// P7b (contract §3.12.4, AM-P7b-6): the Slack picker's client and project tags
+// are read beside the view (getSlackPickerTags never throws: null shows the
+// picker without tags).
 //
 // No metadata export: a page title would name the feature in the HTML head.
 export const dynamic = "force-dynamic";
@@ -36,13 +41,14 @@ function onCanonicalHost(): boolean {
 // which next build refuses); callers always pass the props object, as Next does.
 export default async function ExecutiveSettingsPage({ searchParams }: { searchParams?: Record<string, string | string[] | undefined> }) {
   const principal = await requireExecPrincipalForPage("GET /executive/settings");
-  const view = await getSettingsView(principal);
+  const [view, slackTags] = await Promise.all([getSettingsView(principal), getSlackPickerTags(principal)]);
   return (
     <SettingsPageView
       view={view}
       slackResult={parseSlackResult(searchParams?.slack)}
       who={parseSlackWho(searchParams?.who)}
       onCanonicalHost={onCanonicalHost()}
+      slackTags={slackTags}
     />
   );
 }

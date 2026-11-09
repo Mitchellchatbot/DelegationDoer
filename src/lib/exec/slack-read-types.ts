@@ -58,8 +58,9 @@ export const SLACK_READ_LIMITS = Object.freeze({
   outageMissed: 20, outageAgeMs: 30 * 60_000, pickerRows: 1_000
 });
 
-/** C17: the features the Slack sub-cap sums. P7b appends its digest feature. */
-export const SLACK_CAP_FEATURES: readonly ExecLlmFeature[] = Object.freeze(["slack_triage"] as ExecLlmFeature[]);
+/** C17: the features the Slack sub-cap sums. P7b appends its digest feature (P7b C14, stage-0 seed P7a-1): triage and digests
+ *  share one Slack total under one effective cap. */
+export const SLACK_CAP_FEATURES: readonly ExecLlmFeature[] = Object.freeze(["slack_triage", "digest"] as ExecLlmFeature[]);
 /** C19: the attention kinds of source "slack" one sync owns. P7b appends its kinds (the sync scope is this array). */
 export const SLACK_ATTENTION_KINDS = ["slack_decision", "slack_request", "slack_commitment", "slack_unassessed"] as const;
 export type SlackAttentionKind = (typeof SLACK_ATTENTION_KINDS)[number];

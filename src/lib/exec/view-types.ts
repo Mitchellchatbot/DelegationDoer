@@ -12,6 +12,7 @@ import type { ProjectHealth } from "@/lib/exec/analysis/projects";
 import type { FeedbackReason } from "@/lib/exec/attention-types";
 import type { VoiceProfileRow } from "@/lib/exec/drafts-store";
 import type { SettingsSchemaKey } from "@/lib/exec/settings-fields";
+import type { ProjectSlackSection } from "@/lib/exec/slack-projects";
 import type { SlackSettingsView } from "@/lib/exec/slack-types";
 import type { ProjectStageStatus, TaskStatus, UserRole } from "@/lib/exec/sources/dd-types";
 import type { ExecSettings, ExecSurface, SourceRef } from "@/lib/exec/types";
@@ -179,6 +180,8 @@ export interface ProjectDetailView {
   updates: Section<ProjectUpdateEvent[]>;
   meetingRisks: Section<{ state: "no_client" | "ok"; rows: MeetingRiskRow[] }>;
   conversations: Section<{ state: "off" | "not_installed" | "no_client" | "screen_unavailable" | "ok"; rows: ConversationRow[]; hiddenRestricted: number }>;
+  /** P7b (§3.17.4, C19; stage-0 seed, OPTIONAL until Area F fills getProjectDetail and the fixtures): the Slack section. */
+  slack?: Section<ProjectSlackSection>;
 }
 
 export interface RecentAccessRow { at: string; route: string; surface: ExecSurface; ip: string | null; device: string | null; sessionTag: string | null }

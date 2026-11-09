@@ -308,7 +308,8 @@ describe("rateLimit (S2, C11, test 2)", () => {
   it("registers the four buckets (and P5b's chat and proposal, P6's slack_connect and slack_disconnect, P7a's slack_reading and slack_channels); auditNthNewestAt needs at least one action", () => {
     expect(Object.keys(RATE_BUCKETS).sort()).toEqual([
       "assess", "attention_action", "attention_feedback", "chat", "proposal", "settings_update", "slack_channels", "slack_connect",
-      "slack_disconnect", "slack_reading"
+      // P7b stage 0 (§0.2 step 5): the tag route's and the digest route's buckets.
+      "slack_digest_build", "slack_disconnect", "slack_links", "slack_reading"
     ]);
     expect(() => auditNthNewestAt([])).toThrow();
   });

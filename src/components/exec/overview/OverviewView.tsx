@@ -39,7 +39,7 @@ export function OverviewView({
 }) {
   const now = overview.generatedAt;
   const tz = principalTz;
-  const { tiles, attention, approvals, deadlines, projects, system, email } = overview.sections;
+  const { tiles, attention, approvals, deadlines, projects, system, email, slack } = overview.sections;
   // Email (P3): its card, the decision asks next to the approvals and the
   // mail line on the System card appear only while email is on; off says so
   // in the email card alone.
@@ -53,7 +53,7 @@ export function OverviewView({
     <div className="space-y-5">
       <ExecHeader updatedAt={now} tz={tz} trailing={<ExecTabs active="overview" tabs={EXEC_TABS} />} />
       <TodayGlance tiles={tiles} tz={tz} now={now} />
-      <OverviewTileRow tiles={tiles} tz={tz} now={now} />
+      <OverviewTileRow tiles={tiles} tz={tz} now={now} slack={slack ?? null} />
       <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
         <AttentionSection attention={attention} tz={tz} now={now} askAiEnabled={chat !== null} />
         <div className="flex min-w-0 flex-col gap-5">

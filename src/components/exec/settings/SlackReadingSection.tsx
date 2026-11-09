@@ -1,7 +1,9 @@
 import type { ReactNode } from "react";
 import { BookOpen, ListChecks, TriangleAlert } from "lucide-react";
 import { MISSING, formatCount, formatInZone } from "@/lib/exec/format";
+import { SLACK_INTEL_COPY } from "@/lib/exec/slack-intel-copy";
 import { SLACK_READ_COPY } from "@/lib/exec/slack-read-copy";
+import type { SlackPickerTags } from "@/lib/exec/slack-page";
 import type { SlackReadingView } from "@/lib/exec/slack-types";
 import { cn } from "@/lib/utils";
 import { SlackChannelPicker } from "./SlackChannelPicker";
@@ -31,6 +33,12 @@ import { SlackReadingControls } from "./SlackReadingControls";
 //
 // Pure: no server-only import, so the page, tests and the static screenshot
 // harness render it the same way.
+//
+// P7b fixer (ui-3): with P7b the same switch also sends every watched
+// conversation's messages from people to Anthropic for a daily digest and lets
+// chat read conversations live, so SLACK_INTEL_COPY.readingIntelNotice ({days})
+// is shown wherever the reading notice or the switch is (not_consented, paused,
+// on) and inside the enable confirm.
 
 const fill = (template: string, values: Record<string, string>): string =>
   Object.entries(values).reduce((s, [k, v]) => s.split(`{${k}}`).join(v), template);
@@ -99,7 +107,8 @@ export function SlackReadingSection({
   onCanonicalHost = true,
   initialDialog = null,
   initialChecked = false,
-  initialFinanceConfirm = null
+  initialFinanceConfirm = null,
+  tags = null
 }: {
   view: SlackReadingView;
   /** His zone and the page's one "now", for the dates. */
@@ -111,6 +120,8 @@ export function SlackReadingSection({
   initialDialog?: "enable" | "stop" | null;
   initialChecked?: boolean;
   initialFinanceConfirm?: string | null;
+  /** P7b (§3.12.4, AM-P7b-6): the picker's per-row client and project tags (getSlackPickerTags); null shows none. */
+  tags?: SlackPickerTags | null;
 }) {
   const state = view.state;
   if (state === "bot_not_connected") return null;
@@ -127,6 +138,7 @@ export function SlackReadingSection({
           ))}
         </ul>
         <Note>{fill(SLACK_READ_COPY.readingNotice, { days: String(view.retentionDaysSlack) })}</Note>
+        <IntelNotice days={view.retentionDaysSlack} />
       </>
     );
   } else if (state === "discovering") {
@@ -140,18 +152,22 @@ export function SlackReadingSection({
     body = (
       <>
         <Note tone="body">{SLACK_READ_COPY.paused}</Note>
+        <IntelNotice days={view.retentionDaysSlack} />
         <ReadingChecklist />
       </>
     );
   } else if (state === "on") {
     body = (
-      <ul data-reading-status className="divide-y divide-slate-100 rounded-xl border border-slate-100 text-[12.5px]">
-        {readingStatusLines(view, tz, now).map((l) => (
-          <li key={l.key} data-reading-status-row={l.key} className="break-words px-3 py-1.5 text-slate-700">
-            {l.text}
-          </li>
-        ))}
-      </ul>
+      <>
+        <ul data-reading-status className="divide-y divide-slate-100 rounded-xl border border-slate-100 text-[12.5px]">
+          {readingStatusLines(view, tz, now).map((l) => (
+            <li key={l.key} data-reading-status-row={l.key} className="break-words px-3 py-1.5 text-slate-700">
+              {l.text}
+            </li>
+          ))}
+        </ul>
+        <IntelNotice days={view.retentionDaysSlack} />
+      </>
     );
   } else if (state === "revoked") {
     body = (
@@ -176,14 +192,33 @@ export function SlackReadingSection({
       </h3>
       {body}
       {state !== "not_installed" && (
-        <SlackReadingControls view={view} onCanonicalHost={onCanonicalHost} initialDialog={initialDialog} initialChecked={initialChecked} />
+        <SlackReadingControls
+          view={view}
+          onCanonicalHost={onCanonicalHost}
+          initialDialog={initialDialog}
+          initialChecked={initialChecked}
+          enableConfirmExtra={intelNoticeText(view.retentionDaysSlack)}
+        />
       )}
       {picker && (
         <div className="border-t border-slate-100 pt-3">
-          <SlackChannelPicker view={view} initialFinanceConfirm={initialFinanceConfirm} />
+          <SlackChannelPicker view={view} initialFinanceConfirm={initialFinanceConfirm} tags={tags} />
         </div>
       )}
     </div>
+  );
+}
+
+/** P7b fixer (ui-3): what P7b adds to the switch, with the Slack retention. */
+export function intelNoticeText(days: number): string {
+  return fill(SLACK_INTEL_COPY.readingIntelNotice, { days: String(days) });
+}
+
+function IntelNotice({ days }: { days: number }) {
+  return (
+    <p data-reading-intel-notice className="text-[12.5px] leading-relaxed text-muted">
+      {intelNoticeText(days)}
+    </p>
   );
 }
 

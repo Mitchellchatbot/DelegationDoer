@@ -1,4 +1,5 @@
 import type { EmailDocNode } from "@/lib/email-doc";
+import type { SlotStatus } from "@/lib/exec/slack-intel-types";
 import type { ErrorClass } from "@/lib/exec/types";
 
 // Shared types and constants for the Executive Assistant's drafts (P4).
@@ -111,6 +112,28 @@ export interface ExecDraftRow {
    * successor (T43 / T45), so the purge by id reaches drafts no card names. Null for every web draft.
    */
   chatMessageId: string | null;
+  /**
+   * P7b (§3.17.2 E2; stage-0 seed, OPTIONAL until Area E's loader maps the columns, bindings AM-P7b-11):
+   * exec_drafts.purpose / generated_version / client_update_facts. Absent or a missing column = "reply" / null / null.
+   */
+  purpose?: DraftPurpose;
+  generatedVersion?: number | null;
+  clientUpdateFacts?: ClientUpdateFactsRecord | null;
+}
+
+/** P7b: exec_drafts.purpose (N17, C10). */
+export type DraftPurpose = "reply" | "client_update";
+/** P7b (§3.8.3): stored on exec_drafts.client_update_facts: counts and slot statuses only, never text. Defined here (pure)
+ *  because it is a draft column; client-update-facts.ts re-exports it (bindings AM-P7b-12). */
+export interface ClientUpdateFactsRecord {
+  completed: { status: SlotStatus; count: number }; teamWork: { status: SlotStatus; count: number }; publicSlack: { status: SlotStatus; count: number };
+  lastUpdate: { teamEmailSentAt: string | null; workReportedAt: string | null } | null;
+}
+/** P4's pack fact (drafts-pack.ts re-exports it). P7b (§3.17.2 E2): class widens to "public" for the public_slack slot and a
+ *  fact may name its slot; P4's reply packs keep class "internal" and no slot (assertPackAllowed). */
+export interface PackFact {
+  id: string; clientId: string; class: "internal" | "public"; line: string;
+  slot?: "open" | "completed" | "team_work" | "public_slack";
 }
 
 export type RecipientBadge = "external" | "role" | "not_in_thread" | "added_in_outlook";
@@ -164,6 +187,10 @@ export interface DraftView {
   usesPrivateRefs: boolean;
   /** P5b (F5, C44): who wrote the current instruction. Kept on restricted rows, where `instruction` is null. */
   instructionBy: InstructionBy;
+  /** P7b (§3.17.2 E2, E5; stage-0 seed, OPTIONAL until Area E's view mapping lands): absent = "reply" / null. Counts and
+   *  statuses only (the panel's "Client update. Used: …" line); clientName is the facts client's DD name. */
+  purpose?: DraftPurpose;
+  clientUpdate?: (ClientUpdateFactsRecord & { clientName: string | null }) | null;
 }
 
 export type DraftAttention = "unknown" | "sent_mismatch" | "gone_unconfirmed" | "outlook_changed" | "generation_failed"

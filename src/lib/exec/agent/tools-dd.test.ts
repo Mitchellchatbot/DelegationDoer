@@ -239,7 +239,8 @@ describe("list_attention (tests 20, 122)", () => {
     const r = await runTool(makeCtx(), "list_attention", { status: "active", category: "any", band: "any", source: "slack", limit: 10 });
     expect(vi.mocked(listScreenedAttention)).not.toHaveBeenCalled();
     expect((r.json.items as { items: unknown[] }).items).toEqual([]);
-    expect(r.json.notes).toContain("Slack isn't connected yet.");
+    // P7b (fact (e)): the note says only what is true (reading isn't on), never "isn't connected yet".
+    expect(r.json.notes).toContain("Slack reading isn't on, so there are no Slack items. Say so; don't guess about Slack.");
   });
 
   it("(fixer ui-2) source slack once reading is set up → the Slack Needs Attention items through the screen, no 'isn't connected' note", async () => {
@@ -249,7 +250,7 @@ describe("list_attention (tests 20, 122)", () => {
       vi.mocked(listScreenedAttention).mockResolvedValue({ items: [], nextCursor: null, hiddenEmail: 0, emailScreen: "none" } as never);
       const r = await runTool(makeCtx(), "list_attention", { status: "active", category: "any", band: "any", source: "slack", limit: 10 });
       expect(vi.mocked(listScreenedAttention).mock.calls[0][1], state).toEqual({ source: "slack", limit: 10 });
-      expect(r.json.notes ?? [], state).not.toContain("Slack isn't connected yet.");
+      expect(r.json.notes ?? [], state).not.toContain("Slack reading isn't on, so there are no Slack items. Say so; don't guess about Slack.");
     }
   });
 

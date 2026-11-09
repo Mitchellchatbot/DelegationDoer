@@ -35,7 +35,8 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
  * token verdicts, §2.3), ddtext (P5a: the DD text triage's cursor and lease,
  * contract §2.5), slack (P7a: the reading jobs' leases, contract §3.20.1).
  */
-export type SyncSource = "mail" | "email" | "clone-ea" | "ddtext" | "slack";
+/** P7b (stage-0 seed): "slack-intel" keys purge-log { afterId }, optouts { fp, count }, correlate { lastFullAt } (§3.2). */
+export type SyncSource = "mail" | "email" | "clone-ea" | "ddtext" | "slack" | "slack-intel";
 
 export interface SyncStateOptions {
   signal?: AbortSignal;
@@ -75,7 +76,7 @@ function parseRev(text: string | null): number | null {
 }
 
 function checkRow(source: unknown, key: unknown): asserts source is SyncSource {
-  if (source !== "mail" && source !== "email" && source !== "clone-ea" && source !== "ddtext" && source !== "slack") {
+  if (source !== "mail" && source !== "email" && source !== "clone-ea" && source !== "ddtext" && source !== "slack" && source !== "slack-intel") {
     throw new NonRetryableError(`exec_sync_state: unknown source ${JSON.stringify(source)}`);
   }
   if (typeof key !== "string" || key.length === 0 || key.length > MAX_KEY_CHARS) {

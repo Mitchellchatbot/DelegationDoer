@@ -25,7 +25,7 @@ vi.mock("@/lib/exec/email-store", async (orig) => (await import("./__tests__/b-s
 vi.mock("@/lib/exec/sources/mail", async (orig) => (await import("./__tests__/b-stub")).stubOnly(await orig(), ["loadScreeningPolicy"]));
 
 import { chatSpentTodayUsd } from "@/lib/exec/agent/budget";
-import { CHAT_PROMPT_VERSION, CHAT_SYSTEM_PROMPT_V2, SLACK_SURFACE_PROMPT } from "@/lib/exec/agent/prompt";
+import { CHAT_PROMPT_VERSION, CHAT_SYSTEM_PROMPT_V2, CHAT_SYSTEM_PROMPT_V3, SLACK_SURFACE_PROMPT } from "@/lib/exec/agent/prompt";
 import { createTurnMemo, executeToolCall } from "@/lib/exec/agent/tools";
 import { prepareChatTurn, runPreparedTurn, type ChatTurnRequest, type PreparedTurn } from "@/lib/exec/agent/turn";
 import { getProposal } from "@/lib/exec/chat-store";
@@ -186,18 +186,19 @@ describe("X2: the Slack system block (PX2, PX3)", () => {
     expect(systems).toHaveLength(2);
     expect(systems[1]).toBe(systems[0]);
     const blocks = slack.model.requests[0].system as { type: string; text: string }[];
-    expect(blocks.map((b) => b.text)).toEqual([CHAT_SYSTEM_PROMPT_V2, expect.stringContaining("Mitchell"), SLACK_SURFACE_PROMPT]);
+    expect(blocks.map((b) => b.text)).toEqual([CHAT_SYSTEM_PROMPT_V3, expect.stringContaining("Mitchell"), SLACK_SURFACE_PROMPT]);   // P7b: prompt v3
 
     const web = await turn("web", "A short answer.");
     const webBlocks = web.model.requests[0].system as { type: string; text: string }[];
-    expect(webBlocks.map((b) => b.text)).toEqual([CHAT_SYSTEM_PROMPT_V2, expect.stringContaining("Mitchell")]);
+    expect(webBlocks.map((b) => b.text)).toEqual([CHAT_SYSTEM_PROMPT_V3, expect.stringContaining("Mitchell")]);
     expect(JSON.stringify(web.model.requests[1].system)).toBe(JSON.stringify(web.model.requests[0].system));
   });
 
   it("PX3: SLACK_SURFACE_PROMPT is pinned by its sha256 (and P5b's prompt version doesn't move, X4)", () => {
     expect(createHash("sha256").update(SLACK_SURFACE_PROMPT, "utf8").digest("hex")).toBe("9e0c10b94f8fca67fe666495f1452ddccfd6bba6b917cc8d403d1e15b9997375");
     expect(SLACK_SURFACE_PROMPT).toContain("Quote at most 300 characters from any one email; summarize instead.");
-    expect(CHAT_PROMPT_VERSION).toBe("exec-chat-v2");
+    // X4: P6 bumped no prompt version; P7b's prompt v3 (§3.16) did, and SLACK_SURFACE_PROMPT is unchanged by it.
+    expect(CHAT_PROMPT_VERSION).toBe("exec-chat-v3");
   });
 
   it("PX3b (fixer ui-4): in the Slack DM, P5b's 'Slack isn't connected' lines are read as 'can't read his Slack', never as 'this DM isn't connected'", () => {

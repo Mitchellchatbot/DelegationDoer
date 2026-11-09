@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { CircleCheck, MessagesSquare, TriangleAlert } from "lucide-react";
 import { MISSING, formatInZone } from "@/lib/exec/format";
 import { SLACK_COPY } from "@/lib/exec/slack-copy";
+import type { SlackPickerTags } from "@/lib/exec/slack-page";
 import { SLACK_RE, type SlackConnectResult, type SlackSettingsView } from "@/lib/exec/slack-types";
 import { cn } from "@/lib/utils";
 import { SectionCard } from "../SectionCard";
@@ -147,7 +148,8 @@ export function SlackSection({
   tz,
   now,
   confirmOpen = false,
-  readingInitial = {}
+  readingInitial = {},
+  tags = null
 }: {
   view: SlackSettingsView;
   /** The validated ?slack= code (parseSlackResult); null or unknown shows no banner. */
@@ -163,6 +165,8 @@ export function SlackSection({
   confirmOpen?: boolean;
   /** P7a, static renders only: a reading confirm open ("enable" / "stop"), its checkbox ticked, the finance confirm for a channel. */
   readingInitial?: { dialog?: "enable" | "stop" | null; checked?: boolean; financeConfirm?: string | null };
+  /** P7b (§3.12.4, AM-P7b-6): the picker's client and project tags, passed to the reading half; null shows none. */
+  tags?: SlackPickerTags | null;
 }) {
   const state = slackSectionState(view);
   const banner =
@@ -228,6 +232,7 @@ export function SlackSection({
             initialDialog={readingInitial.dialog ?? null}
             initialChecked={readingInitial.checked === true}
             initialFinanceConfirm={readingInitial.financeConfirm ?? null}
+            tags={tags}
           />
         )}
       </div>

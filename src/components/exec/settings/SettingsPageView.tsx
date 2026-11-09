@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { History, Mic, SlidersHorizontal, ThumbsUp, Wallet, Waypoints } from "lucide-react";
 import type { VoiceProfileRow } from "@/lib/exec/drafts-store";
 import { MISSING, formatCount, formatInZone, pluralize } from "@/lib/exec/format";
+import type { SlackPickerTags } from "@/lib/exec/slack-page";
 import type { SlackConnectResult } from "@/lib/exec/slack-types";
 import { voiceCanBuild } from "@/lib/exec/ui/settings-api";
 import type { SettingsView } from "@/lib/exec/view-types";
@@ -300,7 +301,8 @@ export function SettingsPageView({
   view,
   slackResult = null,
   who = null,
-  onCanonicalHost = true
+  onCanonicalHost = true,
+  slackTags = null
 }: {
   view: SettingsView;
   /** P6 (C24): the validated ?slack= result code the OAuth routes redirected with (SlackSection's parseSlackResult). */
@@ -309,6 +311,8 @@ export function SettingsPageView({
   who?: string | null;
   /** P6 (C45): this request's host is the canonical one (isCanonicalRequestHost); false replaces Connect / Reconnect. */
   onCanonicalHost?: boolean;
+  /** P7b (§3.12.4, AM-P7b-6): the Slack picker's client and project tags (slack-page.ts getSlackPickerTags); null shows none. */
+  slackTags?: SlackPickerTags | null;
 }) {
   const now = view.generatedAt;
   const tz = view.timezone;
@@ -337,7 +341,7 @@ export function SettingsPageView({
           <Spend view={view} />
           <VoiceCard view={view} />
           <ReadOnly view={view} />
-          <SlackSection view={view.slack} result={slackResult} who={who} onCanonicalHost={onCanonicalHost} tz={tz} now={now} />
+          <SlackSection view={view.slack} result={slackResult} who={who} onCanonicalHost={onCanonicalHost} tz={tz} now={now} tags={slackTags} />
           <Feedback view={view} />
         </div>
       </div>

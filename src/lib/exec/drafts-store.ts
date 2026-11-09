@@ -8,10 +8,12 @@ import {
   GENERATION_FLAGS,
   INSTRUCTION_BY,
   REVIEW_BLOCKERS,
+  type ClientUpdateFactsRecord,
   type DraftAddress,
   type ExecDraftRow,
   type ExecDraftStatus
 } from "@/lib/exec/drafts-types";
+import type { SlotStatus } from "@/lib/exec/slack-intel-types";
 import { NonRetryableError, type ErrorClass, type ExecPrincipal } from "@/lib/exec/types";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 
@@ -42,8 +44,31 @@ const DAY_MS = 86_400_000;
 const CLONE_ID = /^[A-Za-z0-9_-]{1,64}$/;
 const CURSOR_RE = /^(\d{4}-\d{2}-\d{2}T[0-9:.]+Z)~(ed_[0-9a-f]{32})$/;
 
+/** ExecDraftRow's three optional P7b fields (purpose, generatedVersion, clientUpdateFacts) are not in P4's column map: they
+ *  are read and written through the tolerant path below (§3.17.2 E6), so a database without the P7b migration still reads
+ *  and writes P4's drafts exactly as before. */
+type MappedDraftField = Exclude<keyof ExecDraftRow, "purpose" | "generatedVersion" | "clientUpdateFacts">;
+type P7bDraftField = "purpose" | "generatedVersion" | "clientUpdateFacts";
+
+/** P7b (§2.1.6, §3.17.2 E2/E6): exec_drafts.purpose / generated_version / client_update_facts, appended by P7b's migration. */
+export const P7B_DRAFT_COLUMNS: Readonly<Record<P7bDraftField, string>> = Object.freeze({
+  purpose: "purpose",
+  generatedVersion: "generated_version",
+  clientUpdateFacts: "client_update_facts"
+});
+const P7B_FIELDS = Object.keys(P7B_DRAFT_COLUMNS) as P7bDraftField[];
+const P7B_COLUMN_NAMES = P7B_FIELDS.map((f) => P7B_DRAFT_COLUMNS[f]);
+/** E6: once a read finds P7b's columns missing, reads skip them for this long (per process) before asking again. */
+const P7B_MISSING_TTL_MS = 600_000;
+let p7bMissingUntil = 0;
+const p7bColumnsKnownMissing = () => Date.now() < p7bMissingUntil;
+/** Test seam: forget E6's cached "P7b's columns are missing" verdict. */
+export function __resetDraftStoreColumnCacheForTests(): void {
+  p7bMissingUntil = 0;
+}
+
 /** camel -> snake, every column of exec_drafts (§2.1), in the row's order. */
-export const DRAFT_COLUMNS: Readonly<Record<keyof ExecDraftRow, string>> = Object.freeze({
+export const DRAFT_COLUMNS: Readonly<Record<MappedDraftField, string>> = Object.freeze({
   id: "id",
   principalId: "principal_id",
   accountId: "account_id",
@@ -131,7 +156,7 @@ export const DRAFT_COLUMNS: Readonly<Record<keyof ExecDraftRow, string>> = Objec
   chatMessageId: "chat_message_id"
 });
 
-const DRAFT_FIELDS = Object.keys(DRAFT_COLUMNS) as (keyof ExecDraftRow)[];
+const DRAFT_FIELDS = Object.keys(DRAFT_COLUMNS) as MappedDraftField[];
 const ALL_DRAFT_COLUMNS = DRAFT_FIELDS.map((f) => DRAFT_COLUMNS[f]).join(",");
 /**
  * P5b (F7, security-2): every column but P5b's two (instruction_by, chat_message_id), for a database where P5b's
@@ -140,6 +165,8 @@ const ALL_DRAFT_COLUMNS = DRAFT_FIELDS.map((f) => DRAFT_COLUMNS[f]).join(",");
  * migration (chat needs the migration, so no 'assistant' row and no linked row exists yet).
  */
 const LEGACY_DRAFT_COLUMNS = DRAFT_FIELDS.filter((f) => f !== "instructionBy" && f !== "chatMessageId").map((f) => DRAFT_COLUMNS[f]).join(",");
+/** P7b (E6): P4's and P5b's columns plus P7b's three, the first read tried while they aren't known to be missing. */
+const FULL_DRAFT_COLUMNS = `${ALL_DRAFT_COLUMNS},${P7B_COLUMN_NAMES.join(",")}`;
 const INSTRUCTION_BY_COLUMN = DRAFT_COLUMNS.instructionBy;
 const INSTRUCTION_BY_DEFAULT = "owner";
 const CHAT_MESSAGE_ID_COLUMN = DRAFT_COLUMNS.chatMessageId;
@@ -189,6 +216,35 @@ function missingInstructionBy(error: DbError | null | undefined): boolean {
   return [INSTRUCTION_BY_COLUMN, CHAT_MESSAGE_ID_COLUMN].some((c) => new RegExp(`(?<![A-Za-z0-9_])${c}(?![A-Za-z0-9_])`).test(text));
 }
 
+/** P7b (E6): one of P7b's three columns isn't there (P7b's migration isn't applied): 42703 / PGRST204 naming it. */
+function missingP7bColumn(error: DbError | null | undefined): boolean {
+  if (!error) return false;
+  const code = error.code ?? "";
+  if (code !== "42703" && code !== "PGRST204") return false;
+  const text = `${error.message ?? ""} ${error.details ?? ""}`;
+  return P7B_COLUMN_NAMES.some((c) => new RegExp(`(?<![A-Za-z0-9_])${c}(?![A-Za-z0-9_])`).test(text));
+}
+
+/** P7b (E6): the store refused a write because P7b's draft columns aren't there (a client update can't be stored yet). */
+export function isP7bColumnMissing(err: unknown): boolean {
+  return err instanceof DraftStoreError && (err.code === "42703" || err.code === "PGRST204") &&
+    P7B_COLUMN_NAMES.some((c) => new RegExp(`(?<![A-Za-z0-9_])${c}(?![A-Za-z0-9_])`).test(err.message));
+}
+
+/** A write's P7b values can be dropped on a database without the columns only when they are what that database holds
+ *  anyway: purpose 'reply' and no facts record (generated_version is a hint P4's drafts never read). */
+function p7bDroppable(values: Record<string, unknown>): boolean {
+  const purpose = values[P7B_DRAFT_COLUMNS.purpose];
+  const facts = values[P7B_DRAFT_COLUMNS.clientUpdateFacts];
+  return (purpose === undefined || purpose === "reply") && (facts === undefined || facts === null);
+}
+const hasP7bKeys = (values: Record<string, unknown>) => P7B_COLUMN_NAMES.some((c) => c in values);
+function withoutKeys(values: Record<string, unknown>, keys: readonly string[]): Record<string, unknown> {
+  const out = { ...values };
+  for (const k of keys) delete out[k];
+  return out;
+}
+
 /** A row read with LEGACY_DRAFT_COLUMNS, with the columns' defaults filled in (draftFromDb stays strict). */
 function withDefaultInstructionBy(raw: unknown): unknown {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return raw;
@@ -205,8 +261,26 @@ type DraftAnswer = { data: unknown; error: DbError | null };
  * the read answered them, for the caller's own handling.
  */
 async function readDraftRows(run: (columns: string) => PromiseLike<{ data: unknown; error: unknown }>): Promise<DraftAnswer> {
+  // P7b (E6): P7b's three columns first, unless a read in the last 10 minutes found them missing. A missing P7b column
+  // retries once without them (the rows then read purpose 'reply' and no generation record); a missing P5b column means
+  // P7b's are missing too (P7b's migration requires P5b's), so it goes straight to the legacy list.
+  if (!p7bColumnsKnownMissing()) {
+    const full = (await run(FULL_DRAFT_COLUMNS)) as DraftAnswer;
+    if (!missingP7bColumn(full.error) && !missingInstructionBy(full.error)) return full;
+    p7bMissingUntil = Date.now() + P7B_MISSING_TTL_MS;
+    if (!missingInstructionBy(full.error)) {
+      const mapped = (await run(ALL_DRAFT_COLUMNS)) as DraftAnswer;
+      if (!missingInstructionBy(mapped.error)) return mapped;
+    }
+    return legacyDraftRows(run);
+  }
   const first = (await run(ALL_DRAFT_COLUMNS)) as DraftAnswer;
   if (!missingInstructionBy(first.error)) return first;
+  return legacyDraftRows(run);
+}
+
+/** The legacy list (before P5b's migration): P5b's columns given their defaults. */
+async function legacyDraftRows(run: (columns: string) => PromiseLike<{ data: unknown; error: unknown }>): Promise<DraftAnswer> {
   const legacy = (await run(LEGACY_DRAFT_COLUMNS)) as DraftAnswer;
   if (legacy.error) return legacy;
   const data = Array.isArray(legacy.data) ? legacy.data.map(withDefaultInstructionBy) : withDefaultInstructionBy(legacy.data);
@@ -240,7 +314,7 @@ type Kind =
 
 const CLONE_FLAGS = ["send_status_unknown", "not_found_after_send", "verify_overdue", "create_unconfirmed", "gone_unconfirmed", "unverified", "signature_skipped"];
 
-const KINDS: Readonly<Record<keyof ExecDraftRow, Kind>> = {
+const KINDS: Readonly<Record<MappedDraftField, Kind>> = {
   id: "text", principalId: "text", accountId: "text",
   kind: { enum: ["reply", "new"], nullable: false },
   origin: { enum: ["web", "slack", "chat"], nullable: false },
@@ -280,7 +354,7 @@ const isAddress = (v: unknown): v is DraftAddress =>
   typeof v === "object" && v !== null && !Array.isArray(v) && typeof (v as DraftAddress).address === "string" &&
   ((v as DraftAddress).name === null || (v as DraftAddress).name === undefined || typeof (v as DraftAddress).name === "string");
 
-function cell(row: Record<string, unknown>, field: keyof ExecDraftRow): unknown {
+function cell(row: Record<string, unknown>, field: MappedDraftField): unknown {
   const column = DRAFT_COLUMNS[field];
   const v = row[column];
   const kind = KINDS[field];
@@ -336,13 +410,65 @@ export function draftFromDb(raw: unknown): ExecDraftRow {
   const row = raw as Record<string, unknown>;
   const out: Record<string, unknown> = {};
   for (const field of DRAFT_FIELDS) out[field] = cell(row, field);
+  // P7b (E2, E6): a column the read selected is mapped (strictly); one it didn't (a database before P7b's migration, or
+  // P4's insert read-back) is left absent, which every reader takes as purpose 'reply' and no generation record.
+  const bad = (column: string) => new DraftStoreError(`exec drafts store: ${DRAFTS} read failed: column ${column} is malformed`, null, "fatal");
+  if (P7B_DRAFT_COLUMNS.purpose in row) {
+    const v = row[P7B_DRAFT_COLUMNS.purpose];
+    if (v !== "reply" && v !== "client_update") throw bad(P7B_DRAFT_COLUMNS.purpose);
+    out.purpose = v;
+  }
+  if (P7B_DRAFT_COLUMNS.generatedVersion in row) {
+    const v = row[P7B_DRAFT_COLUMNS.generatedVersion];
+    if (v !== null && (typeof v !== "number" || !Number.isSafeInteger(v) || v < 1)) throw bad(P7B_DRAFT_COLUMNS.generatedVersion);
+    out.generatedVersion = v;
+  }
+  if (P7B_DRAFT_COLUMNS.clientUpdateFacts in row) {
+    const v = row[P7B_DRAFT_COLUMNS.clientUpdateFacts];
+    const record = v === null ? null : clientUpdateFactsRecordOf(v);
+    if (record === undefined) throw bad(P7B_DRAFT_COLUMNS.clientUpdateFacts);
+    out.clientUpdateFacts = record;
+  }
   return out as unknown as ExecDraftRow;
+}
+
+/** SlotStatus's values (slack-intel-types.ts), for the strict read of client_update_facts. */
+const SLOT_STATUSES: readonly SlotStatus[] = ["used", "none", "unavailable", "not_connected", "off"];
+
+/** exec_drafts.client_update_facts as a ClientUpdateFactsRecord (counts, slot statuses, two timestamps), or undefined when
+ *  it isn't one. Only the record's own keys are kept: the column never carries text. */
+export function clientUpdateFactsRecordOf(v: unknown): ClientUpdateFactsRecord | undefined {
+  if (typeof v !== "object" || v === null || Array.isArray(v)) return undefined;
+  const o = v as Record<string, unknown>;
+  const slot = (x: unknown): { status: SlotStatus; count: number } | undefined => {
+    if (typeof x !== "object" || x === null || Array.isArray(x)) return undefined;
+    const s = x as Record<string, unknown>;
+    if (typeof s.status !== "string" || !(SLOT_STATUSES as readonly string[]).includes(s.status)) return undefined;
+    if (typeof s.count !== "number" || !Number.isSafeInteger(s.count) || s.count < 0) return undefined;
+    return { status: s.status as SlotStatus, count: s.count };
+  };
+  const completed = slot(o.completed);
+  const teamWork = slot(o.teamWork);
+  const publicSlack = slot(o.publicSlack);
+  if (completed === undefined || teamWork === undefined || publicSlack === undefined) return undefined;
+  const instant = (x: unknown): string | null | undefined =>
+    x === null || x === undefined ? null : typeof x === "string" && Number.isFinite(Date.parse(x)) ? new Date(Date.parse(x)).toISOString() : undefined;
+  let lastUpdate: ClientUpdateFactsRecord["lastUpdate"] = null;
+  if (o.lastUpdate !== null && o.lastUpdate !== undefined) {
+    if (typeof o.lastUpdate !== "object" || Array.isArray(o.lastUpdate)) return undefined;
+    const l = o.lastUpdate as Record<string, unknown>;
+    const teamEmailSentAt = instant(l.teamEmailSentAt);
+    const workReportedAt = instant(l.workReportedAt);
+    if (teamEmailSentAt === undefined || workReportedAt === undefined) return undefined;
+    lastUpdate = { teamEmailSentAt, workReportedAt };
+  }
+  return { completed, teamWork, publicSlack, lastUpdate };
 }
 
 /** Every column a create sets (identical key set for every insert): the row minus the database-set id, created_at and updated_at. */
 export type NewDraftRow = Omit<ExecDraftRow, "id" | "createdAt" | "updatedAt">;
 
-const NEW_DRAFT_FIELDS = DRAFT_FIELDS.filter((f) => f !== "id" && f !== "createdAt" && f !== "updatedAt") as (keyof NewDraftRow)[];
+const NEW_DRAFT_FIELDS = DRAFT_FIELDS.filter((f) => f !== "id" && f !== "createdAt" && f !== "updatedAt") as (keyof NewDraftRow & MappedDraftField)[];
 
 /** The insert payload: every NewDraftRow field, snake_case, arrays copied (rule 11: one key set). */
 function toDb(row: NewDraftRow): Record<string, unknown> {
@@ -351,6 +477,13 @@ function toDb(row: NewDraftRow): Record<string, unknown> {
     if (!(field in row)) refuse(`insert is missing ${field}`);
     const v = row[field];
     out[DRAFT_COLUMNS[field]] = Array.isArray(v) ? [...v] : v;
+  }
+  // P7b (E2): a row that names its purpose sends P7b's three columns together (one key set for them); one that doesn't
+  // (every P4 and P5b insert) sends P4's set exactly, and the table's defaults apply ('reply', null, null).
+  if (row.purpose !== undefined || row.generatedVersion !== undefined || row.clientUpdateFacts !== undefined) {
+    out[P7B_DRAFT_COLUMNS.purpose] = row.purpose ?? "reply";
+    out[P7B_DRAFT_COLUMNS.generatedVersion] = row.generatedVersion ?? null;
+    out[P7B_DRAFT_COLUMNS.clientUpdateFacts] = row.clientUpdateFacts ?? null;
   }
   return out;
 }
@@ -443,13 +576,23 @@ export async function insertDraft(principal: ExecPrincipal, row: NewDraftRow, op
     if (opts.signal) query = query.abortSignal(opts.signal);
     return query.single();
   };
-  let { data, error } = (await insert(payload, ALL_DRAFT_COLUMNS)) as DraftAnswer;
-  if (missingInstructionBy(error) && payload[INSTRUCTION_BY_COLUMN] === INSTRUCTION_BY_DEFAULT && payload[CHAT_MESSAGE_ID_COLUMN] === null) {
+  // P7b (E6): a payload with P7b's columns reads them back too; P4's payloads keep P4's read-back exactly.
+  const p7b = hasP7bKeys(payload);
+  let { data, error } = (await insert(payload, p7b ? FULL_DRAFT_COLUMNS : ALL_DRAFT_COLUMNS)) as DraftAnswer;
+  let sent = payload;
+  if (p7b && missingP7bColumn(error) && p7bDroppable(payload)) {
+    // P7b's migration isn't applied: a 'reply' row with no record is what the table holds anyway.
+    p7bMissingUntil = Date.now() + P7B_MISSING_TTL_MS;
+    sent = withoutKeys(payload, P7B_COLUMN_NAMES);
+    ({ data, error } = (await insert(sent, ALL_DRAFT_COLUMNS)) as DraftAnswer);
+  } else if (p7b && !error) {
+    p7bMissingUntil = 0;
+  }
+  if (missingInstructionBy(error) && sent[INSTRUCTION_BY_COLUMN] === INSTRUCTION_BY_DEFAULT && sent[CHAT_MESSAGE_ID_COLUMN] === null && p7bDroppable(sent)) {
     // P5b's migration isn't applied: an owner row with no linked answer is what the table's defaults would write
     // anyway (F7). An assistant or linked row can't be stored there, so it fails below (chat needs the migration).
-    const legacyPayload = { ...payload };
-    delete legacyPayload[INSTRUCTION_BY_COLUMN];
-    delete legacyPayload[CHAT_MESSAGE_ID_COLUMN];
+    // P7b's columns can't exist there either (P7b's migration requires P5b's), so they go too when they're defaults.
+    const legacyPayload = withoutKeys(sent, [INSTRUCTION_BY_COLUMN, CHAT_MESSAGE_ID_COLUMN, ...P7B_COLUMN_NAMES]);
     ({ data, error } = (await insert(legacyPayload, LEGACY_DRAFT_COLUMNS)) as DraftAnswer);
     if (!error) data = withDefaultInstructionBy(data);
   }
@@ -525,10 +668,17 @@ export async function casDraft(principal: ExecPrincipal, id: string, expect: Cas
     return selected;
   };
   let { data, error } = (await update(body)) as DraftAnswer;
-  if (missingInstructionBy(error) && body[INSTRUCTION_BY_COLUMN] === INSTRUCTION_BY_DEFAULT) {
+  let sent = body;
+  if (missingP7bColumn(error) && p7bDroppable(sent)) {
+    // P7b (E6): P7b's migration isn't applied: generated_version (and a 'reply' purpose) mean nothing there, so the write
+    // without them is the same. A client update's purpose or record can't be stored there and fails below.
+    p7bMissingUntil = Date.now() + P7B_MISSING_TTL_MS;
+    sent = withoutKeys(sent, P7B_COLUMN_NAMES);
+    ({ data, error } = (await update(sent)) as DraftAnswer);
+  }
+  if (missingInstructionBy(error) && sent[INSTRUCTION_BY_COLUMN] === INSTRUCTION_BY_DEFAULT && p7bDroppable(sent)) {
     // P5b's migration isn't applied: every row there is already 'owner' (F7), so the write without it is the same.
-    const legacy = { ...body };
-    delete legacy[INSTRUCTION_BY_COLUMN];
+    const legacy = withoutKeys(sent, [INSTRUCTION_BY_COLUMN, ...P7B_COLUMN_NAMES]);
     ({ data, error } = (await update(legacy)) as DraftAnswer);
   }
   if (error) throw failure(`${DRAFTS} update`, error, opts.signal);

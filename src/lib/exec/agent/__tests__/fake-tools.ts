@@ -42,6 +42,11 @@ export function fakeTargetKey(t: RefTarget): string {
       return `page:${t.path}`;
     case "meeting":
       return `meeting:${t.id}`;
+    // P7b (stage-0 seed, forced by the RefTarget members): agent/refs.ts's key formats.
+    case "slack_message":
+      return `slack_message:${t.channelId}:${t.ts}`;
+    case "slack_digest":
+      return `slack_digest:${t.channelId}:${t.localDate}:${t.rebuilds}`;
     default:
       return `${t.type}:${t.id}`;
   }
@@ -144,9 +149,37 @@ export class FakeConsultedBudget {
   }
 }
 
+/** P7b (§3.17.3 D2): the Slack consulted budget, all-or-nothing admit, ≤ 600 keys / ≤ 200 channels, the private flag. */
+export class FakeSlackConsultedBudget {
+  private readonly refs = new Set<string>();
+  private readonly channels = new Set<string>();
+  private privateSeen = false;
+  constructor(private readonly maxRefs: number = 600, private readonly maxChannels: number = 200) {}
+  admit(refKeys: readonly string[], channelId: string, privacy: string): boolean {
+    const fresh = [...new Set(refKeys)].filter((k) => !this.refs.has(k));
+    const newChannel = this.channels.has(channelId) ? 0 : 1;
+    if (this.refs.size + fresh.length > this.maxRefs || this.channels.size + newChannel > this.maxChannels) return false;
+    for (const k of fresh) this.refs.add(k);
+    this.channels.add(channelId);
+    if (privacy !== "public") this.privateSeen = true;
+    return true;
+  }
+  get full(): boolean {
+    return this.refs.size >= this.maxRefs || this.channels.size >= this.maxChannels;
+  }
+  get privateSlack(): boolean {
+    return this.privateSeen;
+  }
+  snapshot(): { refs: string[]; channels: string[]; privateSlack: boolean } {
+    return { refs: [...this.refs], channels: [...this.channels], privateSlack: this.privateSeen };
+  }
+}
+
 export const fakeSerializeModule = {
   RESULT_JSON_CHARS: 16_000,
   ConsultedBudget: FakeConsultedBudget,
+  // P7b (D2): run.ts builds one per turn (the same semantics as serialize.ts's; this file may not import that module).
+  SlackConsultedBudget: FakeSlackConsultedBudget,
   capList: <T>(items: readonly T[], cap: number, total?: number) => ({ items: items.slice(0, cap), total: total ?? items.length, truncated: (total ?? items.length) > Math.min(cap, items.length) }),
   escapeJsonLt: (json: string) => json.split("<").join(`${String.fromCharCode(92)}u003c`)
 };

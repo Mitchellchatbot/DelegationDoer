@@ -643,6 +643,8 @@ interface Vocabulary {
   words: ReadonlySet<string>;
   /** Lowercased exact names. */
   names: ReadonlySet<string>;
+  /** P7b B-P7b-2: `err.name` (an Error's class, a code) isn't content even where "name" is a content word. */
+  errorNames?: boolean;
 }
 const P3_VOCAB: Vocabulary = { words: CONTENT_WORDS, names: CONTENT_NAMES };
 const P4_VOCAB: Vocabulary = {
@@ -657,6 +659,8 @@ const P4_VOCAB: Vocabulary = {
 // values under them are still checked. Only the key names of an object literal handed to
 // notifyOps are skipped, never a shorthand property (whose name is the value).
 const ALERT_SCHEMA_KEYS: ReadonlySet<string> = new Set(["key", "title"]);
+// P7b B-P7b-2: the bindings that conventionally hold a caught error (`err instanceof Error ? err.name : "error"`).
+const ERROR_BINDING = /^(?:err|error|e|ex|cause)$/;
 
 function isContentName(name: string, vocab: Vocabulary = P3_VOCAB): boolean {
   if (vocab.names.has(name.toLowerCase())) return true;
@@ -690,6 +694,8 @@ function contentRefs(
     if (ts.isTypeNode(n)) return;
     if (ts.isPropertyAccessExpression(n)) {
       if (n.name.text === "length" || n.name.text === "size") return;
+      // P7b B-P7b-2: in a vocabulary where "name" is content, an Error's own name (err.name, error.name) is still a code.
+      if (vocab.errorNames && n.name.text === "name" && ts.isIdentifier(n.expression) && ERROR_BINDING.test(n.expression.text)) return;
       if (isContentName(n.name.text, vocab)) found.push(n.name.text);
       visit(n.expression);
       return;
@@ -970,7 +976,11 @@ const isP4Handler = (p: string) => /^src\/lib\/exec\/handlers\/(?:draft|voice)-[
 // applies, agent/** and the chat route; P3's elsewhere), built below.
 const baseVocabFor = (p: string): Vocabulary => (isP4ContentFile(p) ? P4_VOCAB : isChatFile(p) ? chatVocabulary(isDdTextFile(p)) : isDdTextFile(p) ? P5_VOCAB : P3_VOCAB);
 // P6 B-P6-5: a Slack file takes the Slack words and names on top of its class's vocabulary (slackVocabulary, below).
-const vocabFor = (p: string): Vocabulary => (isSlackFile(p) ? slackVocabulary(baseVocabFor(p)) : baseVocabFor(p));
+// P7b B-P7b-2: a P7b content file takes the P7b words on top of that (p7bVocabulary, below).
+const vocabFor = (p: string): Vocabulary => {
+  const base = isSlackFile(p) ? slackVocabulary(baseVocabFor(p)) : baseVocabFor(p);
+  return isP7bContentFile(p) ? p7bVocabulary(base) : base;
+};
 
 /** B8: rule 9 over the P4 file class with the P4 vocabulary; the handler-return check covers the P4 handlers. */
 function p4ContentOffenses(file: string, f: MailFacts): string[] {
@@ -1010,6 +1020,10 @@ const PACK_BANNED_TARGET = /^src\/lib\/(?:brain-|growth-brain|finance-|facebook-
 const PACK_BANNED_TABLES: ReadonlySet<string> = new Set(["brain_memories", "mrr_entries", "client_meetings", "task_messages", "activity_logs", "eod_notes", "sod_notes"]);
 const DD_MODULE = "src/lib/exec/sources/dd";
 const PACK_DD_NAMES: ReadonlySet<string> = new Set(["listOpenTasksForClient", "listProjects", "listProjectStages", "listUsers", "listClientMatchSignals", "getMailTimezone"]);
+// P7b B-P7b-4 (BD11): the pack's one new source, and what drafts-pack.ts may take from it. PACK_DD_NAMES is unchanged.
+const CU_FACTS_MODULE = "src/lib/exec/client-update-facts";
+const PACK_CU_FACTS_IMPORTER = "src/lib/exec/drafts-pack.ts";
+const PACK_CU_FACTS_NAMES: ReadonlySet<string> = new Set(["clientUpdateFacts", "ClientUpdateFacts", "CLIENT_UPDATE_PROMPT_ADDENDUM"]);
 const DRAFTS_ROUTE_DIR = "src/app/api/exec/drafts/";
 const isDraftsRouteFile = (p: string) => p.startsWith(DRAFTS_ROUTE_DIR) && /\/route\.[cm]?[jt]sx?$/.test(p);
 const HTTP_METHODS: ReadonlySet<string> = new Set(["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]);
@@ -1353,7 +1367,9 @@ function envOffenses(file: string, f: P4Facts): string[] {
   return out;
 }
 
-/** B10: the pack files' imports, table names and sources/dd names. */
+/** B10: the pack files' imports, table names and sources/dd names.
+ *  P7b B-P7b-4: drafts-pack.ts may take clientUpdateFacts, ClientUpdateFacts and CLIENT_UPDATE_PROMPT_ADDENDUM from
+ *  client-update-facts (the pack's one new source); no other pack file imports that module. */
 function packOffenses(file: string, f: P4Facts): string[] {
   if (!PACK_FILES.has(file)) return [];
   const out: string[] = [];
@@ -1362,6 +1378,11 @@ function packOffenses(file: string, f: P4Facts): string[] {
     if (s.target === DD_MODULE) {
       if (s.whole) out.push(`${file}:${s.line}: takes sources/dd whole`);
       for (const name of s.names) if (!PACK_DD_NAMES.has(name)) out.push(`${file}:${s.line}: imports ${name} from sources/dd`);
+    }
+    if (s.target === CU_FACTS_MODULE) {
+      if (file !== PACK_CU_FACTS_IMPORTER) out.push(`${file}:${s.line}: imports ${CU_FACTS_MODULE} (only ${PACK_CU_FACTS_IMPORTER} may)`);
+      else if (s.whole) out.push(`${file}:${s.line}: takes client-update-facts whole`);
+      else for (const name of s.names) if (!PACK_CU_FACTS_NAMES.has(name)) out.push(`${file}:${s.line}: imports ${name} from client-update-facts`);
     }
   }
   for (const t of f.tableNames) out.push(`${file}:${t.line}: names ${t.name}`);
@@ -1469,6 +1490,8 @@ const DD_TEXT_IMPORTERS: ReadonlySet<string> = new Set(["src/lib/exec/triage/ddt
 const AGENT_DD_TEXT_IMPORTER = "src/lib/exec/agent/tools.ts";
 const PROJECTS_VIEW_FILE = "src/lib/exec/projects-view.ts";
 const PROJECTS_VIEW_DD_TEXT_NAMES: ReadonlySet<string> = new Set(["listMeetingBriefRisks"]);
+// P7b B-P7b-5 (P5aC §3.14.3 rule 10): the pack's new source reads the team's work notes, and nothing else, from sources/dd-text.
+const P7B_DD_TEXT_IMPORTERS: ReadonlyMap<string, ReadonlySet<string>> = new Map([["src/lib/exec/client-update-facts.ts", new Set(["listEodClientWorkForClient"])]]);
 const LIST_ATTENTION_FILES: ReadonlySet<string> = new Set(["src/lib/exec/attention.ts", "src/lib/exec/attention-read.ts"]);
 const INTAKE_ONLY_NAMES: ReadonlySet<string> = new Set(["listTaskThreadLinks", "listPendingApprovalItems"]);
 const INTAKE_ONLY_FILES: ReadonlySet<string> = new Set(["src/lib/exec/sources/dd.ts", "src/lib/exec/intake-screen.ts"]);
@@ -1685,6 +1708,12 @@ function ddTextImportOffenses(file: string, f: P5Facts): string[] {
       for (const name of r.names) if (!PROJECTS_VIEW_DD_TEXT_NAMES.has(name)) out.push(`${file}:${r.line}: imports ${name} from sources/dd-text`);
       continue;
     }
+    // P7b B-P7b-5: client-update-facts.ts joins the importers with listEodClientWorkForClient only.
+    const p7bNames = P7B_DD_TEXT_IMPORTERS.get(file);
+    if (p7bNames !== undefined) {
+      for (const name of r.names) if (!p7bNames.has(name)) out.push(`${file}:${r.line}: imports ${name} from sources/dd-text`);
+      continue;
+    }
     out.push(`${file}:${r.line}: imports sources/dd-text`);
   }
   return out;
@@ -1807,6 +1836,14 @@ const DD_TEXT_COLUMNS: ReadonlySet<string> = new Set([
   "message", "business_information", "seo_brief", "health_summary", "touchpoint_summary"
 ]);
 const TEXT_COLUMN_FILES: ReadonlySet<string> = new Set(["src/lib/exec/sources/dd-text.ts", "src/lib/exec/sources/dd.ts"]);
+/** P7b B-P7b-5: the DD tables P7b reads around (client updates, team work notes), each with its own text columns on top of
+ *  DD_TEXT_COLUMNS. The allow-list is unchanged: sources/dd-text.ts, and sources/dd.ts for its existing reads only. */
+const P7B_DD_TEXT_TABLE_COLUMNS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ["eod_client_work", new Set(["worked_on", "results"])],
+  ["email_drafts", new Set(["subject", "body_text", "body_html", "rejection_note"])],
+  ["eod_client_updates", new Set(["message", "subject"])],
+  ["eod_client_checkins", new Set(["message", "subject"])]
+]);
 /** §3.20 item 2: sources/dd.ts is on the allow-list for its EXISTING text reads only (the `detail` first-line parses and
  *  the `messages` reads); any other DD text column there (e.g. tasks.description, mutant M7) fails like anywhere else. */
 const DD_TS_FILE = "src/lib/exec/sources/dd.ts";
@@ -1840,7 +1877,9 @@ const F_ENTRY_POINTS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   [
     "purgeDraftsByIds",
     new Set(["src/lib/exec/drafts-store.ts", "src/lib/exec/email-store.ts", "src/lib/exec/handlers/email-attention.ts", "src/lib/exec/agent/turn.ts"])
-  ]
+  ],
+  // P7b B-P7b-6: the client-update draft is created only by prepare_client_update's service (no route, no other caller).
+  ["createClientUpdateDraft", new Set(["src/lib/exec/drafts.ts", "src/lib/exec/client-update.ts"])]
 ]);
 const DRAFTS_FILE = "src/lib/exec/drafts.ts";
 const P4_REQUEST_SCHEMAS = ["CreateDraftBody", "EditDraftBody", "RegenerateBody", "SaveBody", "ReviewBody", "SendBody", "ResolveBody"];
@@ -1975,8 +2014,9 @@ function textColumnOffenses(file: string, f: P5bFacts): string[] {
   if (!isExecCode(file) || (TEXT_COLUMN_FILES.has(file) && file !== DD_TS_FILE)) return [];
   const out: string[] = [];
   for (const list of f.columnLists) {
-    if (!DD_TEXT_TABLES.has(list.table)) continue;
-    const text = list.columns.filter((c) => DD_TEXT_COLUMNS.has(c) && !(file === DD_TS_FILE && DD_TS_TEXT_COLUMNS.has(c)));
+    const p7b = P7B_DD_TEXT_TABLE_COLUMNS.get(list.table);
+    if (!DD_TEXT_TABLES.has(list.table) && p7b === undefined) continue;
+    const text = list.columns.filter((c) => (DD_TEXT_COLUMNS.has(c) || (p7b?.has(c) ?? false)) && !(file === DD_TS_FILE && DD_TS_TEXT_COLUMNS.has(c)));
     if (text.length > 0) out.push(`${file}:${list.line}: selects ${text.join(", ")} from ${list.table}`);
   }
   return out;
@@ -2077,7 +2117,9 @@ function entryPointOffenses(file: string, f: P5bFacts): string[] {
 // P7a B-P7a-1: the files whose path lacks "slack" but that handle Slack metadata: the DD bot's identity, and sources/dd.ts
 // (it reads the lead-channel names). Every handlers/slack-*.ts, triage/slack.ts and producers/slack.ts are in through /slack/i.
 const P7A_SLACK_CLASS_FILES: ReadonlySet<string> = new Set(["src/lib/exec/dd-bot.ts", "src/lib/exec/sources/dd.ts"]);
-const isSlackFile = (p: string) => isExecCode(p) && (/slack/i.test(p) || P7A_SLACK_CLASS_FILES.has(p));
+// P7b B-P7b-2: prepare_client_update's service and the pack's new source hold Slack facts though their paths don't say slack.
+const P7B_SLACK_CLASS_FILES: ReadonlySet<string> = new Set(["src/lib/exec/client-update.ts", "src/lib/exec/client-update-facts.ts"]);
+const isSlackFile = (p: string) => isExecCode(p) && (/slack/i.test(p) || P7A_SLACK_CLASS_FILES.has(p) || P7B_SLACK_CLASS_FILES.has(p));
 const isSlackHandler = (p: string) => /^src\/lib\/exec\/handlers\/slack-[^/]*\.ts$/.test(p);
 const SLACK_WORDS = ["token", "tokens", "secret", "secrets", "signature", "challenge", "blocks"];
 const SLACK_NAMES = [
@@ -2094,6 +2136,34 @@ function slackVocabulary(base: Vocabulary): Vocabulary {
   if (!v) {
     v = { words: new Set([...base.words, ...SLACK_WORDS]), names: new Set([...base.names, ...SLACK_NAMES]) };
     slackVocabs.set(base, v);
+  }
+  return v;
+}
+
+// P7b B-P7b-2 (§0.4): the files that turn Slack into intelligence log no summary, digest line, query, instruction, title,
+// name or permalink. Named files, plus every slack-intel* / slack-digest* / slack-search* / slack-links* file in exec code
+// (the handlers included: handlers/slack-digest*.ts, handlers/slack-intel-sweep.ts); handlers/slack-correlate.ts is named too.
+// Their vocabulary gains the words below on top of their class's (an Error's own .name stays a code, ERROR_BINDING).
+const P7B_CONTENT_FILES: ReadonlySet<string> = new Set([
+  "src/lib/exec/client-update.ts", "src/lib/exec/client-update-facts.ts", "src/lib/exec/correlate-slack.ts", "src/lib/exec/triage/slack-digest.ts",
+  "src/lib/exec/handlers/slack-correlate.ts"
+]);
+const P7B_CONTENT_BASENAME = /^(?:slack-intel|slack-digest|slack-search|slack-links)/;
+const isP7bContentFile = (p: string) => isExecCode(p) && (P7B_CONTENT_FILES.has(p) || P7B_CONTENT_BASENAME.test(path.posix.basename(p)));
+/** B-P7b-2's handler-return check (they are slack-* handlers too, so B-P6-5's check covers them with this vocabulary). */
+const isP7bHandler = (p: string) => /^src\/lib\/exec\/handlers\/(?:slack-correlate|slack-digest[^/]*|slack-intel-sweep)\.ts$/.test(p);
+const P7B_WORDS = [
+  "summary", "summaries", "highlight", "highlights", "decision", "decisions", "question", "questions", "query", "excerpt", "excerpts", "instruction",
+  "results", "title", "titles", "name", "names", "permalink", "permalinks", "corpus"
+];
+/** workedOn / worked_on split into two plain words, so they are exact names. */
+const P7B_NAMES = ["workedon", "worked_on"];
+const p7bVocabs = new Map<Vocabulary, Vocabulary>();
+function p7bVocabulary(base: Vocabulary): Vocabulary {
+  let v = p7bVocabs.get(base);
+  if (!v) {
+    v = { words: new Set([...base.words, ...P7B_WORDS]), names: new Set([...base.names, ...P7B_NAMES]), errorNames: true };
+    p7bVocabs.set(base, v);
   }
   return v;
 }
@@ -2302,6 +2372,8 @@ interface FileFacts extends ImportFacts {
   p6: P6Facts;
   /** P7a rules B-P7a-2, -3, -6, -7, -9 */
   p7a: P7aFacts;
+  /** P7b rules B-P7b-1, -3, -6, -7 */
+  p7b: P7bFacts;
 }
 
 interface Scan {
@@ -2358,7 +2430,8 @@ function scanTree(probes: ReadonlyMap<string, string>, exportProbes: readonly st
       p5: analyzeP5(sf),
       p5b: analyzeP5b(sf),
       p6: analyzeP6(sf, isExecCode(file) ? checker : undefined),
-      p7a: analyzeP7a(sf, isExecCode(file) ? checker : null)
+      p7a: analyzeP7a(sf, isExecCode(file) ? checker : null),
+      p7b: analyzeP7b(sf)
     });
   }
   const nextConfigPath = path.join(ROOT, NEXT_CONFIG_FILE);
@@ -3664,7 +3737,8 @@ describe("P5b boundary (real source tree; contract §3.20, tests 101-105)", () =
       .filter(([, f]) => f.p5.refs.some((r) => r.target === DD_TEXT_MODULE && !r.typeOnly))
       .map(([file]) => file)
       .sort();
-    const allowed = new Set([...DD_TEXT_IMPORTERS, AGENT_DD_TEXT_IMPORTER, PROJECTS_VIEW_FILE]);
+    // P7b B-P7b-5: client-update-facts.ts joins them (listEodClientWorkForClient only; rule 10 checks the names).
+    const allowed = new Set([...DD_TEXT_IMPORTERS, AGENT_DD_TEXT_IMPORTER, PROJECTS_VIEW_FILE, ...P7B_DD_TEXT_IMPORTERS.keys()]);
     expect(importers.filter((file) => !allowed.has(file))).toEqual([]);
     expect(importers).toEqual(expect.arrayContaining([AGENT_DD_TEXT_IMPORTER, PROJECTS_VIEW_FILE]));
     expect(importers.filter((file) => file.startsWith("src/lib/exec/agent/"))).toEqual([AGENT_DD_TEXT_IMPORTER]);
@@ -4686,5 +4760,854 @@ describe("P7a boundary detectors with the checker: ReadTarget values (B-P7a-7) a
     expect(readTargetOffenses(SLACK_INSTALL_FILE, facts)).toEqual([]);
     expect(readTargetOffenses("src/lib/exec/handlers/slack-read-sweep.ts", facts)).toHaveLength(1);
     expect(readTargetOffenses("src/lib/slack.ts", facts)).toEqual([]);
+  });
+});
+
+// --- P7b (contract §0.4 B-P7b-1..9, §5.14 BD01-BD13; Area B owns this section, other areas request additions) -------------
+//
+//   B-P7b-1 Only slack-intel-store.ts names the three P7b tables and the fourteen P7b functions in a string (tests and the
+//           migration aside; whole tokens, as B-P6-6: an index name, a "name." / "name:" label or a `target` value isn't a
+//           read). The P5b columns consulted_slack_refs / consulted_slack_channels / consulted_private_slack are named (a
+//           string, a key, a property, a binding) only by slack-intel-store.ts and chat-store.ts.
+//   B-P7b-2 The P7b content files (P7B_CONTENT_FILES and every slack-intel* / slack-digest* / slack-search* / slack-links*
+//           file) log and alert no summary, digest line, query, instruction, work note, title, name, permalink or corpus
+//           (p7bVocabulary, above), and their handlers return none; client-update.ts and client-update-facts.ts join the
+//           Slack class (P7B_SLACK_CLASS_FILES, above). An Error's own name stays a code (ERROR_BINDING, above).
+//   B-P7b-3 Excerpts have one writer: outside slack-read-store.ts no object literal handed to .insert / .upsert / .update /
+//           .rpc has a key excerpt or p_excerpt; slack-intel-store.ts names excerpt in no string (it never selects one);
+//           the P7b migration adds no column named excerpt.
+//   B-P7b-4 client-update-facts.ts imports only CU_FACTS_ALLOWED (with its name and types-only limits; type-only imports
+//           may also come from the two pure type modules CU_FACTS_TYPE_TARGETS), and names no PACK_BANNED_TABLES table;
+//           drafts-pack.ts takes only PACK_CU_FACTS_NAMES from it (packOffenses, above).
+//   B-P7b-5 client-update-facts.ts reads sources/dd-text for listEodClientWorkForClient only (rule 10, above); P5b's text
+//           column rule covers eod_client_work, email_drafts, eod_client_updates and eod_client_checkins
+//           (P7B_DD_TEXT_TABLE_COLUMNS, above); sources/dd.ts's anchor read selects exactly its six columns.
+//   B-P7b-6 createClientUpdateDraft is named only in drafts.ts and client-update.ts (F_ENTRY_POINTS, above); client-update
+//           is referenced by value only from agent/tools.ts, and by no src/app file in any form; prepare_client_update's
+//           schema is exactly { thread_id, project_id } with no instruction key; every createClientUpdateDraft call in
+//           client-update.ts passes ownerInstruction = ownerInstructionFrom(<ctx>.question).text, traced through consts.
+//   B-P7b-7 Among the P7b files only slack-search.ts and slack-digests.ts import slack-read or the three live reads
+//           (readHistory, readReplies, getPermalink) by value; in those two every live-read call sits directly in a
+//           function handed to paced(...), each paced call names its rate class as the literal ("triage" / "sweep"), and a
+//           file that imports paced or openReader imports slackUsePolicy too.
+//   B-P7b-8 The client components under components/exec/slack/** (and BuildDigestButton.tsx and SlackChannelTags.tsx
+//           whatever their directive) reach no server-only module; slack-intel-copy.ts and slack-intel-types.ts import no
+//           server-only or Supabase module, and slack-intel-types.ts imports only slack-read-types, email-types and time.
+//   B-P7b-9 P3's bans hold for every P7b file (bannedOffenses, importerOffenses); none imports DD's fb-onboarding modules
+//           (B-P7a-3's leadKeyOffenses: channelSlug is P7a's slack-classes.ts).
+// Comments never count; names in types never count.
+
+const P7B_TABLES = ["exec_slack_channel_links", "exec_slack_message_links", "exec_slack_digests"];
+/** §2.1.12's fourteen functions, RPC 1-14 in order. */
+const P7B_FUNCTIONS = [
+  "exec_slack_set_channel_links", "exec_slack_set_channel_rules", "exec_slack_unlinked_messages", "exec_slack_project_items", "exec_slack_search",
+  "exec_slack_digest_claim", "exec_slack_digest_finish", "exec_slack_digest_blank", "exec_chat_finish_turn_v2", "exec_chat_redact_slack",
+  "exec_chat_slack_recheck", "exec_chat_slack_orphan_channels", "exec_slack_public_facts", "exec_slack_intel_forget_channels"
+];
+const P7B_COLUMNS = ["consulted_slack_refs", "consulted_slack_channels", "consulted_private_slack"];
+const P7B_COLUMN_SET: ReadonlySet<string> = new Set(P7B_COLUMNS);
+const SLACK_INTEL_STORE_FILE = "src/lib/exec/slack-intel-store.ts";
+const CHAT_STORE_FILE = "src/lib/exec/chat-store.ts";
+const P7B_COLUMN_FILES: ReadonlySet<string> = new Set([SLACK_INTEL_STORE_FILE, CHAT_STORE_FILE]);
+const P7B_STORE_TEXT = new RegExp(`(?<![A-Za-z0-9_])(${[...P7B_TABLES, ...P7B_FUNCTIONS].join("|")})(?![A-Za-z0-9_.:])`, "g");
+const P7B_COLUMN_TEXT = new RegExp(`(?<![A-Za-z0-9_])(${P7B_COLUMNS.join("|")})(?![A-Za-z0-9_])`, "g");
+const P7B_MIGRATION_FILE = "supabase/migrations/20261110100000_exec_slack_intel.sql";
+const EXCERPT_KEYS: ReadonlySet<string> = new Set(["excerpt", "p_excerpt"]);
+const EXCERPT_WRITE_METHODS: ReadonlySet<string> = new Set(["insert", "upsert", "update", "rpc"]);
+const EXCERPT_TOKEN = /(?<![A-Za-z0-9_])excerpt(?![A-Za-z0-9_])/i;
+// B-P7b-4
+const CU_FACTS_FILE = "src/lib/exec/client-update-facts.ts";
+interface CuFactsRule { names: ReadonlySet<string> | null; typesOnly: boolean }
+const CU_FACTS_ALLOWED: ReadonlyMap<string, CuFactsRule> = new Map([
+  ["src/lib/exec/types", { names: null, typesOnly: false }],
+  ["src/lib/exec/drafts-types", { names: null, typesOnly: true }],
+  ["src/lib/exec/slack-intel-types", { names: null, typesOnly: false }],
+  ["src/lib/exec/slack-read-types", { names: null, typesOnly: true }],
+  ["src/lib/exec/slack-intel-store", { names: new Set(["listPublicSlackFactsForClient", "slackIntelState"]), typesOnly: false }],
+  ["src/lib/exec/slack-reading", { names: new Set(["listIntelChannels"]), typesOnly: false }],
+  ["src/lib/exec/principal", { names: new Set(["loadSettings"]), typesOnly: false }],
+  ["src/lib/exec/sources/dd", { names: new Set(["listCompletedTasksForClient", "listUsers"]), typesOnly: false }],
+  ["src/lib/exec/sources/dd-text", { names: new Set(["listEodClientWorkForClient"]), typesOnly: false }],
+  ["src/lib/exec/text/untrusted", { names: null, typesOnly: false }],
+  ["src/lib/exec/refs", { names: null, typesOnly: false }],
+  ["src/lib/exec/time", { names: null, typesOnly: false }],
+  ["src/lib/exec/triage/email-text", { names: new Set(["neutralizeUntrusted", "sanitizeText"]), typesOnly: false }]
+]);
+/** Erased at run time and pure: the DD row types and the email verdict types (a type import carries no capability). */
+const CU_FACTS_TYPE_TARGETS: ReadonlySet<string> = new Set(["src/lib/exec/sources/dd-types", "src/lib/exec/email-types"]);
+// B-P7b-6
+const CLIENT_UPDATE_FILE = "src/lib/exec/client-update.ts";
+const CLIENT_UPDATE_MODULE = "src/lib/exec/client-update";
+const CLIENT_UPDATE_IMPORTER = "src/lib/exec/agent/tools.ts";
+const TOOL_DEFS_FILE = "src/lib/exec/agent/tool-defs.ts";
+const CLIENT_UPDATE_TOOL = "prepare_client_update";
+const CLIENT_UPDATE_TOOL_KEYS = ["project_id", "thread_id"];
+const CREATE_CLIENT_UPDATE_DRAFT = "createClientUpdateDraft";
+const OWNER_INSTRUCTION_FROM = "ownerInstructionFrom";
+/** A receiver that holds the tool's own input, never his question. */
+const TOOL_INPUT_BINDING = /^(?:input|args|toolInput|params|body)$/;
+// B-P7b-7
+const LIVE_READ_FILES: ReadonlyMap<string, string> = new Map([["src/lib/exec/slack-search.ts", "triage"], ["src/lib/exec/slack-digests.ts", "sweep"]]);
+const SLACK_READ_MODULE = "src/lib/exec/slack-read";
+const SLACK_SOURCE_MODULE = "src/lib/exec/sources/slack";
+const SLACK_INTEL_TYPES_MODULE = "src/lib/exec/slack-intel-types";
+const LIVE_READ_FUNCTIONS: ReadonlySet<string> = new Set(["readHistory", "readReplies", "getPermalink"]);
+const LIVE_READ_GLUE: ReadonlySet<string> = new Set(["paced", "openReader"]);
+// B-P7b-8
+const P7B_COMPONENT_DIR = "src/components/exec/slack/";
+const SLACK_TAGS_FILE = "src/components/exec/settings/SlackChannelTags.tsx";
+const P7B_CLIENT_COMPONENTS: ReadonlySet<string> = new Set(["src/components/exec/slack/BuildDigestButton.tsx", SLACK_TAGS_FILE]);
+const SLACK_INTEL_TYPES_FILE = "src/lib/exec/slack-intel-types.ts";
+const SLACK_INTEL_COPY_FILE = "src/lib/exec/slack-intel-copy.ts";
+const SLACK_INTEL_TYPES_IMPORTS: ReadonlySet<string> = new Set(["src/lib/exec/slack-read-types", "src/lib/exec/email-types", "src/lib/exec/time"]);
+// The P7b files (§0.5): B-P7b-7 and B-P7b-9 are about them.
+const P7B_LIB_FILE =
+  /^src\/lib\/exec\/(?:slack-intel[^/]*|slack-links|correlate-slack|slack-digests|slack-search|slack-redact|client-update|client-update-facts|slack-page|slack-projects|triage\/slack-digest|handlers\/slack-correlate|handlers\/slack-digest[^/]*|handlers\/slack-intel-sweep)\.tsx?$/;
+const P7B_ROUTE_FILES: ReadonlySet<string> = new Set(["src/app/api/exec/slack/channels/[channelId]/links/route.ts", "src/app/api/exec/slack/digests/route.ts"]);
+const isP7bFile = (p: string) =>
+  P7B_LIB_FILE.test(p) || P7B_ROUTE_FILES.has(p) || p.startsWith(P7B_COMPONENT_DIR) || p === SLACK_TAGS_FILE || p.startsWith("src/app/(main)/executive/slack/");
+
+interface P7bFacts {
+  /** B-P7b-1: P7b table and function names in strings. */
+  storeNames: { name: string; line: number }[];
+  /** B-P7b-1: the P5b Slack columns in strings, keys, property names and bindings. */
+  columnNames: { name: string; line: number }[];
+  /** B-P7b-3: "line: method" for an excerpt / p_excerpt key inside an .insert / .upsert / .update / .rpc argument. */
+  excerptWrites: string[];
+  /** B-P7b-3: lines of a string naming excerpt as a token (a column list). */
+  excerptTexts: number[];
+  /** B-P7b-7: calls of a live read imported from sources/slack, and whether a paced(...) callback holds each. */
+  liveReads: { name: string; line: number; inPaced: boolean }[];
+  /** B-P7b-7: each paced(...) call's rate class literal (null when it isn't a string literal). */
+  pacedClasses: { cls: string | null; line: number }[];
+  /** B-P7b-6: tool("<name>", …) definitions: the schema's keys (null: not an object literal) and any instruction key. */
+  toolDefs: { name: string; line: number; keys: string[] | null; instruction: boolean }[];
+  /** B-P7b-6: createClientUpdateDraft calls, each with whether its ownerInstruction traces to ownerInstructionFrom(ctx.question). */
+  ownerCalls: { line: number; ok: boolean; why: string }[];
+}
+
+type OwnerDecl = { kind: "init"; expr: ts.Expression } | { kind: "member"; of: ts.Expression | null; prop: string };
+
+function analyzeP7b(sf: ts.SourceFile): P7bFacts {
+  const lineOf = (n: ts.Node) => sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1;
+  const facts: P7bFacts = { storeNames: [], columnNames: [], excerptWrites: [], excerptTexts: [], liveReads: [], pacedClasses: [], toolDefs: [], ownerCalls: [] };
+  const targetOf = (spec: string): string | null => {
+    const abs = resolveSpecifier(sf.fileName, spec);
+    return abs === null ? null : relPath(stripExt(abs)).toLowerCase();
+  };
+  // The live reads' local names, as imported from sources/slack.
+  const liveBindings = new Map<string, string>();
+  for (const s of sf.statements) {
+    if (!ts.isImportDeclaration(s) || !ts.isStringLiteral(s.moduleSpecifier) || targetOf(s.moduleSpecifier.text) !== SLACK_SOURCE_MODULE) continue;
+    const b = s.importClause?.namedBindings;
+    if (b && ts.isNamedImports(b)) {
+      for (const el of b.elements) {
+        const original = (el.propertyName ?? el.name).text;
+        if (LIVE_READ_FUNCTIONS.has(original) && !el.isTypeOnly) liveBindings.set(el.name.text, original);
+      }
+    }
+  }
+  // Declarations by name, for B-P7b-6's trace: consts, destructured consts and destructured parameters.
+  const decls = new Map<string, OwnerDecl[]>();
+  const addDecl = (name: string, d: OwnerDecl) => decls.set(name, [...(decls.get(name) ?? []), d]);
+  const collect = (n: ts.Node): void => {
+    // Consts only: a let or var can be reassigned after the line the trace reads.
+    if (ts.isVariableDeclaration(n) && n.initializer && (ts.getCombinedNodeFlags(n) & ts.NodeFlags.Const) !== 0) {
+      if (ts.isIdentifier(n.name)) addDecl(n.name.text, { kind: "init", expr: n.initializer });
+      else if (ts.isObjectBindingPattern(n.name)) {
+        for (const el of n.name.elements) {
+          if (!ts.isIdentifier(el.name)) continue;
+          const prop = el.propertyName && (ts.isIdentifier(el.propertyName) || ts.isStringLiteral(el.propertyName)) ? el.propertyName.text : el.name.text;
+          addDecl(el.name.text, { kind: "member", of: n.initializer, prop });
+        }
+      }
+    }
+    if (ts.isParameter(n) && ts.isObjectBindingPattern(n.name)) {
+      for (const el of n.name.elements) {
+        if (!ts.isIdentifier(el.name)) continue;
+        const prop = el.propertyName && ts.isIdentifier(el.propertyName) ? el.propertyName.text : el.name.text;
+        addDecl(el.name.text, { kind: "member", of: null, prop });
+      }
+    }
+    ts.forEachChild(n, collect);
+  };
+  collect(sf);
+  const strip = (e: ts.Expression): ts.Expression => {
+    let x = e;
+    while (ts.isParenthesizedExpression(x) || ts.isAsExpression(x) || ts.isNonNullExpression(x) || ts.isSatisfiesExpression(x) || ts.isAwaitExpression(x)) x = x.expression;
+    return x;
+  };
+  const every = (name: string, ok: (d: OwnerDecl) => boolean): boolean => {
+    const ds = decls.get(name) ?? [];
+    return ds.length > 0 && ds.every(ok);
+  };
+  /** <ctx>.question, or a binding of it; never a tool input's field. */
+  const isQuestion = (e: ts.Expression, depth = 0): boolean => {
+    if (depth > 6) return false;
+    const x = strip(e);
+    if (ts.isPropertyAccessExpression(x)) return x.name.text === "question" && !(ts.isIdentifier(x.expression) && TOOL_INPUT_BINDING.test(x.expression.text));
+    if (ts.isIdentifier(x)) {
+      return every(x.text, (d) => (d.kind === "init" ? isQuestion(d.expr, depth + 1)
+        : d.prop === "question" && (d.of === null || !(ts.isIdentifier(strip(d.of)) && TOOL_INPUT_BINDING.test((strip(d.of) as ts.Identifier).text)))));
+    }
+    return false;
+  };
+  /** ownerInstructionFrom(<question>), or a const holding it. */
+  const isOwnerCall = (e: ts.Expression, depth = 0): boolean => {
+    if (depth > 6) return false;
+    const x = strip(e);
+    if (ts.isCallExpression(x)) return ts.isIdentifier(x.expression) && x.expression.text === OWNER_INSTRUCTION_FROM && x.arguments.length === 1 && isQuestion(x.arguments[0]);
+    if (ts.isIdentifier(x)) return every(x.text, (d) => d.kind === "init" && isOwnerCall(d.expr, depth + 1));
+    return false;
+  };
+  /** ownerInstructionFrom(<question>).text, through consts and a { text } destructuring. */
+  const isOwnerText = (e: ts.Expression, depth = 0): boolean => {
+    if (depth > 6) return false;
+    const x = strip(e);
+    if (ts.isPropertyAccessExpression(x)) return x.name.text === "text" && isOwnerCall(x.expression, depth + 1);
+    if (ts.isIdentifier(x)) {
+      return every(x.text, (d) => (d.kind === "init" ? isOwnerText(d.expr, depth + 1) : d.prop === "text" && d.of !== null && isOwnerCall(d.of, depth + 1)));
+    }
+    return false;
+  };
+  const inPaced = (call: ts.Node): boolean => {
+    let n: ts.Node | undefined = call.parent;
+    while (n !== undefined && !ts.isFunctionLike(n)) n = n.parent;
+    if (n === undefined || !(ts.isArrowFunction(n) || ts.isFunctionExpression(n))) return false;
+    const holder = n.parent;
+    return ts.isCallExpression(holder) && calleeName(holder) === "paced" && holder.arguments.some((a) => a === n);
+  };
+  // Every object-literal key under a node, callbacks included (rows.map((r) => ({ … })) builds the rows a write sends).
+  const objectKeys = (root: ts.Node, out: { key: string; at: ts.Node }[]): void => {
+    const walk = (n: ts.Node): void => {
+      if ((ts.isPropertyAssignment(n) || ts.isShorthandPropertyAssignment(n)) && n.name !== undefined) {
+        const key = propertyNameText(n.name);
+        if (key !== null) out.push({ key, at: n });
+      }
+      ts.forEachChild(n, walk);
+    };
+    walk(root);
+  };
+  const isTargetValue = (n: ts.Node): boolean =>
+    ts.isPropertyAssignment(n.parent) && n.parent.initializer === n && propertyNameText(n.parent.name) === "target";
+
+  const visit = (node: ts.Node): void => {
+    if (ts.isTypeNode(node) || ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) return;
+    if (ts.isInterfaceDeclaration(node) || ts.isTypeAliasDeclaration(node)) return;
+    if (ts.isStringLiteralLike(node) || ts.isTemplateHead(node) || ts.isTemplateMiddle(node) || ts.isTemplateTail(node)) {
+      const text = node.text;
+      if (!isTargetValue(node)) for (const m of text.matchAll(P7B_STORE_TEXT)) facts.storeNames.push({ name: m[1], line: lineOf(node) });
+      for (const m of text.matchAll(P7B_COLUMN_TEXT)) facts.columnNames.push({ name: m[1], line: lineOf(node) });
+      // A quoted object key is a property, not a column list (B-P7b-3's write half reads keys).
+      const isKey = (ts.isPropertyAssignment(node.parent) || ts.isPropertySignature(node.parent)) && node.parent.name === node;
+      if (!isKey && EXCERPT_TOKEN.test(text)) facts.excerptTexts.push(lineOf(node));
+    }
+    if (ts.isIdentifier(node) && P7B_COLUMN_SET.has(node.text)) facts.columnNames.push({ name: node.text, line: lineOf(node) });
+    if (ts.isCallExpression(node)) {
+      const callee = node.expression;
+      const name = calleeName(node);
+      if (ts.isPropertyAccessExpression(callee) && EXCERPT_WRITE_METHODS.has(callee.name.text)) {
+        const keys: { key: string; at: ts.Node }[] = [];
+        for (const a of node.arguments) objectKeys(a, keys);
+        for (const k of keys) if (EXCERPT_KEYS.has(k.key)) facts.excerptWrites.push(`${lineOf(k.at)}: .${callee.name.text}({ ${k.key} })`);
+      }
+      if (ts.isIdentifier(callee) && liveBindings.has(callee.text)) {
+        facts.liveReads.push({ name: liveBindings.get(callee.text) as string, line: lineOf(node), inPaced: inPaced(node) });
+      }
+      if (name === "paced") {
+        const cls = node.arguments[2];
+        facts.pacedClasses.push({ cls: cls !== undefined && ts.isStringLiteralLike(cls) ? cls.text : null, line: lineOf(node) });
+      }
+      const first = node.arguments[0];
+      if (ts.isIdentifier(callee) && callee.text === "tool" && first !== undefined && ts.isStringLiteralLike(first)) {
+        const last = node.arguments[node.arguments.length - 1];
+        const keys = node.arguments.length > 1 && ts.isObjectLiteralExpression(last) ? literalKeys(last).keys : null;
+        const all: { key: string; at: ts.Node }[] = [];
+        for (const a of node.arguments.slice(1)) objectKeys(a, all);
+        facts.toolDefs.push({ name: first.text, line: lineOf(node), keys, instruction: all.some((k) => /instruction/i.test(k.key)) });
+      }
+      if (name === CREATE_CLIENT_UPDATE_DRAFT) {
+        const input = node.arguments[1];
+        let ok = false;
+        let why = "its input is not an object literal";
+        if (input !== undefined && ts.isObjectLiteralExpression(input)) {
+          const { opaque } = literalKeys(input);
+          const prop = input.properties.find((p) => p.name !== undefined && propertyNameText(p.name) === "ownerInstruction");
+          if (opaque) why = "its input has a spread or a computed key";
+          else if (prop === undefined) why = "no ownerInstruction";
+          else {
+            const value = ts.isShorthandPropertyAssignment(prop) ? prop.name : ts.isPropertyAssignment(prop) ? prop.initializer : null;
+            ok = value !== null && isOwnerText(value);
+            why = ok ? "" : "ownerInstruction is not ownerInstructionFrom(<ctx>.question).text";
+          }
+        }
+        facts.ownerCalls.push({ line: lineOf(node), ok, why });
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return facts;
+}
+
+const p7bOffenses = (check: (file: string, f: FileFacts) => string[]) => [...scan.facts].flatMap(([file, facts]) => check(file, facts));
+
+/** B-P7b-1: the P7b tables and functions outside slack-intel-store.ts; the P5b Slack columns outside it and chat-store.ts. */
+function p7bStoreOffenses(file: string, f: FileFacts): string[] {
+  return [
+    ...(file === SLACK_INTEL_STORE_FILE ? [] : f.p7b.storeNames.map((s) => `${file}:${s.line}: names ${s.name}; only ${SLACK_INTEL_STORE_FILE} may`)),
+    ...(P7B_COLUMN_FILES.has(file) ? [] : f.p7b.columnNames.map((s) => `${file}:${s.line}: names ${s.name}; only ${[...P7B_COLUMN_FILES].join(" and ")} may`))
+  ];
+}
+
+/** B-P7b-2: content in a P7b content file's logs and alerts, and in a P7b handler's returns (the P7b vocabulary). */
+function p7bContentOffenses(file: string, f: MailFacts): string[] {
+  if (!isP7bContentFile(file) && !isP7bHandler(file)) return [];
+  return [...f.contentLogs.map((at) => `${file}:${at}`), ...(isP7bHandler(file) ? f.contentReturns.map((at) => `${file}:${at}`) : [])];
+}
+
+/** B-P7b-3 (code): excerpt keys written outside slack-read-store.ts; excerpt in slack-intel-store.ts's strings. */
+function p7bExcerptOffenses(file: string, f: FileFacts): string[] {
+  return [
+    ...(file === SLACK_READ_STORE_FILE ? [] : f.p7b.excerptWrites.map((at) => `${file}:${at}: writes an excerpt (only ${SLACK_READ_STORE_FILE} may)`)),
+    ...(file === SLACK_INTEL_STORE_FILE ? f.p7b.excerptTexts.map((line) => `${file}:${line}: names excerpt (the P7b store never selects one)`) : [])
+  ];
+}
+
+/** Split a create-table body at its top-level commas. */
+function topLevelItems(body: string): string[] {
+  const out: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < body.length; i++) {
+    const c = body[i];
+    if (c === "(") depth += 1;
+    else if (c === ")") depth -= 1;
+    else if (c === "," && depth === 0) {
+      out.push(body.slice(start, i));
+      start = i + 1;
+    }
+  }
+  out.push(body.slice(start));
+  return out;
+}
+
+/** B-P7b-3 (migration): no P7b table defines a column named like excerpt, and no ADD COLUMN adds one (comments stripped). */
+function migrationExcerptOffenses(sql: string): string[] {
+  const text = sql.replace(/--[^\n]*/g, "");
+  const out: string[] = [];
+  for (const m of text.matchAll(/add\s+column\s+(?:if\s+not\s+exists\s+)?"?([a-z0-9_]*excerpt[a-z0-9_]*)"?/gi)) out.push(`adds a column ${m[1].toLowerCase()}`);
+  const create = new RegExp(`create\\s+table\\s+(?:if\\s+not\\s+exists\\s+)?(?:public\\.)?(${P7B_TABLES.join("|")})\\s*\\(`, "gi");
+  for (const m of text.matchAll(create)) {
+    let depth = 1;
+    let i = (m.index ?? 0) + m[0].length;
+    const start = i;
+    for (; i < text.length && depth > 0; i++) {
+      if (text[i] === "(") depth += 1;
+      else if (text[i] === ")") depth -= 1;
+    }
+    for (const item of topLevelItems(text.slice(start, i - 1))) {
+      const first = (item.trim().split(/\s+/)[0] ?? "").replace(/"/g, "").toLowerCase();
+      if (/excerpt/.test(first)) out.push(`${m[1].toLowerCase()} has a column ${first}`);
+    }
+  }
+  return out;
+}
+
+/** B-P7b-4: client-update-facts.ts's imports and table names. */
+function clientUpdateFactsOffenses(file: string, f: FileFacts): string[] {
+  if (file !== CU_FACTS_FILE) return [];
+  const out: string[] = [];
+  for (const s of f.p4.specifiers) if (s.target === null && s.spec !== "server-only") out.push(`${file}:${s.line}: imports ${s.spec}`);
+  for (const r of f.p5.refs) {
+    if (r.target === null) continue;
+    const rule = CU_FACTS_ALLOWED.get(r.target);
+    if (rule === undefined) {
+      if (!(r.typeOnly && CU_FACTS_TYPE_TARGETS.has(r.target))) out.push(`${file}:${r.line}: imports ${r.target}${r.typeOnly ? " (types)" : ""}; not on its allow-list`);
+      continue;
+    }
+    if (r.typeOnly) continue;
+    if (rule.typesOnly && (r.names.length > 0 || r.whole)) out.push(`${file}:${r.line}: imports values from ${r.target} (types only)`);
+    if (r.whole) out.push(`${file}:${r.line}: takes ${r.target} whole`);
+    if (rule.names !== null) for (const name of r.names) if (!rule.names.has(name)) out.push(`${file}:${r.line}: imports ${name} from ${r.target}`);
+  }
+  for (const t of f.p4.tableNames) out.push(`${file}:${t.line}: names ${t.name}`);
+  return out;
+}
+
+/** B-P7b-6: client-update's importers, the tool's schema, and the owner instruction's source. */
+function clientUpdateEntryOffenses(file: string, f: FileFacts): string[] {
+  const out: string[] = [];
+  for (const r of f.p5.refs) {
+    if (r.target !== CLIENT_UPDATE_MODULE) continue;
+    if (file.startsWith("src/app/")) out.push(`${file}:${r.line}: references ${CLIENT_UPDATE_MODULE}`);
+    else if (!r.typeOnly && file !== CLIENT_UPDATE_IMPORTER) out.push(`${file}:${r.line}: imports ${CLIENT_UPDATE_MODULE} (only ${CLIENT_UPDATE_IMPORTER} may)`);
+  }
+  if (file === TOOL_DEFS_FILE) {
+    const defs = f.p7b.toolDefs.filter((d) => d.name === CLIENT_UPDATE_TOOL);
+    if (defs.length !== 1) out.push(`${file}: ${defs.length} ${CLIENT_UPDATE_TOOL} definitions (one expected)`);
+    for (const d of defs) {
+      if (d.instruction) out.push(`${file}:${d.line}: ${CLIENT_UPDATE_TOOL} has an instruction property`);
+      if (d.keys === null || [...d.keys].sort().join(",") !== CLIENT_UPDATE_TOOL_KEYS.join(",")) {
+        out.push(`${file}:${d.line}: ${CLIENT_UPDATE_TOOL}'s schema is ${d.keys === null ? "not an object literal" : `{ ${d.keys.join(", ")} }`}`);
+      }
+    }
+  }
+  if (file === CLIENT_UPDATE_FILE) for (const c of f.p7b.ownerCalls) if (!c.ok) out.push(`${file}:${c.line}: ${CREATE_CLIENT_UPDATE_DRAFT}: ${c.why}`);
+  return out;
+}
+
+/** B-P7b-7: the live-read imports of the P7b files, and the paced enclosure and rate class in the two live files. */
+function liveReadOffenses(file: string, f: FileFacts): string[] {
+  if (!isP7bFile(file)) return [];
+  const out: string[] = [];
+  const valueRefs = (target: string) => f.p5.refs.filter((r) => r.target === target && !r.typeOnly);
+  const expected = LIVE_READ_FILES.get(file);
+  if (expected === undefined) {
+    for (const r of valueRefs(SLACK_READ_MODULE)) out.push(`${file}:${r.line}: imports ${SLACK_READ_MODULE} (only ${[...LIVE_READ_FILES.keys()].join(" and ")} may)`);
+    for (const r of valueRefs(SLACK_SOURCE_MODULE)) {
+      if (r.whole || r.names.some((n) => LIVE_READ_FUNCTIONS.has(n))) out.push(`${file}:${r.line}: imports a live Slack read (only ${[...LIVE_READ_FILES.keys()].join(" and ")} may)`);
+    }
+    return out;
+  }
+  for (const r of valueRefs(SLACK_SOURCE_MODULE)) if (r.whole) out.push(`${file}:${r.line}: takes ${SLACK_SOURCE_MODULE} whole (its reads can't be checked)`);
+  for (const c of f.p7b.liveReads) if (!c.inPaced) out.push(`${file}:${c.line}: ${c.name}(…) outside a paced(…) callback`);
+  for (const p of f.p7b.pacedClasses) if (p.cls !== expected) out.push(`${file}:${p.line}: paced(…) with class ${p.cls === null ? "(not a literal)" : JSON.stringify(p.cls)}; ${expected} expected`);
+  const glue = valueRefs(SLACK_READ_MODULE).some((r) => r.whole || r.names.some((n) => LIVE_READ_GLUE.has(n)));
+  const policy = f.mail.modules.some((m) => m.target === SLACK_INTEL_TYPES_MODULE && m.names.includes("slackUsePolicy"));
+  if (glue && !policy) out.push(`${file}: reads Slack live without importing slackUsePolicy`);
+  return out;
+}
+
+/** B-P7b-8: the Slack UI's client components and the two pure seeds. */
+function p7bClientSafeOffenses(file: string, f: FileFacts, factsByFile: ReadonlyMap<string, { p5: P5Facts }>, modules: ReadonlyMap<string, string>): string[] {
+  const out: string[] = [];
+  if ((file.startsWith(P7B_COMPONENT_DIR) || file === SLACK_TAGS_FILE) && (f.p5.useClient || P7B_CLIENT_COMPONENTS.has(file))) {
+    const chain = serverOnlyChain(file, f.p5, factsByFile, modules);
+    if (chain !== null) out.push(`${file}: reaches server-only (${chain.join(" → ")})`);
+  }
+  if (file === SLACK_INTEL_COPY_FILE || file === SLACK_INTEL_TYPES_FILE) {
+    if (f.p5.serverOnly) out.push(`${file}: imports server-only`);
+    for (const s of f.p4.specifiers) if (/supabase/i.test(s.spec)) out.push(`${file}:${s.line}: imports ${s.spec}`);
+    const chain = serverOnlyChain(file, f.p5, factsByFile, modules);
+    if (chain !== null && !f.p5.serverOnly) out.push(`${file}: reaches server-only (${chain.join(" → ")})`);
+  }
+  if (file === SLACK_INTEL_TYPES_FILE) {
+    for (const s of f.p4.specifiers) if (s.target === null || !SLACK_INTEL_TYPES_IMPORTS.has(s.target)) out.push(`${file}:${s.line}: imports ${s.spec}`);
+  }
+  return out;
+}
+
+/** B-P7b-9: P3's bans and the fb-onboarding ban, over the P7b files. */
+function p7bBanOffenses(file: string, f: FileFacts): string[] {
+  if (!isP7bFile(file)) return [];
+  return [...bannedOffenses(file, f.mail), ...importerOffenses(file, f.mail), ...leadKeyOffenses(file, f)];
+}
+
+const P7B_PRESENT = [
+  "src/lib/exec/slack-intel-types.ts", "src/lib/exec/slack-intel-copy.ts", "src/lib/exec/slack-intel-store.ts", "src/lib/exec/slack-links.ts",
+  "src/lib/exec/correlate-slack.ts", "src/lib/exec/handlers/slack-correlate.ts", "src/app/api/exec/slack/channels/[channelId]/links/route.ts",
+  "src/lib/exec/slack-digests.ts", "src/lib/exec/triage/slack-digest.ts", "src/lib/exec/slack-search.ts", "src/lib/exec/slack-redact.ts",
+  "src/lib/exec/client-update.ts", "src/lib/exec/client-update-facts.ts", "src/lib/exec/slack-page.ts", "src/lib/exec/slack-projects.ts"
+];
+
+describe("P7b boundary (real source tree; contract §0.4, BD01-BD13)", () => {
+  it("knows the P7b files, its content class and its handlers; the P7b modules are in the scan", () => {
+    for (const p of P7B_PRESENT) {
+      expect(isP7bFile(p), p).toBe(true);
+      expect(scan.files, p).toContain(p);
+    }
+    for (const p of ["src/lib/exec/handlers/slack-digest.ts", "src/lib/exec/handlers/slack-intel-sweep.ts", "src/components/exec/slack/DigestCard.tsx",
+      SLACK_TAGS_FILE, "src/app/(main)/executive/slack/page.tsx", "src/app/api/exec/slack/digests/route.ts"]) {
+      expect(isP7bFile(p), p).toBe(true);
+    }
+    for (const p of ["src/lib/exec/slack-read.ts", "src/lib/exec/slack-read-store.ts", "src/lib/exec/handlers/slack-triage.ts", "src/lib/exec/agent/tools.ts",
+      "src/app/api/exec/slack/channels/[channelId]/route.ts"]) {
+      expect(isP7bFile(p), p).toBe(false);
+    }
+    for (const p of ["src/lib/exec/client-update.ts", "src/lib/exec/client-update-facts.ts", "src/lib/exec/correlate-slack.ts", "src/lib/exec/triage/slack-digest.ts",
+      "src/lib/exec/slack-intel-store.ts", "src/lib/exec/slack-digests.ts", "src/lib/exec/slack-search.ts", "src/lib/exec/slack-links.ts",
+      "src/lib/exec/handlers/slack-digest.ts", "src/lib/exec/handlers/slack-intel-sweep.ts", "src/lib/exec/handlers/slack-correlate.ts"]) {
+      expect(isP7bContentFile(p), p).toBe(true);
+    }
+    for (const p of ["src/lib/exec/slack-read-store.ts", "src/lib/exec/slack-page.ts", "src/lib/exec/handlers/slack-triage.ts", "src/lib/exec/jobs.ts"]) {
+      expect(isP7bContentFile(p), p).toBe(false);
+    }
+    for (const p of ["src/lib/exec/handlers/slack-correlate.ts", "src/lib/exec/handlers/slack-digest.ts", "src/lib/exec/handlers/slack-digest-plan.ts",
+      "src/lib/exec/handlers/slack-intel-sweep.ts"]) {
+      expect(isP7bHandler(p) && isSlackHandler(p), p).toBe(true);
+    }
+    expect(isSlackFile("src/lib/exec/client-update.ts") && isSlackFile("src/lib/exec/client-update-facts.ts")).toBe(true);
+  });
+
+  it("BD01 B-P7b-1: the P7b tables and functions are named only by slack-intel-store.ts; the Slack columns by it and chat-store.ts", () => {
+    expect(P7B_TABLES).toHaveLength(3);
+    expect(new Set(P7B_FUNCTIONS).size).toBe(14);
+    // The P7b migration creates exactly the fourteen, each once (integrator: tightened to equality once the file was final).
+    const migration = path.join(ROOT, P7B_MIGRATION_FILE);
+    expect(existsSync(migration)).toBe(true);
+    const created = [...readFileSync(migration, "utf8").matchAll(/create or replace function public[.]([a-z0-9_]+)[(]/g)].map((m) => m[1]);
+    expect(created).toHaveLength(14);
+    expect([...created].sort()).toEqual([...P7B_FUNCTIONS].sort());
+    expect(p7bOffenses(p7bStoreOffenses)).toEqual([]);
+  });
+
+  it("BD02 B-P7b-2: no P7b content file logs or alerts content, and no P7b handler returns it, under the P7b vocabulary", () => {
+    expect(isContentName("clientName", vocabFor("src/lib/exec/slack-digests.ts"))).toBe(true);
+    expect(isContentName("workedOn", vocabFor("src/lib/exec/client-update-facts.ts"))).toBe(true);
+    expect(isContentName("clientName", vocabFor("src/lib/exec/handlers/slack-triage.ts"))).toBe(false);
+    expect(isContentName("clientName", vocabFor("src/lib/exec/jobs.ts"))).toBe(false);
+    expect(p3Offenses(p7bContentOffenses)).toEqual([]);
+    expect(p3Offenses(slackContentOffenses)).toEqual([]);
+  });
+
+  it("BD03 B-P7b-3: excerpts have one writer, slack-intel-store.ts selects none, the P7b migration adds no excerpt column", () => {
+    // The detector sees the real writer: P7a's store hands excerpts to its RPC (allowed there).
+    expect(p7bOffenses(p7bExcerptOffenses)).toEqual([]);
+    const migration = path.join(ROOT, P7B_MIGRATION_FILE);
+    if (existsSync(migration)) expect(migrationExcerptOffenses(readFileSync(migration, "utf8"))).toEqual([]);
+  });
+
+  it("BD04 B-P7b-4: client-update-facts.ts imports only its allow-list; drafts-pack.ts takes only the three names from it", () => {
+    expect(scan.files).toContain(CU_FACTS_FILE);
+    expect(p7bOffenses(clientUpdateFactsOffenses)).toEqual([]);
+    expect(p4Offenses(packOffenses)).toEqual([]);
+  });
+
+  it("BD05 B-P7b-5: sources/dd-text readers and the DD text columns; the anchor read's six columns are pinned", () => {
+    expect(p5Offenses(ddTextImportOffenses)).toEqual([]);
+    expect(p5bFacts().flatMap(([file, f]) => textColumnOffenses(file, f.p5b))).toEqual([]);
+    const anchors = factsOf(DD_TS_FILE).p5b.columnLists.filter((l) => l.table === "eod_client_updates" || l.table === "eod_client_checkins");
+    expect(anchors.map((l) => l.table).sort()).toEqual(["eod_client_checkins", "eod_client_updates"]);
+    for (const l of anchors) expect(l.columns).toEqual(["id", "client_id", "client_name", "slack_channel", "slack_ts", "sent_at"]);
+  });
+
+  it("BD06 B-P7b-6: createClientUpdateDraft and client-update's callers; prepare_client_update's schema has no instruction", () => {
+    expect(factsOf(DRAFTS_FILE).p5b.entryPoints.some((e) => e.name === CREATE_CLIENT_UPDATE_DRAFT)).toBe(true);
+    expect(p5bFacts().flatMap(([file, f]) => entryPointOffenses(file, f.p5b))).toEqual([]);
+    const defs = factsOf(TOOL_DEFS_FILE).p7b.toolDefs.filter((d) => d.name === CLIENT_UPDATE_TOOL);
+    expect(defs.map((d) => [d.keys === null ? null : [...d.keys].sort(), d.instruction])).toEqual([[CLIENT_UPDATE_TOOL_KEYS, false]]);
+    expect(p7bOffenses(clientUpdateEntryOffenses)).toEqual([]);
+  });
+
+  it("BD07 B-P7b-7: live Slack reads only in slack-search.ts and slack-digests.ts, inside paced(...) with their class", () => {
+    expect(p7bOffenses(liveReadOffenses)).toEqual([]);
+  });
+
+  it("BD08 B-P7b-8: the Slack UI's client components reach no server-only module; the two seeds stay pure", () => {
+    const modules = moduleIndex(scan.facts.keys());
+    expect(p7bOffenses((file, f) => p7bClientSafeOffenses(file, f, scan.facts, modules))).toEqual([]);
+    expect(new Set(factsOf(SLACK_INTEL_TYPES_FILE).p4.specifiers.map((s) => s.target))).toEqual(SLACK_INTEL_TYPES_IMPORTS);
+    expect(serverOnlyChain(SLACK_INTEL_COPY_FILE, factsOf(SLACK_INTEL_COPY_FILE).p5, scan.facts, modules)).toBeNull();
+  });
+
+  it("BD09 B-P7b-9: P3's bans and the fb-onboarding ban hold for every P7b file", () => {
+    expect(scan.files.filter(isP7bFile).length).toBeGreaterThanOrEqual(P7B_PRESENT.length);
+    expect(p7bOffenses(p7bBanOffenses)).toEqual([]);
+    expect(factsOf("src/lib/exec/correlate-slack.ts").mail.modules.map((m) => m.target)).toContain("src/lib/exec/slack-classes");
+  });
+
+  it("BD12 B-P7b-6: every createClientUpdateDraft call in client-update.ts passes ownerInstructionFrom(<ctx>.question).text", () => {
+    const facts = factsOf(CLIENT_UPDATE_FILE);
+    const text = readFileSync(path.join(ROOT, CLIENT_UPDATE_FILE), "utf8");
+    // Integrator (stage 2): once the service calls the draft function, the check is strict and never vacuous.
+    if (text.includes(`${CREATE_CLIENT_UPDATE_DRAFT}(`)) expect(facts.p7b.ownerCalls.length).toBeGreaterThan(0);
+    expect(facts.p7b.ownerCalls.filter((c) => !c.ok)).toEqual([]);
+  });
+
+  it("BD13 P7a's rules hold on P7b's tree: B-P7a-2 (P7a tables only in slack-read-store.ts) and B-P7a-6 (the page's CatchUpRow says quote)", () => {
+    expect(p7aOffenses(p7aStoreOffenses)).toEqual([]);
+    expect(p7aOffenses(excerptOffenses)).toEqual([]);
+    expect(readFileSync(path.join(ROOT, "src/lib/exec/slack-page.ts"), "utf8")).toMatch(/interface CatchUpRow \{[^}]*\bquote: string \| null/);
+  });
+});
+
+describe("P7b boundary detectors (probes; BD01-BD13)", () => {
+  const kindOf = (file: string) => (file.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+  const sourceAt = (file: string, code: string) => ts.createSourceFile(path.join(ROOT, file), code, ts.ScriptTarget.Latest, true, kindOf(file));
+  const mailAt = (file: string, code: string) => analyzeMail(sourceAt(file, code), vocabFor(file));
+  /** Syntax-only facts of a probe file (no checker), shaped like the scan's. */
+  const factsAt = (file: string, code: string): FileFacts => {
+    const sf = sourceAt(file, code);
+    return { mail: analyzeMail(sf, vocabFor(file)), p4: analyzeP4(sf), p5: analyzeP5(sf), p5b: analyzeP5b(sf), p7a: analyzeP7a(sf, null), p7b: analyzeP7b(sf) } as unknown as FileFacts;
+  };
+  const PAGE = "src/lib/exec/slack-page.ts";
+  const DIGESTS = "src/lib/exec/slack-digests.ts";
+  const SEARCH = "src/lib/exec/slack-search.ts";
+  const DIGEST_HANDLER = "src/lib/exec/handlers/slack-digest.ts";
+  const CORRELATE = "src/lib/exec/correlate-slack.ts";
+  const BUTTON = "src/components/exec/slack/BuildDigestButton.tsx";
+  const ROUTE_FILE = "src/app/api/exec/slack/digests/route.ts";
+
+  it("BD01 B-P7b-1: every P7b table and function, by RPC, from() or SQL text, outside slack-intel-store.ts; labels, types and comments aren't", () => {
+    const store = (file: string, code: string) => p7bStoreOffenses(file, factsAt(file, code));
+    expect(store(PAGE, 'const { data } = await db.from("exec_slack_digests").select("id");')).toHaveLength(1);
+    for (const name of [...P7B_TABLES, ...P7B_FUNCTIONS]) {
+      expect(store(DIGEST_HANDLER, `await db.rpc(${JSON.stringify(name)}, {});`), name).toHaveLength(1);
+      expect(store(SLACK_INTEL_STORE_FILE, `await db.rpc(${JSON.stringify(name)}, {});`), name).toEqual([]);
+    }
+    expect(store(PAGE, "const sql = `select * from exec_slack_message_links where ts = ${ts}`;")).toHaveLength(1);
+    expect(store(PAGE, 'if (m.includes("exec_slack_digests_built_idx")) x();')).toEqual([]);
+    expect(store(PAGE, 'await auditEvent(p, { action: "slack.digest.request", target: "exec_slack_digests:" + id });')).toEqual([]);
+    expect(store(PAGE, 'const t = { target: "exec_slack_channel_links" };')).toEqual([]);
+    expect(store(PAGE, 'type T = "exec_slack_digests";\n// exec_slack_digests rows')).toEqual([]);
+    // P5b's v1 RPC is not P7b's: its own rule applies, not this one.
+    expect(store(DIGEST_HANDLER, 'await db.rpc("exec_chat_finish_turn", a);')).toEqual([]);
+    // The Slack columns: chat-store.ts and the store may; any other file is flagged, as a string, a key, a property or a binding.
+    for (const code of ['await db.from("exec_messages").select("id, consulted_slack_refs");', "await db.from(\"exec_messages\").update({ consulted_private_slack: true });",
+      "const n = row.consulted_slack_channels.length;", "const { consulted_slack_refs } = row;"]) {
+      expect(store("src/lib/exec/agent/run.ts", code), code).toHaveLength(1);
+      expect(store(CHAT_STORE_FILE, code), code).toEqual([]);
+      expect(store(SLACK_INTEL_STORE_FILE, code), code).toEqual([]);
+    }
+    expect(store("src/lib/exec/agent/run.ts", "interface Row { consulted_slack_refs: string[] }\nconst consultedSlackRefs = 1;")).toEqual([]);
+  });
+
+  it("BD02 B-P7b-2: console.log(digest.summary) in slack-digests.ts, notifyOps with a query in slack-search.ts, a handler returning a summary", () => {
+    const content = (file: string, code: string) => p7bContentOffenses(file, mailAt(file, code));
+    expect(content(DIGESTS, "console.log(digest.summary);")).toHaveLength(1);
+    expect(content(SEARCH, 'notifyOps("x", { query });')).toHaveLength(1);
+    for (const [file, code] of [
+      [CORRELATE, "console.warn(client.name);"], ["src/lib/exec/client-update-facts.ts", "console.log(entry.workedOn);"],
+      ["src/lib/exec/client-update.ts", "console.info(`[exec] ${ownerInstruction}`);"], [DIGESTS, "console.log(line.permalink);"],
+      ["src/lib/exec/triage/slack-digest.ts", "console.error(corpus);"], ["src/lib/exec/slack-intel-store.ts", "console.error(row.title);"],
+      ["src/lib/exec/slack-links.ts", "console.log(names);"], [SEARCH, "console.log(hit.text);"], [DIGESTS, "console.log({ highlights });"]
+    ] as const) {
+      expect(content(file, code), `${file}: ${code}`).toHaveLength(1);
+    }
+    // Ids, counts, codes and an Error's own name pass.
+    for (const code of ["console.log(channelId, ts, count, humanCount);", 'console.error(`[exec-slack-intel] build failed for ${principal.id} (${err instanceof Error ? err.name : "error"})`);',
+      "console.warn(error.name, e.name);", "console.log(digestId, nameCount, summaryLength);"]) {
+      expect(content(DIGESTS, code), code).toEqual([]);
+    }
+    const handler = (ret: string) => `export const h = { kind: "exec.slack-digest", lane: "bulk", timeoutMs: 1, run: async (ctx) => (${ret}) };`;
+    expect(content(DIGEST_HANDLER, handler("{ outcome, summary: parsed.summary }"))).toHaveLength(1);
+    expect(content("src/lib/exec/handlers/slack-correlate.ts", handler("{ names }"))).toHaveLength(1);
+    expect(content("src/lib/exec/handlers/slack-intel-sweep.ts", handler("{ query }"))).toHaveLength(1);
+    expect(content(DIGEST_HANDLER, handler("{ outcome: \"built\", humanCount: 4, partial: false, fullDay: true, costUsd: 0.01 }"))).toEqual([]);
+    // P7a's and other files keep their own vocabulary.
+    expect(content("src/lib/exec/handlers/slack-triage.ts", "console.log(clientName);")).toEqual([]);
+    expect(slackContentOffenses("src/lib/exec/handlers/slack-triage.ts", mailAt("src/lib/exec/handlers/slack-triage.ts", "console.log(clientName);"))).toEqual([]);
+    expect(contentOffenses("src/lib/exec/jobs.ts", mailAt("src/lib/exec/jobs.ts", "console.log(clientName);"))).toEqual([]);
+  });
+
+  it("BD03 B-P7b-3: upsert({ excerpt }) in slack-intel-store.ts and slack-digests.ts; an excerpt select in the store; reads aren't writes", () => {
+    const ex = (file: string, code: string) => p7bExcerptOffenses(file, factsAt(file, code));
+    for (const file of [SLACK_INTEL_STORE_FILE, DIGESTS, SEARCH, "src/lib/exec/handlers/slack-intel-sweep.ts"]) {
+      expect(ex(file, 'await db.from("exec_slack_digests").upsert({ excerpt });'), file).toHaveLength(1);
+      expect(ex(file, 'await db.rpc("x", { p_rows: [{ id, p_excerpt: e }] });'), file).toHaveLength(1);
+      expect(ex(file, 'await db.from("t").update({ data: { excerpt: e } });'), file).toHaveLength(1);
+      expect(ex(file, 'await db.from("t").insert([{ "excerpt": e }]);'), file).toHaveLength(1);
+    }
+    expect(ex(SLACK_READ_STORE_FILE, 'await db.rpc("exec_slack_write_items", { p_items: [{ excerpt }] });')).toEqual([]);
+    expect(ex(SLACK_INTEL_STORE_FILE, 'const r = await db.from("exec_slack_items").select("id, summary, excerpt");')).toHaveLength(1);
+    expect(ex(SEARCH, 'const cols = "id, summary, excerpt";')).toEqual([]);
+    expect(ex(SEARCH, "const n = item.excerpt === null ? 0 : 1; render({ excerpt: item.excerpt }); map.update(k, { excerpt });")).toHaveLength(1);
+    expect(ex(SEARCH, "const n = item.excerpt === null ? 0 : 1; render({ excerpt: item.excerpt });")).toEqual([]);
+    expect(ex(SEARCH, "await db.from(\"t\").upsert(rows.map((r) => ({ excerpt: r.x })));")).toHaveLength(1);
+    // The migration half: a column defined or added, never an expression, an index or a comment.
+    const sql = (body: string) => migrationExcerptOffenses(body);
+    expect(sql("create table if not exists public.exec_slack_digests (\n  id text primary key,\n  excerpt text,\n  summary text\n);")).toEqual(["exec_slack_digests has a column excerpt"]);
+    expect(sql('create table public.exec_slack_message_links (ts text, "message_excerpt" text not null default \'\');')).toEqual(["exec_slack_message_links has a column message_excerpt"]);
+    expect(sql("alter table public.exec_messages add column if not exists excerpt text;")).toEqual(["adds a column excerpt"]);
+    expect(sql([
+      "create table if not exists public.exec_slack_digests (",
+      "  id text primary key, summary text check (char_length(summary) <= 1200),",
+      "  constraint exec_slack_digests_x check (coalesce(summary, '') <> 'excerpt')",
+      ");",
+      "-- excerpt text: never stored here",
+      "create index if not exists exec_slack_items_search_idx on public.exec_slack_items using gin (to_tsvector('simple'::regconfig, coalesce(summary, '') || ' ' || coalesce(excerpt, '')));",
+      "select i.excerpt from public.exec_slack_items i;"
+    ].join("\n"))).toEqual([]);
+  });
+
+  it("BD04 B-P7b-4: the three named probes in client-update-facts.ts; its allow-list passes; banned modules and tables are flagged", () => {
+    const cu = (code: string) => clientUpdateFactsOffenses(CU_FACTS_FILE, factsAt(CU_FACTS_FILE, code));
+    expect(cu('import { listClients } from "@/lib/exec/sources/dd";')).toHaveLength(1);
+    expect(cu('import { listOpenSlackItems } from "@/lib/exec/slack-reading";')).toHaveLength(1);
+    expect(cu('import { getChannel } from "@/lib/exec/slack-read-store";')).toHaveLength(1);
+    expect(cu([
+      'import "server-only";',
+      'import type { ExecPrincipal } from "@/lib/exec/types";',
+      'import type { ClientUpdateFactsRecord, PackFact } from "@/lib/exec/drafts-types";',
+      'import { SLACK_INTEL_LIMITS, slackUsePolicy, type SlotStatus } from "@/lib/exec/slack-intel-types";',
+      'import type { ChannelRow } from "@/lib/exec/slack-read-types";',
+      'import { listPublicSlackFactsForClient, slackIntelState } from "@/lib/exec/slack-intel-store";',
+      'import { listIntelChannels } from "@/lib/exec/slack-reading";',
+      'import { loadSettings } from "@/lib/exec/principal";',
+      'import { listCompletedTasksForClient, listUsers } from "@/lib/exec/sources/dd";',
+      'import type { DdTask, DdUser } from "@/lib/exec/sources/dd-types";',
+      'import type { MatchConfidence } from "@/lib/exec/email-types";',
+      'import { listEodClientWorkForClient } from "@/lib/exec/sources/dd-text";',
+      'import { maskSecrets, newNonce, renderUntrustedBlock } from "@/lib/exec/text/untrusted";',
+      'import { isAllowedLinkUrl } from "@/lib/exec/refs";',
+      'import { localDateString } from "@/lib/exec/time";',
+      'import { neutralizeUntrusted, sanitizeText } from "@/lib/exec/triage/email-text";',
+      'export type { ClientUpdateFactsRecord } from "@/lib/exec/drafts-types";'
+    ].join("\n"))).toEqual([]);
+    for (const code of [
+      'import { DRAFT_LIMITS } from "@/lib/exec/drafts-types";', 'import { compareTs } from "@/lib/exec/slack-read-types";',
+      'import { buildDraftPack } from "@/lib/exec/drafts-pack";', 'import { readHistory } from "@/lib/exec/sources/slack";',
+      'import { paced } from "@/lib/exec/slack-read";', 'import * as dd from "@/lib/exec/sources/dd";', 'import { executeToolCall } from "@/lib/exec/agent/tools";',
+      'import type { ToolContext } from "@/lib/exec/agent/tools";', 'import { notifyOps } from "@/lib/slack";', 'import { getSupabaseAdmin } from "@/lib/supabase-admin";',
+      'import { z } from "zod";', 'import { listDigestViews } from "@/lib/exec/slack-digests";', 'import { sanitizeText, stripQuotes } from "@/lib/exec/triage/email-text";',
+      'const t = "brain_memories";', 'const m = await import("@/lib/exec/sources/dd");'
+    ]) {
+      expect(cu(code).length, code).toBeGreaterThanOrEqual(1);
+    }
+    // Only client-update-facts.ts is held to this list.
+    expect(clientUpdateFactsOffenses("src/lib/exec/client-update.ts", factsAt("src/lib/exec/client-update.ts", 'import { listClients } from "@/lib/exec/sources/dd";'))).toEqual([]);
+  });
+
+  it("BD05 B-P7b-5: listEodClientWorkForClient in slack-page.ts, worked_on from eod_client_work in sources/dd.ts, message from the anchors", () => {
+    const dt = (file: string, code: string) => ddTextImportOffenses(file, analyzeP5(sourceAt(file, code)));
+    const cols = (file: string, code: string) => textColumnOffenses(file, analyzeP5b(sourceAt(file, code)));
+    expect(dt(PAGE, 'import { listEodClientWorkForClient } from "@/lib/exec/sources/dd-text";')).toHaveLength(1);
+    expect(dt(CU_FACTS_FILE, 'import { listEodClientWorkForClient } from "@/lib/exec/sources/dd-text";')).toEqual([]);
+    expect(dt(CU_FACTS_FILE, 'import { listEodClientWorkForClient, listMeetingBriefRisks } from "@/lib/exec/sources/dd-text";')).toHaveLength(1);
+    expect(dt(CU_FACTS_FILE, 'import * as text from "@/lib/exec/sources/dd-text";')).toHaveLength(1);
+    expect(cols(DD_TS_FILE, 'const q = getSupabaseAdmin().from("eod_client_work").select("id, worked_on");')).toHaveLength(1);
+    expect(cols(DD_TS_FILE, 'const q = from("eod_client_work", "id,note_date,results");')).toHaveLength(1);
+    expect(cols(DD_TS_FILE, 'const q = from("eod_client_updates", "id,client_id,message");')).toHaveLength(1);
+    expect(cols(DD_TS_FILE, 'const q = from("eod_client_checkins", "id,subject");')).toHaveLength(1);
+    expect(cols(DD_TS_FILE, 'const q = from("email_drafts", "id,body_html");')).toHaveLength(1);
+    expect(cols("src/lib/exec/client-update.ts", 'const q = db.from("email_drafts").select("id, subject, sent_at");')).toHaveLength(1);
+    // The reads P7b makes pass; sources/dd-text.ts may select the text it is the one reader of.
+    expect(cols(DD_TS_FILE, 'const C = "id,client_id,client_name,slack_channel,slack_ts,sent_at";\nconst q = from("eod_client_updates", C);')).toEqual([]);
+    expect(cols(DD_TS_FILE, 'const q = from("email_drafts", "id,sent_at,client_id,kind,status");')).toEqual([]);
+    expect(cols(DD_TS_FILE, 'const q = from("eod_client_work", "id,reported_to_client_at");')).toEqual([]);
+    expect(cols("src/lib/exec/sources/dd-text.ts", 'const q = from("eod_client_work", "id,note_date,worked_on,results,reported_to_client_at");')).toEqual([]);
+  });
+
+  it("BD06 B-P7b-6: createClientUpdateDraft in a route, client-update outside agent/tools.ts, an instruction on prepare_client_update", () => {
+    const ep = (file: string, code: string) => entryPointOffenses(file, analyzeP5b(sourceAt(file, code)));
+    const entry = (file: string, code: string) => clientUpdateEntryOffenses(file, factsAt(file, code));
+    expect(ep(ROUTE_FILE, 'import { createClientUpdateDraft } from "@/lib/exec/drafts";')).toHaveLength(1);
+    expect(ep("src/lib/exec/agent/tools.ts", "await createClientUpdateDraft(p, x);")).toHaveLength(1);
+    expect(ep(CLIENT_UPDATE_FILE, "await createClientUpdateDraft(p, x);")).toEqual([]);
+    expect(entry(ROUTE_FILE, 'import { prepareClientUpdate } from "@/lib/exec/client-update";')).toHaveLength(1);
+    expect(entry(ROUTE_FILE, 'import type { ClientUpdateResult } from "@/lib/exec/client-update";')).toHaveLength(1);
+    expect(entry("src/lib/exec/agent/run.ts", 'import { prepareClientUpdate } from "@/lib/exec/client-update";')).toHaveLength(1);
+    expect(entry("src/lib/exec/agent/types.ts", 'import type { ClientUpdateResult } from "@/lib/exec/client-update";')).toEqual([]);
+    expect(entry(CLIENT_UPDATE_IMPORTER, 'import { prepareClientUpdate } from "@/lib/exec/client-update";')).toEqual([]);
+    const defs = (props: string) => `const TOOLS = [tool("search_email", "l", "read", true, 1, "d", { query: { type: "string" } }),\n  tool("prepare_client_update", "l", "staged", true, 1, "Use his words as the instruction.", { ${props} })];`;
+    expect(entry(TOOL_DEFS_FILE, defs('thread_id: { type: "string" }, project_id: { type: "string" }'))).toEqual([]);
+    expect(entry(TOOL_DEFS_FILE, defs('thread_id: { type: "string" }, project_id: { type: "string" }, instruction: { type: "string" }'))).toHaveLength(2);
+    expect(entry(TOOL_DEFS_FILE, defs('thread_id: { type: "string", properties: { owner_instruction: {} } }, project_id: { type: "string" }'))).toHaveLength(1);
+    expect(entry(TOOL_DEFS_FILE, defs('thread_id: { type: "string" }, project_id: { type: "string" }, client: { type: "string" }'))).toHaveLength(1);
+    expect(entry(TOOL_DEFS_FILE, defs('thread_id: { type: "string" }'))).toHaveLength(1);
+    expect(entry(TOOL_DEFS_FILE, 'const TOOLS = [tool("search_email", "l", "read", true, 1, "d", {})];')).toHaveLength(1);
+  });
+
+  it("BD07 B-P7b-7: a live read imported outside the two files, a read outside paced(...), the wrong class, no policy import", () => {
+    const live = (file: string, code: string) => liveReadOffenses(file, factsAt(file, code));
+    expect(live(CU_FACTS_FILE, 'import { readHistory } from "@/lib/exec/sources/slack";')).toHaveLength(1);
+    expect(live(PAGE, 'import { openReader } from "@/lib/exec/slack-read";')).toHaveLength(1);
+    expect(live(DIGEST_HANDLER, 'import { getPermalink as link } from "@/lib/exec/sources/slack";')).toHaveLength(1);
+    expect(live(PAGE, 'import type { SlackReadMessage } from "@/lib/exec/sources/slack";\nimport type { ReadingInstallation } from "@/lib/exec/slack-read";')).toEqual([]);
+    const head = 'import { openReader, paced } from "@/lib/exec/slack-read";\nimport { getPermalink, readHistory as history } from "@/lib/exec/sources/slack";\nimport { slackUsePolicy } from "@/lib/exec/slack-intel-types";\n';
+    expect(live(SEARCH, `${head}const page = await paced(ri, "conversations.history", "triage", () => history(ri.target, q), { signal });`)).toEqual([]);
+    expect(live(SEARCH, `${head}const link = await paced(ri, "chat.getPermalink", "triage", async () => { return getPermalink(ri.target, c, ts); });`)).toEqual([]);
+    expect(live(SEARCH, `${head}const page = await history(ri.target, q);`)).toHaveLength(1);
+    expect(live(SEARCH, `${head}const f = () => history(ri.target, q); await paced(ri, "conversations.history", "triage", f);`)).toHaveLength(1);
+    expect(live(SEARCH, `${head}await paced(ri, "conversations.history", "triage", async () => { const g = () => history(ri.target, q); return g(); });`)).toHaveLength(1);
+    expect(live(SEARCH, `${head}await paced(ri, "conversations.history", "sweep", () => history(ri.target, q));`)).toHaveLength(1);
+    expect(live(DIGESTS, `${head}await paced(ri, "conversations.history", "sweep", () => history(ri.target, q));`)).toEqual([]);
+    expect(live(DIGESTS, `${head}await paced(ri, "conversations.history", cls, () => history(ri.target, q));`)).toHaveLength(1);
+    expect(live(SEARCH, 'import { paced } from "@/lib/exec/slack-read";\nimport { readHistory } from "@/lib/exec/sources/slack";\nawait paced(ri, "conversations.history", "triage", () => readHistory(ri.target, q));')).toHaveLength(1);
+    expect(live(SEARCH, 'import * as slack from "@/lib/exec/sources/slack";\nimport { slackUsePolicy } from "@/lib/exec/slack-intel-types";')).toHaveLength(1);
+    // Not a P7b file: P7a's own handlers are outside this rule.
+    expect(live("src/lib/exec/handlers/slack-read-sweep.ts", 'import { readHistory } from "@/lib/exec/sources/slack";\nawait readHistory(t, q);')).toEqual([]);
+  });
+
+  it("BD08 B-P7b-8: server-only in BuildDigestButton.tsx; a client component reaching a server module; the seeds' purity", () => {
+    const modules = moduleIndex(scan.facts.keys());
+    const safe = (file: string, code: string) => p7bClientSafeOffenses(file, factsAt(file, code), scan.facts, modules);
+    expect(safe(BUTTON, 'import "server-only";')).toHaveLength(1);
+    expect(safe("src/components/exec/slack/DigestFilter.tsx", '"use client";\nimport { getSlackPageView } from "@/lib/exec/slack-page";')).toHaveLength(1);
+    expect(safe(SLACK_TAGS_FILE, '"use client";\nimport { setChannelTags } from "@/lib/exec/slack-intel-store";')).toHaveLength(1);
+    expect(safe(SLACK_TAGS_FILE, '"use client";\nimport { SLACK_INTEL_COPY } from "@/lib/exec/slack-intel-copy";\nimport type { SlackChannelLink } from "@/lib/exec/slack-intel-types";\nimport { useIsTopWindow } from "@/components/exec/drafts/frame-guard";')).toEqual([]);
+    // A server component under components/exec/slack may read server modules (the page's server half).
+    expect(safe("src/components/exec/slack/SlackPageView.tsx", 'import { getSlackPageView } from "@/lib/exec/slack-page";')).toEqual([]);
+    expect(safe(SLACK_INTEL_TYPES_FILE, 'import "server-only";')).toHaveLength(2);
+    expect(safe(SLACK_INTEL_TYPES_FILE, 'import { getSupabaseAdmin } from "@/lib/supabase-admin";').length).toBeGreaterThanOrEqual(2);
+    expect(safe(SLACK_INTEL_TYPES_FILE, 'import { listClients } from "@/lib/exec/sources/dd";').length).toBeGreaterThanOrEqual(1);
+    expect(safe(SLACK_INTEL_TYPES_FILE, 'import { compareTs } from "@/lib/exec/slack-read-types";\nimport { localDateString } from "@/lib/exec/time";\nimport type { MatchConfidence } from "@/lib/exec/email-types";')).toEqual([]);
+    expect(safe(SLACK_INTEL_COPY_FILE, 'import { createClient } from "@supabase/supabase-js";')).toHaveLength(1);
+    expect(safe(SLACK_INTEL_COPY_FILE, "export const SLACK_INTEL_COPY = Object.freeze({ tabLabel: \"Slack\" });")).toEqual([]);
+  });
+
+  it("BD09 B-P7b-9: channelSlug from @/lib/fb-onboarding in correlate-slack.ts; P3's bans in every P7b file", () => {
+    const ban = (file: string, code: string) => p7bBanOffenses(file, factsAt(file, code));
+    expect(ban(CORRELATE, 'import { channelSlug } from "@/lib/fb-onboarding";')).toHaveLength(1);
+    expect(ban(CORRELATE, 'import { channelSlug } from "@/lib/exec/slack-classes";')).toEqual([]);
+    expect(ban(DIGESTS, 'import { runAiTool } from "@/lib/ai-tools";')).toHaveLength(1);
+    expect(ban(SEARCH, 'import { findSlackUserByEmail } from "@/lib/slack-users";\nfindSlackUserByEmail(x);').length).toBeGreaterThanOrEqual(1);
+    expect(ban("src/components/exec/slack/DigestCard.tsx", 'import { postAsUser } from "@/lib/slack";').length).toBeGreaterThanOrEqual(1);
+    expect(ban(ROUTE_FILE, 'import { getClient } from "@/lib/missive-client";')).toHaveLength(1);
+  });
+
+  it("BD10 the same names inside comments and types aren't flagged by any P7b rule", () => {
+    const code = [
+      "// exec_slack_digests, consulted_slack_refs, upsert({ excerpt }), readHistory(ri.target, q)",
+      '/* import { listClients } from "@/lib/exec/sources/dd"; console.log(digest.summary); paced(ri, "x", "sweep", f) */',
+      "type Probe = { consulted_slack_refs: string[]; excerpt: string };",
+      "export const ok = 1;"
+    ].join("\n");
+    for (const file of [PAGE, DIGESTS, SEARCH, CU_FACTS_FILE, CLIENT_UPDATE_FILE]) {
+      const f = factsAt(file, code);
+      expect([...p7bStoreOffenses(file, f), ...p7bContentOffenses(file, f.mail), ...p7bExcerptOffenses(file, f), ...clientUpdateFactsOffenses(file, f),
+        ...clientUpdateEntryOffenses(file, f), ...liveReadOffenses(file, f), ...p7bBanOffenses(file, f)], file).toEqual([]);
+    }
+  });
+
+  it("BD11 P4's B10 still passes with drafts-pack.ts importing client-update-facts (its three names); other names and pack files are flagged", () => {
+    const pack = (file: string, code: string) => packOffenses(file, analyzeP4(sourceAt(file, code)));
+    const ok = 'import { CLIENT_UPDATE_PROMPT_ADDENDUM, clientUpdateFacts, type ClientUpdateFacts } from "@/lib/exec/client-update-facts";';
+    expect(pack(PACK_CU_FACTS_IMPORTER, ok)).toEqual([]);
+    expect(PACK_BANNED_TARGET.test(CU_FACTS_MODULE)).toBe(false);
+    expect(pack(PACK_CU_FACTS_IMPORTER, 'import { renderSlackFactsBlock } from "@/lib/exec/client-update-facts";')).toHaveLength(1);
+    expect(pack(PACK_CU_FACTS_IMPORTER, 'import * as cuf from "@/lib/exec/client-update-facts";')).toHaveLength(1);
+    expect(pack("src/lib/exec/drafts-generate.ts", ok)).toHaveLength(1);
+    // B10 itself is unchanged: a Slack module and a private table still fail.
+    expect(pack(PACK_CU_FACTS_IMPORTER, 'import { x } from "@/lib/exec-slack-thing";\nconst t = "task_messages";')).toHaveLength(2);
+    expect(pack(PACK_CU_FACTS_IMPORTER, 'import { listClients } from "@/lib/exec/sources/dd";')).toHaveLength(1);
+    expect([...PACK_DD_NAMES].sort()).toEqual(["getMailTimezone", "listClientMatchSignals", "listOpenTasksForClient", "listProjectStages", "listProjects", "listUsers"]);
+  });
+
+  it("BD12 the ownerInstructionFrom(ctx.question) trace: his question passes, through consts and destructuring; a tool input or anything else fails", () => {
+    const owner = (code: string) => factsAt(CLIENT_UPDATE_FILE, code).p7b.ownerCalls.map((c) => c.ok);
+    const draft = (value: string, pre = "") =>
+      `export async function prepareClientUpdate(principal, settings, input, ctx) {\n${pre}\n  return createClientUpdateDraft(principal, { threadId: input.thread_id, ownerInstruction: ${value}, usesPrivateRefs: false, projectIds: [] }, { signal: ctx.signal });\n}`;
+    expect(owner(draft("ownerInstructionFrom(ctx.question).text"))).toEqual([true]);
+    expect(owner(draft("owner.text", "  const owner = ownerInstructionFrom(ctx.question);"))).toEqual([true]);
+    expect(owner(draft("instruction", "  const owner = ownerInstructionFrom(ctx.question);\n  const instruction = owner.text;"))).toEqual([true]);
+    expect(owner(draft("text", "  const { text } = ownerInstructionFrom(ctx.question);"))).toEqual([true]);
+    expect(owner(draft("words", "  const { text: words, clipped } = ownerInstructionFrom(ctx.question);"))).toEqual([true]);
+    expect(owner(draft("owner.text", "  const { question } = ctx;\n  const owner = ownerInstructionFrom(question);"))).toEqual([true]);
+    expect(owner("export async function f(p, { question, signal }) { return createClientUpdateDraft(p, { threadId: t, ownerInstruction: ownerInstructionFrom(question).text, usesPrivateRefs: false, projectIds: [] }); }")).toEqual([true]);
+    for (const [value, pre] of [
+      ["input.thread_id", ""], ["ctx.question", ""], ["ownerInstructionFrom(input.question).text", ""], ["ownerInstructionFrom(ctx.question).clipped", ""],
+      ["ownerInstructionFrom(ctx.answer).text", ""], ["`${ownerInstructionFrom(ctx.question).text} ${input.thread_id}`", ""],
+      ["ownerInstructionFrom(ctx.question).text + modelText", ""], ["owner.text", "  let owner = ownerInstructionFrom(ctx.question);\n  owner = { text: input.x };"],
+      ["owner.text", "  const owner = ownerInstructionFrom(ctx.question);\n  if (x) { const owner = { text: input.thread_id }; }"], ["owner.text", "  const owner = clip(ctx.question);"]
+    ] as const) {
+      expect(owner(draft(value, pre)), value + pre).toEqual([false]);
+    }
+    expect(owner("await createClientUpdateDraft(p, { ...base });")).toEqual([false]);
+    expect(owner("await createClientUpdateDraft(p, args);")).toEqual([false]);
+    expect(owner("await createClientUpdateDraft(p, { threadId: t, usesPrivateRefs: false, projectIds: [] });")).toEqual([false]);
+    // The real rule reports each failing call in client-update.ts only.
+    const f = factsAt(CLIENT_UPDATE_FILE, draft("input.thread_id"));
+    expect(clientUpdateEntryOffenses(CLIENT_UPDATE_FILE, f)).toHaveLength(1);
+    expect(clientUpdateEntryOffenses("src/lib/exec/drafts.ts", f)).toEqual([]);
+  });
+
+  it("BD13 P7a's rules on P7b files: from(\"exec_slack_items\") in slack-search.ts, { excerpt: item.excerpt } in slack-page.ts", () => {
+    const p7aFacts = (file: string, code: string) => ({ mail: mailAt(file, code), p7a: analyzeP7a(sourceAt(file, code), null) }) as unknown as FileFacts;
+    expect(p7aStoreOffenses(SEARCH, p7aFacts(SEARCH, 'const { data } = await db.from("exec_slack_items").select("id");'))).toHaveLength(1);
+    expect(p7aStoreOffenses(SEARCH, p7aFacts(SEARCH, 'await listIntelChannels(principal);'))).toEqual([]);
+    expect(excerptOffenses(PAGE, p7aFacts(PAGE, "const row = { itemId: item.id, excerpt: item.excerpt };"))).toHaveLength(1);
+    expect(excerptOffenses(PAGE, p7aFacts(PAGE, "const row = { itemId: item.id, quote: item.excerpt };"))).toEqual([]);
   });
 });

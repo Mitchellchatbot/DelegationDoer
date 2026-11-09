@@ -16,6 +16,9 @@ import {
   type BucketRow
 } from "@/lib/exec/email-store";
 import { countDraftsForSystem, getVoiceProfile, type DraftSystemCounts } from "@/lib/exec/drafts-store";
+import { slackCatchUpCounts } from "@/lib/exec/slack-digests";
+import { slackIntelState } from "@/lib/exec/slack-intel-store";
+import { SLACK_INTEL_LIMITS, type SlackCatchUpCounts, type SlackIntelState } from "@/lib/exec/slack-intel-types";
 import { DRAFT_JOB_KINDS } from "@/lib/exec/drafts-types";
 import {
   bucketize,
@@ -312,6 +315,12 @@ export interface OverviewSections {
   projects: OverviewSection<OverviewProjects>;
   system: OverviewSection<OverviewSystem>;
   email: OverviewSection<OverviewEmail>;
+  /**
+   * P7b (§3.12.2, C24): the Slack tile's data. { ok: false } = the settings couldn't be read (no tile: the state is
+   * unknown); otherwise the intel state, and the catch-up counts while it is "ok" (null = that read failed or ran past
+   * 8 s: the tile says "Couldn't load"). Optional in the type: getOverview always fills it; a fixture may leave it out.
+   */
+  slack?: OverviewSection<{ state: SlackIntelState; counts: SlackCatchUpCounts | null }>;
 }
 
 export interface ExecOverview {
@@ -860,6 +869,7 @@ export async function getOverview(principal: ExecPrincipal, now: Date = new Date
   });
 
   const draftsSystem = draftsSystemReads(principal, now, read, emailGate, jobs);
+  const slackTile = slackTileRead(principal, now, signal, emailGate);
   const slackSystem = slackSystemRead(principal, read, emailGate);
 
   const system = build("system", async (): Promise<OverviewSystem> => {
@@ -871,14 +881,15 @@ export async function getOverview(principal: ExecPrincipal, now: Date = new Date
     return { ...health, ...(drafts === undefined ? {} : { drafts }), ...(slack === undefined ? {} : { slack }) };
   });
 
-  const [tilesResult, attentionResult, approvalsResult, deadlinesResult, projectsResult, systemResult, emailResult] = await Promise.all([
+  const [tilesResult, attentionResult, approvalsResult, deadlinesResult, projectsResult, systemResult, emailResult, slackResult] = await Promise.all([
     tiles,
     attention,
     approvalsSection,
     deadlines,
     projectsSection,
     system,
-    email.section
+    email.section,
+    slackTile
   ]);
   return {
     generatedAt: nowIso,
@@ -890,9 +901,47 @@ export async function getOverview(principal: ExecPrincipal, now: Date = new Date
       deadlines: deadlinesResult,
       projects: projectsResult,
       system: systemResult,
-      email: emailResult
+      email: emailResult,
+      slack: slackResult
     }
   };
+}
+
+// ---------------------------------------------------------------------------
+// The Slack tile (P7b §3.12.2, C24)
+// ---------------------------------------------------------------------------
+
+/**
+ * The Slack tile's section. The settings come from the email gate's read (one settings read per page); without them the
+ * state is unknown and there is no tile ({ ok: false }). slackIntelState never throws (C1 fails closed to
+ * "not_installed", reading nothing while the P7a schema flag is off). Only while the state is "ok" are the catch-up counts
+ * read, raced against 8 s inside the page's deadline; a failure or a timeout is counts null (the tile's "Couldn't load").
+ * Logs carry the principal id and the error's name only.
+ */
+async function slackTileRead(
+  principal: ExecPrincipal,
+  now: Date,
+  signal: AbortSignal,
+  gateRead: Promise<Settled<EmailGate>>
+): Promise<NonNullable<OverviewSections["slack"]>> {
+  const gate = await gateRead;
+  if (!gate.ok) return UNAVAILABLE;
+  try {
+    const state = await untilAborted(slackIntelState(principal, gate.value.settings, { signal }), signal);
+    if (state !== "ok") return { ok: true, data: { state, counts: null } };
+    const timeout = AbortSignal.timeout(SLACK_INTEL_LIMITS.overviewReadTimeoutMs);
+    const tileSignal = typeof AbortSignal.any === "function" ? AbortSignal.any([signal, timeout]) : timeout;
+    try {
+      const counts = await untilAborted(slackCatchUpCounts(principal, state, { signal: tileSignal, now }), tileSignal);
+      return { ok: true, data: { state, counts } };
+    } catch (err) {
+      console.error(`[exec-overview] slack counts failed for ${principal.id} (${err instanceof Error ? err.name : "error"})`);
+      return { ok: true, data: { state, counts: null } };
+    }
+  } catch (err) {
+    console.error(`[exec-overview] slack state failed for ${principal.id} (${err instanceof Error ? err.name : "error"})`);
+    return UNAVAILABLE;
+  }
 }
 
 // ---------------------------------------------------------------------------

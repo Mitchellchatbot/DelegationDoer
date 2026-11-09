@@ -378,3 +378,9 @@ export interface ApprovalItemList {
   total: number;
   truncated: boolean;
 }
+
+/**
+ * P7b (§3.13; Area B): one Scaled Team post that names a client (C4): an eod_client_updates or eod_client_checkins row with a
+ * Slack ts. Ids and times only: never message or subject (P5b rule 2 + B-P7b-5).
+ */
+export interface DdEodSlackAnchor { source: "update" | "checkin"; id: string; clientId: string | null; clientName: string; slackChannel: string; slackTs: string; sentAt: string }

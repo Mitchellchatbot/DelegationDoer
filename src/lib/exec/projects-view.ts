@@ -17,6 +17,7 @@ import { listBucketRows } from "@/lib/exec/email-store";
 import { loadIntakeScreeningPolicy, restrictedIntakeTaskIds } from "@/lib/exec/intake-screen";
 import { loadSettings } from "@/lib/exec/principal";
 import { isLiveDdtextSignal } from "@/lib/exec/producers/ddtext";
+import { getProjectSlackSection, type ProjectSlackSection } from "@/lib/exec/slack-projects";
 import { ddClientRef, ddProjectRef, ddTaskRef, execEmailThreadRef } from "@/lib/exec/refs";
 import {
   listActivitySince,
@@ -77,6 +78,8 @@ const SUBJECT_CHARS = 120;
 const MAX_AI_BLOCKERS = 20;
 const AI_BLOCKER_KINDS: readonly DdtextKind[] = ["blocker", "waiting", "decision"];
 const PROJECT_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/;
+/** P7b (§3.17.4): the Slack section is raced against its own 10 s inside the page's deadline. */
+const SLACK_SECTION_TIMEOUT_MS = 10_000;
 
 const UNAVAILABLE = { ok: false, error: "unavailable" } as const;
 type Settled<T> = Cell<T>;
@@ -340,7 +343,8 @@ function stageViews(
  * and extensions), blockers (derived, and AI-assessed ones from DD text when
  * triage is on), the honest updates feed, the derived client's meeting-brief
  * risks (AI-assessed, read live) and his conversations with that client
- * (screened, private, subject only). null when the project doesn't exist.
+ * (screened, private, subject only), and P7b's Slack section (slack-projects.ts,
+ * raced against 10 s). null when the project doesn't exist.
  */
 export async function getProjectDetail(
   principal: ExecPrincipal,
@@ -550,13 +554,33 @@ export async function getProjectDetail(
     return { state: "ok" as const, rows, hiddenRestricted: candidates.length - kept.length };
   });
 
+  // P7b (§3.17.4, §3.12.3, C19): the Slack card, from the settings, the project's task ids and the derived client. Raced
+  // against 10 s; a throw, a timeout or a failed input is the card's "Couldn't load". Only the error's name is logged.
+  const slack = (async (): Promise<Section<ProjectSlackSection>> => {
+    try {
+      const s: ExecSettings = need(await settings);
+      const taskIds = need(await tasks).map((t) => t.id);
+      const client = await derived;
+      const timeout = AbortSignal.timeout(SLACK_SECTION_TIMEOUT_MS);
+      const slackSignal = typeof AbortSignal.any === "function" ? AbortSignal.any([signal, timeout]) : timeout;
+      const data = await untilAborted(
+        getProjectSlackSection(principal, s, { projectId: project.id, projectName: project.name, taskIds, derivedClient: client }, { now, signal: slackSignal }),
+        slackSignal
+      );
+      return { ok: true, data };
+    } catch (err) {
+      if (err !== INPUT_FAILED) console.error(`[exec-projects] slack section failed for ${principal.id} (${err instanceof Error ? err.name : "error"})`);
+      return UNAVAILABLE;
+    }
+  })();
+
   const departmentName = (async () => {
     const d = await departments;
     if (!d.ok || project.departmentId === null) return null;
     return d.value.find((x) => x.id === project.departmentId)?.name ?? null;
   })();
 
-  const [summaryS, stagesS, delaysS, blockersS, updatesS, risksS, conversationsS, deptName] = await Promise.all([
+  const [summaryS, stagesS, delaysS, blockersS, updatesS, risksS, conversationsS, deptName, slackS] = await Promise.all([
     summary,
     stagesSection,
     delays,
@@ -564,7 +588,8 @@ export async function getProjectDetail(
     updates,
     meetingRisks,
     conversations,
-    departmentName
+    departmentName,
+    slack
   ]);
   opts.signal?.throwIfAborted();
   return {
@@ -577,7 +602,8 @@ export async function getProjectDetail(
     blockers: blockersS,
     updates: updatesS,
     meetingRisks: risksS,
-    conversations: conversationsS
+    conversations: conversationsS,
+    slack: slackS
   };
 }
 

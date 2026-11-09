@@ -22,7 +22,7 @@ export interface ProposalView {
 }
 export type CardView =
   | { kind: "task_proposal"; proposal: ProposalView }
-  | { kind: "draft"; draftId: string; href: string; existing: boolean; privateRefKinds: ("other_threads" | "dd_text" | "other_clients")[] };
+  | { kind: "draft"; draftId: string; href: string; existing: boolean; privateRefKinds: ("other_threads" | "dd_text" | "other_clients" | "private_slack")[] };   // P7b: + private_slack (stage-0 seed)
 export interface ChatMessageView {
   id: string; turnId: string; role: "user" | "assistant";
   status: ChatStatusView; statusReason: string | null;

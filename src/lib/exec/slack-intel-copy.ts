@@ -1,0 +1,90 @@
+// P7b Slack intelligence: every fixed string (P7b contract §3.14; stage 0, lead seed, frozen). Pure and client-safe:
+// no imports. Exactly the contract's block (a sha256 pin in p7b-seed.test.ts); a change goes through the lead. The P7b
+// fixer's copy changes (state.reading_revoked, notAssessed, notOnNote.reading_revoked, tagsInactive, readingIntelNotice)
+// are recorded in the contract's appendix "P7b fixer amendments".
+// Templates use {name} placeholders that the caller fills; the strings never hold Slack text, names or ids.
+
+export const SLACK_INTEL_COPY = Object.freeze({
+  tabLabel: "Slack",
+  pageTitle: "Slack",
+  pageIntro: "What needs you in Slack and a daily digest per conversation. Summaries are AI-assessed; open Slack for the messages.",
+  state: {
+    not_installed: "Slack intelligence isn't installed yet. The team needs to apply the database update.",
+    not_connected: "Slack isn't connected. Connect it in Settings.",
+    reading_revoked: "The assistant can't read your Slack: reading isn't allowed, or it stopped working. Allow it in Settings to see catch-up and digests.",
+    reading_off: "Slack reading is off. It's turned on in Settings after the legal and notice checklist.",
+    discovering: "The assistant is still sorting your Slack conversations. Catch-up and digests appear once it's done."
+  },
+  pickerLink: "Choose which conversations are read, muted or tagged",
+  catchUpTitle: "Catch-up",
+  catchUpEmpty: "Nothing in Slack is waiting on you.",
+  catchUpHiddenMuted: "{n} more in muted conversations aren't shown.",
+  notAssessed: "Not assessed (the daily Slack budget was reached, or it couldn't be assessed)",
+  openInSlack: "Open in Slack",
+  digestsTitle: "Daily digests",
+  digestsEmpty: "No digests for this day.",
+  digestNotBuilt: "Not built yet.",
+  digestBuilding: "Building…",
+  digestEmpty: "No messages from people that day.",
+  digestStale: "Removed: a message it used was deleted. It will be rebuilt.",
+  digestStaleOld: "Removed: a message it used was deleted.",
+  digestFailed: "Couldn't build this digest.",
+  digestSkippedCap: "Not summarized: the daily Slack budget was reached.",
+  digestPartial: "Busy day: only the latest messages were summarized.",
+  digestCounts: "{human} messages from people · {bots} from bots and DD · {threads} threads",
+  buildToday: "Build today's digest",
+  buildQueued: "Queued. Refresh in a minute.",
+  buildFresh: "Already up to date.",
+  buildError: "Couldn't start the build. Try again.",
+  channelsWithoutDigest: "{n} more conversations had activity.",
+  privacy: { public: "Public", private: "Private", group_dm: "Group DM", dm: "DM", external: "Slack Connect", finance: "Finance" },
+  kinds: { request: "Request", question: "Question", decision: "Decision", commitment: "Commitment", action_item: "Action item", fyi: "FYI" },
+  projectSection: "Slack",
+  projectLinked: "Linked to this project's work",
+  projectClient: "In {client}'s channels",
+  projectMentions: "Mentions",
+  projectEmpty: "No Slack discussion is linked to this project yet. Tag channels to clients and projects in Settings.",
+  overviewTileLabel: "Slack",
+  overviewTileSub: "Unanswered in Slack",
+  tagsSaved: "Saved", tagsNotTaggable: "This conversation can't be tagged.", tagsUnknown: "That client or project no longer exists.",
+  tagsRateLimited: "Too many changes. Try again in a few minutes.", tagsError: "Couldn't save. Try again.",
+  tagsGreyed: "Not taggable", tagsTagged: "Tagged: {client}", tagsRuleOne: "Name suggests {client}", tagsRuleMany: "Name matches {n} clients",
+  tagsFramed: "Changes are off in an embedded view.",
+  tagsInactive: "Tagged: {client} (inactive client)",
+  readingIntelNotice: "With reading on, the assistant also writes a daily digest of each watched conversation (not one-to-one DMs): its messages from people, not only those addressed to you, are sent to Anthropic's Claude, sometimes more than once a day, and digests are kept in DD for {days} days. Digests share the Slack daily budget. When you ask in chat, it can also read up to 3 watched conversations live (up to 30 days back); those answers are kept with your chat history.",
+  // chat
+  notOnNote: {
+    not_installed: "Slack reading isn't installed yet. Say so; don't guess about Slack.",
+    not_connected: "Slack isn't connected. Say so; don't guess about Slack.",
+    reading_revoked: "Slack reading isn't allowed, or it stopped working. Say so; don't guess about Slack.",
+    reading_off: "Slack reading isn't on. Say so; don't guess about Slack.",
+    discovering: "Slack reading is still being set up. Say so; don't guess about Slack."
+  },
+  searchRecordedOnly: "This searches what the assistant recorded and, when asked, a few channels read live. Say 'I didn't find it', never 'it isn't in Slack'.",
+  searchLiveNeedsScope: "Live reading needs a channel or a client.",
+  searchLivePartial: "Live reading stopped early (Slack's rate limit or time budget); some recent messages weren't checked.",
+  searchLiveClamped: "Live reading covers at most the last 30 days.",
+  slackBudgetFull: "This question has read as much Slack as one answer may; some items were left out.",
+  digestBuildingNote: "Today's digest for {channel} is being built; ask again in a minute.",
+  cuMedium: "The thread's client match is only medium confidence, so the drafter gets no client facts. Ask him to confirm the client in DD.",
+  cuNoClient: "This thread isn't matched to a client, so a client update can't be prepared. Use create_draft for an ordinary reply.",
+  cuUntriaged: "This thread hasn't been triaged yet; the drafter checks the client when it writes.",
+  cuExisting: "A draft for this thread already has your edits or is saved in Outlook; regenerate it from the draft page.",
+  cuBusy: "A draft for this thread is being written right now.",
+  cuRegenerated: "The thread's open draft was rewritten as a client update.",
+  cuNothingSent: "Nothing is sent. He reviews and sends it from DD.",
+  cuPrivateCount: "{n} private Slack items about this client weren't given to the drafter; ask to see them.",
+  cuSlackOff: "Slack reading isn't on, so no Slack updates were used.",
+  cuLastUpdate: "The team last emailed this client an update on {date}; check this one doesn't repeat it.",
+  cuWorkReported: "Team work was last reported to this client on {date}.",
+  cuClipped: "His message was longer than 2,000 characters; the drafter got the first 2,000.",
+  cuOnePerMessage: "Only one client update can be prepared per message. Ask him to request each client's update in its own message.",
+  searchLiveRateBudget: "Live reading stopped early: Slack's rate budget for the assistant is used up for now.",
+  digestRebuilding: "This digest is being rebuilt; ask again in a minute.",
+  // draft panel (P4 UI)
+  draftClientUpdate: "Client update. Used: {completed} finished tasks, {teamWork} team work notes, {publicSlack} public Slack updates.",
+  draftClientUpdateLast: "The team last emailed {client} an update on {date}.",
+  slotUnavailable: "{slot} couldn't be read, so they weren't used."
+});
+export const SLACK_REDACTED_TEXT = "[Removed: this answer drew on Slack messages that were deleted or are no longer available.]";
+export const SLACK_UNCHECKED_TEXT = "[Removed: the Slack messages this answer drew on couldn't be re-checked.]";

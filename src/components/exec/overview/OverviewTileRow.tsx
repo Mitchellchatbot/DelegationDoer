@@ -1,16 +1,55 @@
 import { TriangleAlert } from "lucide-react";
 import { formatCount, formatInZone, pluralize } from "@/lib/exec/format";
-import type { OverviewSection, OverviewTiles } from "@/lib/exec/overview";
+import type { OverviewSection, OverviewSections, OverviewTiles } from "@/lib/exec/overview";
+import { SLACK_INTEL_COPY } from "@/lib/exec/slack-intel-copy";
+import { cn } from "@/lib/utils";
 import { StatTile, type StatTint } from "../StatTile";
 
 // The six numbers for today. A tile whose read failed shows "—" and says it
 // couldn't load: the value is unknown, not zero.
+//
+// P7b (§3.12.2, C24): a seventh, "Slack" (unanswered Slack items to him,
+// Derived, linking to /executive/slack), only while the Slack intelligence
+// state is "ok"; the grid becomes xl:grid-cols-7 only then. With the state ok
+// and the counts unread, the tile says "Couldn't load"; any other state, or no
+// section, shows no tile and leaves P2b's six as they were.
 
 function Unavailable({ label, tint }: { label: string; tint: StatTint }) {
   return <StatTile label={label} value={null} tint={tint} delta={{ text: "Couldn't load", tone: "warn" }} />;
 }
 
-export function OverviewTileRow({ tiles, tz, now }: { tiles: OverviewSection<OverviewTiles>; tz: string; now: string }) {
+/** Whether the Slack tile shows (C24): the section read, and the state is "ok". */
+export function slackTileShown(slack: OverviewSections["slack"] | null | undefined): boolean {
+  return slack !== null && slack !== undefined && slack.ok && slack.data.state === "ok";
+}
+
+function SlackTile({ slack }: { slack: NonNullable<OverviewSections["slack"]> }) {
+  const counts = slack.ok ? slack.data.counts : null;
+  if (counts === null) return <Unavailable label={SLACK_INTEL_COPY.overviewTileLabel} tint="amber" />;
+  return (
+    <StatTile
+      label={SLACK_INTEL_COPY.overviewTileLabel}
+      value={counts.unanswered}
+      basis="derived"
+      sub={SLACK_INTEL_COPY.overviewTileSub}
+      tint="amber"
+      href="/executive/slack"
+    />
+  );
+}
+
+export function OverviewTileRow({
+  tiles,
+  tz,
+  now,
+  slack = null
+}: {
+  tiles: OverviewSection<OverviewTiles>;
+  tz: string;
+  now: string;
+  /** P7b: the Overview's Slack section (getOverview's sections.slack); null or absent shows no Slack tile. */
+  slack?: OverviewSections["slack"] | null;
+}) {
   if (!tiles.ok) {
     return (
       <div role="status" className="flex items-start gap-2 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-[12.5px] text-amber-900">
@@ -21,8 +60,9 @@ export function OverviewTileRow({ tiles, tz, now }: { tiles: OverviewSection<Ove
   }
   const { completedToday, createdToday, openOverdue, activePeople, eodSubmitted, hoursLogged, eodDate } = tiles.data;
   const day = (ymd: string) => formatInZone(ymd, tz, "date", now);
+  const showSlack = slackTileShown(slack);
   return (
-    <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
+    <div data-overview-tiles className={cn("grid grid-cols-2 gap-3 md:grid-cols-3", showSlack ? "xl:grid-cols-7" : "xl:grid-cols-6")}>
       {completedToday.ok ? (
         <StatTile
           label="Completed today"
@@ -93,6 +133,7 @@ export function OverviewTileRow({ tiles, tz, now }: { tiles: OverviewSection<Ove
       ) : (
         <Unavailable label="Hours logged" tint="teal" />
       )}
+      {showSlack && slack && <SlackTile slack={slack} />}
     </div>
   );
 }

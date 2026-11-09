@@ -43,6 +43,8 @@ import { purgeDraftsByIds } from "@/lib/exec/drafts-store";
 import { getEmailThread, listThreadScreenRows } from "@/lib/exec/email-store";
 import type { ThinkingBindingBehavior } from "@/lib/exec/llm/request";
 import { ddClientRef, ddPageRef, ddProjectRef, execEmailThreadRef } from "@/lib/exec/refs";
+import { SLACK_REDACTED_TEXT, SLACK_UNCHECKED_TEXT } from "@/lib/exec/slack-intel-copy";
+import { recheckSlackAnswer } from "@/lib/exec/slack-redact";
 import { listClients, listDepartments, listProjects } from "@/lib/exec/sources/dd";
 import { loadScreeningPolicy, screenStoredRow } from "@/lib/exec/sources/mail";
 import type { ExecPrincipal, ExecSettings, SourceRef } from "@/lib/exec/types";
@@ -313,8 +315,8 @@ async function resolveCards(principal: ExecPrincipal, sources: readonly CardSour
   return out;
 }
 
-const privacyOf = (m: Pick<StoredMessage, "consultedEmailThreadIds" | "consultedDdText">): boolean =>
-  m.consultedEmailThreadIds.length > 0 || m.consultedDdText === true;
+const privacyOf = (m: Pick<StoredMessage, "consultedEmailThreadIds" | "consultedDdText" | "consultedPrivateSlack">): boolean =>
+  m.consultedEmailThreadIds.length > 0 || m.consultedDdText === true || m.consultedPrivateSlack === true;
 
 /** A stored assistant row as it is shown: a running row older than 600 s is failed / stale (B5). */
 function shownAssistant(a: StoredMessage, now: Date): { status: ChatMessageView["status"]; statusReason: string | null; text: string; recommendations: string } {
@@ -484,8 +486,10 @@ async function postFinishScreen(principal: ExecPrincipal, scope: {
     } else {
       const others = earlier.value.filter((m) => m.id !== scope.messageId);
       if (others.length > 0) {
-        if (others.some((m) => m.verified)) decision = REDACTED_TEXT;
-        else if (decision === null) decision = UNCHECKED_TEXT;
+        // P7b (N15): an earlier answer removed for Slack reasons (its own sentence) makes this one carry the Slack sentence.
+        const verified = others.filter((m) => m.verified);
+        if (verified.length > 0) decision = verified.every((m) => m.slack === true) && decision !== REDACTED_TEXT ? SLACK_REDACTED_TEXT : REDACTED_TEXT;
+        else if (decision === null) decision = others.every((m) => m.slack === true) ? SLACK_UNCHECKED_TEXT : UNCHECKED_TEXT;
       }
     }
   }
@@ -577,6 +581,8 @@ export async function runPreparedTurn(principal: ExecPrincipal, settings: ExecSe
     refSeq: begin.refSeq,
     context: current ? current.resolved : null,
     prior: { threads: new Set(), clients: new Set(), ddText: false },
+    // P7b (C8, C30): his stored question text; only prepare_client_update reads it.
+    question: req.text,
     chatSpentAtStartUsd: 0,
     settings,
     now,
@@ -601,6 +607,7 @@ export async function runPreparedTurn(principal: ExecPrincipal, settings: ExecSe
       const threads = new Set<string>();
       const clients = new Set<string>();
       let ddText = false;
+      let privateSlack = false;
       for (const t of earlier) {
         const a = t.assistant;
         if (!a) continue;
@@ -608,6 +615,8 @@ export async function runPreparedTurn(principal: ExecPrincipal, settings: ExecSe
         for (const id of a.consultedEmailThreadIds) threads.add(id);
         for (const id of a.consultedClientIds) clients.add(id);
         ddText = ddText || a.consultedDdText === true;
+        // P7b (N15, C24): a replayed answer that consulted non-public Slack makes this turn's drafts private_slack.
+        privateSlack = privateSlack || a.consultedPrivateSlack === true;
       }
       const contexts = await earlierContextRefs(principal, settings, earlier, current, now);
       const spent = await withOwnSignal(BUDGET_READ_MS, (signal) => chatSpentTodayUsd(principal, now, { signal }));
@@ -617,7 +626,7 @@ export async function runPreparedTurn(principal: ExecPrincipal, settings: ExecSe
           priorRefs: [...priorRefs.values()],
           // This turn's context first, so its (newest) ref is the one an item with the same target is given.
           contextRefs: [...baseInput({}).contextRefs, ...contexts],
-          prior: { threads, clients, ddText },
+          prior: { threads, clients, ddText, privateSlack },
           chatSpentAtStartUsd: spent
         })
       };
@@ -646,7 +655,11 @@ export async function runPreparedTurn(principal: ExecPrincipal, settings: ExecSe
     consultedDdText: agent.consultedDdText,
     usage: agent.usage,
     model: agent.model,
-    refSeq: agent.refSeq
+    refSeq: agent.refSeq,
+    // P7b (D5, D6, N15): the Slack consults go with the answer, in the same transaction (RPC 9).
+    slackRefs: agent.consultedSlack?.refs ?? [],
+    slackChannels: agent.consultedSlack?.channels ?? [],
+    privateSlack: agent.consultedSlack?.privateSlack === true
   };
   let saved = false;
   try {
@@ -657,7 +670,7 @@ export async function runPreparedTurn(principal: ExecPrincipal, settings: ExecSe
   }
   if (!saved) console.warn(`[exec-chat] finish not saved turn=${logId(begin.turnId)}`);
 
-  const decision = await postFinishScreen(principal, {
+  const screenDecision = await postFinishScreen(principal, {
     messageId: begin.assistantMessageId,
     conversationId: begin.conversationId,
     sinceIso: begin.userCreatedAt,
@@ -667,13 +680,35 @@ export async function runPreparedTurn(principal: ExecPrincipal, settings: ExecSe
     saved
   }).catch((): string | null => UNCHECKED_TEXT);
 
+  // P7b (D5, §3.9): after P5b's C21 screen, an answer that consulted Slack is re-checked (RPC 11, its own controller): a
+  // message, digest or channel it used that is already gone redacts it (and later answers); a check that can't run twice
+  // hides this answer only (fail closed). Only when the screen left the answer shown. A finish that wasn't saved never
+  // recorded the consults, so nothing could redact the answer later (P6 would keep it in the DM): it is hidden, and the
+  // per-message write runs in case the finish committed after its deadline (the RPC refuses a row still running).
+  let decision = screenDecision;
+  if (decision === null && (agent.consultedSlack?.channels.length ?? 0) > 0) {
+    if (!saved) {
+      decision = SLACK_UNCHECKED_TEXT;
+      const wrote = await attempt((signal) => redactChatMessage(principal, begin.assistantMessageId, SLACK_UNCHECKED_TEXT, { signal }));
+      if (!wrote.ok) console.warn(`[exec-chat] redaction write failed message=${logId(begin.assistantMessageId)}`);
+    } else {
+      const recheck = await recheckSlackAnswer(principal, begin.assistantMessageId).catch((): "unchecked" => "unchecked");
+      if (recheck === "redacted") decision = SLACK_REDACTED_TEXT;
+      else if (recheck === "unchecked") decision = SLACK_UNCHECKED_TEXT;
+    }
+  }
+
   const answer = decision ?? agent.answer;
   const recommendations = decision ? "" : agent.recommendations;
   const cited = decision ? [] : agent.cited;
   let cards: CardView[] = [];
   try {
     const resolved = await withOwnSignal(SCREEN_TIMEOUT_MS, (signal) =>
-      resolveCards(principal, [{ messageId: begin.assistantMessageId, cards: agent.cards, privacy: agent.consulted.length > 0 || agent.consultedDdText }], now, signal)
+      resolveCards(principal, [{
+        messageId: begin.assistantMessageId,
+        cards: agent.cards,
+        privacy: agent.consulted.length > 0 || agent.consultedDdText || agent.consultedSlack?.privateSlack === true
+      }], now, signal)
     );
     cards = resolved.get(begin.assistantMessageId) ?? [];
   } catch {

@@ -15,6 +15,7 @@ import type {
 } from "@/lib/exec/agent/types";
 import { wellFormedText } from "@/lib/exec/chat/answer";
 import { REDACTED_TEXT, UNCHECKED_TEXT } from "@/lib/exec/chat/copy";
+import { SLACK_REDACTED_TEXT, SLACK_UNCHECKED_TEXT } from "@/lib/exec/slack-intel-copy";
 import type { ExecPrincipal } from "@/lib/exec/types";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 
@@ -68,6 +69,33 @@ const MESSAGE_COLS =
 const PROPOSAL_COLS =
   "id,principal_id,conversation_id,message_id,status,title,description,assignee_user_id,assignee_name,department_id," +
   "due_on,due_at,client_name,priority,task_id,decided_at,redacted_at,created_at,updated_at,expires_at";
+/** P7b (contract §3.17.3 D6, N15, C24): the replayed answers' private-Slack flag. A tolerant column (§2.5 item 2: the code
+ *  may run before the P7b migration): a read that fails on it is retried without it, and the column is left out for the
+ *  next 10 minutes. Absent, nothing could have consulted Slack (the tools answer "not installed" without the schema). */
+const MESSAGE_SLACK_COL = "consulted_private_slack";
+const SLACK_COL_REPROBE_MS = 10 * 60_000;
+let slackColMissingAt: number | null = null;
+
+function messageCols(): string {
+  return slackColMissingAt !== null && Date.now() - slackColMissingAt < SLACK_COL_REPROBE_MS ? MESSAGE_COLS : `${MESSAGE_COLS},${MESSAGE_SLACK_COL}`;
+}
+
+/** A message read, retried once without the P7b column when the database doesn't have it (42703 / PGRST204). */
+async function readMessages<T>(run: (cols: string) => PromiseLike<{ data: T; error: DbError | null }>): Promise<{ data: T; error: DbError | null }> {
+  const cols = messageCols();
+  const first = await run(cols);
+  const code = first.error?.code ?? "";
+  if (first.error && cols !== MESSAGE_COLS && (code === "42703" || code === "PGRST204" || (first.error.message ?? "").includes(MESSAGE_SLACK_COL))) {
+    slackColMissingAt = Date.now();
+    return run(MESSAGE_COLS);
+  }
+  return first;
+}
+
+/** Test seam: forget the per-process column probe. */
+export function __resetChatStoreColumnsForTests(): void {
+  slackColMissingAt = null;
+}
 
 /** DB failures (never content in the message). */
 export class ChatStoreError extends Error {
@@ -252,6 +280,26 @@ export interface FinishTurnInput {
   consultedEmailThreadIds: string[];                                    // ≤ 560 (C41)
   consultedClientIds: string[]; consultedDdText: boolean;               // C24
   usage: TurnUsage; model: string; refSeq: number;
+  /** P7b (contract §3.17.3 D6, N15; optional, default empty): the turn's Slack consults (m:/d: keys ≤ 600, channels ≤ 200,
+   *  the private flag). Any of them set → the v2 finish (RPC 9), which writes them in the same transaction as the answer. */
+  slackRefs?: string[]; slackChannels?: string[]; privateSlack?: boolean;
+}
+
+/** P7b: RPC 9's caller in slack-intel-store.ts (the only module that may name it, B-P7b-1): RPC 2's p_* arguments as built
+ *  here (p_principal aside) plus the three Slack values. true = the running row was finished. */
+type FinishTurnV2Rpc = (principal: ExecPrincipal, args: Readonly<Record<string, unknown>>,
+  slack: { refs: readonly string[]; channels: readonly string[]; privateSlack: boolean }, opts: { signal: AbortSignal }) => Promise<boolean>;
+
+/** The v2 finish through the P7b store, loaded on first use (a static import would cycle: the store reads P7a's facade, whose
+ *  attention reads reach P3's email store, which imports this module). Throws SlackIntelStoreError("finish_v2_missing") when
+ *  RPC 9 isn't there, so a Slack consult is never dropped by a v1 finish (D6). */
+async function finishTurnV2(principal: ExecPrincipal, args: Record<string, unknown>,
+  slack: { refs: string[]; channels: string[]; privateSlack: boolean }, signal: AbortSignal): Promise<boolean> {
+  const intel = await import("@/lib/exec/slack-intel-store");
+  const call = (intel as unknown as { finishTurnV2Rpc?: FinishTurnV2Rpc }).finishTurnV2Rpc;
+  if (typeof call !== "function" || !(await intel.finishTurnV2Available())) throw new intel.SlackIntelStoreError("finish_v2_missing", null);
+  signal.throwIfAborted();
+  return call(principal, args, slack, { signal });
 }
 
 /**
@@ -278,25 +326,33 @@ export async function finishTurn(principal: ExecPrincipal, input: FinishTurnInpu
   if (typeof input.messageId !== "string" || !MESSAGE_ID.test(input.messageId)) {
     throw new TypeError("exec chat store: finishTurn: a malformed message id");
   }
+  const args = {
+    p_message_id: input.messageId,
+    p_status: input.status,
+    p_status_reason: input.statusReason,
+    p_refusal_category: input.refusalCategory,
+    p_text: wellFormedDeep(input.text),
+    p_recommendations: wellFormedDeep(input.recommendations),
+    p_sources: wellFormedDeep(input.sources),
+    p_cards: wellFormedDeep(input.cards),
+    p_tool_calls: wellFormedDeep(input.toolCalls),
+    p_consulted: input.consultedEmailThreadIds,
+    p_consulted_clients: input.consultedClientIds,
+    p_consulted_dd_text: input.consultedDdText,
+    p_usage: input.usage,
+    p_model: input.model,
+    p_ref_seq: input.refSeq
+  };
+  // P7b D6: a turn that consulted Slack finishes through RPC 9 (the answer and its consults commit together); a turn that
+  // didn't keeps P5b's RPC 2 exactly (no probe, no extra call).
+  const slack = {
+    refs: Array.isArray(input.slackRefs) ? input.slackRefs.filter((k) => typeof k === "string" && k.length > 0) : [],
+    channels: Array.isArray(input.slackChannels) ? input.slackChannels.filter((c) => typeof c === "string" && c.length > 0) : [],
+    privateSlack: input.privateSlack === true
+  };
+  if (slack.refs.length > 0 || slack.channels.length > 0 || slack.privateSlack) return finishTurnV2(principal, args, slack, opts.signal);
   const { data, error } = await db()
-    .rpc("exec_chat_finish_turn", {
-      p_principal: principalId,
-      p_message_id: input.messageId,
-      p_status: input.status,
-      p_status_reason: input.statusReason,
-      p_refusal_category: input.refusalCategory,
-      p_text: wellFormedDeep(input.text),
-      p_recommendations: wellFormedDeep(input.recommendations),
-      p_sources: wellFormedDeep(input.sources),
-      p_cards: wellFormedDeep(input.cards),
-      p_tool_calls: wellFormedDeep(input.toolCalls),
-      p_consulted: input.consultedEmailThreadIds,
-      p_consulted_clients: input.consultedClientIds,
-      p_consulted_dd_text: input.consultedDdText,
-      p_usage: input.usage,
-      p_model: input.model,
-      p_ref_seq: input.refSeq
-    })
+    .rpc("exec_chat_finish_turn", { p_principal: principalId, ...args })
     .abortSignal(opts.signal);
   if (error) throw failure(MESSAGES, "exec_chat_finish_turn", error, opts.signal);
   if (typeof data !== "boolean") throw malformed(MESSAGES, "exec_chat_finish_turn");
@@ -316,6 +372,8 @@ export interface StoredMessage {
   sources: CitedSource[]; cards: ChatCard[]; consultedEmailThreadIds: string[];
   consultedClientIds: string[]; consultedDdText: boolean; createdAt: string;
   finishedAt: string | null; redactedAt: string | null;
+  /** P7b (D6, N15, C24): the answer consulted non-public Slack. Present only when the P7b column was read. */
+  consultedPrivateSlack?: boolean;
 }
 export interface ChatConversationRow { id: string; surface: "web" | "slack"; title: string; refSeq: number; turnCount: number;
   createdAt: string; lastMessageAt: string }
@@ -353,7 +411,7 @@ function sourcesOf(v: unknown): CitedSource[] {
   );
 }
 
-const PRIVATE_REF_KINDS: readonly PrivateRefKind[] = ["other_threads", "dd_text", "other_clients"];
+const PRIVATE_REF_KINDS: readonly PrivateRefKind[] = ["other_threads", "dd_text", "other_clients", "private_slack"];
 
 function cardsOf(v: unknown): ChatCard[] {
   if (!Array.isArray(v)) return [];
@@ -397,7 +455,8 @@ function messageFromRow(r: Row): StoredMessage & { conversationId: string; turnI
     consultedDdText: r.consulted_dd_text === true,
     createdAt,
     finishedAt: str(r.finished_at),
-    redactedAt: str(r.redacted_at)
+    redactedAt: str(r.redacted_at),
+    ...(MESSAGE_SLACK_COL in r ? { consultedPrivateSlack: r[MESSAGE_SLACK_COL] === true } : {})
   };
 }
 
@@ -452,16 +511,18 @@ export async function loadConversation(principal: ExecPrincipal, conversationId:
   const conversation = conversationFromRow(conv as unknown as Row);
 
   // Two rows per turn (one transaction, one created_at): the newest maxTurns + 1 turns tell whether there are earlier ones.
-  let query = db()
-    .from(MESSAGES)
-    .select(MESSAGE_COLS)
-    .eq("conversation_id", conversation.id)
-    .eq("principal_id", principalId)
-    .order("created_at", { ascending: false })
-    .order("id", { ascending: false })
-    .limit((maxTurns + 1) * 2);
-  if (signal) query = query.abortSignal(signal);
-  const { data, error } = await query;
+  const { data, error } = await readMessages((cols) => {
+    let query = db()
+      .from(MESSAGES)
+      .select(cols)
+      .eq("conversation_id", conversation.id)
+      .eq("principal_id", principalId)
+      .order("created_at", { ascending: false })
+      .order("id", { ascending: false })
+      .limit((maxTurns + 1) * 2);
+    if (signal) query = query.abortSignal(signal);
+    return query;
+  });
   if (error) throw failure(MESSAGES, `${MESSAGES} read`, error, signal);
   if (!Array.isArray(data)) throw malformed(MESSAGES, `${MESSAGES} read`);
   const newestFirst = turnsOf((data as unknown as Row[]).map(messageFromRow));
@@ -494,21 +555,25 @@ export async function loadTurnByMessageId(principal: ExecPrincipal, assistantMes
   const principalId = requirePrincipal(principal);
   if (typeof assistantMessageId !== "string" || !MESSAGE_ID.test(assistantMessageId)) return null;
   const signal = opts?.signal;
-  let head = db().from(MESSAGES).select(MESSAGE_COLS).eq("id", assistantMessageId).eq("principal_id", principalId).eq("role", "assistant");
-  if (signal) head = head.abortSignal(signal);
-  const { data: a, error: aError } = await head.maybeSingle();
+  const { data: a, error: aError } = await readMessages((cols) => {
+    let head = db().from(MESSAGES).select(cols).eq("id", assistantMessageId).eq("principal_id", principalId).eq("role", "assistant");
+    if (signal) head = head.abortSignal(signal);
+    return head.maybeSingle();
+  });
   if (aError) throw failure(MESSAGES, `${MESSAGES} read`, aError, signal);
   if (a === null || a === undefined) return null;
   const assistant = messageFromRow(a as unknown as Row);
-  let q = db()
-    .from(MESSAGES)
-    .select(MESSAGE_COLS)
-    .eq("conversation_id", assistant.conversationId)
-    .eq("principal_id", principalId)
-    .eq("turn_id", assistant.turnId)
-    .eq("role", "user");
-  if (signal) q = q.abortSignal(signal);
-  const { data: u, error: uError } = await q.maybeSingle();
+  const { data: u, error: uError } = await readMessages((cols) => {
+    let q = db()
+      .from(MESSAGES)
+      .select(cols)
+      .eq("conversation_id", assistant.conversationId)
+      .eq("principal_id", principalId)
+      .eq("turn_id", assistant.turnId)
+      .eq("role", "user");
+    if (signal) q = q.abortSignal(signal);
+    return q.maybeSingle();
+  });
   if (uError) throw failure(MESSAGES, `${MESSAGES} read`, uError, signal);
   if (u === null || u === undefined) return null;
   return { turnId: assistant.turnId, user: stored(messageFromRow(u as unknown as Row)), assistant: stored(assistant) };
@@ -702,7 +767,10 @@ export async function redactChatForThreads(principal: ExecPrincipal, threadIds: 
  *  REDACTED_TEXT or UNCHECKED_TEXT; an earlier REDACTED_TEXT is never replaced (the RPC keeps it). Same not-installed rule. */
 export async function redactChatMessage(principal: ExecPrincipal, messageId: string, text: string, opts?: { signal?: AbortSignal }): Promise<boolean> {
   const principalId = requirePrincipal(principal);
-  if (text !== REDACTED_TEXT && text !== UNCHECKED_TEXT) throw new TypeError("exec chat store: redactChatMessage takes REDACTED_TEXT or UNCHECKED_TEXT only");
+  // P7b (§3.9, C27): the two Slack sentences too (the post-finish recheck's fail-closed redaction of one answer).
+  if (text !== REDACTED_TEXT && text !== UNCHECKED_TEXT && text !== SLACK_REDACTED_TEXT && text !== SLACK_UNCHECKED_TEXT) {
+    throw new TypeError("exec chat store: redactChatMessage takes one of the fixed redaction sentences only");
+  }
   if (typeof messageId !== "string" || !MESSAGE_ID.test(messageId)) return false;
   let call = db().rpc("exec_chat_redact_message", { p_principal: principalId, p_message_id: messageId, p_text: text });
   if (opts?.signal) call = call.abortSignal(opts.signal);
@@ -716,9 +784,10 @@ export async function redactChatMessage(principal: ExecPrincipal, messageId: str
 }
 
 /** C21 (5): assistant messages of this conversation with redacted_at >= sinceIso (exec_messages_redacted_idx): ids and
- *  whether their text is REDACTED_TEXT. Never other content. Same not-installed rule ([]). */
+ *  whether their text is REDACTED_TEXT. Never other content. Same not-installed rule ([]). P7b (additive): a Slack
+ *  redaction (SLACK_REDACTED_TEXT) is verified too, and `slack` says the removal was a Slack one (either Slack sentence). */
 export async function listRedactedSince(principal: ExecPrincipal, conversationId: string, sinceIso: string,
-  opts?: { signal?: AbortSignal }): Promise<{ id: string; verified: boolean }[]> {
+  opts?: { signal?: AbortSignal }): Promise<{ id: string; verified: boolean; slack?: boolean }[]> {
   const principalId = requirePrincipal(principal);
   if (typeof conversationId !== "string" || !CONVERSATION_ID.test(conversationId)) return [];
   if (typeof sinceIso !== "string" || !Number.isFinite(Date.parse(sinceIso))) throw new TypeError("exec chat store: sinceIso must be a timestamp");
@@ -743,7 +812,8 @@ export async function listRedactedSince(principal: ExecPrincipal, conversationId
   return (data as unknown as Row[]).map((r) => {
     const id = str(r.id);
     if (id === null) throw malformed(MESSAGES, `${MESSAGES} redacted read`);
-    return { id, verified: r.text === REDACTED_TEXT };
+    const slack = r.text === SLACK_REDACTED_TEXT || r.text === SLACK_UNCHECKED_TEXT;
+    return { id, verified: r.text === REDACTED_TEXT || r.text === SLACK_REDACTED_TEXT, ...(slack ? { slack: true } : {}) };
   });
 }
 

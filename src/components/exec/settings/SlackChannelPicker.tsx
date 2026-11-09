@@ -5,11 +5,13 @@ import { useRouter } from "next/navigation";
 import { Hash, Lock, Search } from "lucide-react";
 import { SLACK_READ_COPY } from "@/lib/exec/slack-read-copy";
 import type { DenyReason, WatchState } from "@/lib/exec/slack-read-types";
+import type { SlackPickerTags } from "@/lib/exec/slack-page";
 import type { PickerRow, SlackReadingView } from "@/lib/exec/slack-types";
 import type { WatchMode } from "@/lib/exec/types";
 import { setChannelWatch, setWatchMode, type ChannelWatchResult } from "@/lib/exec/ui/settings-api";
 import { cn } from "@/lib/utils";
 import { useIsTopWindow } from "../drafts/frame-guard";
+import { SlackChannelTags } from "./SlackChannelTags";
 import { refreshWithoutResult } from "./SlackConnectControls";
 
 // The Settings channel picker (P7a contract §3.16, C29, N11, N12, C10; Area
@@ -36,9 +38,18 @@ import { refreshWithoutResult } from "./SlackConnectControls";
 //     from the answer and says so (pickerConflict).
 // At 390 px wide the badges wrap under the name and the control stays one row.
 //
+// P7b (contract §3.17.6 P7a-6, §3.12.4, AM-P7b-6): with `tags` (a serializable
+// data prop the server builds: slack-page.ts getSlackPickerTags), each row with
+// an entry renders SlackChannelTags under it: his client and project tags and
+// the name rule's verdict. A function slot can't cross from the server section
+// into this client island, and PickerRow has no convType or leftAt, so C25's
+// `taggable` comes computed from the P7a ChannelRow; a row he has just set to
+// Don't watch here is greyed at once (RPC 1 refuses it anyway). Without `tags`
+// (P7b's schema missing, or its reads failed) the picker is P7a's, unchanged.
+//
 // Imports only client-safe modules (B-P7a-8 / P5a rule 16): the copy, the
-// pure settings-api, the frame guard; types only from slack-types and
-// slack-read-types.
+// pure settings-api, the frame guard, P7b's client SlackChannelTags; types
+// only from slack-types, slack-read-types and (P7b) slack-page.
 
 type Choice = { state: WatchState; label: string };
 export const WATCH_CHOICES: readonly Choice[] = Object.freeze([
@@ -288,9 +299,15 @@ export function FinanceConfirm({ row, pending, onConfirm, onCancel, autoFocus = 
 export function SlackChannelPicker({
   view,
   initialFinanceConfirm = null,
-  initialFilter = ""
+  initialFilter = "",
+  tags = null,
+  initialTagsOpen = null
 }: {
   view: Pick<SlackReadingView, "channels" | "counts" | "watchMode" | "settingsVersion">;
+  /** P7b (P7a-6, AM-P7b-6): the per-row tags data; null or absent renders no tags (P7a's picker as it was). */
+  tags?: SlackPickerTags | null;
+  /** Static renders only (tests, screenshots): this channel's tags editor open on first render. The page never passes it. */
+  initialTagsOpen?: string | null;
   /** Static renders only (tests, screenshots): the finance confirm open for this channel id. The page never passes it. */
   initialFinanceConfirm?: string | null;
   /** Static renders only: the filter box's text. */
@@ -478,6 +495,16 @@ export function SlackChannelPicker({
                 onConfirm={() => void choose(row, "watched", true)}
                 onCancel={() => setFinance(null)}
                 autoFocus={initialFinanceConfirm === null}
+              />
+            )}
+            {tags !== null && tags.byChannel[row.channelId] !== undefined && (
+              <SlackChannelTags
+                channelId={row.channelId}
+                taggable={tags.byChannel[row.channelId].taggable && row.watchState !== "unwatched"}
+                links={tags.byChannel[row.channelId].links}
+                clients={tags.clients}
+                projects={tags.projects}
+                initialOpen={initialTagsOpen === row.channelId}
               />
             )}
             <p aria-live="polite" role="status" data-picker-message={row.channelId} className="text-[12px] text-rose-700">

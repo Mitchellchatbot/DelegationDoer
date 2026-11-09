@@ -1,0 +1,8 @@
+{
+  "_doc": [
+    "P7a's listAuthorOptouts(principal) answer: a string[] of author ids (slack-read-store.ts). One opted-out author. Lead-owned, frozen."
+  ],
+  "authorUserIds": [
+    "U0OPTOUT"
+  ]
+}

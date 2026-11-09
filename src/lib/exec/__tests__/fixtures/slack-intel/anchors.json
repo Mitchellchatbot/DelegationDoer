@@ -1,0 +1,279 @@
+{
+  "_doc": [
+    "DD's own Slack posts (contract 5.0): raw = the Slack message as conversations.history returns it; ddPaths = what P7a's",
+    "extractDdPaths gives for it (P7a's ddPathsOfMessage: the text's link tokens first, then the block link / button URLs; pinned",
+    "by p7b-seed.test.ts) and what P7a stores in exec_slack_messages.dd_paths; isDdPost.arms = the arms of isDdPost(m, ddBot) that",
+    "holds, every one (template | app | user; ddBot = { userId: U0DDBOT, appId: A0DDAPP }); expect = parseDdPaths(ddPaths) (LK06).",
+    "anchorRow = the eod_client_checkins / eod_client_updates row (C4) a check-in post links through (slack_channel, slack_ts).",
+    "Lead-owned, frozen."
+  ],
+  "ddBot": {
+    "userId": "U0DDBOT",
+    "appId": "A0DDAPP",
+    "botId": "B0DDBOT"
+  },
+  "anchors": [
+    {
+      "name": "task notify as-user (src/lib/slack.ts notifyTeamFyiAsUser): template only, posted as a teammate",
+      "channelId": "C0ACMESEO",
+      "raw": {
+        "type": "message",
+        "user": "U0HENRY",
+        "team": "T0SCALED",
+        "ts": "1794060300.000100",
+        "text": "Task update SENTINEL-INTEL-DD-TEXT-9c1d",
+        "blocks": [
+          {
+            "type": "section",
+            "text": {
+              "type": "mrkdwn",
+              "text": "*Task update*\nSENTINEL-INTEL-DD-TEXT-9c1d"
+            }
+          },
+          {
+            "type": "section",
+            "text": {
+              "type": "mrkdwn",
+              "text": "*<https://operations.scaledai.org/tasks/tk_101|SENTINEL-INTEL-TASK-TITLE-9c1d>*"
+            }
+          },
+          {
+            "type": "actions",
+            "elements": [
+              {
+                "type": "button",
+                "text": {
+                  "type": "plain_text",
+                  "text": "Open in Scaled Operations",
+                  "emoji": true
+                },
+                "url": "https://operations.scaledai.org/tasks/tk_101"
+              }
+            ]
+          }
+        ]
+      },
+      "isDdPost": {
+        "arms": [
+          "template"
+        ]
+      },
+      "ddPaths": [
+        "/tasks/tk_101"
+      ],
+      "expect": {
+        "taskIds": [
+          "tk_101"
+        ],
+        "clientIds": [],
+        "projectIds": [],
+        "emailThreadIds": []
+      }
+    },
+    {
+      "name": "new task announcement (src/app/api/tasks/route.ts POST): the DD bot, header + client line + button",
+      "channelId": "C0ACMESEO",
+      "raw": {
+        "type": "message",
+        "subtype": "bot_message",
+        "user": "U0DDBOT",
+        "bot_id": "B0DDBOT",
+        "app_id": "A0DDAPP",
+        "team": "T0SCALED",
+        "ts": "1794060600.000200",
+        "text": "New SEO task",
+        "bot_profile": {
+          "id": "B0DDBOT",
+          "app_id": "A0DDAPP",
+          "name": "Scaled Operations",
+          "deleted": false,
+          "team_id": "T0SCALED"
+        },
+        "blocks": [
+          {
+            "type": "header",
+            "text": {
+              "type": "plain_text",
+              "text": "New SEO task",
+              "emoji": true
+            }
+          },
+          {
+            "type": "section",
+            "text": {
+              "type": "mrkdwn",
+              "text": "*<https://operations.scaledai.org/tasks/tk_102|SENTINEL-INTEL-TASK-TITLE-9c1d>*\n*Client:* Sentinel Intelclient 9c1d"
+            }
+          },
+          {
+            "type": "section",
+            "text": {
+              "type": "mrkdwn",
+              "text": "*Assigned to:* Sam\n*Priority:* high  .  *Estimate:* 3h"
+            }
+          },
+          {
+            "type": "actions",
+            "elements": [
+              {
+                "type": "button",
+                "text": {
+                  "type": "plain_text",
+                  "text": "Open in Scaled Operations",
+                  "emoji": true
+                },
+                "url": "https://operations.scaledai.org/tasks/tk_102"
+              }
+            ]
+          }
+        ]
+      },
+      "isDdPost": {
+        "arms": [
+          "app",
+          "user",
+          "template"
+        ]
+      },
+      "ddPaths": [
+        "/tasks/tk_102"
+      ],
+      "expect": {
+        "taskIds": [
+          "tk_102"
+        ],
+        "clientIds": [],
+        "projectIds": [],
+        "emailThreadIds": []
+      }
+    },
+    {
+      "name": "client, project and inbox links in a DD-bot post (text tokens first, then button/link URLs)",
+      "channelId": "C0ACMESEO",
+      "raw": {
+        "type": "message",
+        "user": "U0DDBOT",
+        "bot_id": "B0DDBOT",
+        "app_id": "A0DDAPP",
+        "team": "T0SCALED",
+        "ts": "1794061200.000300",
+        "text": "See <https://operations.scaledai.org/clients/cl_acme|Sentinel Intelclient 9c1d> and <https://operations.scaledai.org/projects/pr_7|Launch>",
+        "blocks": [
+          {
+            "type": "section",
+            "text": {
+              "type": "mrkdwn",
+              "text": "<https://operations.scaledai.org/inboxes/acct_1?thread=th_42&view=all|Email thread>"
+            }
+          },
+          {
+            "type": "actions",
+            "elements": [
+              {
+                "type": "button",
+                "text": {
+                  "type": "plain_text",
+                  "text": "Open in Scaled Operations",
+                  "emoji": true
+                },
+                "url": "https://operations.scaledai.org/projects/pr_7"
+              }
+            ]
+          }
+        ]
+      },
+      "isDdPost": {
+        "arms": [
+          "app",
+          "user",
+          "template"
+        ]
+      },
+      "ddPaths": [
+        "/clients/cl_acme",
+        "/projects/pr_7",
+        "/inboxes/acct_1?thread=th_42&view=all"
+      ],
+      "expect": {
+        "taskIds": [],
+        "clientIds": [
+          "cl_acme"
+        ],
+        "projectIds": [
+          "pr_7"
+        ],
+        "emailThreadIds": [
+          "th_42"
+        ]
+      }
+    },
+    {
+      "name": "EOD client check-in (src/app/api/eod/client-checkins/route.ts): the DD bot in the Scaled Team channel, no DD URL",
+      "channelId": "C0SCALEDTEAM",
+      "raw": {
+        "type": "message",
+        "subtype": "bot_message",
+        "user": "U0DDBOT",
+        "bot_id": "B0DDBOT",
+        "app_id": "A0DDAPP",
+        "team": "T0SCALED",
+        "ts": "1794063600.000400",
+        "text": "Sam -> Sentinel Intelclient 9c1d - Weekly update",
+        "blocks": [
+          {
+            "type": "section",
+            "text": {
+              "type": "mrkdwn",
+              "text": "*Sam* -> *Sentinel Intelclient 9c1d*\n*Subject:* Weekly update\n>SENTINEL-INTEL-EOD-WORK-9c1d"
+            }
+          }
+        ]
+      },
+      "isDdPost": {
+        "arms": [
+          "app",
+          "user"
+        ]
+      },
+      "ddPaths": [],
+      "anchorRow": {
+        "source": "checkin",
+        "id": "cc_test_1",
+        "clientId": "cl_acme",
+        "clientName": "Sentinel Intelclient 9c1d",
+        "slackChannel": "C0SCALEDTEAM",
+        "slackTs": "1794063600.000400",
+        "sentAt": "2026-11-07T15:00:00.000Z"
+      },
+      "expect": {
+        "taskIds": [],
+        "clientIds": [],
+        "projectIds": [],
+        "emailThreadIds": []
+      }
+    },
+    {
+      "name": "a look-alike host and localhost are not DD links (extractDdPaths ignores them); the post is still a DD post by its user",
+      "channelId": "C0ACMESEO",
+      "raw": {
+        "type": "message",
+        "user": "U0DDBOT",
+        "team": "T0SCALED",
+        "ts": "1794064000.000500",
+        "text": "<https://operations.scaledai.org.evil.io/tasks/tk_9|x> <http://localhost:3000/tasks/tk_9|y>"
+      },
+      "isDdPost": {
+        "arms": [
+          "user"
+        ]
+      },
+      "ddPaths": [],
+      "expect": {
+        "taskIds": [],
+        "clientIds": [],
+        "projectIds": [],
+        "emailThreadIds": []
+      }
+    }
+  ]
+}

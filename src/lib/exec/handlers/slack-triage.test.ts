@@ -354,7 +354,8 @@ describe("CC02-CC07: the Slack sub-cap", () => {
     vi.mocked(loadSettings).mockResolvedValue(settings({ slackDailyCapUsd: 2, dailyCostCapUsd: 5 }));
     vi.mocked(featureSpentTodayUsd).mockResolvedValue(1);
     expect(await run()).toMatchObject({ degraded: "budget" });
-    expect(vi.mocked(featureSpentTodayUsd).mock.calls[0].slice(0, 3)).toEqual(["ep_1", "America/New_York", ["slack_triage"]]);
+    // P7b stage 0 (P7a-1, C14): triage now sums the digest feature too (one Slack total under one cap).
+    expect(vi.mocked(featureSpentTodayUsd).mock.calls[0].slice(0, 3)).toEqual(["ep_1", "America/New_York", ["slack_triage", "digest"]]);
   });
 
   it("CC07 the next day new candidates are assessed; old unassessed items aren't re-triaged", async () => {

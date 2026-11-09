@@ -300,7 +300,9 @@ export async function runDraftGeneration(input: {
     internalDomains: new Set(names.internalDomains),
     recipients: new Set([...row.toRecipients, ...row.ccRecipients, ...row.bccRecipients].map((a) => a.address.trim().toLowerCase())),
     clientNames: names.clientNames,
-    userNames: names.userNames
+    userNames: names.userNames,
+    // P7b E7 (C34): a client update keeps the other-client check even for names in his words.
+    strictClientNames: row.purpose === "client_update"
   };
   const flags = scanDraftOutput(parsed.out, ctx);
 
@@ -321,6 +323,10 @@ export async function runDraftGeneration(input: {
     client_id: pack.clientId,
     generation_flags: flags,
     generated_at: now().toISOString(),
+    // P7b E4 (C9): the version this generation produced, so a later edit (version moves) is told apart from it; and,
+    // for a client update, the pack's slot record (counts and statuses only).
+    generated_version: row.version + 1,
+    ...(row.purpose === "client_update" ? { client_update_facts: pack.clientUpdate ?? null } : {}),
     generation_error: null,
     prior_status: null,
     next_check_at: null,

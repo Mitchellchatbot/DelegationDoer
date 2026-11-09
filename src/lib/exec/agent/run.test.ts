@@ -490,7 +490,7 @@ describe("the request (tests 54-56)", () => {
       expect(r.thinking?.type).toBe("adaptive");
       expect(r.thinking).not.toHaveProperty("display");
       for (const k of ["temperature", "top_p", "top_k"]) expect(r).not.toHaveProperty(k);
-      expect(r.tools).toHaveLength(16);
+      expect(r.tools).toHaveLength(19);   // P7b stage 0 (§3.15, N16): 19 tools
     }
   });
 
@@ -526,7 +526,7 @@ describe("usage, the sink, and never throwing (tests 57-59)", () => {
     const { result } = await run({ steps: [{ ...(toolsStep(1) as object), usage, costUsd: 0.25 } as Step, { text: ["Done."], usage, costUsd: 0.5, model: "claude-opus-5-5" }] });
     expect(result.usage).toMatchObject({
       modelCalls: 2, toolCalls: 1, toolCallsNotPersisted: 0, inputTokens: 200, outputTokens: 100, cacheReadTokens: 20, cacheWriteTokens: 40,
-      costUsd: 0.75, transformations: 0, unknownMarkers: 0, partialRoundUncounted: false, promptVersion: "exec-chat-v2", toolsVersion: "fake-tools-v1"
+      costUsd: 0.75, transformations: 0, unknownMarkers: 0, partialRoundUncounted: false, promptVersion: "exec-chat-v3", toolsVersion: "fake-tools-v1"
     });
     expect(result.model).toBe("claude-opus-5-5");
   });

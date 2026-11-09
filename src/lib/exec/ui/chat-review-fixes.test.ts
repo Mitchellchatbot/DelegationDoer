@@ -159,9 +159,9 @@ describe("ui-6: the five tabs fit a phone", () => {
     const strip = html.match(/<div data-exec-tab-strip="true"[^>]*class="([^"]*)"/)?.[1] ?? "";
     expect(strip.split(" ")).toEqual(expect.arrayContaining(["gap-0", "sm:gap-0.5", "overflow-x-auto"]));
     const pills = [...html.matchAll(/<a[^>]*class="([^"]*rounded-full px-[^"]*)"/g)].map((m) => m[1].split(" "));
-    expect(pills).toHaveLength(5);
+    expect(pills).toHaveLength(6);
     for (const c of pills) {
-      expect(c).toEqual(expect.arrayContaining(["px-2", "sm:px-3.5", "text-[12px]", "sm:text-[12.5px]"]));
+      expect(c).toEqual(expect.arrayContaining(["px-1.5", "sm:px-3.5", "text-[11.5px]", "sm:text-[12.5px]"]));
       expect(c).not.toContain("px-2.5");
     }
   });

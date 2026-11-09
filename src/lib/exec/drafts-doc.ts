@@ -460,6 +460,13 @@ export interface ScanContext {
   recipients: ReadonlySet<string>;
   /** Active clients' names other than the facts client; DD users' full names other than his. null = not loaded (name checks skipped). */
   clientNames: readonly string[] | null; userNames: readonly string[] | null;
+  /**
+   * P7b (§3.17.2 E7, C34): a client update's scan. true → another client's name in the output is flagged
+   * other_client_name even when his instruction names it (his whole message is the instruction, so a message naming two
+   * clients must not let the other one through). teammate_name and the URL / email / phone / amount / number allowances
+   * are unchanged. Absent or false = P4's scan exactly.
+   */
+  strictClientNames?: boolean;
 }
 
 const URL_RE = /\bhttps?:\/\/[^\s<>"'()[\]{}]+|\bwww\.[a-z0-9-]+(?:\.[a-z0-9-]+)+(?:\/[^\s<>"'()[\]{}]*)?/gi;
@@ -619,12 +626,13 @@ export function scanDraftOutput(out: DraftModelOutput, ctx: ScanContext): Genera
     if (!allowed.numbers.has(n) && !allowed.digits.has(n)) flags.add("unexpected_number");
   }
   const instruction = scanForm(ctx.instruction ?? "").toLowerCase();
+  const strictClients = ctx.strictClientNames === true;
   if (ctx.clientNames !== null) {
     for (const name of ctx.clientNames) {
       const n = scanForm(name).trim();
       if (n.length < MIN_NAME_CHARS) continue;
       const re = nameRe(n);
-      if (re.test(text) && !re.test(instruction)) flags.add("other_client_name");
+      if (re.test(text) && (strictClients || !re.test(instruction))) flags.add("other_client_name");
     }
   }
   if (ctx.userNames !== null) {

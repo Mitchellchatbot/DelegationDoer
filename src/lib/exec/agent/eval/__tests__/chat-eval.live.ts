@@ -10,7 +10,9 @@
 // enums and counts, never the answer) and fails (exit 1) on a hard check:
 //   - the status is complete or capped (never failed or refused);
 //   - no unknown markers; no URL in the answer;
-//   - the Slack question is answered "isn't connected";
+//   - the Slack question calls search_slack or list_commitments and answers with what is true here: the eval's settings have
+//     no Slack reading schema, so the Slack tools answer "Slack reading isn't installed yet" (P7b fixer ui-13; before P7b
+//     the expected answer was "isn't connected");
 //   - "What has this team completed this week?" cites task refs from team_progress's completed items (b-agent-4).
 //
 // Why it lives under __tests__/: it is test code (vitest runs it with its own config, never the default one, whose
@@ -155,7 +157,7 @@ const QUESTIONS: Question[] = [
   { n: 12, text: "Which projects have problems?", expect: ["project_health"] },
   { n: 13, text: "Who is waiting for my decision?", expect: ["pending_approvals", "list_attention"] },
   { n: 14, text: "Find the discussion about this client.", context: { kind: "client", id: "c_acme" }, expect: ["get_source", "client_overview", "search_email"] },
-  { n: 15, text: "What commitments were made in Slack?", expect: [], slack: true },
+  { n: 15, text: "What commitments were made in Slack?", expect: ["search_slack", "list_commitments"], slack: true },
   { n: 16, text: "Give me a summary of each team's progress.", expect: ["team_progress"] }
 ];
 
@@ -195,7 +197,8 @@ describe.skipIf(!live)("the chat eval: the brief's 16 questions against a test k
       expect(["complete", "capped"]).toContain(result.status);
       expect(result.usage.unknownMarkers).toBe(0);
       expect(urlFree).toBe(true);
-      if (q.slack) expect(result.answer).toMatch(/isn['’]t connected|not connected/i);
+      // P7b (fixer ui-13): the Slack tools are always registered; with no reading schema they answer the not-installed note.
+      if (q.slack) expect(result.answer).toMatch(/isn['’]t (installed|connected|on)|not (installed|connected|on)/i);
       if (q.completed) {
         const citedTasks = result.cited.filter((c) => c.target.type === "task").map((c) => (c.target as { id: string }).id);
         expect(citedTasks.some((id) => [...COMPLETED_SEO, ...COMPLETED_WEB].includes(id))).toBe(true);

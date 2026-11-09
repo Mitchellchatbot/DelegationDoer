@@ -287,6 +287,16 @@ export async function confirmProposal(principal: ExecPrincipal, id: string, now:
   return { kind: "in_progress" };
 }
 
+/**
+ * P6 X3 (contract §3.15.1; Area D): one proposal's card by id, built exactly as storedTurnPayload builds a card's
+ * ProposalView: getProposal(principal, id) then proposalViewFor(principal, row, now) (agent/turn.ts). null when the row
+ * isn't his or doesn't exist (a malformed id included). Reads throw.
+ */
+export async function getProposalView(principal: ExecPrincipal, id: string, now: Date, opts?: { signal?: AbortSignal }): Promise<ProposalView | null> {
+  const row = await getProposal(principal, id, { signal: opts?.signal });
+  return row ? proposalViewFor(principal, row, now, { signal: opts?.signal }) : null;
+}
+
 export async function dismissProposal(principal: ExecPrincipal, id: string, now: Date, opts?: { signal?: AbortSignal }): Promise<DismissOutcome> {
   const signal = opts?.signal;
   for (let attempt = 0; attempt < 2; attempt++) {

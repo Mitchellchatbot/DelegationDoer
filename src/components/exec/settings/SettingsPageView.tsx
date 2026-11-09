@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { History, Mic, SlidersHorizontal, ThumbsUp, Wallet, Waypoints } from "lucide-react";
 import type { VoiceProfileRow } from "@/lib/exec/drafts-store";
 import { MISSING, formatCount, formatInZone, pluralize } from "@/lib/exec/format";
+import type { SlackConnectResult } from "@/lib/exec/slack-types";
 import { voiceCanBuild } from "@/lib/exec/ui/settings-api";
 import type { SettingsView } from "@/lib/exec/view-types";
 import { BasisLabel } from "../BasisLabel";
@@ -9,12 +10,14 @@ import { EXEC_TABS, ExecTabs } from "../ExecTabs";
 import { ExecHeader } from "../ExecHeader";
 import { SectionCard } from "../SectionCard";
 import { SettingsForm } from "./SettingsForm";
+import { SlackSection } from "./SlackSection";
 import { VoiceResetButton } from "./VoiceResetButton";
 
 // /executive/settings (P5a contract §3.13.2, A6, C14, C20): the switches he
 // can change (SettingsForm, frame-guarded), today's AI spend, the settings
 // the team sets by hand (read-only here), the learned writing style with its
-// reset, feedback totals and recent access. Rendered from a SettingsView only:
+// reset, feedback totals and recent access, and (P6, contract §3.13) the Slack
+// app's own section: Connect, Reconnect, Disconnect. Rendered from a SettingsView only:
 // each section fails soft on its own, and no value is shown as a zero when it
 // couldn't be read.
 
@@ -25,10 +28,10 @@ export const SETTINGS_PAGE_COPY = {
   voiceNotInstalled: "Not available yet: the team needs to apply the database update.",
   voiceNone: "No profile yet. It builds once a week from your sent email.",
   teamSet: "Set by the team. Shown here for reference.",
-  // No assistant brief (P8) or Slack app (P6) exists in this build and nothing
-  // reads those columns, so their stored values are never shown (review ui-3).
-  briefNotSetUp: "Not set up yet",
-  slackNotSetUp: "Not set up yet: arrives with the Slack app"
+  // No assistant brief (P8) exists in this build and nothing reads its columns,
+  // so its stored values are never shown (review ui-3). The Slack app (P6) has
+  // its own section (SlackSection); the old Slack check-in columns stay unshown.
+  briefNotSetUp: "Not set up yet"
 } as const;
 
 const usd = (n: number) => (Number.isFinite(n) ? `$${n.toFixed(2)}` : MISSING);
@@ -154,7 +157,7 @@ function ReadOnly({ view }: { view: SettingsView }) {
   const s = view.settings;
   const mailbox = view.pinnedMailbox;
   return (
-    <SectionCard title="Email, drafts, brief and Slack" icon={Waypoints} subtitle={SETTINGS_PAGE_COPY.teamSet}>
+    <SectionCard title="Email, drafts and brief" icon={Waypoints} subtitle={SETTINGS_PAGE_COPY.teamSet}>
       <dl className="divide-y divide-slate-100">
         <Row label="Email intelligence">{s.emailSchemaReady ? onOff(s.emailEnabled) : "Not set up yet"}</Row>
         <Row label="Pinned mailbox">
@@ -171,7 +174,6 @@ function ReadOnly({ view }: { view: SettingsView }) {
         <Row label="Assistant drafts">{s.draftsSchemaReady ? onOff(s.draftsEnabled) : "Not set up yet"}</Row>
         <Row label="Send from DD">{s.draftsSchemaReady ? onOff(s.sendEnabled) : "Not set up yet"}</Row>
         <Row label="Morning brief">{SETTINGS_PAGE_COPY.briefNotSetUp}</Row>
-        <Row label="Slack">{SETTINGS_PAGE_COPY.slackNotSetUp}</Row>
       </dl>
     </SectionCard>
   );
@@ -288,7 +290,20 @@ function RecentAccess({ view }: { view: SettingsView }) {
   );
 }
 
-export function SettingsPageView({ view }: { view: SettingsView }) {
+export function SettingsPageView({
+  view,
+  slackResult = null,
+  who = null,
+  onCanonicalHost = true
+}: {
+  view: SettingsView;
+  /** P6 (C24): the validated ?slack= result code the OAuth routes redirected with (SlackSection's parseSlackResult). */
+  slackResult?: SlackConnectResult | null;
+  /** P6 (C25): the validated ?who= Slack user id, shown only with wrong_user. */
+  who?: string | null;
+  /** P6 (C45): this request's host is the canonical one (isCanonicalRequestHost); false replaces Connect / Reconnect. */
+  onCanonicalHost?: boolean;
+}) {
   const now = view.generatedAt;
   const tz = view.timezone;
   return (
@@ -316,6 +331,7 @@ export function SettingsPageView({ view }: { view: SettingsView }) {
           <Spend view={view} />
           <VoiceCard view={view} />
           <ReadOnly view={view} />
+          <SlackSection view={view.slack} result={slackResult} who={who} onCanonicalHost={onCanonicalHost} tz={tz} now={now} />
           <Feedback view={view} />
         </div>
       </div>

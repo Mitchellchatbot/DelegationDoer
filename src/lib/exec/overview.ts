@@ -35,6 +35,8 @@ import {
 } from "@/lib/exec/email-view";
 import { EMAIL_ATTENTION_JOB_KIND, EMAIL_RECONCILE_JOB_KIND, EMAIL_TRIAGE_JOB_KIND } from "@/lib/exec/jobs";
 import { DD_ATTENTION_KINDS } from "@/lib/exec/producers/dd";
+import { slackSystemSummary } from "@/lib/exec/slack-install";
+import type { SlackSystemSummary } from "@/lib/exec/slack-types";
 import { listAllReplyArtifacts, loadScreeningPolicy } from "@/lib/exec/sources/mail";
 import { getSyncState, parseAccountsState, parseEaTokenState, parseSendTokenState, parseSocketState } from "@/lib/exec/sync-state";
 import {
@@ -262,6 +264,12 @@ export interface OverviewSystem {
    * exists; null when the settings couldn't be read (the card says so).
    */
   drafts?: OverviewDraftsSystem | null;
+  /**
+   * P6 (contract §3.15.3): the Slack app's state, one row on the card. Absent
+   * before the P6 schema exists (it needs P5b's, so nothing is read while
+   * chat isn't installed); null when it couldn't be read (the card says so).
+   */
+  slack?: SlackSystemSummary | null;
 }
 
 /** A token's last self-check as the System card shows it. reason "not_checked": no verdict stored yet. */
@@ -850,13 +858,15 @@ export async function getOverview(principal: ExecPrincipal, now: Date = new Date
   });
 
   const draftsSystem = draftsSystemReads(principal, now, read, emailGate, jobs);
+  const slackSystem = slackSystemRead(principal, read, emailGate);
 
   const system = build("system", async (): Promise<OverviewSystem> => {
     const rows = need(await jobs);
     const gate = await emailGate;
     const health = systemHealth(rows, now, gate.ok && gate.value.kind === "on" ? [...TRACKED_JOB_KINDS, ...EMAIL_TRACKED_JOB_KINDS] : TRACKED_JOB_KINDS);
     const drafts = await draftsSystem;
-    return drafts === undefined ? health : { ...health, drafts };
+    const slack = await slackSystem;
+    return { ...health, ...(drafts === undefined ? {} : { drafts }), ...(slack === undefined ? {} : { slack }) };
   });
 
   const [tilesResult, attentionResult, approvalsResult, deadlinesResult, projectsResult, systemResult, emailResult] = await Promise.all([
@@ -938,6 +948,30 @@ async function draftsSystemReads(
           ? { status: null, builtAt: null, lastAttemptAt: null, lastAttemptError: null }
           : { status: v.status, builtAt: v.status === "ready" ? v.builtAt : null, lastAttemptAt: v.lastAttemptAt, lastAttemptError: v.lastAttemptError }
   };
+}
+
+// ---------------------------------------------------------------------------
+// Slack on the System card (P6, contract §3.15.3)
+// ---------------------------------------------------------------------------
+
+/**
+ * The System card's Slack row: undefined (no row) while P5b's chat schema
+ * isn't installed (P6's migration requires it, so nothing is read) or once
+ * slackSystemSummary says the P6 tables aren't there; null when the settings
+ * or the installation read failed (logged once by read()). State, times and
+ * an error code only: no token or blob is read here.
+ */
+async function slackSystemRead(
+  principal: ExecPrincipal,
+  read: OverviewRead,
+  gateRead: Promise<Settled<EmailGate>>
+): Promise<SlackSystemSummary | null | undefined> {
+  const gate = await gateRead;
+  if (!gate.ok) return null;
+  if (gate.value.settings.chatSchemaReady !== true) return undefined;
+  const summary = await read("slack status", () => slackSystemSummary(principal));
+  if (!summary.ok) return null;
+  return summary.value ?? undefined;
 }
 
 // ---------------------------------------------------------------------------

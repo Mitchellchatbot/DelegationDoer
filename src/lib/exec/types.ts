@@ -24,7 +24,9 @@ export interface ExecPrincipalData {
   timezone: string;
   /** Missive (missiveclone) account ids this principal's mail access is pinned to. */
   mailAccountIds: readonly string[];
+  /** Unused: the Slack binding is exec_slack_installations, P6 K6. */
   slackTeamId: string | null;
+  /** Unused: the Slack binding is exec_slack_installations, P6 K6. */
   slackUserId: string | null;
 }
 

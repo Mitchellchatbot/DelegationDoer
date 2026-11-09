@@ -64,6 +64,13 @@ export const CHAT_SYSTEM_PROMPT_V2: string = [
   "- Describe workload and flow, not performance. Don't rank people or speculate about why someone is behind."
 ].join("\n");
 
+/**
+ * P6 X2 (contract §3.15.1, C27, K12): the third system block of a Slack turn, after the principal block. Constant per
+ * surface, so the cached prefix holds; a test pins its sha256. Web turns never carry it, and it bumps no prompt version (X4).
+ */
+export const SLACK_SURFACE_PROMPT =
+  "This conversation is in a Slack direct message. Slack keeps its own copy of everything you write here. Quote at most 300 characters from any one email; summarize instead. Never include restricted-sender mail (you never see it; give the count and say to open DD), finance or payroll figures, passwords, keys or other credentials. Links are not shown in Slack: cite sources with markers as usual. Where a tool or the instructions above say Slack isn't connected, that means you can't read his Slack channels or his other Slack conversations: you see only this conversation.";
+
 const DEFAULT_ZONE = "America/New_York";
 
 /** "He is <name>. His timezone is <tz>." Static for the session (the second system block). */

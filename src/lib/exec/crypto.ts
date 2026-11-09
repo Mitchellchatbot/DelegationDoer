@@ -1,6 +1,6 @@
 import "server-only";
 
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, createHmac, hkdfSync, randomBytes, timingSafeEqual } from "node:crypto";
 
 // AES-256-GCM for the credentials the assistant stores: the Slack bot and user
 // tokens in exec_slack_installations (P6). The pattern is onboarding-vault.ts
@@ -215,4 +215,65 @@ export function needsReseal(sealed: string): boolean {
   if (typeof sealed !== "string") return true;
   const parts = sealed.split(".");
   return !(parts.length === 5 && parts[0] === VERSION && parts[1] === current.kid);
+}
+
+// ---------------------------------------------------------------------------
+// P6 (contract §3.3, C2; Area A): HMAC-signed OAuth state tokens.
+//
+//   signState("slack-oauth", "s1.<nonce>.<exp>")  ->  "s1.<nonce>.<exp>.<mac>"
+//
+// mac = base64url(HMAC-SHA256(K, payload)) with K = HKDF-SHA256(key bytes, no
+// salt, info "exec-state:v1:<purpose>", 32 bytes). The purpose label keeps K
+// apart from the GCM key above (a state mac can't be made or checked with the
+// sealing key, nor a sealed blob opened with K) and apart from any other
+// purpose. Verified under EXEC_TOKEN_KEY, then EXEC_TOKEN_KEY_PREVIOUS, so a
+// rotation doesn't break a flow that started a minute before it. The mac is
+// compared as its canonical base64url text, in constant time: base64url's
+// last character carries two unused bits, and comparing decoded bytes would
+// accept four spellings of one mac.
+// ---------------------------------------------------------------------------
+
+export type StatePurpose = "slack-oauth";
+
+const STATE_PURPOSES: ReadonlySet<string> = new Set<StatePurpose>(["slack-oauth"]);
+const STATE_PAYLOAD = /^[A-Za-z0-9._-]{1,300}$/;
+// base64url of the 32-byte HMAC-SHA256, unpadded.
+const STATE_MAC = /^[A-Za-z0-9_-]{43}$/;
+
+function stateMac(key: Key, purpose: StatePurpose, payload: string): string {
+  const k = Buffer.from(hkdfSync("sha256", key.bytes, Buffer.alloc(0), `exec-state:v1:${purpose}`, 32));
+  return createHmac("sha256", k).update(payload, "utf8").digest("base64url");
+}
+
+/** payload ∈ /^[A-Za-z0-9._-]{1,300}$/ (else TypeError). Returns `${payload}.${mac}`, mac = base64url(HMAC-SHA256(K, payload)),
+ *  K = hkdfSync("sha256", currentKey.bytes, Buffer.alloc(0), "exec-state:v1:" + purpose, 32). Throws SecretUnavailableError
+ *  exactly as sealSecret does when the key is missing or invalid. */
+export function signState(purpose: StatePurpose, payload: string): string {
+  if (!STATE_PURPOSES.has(purpose)) throw new TypeError("signState: unknown purpose");
+  if (typeof payload !== "string" || !STATE_PAYLOAD.test(payload)) {
+    throw new TypeError("signState: the payload must be 1-300 characters of A-Z, a-z, 0-9, '.', '_' and '-'");
+  }
+  const { current } = keyring();
+  return `${payload}.${stateMac(current, purpose, payload)}`;
+}
+
+/** The payload when the last "."-separated part is a valid mac under EXEC_TOKEN_KEY or EXEC_TOKEN_KEY_PREVIOUS (timingSafeEqual
+ *  on equal-length buffers), else null. Never throws for bad input; throws SecretUnavailableError for a bad key config. */
+export function verifyState(purpose: StatePurpose, token: string): string | null {
+  // The key config first: a broken config is an outage to report, not a bad state.
+  const { all } = keyring();
+  if (!STATE_PURPOSES.has(purpose) || typeof token !== "string" || token.length > 344) return null;
+  const dot = token.lastIndexOf(".");
+  if (dot <= 0) return null;
+  const payload = token.slice(0, dot);
+  const mac = token.slice(dot + 1);
+  if (!STATE_PAYLOAD.test(payload) || !STATE_MAC.test(mac)) return null;
+  const given = Buffer.from(mac, "ascii");
+  let valid = false;
+  // Every key is checked (no early exit), so the timing doesn't say which key matched.
+  for (const key of all) {
+    const want = Buffer.from(stateMac(key, purpose, payload), "ascii");
+    if (want.length === given.length && timingSafeEqual(want, given)) valid = true;
+  }
+  return valid ? payload : null;
 }

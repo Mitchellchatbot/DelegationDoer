@@ -12,6 +12,7 @@ import type { ProjectHealth } from "@/lib/exec/analysis/projects";
 import type { FeedbackReason } from "@/lib/exec/attention-types";
 import type { VoiceProfileRow } from "@/lib/exec/drafts-store";
 import type { SettingsSchemaKey } from "@/lib/exec/settings-fields";
+import type { SlackSettingsView } from "@/lib/exec/slack-types";
 import type { ProjectStageStatus, TaskStatus, UserRole } from "@/lib/exec/sources/dd-types";
 import type { ExecSettings, ExecSurface, SourceRef } from "@/lib/exec/types";
 
@@ -209,4 +210,9 @@ export interface SettingsView {
    * down to the cent (agent/budget.ts effectiveChatCapUsd); shown beside the chat budget field. 0 = chat is paused.
    */
   effectiveChatCapUsd: number;
+  /**
+   * P6 (contract §3.13, §3.15.2): the Slack section (getSlackSettingsView, slack-settings.ts). Never a failed Section:
+   * the view itself fails soft (a read that failed shows schema true, state "not_connected").
+   */
+  slack: SlackSettingsView;
 }

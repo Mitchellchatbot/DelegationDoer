@@ -7,6 +7,9 @@ import { purgeExpiredDrafts } from "@/lib/exec/drafts-store";
 import { purgeExpiredEmailRows } from "@/lib/exec/email-store";
 import { purgeFinishedJobs } from "@/lib/exec/jobs";
 import type { ScheduledWork } from "@/lib/exec/scheduler";
+import { purgeUnpurgedRevocations } from "@/lib/exec/handlers/slack-uninstall";
+import { deleteExpiredOAuthStates, deleteOldSlackEvents } from "@/lib/exec/slack-install";
+import { SLACK_LIMITS } from "@/lib/exec/slack-types";
 import type { JobHandler } from "@/lib/exec/types";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 
@@ -51,6 +54,18 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 //                         "running" 10 minutes after they began marked failed/stale (a
 //                         process that died mid-answer): purgeExpiredChatRows. Tolerates
 //                         the P5b migration not being applied yet (counts 0).
+//   Slack (P6)            exec_slack_events older than 25 hours (SLACK_LIMITS.eventRetentionHours,
+//                         K16: past Slack's Delayed Events window, so a redelivery still
+//                         dedupes), in chunks of 1,000 by event_id: deleteOldSlackEvents;
+//                         exec_oauth_states past their expires_at: deleteExpiredOAuthStates.
+//                         Both tolerate the P6 migration not being applied yet (counts 0).
+//                         Slack conversations expire with the chat purge above (their own
+//                         expires_at) and go on uninstall (RPC 4); feedback cascades with its
+//                         message; the post ledger is emptied by the DM purge and the
+//                         uninstall purge (exec.slack-dm-purge, RPC 4). C18 backstop: an
+//                         installation revoked over an hour ago whose purge job never ran
+//                         (purged_at null) is purged here through the same step:
+//                         purgeUnpurgedRevocations (tolerates the P6 migration missing).
 //
 // The deletes are global, not per principal. Rows with no principal (system
 // jobs, access attempts that never resolved to a principal) have to age out
@@ -58,8 +73,6 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 // (key exec.purge:<principal>:<local date>), so with several principals it
 // runs several times a day; every delete is idempotent, so the extra runs
 // find nothing to delete.
-//
-// Later phases add the Slack retention to this job.
 
 export const PURGE_JOB_KIND = "exec.purge";
 
@@ -104,6 +117,12 @@ export interface PurgeCounts {
   chatConversations: number;
   chatMessages: number;
   chatStaleFailed: number;
+  /** P6 (deleteOldSlackEvents, contract §2.6): Events API dedupe rows older than 25 hours. */
+  slackEvents: number;
+  /** P6 (deleteExpiredOAuthStates): OAuth state nonces past their expires_at. */
+  oauthStates: number;
+  /** P6 C18 backstop (purgeUnpurgedRevocations): revoked installations whose own purge never ran, purged now. */
+  slackRevocationsPurged: number;
 }
 
 function errMessage(err: unknown): string {
@@ -171,7 +190,10 @@ export async function runPurge(signal?: AbortSignal, now: Date = new Date()): Pr
     attentionFeedback: 0,
     chatConversations: 0,
     chatMessages: 0,
-    chatStaleFailed: 0
+    chatStaleFailed: 0,
+    slackEvents: 0,
+    oauthStates: 0,
+    slackRevocationsPurged: 0
   };
   const one = (key: keyof PurgeCounts, run: () => Promise<number>) => async (): Promise<Partial<PurgeCounts>> => ({ [key]: await run() });
   const steps: readonly [string, () => Promise<Partial<PurgeCounts>>][] = [
@@ -205,7 +227,11 @@ export async function runPurge(signal?: AbortSignal, now: Date = new Date()): Pr
         const c = await purgeExpiredChatRows(now, { signal });
         return { chatConversations: c.conversations, chatMessages: c.messages, chatStaleFailed: c.staleFailed };
       }
-    ]
+    ],
+    // P6 (§2.6): after every earlier phase's step.
+    ["slackEvents", one("slackEvents", () => deleteOldSlackEvents(now, SLACK_LIMITS.eventRetentionHours, { signal }))],
+    ["oauthStates", one("oauthStates", () => deleteExpiredOAuthStates(now, { signal }))],
+    ["slackRevocationsPurged", one("slackRevocationsPurged", () => purgeUnpurgedRevocations(now, { signal }))]
   ];
 
   const failures: string[] = [];
@@ -227,7 +253,8 @@ export async function runPurge(signal?: AbortSignal, now: Date = new Date()): Pr
       `draftsContentPurged=${counts.draftsContentPurged} draftsDeleted=${counts.draftsDeleted} ` +
       `draftsClosedIdle=${counts.draftsClosedIdle} draftsChecksScheduled=${counts.draftsChecksScheduled} ` +
       `ddtextItems=${counts.ddtextItems} ddtextAttention=${counts.ddtextAttention} attentionFeedback=${counts.attentionFeedback} ` +
-      `chatConversations=${counts.chatConversations} chatMessages=${counts.chatMessages} chatStaleFailed=${counts.chatStaleFailed}` +
+      `chatConversations=${counts.chatConversations} chatMessages=${counts.chatMessages} chatStaleFailed=${counts.chatStaleFailed} ` +
+      `slackEvents=${counts.slackEvents} oauthStates=${counts.oauthStates} slackRevocationsPurged=${counts.slackRevocationsPurged}` +
       `${failures.length > 0 ? ` failed=${failures.length}` : ""}`
   );
   if (failures.length > 0) {

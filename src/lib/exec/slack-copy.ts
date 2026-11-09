@@ -1,0 +1,126 @@
+// P6 Slack app: every fixed string the bot and the Slack settings show (P6
+// contract §3.14; stage 0, lead seed, frozen). Pure and client-safe: no
+// server-only, no Supabase; the one import is P5b's pure chat copy, whose
+// shared sentences are re-exported here, never re-typed.
+//
+// Fixed copy never carries a link or a link label inside a sentence: "Open DD"
+// and "Open in DD" are their own keys, passed to slackLink as labels (rule 9).
+// Renderers put every value here through escapeMrkdwn (rule 2).
+
+export { CHAT_PAUSED_TEXT, FAILED_TEXT, PROPOSAL_PRIVACY_NOTICE } from "@/lib/exec/chat/copy";
+
+export const SLACK_COPY = Object.freeze({
+  fallbackText: "New reply from your assistant",
+  placeholder: "_Working on it…_",
+  suggested: "Suggested",
+  didntFit: "_The rest of this answer didn't fit in Slack. Ask me for a shorter version._",
+  feedbackUp: "Useful", feedbackDown: "Not useful", feedbackThanks: "Thanks, noted.",
+  notSaved: "This answer wasn't saved in DD.",
+  sourcesLabel: "Sources",
+  notes: Object.freeze({
+    late: "Sorry, Slack delivered this late, so I didn't answer it. Ask me again?",
+    timedOut: "That took too long, so I stopped. Try a narrower question.",
+    failed: "Something went wrong, so there's no answer. Try again.",
+    stale: "Something went wrong before I could finish this answer. Ask me again?",
+    chatOff: "Chat is turned off in Executive AI settings, so I can't answer here.",
+    busyThread: "I'm still answering your last message in this thread. Wait for that answer, then ask again.",
+    busyPrincipal: "I'm still working on your last questions. Try again shortly.",
+    rateLimited: "You've asked a lot in the last 10 minutes. Try again in {minutes} min.",
+    tooLong: "That message is too long for me (4,000 characters at most). Send a shorter question.",
+    unrenderable: "I couldn't show this answer in Slack. Ask me again, or ask for a shorter answer.",
+    removed: "This answer was removed: it drew on mail from a sender that is now restricted."
+  }),
+  draftHeader: "*Draft reply*",
+  draftSave: "Save to Outlook Drafts", draftRegenerate: "Regenerate", draftRefresh: "Refresh", openInDd: "Open in DD", openDd: "Open DD",
+  draftPrivateRefs: "This draft was started in a conversation that also read other email, team notes or other clients' records. Check and save it in DD.",
+  draftPreviewClipped: "(The full draft is in DD.)",
+  draftStatus: Object.freeze({
+    drafting: "Drafting… I'll update this card when it's ready.",
+    failed: "I couldn't draft this. Try Regenerate, or open it in DD.",
+    ready: "Ready to save to your Outlook Drafts.",
+    saving: "Saving to Outlook… I'll update this card.",
+    saved: "Saved to your Outlook Drafts. Review and send it from Outlook or DD.",
+    sending: "Sending from DD…",
+    sent: "Sent.",
+    check: "DD can't tell whether this was sent. Open it in DD to check.",
+    gone: "This draft is gone.",
+    hidden: "This draft is hidden: its email is from a restricted sender.",
+    changed: "This draft changed since this card was posted. Check it and try again.",
+    needsEdit: "This draft needs an edit before it can be saved (a placeholder, an empty body, a missing subject or formatting DD can't save). Open it in DD.",
+    recipients: "The recipients need a check in DD before this can be saved.",
+    rateLimited: "Too many draft actions at once. Try again in a minute.",
+    unavailable: "Drafts aren't available right now. Open DD to see why.",
+    saveFailed: "Couldn't save this draft to Outlook. Try again, or open it in DD.",
+    outlookChanged: "The copy in your Outlook Drafts changed since DD saved it. Open it in DD to check.",
+    checkInDd: "This draft needs a check in DD before it can be saved.",
+    privateRefs: "Check and save this draft in DD."
+  }),
+  proposalHeader: "*Proposed task*",
+  proposalCreate: "Create task", proposalDismiss: "Dismiss", openTask: "Open task",
+  proposalFields: "Assignee: {assignee} · Department: {department} · Client: {client} · Priority: {priority} · Due: {due}",
+  proposalStatus: Object.freeze({
+    created: "Created in DD.",
+    creating: "Creating…",
+    dismissed: "Dismissed.",
+    removed: "Removed: this proposal drew on mail from a sender that is now restricted.",
+    expired: "This proposal expired. Ask me again if you still want it.",
+    changed: "This proposal changed since it was shown. Check it and press Create task again.",
+    assignee: "The assignee isn't available in DD any more. Ask me to propose it again.",
+    failed: "Something went wrong. Try again.",
+    chatOff: "Chat is turned off in Executive AI settings, so this can't be done here.",
+    rateLimited: "Too many task actions in the last 10 minutes. Try again in a few minutes."
+  }),
+  homeHeader: "Executive Assistant",
+  ask: "Ask me anything in the *Messages* tab.",
+  homeNeedsYou: "*Needs you*",
+  homeNothing: "Nothing needs you right now.",
+  homeAttentionFailed: "Couldn't load what needs you. Open DD.",
+  homeHiddenEmail: "{n} email item(s) hidden: restricted sender.",
+  homeEmailUnavailable: "Email items are hidden: the restricted-sender check couldn't run.",
+  homeEmail: "*Email*",
+  homeEmailCounts: "Reply {reply} · Urgent {urgent} · Important {important} · Waiting {waiting}",
+  homeEmailCountsFailed: "Couldn't load email counts.",
+  restrictedCount: "{n} restricted-sender emails need you.",       // followed by the openDd link (rule 9)
+  homeEmailOff: "Email isn't on.",
+  homeBrief: "The assistant's morning brief isn't set up yet.",
+  homeUpdated: "Updated {time}. Private to you.",
+  bandLabels: Object.freeze({ critical: "Critical", high: "High", normal: "Normal" }),
+  aiAssessed: "AI-assessed",                                         // the web's BasisLabel for a model's reading (DDTEXT_AI_KINDS)
+  settingsReadFailed: "Couldn't load the Slack connection. Reload the page.",
+  neutralHome: "This is a private assistant. It doesn't respond to messages.",
+  settingsNotInstalled: "Slack isn't installed yet (the P6 database update hasn't been applied).",
+  settingsNotConfigured: "Slack isn't set up yet: the team needs to create the app and set its keys.",
+  settingsIntro: "Connect the Executive Assistant to Slack to ask questions in a direct message. It can't read your channels or your messages with other people.",
+  settingsPasswordNote: "You need to be signed in with your password or a second factor.",
+  settingsConnect: "Connect Slack", settingsDisconnect: "Disconnect", settingsReconnect: "Reconnect Slack",
+  settingsError: "Slack rejected the last request ({code}). Reconnect if this keeps happening.",
+  settingsWrongHost: "Open DD at operations.scaledai.org to connect Slack. Your sign-in there is separate.",
+  settingsRevoked: "Disconnected on {date} ({reason}).",
+  settingsFramed: "Changes are off in an embedded view.",
+  revokeReasons: Object.freeze({ app_uninstalled: "the app was removed in Slack", tokens_revoked: "Slack revoked its access", disconnected: "disconnected here" }),
+  disconnectConfirmTitle: "Disconnect Slack?",
+  disconnectConfirmBody: "The app is removed from Slack, and your Slack conversations with the assistant are deleted from DD. Messages already in Slack stay there until Slack deletes them.",
+  disconnectSlackDown: "Couldn't reach Slack, so nothing changed. Try again.",
+  disconnectFailed: "Couldn't disconnect. Try again.",
+  connectResult: Object.freeze({
+    connected: "Slack is connected. Send the assistant a direct message to try it.",
+    denied: "Slack wasn't connected: the request was cancelled in Slack.",
+    state_invalid: "That connection link was already used or isn't yours. Start again from this page.",
+    state_expired: "That connection link expired. Start again from this page.",
+    not_configured: "Slack isn't set up yet: the team needs to create the app and set its keys.",
+    not_installed: "Slack isn't installed yet (the P6 database update hasn't been applied).",
+    session_unbound: "Your session couldn't be checked. Sign in again with your password, then connect.",
+    rate_limited: "Too many connection attempts. Try again in a few minutes.",
+    unavailable: "Something went wrong on DD's side. Try again.",
+    slack_unavailable: "Couldn't reach Slack. Try again.",
+    exchange_failed: "Slack didn't complete the connection. Try again.",
+    enterprise: "This app can't be installed across an Enterprise Grid organization. Install it in the ScaledAI workspace only.",
+    wrong_team: "That was a different Slack workspace. Connect the ScaledAI workspace.",
+    wrong_app: "Slack answered for a different app. Ask the team to check the app's keys.",
+    missing_scopes: "Slack didn't grant every permission the assistant needs. Try again and allow all of them.",
+    identity_not_found: "Slack has no member with your DD email address. Ask the team to check your Slack account's email.",
+    wrong_user: "Slack says Slack member {who} approved this install, not you. Nothing was saved. Sign in to Slack as yourself and try again.",
+    wrong_host: "You started from a different DD address, so you've been moved to operations.scaledai.org. Press Connect Slack again here.",
+    extra_scopes: "The Slack app has more permissions than the assistant uses. Ask the team to remove them, and uninstall the app first if it was installed with them. Nothing was saved."
+  })
+});

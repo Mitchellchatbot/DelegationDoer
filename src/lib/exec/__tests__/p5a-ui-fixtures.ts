@@ -1,5 +1,6 @@
 import type { AttentionFeedItem } from "@/lib/exec/attention-types";
 import type { ProjectHealth } from "@/lib/exec/analysis/projects";
+import type { SlackSettingsView } from "@/lib/exec/slack-types";
 import type { ExecSettings, SourceRef } from "@/lib/exec/types";
 import type {
   CountsValue,
@@ -458,6 +459,27 @@ export const voiceProfile = {
   updatedAt: "2026-11-02T09:00:00.000Z"
 };
 
+/** P6 (contract §3.13): the Slack section's view. Default: installed and configured, not connected. */
+export function slackSettingsView(over: Partial<SlackSettingsView> = {}): SlackSettingsView {
+  return {
+    schema: true,
+    configured: true,
+    state: "not_connected",
+    installationId: null,
+    teamId: null,
+    dmChannelId: null,
+    userId: null,
+    installedAt: null,
+    scopes: [],
+    lastDmAt: null,
+    lastErrorCode: null,
+    lastErrorAt: null,
+    revokedAt: null,
+    revokeReason: null,
+    ...over
+  };
+}
+
 export function settingsView(over: Partial<SettingsView> = {}): SettingsView {
   return {
     generatedAt: NOW,
@@ -492,6 +514,8 @@ export function settingsView(over: Partial<SettingsView> = {}): SettingsView {
     voice: { ok: true, data: { installed: true, profile: voiceProfile } },
     // min(9, 0.6 x 15) = 9 (C30).
     effectiveChatCapUsd: 9,
+    // P6: installed and configured, not connected yet.
+    slack: slackSettingsView(),
     ...over
   };
 }

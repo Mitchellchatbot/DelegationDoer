@@ -9,6 +9,17 @@ import { emailAttentionJobHandler, emailAttentionScheduledWork } from "@/lib/exe
 import { emailReconcileJobHandler, emailReconcileScheduledWork } from "@/lib/exec/handlers/email-reconcile";
 import { emailTriageJobHandler } from "@/lib/exec/handlers/email-triage";
 import { purgeJobHandler, purgeScheduledWork } from "@/lib/exec/handlers/purge";
+import { slackActionJobHandler } from "@/lib/exec/handlers/slack-action";
+import { slackCardJobHandler } from "@/lib/exec/handlers/slack-card";
+import { slackHomeJobHandler } from "@/lib/exec/handlers/slack-home";
+import { slackReplyJobHandler } from "@/lib/exec/handlers/slack-reply";
+import {
+  slackDmPurgeJobHandler,
+  slackDmPurgeScheduledWork,
+  slackSweepJobHandler,
+  slackSweepScheduledWork
+} from "@/lib/exec/handlers/slack-sweep";
+import { slackUninstallJobHandler } from "@/lib/exec/handlers/slack-uninstall";
 import { voiceRefreshJobHandler, voiceRefreshScheduledWork } from "@/lib/exec/handlers/voice-refresh";
 import { JOB_LANES, getJobHandler, registerJobHandler, runWorkerPass, type WorkerPassSummary } from "@/lib/exec/jobs";
 import { ensureMailHook, recordSocketHealth } from "@/lib/exec/mail-hook";
@@ -32,6 +43,12 @@ import type { JobHandler, JobLane } from "@/lib/exec/types";
 // P5a DD text triage (contract §3.12.6, K17): its own kind on the same
 // 10-minute buckets as the DD attention refresh, bulk lane, ungated (turned
 // off, it deletes its own items and attention rows; not installed, it skips).
+// P6 Slack (contract §3.11.8, C35): the DM reply, button actions, card
+// refreshes, App Home, the uninstall check and purge, the 5-minute stale and
+// redaction sweep and the daily DM purge. Registered unconditionally: a
+// service without EXEC_TOKEN_KEY fails the jobs with the runner's ops alert.
+// Both schedules are gated (Y4 `when`) on an active installation, so a
+// principal without Slack enqueues nothing.
 const BUILT_IN_HANDLERS: readonly JobHandler[] = [
   purgeJobHandler,
   ddAttentionJobHandler,
@@ -41,7 +58,14 @@ const BUILT_IN_HANDLERS: readonly JobHandler[] = [
   draftGenerateJobHandler,
   draftReconcileJobHandler,
   voiceRefreshJobHandler,
-  ddtextJobHandler
+  ddtextJobHandler,
+  slackReplyJobHandler,
+  slackActionJobHandler,
+  slackCardJobHandler,
+  slackHomeJobHandler,
+  slackUninstallJobHandler,
+  slackSweepJobHandler,
+  slackDmPurgeJobHandler
 ];
 const BUILT_IN_SCHEDULE: readonly ScheduledWork[] = [
   purgeScheduledWork,
@@ -50,7 +74,9 @@ const BUILT_IN_SCHEDULE: readonly ScheduledWork[] = [
   emailAttentionScheduledWork,
   draftReconcileScheduledWork,
   voiceRefreshScheduledWork,
-  ddtextScheduledWork
+  ddtextScheduledWork,
+  slackSweepScheduledWork,
+  slackDmPurgeScheduledWork
 ];
 
 // The cron route's whole run has to fit well inside its 60 s maxDuration.

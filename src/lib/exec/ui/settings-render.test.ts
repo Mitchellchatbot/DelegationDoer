@@ -241,9 +241,11 @@ describe("SettingsPageView (test 75)", () => {
     expect(text).toContain("Email triage $0.31");
     expect(text).toContain("Pinned mailbox mitchell@scaledai.org");
     expect(text).toContain("Send from DD Off");
-    // The brief and the Slack app don't exist in this build: never their stored values (ui-3).
+    // The brief doesn't exist in this build: never its stored values (ui-3). P6 replaced the read-only Slack row with the
+    // Slack section (ui/slack-settings.test.ts covers its states); the old Slack check-in values are still never shown.
     expect(text).toContain("Morning brief Not set up yet");
-    expect(text).toContain("Slack Not set up yet: arrives with the Slack app");
+    expect(text).not.toContain("arrives with the Slack app");
+    expect(text).toContain("Slack Connect the Executive Assistant to Slack to ask questions in a direct message.");
     for (const stale of ["Morning brief On", "07:30", "Slack check-ins", "Slack watch mode", "Muted Slack channels", "Public channels"]) expect(text).not.toContain(stale);
     // P5b ships chat: the retention help no longer says it isn't available (bindings AM4).
     expect(SETTINGS_FIELDS.find((f) => f.key === "retentionDaysChat")?.help).toBe("Days, 7 to 730. Applies to records written from now on.");

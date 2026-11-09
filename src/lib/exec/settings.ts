@@ -19,6 +19,7 @@ import {
   type SettingsFieldDef,
   type SettingsPatch
 } from "@/lib/exec/settings-fields";
+import { getSlackSettingsView } from "@/lib/exec/slack-settings";
 import { getSyncState, parseAccountsState } from "@/lib/exec/sync-state";
 import { startOfLocalDayUtc } from "@/lib/exec/time";
 import { NonRetryableError, type ExecPrincipal, type ExecSettings, type ExecSurface } from "@/lib/exec/types";
@@ -211,7 +212,7 @@ export async function getSettingsView(
   const settings: ExecSettings = snapshot.settings;
   const signal = AbortSignal.timeout(READ_TIMEOUT_MS);
 
-  const [pinned, spend, recentAccess, feedback, voice] = await Promise.all([
+  const [pinned, spend, recentAccess, feedback, voice, slack] = await Promise.all([
     section("pinned mailbox", () => pinnedMailbox(principal, signal)),
     section("spend", () => spendTodayByFeature(principal, at, { capUsd: settings.dailyCostCapUsd, signal })),
     section("recent access", () => listRecentAccess(principal, RECENT_ACCESS_DEFAULT, { signal })),
@@ -220,7 +221,9 @@ export async function getSettingsView(
       settings.draftsSchemaReady
         ? { installed: true, profile: await getVoiceProfile(principal, { signal }) }
         : { installed: false, profile: null }
-    )
+    ),
+    // P6 (contract §3.13): the Slack section's view. It fails soft itself (never throws), under the same deadline.
+    getSlackSettingsView(principal, { signal })
   ]);
 
   return {
@@ -235,7 +238,8 @@ export async function getSettingsView(
     feedback,
     voice,
     // P5b (C30): pure, from the settings read (P5b's columns missing → chatDailyCapUsd is its default).
-    effectiveChatCapUsd: effectiveChatCapUsd(settings)
+    effectiveChatCapUsd: effectiveChatCapUsd(settings),
+    slack
   };
 }
 

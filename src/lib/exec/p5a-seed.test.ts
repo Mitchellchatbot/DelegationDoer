@@ -157,8 +157,10 @@ describe("P5a seed: constants (§3.1.4, §3.3.1, §3.9, §3.11.1, §3.12)", () =
     expect(ddtextScheduledWork.enabled).toBeUndefined();
   });
 
-  it("RATE_BUCKETS registers the four P5a buckets and P5b's two (and loading http.ts runs no stub)", () => {
-    expect(Object.keys(RATE_BUCKETS).sort()).toEqual(["assess", "attention_action", "attention_feedback", "chat", "proposal", "settings_update"]);
+  it("RATE_BUCKETS registers the four P5a buckets, P5b's two and P6's two (and loading http.ts runs no stub)", () => {
+    expect(Object.keys(RATE_BUCKETS).sort()).toEqual([
+      "assess", "attention_action", "attention_feedback", "chat", "proposal", "settings_update", "slack_connect", "slack_disconnect"
+    ]);
     for (const def of Object.values(RATE_BUCKETS)) expect(typeof def.nthNewestAt).toBe("function");
   });
 

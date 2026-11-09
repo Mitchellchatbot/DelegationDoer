@@ -195,8 +195,8 @@ export function validateBody<T>(value: unknown, schema: ZodType<T, ZodTypeDef, u
   return { ok: false, response: jsonError(400, "invalid", { detail }) };
 }
 
-/** P5b adds "chat". */
-export type RateBucket = "attention_action" | "attention_feedback" | "settings_update" | "assess";
+/** P5b added "chat" (his questions, any surface) and "proposal" (his confirms and dismisses). */
+export type RateBucket = "attention_action" | "attention_feedback" | "settings_update" | "assess" | "chat" | "proposal";
 export interface RateBucketDef {
   /** created_at of the n-th newest counted row at or after sinceIso, or null when there are fewer than n. Throws on a read error. */
   nthNewestAt: (principal: ExecPrincipal, sinceIso: string, n: number, signal?: AbortSignal) => Promise<string | null>;
@@ -237,9 +237,45 @@ export function auditNthNewestAt(actions: readonly string[]): RateBucketDef["nth
 }
 
 /**
+ * P5b (contract §3.0.1, S2; bindings AM2): the n-th newest value of `column` among the principal's rows of `table`
+ * at or after sinceIso, optionally narrowed to one value of `role`:
+ *   select <column> from <table> where principal_id = p [and role = r] and <column> >= since and <column> is not null
+ *   order by <column> desc range(n-1, n-1)
+ * served by exec_messages_rate_idx (user rows by created_at) and exec_task_proposals_decided_idx (decided rows by
+ * decided_at). Throws on any read error, a missing table (42P01 / PGRST205) included, so rateLimit answers 503.
+ */
+function rowNthNewestAt(table: "exec_messages" | "exec_task_proposals", column: "created_at" | "decided_at", role: "user" | null): RateBucketDef["nthNewestAt"] {
+  return async (principal, sinceIso, n, signal) => {
+    if (!Number.isSafeInteger(n) || n < 1) throw new TypeError("nthNewestAt: n must be a positive integer");
+    if (!Number.isFinite(Date.parse(sinceIso))) throw new TypeError("nthNewestAt: sinceIso must be a timestamp");
+    let query = getSupabaseAdmin().from(table).select(column).eq("principal_id", principal.id);
+    if (role !== null) query = query.eq("role", role);
+    query = query
+      .gte(column, sinceIso)
+      .not(column, "is", null)
+      .order(column, { ascending: false })
+      .range(n - 1, n - 1);
+    if (signal) query = query.abortSignal(signal);
+    const { data, error } = await query;
+    if (error) {
+      signal?.throwIfAborted();
+      throw new Error(`${table} rate count failed: ${error.message}`);
+    }
+    if (!Array.isArray(data)) throw new Error(`${table} rate count failed: no rows array in the response`);
+    if (data.length === 0) return null;
+    const at = (data[0] as unknown as Record<string, unknown>)[column];
+    if (typeof at !== "string" || !Number.isFinite(Date.parse(at))) throw new Error(`${table} rate count failed: ${column} is not a timestamp`);
+    return at;
+  };
+}
+
+/**
  * Bucket registry (C11). Each audit-backed bucket counts the audit rows of its
  * actions. P4's drafts limiter (countRecentAudit, P4C C38) stays outside it,
- * as P4 built it (S2). P5b registers "chat".
+ * as P4 built it (S2). P5b registered "chat" (exec_messages user rows, any
+ * surface, so Slack DMs share it; the begin RPC repeats the exact count under
+ * its lock, C49) and "proposal" (exec_task_proposals decided rows: confirms
+ * and dismisses).
  */
 export const RATE_BUCKETS: Readonly<Record<RateBucket, RateBucketDef>> = Object.freeze({
   attention_action: {
@@ -247,7 +283,9 @@ export const RATE_BUCKETS: Readonly<Record<RateBucket, RateBucketDef>> = Object.
   },
   attention_feedback: { nthNewestAt: auditNthNewestAt(["attention.feedback"]) },
   settings_update: { nthNewestAt: auditNthNewestAt(["settings.update", "settings.voice_reset"]) },
-  assess: { nthNewestAt: auditNthNewestAt(["email.assess"]) }
+  assess: { nthNewestAt: auditNthNewestAt(["email.assess"]) },
+  chat: { nthNewestAt: rowNthNewestAt("exec_messages", "created_at", "user") },
+  proposal: { nthNewestAt: rowNthNewestAt("exec_task_proposals", "decided_at", null) }
 });
 
 /**

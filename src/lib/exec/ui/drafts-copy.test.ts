@@ -50,7 +50,7 @@ const DRAFT_ERROR_CODES = all<DraftErrorCode>({
   send_unavailable: true, rate_limited: true, version_conflict: true, state_conflict: true, review_required: true, review_expired: true,
   acks_missing: true, recipients_blocked: true, placeholders: true, empty_body: true, unsafe_markup: true, instruction_required: true,
   subject_required: true, thread_unavailable: true, mailbox_problem: true, audit_unavailable: true, unavailable: true, hold: true,
-  sent_copy_found: true
+  sent_copy_found: true, private_refs_unconfirmed: true
 });
 const EA_REASONS = all<EaReadinessReason>({
   no_pin: true, multiple_principals: true, token_missing: true, base_url_missing: true, clone_unreachable: true, cl2_missing: true,
@@ -74,7 +74,7 @@ const FLAGS = all<GenerationFlag>({
 const BLOCKERS = all<ReviewBlocker>({
   already_replied: true, newer_inbound: true, reply_scheduled: true, legacy_draft_pending: true, opened_in_outlook: true,
   changed_in_outlook: true, recipients_changed: true, reply_to_present: true, placeholder_in_outlook: true, thread_unavailable: true,
-  facts_outside_client: true, unexpected_content: true
+  facts_outside_client: true, unexpected_content: true, private_refs: true
 });
 const ATTENTION = all<DraftAttention>({
   unknown: true, sent_mismatch: true, gone_unconfirmed: true, outlook_changed: true, generation_failed: true, restricted: true, stale_link: true

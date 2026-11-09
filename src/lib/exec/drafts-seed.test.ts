@@ -393,14 +393,18 @@ describe("stage-0 additive seeds", () => {
 // --- the seeded constants the areas build on -----------------------------------------------------
 
 describe("stage-0 constants", () => {
-  it("DRAFT_COLUMNS maps every one of the 81 ExecDraftRow fields to its snake_case column, uniquely", () => {
+  it("DRAFT_COLUMNS maps every one of the 83 ExecDraftRow fields to its snake_case column, uniquely", () => {
     const keys = Object.keys(DRAFT_COLUMNS);
-    expect(keys).toHaveLength(81);
+    // P5b (F7, F12): instruction_by is the 82nd, appended by P5b's migration after expires_at; chat_message_id
+    // (review security-2) the 83rd, appended by the same migration.
+    expect(keys).toHaveLength(83);
     expect(keys[0]).toBe("id");
-    expect(keys[keys.length - 1]).toBe("expiresAt");
+    expect(keys[keys.length - 3]).toBe("expiresAt");
+    expect(keys[keys.length - 2]).toBe("instructionBy");
+    expect(keys[keys.length - 1]).toBe("chatMessageId");
     const snake = (k: string) => k.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase();
     for (const k of keys) expect(DRAFT_COLUMNS[k as keyof typeof DRAFT_COLUMNS], k).toBe(snake(k));
-    expect(new Set(Object.values(DRAFT_COLUMNS)).size).toBe(81);
+    expect(new Set(Object.values(DRAFT_COLUMNS)).size).toBe(83);
     expect(DRAFT_STATUSES).toHaveLength(13);
   });
 

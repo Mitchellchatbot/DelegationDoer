@@ -8,6 +8,8 @@ vi.mock("@/lib/supabase-admin", () => ({ getSupabaseAdmin: vi.fn() }));
 vi.mock("@/lib/exec/attention-feedback", () => ({ feedbackTotals: vi.fn() }));
 // The fake PostgREST can't project sync-state's JSON-path select; the mailbox state is stubbed here.
 vi.mock("@/lib/exec/sync-state", async (orig) => ({ ...(await orig<typeof import("@/lib/exec/sync-state")>()), getSyncState: vi.fn() }));
+// P5b: Area C's effective chat cap (C30) has its own suite; the view only carries its answer (chat-settings.test.ts).
+vi.mock("@/lib/exec/agent/budget", () => ({ effectiveChatCapUsd: vi.fn(() => 9) }));
 
 import { createFakeDraftsDb, type FakeDraftsDb, type FakeRequest, type Row } from "@/lib/exec/__tests__/fake-drafts-db";
 import { feedbackTotals } from "@/lib/exec/attention-feedback";
@@ -41,10 +43,10 @@ function mint(id = "ep_1", accounts: string[] = ["acc_1", "acc_2"]): ExecPrincip
 const P = mint();
 const OTHER = mint("ep_2");
 
-type Groups = { email?: boolean; drafts?: boolean; ddtext?: boolean };
-/** An exec_settings row holding the base columns, updated_at and the groups asked for (all by default). */
+type Groups = { email?: boolean; drafts?: boolean; ddtext?: boolean; chat?: boolean };
+/** An exec_settings row holding the base columns, updated_at and the groups asked for (all by default; P5b's chat included). */
 function settingsDbRow(over: Row = {}, groups: Groups = {}): Row {
-  const g = { email: true, drafts: true, ddtext: true, ...groups };
+  const g = { email: true, drafts: true, ddtext: true, chat: true, ...groups };
   const row: Row = {
     principal_id: "ep_1",
     brief_enabled: false,
@@ -64,6 +66,7 @@ function settingsDbRow(over: Row = {}, groups: Groups = {}): Row {
   if (g.email) row.email_enabled = true;
   if (g.drafts) Object.assign(row, { drafts_enabled: true, send_enabled: false, voice_enabled: true });
   if (g.ddtext) Object.assign(row, { ddtext_enabled: false, retention_days_ddtext: 90 });
+  if (g.chat) Object.assign(row, { chat_enabled: false, ask_ai_uses_exec: false, chat_daily_cap_usd: "9.00" });
   return { ...row, ...over };
 }
 
@@ -303,7 +306,7 @@ describe("settings-fields.ts (test 25c)", () => {
       expect(def.label.length).toBeGreaterThan(3);
       expect(def.help.length).toBeGreaterThan(10);
       expect(`${def.label} ${def.help}`).not.toMatch(/stub/i);
-      expect(["base", "email", "drafts", "ddtext"]).toContain(def.group);
+      expect(["base", "email", "drafts", "ddtext", "chat"]).toContain(def.group);
       if (def.kind === "boolean") expect([def.min, def.max]).toEqual([undefined, undefined]);
       else expect(typeof def.min === "number" && typeof def.max === "number").toBe(true);
     }
@@ -526,7 +529,7 @@ describe("getSettingsView", () => {
     useDb({ tables: { exec_settings: [settingsDbRow({}, { drafts: false, ddtext: false })] } });
     vi.mocked(getSyncState).mockResolvedValue(null);
     const view = await getSettingsView(P, NOW);
-    expect(view.schema).toEqual({ email: true, drafts: false, ddtext: false });
+    expect(view.schema).toEqual({ email: true, drafts: false, ddtext: false, chat: false });
     expect(view.feedback).toEqual({ ok: true, data: null });
     expect(view.voice).toEqual({ ok: true, data: { installed: false, profile: null } });
     expect(feedbackTotals).not.toHaveBeenCalled();

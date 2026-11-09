@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useId, useRef, useState, type Ref } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode, type Ref } from "react";
+import { CHAT_NOT_INSTALLED_TEXT } from "@/lib/exec/chat/copy";
 import { SETTINGS_FIELDS, validateSettingsField, type SettingsFieldDef, type SettingsPatch, type SettingsSchemaKey } from "@/lib/exec/settings-fields";
 import { focusLost } from "@/lib/exec/ui/focus";
 import { SETTINGS_COPY, patchSettings, voiceCanBuild } from "@/lib/exec/ui/settings-api";
@@ -20,6 +21,13 @@ import { useIsTopWindow } from "../drafts/frame-guard";
 // saying changes are off (a-build-2). Turning DD text triage on asks for an
 // explicit confirmation first (the notice and the data terms); turning it off
 // says what that deletes.
+//
+// P5b (contract §3.19.12, C30, B10): the chat fields have their own "Chat"
+// section, in this order: the Chat switch, its daily budget (with the cap
+// that actually applies beside it: the lower of the field and 60% of the
+// daily AI budget) and "Use the assistant for Ask AI", which stays disabled
+// while Chat is off. Before P5b's migration the section is one sentence and
+// no control.
 
 type FieldKey = keyof SettingsPatch;
 type Status = { field: FieldKey; tone: "ok" | "error"; text: string } | null;
@@ -61,10 +69,27 @@ function sentence(detail: string): string {
 }
 
 const GROUPS: readonly { title: string; test: (def: SettingsFieldDef) => boolean }[] = [
-  { title: "Assistant switches", test: (d) => d.kind === "boolean" },
-  { title: "Retention", test: (d) => d.kind === "int" },
-  { title: "Daily AI budget", test: (d) => d.kind === "money" }
+  { title: "Assistant switches", test: (d) => d.group !== "chat" && d.kind === "boolean" },
+  { title: "Retention", test: (d) => d.group !== "chat" && d.kind === "int" },
+  { title: "Daily AI budget", test: (d) => d.group !== "chat" && d.kind === "money" }
 ];
+
+/** P5b's section: its fields in the order §3.19.12 lists them. */
+export const CHAT_SECTION_TITLE = "Chat";
+const CHAT_FIELD_ORDER: readonly FieldKey[] = ["chatEnabled", "chatDailyCapUsd", "askAiUsesExec"];
+const CHAT_FIELDS: readonly SettingsFieldDef[] = CHAT_FIELD_ORDER.map((key) => SETTINGS_FIELDS.find((d) => d.key === key)).filter(
+  (d): d is SettingsFieldDef => d !== undefined
+);
+
+/** The line beside the chat budget: what chat may spend today once the daily budget's share is applied (C30). */
+export function effectiveChatCapText(effectiveUsd: number): string {
+  return Number.isFinite(effectiveUsd) ? `Chat can use up to $${effectiveUsd.toFixed(2)} a day: this budget or 60% of the daily AI budget, whichever is lower.` : "";
+}
+
+/** Why askAiUsesExec can't be switched right now (Chat is off), or null. */
+export function askAiLockedText(view: Pick<SettingsView, "settings">): string | null {
+  return view.settings.chatEnabled ? null : "Turn on Chat first.";
+}
 
 const SMALL_BUTTON =
   "rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[12.5px] font-semibold text-slate-700 hover:border-slate-300 hover:text-ink disabled:cursor-not-allowed disabled:opacity-50";
@@ -174,8 +199,14 @@ function FieldRow({
   onSave,
   onConfirmCheck,
   onConfirm,
-  onCancel
+  onCancel,
+  locked = null,
+  note = null
 }: {
+  /** P5b: a reason the control is disabled though the field is installed (askAiUsesExec while Chat is off). */
+  locked?: string | null;
+  /** P5b: a line under the help (the effective chat cap). */
+  note?: ReactNode;
   def: SettingsFieldDef;
   view: SettingsView;
   isTop: boolean;
@@ -226,6 +257,16 @@ function FieldRow({
               {SETTINGS_COPY.voiceNeeds}
             </p>
           )}
+          {ready && note && (
+            <p data-setting-note className="mt-1 text-[12px] font-medium text-slate-700">
+              {note}
+            </p>
+          )}
+          {ready && locked && (
+            <p data-setting-locked className="mt-1 text-[12px] font-medium text-amber-800">
+              {locked}
+            </p>
+          )}
         </div>
         <div className="flex shrink-0 flex-wrap items-center gap-2">
           {!isTop ? (
@@ -233,7 +274,7 @@ function FieldRow({
               {ready ? settingValueText(def, value) : "—"}
             </span>
           ) : def.kind === "boolean" ? (
-            <Switch buttonRef={switchRef} on={ready && value === true} labelledBy={labelId} disabled={!ready || busy || confirm !== null} onClick={onToggle} />
+            <Switch buttonRef={switchRef} on={ready && value === true} labelledBy={labelId} disabled={!ready || busy || confirm !== null || locked !== null} onClick={onToggle} />
           ) : (
             <>
               <input
@@ -246,11 +287,11 @@ function FieldRow({
                 max={def.max}
                 step={def.kind === "money" ? 0.01 : 1}
                 value={ready ? (draft ?? (typeof value === "number" ? String(value) : "")) : ""}
-                disabled={!ready || busy}
+                disabled={!ready || busy || locked !== null}
                 onChange={(e) => onDraft(e.currentTarget.value)}
                 className="w-28 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-right text-[13px] tabular-nums text-ink focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100 disabled:bg-slate-50 disabled:text-muted"
               />
-              <button type="button" onClick={onSave} disabled={!ready || busy || draft === undefined} className={SMALL_BUTTON}>
+              <button type="button" onClick={onSave} disabled={!ready || busy || draft === undefined || locked !== null} className={SMALL_BUTTON}>
                 {pending === def.key ? "Saving…" : "Save"}
               </button>
             </>
@@ -325,6 +366,39 @@ export function SettingsForm({
     setStatus({ field: def.key, tone: "error", text: result.message });
   }
 
+  const rowFor = (def: SettingsFieldDef, extra: { locked?: string | null; note?: ReactNode } = {}) => (
+    <FieldRow
+      key={def.key}
+      def={def}
+      view={view}
+      isTop={isTop}
+      pending={pending}
+      status={status}
+      draft={drafts[def.key]}
+      error={errors[def.key]}
+      confirm={def.key === DDTEXT_KEY ? confirm : null}
+      locked={extra.locked ?? null}
+      note={extra.note ?? null}
+      onToggle={() => {
+        const on = valueOf(view, def.key) === true;
+        if (def.key === DDTEXT_KEY) setConfirm({ turningOn: !on, checked: false });
+        else void save(def, !on);
+      }}
+      onDraft={(v) => setDrafts((d) => ({ ...d, [def.key]: v }))}
+      onSave={() => {
+        const raw = (drafts[def.key] ?? "").trim();
+        void save(def, raw === "" ? Number.NaN : Number(raw));
+      }}
+      onConfirmCheck={(checked) => setConfirm((c) => (c ? { ...c, checked } : c))}
+      onConfirm={() => {
+        if (!confirm) return;
+        void save(def, confirm.turningOn, confirm.turningOn ? "ddtext_notice" : undefined);
+      }}
+      onCancel={() => setConfirm(null)}
+    />
+  );
+  const chatInstalled = view.schema.chat === true;
+
   return (
     <div data-settings-form className="min-w-0">
       {!isTop && (
@@ -372,6 +446,23 @@ export function SettingsForm({
           </section>
         );
       })}
+      <section data-chat-settings className="border-b border-slate-100 last:border-b-0">
+        <h3 className="pt-3 text-[11px] font-semibold uppercase tracking-wide text-muted">{CHAT_SECTION_TITLE}</h3>
+        {chatInstalled ? (
+          <div className="divide-y divide-slate-100">
+            {CHAT_FIELDS.map((def) =>
+              rowFor(def, {
+                locked: def.key === "askAiUsesExec" ? askAiLockedText(view) : null,
+                note: def.key === "chatDailyCapUsd" ? effectiveChatCapText(view.effectiveChatCapUsd) : null
+              })
+            )}
+          </div>
+        ) : (
+          <p data-chat-not-installed className="py-3 text-[12.5px] font-medium text-amber-800">
+            {CHAT_NOT_INSTALLED_TEXT}
+          </p>
+        )}
+      </section>
     </div>
   );
 }

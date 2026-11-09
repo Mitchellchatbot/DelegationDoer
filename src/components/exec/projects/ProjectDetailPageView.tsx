@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { AlarmClock, ArrowLeft, CalendarClock, History, Layers, Mail, MessageSquareWarning, ShieldAlert, TriangleAlert } from "lucide-react";
+import { ASK_ABOUT_PROJECT_LINK } from "@/lib/exec/chat/copy";
 import { MISSING, formatCount, formatInZone, pluralize } from "@/lib/exec/format";
 import type { ConversationRow, ProjectDetailView, ProjectUpdateEvent, StageView } from "@/lib/exec/view-types";
 import { cn } from "@/lib/utils";
@@ -415,7 +416,14 @@ function Conversations({ view }: { view: ProjectDetailView }) {
   );
 }
 
-export function ProjectDetailPageView({ view }: { view: ProjectDetailView }) {
+export function ProjectDetailPageView({
+  view,
+  askHref = null
+}: {
+  view: ProjectDetailView;
+  /** P5b (§3.19.11): "/executive/chat?context=project:<id>" while chat is on; null shows no link. */
+  askHref?: string | null;
+}) {
   const now = view.generatedAt;
   const tz = view.timezone;
   const p = view.project;
@@ -434,6 +442,11 @@ export function ProjectDetailPageView({ view }: { view: ProjectDetailView }) {
           <RefLink url={p.ref.url} className="font-semibold text-indigo-700">
             Open in DD
           </RefLink>
+          {askHref && (
+            <Link href={askHref} prefetch={false} data-ask-about="project" className="font-semibold text-indigo-700 hover:text-indigo-900">
+              {ASK_ABOUT_PROJECT_LINK}
+            </Link>
+          )}
         </p>
       </div>
       <Summary view={view} />

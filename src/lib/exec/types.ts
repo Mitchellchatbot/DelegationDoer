@@ -90,6 +90,14 @@ export interface ExecSettings {
   retentionDaysDdtext: number;
   /** The P5a migration is applied: the settings read found its columns, so exec_attention_feedback and exec_ddtext_* exist too. */
   ddtextSchemaReady: boolean;
+  /** exec_settings.chat_enabled (P5b). False when the column is missing. */
+  chatEnabled: boolean;
+  /** exec_settings.ask_ai_uses_exec (P5b, B10). */
+  askAiUsesExec: boolean;
+  /** exec_settings.chat_daily_cap_usd (P5b, B8). Default 9. */
+  chatDailyCapUsd: number;
+  /** The settings read found the P5b columns (the P5b migration is applied). */
+  chatSchemaReady: boolean;
 }
 
 // ---------------------------------------------------------------------------

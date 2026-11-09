@@ -44,18 +44,26 @@ afterEach(() => {
 
 describe("SettingsForm, top-level (test 75)", () => {
   it("every registry field renders with its label and a control", () => {
-    const html = form();
-    for (const def of SETTINGS_FIELDS) {
-      const f = fieldOf(html, def.key);
-      expect(f, def.key).not.toBe("");
-      expect(textOf(f)).toContain(def.label);
-      expect(f).toMatch(def.kind === "boolean" ? /role="switch"/ : /<input type="number"/);
+    // P5b (contract §3.19.12): the chat fields render in their own section, and only once
+    // P5b's migration is applied (before it, the section is one sentence with no control).
+    const chatInstalled = settingsView({ schema: { email: true, drafts: true, ddtext: true, chat: true }, settings: settings({ chatSchemaReady: true, chatEnabled: true }) });
+    for (const [view, fields] of [
+      [settingsView(), SETTINGS_FIELDS.filter((d) => d.group !== "chat")],
+      [chatInstalled, SETTINGS_FIELDS]
+    ] as const) {
+      const html = form(view);
+      for (const def of fields) {
+        const f = fieldOf(html, def.key);
+        expect(f, def.key).not.toBe("");
+        expect(textOf(f)).toContain(def.label);
+        expect(f).toMatch(def.kind === "boolean" ? /role="switch"/ : /<input type="number"/);
+      }
+      expect(textOf(html)).toContain("Applies to records written from now on.");
     }
-    expect(textOf(html)).toContain("Applies to records written from now on.");
   });
 
   it("a field whose migration isn't applied is disabled, with the copy", () => {
-    const html = form(settingsView({ schema: { email: true, drafts: false, ddtext: false } }));
+    const html = form(settingsView({ schema: { email: true, drafts: false, ddtext: false, chat: false } }));
     for (const key of ["ddtextEnabled", "retentionDaysDdtext", "voiceEnabled"]) {
       const f = fieldOf(html, key);
       expect(textOf(f), key).toContain("Not available yet: the team needs to apply the database update.");
@@ -237,7 +245,8 @@ describe("SettingsPageView (test 75)", () => {
     expect(text).toContain("Morning brief Not set up yet");
     expect(text).toContain("Slack Not set up yet: arrives with the Slack app");
     for (const stale of ["Morning brief On", "07:30", "Slack check-ins", "Slack watch mode", "Muted Slack channels", "Public channels"]) expect(text).not.toContain(stale);
-    expect(SETTINGS_FIELDS.find((f) => f.key === "retentionDaysChat")?.help).toMatch(/^Chat isn't available yet; this applies once it is. /);
+    // P5b ships chat: the retention help no longer says it isn't available (bindings AM4).
+    expect(SETTINGS_FIELDS.find((f) => f.key === "retentionDaysChat")?.help).toBe("Days, 7 to 730. Applies to records written from now on.");
     expect(text).toContain("12 useful votes · 3 not useful votes");
     expect(text).toContain("Overdue tasks 5 up · 1 down");
     expect(text).not.toContain("overdue_tasks");

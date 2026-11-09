@@ -7,7 +7,8 @@ import {
   parseEmailFingerprint,
   syncAttention
 } from "@/lib/exec/attention";
-import { purgeDraftsForThreads } from "@/lib/exec/drafts-store";
+import { listChatDraftIdsForThreads, redactChatForThreads } from "@/lib/exec/chat-store";
+import { purgeDraftsByIds, purgeDraftsForThreads } from "@/lib/exec/drafts-store";
 import { stampDecision } from "@/lib/exec/email-state";
 import {
   applyThreadProposal,
@@ -155,6 +156,10 @@ export interface SafetyNetCounts {
   drafts: number | null;
   signals: number;
   orphanItems: number;
+  /** P5b (contract §3.18, C19): chat answers redacted for those threads (0 before the P5b migration). */
+  chatRedacted: number;
+  /** P5b (C20): chat drafts on those answers' cards purged by id; null = P4's purge-by-id RPC isn't there. */
+  chatDrafts: number | null;
 }
 
 export interface EmailAttentionSummary {
@@ -469,19 +474,26 @@ async function deleteOrphanCommitmentItems(principal: ExecPrincipal, signal: Abo
 /**
  * Hard-delete what must not survive a restricted thread (A6): its email items
  * in every status, its commitments, its assistant drafts' content (P4 X5: the
- * restricted purge, after the commitments delete, over the same threads) and
- * its signal rows, for every tombstoned thread plus `alsoRestricted` (rows the
- * screen found matching a rule that aren't tombstones yet); then orphaned
- * commitment items.
+ * restricted purge, after the commitments delete, over the same threads), its
+ * chat answers (P5b, §3.18: redacted, and the chat drafts on their cards
+ * purged by id; both verdicts here are verified, a tombstone or a rule match,
+ * so the redaction is principal-wide, C21) and its signal rows, for every
+ * tombstoned thread plus `alsoRestricted` (rows the screen found matching a
+ * rule that aren't tombstones yet); then orphaned commitment items.
  */
 async function safetyNet(principal: ExecPrincipal, alsoRestricted: readonly string[], signal: AbortSignal): Promise<SafetyNetCounts & { tombstoned: string[] }> {
   const tombstoned = await listTombstonedThreadIds(principal, { signal });
   const threads = unique([...tombstoned, ...alsoRestricted]);
-  const counts: SafetyNetCounts = { threads: threads.length, attentionRows: 0, commitments: 0, drafts: null, signals: 0, orphanItems: 0 };
+  const counts: SafetyNetCounts = {
+    threads: threads.length, attentionRows: 0, commitments: 0, drafts: null, signals: 0, orphanItems: 0, chatRedacted: 0, chatDrafts: 0
+  };
   if (threads.length > 0) {
     counts.attentionRows = await deleteEmailAttentionForThreads(principal, threads, { signal });
     counts.commitments = await deleteCommitmentsForThreads(principal, threads, { signal });
     counts.drafts = await purgeDraftsForThreads(principal, threads, { signal });
+    counts.chatRedacted = await redactChatForThreads(principal, threads, { signal });
+    const chatDraftIds = await listChatDraftIdsForThreads(principal, threads, { signal });
+    counts.chatDrafts = chatDraftIds.length > 0 ? await purgeDraftsByIds(principal, chatDraftIds, { signal }) : 0;
     counts.signals = await deleteSignalsForThreads(principal, threads, { signal });
   }
   counts.orphanItems = await deleteOrphanCommitmentItems(principal, signal);
@@ -494,7 +506,9 @@ const netCounts = (n: SafetyNetCounts): SafetyNetCounts => ({
   commitments: n.commitments,
   drafts: n.drafts,
   signals: n.signals,
-  orphanItems: n.orphanItems
+  orphanItems: n.orphanItems,
+  chatRedacted: n.chatRedacted,
+  chatDrafts: n.chatDrafts
 });
 
 // ---------------------------------------------------------------------------

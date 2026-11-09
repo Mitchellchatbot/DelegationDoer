@@ -1,6 +1,7 @@
 import "server-only";
 
 import { randomBytes } from "node:crypto";
+import { sanitizeText as sanitizeInvisible } from "@/lib/exec/triage/email-text";
 
 // The one DD text wrapping module of both P5 phases (P5a contract §3.11.1,
 // S4, coherence-12; Area D). DD free text that goes to a model is sanitized,
@@ -136,4 +137,188 @@ export function untrustedEntrySize(nonce: string, entry: UntrustedEntry): number
 /** The fixed open+close tag overhead of a block, for packers. */
 export function untrustedBlockOverhead(nonce: string): number {
   return openTag(checkNonce(nonce)).length + CLOSE_TAG.length;
+}
+
+// ---------------------------------------------------------------------------
+// P5b additions (P5b contract §3.6, C46, C47; Area B): the chat tools' per-item
+// blocks, the per-result text budget, credential masking and the ref-marker
+// deface. P5a's exports above are unchanged.
+//
+// A chat tool result carries DD text one item per block:
+//   <untrusted_dd_text nonce="N" id="U3" kind="comment" ref="r12" author="Sam Lee" at="Nov 3, 2:02 PM EST">
+//   …text…
+//   </untrusted_dd_text>
+// The attributes are code-written (their values neutralized and escaped); the
+// text was written by DD users or by a model (kind ai_summary, attention_text).
+// ---------------------------------------------------------------------------
+
+export type UntrustedKind =
+  | "task_description" | "comment" | "status_note" | "handoff_note" | "extension_reason" | "task_message"
+  | "eod_note" | "sod_note" | "meeting_brief" | "ai_summary" | "attention_text";
+
+const UNTRUSTED_KINDS: ReadonlySet<string> = new Set<UntrustedKind>([
+  "task_description", "comment", "status_note", "handoff_note", "extension_reason", "task_message",
+  "eod_note", "sod_note", "meeting_brief", "ai_summary", "attention_text"
+]);
+
+const HIDDEN = "[hidden]";
+// C46: a credential label, whole word, any case, then ":" or "=" and a value on the same line. The longer labels come
+// first so "username/password" is not read as "username" + "/password".
+const SECRET_LABEL =
+  /(?<![A-Za-z0-9_])(username\/password|user\/pass|client[^\S\n]+secret|api[^\S\n]+key|apikey|password|passcode|secret|token|login|pwd|pass)(?![A-Za-z0-9_])[^\S\n]*[:=][^\S\n]*(?=\S)[^\n]*/gi;
+// C46: a long run of key-like characters (an API key, a token) holding at least one letter and one digit.
+const SECRET_RUN = /[A-Za-z0-9_-]{32,}/g;
+const HAS_LETTER = /[A-Za-z]/;
+const HAS_DIGIT = /[0-9]/;
+// C47 (1): "[" then optional spaces, "r" (any case), 1-5 digits, optional spaces, then "]" or ",".
+const REF_MARKER_LIKE = /\[(?=\s*[rR]\d{1,5}\s*[\],])/g;
+
+/**
+ * C46. A label (password, passcode, pwd, pass, login, user/pass, username/password, token, api key, apikey, secret,
+ * client secret; any case, whole word) followed by ":" or "=" keeps the label and loses the value up to the end of the
+ * line ("<label>: [hidden]"); a run of 32 or more characters of [A-Za-z0-9_-] holding a letter and a digit becomes
+ * "[hidden]". masked = anything changed.
+ */
+export function maskSecrets(s: string): { text: string; masked: boolean } {
+  if (typeof s !== "string" || s === "") return { text: "", masked: false };
+  let masked = false;
+  const labelled = s.replace(SECRET_LABEL, (_all, label: string) => {
+    masked = true;
+    return `${label}: ${HIDDEN}`;
+  });
+  const text = labelled.replace(SECRET_RUN, (run) => {
+    if (!HAS_LETTER.test(run) || !HAS_DIGIT.test(run)) return run;
+    masked = true;
+    return HIDDEN;
+  });
+  return { text, masked };
+}
+
+/**
+ * C47 (1): every "[" that starts "[", optional spaces, "r" (any case), 1-5 digits, optional spaces, then "]" or ","
+ * becomes "‹", one character for one (P3's convention), so untrusted text can't pass for a citation marker.
+ */
+export function defaceRefMarkers(s: string): string {
+  if (typeof s !== "string" || s === "") return "";
+  return s.replace(REF_MARKER_LIKE, DEFACED);
+}
+
+/**
+ * C47 (3): sanitize (invisible and bidi characters out, so none can hide a look-alike) → maskSecrets →
+ * neutralizeDdText → defaceRefMarkers. Applied to every free-text value a chat tool puts in its JSON (titles, names,
+ * subjects, counterparts, summaries, reasons, decision questions, commitment text, attention text, attachment names,
+ * project and stage names).
+ */
+export function neutralizeChatText(s: string): { text: string; masked: boolean } {
+  if (typeof s !== "string" || s === "") return { text: "", masked: false };
+  const { text, masked } = maskSecrets(sanitizeInvisible(s));
+  return { text: defaceRefMarkers(neutralizeDdText(text)), masked };
+}
+
+export interface UntrustedItem {
+  kind: UntrustedKind;
+  ref: string | null;
+  author: string | null;
+  at: string | null;
+  text: string;
+}
+
+const ATTRIBUTE_CHARS = 120;
+const RIGHT_DEFACED = "\u{203A}";
+const BLOCK_ID = /^[A-Z][0-9]{1,4}$/;
+const REF_SHAPE = /^r[0-9]{1,5}$/;
+const DD_TEXT_CLOSE = "</untrusted_dd_text>";
+
+// An attribute value: one line, neutralized, the four markup characters replaced, at most 120 characters.
+function attributeValue(raw: string): string {
+  const one = neutralizeChatText(raw).text.replace(/\s+/g, " ").trim();
+  const escaped = one.replace(/["<>&]/g, (c) => (c === '"' ? "'" : c === "<" ? DEFACED : c === ">" ? RIGHT_DEFACED : "+"));
+  return clipForModel(escaped, ATTRIBUTE_CHARS).text;
+}
+
+
+function itemText(text: string): { text: string; masked: boolean } {
+  const { text: maskedText, masked } = maskSecrets(sanitizeInvisible(typeof text === "string" ? text : ""));
+  // Mask BEFORE the clip (C46), so a clip can't cut a secret in half and leave its tail.
+  return { text: clipForModel(defaceRefMarkers(neutralizeDdText(maskedText)).trim(), DD_TEXT_ITEM_CHARS).text, masked };
+}
+
+function renderItem(nonce: string, id: string, item: UntrustedItem, text: string): string {
+  const attrs = [`nonce="${nonce}"`, `id="${id}"`, `kind="${item.kind}"`];
+  if (item.ref !== null && REF_SHAPE.test(item.ref)) attrs.push(`ref="${item.ref}"`);
+  if (typeof item.author === "string" && item.author.trim() !== "") attrs.push(`author="${attributeValue(item.author)}"`);
+  if (typeof item.at === "string" && item.at.trim() !== "") attrs.push(`at="${attributeValue(item.at)}"`);
+  return `<untrusted_dd_text ${attrs.join(" ")}>\n${text}\n${DD_TEXT_CLOSE}`;
+}
+
+function checkItem(nonce: string, id: string, item: UntrustedItem): void {
+  checkNonce(nonce);
+  if (typeof id !== "string" || !BLOCK_ID.test(id)) throw new TypeError("text/untrusted: a block id is a letter and 1-4 digits");
+  if (!item || !UNTRUSTED_KINDS.has(item.kind)) throw new TypeError("text/untrusted: unknown untrusted item kind");
+}
+
+/**
+ * One chat block per item. text = maskSecrets → neutralizeDdText → defaceRefMarkers → clipForModel(DD_TEXT_ITEM_CHARS);
+ * attribute values neutralized, `"` `<` `>` `&` replaced, at most 120 characters each; ref, author and at are left out
+ * when absent. The nonce is newNonce() (16 hex), one per tool result.
+ */
+export function renderUntrustedItemBlock(nonce: string, id: string, item: UntrustedItem): { block: string; masked: boolean } {
+  checkItem(nonce, id, item);
+  const { text, masked } = itemText(item.text);
+  return { block: renderItem(nonce, id, item, text), masked };
+}
+
+/**
+ * One tool result's untrusted items under the S4 budget: at most `totalChars` (default DD_TEXT_RESULT_CHARS) of item
+ * text, each item clipped to DD_TEXT_ITEM_CHARS first. Once an item doesn't fit, it and every later item are refused
+ * (counted in `omitted`), so what is shown is always a prefix of what the tool offered.
+ */
+export class TextBudget {
+  private readonly nonce: string;
+  private readonly total: number;
+  private used = 0;
+  private refusedOnce = false;
+  private omittedCount = 0;
+  private anyMasked = false;
+  private readonly kept: { id: string; ref: string | null; block: string }[] = [];
+
+  constructor(nonce: string, totalChars: number = DD_TEXT_RESULT_CHARS) {
+    this.nonce = checkNonce(nonce);
+    this.total = Number.isFinite(totalChars) && totalChars >= 0 ? Math.floor(totalChars) : DD_TEXT_RESULT_CHARS;
+  }
+
+  /**
+   * Adds one item; returns its block id ("U<n>", in order) or null when the result budget is spent (the caller marks
+   * the entry text_omitted: true). An item with no text left after neutralizing is not a block: null, not counted.
+   */
+  add(item: UntrustedItem): string | null {
+    const { text, masked } = itemText(item?.text ?? "");
+    if (text === "") return null;
+    if (this.refusedOnce || this.used + text.length > this.total) {
+      this.refusedOnce = true;
+      this.omittedCount += 1;
+      return null;
+    }
+    const id = `U${this.kept.length + 1}`;
+    checkItem(this.nonce, id, item);
+    this.used += text.length;
+    if (masked) this.anyMasked = true;
+    const ref = item.ref !== null && REF_SHAPE.test(item.ref) ? item.ref : null;
+    this.kept.push({ id, ref, block: renderItem(this.nonce, id, item, text) });
+    return id;
+  }
+
+  /** The kept blocks in order; each non-empty. */
+  blocks(): { id: string; ref: string | null; block: string }[] {
+    return this.kept.map((b) => ({ ...b }));
+  }
+
+  get omitted(): number {
+    return this.omittedCount;
+  }
+
+  /** C46: some kept item was masked; the result then carries the note "Some credential-like text was hidden." */
+  get masked(): boolean {
+    return this.anyMasked;
+  }
 }

@@ -27,12 +27,19 @@ export type PriorStatus = "draft" | "saved" | "generation_failed" | "unknown";
 export type GenerationError = "declined" | "truncated" | "invalid_output" | "budget" | "input_too_large"
   | "thread_unavailable" | "restricted" | "model_error" | "timeout" | "stale" | "stopped";
 export type FactsStatus = "used" | "none" | "not_matched" | "medium_confidence" | "unavailable" | "recipients_outside_client";
+/** P5b (F4, C45): `private_refs`, appended last, is raised for a draft started in a chat that read other private material. */
 export type ReviewBlocker = "already_replied" | "newer_inbound" | "reply_scheduled" | "legacy_draft_pending"
   | "opened_in_outlook" | "changed_in_outlook" | "recipients_changed" | "reply_to_present"
-  | "placeholder_in_outlook" | "thread_unavailable" | "facts_outside_client" | "unexpected_content";
+  | "placeholder_in_outlook" | "thread_unavailable" | "facts_outside_client" | "unexpected_content" | "private_refs";
 export const REVIEW_BLOCKERS: readonly ReviewBlocker[] = ["already_replied", "newer_inbound", "reply_scheduled",
   "legacy_draft_pending", "opened_in_outlook", "changed_in_outlook", "recipients_changed", "reply_to_present",
-  "placeholder_in_outlook", "thread_unavailable", "facts_outside_client", "unexpected_content"];
+  "placeholder_in_outlook", "thread_unavailable", "facts_outside_client", "unexpected_content", "private_refs"];
+/**
+ * P5b (F7, C44): who wrote the draft's current instruction. `owner` = typed by him (every web draft, and any
+ * regeneration with an instruction he sent); `assistant` = written by the chat assistant (createChatReplyDraft).
+ */
+export type InstructionBy = "owner" | "assistant";
+export const INSTRUCTION_BY: readonly InstructionBy[] = ["owner", "assistant"];
 /** C65: the output scan's codes; the flagged values are never stored. */
 export type GenerationFlag = "unexpected_url" | "unexpected_email" | "unexpected_phone" | "unexpected_amount"
   | "unexpected_number" | "other_client_name" | "teammate_name";
@@ -97,6 +104,13 @@ export interface ExecDraftRow {
   lastErrorCode: string | null; lastErrorAt: string | null; nextCheckAt: string | null; checkCount: number;
   goneAt: string | null; createdAt: string; updatedAt: string; terminalAt: string | null;
   contentPurgedAt: string | null; expiresAt: string | null;
+  /** P5b (F7): exec_drafts.instruction_by, the column P5b's migration appends after expires_at. */
+  instructionBy: InstructionBy;
+  /**
+   * P5b (review security-2): exec_drafts.chat_message_id, the chat answer whose create_draft wrote it; copied to P4's
+   * successor (T43 / T45), so the purge by id reaches drafts no card names. Null for every web draft.
+   */
+  chatMessageId: string | null;
 }
 
 export type RecipientBadge = "external" | "role" | "not_in_thread" | "added_in_outlook";
@@ -142,6 +156,14 @@ export interface DraftView {
   createdAt: string; updatedAt: string;
   /** Additive (integrator): the facts client's DD name, for the "<client>" copy (§3.13.4). Absent when the row has no facts client, is restricted, or the name couldn't be read. */
   clientName?: string | null;
+  /**
+   * P5b (F5, C45): the draft was started in a chat that also read other email, team notes or other clients' records,
+   * so Save asks for "I've checked it" (confirmPrivate) and Send for the private_refs acknowledgement. A flag, not
+   * content: kept on restricted rows.
+   */
+  usesPrivateRefs: boolean;
+  /** P5b (F5, C44): who wrote the current instruction. Kept on restricted rows, where `instruction` is null. */
+  instructionBy: InstructionBy;
 }
 
 export type DraftAttention = "unknown" | "sent_mismatch" | "gone_unconfirmed" | "outlook_changed" | "generation_failed"
@@ -195,7 +217,9 @@ export type DraftErrorCode = "not_found" | "forbidden" | "bad_request" | "invali
   | "drafts_unavailable" | "send_unavailable" | "rate_limited" | "version_conflict" | "state_conflict"
   | "review_required" | "review_expired" | "acks_missing" | "recipients_blocked" | "placeholders" | "empty_body"
   | "unsafe_markup" | "instruction_required" | "subject_required" | "thread_unavailable" | "mailbox_problem"
-  | "audit_unavailable" | "unavailable" | "hold" | "sent_copy_found";
+  | "audit_unavailable" | "unavailable" | "hold" | "sent_copy_found"
+  /** P5b (F3, C45): Save of a usesPrivateRefs draft without confirmPrivate: true (409, nothing written). */
+  | "private_refs_unconfirmed";
 
 export const DRAFT_LIMITS = Object.freeze({
   instructionChars: 2_000, bodyDocBytes: 65_536, bodyTextChars: 20_000, docDepth: 20, docNodes: 5_000,

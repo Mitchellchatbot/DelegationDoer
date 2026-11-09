@@ -2,14 +2,14 @@
 // and pure checks, client-safe: no import at all (no server-only, no
 // Supabase), so the client SettingsForm renders and validates from it
 // (boundary rule 16) and the server-only settings.ts validates and writes
-// from it. P5b appends its fields (chatEnabled, askAiUsesExec,
+// from it. P5b appended its fields (chatEnabled, askAiUsesExec,
 // chatDailyCapUsd) and the "chat" key; the PATCH route's body schema is built
 // from this list, so an appended field is accepted without a route change.
 
-/** One optional exec_settings column group per migration (principal.ts SETTINGS_COLUMN_GROUPS). P5b adds "chat". */
-export type SettingsSchemaKey = "email" | "drafts" | "ddtext";
+/** One optional exec_settings column group per migration (principal.ts SETTINGS_COLUMN_GROUPS). P5b added "chat". */
+export type SettingsSchemaKey = "email" | "drafts" | "ddtext" | "chat";
 
-/** The fields the owner may change from Settings. P5b adds chatEnabled, askAiUsesExec, chatDailyCapUsd. */
+/** The fields the owner may change from Settings. P5b added chatEnabled, askAiUsesExec, chatDailyCapUsd. */
 export interface SettingsPatch {
   ddtextEnabled?: boolean;
   retentionDaysEmail?: number;
@@ -17,6 +17,9 @@ export interface SettingsPatch {
   retentionDaysChat?: number;
   dailyCostCapUsd?: number;
   voiceEnabled?: boolean;
+  chatEnabled?: boolean;
+  askAiUsesExec?: boolean;
+  chatDailyCapUsd?: number;
 }
 
 export interface SettingsFieldDef {
@@ -73,8 +76,7 @@ export const SETTINGS_FIELDS: readonly SettingsFieldDef[] = Object.freeze([
     min: 7,
     max: 730,
     label: "Keep assistant chat history for",
-    // Chat ships in P5b: the field is editable now, but no chat record exists yet (review ui-3, A6).
-    help: `Chat isn't available yet; this applies once it is. ${RETENTION_HELP}`
+    help: RETENTION_HELP
   },
   // At most 2 decimals (C14). The database also allows 0, which switches AI
   // off; only a script sets that (K19), so the form can't.
@@ -96,6 +98,38 @@ export const SETTINGS_FIELDS: readonly SettingsFieldDef[] = Object.freeze([
     kind: "boolean",
     label: "Learn my writing style",
     help: "Once a week, builds a short style profile (tone, length, greeting, sign-off) from your sent email, so drafts sound like you."
+  },
+  // P5b (contract §3.2, §3.19.12; B8, B10, C30): the chat switch, the Ask AI
+  // routing switch (allowed whatever chatEnabled is; routing needs both) and
+  // chat's own daily budget, $0 to $100 in cents (the database allows up to
+  // $1,000; the effective cap is also held under 60% of the daily AI budget).
+  {
+    key: "chatEnabled",
+    column: "chat_enabled",
+    group: "chat",
+    kind: "boolean",
+    label: "Chat",
+    help: "Ask questions in DD. Answers use Opus and count toward the daily AI budget."
+  },
+  {
+    key: "askAiUsesExec",
+    column: "ask_ai_uses_exec",
+    group: "chat",
+    kind: "boolean",
+    label: "Use the assistant for Ask AI",
+    help:
+      "When on, Ask AI on DD pages answers with the assistant while you're signed in with your password or a second factor. " +
+      "Other people, and sign-in links, keep the current Ask AI."
+  },
+  {
+    key: "chatDailyCapUsd",
+    column: "chat_daily_cap_usd",
+    group: "chat",
+    kind: "money",
+    min: 0,
+    max: 100,
+    label: "Chat daily budget",
+    help: "Chat pauses for the day once it has used this much. The daily AI budget still applies."
   }
 ] satisfies SettingsFieldDef[]);
 

@@ -138,10 +138,21 @@ function Lines({ lines, tone = "warn" }: { lines: string[]; tone?: "warn" | "dan
   );
 }
 
-function InstructionBox({ value, onChange, disabled }: { value: string; onChange: (v: string) => void; disabled: boolean }) {
+/**
+ * The instruction box. `writtenByAssistant` (P5b F5, C44; exported for the render tests): the box holds, unchanged, an
+ * instruction the chat assistant wrote, so it says so under the label.
+ */
+export function InstructionBox({ value, onChange, disabled, writtenByAssistant = false }: {
+  value: string; onChange: (v: string) => void; disabled: boolean; writtenByAssistant?: boolean;
+}) {
   return (
     <label className="block space-y-1">
       <span className="text-[11px] font-semibold uppercase tracking-wide text-muted">{COPY.instructionLabel}</span>
+      {writtenByAssistant && (
+        <span data-instruction-by="assistant" className="block text-[11.5px] text-amber-800">
+          {COPY.instructionByAssistant}
+        </span>
+      )}
       <textarea
         value={value}
         onChange={(e) => onChange(e.currentTarget.value.slice(0, DRAFT_LIMITS.instructionChars))}
@@ -355,6 +366,10 @@ function ExistingDraft({
   const [instruction, setInstruction] = useState(initial.instruction ?? "");
   const instructionRef = useRef(instruction);
   instructionRef.current = instruction;
+  // P5b F5 (C45): "I've checked it" on a draft started in a chat that read other private material; saves post it.
+  const [privateRefsChecked, setPrivateRefsChecked] = useState(false);
+  const privateRefsRef = useRef(privateRefsChecked);
+  privateRefsRef.current = privateRefsChecked;
   const [review, setReview] = useState<ReviewResult | null>(null);
   const [sending, setSending] = useState(false);
   const [sendReady, setSendReady] = useState<boolean | null>(null);
@@ -408,6 +423,7 @@ function ExistingDraft({
       if (prev.status !== v.status) {
         setCheckedOutlook(false);
         setOpenBlocked(false);
+        setPrivateRefsChecked(false);
       }
     },
     [seedEditor]
@@ -449,7 +465,17 @@ function ExistingDraft({
         }
       },
       act: async (action, version) => {
-        const req = requestFor(action, { view: viewRef.current, version, instruction: instructionRef.current.trim() || null, shownReadBack: shownRef.current });
+        const current = viewRef.current;
+        const typed = instructionRef.current.trim();
+        const req = requestFor(action, {
+          view: current,
+          version,
+          instruction: typed || null,
+          shownReadBack: shownRef.current,
+          confirmPrivate: current.usesPrivateRefs && privateRefsRef.current,
+          // C44: the assistant's instruction, unchanged, stays the assistant's on a regenerate.
+          keepInstruction: current.instructionBy === "assistant" && typed === (current.instruction ?? "").trim()
+        });
         if (req === null) {
           lastOutcome.current = null;
           return { ok: false, status: 0 };
@@ -712,7 +738,14 @@ function ExistingDraft({
         </div>
       )}
 
-      {showInstruction && <InstructionBox value={instruction} onChange={setInstruction} disabled={busy !== null} />}
+      {showInstruction && (
+        <InstructionBox
+          value={instruction}
+          onChange={setInstruction}
+          disabled={busy !== null}
+          writtenByAssistant={view.instructionBy === "assistant" && instruction.trim() !== "" && instruction.trim() === (view.instruction ?? "").trim()}
+        />
+      )}
 
       <DraftActions
         view={view}
@@ -729,6 +762,8 @@ function ExistingDraft({
           if (link !== null && isAllowedLinkUrl(link)) openNow((url, target, features) => window.open(url, target, features), link);
           setOpenBlocked(false);
         }}
+        privateRefsChecked={privateRefsChecked}
+        onPrivateRefsChecked={setPrivateRefsChecked}
       />
 
       {review !== null && (

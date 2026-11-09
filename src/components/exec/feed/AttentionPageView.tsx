@@ -30,7 +30,8 @@ export function AttentionPageView({
   draftsAvailable,
   ignoredParams,
   freshnessUnavailable = false,
-  feedbackAvailable = true
+  feedbackAvailable = true,
+  askAiEnabled = false
 }: {
   /** null: the feed couldn't be read. */
   page: ScreenedAttentionPage | null;
@@ -45,6 +46,8 @@ export function AttentionPageView({
   freshnessUnavailable?: boolean;
   /** Review ui-5: exec_attention_feedback exists (settings.ddtextSchemaReady); default true. */
   feedbackAvailable?: boolean;
+  /** P5b (C33): each row, Load more's included, gets Ask AI (chat installed and on); default false. */
+  askAiEnabled?: boolean;
 }) {
   const header = <ExecHeader updatedAt={now} tz={tz} trailing={<ExecTabs active="overview" tabs={EXEC_TABS} />} />;
   const back = (
@@ -88,6 +91,7 @@ export function AttentionPageView({
             draftsAvailable={draftsAvailable}
             freshnessUnknown={freshnessUnavailable}
             feedbackAvailable={feedbackAvailable}
+            askAiEnabled={askAiEnabled}
           />
         </SectionCard>
       )}

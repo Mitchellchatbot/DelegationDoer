@@ -428,6 +428,11 @@ export function settings(over: Partial<ExecSettings> = {}): ExecSettings {
     ddtextEnabled: false,
     retentionDaysDdtext: 90,
     ddtextSchemaReady: true,
+    // P5b stage -1: chat not installed (P5a's pages render as before).
+    chatEnabled: false,
+    askAiUsesExec: false,
+    chatDailyCapUsd: 9,
+    chatSchemaReady: false,
     ...over
   };
 }
@@ -459,7 +464,8 @@ export function settingsView(over: Partial<SettingsView> = {}): SettingsView {
     timezone: TZ,
     version: "2026-11-05T12:00:00.123456+00:00",
     settings: settings(),
-    schema: { email: true, drafts: true, ddtext: true },
+    // P5b: chat not installed (the settings() fixture above), so the view says so.
+    schema: { email: true, drafts: true, ddtext: true, chat: false },
     pinnedMailbox: { ok: true, data: { accountIds: ["acc_1"], emails: ["mitchell@scaledai.org"] } },
     spend: { ok: true, data: { totalUsd: 0.42, capUsd: 15, byFeature: [{ feature: "triage", usd: 0.31 }, { feature: "draft", usd: 0.11 }] } },
     recentAccess: {
@@ -484,6 +490,8 @@ export function settingsView(over: Partial<SettingsView> = {}): SettingsView {
       }
     },
     voice: { ok: true, data: { installed: true, profile: voiceProfile } },
+    // min(9, 0.6 x 15) = 9 (C30).
+    effectiveChatCapUsd: 9,
     ...over
   };
 }

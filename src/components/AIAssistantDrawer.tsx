@@ -6,12 +6,19 @@ import {
   Sparkles, Send, X, ArrowUp, Loader2, RefreshCw, Mic, MicOff,
   ClipboardPlus, CheckCircle2, Users, ExternalLink, Mail
 } from "lucide-react";
+import dynamic from "next/dynamic";
 import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { useCurrentUser } from "@/lib/user-context";
+import { useAskAiRouting } from "@/components/AskAiRouting";
+
+// The other body: loaded only in a browser the server switched it on for
+// (useAskAiRouting), never rendered on the server, so nobody else downloads
+// or renders it. Its own wording lives in its own chunk.
+const RoutedPanel = dynamic(() => import("@/components/exec/chat/ExecChatPanel"), { ssr: false });
 
 // Mirrors the ProposedAction discriminated union in src/lib/ai-tools.ts.
 // Redeclared here so the drawer (a client component) doesn't pull in
@@ -96,7 +103,7 @@ function clientStarters(name: string): string[] {
 // bold / code blocks render properly instead of showing raw `##`
 // and `**`).
 export function AIAssistantDrawer({
-  open, onOpenChange, starter, client
+  open, onOpenChange, starter, client, routing = "auto"
 }: {
   open: boolean;
   onOpenChange: (b: boolean) => void;
@@ -108,8 +115,15 @@ export function AIAssistantDrawer({
   // client and each turn POSTs a clientContext so the assistant scopes
   // its answers + tool calls to this client (see /api/ai/chat).
   client?: ClientContext;
+  // "auto" (the default) follows the layout's routing switch; "legacy"
+  // always keeps this drawer's own conversation (the SOP page passes it).
+  routing?: "auto" | "legacy";
 }) {
   const me = useCurrentUser();
+  const { routed, emailOn } = useAskAiRouting();
+  const showRouted = routed && routing === "auto";
+  // The header's subtitle line, filled by the routed body when it shows.
+  const [subtitleSlot, setSubtitleSlot] = useState<HTMLDivElement | null>(null);
   // Founder/leaders get org-wide operational starters; everyone else gets
   // self-focused ones. A client-scoped drawer overrides both with client
   // starters (below).
@@ -238,11 +252,15 @@ export function AIAssistantDrawer({
                     <Dialog.Title className="text-sm font-semibold leading-tight truncate">
                       {client ? `Ask AI · ${client.name}` : "Ask AI"}
                     </Dialog.Title>
-                    <div className="text-[10px] text-ink/55 leading-tight truncate">
-                      {client
-                        ? `Scoped to ${client.name}`
-                        : "Live access to tasks, people, calendar, more"}
-                    </div>
+                    {showRouted ? (
+                      <div ref={setSubtitleSlot} data-subtitle-slot className="text-[10px] text-ink/55 leading-tight truncate" />
+                    ) : (
+                      <div className="text-[10px] text-ink/55 leading-tight truncate">
+                        {client
+                          ? `Scoped to ${client.name}`
+                          : "Live access to tasks, people, calendar, more"}
+                      </div>
+                    )}
                   </div>
                   <div className="ml-auto flex items-center gap-1">
                     {messages.length > 0 && (
@@ -266,29 +284,37 @@ export function AIAssistantDrawer({
                   </div>
                 </header>
 
-                {/* Conversation */}
-                <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-3">
-                  {messages.length === 0 && (
-                    <EmptyState
-                      onPick={send}
-                      starters={client ? clientStarters(client.name) : roleStarters}
-                      client={client}
-                    />
-                  )}
-                  {messages.map((m, i) => (
-                    <MessageBubble key={i} message={m} />
-                  ))}
-                  {loading && <ThinkingBubble />}
-                </div>
+                {showRouted ? (
+                  <div data-routed-body className="flex min-h-0 flex-1 flex-col">
+                    <RoutedPanel client={client ?? null} subtitleSlot={subtitleSlot} emailOn={emailOn} />
+                  </div>
+                ) : (
+                  <>
+                    {/* Conversation */}
+                    <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-3">
+                      {messages.length === 0 && (
+                        <EmptyState
+                          onPick={send}
+                          starters={client ? clientStarters(client.name) : roleStarters}
+                          client={client}
+                        />
+                      )}
+                      {messages.map((m, i) => (
+                        <MessageBubble key={i} message={m} />
+                      ))}
+                      {loading && <ThinkingBubble />}
+                    </div>
 
-                {/* Composer */}
-                <Composer
-                  inputRef={inputRef}
-                  value={input}
-                  setValue={setInput}
-                  loading={loading}
-                  onSubmit={() => send()}
-                />
+                    {/* Composer */}
+                    <Composer
+                      inputRef={inputRef}
+                      value={input}
+                      setValue={setInput}
+                      loading={loading}
+                      onSubmit={() => send()}
+                    />
+                  </>
+                )}
               </motion.div>
             </Dialog.Content>
           </Dialog.Portal>

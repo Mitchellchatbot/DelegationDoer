@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ExternalLink } from "lucide-react";
+import { ExternalLink, TriangleAlert } from "lucide-react";
 import type { DraftView } from "@/lib/exec/drafts-types";
 import { draftReplyHref } from "@/lib/exec/drafts-links";
 import { isAllowedLinkUrl } from "@/lib/exec/refs";
@@ -134,6 +134,17 @@ export function actionsFor(view: DraftView, ctx: { outlookVersionShown?: boolean
   return out;
 }
 
+/** The actions that save to Outlook (R7): the ones P5b's private-refs confirmation gates (F5, C45). */
+export const SAVE_ACTIONS: ReadonlySet<DraftUiAction> = new Set<DraftUiAction>(["save", "replace_with_dd"]);
+
+/**
+ * P5b F5 (C45): whether the row shows the private-refs notice and its "I've checked it" box: a draft started in a
+ * chat that also read other private material, offering a save. The box gates every save action.
+ */
+export function showsPrivateRefsBox(view: DraftView, actions: readonly ActionSpec[]): boolean {
+  return view.usesPrivateRefs && !view.restricted && actions.some((a) => SAVE_ACTIONS.has(a.action));
+}
+
 /** Whether the row shows the "I checked my Sent Items in Outlook" box (always on both `gone` rows, buildability-3). */
 export function showsCheckedBox(view: DraftView, actions: readonly ActionSpec[]): boolean {
   if (view.status === "gone" && view.lastError?.code !== "outlook_reappeared") return true;
@@ -156,7 +167,9 @@ export function DraftActions({
   onCheckedOutlook,
   outlookVersionShown = false,
   openBlocked = false,
-  onOpenNow
+  onOpenNow,
+  privateRefsChecked = false,
+  onPrivateRefsChecked
 }: {
   view: DraftView;
   isTop: boolean;
@@ -172,10 +185,14 @@ export function DraftActions({
   /** The popup was blocked: offer "Open it now" (C69). */
   openBlocked?: boolean;
   onOpenNow?: () => void;
+  /** P5b F5 (C45): the "I've checked it" box of a usesPrivateRefs draft (the panel owns its state; saves post confirmPrivate). */
+  privateRefsChecked?: boolean;
+  onPrivateRefsChecked?: (checked: boolean) => void;
 }) {
   if (!isTop) return null;
   const actions = actionsFor(view, { outlookVersionShown, sendReady });
   const checkbox = showsCheckedBox(view, actions);
+  const privateBox = showsPrivateRefsBox(view, actions);
   const threadHref = view.kind === "reply" && view.threadId !== null ? `/executive/email/${encodeURIComponent(view.threadId)}` : null;
   const againHref = view.kind === "reply" && view.threadId !== null ? draftReplyHref(view.threadId) : null;
   const sendHint = !view.restricted && view.status === "saved" && (view.capabilities.sendUnavailable !== null || sendReady === false);
@@ -187,6 +204,26 @@ export function DraftActions({
 
   return (
     <div data-actions={view.status} className="space-y-2">
+      {privateBox && (
+        <div data-private-refs className="space-y-1.5 rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-2.5">
+          <p role="status" className="flex items-start gap-2 text-[12.5px] text-amber-900">
+            <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
+            <span>{COPY.privateRefsNotice}</span>
+          </p>
+          <label className="flex items-start gap-2 text-[12.5px] text-slate-800">
+            <input
+              type="checkbox"
+              required
+              data-private-refs-check
+              checked={privateRefsChecked}
+              onChange={(e) => onPrivateRefsChecked?.(e.currentTarget.checked)}
+              disabled={disabled}
+              className="mt-0.5 h-4 w-4 rounded border-slate-300"
+            />
+            <span>{COPY.privateRefsCheck}</span>
+          </label>
+        </div>
+      )}
       {checkbox && (
         <label className="flex items-start gap-2 text-[12.5px] text-slate-700">
           <input
@@ -203,7 +240,7 @@ export function DraftActions({
         {actions.map((a) => {
           const isOpen = a.action === "open_in_outlook";
           if (isOpen && !outlookOk) return null;
-          const gated = a.needsChecked && !checkedOutlook;
+          const gated = (a.needsChecked && !checkedOutlook) || (privateBox && SAVE_ACTIONS.has(a.action) && !privateRefsChecked);
           return (
             <button
               key={a.action}

@@ -38,7 +38,16 @@ vi.mock("@/lib/exec/chat-store", async (importOriginal) => {
 // Slack schedules' gate (slack-sweep.ts slackWorkDue) reads the active installation: none here unless a test says so.
 vi.mock("@/lib/exec/slack-install", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/exec/slack-install")>();
-  return { ...actual, deleteOldSlackEvents: vi.fn(), deleteExpiredOAuthStates: vi.fn(), getActiveInstallation: vi.fn(), listUnpurgedRevokedInstallations: vi.fn() };
+  return {
+    ...actual,
+    deleteOldSlackEvents: vi.fn(),
+    deleteExpiredOAuthStates: vi.fn(),
+    getActiveInstallation: vi.fn(),
+    listUnpurgedRevokedInstallations: vi.fn(),
+    // P8 (M10 steps 1 and 3): the system purge's revoked-reading lister and the brief-lines fact read.
+    listRevokedReadingInstallations: vi.fn(),
+    installationFactsForSystem: vi.fn()
+  };
 });
 // P7a's Slack reading retention step (purgeExpiredSlack, contract §3.15) has its own suites (slack-read-store, purge); here it
 // finds nothing to delete.
@@ -51,6 +60,23 @@ vi.mock("@/lib/exec/slack-read-store", async (importOriginal) => {
 vi.mock("@/lib/exec/slack-intel-store", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/exec/slack-intel-store")>();
   return { ...actual, purgeExpiredSlackIntel: vi.fn() };
+});
+// P8 (contract §3.15): the two hooks' store reads (Area A's brief store) are mocked; the hooks' adapters are tested here.
+// The system purge's P8 steps (§3.14.1: briefs, briefSlack, ddBotFallbackDms) have their own suite (handlers/purge.test.ts);
+// here they find nothing to do.
+vi.mock("@/lib/exec/brief-store", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/exec/brief-store")>();
+  return {
+    ...actual,
+    checkinPostKeys: vi.fn(),
+    isBriefSchemaMissing: vi.fn(),
+    lastDeliveredBriefAt: vi.fn(),
+    purgeExpiredBriefs: vi.fn(),
+    listPrincipalIdsWithSlackLines: vi.fn(),
+    scrubBriefsForSlackSystem: vi.fn(),
+    listFallbackDmsDue: vi.fn(),
+    markFallbackDmDeleted: vi.fn()
+  };
 });
 // P7a (contract §3.11.12, RT02-RT03): the events route's gate cache is refreshed by the worker tick, not awaited.
 vi.mock("@/lib/exec/slack-gate-cache", async (importOriginal) => {
@@ -66,7 +92,13 @@ import { purgeExpiredDrafts } from "@/lib/exec/drafts-store";
 import { purgeExpiredDdtext, purgeOrphanDdtextAttention } from "@/lib/exec/ddtext-store";
 import { purgeOldFeedback } from "@/lib/exec/attention-feedback";
 import { purgeExpiredChatRows } from "@/lib/exec/chat-store";
-import { deleteExpiredOAuthStates, deleteOldSlackEvents, getActiveInstallation, listUnpurgedRevokedInstallations } from "@/lib/exec/slack-install";
+import {
+  deleteExpiredOAuthStates,
+  deleteOldSlackEvents,
+  getActiveInstallation,
+  listRevokedReadingInstallations,
+  listUnpurgedRevokedInstallations
+} from "@/lib/exec/slack-install";
 import { purgeExpiredSlack } from "@/lib/exec/slack-read-store";
 import { DD_ATTENTION_JOB_KIND, ddAttentionJobHandler, ddAttentionScheduledWork } from "@/lib/exec/handlers/dd-attention";
 import { DDTEXT_JOB_KIND, ddtextJobHandler, ddtextScheduledWork } from "@/lib/exec/handlers/ddtext-triage";
@@ -75,7 +107,26 @@ import { draftReconcileJobHandler, draftReconcileScheduledWork } from "@/lib/exe
 import { emailAttentionJobHandler, emailAttentionScheduledWork } from "@/lib/exec/handlers/email-attention";
 import { emailReconcileJobHandler, emailReconcileScheduledWork } from "@/lib/exec/handlers/email-reconcile";
 import { emailTriageJobHandler } from "@/lib/exec/handlers/email-triage";
-import { PURGE_JOB_KIND, RETENTION_DAYS, purgeJobHandler, purgeScheduledWork, runPurge } from "@/lib/exec/handlers/purge";
+import { PURGE_JOB_KIND, RETENTION_DAYS, purgeJobHandler, purgeSystemWork, runPurge } from "@/lib/exec/handlers/purge";
+import { accessAlertJobHandler } from "@/lib/exec/handlers/access-alert";
+import { briefJobHandler, briefScheduledWork } from "@/lib/exec/handlers/brief";
+import { briefDeliverJobHandler } from "@/lib/exec/handlers/brief-deliver";
+import { briefFallbackJobHandler } from "@/lib/exec/handlers/brief-fallback";
+import { briefHealthJobHandler, briefHealthScheduledWork } from "@/lib/exec/handlers/brief-health";
+import { briefPrepJobHandler, briefPrepScheduledWork } from "@/lib/exec/handlers/brief-prep";
+import { briefSweepJobHandler, briefSweepScheduledWork } from "@/lib/exec/handlers/brief-sweep";
+import { checkinRewriteJobHandler } from "@/lib/exec/handlers/checkin-rewrite";
+import { checkinSendJobHandler } from "@/lib/exec/handlers/checkin-send";
+import { opsWatchJobHandler, opsWatchSystemWork } from "@/lib/exec/handlers/ops-watch";
+import {
+  checkinPostKeys,
+  isBriefSchemaMissing,
+  lastDeliveredBriefAt,
+  listFallbackDmsDue,
+  listPrincipalIdsWithSlackLines,
+  purgeExpiredBriefs
+} from "@/lib/exec/brief-store";
+import { getAnsweredExclusion } from "@/lib/exec/slack-reading";
 import { slackActionJobHandler } from "@/lib/exec/handlers/slack-action";
 import { slackCardJobHandler } from "@/lib/exec/handlers/slack-card";
 import { slackHomeJobHandler } from "@/lib/exec/handlers/slack-home";
@@ -106,9 +157,20 @@ import {
   registerJobHandler
 } from "@/lib/exec/jobs";
 import { ensureMailHook, recordSocketHealth } from "@/lib/exec/mail-hook";
-import { __resetSchedulerForTests, dueDedupeKey, getScheduledWork, listScheduledWork, registerScheduledWork } from "@/lib/exec/scheduler";
+import {
+  __resetSchedulerForTests,
+  dueSystemDedupeKey,
+  getScheduledWork,
+  getSystemScheduledWork,
+  listScheduledWork,
+  listSystemScheduledWork,
+  registerScheduledWork,
+  registerSystemScheduledWork
+} from "@/lib/exec/scheduler";
 import {
   __resetExecRuntimeForTests,
+  briefAnsweredExclusion,
+  briefSinceLastResolver,
   ensureExecRuntime,
   runExecSchedulerTick,
   runExecTickForCron,
@@ -158,7 +220,16 @@ const NO_EMAIL_PURGED = {
   slackChannels: 0,
   slackAttention: 0,
   slackDigests: 0,
-  slackDigestsFailed: 0
+  slackDigestsFailed: 0,
+  // P8 (§3.14.1): the system purge's four new steps find nothing here.
+  briefContentPurged: 0,
+  briefsDeleted: 0,
+  briefCheckinsDeleted: 0,
+  briefMentionsDeleted: 0,
+  revokedReadingPurged: 0,
+  briefSlackScrubbed: 0,
+  fallbackDmsDeleted: 0,
+  fallbackDmsRetry: 0
 };
 
 function resetAll(): void {
@@ -186,6 +257,11 @@ beforeEach(() => {
   // The C18 backstop (fixer correctness-5) finds no revocation waiting for its purge here.
   vi.mocked(listUnpurgedRevokedInstallations).mockResolvedValue([]);
   vi.mocked(purgeExpiredSlack).mockResolvedValue({ items: 0, messages: 0, threads: 0, markers: 0, log: 0, channels: 0, attention: 0 });
+  // P8 (§3.14.1): no expired brief, no revoked reading half, no brief citing Slack, no mini-brief DM due.
+  vi.mocked(purgeExpiredBriefs).mockResolvedValue({ contentPurged: 0, briefsDeleted: 0, checkinsDeleted: 0, mentionsDeleted: 0 });
+  vi.mocked(listRevokedReadingInstallations).mockResolvedValue([]);
+  vi.mocked(listPrincipalIdsWithSlackLines).mockResolvedValue([]);
+  vi.mocked(listFallbackDmsDue).mockResolvedValue([]);
   vi.spyOn(console, "log").mockImplementation(() => {});
   vi.spyOn(console, "warn").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
@@ -217,8 +293,9 @@ describe("while EXEC_ENABLED is not 'true'", () => {
   });
 });
 
+// P8 (contract §3.15, M10, C17): exec.purge left this list for the system schedule (ALL_SYSTEM_SCHEDULES); the four brief
+// works joined it at the end.
 const ALL_SCHEDULES = [
-  purgeScheduledWork,
   ddAttentionScheduledWork,
   emailReconcileScheduledWork,
   emailAttentionScheduledWork,
@@ -235,8 +312,14 @@ const ALL_SCHEDULES = [
   // P7b (contract §3.11.5)
   slackCorrelateScheduledWork,
   slackDigestPlanScheduledWork,
-  slackIntelSweepScheduledWork
+  slackIntelSweepScheduledWork,
+  // P8 (contract §3.6, §3.15)
+  briefScheduledWork,
+  briefPrepScheduledWork,
+  briefSweepScheduledWork,
+  briefHealthScheduledWork
 ];
+const ALL_SYSTEM_SCHEDULES = [purgeSystemWork, opsWatchSystemWork];
 
 describe("ensureExecRuntime", () => {
   // P6 (contract §3.11.8, C35): the seven Slack kinds, registered unconditionally; both schedules gated on an active installation.
@@ -294,9 +377,12 @@ describe("ensureExecRuntime", () => {
     ensureExecRuntime();
     expect(getJobHandler(PURGE_JOB_KIND)).toBe(purgeJobHandler);
     expect(getJobHandler(DD_ATTENTION_JOB_KIND)).toBe(ddAttentionJobHandler);
-    expect(getScheduledWork(PURGE_JOB_KIND)).toBe(purgeScheduledWork);
+    // P8 (M10, C17): exec.purge is system work now, never a per-principal schedule.
+    expect(getScheduledWork(PURGE_JOB_KIND)).toBeUndefined();
+    expect(getSystemScheduledWork(PURGE_JOB_KIND)).toBe(purgeSystemWork);
     expect(getScheduledWork(DD_ATTENTION_JOB_KIND)).toBe(ddAttentionScheduledWork);
     expect(listScheduledWork()).toEqual(ALL_SCHEDULES);
+    expect(listSystemScheduledWork()).toEqual(ALL_SYSTEM_SCHEDULES);
   });
 
   it("registers the three email kinds (P3) and their two schedules", () => {
@@ -323,13 +409,16 @@ describe("ensureExecRuntime", () => {
     registerJobHandler(purgeJobHandler);
     expect(() => ensureExecRuntime()).not.toThrow();
     expect(getJobHandler(PURGE_JOB_KIND)).toBe(purgeJobHandler);
-    expect(getScheduledWork(PURGE_JOB_KIND)).toBe(purgeScheduledWork);
+    expect(getSystemScheduledWork(PURGE_JOB_KIND)).toBe(purgeSystemWork);
   });
 
   it("tolerates a schedule that is already registered", () => {
-    registerScheduledWork(purgeScheduledWork);
+    registerScheduledWork(ddAttentionScheduledWork);
+    // P8: a system schedule another copy of the module already registered, too.
+    registerSystemScheduledWork(purgeSystemWork);
     expect(() => ensureExecRuntime()).not.toThrow();
     expect(listScheduledWork()).toEqual(ALL_SCHEDULES);
+    expect(listSystemScheduledWork()).toEqual(ALL_SYSTEM_SCHEDULES);
     expect(getJobHandler(PURGE_JOB_KIND)).toBe(purgeJobHandler);
   });
 
@@ -342,6 +431,85 @@ describe("ensureExecRuntime", () => {
     __resetExecRuntimeForTests();
     ensureExecRuntime();
     expect(getJobHandler(PURGE_JOB_KIND)).toBe(purgeJobHandler);
+  });
+});
+
+describe("P8 the morning brief (contract §3.15): the ten handlers, four schedules, two system works and two hooks", () => {
+  const P8_HANDLERS = [briefJobHandler, briefDeliverJobHandler, briefFallbackJobHandler, briefPrepJobHandler, briefSweepJobHandler,
+    briefHealthJobHandler, checkinSendJobHandler, checkinRewriteJobHandler, opsWatchJobHandler, accessAlertJobHandler];
+
+  it("registers each handler once, with the §3.13 lanes and timeouts", () => {
+    ensureExecRuntime();
+    ensureExecRuntime();
+    for (const handler of P8_HANDLERS) expect(getJobHandler(handler.kind)).toBe(handler);
+    expect(P8_HANDLERS.map((h) => [h.kind, h.lane, h.timeoutMs])).toEqual([
+      ["exec.brief", "interactive", 240_000],
+      ["exec.brief-deliver", "interactive", 60_000],
+      ["exec.brief-fallback", "interactive", 60_000],
+      ["exec.brief-prep", "bulk", 15_000],
+      ["exec.brief-sweep", "bulk", 60_000],
+      ["exec.brief-health", "bulk", 30_000],
+      ["exec.checkin-send", "interactive", 30_000],
+      ["exec.checkin-rewrite", "interactive", 60_000],
+      ["exec.ops-watch", "bulk", 30_000],
+      ["exec.access-alert", "bulk", 30_000]
+    ]);
+    // No schedule for the deliver, fallback (a companion), check-in, ops-watch (system) or access-alert kinds.
+    for (const kind of ["exec.brief-deliver", "exec.brief-fallback", "exec.checkin-send", "exec.checkin-rewrite", "exec.access-alert"]) {
+      expect(getScheduledWork(kind), kind).toBeUndefined();
+      expect(getSystemScheduledWork(kind), kind).toBeUndefined();
+    }
+    expect(getSystemScheduledWork("exec.ops-watch")).toBe(opsWatchSystemWork);
+    expect(getScheduledWork("exec.ops-watch")).toBeUndefined();
+  });
+
+  it("registers the two hooks: P7a's answered exclusion (A6) and P7b's since-last-brief resolver (B4)", async () => {
+    ensureExecRuntime();
+    expect(getAnsweredExclusion()).toBe(briefAnsweredExclusion);
+    expect(Reflect.get(globalThis, "__ddExecSinceLastBriefResolver")).toBe(briefSinceLastResolver);
+  });
+
+  it("A6 the adapter un-stamps exactly the stamps that are his check-in posts; a missing brief schema matches none", async () => {
+    vi.mocked(checkinPostKeys).mockResolvedValue(new Set(["D0SAM0001:1793990000.000100"]));
+    const rows = [{ channelId: "D0SAM0001", respondedTs: "1793990000.000100" }, { channelId: "C0OPS0001", respondedTs: "1793990001.000200" }];
+    await expect(briefAnsweredExclusion(principal, rows)).resolves.toEqual([rows[0]]);
+    expect(checkinPostKeys).toHaveBeenCalledWith(principal, [{ channelId: "D0SAM0001", ts: "1793990000.000100" }, { channelId: "C0OPS0001", ts: "1793990001.000200" }]);
+    await expect(briefAnsweredExclusion(principal, [])).resolves.toEqual([]);
+    const missing = new Error("not installed");
+    vi.mocked(checkinPostKeys).mockRejectedValue(missing);
+    vi.mocked(isBriefSchemaMissing).mockImplementation((e) => e === missing);
+    await expect(briefAnsweredExclusion(principal, rows)).resolves.toEqual([]);
+    const other = new Error("timeout");
+    vi.mocked(checkinPostKeys).mockRejectedValue(other);
+    await expect(briefAnsweredExclusion(principal, rows)).rejects.toBe(other);
+  });
+
+  it("B4 the resolver answers the latest delivered or fallback stamp, or null", async () => {
+    vi.mocked(lastDeliveredBriefAt).mockResolvedValue("2026-11-06T13:01:00.000Z");
+    await expect(briefSinceLastResolver(principal)).resolves.toEqual(new Date("2026-11-06T13:01:00.000Z"));
+    vi.mocked(lastDeliveredBriefAt).mockResolvedValue(null);
+    await expect(briefSinceLastResolver(principal)).resolves.toBeNull();
+    vi.mocked(lastDeliveredBriefAt).mockResolvedValue("not a time");
+    await expect(briefSinceLastResolver(principal)).resolves.toBeNull();
+  });
+
+  it("the brief's schedules: exec.brief and its watchdog at the brief time, prep 15 minutes before, the sweep every 5, health at 06:00", async () => {
+    vi.stubEnv("EXEC_ENABLED", "true");
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.mocked(listEnabledPrincipals).mockResolvedValue([principal]);
+    vi.mocked(loadSettings).mockImplementation(async (id: string) => ({ ...settingsFromRow(null, id), briefEnabled: true }));
+    vi.setSystemTime(new Date("2026-11-06T13:00:00Z"));   // 08:00 EST
+    await runExecSchedulerTick();
+    const rows = db.upserts.map((u) => u.row).filter((r) => String(r.kind).startsWith("exec.brief"));
+    expect(rows.map((r) => [r.kind, r.dedupe_key, r.lane, r.max_attempts])).toEqual([
+      ["exec.brief", "exec.brief:ep_1:2026-11-06", "interactive", 1],
+      ["exec.brief-fallback", "exec.brief-fallback:ep_1:2026-11-06", "interactive", 1],
+      ["exec.brief-prep", "exec.brief-prep:ep_1:2026-11-06", "bulk", 1],
+      ["exec.brief-sweep", `exec.brief-sweep:ep_1:i${intervalBucket(new Date("2026-11-06T13:00:00Z"), 5)}`, "bulk", 1],
+      ["exec.brief-health", "exec.brief-health:ep_1:2026-11-06", "bulk", 2]
+    ]);
+    expect(rows[0].payload).toEqual({ local_date: "2026-11-06", scheduled_at: "2026-11-06T13:00:00.000Z", trigger: "schedule" });
+    expect(rows[1]).toMatchObject({ payload: { local_date: "2026-11-06", scheduled_at: "2026-11-06T13:00:00.000Z" }, run_after: "2026-11-06T13:45:00.000Z" });
   });
 });
 
@@ -438,7 +606,9 @@ describe("P7b Slack intelligence (contract §3.11.5): the four handlers and the 
     expect(slackIntelSweepScheduledWork).toMatchObject({ lane: "bulk", cadence: { kind: "interval", minutes: 10 }, maxAttempts: 3 });
     // The sweep only removes data, so reading off doesn't stop it; only a missing P7a schema does.
     expect([gate(slackIntelSweepScheduledWork, base), gate(slackIntelSweepScheduledWork, schema), gate(slackIntelSweepScheduledWork, on)]).toEqual([false, true, true]);
-    expect(slackIntelSweepScheduledWork.payload?.(principal)).toEqual({ reason: "schedule" });
+    // P8 stage 0 (p8-bindings.md, forced by the ScheduledWork.payload ctx seed): the payload function now gets a ScheduleContext.
+    const ctx = { now: new Date(), settings: base, zone: "UTC", localDate: null, dueAt: null, dueKey: "exec.slack-intel-sweep:ep_1:i1" };
+    expect(slackIntelSweepScheduledWork.payload?.(principal, ctx)).toEqual({ reason: "schedule" });
   });
 });
 
@@ -509,14 +679,24 @@ describe("runExecSchedulerTick", () => {
     vi.useFakeTimers({ toFake: ["Date"] });
   });
 
-  it("enqueues only the 10-minute DD and email-attention refreshes before the purge's time, and is idle on a repeat in the same bucket", async () => {
-    const at = new Date("2026-11-04T07:00:00Z"); // 02:00 EST, before the 03:30 purge
+  it("enqueues the system works and the 10-minute DD and email-attention refreshes, and is idle on a repeat in the same buckets", async () => {
+    const at = new Date("2026-11-04T07:00:00Z"); // 02:00 EST; past 03:30 UTC, the system purge's time (P8 M10)
     vi.setSystemTime(at);
     vi.mocked(listEnabledPrincipals).mockResolvedValue([principal]);
     // Email is off (the default settings): the attention pass still runs (L24), reconcile doesn't. The DD text
-    // triage is ungated too (P5a: off deletes, not installed skips).
-    await expect(runExecSchedulerTick()).resolves.toBe("principals=1 enqueued=3 reaped=0");
+    // triage is ungated too (P5a: off deletes, not installed skips). P8: the two system works run first (principal_id
+    // null), and the 5-minute brief sweep is ungated (it skips cheaply when the brief isn't installed); the brief is off.
+    await expect(runExecSchedulerTick()).resolves.toBe("principals=1 enqueued=4 reaped=0 system=2");
     expect(db.upserts.map((u) => u.row)).toEqual([
+      { kind: PURGE_JOB_KIND, lane: "bulk", principal_id: null, payload: {}, dedupe_key: "exec.purge:system:2026-11-04", max_attempts: 3 },
+      {
+        kind: "exec.ops-watch",
+        lane: "bulk",
+        principal_id: null,
+        payload: { bucket: intervalBucket(at, 15) },
+        dedupe_key: `exec.ops-watch:system:i${intervalBucket(at, 15)}`,
+        max_attempts: 1
+      },
       {
         kind: DD_ATTENTION_JOB_KIND,
         lane: "bulk",
@@ -540,12 +720,20 @@ describe("runExecSchedulerTick", () => {
         payload: {},
         dedupe_key: `exec.ddtext-triage:ep_1:i${intervalBucket(at, 10)}`,
         max_attempts: 3
+      },
+      {
+        kind: "exec.brief-sweep",
+        lane: "bulk",
+        principal_id: "ep_1",
+        payload: {},
+        dedupe_key: `exec.brief-sweep:ep_1:i${intervalBucket(at, 5)}`,
+        max_attempts: 1
       }
     ]);
     expect(db.callsTo("exec_reap_expired_leases")).toHaveLength(1);
 
-    // Same 10-minute bucket: the key dedupes, nothing is due, the tick is idle.
-    vi.setSystemTime(new Date("2026-11-04T07:09:00Z"));
+    // Same 5-, 10- and 15-minute buckets and the same UTC day: every key dedupes, the tick is idle.
+    vi.setSystemTime(new Date("2026-11-04T07:04:00Z"));
     await expect(runExecSchedulerTick()).resolves.toBe("idle");
   });
 
@@ -565,31 +753,33 @@ describe("runExecSchedulerTick", () => {
     });
   });
 
-  it("enqueues the daily purge once its local time has passed, deduped by local date", async () => {
-    vi.mocked(listEnabledPrincipals).mockResolvedValue([principal]);
+  // P8 (M10, C17): the purge is SYSTEM work (principal_id null) at 03:30 UTC, keyed by UTC date, with or without principals.
+  it("enqueues the system purge once 03:30 UTC has passed, deduped by UTC date, with no enabled principal", async () => {
     const purges = () => db.upserts.filter((u) => u.row.kind === PURGE_JOB_KIND);
 
-    vi.setSystemTime(new Date("2026-11-04T08:29:00Z")); // 03:29 EST
+    vi.setSystemTime(new Date("2026-11-04T03:29:00Z"));
     await runExecSchedulerTick();
     expect(purges()).toEqual([]);
 
-    // The purge, plus the DD and email-attention refreshes and the DD text triage of a new 10-minute bucket.
-    vi.setSystemTime(new Date("2026-11-04T08:30:00Z")); // 03:30 EST
-    await expect(runExecSchedulerTick()).resolves.toBe("principals=1 enqueued=4 reaped=0");
+    // The purge, plus this 15-minute bucket's ops-watch (already enqueued at 03:29: same bucket).
+    vi.setSystemTime(new Date("2026-11-04T03:30:00Z"));
+    await expect(runExecSchedulerTick()).resolves.toBe("principals=0 enqueued=0 reaped=0 system=2");
     expect(purges().map((u) => u.row)).toEqual([
-      { kind: PURGE_JOB_KIND, lane: "bulk", principal_id: "ep_1", payload: {}, dedupe_key: "exec.purge:ep_1:2026-11-04" }
+      { kind: PURGE_JOB_KIND, lane: "bulk", principal_id: null, payload: {}, dedupe_key: "exec.purge:system:2026-11-04", max_attempts: 3 }
     ]);
 
-    vi.setSystemTime(new Date("2026-11-04T20:00:00Z")); // later the same local day
+    vi.setSystemTime(new Date("2026-11-04T20:00:00Z")); // later the same UTC day
     await runExecSchedulerTick();
     expect(purges()).toHaveLength(2);
-    expect(purges()[1].row.dedupe_key).toBe("exec.purge:ep_1:2026-11-04");
+    expect(purges()[1].row.dedupe_key).toBe("exec.purge:system:2026-11-04");
+    expect(db.upsertResult({ dedupe_key: "exec.purge:system:2026-11-04" })).toEqual({ data: [], error: null });
   });
 
   it("reports reaped leases", async () => {
     vi.setSystemTime(NOW);
     db.rpc.set("exec_reap_expired_leases", () => ({ data: 2, error: null }));
-    await expect(runExecSchedulerTick()).resolves.toBe("principals=0 enqueued=0 reaped=2");
+    // P8: the system works enqueue too (12:00Z is past 03:30 UTC).
+    await expect(runExecSchedulerTick()).resolves.toBe("principals=0 enqueued=0 reaped=2 system=2");
   });
 });
 
@@ -597,10 +787,13 @@ describe("runExecTickForCron", () => {
   beforeEach(() => vi.stubEnv("EXEC_ENABLED", "true"));
 
   it("runs the scheduler, then both lanes, and reports each part", async () => {
+    // P8 (M10): the two system works enqueue with no principal at all (12:00Z: past the 03:30 UTC purge).
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
     const out = await runExecTickForCron(40_000);
     expect(out).toEqual({
       ok: true,
-      scheduler: { principals: 0, enqueued: 0, reaped: 0, summary: "idle" },
+      scheduler: { principals: 0, enqueued: 0, reaped: 0, summary: "principals=0 enqueued=0 reaped=0 system=2" },
       interactive: {
         lane: "interactive",
         skipped: null,
@@ -701,18 +894,15 @@ describe("exec.purge", () => {
     vi.setSystemTime(NOW);
   });
 
-  it("is a bulk job with a 120 s ceiling, scheduled daily at 03:30 local", () => {
-    expect(purgeJobHandler).toMatchObject({ kind: "exec.purge", lane: "bulk", timeoutMs: 120_000 });
-    expect(purgeScheduledWork).toMatchObject({ kind: "exec.purge", lane: "bulk", cadence: { kind: "daily" } });
-    expect(purgeScheduledWork.enabled).toBeUndefined();
-    const settings = settingsFromRow(null, "ep_1");
-    expect(dueDedupeKey(purgeScheduledWork, principal, settings, new Date("2026-11-04T08:29:59Z"))).toBeNull();
-    expect(dueDedupeKey(purgeScheduledWork, principal, settings, new Date("2026-11-04T08:30:00Z"))).toBe("exec.purge:ep_1:2026-11-04");
-    // Ignores the brief time: it's not tied to any setting.
-    const briefAtFour = { ...settings, briefLocalTime: "04:00" };
-    expect(dueDedupeKey(purgeScheduledWork, principal, briefAtFour, new Date("2026-11-04T08:30:00Z"))).toBe("exec.purge:ep_1:2026-11-04");
+  // P8 (M10, C17): a SYSTEM job daily at 03:30 UTC (no principal, no setting). Its ceiling (300 s from P8, Area A's
+  // handlers/purge.ts) is pinned by purge.test.ts.
+  it("is a bulk job, scheduled as system work daily at 03:30 UTC", () => {
+    expect(purgeJobHandler).toMatchObject({ kind: "exec.purge", lane: "bulk" });
+    expect(purgeSystemWork).toMatchObject({ kind: "exec.purge", lane: "bulk", cadence: { kind: "daily", atUtc: "03:30" }, maxAttempts: 3 });
+    expect(dueSystemDedupeKey(purgeSystemWork, new Date("2026-11-04T03:29:59Z"))).toBeNull();
+    expect(dueSystemDedupeKey(purgeSystemWork, new Date("2026-11-04T03:30:00Z"))).toBe("exec.purge:system:2026-11-04");
     expect(Object.isFrozen(purgeJobHandler)).toBe(true);
-    expect(Object.isFrozen(purgeScheduledWork)).toBe(true);
+    expect(Object.isFrozen(purgeSystemWork)).toBe(true);
   });
 
   it("deletes past each table's retention and returns the counts", async () => {
@@ -760,7 +950,8 @@ describe("exec.purge", () => {
       "[exec-purge] deleted finishedJobs=7 accessLog=30 auditLog=2 aiUsage=11 resolvedAttention=4 " +
         "emailThreads=0 emailCommitments=0 emailSignals=0 emailAttentionRows=0 " +
         "draftsContentPurged=0 draftsDeleted=0 draftsClosedIdle=0 draftsChecksScheduled=0 " +
-        "ddtextItems=0 ddtextAttention=0 attentionFeedback=0 chatConversations=0 chatMessages=0 chatStaleFailed=0 slackEvents=0 oauthStates=0 slackRevocationsPurged=0 slackItems=0 slackMessages=0 slackThreads=0 slackMarkers=0 slackLog=0 slackChannels=0 slackAttention=0 slackDigests=0 slackDigestsFailed=0"
+        "ddtextItems=0 ddtextAttention=0 attentionFeedback=0 chatConversations=0 chatMessages=0 chatStaleFailed=0 slackEvents=0 oauthStates=0 slackRevocationsPurged=0 slackItems=0 slackMessages=0 slackThreads=0 slackMarkers=0 slackLog=0 slackChannels=0 slackAttention=0 slackDigests=0 slackDigestsFailed=0 " +
+        "briefContentPurged=0 briefsDeleted=0 briefCheckinsDeleted=0 briefMentionsDeleted=0 revokedReadingPurged=0 briefSlackScrubbed=0 fallbackDmsDeleted=0 fallbackDmsRetry=0"
     );
   });
 
@@ -792,7 +983,7 @@ describe("exec.purge", () => {
   it("runs every step even when one fails, then fails the run", async () => {
     db.deleteResult = (d) =>
       d.table === "exec_access_log" ? { count: null, error: { message: "statement timeout" } } : { count: 1, error: null };
-    await expect(runPurge()).rejects.toThrow("exec.purge: 1 of 16 steps failed: accessLog: exec_access_log purge failed: statement timeout");
+    await expect(runPurge()).rejects.toThrow("exec.purge: 1 of 20 steps failed: accessLog: exec_access_log purge failed: statement timeout");
     expect(db.deletes.map((d) => d.table)).toEqual([
       "exec_jobs",
       "exec_access_log",
@@ -807,7 +998,7 @@ describe("exec.purge", () => {
     db.deleteResult = (d) =>
       d.table === "exec_attention_items" ? { count: null, error: { message: "permission denied" } } : { count: 2, error: null };
     await expect(runPurge()).rejects.toThrow(
-      "exec.purge: 1 of 16 steps failed: resolvedAttention: exec_attention_items purge failed: permission denied"
+      "exec.purge: 1 of 20 steps failed: resolvedAttention: exec_attention_items purge failed: permission denied"
     );
     expect(db.deletes.map((d) => d.table)).toEqual([
       "exec_jobs",
@@ -820,7 +1011,8 @@ describe("exec.purge", () => {
       "[exec-purge] deleted finishedJobs=2 accessLog=2 auditLog=2 aiUsage=2 resolvedAttention=0 " +
         "emailThreads=0 emailCommitments=0 emailSignals=0 emailAttentionRows=0 " +
         "draftsContentPurged=0 draftsDeleted=0 draftsClosedIdle=0 draftsChecksScheduled=0 " +
-        "ddtextItems=0 ddtextAttention=0 attentionFeedback=0 chatConversations=0 chatMessages=0 chatStaleFailed=0 slackEvents=0 oauthStates=0 slackRevocationsPurged=0 slackItems=0 slackMessages=0 slackThreads=0 slackMarkers=0 slackLog=0 slackChannels=0 slackAttention=0 slackDigests=0 slackDigestsFailed=0 failed=1"
+        "ddtextItems=0 ddtextAttention=0 attentionFeedback=0 chatConversations=0 chatMessages=0 chatStaleFailed=0 slackEvents=0 oauthStates=0 slackRevocationsPurged=0 slackItems=0 slackMessages=0 slackThreads=0 slackMarkers=0 slackLog=0 slackChannels=0 slackAttention=0 slackDigests=0 slackDigestsFailed=0 " +
+        "briefContentPurged=0 briefsDeleted=0 briefCheckinsDeleted=0 briefMentionsDeleted=0 revokedReadingPurged=0 briefSlackScrubbed=0 fallbackDmsDeleted=0 fallbackDmsRetry=0 failed=1"
     );
   });
 

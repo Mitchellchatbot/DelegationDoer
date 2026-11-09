@@ -200,7 +200,9 @@ export function validateBody<T>(value: unknown, schema: ZodType<T, ZodTypeDef, u
 export type RateBucket = "attention_action" | "attention_feedback" | "settings_update" | "assess" | "chat" | "proposal"
   | "slack_connect" | "slack_disconnect" | "slack_reading" | "slack_channels"
   // P7b (stage-0 seed, §0.2 step 5): the tag route (B, 60 / 10 min) and the digest build route (C, 20 / 10 min).
-  | "slack_links" | "slack_digest_build";
+  | "slack_links" | "slack_digest_build"
+  // P8 (stage-0 seed, §3.17.4; then Area E's): Regenerate (6 / h), its dry run (3 / h) and the brief settings (30 / 10 min).
+  | "brief_regenerate" | "brief_dry_run" | "brief_settings";
 export interface RateBucketDef {
   /** created_at of the n-th newest counted row at or after sinceIso, or null when there are fewer than n. Throws on a read error. */
   nthNewestAt: (principal: ExecPrincipal, sinceIso: string, n: number, signal?: AbortSignal) => Promise<string | null>;
@@ -298,7 +300,11 @@ export const RATE_BUCKETS: Readonly<Record<RateBucket, RateBucketDef>> = Object.
   slack_reading: { nthNewestAt: auditNthNewestAt(["slack.read_stop"]) },
   slack_channels: { nthNewestAt: auditNthNewestAt(["slack.channel_watch", "settings.watch_mode"]) },
   slack_links: { nthNewestAt: auditNthNewestAt(["slack.channel.links"]) },
-  slack_digest_build: { nthNewestAt: auditNthNewestAt(["slack.digest.request"]) }
+  slack_digest_build: { nthNewestAt: auditNthNewestAt(["slack.digest.request"]) },
+  // P8 (§3.17.4; seeded at stage 0, then Area E's).
+  brief_regenerate: { nthNewestAt: auditNthNewestAt(["brief.regenerate"]) },
+  brief_dry_run: { nthNewestAt: auditNthNewestAt(["brief.dry_run"]) },
+  brief_settings: { nthNewestAt: auditNthNewestAt(["brief.settings.update"]) }
 });
 
 /**

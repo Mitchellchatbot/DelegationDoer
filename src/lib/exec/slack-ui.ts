@@ -1,3 +1,4 @@
+import { BRIEF_COPY, fillBrief } from "@/lib/exec/brief-copy";                                       // P8 (pure, no imports)
 import type { ChatDonePayload, DisplaySource, ProposalView } from "@/lib/exec/chat/view-types";   // P5b
 import { markersForDisplay } from "@/lib/exec/chat/markers";
 import { draftPageHref } from "@/lib/exec/drafts-links";
@@ -720,11 +721,18 @@ export function renderProposalCard(view: ProposalView | null, opts: { status?: P
 
 // --- App Home ------------------------------------------------------------------------------------
 
+/** P8 (§3.21.3, K13; stage-0 seed): the App Home's brief line. state keys BRIEF_COPY.home; time and tz fill homeSchedule
+ *  ("Daily at {time} ({tz})"); sentAt is the formatted send time BRIEF_COPY.home.delivered shows, or null. */
+export interface OwnerHomeBrief { state: keyof typeof BRIEF_COPY.home; time: string; tz: string; sentAt: string | null }
+
 export interface OwnerHomeInput {
   /** aiAssessed (additive): the item is a model's reading (P5a's DDTEXT_AI_KINDS), labelled as the web labels it. */
   attention: { ok: true; items: { band: "critical" | "high" | "normal"; title: string; href: string; aiAssessed?: boolean }[]; hiddenEmail: number; emailScreen: "ok" | "none" | "unavailable" } | { ok: false };
   email: { state: "off" | "no_pin" } | { state: "on"; counts: { reply: number; urgent: number; important: number; waiting: number } | null; restricted: number | null };
   updatedAt: string; timezone: string;
+  /** P8 (§3.21.3; stage-0 seed, OPTIONAL so P6's literals compile, p8-bindings.md AM-P8-15): absent or null renders
+   *  SLACK_COPY.homeBrief as before. Area D renders BRIEF_COPY.home[state] + the schedule context in its place. */
+  brief?: OwnerHomeBrief | null;
 }
 
 /** "Nov 7, 3:04 PM EST" in his zone (UTC when the zone is unknown); null for a bad timestamp. */
@@ -742,6 +750,23 @@ function formatUpdated(iso: string, timezone: string): string | null {
       return null;
     }
   }
+}
+
+/** P8 (§3.21.3, K13): the brief's state line (BRIEF_COPY.home[state], {time} = the send time) and its schedule context; null (the
+ *  Home job couldn't read the brief line) → SLACK_COPY.homeBrief as before. Fixed copy and short labels only, all escaped. */
+function homeBriefBlocks(brief: OwnerHomeBrief | null): SlackBlock[] {
+  const state = brief?.state;
+  if (brief === null || typeof state !== "string" || !Object.prototype.hasOwnProperty.call(BRIEF_COPY.home, state)) {
+    return [section(escapeMrkdwn(SLACK_COPY.homeBrief))];
+  }
+  const label = (v: unknown) => clipChars(sanitizeChars(typeof v === "string" ? v : "").replace(/\s+/g, " ").trim(), 40);
+  const sentAt = label(brief.sentAt);
+  const line = fillBrief(BRIEF_COPY.home[state], { time: sentAt.length > 0 ? sentAt : "—" });
+  const out: SlackBlock[] = [section(escapeMrkdwn(line))];
+  const time = label(brief.time);
+  const tz = label(brief.tz);
+  if (time.length > 0 && tz.length > 0) out.push(context([escapeMrkdwn(fillBrief(BRIEF_COPY.homeSchedule, { time, tz }))]));
+  return out;
 }
 
 export function renderOwnerHome(input: OwnerHomeInput): SlackHomeView {
@@ -784,7 +809,7 @@ export function renderOwnerHome(input: OwnerHomeInput): SlackHomeView {
     blocks.push(section(escapeMrkdwn(SLACK_COPY.homeEmailOff)));
   }
 
-  blocks.push(divider(), section(escapeMrkdwn(SLACK_COPY.homeBrief)));
+  blocks.push(divider(), ...homeBriefBlocks(input?.brief ?? null));
   const updated = formatUpdated(input?.updatedAt, input?.timezone);
   if (updated !== null) blocks.push(context([escapeMrkdwn(SLACK_COPY.homeUpdated.replace("{time}", updated))]));
   return { type: "home", blocks: blocks.slice(0, SLACK_LIMITS.blocksPerHome) };

@@ -52,6 +52,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllEnvs();
   resetExec();
 });
@@ -96,12 +97,17 @@ describe.each(["GET", "POST"] as const)("%s /api/cron/exec-tick", (method) => {
 
   it("runs the tick with a 40 s budget and reports every part", async () => {
     vi.stubEnv("EXEC_ENABLED", "true");
+    // P8 (M10, C18): the two system works (exec.purge daily at 03:30 UTC, exec.ops-watch every 15 minutes) enqueue on every
+    // tick with no principal, so the summary counts them and depends on the time of day: 12:00Z is past the purge's 03:30.
+    // They are upserts into exec_jobs, not RPCs, so the RPC list is unchanged.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-11-04T12:00:00.000Z"));
     const res = await call(authed(method));
     expect(res.status).toBe(200);
     const body = (await res.json()) as Record<string, unknown>;
     expect(body).toMatchObject({
       ok: true,
-      scheduler: { principals: 0, enqueued: 0, reaped: 0, summary: "idle" },
+      scheduler: { principals: 0, enqueued: 0, reaped: 0, summary: "principals=0 enqueued=0 reaped=0 system=2" },
       interactive: { lane: "interactive", claimed: 0, running: 0 },
       bulk: { lane: "bulk", claimed: 0, running: 0 },
       budgetMs: 40_000

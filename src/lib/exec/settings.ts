@@ -2,10 +2,12 @@ import "server-only";
 
 import { effectiveChatCapUsd } from "@/lib/exec/agent/budget";
 import { feedbackTotals } from "@/lib/exec/attention-feedback";
+import type { BriefSettingsView } from "@/lib/exec/brief-settings";
 import { getVoiceProfile } from "@/lib/exec/drafts-store";
 import {
   loadSettings,
   loadSettingsSnapshot,
+  resolveTimezone,
   settingsColumnsFor,
   settingsSchemaFlags,
   snapshotFromRow,
@@ -247,8 +249,96 @@ export async function getSettingsView(
     voice,
     // P5b (C30): pure, from the settings read (P5b's columns missing → chatDailyCapUsd is its default).
     effectiveChatCapUsd: effectiveChatCapUsd(settings),
-    slack
+    slack,
+    // P8 (§3.17.5, §3.21.4, C22): the Brief section, from the same snapshot (its CAS version is the page's).
+    brief: briefSettingsViewOf(principal, snapshot)
   };
+}
+
+// ---------------------------------------------------------------------------
+// P8: the brief settings (contract §3.17.5, C22; Area E). brief-settings.ts validates and decides; the write itself is
+// here because only settings.ts and principal.ts write exec_settings (boundary rule 14).
+// ---------------------------------------------------------------------------
+
+/** The five brief columns P2a's foundation created (always present: no schema group gates them). */
+export interface BriefSettingsColumns {
+  brief_enabled?: boolean;
+  brief_local_time?: string;
+  brief_timezone?: string | null;
+  checkins_enabled?: boolean;
+  supersede_legacy_brief?: boolean;
+}
+
+const BRIEF_COLUMNS: ReadonlySet<string> = new Set(["brief_enabled", "brief_local_time", "brief_timezone", "checkins_enabled", "supersede_legacy_brief"]);
+
+/** P8 (§3.17.5): the Settings page's Brief section, from a snapshot. The effective zone follows principalFromRows' rule
+ *  (brief_timezone → his work zone → America/New_York), recomputed from the snapshot so a just-saved zone shows at once. */
+export function briefSettingsViewOf(principal: ExecPrincipal, snapshot: SettingsSnapshot): BriefSettingsView {
+  const s = snapshot.settings;
+  return {
+    enabled: s.briefEnabled === true,
+    time: s.briefLocalTime,
+    timezone: s.briefTimezone ?? null,
+    effectiveTz: resolveTimezone(s.briefTimezone ?? null, principal.workTimezone),
+    workTz: principal.workTimezone,
+    checkinsEnabled: s.checkinsEnabled === true,
+    supersede: s.supersedeLegacyBrief === true,
+    version: snapshot.version
+  };
+}
+
+/**
+ * P8 (§3.17.5, C22): the brief settings write, with updateSettings' CAS on exec_settings.updated_at exactly as PostgREST
+ * printed it: `update exec_settings set <columns>, updated_at = now where principal_id and updated_at = expectedVersion`
+ * (expectedVersion null and no row → insert … on conflict do nothing). Writes only the five brief columns given (any
+ * other key is a TypeError, before anything is read) and updated_at; returns the row its CAS selected, or the current
+ * snapshot on a conflict. The caller (brief-settings.ts) has validated the values and the supersede confirmation.
+ * Throws on a database error (the route answers 503).
+ */
+export async function updateBriefSettingsColumns(
+  principal: ExecPrincipal,
+  columns: BriefSettingsColumns,
+  opts: { expectedVersion: string | null; now?: Date; current?: SettingsSnapshot }
+): Promise<{ outcome: "updated"; snapshot: SettingsSnapshot } | { outcome: "conflict"; snapshot: SettingsSnapshot }> {
+  requirePrincipal(principal);
+  const now = validNow(opts.now);
+  const keys = Object.keys(columns ?? {}).filter((k) => (columns as Record<string, unknown>)[k] !== undefined);
+  if (keys.length === 0 || keys.some((k) => !BRIEF_COLUMNS.has(k))) throw new TypeError("exec settings: only the five brief columns, at least one");
+  const expected = opts.expectedVersion;
+  if (expected !== null && (typeof expected !== "string" || expected.length === 0 || expected.length > VERSION_MAX_CHARS)) {
+    throw new NonRetryableError("exec settings: expectedVersion must be null or the version string the settings read returned");
+  }
+  const current = opts.current ?? (await loadSettingsSnapshot(principal.id));
+  const schema = settingsSchemaFlags(current.settings);
+  const write: Record<string, unknown> = {};
+  for (const k of keys) write[k] = (columns as Record<string, unknown>)[k];
+  // As updateSettings: the new token always differs from the one it replaces.
+  const previousMs = expected === null ? Number.NaN : Date.parse(expected);
+  const writeMs = Number.isFinite(previousMs) && previousMs >= now.getTime() ? previousMs + 1 : now.getTime();
+  write.updated_at = new Date(writeMs).toISOString();
+  const returning = settingsColumnsFor(schema);
+  let rows: unknown;
+  if (expected === null) {
+    if (current.version !== null) return { outcome: "conflict", snapshot: current };
+    const { data, error } = await getSupabaseAdmin()
+      .from(SETTINGS_TABLE)
+      .upsert({ principal_id: principal.id, ...write }, { onConflict: "principal_id", ignoreDuplicates: true })
+      .select(returning);
+    if (error) throw new Error(`exec_settings insert failed: ${error.message}`);
+    rows = data;
+  } else {
+    const { data, error } = await getSupabaseAdmin()
+      .from(SETTINGS_TABLE)
+      .update(write)
+      .eq("principal_id", principal.id)
+      .eq("updated_at", expected)
+      .select(returning);
+    if (error) throw new Error(`exec_settings update failed: ${error.message}`);
+    rows = data;
+  }
+  const written = Array.isArray(rows) ? (rows as Record<string, unknown>[]) : [];
+  if (written.length !== 1) return { outcome: "conflict", snapshot: await loadSettingsSnapshot(principal.id) };
+  return { outcome: "updated", snapshot: snapshotFromRow(written[0], principal.id, schema) };
 }
 
 // ---------------------------------------------------------------------------

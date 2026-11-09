@@ -1,17 +1,28 @@
 import "server-only";
 
 import { purgeOldFeedback } from "@/lib/exec/attention-feedback";
+import { auditEvent } from "@/lib/exec/audit";
+import {
+  listFallbackDmsDue,
+  listPrincipalIdsWithSlackLines,
+  markFallbackDmDeleted,
+  purgeExpiredBriefs,
+  scrubBriefsForSlackSystem
+} from "@/lib/exec/brief-store";
+import { BRIEF_LIMITS } from "@/lib/exec/brief-types";
 import { purgeExpiredChatRows } from "@/lib/exec/chat-store";
+import { deleteDdBotDm } from "@/lib/exec/dd-bot";
 import { purgeExpiredDdtext, purgeOrphanDdtextAttention } from "@/lib/exec/ddtext-store";
 import { purgeExpiredDrafts } from "@/lib/exec/drafts-store";
 import { purgeExpiredEmailRows } from "@/lib/exec/email-store";
 import { purgeFinishedJobs } from "@/lib/exec/jobs";
-import type { ScheduledWork } from "@/lib/exec/scheduler";
+import type { SystemScheduledWork } from "@/lib/exec/scheduler";
 import { purgeUnpurgedRevocations } from "@/lib/exec/handlers/slack-uninstall";
-import { deleteExpiredOAuthStates, deleteOldSlackEvents } from "@/lib/exec/slack-install";
+import { deleteExpiredOAuthStates, deleteOldSlackEvents, installationFactsForSystem, listRevokedReadingInstallations } from "@/lib/exec/slack-install";
 import { purgeExpiredSlackIntel } from "@/lib/exec/slack-intel-store";
 import { purgeExpiredSlack } from "@/lib/exec/slack-read-store";
-import { SLACK_LIMITS } from "@/lib/exec/slack-types";
+import { purgeReading } from "@/lib/exec/slack-reading";
+import { SLACK_LIMITS, SLACK_RE } from "@/lib/exec/slack-types";
 import type { JobHandler } from "@/lib/exec/types";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 
@@ -84,13 +95,37 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 //                         of their own: message links cascade with P7a's message rows, channel links
 //                         and digests with P7a's channel rows. Tolerates the P7b migration not being
 //                         applied yet (counts 0).
+//   briefs (P8)           after P7b's step (P8 contract §3.14.1, M9, C28): exec_briefs.content nulled 30
+//                         days after its local date ends (content_expires_at, set by the app), whole
+//                         rows 180 days after it (expires_at; their check-ins cascade), check-ins 30
+//                         days after creation (purge_at), mentions 90 days after the last one:
+//                         purgeExpiredBriefs (exec_brief_purge_expired, 1,000 per batch, up to 10
+//                         rounds). Tolerates the P8 migration not being applied yet (counts 0).
+//   revokedReading (P8)   M10's daily re-check, principal-agnostic (intel-15, coherence-8): every
+//                         installation whose reading half was revoked and not yet purged, whatever its
+//                         principal's state (a disabled principal's included), ≤ 50 a day, gets P7a's
+//                         purgeReading (RPC 14, idempotent; it appends the 'reading' purge-log row P7b
+//                         and the brief sweep follow) and P7a's slack.read_purged audit row (ids and
+//                         counts only). P7a not installed (null) → the step stops. The revoked
+//                         INSTALLATIONS are P6's backstop above (slackRevocationsPurged: purgeReading
+//                         then purgeInstallation, P7a's order; p8-bindings.md AM-P8-16).
+//   briefSlack (P8)       then every brief that still cites Slack, of a principal with no live reading
+//                         half (installationFactsForSystem), loses its Slack-derived lines
+//                         (exec_brief_scrub_slack all := true). Slack-derived data goes within 24 h.
+//   ddBotFallbackDms (P8) the watchdog's mini-brief DMs (posted by the DD bot, outside P6's ledger and
+//                         token) past their fallback_delete_after (retention_days_chat at post time) are
+//                         deleted with the DD bot token (dd-bot.ts deleteDdBotDm), ≤ 50 a day;
+//                         message_not_found / channel_not_found count as done, other errors are tried
+//                         again the next day (C49, intel-18).
 //
 // The deletes are global, not per principal. Rows with no principal (system
 // jobs, access attempts that never resolved to a principal) have to age out
-// too, and so does a disabled principal's mail. The schedule is per principal
-// (key exec.purge:<principal>:<local date>), so with several principals it
-// runs several times a day; every delete is idempotent, so the extra runs
-// find nothing to delete.
+// too, and so does a disabled principal's mail. P8 (M10, C17): the job is
+// system-scoped (principal_id null): purgeSystemWork runs it daily at 03:30
+// UTC, key exec.purge:system:<UTC date>, while EXEC_ENABLED=true, whether or
+// not any principal is enabled. Per-principal exec.purge:<principal>:<date>
+// rows queued before P8 still run once; every delete is idempotent, so an
+// extra run finds nothing to delete.
 
 export const PURGE_JOB_KIND = "exec.purge";
 
@@ -104,10 +139,12 @@ export const RETENTION_DAYS = Object.freeze({
   attentionFeedback: 365
 });
 
-const PURGE_TIMEOUT_MS = 120_000;
-// Local time, in the principal's zone: overnight, clear of the 08:00 brief.
-const PURGE_LOCAL_TIME = "03:30";
+/** P8 (C17): five minutes (the brief, revoked-reading and DD-bot steps make Slack and RPC calls of their own). */
+const PURGE_TIMEOUT_MS = BRIEF_LIMITS.purgeTimeoutMs;
 const DAY_MS = 86_400_000;
+const REVOKED_READING_PER_DAY = BRIEF_LIMITS.revokedReadingPerDay;     // 50
+const FALLBACK_DM_DELETES_PER_DAY = BRIEF_LIMITS.fallbackDmDeletesPerDay; // 50
+const BRIEF_SLACK_PRINCIPALS = 100;
 
 export interface PurgeCounts {
   finishedJobs: number;
@@ -153,6 +190,18 @@ export interface PurgeCounts {
   /** P7b (purgeExpiredSlackIntel, contract §2.3): expired digests deleted, and stale 'building' digests marked failed. */
   slackDigests: number;
   slackDigestsFailed: number;
+  /** P8 (purgeExpiredBriefs, §2.5): brief content nulled, brief rows deleted, check-ins deleted, mentions deleted. */
+  briefContentPurged: number;
+  briefsDeleted: number;
+  briefCheckinsDeleted: number;
+  briefMentionsDeleted: number;
+  /** P8 (M10 step 1): revoked reading halves purged with P7a's purgeReading (the revoked installations are slackRevocationsPurged). */
+  revokedReadingPurged: number;
+  /** P8 (M10 step 3): briefs whose Slack-derived lines were removed (the principal's reading half is gone). */
+  briefSlackScrubbed: number;
+  /** P8 (C49): the watchdog's DD-bot mini-brief DMs deleted, and the ones left for the next day. */
+  fallbackDmsDeleted: number;
+  fallbackDmsRetry: number;
 }
 
 function errMessage(err: unknown): string {
@@ -190,6 +239,97 @@ async function deleteResolvedAttention(days: number, now: Date, signal?: AbortSi
   const { count, error } = await query;
   if (error) throw new Error(`exec_attention_items purge failed: ${error.message}`);
   return count ?? 0;
+}
+
+/** Counts only: the keys a purgeReading answer may carry, finite non-negative numbers (P7a's audit shape). */
+function readingCounts(raw: Record<string, number>): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const [k, v] of Object.entries(raw)) if (/^[a-z_]{1,40}$/i.test(k) && typeof v === "number" && Number.isFinite(v) && v >= 0) out[k] = v;
+  return out;
+}
+
+const errName = (err: unknown) => (err instanceof Error ? err.name : "error");
+
+/**
+ * P8 M10 step 1 (intel-15, coherence-8): purge every revoked reading half with P7a's purgeReading, principal-agnostic, ≤ 50 a
+ * day, oldest revoke first, and write P7a's slack.read_purged audit row (ids and counts only). null (P7a not installed) ends
+ * the step. One failing installation doesn't stop the rest; the first failure is rethrown at the end (the run reports it).
+ */
+async function purgeRevokedReading(signal: AbortSignal | undefined): Promise<number> {
+  const ids = (await listRevokedReadingInstallations()).filter((id) => SLACK_RE.installationId.test(id)).slice(0, REVOKED_READING_PER_DAY);
+  let purged = 0;
+  let firstError: unknown = null;
+  for (const id of ids) {
+    signal?.throwIfAborted();
+    try {
+      const raw = await purgeReading(id);
+      if (raw === null) break;
+      await auditEvent(null, {
+        actor: "system",
+        action: "slack.read_purged",
+        target: "exec_slack_installations:" + id,
+        input: { reason: "system_purge", ...readingCounts(raw) }
+      });
+      purged += 1;
+    } catch (err) {
+      console.error("[exec-purge] revoked reading purge of " + id + " failed (" + errName(err) + ")");
+      firstError ??= err;
+    }
+  }
+  if (firstError !== null) throw firstError;
+  return purged;
+}
+
+/**
+ * P8 M10 step 3: every brief that still cites Slack, of a principal whose reading half isn't live, loses its Slack-derived
+ * lines (exec_brief_scrub_slack, all). The principal's installation facts are booleans only. One failing principal doesn't
+ * stop the rest; the first failure is rethrown at the end.
+ */
+async function scrubBriefSlackForRevoked(signal: AbortSignal | undefined): Promise<number> {
+  const ids = await listPrincipalIdsWithSlackLines(BRIEF_SLACK_PRINCIPALS, { signal });
+  let scrubbed = 0;
+  let firstError: unknown = null;
+  for (const id of ids) {
+    signal?.throwIfAborted();
+    try {
+      const facts = await installationFactsForSystem(id, { signal });
+      if (facts.readingActive) continue;
+      scrubbed += (await scrubBriefsForSlackSystem(id, { signal })) ?? 0;
+    } catch (err) {
+      console.error("[exec-purge] brief Slack scrub of " + id + " failed (" + errName(err) + ")");
+      firstError ??= err;
+    }
+  }
+  if (firstError !== null) throw firstError;
+  return scrubbed;
+}
+
+/**
+ * P8 C49 (intel-18): the watchdog's mini-brief DMs past fallback_delete_after, deleted with the DD bot token through
+ * dd-bot.ts (≤ 50 a day). "deleted" (message_not_found / channel_not_found included) → marked; "retry" or a throw → left for
+ * the next day and counted. A store error marking a row fails the step.
+ */
+async function deleteFallbackDms(now: Date, signal: AbortSignal | undefined): Promise<{ deleted: number; retry: number }> {
+  const due = await listFallbackDmsDue(now, FALLBACK_DM_DELETES_PER_DAY);
+  let deleted = 0;
+  let retry = 0;
+  for (const dm of due) {
+    signal?.throwIfAborted();
+    let outcome: "deleted" | "retry";
+    try {
+      outcome = await deleteDdBotDm({ channel: dm.channel, ts: dm.ts }, { signal: signal ?? new AbortController().signal });
+    } catch (err) {
+      console.error("[exec-purge] DD-bot mini-brief " + dm.id + " not deleted (" + errName(err) + ")");
+      outcome = "retry";
+    }
+    if (outcome === "deleted") {
+      await markFallbackDmDeleted(dm.id);
+      deleted += 1;
+    } else {
+      retry += 1;
+    }
+  }
+  return { deleted, retry };
 }
 
 /**
@@ -232,7 +372,15 @@ export async function runPurge(signal?: AbortSignal, now: Date = new Date()): Pr
     slackChannels: 0,
     slackAttention: 0,
     slackDigests: 0,
-    slackDigestsFailed: 0
+    slackDigestsFailed: 0,
+    briefContentPurged: 0,
+    briefsDeleted: 0,
+    briefCheckinsDeleted: 0,
+    briefMentionsDeleted: 0,
+    revokedReadingPurged: 0,
+    briefSlackScrubbed: 0,
+    fallbackDmsDeleted: 0,
+    fallbackDmsRetry: 0
   };
   const one = (key: keyof PurgeCounts, run: () => Promise<number>) => async (): Promise<Partial<PurgeCounts>> => ({ [key]: await run() });
   const steps: readonly [string, () => Promise<Partial<PurgeCounts>>][] = [
@@ -296,7 +444,33 @@ export async function runPurge(signal?: AbortSignal, now: Date = new Date()): Pr
         const n = (v: unknown) => (typeof v === "number" && Number.isSafeInteger(v) && v > 0 ? v : 0);
         return { slackDigests: n(c?.digests), slackDigestsFailed: n(c?.failedBuilds) };
       }
-    ]
+    ],
+    // P8 (C49): the DD bot's mini-brief DMs at chat retention, BEFORE the briefs step (P8 fixer security-2): a mini-brief's
+    // deletion time is capped at its row's expiry, so on the run where both are due the DM is deleted while its row still holds
+    // the channel and ts (RPC 7 also keeps an undeleted one's row up to 7 more days, for a "retry").
+    [
+      "ddBotFallbackDms",
+      async () => {
+        const c = await deleteFallbackDms(now, signal);
+        return { fallbackDmsDeleted: c.deleted, fallbackDmsRetry: c.retry };
+      }
+    ],
+    // P8 (§3.14.1): after P7b's step. The store answers zeros when the P8 migration isn't applied.
+    [
+      "briefs",
+      async () => {
+        const c = await purgeExpiredBriefs(now, { signal });
+        return {
+          briefContentPurged: c.contentPurged,
+          briefsDeleted: c.briefsDeleted,
+          briefCheckinsDeleted: c.checkinsDeleted,
+          briefMentionsDeleted: c.mentionsDeleted
+        };
+      }
+    ],
+    // P8 (M10's re-check, principal-agnostic): revoked reading halves, then the briefs of principals with no live reading half.
+    ["revokedReading", one("revokedReadingPurged", () => purgeRevokedReading(signal))],
+    ["briefSlack", one("briefSlackScrubbed", () => scrubBriefSlackForRevoked(signal))]
   ];
 
   const failures: string[] = [];
@@ -322,7 +496,10 @@ export async function runPurge(signal?: AbortSignal, now: Date = new Date()): Pr
       `slackEvents=${counts.slackEvents} oauthStates=${counts.oauthStates} slackRevocationsPurged=${counts.slackRevocationsPurged} ` +
       `slackItems=${counts.slackItems} slackMessages=${counts.slackMessages} slackThreads=${counts.slackThreads} ` +
       `slackMarkers=${counts.slackMarkers} slackLog=${counts.slackLog} slackChannels=${counts.slackChannels} slackAttention=${counts.slackAttention} ` +
-      `slackDigests=${counts.slackDigests} slackDigestsFailed=${counts.slackDigestsFailed}` +
+      `slackDigests=${counts.slackDigests} slackDigestsFailed=${counts.slackDigestsFailed} ` +
+      `briefContentPurged=${counts.briefContentPurged} briefsDeleted=${counts.briefsDeleted} briefCheckinsDeleted=${counts.briefCheckinsDeleted} ` +
+      `briefMentionsDeleted=${counts.briefMentionsDeleted} revokedReadingPurged=${counts.revokedReadingPurged} ` +
+      `briefSlackScrubbed=${counts.briefSlackScrubbed} fallbackDmsDeleted=${counts.fallbackDmsDeleted} fallbackDmsRetry=${counts.fallbackDmsRetry}` +
       `${failures.length > 0 ? ` failed=${failures.length}` : ""}`
   );
   if (failures.length > 0) {
@@ -338,8 +515,14 @@ export const purgeJobHandler: JobHandler = Object.freeze<JobHandler>({
   run: ({ signal }) => runPurge(signal)
 });
 
-export const purgeScheduledWork: ScheduledWork = Object.freeze<ScheduledWork>({
+/**
+ * P8 (contract §3.14.1, M10, C17): exec.purge as a SYSTEM job (principal_id null), daily at 03:30 UTC, key
+ * exec.purge:system:<UTC date>, maxAttempts 3, the handler's 300 s timeout. Registered by runtime.ts's
+ * BUILT_IN_SYSTEM_SCHEDULE (Area B); the scheduler's EXEC_ENABLED gate is the only one (no principal needs to be enabled).
+ */
+export const purgeSystemWork: SystemScheduledWork = Object.freeze<SystemScheduledWork>({
   kind: PURGE_JOB_KIND,
   lane: "bulk",
-  cadence: { kind: "daily", at: () => PURGE_LOCAL_TIME }
+  cadence: { kind: "daily", atUtc: "03:30" },
+  maxAttempts: 3
 });

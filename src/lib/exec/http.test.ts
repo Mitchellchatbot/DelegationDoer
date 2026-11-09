@@ -309,8 +309,10 @@ describe("rateLimit (S2, C11, test 2)", () => {
     expect(Object.keys(RATE_BUCKETS).sort()).toEqual([
       "assess", "attention_action", "attention_feedback", "chat", "proposal", "settings_update", "slack_channels", "slack_connect",
       // P7b stage 0 (§0.2 step 5): the tag route's and the digest route's buckets.
-      "slack_digest_build", "slack_disconnect", "slack_links", "slack_reading"
-    ]);
+      "slack_digest_build", "slack_disconnect", "slack_links", "slack_reading",
+      // P8 stage 0 (§3.17.4, p8-bindings.md): Regenerate, its dry run and the brief settings.
+      "brief_dry_run", "brief_regenerate", "brief_settings"
+    ].sort());
     expect(() => auditNthNewestAt([])).toThrow();
   });
 });

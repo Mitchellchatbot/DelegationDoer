@@ -766,7 +766,8 @@ describe("/executive/settings: the Slack params and the host", () => {
     expect(html).not.toContain("data-slack-result");
     expect(textOf(html)).not.toContain("arrives with the Slack app");
     // The read-only card no longer names Slack.
-    expect(textOf(html)).toContain("Email, drafts and brief");
+    // P8 (AM-P8-15, forced): the brief moved to its own section, so the read-only card is "Email and drafts".
+    expect(textOf(html)).toContain("Email and drafts");
   });
 });
 

@@ -22,6 +22,10 @@ export interface ExecPrincipalData {
   name: string;
   /** Resolved IANA zone: settings.brief_timezone → users.work_timezone → America/New_York */
   timezone: string;
+  /** P8 M3: the brief's zone = settings.brief_timezone → users.work_timezone → America/New_York (= timezone today). */
+  briefTimezone: string;
+  /** P8: users.work_timezone → America/New_York; never the brief zone. For work-hours uses (P4 quote zone, P7a window) when they switch. */
+  workTimezone: string;
   /** Missive (missiveclone) account ids this principal's mail access is pinned to. */
   mailAccountIds: readonly string[];
   /** Unused: the Slack binding is exec_slack_installations, P6 K6. */
@@ -222,7 +226,8 @@ export interface SourceRef {
 // LLM
 // ---------------------------------------------------------------------------
 
-export type ExecLlmFeature = "chat" | "draft" | "brief" | "triage" | "digest" | "voice" | "spike" | "ddtext" | "slack_triage";
+/** P8 (§3.21.1, stage-0 seed): "checkin" = the morning brief's check-in notes (Opus 5.5, effort medium, DD data only). */
+export type ExecLlmFeature = "chat" | "draft" | "brief" | "triage" | "digest" | "voice" | "spike" | "ddtext" | "slack_triage" | "checkin";
 export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
 
 // ---------------------------------------------------------------------------

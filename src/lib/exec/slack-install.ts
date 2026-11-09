@@ -574,23 +574,51 @@ export async function acceptEvent(facts: SlackEventFacts, opts: { signal: AbortS
   throw new SlackStoreError("acceptEvent: malformed answer", null);
 }
 
-/** RPC 2, same rules. */
+/** P8 C43 (coherence-6): P8's versioned RPC 2 (P6's body plus the check-in buttons); P6's own function is never touched. */
+const RPC_ACCEPT_ACTION_V2 = "exec_slack_accept_action_v2";
+/** How long a process remembers that v2 is missing before it tries v2 again (P7aC C4's pattern). */
+const ACCEPT_V2_ABSENT_MS = 5 * 60_000;
+const ACCEPT_V2_MISSING_CODES: ReadonlySet<string> = new Set(["42883", "PGRST202"]);
+type AcceptV2Global = typeof globalThis & { __ddExecAcceptActionV2AbsentAt?: number };
+
+function acceptV2AbsentNow(): boolean {
+  const at = (globalThis as AcceptV2Global).__ddExecAcceptActionV2AbsentAt;
+  return typeof at === "number" && Number.isFinite(at) && Date.now() - at >= 0 && Date.now() - at < ACCEPT_V2_ABSENT_MS;
+}
+
+/** Test seam: forget that v2 was found missing. */
+export function __resetAcceptActionV2ForTests(): void {
+  delete (globalThis as AcceptV2Global).__ddExecAcceptActionV2AbsentAt;
+}
+
+/** RPC 2, same rules. P8 (C43): exec_slack_accept_action_v2 first; 42883 / PGRST202 → v2 is marked absent for 5 minutes per
+ *  process and P6's exec_slack_accept_action answers on the same signal; while marked, v1 is called directly. The answer is
+ *  mapped exactly as P6 maps it (v1's schema missing → not_installed). */
 export async function acceptAction(facts: SlackActionFacts, opts: { signal: AbortSignal }): Promise<AcceptActionResult> {
   const signal = opts?.signal;
-  const { data, error } = await withSignal(
-    db().rpc(RPC_ACCEPT_ACTION, {
-      p_team_id: facts.teamId,
-      p_api_app_id: facts.apiAppId,
-      p_user_id: facts.userId,
-      p_trigger_id: facts.triggerId,
-      p_action_id: facts.actionId,
-      p_value: facts.value,
-      p_container_type: facts.containerType,
-      p_channel_id: facts.channelId,
-      p_message_ts: facts.messageTs
-    }),
-    signal
-  );
+  const args = {
+    p_team_id: facts.teamId,
+    p_api_app_id: facts.apiAppId,
+    p_user_id: facts.userId,
+    p_trigger_id: facts.triggerId,
+    p_action_id: facts.actionId,
+    p_value: facts.value,
+    p_container_type: facts.containerType,
+    p_channel_id: facts.channelId,
+    p_message_ts: facts.messageTs
+  };
+  if (!acceptV2AbsentNow()) {
+    const v2 = await withSignal(db().rpc(RPC_ACCEPT_ACTION_V2, args), signal);
+    const code = v2.error ? pgCodeOf(v2.error) : null;
+    if (!(v2.error && code !== null && ACCEPT_V2_MISSING_CODES.has(code))) return acceptActionAnswer(v2, signal);
+    signal?.throwIfAborted();
+    (globalThis as AcceptV2Global).__ddExecAcceptActionV2AbsentAt = Date.now();
+  }
+  return acceptActionAnswer(await withSignal(db().rpc(RPC_ACCEPT_ACTION, args), signal), signal);
+}
+
+function acceptActionAnswer(result: { data: unknown; error: DbError | null }, signal: AbortSignal | undefined): AcceptActionResult {
+  const { data, error } = result;
   if (error) {
     signal?.throwIfAborted();
     if (missing(error)) return { outcome: "not_installed" };
@@ -1353,4 +1381,43 @@ async function readingSummary(principal: ExecPrincipal, botState: SlackSystemSum
     if (!READING_MISSING_CODES.has(code)) console.error(`[exec-slack] reading summary not read: ${code}`);
     return null;
   }
+}
+
+// ---------------------------------------------------------------------------
+// P8 (contract §3.21.3, C1, M10; stage-0 compile-only placeholder, Area D writes the body)
+// ---------------------------------------------------------------------------
+
+/**
+ * Principal-free, booleans only (the legacy gate and the system purge have no principal). schema: the P6 installation table
+ * is there; active: a row with revoked_at null; readingActive: P7a's user half live on that row (user_token_enc not null and
+ * user_revoked_at null; false when the P7a columns are missing). A missing P6 table → { schema: false, active: false,
+ * readingActive: false }; any other read error throws.
+ */
+export async function installationFactsForSystem(principalId: string, opts?: { signal?: AbortSignal }):
+  Promise<{ schema: boolean; active: boolean; readingActive: boolean }> {
+  if (typeof principalId !== "string" || principalId.length === 0 || principalId.length > 100) {
+    throw new TypeError("exec slack store: installationFactsForSystem needs a principal id");
+  }
+  const signal = opts?.signal;
+  const op = "installationFactsForSystem";
+  const read = (cols: string) => withSignal(db().from(INSTALLATIONS).select(cols).eq("principal_id", principalId).is("revoked_at", null)
+    .order("installed_at", { ascending: false }).limit(1), signal);
+  let { data, error } = await read("id,revoked_at,user_token_enc,user_revoked_at,reading_state");
+  let readingColumns = true;
+  // P7a's columns missing (a P6-only database): the bot half still answers; the reading half is "not live" (AM-P8-17).
+  if (error && COLUMN_MISSING_CODES.has(pgCodeOf(error) ?? "")) {
+    readingColumns = false;
+    ({ data, error } = await read("id,revoked_at"));
+  }
+  if (error) {
+    signal?.throwIfAborted();
+    if (missing(error)) return { schema: false, active: false, readingActive: false };
+    throw failure(op, error, signal);
+  }
+  const row = Array.isArray(data) ? ((data[0] as unknown as Row | undefined) ?? null) : null;
+  const active = row !== null && row.revoked_at === null;
+  const readingActive = active && readingColumns && row !== null &&
+    typeof row.user_token_enc === "string" && row.user_token_enc.length > 0 && row.user_revoked_at === null &&
+    (row.reading_state === "discovering" || row.reading_state === "ready");
+  return { schema: true, active, readingActive };
 }

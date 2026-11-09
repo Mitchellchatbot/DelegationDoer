@@ -1,0 +1,37 @@
+{
+  "_note": "Model output fixture (P8 contract §5.7; lead, stage 0). refs and top3 entries written \"@fp:<fingerprint>\" are replaced by the alias assembleSections assigned to that fingerprint (brief-assert.ts resolveFixtureAliases); any other string is used as it is.",
+  "output": {
+    "headline": "The items are fine but the top 3 cites an alias that was never given (BC08): the deterministic top 3 replaces it.",
+    "sections": [
+      {
+        "key": "blockers",
+        "items": [
+          {
+            "text": "Acme's checkout form is down.",
+            "refs": [
+              "@fp:dd:incident:task:t_incident7"
+            ],
+            "kind": "fact"
+          }
+        ]
+      }
+    ],
+    "top3": [
+      "@fp:dd:incident:task:t_incident7",
+      "i999",
+      "@fp:email:thread:th_imp1:msg_i1"
+    ],
+    "_alsoTest": {
+      "duplicate": [
+        "@fp:dd:incident:task:t_incident7",
+        "@fp:dd:incident:task:t_incident7"
+      ],
+      "four": [
+        "@fp:dd:incident:task:t_incident7",
+        "@fp:email:thread:th_escal2:msg_e2",
+        "@fp:email:thread:th_imp1:msg_i1",
+        "@fp:dd:site:acme.example"
+      ]
+    }
+  }
+}

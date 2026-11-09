@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 vi.mock("@/lib/supabase-admin", () => ({ getSupabaseAdmin: vi.fn() }));
@@ -23,7 +23,7 @@ import { getDraftView, requestRegeneration, saveDraft } from "@/lib/exec/drafts"
 import { kickInteractive } from "@/lib/exec/jobs";
 import { confirmProposal, dismissProposal, getProposalView } from "@/lib/exec/proposals";
 import { ensureExecRuntime } from "@/lib/exec/runtime";
-import { acceptAction, acceptEvent } from "@/lib/exec/slack-install";
+import { __resetAcceptActionV2ForTests, acceptAction, acceptEvent } from "@/lib/exec/slack-install";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 
 // POST /api/integrations/exec-slack/interactions (P6 contract §3.10.2, K8, C12,
@@ -180,7 +180,8 @@ describe("the ack", () => {
     expect(vi.mocked(ensureExecRuntime).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(acceptAction).mock.invocationCallOrder[0]);
     expect(fetchSpy).not.toHaveBeenCalled();
     noP4P5bCalls();
-    expect(db.calls.map((c) => [c.kind, c.target])).toEqual([["rpc", "exec_slack_accept_action"]]);
+    // P8 (C43): P6's acceptAction calls P8's exec_slack_accept_action_v2 (P6's body + the check-in buttons) first.
+    expect(db.calls.map((c) => [c.kind, c.target])).toEqual([["rpc", "exec_slack_accept_action_v2"]]);
     expect(db.tables.exec_jobs.map((j) => [j.kind, j.lane, j.max_attempts, j.payload])).toEqual([
       ["exec.slack-action", "interactive", 1, { installation_id: INSTALLATION_ID, action_id: "ea_draft_save", value: `d1.${ED}.3`, channel_id: "D0MITCH", message_ts: MESSAGE_TS }]
     ]);
@@ -196,7 +197,9 @@ describe("the ack", () => {
   });
 
   it("the RPC missing → 200, nothing done", async () => {
-    useDb({ ...owner(), missing: ["exec_slack_accept_action"] });
+    // P8 (C43): v2 first, then P6's RPC; "the RPC missing" = both missing (and the 5-minute absence memo forgotten after).
+    useDb({ ...owner(), missing: ["exec_slack_accept_action", "exec_slack_accept_action_v2"] });
+    onTestFinished(() => __resetAcceptActionV2ForTests());
     expect((await click(blockActions())).status).toBe(200);
     expect(kickInteractive).not.toHaveBeenCalled();
     expect(slackLines()[0]).toContain("dropped reason=schema_missing");

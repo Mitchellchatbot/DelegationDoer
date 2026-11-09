@@ -18,7 +18,8 @@ import {
   type ExecPrincipal,
   type JobContext,
   type JobHandler,
-  type JobLane
+  type JobLane,
+  type JobStatus
 } from "@/lib/exec/types";
 
 // The assistant's durable job queue (public.exec_jobs).
@@ -1134,6 +1135,57 @@ export async function purgeFinishedJobs(olderThanDays: number, signal?: AbortSig
   const { count, error } = await query;
   if (error) throw new Error(`exec_jobs purge failed: ${error.message}`);
   return count ?? 0;
+}
+
+// ---------------------------------------------------------------------------
+// P8 (contract §3.13.9, §3.13.2 / §3.13.5, intel-11): two reads of exec_jobs. Ids and kinds only.
+// ---------------------------------------------------------------------------
+
+/** The lease reaper's note on a job it killed (exec_reap_expired_leases: 'lease expired (worker ' || locked_by || ')' …). */
+export const REAPED_ERROR_PREFIX = "lease expired (worker ";
+const LIVE_STATUSES: readonly JobStatus[] = Object.freeze(["queued", "running"]);
+const MAX_REAPED_LIST = 1_000;
+
+function isoInstant(v: unknown): v is string {
+  return typeof v === "string" && Number.isFinite(Date.parse(v));
+}
+
+/** C18: dead jobs whose finished_at is in [fromIso, toIso) and whose last_error starts "lease expired (worker " (the
+ *  reaper's note); columns id, kind only, oldest first, at most `limit` (served by exec_jobs_finished_idx). Throws on a read
+ *  error. */
+export async function listReapedJobs(fromIso: string, toIso: string, limit: number): Promise<{ id: number; kind: string }[]> {
+  if (!isoInstant(fromIso) || !isoInstant(toIso)) throw new Error("listReapedJobs: fromIso and toIso must be ISO instants");
+  if (!Number.isInteger(limit) || limit < 1 || limit > MAX_REAPED_LIST) throw new Error(`listReapedJobs: limit must be 1-${MAX_REAPED_LIST}`);
+  // The prefix holds no LIKE metacharacter (% _ \), so the pattern is the prefix and one trailing %.
+  const { data, error } = await getSupabaseAdmin()
+    .from("exec_jobs")
+    .select("id,kind")
+    .eq("status", "dead")
+    .gte("finished_at", fromIso)
+    .lt("finished_at", toIso)
+    .like("last_error", `${REAPED_ERROR_PREFIX}%`)
+    .order("finished_at", { ascending: true })
+    .limit(limit);
+  if (error) throw new Error(`exec_jobs read failed (reaped jobs): ${error.message}`);
+  const out: { id: number; kind: string }[] = [];
+  for (const row of (Array.isArray(data) ? data : []) as { id?: unknown; kind?: unknown }[]) {
+    const id = typeof row.id === "string" ? Number(row.id) : row.id;
+    if (typeof id === "number" && Number.isSafeInteger(id) && isValidJobKind(row.kind)) out.push({ id, kind: row.kind });
+  }
+  return out;
+}
+
+/** intel-11 (C48): true when a job with this dedupe key is queued or running (a finished, dead or cancelled one, or none,
+ *  is false). Throws on a read error (callers treat a throw as "live": they never move a row on an unknown answer). */
+export async function isJobLive(dedupeKey: string, opts?: { signal?: AbortSignal }): Promise<boolean> {
+  if (typeof dedupeKey !== "string" || dedupeKey.length === 0 || dedupeKey.length > MAX_DEDUPE_KEY_CHARS) {
+    throw new Error(`isJobLive: dedupeKey must be 1-${MAX_DEDUPE_KEY_CHARS} characters`);
+  }
+  let query = getSupabaseAdmin().from("exec_jobs").select("id").eq("dedupe_key", dedupeKey).in("status", [...LIVE_STATUSES]).limit(1);
+  if (opts?.signal) query = query.abortSignal(opts.signal);
+  const { data, error } = await query;
+  if (error) throw new Error(`exec_jobs read failed (live job): ${error.message}`);
+  return Array.isArray(data) && data.length > 0;
 }
 
 // ---------------------------------------------------------------------------

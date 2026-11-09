@@ -1,0 +1,41 @@
+name: Exec tick
+
+# Wakes the app and runs one Executive AI tick, so the morning brief and its watchdog run on time even when the
+# in-process timers were asleep (the reason daily-briefing.yml exists). Off the top of the hour on purpose: GitHub
+# delays and drops scheduled runs at :00 under load. 10:07-17:07 UTC covers the 08:00 ET brief and its catch-up window
+# in both EST and EDT. The endpoint dedupes (job keys) and needs CRON_SECRET (src/lib/cron-auth.ts).
+#
+# Set the repository variable EXEC_TICK_URL to https://operations.scaledai.org/api/cron/exec-tick and the secret
+# CRON_SECRET to the Railway service's value. The response body is never printed.
+
+on:
+  schedule:
+    - cron: "7 10-17 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Run one exec tick
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          EXEC_TICK_URL: ${{ vars.EXEC_TICK_URL }}
+        run: |
+          if [ -z "$CRON_SECRET" ] || [ -z "$EXEC_TICK_URL" ]; then
+            echo "::error::Set the repository secret CRON_SECRET and the repository variable EXEC_TICK_URL."
+            exit 1
+          fi
+          case "$EXEC_TICK_URL" in
+            https://*/api/cron/exec-tick) ;;
+            *) echo "::error::EXEC_TICK_URL must be https://<host>/api/cron/exec-tick"; exit 1 ;;
+          esac
+          for attempt in 1 2 3; do
+            code="$(curl -sS -o /dev/null -w '%{http_code}' -m 70 -X POST -H "Authorization: Bearer $CRON_SECRET" "$EXEC_TICK_URL" || echo 000)"
+            echo "Attempt $attempt: HTTP $code"
+            if [ "$code" = "200" ]; then exit 0; fi
+            sleep 20
+          done
+          echo "::error::exec-tick did not answer 200 after 3 attempts"
+          exit 1

@@ -232,7 +232,10 @@ describe("SettingsPageView (test 75)", () => {
     const html = page();
     const text = textOf(html);
     expect(text).toContain("When Route Surface IP (as reported) Device Session");
-    expect(text).toContain("The IP is the first X-Forwarded-For entry and can be spoofed.");
+    // P8 (C21, forced): clientIp now takes the right-most hop (the host proxy's), so the note says that instead.
+    // P8 fixer ui-7: the access-log IP feeds the new-network alert (M13, C20), and the note says so.
+    expect(text).toContain("The IP is the address our host's proxy recorded for the request. It's shown here and used only to alert you to sign-ins from a new network.");
+    expect(text).not.toContain("for your information only");
     expect(text).toContain("203.0.113.7");
     expect(text).toContain("a1b2c3d4");
   });
@@ -245,7 +248,8 @@ describe("SettingsPageView (test 75)", () => {
     expect(text).toContain("Send from DD Off");
     // The brief doesn't exist in this build: never its stored values (ui-3). P6 replaced the read-only Slack row with the
     // Slack section (ui/slack-settings.test.ts covers its states); the old Slack check-in values are still never shown.
-    expect(text).toContain("Morning brief Not set up yet");
+    // P8 (AM-P8-15, forced): the brief has its own section (BriefSettingsSection); the stale read-only row is gone.
+    expect(text).not.toContain("Morning brief Not set up yet");
     expect(text).not.toContain("arrives with the Slack app");
     expect(text).toContain("Slack Connect the Executive Assistant to Slack to ask questions in a direct message.");
     for (const stale of ["Morning brief On", "07:30", "Slack check-ins", "Slack watch mode", "Muted Slack channels", "Public channels"]) expect(text).not.toContain(stale);

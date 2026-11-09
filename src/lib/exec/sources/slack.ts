@@ -321,7 +321,9 @@ export async function authTest(token: string, opts?: SlackCallOptions): Promise<
   return { teamId, userId, botId: str(json.bot_id) };
 }
 
-export interface SlackUserSummary { id: string; deleted: boolean; isBot: boolean; teamId: string | null }
+/** P8 (§3.21.3, C8): isRestricted / isUltraRestricted are Slack's guest flags (a multi-channel and a single-channel guest);
+ *  false when Slack leaves them out. Optional in the type so P6's literals compile; lookupUserByEmail always fills both. */
+export interface SlackUserSummary { id: string; deleted: boolean; isBot: boolean; teamId: string | null; isRestricted?: boolean; isUltraRestricted?: boolean }
 
 /** users.lookupByEmail, form-encoded POST (CODE §2: JSON POST returns invalid_arguments). users_not_found → null. */
 export async function lookupUserByEmail(token: string, email: string, opts?: SlackCallOptions): Promise<SlackUserSummary | null> {
@@ -336,7 +338,10 @@ export async function lookupUserByEmail(token: string, email: string, opts?: Sla
   const user = isRecord(json.user) ? json.user : null;
   const id = user ? str(user.id) : null;
   if (user === null || id === null) throw badResponse(method);
-  return { id, deleted: user.deleted === true, isBot: user.is_bot === true, teamId: str(user.team_id) };
+  return {
+    id, deleted: user.deleted === true, isBot: user.is_bot === true, teamId: str(user.team_id),
+    isRestricted: user.is_restricted === true, isUltraRestricted: user.is_ultra_restricted === true
+  };
 }
 
 /** conversations.open users=<id> → the D… channel id. */
@@ -435,11 +440,74 @@ export async function listDmItems(target: DmTarget, q: { latest: string; cursor?
   return { items, nextCursor: meta ? str(meta.next_cursor) : null };
 }
 
+/** P8 (§3.21.3, M2): how many conversations.history pages the metadata lookup reads (50 messages each). */
+const METADATA_LOOKUP_PAGES = 2;
+
+/** conversations.history(channel = target.dmChannelId, oldest, inclusive, limit 50, include_all_metadata = true) with the target's
+ *  token; ≤ 2 pages; the first message whose metadata.event_type === eventType and whose event_payload has every match entry.
+ *  Refuses q.channel !== target.dmChannelId before any network call, like the senders (K11). Reads no text: ts and metadata only. */
+export async function findDmMessageByMetadata(target: DmTarget, q: { channel: string; oldest: string; eventType: string;
+  match: Record<string, string | number> }, opts?: SlackCallOptions): Promise<{ ts: string } | null> {
+  assertDmChannel(target, q?.channel);
+  const method: SlackMethod = "conversations.history";
+  if (typeof q.oldest !== "string" || !SLACK_RE.ts.test(q.oldest) || typeof q.eventType !== "string" || q.eventType.length === 0 ||
+    !isRecord(q.match) || Object.keys(q.match).length === 0) {
+    throw new SlackApiError(method, "invalid_arguments", { errorClass: "fatal" });
+  }
+  const wanted = Object.entries(q.match);
+  let cursor: string | null = null;
+  for (let page = 0; page < METADATA_LOOKUP_PAGES; page++) {
+    const form: Record<string, FormValue> = {
+      channel: q.channel, oldest: q.oldest, inclusive: "true", limit: "50", include_all_metadata: "true", cursor
+    };
+    const json = await callSlack(method, bearer(method, target.token), { form }, opts);
+    for (const m of messagesOf(json)) {
+      const ts = str(m.ts);
+      const meta = isRecord(m.metadata) ? m.metadata : null;
+      if (ts === null || meta === null || meta.event_type !== q.eventType || !isRecord(meta.event_payload)) continue;
+      const payload = meta.event_payload;
+      if (wanted.every(([k, v]) => payload[k] === v || (typeof v === "number" && payload[k] === String(v)))) return { ts };
+    }
+    cursor = isRecord(json.response_metadata) ? str(json.response_metadata.next_cursor) : null;
+    if (cursor === null || json.has_more !== true) break;
+  }
+  return null;
+}
+
 // --- the only senders (K11) ----------------------------------------------------------------------
 
+/** P8 (§3.21.3, M2): Slack message metadata on a post: an event type and a payload of ids and numbers only. */
+export interface SlackMessageMetadata { event_type: string; event_payload: Record<string, string | number> }
+
+const METADATA_EVENT = /^[a-z][a-z0-9_]{0,59}$/;
+const METADATA_KEY = /^[a-z][a-z0-9_]{0,39}$/;
+const METADATA_VALUE = /^[A-Za-z0-9_.:-]{1,100}$/;
+
+/** The metadata object as Slack takes it; a malformed one throws before any network call (ids and numbers only, §0.3 rule 5). */
+function metadataOf(m: SlackMessageMetadata): Json {
+  const refuse = () => new SlackApiError("chat.postMessage", "invalid_metadata", { errorClass: "fatal" });
+  if (!isRecord(m) || typeof m.event_type !== "string" || !METADATA_EVENT.test(m.event_type) || !isRecord(m.event_payload)) throw refuse();
+  const entries = Object.entries(m.event_payload);
+  if (entries.length === 0 || entries.length > 10) throw refuse();
+  const payload: Json = {};
+  for (const [k, v] of entries) {
+    const ok = METADATA_KEY.test(k) && ((typeof v === "number" && Number.isSafeInteger(v)) || (typeof v === "string" && METADATA_VALUE.test(v)));
+    if (!ok) throw refuse();
+    payload[k] = v;
+  }
+  return { event_type: m.event_type, event_payload: payload };
+}
+
+/** P8 (§3.13.7): true when err is a SlackApiError from chat.postMessage itself (any earlier call's failure proves no post). */
+export function failedOnPost(err: unknown): boolean {
+  return err instanceof SlackApiError && err.method === "chat.postMessage";
+}
+
 /** K11: the only senders. Each throws SlackChannelRefusedError BEFORE any network call when msg.channel !== target.dmChannelId
- *  (so also for a C…, G…, U… or another D… id). postInDm always sends unfurl_links: false, unfurl_media: false, link_names: false. */
-export async function postInDm(target: DmTarget, msg: { channel: string; threadTs?: string | null } & SlackMessageParts, opts?: SlackCallOptions): Promise<{ ts: string }> {
+ *  (so also for a C…, G…, U… or another D… id). postInDm always sends unfurl_links: false, unfurl_media: false, link_names: false.
+ *  P8 (§3.21.3): msg.metadata, when given, is sent as Slack's `metadata` object (ids and numbers only). */
+export async function postInDm(target: DmTarget, msg: { channel: string; threadTs?: string | null; metadata?: SlackMessageMetadata | null } & SlackMessageParts,
+  opts?: SlackCallOptions): Promise<{ ts: string }> {
   assertDmChannel(target, msg.channel);
   const method: SlackMethod = "chat.postMessage";
   const body: Json = {
@@ -451,6 +519,7 @@ export async function postInDm(target: DmTarget, msg: { channel: string; threadT
     link_names: false
   };
   if (typeof msg.threadTs === "string" && msg.threadTs.length > 0) body.thread_ts = msg.threadTs;
+  if (msg.metadata !== undefined && msg.metadata !== null) body.metadata = metadataOf(msg.metadata);
   const json = await callSlack(method, bearer(method, target.token), { json: body }, opts);
   const ts = str(json.ts);
   if (ts === null) throw badResponse(method);

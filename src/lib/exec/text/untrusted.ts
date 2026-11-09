@@ -86,12 +86,17 @@ function checkNonce(nonce: string): string {
   return nonce;
 }
 
-/** P7a (contract §3.12, AM-P7a-10): the block's tag. Default untrusted_dd_text; Slack triage renders untrusted_slack. */
-export type UntrustedBlockTag = "untrusted_dd_text" | "untrusted_slack";
+/** P7a (contract §3.12, AM-P7a-10): the block's tag. Default untrusted_dd_text; Slack triage renders untrusted_slack.
+ *  P8 (stage-0 seed, p8-bindings.md AM-P8-13): untrusted_brief (the brief's email/Slack-derived input, §3.10.1) and
+ *  untrusted_checkin (earlier check-in notes going back into the check-in model, §3.12.1). */
+export type UntrustedBlockTag = "untrusted_dd_text" | "untrusted_slack" | "untrusted_brief" | "untrusted_checkin";
 export interface UntrustedBlockOptions { tag?: UntrustedBlockTag }
 
+const BLOCK_TAGS: ReadonlySet<string> = new Set<UntrustedBlockTag>(["untrusted_dd_text", "untrusted_slack", "untrusted_brief", "untrusted_checkin"]);
+
 function tagOf(opts: UntrustedBlockOptions | undefined): UntrustedBlockTag {
-  return opts?.tag === "untrusted_slack" ? "untrusted_slack" : "untrusted_dd_text";
+  const tag = opts?.tag;
+  return typeof tag === "string" && BLOCK_TAGS.has(tag) ? tag : "untrusted_dd_text";
 }
 const openTag = (nonce: string, tag: UntrustedBlockTag = "untrusted_dd_text") => `<${tag} nonce="${nonce}">\n`;
 const closeTag = (tag: UntrustedBlockTag = "untrusted_dd_text") => `</${tag}>`;

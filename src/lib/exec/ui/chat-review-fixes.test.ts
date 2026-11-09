@@ -159,9 +159,11 @@ describe("ui-6: the five tabs fit a phone", () => {
     const strip = html.match(/<div data-exec-tab-strip="true"[^>]*class="([^"]*)"/)?.[1] ?? "";
     expect(strip.split(" ")).toEqual(expect.arrayContaining(["gap-0", "sm:gap-0.5", "overflow-x-auto"]));
     const pills = [...html.matchAll(/<a[^>]*class="([^"]*rounded-full px-[^"]*)"/g)].map((m) => m[1].split(" "));
-    expect(pills).toHaveLength(6);
+    // P8 (AM-P8-23, forced): seven tabs with Brief.
+    expect(pills).toHaveLength(7);
     for (const c of pills) {
-      expect(c).toEqual(expect.arrayContaining(["px-1.5", "sm:px-3.5", "text-[11.5px]", "sm:text-[12.5px]"]));
+      // P8 (forced): the seventh tab, Brief, needs px-1 and 11 px below sm to fit a 390 px phone (P8 screenshots, SH01).
+      expect(c).toEqual(expect.arrayContaining(["px-1", "sm:px-3.5", "text-[11px]", "sm:text-[12.5px]"]));
       expect(c).not.toContain("px-2.5");
     }
   });

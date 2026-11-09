@@ -39,6 +39,8 @@ vi.mock("@/lib/exec/email-store", async (importOriginal) => {
 // P4 (X5): the safety nets' drafts purge; its own suite is drafts-store.test.ts. P5b (§3.18): the chat
 // drafts' purge by id (Area F's) and the chat store's redaction and draft-id read (chat-store.test.ts).
 vi.mock("@/lib/exec/drafts-store", () => ({ purgeDraftsForThreads: vi.fn(), purgeDraftsByIds: vi.fn() }));
+// P8 X1 (contract §3.21.1): the brief scrub of the safety nets (its own SQL is brief-store.test.ts's and the SQL suite's).
+vi.mock("@/lib/exec/brief-store", () => ({ scrubBriefsForThreads: vi.fn() }));
 vi.mock("@/lib/exec/chat-store", () => ({ redactChatForThreads: vi.fn(), listChatDraftIdsForThreads: vi.fn() }));
 vi.mock("@/lib/exec/jobs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/exec/jobs")>();
@@ -72,6 +74,7 @@ import {
 import type { AttentionCandidate } from "@/lib/exec/attention-types";
 import { listChatDraftIdsForThreads, redactChatForThreads } from "@/lib/exec/chat-store";
 import { purgeDraftsByIds, purgeDraftsForThreads } from "@/lib/exec/drafts-store";
+import { scrubBriefsForThreads } from "@/lib/exec/brief-store";
 import {
   applyThreadProposal,
   deleteCommitmentsForThreads,
@@ -354,6 +357,7 @@ beforeEach(() => {
   vi.mocked(deleteEmailAttentionForThreads).mockResolvedValue(0);
   vi.mocked(deleteCommitmentsForThreads).mockResolvedValue(0);
   vi.mocked(purgeDraftsForThreads).mockResolvedValue(0);
+  vi.mocked(scrubBriefsForThreads).mockResolvedValue(0);
   vi.mocked(redactChatForThreads).mockResolvedValue(0);
   vi.mocked(listChatDraftIdsForThreads).mockResolvedValue([]);
   vi.mocked(purgeDraftsByIds).mockResolvedValue(0);
@@ -766,7 +770,7 @@ describe("the safety nets", () => {
     vi.mocked(listTombstonedThreadIds).mockResolvedValue([TH(7), TH(8)]);
     vi.mocked(purgeDraftsForThreads).mockResolvedValue(2);
     const out = await run();
-    for (const fn of [deleteEmailAttentionForThreads, deleteCommitmentsForThreads, purgeDraftsForThreads, deleteSignalsForThreads]) {
+    for (const fn of [deleteEmailAttentionForThreads, deleteCommitmentsForThreads, purgeDraftsForThreads, scrubBriefsForThreads, deleteSignalsForThreads]) {
       expect(vi.mocked(fn).mock.calls.map((c) => c[1])).toEqual([
         [TH(7), TH(8)],
         [TH(7), TH(8)]
@@ -785,6 +789,11 @@ describe("the safety nets", () => {
       const signals = vi.mocked(deleteSignalsForThreads).mock.invocationCallOrder[i];
       expect(commitments).toBeLessThan(drafts);
       expect(drafts).toBeLessThan(signals);
+      // P8 X1 (ST07): the brief scrub right after the drafts purge, before the signals delete, with the same signal.
+      const briefs = vi.mocked(scrubBriefsForThreads).mock.invocationCallOrder[i];
+      expect(drafts).toBeLessThan(briefs);
+      expect(briefs).toBeLessThan(vi.mocked(redactChatForThreads).mock.invocationCallOrder[i]);
+      expect(vi.mocked(scrubBriefsForThreads).mock.calls[i][2]).toEqual({ signal: expect.any(AbortSignal) });
       expect(vi.mocked(purgeDraftsForThreads).mock.calls[i][2]).toEqual({ signal: expect.any(AbortSignal) });
     }
     expect((out as { net1?: { drafts: number | null } }).net1?.drafts).toBe(2);
@@ -799,6 +808,24 @@ describe("the safety nets", () => {
     vi.mocked(purgeDraftsForThreads).mockRejectedValue(new Error("exec drafts store: exec_drafts_purge_restricted failed: lock timeout"));
     await expect(run()).rejects.toThrow(/exec_drafts_purge_restricted failed/);
     expect(syncAttention).toHaveBeenCalledTimes(1);
+  });
+
+  // P8 X1 (contract §3.21.1, §5.13 ST07): the brief scrub, one step inside the shared net right after P4's drafts purge.
+  it("P8 ST07: each net scrubs the briefs of the same threads as P4's drafts step; SafetyNetCounts.briefs (null = not installed); a failure fails the net", async () => {
+    let out = await run();
+    expect(scrubBriefsForThreads).not.toHaveBeenCalled();
+    expect(out.net1).toMatchObject({ briefs: null, drafts: null });
+    vi.mocked(listTombstonedThreadIds).mockResolvedValue([TH(7), TH(8)]);
+    vi.mocked(scrubBriefsForThreads).mockResolvedValue(3);
+    out = await run();
+    expect(vi.mocked(scrubBriefsForThreads).mock.calls.map((c) => c[1])).toEqual(vi.mocked(purgeDraftsForThreads).mock.calls.map((c) => c[1]));
+    expect(vi.mocked(scrubBriefsForThreads).mock.calls.map((c) => c[1])).toEqual([[TH(7), TH(8)], [TH(7), TH(8)]]);
+    expect(out.net1).toMatchObject({ briefs: 3 });
+    expect(out.net2).toMatchObject({ briefs: 3 });
+    vi.mocked(scrubBriefsForThreads).mockResolvedValue(null);
+    expect((await run()).net1).toMatchObject({ briefs: null });
+    vi.mocked(scrubBriefsForThreads).mockRejectedValue(new Error("exec brief store: exec_brief_scrub_threads failed (55P03)"));
+    await expect(run()).rejects.toThrow(/exec_brief_scrub_threads failed/);
   });
 
   it("the safety nets skip every delete, the drafts purge included, when nothing is tombstoned or rule-matched", async () => {

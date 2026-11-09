@@ -167,8 +167,10 @@ describe("P5a seed: constants (§3.1.4, §3.3.1, §3.9, §3.11.1, §3.12)", () =
     expect(Object.keys(RATE_BUCKETS).sort()).toEqual([
       "assess", "attention_action", "attention_feedback", "chat", "proposal", "settings_update", "slack_channels", "slack_connect",
       // P7b stage 0 (§0.2 step 5): the tag route's and the digest route's buckets.
-      "slack_digest_build", "slack_disconnect", "slack_links", "slack_reading"
-    ]);
+      "slack_digest_build", "slack_disconnect", "slack_links", "slack_reading",
+      // P8 stage 0 (§3.17.4, p8-bindings.md): Regenerate, its dry run and the brief settings.
+      "brief_dry_run", "brief_regenerate", "brief_settings"
+    ].sort());
     for (const def of Object.values(RATE_BUCKETS)) expect(typeof def.nthNewestAt).toBe("function");
   });
 

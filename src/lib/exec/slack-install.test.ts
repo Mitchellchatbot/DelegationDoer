@@ -12,6 +12,7 @@ import { enqueueJob } from "@/lib/exec/jobs";
 import {
   SlackStoreError,
   acceptAction,
+  __resetAcceptActionV2ForTests,
   acceptEvent,
   clearSlackError,
   consumeOAuthState,
@@ -387,8 +388,10 @@ describe("the acks (RPCs 1 and 2)", () => {
     expect(db.tables.exec_jobs).toHaveLength(1);
     expect(db.tables.exec_jobs[0]).toMatchObject({ kind: "exec.slack-action", lane: "interactive", max_attempts: 1, principal_id: "ep_1",
       payload: { installation_id: INST, action_id: "ea_fb_up", value: `f1.${MSG_ID(9)}`, channel_id: RI.dmChannelId, message_ts: "1793977301.000101" } });
-    useDb({ missing: ["exec_slack_accept_action"] });
+    // P8 (C43): acceptAction calls exec_slack_accept_action_v2 first and P6's RPC when v2 is missing: not installed = both missing.
+    useDb({ missing: ["exec_slack_accept_action", "exec_slack_accept_action_v2"] });
     expect(await acceptAction(ACTION(), { signal })).toEqual({ outcome: "not_installed" });
+    __resetAcceptActionV2ForTests();
     useDb({ fail: () => ({ code: "53300", message: "too many connections" }) });
     await expect(acceptAction(ACTION(), { signal })).rejects.toMatchObject({ op: "acceptAction", pgCode: "53300" });
   });

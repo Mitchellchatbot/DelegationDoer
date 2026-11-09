@@ -3,6 +3,7 @@ import "server-only";
 import { createHash } from "node:crypto";
 
 import { deleteEmailAttentionForThreads } from "@/lib/exec/attention";
+import { scrubBriefsForThreads } from "@/lib/exec/brief-store";
 import { listChatDraftIdsForThreads, redactChatForThreads } from "@/lib/exec/chat-store";
 import { purgeDraftsByIds, purgeDraftsForThreads } from "@/lib/exec/drafts-store";
 import {
@@ -517,7 +518,12 @@ async function casWrite(
  * landed or survived around the CAS. Step 5 (P4 contract §2.7, X4) empties the
  * thread's assistant drafts through exec_drafts_purge_restricted: a null
  * answer means the P4 migration isn't applied and is fine; any other failure
- * throws (retryable), so the procedure never finishes without it. Step 6 is
+ * throws (retryable), so the procedure never finishes without it. Right after
+ * it (P8 contract §3.21.1 X1, M9), the morning briefs citing the thread are
+ * scrubbed (exec_brief_scrub_threads: each citing line becomes "[Removed:
+ * restricted sender]", its pending line and top-3 entries go, the headline is
+ * nulled); null = the P8 migration isn't applied and is fine, any other
+ * failure throws (retryable) like the drafts step. Step 6 is
  * Area E's deleteEmailAttentionForThreads (attention.ts, contract §3.13),
  * which parses email:thread:/email:commitment: fingerprints and hard-deletes
  * the thread's email attention rows in every status. A step that fails throws
@@ -538,6 +544,8 @@ async function deleteTombstoneLeftovers(principal: ExecPrincipal, threadId: stri
   await deleteCommitmentsForThreads(principal, [threadId], { signal });
   await deleteSignalsForThreads(principal, [threadId], { signal });
   await purgeDraftsForThreads(principal, [threadId], { signal });
+  // P8 X1 (M9): the briefs citing the thread; null = not installed (fine), any other failure throws (the retry runs it again).
+  await scrubBriefsForThreads(principal, [threadId], { signal });
   await deleteEmailAttentionForThreads(principal, [threadId], { signal });
   await redactChatForThreads(principal, [threadId], { signal });
   const chatDraftIds = await listChatDraftIdsForThreads(principal, [threadId], { signal });
@@ -550,7 +558,8 @@ async function deleteTombstoneLeftovers(principal: ExecPrincipal, threadId: stri
  * again (a write plan's insert may have raced the CAS), (4) delete its signal
  * rows, (5) purge its assistant drafts (P4), (6) delete its email attention
  * rows (Area E), then (P5b) redact its chat answers and purge their chat
- * drafts. Steps 3-6 run only after the CAS landed.
+ * drafts. Steps 3-6 run only after the CAS landed. P8 (X1): step 5 is followed
+ * by the brief scrub (scrubBriefsForThreads).
  */
 async function tombstoneProcedure(
   principal: ExecPrincipal,

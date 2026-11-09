@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
+import { OWNER_EMAIL } from "@/lib/access";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { openView, openDmAsUser, postMessageAsUser } from "@/lib/slack";
 import { resolveSlackId } from "@/lib/slack-resolve";
@@ -92,15 +93,55 @@ export async function POST(req: NextRequest) {
       }
     } else if (action.action_id === "daily_brief_send" && payload.response_url) {
       const { b, m } = JSON.parse(action.value ?? "{}") as { b?: string; m?: string };
-      if (b && m) await sendBriefingMessage(b, m, payload.response_url);
+      if (b && m && !(await legacyBriefButtonAnswered(b, payload.response_url))) await sendBriefingMessage(b, m, payload.response_url);
     } else if (action.action_id === "daily_brief_rewrite" && payload.response_url) {
       const { b, m } = JSON.parse(action.value ?? "{}") as { b?: string; m?: string };
-      if (b && m) await rewriteBriefingMessage(b, m, payload.response_url);
+      if (b && m && !(await legacyBriefButtonAnswered(b, payload.response_url))) await rewriteBriefingMessage(b, m, payload.response_url);
     }
   } catch (err) {
     console.error(`[slack/interactions] ${action.action_id} failed:`, err);
   }
   return NextResponse.json({});
+}
+
+// P8 (M1, C37): the Executive AI brief replaces this brief's check-in buttons once it owns a day. A Send / Rewrite click
+// on a legacy brief of a day the assistant delivered answers "expired" (ephemeral) before any DB or model call. Copied
+// from BRIEF_COPY.legacyExpired: this route imports nothing static from exec code (B-P8-4), only the gate, lazily, on the
+// Node.js runtime.
+const LEGACY_EXPIRED_TEXT = "Expired: check-ins now come from your Executive Assistant's brief.";
+
+/**
+ * True when the click has been answered here and must stop: the legacy brief's day belongs to the Executive AI brief (the
+ * ephemeral "expired" reply went out), or the gate couldn't be read (fail closed: nothing sent, nothing changed; he clicks
+ * again). False: the legacy button works as before.
+ */
+async function legacyBriefButtonAnswered(briefId: string, responseUrl: string): Promise<boolean> {
+  if (process.env.EXEC_ENABLED === "true" && process.env.NEXT_RUNTIME === "nodejs") {
+    try {
+      const { legacyCheckinVerdict } = await import("@/lib/exec/brief-legacy-gate");
+      if ((await legacyCheckinVerdict(OWNER_EMAIL, briefId, new Date())) === "expired") {
+        await postLegacyExpired(responseUrl);
+        return true;
+      }
+    } catch {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** The ephemeral "expired" reply through the click's response_url. Never throws; a failure is logged without the URL. */
+async function postLegacyExpired(responseUrl: string): Promise<void> {
+  try {
+    const res = await fetch(responseUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ response_type: "ephemeral", replace_original: false, text: LEGACY_EXPIRED_TEXT })
+    });
+    if (!res.ok) console.error(`[slack/interactions] expired reply failed: HTTP ${res.status}`);
+  } catch (err) {
+    console.error(`[slack/interactions] expired reply failed (${err instanceof Error ? err.name : "error"})`);
+  }
 }
 
 // Daily-brief "Send" button: send one drafted team check-in AS Mitchell, mark

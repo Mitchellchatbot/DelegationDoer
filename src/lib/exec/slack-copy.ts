@@ -88,7 +88,7 @@ export const SLACK_COPY = Object.freeze({
   homeEmailCountsFailed: "Couldn't load email counts.",
   restrictedCount: "{n} restricted-sender emails need you.",       // followed by the openDd link (rule 9)
   homeEmailOff: "Email isn't on.",
-  homeBrief: "The assistant's morning brief isn't set up yet.",
+  homeBrief: "Morning brief: couldn't load its status here. It's in Executive AI in DD.",   // P8 (AM-P8-15): the brief line couldn't be read
   homeUpdated: "Updated {time}. Private to you.",
   bandLabels: Object.freeze({ critical: "Critical", high: "High", normal: "Normal" }),
   aiAssessed: "AI-assessed",                                         // the web's BasisLabel for a model's reading (DDTEXT_AI_KINDS)

@@ -49,3 +49,14 @@ export function feedFocusSelectors(itemId: string, outOfView: boolean): string[]
     ? [`[data-feed-stub="${id}"] [data-undo]`, `[data-feed-stub="${id}"]`]
     : [`[data-feed-row="${id}"] button[data-action]`, `[data-feed-row="${id}"] summary[data-action]`];
 }
+
+/**
+ * P8 fixer ui-11 (the review ui-7 pattern): an inline confirm that replaces the control which opened it. "open" → focus its
+ * question (tabIndex -1) so it is announced; "close" → focus the control that opened it (or, when that control is gone, the
+ * status line, if focus was lost with it); null → nothing moved. A confirm rendered open from the start isn't an opening.
+ */
+export function confirmFocusStep(wasOpen: boolean, isOpen: boolean): "open" | "close" | null {
+  if (isOpen && !wasOpen) return "open";
+  if (!isOpen && wasOpen) return "close";
+  return null;
+}

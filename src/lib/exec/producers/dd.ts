@@ -25,6 +25,7 @@ import {
 } from "@/lib/exec/analysis/recurring";
 import { ATTENTION_LIMITS } from "@/lib/exec/attention";
 import type { AttentionCandidate, AttentionCategory, AttentionFact, FactBasis } from "@/lib/exec/attention-types";
+import { BRIEF_COPY, fillBrief } from "@/lib/exec/brief-copy";
 import { formatInZone, pluralize } from "@/lib/exec/format";
 import { scorePriority, type AttentionKind, type PriorityFactors } from "@/lib/exec/priority";
 import { ddClientRef, ddPageRef, ddTaskRef } from "@/lib/exec/refs";
@@ -774,11 +775,25 @@ function pastDueProofs(ctx: Ctx, openTasks: readonly DdTask[]): DdTask[] {
   return openTasks.filter((t) => t.status === "pending_approval" && isOverdue(t, ctx.now)).sort(byTime((t) => t.dueDate));
 }
 
+/**
+ * P8 (M14, C46, §3.21.2): the check-ins item while the assistant's brief owns today (bucket.source "exec"): the title,
+ * what and next come from BRIEF_COPY.approvalsCheckins (its check-ins are sent from the assistant's Slack DM); the
+ * legacy copy above stays for the legacy brief. The fingerprint is unchanged (dd:approval:checkins), so a switch of
+ * source changes the item's state (its count and source), never its identity.
+ */
+const EXEC_CHECKINS: ApprovalCopy = {
+  ...APPROVALS.checkins,
+  title: (n) => (n === 1 ? BRIEF_COPY.approvalsCheckins.titleOne : fillBrief(BRIEF_COPY.approvalsCheckins.title, { n })),
+  what: (n) => (n === 1 ? BRIEF_COPY.approvalsCheckins.whatOne : fillBrief(BRIEF_COPY.approvalsCheckins.what, { n })),
+  next: BRIEF_COPY.approvalsCheckins.next
+};
+
 function approvalCandidates(ctx: Ctx, buckets: readonly ApprovalBucket[], openTasks: readonly DdTask[]): AttentionCandidate[] {
   return buckets
     .filter((b) => b.count > 0 && Object.hasOwn(APPROVALS, b.mechanism))
     .map((b) => {
-      const copy = APPROVALS[b.mechanism];
+      const execCheckins = b.mechanism === "checkins" && b.source === "exec";
+      const copy = execCheckins ? EXEC_CHECKINS : APPROVALS[b.mechanism];
       const waited = daysSince(ctx, b.oldestAt);
       const oldest = waited === null ? "" : ` The oldest has waited ${span(waited)} (since ${day(ctx, b.oldestAt)}).`;
       const facts = [fact(`${pluralize(b.count, copy.one, copy.many)} pending.`, "record")];
@@ -813,7 +828,8 @@ function approvalCandidates(ctx: Ctx, buckets: readonly ApprovalBucket[], openTa
           ...(pastDue.length > 0 ? { overdueDays: late, taskPriority: topPriority(pastDue), clientFacing: pastDue.some(hasClient) } : {})
         },
         // A proof passing its task's due date while it waits is a change worth seeing again.
-        state: { count: b.count, oldestDays: waited, ids: pastDue.map((t) => t.id), status: "pending" },
+        // P8 (M14): the exec source is part of the state, so switching sources is a change worth seeing (same fingerprint).
+        state: { count: b.count, oldestDays: waited, ids: pastDue.map((t) => t.id), status: execCheckins ? "pending_exec" : "pending" },
         occurredAt: b.oldestAt
       });
     });

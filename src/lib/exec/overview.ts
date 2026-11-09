@@ -6,6 +6,17 @@ import { dailyCounts, isAutoArchived, isIncident, isOverdue, upcomingDeadlines, 
 import { lastAttentionRefresh } from "@/lib/exec/attention";
 import { listScreenedAttention } from "@/lib/exec/attention-read";
 import type { AttentionFeedItem, EmailScreenState } from "@/lib/exec/attention-types";
+import type {
+  BriefChannel,
+  BriefMode,
+  BriefModeReason,
+  BriefOwner,
+  BriefOwnerReason,
+  BriefStatus,
+  CheckinStatus,
+  TokenHealthState
+} from "@/lib/exec/brief-types";
+import { getBriefCardView, getBriefSystemView, type BriefCardView } from "@/lib/exec/brief-view";
 import { ddtextLastRunAt } from "@/lib/exec/ddtext-store";
 import {
   listBucketRows,
@@ -37,11 +48,13 @@ import {
   type ScreeningPolicy
 } from "@/lib/exec/email-view";
 import { EMAIL_ATTENTION_JOB_KIND, EMAIL_RECONCILE_JOB_KIND, EMAIL_TRIAGE_JOB_KIND } from "@/lib/exec/jobs";
+import { refusalsSince, spentTodayUsd } from "@/lib/exec/llm/usage";
 import { DD_ATTENTION_KINDS } from "@/lib/exec/producers/dd";
 import { slackSystemSummary } from "@/lib/exec/slack-install";
 import type { SlackSystemSummary } from "@/lib/exec/slack-types";
 import { listAllReplyArtifacts, loadScreeningPolicy } from "@/lib/exec/sources/mail";
-import { getSyncState, parseAccountsState, parseEaTokenState, parseSendTokenState, parseSocketState } from "@/lib/exec/sync-state";
+import { spendTodayByFeature } from "@/lib/exec/settings";
+import { getSyncState, parseAccountsState, parseEaTokenState, parseSendTokenState, parseSocketState, parseTokenHealthState } from "@/lib/exec/sync-state";
 import {
   getPendingApprovals,
   listActivitySince,
@@ -275,6 +288,26 @@ export interface OverviewSystem {
    * ("Slack reading"), filled by slackSystemSummary; absent or null = no row.
    */
   slack?: SlackSystemSummary | null;
+  /**
+   * P8 (§3.17.6, M12; Area E): today's brief. Like drafts and slack above: absent = no row (the brief is off, its tables
+   * aren't installed, or the settings couldn't be read), null = the read failed (the card says "couldn't load").
+   */
+  brief?: OverviewBriefSystem | null;
+  /** P8 (C19): his DD Slack token's last auth.test verdict (exec_sync_state brief/token-health); "unchecked" = none stored.
+   *  Present while the brief and its check-ins are on; null = the read failed. */
+  userToken?: { state: TokenHealthState["state"] | "unchecked"; checkedAt: string | null } | null;
+  /** P8 (C40): AI spend today against the cap, by feature, and model refusals in the last 24 hours. Present while the brief
+   *  is on (the P8 System rows come with it); null = a read failed. */
+  ai?: { spentTodayUsd: number; capUsd: number; byFeature: Record<string, number>; refusals24h: number } | null;
+}
+
+/** P8 (§3.17.6, M12): the System card's "Morning brief" row (ids, enums, times and counts only). */
+export interface OverviewBriefSystem {
+  localDate: string; owner: BriefOwner | "unknown"; ownerReason: BriefOwnerReason | null;
+  status: BriefStatus | "none"; statusReason: string | null; channel: BriefChannel;
+  mode: BriefMode | null; modeReason: BriefModeReason | null; builtAt: string | null; deliveredAt: string | null;
+  fallbackSentAt: string | null; fallbackErrorCode: string | null; legacyDeliveredToday: boolean | null;
+  checkins: Record<CheckinStatus, number>;
 }
 
 /** A token's last self-check as the System card shows it. reason "not_checked": no verdict stored yet. */
@@ -321,6 +354,12 @@ export interface OverviewSections {
    * 8 s: the tile says "Couldn't load"). Optional in the type: getOverview always fills it; a fixture may leave it out.
    */
   slack?: OverviewSection<{ state: SlackIntelState; counts: SlackCatchUpCounts | null }>;
+  /**
+   * P8 (§3.17.2, C41): the brief card in TodayGlance's slot. Read only when the page asks (getOverview's opts.brief: the
+   * brief's own gather reads the Overview and never needs it); data null = no current brief (TodayGlance renders),
+   * { ok: false } = the read failed (TodayGlance renders too, UI20).
+   */
+  brief?: OverviewSection<BriefCardView | null>;
 }
 
 export interface ExecOverview {
@@ -369,6 +408,9 @@ const DDTEXT_JOB = "exec.ddtext-triage";
 export const TRACKED_JOB_KINDS: readonly string[] = [DD_ATTENTION_JOB, "exec.purge", DDTEXT_JOB];
 // Listed too while email is on (P3): its triage, reconcile and attention jobs.
 export const EMAIL_TRACKED_JOB_KINDS: readonly string[] = [EMAIL_TRIAGE_JOB_KIND, EMAIL_RECONCILE_JOB_KIND, EMAIL_ATTENTION_JOB_KIND];
+// P8 (§3.17.6): listed too while the brief is on (= BRIEF_JOB_KINDS.build; a literal here, as the kinds above are, so the
+// Overview needs no import of the brief's job modules).
+export const BRIEF_BUILD_JOB = "exec.brief";
 
 // The principal id goes into a PostgREST or() filter, where a comma or a
 // parenthesis would change the filter; ids are "ep_" plus hex.
@@ -710,7 +752,7 @@ function ddtextFreshness(principal: ExecPrincipal, read: OverviewRead, gateRead:
  * for a failed read: that section comes back { ok: false }. A missing
  * principal or an invalid `now` is a TypeError, before anything is read.
  */
-export async function getOverview(principal: ExecPrincipal, now: Date = new Date()): Promise<ExecOverview> {
+export async function getOverview(principal: ExecPrincipal, now: Date = new Date(), opts: { brief?: boolean } = {}): Promise<ExecOverview> {
   if (!principal || typeof principal.id !== "string" || principal.id.length === 0) {
     throw new TypeError("exec overview: an ExecPrincipal is required");
   }
@@ -871,17 +913,28 @@ export async function getOverview(principal: ExecPrincipal, now: Date = new Date
   const draftsSystem = draftsSystemReads(principal, now, read, emailGate, jobs);
   const slackTile = slackTileRead(principal, now, signal, emailGate);
   const slackSystem = slackSystemRead(principal, read, emailGate);
+  // P8 (§3.17.6, M12): the brief, check-in token and AI rows, read only while the brief is on.
+  const briefSystem = briefSystemReads(principal, now, read, emailGate);
+  // P8 (§3.17.2, C41): the brief card, only when the page asks for it. getBriefCardView takes no signal: it races the deadline.
+  const briefCard = opts?.brief === true ? build("brief card", () => untilAborted(getBriefCardView(principal, now), signal)) : null;
 
   const system = build("system", async (): Promise<OverviewSystem> => {
     const rows = need(await jobs);
     const gate = await emailGate;
-    const health = systemHealth(rows, now, gate.ok && gate.value.kind === "on" ? [...TRACKED_JOB_KINDS, ...EMAIL_TRACKED_JOB_KINDS] : TRACKED_JOB_KINDS);
+    const tracked = [
+      ...TRACKED_JOB_KINDS,
+      ...(gate.ok && gate.value.kind === "on" ? EMAIL_TRACKED_JOB_KINDS : []),
+      // P8 (§3.17.6): the brief build is tracked like P3's email kinds, while the brief is on.
+      ...(gate.ok && gate.value.settings.briefEnabled === true ? [BRIEF_BUILD_JOB] : [])
+    ];
+    const health = systemHealth(rows, now, tracked);
     const drafts = await draftsSystem;
     const slack = await slackSystem;
-    return { ...health, ...(drafts === undefined ? {} : { drafts }), ...(slack === undefined ? {} : { slack }) };
+    const brief = await briefSystem;
+    return { ...health, ...(drafts === undefined ? {} : { drafts }), ...(slack === undefined ? {} : { slack }), ...brief };
   });
 
-  const [tilesResult, attentionResult, approvalsResult, deadlinesResult, projectsResult, systemResult, emailResult, slackResult] = await Promise.all([
+  const [tilesResult, attentionResult, approvalsResult, deadlinesResult, projectsResult, systemResult, emailResult, slackResult, briefResult] = await Promise.all([
     tiles,
     attention,
     approvalsSection,
@@ -889,7 +942,8 @@ export async function getOverview(principal: ExecPrincipal, now: Date = new Date
     projectsSection,
     system,
     email.section,
-    slackTile
+    slackTile,
+    briefCard
   ]);
   return {
     generatedAt: nowIso,
@@ -902,7 +956,8 @@ export async function getOverview(principal: ExecPrincipal, now: Date = new Date
       projects: projectsResult,
       system: systemResult,
       email: emailResult,
-      slack: slackResult
+      slack: slackResult,
+      ...(briefResult === null ? {} : { brief: briefResult })
     }
   };
 }
@@ -1023,6 +1078,55 @@ async function slackSystemRead(
   const summary = await read("slack status", () => slackSystemSummary(principal));
   if (!summary.ok) return null;
   return summary.value ?? undefined;
+}
+
+// ---------------------------------------------------------------------------
+// The morning brief on the System card (P8, contract §3.17.6, M12, C19, C40)
+// ---------------------------------------------------------------------------
+
+const REFUSAL_WINDOW_MS = 24 * HOUR_MS;
+
+type BriefSystemRows = Pick<OverviewSystem, "brief" | "userToken" | "ai">;
+
+/**
+ * The System card's P8 rows, read only while the brief is on (nothing at all otherwise: the card is P7b's). Each fails
+ * on its own (null = "couldn't load"): the brief row (getBriefSystemView; its null, the tables not installed, is no row),
+ * the check-in token's last auth.test verdict while check-ins are on (none stored = "unchecked"), and today's AI spend
+ * against the cap (spentTodayUsd, the cap's own day and zone, C40), by feature (P5a's spendTodayByFeature) and the model
+ * refusals of the last 24 hours. Enums, times, counts and dollars only.
+ */
+async function briefSystemReads(principal: ExecPrincipal, now: Date, read: OverviewRead, gateRead: Promise<Settled<EmailGate>>): Promise<BriefSystemRows> {
+  const gate = await gateRead;
+  if (!gate.ok || gate.value.settings.briefEnabled !== true) return {};
+  const settings = gate.value.settings;
+  const checkins = settings.checkinsEnabled === true;
+  const [brief, token, spent, byFeature, refusals] = await Promise.all([
+    read("brief status", () => getBriefSystemView(principal, settings, now)),
+    checkins ? read("check-in token", (o) => getSyncState(principal, "brief", "token-health", parseTokenHealthState, o)) : Promise.resolve(SKIPPED),
+    read("ai spend", () => spentTodayUsd(principal.id, principal.timezone, now)),
+    read("ai spend by feature", (o) => spendTodayByFeature(principal, now, { capUsd: settings.dailyCostCapUsd, signal: o.signal })),
+    read("model refusals", (o) => refusalsSince(principal.id, new Date(now.getTime() - REFUSAL_WINDOW_MS).toISOString(), o))
+  ]);
+  const out: BriefSystemRows = {};
+  if (!brief.ok) out.brief = null;
+  else if (brief.value !== null) out.brief = brief.value;
+  if (checkins) {
+    out.userToken = !token.ok
+      ? null
+      : token.value === null
+        ? { state: "unchecked", checkedAt: null }
+        : { state: token.value.value.state, checkedAt: token.value.value.checkedAt ?? null };
+  }
+  out.ai =
+    spent.ok && byFeature.ok && refusals.ok
+      ? {
+          spentTodayUsd: spent.value,
+          capUsd: settings.dailyCostCapUsd,
+          byFeature: Object.fromEntries(byFeature.value.byFeature.map((f) => [f.feature, f.usd])),
+          refusals24h: refusals.value
+        }
+      : null;
+  return out;
 }
 
 // ---------------------------------------------------------------------------

@@ -1,0 +1,94 @@
+{
+  "_note": "Model output fixture (P8 contract §5.7; lead, stage 0). refs and top3 entries written \"@fp:<fingerprint>\" are replaced by the alias assembleSections assigned to that fingerprint (brief-assert.ts resolveFixtureAliases); any other string is used as it is.",
+  "output": {
+    "headline": "A busy Friday: one critical incident, a client threatening to cancel, and two approvals waiting.",
+    "sections": [
+      {
+        "key": "emails",
+        "items": [
+          {
+            "text": "Initech wants the renewal terms today.",
+            "refs": [
+              "@fp:email:thread:th_imp1:msg_i1"
+            ],
+            "kind": "fact"
+          },
+          {
+            "text": "Reply to Initech with the renewal terms before noon. SENTINEL_BRIEF_LINE_7Q",
+            "refs": [
+              "@fp:email:thread:th_imp1:msg_i1"
+            ],
+            "kind": "recommendation"
+          }
+        ]
+      },
+      {
+        "key": "client_requests",
+        "items": [
+          {
+            "text": "A client says they will cancel unless the site is fixed.",
+            "refs": [
+              "@fp:email:thread:th_escal2:msg_e2"
+            ],
+            "kind": "fact"
+          }
+        ]
+      },
+      {
+        "key": "blockers",
+        "items": [
+          {
+            "text": "Acme's checkout form is down and Delta design is blocked on brand assets.",
+            "refs": [
+              "@fp:dd:incident:task:t_incident7",
+              "@fp:dd:ddtext:blocker:comment:cm_1"
+            ],
+            "kind": "fact"
+          }
+        ]
+      },
+      {
+        "key": "slack",
+        "items": [
+          {
+            "text": "Eve needs the pricing sheet in #sales.",
+            "refs": [
+              "@fp:slack:msg:C0SALES01:1794148000.000100"
+            ],
+            "kind": "fact"
+          }
+        ]
+      },
+      {
+        "key": "decisions",
+        "items": [
+          {
+            "text": "Dana is waiting for your vendor decision.",
+            "refs": [
+              "@fp:slack:msg:C0OPS0001:1794149000.000200"
+            ],
+            "kind": "recommendation"
+          }
+        ]
+      },
+      {
+        "key": "work",
+        "items": [
+          {
+            "text": "Alice has 4 overdue tasks; Bob has 3 idle.",
+            "refs": [
+              "@fp:dd:overdue:assignee:u_alice",
+              "@fp:dd:stalled:assignee:u_bob"
+            ],
+            "kind": "fact"
+          }
+        ]
+      }
+    ],
+    "top3": [
+      "@fp:dd:incident:task:t_incident7",
+      "@fp:email:thread:th_escal2:msg_e2",
+      "@fp:email:thread:th_imp1:msg_i1"
+    ]
+  }
+}

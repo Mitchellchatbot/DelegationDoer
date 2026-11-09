@@ -1,5 +1,6 @@
 import "server-only";
 
+import type { TokenHealthState as BriefTokenHealthState } from "@/lib/exec/brief-types";
 import type { EaReadinessReason, SendTokenReason } from "@/lib/exec/drafts-types";
 import { NonRetryableError, type ExecPrincipal } from "@/lib/exec/types";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
@@ -36,7 +37,15 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
  * contract §2.5), slack (P7a: the reading jobs' leases, contract §3.20.1).
  */
 /** P7b (stage-0 seed): "slack-intel" keys purge-log { afterId }, optouts { fp, count }, correlate { lastFullAt } (§3.2). */
-export type SyncSource = "mail" | "email" | "clone-ea" | "ddtext" | "slack" | "slack-intel";
+/** P8 (stage-0 seed, §3.21.1; Area A's keys): "brief" keys token-health (TokenHealthState) and slack-scrub (SlackScrubCursor). */
+export type SyncSource = "mail" | "email" | "clone-ea" | "ddtext" | "slack" | "slack-intel" | "brief";
+
+/** P8 (§2.3, C19): Mitchell's DD Slack token's last auth.test verdict, as exec_sync_state brief/token-health stores it. */
+export type { TokenHealthState } from "@/lib/exec/brief-types";
+/** P8 (§2.3, C16; p8-bindings.md AM-P8-9): the brief's Slack scrub cursor (exec_sync_state brief/slack-scrub). The stored
+ *  afterId never passes a purge-log row younger than BRIEF_LIMITS.purgeLogSettleMs nor one held back for a build in
+ *  flight; the rows above it are re-read (and re-scrubbed, idempotently) until it may pass them. */
+export interface SlackScrubCursor { afterId: number }
 
 export interface SyncStateOptions {
   signal?: AbortSignal;
@@ -76,7 +85,7 @@ function parseRev(text: string | null): number | null {
 }
 
 function checkRow(source: unknown, key: unknown): asserts source is SyncSource {
-  if (source !== "mail" && source !== "email" && source !== "clone-ea" && source !== "ddtext" && source !== "slack" && source !== "slack-intel") {
+  if (source !== "mail" && source !== "email" && source !== "clone-ea" && source !== "ddtext" && source !== "slack" && source !== "slack-intel" && source !== "brief") {
     throw new NonRetryableError(`exec_sync_state: unknown source ${JSON.stringify(source)}`);
   }
   if (typeof key !== "string" || key.length === 0 || key.length > MAX_KEY_CHARS) {
@@ -764,4 +773,28 @@ export function parseSendTokenState(raw: unknown): SendTokenState | null {
     expiresAt: isoOrNull(o.expiresAt),
     tokenFp: tokenFpOrNull(o.tokenFp)
   }));
+}
+
+// ---------------------------------------------------------------------------
+// P8 (§3.21.1, §2.3; Area A): the brief source's two keys
+// ---------------------------------------------------------------------------
+
+const TOKEN_HEALTH_STATES: ReadonlySet<string> = new Set(["ok", "mismatch", "missing", "revoked", "error", "no_installation"]);
+
+/**
+ * brief/token-health (C19): a stored TokenHealthState ({ state, checkedAt }), or null when it doesn't parse. Pure. The
+ * stored object may carry more (slackUserMatches, teamMatches, §2.3); only the two fields the System card reads are
+ * returned. Never a token or a Slack user id.
+ */
+export function parseTokenHealthState(raw: unknown): BriefTokenHealthState | null {
+  return parsed(raw, (o) => {
+    const state = typeof o.state === "string" && TOKEN_HEALTH_STATES.has(o.state) ? (o.state as BriefTokenHealthState["state"]) : reject();
+    return { state, checkedAt: iso(o.checkedAt) };
+  });
+}
+
+/** brief/slack-scrub (C16; AM-P8-9): a stored SlackScrubCursor ({ afterId }, a non-negative purge-log id), or null when it
+ *  doesn't parse. Pure. */
+export function parseSlackScrubCursor(raw: unknown): SlackScrubCursor | null {
+  return parsed(raw, (o) => ({ afterId: whole(o.afterId, 0) }));
 }

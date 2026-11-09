@@ -1,0 +1,86 @@
+{
+  "_note": "Model output fixture (P8 contract §5.7; lead, stage 0). refs and top3 entries written \"@fp:<fingerprint>\" are replaced by the alias assembleSections assigned to that fingerprint (brief-assert.ts resolveFixtureAliases); any other string is used as it is.",
+  "output": {
+    "headline": "A headline far past one hundred and sixty characters that must be clipped with an ellipsis A headline far past one hundred and sixty characters that must be clipped with an ellipsis A headline far past one hundred and sixty characters that must be clipped with an ellipsis A headline far past one hun",
+    "sections": [
+      {
+        "key": "work",
+        "items": [
+          {
+            "text": "A line far past two hundred and eighty characters that must be clipped with an ellipsis at the limit A line far past two hundred and eighty characters that must be clipped with an ellipsis at the limit A line far past two hundred and eighty characters that must be clipped with an ellipsis at the limit A line far past two hundred and eighty characters that must be clipped with an ellipsis at the li",
+            "refs": [
+              "@fp:dd:overdue:assignee:u_alice"
+            ],
+            "kind": "fact"
+          },
+          {
+            "text": "Nine more lines follow, so the section keeps only the first eight (model order).",
+            "refs": [
+              "@fp:dd:stalled:assignee:u_bob"
+            ],
+            "kind": "fact"
+          },
+          {
+            "text": "Extra work line 1.",
+            "refs": [
+              "@fp:dd:waiting:client:cl_globex"
+            ],
+            "kind": "fact"
+          },
+          {
+            "text": "Extra work line 2.",
+            "refs": [
+              "@fp:dd:waiting:client:cl_globex"
+            ],
+            "kind": "fact"
+          },
+          {
+            "text": "Extra work line 3.",
+            "refs": [
+              "@fp:dd:waiting:client:cl_globex"
+            ],
+            "kind": "fact"
+          },
+          {
+            "text": "Extra work line 4.",
+            "refs": [
+              "@fp:dd:waiting:client:cl_globex"
+            ],
+            "kind": "fact"
+          },
+          {
+            "text": "Extra work line 5.",
+            "refs": [
+              "@fp:dd:waiting:client:cl_globex"
+            ],
+            "kind": "fact"
+          },
+          {
+            "text": "Extra work line 6.",
+            "refs": [
+              "@fp:dd:waiting:client:cl_globex"
+            ],
+            "kind": "fact"
+          },
+          {
+            "text": "Extra work line 7.",
+            "refs": [
+              "@fp:dd:waiting:client:cl_globex"
+            ],
+            "kind": "fact"
+          },
+          {
+            "text": "Extra work line 8.",
+            "refs": [
+              "@fp:dd:waiting:client:cl_globex"
+            ],
+            "kind": "fact"
+          }
+        ]
+      }
+    ],
+    "top3": [
+      "@fp:dd:overdue:assignee:u_alice"
+    ]
+  }
+}

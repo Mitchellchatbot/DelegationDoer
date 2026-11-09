@@ -1,5 +1,6 @@
 import "server-only";
 
+import { isIP } from "node:net";
 import { headers } from "next/headers";
 import { notFound as renderNotFound } from "next/navigation";
 import { NextResponse } from "next/server";
@@ -208,7 +209,9 @@ export async function requireExecSession(req: Request, route: string, opts: Exec
     const session = await readAccessToken(supabase, route);
     if (!session.ok) return session.outage ? authUnavailable() : notFound();
     if (!signInIsStrong(session.token, authUserId)) {
-      console.warn(`[exec-access] ${route}: step-up refused a session on the owner's account (sign-in: ${signInMethods(session.token, authUserId)})`);
+      // The amr methods only ("otp"): computed first, so the log line never names the session's token.
+      const methods = signInMethods(session.token, authUserId);
+      console.warn(`[exec-access] ${route}: step-up refused a session on the owner's account (sign-in: ${methods})`);
       return notFound();
     }
     checkedToken = session.token;
@@ -228,7 +231,7 @@ export async function requireExecSession(req: Request, route: string, opts: Exec
   // caller is already verified, and losing a log row must not lock the owner out.
   const sessionId =
     checkedToken !== null ? sessionIdFromAccessToken(checkedToken, authUserId) : await readSessionId(supabase, authUserId, route);
-  await logAccess({
+  const entry: AccessLogEntry = {
     principalId: principal.id,
     authUserId,
     sessionId,
@@ -236,9 +239,27 @@ export async function requireExecSession(req: Request, route: string, opts: Exec
     userAgent: req.headers.get("user-agent"),
     route,
     surface: "web"
-  });
+  };
+  await logAccess(entry);
+
+  // 9. P8 (M13, C20): a strong session (the step-up ran) from a network or browser family not seen lately raises an
+  // alert. Fire-and-forget: the request never waits on it, and the module is loaded lazily (it imports jobs.ts, which
+  // imports this file). A failure is logged by route and error name only.
+  if (checkedToken !== null) noteStrongAccess(principal, entry);
 
   return { ok: true, principal, authUserId, sessionId };
+}
+
+function noteStrongAccess(principal: ExecPrincipal, entry: AccessLogEntry): void {
+  const sighting = { ip: entry.ip, userAgent: entry.userAgent, now: new Date() };
+  void import("@/lib/exec/handlers/access-alert")
+    .then((m) => m.noteStrongWebAccess(principal, sighting))
+    .catch((err: unknown) => console.warn(`[exec-access] ${entry.route}: new-network check unavailable (${errorName(err)})`));
+}
+
+/** An Error's class name for a log line (never its message), or "error". */
+function errorName(err: unknown): string {
+  return err instanceof Error && /^[A-Za-z]{1,40}$/.test(err.name) ? err.name : "error";
 }
 
 // A server-component page has no Request, so the page gate builds one from
@@ -486,15 +507,59 @@ export async function logAccess(entry: AccessLogEntry): Promise<void> {
 }
 
 /**
- * Client IP for the access log: the first X-Forwarded-For entry, else
- * X-Real-IP, else null. Informational only. A client can put its own value at
- * the front of X-Forwarded-For, so nothing may authorize on this.
+ * C21: the right-most X-Forwarded-For entry (the hop Railway's proxy appends), trimmed, ":port" and [brackets] stripped,
+ * valid per node:net isIP; else null. X-Real-IP is no longer read. Informational and alerting only: nothing authorizes on it.
+ *
+ * A client can write anything at the FRONT of X-Forwarded-For; the proxy appends the address it saw, so the last entry is
+ * the one the client didn't choose (P8 M13; Railway's appending is checked live, §7.3). An invalid last entry is null:
+ * never a fall back to an earlier, client-written one.
  */
 export function clientIp(req: Request): string | null {
-  const forwarded = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
-  if (forwarded) return forwarded;
-  const real = req.headers.get("x-real-ip")?.trim();
-  return real || null;
+  const header = req.headers.get("x-forwarded-for");
+  if (header === null) return null;
+  const entries = header.split(",");
+  for (let i = entries.length - 1; i >= 0; i -= 1) {
+    const raw = entries[i].trim();
+    if (raw !== "") return normalizeIp(raw);
+  }
+  return null;
+}
+
+/** "[v6]:port" / "[v6]" → v6; "v4:port" → v4; then a literal per isIP, or null. */
+function normalizeIp(raw: string): string | null {
+  const bracketed = /^\[([^\]]+)\](?::\d{1,5})?$/.exec(raw);
+  const v4WithPort = /^(\d{1,3}(?:\.\d{1,3}){3}):\d{1,5}$/.exec(raw);
+  const candidate = bracketed ? bracketed[1] : v4WithPort ? v4WithPort[1] : raw;
+  const kind = isIP(candidate);
+  if (kind === 4) return candidate;
+  if (kind === 6) return candidate.toLowerCase();
+  return null;
+}
+
+/**
+ * P8 (§3.19, C20): the principal's web access rows with created_at in [fromIso, toIso), newest first, at most `limit`;
+ * the ip and user_agent columns only. Surface "slack" rows are never read (K9). Throws on a read error.
+ */
+export async function listWebAccessSince(principalId: string, fromIso: string, toIso: string, limit: number):
+  Promise<{ ip: string | null; userAgent: string | null }[]> {
+  if (typeof principalId !== "string" || principalId.length === 0) throw new TypeError("listWebAccessSince: principalId is required");
+  if (!Number.isFinite(Date.parse(fromIso)) || !Number.isFinite(Date.parse(toIso))) throw new TypeError("listWebAccessSince: expected ISO instants");
+  const n = Math.max(1, Math.min(Math.trunc(limit), 5_000));
+  const { data, error } = await getSupabaseAdmin()
+    .from("exec_access_log")
+    .select("ip,user_agent")
+    .eq("principal_id", principalId)
+    .eq("surface", "web")
+    .gte("created_at", fromIso)
+    .lt("created_at", toIso)
+    .order("created_at", { ascending: false })
+    .limit(n);
+  if (error) throw new Error(`exec_access_log read failed: ${error.message}`);
+  const rows = Array.isArray(data) ? (data as { ip?: unknown; user_agent?: unknown }[]) : [];
+  return rows.map((r) => ({
+    ip: typeof r.ip === "string" ? r.ip : null,
+    userAgent: typeof r.user_agent === "string" ? r.user_agent : null
+  }));
 }
 
 /**

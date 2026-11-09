@@ -1,5 +1,6 @@
 import { OverviewView } from "@/components/exec/overview/OverviewView";
 import { requireExecPrincipalForPage } from "@/lib/exec/access";
+import { getBriefHeaderView } from "@/lib/exec/brief-view";
 import { CHAT_STARTERS } from "@/lib/exec/chat/copy";
 import { chatEmailOn } from "@/lib/exec/chat/email-on";
 import { getOverview } from "@/lib/exec/overview";
@@ -19,12 +20,20 @@ import { loadSettings } from "@/lib/exec/principal";
 // settings read runs beside the Overview; if it fails, the page is drawn
 // without them (the chat route would refuse anyway).
 //
+// P8 (contract §3.17.2, §3.17.3, C41, C42): the Overview reads the brief card
+// too (it takes TodayGlance's slot when today's brief exists), and the header
+// gets the brief pill and Regenerate from getBriefHeaderView, after the
+// settings read; a failed header read draws the page without them.
+//
 // No metadata export: a page title would name the feature in the HTML head.
 export const dynamic = "force-dynamic";
 
 export default async function ExecutiveOverviewPage() {
   const principal = await requireExecPrincipalForPage("GET /executive");
-  const [overview, settings] = await Promise.all([getOverview(principal), loadSettings(principal.id).catch(() => null)]);
+  const now = new Date();
+  const settingsRead = loadSettings(principal.id).catch(() => null);
+  const headerRead = settingsRead.then((s) => (s === null ? null : getBriefHeaderView(principal, s, now).catch(() => null)));
+  const [overview, settings, brief] = await Promise.all([getOverview(principal, now, { brief: true }), settingsRead, headerRead]);
   const chat = settings !== null && settings.chatSchemaReady && settings.chatEnabled ? { starters: CHAT_STARTERS, emailOn: chatEmailOn(settings, principal) } : null;
-  return <OverviewView overview={overview} principalTz={principal.timezone} chat={chat} />;
+  return <OverviewView overview={overview} principalTz={principal.timezone} chat={chat} brief={brief} />;
 }

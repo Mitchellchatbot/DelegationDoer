@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -645,6 +646,10 @@ interface Vocabulary {
   names: ReadonlySet<string>;
   /** P7b B-P7b-2: `err.name` (an Error's class, a code) isn't content even where "name" is a content word. */
   errorNames?: boolean;
+  /** P8 B-P8-6: more last words that make a name a count (titlesShown, linesDropped), for this vocabulary only. */
+  countWords?: ReadonlySet<string>;
+  /** P8 B-P8-6: fixed-copy roots (BRIEF_OPS.reaped.title is a constant, not content), for this vocabulary only. */
+  constRoots?: ReadonlySet<string>;
 }
 const P3_VOCAB: Vocabulary = { words: CONTENT_WORDS, names: CONTENT_NAMES };
 const P4_VOCAB: Vocabulary = {
@@ -668,7 +673,14 @@ function isContentName(name: string, vocab: Vocabulary = P3_VOCAB): boolean {
   if (words.length === 0) return false;
   const last = words[words.length - 1];
   if (vocab.words.has(last)) return true;
-  return words.some((w) => vocab.words.has(w)) && !COUNT_WORDS.has(last);
+  return words.some((w) => vocab.words.has(w)) && !COUNT_WORDS.has(last) && !(vocab.countWords?.has(last) ?? false);
+}
+
+/** P8 B-P8-6: the identifier a property / element access chain starts from (BRIEF_OPS in BRIEF_OPS.reaped.title), or null. */
+function accessRoot(e: ts.Expression): string | null {
+  let x: ts.Expression = e;
+  while (ts.isPropertyAccessExpression(x) || ts.isElementAccessExpression(x)) x = x.expression;
+  return ts.isIdentifier(x) ? x.text : null;
 }
 
 function propertyNameText(name: ts.PropertyName): string | null {
@@ -694,6 +706,11 @@ function contentRefs(
     if (ts.isTypeNode(n)) return;
     if (ts.isPropertyAccessExpression(n)) {
       if (n.name.text === "length" || n.name.text === "size") return;
+      // P8 B-P8-6: a fixed-copy constant (BRIEF_OPS.<alert>.title) holds no content.
+      if (vocab.constRoots) {
+        const root = accessRoot(n);
+        if (root !== null && vocab.constRoots.has(root)) return;
+      }
       // P7b B-P7b-2: in a vocabulary where "name" is content, an Error's own name (err.name, error.name) is still a code.
       if (vocab.errorNames && n.name.text === "name" && ts.isIdentifier(n.expression) && ERROR_BINDING.test(n.expression.text)) return;
       if (isContentName(n.name.text, vocab)) found.push(n.name.text);
@@ -977,9 +994,12 @@ const isP4Handler = (p: string) => /^src\/lib\/exec\/handlers\/(?:draft|voice)-[
 const baseVocabFor = (p: string): Vocabulary => (isP4ContentFile(p) ? P4_VOCAB : isChatFile(p) ? chatVocabulary(isDdTextFile(p)) : isDdTextFile(p) ? P5_VOCAB : P3_VOCAB);
 // P6 B-P6-5: a Slack file takes the Slack words and names on top of its class's vocabulary (slackVocabulary, below).
 // P7b B-P7b-2: a P7b content file takes the P7b words on top of that (p7bVocabulary, below).
+// P8 B-P8-6: a P8 content file (brief|checkin|network under exec code, dd-bot.ts, access.ts) takes the P8 words and names on
+// top of that (p8Vocabulary, in the P8 section below).
 const vocabFor = (p: string): Vocabulary => {
   const base = isSlackFile(p) ? slackVocabulary(baseVocabFor(p)) : baseVocabFor(p);
-  return isP7bContentFile(p) ? p7bVocabulary(base) : base;
+  const withP7b = isP7bContentFile(p) ? p7bVocabulary(base) : base;
+  return isP8ContentFile(p) ? p8Vocabulary(withP7b) : withP7b;
 };
 
 /** B8: rule 9 over the P4 file class with the P4 vocabulary; the handler-return check covers the P4 handlers. */
@@ -2374,6 +2394,8 @@ interface FileFacts extends ImportFacts {
   p7a: P7aFacts;
   /** P7b rules B-P7b-1, -3, -6, -7 */
   p7b: P7bFacts;
+  /** P8 rules B-P8-1..5, -7, -8, -10, -12 */
+  p8: P8Facts;
 }
 
 interface Scan {
@@ -2383,6 +2405,8 @@ interface Scan {
   trustedExports: Map<string, string[]>;
   probeMints: Map<string, number[]>;
   probeExports: Map<string, string[]>;
+  /** P8 B-P8-12: the in-memory probes' P8 facts, read WITH the checker (contextual DmTarget types). */
+  probeP8: Map<string, P8Facts>;
   /** The repo-root next.config.mjs through the P4 analyzer (B1, B2, B9); null when the file is missing. */
   nextConfig: P4Facts | null;
 }
@@ -2431,7 +2455,8 @@ function scanTree(probes: ReadonlyMap<string, string>, exportProbes: readonly st
       p5b: analyzeP5b(sf),
       p6: analyzeP6(sf, isExecCode(file) ? checker : undefined),
       p7a: analyzeP7a(sf, isExecCode(file) ? checker : null),
-      p7b: analyzeP7b(sf)
+      p7b: analyzeP7b(sf),
+      p8: analyzeP8(sf, isExecCode(file) ? checker : null)
     });
   }
   const nextConfigPath = path.join(ROOT, NEXT_CONFIG_FILE);
@@ -2444,7 +2469,8 @@ function scanTree(probes: ReadonlyMap<string, string>, exportProbes: readonly st
   }
   const probeMints = new Map([...probes.keys()].map((file) => [file, findMints(sourceOf(file), checker, brand)]));
   const probeExports = new Map(exportProbes.map((file) => [file, principalExports(sourceOf(file), checker, brand)]));
-  return { files: absFiles.map(relPath), facts, trustedExports, probeMints, probeExports, nextConfig };
+  const probeP8 = new Map([...probes.keys()].map((file) => [file, analyzeP8(sourceOf(file), checker)]));
+  return { files: absFiles.map(relPath), facts, trustedExports, probeMints, probeExports, nextConfig, probeP8 };
 }
 
 // --- detector probes (in-memory files next to principal.ts) ---------------------------
@@ -5609,5 +5635,863 @@ describe("P7b boundary detectors (probes; BD01-BD13)", () => {
     expect(p7aStoreOffenses(SEARCH, p7aFacts(SEARCH, 'await listIntelChannels(principal);'))).toEqual([]);
     expect(excerptOffenses(PAGE, p7aFacts(PAGE, "const row = { itemId: item.id, excerpt: item.excerpt };"))).toHaveLength(1);
     expect(excerptOffenses(PAGE, p7aFacts(PAGE, "const row = { itemId: item.id, quote: item.excerpt };"))).toEqual([]);
+  });
+});
+
+// --- P8 (contract §0.4 B-P8-1..12, §5.17 BD01-BD12; Area B owns this section, other areas request additions) -------------
+//
+//   B-P8-1  Only brief-store.ts names the three P8 tables and the ten brief functions in a string (tests and the migration
+//           aside); exec_slack_accept_action_v2 only slack-install.ts. Whole tokens, as B-P6-6: an audit target
+//           ("exec_brief_checkins:" + id, or a `target:` value), an index name or a column is not a table read.
+//   B-P8-2  The literal slack_user_token (a string, an identifier or a property name) appears in src only in checkin-post.ts
+//           and the legacy files that already used it (AM-P8-24); checkin-post.ts is imported only by
+//           handlers/checkin-send.ts and handlers/brief-health.ts, by name, ⊆ {verifyOwnerUserToken, postCheckinAsOwner,
+//           OwnerTokenVerdict}.
+//   B-P8-3  dd-bot.ts: postDdBotDm is imported only by handlers/brief-fallback.ts, deleteDdBotDm only by handlers/purge.ts;
+//           no file takes dd-bot.ts whole; SLACK_BOT_TOKEN stays readable only in ops.ts and dd-bot.ts (slackEnvOffenses).
+//   B-P8-4  The two legacy files (the runner, DD's Slack interactions route) reach exec code only through
+//           import("@/lib/exec/brief-legacy-gate"), whose nearest enclosing if (then side) has the condition
+//           process.env.NEXT_RUNTIME === "nodejs" (alone or as an && operand); no static exec import there; no other non-exec
+//           file imports a @/lib/exec/brief* module; brief-legacy-gate.ts is imported only by those two and takes only
+//           loadOwnerBriefRowForLegacy from principal.ts (rule 3 already refuses import() of principal.ts).
+//   B-P8-5  The pure P8 modules' VALUE imports: exec types, attention-types, brief-types, brief-copy, time, format, refs
+//           (isAllowedLinkUrl, appOrigin, clipExcerpt), slack-types, slack-ui, slack-copy, slack-intel-types; node:crypto and
+//           node:net in brief-sections.ts, brief-novelty.ts and network.ts only. `import type` from anywhere is erased.
+//   B-P8-6  Rule 9 over the P8 content class (exec code matching /brief|checkin|network/i, dd-bot.ts, access.ts) with the P8
+//           words and names on top of the file's own vocabulary; the handler-return check over handlers/brief*.ts,
+//           checkin*.ts, ops-watch.ts, access-alert.ts. Count words stay allowed (titlesShown, linesDropped), an Error's
+//           .name is a code, and BRIEF_OPS / BRIEF_COPY are fixed copy.
+//   B-P8-7  brief-checkins.ts value-imports only its allow-list (with the named subsets); never, even as a type, a mail,
+//           email, attention, Slack-reading, Slack-intel, DD-text, agent, gather or overview module (DD data only, M6).
+//   B-P8-8  callModel({ feature: "brief" }) only in brief-compose.ts; feature "checkin" only in brief-checkins.ts.
+//   B-P8-9  The client components under components/exec/brief/ and settings/Brief* are rule-16 roots.
+//   B-P8-10 "x-forwarded-for" (any case) in exec code only in access.ts.
+//   B-P8-11 exec-tick.yml's one cron, its two references, its body never printed; daily-briefing.yml unchanged.
+//   B-P8-12 An object literal whose contextual type is DmTarget (the checker), or a value cast, asserted or annotated as one,
+//           is constructed only in slack-install.ts, checkin-post.ts and dd-bot.ts.
+// Comments never count; names in types never count (B-P8-1, -2, -10).
+
+const BRIEF_STORE_FILE = "src/lib/exec/brief-store.ts";
+const P8_TABLES = ["exec_briefs", "exec_brief_checkins", "exec_brief_mentions"];
+/** §2.1.4-§2.1.10: the helpers, then RPCs 1-7 (the SQL harness's P8_FUNCTIONS minus the versioned RPC 2). */
+const P8_FUNCTIONS = [
+  "exec_brief_item_hit", "exec_brief_scrub_content", "exec_brief_ref_array", "exec_brief_claim_build", "exec_brief_finish_build",
+  "exec_brief_delivery_step", "exec_brief_claim_fallback", "exec_brief_scrub_threads", "exec_brief_scrub_slack", "exec_brief_purge_expired"
+];
+const ACCEPT_V2 = "exec_slack_accept_action_v2";
+const P8_STORE_TEXT = new RegExp(`(?<![A-Za-z0-9_])(${[...P8_TABLES, ...P8_FUNCTIONS].join("|")})(?![A-Za-z0-9_.:])`, "g");
+const ACCEPT_V2_TEXT = new RegExp(`(?<![A-Za-z0-9_])${ACCEPT_V2}(?![A-Za-z0-9_.:])`);
+const P8_MIGRATION_FILE = "supabase/migrations/20261111100000_exec_brief.sql";
+
+const USER_TOKEN = "slack_user_token";
+const USER_TOKEN_TEXT = /(?<![A-Za-z0-9_])slack_user_token(?![A-Za-z0-9_])/;
+const CHECKIN_POST_FILE = "src/lib/exec/checkin-post.ts";
+/** AM-P8-24: `git grep -l slack_user_token -- src` at the base (tests aside), plus checkin-post.ts. */
+const USER_TOKEN_FILES: ReadonlySet<string> = new Set([
+  "src/app/api/integrations/slack/callback/route.ts", "src/app/api/integrations/slack/clear/route.ts",
+  "src/app/api/integrations/slack/disconnect/route.ts", "src/app/api/integrations/slack/test/route.ts", "src/app/api/kudos/route.ts",
+  "src/app/api/slack/interactions/route.ts", "src/app/api/tasks/[id]/comments/route.ts", "src/app/api/tasks/[id]/notify/route.ts",
+  "src/lib/slack-status-sync.ts", CHECKIN_POST_FILE
+]);
+const CHECKIN_POST_MODULE = "src/lib/exec/checkin-post";
+const CHECKIN_POST_IMPORTERS: ReadonlySet<string> = new Set(["src/lib/exec/handlers/checkin-send.ts", "src/lib/exec/handlers/brief-health.ts"]);
+const CHECKIN_POST_NAMES: ReadonlySet<string> = new Set(["verifyOwnerUserToken", "postCheckinAsOwner", "OwnerTokenVerdict"]);
+const DD_BOT_MODULE = "src/lib/exec/dd-bot";
+const DD_BOT_P8_IMPORTER: ReadonlyMap<string, string> = new Map([
+  ["postDdBotDm", "src/lib/exec/handlers/brief-fallback.ts"],
+  ["deleteDdBotDm", "src/lib/exec/handlers/purge.ts"]
+]);
+
+const LEGACY_FILES: readonly string[] = ["src/lib/daily-briefing-runner.ts", "src/app/api/slack/interactions/route.ts"];
+const LEGACY_GATE_SPEC = "@/lib/exec/brief-legacy-gate";
+const LEGACY_GATE_MODULE = "src/lib/exec/brief-legacy-gate";
+const LEGACY_GATE_FILE = "src/lib/exec/brief-legacy-gate.ts";
+const LEGACY_GATE_PRINCIPAL_NAMES: ReadonlySet<string> = new Set(["loadOwnerBriefRowForLegacy"]);
+const PRINCIPAL_MODULE_TARGET = "src/lib/exec/principal";
+
+const PURE_P8_FILES: readonly string[] = [
+  "src/lib/exec/brief-ownership.ts", "src/lib/exec/brief-novelty.ts", "src/lib/exec/brief-sections.ts", "src/lib/exec/brief-validate.ts",
+  "src/lib/exec/brief-slack-ui.ts", "src/lib/exec/network.ts"
+];
+// Integrator (stage 2): brief-sections is allowed too. The frozen layout puts PENDING_KINDS (which noveltyVerdict needs, M8)
+// and the deterministic top 3 and section scaffolding (which the validator needs, §3.10.2 rules 4 and 6) in brief-sections.ts,
+// so brief-novelty.ts and brief-validate.ts value-import it. brief-sections.ts is itself one of PURE_P8_FILES, held to this
+// same list, so allowing it lets nothing impure in.
+const PURE_ALLOWED_TARGETS: ReadonlySet<string> = new Set(
+  ["types", "attention-types", "brief-types", "brief-copy", "time", "format", "refs", "slack-types", "slack-ui", "slack-copy", "slack-intel-types", "brief-sections"].map((m) => `src/lib/exec/${m}`)
+);
+const PURE_REFS_TARGET = "src/lib/exec/refs";
+const PURE_REFS_NAMES: ReadonlySet<string> = new Set(["isAllowedLinkUrl", "appOrigin", "clipExcerpt"]);
+const PURE_NODE_FILES: ReadonlySet<string> = new Set(["src/lib/exec/brief-sections.ts", "src/lib/exec/brief-novelty.ts", "src/lib/exec/network.ts"]);
+const PURE_NODE_SPECS: ReadonlySet<string> = new Set(["node:crypto", "node:net"]);
+
+const CHECKINS_FILE = "src/lib/exec/brief-checkins.ts";
+/** B-P8-7: allowed value-import targets → the names allowed (null: any). The bare "server-only" is allowed too. */
+const CHECKINS_ALLOWED: ReadonlyMap<string, ReadonlySet<string> | null> = new Map<string, ReadonlySet<string> | null>([
+  ["src/lib/exec/types", null],
+  ["src/lib/exec/brief-types", null],
+  ["src/lib/exec/brief-copy", null],
+  ["src/lib/exec/brief-store", new Set(["listRecentCheckinRecipients", "listSentCheckinTexts", "listLegacyCheckinRecipients"])],
+  ["src/lib/exec/sources/dd", new Set(["listUsers", "listOpenTasks", "listDepartments"])],
+  ["src/lib/exec/sources/slack", new Set(["lookupUserByEmail", "SlackApiError"])],
+  ["src/lib/exec/llm/request", null],
+  ["src/lib/exec/llm/client", null],
+  ["src/lib/exec/text/untrusted", new Set(["newNonce", "renderUntrustedBlock"])],
+  ["src/lib/exec/time", null],
+  ["src/lib/exec/crypto", new Set(["checkinMac"])]
+]);
+const CHECKINS_NEVER = /^src\/lib\/exec\/(?:sources\/mail(?:$|\/)|email-|attention|slack-read|slack-intel|sources\/dd-text(?:$|\/)|agent\/|brief-gather$|overview$)/;
+
+const MODEL_FEATURE_FILES: ReadonlyMap<string, string> = new Map([["brief", "src/lib/exec/brief-compose.ts"], ["checkin", CHECKINS_FILE]]);
+const ACCESS_FILE = "src/lib/exec/access.ts";
+const FORWARDED_FOR = "x-forwarded-for";
+const DM_TARGET_MAKERS: ReadonlySet<string> = new Set([SLACK_INSTALL_FILE, CHECKIN_POST_FILE, DD_BOT_FILE]);
+const DM_TARGET_TYPE = "DmTarget";
+const BRIEF_COMPONENT_DIR = "src/components/exec/brief/";
+const isBriefComponent = (p: string) => p.startsWith(BRIEF_COMPONENT_DIR) || /^src\/components\/exec\/settings\/Brief[^/]*\.tsx?$/.test(p);
+
+// B-P8-6: the P8 content class and its vocabulary.
+// The two P8 handlers whose names don't say brief, checkin or network are in the class too (their returns are checked).
+const P8_CONTENT_EXTRA_FILES: ReadonlySet<string> = new Set([DD_BOT_FILE, ACCESS_FILE, "src/lib/exec/handlers/ops-watch.ts", "src/lib/exec/handlers/access-alert.ts"]);
+const isP8ContentFile = (p: string) => isExecCode(p) && (/brief|checkin|network/i.test(p) || P8_CONTENT_EXTRA_FILES.has(p));
+const isP8Handler = (p: string) => /^src\/lib\/exec\/handlers\/(?:brief[^/]*|checkin[^/]*|ops-watch|access-alert)\.ts$/.test(p);
+const P8_WORDS = [
+  "headline", "text", "texts", "title", "titles", "line", "lines", "summary", "summaries", "mac", "macs", "token", "tokens", "blocks",
+  "name", "names", "ip", "agent"
+];
+const P8_NAMES = [
+  "usertoken", "slack_user_token", "slackusertoken", "buttonvalue", "button_value", "responseurl", "response_url", "triggerid", "trigger_id",
+  "useragent", "user_agent", "clientip"
+];
+const P8_COUNT_WORDS = ["shown", "dropped"];
+const P8_CONST_ROOTS = ["BRIEF_OPS", "BRIEF_COPY"];
+const p8Vocabs = new Map<Vocabulary, Vocabulary>();
+/** B-P8-6: a P8 content file's vocabulary, built once per base vocabulary. */
+function p8Vocabulary(base: Vocabulary): Vocabulary {
+  let v = p8Vocabs.get(base);
+  if (!v) {
+    v = {
+      words: new Set([...base.words, ...P8_WORDS]),
+      names: new Set([...base.names, ...P8_NAMES]),
+      errorNames: true,
+      countWords: new Set([...(base.countWords ?? []), ...P8_COUNT_WORDS]),
+      constRoots: new Set([...(base.constRoots ?? []), ...P8_CONST_ROOTS])
+    };
+    p8Vocabs.set(base, v);
+  }
+  return v;
+}
+
+interface P8Ref {
+  spec: string;
+  /** Resolved repo path without extension, lowercased; null for a bare specifier. */
+  target: string | null;
+  line: number;
+  valueNames: string[];
+  typeNames: string[];
+  /** Namespace import, export *, import(), require(), import-equals, import("…") types. */
+  whole: boolean;
+  /** Erased at compile time (import type, all-type named imports, export type, import("…") types). */
+  typeOnly: boolean;
+  /** `import "x";` */
+  sideEffect: boolean;
+  /** import() or require() */
+  dynamic: boolean;
+  /** dynamic only: the nearest enclosing if statement holds the call on its then side and tests process.env.NEXT_RUNTIME === "nodejs". */
+  guarded: boolean;
+}
+interface P8Facts {
+  refs: P8Ref[];
+  /** B-P8-1 */
+  storeNames: { name: string; line: number }[];
+  acceptV2: number[];
+  /** B-P8-2 */
+  userToken: number[];
+  /** B-P8-8: callModel({ feature: "<literal>" }) */
+  modelFeatures: { feature: string; line: number }[];
+  /** B-P8-10 */
+  forwardedFor: number[];
+  /** B-P8-12 */
+  dmTargets: number[];
+}
+
+/** process.env.NEXT_RUNTIME === "nodejs" exactly (either operand order), alone or as one operand of an && chain. */
+function hasNodeRuntimeCheck(e: ts.Expression): boolean {
+  let x = e;
+  while (ts.isParenthesizedExpression(x)) x = x.expression;
+  if (!ts.isBinaryExpression(x)) return false;
+  if (x.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken) return hasNodeRuntimeCheck(x.left) || hasNodeRuntimeCheck(x.right);
+  if (x.operatorToken.kind !== ts.SyntaxKind.EqualsEqualsEqualsToken) return false;
+  const isEnv = (n: ts.Expression) =>
+    ts.isPropertyAccessExpression(n) && n.name.text === "NEXT_RUNTIME" && ts.isPropertyAccessExpression(n.expression) &&
+    n.expression.name.text === "env" && ts.isIdentifier(n.expression.expression) && n.expression.expression.text === "process";
+  const isNode = (n: ts.Expression) => ts.isStringLiteral(n) && n.text === "nodejs";
+  return (isEnv(x.left) && isNode(x.right)) || (isEnv(x.right) && isNode(x.left));
+}
+
+/** A type (or its union / intersection members, or what an alias names) that is slack-types.ts's DmTarget. */
+function isDmTargetType(t: ts.Type | undefined, depth = 0): boolean {
+  if (t === undefined || depth > 4) return false;
+  const sym = t.aliasSymbol ?? t.getSymbol();
+  if (sym && sym.getName() === DM_TARGET_TYPE && (sym.declarations ?? []).some((d) => path.basename(d.getSourceFile().fileName) === "slack-types.ts")) return true;
+  if (t.isUnionOrIntersection()) return t.types.some((m) => isDmTargetType(m, depth + 1));
+  return false;
+}
+
+/** A type node that names DmTarget (as written: probes have no checker). */
+function namesDmTarget(node: ts.TypeNode | undefined): boolean {
+  if (node === undefined) return false;
+  if (ts.isTypeReferenceNode(node)) {
+    const n = node.typeName;
+    return (ts.isIdentifier(n) ? n.text : n.right.text) === DM_TARGET_TYPE;
+  }
+  if (ts.isUnionTypeNode(node) || ts.isIntersectionTypeNode(node)) return node.types.some((m) => namesDmTarget(m));
+  if (ts.isParenthesizedTypeNode(node) || ts.isTypeOperatorNode(node)) return namesDmTarget(node.type);
+  return false;
+}
+
+function analyzeP8(sf: ts.SourceFile, checker: ts.TypeChecker | null): P8Facts {
+  const lineOf = (n: ts.Node) => sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1;
+  const facts: P8Facts = { refs: [], storeNames: [], acceptV2: [], userToken: [], modelFeatures: [], forwardedFor: [], dmTargets: [] };
+  const addRef = (spec: string, node: ts.Node, r: Partial<P8Ref>) => {
+    const abs = resolveSpecifier(sf.fileName, spec);
+    facts.refs.push({
+      spec, target: abs === null ? null : relPath(stripExt(abs)).toLowerCase(), line: lineOf(node), valueNames: [], typeNames: [], whole: false,
+      typeOnly: false, sideEffect: false, dynamic: false, guarded: false, ...r
+    });
+  };
+  const isTargetValue = (n: ts.Node): boolean =>
+    ts.isPropertyAssignment(n.parent) && n.parent.initializer === n && propertyNameText(n.parent.name) === "target";
+  const collectImportTypes = (n: ts.Node): void => {
+    if (ts.isImportTypeNode(n) && ts.isLiteralTypeNode(n.argument) && ts.isStringLiteral(n.argument.literal)) addRef(n.argument.literal.text, n, { whole: true, typeOnly: true });
+    ts.forEachChild(n, collectImportTypes);
+  };
+  const guardedCall = (call: ts.Node): boolean => {
+    let child: ts.Node = call;
+    let parent: ts.Node | undefined = call.parent;
+    while (parent !== undefined) {
+      if (ts.isIfStatement(parent)) return parent.thenStatement === child && hasNodeRuntimeCheck(parent.expression);
+      child = parent;
+      parent = parent.parent;
+    }
+    return false;
+  };
+
+  const visit = (node: ts.Node): void => {
+    if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
+      const clause = node.importClause;
+      const bindings = clause?.namedBindings;
+      const named = bindings && ts.isNamedImports(bindings) ? bindings.elements : undefined;
+      const allType = clause?.isTypeOnly === true;
+      const valueNames = [
+        ...(clause?.name && !allType ? ["default"] : []),
+        ...(named && !allType ? named.filter((el) => !el.isTypeOnly).map((el) => (el.propertyName ?? el.name).text) : [])
+      ];
+      const typeNames = [
+        ...(clause?.name && allType ? ["default"] : []),
+        ...(named ? named.filter((el) => allType || el.isTypeOnly).map((el) => (el.propertyName ?? el.name).text) : [])
+      ];
+      const namespace = !!bindings && ts.isNamespaceImport(bindings);
+      const typeOnly = clause !== undefined && (allType || (!clause.name && !namespace && named !== undefined && named.length > 0 && named.every((el) => el.isTypeOnly)));
+      addRef(node.moduleSpecifier.text, node, { valueNames, typeNames, whole: namespace, typeOnly, sideEffect: clause === undefined });
+      return;
+    }
+    if (ts.isExportDeclaration(node)) {
+      if (node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) {
+        const clause = node.exportClause;
+        const named = clause && ts.isNamedExports(clause) ? clause.elements : undefined;
+        const typeOnly = node.isTypeOnly || (named !== undefined && named.length > 0 && named.every((el) => el.isTypeOnly));
+        addRef(node.moduleSpecifier.text, node, {
+          valueNames: named && !node.isTypeOnly ? named.filter((el) => !el.isTypeOnly).map((el) => (el.propertyName ?? el.name).text) : [],
+          typeNames: named ? named.filter((el) => node.isTypeOnly || el.isTypeOnly).map((el) => (el.propertyName ?? el.name).text) : [],
+          whole: !clause || ts.isNamespaceExport(clause),
+          typeOnly
+        });
+      }
+      return;
+    }
+    if (ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference) && ts.isStringLiteral(node.moduleReference.expression)) {
+      addRef(node.moduleReference.expression.text, node, { whole: true, typeOnly: node.isTypeOnly });
+      return;
+    }
+    // Types: only their import("…") references count (erased); a type's string literal or property name names no table, header
+    // or column, and B-P8-12 reads DmTarget in casts and annotations from their parents below.
+    if (ts.isTypeNode(node) || ts.isInterfaceDeclaration(node) || ts.isTypeAliasDeclaration(node)) {
+      collectImportTypes(node);
+      return;
+    }
+
+    if (ts.isCallExpression(node)) {
+      const callee = node.expression;
+      const isLoader = callee.kind === ts.SyntaxKind.ImportKeyword || (ts.isIdentifier(callee) && callee.text === "require");
+      const [arg] = node.arguments;
+      if (isLoader && arg && ts.isStringLiteralLike(arg)) addRef(arg.text, node, { whole: true, dynamic: true, guarded: guardedCall(node) });
+      if (isLoader && arg && !ts.isStringLiteralLike(arg)) facts.refs.push({ spec: "(computed)", target: null, line: lineOf(node), valueNames: [], typeNames: [], whole: true, typeOnly: false, sideEffect: false, dynamic: true, guarded: guardedCall(node) });
+      if (calleeName(node) === "callModel" && arg && ts.isObjectLiteralExpression(arg)) {
+        const prop = arg.properties.find((p) => p.name !== undefined && propertyNameText(p.name) === "feature");
+        if (prop && ts.isPropertyAssignment(prop) && ts.isStringLiteralLike(prop.initializer)) facts.modelFeatures.push({ feature: prop.initializer.text, line: lineOf(node) });
+      }
+    }
+    if (ts.isStringLiteralLike(node) || ts.isTemplateHead(node) || ts.isTemplateMiddle(node) || ts.isTemplateTail(node)) {
+      const text = node.text;
+      if (!isTargetValue(node)) {
+        for (const m of text.matchAll(P8_STORE_TEXT)) facts.storeNames.push({ name: m[1], line: lineOf(node) });
+        if (ACCEPT_V2_TEXT.test(text)) facts.acceptV2.push(lineOf(node));
+      }
+      if (USER_TOKEN_TEXT.test(text)) facts.userToken.push(lineOf(node));
+      // The header name as a value (a header read, a forwarded-headers list), not prose that mentions it (UI copy).
+      if (text.trim().toLowerCase() === FORWARDED_FOR) facts.forwardedFor.push(lineOf(node));
+    }
+    if ((ts.isIdentifier(node) || ts.isPrivateIdentifier(node)) && node.text === USER_TOKEN) facts.userToken.push(lineOf(node));
+
+    // B-P8-12: a value made a DmTarget by a cast, an assertion, `satisfies`, an annotation, or (with the checker) an object
+    // literal whose contextual type is DmTarget.
+    if ((ts.isAsExpression(node) || ts.isTypeAssertionExpression(node) || ts.isSatisfiesExpression(node)) && namesDmTarget(node.type)) facts.dmTargets.push(lineOf(node));
+    // An annotated declaration builds one only when its initializer is an object literal (`let t: DmTarget | null = null` doesn't).
+    if (ts.isVariableDeclaration(node) && node.initializer && namesDmTarget(node.type)) {
+      let init: ts.Expression = node.initializer;
+      while (ts.isParenthesizedExpression(init)) init = init.expression;
+      if (ts.isObjectLiteralExpression(init)) facts.dmTargets.push(lineOf(node));
+    }
+    if (ts.isObjectLiteralExpression(node) && checker !== null) {
+      let t: ts.Type | undefined;
+      try {
+        t = checker.getContextualType(node);
+      } catch {
+        t = undefined;
+      }
+      if (isDmTargetType(t)) facts.dmTargets.push(lineOf(node));
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  facts.dmTargets = [...new Set(facts.dmTargets)];
+  return facts;
+}
+
+const p8Offenses = (check: (file: string, f: FileFacts) => string[]) => [...scan.facts].flatMap(([file, facts]) => check(file, facts));
+
+/** B-P8-1 */
+function p8StoreOffenses(file: string, f: FileFacts): string[] {
+  return [
+    ...(file === BRIEF_STORE_FILE ? [] : f.p8.storeNames.map((s) => `${file}:${s.line}: names ${s.name}; only ${BRIEF_STORE_FILE} may`)),
+    ...(file === SLACK_INSTALL_FILE ? [] : f.p8.acceptV2.map((line) => `${file}:${line}: names ${ACCEPT_V2}; only ${SLACK_INSTALL_FILE} may`))
+  ];
+}
+
+/** B-P8-2 */
+function userTokenOffenses(file: string, f: FileFacts): string[] {
+  const out = USER_TOKEN_FILES.has(file) ? [] : f.p8.userToken.map((line) => `${file}:${line}: names ${USER_TOKEN}; only ${CHECKIN_POST_FILE} (and the legacy DD files) may`);
+  for (const r of f.p8.refs) {
+    if (r.target !== CHECKIN_POST_MODULE || file === CHECKIN_POST_FILE) continue;
+    if (!CHECKIN_POST_IMPORTERS.has(file)) out.push(`${file}:${r.line}: imports checkin-post.ts; only ${[...CHECKIN_POST_IMPORTERS].join(" and ")} may`);
+    else if (r.whole) out.push(`${file}:${r.line}: takes checkin-post.ts whole`);
+    else for (const name of [...r.valueNames, ...r.typeNames]) if (!CHECKIN_POST_NAMES.has(name)) out.push(`${file}:${r.line}: imports ${name} from checkin-post.ts`);
+  }
+  return out;
+}
+
+/** B-P8-3 */
+function ddBotOffenses(file: string, f: FileFacts): string[] {
+  const out: string[] = [];
+  for (const r of f.p8.refs) {
+    if (r.target !== DD_BOT_MODULE || file === DD_BOT_FILE) continue;
+    if (r.whole) {
+      out.push(`${file}:${r.line}: takes dd-bot.ts whole`);
+      continue;
+    }
+    for (const name of [...r.valueNames, ...r.typeNames]) {
+      const only = DD_BOT_P8_IMPORTER.get(name);
+      if (only !== undefined && only !== file) out.push(`${file}:${r.line}: imports ${name} from dd-bot.ts; only ${only} may`);
+    }
+  }
+  return out;
+}
+
+/** B-P8-4 */
+function legacyGateOffenses(file: string, f: FileFacts): string[] {
+  const out: string[] = [];
+  const legacy = LEGACY_FILES.includes(file);
+  for (const r of f.p8.refs) {
+    const exec = r.target !== null && r.target.startsWith("src/lib/exec/");
+    if (legacy && exec) {
+      if (!r.dynamic) out.push(`${file}:${r.line}: a static import of ${r.spec} (only a lazy import("${LEGACY_GATE_SPEC}") may)`);
+      else if (r.target !== LEGACY_GATE_MODULE || r.spec !== LEGACY_GATE_SPEC) out.push(`${file}:${r.line}: import(${JSON.stringify(r.spec)}) is not the legacy gate`);
+      else if (!r.guarded) out.push(`${file}:${r.line}: import("${LEGACY_GATE_SPEC}") outside an if (process.env.NEXT_RUNTIME === "nodejs") branch`);
+      continue;
+    }
+    if (legacy && r.dynamic && r.target === null) out.push(`${file}:${r.line}: a computed import()`);
+    if (!legacy && !isExecCode(file) && r.target !== null && r.target.startsWith("src/lib/exec/brief")) out.push(`${file}:${r.line}: a non-exec file imports ${r.spec}`);
+    if (!legacy && r.target === LEGACY_GATE_MODULE) out.push(`${file}:${r.line}: imports the legacy gate; only ${LEGACY_FILES.join(" and ")} may`);
+    if (file === LEGACY_GATE_FILE && r.target === PRINCIPAL_MODULE_TARGET) {
+      if (r.whole) out.push(`${file}:${r.line}: takes principal.ts whole`);
+      for (const name of [...r.valueNames, ...r.typeNames]) if (!LEGACY_GATE_PRINCIPAL_NAMES.has(name)) out.push(`${file}:${r.line}: imports ${name} from principal.ts`);
+    }
+  }
+  return out;
+}
+
+/** B-P8-5 */
+function pureP8Offenses(file: string, f: FileFacts): string[] {
+  if (!PURE_P8_FILES.includes(file)) return [];
+  const out: string[] = [];
+  for (const r of f.p8.refs) {
+    if (r.typeOnly) continue;
+    if (r.target === null) {
+      if (!(PURE_NODE_SPECS.has(r.spec) && PURE_NODE_FILES.has(file))) out.push(`${file}:${r.line}: a pure module imports ${r.spec}`);
+      continue;
+    }
+    if (!PURE_ALLOWED_TARGETS.has(r.target)) {
+      out.push(`${file}:${r.line}: a pure module imports ${r.spec}`);
+      continue;
+    }
+    if (r.target === PURE_REFS_TARGET) {
+      if (r.whole) out.push(`${file}:${r.line}: takes refs.ts whole`);
+      for (const name of r.valueNames) if (!PURE_REFS_NAMES.has(name)) out.push(`${file}:${r.line}: imports ${name} from refs.ts`);
+    }
+  }
+  return out;
+}
+
+/** B-P8-6 */
+function p8ContentOffenses(file: string, f: MailFacts): string[] {
+  if (!isP8ContentFile(file)) return [];
+  return [...f.contentLogs.map((at) => `${file}:${at}`), ...(isP8Handler(file) ? f.contentReturns.map((at) => `${file}:${at}`) : [])];
+}
+
+/** B-P8-7 */
+function checkinImportOffenses(file: string, f: FileFacts): string[] {
+  if (file !== CHECKINS_FILE) return [];
+  const out: string[] = [];
+  for (const r of f.p8.refs) {
+    if (r.target !== null && CHECKINS_NEVER.test(r.target)) {
+      out.push(`${file}:${r.line}: imports ${r.spec} (check-ins see DD data only)`);
+      continue;
+    }
+    if (r.typeOnly) continue;
+    if (r.target === null) {
+      if (!(r.spec === "server-only" && r.sideEffect)) out.push(`${file}:${r.line}: imports ${r.spec}`);
+      continue;
+    }
+    if (!CHECKINS_ALLOWED.has(r.target)) {
+      out.push(`${file}:${r.line}: imports ${r.spec}`);
+      continue;
+    }
+    const names = CHECKINS_ALLOWED.get(r.target) ?? null;
+    if (names === null) continue;
+    if (r.whole) out.push(`${file}:${r.line}: takes ${r.spec} whole`);
+    for (const name of r.valueNames) if (!names.has(name)) out.push(`${file}:${r.line}: imports ${name} from ${r.spec}`);
+  }
+  return out;
+}
+
+/** B-P8-8 */
+function modelFeatureOffenses(file: string, f: FileFacts): string[] {
+  return f.p8.modelFeatures
+    .filter((m) => MODEL_FEATURE_FILES.has(m.feature) && MODEL_FEATURE_FILES.get(m.feature) !== file)
+    .map((m) => `${file}:${m.line}: callModel({ feature: "${m.feature}" }); only ${MODEL_FEATURE_FILES.get(m.feature)} may`);
+}
+
+/** B-P8-10 */
+function forwardedForOffenses(file: string, f: FileFacts): string[] {
+  if (!isExecCode(file) || file === ACCESS_FILE) return [];
+  return f.p8.forwardedFor.map((line) => `${file}:${line}: names the ${FORWARDED_FOR} header; only ${ACCESS_FILE} may`);
+}
+
+/** B-P8-12 */
+function dmTargetOffenses(file: string, f: { p8: P8Facts }): string[] {
+  if (DM_TARGET_MAKERS.has(file)) return [];
+  return f.p8.dmTargets.map((line) => `${file}:${line}: builds a ${DM_TARGET_TYPE}; only ${[...DM_TARGET_MAKERS].join(", ")} may`);
+}
+
+/** B-P8-11: exec-tick.yml's shape; daily-briefing.yml unchanged (LF-normalized sha256 of the base file). */
+function workflowOffenses(tick: string, daily: string): string[] {
+  const out: string[] = [];
+  const crons = [...tick.matchAll(/^\s*-\s*cron:\s*"([^"]*)"\s*$/gm)].map((m) => m[1]);
+  if (crons.length !== 1 || crons[0] !== "7 10-17 * * *") out.push(`exec-tick.yml: crons ${JSON.stringify(crons)}`);
+  if (!/^\s*workflow_dispatch:\s*\{\}\s*$/m.test(tick)) out.push("exec-tick.yml: no workflow_dispatch");
+  const refs = [...tick.matchAll(/\$\{\{\s*([^}]+?)\s*\}\}/g)].map((m) => m[1]).sort();
+  if (JSON.stringify(refs) !== JSON.stringify(["secrets.CRON_SECRET", "vars.EXEC_TICK_URL"])) out.push(`exec-tick.yml: references ${JSON.stringify(refs)}`);
+  const curls = tick.split(/\r?\n/).filter((l) => /\bcurl\b/.test(l));
+  if (curls.length !== 1 || !curls[0].includes("-o /dev/null") || !curls[0].includes("-X POST")) out.push("exec-tick.yml: the curl must POST with -o /dev/null");
+  const dailySha = createHash("sha256").update(daily.replace(/\r\n/g, "\n"), "utf8").digest("hex");
+  if (dailySha !== "94f6b93f5d2016a060200ad6a0826009e3d9e98796253b2625cc939234ff4c61") out.push("daily-briefing.yml changed");
+  return out;
+}
+
+// B-P8-12 probes in the real program: the checker sees an object literal's contextual type.
+const DM_PRELUDE = 'import type { DmTarget } from "./slack-types";\nimport { postInDm } from "./sources/slack";\ndeclare const token: string;\ndeclare const ch: string;\n';
+const dmTargetProbes = [
+  ["an annotated DmTarget object literal", probe(`${DM_PRELUDE}const t: DmTarget = { token, dmChannelId: ch };\nexport const x = t;`), 1],
+  ["an object literal handed to postInDm (contextual DmTarget, no annotation)", probe(`${DM_PRELUDE}export async function f() { await postInDm({ token, dmChannelId: ch }, { channel: ch, text: "t", blocks: [] }); }`), 1],
+  ["a cast", probe(`${DM_PRELUDE}export const t = { token, dmChannelId: ch } as DmTarget;`), 1],
+  ["a function returning a DmTarget literal", probe(`${DM_PRELUDE}export function make(): DmTarget { return { token, dmChannelId: ch }; }`), 1],
+  ["a union-typed parameter", probe(`${DM_PRELUDE}declare function use(t: DmTarget | null): void;\nuse({ token, dmChannelId: ch });`), 1],
+  ["reading a DmTarget's field (harmless)", probe(`${DM_PRELUDE}declare const t: DmTarget;\nexport const c = t.dmChannelId; export const o = { channel: t.dmChannelId };`), 0]
+] as const;
+
+const P8_PRESENT = [
+  "src/lib/exec/brief-ownership.ts", "src/lib/exec/brief-ownership-load.ts", "src/lib/exec/brief-legacy-gate.ts", "src/lib/exec/network.ts",
+  "src/lib/exec/handlers/ops-watch.ts", "src/lib/exec/handlers/access-alert.ts", "src/lib/exec/brief-store.ts", "src/lib/exec/brief-checkins.ts",
+  "src/lib/exec/checkin-post.ts", "src/lib/exec/brief-compose.ts", "src/lib/exec/brief-slack-ui.ts", "src/lib/exec/dd-bot.ts"
+];
+
+describe("P8 boundary (real source tree; contract §0.4 B-P8-1..12, §5.17 BD01-BD12)", () => {
+  it("knows the P8 files: in the scan, the content class and the handler class", () => {
+    for (const p of P8_PRESENT) expect(scan.files, p).toContain(p);
+    for (const p of ["src/lib/exec/brief-ownership.ts", "src/lib/exec/handlers/brief-sweep.ts", "src/lib/exec/checkin-post.ts", "src/lib/exec/network.ts",
+      DD_BOT_FILE, ACCESS_FILE, "src/components/exec/brief/BriefView.tsx", "src/app/api/exec/briefs/regenerate/route.ts", "src/app/(main)/executive/brief/page.tsx"]) {
+      expect(isP8ContentFile(p), p).toBe(true);
+    }
+    for (const p of ["src/lib/exec/jobs.ts", "src/lib/exec/slack-dm.ts", "src/lib/daily-briefing-runner.ts", "src/lib/exec/handlers/purge.ts"]) expect(isP8ContentFile(p), p).toBe(false);
+    for (const p of ["src/lib/exec/handlers/brief.ts", "src/lib/exec/handlers/brief-fallback.ts", "src/lib/exec/handlers/checkin-send.ts",
+      "src/lib/exec/handlers/ops-watch.ts", "src/lib/exec/handlers/access-alert.ts"]) expect(isP8Handler(p), p).toBe(true);
+    expect(isP8Handler("src/lib/exec/handlers/purge.ts")).toBe(false);
+  });
+
+  it("BD01 P3's rules 1-5 still pass with loadOwnerBriefRowForLegacy: it returns no principal, principal.ts stays the only minter", () => {
+    const offenders = [...scan.trustedExports].flatMap(([file, names]) => names.map((name) => `${file}#${name}`)).filter((e) => !PRINCIPAL_EXPORTS.has(e));
+    expect(offenders).toEqual([]);
+    expect([...scan.facts].filter(([file, f]) => file !== PRINCIPAL_FILE && f.mints.length > 0).map(([file]) => file)).toEqual([]);
+    const gate = factsOf(LEGACY_GATE_FILE);
+    expect(gate.importedNames).toEqual(new Set(["loadOwnerBriefRowForLegacy"]));
+    expect(gate.wholeModule).toEqual([]);
+    expect([...scan.facts].flatMap(([file, f]) => f.wholeModule.map((line) => `${file}:${line}`))).toEqual([]);
+  });
+
+  it("BD02 B-P8-1: the P8 tables and functions only in brief-store.ts; the versioned RPC 2 only in slack-install.ts", () => {
+    expect(P8_FUNCTIONS).toHaveLength(10);
+    const migration = path.join(ROOT, P8_MIGRATION_FILE);
+    // Integrator (stage 2): the migration exists and creates exactly the ten and the versioned RPC 2.
+    expect(existsSync(migration)).toBe(true);
+    const created = [...readFileSync(migration, "utf8").matchAll(/create or replace function public[.]([a-z0-9_]+)[(]/g)].map((m) => m[1]);
+    expect([...new Set(created)].sort()).toEqual([...P8_FUNCTIONS, ACCEPT_V2].sort());
+    expect(p8Offenses(p8StoreOffenses)).toEqual([]);
+  });
+
+  it("BD03 B-P8-2 / B-P8-3: slack_user_token, checkin-post.ts's importers, dd-bot.ts's P8 exports, SLACK_BOT_TOKEN", () => {
+    expect(p8Offenses(userTokenOffenses)).toEqual([]);
+    expect(p8Offenses(ddBotOffenses)).toEqual([]);
+    expect(p6Offenses(slackEnvOffenses)).toEqual([]);
+    expect(p3Offenses(importerOffenses).filter((o) => o.startsWith(DD_BOT_FILE))).toEqual([]);
+    // The legacy files that read the user token are exactly the allow-list's (the scan still sees them).
+    const readers = [...scan.facts].filter(([, f]) => f.p8.userToken.length > 0).map(([file]) => file);
+    expect(readers.every((file) => USER_TOKEN_FILES.has(file))).toBe(true);
+    expect(readers).toContain("src/app/api/slack/interactions/route.ts");
+  });
+
+  it("BD04 B-P8-4: the legacy files reach exec code only through the guarded lazy gate; nothing else imports brief*", () => {
+    for (const file of LEGACY_FILES) {
+      const dyn = factsOf(file).p8.refs.filter((r) => r.dynamic);
+      expect(dyn.length, file).toBeGreaterThanOrEqual(1);
+      expect(dyn.every((r) => r.spec === LEGACY_GATE_SPEC && r.guarded), file).toBe(true);
+    }
+    expect(p8Offenses(legacyGateOffenses)).toEqual([]);
+    // Rule 3 still refuses import() of principal.ts anywhere.
+    expect([...scan.facts].flatMap(([file, f]) => f.wholeModule.map((line) => `${file}:${line}`))).toEqual([]);
+  });
+
+  it("BD05 B-P8-5: the pure P8 modules import only the allow-list (type imports aside)", () => {
+    for (const file of PURE_P8_FILES) expect(scan.files, file).toContain(file);
+    expect(p8Offenses(pureP8Offenses)).toEqual([]);
+  });
+
+  it("BD08 B-P8-6: no P8 content file logs or alerts content, no P8 handler returns it", () => {
+    expect(scan.files.filter(isP8ContentFile).length).toBeGreaterThanOrEqual(P8_PRESENT.length - 2);
+    expect(p3Offenses(p8ContentOffenses)).toEqual([]);
+    // The class's other rules still hold under the wider vocabulary.
+    expect(p3Offenses(slackContentOffenses)).toEqual([]);
+    expect(p3Offenses(contentOffenses)).toEqual([]);
+  });
+
+  it("BD06 B-P8-7: brief-checkins.ts imports only its allow-list", () => {
+    expect(p8Offenses(checkinImportOffenses)).toEqual([]);
+  });
+
+  it("BD07 B-P8-8: callModel's brief feature only in brief-compose.ts, checkin only in brief-checkins.ts", () => {
+    expect(p8Offenses(modelFeatureOffenses)).toEqual([]);
+  });
+
+  it("BD09 B-P8-9: the brief client components are rule-16 roots, scanned, reaching no server-only module", () => {
+    const present = scan.files.filter(isBriefComponent);
+    const modules = moduleIndex(scan.facts.keys());
+    for (const file of present) {
+      expect(isClientRoot(file), file).toBe(true);
+      const facts = factsOf(file).p5;
+      if (facts.useClient) expect(serverOnlyChain(file, facts, scan.facts, modules), file).toBeNull();
+    }
+    // Integrator (stage 2): Area E's components exist, so the scan must see every one of them, the two client roots included.
+    expect([...present].sort()).toEqual([
+      "src/components/exec/brief/BriefCard.tsx", "src/components/exec/brief/BriefPill.tsx", "src/components/exec/brief/BriefView.tsx",
+      "src/components/exec/brief/CheckinList.tsx", "src/components/exec/brief/RegenerateButton.tsx",
+      "src/components/exec/settings/BriefSettingsForm.tsx", "src/components/exec/settings/BriefSettingsSection.tsx"
+    ]);
+    for (const client of ["src/components/exec/brief/RegenerateButton.tsx", "src/components/exec/settings/BriefSettingsForm.tsx"]) {
+      expect(factsOf(client).p5.useClient, client).toBe(true);
+    }
+  });
+
+  it("BD10 B-P8-10: x-forwarded-for only in access.ts (its clientIp and the page gate's forwarded headers)", () => {
+    expect(factsOf(ACCESS_FILE).p8.forwardedFor.length).toBeGreaterThanOrEqual(2);
+    expect(p8Offenses(forwardedForOffenses)).toEqual([]);
+  });
+
+  it("BD11 B-P8-11: exec-tick.yml's shape and daily-briefing.yml unchanged", () => {
+    expect(workflowOffenses(readFileSync(path.join(ROOT, ".github/workflows/exec-tick.yml"), "utf8"), readFileSync(path.join(ROOT, ".github/workflows/daily-briefing.yml"), "utf8"))).toEqual([]);
+  });
+
+  it("BD12 B-P8-12: DmTarget values are built only in slack-install.ts, checkin-post.ts and dd-bot.ts", () => {
+    expect(p8Offenses(dmTargetOffenses)).toEqual([]);
+  });
+});
+
+describe("P8 boundary detectors (probes; BD02-BD12)", () => {
+  const kindOf = (file: string) => (file.endsWith(".tsx") ? ts.ScriptKind.TSX : /\.[cm]?js$/.test(file) ? ts.ScriptKind.JS : ts.ScriptKind.TS);
+  const sourceAt = (file: string, code: string) => ts.createSourceFile(path.join(ROOT, file), code, ts.ScriptTarget.Latest, true, kindOf(file));
+  const mailAt = (file: string, code: string) => analyzeMail(sourceAt(file, code), vocabFor(file));
+  /** Syntax-only facts of a probe file (no checker), shaped like the scan's. */
+  const factsAt = (file: string, code: string): FileFacts => {
+    const sf = sourceAt(file, code);
+    return { ...analyzeImports(sf), mail: analyzeMail(sf, vocabFor(file)), p5: analyzeP5(sf), p8: analyzeP8(sf, null) } as unknown as FileFacts;
+  };
+  const OTHER = "src/lib/exec/brief-view.ts";
+  const HANDLER = "src/lib/exec/handlers/brief-sweep.ts";
+
+  it("BD02 B-P8-1: from(\"exec_briefs\") outside the store is flagged; the store, labels, index names, comments and types aren't", () => {
+    const store = (file: string, code: string) => p8StoreOffenses(file, factsAt(file, code));
+    expect(store(OTHER, 'const { data } = await db.from("exec_briefs").select("id");')).toHaveLength(1);
+    for (const name of [...P8_TABLES, ...P8_FUNCTIONS]) {
+      expect(store(HANDLER, `await db.rpc(${JSON.stringify(name)}, {});`), name).toHaveLength(1);
+      expect(store(BRIEF_STORE_FILE, `await db.rpc(${JSON.stringify(name)}, {});`), name).toEqual([]);
+    }
+    expect(store("src/app/api/exec/briefs/latest/route.ts", "const sql = `select * from exec_brief_mentions where fp = ${fp}`;")).toHaveLength(1);
+    expect(store("src/lib/some-dd-module.ts", 'const t = "exec_brief_checkins";')).toHaveLength(1);
+    expect(store(HANDLER, 'await auditStart(p, { actor: "slack", action: "brief.checkin.send", target: "exec_brief_checkins:" + row.id });')).toEqual([]);
+    expect(store(HANDLER, 'const t = { target: "exec_briefs" };')).toEqual([]);
+    expect(store(HANDLER, 'if (m.includes("exec_briefs_day_key") || m.includes("exec_brief_checkins_slack_ts_idx")) x();')).toEqual([]);
+    expect(store(HANDLER, 'type T = "exec_briefs";\n// exec_brief_checkins rows\n/* exec_brief_purge_expired(now) */')).toEqual([]);
+    expect(store(HANDLER, `await db.rpc("${ACCEPT_V2}", a);`)).toHaveLength(1);
+    expect(store(SLACK_INSTALL_FILE, `const RPC_V2 = "${ACCEPT_V2}";`)).toEqual([]);
+    // P6's own RPC name is P6's rule, not this one.
+    expect(store(HANDLER, 'await db.rpc("exec_slack_accept_action", a);')).toEqual([]);
+  });
+
+  it("BD03 B-P8-2: checkin-post.ts imported by another handler, slack_user_token read in exec code; B-P8-3: dd-bot's exports", () => {
+    const tok = (file: string, code: string) => userTokenOffenses(file, factsAt(file, code));
+    expect(tok("src/lib/exec/handlers/brief-deliver.ts", 'import { postCheckinAsOwner } from "@/lib/exec/checkin-post";')).toHaveLength(1);
+    expect(tok("src/lib/exec/handlers/checkin-send.ts", 'import { postCheckinAsOwner, verifyOwnerUserToken, type OwnerTokenVerdict } from "@/lib/exec/checkin-post";')).toEqual([]);
+    expect(tok("src/lib/exec/handlers/brief-health.ts", 'import { verifyOwnerUserToken } from "../checkin-post";')).toEqual([]);
+    expect(tok("src/lib/exec/handlers/brief-health.ts", 'import { ownerToken } from "@/lib/exec/checkin-post";')).toHaveLength(1);
+    expect(tok("src/lib/exec/handlers/checkin-send.ts", 'import * as cp from "@/lib/exec/checkin-post";')).toHaveLength(1);
+    expect(tok("src/lib/exec/handlers/checkin-send.ts", 'const cp = await import("@/lib/exec/checkin-post");')).toHaveLength(1);
+    expect(tok("src/lib/exec/brief-view.ts", 'import type { OwnerTokenVerdict } from "@/lib/exec/checkin-post";')).toHaveLength(1);
+    expect(tok("src/lib/exec/brief-checkins.ts", 'const { data } = await db.from("users").select("id, slack_user_token");')).toHaveLength(1);
+    expect(tok("src/lib/exec/sources/dd.ts", "const t = row.slack_user_token;")).toHaveLength(1);
+    expect(tok("src/lib/some-dd-module.ts", "const { slack_user_token } = row;")).toHaveLength(1);
+    expect(tok(CHECKIN_POST_FILE, 'const { data } = await db.from("users").select("slack_user_token").eq("id", id);')).toEqual([]);
+    expect(tok("src/app/api/kudos/route.ts", "const t = owner.slack_user_token;")).toEqual([]);
+    expect(tok("src/lib/exec/sources/dd.ts", "// reads slack_user_token? never\nconst slackUserToken = 1; type R = { slack_user_token: string };")).toEqual([]);
+    const bot = (file: string, code: string) => ddBotOffenses(file, factsAt(file, code));
+    expect(bot("src/lib/exec/handlers/brief-sweep.ts", 'import { postDdBotDm } from "@/lib/exec/dd-bot";')).toHaveLength(1);
+    expect(bot("src/lib/exec/handlers/brief-fallback.ts", 'import { postDdBotDm } from "@/lib/exec/dd-bot";')).toEqual([]);
+    expect(bot("src/lib/exec/handlers/brief-fallback.ts", 'import { deleteDdBotDm } from "@/lib/exec/dd-bot";')).toHaveLength(1);
+    expect(bot("src/lib/exec/handlers/purge.ts", 'import { deleteDdBotDm } from "@/lib/exec/dd-bot";')).toEqual([]);
+    expect(bot("src/lib/exec/slack-read.ts", 'import { getDdBotIdentity } from "@/lib/exec/dd-bot";')).toEqual([]);
+    expect(bot("src/lib/exec/handlers/purge.ts", 'import * as bot from "@/lib/exec/dd-bot";')).toHaveLength(1);
+    expect(bot("src/lib/exec/slack-reading.ts", 'export { postDdBotDm } from "@/lib/exec/dd-bot";')).toHaveLength(1);
+    // B-P6-2: DD's Slack client from dd-bot.ts is flagged by rule 7.
+    expect(importerOffenses(DD_BOT_FILE, mailAt(DD_BOT_FILE, 'import { postMessage } from "@/lib/slack";'))).toHaveLength(1);
+    expect(slackEnvOffenses("src/lib/exec/handlers/brief-fallback.ts", analyzeP6(sourceAt("src/lib/exec/handlers/brief-fallback.ts", "const t = process.env.SLACK_BOT_TOKEN;")))).toHaveLength(1);
+  });
+
+  it("BD04 B-P8-4: a static exec import in the runner, an unguarded import(), import(\"@/lib/exec/principal\") anywhere", () => {
+    const legacy = (file: string, code: string) => legacyGateOffenses(file, factsAt(file, code));
+    const RUNNER_FILE = LEGACY_FILES[0];
+    const ROUTE_FILE = LEGACY_FILES[1];
+    expect(legacy(RUNNER_FILE, 'import { legacyBriefGate } from "@/lib/exec/brief-legacy-gate";')).toHaveLength(1);
+    expect(legacy(RUNNER_FILE, 'import type { LegacyBriefDecision } from "@/lib/exec/brief-legacy-gate";')).toHaveLength(1);
+    expect(legacy(ROUTE_FILE, 'import { isExecEnabled } from "@/lib/exec/access";')).toHaveLength(1);
+    expect(legacy(RUNNER_FILE, 'async function f() { const m = await import("@/lib/exec/brief-legacy-gate"); }')).toHaveLength(1);
+    expect(legacy(RUNNER_FILE, 'async function f() { if (process.env.EXEC_ENABLED === "true") { await import("@/lib/exec/brief-legacy-gate"); } }')).toHaveLength(1);
+    expect(legacy(RUNNER_FILE, 'async function f() { if (process.env.NEXT_RUNTIME === "nodejs") { await import("@/lib/exec/runtime"); } }')).toHaveLength(1);
+    expect(legacy(RUNNER_FILE, 'async function f() { if (process.env.NEXT_RUNTIME === "nodejs") { await import(name); } }')).toHaveLength(1);
+    expect(legacy(RUNNER_FILE, 'async function f() { if (process.env.EXEC_ENABLED === "true") { if (process.env.NEXT_RUNTIME === "nodejs") { await import("@/lib/exec/brief-legacy-gate"); } } }')).toEqual([]);
+    expect(legacy(ROUTE_FILE, 'async function f() { if (process.env.EXEC_ENABLED === "true" && process.env.NEXT_RUNTIME === "nodejs") { await import("@/lib/exec/brief-legacy-gate"); } }')).toEqual([]);
+    expect(legacy("src/lib/cron-bootstrap.ts", 'import { legacyBriefGate } from "@/lib/exec/brief-legacy-gate";')).toHaveLength(2);
+    expect(legacy("src/components/Sidebar.tsx", 'import type { BriefRow } from "@/lib/exec/brief-types";')).toHaveLength(1);
+    expect(legacy("src/lib/exec/brief-view.ts", 'import { legacyBriefGate } from "@/lib/exec/brief-legacy-gate";')).toHaveLength(1);
+    expect(legacy("src/lib/exec/brief-view.ts", 'import type { BriefRow } from "@/lib/exec/brief-types";')).toEqual([]);
+    expect(legacy(LEGACY_GATE_FILE, 'import { loadOwnerBriefRowForLegacy } from "@/lib/exec/principal";')).toEqual([]);
+    expect(legacy(LEGACY_GATE_FILE, 'import { loadOwnerBriefRowForLegacy, loadSettings } from "@/lib/exec/principal";')).toHaveLength(1);
+    // Rule 3: import() of principal.ts anywhere is taking it whole.
+    expect(factsAt("src/lib/exec/brief-legacy-gate.ts", 'const p = await import("@/lib/exec/principal");').wholeModule).toHaveLength(1);
+    expect(factsAt(RUNNER_FILE, 'async function f() { if (process.env.NEXT_RUNTIME === "nodejs") { await import("@/lib/exec/principal"); } }').wholeModule).toHaveLength(1);
+  });
+
+  it("BD05 B-P8-5: a pure module importing server-only, Supabase, a store or jobs is flagged; import type from a server module is allowed", () => {
+    const pure = (file: string, code: string) => pureP8Offenses(file, factsAt(file, code));
+    const P = "src/lib/exec/brief-ownership.ts";
+    expect(pure(P, 'import "server-only";')).toHaveLength(1);
+    expect(pure(P, 'import { getSupabaseAdmin } from "@/lib/supabase-admin";')).toHaveLength(1);
+    expect(pure(P, 'import { getBriefByDate } from "@/lib/exec/brief-store";')).toHaveLength(1);
+    expect(pure(P, 'import { enqueueJob } from "@/lib/exec/jobs";')).toHaveLength(1);
+    expect(pure(P, 'import { loadSettings } from "@/lib/exec/principal";')).toHaveLength(1);
+    expect(pure("src/lib/exec/brief-sections.ts", 'import { parseEmailFingerprint } from "@/lib/exec/attention";')).toHaveLength(1);
+    expect(pure(P, 'import { ddPageRef } from "@/lib/exec/refs";')).toHaveLength(1);
+    expect(pure(P, 'import { createHash } from "node:crypto";')).toHaveLength(1);
+    expect(pure("src/lib/exec/network.ts", 'import { createHash } from "node:crypto";\nimport { isIP } from "node:net";')).toEqual([]);
+    expect(pure("src/lib/exec/network.ts", 'import { readFileSync } from "node:fs";')).toHaveLength(1);
+    expect(pure("src/lib/exec/brief-slack-ui.ts", [
+      'import type { BriefScreen } from "@/lib/exec/brief-screen";',
+      'import { type ExecOverview } from "@/lib/exec/overview";',
+      'import { BRIEF_COPY, fillBrief } from "@/lib/exec/brief-copy";',
+      'import { BRIEF_LIMITS } from "@/lib/exec/brief-types";',
+      'import { escapeMrkdwn, safeMrkdwn, section, slackLink } from "@/lib/exec/slack-ui";',
+      'import { appOrigin, clipExcerpt, isAllowedLinkUrl } from "@/lib/exec/refs";',
+      'import { formatInZone } from "@/lib/exec/format";',
+      'import { localDateString } from "@/lib/exec/time";',
+      'import type { SourceRef } from "@/lib/exec/types";'
+    ].join("\n"))).toEqual([]);
+    // Only the six pure files are held to it.
+    expect(pure("src/lib/exec/brief-view.ts", 'import "server-only";')).toEqual([]);
+  });
+
+  it("BD06 B-P8-7: brief-checkins.ts importing mail, attention-read, slack-intel-store, dd-text is flagged; its allow-list passes", () => {
+    const ci = (code: string) => checkinImportOffenses(CHECKINS_FILE, factsAt(CHECKINS_FILE, code));
+    for (const code of [
+      'import { listThreads } from "@/lib/exec/sources/mail";', 'import { listScreenedAttention } from "@/lib/exec/attention-read";',
+      'import { slackIntelState } from "@/lib/exec/slack-intel-store";', 'import { listDdText } from "@/lib/exec/sources/dd-text";',
+      'import type { AttentionFeedItem } from "@/lib/exec/attention-types";', 'import { gatherBrief } from "@/lib/exec/brief-gather";',
+      'import { getOverview } from "@/lib/exec/overview";', 'import { readOpenSlackItems } from "@/lib/exec/slack-reading";',
+      'import { runAgent } from "@/lib/exec/agent/run";', 'import { listUsers, listClients } from "@/lib/exec/sources/dd";',
+      'import { insertCheckins } from "@/lib/exec/brief-store";', 'import { checkinMac, verifyCheckinMac } from "@/lib/exec/crypto";',
+      'import { clipForModel } from "@/lib/exec/text/untrusted";', 'import * as dd from "@/lib/exec/sources/dd";',
+      'import { getSupabaseAdmin } from "@/lib/supabase-admin";', 'import { listThreads } from "@/lib/exec/email-store";'
+    ]) {
+      expect(ci(code).length, code).toBeGreaterThanOrEqual(1);
+    }
+    expect(ci([
+      'import "server-only";',
+      'import type { ExecPrincipal } from "@/lib/exec/types";',
+      'import { BRIEF_LIMITS, type CheckinCandidate } from "@/lib/exec/brief-types";',
+      'import { BRIEF_COPY } from "@/lib/exec/brief-copy";',
+      'import { listLegacyCheckinRecipients, listRecentCheckinRecipients, listSentCheckinTexts } from "@/lib/exec/brief-store";',
+      'import { listDepartments, listOpenTasks, listUsers } from "@/lib/exec/sources/dd";',
+      'import type { DdUser } from "@/lib/exec/sources/dd-types";',
+      'import { SlackApiError, lookupUserByEmail } from "@/lib/exec/sources/slack";',
+      'import { buildExecRequest } from "@/lib/exec/llm/request";',
+      'import { callModel } from "@/lib/exec/llm/client";',
+      'import { newNonce, renderUntrustedBlock } from "@/lib/exec/text/untrusted";',
+      'import { localDateString } from "@/lib/exec/time";',
+      'import { checkinMac } from "@/lib/exec/crypto";'
+    ].join("\n"))).toEqual([]);
+    expect(checkinImportOffenses("src/lib/exec/brief-gather.ts", factsAt("src/lib/exec/brief-gather.ts", 'import { listThreads } from "@/lib/exec/sources/mail";'))).toEqual([]);
+  });
+
+  it("BD07 B-P8-8: callModel({ feature: \"brief\" }) in a probe file is flagged; the two owners pass", () => {
+    const mf = (file: string, code: string) => modelFeatureOffenses(file, factsAt(file, code));
+    expect(mf(HANDLER, 'await callModel({ principal, feature: "brief", request, signal });')).toHaveLength(1);
+    expect(mf(HANDLER, 'await llm.callModel({ principal, feature: "checkin", request });')).toHaveLength(1);
+    expect(mf("src/lib/exec/brief-compose.ts", 'await callModel({ principal, feature: "brief", request, signal });')).toEqual([]);
+    expect(mf(CHECKINS_FILE, 'await callModel({ principal, feature: "checkin", request, signal });')).toEqual([]);
+    expect(mf(CHECKINS_FILE, 'await callModel({ principal, feature: "brief", request, signal });')).toHaveLength(1);
+    expect(mf(HANDLER, 'await callModel({ principal, feature: "chat", request });')).toEqual([]);
+  });
+
+  it("BD08 B-P8-6: logging headline, checkinText, userToken, buttonValue, clientIp in a brief file is flagged; counts and codes pass", () => {
+    const content = (file: string, code: string) => p8ContentOffenses(file, mailAt(file, code));
+    for (const code of [
+      "console.log(content.headline);", "console.warn(checkinText);", "console.error(userToken);", "console.log({ buttonValue });", "console.log(clientIp);",
+      "console.log(row.text);", "console.log(item.title);", 'void notifyOps({ key: "k", title: "t", detail: top.title });', "console.log(lines);",
+      "console.log(recipient.name);", "console.log(mac);", "console.log(parts.blocks);", "console.log(ip);", "console.log(userAgent);", "console.log(p.response_url);",
+      "console.log(trigger_id);", "console.log(slack_user_token);", "console.log(digest.summary);"
+    ]) {
+      expect(content(HANDLER, code), code).toHaveLength(1);
+    }
+    for (const code of [
+      "console.log(linesDropped, textLength, titlesShown, briefId, rev, status);", 'console.warn(`[exec-brief] brief ${id}: ${code}`);',
+      "console.error(`[exec-brief] failed (${err instanceof Error ? err.name : \"error\"})`);",
+      "void notifyOps({ key: BRIEF_OPS.failed.key(p.id), title: BRIEF_OPS.failed.title, detail: `principal ${p.id}, ${d}: ${code}` });",
+      "console.log(BRIEF_COPY.home[state]);", "console.log(net, family);"
+    ]) {
+      expect(content(HANDLER, code), code).toEqual([]);
+    }
+    const handler = (ret: string) => `export const h = { kind: "exec.brief-sweep", lane: "bulk", timeoutMs: 1, run: async (ctx) => (${ret}) };`;
+    expect(content(HANDLER, handler("{ outcome, headline: c.headline }"))).toHaveLength(1);
+    expect(content("src/lib/exec/handlers/checkin-send.ts", handler("{ status, text: row.text }"))).toHaveLength(1);
+    expect(content("src/lib/exec/handlers/ops-watch.ts", handler("{ kinds, titles }"))).toHaveLength(1);
+    expect(content(HANDLER, handler("{ scrubbed: 2, followed: 1, staleBuild: ids, linesDropped: 3 }"))).toEqual([]);
+    // access.ts and dd-bot.ts are in the class; a file outside it keeps its own vocabulary.
+    expect(content(ACCESS_FILE, "console.warn(ip, userAgent);")).toHaveLength(1);
+    expect(content(DD_BOT_FILE, "console.log(token);")).toHaveLength(1);
+    expect(content("src/lib/exec/jobs.ts", "console.log(item.title);")).toEqual([]);
+    expect(vocabFor("src/lib/exec/jobs.ts")).toBe(P3_VOCAB);
+    expect(vocabFor(HANDLER).words.has("headline")).toBe(true);
+  });
+
+  it("BD09 B-P8-9: a brief client component reaching a server module is flagged; client-safe imports pass", () => {
+    const modules = moduleIndex(scan.facts.keys());
+    const file = "src/components/exec/brief/RegenerateButton.tsx";
+    expect(isBriefComponent(file) && isBriefComponent("src/components/exec/settings/BriefSettingsForm.tsx")).toBe(true);
+    expect(isBriefComponent("src/components/exec/settings/SlackSection.tsx")).toBe(false);
+    expect(isClientRoot(file)).toBe(true);
+    const chainOf = (code: string) => serverOnlyChain(file, analyzeP5(sourceAt(file, code)), scan.facts, modules);
+    expect(chainOf('"use client";\nimport { getBriefByDate } from "@/lib/exec/brief-store";')).toEqual([file, "src/lib/exec/brief-store.ts"]);
+    expect(chainOf('"use client";\nimport { BRIEF_COPY } from "@/lib/exec/brief-copy";\nimport type { BriefPageView } from "@/lib/exec/brief-view";')).toBeNull();
+  });
+
+  it("BD10 B-P8-10: \"x-forwarded-for\" in a probe exec file is flagged (any case); access.ts and DD code aren't", () => {
+    const ff = (file: string, code: string) => forwardedForOffenses(file, factsAt(file, code));
+    expect(ff(OTHER, 'const ip = req.headers.get("x-forwarded-for");')).toHaveLength(1);
+    expect(ff("src/app/api/exec/briefs/latest/route.ts", 'const ip = req.headers.get("X-Forwarded-For");')).toHaveLength(1);
+    expect(ff(ACCESS_FILE, 'const ip = req.headers.get("x-forwarded-for");')).toEqual([]);
+    expect(ff("src/lib/some-dd-module.ts", 'const ip = req.headers.get("x-forwarded-for");')).toEqual([]);
+    expect(ff(OTHER, "// x-forwarded-for is read in access.ts only\nconst h = \"x-real-ip\";")).toEqual([]);
+    // The header name as a value counts (any case, padded); prose that mentions it (UI copy) isn't a read.
+    expect(ff(OTHER, 'const H = ["user-agent", " X-FORWARDED-FOR "];')).toHaveLength(1);
+    expect(ff("src/components/exec/settings/SettingsPageView.tsx", 'const c = { ipNote: "The IP is the right-most X-Forwarded-For entry." };')).toEqual([]);
+  });
+
+  it("BD11 B-P8-11 (with WF01/WF02): a second cron, another secret, a printed body or a changed daily workflow is flagged", () => {
+    const tick = readFileSync(path.join(ROOT, ".github/workflows/exec-tick.yml"), "utf8");
+    const daily = readFileSync(path.join(ROOT, ".github/workflows/daily-briefing.yml"), "utf8");
+    expect(workflowOffenses(tick, daily)).toEqual([]);
+    expect(workflowOffenses(tick.replace('    - cron: "7 10-17 * * *"', '    - cron: "7 10-17 * * *"\n    - cron: "0 12 * * *"'), daily)).toHaveLength(1);
+    expect(workflowOffenses(tick.replace("${{ vars.EXEC_TICK_URL }}", "${{ secrets.EXEC_TICK_URL }}"), daily)).toHaveLength(1);
+    expect(workflowOffenses(tick.replace("-o /dev/null ", ""), daily)).toHaveLength(1);
+    expect(workflowOffenses(tick, daily.replace("0 12 * * *", "0 11 * * *"))).toHaveLength(1);
+  });
+
+  it("BD12 B-P8-12: a DmTarget object literal in a probe file is flagged (the checker sees contextual types); the three makers pass", () => {
+    for (const [what, file, n] of dmTargetProbes) {
+      const facts = scan.probeP8.get(file);
+      if (!facts) throw new Error(`boundary test: ${what} wasn't scanned`);
+      expect(dmTargetOffenses(relPath(file), { p8: facts }), what).toHaveLength(n);
+    }
+    // Syntax alone sees casts and annotations; the makers are allowed.
+    const dm = (file: string, code: string) => dmTargetOffenses(file, factsAt(file, code));
+    expect(dm(OTHER, "const t = { token, dmChannelId } as DmTarget;")).toHaveLength(1);
+    expect(dm(OTHER, "const t = <DmTarget>{ token, dmChannelId };")).toHaveLength(1);
+    expect(dm(OTHER, "const t: DmTarget | null = { token, dmChannelId };")).toHaveLength(1);
+    expect(dm(OTHER, "const t = { token, dmChannelId } satisfies DmTarget;")).toHaveLength(1);
+    for (const maker of DM_TARGET_MAKERS) expect(dm(maker, "const t = { token, dmChannelId } as DmTarget;"), maker).toEqual([]);
+    expect(dm(OTHER, "function f(t: DmTarget) { return t.dmChannelId; }")).toEqual([]);
+    // Holding one isn't building one (P6's disconnect route keeps the target it opened).
+    expect(dm(OTHER, "let target: DmTarget | null = null; target = open.target;")).toEqual([]);
+  });
+
+  it("BD13 the same names inside comments and types aren't flagged by any P8 rule", () => {
+    const code = [
+      '// exec_briefs, exec_slack_accept_action_v2, slack_user_token, "x-forwarded-for", callModel({ feature: "brief" })',
+      '/* import { postDdBotDm } from "@/lib/exec/dd-bot"; console.log(headline); */',
+      'type Probe = { slack_user_token: string; t: "exec_briefs" | "x-forwarded-for" };',
+      "export const ok = 1;"
+    ].join("\n");
+    for (const file of [OTHER, HANDLER, CHECKINS_FILE, LEGACY_FILES[0], "src/lib/exec/brief-ownership.ts"]) {
+      const f = factsAt(file, code);
+      expect([...p8StoreOffenses(file, f), ...userTokenOffenses(file, f), ...ddBotOffenses(file, f), ...legacyGateOffenses(file, f), ...pureP8Offenses(file, f),
+        ...p8ContentOffenses(file, f.mail), ...checkinImportOffenses(file, f), ...modelFeatureOffenses(file, f), ...forwardedForOffenses(file, f),
+        ...dmTargetOffenses(file, f)], file).toEqual([]);
+    }
   });
 });

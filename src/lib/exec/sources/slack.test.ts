@@ -490,7 +490,8 @@ describe("the reads", () => {
   it("SC10 lookupUserByEmail is form-encoded; users_not_found → null", async () => {
     let found = true;
     const slack = installFakeSlack({ "users.lookupByEmail": () => (found ? SLACK_RECORDED.lookupByEmail() : SLACK_RECORDED.error("users_not_found")) });
-    expect(await lookupUserByEmail(TOKEN, "mitchell@scaledai.org")).toEqual({ id: "U0MITCH", deleted: false, isBot: false, teamId: "T0SCALED" });
+    // P8 (§3.21.3, C8): the summary gains the guest flags (false when Slack leaves them out).
+    expect(await lookupUserByEmail(TOKEN, "mitchell@scaledai.org")).toEqual({ id: "U0MITCH", deleted: false, isBot: false, teamId: "T0SCALED", isRestricted: false, isUltraRestricted: false });
     expect(slack.calls[0].headers["content-type"]).toBe("application/x-www-form-urlencoded");
     expect(slack.calls[0].body).toEqual({ email: "mitchell@scaledai.org" });
     found = false;
@@ -499,7 +500,7 @@ describe("the reads", () => {
 
   it("lookupUserByEmail reports deleted and bot users as such", async () => {
     installFakeSlack({ "users.lookupByEmail": () => ({ ok: true, user: { id: "U0GONE", deleted: true, is_bot: true } }) });
-    expect(await lookupUserByEmail(TOKEN, "x@scaledai.org")).toEqual({ id: "U0GONE", deleted: true, isBot: true, teamId: null });
+    expect(await lookupUserByEmail(TOKEN, "x@scaledai.org")).toEqual({ id: "U0GONE", deleted: true, isBot: true, teamId: null, isRestricted: false, isUltraRestricted: false });
   });
 
   it("authTest and openDm read their recorded shapes", async () => {

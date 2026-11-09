@@ -615,6 +615,44 @@ export function createFakeSlackDb(seed?: FakeSlackDbSeed): FakeSlackDb {
     return { outcome: job === null ? "duplicate" : "enqueued" };
   }
 
+  /** P8 (§2.1.12, C43; Area D): exec_slack_accept_action_v2, mirrored from 20261111100000_exec_brief.sql: P6's checks in P6's
+   *  order with the allow-list widened by the two check-in buttons, then one exec.checkin-* job per CLICK (dedupe
+   *  checkin-send:<trigger_id> / checkin-rewrite:<trigger_id>, intel-17), else P6's own insert. The PGRST202 seam is `missing`
+   *  (db.missing.add("exec_slack_accept_action_v2")), as for any RPC. */
+  function acceptActionV2(a: Row): Row {
+    const inst = [...rowsOf(SI)]
+      .filter((i) => isNull(i.revoked_at) && i.team_id === a.p_team_id && i.app_id === a.p_api_app_id && !isNull(a.p_user_id) && i.user_id === a.p_user_id)
+      .sort((x, y) => ms(x.installed_at) - ms(y.installed_at))[0];
+    const ignored = (why: string) => ({ outcome: "ignored", reason: why });
+    if (!inst) return ignored("not_owner");
+    if (a.p_container_type !== "message") return ignored("container");
+    if (a.p_channel_id !== inst.slack_dm_channel_id) return ignored("other_channel");
+    if (!matches(a.p_message_ts, TS)) return ignored("bad_ts");
+    if (!["ea_draft_save", "ea_draft_regen", "ea_card_refresh", "ea_task_create", "ea_task_dismiss", "ea_fb_up", "ea_fb_down", "ea_ci_send", "ea_ci_rewrite"]
+      .includes(String(a.p_action_id))) {
+      return ignored("unknown_action");
+    }
+    if (typeof a.p_value !== "string" || a.p_value.length > 200 || !/^[a-z][0-9]\.[A-Za-z0-9_.]+$/.test(a.p_value)) return ignored("bad_value");
+    if (!matches(a.p_trigger_id, /^[A-Za-z0-9.]{1,200}$/)) return ignored("bad_trigger");
+    if (a.p_action_id === "ea_ci_send" || a.p_action_id === "ea_ci_rewrite") {
+      if (!/^c1\.ebc_[0-9a-f]{32}\.[0-9]{1,4}\.[0-9a-f]{32}$/.test(a.p_value)) return ignored("bad_value");
+      const parts = a.p_value.split(".");
+      const send = a.p_action_id === "ea_ci_send";
+      const ciJob = insertJob({
+        kind: send ? "exec.checkin-send" : "exec.checkin-rewrite", lane: "interactive", principal_id: inst.principal_id,
+        payload: { installation_id: inst.id, checkin_id: parts[1], rev: Number(parts[2]), value: a.p_value, channel_id: a.p_channel_id, message_ts: a.p_message_ts },
+        dedupe_key: `${send ? "checkin-send:" : "checkin-rewrite:"}${String(a.p_trigger_id)}`, max_attempts: 1
+      });
+      return { outcome: ciJob === null ? "duplicate" : "enqueued" };
+    }
+    const job = insertJob({
+      kind: "exec.slack-action", lane: "interactive", principal_id: inst.principal_id,
+      payload: { installation_id: inst.id, action_id: a.p_action_id, value: a.p_value, channel_id: a.p_channel_id, message_ts: a.p_message_ts },
+      dedupe_key: `slack-act:${String(a.p_trigger_id)}`, max_attempts: 1
+    });
+    return { outcome: job === null ? "duplicate" : "enqueued" };
+  }
+
   function purgeInstallation(a: Row): Row {
     const id = a.p_installation_id;
     const inst = rowsOf(SI).find((i) => i.id === id && !isNull(i.revoked_at));
@@ -764,6 +802,7 @@ export function createFakeSlackDb(seed?: FakeSlackDbSeed): FakeSlackDb {
   const rpcs: Record<string, (args: Row) => unknown> = {
     exec_slack_accept_event: acceptEvent,
     exec_slack_accept_action: acceptAction,
+    exec_slack_accept_action_v2: acceptActionV2,
     exec_slack_revoke_installation: revokeInstallation,
     exec_slack_purge_installation: purgeInstallation,
     exec_slack_conversation_for_thread: conversationForThread,

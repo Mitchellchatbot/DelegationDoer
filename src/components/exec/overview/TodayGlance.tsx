@@ -6,9 +6,10 @@ import { BasisLabel } from "../BasisLabel";
 
 // "Today at a glance", the dark card at the top of the Overview (CfoRead's
 // look). Four fixed sentences built from the tiles: no model writes any of
-// it, and the AI brief takes this card's place in P8. Each line keeps its
-// basis label like any other fact, and a tile whose read failed is named as
-// not loaded, never counted as zero.
+// it, and the AI brief takes this card's place when one exists for today
+// (P8 C41: BriefCard; before today's brief time, yesterday's). Each line keeps
+// its basis label like any other fact, and a tile whose read failed is named
+// as not loaded, never counted as zero.
 
 interface GlanceLine {
   key: string;

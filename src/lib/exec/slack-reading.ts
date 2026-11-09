@@ -124,5 +124,6 @@ export { listAuthorOptouts, purgeAuthor } from "@/lib/exec/slack-read-store";   
 export { getSlackItemsByIds, listIntelChannels } from "@/lib/exec/slack-read-store";
 // P7b fixer (security-3): the newest opt-out's time, so P7b withholds digests built before it until its sweep blanks them.
 export { latestAuthorOptoutAt } from "@/lib/exec/slack-read-store";
+export { purgeReading } from "@/lib/exec/slack-read-store";           // P8 A8: the system purge's revoked-reading step (M10)
 export { getDdBotIdentity } from "@/lib/exec/dd-bot";            // P8 M7
 export { SLACK_ATTENTION_KINDS, SLACK_CAP_FEATURES } from "@/lib/exec/slack-read-types";

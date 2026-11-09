@@ -11,6 +11,7 @@ import {
   countEnabledMailPinnedPrincipals,
   isValidTimeZone,
   listEnabledPrincipals,
+  loadOwnerBriefRowForLegacy,
   loadPrincipalById,
   loadPrincipalForUser,
   loadSettings,
@@ -938,5 +939,140 @@ describe("P7a settings: the slack group and watch_mode (SE01-SE04)", () => {
     ]);
     expect(SETTINGS_FIELDS.filter((d) => d.section === "slack").map((d) => d.key)).toEqual(["slackReadingEnabled", "slackDailyCapUsd", "retentionDaysSlack"]);
     expect(settingsFieldFor("retentionDaysSlack")?.group).toBe("base");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P8 (contract §3.5, §5.1 OW12): the legacy brief gate's principal-free read
+// ---------------------------------------------------------------------------
+
+describe("loadOwnerBriefRowForLegacy (OW12)", () => {
+  interface LegacyQuery { table: string; columns: string | null; eq: [string, unknown][]; ilike: [string, string][]; limit: number | null }
+  /** A chainable client for the loader's three reads: select / eq / ilike (a LIKE pattern, \-escaped, case-insensitive) / limit / maybeSingle. */
+  function legacyDb(tables: Record<string, Row[]>, errors: Record<string, DbError> = {}) {
+    const queries: LegacyQuery[] = [];
+    const likeToRegExp = (pattern: string) => {
+      let re = "";
+      for (let i = 0; i < pattern.length; i += 1) {
+        const c = pattern[i];
+        if (c === "\\" && i + 1 < pattern.length) re += pattern[++i].replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        else if (c === "%") re += ".*";
+        else if (c === "_") re += ".";
+        else re += c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      }
+      return new RegExp(`^${re}$`, "i");
+    };
+    const client = {
+      from(table: string) {
+        const q: LegacyQuery = { table, columns: null, eq: [], ilike: [], limit: null };
+        queries.push(q);
+        const run = () => {
+          if (errors[table]) return { data: null, error: errors[table] };
+          const rows = (tables[table] ?? [])
+            .filter((r) => q.eq.every(([k, v]) => r[k] === v))
+            .filter((r) => q.ilike.every(([k, p]) => typeof r[k] === "string" && likeToRegExp(p).test(r[k] as string)));
+          return { data: q.limit === null ? rows : rows.slice(0, q.limit), error: null };
+        };
+        const b = {
+          select(columns: string) { q.columns = columns; return b; },
+          eq(column: string, value: unknown) { q.eq.push([column, value]); return b; },
+          ilike(column: string, pattern: string) { q.ilike.push([column, pattern]); return b; },
+          limit(n: number) { q.limit = n; return b; },
+          async maybeSingle() {
+            const r = run();
+            if (r.error) return r;
+            if ((r.data as Row[]).length > 1) return { data: null, error: { message: "multiple rows", code: "PGRST116" } };
+            return { data: (r.data as Row[])[0] ?? null, error: null };
+          },
+          then<A, B>(onFulfilled?: (v: ReturnType<typeof run>) => A, onRejected?: (e: unknown) => B) {
+            return Promise.resolve(run()).then(onFulfilled, onRejected);
+          }
+        };
+        return b;
+      }
+    };
+    vi.mocked(getSupabaseAdmin).mockReturnValue(client as unknown as SupabaseClient);
+    return { queries };
+  }
+  const OWNER = "mitchell@scaledai.org";
+  const users = [userRow({ email: "Mitchell@ScaledAI.org" }), userRow({ id: "u_2", email: "mitchellxscaledai.org" }), userRow({ id: "u_3", email: "mitchell@scaledai_org" })];
+
+  it("matches the owner's users row case-insensitively and reads the brief settings and zone, never minting a principal", async () => {
+    const db = legacyDb({ users, exec_principals: [principalRow()], exec_settings: [settingsRow()] });
+    const read = await loadOwnerBriefRowForLegacy(" Mitchell@ScaledAI.org ");
+    expect(read).toEqual({
+      state: "ok",
+      row: { principalId: "ep_1", enabled: true, briefEnabled: true, supersede: true, checkinsEnabled: false, briefLocalTime: "07:30", briefTimezone: "Asia/Karachi" }
+    });
+    if (read.state !== "ok") throw new Error("expected a row");
+    // Scalars only: nothing that holds the principal brand, the email, a name or a token.
+    expect(Object.keys(read.row).sort()).toEqual(["briefEnabled", "briefLocalTime", "briefTimezone", "checkinsEnabled", "enabled", "principalId", "supersede"]);
+    expect(Object.getOwnPropertySymbols(read.row)).toEqual([]);
+    expect(db.queries.map((q) => [q.table, q.columns])).toEqual([
+      ["users", "id,email,work_timezone"],
+      ["exec_principals", "id,enabled"],
+      ["exec_settings", "principal_id,brief_enabled,brief_local_time,brief_timezone,supersede_legacy_brief,checkins_enabled"]
+    ]);
+    expect(db.queries[0].ilike).toEqual([["email", "mitchell@scaledai.org"]]);
+    expect(db.queries[0].limit).toBe(2);
+  });
+
+  it("escapes % and _ so a lookalike email never matches (the pattern is exact)", async () => {
+    const db = legacyDb({ users, exec_principals: [principalRow({ id: "ep_3", user_id: "u_3" })], exec_settings: [] });
+    // "mitchell@scaledai_org" with an unescaped _ would match "mitchell@scaledai.org"'s row too (two rows: a throw).
+    await expect(loadOwnerBriefRowForLegacy("mitchell@scaledai_org")).resolves.toMatchObject({ state: "ok", row: { principalId: "ep_3" } });
+    expect(db.queries[0].ilike).toEqual([["email", "mitchell@scaledai\\_org"]]);
+    legacyDb({ users: [userRow({ email: "a@b.org" })], exec_principals: [principalRow()], exec_settings: [] });
+    await expect(loadOwnerBriefRowForLegacy("%@b.org")).resolves.toEqual({ state: "no_principal" });
+    await expect(loadOwnerBriefRowForLegacy("a*@b.org")).rejects.toThrow(TypeError);
+  });
+
+  it("two users rows for the email → throws", async () => {
+    legacyDb({ users: [userRow({ email: OWNER }), userRow({ id: "u_9", email: "MITCHELL@scaledai.org" })], exec_principals: [principalRow()], exec_settings: [] });
+    await expect(loadOwnerBriefRowForLegacy(OWNER)).rejects.toThrow("more than one row");
+  });
+
+  it("no user or no principal → no_principal; a disabled principal is still read (enabled false)", async () => {
+    legacyDb({ users: [], exec_principals: [principalRow()], exec_settings: [] });
+    await expect(loadOwnerBriefRowForLegacy(OWNER)).resolves.toEqual({ state: "no_principal" });
+    legacyDb({ users, exec_principals: [], exec_settings: [] });
+    await expect(loadOwnerBriefRowForLegacy(OWNER)).resolves.toEqual({ state: "no_principal" });
+    await expect(loadOwnerBriefRowForLegacy("  ")).resolves.toEqual({ state: "no_principal" });
+    legacyDb({ users, exec_principals: [principalRow({ enabled: false })], exec_settings: [] });
+    await expect(loadOwnerBriefRowForLegacy(OWNER)).resolves.toEqual({
+      state: "ok",
+      // No settings row: the P2a defaults (brief off, 08:00, check-ins on) and the user's zone.
+      row: { principalId: "ep_1", enabled: false, briefEnabled: false, supersede: false, checkinsEnabled: true, briefLocalTime: "08:00", briefTimezone: "America/Chicago" }
+    });
+  });
+
+  it.each([["42P01"], ["PGRST205"], ["42703"], ["PGRST204"]])("%s on exec_principals or exec_settings → not_installed", async (code) => {
+    legacyDb({ users, exec_principals: [principalRow()], exec_settings: [] }, { exec_principals: { message: "relation does not exist", code } });
+    await expect(loadOwnerBriefRowForLegacy(OWNER)).resolves.toEqual({ state: "not_installed" });
+    legacyDb({ users, exec_principals: [principalRow()], exec_settings: [] }, { exec_settings: { message: "relation does not exist", code } });
+    await expect(loadOwnerBriefRowForLegacy(OWNER)).resolves.toEqual({ state: "not_installed" });
+  });
+
+  it("any other error throws, by table and code only", async () => {
+    legacyDb({ users }, { users: { message: "canceling statement due to statement timeout mitchell@scaledai.org", code: "57014" } });
+    await expect(loadOwnerBriefRowForLegacy(OWNER)).rejects.toThrow("users read failed (57014)");
+    legacyDb({ users, exec_principals: [principalRow()] }, { exec_principals: { message: "connection reset" } });
+    await expect(loadOwnerBriefRowForLegacy(OWNER)).rejects.toThrow("exec_principals read failed (error)");
+    legacyDb({ users, exec_principals: [principalRow()] }, { exec_settings: { message: "timeout", code: "57014" } });
+    const err = await loadOwnerBriefRowForLegacy(OWNER).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toBe("exec_settings read failed (57014)");
+    expect((err as Error).message).not.toContain("mitchell");
+  });
+
+  it("the brief zone matches principalFromRows' timezone exactly (the legacy gate and the exec side agree on the day)", async () => {
+    for (const [settingsTz, userTz] of [["Asia/Karachi", "America/Chicago"], [null, "America/Chicago"], [null, null], ["Not/AZone", "Asia/Manila"]] as const) {
+      legacyDb({ users: [userRow({ work_timezone: userTz })], exec_principals: [principalRow()], exec_settings: [settingsRow({ brief_timezone: settingsTz })] });
+      const read = await loadOwnerBriefRowForLegacy(OWNER);
+      if (read.state !== "ok") throw new Error("expected a row");
+      const p = principalFromRows(principalRow() as unknown as PRow, userRow({ work_timezone: userTz }) as unknown as URow, settingsRow({ brief_timezone: settingsTz }) as unknown as SRow);
+      expect(read.row.briefTimezone).toBe(p?.briefTimezone);
+      expect(p?.briefTimezone).toBe(p?.timezone);
+    }
   });
 });

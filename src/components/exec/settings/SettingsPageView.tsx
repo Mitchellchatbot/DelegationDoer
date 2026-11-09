@@ -7,6 +7,7 @@ import type { SlackConnectResult } from "@/lib/exec/slack-types";
 import { voiceCanBuild } from "@/lib/exec/ui/settings-api";
 import type { SettingsView } from "@/lib/exec/view-types";
 import { BasisLabel } from "../BasisLabel";
+import { BriefSettingsSection } from "./BriefSettingsSection";
 import { EXEC_TABS, ExecTabs } from "../ExecTabs";
 import { ExecHeader } from "../ExecHeader";
 import { SectionCard } from "../SectionCard";
@@ -17,22 +18,23 @@ import { VoiceResetButton } from "./VoiceResetButton";
 // /executive/settings (P5a contract §3.13.2, A6, C14, C20): the switches he
 // can change (SettingsForm, frame-guarded), today's AI spend, the settings
 // the team sets by hand (read-only here), the learned writing style with its
-// reset, feedback totals and recent access, and (P6, contract §3.13) the Slack
-// app's own section: Connect, Reconnect, Disconnect. Rendered from a SettingsView only:
+// reset, feedback totals and recent access, (P6, contract §3.13) the Slack
+// app's own section: Connect, Reconnect, Disconnect, and (P8, contract §3.17.5)
+// the morning brief's own section. Rendered from a SettingsView only:
 // each section fails soft on its own, and no value is shown as a zero when it
 // couldn't be read.
 
 export const SETTINGS_PAGE_COPY = {
-  ipNote: "The IP is the first X-Forwarded-For entry and can be spoofed.",
+  // P8 (C21): clientIp now takes the right-most X-Forwarded-For hop, the one our host's proxy appends (never X-Real-IP).
+  // P8 fixer ui-7 (M13, C20): the IP also feeds the new-network sign-in alert, so the note no longer says "for your information only".
+  ipNote: "The IP is the address our host's proxy recorded for the request. It's shown here and used only to alert you to sign-ins from a new network.",
   noFeedback: "No feedback yet.",
   feedbackNotInstalled: "Not available yet: the team needs to apply the database update.",
   voiceNotInstalled: "Not available yet: the team needs to apply the database update.",
   voiceNone: "No profile yet. It builds once a week from your sent email.",
-  teamSet: "Set by the team. Shown here for reference.",
-  // No assistant brief (P8) exists in this build and nothing reads its columns,
-  // so its stored values are never shown (review ui-3). The Slack app (P6) has
-  // its own section (SlackSection); the old Slack check-in columns stay unshown.
-  briefNotSetUp: "Not set up yet"
+  teamSet: "Set by the team. Shown here for reference."
+  // P8 (AM-P8-15): the morning brief has its own section now (BriefSettingsSection); the read-only "Not set up yet"
+  // row is gone. The Slack app (P6) has its own section (SlackSection); the old Slack check-in columns stay unshown.
 } as const;
 
 const usd = (n: number) => (Number.isFinite(n) ? `$${n.toFixed(2)}` : MISSING);
@@ -43,6 +45,7 @@ const FEATURE_LABEL: Readonly<Record<string, string>> = {
   draft: "Drafts",
   voice: "Writing style",
   brief: "Brief",
+  checkin: "Check-ins",   // P8 (§3.21.1): the brief's check-in notes
   digest: "Digest",
   chat: "Chat",
   ddtext: "DD text triage",
@@ -164,7 +167,7 @@ function ReadOnly({ view }: { view: SettingsView }) {
   const s = view.settings;
   const mailbox = view.pinnedMailbox;
   return (
-    <SectionCard title="Email, drafts and brief" icon={Waypoints} subtitle={SETTINGS_PAGE_COPY.teamSet}>
+    <SectionCard title="Email and drafts" icon={Waypoints} subtitle={SETTINGS_PAGE_COPY.teamSet}>
       <dl className="divide-y divide-slate-100">
         <Row label="Email intelligence">{s.emailSchemaReady ? onOff(s.emailEnabled) : "Not set up yet"}</Row>
         <Row label="Pinned mailbox">
@@ -180,7 +183,6 @@ function ReadOnly({ view }: { view: SettingsView }) {
         </Row>
         <Row label="Assistant drafts">{s.draftsSchemaReady ? onOff(s.draftsEnabled) : "Not set up yet"}</Row>
         <Row label="Send from DD">{s.draftsSchemaReady ? onOff(s.sendEnabled) : "Not set up yet"}</Row>
-        <Row label="Morning brief">{SETTINGS_PAGE_COPY.briefNotSetUp}</Row>
       </dl>
     </SectionCard>
   );
@@ -340,6 +342,7 @@ export function SettingsPageView({
         <div className="flex min-w-0 flex-col gap-5">
           <Spend view={view} />
           <VoiceCard view={view} />
+          {view.brief !== undefined && <BriefSettingsSection view={view.brief} />}
           <ReadOnly view={view} />
           <SlackSection view={view.slack} result={slackResult} who={who} onCanonicalHost={onCanonicalHost} tz={tz} now={now} tags={slackTags} />
           <Feedback view={view} />

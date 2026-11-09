@@ -466,6 +466,18 @@ describe("RO10 save", () => {
     expect((await save()).status).toBe(503);
     noSideEffects();
   });
+  // P5b F3 / F12 (C45): R7's second confirmation for a draft started in a chat that read other private material.
+  it("a draft that uses private refs → 409 private_refs_unconfirmed without confirmPrivate, before any audit row or clone call; with it → saved", async () => {
+    env = setupDraftEnv({ rows: [draftRow({ origin: "chat", instruction_by: "assistant", uses_private_refs: true })] });
+    const res = await save();
+    expect(res.status).toBe(409);
+    expect(await bodyOf(res)).toEqual({ error: "private_refs_unconfirmed" });
+    noSideEffects();
+    expect(rowOf(env.db)).toMatchObject({ status: "draft", version: 1 });
+    env.fake.answer("create_reply", okCreate());
+    expect((await save({ version: 1, confirmPrivate: true })).status).toBe(200);
+    expect(rowOf(env.db).status).toBe("saved");
+  });
   it("audit down → 503 audit_unavailable and no clone call", async () => {
     env = setupDraftEnv({ rows: [draftRow()] });
     vi.mocked(auditStart).mockRejectedValue(new AuditUnavailableError("down"));

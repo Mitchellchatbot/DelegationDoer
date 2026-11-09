@@ -82,6 +82,9 @@ export function draftView(over: ViewOverrides = {}): DraftView {
     capabilities: caps(capabilities),
     createdAt: "2026-11-06T14:00:00.000Z",
     updatedAt: "2026-11-06T14:59:30.000Z",
+    // P5b (F5, F12): a web draft by default.
+    usesPrivateRefs: false,
+    instructionBy: "owner",
     ...rest
   };
 }

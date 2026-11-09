@@ -31,7 +31,18 @@ export function FeedFreshness({ checkedAt, now }: { checkedAt: string | null; no
   );
 }
 
-export function AttentionSection({ attention, tz, now }: { attention: OverviewSection<OverviewAttention>; tz: string; now: string }) {
+export function AttentionSection({
+  attention,
+  tz,
+  now,
+  askAiEnabled = false
+}: {
+  attention: OverviewSection<OverviewAttention>;
+  tz: string;
+  now: string;
+  /** P5b (C33): each row gets Ask AI (the Overview passes it while chat is on). */
+  askAiEnabled?: boolean;
+}) {
   if (!attention.ok) return <SectionCard title="Needs attention" icon={BellRing} error />;
   const { items, limit, checkedAt, draftsEnabled, hasMore, ddtextCheckedAt, hiddenEmail, emailScreen, feedbackAvailable } = attention.data;
   const count = hasMore || items.length >= limit ? `Top ${items.length} by priority` : items.length > 0 ? pluralize(items.length, "item") : null;
@@ -58,6 +69,7 @@ export function AttentionSection({ attention, tz, now }: { attention: OverviewSe
         emailScreen={emailScreen}
         draftsAvailable={draftsEnabled === true}
         feedbackAvailable={feedbackAvailable !== false}
+        askAiEnabled={askAiEnabled}
       />
     </SectionCard>
   );

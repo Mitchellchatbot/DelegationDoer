@@ -11,6 +11,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const { refresh } = vi.hoisted(() => ({ refresh: vi.fn() }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh }) }));
 
+import ChatLoading from "@/app/(main)/executive/chat/loading";
 import EmailLoading from "@/app/(main)/executive/email/loading";
 import SegmentError from "@/app/(main)/executive/error";
 import OwnerSegmentLayout, * as layoutModule from "@/app/(main)/executive/layout";
@@ -32,7 +33,7 @@ beforeEach(() => {
 });
 
 describe("segment files that render before the gate", () => {
-  for (const file of ["layout.tsx", "loading.tsx", "error.tsx", "email/loading.tsx"]) {
+  for (const file of ["layout.tsx", "loading.tsx", "error.tsx", "email/loading.tsx", "chat/loading.tsx"]) {
     it(`${file} never names the feature in its source`, () => {
       expect(source(file)).not.toMatch(FEATURE_WORDS);
     });
@@ -64,6 +65,16 @@ describe("segment files that render before the gate", () => {
     expect(out).not.toMatch(FEATURE_WORDS);
     // It is only the shapes: no data, no awaits, no imports from the app.
     const src = source("email/loading.tsx");
+    expect(src).not.toMatch(/\bawait\b|\basync\b|^import /m);
+  });
+
+  it("the chat page's loading is shapes only too (P5b test 99)", () => {
+    const out = renderToStaticMarkup(createElement(ChatLoading));
+    expect(textOf(out).trim()).toBe("");
+    expect(out).toContain('aria-busy="true"');
+    expect(out).toContain("dd-skeleton");
+    expect(out).not.toMatch(FEATURE_WORDS);
+    const src = source("chat/loading.tsx");
     expect(src).not.toMatch(/\bawait\b|\basync\b|^import /m);
   });
 

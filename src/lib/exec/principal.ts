@@ -48,7 +48,15 @@ export const DEFAULT_SETTINGS: Omit<ExecSettings, "principalId"> = {
   // Stage -1 seed (contract §3.7.1); the column-group loader is Area B's.
   ddtextEnabled: false,
   retentionDaysDdtext: 90,
-  ddtextSchemaReady: false
+  ddtextSchemaReady: false,
+  // P5b (B8, B10, contract §3.2): chat and the Ask AI routing stay off until he
+  // turns them on in Settings, and a read that never saw the P5b columns can't
+  // vouch for the schema. Stage -1 seed; the "chat" column group, the
+  // registry fields and the PATCH are Area A's.
+  chatEnabled: false,
+  askAiUsesExec: false,
+  chatDailyCapUsd: 9,
+  chatSchemaReady: false
 };
 
 const PRINCIPAL_COLS = "id,user_id,enabled,mail_account_ids,slack_team_id,slack_user_id";
@@ -64,25 +72,31 @@ const SETTINGS_BASE_COLS =
   "retention_days_chat,daily_cost_cap_usd,updated_at";
 const P4_SETTINGS_COLUMNS = ["drafts_enabled", "send_enabled", "voice_enabled"] as const;
 const DDTEXT_SETTINGS_COLUMNS = ["ddtext_enabled", "retention_days_ddtext"] as const;
+/** P5b's three columns (20261107100000_exec_chat.sql): the "chat" group. */
+const CHAT_SETTINGS_COLUMNS = ["chat_enabled", "ask_ai_uses_exec", "chat_daily_cap_usd"] as const;
 
 /**
  * Optional exec_settings column groups, in migration order (contract §3.7.1,
  * K15). A group is "schema ready" when the settings read selected it. P5b
- * appends { key: "chat", columns: [...] }.
+ * appended { key: "chat", columns: CHAT_SETTINGS_COLUMNS }.
  */
 export const SETTINGS_COLUMN_GROUPS: readonly { key: SettingsSchemaKey; columns: readonly string[] }[] = [
   { key: "email", columns: ["email_enabled"] },
   { key: "drafts", columns: P4_SETTINGS_COLUMNS },
-  { key: "ddtext", columns: DDTEXT_SETTINGS_COLUMNS }
+  { key: "ddtext", columns: DDTEXT_SETTINGS_COLUMNS },
+  { key: "chat", columns: CHAT_SETTINGS_COLUMNS }
 ];
 
 /**
  * A group that can't exist without another (bindings AM9): P4's migration
  * refuses to run before P3's email_enabled column exists, so a read that
  * finds email_enabled missing drops the drafts group with it. P5a's ddtext
- * group needs only P2a and P2b, so it stands alone.
+ * group needs only P2a and P2b, so it stands alone. P5b's migration refuses
+ * to run before P4's exec_drafts (which comes with P4's switches), so a read
+ * that finds the drafts group missing drops the chat group too (and email
+ * missing takes drafts, then chat).
  */
-const GROUP_REQUIRES: Readonly<Partial<Record<SettingsSchemaKey, SettingsSchemaKey>>> = Object.freeze({ drafts: "email" });
+const GROUP_REQUIRES: Readonly<Partial<Record<SettingsSchemaKey, SettingsSchemaKey>>> = Object.freeze({ drafts: "email", chat: "drafts" });
 
 /** Which optional column groups a settings read selected (= whose migration is applied). */
 export type SettingsSchemaFlags = Record<SettingsSchemaKey, boolean>;
@@ -133,6 +147,10 @@ interface SettingsRow {
   /** Absent when the P5a migration isn't applied. */
   ddtext_enabled?: boolean | null;
   retention_days_ddtext?: number | null;
+  /** Absent when the P5b migration isn't applied. */
+  chat_enabled?: boolean | null;
+  ask_ai_uses_exec?: boolean | null;
+  chat_daily_cap_usd?: number | string | null;
   /** The CAS token, exactly as PostgREST printed it (never parsed: microseconds matter). */
   updated_at?: string | null;
 }
@@ -165,27 +183,29 @@ function num(v: number | string | null | undefined, fallback: number): number {
  *
  * `emailSchemaReady` says whether the read that produced `row` selected the
  * P3 email_enabled column, `draftsSchemaReady` whether it selected the three
- * P4 switches, and `ddtextSchemaReady` whether it selected both P5a columns.
+ * P4 switches, `ddtextSchemaReady` whether it selected both P5a columns, and
+ * `chatSchemaReady` whether it selected all three P5b columns.
  * The loader always says; when a caller doesn't, the row itself answers (it
  * has the key only if the column was selected), and no row means not ready.
  * Each switch is on only when its schema is ready and the column is exactly
  * true: NULL or a missing column is off (L1). A missing or unreadable
- * retention takes its default (retentionDaysDdtext 90).
+ * retention or cap takes its default (retentionDaysDdtext 90, chatDailyCapUsd 9).
  */
 export function settingsFromRow(
   row: SettingsRow | null,
   principalId: string,
-  opts: { emailSchemaReady?: boolean; draftsSchemaReady?: boolean; ddtextSchemaReady?: boolean } = {}
+  opts: { emailSchemaReady?: boolean; draftsSchemaReady?: boolean; ddtextSchemaReady?: boolean; chatSchemaReady?: boolean } = {}
 ): ExecSettings {
   const d = DEFAULT_SETTINGS;
   const has = (column: string) => row !== null && Object.prototype.hasOwnProperty.call(row, column);
   const emailSchemaReady = opts.emailSchemaReady ?? has("email_enabled");
   const draftsSchemaReady = opts.draftsSchemaReady ?? P4_SETTINGS_COLUMNS.every(has);
   const ddtextSchemaReady = opts.ddtextSchemaReady ?? DDTEXT_SETTINGS_COLUMNS.every(has);
+  const chatSchemaReady = opts.chatSchemaReady ?? CHAT_SETTINGS_COLUMNS.every(has);
   if (!row) {
     return {
       principalId, ...d, mutedChannelIds: [], emailEnabled: false, emailSchemaReady, draftsEnabled: false, sendEnabled: false, voiceEnabled: false,
-      draftsSchemaReady, ddtextEnabled: false, ddtextSchemaReady
+      draftsSchemaReady, ddtextEnabled: false, ddtextSchemaReady, chatEnabled: false, askAiUsesExec: false, chatSchemaReady
     };
   }
   const policy: RestrictedPolicy = row.restricted_policy === "dd_only" ? "dd_only" : "hidden";
@@ -212,7 +232,11 @@ export function settingsFromRow(
     draftsSchemaReady,
     ddtextEnabled: ddtextSchemaReady && row.ddtext_enabled === true,
     retentionDaysDdtext: num(row.retention_days_ddtext, d.retentionDaysDdtext),
-    ddtextSchemaReady
+    ddtextSchemaReady,
+    chatEnabled: chatSchemaReady && row.chat_enabled === true,
+    askAiUsesExec: chatSchemaReady && row.ask_ai_uses_exec === true,
+    chatDailyCapUsd: num(row.chat_daily_cap_usd, d.chatDailyCapUsd),
+    chatSchemaReady
   };
 }
 
@@ -250,12 +274,26 @@ export function settingsColumnsFor(schema: Readonly<SettingsSchemaFlags>): strin
 }
 
 /** The schema flags a settings value carries, by column-group key (SettingsView.schema). */
-export function settingsSchemaFlags(s: Pick<ExecSettings, "emailSchemaReady" | "draftsSchemaReady" | "ddtextSchemaReady">): SettingsSchemaFlags {
-  return { email: s.emailSchemaReady === true, drafts: s.draftsSchemaReady === true, ddtext: s.ddtextSchemaReady === true };
+export function settingsSchemaFlags(
+  s: Pick<ExecSettings, "emailSchemaReady" | "draftsSchemaReady" | "ddtextSchemaReady" | "chatSchemaReady">
+): SettingsSchemaFlags {
+  return {
+    email: s.emailSchemaReady === true,
+    drafts: s.draftsSchemaReady === true,
+    ddtext: s.ddtextSchemaReady === true,
+    chat: s.chatSchemaReady === true
+  };
 }
 
-function schemaOpts(schema: Readonly<SettingsSchemaFlags>): { emailSchemaReady: boolean; draftsSchemaReady: boolean; ddtextSchemaReady: boolean } {
-  return { emailSchemaReady: schema.email === true, draftsSchemaReady: schema.drafts === true, ddtextSchemaReady: schema.ddtext === true };
+function schemaOpts(
+  schema: Readonly<SettingsSchemaFlags>
+): { emailSchemaReady: boolean; draftsSchemaReady: boolean; ddtextSchemaReady: boolean; chatSchemaReady: boolean } {
+  return {
+    emailSchemaReady: schema.email === true,
+    draftsSchemaReady: schema.drafts === true,
+    ddtextSchemaReady: schema.ddtext === true,
+    chatSchemaReady: schema.chat === true
+  };
 }
 
 /**

@@ -17,7 +17,8 @@ import { NavDrawerProvider } from "@/components/NavDrawerProvider";
 import { ToastSuccessIcon, ToastErrorIcon, ToastWarningIcon } from "@/components/ToastIcons";
 import { MultitaskBubbles } from "@/components/multitask/MultitaskBubbles";
 import { primaryDepartment } from "@/lib/departments";
-import { execNavItemFor } from "@/lib/exec/access";
+import { execAskAiRoutingStateFor, execNavItemFor } from "@/lib/exec/access";
+import { AskAiRoutingProvider } from "@/components/AskAiRouting";
 
 export default async function MainLayout({ children }: { children: React.ReactNode }) {
   // Three legitimate states:
@@ -50,10 +51,16 @@ export default async function MainLayout({ children }: { children: React.ReactNo
   // page gate would admit. It only decides whether the row is drawn (it never
   // throws); the page's own gate is what keeps everyone else out. Its label
   // and link exist only in this value, so no other browser receives them.
-  const ownerNavItem = await execNavItemFor(user);
+  // askAiRouted (same checks, plus the owner's own Settings switch) says
+  // whether the Ask AI drawer answers through the assistant on this load;
+  // it is one boolean, and false for everyone else and on any error. With
+  // it, whether his mailbox can be read (one more boolean, false likewise),
+  // so the routed drawer doesn't claim a mailbox that is off.
+  const [ownerNavItem, askAiRouting] = await Promise.all([execNavItemFor(user), execAskAiRoutingStateFor(user)]);
 
   return (
     <UserProvider user={user}>
+      <AskAiRoutingProvider routed={askAiRouting.routed} emailOn={askAiRouting.emailOn}>
       <PresenceProvider>
       <TeamProvider>
       <ClockProvider>
@@ -114,6 +121,7 @@ export default async function MainLayout({ children }: { children: React.ReactNo
       </ClockProvider>
       </TeamProvider>
       </PresenceProvider>
+      </AskAiRoutingProvider>
     </UserProvider>
   );
 }

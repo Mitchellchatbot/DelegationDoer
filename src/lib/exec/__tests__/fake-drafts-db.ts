@@ -7,7 +7,7 @@
 //   from(t).upsert(row, { onConflict }) [.select(cols)]
 //   from(t).update(patch) ...filters... [.select(cols)]
 //   from(t).delete({ count }) ...filters... [.select(cols)]
-//   rpc("exec_drafts_purge_restricted" | "exec_drafts_purge_expired", args)
+//   rpc("exec_drafts_purge_restricted" | "exec_drafts_purge_expired" | "exec_drafts_purge_by_ids", args)
 //
 // exec_drafts behaves like the table: inserts get the DDL defaults, every
 // insert and update is checked against the §2.1 CHECK subset below (23514 with
@@ -85,7 +85,9 @@ const GENERATION_ERRORS = ["declined", "truncated", "invalid_output", "budget", 
 const GENERATION_FLAGS = ["unexpected_url", "unexpected_email", "unexpected_phone", "unexpected_amount", "unexpected_number", "other_client_name", "teammate_name"];
 const FACTS = ["used", "none", "not_matched", "medium_confidence", "unavailable", "recipients_outside_client"];
 const BLOCKERS = ["already_replied", "newer_inbound", "reply_scheduled", "legacy_draft_pending", "opened_in_outlook", "changed_in_outlook",
-  "recipients_changed", "reply_to_present", "placeholder_in_outlook", "thread_unavailable", "facts_outside_client", "unexpected_content"];
+  "recipients_changed", "reply_to_present", "placeholder_in_outlook", "thread_unavailable", "facts_outside_client", "unexpected_content",
+  // P5b (F4): the migration's re-added CHECK appends private_refs.
+  "private_refs"];
 const CLONE_FLAGS = ["send_status_unknown", "not_found_after_send", "verify_overdue", "create_unconfirmed", "gone_unconfirmed", "unverified", "signature_skipped"];
 const HEX64 = /^[0-9a-f]{64}$/;
 const KEY = /^[A-Za-z0-9_.:-]{1,128}$/;
@@ -174,7 +176,11 @@ export function draftDefaults(now: Date): Row {
     updated_at: nowIso,
     terminal_at: null,
     content_purged_at: null,
-    expires_at: null
+    expires_at: null,
+    // P5b (F7): instruction_by text not null default 'owner'.
+    instruction_by: "owner",
+    // P5b (security-2): chat_message_id text, nullable, no default.
+    chat_message_id: null
   };
 }
 
@@ -262,6 +268,9 @@ export function checkDraftRow(row: Row): string[] {
   enumOrNull("exec_drafts_owner_resolution_check", row.owner_resolution, ["sent", "not_sent"]);
   check("exec_drafts_last_error_code_check", isNull(row.last_error_code) || (typeof row.last_error_code === "string" && /^[a-z][a-z0-9_]{0,63}$/.test(row.last_error_code)));
   check("exec_drafts_check_count_check", typeof row.check_count === "number" && row.check_count >= 0 && row.check_count <= 10_000);
+  // P5b (F7): a row seeded without the column is a database before P5b's migration (no CHECK there).
+  if ("instruction_by" in row) check("exec_drafts_instruction_by_check", row.instruction_by === "owner" || row.instruction_by === "assistant");
+  if ("chat_message_id" in row) check("exec_drafts_chat_message_id_check", isNull(row.chat_message_id) || (typeof row.chat_message_id === "string" && /^ecm_[0-9a-f]{32}$/.test(row.chat_message_id)));
 
   const reply = row.kind === "reply";
   check("exec_drafts_kind_shape",
@@ -330,6 +339,47 @@ export function purgeRestrictedRows(tables: Record<string, Row[]>, args: Row, no
       review_blockers: [],
       restricted_purged: true,
       content_purged_at: d.content_purged_at ?? nowIso,
+      version: Number(d.version) + 1,
+      updated_at: nowIso
+    };
+    Object.assign(d, patch);
+    n += 1;
+  }
+  return n;
+}
+
+/**
+ * P5b RPC 5, exec_drafts_purge_by_ids, on the fake's rows (the migration's SQL): P4's C12 transitions of
+ * exec_drafts_purge_restricted applied by id to his origin = 'chat' rows not yet purged, plus
+ * last_error_code = 'chat_source_restricted'. More than 200 ids raise (P0001), as the function does.
+ */
+export function purgeRowsByIds(tables: Record<string, Row[]>, args: Row, now: Date): number {
+  const principal = args.p_principal;
+  if (isNull(principal)) throw Object.assign(new Error("exec_drafts_purge_by_ids: p_principal is required"), { code: "P0001" });
+  const ids = args.p_draft_ids;
+  if (!Array.isArray(ids) || ids.length === 0) return 0;
+  if (ids.length > 200) throw Object.assign(new Error("exec_drafts_purge_by_ids: at most 200 draft ids per call"), { code: "P0001" });
+  const days = retentionOf(tables, principal);
+  const nowIso = now.toISOString();
+  let n = 0;
+  for (const d of tables[DRAFTS] ?? []) {
+    if (d.principal_id !== principal || !ids.includes(d.id) || d.origin !== "chat" || d.restricted_purged === true) continue;
+    const s = String(d.status);
+    const ddOnlyOpen = isNull(d.outlook_graph_id) && ["generating", "generation_failed", "draft"].includes(s);
+    const patch: Row = {
+      status: ddOnlyOpen ? "discarded" : s === "generating" ? (d.prior_status ?? "draft") : s,
+      terminal_at: ddOnlyOpen ? (d.terminal_at ?? nowIso) : d.terminal_at,
+      expires_at: ddOnlyOpen ? (d.expires_at ?? addDays(nowIso, days)) : d.expires_at,
+      next_check_at: ["generating", "generation_failed", "draft"].includes(s) ? null : d.next_check_at,
+      prior_status: s === "discarding" ? d.prior_status : null,
+      ...structuredClone(CONTENT_EMPTY),
+      review_hash: null,
+      review_at: null,
+      review_blockers: [],
+      restricted_purged: true,
+      content_purged_at: d.content_purged_at ?? nowIso,
+      last_error_code: "chat_source_restricted",
+      last_error_at: nowIso,
       version: Number(d.version) + 1,
       updated_at: nowIso
     };
@@ -503,7 +553,8 @@ export function createFakeDraftsDb(cfg: FakeDraftsDbConfig = {}): FakeDraftsDb {
 
   const rpcs: Record<string, (args: Row) => unknown> = {
     exec_drafts_purge_restricted: (args) => purgeRestrictedRows(tables, args, now()),
-    exec_drafts_purge_expired: (args) => purgeExpiredRows(tables, args)
+    exec_drafts_purge_expired: (args) => purgeExpiredRows(tables, args),
+    exec_drafts_purge_by_ids: (args) => purgeRowsByIds(tables, args, now())
   };
 
   /** The table's own refusals: CHECKs (23514) and the one-active index (23505), on the rows as they would be after the write. */

@@ -1,6 +1,7 @@
 import "server-only";
 
 import { purgeOldFeedback } from "@/lib/exec/attention-feedback";
+import { purgeExpiredChatRows } from "@/lib/exec/chat-store";
 import { purgeExpiredDdtext, purgeOrphanDdtextAttention } from "@/lib/exec/ddtext-store";
 import { purgeExpiredDrafts } from "@/lib/exec/drafts-store";
 import { purgeExpiredEmailRows } from "@/lib/exec/email-store";
@@ -44,6 +45,12 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 //   (P5a)                 (purgeOldFeedback; they outlive the items they rate).
 //                         All three tolerate the P5a migration not being applied yet
 //                         (counts 0).
+//   chat (P5b)            exec_conversations past their expires_at (the newest turn +
+//                         retention_days_chat; their messages and staged tasks cascade),
+//                         exec_messages past their own expires_at, and answers still
+//                         "running" 10 minutes after they began marked failed/stale (a
+//                         process that died mid-answer): purgeExpiredChatRows. Tolerates
+//                         the P5b migration not being applied yet (counts 0).
 //
 // The deletes are global, not per principal. Rows with no principal (system
 // jobs, access attempts that never resolved to a principal) have to age out
@@ -52,7 +59,7 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 // runs several times a day; every delete is idempotent, so the extra runs
 // find nothing to delete.
 //
-// Later phases add the Slack and chat retention to this job.
+// Later phases add the Slack retention to this job.
 
 export const PURGE_JOB_KIND = "exec.purge";
 
@@ -93,6 +100,10 @@ export interface PurgeCounts {
   ddtextAttention: number;
   /** P5a (purgeOldFeedback): feedback votes older than 365 days. */
   attentionFeedback: number;
+  /** P5b (purgeExpiredChatRows, contract §3.21): expired conversations (cascading), expired messages, stale running answers. */
+  chatConversations: number;
+  chatMessages: number;
+  chatStaleFailed: number;
 }
 
 function errMessage(err: unknown): string {
@@ -157,7 +168,10 @@ export async function runPurge(signal?: AbortSignal, now: Date = new Date()): Pr
     draftsChecksScheduled: 0,
     ddtextItems: 0,
     ddtextAttention: 0,
-    attentionFeedback: 0
+    attentionFeedback: 0,
+    chatConversations: 0,
+    chatMessages: 0,
+    chatStaleFailed: 0
   };
   const one = (key: keyof PurgeCounts, run: () => Promise<number>) => async (): Promise<Partial<PurgeCounts>> => ({ [key]: await run() });
   const steps: readonly [string, () => Promise<Partial<PurgeCounts>>][] = [
@@ -184,7 +198,14 @@ export async function runPurge(signal?: AbortSignal, now: Date = new Date()): Pr
     // attention row whose item expired just now goes in this same run.
     ["ddtextItems", one("ddtextItems", () => purgeExpiredDdtext(now, { signal }))],
     ["ddtextAttention", one("ddtextAttention", () => purgeOrphanDdtextAttention(now, { signal }))],
-    ["attentionFeedback", one("attentionFeedback", () => purgeOldFeedback(now, { signal }))]
+    ["attentionFeedback", one("attentionFeedback", () => purgeOldFeedback(now, { signal }))],
+    [
+      "chat",
+      async () => {
+        const c = await purgeExpiredChatRows(now, { signal });
+        return { chatConversations: c.conversations, chatMessages: c.messages, chatStaleFailed: c.staleFailed };
+      }
+    ]
   ];
 
   const failures: string[] = [];
@@ -205,7 +226,8 @@ export async function runPurge(signal?: AbortSignal, now: Date = new Date()): Pr
       `emailAttentionRows=${counts.emailAttentionRows} ` +
       `draftsContentPurged=${counts.draftsContentPurged} draftsDeleted=${counts.draftsDeleted} ` +
       `draftsClosedIdle=${counts.draftsClosedIdle} draftsChecksScheduled=${counts.draftsChecksScheduled} ` +
-      `ddtextItems=${counts.ddtextItems} ddtextAttention=${counts.ddtextAttention} attentionFeedback=${counts.attentionFeedback}` +
+      `ddtextItems=${counts.ddtextItems} ddtextAttention=${counts.ddtextAttention} attentionFeedback=${counts.attentionFeedback} ` +
+      `chatConversations=${counts.chatConversations} chatMessages=${counts.chatMessages} chatStaleFailed=${counts.chatStaleFailed}` +
       `${failures.length > 0 ? ` failed=${failures.length}` : ""}`
   );
   if (failures.length > 0) {

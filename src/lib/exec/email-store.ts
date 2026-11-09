@@ -3,7 +3,8 @@ import "server-only";
 import { createHash } from "node:crypto";
 
 import { deleteEmailAttentionForThreads } from "@/lib/exec/attention";
-import { purgeDraftsForThreads } from "@/lib/exec/drafts-store";
+import { listChatDraftIdsForThreads, redactChatForThreads } from "@/lib/exec/chat-store";
+import { purgeDraftsByIds, purgeDraftsForThreads } from "@/lib/exec/drafts-store";
 import {
   commitmentExpiresAt,
   planThreadWrite,
@@ -43,7 +44,8 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 // tombstone procedure: delete the thread's commitments, write the whitelist
 // row, delete its commitments again (one may have landed in between), its
 // signals, purge its assistant drafts (P4: content emptied, the row kept so
-// an Outlook draft stays tracked) and delete its email attention rows.
+// an Outlook draft stays tracked), delete its email attention rows, and (P5b)
+// redact every chat answer that drew on it and purge those answers' chat drafts.
 //
 // Reads fail closed: a database error throws, never an empty list, because
 // an empty Email tab or commitments card must mean "nothing", not "couldn't
@@ -522,12 +524,24 @@ async function casWrite(
  * after the tombstone has landed; on a transient failure the job retries, and
  * the retry finds the tombstone already in place and runs these steps again
  * (applyThreadProposal's noop branch).
+ *
+ * P5b (contract §3.18, B7, C19, C20): then, as the last steps, every chat
+ * answer that consulted or cited the thread, and every later answer of the
+ * same conversation, is redacted (principal-wide: a tombstone is a verified
+ * verdict), and the chat-written drafts on those answers' cards are purged by
+ * id (P4's exec_drafts_purge_by_ids, origin = 'chat' rows only), because a
+ * chat draft can quote a thread other than its own. Before the P5b migration
+ * both answer nothing (0 / []); any other failure throws (retryable), like
+ * the steps above.
  */
 async function deleteTombstoneLeftovers(principal: ExecPrincipal, threadId: string, signal: AbortSignal | undefined): Promise<void> {
   await deleteCommitmentsForThreads(principal, [threadId], { signal });
   await deleteSignalsForThreads(principal, [threadId], { signal });
   await purgeDraftsForThreads(principal, [threadId], { signal });
   await deleteEmailAttentionForThreads(principal, [threadId], { signal });
+  await redactChatForThreads(principal, [threadId], { signal });
+  const chatDraftIds = await listChatDraftIdsForThreads(principal, [threadId], { signal });
+  if (chatDraftIds.length > 0) await purgeDraftsByIds(principal, chatDraftIds, { signal });
 }
 
 /**
@@ -535,7 +549,8 @@ async function deleteTombstoneLeftovers(principal: ExecPrincipal, threadId: stri
  * commitments, (2) write the whitelist row by CAS, (3) delete its commitments
  * again (a write plan's insert may have raced the CAS), (4) delete its signal
  * rows, (5) purge its assistant drafts (P4), (6) delete its email attention
- * rows (Area E). Steps 3-6 run only after the CAS landed.
+ * rows (Area E), then (P5b) redact its chat answers and purge their chat
+ * drafts. Steps 3-6 run only after the CAS landed.
  */
 async function tombstoneProcedure(
   principal: ExecPrincipal,

@@ -105,6 +105,18 @@ describe("integrator seams: the DraftPanel's requests against the routes' strict
     expect(requestFor("open_in_outlook", ctx())).toBeNull();
   });
 
+  // P5b F5 (C44, C45): the private-refs confirmation and the kept assistant instruction parse too.
+  it("a save with confirmPrivate and a regenerate that keeps the assistant's instruction parse under their bodies", () => {
+    for (const action of ["save", "replace_with_dd"] as const) {
+      const req = requestFor(action, ctx({ confirmPrivate: true }));
+      expect(req?.body).toMatchObject({ confirmPrivate: true });
+      expectAccepted(req, `${action} (confirmPrivate)`);
+    }
+    const kept = requestFor("regenerate", ctx({ keepInstruction: true }));
+    expect(kept?.body).toEqual({ version: 7 });
+    expectAccepted(kept, "regenerate (kept instruction)");
+  });
+
   it("write_myself's empty body passes the server's doc validator (T15)", () => {
     expect(validateBodyDoc(EMPTY_BODY_DOC).ok).toBe(true);
   });

@@ -1,4 +1,7 @@
+import { MessageSquareText } from "lucide-react";
+import { RAIL_TITLE } from "@/lib/exec/chat/copy";
 import type { ExecOverview, OverviewSection } from "@/lib/exec/overview";
+import { ExecChat } from "../chat/ExecChat";
 import { OverviewEmailSection } from "../email/OverviewEmailSection";
 import { EXEC_TABS, ExecTabs } from "../ExecTabs";
 import { ExecHeader } from "../ExecHeader";
@@ -7,6 +10,7 @@ import { AttentionSection } from "./AttentionSection";
 import { DeadlinesSection } from "./DeadlinesSection";
 import { OverviewTileRow } from "./OverviewTileRow";
 import { ProjectsSection } from "./ProjectsSection";
+import { SectionCard } from "../SectionCard";
 import { SystemSection } from "./SystemSection";
 import { TodayGlance } from "./TodayGlance";
 
@@ -19,7 +23,20 @@ import { TodayGlance } from "./TodayGlance";
 // Columns are minmax(0, …) so a long title wraps inside its card instead of
 // widening the grid past the screen, and cards keep their own height instead
 // of stretching to the taller card beside them.
-export function OverviewView({ overview, principalTz }: { overview: ExecOverview; principalTz: string }) {
+//
+// P5b (contract §3.19.8, C33, C34): with `chat` (the page passes it only while
+// chat is installed and on), an "Ask" card heads the right column with the
+// rail chat, which starts a fresh conversation on every load, and the feed
+// rows get Ask AI, whose plain clicks the rail answers itself.
+export function OverviewView({
+  overview,
+  principalTz,
+  chat = null
+}: {
+  overview: ExecOverview;
+  principalTz: string;
+  chat?: { starters: readonly string[]; emailOn?: boolean } | null;
+}) {
   const now = overview.generatedAt;
   const tz = principalTz;
   const { tiles, attention, approvals, deadlines, projects, system, email } = overview.sections;
@@ -38,8 +55,23 @@ export function OverviewView({ overview, principalTz }: { overview: ExecOverview
       <TodayGlance tiles={tiles} tz={tz} now={now} />
       <OverviewTileRow tiles={tiles} tz={tz} now={now} />
       <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
-        <AttentionSection attention={attention} tz={tz} now={now} />
+        <AttentionSection attention={attention} tz={tz} now={now} askAiEnabled={chat !== null} />
         <div className="flex min-w-0 flex-col gap-5">
+          {chat !== null && (
+            <SectionCard title={RAIL_TITLE} icon={MessageSquareText}>
+              <ExecChat
+                variant="rail"
+                initialConversation={null}
+                initialMessages={[]}
+                initialContext={null}
+                starters={chat.starters}
+                tz={tz}
+                nowIso={now}
+                interceptAskAiLinks
+                emailOn={chat.emailOn}
+              />
+            </SectionCard>
+          )}
           <ApprovalsSection approvals={approvals} now={now} decisionAsks={decisionAsks} />
           <OverviewEmailSection email={email} tz={tz} now={now} />
           <SystemSection system={system} now={now} mail={emailOn ? emailOn.mail : null} tz={tz} />

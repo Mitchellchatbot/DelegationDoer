@@ -16,6 +16,7 @@ import type {
   DdClientMeeting,
   DdDepartment,
   DdEodNote,
+  DdEodSlackAnchor,
   DdIncidentLog,
   DdProject,
   DdProjectStage,
@@ -1889,4 +1890,167 @@ export async function listDdBotDmChannelIds(principal: ExecPrincipal, opts?: DdR
     if (out.length >= DD_BOT_DM_IDS_MAX) break;
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// P7b (§3.13). Stage 0: compile-only stubs with the frozen signatures; Area B writes listEodSlackAnchors, Area E the other
+// three, in separate blocks (the integrator merges). All four throw DdReadError with the table name only.
+// ---------------------------------------------------------------------------
+
+// (B) The Scaled Team anchors (C4, N18). Exactly these six columns of eod_client_updates and eod_client_checkins: a post's ids,
+// its client and where it landed in Slack. Never message or subject (P5b rule 2, B-P7b-5): the correlator needs only to know
+// which client a (channel, ts) post named. The two tables share the column list.
+const EOD_ANCHOR_COLS = "id,client_id,client_name,slack_channel,slack_ts,sent_at";
+const EOD_ANCHOR_ORDER = ["sent_at", "id"] as const;
+/** The verdict tables' channel id CHECK (§2.1.2) and a Slack ts (§2.1.3). */
+const ANCHOR_CHANNEL_ID = /^[CGD][A-Z0-9]{2,30}$/;
+const ANCHOR_TS = /^[0-9]{1,12}\.[0-9]{1,8}$/;
+
+interface EodAnchorRow {
+  id: unknown;
+  client_id: unknown;
+  client_name: unknown;
+  slack_channel: unknown;
+  slack_ts: unknown;
+  sent_at: unknown;
+}
+
+/** pageAll's loop with the database's code in the error, never its message (a message may quote a value). */
+async function pageAnchors(table: string, build: () => Query, signal: AbortSignal | undefined): Promise<EodAnchorRow[]> {
+  const rows: EodAnchorRow[] = [];
+  for (let page = 0; page < MAX_PAGES; page += 1) {
+    let query = build();
+    for (const column of EOD_ANCHOR_ORDER) query = query.order(column, { ascending: true });
+    query = query.range(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE - 1);
+    if (signal) query = query.abortSignal(signal);
+    const { data, error } = await query;
+    if (error) throw new DdReadError(table, codeOf(error));
+    if (!Array.isArray(data)) throw new DdReadError(table, "the response carried no rows");
+    for (const row of data) rows.push(row as unknown as EodAnchorRow);
+    if (data.length < PAGE_SIZE) return rows;
+  }
+  throw new DdReadError(table, `too many rows (more than ${MAX_PAGES * PAGE_SIZE})`);
+}
+
+function anchorOf(source: DdEodSlackAnchor["source"], r: EodAnchorRow): DdEodSlackAnchor | null {
+  if (typeof r?.id !== "string" || r.id.length === 0) return null;
+  if (typeof r.client_name !== "string" || typeof r.slack_channel !== "string" || typeof r.slack_ts !== "string" || typeof r.sent_at !== "string") return null;
+  const slackChannel = r.slack_channel.trim();
+  const slackTs = r.slack_ts.trim();
+  if (!ANCHOR_CHANNEL_ID.test(slackChannel) || !ANCHOR_TS.test(slackTs) || !Number.isFinite(Date.parse(r.sent_at))) return null;
+  const clientId = typeof r.client_id === "string" && r.client_id.length > 0 ? r.client_id : null;
+  return { source, id: r.id, clientId, clientName: r.client_name, slackChannel, slackTs, sentAt: r.sent_at };
+}
+
+/** (B) Scaled Team anchors (C4). Columns exactly: id, client_id, client_name, slack_channel, slack_ts, sent_at from eod_client_updates
+ *  and eod_client_checkins where slack_ts is not null and sent_at >= since; paged by (sent_at, id). Never message or subject.
+ *  Updates first, then check-ins, each oldest first; a row without a usable channel id or ts is left out. A failed read
+ *  throws DdReadError naming the table and the database's code only. */
+export async function listEodSlackAnchors(principal: ExecPrincipal, sinceIso: string, opts: DdReadOptions = {}): Promise<DdEodSlackAnchor[]> {
+  requirePrincipal(principal);
+  const since = isoParam("sinceIso", sinceIso);
+  const updates = await pageAnchors(
+    "eod_client_updates",
+    () => from("eod_client_updates", EOD_ANCHOR_COLS).not("slack_ts", "is", null).not("slack_channel", "is", null).gte("sent_at", since),
+    opts.signal
+  );
+  const checkins = await pageAnchors(
+    "eod_client_checkins",
+    () => from("eod_client_checkins", EOD_ANCHOR_COLS).not("slack_ts", "is", null).not("slack_channel", "is", null).gte("sent_at", since),
+    opts.signal
+  );
+  const out: DdEodSlackAnchor[] = [];
+  for (const r of updates) {
+    const a = anchorOf("update", r);
+    if (a !== null) out.push(a);
+  }
+  for (const r of checkins) {
+    const a = anchorOf("checkin", r);
+    if (a !== null) out.push(a);
+  }
+  return out;
+}
+
+// (E) P7b prepare_client_update and its pack slots (§3.13, N17, C11). Ids, enums, dates and counts only: never
+// email_drafts.subject / body_text / body_html / rejection_note, never eod_client_work.worked_on / results (the one
+// reader of those is sources/dd-text.ts), never eod_client_updates / eod_client_checkins text (P5b rule 2, B-P7b-5).
+// A failed read throws DdReadError naming the table and the database's code only.
+const COMPLETED_FOR_CLIENT_MAX = 50;
+const CLIENT_UPDATE_EMAIL_KINDS = ["client_update", "eod_digest"] as const;
+
+/** A timestamp column as an ISO instant, or null (anything that doesn't parse reads as null: the value is a hint). */
+function instantOrNull(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const ms = Date.parse(value);
+  return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
+}
+
+/** The newest non-null value of one timestamp column among the rows `build` selects (limit 1, newest first), or null. */
+async function newestInstant(table: string, column: string, build: () => Query, signal: AbortSignal | undefined): Promise<string | null> {
+  let query = build().not(column, "is", null).order(column, { ascending: false }).limit(1);
+  if (signal) query = query.abortSignal(signal);
+  const { data, error } = await query;
+  if (error) throw new DdReadError(table, codeOf(error));
+  if (!Array.isArray(data)) throw new DdReadError(table, "the response carried no rows");
+  const first: unknown = data[0];
+  return typeof first === "object" && first !== null ? instantOrNull((first as Record<string, unknown>)[column]) : null;
+}
+
+/** (E) P2b's task columns (TASK_COLUMNS), completed_at >= since, client_name = clientName (exact), deleted_at is null,
+ *  is_draft = false; newest completion first; ≤ 50. Also status = 'done' (as listTasksCompletedBetween): a reopened task
+ *  that kept its completed_at is not finished work. An empty name reads nothing. */
+export async function listCompletedTasksForClient(principal: ExecPrincipal, clientName: string, sinceIso: string, opts: DdReadOptions = {}): Promise<DdTask[]> {
+  requirePrincipal(principal);
+  const since = isoParam("sinceIso", sinceIso);
+  if (typeof clientName !== "string" || clientName.trim() === "") return [];
+  let query = from("tasks", TASK_COLS)
+    .eq("client_name", clientName)
+    .eq("status", "done")
+    .gte("completed_at", since)
+    .eq("is_draft", false)
+    .is("deleted_at", null)
+    .order("completed_at", { ascending: false })
+    .order("id", { ascending: false })
+    .limit(COMPLETED_FOR_CLIENT_MAX);
+  if (opts.signal) query = query.abortSignal(opts.signal);
+  const { data, error } = await query;
+  if (error) throw new DdReadError("tasks", codeOf(error));
+  if (!Array.isArray(data)) throw new DdReadError("tasks", "the response carried no rows");
+  return (data as unknown as TaskRow[]).map(taskFromRow);
+}
+
+/** (E) email_drafts.sent_at (client_id = id, status = 'sent', kind in ('client_update','eod_digest'), newest, limit 1);
+ *  max(eod_client_work.reported_to_client_at) for client_name; max(tasks.reported_to_client_at) for client_name. Timestamps only.
+ *  workReportedAt is the later of the two reported_to_client_at values. An empty id or name skips its reads (null). */
+export async function getLastClientUpdate(principal: ExecPrincipal, client: { clientId: string; clientName: string }, opts: DdReadOptions = {}):
+  Promise<{ teamEmailSentAt: string | null; workReportedAt: string | null }> {
+  requirePrincipal(principal);
+  const clientId = typeof client?.clientId === "string" ? client.clientId : "";
+  const clientName = typeof client?.clientName === "string" ? client.clientName : "";
+  const signal = opts.signal;
+  const teamEmailSentAt = clientId === ""
+    ? null
+    : await newestInstant("email_drafts", "sent_at", () =>
+      from("email_drafts", "sent_at").eq("client_id", clientId).eq("status", "sent").in("kind", [...CLIENT_UPDATE_EMAIL_KINDS]), signal);
+  if (clientName.trim() === "") return { teamEmailSentAt, workReportedAt: null };
+  const work = await newestInstant("eod_client_work", "reported_to_client_at", () =>
+    from("eod_client_work", "reported_to_client_at").eq("client_name", clientName), signal);
+  const tasks = await newestInstant("tasks", "reported_to_client_at", () =>
+    from("tasks", "reported_to_client_at").eq("client_name", clientName), signal);
+  const workReportedAt = work === null ? tasks : tasks === null ? work : (Date.parse(work) >= Date.parse(tasks) ? work : tasks);
+  return { teamEmailSentAt, workReportedAt };
+}
+
+/** (E) count of eod_client_work rows (select "id", head count) for client_name with note_date >= sinceDate. Entries the team
+ *  discarded (dismissed_at set, DD's own discard) are not work to report and don't count. An empty name counts 0. */
+export async function countEodClientWorkForClient(principal: ExecPrincipal, clientName: string, sinceDate: string, opts: DdReadOptions = {}): Promise<number> {
+  requirePrincipal(principal);
+  const since = ymdParam("sinceDate", sinceDate);
+  if (typeof clientName !== "string" || clientName.trim() === "") return 0;
+  let query = from("eod_client_work", "id", HEAD_COUNT).eq("client_name", clientName).gte("note_date", since).is("dismissed_at", null);
+  if (opts.signal) query = query.abortSignal(opts.signal);
+  const { count, error } = await query;
+  if (error) throw new DdReadError("eod_client_work", codeOf(error));
+  if (typeof count !== "number") throw new DdReadError("eod_client_work", "the response carried no count");
+  return count;
 }

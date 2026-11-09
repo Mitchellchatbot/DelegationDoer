@@ -206,3 +206,54 @@ export class ConsultedBudget {
     return [...this.ids];
   }
 }
+
+/** P7b (contract §3.17.3 D2, N15): the privacies a Slack result can carry; every one but "public" sets the private flag. */
+type SlackConsultPrivacy = "public" | "private" | "group_dm" | "dm" | "external" | "finance";
+
+/**
+ * P7b (§3.15.2 "Consulted", N15, C24): the turn's Slack consults. Every stored item, digest or live message that reaches a
+ * result is admitted here first, with its ref keys (m:<C>:<ts> / d:<C>:<date>:<n>) and its channel; at most 600 keys and
+ * 200 channels (exec_messages' CHECKs). admit is all-or-nothing and synchronous (P5b C41's pattern: no await between the
+ * admit and the push, so parallel tools can't overshoot): false = it doesn't fit, nothing was recorded and the caller
+ * drops the item. Already-admitted keys and channels are free. A non-public privacy sets the private flag (C24's
+ * private_slack). Pure: no I/O, nothing logged.
+ */
+export class SlackConsultedBudget {
+  private readonly maxRefs: number;
+  private readonly maxChannels: number;
+  private readonly refs = new Set<string>();
+  private readonly channels = new Set<string>();
+  private privateSeen = false;
+
+  /** defaults 600 / 200 */
+  constructor(maxRefs: number = 600, maxChannels: number = 200) {
+    this.maxRefs = Number.isFinite(maxRefs) && maxRefs >= 0 ? Math.floor(maxRefs) : 600;
+    this.maxChannels = Number.isFinite(maxChannels) && maxChannels >= 0 ? Math.floor(maxChannels) : 200;
+  }
+
+  admit(refKeys: readonly string[], channelId: string, privacy: SlackConsultPrivacy): boolean {
+    if (typeof channelId !== "string" || channelId.length === 0) return false;
+    const keys = [...new Set((Array.isArray(refKeys) ? refKeys : []).filter((k): k is string => typeof k === "string" && k.length > 0))];
+    const newKeys = keys.filter((k) => !this.refs.has(k)).length;
+    const newChannel = this.channels.has(channelId) ? 0 : 1;
+    if (this.refs.size + newKeys > this.maxRefs || this.channels.size + newChannel > this.maxChannels) return false;
+    for (const k of keys) this.refs.add(k);
+    this.channels.add(channelId);
+    if (privacy !== "public") this.privateSeen = true;
+    return true;
+  }
+
+  /** At a limit: the next new key or channel is refused. */
+  get full(): boolean {
+    return this.refs.size >= this.maxRefs || this.channels.size >= this.maxChannels;
+  }
+
+  /** Whether a non-public Slack result was admitted this turn. */
+  get privateSlack(): boolean {
+    return this.privateSeen;
+  }
+
+  snapshot(): { refs: string[]; channels: string[]; privateSlack: boolean } {
+    return { refs: [...this.refs], channels: [...this.channels], privateSlack: this.privateSeen };
+  }
+}

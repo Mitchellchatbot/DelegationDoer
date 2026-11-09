@@ -18,6 +18,7 @@ import type {
 } from "@/lib/exec/drafts-types";
 import { DRAFT_LIMITS } from "@/lib/exec/drafts-types";
 import { isAllowedLinkUrl } from "@/lib/exec/refs";
+import { SLACK_INTEL_COPY } from "@/lib/exec/slack-intel-copy";
 import { cn } from "@/lib/utils";
 import { busyFor, type DraftBusy, type DraftUiAction } from "./actions";
 import { canRecheckReadiness } from "./banner";
@@ -329,6 +330,63 @@ export function NewDraft({
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// P7b (§3.17.2 E5): a client update's line (counts and slot statuses only)
+// ---------------------------------------------------------------------------
+
+const SLOT_LABELS = { completed: "Finished tasks", teamWork: "Team work notes", publicSlack: "Public Slack updates" } as const;
+
+function fill(template: string, values: Record<string, string>): string {
+  return template.replace(/\{([a-zA-Z]+)\}/g, (whole, key: string) => (key in values ? values[key] : whole));
+}
+
+function shortDate(iso: string, tz: string): string | null {
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms)) return null;
+  try {
+    return new Intl.DateTimeFormat("en-US", { timeZone: tz, month: "short", day: "numeric", year: "numeric" }).format(new Date(ms));
+  } catch {
+    return new Intl.DateTimeFormat("en-US", { timeZone: "UTC", month: "short", day: "numeric", year: "numeric" }).format(new Date(ms));
+  }
+}
+
+/**
+ * The client-update line's sentences (exported for the render tests): draftClientUpdate with the three counts, one
+ * slotUnavailable per slot that couldn't be read, and draftClientUpdateLast when the team's last update email is known.
+ * Empty for a reply, a restricted row, or before the first generation stored its record.
+ */
+export function clientUpdatePanelLines(view: Pick<DraftView, "purpose" | "clientUpdate">, tz: string): string[] {
+  const cu = view.purpose === "client_update" ? (view.clientUpdate ?? null) : null;
+  if (cu === null) return [];
+  const lines = [
+    fill(SLACK_INTEL_COPY.draftClientUpdate, {
+      completed: String(cu.completed.count),
+      teamWork: String(cu.teamWork.count),
+      publicSlack: String(cu.publicSlack.count)
+    })
+  ];
+  for (const key of ["completed", "teamWork", "publicSlack"] as const) {
+    if (cu[key].status === "unavailable") lines.push(fill(SLACK_INTEL_COPY.slotUnavailable, { slot: SLOT_LABELS[key] }));
+  }
+  const sent = cu.lastUpdate?.teamEmailSentAt ?? null;
+  const date = sent === null ? null : shortDate(sent, tz);
+  if (date !== null) lines.push(fill(SLACK_INTEL_COPY.draftClientUpdateLast, { client: cu.clientName ?? "the client", date }));
+  return lines;
+}
+
+/** The line under the status banner of a client-update draft (nothing for any other draft). */
+export function ClientUpdateNote({ view, tz }: { view: Pick<DraftView, "purpose" | "clientUpdate">; tz: string }) {
+  const lines = clientUpdatePanelLines(view, tz);
+  if (lines.length === 0) return null;
+  return (
+    <div data-client-update="" className="space-y-0.5 rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2 text-[12.5px] text-slate-700">
+      {lines.map((line, i) => (
+        <p key={`${i}-${line}`}>{line}</p>
+      ))}
     </div>
   );
 }
@@ -660,6 +718,7 @@ function ExistingDraft({
         onRecheck={isTop ? () => void recheckReadiness() : undefined}
         rechecking={rechecking}
       />
+      <ClientUpdateNote view={view} tz={tz} />
 
       {recipientsShown && (
         <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">

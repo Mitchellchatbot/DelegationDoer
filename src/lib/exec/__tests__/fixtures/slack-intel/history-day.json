@@ -1,0 +1,253 @@
+{
+  "_doc": [
+    "One local day (2026-11-07 in America/New_York, ts in [1794027600.000000, 1794114000.000000)) of the watched public channel",
+    "C0ACMESEO (channels.json publicWatched), as conversations.history returns it (newest first), and the replies of its one",
+    "thread (parent first). raw = the Slack API message (with its ts); expect = how a digest build or a live search classifies it",
+    "before any text is kept (contract 3.11.2 step 6, 3.7 step 3): human (rendered; U0MITCH is YOU); ddPost (isDdPost holds by",
+    "ddArm template | app | user; counted ddPost); bot (counted bot); noise (a subtype or hidden: counted bot); external",
+    "(user_team T0PARTNER: kept, summarized only, counted external); optedOut (U0OPTOUT, optouts.json: dropped, never counted).",
+    "counts = the build's counts for the day with the thread's replies (human includes the two replies; the parent once).",
+    "readHistory / readReplies (sources/slack.ts) parse raw (p7b-seed.test.ts pins the parse). Lead-owned, frozen."
+  ],
+  "channelId": "C0ACMESEO",
+  "localDate": "2026-11-07",
+  "tz": "America/New_York",
+  "fromTs": "1794027600.000000",
+  "toTs": "1794114000.000000",
+  "now": "2026-11-08T15:00:00.000Z",
+  "team": {
+    "teamId": "T0SCALED",
+    "userId": "U0MITCH",
+    "partnerTeamId": "T0PARTNER"
+  },
+  "ddBot": {
+    "userId": "U0DDBOT",
+    "appId": "A0DDAPP"
+  },
+  "history": [
+    {
+      "ts": "1794070000.000900",
+      "expect": "human",
+      "raw": {
+        "type": "message",
+        "user": "U0MITCH",
+        "team": "T0SCALED",
+        "text": "Sounds good, ship it SENTINEL-INTEL-SLACK-TEXT-9c1d",
+        "ts": "1794070000.000900"
+      }
+    },
+    {
+      "ts": "1794069000.000800",
+      "expect": "noise",
+      "raw": {
+        "type": "message",
+        "subtype": "channel_join",
+        "user": "U0NEWHIRE",
+        "team": "T0SCALED",
+        "text": "<@U0NEWHIRE> has joined the channel",
+        "ts": "1794069000.000800"
+      }
+    },
+    {
+      "ts": "1794068000.000700",
+      "expect": "optedOut",
+      "raw": {
+        "type": "message",
+        "user": "U0OPTOUT",
+        "team": "T0SCALED",
+        "text": "SENTINEL-INTEL-OPTOUT-TEXT-9c1d my notes on the launch",
+        "ts": "1794068000.000700"
+      }
+    },
+    {
+      "ts": "1794067000.000600",
+      "expect": "external",
+      "raw": {
+        "type": "message",
+        "user": "U0PARTNER",
+        "user_team": "T0PARTNER",
+        "team": "T0PARTNER",
+        "text": "SENTINEL-INTEL-EXTERNAL-TEXT-9c1d we can review on Monday",
+        "ts": "1794067000.000600"
+      }
+    },
+    {
+      "ts": "1794066000.000500",
+      "expect": "bot",
+      "raw": {
+        "type": "message",
+        "subtype": "bot_message",
+        "bot_id": "B0ZAP",
+        "username": "zapier",
+        "text": "SENTINEL-INTEL-BOT-TEXT-9c1d build passed",
+        "ts": "1794066000.000500"
+      }
+    },
+    {
+      "ts": "1794065000.000400",
+      "expect": "ddPost",
+      "ddArm": "template",
+      "raw": {
+        "type": "message",
+        "user": "U0HENRY",
+        "team": "T0SCALED",
+        "text": "Task update SENTINEL-INTEL-DD-TEXT-9c1d",
+        "blocks": [
+          {
+            "type": "section",
+            "text": {
+              "type": "mrkdwn",
+              "text": "*<https://operations.scaledai.org/tasks/tk_101|SENTINEL-INTEL-TASK-TITLE-9c1d>*"
+            }
+          },
+          {
+            "type": "actions",
+            "elements": [
+              {
+                "type": "button",
+                "text": {
+                  "type": "plain_text",
+                  "text": "Open in Scaled Operations",
+                  "emoji": true
+                },
+                "url": "https://operations.scaledai.org/tasks/tk_101"
+              }
+            ]
+          }
+        ],
+        "ts": "1794065000.000400"
+      }
+    },
+    {
+      "ts": "1794064000.000300",
+      "expect": "ddPost",
+      "ddArm": "app",
+      "raw": {
+        "type": "message",
+        "subtype": "bot_message",
+        "bot_id": "B0DDBOT",
+        "app_id": "A0DDAPP",
+        "team": "T0SCALED",
+        "text": "New SEO task SENTINEL-INTEL-DD-TEXT-9c1d",
+        "bot_profile": {
+          "id": "B0DDBOT",
+          "app_id": "A0DDAPP",
+          "name": "Scaled Operations",
+          "deleted": false,
+          "team_id": "T0SCALED"
+        },
+        "ts": "1794064000.000300"
+      }
+    },
+    {
+      "ts": "1794063000.000200",
+      "expect": "ddPost",
+      "ddArm": "user",
+      "raw": {
+        "type": "message",
+        "user": "U0DDBOT",
+        "team": "T0SCALED",
+        "text": "Reminder SENTINEL-INTEL-DD-TEXT-9c1d",
+        "ts": "1794063000.000200"
+      }
+    },
+    {
+      "ts": "1794062000.000150",
+      "expect": "noise",
+      "raw": {
+        "type": "message",
+        "user": "U0JANE",
+        "team": "T0SCALED",
+        "hidden": true,
+        "subtype": "message_replied",
+        "text": "SENTINEL-INTEL-SLACK-TEXT-9c1d",
+        "ts": "1794062000.000150"
+      }
+    },
+    {
+      "ts": "1794061000.000110",
+      "expect": "human",
+      "raw": {
+        "type": "message",
+        "user": "U0SAM",
+        "team": "T0SCALED",
+        "text": "Decided: we go with the blue variant SENTINEL-INTEL-SLACK-TEXT-9c1d",
+        "ts": "1794061000.000110"
+      }
+    },
+    {
+      "ts": "1794060000.000100",
+      "expect": "human",
+      "raw": {
+        "type": "message",
+        "user": "U0JANE",
+        "team": "T0SCALED",
+        "text": "<@U0MITCH> can we ship the landing page Friday? SENTINEL-INTEL-SLACK-TEXT-9c1d",
+        "thread_ts": "1794060000.000100",
+        "reply_count": 2,
+        "latest_reply": "1794060900.000130",
+        "reply_users": [
+          "U0SAM",
+          "U0MITCH"
+        ],
+        "ts": "1794060000.000100"
+      }
+    }
+  ],
+  "replies": {
+    "1794060000.000100": [
+      {
+        "ts": "1794060000.000100",
+        "expect": "human",
+        "raw": {
+          "type": "message",
+          "user": "U0JANE",
+          "team": "T0SCALED",
+          "text": "<@U0MITCH> can we ship the landing page Friday? SENTINEL-INTEL-SLACK-TEXT-9c1d",
+          "thread_ts": "1794060000.000100",
+          "reply_count": 2,
+          "latest_reply": "1794060900.000130",
+          "reply_users": [
+            "U0SAM",
+            "U0MITCH"
+          ],
+          "ts": "1794060000.000100"
+        }
+      },
+      {
+        "ts": "1794060500.000120",
+        "expect": "human",
+        "raw": {
+          "type": "message",
+          "user": "U0SAM",
+          "team": "T0SCALED",
+          "thread_ts": "1794060000.000100",
+          "parent_user_id": "U0JANE",
+          "text": "Friday works if the copy lands Thursday SENTINEL-INTEL-SLACK-TEXT-9c1d",
+          "ts": "1794060500.000120"
+        }
+      },
+      {
+        "ts": "1794060900.000130",
+        "expect": "human",
+        "raw": {
+          "type": "message",
+          "user": "U0MITCH",
+          "team": "T0SCALED",
+          "thread_ts": "1794060000.000100",
+          "parent_user_id": "U0JANE",
+          "text": "Yes, Friday SENTINEL-INTEL-SLACK-TEXT-9c1d",
+          "ts": "1794060900.000130"
+        }
+      }
+    ]
+  },
+  "counts": {
+    "human": 5,
+    "bot": 3,
+    "ddPost": 3,
+    "external": 1,
+    "threads": 1,
+    "optedOutDropped": 1
+  }
+}

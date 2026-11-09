@@ -327,7 +327,9 @@ describe("list_commitments (test 30)", () => {
     expect(r.json.restricted_hidden).toBe(2);
     expect(r.all).not.toContain("EVIDENCE");
     expectNoSecrets(r);
-    expect(r.json.notes).toContain("Commitments made in Slack aren't available yet.");
+    // P7b (D3, N7): Slack commitments are P7a's items, found through search_slack.
+    // Fixer security-6 / ui-4: only what others promised him in Slack is recorded (fact (f)); the note says so.
+    expect(r.json.notes).toContain("Commitments others made to him in Slack are found with search_slack kind commitment; commitments he makes in Slack aren't recorded, so say so if he asks about his own.");
     const owed = await runTool(makeCtx(), "list_commitments", { direction: "owed_to_mitchell", status: "open" });
     expect((owed.json.items as { items: unknown[] }).items).toHaveLength(0);
   });

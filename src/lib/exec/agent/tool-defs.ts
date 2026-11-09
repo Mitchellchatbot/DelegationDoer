@@ -1,7 +1,7 @@
 import type { ToolName } from "@/lib/exec/agent/types";
 import type { ExecToolDef } from "@/lib/exec/llm/request";
 
-// The 16 strict chat tool definitions (P5b contract §3.10; Area B; pure):
+// The 19 strict chat tool definitions (P5b contract §3.10 + P7b §3.15.1; Area B, then P7b Area D; pure):
 // constants built at module load from literals only, in request order (the
 // cached prefix, PLAN:188; never reorder). Imports types only (test 5), so
 // TOOLS_VERSION's sha256 is computed by a small local implementation rather
@@ -24,6 +24,8 @@ export interface ExecChatTool {
 
 const READ_MS = 25_000;
 const SLOW_MS = 40_000;
+/** P7b C21: prepare_client_update's own class (two thread reads, DD and Slack reads, the draft insert). */
+const CLIENT_UPDATE_MS = 60_000;
 
 type Props = Record<string, Record<string, unknown>>;
 
@@ -202,7 +204,7 @@ const TOOLS: ExecChatTool[] = [
     "read",
     true,
     READ_MS,
-    "Commitments found in his email: what he promised others (mitchell_owes) and what others promised him (owed_to_mitchell), with due dates and status. Commitments made in Slack aren't available yet.",
+    "Commitments found in his email: what he promised others (mitchell_owes) and what others promised him (owed_to_mitchell), with due dates and status. Commitments others made to him in Slack are found with search_slack kind commitment; commitments he makes in Slack aren't recorded.",
     {
       direction: { type: "string", enum: ["any", "mitchell_owes", "owed_to_mitchell"] },
       status: { type: "string", enum: ["open", "followed_up", "expired", "any"] }
@@ -257,6 +259,50 @@ const TOOLS: ExecChatTool[] = [
     "Re-check one cited item by its ref (such as r12) from this conversation: re-reads the task, client, project, email thread, attention item, report or approval it points to, with the same screening as the tool that first returned it.",
     {
       ref: { type: "string", description: "A ref from this conversation, such as r12." }
+    }
+  ),
+  // P7b (contract 3.15.1, N16; stage-0 seed): tools 17-19, always registered, exact descriptions and schemas.
+  tool(
+    "search_slack",
+    "Searching Slack",
+    "read",
+    false,
+    SLOW_MS,
+    "Search Slack as the assistant has recorded it: requests, questions, decisions, commitments and action items addressed to him, and daily conversation digests; with include_live, also recent messages read live from up to 3 channels (needs a channel or a client). It is not Slack's own search and only finds what was recorded or read, so say 'I didn't find it', never 'it isn't in Slack'. Lead channels, the DD bot's messages, bot chats and conversations he doesn't watch are never searched (muted ones only for messages addressed to him). Commitments others made to him are found here with kind commitment; his own Slack promises aren't recorded.",
+    {
+      query: { type: "string", description: "Words to look for; '' for none (newest first)." },
+      channel: { type: "string", description: "'' for any, or a channel id or name from an earlier result." },
+      client: { type: "string", description: "'' for none, or a client id or name: limits the search to that client's linked conversations." },
+      kind: { type: "string", enum: ["any", "request", "question", "decision", "commitment", "action_item", "fyi"] },
+      since_days: { type: "integer", enum: [1, 7, 30, 90] },
+      include_live: { type: "boolean", description: "Also read recent messages live (at most 3 channels, at most 30 days)." },
+      limit: { type: "integer", enum: [10, 25] }
+    }
+  ),
+  tool(
+    "slack_digest",
+    "Reading Slack digests",
+    "read",
+    false,
+    READ_MS,
+    "Daily per-conversation Slack digests (a summary, highlights, decisions and open questions) for a window, and, with include_open_items, the open Slack items addressed to him (unanswered requests and questions, pending decisions). Use it for 'catch me up on Slack' and 'what happened in a channel'. Today's digest is built on request and may not be ready yet. One-to-one direct messages are not digested; their items are listed instead.",
+    {
+      scope: { type: "string", enum: ["all", "channel", "client"] },
+      target: { type: "string", description: "'' with scope all; a channel id or name with scope channel; a client id or name with scope client." },
+      window: { type: "string", enum: ["today", "yesterday", "last_7_days", "since_last_brief"] },
+      include_open_items: { type: "boolean" }
+    }
+  ),
+  tool(
+    "prepare_client_update",
+    "Preparing a client update",
+    "staged",
+    true,
+    CLIENT_UPDATE_MS,
+    "Prepare a client update as a reply draft on one of his email threads, only when his newest message asks for an update to a client. The drafter gets his newest message word for word as its instruction, the thread, and status facts about that client's work (open and recently finished tasks, the team's work notes, public-channel Slack summaries), never private Slack. Nothing is sent: he reviews and sends it from DD. Returns the draft link and the context to explain: the client, the projects, recent work, the public Slack used and when the team last updated the client. Call it at most once per message (one client per message); it shares the 3-drafts-per-question limit with create_draft.",
+    {
+      thread_id: { type: "string", description: "The client's email thread, from search_email, an attention item or an earlier answer." },
+      project_id: { type: "string", description: "'' to derive projects from the thread, or a project id or name." }
     }
   )
 ];

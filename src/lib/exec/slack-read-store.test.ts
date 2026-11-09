@@ -24,6 +24,7 @@ import {
   getDdBotRow,
   isSlackReadingSchemaMissing,
   lastSweepAt,
+  latestAuthorOptoutAt,
   listAuthorOptouts,
   listCandidates,
   listGateDropChannels,
@@ -742,6 +743,22 @@ describe("ST08: the limiter, the DD bot row, opt-outs, the outbox, the gate's dr
     expect(await thrown(purgeAuthor(P1, "U0JANE"))).toMatchObject({ op: "not_installed" });
     expect([await listAuthorOptouts(P1), await listPurgeLog(P1, 0, 5), await listGateDropChannels(["ep_1"])]).toEqual([[], [], []]);
   });
+
+  it("P7b fixer (security-3) latestAuthorOptoutAt: the newest opt-out's time, his own only; none or missing → null; a failure throws", async () => {
+    useDb({ tables: { exec_slack_author_optouts: [
+      { principal_id: "ep_1", author_user_id: "U0JANE", created_at: "2026-11-01T10:00:00.000Z" },
+      { principal_id: "ep_1", author_user_id: "U0SAM", created_at: "2026-11-07T10:00:00.000Z" },
+      { principal_id: "ep_2", author_user_id: "U0SAM", created_at: "2026-11-08T10:00:00.000Z" }
+    ] } });
+    expect(await latestAuthorOptoutAt(P1)).toBe("2026-11-07T10:00:00.000Z");
+    expect(await latestAuthorOptoutAt(principal("ep_3"))).toBeNull();
+    const select = db.calls.find((c) => c.kind === "select" && c.target === "exec_slack_author_optouts");
+    expect(select?.columns).toBe("created_at");
+    useDb({ missing: ["exec_slack_author_optouts"] });
+    expect(await latestAuthorOptoutAt(P1)).toBeNull();
+    useDb({ fail: (call) => (call.target === "exec_slack_author_optouts" ? { code: "57014", message: "timeout" } : null) });
+    expect(await thrown(latestAuthorOptoutAt(P1))).toMatchObject({ op: "latestAuthorOptoutAt", pgCode: "57014" });
+  });
 });
 
 describe("PG02-PG06: the purge functions map their answers and the missing schema", () => {
@@ -1003,6 +1020,8 @@ describe("ST17 (C48): every RPC's argument keys are the migration's parameter na
       if (/^exec_slack_(channels|threads|messages|items|deleted|rate|dd_bot|purge_log|author_optouts)$/.test(m[1])) continue;
       expect(sigs.has(m[1]), m[1]).toBe(true);
     }
-    expect(Object.keys(store).filter((k) => typeof (store as Record<string, unknown>)[k] === "function").length).toBe(47);   // §3.8.1: 45 functions, the predicate, the error class
+    // P7b stage 0 (§3.17.6 P7a-2): + listIntelChannels and getSlackItemsByIds (they read tables only; no RPC); the P7b fixer
+    // (security-3): + latestAuthorOptoutAt (a table read; no RPC).
+    expect(Object.keys(store).filter((k) => typeof (store as Record<string, unknown>)[k] === "function").length).toBe(50);   // §3.8.1: 45 functions, the predicate, the error class, P7b's three reads
   });
 });

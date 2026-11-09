@@ -15,6 +15,7 @@ import {
   ingestFactsForRpc,
   isBotMessage,
   isBroadcast,
+  isDdPost,
   isDdTemplate,
   isExternalAuthor,
   isTombstone,
@@ -565,3 +566,33 @@ function sweepCtx(over: Partial<{ conv: ConvType; isHub: boolean; muted: boolean
     optedOut: new Set(over.optedOut ?? []), hePostedInThread: () => false
   };
 }
+
+describe("P7b P7a-5: sweepVerdict's anchor branch is isDdPost (the IG twin of P7b's DG34)", () => {
+  const intel = <T>(name: string): T => JSON.parse(readFileSync(fileURLToPath(new URL(`./__tests__/fixtures/slack-intel/${name}`, import.meta.url)), "utf8")) as T;
+  type Anchor = { name: string; raw: Record<string, unknown>; isDdPost: { arms: string[] } };
+
+  it("anchors.json and history-day.json: a message is a sweep anchor exactly when isDdPost holds, with or without the DD bot's identity", async () => {
+    const anchors = intel<{ anchors: Anchor[] }>("anchors.json").anchors;
+    const day = intel<{ history: { raw: Record<string, unknown>; expect: string }[] }>("history-day.json").history;
+    const raws = [...anchors.map((a) => a.raw), ...day.map((h) => h.raw)];
+    const slack = installFakeSlack({ "conversations.history": () => ({ ok: true, messages: raws, has_more: false, response_metadata: { next_cursor: "" } }) });
+    const { messages } = await readHistory(TARGET, { channel: "C0ACMESEO", limit: 200 });
+    slack.restore();
+    expect(messages).toHaveLength(raws.length);
+    for (const ddBot of [{ userId: "U0DDBOT", appId: "A0DDAPP" }, { userId: null, appId: null }, { userId: "U0DDBOT", appId: null }]) {
+      const ctx = { ...sweepCtx({}), ddBot };
+      for (const m of messages) {
+        if (isTombstone(m)) continue;
+        expect(sweepVerdict(m, ctx).role === "anchor", `${m.ts} ${JSON.stringify(ddBot)}`).toBe(isDdPost(m, ddBot));
+      }
+    }
+    // Every arm is exercised: each anchor's arms as the fixture states them, and the day's three DD posts (one per arm).
+    const ddBot = { userId: "U0DDBOT", appId: "A0DDAPP" };
+    const armsOf = (m: SlackReadMessage) => [m.appId === ddBot.appId ? "app" : null, m.user === ddBot.userId ? "user" : null,
+      isDdTemplate(m.blocks, m.attachments) ? "template" : null].filter((x): x is string => x !== null);
+    anchors.forEach((a, i) => expect(armsOf(messages[i]), a.name).toEqual(a.isDdPost.arms));
+    const dayMessages = messages.slice(anchors.length);
+    expect(dayMessages.filter((m, i) => day[i].expect === "ddPost").map((m) => isDdPost(m, ddBot))).toEqual([true, true, true]);
+    expect(dayMessages.filter((m, i) => day[i].expect !== "ddPost").some((m) => isDdPost(m, ddBot))).toBe(false);
+  });
+});

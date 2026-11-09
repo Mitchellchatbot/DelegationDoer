@@ -1538,6 +1538,102 @@ export async function listAuthorOptouts(principal: ExecPrincipal): Promise<strin
   return (rows ?? []).map((r) => str(r.author_user_id)).filter((v): v is string => v !== null && USER.test(v));
 }
 
+// ---------------------------------------------------------------------------
+// P7b's additive reads (P7b contract §3.17.6 P7a-2, §0.6.1 R8b; Area A): the only path by which P7a rows (and the excerpt)
+// reach P7b. Explicit columns; P7a's missing-schema tolerance; an aborted signal wins. listAuthorOptouts (R8b's third read)
+// is P7a's own, above: P7b binds it as it is (string[], no opts).
+// ---------------------------------------------------------------------------
+
+const INTEL_CHANNELS_MAX = 2000;
+const ITEMS_BY_ID_MAX = 500;
+
+/** Every channel row of the principal except class deny (≤ 2 000, by channel id), optionally only the given ids (each must
+ *  match the channel id shape; others are ignored). Missing schema → []. */
+export async function listIntelChannels(principal: ExecPrincipal, opts?: { channelIds?: readonly string[]; signal?: AbortSignal }): Promise<ChannelRow[]> {
+  const pid = requirePrincipal(principal);
+  const signal = opts?.signal;
+  const read = async (q: PromiseLike<Result>): Promise<Row[] | null> => {
+    const result = await q;
+    if (result.error) {
+      signal?.throwIfAborted();
+      if (missing(result.error)) return null;
+      throw failure("listIntelChannels", result.error, signal);
+    }
+    return rowsOf(result);
+  };
+  const out: ChannelRow[] = [];
+  if (opts?.channelIds !== undefined) {
+    const ids = [...new Set((Array.isArray(opts.channelIds) ? opts.channelIds : []).filter((c) => typeof c === "string" && CHANNEL.test(c)))];
+    for (const chunk of chunks(ids, IN_CHUNK)) {
+      const rows = await read(withSignal(db().from(CHANNELS).select(CHANNEL_COLS).eq("principal_id", pid).neq("class", "deny").in("channel_id", chunk), signal));
+      if (rows === null) return [];
+      for (const r of rows) out.push(toChannelRow(r, "listIntelChannels"));
+    }
+    return out.sort((a, b) => (a.channelId < b.channelId ? -1 : a.channelId > b.channelId ? 1 : 0)).slice(0, INTEL_CHANNELS_MAX);
+  }
+  for (let page = 0; page * PAGE < INTEL_CHANNELS_MAX; page += 1) {
+    const rows = await read(withSignal(db().from(CHANNELS).select(CHANNEL_COLS).eq("principal_id", pid).neq("class", "deny")
+      .order("channel_id", { ascending: true }).range(page * PAGE, Math.min(page * PAGE + PAGE, INTEL_CHANNELS_MAX) - 1), signal));
+    if (rows === null) return [];
+    for (const r of rows) out.push(toChannelRow(r, "listIntelChannels"));
+    if (rows.length < PAGE) break;
+  }
+  return out.slice(0, INTEL_CHANNELS_MAX);
+}
+
+/** The items of the given ids (esl_…; ≤ 500, malformed ids ignored), in the order asked, screened like C20 through
+ *  slackScreenRows + slackScreenAllows (attention-read.ts, the rule listOpenSlackItems applies: one rule, never re-implemented)
+ *  with the surface as given (anything but "web" screens as the stricter "slack"): a withheld row (reading not live, no channel
+ *  row, deny/unclassified/hub, no message row, a deleted marker, a channel that isn't watched without an owner/Slack mute
+ *  bypass, finance on "slack") is dropped. The only P7a read that selects `excerpt` for P7b. Missing schema → []; any other
+ *  failure throws (the caller fails closed). */
+export async function getSlackItemsByIds(principal: ExecPrincipal, ids: readonly string[], opts: { surface: "web" | "slack"; signal?: AbortSignal }): Promise<SlackItemRow[]> {
+  const pid = requirePrincipal(principal);
+  const signal = opts?.signal;
+  const surface: "web" | "slack" = opts?.surface === "web" ? "web" : "slack";
+  const wanted = [...new Set((Array.isArray(ids) ? ids : []).filter((id) => typeof id === "string" && ITEM_ID.test(id)))].slice(0, ITEMS_BY_ID_MAX);
+  if (wanted.length === 0) return [];
+  const byId = new Map<string, SlackItemRow>();
+  for (const chunk of chunks(wanted, IN_CHUNK)) {
+    const result = (await withSignal(db().from(ITEMS).select(ITEM_COLS).eq("principal_id", pid).in("id", chunk), signal)) as Result;
+    if (result.error) {
+      signal?.throwIfAborted();
+      if (missing(result.error)) return [];
+      throw failure("getSlackItemsByIds", result.error, signal);
+    }
+    for (const r of rowsOf(result)) {
+      const item = toItemRow(r, "getSlackItemsByIds");
+      byId.set(item.id, item);
+    }
+  }
+  const items = wanted.map((id) => byId.get(id)).filter((i): i is SlackItemRow => i !== undefined);
+  if (items.length === 0) return [];
+  const screen = await slackScreenRows(principal, items.map((i) => ({ channelId: i.channelId, ts: i.ts })), { signal });
+  if (!screen.readingLive) return [];
+  // Loaded on first use: attention-read.ts imports this module (slackScreenRows), so a static import would be a cycle.
+  const { slackScreenAllows } = await import("@/lib/exec/attention-read");
+  return items.filter((i) => slackScreenAllows(screen, { channelId: i.channelId, ts: i.ts }, i, surface));
+}
+
+/** P7b fixer (security-3; additive, a read, §3.17.6): the newest per-author opt-out's created_at (ISO), so P7b withholds
+ *  every stored digest requested at or before it until its sweep blanks them (C33; digests store no author). null when
+ *  there is none or the table is missing; any other failure throws (the caller fails closed). Refs only: no author id. */
+export async function latestAuthorOptoutAt(principal: ExecPrincipal, opts?: { signal?: AbortSignal }): Promise<string | null> {
+  const pid = requirePrincipal(principal);
+  const signal = opts?.signal;
+  const result = (await withSignal(db().from(OPTOUTS).select("created_at").eq("principal_id", pid).order("created_at", { ascending: false }).limit(1), signal)) as Result;
+  if (result.error) {
+    signal?.throwIfAborted();
+    if (missing(result.error)) return null;
+    throw failure("latestAuthorOptoutAt", result.error, signal);
+  }
+  const at = str(rowsOf(result)[0]?.created_at);
+  if (at === null) return null;
+  const ms = Date.parse(at);
+  if (!Number.isFinite(ms)) throw new SlackReadStoreError("latestAuthorOptoutAt: malformed row", null);
+  return new Date(ms).toISOString();
+}
+
 /** P7b/P8 follow-ups (C31): rows after afterId, oldest first, at most `limit` (1..500). */
 export async function listPurgeLog(principal: ExecPrincipal, afterId: number, limit: number): Promise<{ id: number; scope: "message" | "conversation" | "reading";
   channelId: string | null; ts: string | null; reason: string; createdAt: string }[]> {

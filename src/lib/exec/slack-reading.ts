@@ -52,32 +52,57 @@ export async function getSlackReadingState(principal: ExecPrincipal): Promise<{ 
 export { enqueueSlackSweepNow } from "@/lib/exec/slack-read";    // P8: "right before the brief"
 /** Screened like C20 (surface as given), newest first. P7b's tools and P8's gather read Slack items only through this. */
 export async function listOpenSlackItems(principal: ExecPrincipal, q: { sinceIso: string; limit: number; surface: "web" | "slack" }): Promise<SlackItemRow[]> {
-  const since = typeof q?.sinceIso === "string" ? Date.parse(q.sinceIso) : Number.NaN;
-  const limit = Number.isInteger(q?.limit) && q.limit > 0 ? Math.min(q.limit, ITEMS_MAX) : 0;
-  if (!Number.isFinite(since) || limit === 0) return [];
-  const surface = q.surface === "web" ? "web" : "slack";
-  const now = new Date();
-  let items: SlackItemRow[];
-  let screen;
   try {
-    ({ items } = await listItemsForAttention(principal, now));
-    // Open as the producer reads it (§3.13): not answered, except an owed_to_mitchell commitment (open until 30 days overdue
-    // whatever his answer; the store returns due commitments answered or not).
-    items = items.filter((i) => Date.parse(i.createdAt) >= since && i.kind !== "fyi"
-      && (i.respondedAt === null || (i.kind === "commitment" && i.commitmentDirection === "owed_to_mitchell")));
-    if (items.length === 0) return [];
-    screen = await slackScreenRows(principal, items.map((i) => ({ channelId: i.channelId, ts: i.ts })));
+    return (await openSlackItems(principal, q)).items;
   } catch (err) {
     // C20: an unscreenable batch shows nothing.
     console.warn(`[exec-slack] open Slack items unavailable (${err instanceof Error ? err.name : "error"})`);
     return [];
   }
-  if (!screen.readingLive) return [];
-  const rows = screen;
-  const shown = items.filter((i) => slackScreenAllows(rows, { channelId: i.channelId, ts: i.ts }, i, surface));
-  return shown
-    .sort((a, b) => compareTs(b.ts, a.ts) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
-    .slice(0, limit);
+}
+/**
+ * P7b fixer (ui-8, ui-9; additive, a read): listOpenSlackItems' read and C20 screen exactly (one body, so the two can't
+ * drift), except that a read or screen failure THROWS, so P7b's catch-up, counts and tile show "Couldn't load" instead of
+ * "nothing waiting"; plus `mutedHidden`, the number of open items needing his response that the screen withheld only
+ * because their conversation is muted (the screen would show them were it watched). A count only: no withheld item
+ * leaves this module.
+ */
+export async function readOpenSlackItems(principal: ExecPrincipal, q: { sinceIso: string; limit: number; surface: "web" | "slack" }):
+  Promise<{ items: SlackItemRow[]; mutedHidden: number }> {
+  return openSlackItems(principal, q);
+}
+async function openSlackItems(principal: ExecPrincipal, q: { sinceIso: string; limit: number; surface: "web" | "slack" }):
+  Promise<{ items: SlackItemRow[]; mutedHidden: number }> {
+  const since = typeof q?.sinceIso === "string" ? Date.parse(q.sinceIso) : Number.NaN;
+  const limit = Number.isInteger(q?.limit) && q.limit > 0 ? Math.min(q.limit, ITEMS_MAX) : 0;
+  if (!Number.isFinite(since) || limit === 0) return { items: [], mutedHidden: 0 };
+  const surface = q.surface === "web" ? "web" : "slack";
+  const now = new Date();
+  let { items } = await listItemsForAttention(principal, now);
+  // Open as the producer reads it (§3.13): not answered, except an owed_to_mitchell commitment (open until 30 days overdue
+  // whatever his answer; the store returns due commitments answered or not).
+  items = items.filter((i) => Date.parse(i.createdAt) >= since && i.kind !== "fyi"
+    && (i.respondedAt === null || (i.kind === "commitment" && i.commitmentDirection === "owed_to_mitchell")));
+  if (items.length === 0) return { items: [], mutedHidden: 0 };
+  const rows = await slackScreenRows(principal, items.map((i) => ({ channelId: i.channelId, ts: i.ts })));
+  if (!rows.readingLive) return { items: [], mutedHidden: 0 };
+  const shown: SlackItemRow[] = [];
+  let mutedHidden = 0;
+  for (const i of items) {
+    const key = { channelId: i.channelId, ts: i.ts };
+    if (slackScreenAllows(rows, key, i, surface)) {
+      shown.push(i);
+      continue;
+    }
+    const channel = rows.channels.get(i.channelId);
+    if (channel === undefined || channel.watchState !== "muted" || i.needsResponse !== true || i.respondedAt !== null) continue;
+    const asWatched = { ...rows, channels: new Map([[i.channelId, { ...channel, watchState: "watched" as const }]]) };
+    if (slackScreenAllows(asWatched, key, i, surface)) mutedHidden += 1;
+  }
+  return {
+    items: shown.sort((a, b) => compareTs(b.ts, a.ts) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)).slice(0, limit),
+    mutedHidden
+  };
 }
 /** P8 registers the check-in exclusion (C21); last registration wins; none in P7a. */
 export function registerAnsweredExclusion(fn: (principal: ExecPrincipal, rows: readonly { channelId: string; respondedTs: string }[]) =>
@@ -95,5 +120,9 @@ export function __resetAnsweredExclusionForTests(): void {
 }
 export { listPurgeLog } from "@/lib/exec/slack-read-store";      // P7b redaction / digests, P8 brief scrub (C31)
 export { listAuthorOptouts, purgeAuthor } from "@/lib/exec/slack-read-store";   // C44: P7b excludes opted-out authors from digests and search
+// P7b (§3.17.6 P7a-3): the channel rows (all but deny) and the C20-screened items by id, the only path by which P7a rows reach P7b.
+export { getSlackItemsByIds, listIntelChannels } from "@/lib/exec/slack-read-store";
+// P7b fixer (security-3): the newest opt-out's time, so P7b withholds digests built before it until its sweep blanks them.
+export { latestAuthorOptoutAt } from "@/lib/exec/slack-read-store";
 export { getDdBotIdentity } from "@/lib/exec/dd-bot";            // P8 M7
 export { SLACK_ATTENTION_KINDS, SLACK_CAP_FEATURES } from "@/lib/exec/slack-read-types";

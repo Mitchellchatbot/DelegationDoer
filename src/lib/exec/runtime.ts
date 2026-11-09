@@ -13,8 +13,11 @@ import { slackActionJobHandler } from "@/lib/exec/handlers/slack-action";
 import { slackAttentionJobHandler, slackAttentionScheduledWork } from "@/lib/exec/handlers/slack-attention";
 import { slackCardJobHandler } from "@/lib/exec/handlers/slack-card";
 import { slackClassifyJobHandler } from "@/lib/exec/handlers/slack-classify";
+import { slackCorrelateJobHandler, slackCorrelateScheduledWork } from "@/lib/exec/handlers/slack-correlate";
+import { slackDigestJobHandler, slackDigestPlanJobHandler, slackDigestPlanScheduledWork } from "@/lib/exec/handlers/slack-digest";
 import { slackDiscoverJobHandler, slackDiscoverScheduledWork } from "@/lib/exec/handlers/slack-discover";
 import { slackHomeJobHandler } from "@/lib/exec/handlers/slack-home";
+import { slackIntelSweepJobHandler, slackIntelSweepScheduledWork } from "@/lib/exec/handlers/slack-intel-sweep";
 import { slackProbeJobHandler, slackProbeScheduledWork } from "@/lib/exec/handlers/slack-probe";
 import {
   slackReadPurgeJobHandler,
@@ -68,6 +71,10 @@ import type { JobHandler, JobLane } from "@/lib/exec/types";
 // purge and its daily recheck. Registered unconditionally (P6 C35); the
 // schedules are gated on the P7a schema (and the sweep and probe on the
 // reading switch, the probe also on active_public).
+// P7b Slack intelligence (contract §3.11.5): the correlator (15 minutes, gated on the reading switch and schema), the
+// digest build (no schedule: the plan, the tool, the route and rebuilds enqueue it), the 00:30 digest plan (same gate)
+// and the deletion sweep (10 minutes, gated on the P7a schema only: it removes data, so it runs with reading off).
+// Registered unconditionally, as P6's and P7a's are. There is no purge hook (C32: the sweep follows P7a's outbox).
 const BUILT_IN_HANDLERS: readonly JobHandler[] = [
   purgeJobHandler,
   ddAttentionJobHandler,
@@ -94,7 +101,11 @@ const BUILT_IN_HANDLERS: readonly JobHandler[] = [
   slackRekeyJobHandler,
   slackUserCheckJobHandler,
   slackReadPurgeJobHandler,
-  slackReadRecheckJobHandler
+  slackReadRecheckJobHandler,
+  slackCorrelateJobHandler,
+  slackDigestJobHandler,
+  slackDigestPlanJobHandler,
+  slackIntelSweepJobHandler
 ];
 const BUILT_IN_SCHEDULE: readonly ScheduledWork[] = [
   purgeScheduledWork,
@@ -110,7 +121,10 @@ const BUILT_IN_SCHEDULE: readonly ScheduledWork[] = [
   slackReadSweepScheduledWork,
   slackProbeScheduledWork,
   slackAttentionScheduledWork,
-  slackReadRecheckScheduledWork
+  slackReadRecheckScheduledWork,
+  slackCorrelateScheduledWork,
+  slackDigestPlanScheduledWork,
+  slackIntelSweepScheduledWork
 ];
 
 // The cron route's whole run has to fit well inside its 60 s maxDuration.

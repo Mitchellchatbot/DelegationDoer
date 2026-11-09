@@ -571,7 +571,7 @@ describe("POST /api/exec/chat: a throw after hello (test 82)", () => {
       sources: [], cards: [], toolCalls: [], consultedEmailThreadIds: [], consultedClientIds: [], consultedDdText: false, refSeq: 3
     });
     expect(input.model).toBe("claude-opus-5-5");
-    expect(input.usage).toMatchObject({ modelCalls: 0, toolCalls: 0, costUsd: 0, promptVersion: "exec-chat-v2" });
+    expect(input.usage).toMatchObject({ modelCalls: 0, toolCalls: 0, costUsd: 0, promptVersion: "exec-chat-v3" });
     // A fresh controller: not the request's (already aborted) signal.
     expect(opts.signal).toBeInstanceOf(AbortSignal);
     expect(opts.signal.aborted).toBe(false);

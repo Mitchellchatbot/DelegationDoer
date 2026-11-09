@@ -77,7 +77,8 @@ describe("P7a seed: slack-read-types.ts (§3.1)", () => {
       triage: "exec.slack-triage", attention: "exec.slack-attention", rekey: "exec.slack-rekey",
       userCheck: "exec.slack-user-check", readPurge: "exec.slack-read-purge", recheck: "exec.slack-read-recheck"
     });
-    expect([...SLACK_CAP_FEATURES]).toEqual(["slack_triage"]);
+    // P7b stage 0 (P7a-1, C14): P7b appends its digest feature, as this array's comment says.
+    expect([...SLACK_CAP_FEATURES]).toEqual(["slack_triage", "digest"]);
     expect([...SLACK_ATTENTION_KINDS]).toEqual(["slack_decision", "slack_request", "slack_commitment", "slack_unassessed"]);
     for (const v of [REASON, SLACK_READ_JOB_KINDS, SLACK_READ_LIMITS, SLACK_CAP_FEATURES]) expect(Object.isFrozen(v)).toBe(true);
   });
@@ -194,7 +195,8 @@ describe("P7a seed: additive changes to earlier phases' files (§0.2 step 5, §3
 
   it("SyncSource \"slack\" and the three reading leases are in the types (Area A adds the runtime source check)", () => {
     const src = read("sync-state.ts");
-    expect(src).toMatch(/export type SyncSource = [^;]*"slack";/);
+    // P7b stage 0: SyncSource gains "slack-intel" after "slack" (expectation change, P7b bindings).
+    expect(src).toMatch(/export type SyncSource = [^;]*"slack"(?: \| "slack-intel")?;/);
     for (const k of ["slack-discover-lease", "slack-sweep-lease", "slack-attention-lease"]) expect(src).toContain(`"${k}": "slack"`);
   });
 

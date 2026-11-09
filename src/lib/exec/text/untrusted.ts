@@ -164,11 +164,15 @@ export function untrustedBlockOverhead(nonce: string, opts: UntrustedBlockOption
 
 export type UntrustedKind =
   | "task_description" | "comment" | "status_note" | "handoff_note" | "extension_reason" | "task_message"
-  | "eod_note" | "sod_note" | "meeting_brief" | "ai_summary" | "attention_text";
+  | "eod_note" | "sod_note" | "meeting_brief" | "ai_summary" | "attention_text"
+  // P7b (contract §3.15.2, bindings AM-P7b-20): Slack text (an item summary or excerpt, a digest's AI text, a live
+  // message). Rendered as an <untrusted_slack …> block (the tag P7a's Slack triage uses), never as DD text, so it doesn't
+  // count as an S4 DD-text block for C24.
+  | "slack_text";
 
 const UNTRUSTED_KINDS: ReadonlySet<string> = new Set<UntrustedKind>([
   "task_description", "comment", "status_note", "handoff_note", "extension_reason", "task_message",
-  "eod_note", "sod_note", "meeting_brief", "ai_summary", "attention_text"
+  "eod_note", "sod_note", "meeting_brief", "ai_summary", "attention_text", "slack_text"
 ]);
 
 const HIDDEN = "[hidden]";
@@ -238,6 +242,7 @@ const RIGHT_DEFACED = "\u{203A}";
 const BLOCK_ID = /^[A-Z][0-9]{1,4}$/;
 const REF_SHAPE = /^r[0-9]{1,5}$/;
 const DD_TEXT_CLOSE = "</untrusted_dd_text>";
+const SLACK_TEXT_CLOSE = "</untrusted_slack>";
 
 // An attribute value: one line, neutralized, the four markup characters replaced, at most 120 characters.
 function attributeValue(raw: string): string {
@@ -258,6 +263,7 @@ function renderItem(nonce: string, id: string, item: UntrustedItem, text: string
   if (item.ref !== null && REF_SHAPE.test(item.ref)) attrs.push(`ref="${item.ref}"`);
   if (typeof item.author === "string" && item.author.trim() !== "") attrs.push(`author="${attributeValue(item.author)}"`);
   if (typeof item.at === "string" && item.at.trim() !== "") attrs.push(`at="${attributeValue(item.at)}"`);
+  if (item.kind === "slack_text") return `<untrusted_slack ${attrs.join(" ")}>\n${text}\n${SLACK_TEXT_CLOSE}`;
   return `<untrusted_dd_text ${attrs.join(" ")}>\n${text}\n${DD_TEXT_CLOSE}`;
 }
 

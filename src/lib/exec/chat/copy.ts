@@ -35,7 +35,9 @@ export const DRAFT_PRIVATE_REFS = "Started in a conversation that also read {kin
 export const PRIVATE_REF_KIND_LABELS: Readonly<Record<PrivateRefKind, string>> = Object.freeze({
   other_threads: "other email threads",
   dd_text: "team notes or comments",
-  other_clients: "other clients' records"
+  other_clients: "other clients' records",
+  // P7b (§3.17.3 D8; stage-0 seed, forced by the Record type).
+  private_slack: "private Slack"
 });
 
 /** DRAFT_PRIVATE_REFS with the kinds' labels, in the given order, joined "a", "a and b", "a, b and c". */
@@ -50,9 +52,11 @@ export function draftPrivateRefsText(kinds: readonly PrivateRefKind[]): string {
 // ---------------------------------------------------------------------------
 
 export const CHAT_EMPTY_HEADING = "Ask about the company";
-export const CHAT_EMPTY_SUB = "Answers come from DD and your mailbox, with sources. Slack messages aren't read yet.";
+// P7b fixer (ui-5, a lead copy change): state-neutral, true whether or not Slack reading is on (P7b's chat reads Slack
+// digests, recorded items and a few channels live once it is).
+export const CHAT_EMPTY_SUB = "Answers come from DD, your mailbox and the Slack conversations the assistant reads, with sources.";
 /** ui-10 (a copy addition for the lead): the empty state when email intelligence is off or has no pinned mailbox. */
-export const CHAT_EMPTY_SUB_NO_EMAIL = "Answers come from DD, with sources. Email isn't turned on, and Slack messages aren't read yet.";
+export const CHAT_EMPTY_SUB_NO_EMAIL = "Answers come from DD and the Slack conversations the assistant reads, with sources. Email isn't turned on.";
 /** Starters for the rail and the page. */
 export const CHAT_STARTERS: readonly string[] = Object.freeze([
   "Give me an update on the entire team's progress",

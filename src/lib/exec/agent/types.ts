@@ -9,7 +9,9 @@ import type { SourceRef } from "@/lib/exec/types";
 export const CHAT_TOOL_NAMES = [
   "get_overview", "list_attention", "team_progress", "search_tasks", "get_task", "project_health",
   "pending_approvals", "recurring_issues", "client_overview", "search_email", "get_email_thread",
-  "list_commitments", "get_eod_reports", "propose_task", "create_draft", "get_source"
+  "list_commitments", "get_eod_reports", "propose_task", "create_draft", "get_source",
+  // P7b (§3.15, N16; stage-0 seed): tools 17-19, always registered.
+  "search_slack", "slack_digest", "prepare_client_update"
 ] as const;
 export type ToolName = (typeof CHAT_TOOL_NAMES)[number];
 
@@ -27,7 +29,10 @@ export type RefTarget =
   | { type: "sod_note"; userId: string; date: string }          // the user's own calendar date
   | { type: "approval"; mechanism: ApprovalMechanism; id: string | null }
   | { type: "meeting"; id: string; clientId: string }
-  | { type: "page"; path: string };
+  | { type: "page"; path: string }
+  // P7b (§3.17.3 D1; stage-0 seed): a stored item or a live message, and a digest generation (N15 keys).
+  | { type: "slack_message"; channelId: string; ts: string; itemId: string | null }
+  | { type: "slack_digest"; channelId: string; localDate: string; rebuilds: number };
 
 export interface RefEntry { ref: string; target: RefTarget; source: SourceRef }   // ref = "r<n>"
 export type CitedSource = RefEntry;                                                 // persisted in exec_messages.sources
@@ -52,7 +57,8 @@ export type ToolErrorCode =
   | "too_many" | "unknown_tool" | "email_limit" | "limit" | "internal";
 
 /** C24: what made a chat draft "private refs". */
-export type PrivateRefKind = "other_threads" | "dd_text" | "other_clients";
+export type PrivateRefKind = "other_threads" | "dd_text" | "other_clients"
+  | "private_slack";   // P7b (N15, C24; stage-0 seed): a non-public Slack consult this turn or a replayed one
 export type ChatCard =
   | { kind: "task_proposal"; id: string }
   | { kind: "draft"; id: string; existing: boolean; privateRefKinds: PrivateRefKind[] };

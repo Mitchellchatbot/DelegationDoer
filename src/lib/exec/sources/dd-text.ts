@@ -655,3 +655,64 @@ export async function listSubmittedNotesText(
   }
   return out;
 }
+
+/** P7b: the eod_client_work columns the team-work slot reads (never user_id: no author reaches a draft, C11). */
+const CLIENT_WORK_COLS = "id,note_date,worked_on,results,reported_to_client_at";
+const CLIENT_WORK_MAX = 50;
+
+/** A Supabase error's own code (never its message: a message may quote a value). */
+function codeOnly(error: unknown): string {
+  const code = typeof error === "object" && error !== null ? (error as { code?: unknown }).code : undefined;
+  return typeof code === "string" && /^[A-Za-z0-9_]{1,20}$/.test(code) ? code : "error";
+}
+
+/**
+ * P7b (§3.13; Area E; P5a's one DD text reader, S4; B-P7b-5): a client's eod_client_work entries for the client-update
+ * draft's team-work slot. Columns id, note_date, worked_on, results, reported_to_client_at; never user_id. client_id =
+ * clientId OR client_name = clientName (two reads merged by id: a name can't go into an or() term safely);
+ * note_date >= sinceDate; entries the team discarded in DD (dismissed_at set) are left out; newest first (note_date,
+ * then id); at most `limit` (1..50). Text is sanitized, whitespace-normalized and clipped to 1,500 like every text
+ * here; an empty results reads null. A failed read throws DdReadError naming the table and the database's code.
+ */
+export async function listEodClientWorkForClient(principal: ExecPrincipal, q: { clientId: string; clientName: string; sinceDate: string; limit: number },
+  opts: DdReadOptions = {}): Promise<{ id: string; noteDate: string; workedOn: string; results: string | null; reportedToClientAt: string | null }[]> {
+  requirePrincipal(principal);
+  if (typeof q?.sinceDate !== "string" || !YMD.test(q.sinceDate) || new Date(Date.parse(`${q.sinceDate}T00:00:00Z`)).toISOString().slice(0, 10) !== q.sinceDate) {
+    throw new TypeError("sources/dd-text: sinceDate must be YYYY-MM-DD");
+  }
+  const limit = Number.isSafeInteger(q.limit) ? Math.min(Math.max(q.limit, 1), CLIENT_WORK_MAX) : 6;
+  const clientId = typeof q.clientId === "string" ? q.clientId.trim() : "";
+  const clientName = typeof q.clientName === "string" ? q.clientName : "";
+  const reads: { column: "client_id" | "client_name"; value: string }[] = [];
+  if (clientId !== "") reads.push({ column: "client_id", value: clientId });
+  if (clientName.trim() !== "") reads.push({ column: "client_name", value: clientName });
+  const byId = new Map<string, { id: string; noteDate: string; workedOn: string; results: string | null; reportedToClientAt: string | null }>();
+  for (const r of reads) {
+    let query = from("eod_client_work", CLIENT_WORK_COLS)
+      .eq(r.column, r.value)
+      .gte("note_date", q.sinceDate)
+      .is("dismissed_at", null)
+      .order("note_date", { ascending: false })
+      .order("id", { ascending: false })
+      .limit(limit);
+    if (opts.signal) query = query.abortSignal(opts.signal);
+    const { data, error } = await query;
+    if (error) throw new DdReadError("eod_client_work", codeOnly(error));
+    if (!Array.isArray(data)) throw new DdReadError("eod_client_work", "the response carried no rows");
+    for (const raw of data as unknown[]) {
+      const row = raw as { id?: unknown; note_date?: unknown; worked_on?: unknown; results?: unknown; reported_to_client_at?: unknown };
+      if (typeof row.id !== "string" || row.id.length === 0 || typeof row.note_date !== "string") continue;
+      const noteDate = row.note_date.slice(0, 10);
+      if (!YMD.test(noteDate)) continue;
+      const clean = (v: unknown) => clipForModel(normalizeWhitespace(sanitizeText(typeof v === "string" ? v : ""))).text;
+      const results = clean(row.results);
+      const reported = typeof row.reported_to_client_at === "string" && Number.isFinite(Date.parse(row.reported_to_client_at))
+        ? new Date(Date.parse(row.reported_to_client_at)).toISOString()
+        : null;
+      byId.set(row.id, { id: row.id, noteDate, workedOn: clean(row.worked_on), results: results === "" ? null : results, reportedToClientAt: reported });
+    }
+  }
+  return [...byId.values()]
+    .sort((a, b) => (a.noteDate < b.noteDate ? 1 : a.noteDate > b.noteDate ? -1 : a.id < b.id ? 1 : a.id > b.id ? -1 : 0))
+    .slice(0, limit);
+}

@@ -54,6 +54,7 @@ import {
   getDraft,
   getLatestDraftForParent,
   insertDraft,
+  isP7bColumnMissing,
   listDrafts,
   listDraftsForParent,
   purgeDraftsForThreads,
@@ -64,11 +65,13 @@ import {
   CL2_MAPPED_TIMEZONES,
   DRAFT_LIMITS,
   REVIEW_BLOCKERS,
+  type ClientUpdateFactsRecord,
   type DraftAddress,
   type DraftCapabilities,
   type DraftErrorCode,
   type DraftKind,
   type DraftListItem,
+  type DraftPurpose,
   type DraftView,
   type ExecDraftRow,
   type ExecDraftStatus,
@@ -105,7 +108,7 @@ import {
   type RecipientCheck,
   type RecipientContext
 } from "@/lib/exec/recipients";
-import { getMailTimezone, listClientMatchSignals, listUsers } from "@/lib/exec/sources/dd";
+import { getLastClientUpdate, getMailTimezone, listClientMatchSignals, listUsers } from "@/lib/exec/sources/dd";
 import {
   createNewDraft,
   createReplyDraft,
@@ -747,7 +750,10 @@ function successorRow(principal: ExecPrincipal, old: ExecDraftRow): NewDraftRow 
     // P5b F7 (C44): who wrote the instruction travels with it; F3-F4 (C45): so does the second confirmation, because
     // the copied text came from the same chat; security-2: so does the answer that wrote it, so the chat purge by id
     // (C20) reaches the successor, which no card names.
-    instructionBy: old.instructionBy, usesPrivateRefs: old.usesPrivateRefs, chatMessageId: old.chatMessageId
+    instructionBy: old.instructionBy, usesPrivateRefs: old.usesPrivateRefs, chatMessageId: old.chatMessageId,
+    // P7b (E2): a client update's successor stays one (and keeps its slot record); its copied content wasn't generated
+    // on this row, so generated_version stays null (C9 then treats it as edited). A reply's successor is P4's row exactly.
+    ...(old.purpose === "client_update" ? { purpose: old.purpose, generatedVersion: null, clientUpdateFacts: old.clientUpdateFacts ?? null } : {})
   };
 }
 
@@ -862,6 +868,39 @@ async function factsClientName(principal: ExecPrincipal, row: Pick<ExecDraftRow,
 
 const withClientName = (name: string | null): { clientName?: string } => (name !== null ? { clientName: name } : {});
 
+// P7b (§3.17.2 E2, E5): when the team last updated a client update's client, read as the draft view renders (the pack's
+// source may not read email_drafts, B-P7b-4, so the stored record carries none). Timestamps only, cached per (principal,
+// client) like the client's name; a failed read shows the stored value (null), never an error.
+const LAST_UPDATE_TTL_MS = 300_000;
+const lastUpdateCache = new Map<string, { value: { teamEmailSentAt: string | null; workReportedAt: string | null } | null; until: number }>();
+
+async function clientLastUpdate(principal: ExecPrincipal, clientId: string, clientName: string | null):
+  Promise<{ teamEmailSentAt: string | null; workReportedAt: string | null } | null> {
+  const key = `${principal.id}:${clientId}:${clientName ?? ""}`;
+  const nowMs = Date.now();
+  const hit = lastUpdateCache.get(key);
+  if (hit !== undefined && hit.until > nowMs) return hit.value;
+  try {
+    const value = await getLastClientUpdate(principal, { clientId, clientName: clientName ?? "" }, { signal: AbortSignal.timeout(CLIENT_NAME_TIMEOUT_MS) });
+    lastUpdateCache.set(key, { value, until: nowMs + LAST_UPDATE_TTL_MS });
+    return value;
+  } catch (err) {
+    console.warn(`[exec-drafts] the client's last update is unavailable (${errorName(err)})`);
+    return null;
+  }
+}
+
+/** DraftView.purpose / .clientUpdate (E2, E5): counts and slot statuses only; null on a reply, a restricted row, or before
+ *  the first generation stored a record. */
+async function clientUpdateView(principal: ExecPrincipal, row: ExecDraftRow, restricted: boolean, clientName: string | null):
+  Promise<{ purpose: DraftPurpose; clientUpdate: (ClientUpdateFactsRecord & { clientName: string | null }) | null }> {
+  const purpose: DraftPurpose = row.purpose ?? "reply";
+  const record = row.clientUpdateFacts ?? null;
+  if (purpose !== "client_update" || restricted || record === null) return { purpose, clientUpdate: null };
+  const live = row.clientId !== null ? await clientLastUpdate(principal, row.clientId, clientName) : null;
+  return { purpose, clientUpdate: { ...record, lastUpdate: live ?? record.lastUpdate, clientName } };
+}
+
 async function mailTimezoneOf(principal: ExecPrincipal): Promise<{ zone: string; mapped: boolean }> {
   let zone = "America/New_York";
   try {
@@ -891,6 +930,8 @@ async function buildView(principal: ExecPrincipal, row: ExecDraftRow, v: ViewInp
   const reviewAt = row.reviewAt !== null ? Date.parse(row.reviewAt) : NaN;
   const goneAt = row.goneAt !== null ? Date.parse(row.goneAt) : NaN;
   const holdMs = Math.max(DRAFT_LIMITS.goneHoldMs, DRAFT_LIMITS.goneRecheckMs[DRAFT_LIMITS.goneRecheckMs.length - 1]);
+  const clientName = await factsClientName(principal, row, restricted);
+  const update = await clientUpdateView(principal, row, restricted, clientName);
   return {
     id: row.id, kind: row.kind, status: row.status, version: row.version, savedVersion: row.savedVersion,
     staleLink: row.status === "draft" && isStaleLink(row),
@@ -938,10 +979,12 @@ async function buildView(principal: ExecPrincipal, row: ExecDraftRow, v: ViewInp
     capabilities,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
-    ...withClientName(await factsClientName(principal, row, restricted)),
+    ...withClientName(clientName),
     // P5b F5: flags, not content (kept on restricted rows).
     usesPrivateRefs: row.usesPrivateRefs,
-    instructionBy: row.instructionBy
+    instructionBy: row.instructionBy,
+    // P7b E2/E5: present only on a client update, so a reply's view is P4's (+ P5b's) exactly.
+    ...(update.purpose === "client_update" ? update : {})
   };
 }
 
@@ -2263,6 +2306,48 @@ export type ChatDraftResult =
   | { kind: "created" | "existing"; draftId: string; status: ExecDraftStatus }
   | { kind: "refused"; reason: ChatDraftRefusal };
 
+/** P7b (§3.17.2 E1): createClientUpdateDraft's answer. existingReason: busy = a generation runs; edited = the draft changed since
+ *  it was generated; saved = it has an Outlook copy or another status (C9). */
+export type ClientUpdateDraftResult =
+  | { kind: "created" | "regenerated" | "existing"; draftId: string; status: ExecDraftStatus; existingReason: "busy" | "edited" | "saved" | null }
+  | { kind: "refused"; reason: ChatDraftRefusal };
+
+/**
+ * P7b (§3.17.2 E1, N17, C9): prepare_client_update's draft step. Server-only; imported only by client-update.ts (B-P7b-6).
+ * F1's gate sequence and R2's reply steps (a shared private helper with createChatReplyDraft), then: an active draft that is
+ * generating → existing/busy; draft or generation_failed with no Outlook copy and no edits since generation → regenerated
+ * with his words (instruction_by owner, purpose client_update); otherwise existing (edited / saved). No active draft →
+ * insert (reply, origin chat, instruction_by owner, purpose client_update) → created.
+ *
+ * `ownerInstruction` is his message as ownerInstructionFrom made it (trimmed, ≤ 2 000: P4's limit); empty or longer
+ * throws NonRetryableError, like a malformed input. `projectIds` (≤ 10 ids) are checked and not stored: exec_drafts has
+ * no project column, and the pack derives the client's work itself. A database without P7b's draft columns can't hold
+ * a client update: drafts_unavailable. Every other outcome follows createChatReplyDraft.
+ */
+export async function createClientUpdateDraft(
+  principal: ExecPrincipal,
+  input: { threadId: string; ownerInstruction: string; usesPrivateRefs: boolean; projectIds: string[] },
+  opts: { signal?: AbortSignal } = {}
+): Promise<ClientUpdateDraftResult> {
+  if (typeof input !== "object" || input === null || typeof input.threadId !== "string" || typeof input.ownerInstruction !== "string" ||
+    typeof input.usesPrivateRefs !== "boolean" || !Array.isArray(input.projectIds) || input.projectIds.length > 10 ||
+    input.projectIds.some((p) => typeof p !== "string" || p.length < 1 || p.length > 100)) {
+    throw new NonRetryableError("createClientUpdateDraft: the input is malformed");
+  }
+  const instruction = input.ownerInstruction.trim();
+  if (instruction === "" || instruction.length > DRAFT_LIMITS.instructionChars) {
+    throw new NonRetryableError("createClientUpdateDraft: the owner instruction is empty or too long");
+  }
+  try {
+    return await chatReplyDraftSteps(principal, input.threadId, { kind: "client_update", instruction, usesPrivateRefs: input.usesPrivateRefs }, opts.signal);
+  } catch (err) {
+    if (err instanceof DraftRouteError) return { kind: "refused", reason: CHAT_REFUSAL_OF_ROUTE_CODE[err.code] ?? "unavailable" };
+    // P7b's migration isn't applied: the row can't carry its purpose (E6), so there is no client update to make.
+    if (isP7bColumnMissing(err)) return { kind: "refused", reason: "drafts_unavailable" };
+    throw err;
+  }
+}
+
 /**
  * F1: server-only, never reachable from a request body (F11: only agent/tools.ts imports it). P4's gates in P4's order
  * (G5, G5b, G6, G7, G8), then R2's reply steps; inserts with origin 'chat', instruction_by 'assistant', usesPrivateRefs
@@ -2297,7 +2382,10 @@ export async function createChatReplyDraft(
   const text = input.instruction.trim();
   if (text.length > DRAFT_LIMITS.instructionChars) throw new NonRetryableError("createChatReplyDraft: the instruction is too long");
   try {
-    return await chatReplyDraft(principal, input.threadId, text === "" ? null : text, input.usesPrivateRefs, chatMessageId, opts.signal);
+    const r = await chatReplyDraftSteps(principal, input.threadId, { kind: "chat", instruction: text === "" ? null : text, usesPrivateRefs: input.usesPrivateRefs, chatMessageId }, opts.signal);
+    // F1's answer exactly (the shared steps never regenerate for chat, and existingReason is P7b's).
+    if (r.kind === "refused") return r;
+    return { kind: r.kind === "created" ? "created" : "existing", draftId: r.draftId, status: r.status };
   } catch (err) {
     // Every policy outcome is a value (F1): a P4 helper that answers with a route error (the look-back's sent-copy
     // check, 503) becomes one too, so a DraftRouteError never reaches chat.
@@ -2322,55 +2410,74 @@ const CHAT_REFUSAL_OF_ROUTE_CODE: Readonly<Partial<Record<DraftErrorCode, ChatDr
   sent_copy_found: "needs_check"
 });
 
-async function chatReplyDraft(principal: ExecPrincipal, threadId: string, instruction: string | null, usesPrivateRefs: boolean,
-  chatMessageId: string | null, signal: AbortSignal | undefined): Promise<ChatDraftResult> {
+/** Who asks for the reply draft (P7b §3.17.2 E1): F1's chat draft (the assistant's instruction), or prepare_client_update's
+ *  client update (his own words, regenerating the thread's active draft when that is safe, C9). */
+type ReplyDraftMode =
+  | { kind: "chat"; instruction: string | null; usesPrivateRefs: boolean; chatMessageId: string | null }
+  | { kind: "client_update"; instruction: string; usesPrivateRefs: boolean };
+
+const refused = (reason: ChatDraftRefusal): { kind: "refused"; reason: ChatDraftRefusal } => ({ kind: "refused", reason });
+
+/**
+ * F1's steps, shared by createChatReplyDraft and createClientUpdateDraft (P7b §3.17.2 E1): P4's gates in P4's order
+ * (G5, G5b, G6, G7, G8), R2's reply steps, T03's active-draft check before C63's look-back, the insert, both audit events
+ * and the job. A chat draft answers an active draft as it is (existingReason null); a client update hands it to
+ * clientUpdateOnActive. The signal reaches the reads only (F1).
+ */
+async function chatReplyDraftSteps(principal: ExecPrincipal, threadId: string, mode: ReplyDraftMode,
+  signal: AbortSignal | undefined): Promise<ClientUpdateDraftResult> {
   const now = new Date();
   const readOpts = signal !== undefined ? { signal } : {};
   const gates = await loadDraftGates(principal);
   const s = gates.settings;
   // G5: P4's schema, and P5b's columns on it: an assistant-written row can't be stored before P5b's migration.
-  if (!s.draftsSchemaReady || !s.chatSchemaReady) return chatRefusal("drafts_unavailable");
+  if (!s.draftsSchemaReady || !s.chatSchemaReady) return refused("drafts_unavailable");
   // G5b
-  if (!s.draftsEnabled) return chatRefusal("drafts_off");
-  if (!s.emailSchemaReady || !s.emailEnabled) return chatRefusal("email_off");
+  if (!s.draftsEnabled) return refused("drafts_off");
+  if (!s.emailSchemaReady || !s.emailEnabled) return refused("email_off");
   // G6
-  if (pinnedAccounts(principal).length === 0) return chatRefusal("no_pin");
-  if (gates.usable.length === 0) return chatRefusal("mailbox_problem");
+  if (pinnedAccounts(principal).length === 0) return refused("no_pin");
+  if (gates.usable.length === 0) return refused("mailbox_problem");
   // G7 (C38, C40): the same count the web generations use, so chat and web share one limit.
   signal?.throwIfAborted();
   const recent = await countRecentAudit(principal, "draft.generate.request", iso(now.getTime() - RATE_WINDOW_MS), readOpts);
-  if (recent >= DRAFT_RATE_LIMITS["draft.generate.request"]) return chatRefusal("rate_limited");
+  if (recent >= DRAFT_RATE_LIMITS["draft.generate.request"]) return refused("rate_limited");
   // G8 (C24)
   const ea = await getEaReadiness(principal);
-  if (!ea.ok) return chatRefusal("drafts_unavailable");
+  if (!ea.ok) return refused("drafts_unavailable");
   signal?.throwIfAborted();
 
   // R2's reply steps (C26, C11, L8): the reason a thread isn't available never leaks.
   const prep = await prepareReply(principal, gates, threadId, false, { rethrow: true, ...readOpts });
   if (!prep.ok) {
-    if (prep.code === "mailbox_problem") return chatRefusal("mailbox_problem");
-    if (prep.code === "unavailable") return chatRefusal("unavailable");
-    return chatRefusal("unavailable_thread");
+    if (prep.code === "mailbox_problem") return refused("mailbox_problem");
+    if (prep.code === "unavailable") return refused("unavailable");
+    return refused("unavailable_thread");
   }
-  // T03 first: an active draft is answered as it is; the chat's instruction is not applied and nothing is written.
+  // T03 first: a chat draft answers an active draft as it is (its instruction is not applied, nothing is written); a
+  // client update may rewrite it (C9).
   const active = await getActiveDraftForThread(principal, threadId, readOpts);
-  if (active !== null) return { kind: "existing", draftId: active.id, status: active.status };
+  if (active !== null) {
+    if (mode.kind === "chat") return { kind: "existing", draftId: active.id, status: active.status, existingReason: null };
+    return clientUpdateOnActive(principal, gates, ea, active, mode, now);
+  }
   const look = await lookBack(principal, gates, threadId, prep.derived.parent.id, prep.thread, false, now);
-  if (!look.ok) return chatRefusal("needs_check");
+  if (!look.ok) return refused("needs_check");
   signal?.throwIfAborted();
 
-  // T01 with generate: origin 'chat', the instruction the assistant wrote (F7: 'assistant'), the private-refs flag.
-  const row: NewDraftRow = {
-    ...replyRow(principal, prep, threadId, true, instruction, now),
-    origin: "chat",
-    instructionBy: "assistant",
-    usesPrivateRefs,
-    chatMessageId
-  };
+  // T01 with generate, origin 'chat'. F1: the instruction the assistant wrote (F7: 'assistant'), the private-refs flag and
+  // the answer's id. P7b (N17): his own words (§1.3 #5: 'owner'), purpose client_update, no answer id (the instruction
+  // carries nothing an answer read).
+  const base = replyRow(principal, prep, threadId, true, mode.instruction, now);
+  const row: NewDraftRow = mode.kind === "chat"
+    ? { ...base, origin: "chat", instructionBy: "assistant", usesPrivateRefs: mode.usesPrivateRefs, chatMessageId: mode.chatMessageId }
+    : { ...base, origin: "chat", instructionBy: "owner", usesPrivateRefs: mode.usesPrivateRefs, chatMessageId: null,
+        purpose: "client_update", generatedVersion: null, clientUpdateFacts: null };
   const inserted = await insertDraft(principal, row);
   if (!inserted.inserted) {
     const existing = await getDraft(principal, inserted.existingId);
-    return { kind: "existing", draftId: inserted.existingId, status: existing?.status ?? "draft" };
+    const reason = mode.kind === "chat" ? null : existing === null ? "busy" : existingReasonOf(existing);
+    return { kind: "existing", draftId: inserted.existingId, status: existing?.status ?? "draft", existingReason: reason };
   }
   const created = inserted.row;
   // P4's draft.create, and the draft.generate.request P4's C38 limit counts (C40). Keys within AUDIT_INPUT_KEYS.
@@ -2386,8 +2493,79 @@ async function chatReplyDraft(principal: ExecPrincipal, threadId: string, instru
     await enqueueGeneration(principal, created);
   } catch (err) {
     // T06: enqueueGeneration has already closed the attempt (generation_failed, stale).
-    if (err instanceof DraftRouteError) return chatRefusal("unavailable");
+    if (err instanceof DraftRouteError) return refused("unavailable");
     throw err;
   }
-  return { kind: "created", draftId: created.id, status: created.status };
+  return { kind: "created", draftId: created.id, status: created.status, existingReason: null };
+}
+
+/** C9: why an active draft is left as it is: a generation runs (busy); it has an Outlook copy or a status other than draft /
+ *  generation_failed (saved); or it changed since it was generated (edited). */
+function existingReasonOf(row: Pick<ExecDraftRow, "status" | "outlookGraphId" | "version" | "generatedVersion">): "busy" | "edited" | "saved" {
+  if (row.status === "generating") return "busy";
+  if (row.outlookGraphId !== null || (row.status !== "draft" && row.status !== "generation_failed")) return "saved";
+  return "edited";
+}
+
+/** C9: an active draft with no Outlook copy, in draft or generation_failed, never edited since it was generated. */
+function safeToRegenerate(row: Pick<ExecDraftRow, "status" | "outlookGraphId" | "version" | "generatedVersion">): boolean {
+  if (row.outlookGraphId !== null) return false;
+  if (row.status === "generation_failed") return true;
+  return row.status === "draft" && (row.generatedVersion ?? null) === row.version;
+}
+
+/**
+ * P7b (§3.17.2 E1, C9): the thread already has an active draft. Safe to rewrite → requestRegeneration's own steps for this
+ * row (the row screen, its account, the state guard, the version CAS) with his words, instruction_by 'owner', purpose
+ * client_update and the private-refs flag OR-ed in; one draft.generate.request audit (actor owner); the job. Otherwise the
+ * draft is answered as it is, with why. A refusal of the row's own checks is a value, as in F1.
+ */
+async function clientUpdateOnActive(principal: ExecPrincipal, gates: DraftGates, ea: EaReadiness, active: ExecDraftRow,
+  mode: Extract<ReplyDraftMode, { kind: "client_update" }>, now: Date): Promise<ClientUpdateDraftResult> {
+  const existing = (row: ExecDraftRow): ClientUpdateDraftResult =>
+    ({ kind: "existing", draftId: row.id, status: row.status, existingReason: existingReasonOf(row) });
+  if (!safeToRegenerate(active)) return existing(active);
+  if (!gates.usable.includes(active.accountId)) return refused("mailbox_problem");
+  const screened = await screenOrPurge(principal, active);
+  if (screened.restricted) return refused("unavailable_thread");
+  const row = screened.row;
+  const sendToken = await sendTokenVerdict(principal);
+  const g = guard("regenerate", row, guardContext(row, { principal, gates, ea, sendToken, restricted: false, now }));
+  if (!g.ok) {
+    if (g.code === "drafts_off") return refused("drafts_off");
+    if (g.code === "drafts_unavailable") return refused("drafts_unavailable");
+    if (g.code === "not_found") return refused("unavailable_thread");
+    return existing(row);
+  }
+  const seq = row.generationSeq + 1;
+  const patch: DraftPatch = {
+    status: "generating",
+    prior_status: row.status as PriorStatus,
+    generation_seq: seq,
+    instruction: mode.instruction,
+    instruction_by: "owner",
+    purpose: "client_update",
+    uses_private_refs: row.usesPrivateRefs || mode.usesPrivateRefs,
+    generation_error: null,
+    next_check_at: iso(now.getTime() + DRAFT_LIMITS.generatingStaleMs),
+    updated_at: now.toISOString()
+  };
+  if (!(await casDraft(principal, row.id, versionKey(row), patch))) {
+    // Another writer moved the row first: answer it as it now is.
+    const current = await getDraft(principal, row.id);
+    return current === null ? refused("unavailable_thread") : existing(current);
+  }
+  await auditEvent(principal, {
+    actor: "owner",
+    action: "draft.generate.request",
+    target: `exec_drafts:${row.id}`,
+    input: { draftId: row.id, kind: row.kind, version: row.version, generationSeq: seq }
+  });
+  try {
+    await enqueueGeneration(principal, applied(row, patch));
+  } catch (err) {
+    if (err instanceof DraftRouteError) return refused("unavailable");
+    throw err;
+  }
+  return { kind: "regenerated", draftId: row.id, status: "generating", existingReason: null };
 }

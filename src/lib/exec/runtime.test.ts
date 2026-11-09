@@ -46,6 +46,12 @@ vi.mock("@/lib/exec/slack-read-store", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/exec/slack-read-store")>();
   return { ...actual, purgeExpiredSlack: vi.fn() };
 });
+// P7b's Slack intel retention step (purgeExpiredSlackIntel, contract §2.3) has its own suites (slack-intel-store, purge); here it
+// finds nothing to delete.
+vi.mock("@/lib/exec/slack-intel-store", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/exec/slack-intel-store")>();
+  return { ...actual, purgeExpiredSlackIntel: vi.fn() };
+});
 // P7a (contract §3.11.12, RT02-RT03): the events route's gate cache is refreshed by the worker tick, not awaited.
 vi.mock("@/lib/exec/slack-gate-cache", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/exec/slack-gate-cache")>();
@@ -85,6 +91,9 @@ import { slackReadSweepJobHandler, slackReadSweepScheduledWork } from "@/lib/exe
 import { slackRekeyJobHandler } from "@/lib/exec/handlers/slack-rekey";
 import { slackTriageJobHandler } from "@/lib/exec/handlers/slack-triage";
 import { slackUserCheckJobHandler } from "@/lib/exec/handlers/slack-user-check";
+import { slackCorrelateJobHandler, slackCorrelateScheduledWork } from "@/lib/exec/handlers/slack-correlate";
+import { slackDigestJobHandler, slackDigestPlanJobHandler, slackDigestPlanScheduledWork } from "@/lib/exec/handlers/slack-digest";
+import { slackIntelSweepJobHandler, slackIntelSweepScheduledWork } from "@/lib/exec/handlers/slack-intel-sweep";
 import { refreshGateCache } from "@/lib/exec/slack-gate-cache";
 import { voiceRefreshJobHandler, voiceRefreshScheduledWork } from "@/lib/exec/handlers/voice-refresh";
 import {
@@ -147,7 +156,9 @@ const NO_EMAIL_PURGED = {
   slackMarkers: 0,
   slackLog: 0,
   slackChannels: 0,
-  slackAttention: 0
+  slackAttention: 0,
+  slackDigests: 0,
+  slackDigestsFailed: 0
 };
 
 function resetAll(): void {
@@ -220,7 +231,11 @@ const ALL_SCHEDULES = [
   slackReadSweepScheduledWork,
   slackProbeScheduledWork,
   slackAttentionScheduledWork,
-  slackReadRecheckScheduledWork
+  slackReadRecheckScheduledWork,
+  // P7b (contract §3.11.5)
+  slackCorrelateScheduledWork,
+  slackDigestPlanScheduledWork,
+  slackIntelSweepScheduledWork
 ];
 
 describe("ensureExecRuntime", () => {
@@ -366,7 +381,9 @@ describe("P7a Slack reading (contract §3.11.12): RT01-RT03", () => {
     expect(slackReadRecheckScheduledWork).toMatchObject({ lane: "bulk", cadence: { kind: "daily" }, maxAttempts: 2 });
     expect(slackReadRecheckScheduledWork.cadence.kind === "daily" && slackReadRecheckScheduledWork.cadence.at(base)).toBe("04:20");
     expect([gate(slackReadRecheckScheduledWork, base), gate(slackReadRecheckScheduledWork, { ...base, slackReadingSchemaReady: true })]).toEqual([false, true]);
-    expect(listScheduledWork().filter((w) => w.kind.startsWith("exec.slack-") && !["exec.slack-sweep", "exec.slack-dm-purge"].includes(w.kind)).map((w) => w.kind))
+    // P7b's three schedules (its own describe below) are left out of P7a's list.
+    const notP7a = ["exec.slack-sweep", "exec.slack-dm-purge", "exec.slack-correlate", "exec.slack-digest-plan", "exec.slack-intel-sweep"];
+    expect(listScheduledWork().filter((w) => w.kind.startsWith("exec.slack-") && !notP7a.includes(w.kind)).map((w) => w.kind))
       .toEqual(["exec.slack-discover", "exec.slack-read-sweep", "exec.slack-probe", "exec.slack-attention", "exec.slack-read-recheck"]);
   });
 
@@ -388,6 +405,40 @@ describe("P7a Slack reading (contract §3.11.12): RT01-RT03", () => {
     vi.mocked(refreshGateCache).mockRejectedValueOnce(new Error("later"));
     await expect(runExecWorkerTick()).resolves.toBe("idle");
     await new Promise((r) => setTimeout(r, 0));
+  });
+});
+
+describe("P7b Slack intelligence (contract §3.11.5): the four handlers and the three schedules", () => {
+  const P7B_HANDLERS = [slackCorrelateJobHandler, slackDigestJobHandler, slackDigestPlanJobHandler, slackIntelSweepJobHandler];
+
+  it("registers each once, with the lanes, timeouts and gates of §3.11 (the sweep gated on the P7a schema only, SW05)", () => {
+    ensureExecRuntime();
+    ensureExecRuntime();
+    for (const handler of P7B_HANDLERS) expect(getJobHandler(handler.kind)).toBe(handler);
+    expect(P7B_HANDLERS.map((h) => [h.kind, h.lane, h.timeoutMs])).toEqual([
+      ["exec.slack-correlate", "bulk", 120_000],
+      ["exec.slack-digest", "bulk", 120_000],
+      ["exec.slack-digest-plan", "bulk", 60_000],
+      ["exec.slack-intel-sweep", "bulk", 90_000]
+    ]);
+    expect(getScheduledWork("exec.slack-correlate")).toBe(slackCorrelateScheduledWork);
+    expect(getScheduledWork("exec.slack-digest-plan")).toBe(slackDigestPlanScheduledWork);
+    expect(getScheduledWork("exec.slack-intel-sweep")).toBe(slackIntelSweepScheduledWork);
+    // exec.slack-digest has no schedule: the plan, the tool, the route and rebuilds enqueue it.
+    expect(getScheduledWork("exec.slack-digest")).toBeUndefined();
+    const base = settingsFromRow(null, "ep_1");
+    const schema = { ...base, slackReadingSchemaReady: true };
+    const on = { ...schema, slackReadingEnabled: true };
+    const gate = (w: { enabled?: (s: typeof base) => boolean }, s: typeof base) => w.enabled?.(s);
+    expect(slackCorrelateScheduledWork).toMatchObject({ lane: "bulk", cadence: { kind: "interval", minutes: 15 }, maxAttempts: 3 });
+    expect([gate(slackCorrelateScheduledWork, schema), gate(slackCorrelateScheduledWork, on)]).toEqual([false, true]);
+    expect(slackDigestPlanScheduledWork).toMatchObject({ lane: "bulk", cadence: { kind: "daily" }, maxAttempts: 2 });
+    expect(slackDigestPlanScheduledWork.cadence.kind === "daily" && slackDigestPlanScheduledWork.cadence.at(base)).toBe("00:30");
+    expect([gate(slackDigestPlanScheduledWork, schema), gate(slackDigestPlanScheduledWork, on)]).toEqual([false, true]);
+    expect(slackIntelSweepScheduledWork).toMatchObject({ lane: "bulk", cadence: { kind: "interval", minutes: 10 }, maxAttempts: 3 });
+    // The sweep only removes data, so reading off doesn't stop it; only a missing P7a schema does.
+    expect([gate(slackIntelSweepScheduledWork, base), gate(slackIntelSweepScheduledWork, schema), gate(slackIntelSweepScheduledWork, on)]).toEqual([false, true, true]);
+    expect(slackIntelSweepScheduledWork.payload?.(principal)).toEqual({ reason: "schedule" });
   });
 });
 
@@ -709,7 +760,7 @@ describe("exec.purge", () => {
       "[exec-purge] deleted finishedJobs=7 accessLog=30 auditLog=2 aiUsage=11 resolvedAttention=4 " +
         "emailThreads=0 emailCommitments=0 emailSignals=0 emailAttentionRows=0 " +
         "draftsContentPurged=0 draftsDeleted=0 draftsClosedIdle=0 draftsChecksScheduled=0 " +
-        "ddtextItems=0 ddtextAttention=0 attentionFeedback=0 chatConversations=0 chatMessages=0 chatStaleFailed=0 slackEvents=0 oauthStates=0 slackRevocationsPurged=0 slackItems=0 slackMessages=0 slackThreads=0 slackMarkers=0 slackLog=0 slackChannels=0 slackAttention=0"
+        "ddtextItems=0 ddtextAttention=0 attentionFeedback=0 chatConversations=0 chatMessages=0 chatStaleFailed=0 slackEvents=0 oauthStates=0 slackRevocationsPurged=0 slackItems=0 slackMessages=0 slackThreads=0 slackMarkers=0 slackLog=0 slackChannels=0 slackAttention=0 slackDigests=0 slackDigestsFailed=0"
     );
   });
 
@@ -741,7 +792,7 @@ describe("exec.purge", () => {
   it("runs every step even when one fails, then fails the run", async () => {
     db.deleteResult = (d) =>
       d.table === "exec_access_log" ? { count: null, error: { message: "statement timeout" } } : { count: 1, error: null };
-    await expect(runPurge()).rejects.toThrow("exec.purge: 1 of 15 steps failed: accessLog: exec_access_log purge failed: statement timeout");
+    await expect(runPurge()).rejects.toThrow("exec.purge: 1 of 16 steps failed: accessLog: exec_access_log purge failed: statement timeout");
     expect(db.deletes.map((d) => d.table)).toEqual([
       "exec_jobs",
       "exec_access_log",
@@ -756,7 +807,7 @@ describe("exec.purge", () => {
     db.deleteResult = (d) =>
       d.table === "exec_attention_items" ? { count: null, error: { message: "permission denied" } } : { count: 2, error: null };
     await expect(runPurge()).rejects.toThrow(
-      "exec.purge: 1 of 15 steps failed: resolvedAttention: exec_attention_items purge failed: permission denied"
+      "exec.purge: 1 of 16 steps failed: resolvedAttention: exec_attention_items purge failed: permission denied"
     );
     expect(db.deletes.map((d) => d.table)).toEqual([
       "exec_jobs",
@@ -769,7 +820,7 @@ describe("exec.purge", () => {
       "[exec-purge] deleted finishedJobs=2 accessLog=2 auditLog=2 aiUsage=2 resolvedAttention=0 " +
         "emailThreads=0 emailCommitments=0 emailSignals=0 emailAttentionRows=0 " +
         "draftsContentPurged=0 draftsDeleted=0 draftsClosedIdle=0 draftsChecksScheduled=0 " +
-        "ddtextItems=0 ddtextAttention=0 attentionFeedback=0 chatConversations=0 chatMessages=0 chatStaleFailed=0 slackEvents=0 oauthStates=0 slackRevocationsPurged=0 slackItems=0 slackMessages=0 slackThreads=0 slackMarkers=0 slackLog=0 slackChannels=0 slackAttention=0 failed=1"
+        "ddtextItems=0 ddtextAttention=0 attentionFeedback=0 chatConversations=0 chatMessages=0 chatStaleFailed=0 slackEvents=0 oauthStates=0 slackRevocationsPurged=0 slackItems=0 slackMessages=0 slackThreads=0 slackMarkers=0 slackLog=0 slackChannels=0 slackAttention=0 slackDigests=0 slackDigestsFailed=0 failed=1"
     );
   });
 

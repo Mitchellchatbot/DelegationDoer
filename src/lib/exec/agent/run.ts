@@ -1,9 +1,9 @@
 import "server-only";
 
 import { chatSpentTodayUsd, effectiveChatCapUsd } from "@/lib/exec/agent/budget";
-import { CHAT_PROMPT_VERSION, CHAT_SYSTEM_PROMPT_V2, principalBlock, SLACK_SURFACE_PROMPT } from "@/lib/exec/agent/prompt";
+import { CHAT_PROMPT_VERSION, CHAT_SYSTEM_PROMPT_V3, principalBlock, SLACK_SURFACE_PROMPT } from "@/lib/exec/agent/prompt";
 import { RefRegistry, threadOfTarget } from "@/lib/exec/agent/refs";
-import { ConsultedBudget } from "@/lib/exec/agent/serialize";
+import { ConsultedBudget, SlackConsultedBudget } from "@/lib/exec/agent/serialize";
 import { linkSignals, semaphore, withOwnSignal, type LinkedSignal } from "@/lib/exec/agent/signal";
 import { CHAT_TOOLS, CHAT_TOOL_DEFS, TOOLS_VERSION } from "@/lib/exec/agent/tool-defs";
 import { createTurnMemo, executeToolCall, type ToolContext } from "@/lib/exec/agent/tools";
@@ -74,7 +74,9 @@ import { BudgetExceededError, type ExecPrincipal, type ExecSettings } from "@/li
 export const CHAT_LIMITS = Object.freeze({
   maxModelCalls: 12, turnCostCeilingUsd: 1.5, toolConcurrency: 4, maxToolCallsPerRound: 8,
   cloneConcurrency: 4, softDeadlineMs: 360_000, hardDeadlineMs: 540_000,
-  maxProposalsPerTurn: 5, maxDraftsPerTurn: 3, maxPersistedToolCalls: 100, maxConsultedThreads: 500
+  maxProposalsPerTurn: 5, maxDraftsPerTurn: 3, maxPersistedToolCalls: 100, maxConsultedThreads: 500,
+  // P7b (N15): exec_messages_slack_refs_check / exec_messages_slack_channels_check.
+  maxSlackRefs: 600, maxSlackChannels: 200
 });
 
 /** The §2.1 CHECK bounds the finish write must fit (the code keeps tighter limits; these are the backstop). */
@@ -94,7 +96,11 @@ export interface AgentTurnInput {
   contextRefs: readonly RefEntry[];      // earlier questions' context refs (re-resolved) + this turn's (b-agent-8)
   refSeq: number;
   context: ResolvedContext | null;
-  prior: { threads: ReadonlySet<string>; clients: ReadonlySet<string>; ddText: boolean };   // C24
+  prior: { threads: ReadonlySet<string>; clients: ReadonlySet<string>; ddText: boolean;   // C24
+    /** P7b (N15, C24; optional): any replayed answer consulted non-public Slack. */
+    privateSlack?: boolean };
+  /** P7b (C8, C30; optional): his stored question text this turn (req.text); only prepare_client_update reads it. */
+  question?: string;
   chatSpentAtStartUsd: number;
   settings: ExecSettings; now: Date;
 }
@@ -122,6 +128,9 @@ export interface AgentTurnResult {
   /** P6 X1 (additive): on a Slack turn, how many verbatim runs of tool output the answer, the recommendations and staged tasks had clipped.
    *  Present only when > 0; a count for the turn's audit row, never persisted with the message (not in usage). */
   slackVerbatimClipped?: number;
+  /** P7b (§3.17.3 D5, N15; additive): the turn's Slack consults (keys ≤ 600, channels ≤ 200, the private flag), for the v2
+   *  finish and the post-finish recheck. Absent when the turn ended before its tools could run. */
+  consultedSlack?: { refs: string[]; channels: string[]; privateSlack: boolean };
 }
 
 type ToolState = "running" | "done" | "error" | "skipped";
@@ -264,6 +273,7 @@ export async function runAgentTurn(principal: ExecPrincipal, input: AgentTurnInp
   const consultedClients = new Set<string>();
   let ddText = false;
   let consulted: ConsultedBudget | null = null;
+  let slackConsulted: SlackConsultedBudget | null = null;
   let registry: RefRegistry | null = null;
   let turnSignal: LinkedSignal | null = null;
   let streamed = false;
@@ -340,7 +350,8 @@ export async function runAgentTurn(principal: ExecPrincipal, input: AgentTurnInp
       usage: { ...usage, costUsd: Number(usage.costUsd.toFixed(6)) },
       model: model.slice(0, MODEL_CHARS),
       streamedText: streamed,
-      ...(slackVerbatimClipped > 0 ? { slackVerbatimClipped } : {})
+      ...(slackVerbatimClipped > 0 ? { slackVerbatimClipped } : {}),
+      ...(slackConsulted !== null ? { consultedSlack: slackConsulted.snapshot() } : {})
     };
     // C12: a refused or failed answer takes back what was streamed (a refusal always sends it).
     if (e.status === "refused" || (e.status === "failed" && streamed)) sink.retract();
@@ -381,6 +392,18 @@ export async function runAgentTurn(principal: ExecPrincipal, input: AgentTurnInp
     consulted = budget;
     const contextThread = input.context ? threadOfTarget(input.context.target) : null;
     if (contextThread) budget.admit([contextThread]);
+    // P7b (N15): the turn's Slack consults (≤ 600 keys, ≤ 200 channels, exec_messages' CHECKs).
+    const slackBudget = new SlackConsultedBudget(CHAT_LIMITS.maxSlackRefs, CHAT_LIMITS.maxSlackChannels);
+    slackConsulted = slackBudget;
+    // C34: one prepare_client_update per turn; the first take() is true, every later one false.
+    let clientUpdateTaken = false;
+    const clientUpdateCalls = {
+      take: (): boolean => {
+        if (clientUpdateTaken) return false;
+        clientUpdateTaken = true;
+        return true;
+      }
+    };
 
     const cap = effectiveChatCapUsd(input.settings);
     if (cap <= 0 || !(input.chatSpentAtStartUsd < cap)) return finish(fixed("capped", "chat_budget", CHAT_PAUSED_TEXT));
@@ -391,7 +414,7 @@ export async function runAgentTurn(principal: ExecPrincipal, input: AgentTurnInp
     const labels = new Map<string, string>(CHAT_TOOLS.map((t) => [t.name, t.label]));
     const labelOf = (name: string) => labels.get(name) ?? "The tool";
     const system = [
-      { type: "text" as const, text: CHAT_SYSTEM_PROMPT_V2 },
+      { type: "text" as const, text: CHAT_SYSTEM_PROMPT_V3 },
       { type: "text" as const, text: principalBlock(principal) },
       // P6 X2: the Slack surface block, constant per surface (the cached prefix holds).
       ...(input.surface === "slack" ? [{ type: "text" as const, text: SLACK_SURFACE_PROMPT }] : [])
@@ -403,7 +426,11 @@ export async function runAgentTurn(principal: ExecPrincipal, input: AgentTurnInp
         ddText = true;
       },
       prior: input.prior, staged, cards, conversationId: input.conversationId, assistantMessageId: input.assistantMessageId,
-      surface: input.surface
+      surface: input.surface,
+      // P7b (§3.17.3 D2/D5, C8, C30, C34, N15).
+      question: typeof input.question === "string" ? input.question : "",
+      consultedSlack: slackBudget,
+      clientUpdateCalls
     };
     const ctxFor = (round: number): ToolContext => ({ ...shared, round, signal: turn.signal });
 

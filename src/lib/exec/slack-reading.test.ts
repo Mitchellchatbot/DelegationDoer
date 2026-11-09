@@ -15,7 +15,7 @@ import { loadSettings } from "@/lib/exec/principal";
 import { getReadingHalf, lastReadingEventAt, slackReadingSchemaReady } from "@/lib/exec/slack-install";
 import { lastSweepAt, listItemsForAttention, slackScreenRows, type SlackScreenRows } from "@/lib/exec/slack-read-store";
 import * as facade from "@/lib/exec/slack-reading";
-import { __resetAnsweredExclusionForTests, getAnsweredExclusion, getSlackReadingState, listOpenSlackItems, registerAnsweredExclusion } from "@/lib/exec/slack-reading";
+import { __resetAnsweredExclusionForTests, getAnsweredExclusion, getSlackReadingState, listOpenSlackItems, readOpenSlackItems, registerAnsweredExclusion } from "@/lib/exec/slack-reading";
 import { slackMsgFingerprint } from "@/lib/exec/slack-read-types";
 
 // P7a contract §3.19, §5.14 AT14 (Area D): the facade P7b and P8 import.
@@ -120,6 +120,45 @@ describe("AT14 listOpenSlackItems: C20's screen", () => {
     vi.mocked(listItemsForAttention).mockRejectedValueOnce(new Error("down"));
     expect(await list()).toEqual([]);
   });
+
+  // P7b fixer (ui-8, ui-9): the throwing twin P7b's catch-up, counts and tile read, with its muted count.
+  it("readOpenSlackItems: listOpenSlackItems' items exactly; a read failure throws; mutedHidden counts open, unanswered items a mute alone withheld", async () => {
+    const read = (surface: "web" | "slack" = "web") => readOpenSlackItems(PRINCIPAL, { sinceIso: "2026-11-01T00:00:00.000Z", limit: 50, surface });
+    expect(await read()).toEqual({ items: await list(), mutedHidden: 0 });
+    vi.mocked(listItemsForAttention).mockResolvedValue({
+      items: [
+        itemRow({ ts: T(1), bypassMute: true, needsResponse: true }),
+        itemRow({ ts: T(2), needsResponse: true }),
+        itemRow({ ts: T(3), needsResponse: true }),
+        itemRow({ ts: T(4), needsResponse: false }),
+        itemRow({ ts: T(5), needsResponse: true, sourceClass: "finance" })
+      ],
+      channels: [channelRow()]
+    });
+    const muted = (muteSource: "owner" | "slack" | "default_finance", cls: "standard" | "finance" = "standard") =>
+      screen({ channels: new Map([["C0GENERAL", { class: cls, watchState: "muted", muteSource, financeName: cls === "finance" }]]) });
+    vi.mocked(slackScreenRows).mockResolvedValueOnce(muted("owner"));
+    // T(1) bypasses the mute; T(2), T(3) and the finance item T(5) need a response and only the mute keeps them back; T(4) needs none.
+    expect(await read()).toMatchObject({ items: [expect.objectContaining({ ts: T(1) })], mutedHidden: 3 });
+    // On the Slack DM the finance item stays withheld even if the conversation were watched: not counted.
+    vi.mocked(slackScreenRows).mockResolvedValueOnce(muted("slack"));
+    expect((await read("slack")).mutedHidden).toBe(2);
+    // A finance default mute: nothing shows, every open item a mute keeps back is counted.
+    vi.mocked(slackScreenRows).mockResolvedValueOnce(muted("default_finance", "finance"));
+    expect(await read()).toEqual({ items: [], mutedHidden: 4 });
+    // Unwatched ("Don't watch"), a gone message, reading not live: never counted as muted.
+    vi.mocked(slackScreenRows).mockResolvedValueOnce(screen({ channels: new Map([["C0GENERAL", { class: "standard", watchState: "unwatched", muteSource: null, financeName: false }]]) }));
+    expect(await read()).toEqual({ items: [], mutedHidden: 0 });
+    vi.mocked(slackScreenRows).mockResolvedValueOnce({ ...muted("owner"), messages: new Set() });
+    expect(await read()).toEqual({ items: [], mutedHidden: 0 });
+    vi.mocked(slackScreenRows).mockResolvedValueOnce({ ...muted("owner"), readingLive: false });
+    expect(await read()).toEqual({ items: [], mutedHidden: 0 });
+    // A read failure throws (the caller's section says "Couldn't load"); listOpenSlackItems still withholds.
+    vi.mocked(slackScreenRows).mockRejectedValueOnce(new Error("down"));
+    await expect(read()).rejects.toThrow("down");
+    vi.mocked(listItemsForAttention).mockRejectedValueOnce(new Error("down"));
+    await expect(read()).rejects.toThrow("down");
+  });
 });
 
 describe("the hook and the re-exports", () => {
@@ -136,7 +175,8 @@ describe("the hook and the re-exports", () => {
   it("re-exports the P7b / P8 surface", () => {
     for (const name of ["enqueueSlackSweepNow", "listPurgeLog", "listAuthorOptouts", "purgeAuthor", "getDdBotIdentity"]) expect(typeof (facade as Record<string, unknown>)[name]).toBe("function");
     expect(facade.SLACK_ATTENTION_KINDS).toEqual(["slack_decision", "slack_request", "slack_commitment", "slack_unassessed"]);
-    expect(facade.SLACK_CAP_FEATURES).toEqual(["slack_triage"]);
+    expect(facade.SLACK_CAP_FEATURES).toEqual(["slack_triage", "digest"]);   // P7b stage 0 (P7a-1, C14)
+    for (const name of ["listIntelChannels", "getSlackItemsByIds"]) expect(typeof (facade as Record<string, unknown>)[name]).toBe("function");   // P7b P7a-3
     expect(NOW).toBeInstanceOf(Date);
   });
 });

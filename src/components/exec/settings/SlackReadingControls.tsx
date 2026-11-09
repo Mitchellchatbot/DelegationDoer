@@ -201,7 +201,8 @@ export function EnableReadingConfirm({
   onCheck,
   onConfirm,
   onCancel,
-  autoFocus = true
+  autoFocus = true,
+  extra = null
 }: {
   checked: boolean;
   pending: boolean;
@@ -209,6 +210,8 @@ export function EnableReadingConfirm({
   onConfirm: () => void;
   onCancel: () => void;
   autoFocus?: boolean;
+  /** P7b fixer (ui-3): what P7b adds to the switch, shown under the body (null: nothing). */
+  extra?: string | null;
 }) {
   const id = useId();
   const titleRef = useRef<HTMLParagraphElement>(null);
@@ -219,7 +222,7 @@ export function EnableReadingConfirm({
     <div
       role="group"
       aria-labelledby={`${id}-t`}
-      aria-describedby={`${id}-b`}
+      aria-describedby={extra ? `${id}-b ${id}-x` : `${id}-b`}
       data-reading-enable-confirm
       onKeyDown={(e) => {
         if (readingConfirmKeyAction(e.key, pending) !== "close") return;
@@ -235,6 +238,11 @@ export function EnableReadingConfirm({
       <p id={`${id}-b`} className="text-[12.5px] leading-relaxed text-amber-950">
         {SLACK_READ_COPY.enableConfirmBody}
       </p>
+      {extra ? (
+        <p id={`${id}-x`} data-reading-enable-intel className="text-[12.5px] leading-relaxed text-amber-950">
+          {extra}
+        </p>
+      ) : null}
       <label className="flex items-start gap-2 text-[12.5px] text-amber-950">
         <input
           type="checkbox"
@@ -358,7 +366,8 @@ export function SlackReadingControls({
   view,
   onCanonicalHost = true,
   initialDialog = null,
-  initialChecked = false
+  initialChecked = false,
+  enableConfirmExtra = null
 }: {
   view: SlackReadingView;
   /** C45: false replaces the Allow link with P6's settingsWrongHost. */
@@ -367,6 +376,8 @@ export function SlackReadingControls({
   initialDialog?: "enable" | "stop" | null;
   /** Static renders only: the enable confirm's checkbox ticked. */
   initialChecked?: boolean;
+  /** P7b fixer (ui-3): a second paragraph in the enable confirm (P7b's digests and live reads); null shows none. */
+  enableConfirmExtra?: string | null;
 }) {
   const isTop = useIsTopWindow();
   const router = useRouter();
@@ -475,6 +486,7 @@ export function SlackReadingControls({
                 onConfirm={() => void turnOn()}
                 onCancel={() => setDialog(null)}
                 autoFocus={initialDialog === null}
+                extra={enableConfirmExtra}
               />
             )}
           </div>

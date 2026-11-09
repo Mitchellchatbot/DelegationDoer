@@ -11,6 +11,7 @@ import { ExecHeader } from "../ExecHeader";
 import { ago } from "../overview/labels";
 import { SectionCard } from "../SectionCard";
 import { SourceLinks } from "../SourceLinks";
+import { ProjectSlackSection } from "../slack/ProjectSlackSection";
 import { ProjectStatusBadge, RefLink, STAGE_STATUS_LABEL, TASK_STATUS_LABEL, stuckText } from "./labels";
 
 // /executive/projects/[id] (P5a contract §3.13.2, A4, C16, K25, K26): one
@@ -416,6 +417,12 @@ function Conversations({ view }: { view: ProjectDetailView }) {
   );
 }
 
+/** P7b: P5a's derived-client line for the Slack card's client group, when the summary has a derived client. */
+function derivedNote(view: ProjectDetailView): string | null {
+  const d = view.summary.ok ? view.summary.data.derivedClient : null;
+  return d === null ? null : PROJECT_COPY.derivedFrom(d.taskCount, d.namedTaskCount);
+}
+
 export function ProjectDetailPageView({
   view,
   askHref = null
@@ -460,6 +467,8 @@ export function ProjectDetailPageView({
           <Blockers view={view} />
           <MeetingRisks view={view} />
           <Conversations view={view} />
+          {/* P7b (§3.12.3, C19): the Slack card after Conversations; absent from a view without the section. */}
+          <ProjectSlackSection section={view.slack} derivedNote={derivedNote(view)} tz={tz} now={now} />
         </div>
       </div>
       <p className="flex items-center gap-1.5 text-[11px] text-muted">

@@ -5,13 +5,15 @@ import { cn } from "@/lib/utils";
 // The exec page tabs (ScaleTabs' pattern): each page passes the tab it is,
 // so this stays a server component with no hooks. Only tabs whose page exists
 // are listed, so it never links to a 404: P2b shipped Overview, P3 added
-// Email, P5a added Team and Projects (contract C23), and P5b added Chat. The
-// Email tab shows even while email intelligence is off; its page says so.
+// Email, P5a added Team and Projects (contract C23), P5b added Chat, and P7b
+// added Slack after Email (P7b contract §3.17.1). The Email and Slack tabs
+// show even while their intelligence is off; their pages say so.
 // After the pill group, a gear links to Settings on every page; it is the
 // current page when `active` is "settings". The full Needs Attention feed
 // (/executive/attention) is reached from the Overview card, not a tab (C8).
-// Below sm the pills are tighter (no gap, px-2, 12 px text), so all five fit
-// beside the gear at a 390 px phone (review ui-6) instead of clipping the last.
+// Below sm the pills are tighter (no gap, px-1.5, 11.5 px text: P7b's sixth
+// tab, Slack, made px-2 / 12 px 22 px too wide), so all six fit beside the
+// gear at a 390 px phone (review ui-6) instead of clipping the last.
 
 export interface ExecTab {
   key: string;
@@ -23,6 +25,7 @@ export interface ExecTab {
 export const EXEC_TABS: readonly ExecTab[] = [
   { key: "overview", href: "/executive", label: "Overview" },
   { key: "email", href: "/executive/email", label: "Email" },
+  { key: "slack", href: "/executive/slack", label: "Slack" },
   { key: "team", href: "/executive/team", label: "Team" },
   { key: "projects", href: "/executive/projects", label: "Projects" },
   { key: "chat", href: "/executive/chat", label: "Chat" }
@@ -41,7 +44,7 @@ export function ExecTabs({ active, tabs }: { active: string; tabs: readonly Exec
             href={tab.href}
             aria-current={tab.key === active ? "page" : undefined}
             className={cn(
-              "shrink-0 rounded-full px-2 py-1.5 text-[12px] font-semibold transition-colors sm:px-3.5 sm:text-[12.5px]",
+              "shrink-0 rounded-full px-1.5 py-1.5 text-[11.5px] font-semibold transition-colors sm:px-3.5 sm:text-[12.5px]",
               tab.key === active ? "bg-indigo-600 text-white" : "text-muted hover:text-ink"
             )}
           >

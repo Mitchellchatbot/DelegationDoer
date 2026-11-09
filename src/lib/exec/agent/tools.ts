@@ -16,6 +16,7 @@ import type { AttentionFeedItem, AttentionFilters, EmailScreenState } from "@/li
 import { auditEvent } from "@/lib/exec/audit";
 import { clipUnits, stagedTaskText, wellFormedText } from "@/lib/exec/chat/answer";
 import { insertProposal } from "@/lib/exec/chat-store";
+import { prepareClientUpdate } from "@/lib/exec/client-update";
 import { DDTEXT_AI_KINDS } from "@/lib/exec/ddtext-types";
 import { createChatReplyDraft, type ChatDraftRefusal } from "@/lib/exec/drafts";
 import { draftPageHref } from "@/lib/exec/drafts-links";
@@ -26,8 +27,12 @@ import { intakeThreadIdsForTasks, listScreenedApprovalItems, loadIntakeScreening
 import type { ExecTextBlockParam, ExecToolResultBlockParam, ExecToolUseBlock } from "@/lib/exec/llm/request";
 import { getOverview } from "@/lib/exec/overview";
 import { getProjectDetail, getProjectsListView } from "@/lib/exec/projects-view";
-import { getSlackReadingState } from "@/lib/exec/slack-reading";
-import { ddClientRef, ddPageRef, ddProjectRef, ddTaskRef, execEmailThreadRef } from "@/lib/exec/refs";
+import { ddClientRef, ddPageRef, ddProjectRef, ddTaskRef, execEmailThreadRef, slackMessageRef } from "@/lib/exec/refs";
+import { listDigestViews, requestTodayDigests, sinceLastBrief, slackDigestRef } from "@/lib/exec/slack-digests";
+import { SLACK_INTEL_COPY } from "@/lib/exec/slack-intel-copy";
+import { getDigests, getDigestsByIds, listChannelLinks, slackIntelState } from "@/lib/exec/slack-intel-store";
+import { getSlackItemsByIds, getSlackReadingState, listIntelChannels, readOpenSlackItems } from "@/lib/exec/slack-reading";
+import { searchSlack, slackChannelLabel, type SlackSearchHit } from "@/lib/exec/slack-search";
 import {
   DdReadError,
   getPendingApprovals,
@@ -70,6 +75,22 @@ import { getTeamView, getWorkingNow } from "@/lib/exec/team";
 import { clipForModel, maskSecrets, neutralizeChatText, newNonce, normalizeWhitespace, sanitizeText, TextBudget, type UntrustedItem } from "@/lib/exec/text/untrusted";
 import { localDateString, startOfLocalDayUtc } from "@/lib/exec/time";
 import { messageBodyText, neutralizeUntrusted } from "@/lib/exec/triage/email-text";
+import {
+  SLACK_INTEL_LIMITS,
+  slackDigestKey,
+  slackItemPolicy,
+  slackMessageKey,
+  slackPrivacyOf,
+  slackUsePolicy,
+  storedSearchChannels,
+  type ChannelRow,
+  type SlackChannelLink,
+  type SlackDigestRow,
+  type SlackIntelState,
+  type SlackItemKind,
+  type SlackItemRow,
+  type SlackPrivacy
+} from "@/lib/exec/slack-intel-types";
 import type { ExecPrincipal, ExecSettings, SourceRef } from "@/lib/exec/types";
 import type { Cell, CountsValue, MedianValue, RateValue, TeamDepartmentRow, TeamPersonRow, TeamWindow } from "@/lib/exec/view-types";
 import type { RestrictedSenderRule } from "@/lib/restricted-senders";
@@ -96,6 +117,18 @@ export interface TurnMemo {                       // per turn, lazy, each read a
   projects(): Promise<DdProject[]>; openTasks(): Promise<DdTask[]>; schedules(): Promise<DdUserSchedule[]>;
   email(): Promise<EmailAccess>; bucketRows(): Promise<BucketRow[]>;     // bucketRows only when email is "on"
   intakePolicy(): Promise<{ rules: RestrictedSenderRule[]; hash: string } | null>;   // P5a loadIntakeScreeningPolicy
+  /** P7b (§3.15.2, §3.17.3 D2; stage-0 seed, OPTIONAL until Area D fills createTurnMemo): the turn's Slack intel state, the
+   *  facade's listIntelChannels rows by id and P7b's channel links, loaded once per turn. A read failure rejects (dd_read). */
+  slack?(): Promise<TurnSlack>;
+}
+/** P7b: TurnMemo.slack()'s value. */
+export interface TurnSlack { state: SlackIntelState; channels: Map<string, ChannelRow>; links: Map<string, SlackChannelLink> }
+/** P7b (§3.17.3 D2, N15): the Slack refs and channels this turn's results carried (≤ 600 keys / ≤ 200 channels). admit is
+ *  synchronous and runs before the push (P5b C41's pattern); false = over budget (the item is dropped with slackBudgetFull). */
+export interface ConsultedSlack {
+  admit(refKeys: readonly string[], channelId: string, privacy: SlackPrivacy): boolean;
+  readonly full: boolean;
+  snapshot(): { refs: string[]; channels: string[]; privateSlack: boolean };
 }
 export type EmailAccess =
   | { state: "on"; usable: readonly string[]; rules: RestrictedSenderRule[]; policyHash: string }
@@ -108,12 +141,20 @@ export interface ToolContext {
   consulted: ConsultedBudget;            // C19, C41: threads this turn's results carried data from (≤ 500)
   consultedClients: Set<string>;         // C24: clients whose records a result carried
   markDdText(): void;                    // C24: an S4 DD-text block was delivered
-  prior: { threads: ReadonlySet<string>; clients: ReadonlySet<string>; ddText: boolean };   // C24: replayed turns' sets
+  prior: { threads: ReadonlySet<string>; clients: ReadonlySet<string>; ddText: boolean;   // C24: replayed turns' sets
+    /** P7b (N15, C24; stage-0 seed, OPTIONAL until Area D sets it): any replayed answer's consulted_private_slack. */
+    privateSlack?: boolean };
   staged: { proposals: number; drafts: number };                 // C40 counters
   cards: ChatCard[];                     // staged cards of this turn
   conversationId: string; assistantMessageId: string;
   /** Additive (§3.11.4): the turn's surface, for the audit actor ("slack" → actor slack). Absent = web. */
   surface?: "web" | "slack";
+  /** P7b (§3.17.3 D2, C30; stage-0 seeds, OPTIONAL until Area D wires run.ts / turn.ts and the harnesses): the stored question
+   *  text of this turn (only prepare_client_update reads it, C8), the Slack consulted budget (N15), and the per-turn
+   *  prepare_client_update counter (C34: the first take() is true, every later one false). */
+  question?: string;
+  consultedSlack?: ConsultedSlack;
+  clientUpdateCalls?: { take(): boolean };
 }
 
 /** create_draft's switch (b-agent-2): true only when Area F's F1–F5 and F8 are in the build. When false, create_draft
@@ -145,6 +186,10 @@ const PROPOSAL_DAYS = 7;
 const DEFAULT_ZONE = "America/New_York";
 
 const MASKED_NOTE = "Some credential-like text was hidden.";
+/** P7b (fact (e)): what list_attention says for source slack while Slack reading isn't set up, and list_commitments' pointer. */
+const SLACK_ATTENTION_OFF_NOTE = "Slack reading isn't on, so there are no Slack items. Say so; don't guess about Slack.";
+// Fixer security-6 / ui-4 (fact (f)): P7a records only the commitments others make to him in Slack, never his own.
+const SLACK_COMMITMENTS_NOTE = "Commitments others made to him in Slack are found with search_slack kind commitment; commitments he makes in Slack aren't recorded, so say so if he asks about his own.";
 const CONSULTED_NOTE = "This question has read as much email as one answer may; some items were left out.";
 const SCREEN_UNAVAILABLE_NOTE = "Email items couldn't be screened just now, so none are shown; say email couldn't be checked.";
 const TASK_ID_SHAPE = /^[A-Za-z0-9_.:-]{1,100}$/;
@@ -213,7 +258,15 @@ export function createTurnMemo(principal: ExecPrincipal, settings: ExecSettings,
       const access = await email();
       return access.state === "on" ? listBucketRows(principal, now, { signal }) : [];
     }),
-    intakePolicy: once(() => loadIntakeScreeningPolicy(principal, { signal }))
+    intakePolicy: once(() => loadIntakeScreeningPolicy(principal, { signal })),
+    // P7b (§3.15.2): the intel state (C1; never throws: a failed read is "not_installed"), and only when it is "ok" the
+    // conversations P7a classified (every row but deny) and P7b's channel links. A failed read rejects (dd_read).
+    slack: once(async (): Promise<TurnSlack> => {
+      const state = await slackIntelState(principal, settings, { signal });
+      if (state !== "ok") return { state, channels: new Map(), links: new Map() };
+      const [rows, links] = await Promise.all([listIntelChannels(principal, { signal }), listChannelLinks(principal, { signal })]);
+      return { state, channels: new Map(rows.map((r) => [r.channelId, r])), links };
+    })
   };
 }
 
@@ -549,7 +602,9 @@ const AUDIT_ID_SHAPES: Readonly<Record<string, (v: string) => boolean>> = {
   thread_id: (v) => isThreadIdShape(v),
   // project_health takes an id or a NAME, so only DD's project id shapes are kept: proj_<base36>_<base36>
   // (src/app/api/projects/route.ts:60) and the seed's p_<n>. A one-word name ("Acme") becomes { chars } (rule 6).
-  project_id: (v) => PROJECT_ID_SHAPE.test(v)
+  project_id: (v) => PROJECT_ID_SHAPE.test(v),
+  // P7b (§3.15.2 Audit): search_slack's channel is kept only as a Slack channel id; a name becomes { chars }.
+  channel: (v) => /^[CGD][A-Z0-9]{2,30}$/.test(v)
 };
 const DATE_KEYWORDS: ReadonlySet<string> = new Set(["today", "yesterday"]);
 
@@ -942,10 +997,10 @@ async function listAttentionTool(args: J, ctx: ToolContext): Promise<ToolResultD
   const source = String(args.source);
   const limit = Number(args.limit);
   const filtersEcho = { status, category, band, source, limit };
-  // P7a (fixer ui-2): "Slack isn't connected" only while it isn't: once reading is set up, its Needs Attention items are read
-  // like any other source's (through the same screen).
+  // P7a (fixer ui-2): while Slack reading isn't set up there are no Slack items; once it is, its Needs Attention items are
+  // read like any other source's (through the same screen). P7b (fact (e)): the note says only what is true.
   if (source === "slack" && (await slackSource(ctx)) === "not_connected") {
-    out.note("Slack isn't connected yet.");
+    out.note(SLACK_ATTENTION_OFF_NOTE);
     return out.done({ filters: filtersEcho, items: capList([], limit, 0), more: false, email_screen: "none", email_hidden: 0 });
   }
   const filters: AttentionFilters = {
@@ -2252,7 +2307,8 @@ async function listCommitmentsTool(args: J, ctx: ToolContext): Promise<ToolResul
     kept.push(c);
   }
   const nowMs = ctx.now.getTime();
-  out.note("Commitments made in Slack aren't available yet.");
+  // P7b (§3.17.3 D3, N7): Slack commitments are P7a's items, found through search_slack.
+  out.note(SLACK_COMMITMENTS_NOTE);
   return out.done({
     items: capList(
       kept.slice(0, 50).map((c) => {
@@ -2459,9 +2515,10 @@ const REFUSAL_NOTES: Readonly<Record<ChatDraftRefusal, string>> = {
   needs_check: "An earlier draft for this email may already have been sent. He should check his Sent Items and start the reply from the thread page."
 };
 
-/** C24 (b-security-3): what makes this draft "private refs", over this turn and the replayed ones. */
+/** C24 (b-security-3): what makes this draft "private refs", over this turn and the replayed ones. P7b (N15): a non-public
+ *  Slack consult this turn (consultedSlack) or in a replayed answer (prior.privateSlack) adds private_slack. */
 export function privateRefKinds(
-  ctx: Pick<ToolContext, "consulted" | "prior" | "consultedClients">,
+  ctx: Pick<ToolContext, "consulted" | "prior" | "consultedClients"> & Partial<Pick<ToolContext, "consultedSlack">>,
   ddTextThisTurn: boolean,
   threadId: string,
   threadClientId: string | null
@@ -2472,6 +2529,7 @@ export function privateRefKinds(
   if (ddTextThisTurn || ctx.prior.ddText) kinds.push("dd_text");
   const clients = new Set([...ctx.consultedClients, ...ctx.prior.clients]);
   if ([...clients].some((c) => threadClientId === null || c !== threadClientId)) kinds.push("other_clients");
+  if (ctx.prior.privateSlack === true || ctx.consultedSlack?.snapshot().privateSlack === true) kinds.push("private_slack");
   return kinds;
 }
 
@@ -2593,6 +2651,11 @@ async function getSourceTool(args: J, ctx: ToolContext): Promise<ToolResultDraft
     }
     case "page":
       return wrap({ note: "This ref is a page link; there is nothing more to fetch." });
+    // P7b (§3.15.2 get_source).
+    case "slack_message":
+      return wrap(await slackMessageSource(out, ctx, t));
+    case "slack_digest":
+      return wrap(await slackDigestSource(out, ctx, t));
   }
 }
 
@@ -2609,6 +2672,553 @@ async function personDetail(out: Out, ctx: ToolContext, userId: string): Promise
       tasks.length
     )
   };
+}
+
+// ---------------------------------------------------------------------------
+// 17-19. search_slack, slack_digest, prepare_client_update (P7b contract §3.15.2, N15-N17, C16-C18, C21, C31, C34; Area D)
+// ---------------------------------------------------------------------------
+//
+// Every Slack read is gated twice: the turn's intel state (anything but "ok" answers the not-on note, a value, so the tool
+// list never changes, N16) and, per conversation or item, slackUsePolicy / slackItemPolicy for this turn's use (the Slack
+// DM is "chat_slack": no finance anywhere, N1). Every Slack-derived string goes into the result's untrusted block as
+// kind slack_text (<untrusted_slack …>); the JSON carries "U<n>" and metadata only. Every item, digest or live message
+// that reaches a result is admitted to ctx.consultedSlack first (N15; all-or-nothing, synchronous, before the push): an
+// item that doesn't fit is dropped with slackBudgetFull. Nothing here logs.
+
+const NOT_ON = SLACK_INTEL_COPY.notOnNote;
+const SLACK_DD_READ = "Couldn't read Slack's stored data just now. Say Slack couldn't be checked; don't guess.";
+/** Fixer ui-9: P7a's open-item read failed (never shown as "nothing open"). */
+const SLACK_OPEN_ITEMS_READ = "Couldn't read the open Slack items just now. Say they couldn't be checked; don't guess.";
+const SLACK_LIVE_READ_NOTE = "This was read live; ask again to re-read it.";
+const SLACK_GONE_NOTE = "No longer available.";
+const DIGEST_GONE_NOTE = "This digest was removed or rebuilt; ask for it again.";
+const DIGEST_NO_SUMMARY_NOTE = "This digest has no summary now; ask for it again.";
+const SLACK_CHANNEL_LABEL = 80;
+const DIGESTS_SHOWN = 10;
+const DIGEST_STATUS_SHOWN = 20;
+const OPEN_ITEMS_SHOWN = 15;
+const DIGEST_DATES_MAX = 7;
+
+type SlackChatUse = "chat_web" | "chat_slack";
+type NotOnState = Exclude<SlackIntelState, "ok">;
+
+/** The turn's surface picks the policy use (§3.15.2): the Slack DM never shows finance. */
+const slackUse = (ctx: Pick<ToolContext, "surface">): SlackChatUse => (ctx.surface === "slack" ? "chat_slack" : "chat_web");
+
+const fillCopy = (template: string, values: Record<string, string>): string =>
+  template.replace(/\{([a-zA-Z]+)\}/g, (whole, key: string) => (key in values ? values[key] : whole));
+
+/** The turn's Slack, or the answer to give instead. A turn without the Slack memo or budget reads nothing (fail closed). */
+async function slackTurn(out: Out, ctx: ToolContext): Promise<{ s: TurnSlack; use: SlackChatUse; consulted: ConsultedSlack } | { answer: ToolResultDraft }> {
+  const memo = ctx.memo;
+  const consulted = ctx.consultedSlack;
+  if (typeof memo.slack !== "function" || !consulted) return { answer: out.done({ slack: "not_installed", note: NOT_ON.not_installed }) };
+  let s: TurnSlack;
+  try {
+    s = await memo.slack();
+  } catch {
+    ctx.signal.throwIfAborted();
+    throw new ToolFailure("dd_read", SLACK_DD_READ);
+  }
+  if (s.state !== "ok") return { answer: out.done({ slack: s.state, note: NOT_ON[s.state as NotOnState] ?? NOT_ON.not_installed }) };
+  return { s, use: slackUse(ctx), consulted };
+}
+
+/** N15: admit before the push; false → the item is dropped and the result says the budget is full. */
+function admitSlack(out: Out, consulted: ConsultedSlack, keys: readonly string[], channelId: string, privacy: SlackPrivacy): boolean {
+  if (consulted.admit(keys, channelId, privacy)) return true;
+  out.note(SLACK_INTEL_COPY.slackBudgetFull);
+  return false;
+}
+
+/** §3.15.2's channel resolution: the exact id, else a case-insensitive exact name (a leading # stripped) among `candidates`
+ *  (the conversations this tool may read for this use). Several → needs_choice; none → not_found; '' → none. */
+function resolveSlackChannel(out: Out, param: string, input: string, candidates: readonly ChannelRow[]):
+  { kind: "none" } | { kind: "value"; ch: ChannelRow } | { kind: "answer"; draft: ToolResultDraft } {
+  const raw = input.replace(/\s+/g, " ").trim();
+  if (raw === "") return { kind: "none" };
+  const byId = candidates.find((c) => c.channelId === raw);
+  if (byId) return { kind: "value", ch: byId };
+  const q = raw.replace(/^#/, "").toLowerCase();
+  const hits = q === "" ? [] : candidates.filter((c) => typeof c.name === "string" && c.name.toLowerCase() === q);
+  if (hits.length === 1) return { kind: "value", ch: hits[0] };
+  if (hits.length > 1) {
+    const rows = hits.slice(0, 5).map((c) => ({ id: c.channelId, name: slackChannelLabel(c) }));
+    return { kind: "answer", draft: needsChoice(out, param, raw, rows, () => null) };
+  }
+  throw notFound(`No Slack conversation the assistant reads matches '${out.t(raw, 80)}' for ${param}. Use a channel id or name from an earlier result.`);
+}
+
+/** The ref of a stored item, a live message or a digest (§3.15.2 Refs). */
+function slackHitRef(out: Out, hit: SlackSearchHit): string | null {
+  const isPrivate = hit.privacy !== "public";
+  if (hit.src === "digest") {
+    if (hit.localDate === null || hit.rebuilds === null) return null;
+    return out.ref({ type: "slack_digest", channelId: hit.channelId, localDate: hit.localDate, rebuilds: hit.rebuilds },
+      slackDigestRef({ channelId: hit.channelId, localDate: hit.localDate }, hit.channelLabel, isPrivate));
+  }
+  if (hit.ts === null) return null;
+  return out.ref({ type: "slack_message", channelId: hit.channelId, ts: hit.ts, itemId: hit.itemId },
+    slackMessageRef({ channelId: hit.channelId, ts: hit.ts, permalink: hit.permalink, label: `${hit.channelLabel} message`, isPrivate }));
+}
+
+/** The consulted keys of a hit (N15). */
+function hitKeys(hit: SlackSearchHit): string[] {
+  if (hit.src === "digest") return hit.localDate !== null && hit.rebuilds !== null ? [slackDigestKey(hit.channelId, hit.localDate, hit.rebuilds)] : [];
+  return hit.ts !== null ? [slackMessageKey(hit.channelId, hit.ts)] : [];
+}
+
+function localAt(ctx: ToolContext, iso: string): string {
+  return formatInZone(iso, ctx.principal.timezone, "datetime", ctx.now);
+}
+
+/** One search hit as JSON: metadata plus its text in the untrusted block. */
+function slackHitJson(out: Out, hit: SlackSearchHit): J {
+  const ref = slackHitRef(out, hit);
+  const at = localAt(out.ctx, hit.at);
+  const json: J = { ref, src: hit.src, kind: hit.kind, privacy: hit.privacy, channel: out.t(hit.channelLabel, SLACK_CHANNEL_LABEL), at, at_iso: hit.at };
+  if (hit.src === "digest") json.date = hit.localDate;
+  Object.assign(json, out.block({ kind: "slack_text", ref, author: null, at, text: hit.text }));
+  if (hit.external) json.external = true;
+  if (hit.src === "item" && !hit.assessed) json.assessed = false;
+  if (hit.answered !== null) json.answered = hit.answered;
+  // Fixer security-6: whose promise a stored commitment is; security-5: a digest the model flagged as instruction-like.
+  if (hit.direction) json.direction = hit.direction;
+  if (hit.injectionSuspected === true) json.injection_suspected = true;
+  return json;
+}
+
+function itemTextOf(item: SlackItemRow): string {
+  const parts: string[] = [];
+  if (typeof item.summary === "string" && item.summary.trim() !== "") parts.push(item.summary.trim());
+  if (!item.authorExternal && typeof item.excerpt === "string" && item.excerpt.trim() !== "") parts.push(`Quote: ${item.excerpt.trim()}`);
+  return parts.join("\n");
+}
+
+function digestTextOf(row: SlackDigestRow): string {
+  const lines: string[] = [];
+  if (typeof row.summary === "string" && row.summary.trim() !== "") lines.push(`Summary (AI-assessed): ${row.summary.trim()}`);
+  const list = (title: string, items: readonly { text: string }[]) => {
+    if (!Array.isArray(items) || items.length === 0) return;
+    lines.push(`${title}:`);
+    for (const l of items) if (typeof l?.text === "string" && l.text.trim() !== "") lines.push(`- ${l.text.trim()}`);
+  };
+  list("Highlights", row.highlights);
+  list("Decisions", row.decisions);
+  list("Open questions", row.openQuestions);
+  return lines.join("\n");
+}
+
+const slackCountsJson = (c: SlackDigestRow["counts"] | null): J | null =>
+  c === null ? null : { from_people: c.human, from_bots_and_dd: c.bot + c.ddPost, external: c.external, threads: c.threads };
+
+/** A Slack ts as epoch ms (0 when malformed): ordering and display only, never compared as a string. */
+function tsMsOf(ts: string): number {
+  const m = /^([0-9]{1,12})\.([0-9]{1,8})$/.exec(typeof ts === "string" ? ts : "");
+  return m ? Number(m[1]) * 1000 + Math.floor(Number(`0.${m[2]}`) * 1000) : 0;
+}
+
+// --- 17. search_slack --------------------------------------------------------
+
+async function searchSlackTool(args: J, ctx: ToolContext): Promise<ToolResultDraft> {
+  const out = new Out(ctx);
+  const on = await slackTurn(out, ctx);
+  if ("answer" in on) return on.answer;
+  const { s, use, consulted } = on;
+  const query = String(args.query);
+  const channelIn = String(args.channel);
+  const clientIn = String(args.client);
+  const kind = String(args.kind) as SlackItemKind | "any";
+  const sinceDays = Number(args.since_days) as 1 | 7 | 30 | 90;
+  const includeLive = args.include_live === true;
+  const limit = (Number(args.limit) === 25 ? 25 : 10) as 10 | 25;
+  if (query.length > SLACK_INTEL_LIMITS.searchQueryChars) throw badInput(`Keep query under ${SLACK_INTEL_LIMITS.searchQueryChars} characters.`);
+
+  // A channel among those a search may read for this use: watched, or muted with mute-bypass items (C7).
+  const scope = storedSearchChannels(s.state, s.channels.values(), use);
+  const searchable = [...scope.full, ...scope.bypass].map((id) => s.channels.get(id)).filter((c): c is ChannelRow => c !== undefined);
+  const rc = resolveSlackChannel(out, "channel", channelIn, searchable);
+  if (rc.kind === "answer") return rc.draft;
+  const channel = rc.kind === "value" ? rc.ch : null;
+  let client: DdClient | null = null;
+  if (clientIn.trim() !== "") {
+    const clients = await ctx.memo.clients();
+    const c = settle(out, "client", clientIn, resolveClient(clientIn, clients, { allowAny: true, strict: false }), (x) => out.ref({ type: "client", id: x.id }, ddClientRef(x)));
+    if (c.kind === "answer") return c.draft;
+    if (c.kind === "value") client = c.value;
+  }
+
+  const r = await searchSlack(ctx.principal, {
+    state: s.state, use, channels: s.channels, links: s.links, clientId: client?.id ?? null, channelId: channel?.channelId ?? null, now: ctx.now, signal: ctx.signal
+  }, { query, channel: channelIn, client: clientIn, kind, sinceDays, includeLive, limit });
+
+  const results: J[] = [];
+  for (const hit of r.hits) {
+    if (!admitSlack(out, consulted, hitKeys(hit), hit.channelId, hit.privacy)) continue;
+    results.push(slackHitJson(out, hit));
+  }
+  if (client !== null && results.length > 0) ctx.consultedClients.add(client.id);
+
+  out.note(SLACK_INTEL_COPY.searchRecordedOnly);
+  if (includeLive) {
+    if (r.live.reason === "needs_scope") out.note(SLACK_INTEL_COPY.searchLiveNeedsScope);
+    else {
+      if (sinceDays > SLACK_INTEL_LIMITS.searchLiveDaysMax) out.note(SLACK_INTEL_COPY.searchLiveClamped);
+      if (r.live.reason === "rate_budget") out.note(SLACK_INTEL_COPY.searchLiveRateBudget);
+      else if (r.live.partial) out.note(SLACK_INTEL_COPY.searchLivePartial);
+    }
+  }
+  return out.done({
+    slack: "ok",
+    ...resolvedOf(out),
+    scope: {
+      channel: channel === null ? null : {
+        ref: null,
+        label: out.t(slackChannelLabel(channel), SLACK_CHANNEL_LABEL),
+        privacy: slackPrivacyOf(channel)
+      },
+      client: client === null ? null : { ref: out.ref({ type: "client", id: client.id }, ddClientRef(client)), name: out.t(client.name, 120) }
+    },
+    results: capList(results, limit, Math.max(r.total, results.length)),
+    live: { read: r.live.read, channels: r.live.channels, partial: r.live.partial }
+  });
+}
+
+// --- 18. slack_digest --------------------------------------------------------
+
+/** The window's local dates (oldest first) and bounds in his zone (since_last_brief through P8's resolver, C22). */
+async function digestWindow(ctx: ToolContext, window: string): Promise<{ from: Date; to: Date; dates: string[] }> {
+  const tz = ctx.principal.timezone;
+  const now = ctx.now;
+  const todayStart = startOfLocalDayUtc(now, tz);
+  const today = localDateString(now, tz);
+  if (window === "today") return { from: todayStart, to: now, dates: [today] };
+  if (window === "yesterday") {
+    const start = startOfLocalDayUtc(new Date(todayStart.getTime() - 1), tz);
+    return { from: start, to: todayStart, dates: [localDateString(start, tz)] };
+  }
+  const from = window === "since_last_brief" ? await sinceLastBrief(ctx.principal, ctx.settings, now) : localDayStart(now, tz, 6);
+  const dates: string[] = [];
+  let day = localDateString(from, tz);
+  for (let i = 0; i < 40 && day <= today; i++) {
+    dates.push(day);
+    day = addDaysToYmd(day, 1);
+  }
+  return { from, to: now, dates: dates.slice(-DIGEST_DATES_MAX) };
+}
+
+async function slackDigestTool(args: J, ctx: ToolContext): Promise<ToolResultDraft> {
+  const out = new Out(ctx);
+  const on = await slackTurn(out, ctx);
+  if ("answer" in on) return on.answer;
+  const { s, use, consulted } = on;
+  const scopeIn = String(args.scope);
+  const target = String(args.target);
+  const window = String(args.window);
+  const includeOpen = args.include_open_items === true;
+
+  // The conversations a digest or an open item may come from for this use: watched, or muted with mute-bypass items
+  // (their open items only: listDigestViews never shows a muted conversation's digest, nor a 1:1 DM's).
+  const searchScope = storedSearchChannels(s.state, s.channels.values(), use);
+  const candidates = [...searchScope.full, ...searchScope.bypass].map((id) => s.channels.get(id)).filter((c): c is ChannelRow => c !== undefined);
+  let channelIds: string[] | null = null;            // null = scope all
+  let clientLink: Map<string, "high" | "low"> | null = null;
+  let scopeJson: J = { kind: "all" };
+  if (scopeIn === "channel") {
+    const rc = resolveSlackChannel(out, "target", target, candidates);
+    if (rc.kind === "answer") return rc.draft;
+    if (rc.kind === "none") throw badInput("With scope channel, target must be a channel id or name.");
+    channelIds = [rc.ch.channelId];
+    scopeJson = { kind: "channel", channel: out.t(slackChannelLabel(rc.ch), SLACK_CHANNEL_LABEL) };
+  } else if (scopeIn === "client") {
+    if (target.trim() === "") throw badInput("With scope client, target must be a client id or name.");
+    const clients = await ctx.memo.clients();
+    const c = settle(out, "target", target, resolveClient(target, clients, { allowAny: false, strict: false }), (x) => out.ref({ type: "client", id: x.id }, ddClientRef(x)));
+    if (c.kind === "answer") return c.draft;
+    if (c.kind !== "value") throw notFound("Nothing matches that client for target.");
+    const client = c.value;
+    const allowed = new Set(candidates.map((ch) => ch.channelId));
+    clientLink = new Map();
+    for (const [channelId, link] of s.links) {
+      if (link.clientId !== client.id || !allowed.has(channelId)) continue;
+      if (link.matchConfidence === "high" || link.matchConfidence === "low") clientLink.set(channelId, link.matchConfidence);
+    }
+    channelIds = [...clientLink.keys()];
+    ctx.consultedClients.add(client.id);
+    scopeJson = { kind: "client", client: { ref: out.ref({ type: "client", id: client.id }, ddClientRef(client)), name: out.t(client.name, 120) } };
+  }
+
+  const win = await digestWindow(ctx, window);
+  const views = channelIds !== null && channelIds.length === 0
+    ? []
+    : await listDigestViews(ctx.principal, s.state, { dates: win.dates, ...(channelIds !== null ? { channelIds } : {}), use, limit: 500 }, { signal: ctx.signal, now: ctx.now });
+  // The rows again, by id: the generation (rebuilds) for the consulted key, and the text as it is now.
+  const ids = views.map((v) => v.digestId).filter((id): id is string => typeof id === "string");
+  const rows = new Map((ids.length > 0 ? await getDigestsByIds(ctx.principal, ids, { signal: ctx.signal }) : []).map((r) => [r.id, r]));
+
+  // Window today (C15): "today so far" builds for up to 3 conversations whose digest is missing or older than an hour.
+  const queued = new Set<string>();
+  if (window === "today") {
+    const wanted = views.filter((v) => v.canBuild).map((v) => v.channelId);
+    if (wanted.length > 0) {
+      try {
+        for (const id of await requestTodayDigests(ctx.principal, wanted, ctx.now, SLACK_INTEL_LIMITS.searchLiveChannels)) queued.add(id);
+      } catch {
+        ctx.signal.throwIfAborted();
+        // A build that couldn't be queued: the digest shows as it is.
+      }
+    }
+  }
+
+  const digests: J[] = [];
+  const notBuilt: J[] = [];
+  const building: J[] = [];
+  let digestTotal = 0;
+  let notBuiltTotal = 0;
+  let buildingTotal = 0;
+  for (const v of views) {
+    const label = out.t(v.channelLabel, SLACK_CHANNEL_LABEL);
+    const link = clientLink?.get(v.channelId);
+    const row = v.digestId !== null ? rows.get(v.digestId) : undefined;
+    if (v.digestId !== null && row === undefined) continue;   // removed since the list was read
+    const queuedNow = queued.has(v.channelId) && window === "today";
+    if ((row !== undefined && row.status === "building") || queuedNow) {
+      buildingTotal += 1;
+      if (building.length < DIGEST_STATUS_SHOWN && admitSlack(out, consulted, [], v.channelId, v.privacy)) {
+        building.push({ channel: label, date: v.date, ...(link ? { client_link: link } : {}) });
+        if (queuedNow) out.note(fillCopy(SLACK_INTEL_COPY.digestBuildingNote, { channel: label }));
+      }
+      continue;
+    }
+    if (row === undefined) {
+      notBuiltTotal += 1;
+      if (notBuilt.length < DIGEST_STATUS_SHOWN && admitSlack(out, consulted, [], v.channelId, v.privacy)) {
+        notBuilt.push({ channel: label, date: v.date, reason: "not_built", ...(link ? { client_link: link } : {}) });
+      }
+      continue;
+    }
+    digestTotal += 1;
+    if (digests.length >= DIGESTS_SHOWN) continue;
+    if (!admitSlack(out, consulted, [slackDigestKey(row.channelId, row.localDate, row.rebuilds)], row.channelId, v.privacy)) continue;
+    const ref = out.ref({ type: "slack_digest", channelId: row.channelId, localDate: row.localDate, rebuilds: row.rebuilds },
+      slackDigestRef(row, v.channelLabel, v.privacy !== "public"));
+    const json: J = { ref, channel: label, privacy: v.privacy, date: row.localDate, status: row.status };
+    if (link) json.client_link = link;
+    if (row.status === "built") Object.assign(json, out.block({ kind: "slack_text", ref, author: null, at: row.localDate, text: digestTextOf(row) }));
+    json.counts = slackCountsJson(row.counts);
+    json.partial = row.partial;
+    if (row.status === "built" && row.injectionSuspected) json.injection_suspected = true;   // fixer security-5
+    digests.push(json);
+  }
+
+  let openItems: J | null | undefined;
+  let items: SlackItemRow[] = [];
+  if (includeOpen) {
+    try {
+      ({ items } = await readOpenSlackItems(ctx.principal, {
+        sinceIso: new Date(ctx.now.getTime() - SLACK_INTEL_LIMITS.catchUpWindowDays * DAY_MS).toISOString(),
+        limit: SLACK_INTEL_LIMITS.catchUpReadRows,
+        surface: screenSurface(ctx)
+      }));
+    } catch {
+      ctx.signal.throwIfAborted();
+      out.note(SLACK_OPEN_ITEMS_READ);
+      openItems = null;
+    }
+  }
+  if (includeOpen && openItems !== null) {
+    const scopeSet = channelIds !== null ? new Set(channelIds) : null;
+    const kept: { i: SlackItemRow; privacy: SlackPrivacy }[] = [];
+    for (const i of items) {
+      if (scopeSet !== null && !scopeSet.has(i.channelId)) continue;
+      if (!i.addressedToYou && i.commitmentDirection !== "owed_to_mitchell") continue;
+      const p = slackItemPolicy(s.state, s.channels.get(i.channelId) ?? null, i, use);
+      if (p.allowed) kept.push({ i, privacy: p.privacy });
+    }
+    kept.sort((a, b) => tsMsOf(b.i.ts) - tsMsOf(a.i.ts) || cmpId(a.i.id, b.i.id));
+    const shown: J[] = [];
+    for (const { i, privacy } of kept) {
+      if (shown.length >= OPEN_ITEMS_SHOWN) break;
+      if (!admitSlack(out, consulted, [slackMessageKey(i.channelId, i.ts)], i.channelId, privacy)) continue;
+      const label = slackChannelLabel(s.channels.get(i.channelId) ?? null);
+      const ref = out.ref({ type: "slack_message", channelId: i.channelId, ts: i.ts, itemId: i.id },
+        slackMessageRef({ channelId: i.channelId, ts: i.ts, permalink: i.permalink, label: `${label} message`, isPrivate: privacy !== "public" }));
+      const at = localAt(ctx, new Date(tsMsOf(i.ts) || Date.parse(i.createdAt)).toISOString());
+      const json: J = { ref, kind: i.kind, channel: out.t(label, SLACK_CHANNEL_LABEL), privacy, at };
+      Object.assign(json, out.block({ kind: "slack_text", ref, author: null, at, text: itemTextOf(i) }));
+      if (!i.assessed) json.assessed = false;
+      if (i.kind === "commitment" && i.commitmentDirection) json.direction = i.commitmentDirection;   // fixer security-6
+      shown.push(json);
+    }
+    openItems = capList(shown, OPEN_ITEMS_SHOWN, kept.length) as unknown as J;
+  }
+
+  return out.done({
+    slack: "ok",
+    ...resolvedOf(out),
+    scope: scopeJson,
+    window: { from: out.time(win.from.toISOString()), to: out.time(win.to.toISOString()), dates: win.dates },
+    digests: capList(digests, DIGESTS_SHOWN, digestTotal),
+    not_built: capList(notBuilt, DIGEST_STATUS_SHOWN, notBuiltTotal),
+    building: capList(building, DIGEST_STATUS_SHOWN, buildingTotal),
+    ...(openItems !== undefined ? { open_items: openItems } : {})
+  });
+}
+
+// --- 19. prepare_client_update ------------------------------------------------
+
+async function prepareClientUpdateTool(args: J, ctx: ToolContext): Promise<ToolResultDraft> {
+  const out = new Out(ctx);
+  // C34 first: a second call in this turn reads nothing (no thread, DD, Slack or draft read).
+  if (!ctx.clientUpdateCalls || !ctx.clientUpdateCalls.take()) {
+    out.note(SLACK_INTEL_COPY.cuOnePerMessage);
+    out.note(SLACK_INTEL_COPY.cuNothingSent);
+    return out.done({ draft: null, refused: "one_per_message" });
+  }
+  // P5b C40: shares the 3-drafts-per-question limit with create_draft.
+  if (ctx.staged.drafts >= MAX_DRAFTS_PER_TURN) throw new ToolFailure("limit", "Only 3 drafts can be started per question. Tell him which ones are left.");
+  ctx.staged.drafts += 1;
+  const question = typeof ctx.question === "string" ? ctx.question : "";
+  if (question.trim() === "") {
+    // AM-P7b-7: no stored question → nothing to instruct the drafter with (fail closed).
+    out.note(REFUSAL_NOTES.unavailable);
+    out.note(SLACK_INTEL_COPY.cuNothingSent);
+    return out.done({ draft: null, refused: "unavailable" });
+  }
+  const access = await requireEmail(ctx);
+  if (access.state !== "on") return emailOffDraft(out, access.state);
+  const threadId = String(args.thread_id);
+  const projectId = String(args.project_id);
+  if (!isThreadIdShape(threadId)) throw badInput("Invalid input: thread_id is not a thread id.");
+
+  // C31: the tool works without Slack; a Slack state that can't be read counts as not installed (no Slack read at all).
+  let intelState: SlackIntelState = "not_installed";
+  if (typeof ctx.memo.slack === "function") {
+    try {
+      intelState = (await ctx.memo.slack()).state;
+    } catch {
+      ctx.signal.throwIfAborted();
+      intelState = "not_installed";
+    }
+  }
+  // N15 / C24: computed before the draft step, over this turn and the replayed ones, plus private_slack.
+  const stored = await getEmailThread(ctx.principal, threadId, { signal: ctx.signal });
+  const kinds = privateRefKinds(ctx, DD_TEXT_SEEN.get(ctx.consulted) === true, threadId, stored?.clientId ?? null);
+  const r = await prepareClientUpdate(ctx.principal, ctx.settings, { threadId, projectId }, {
+    question, usesPrivateRefs: kinds.length > 0, privateRefKinds: kinds, intelState, signal: ctx.signal, now: ctx.now
+  });
+
+  // What this call read (P5b C19 / C24, N15): the thread, the client, the public Slack keys.
+  ctx.consulted.admit(r.consulted.threadIds);
+  for (const id of r.consulted.clientIds) ctx.consultedClients.add(id);
+  const admittedSlack = new Set<string>();
+  let slackDropped = false;
+  for (const e of r.consulted.slack) {
+    if (ctx.consultedSlack && ctx.consultedSlack.admit(e.refKeys, e.channelId, "public")) for (const k of e.refKeys) admittedSlack.add(k);
+    else slackDropped = true;
+  }
+
+  if (r.draft) ctx.cards.push({ kind: "draft", id: r.draft.id, existing: r.draft.existing, privateRefKinds: r.draft.privateRefKinds });
+
+  // Notes: a P5b refusal's sentence first, then the cu* sentences, cuNothingSent always last.
+  if (r.refused !== null && r.refused !== "not_a_client_thread") out.note(REFUSAL_NOTES[r.refused]);
+  for (const n of r.notes) if (n !== SLACK_INTEL_COPY.cuNothingSent) out.note(n);
+  if (slackDropped) out.note(SLACK_INTEL_COPY.slackBudgetFull);
+
+  const client = r.client;
+  const publicShown: J[] = [];
+  for (const hit of r.slack.publicForDraft) {
+    const keys = hitKeys(hit);
+    if (keys.length === 0 || !keys.every((k) => admittedSlack.has(k))) continue;
+    const ref = slackHitRef(out, hit);
+    const at = localAt(ctx, hit.at);
+    publicShown.push({ ref, kind: hit.kind, at, ...out.block({ kind: "slack_text", ref, author: null, at, text: hit.text }) });
+  }
+  let needs: J | undefined;
+  if (r.projectChoice !== null) {
+    if (r.projectChoice.matches.length === 0) out.note(`Nothing matches '${out.t(projectId, 120)}' for project_id; the projects listed come from the thread instead.`);
+    else needs = { param: "project_id", matches: r.projectChoice.matches.slice(0, 5).map((m) => ({ id: m.id, name: out.t(m.name, 120), ref: out.ref({ type: "project", id: m.id }, ddProjectRef(m)) })) };
+  }
+  out.note(SLACK_INTEL_COPY.cuNothingSent);
+  const link = r.draft ? r.draft.link : null;
+  return out.done({
+    draft: r.draft === null ? null : {
+      ref: link ? out.ref({ type: "page", path: link }, ddPageRef(link, "Client update draft")) : null,
+      id: r.draft.id,
+      status: r.draft.status,
+      link,
+      existing: r.draft.existing,
+      regenerated: r.draft.regenerated,
+      private_refs: r.draft.privateRefKinds
+    },
+    ...(r.refused !== null ? { refused: r.refused } : {}),
+    client: client === null ? null : {
+      ref: out.ref({ type: "client", id: client.id }, ddClientRef({ id: client.id, name: client.name })),
+      name: out.t(client.name, 120),
+      confidence: client.confidence,
+      facts_for_draft: client.eligibleForFacts
+    },
+    projects: r.projects.slice(0, SLACK_INTEL_LIMITS.projectsShown).map((p) => ({
+      ref: out.ref({ type: "project", id: p.id }, ddProjectRef({ id: p.id, name: p.name })), name: out.t(p.name, 120), basis: p.basis
+    })),
+    ...(needs !== undefined ? { needs_choice: needs } : {}),
+    work: r.work === null ? null : {
+      open: capList(r.work.open.slice(0, 8).map((t) => ({ ref: taskRef(out, t), title: out.t(t.title, 200), status: t.status, due: out.time(t.dueDate) })), 8, r.work.open.length),
+      completed_recently: capList(r.work.completedRecently.slice(0, 8).map((t) => ({ ref: taskRef(out, t), title: out.t(t.title, 200), completed: out.time(t.completedAt) })), 8, r.work.completedRecently.length)
+    },
+    slack: {
+      state: r.slack.state,
+      public_for_draft: capList(publicShown, SLACK_INTEL_LIMITS.publicSlackFacts, publicShown.length),
+      private_not_used: r.slack.privateCount
+    },
+    team_work_entries: r.teamWorkCount,
+    last_client_update: r.lastClientUpdate === null ? null : {
+      team_email_sent: out.time(r.lastClientUpdate.teamEmailSentAt),
+      work_reported: out.time(r.lastClientUpdate.workReportedAt)
+    }
+  });
+}
+
+// --- get_source: Slack (§3.15.2) ------------------------------------------------
+
+async function slackMessageSource(out: Out, ctx: ToolContext, t: Extract<RefTarget, { type: "slack_message" }>): Promise<J> {
+  const on = await slackTurn(out, ctx);
+  if ("answer" in on) return { slack: on.answer.json.slack, note: on.answer.json.note };
+  const { s, use, consulted } = on;
+  if (t.itemId === null) return { note: SLACK_LIVE_READ_NOTE };
+  const [item] = await getSlackItemsByIds(ctx.principal, [t.itemId], { surface: screenSurface(ctx), signal: ctx.signal });
+  if (!item || item.channelId !== t.channelId || item.ts !== t.ts) return { note: SLACK_GONE_NOTE };
+  const ch = s.channels.get(item.channelId) ?? null;
+  const p = slackItemPolicy(s.state, ch, item, use);
+  if (!p.allowed) return { note: SLACK_GONE_NOTE };
+  if (!admitSlack(out, consulted, [slackMessageKey(item.channelId, item.ts)], item.channelId, p.privacy)) return {};
+  const at = localAt(ctx, new Date(tsMsOf(item.ts) || Date.parse(item.createdAt)).toISOString());
+  const json: J = { kind: item.kind, channel: out.t(slackChannelLabel(ch), SLACK_CHANNEL_LABEL), privacy: p.privacy, at, answered: item.respondedAt !== null };
+  Object.assign(json, out.block({ kind: "slack_text", ref: null, author: null, at, text: itemTextOf(item) }));
+  if (!item.assessed) json.assessed = false;
+  if (item.kind === "commitment" && item.commitmentDirection) json.direction = item.commitmentDirection;   // fixer security-6
+  return { message: json };
+}
+
+async function slackDigestSource(out: Out, ctx: ToolContext, t: Extract<RefTarget, { type: "slack_digest" }>): Promise<J> {
+  const on = await slackTurn(out, ctx);
+  if ("answer" in on) return { slack: on.answer.json.slack, note: on.answer.json.note };
+  const { s, use, consulted } = on;
+  const ch = s.channels.get(t.channelId) ?? null;
+  const p = slackUsePolicy(s.state, ch, use);
+  if (!p.allowed) return { note: DIGEST_GONE_NOTE };
+  const rows = await getDigests(ctx.principal, { channelIds: [t.channelId], dates: [t.localDate] }, { signal: ctx.signal });
+  const row = rows.find((r) => r.channelId === t.channelId && r.localDate === t.localDate);
+  // RPC 11's rule: the generation decides "removed" (a blank or a deleted_source finish moves rebuilds); status doesn't, so a
+  // "today" rebuild in flight (same rebuilds, building) is not a removal. A ref with no known generation (-1) reads the day's row.
+  if (!row || (t.rebuilds >= 0 && row.rebuilds !== t.rebuilds)) return { note: DIGEST_GONE_NOTE };
+  if (row.status === "building") return { note: SLACK_INTEL_COPY.digestRebuilding };
+  if (row.status !== "built" || typeof row.summary !== "string" || row.summary.trim() === "") return { note: DIGEST_NO_SUMMARY_NOTE };
+  if (!admitSlack(out, consulted, [slackDigestKey(row.channelId, row.localDate, row.rebuilds)], row.channelId, p.privacy)) return {};
+  const json: J = { channel: out.t(slackChannelLabel(ch), SLACK_CHANNEL_LABEL), privacy: p.privacy, date: row.localDate, status: row.status, counts: slackCountsJson(row.counts), partial: row.partial };
+  if (row.injectionSuspected) json.injection_suspected = true;   // fixer security-5
+  Object.assign(json, out.block({ kind: "slack_text", ref: null, author: null, at: row.localDate, text: digestTextOf(row) }));
+  return { digest: json };
 }
 
 // ---------------------------------------------------------------------------
@@ -2631,6 +3241,10 @@ const HANDLERS: Readonly<Record<ToolName, Handler>> = {
   get_eod_reports: getEodReportsTool,
   propose_task: proposeTaskTool,
   create_draft: createDraftTool,
-  get_source: getSourceTool
+  get_source: getSourceTool,
+  // P7b (§3.15; stage-0 seeds): Area D writes the three tools.
+  search_slack: searchSlackTool,
+  slack_digest: slackDigestTool,
+  prepare_client_update: prepareClientUpdateTool
 };
 

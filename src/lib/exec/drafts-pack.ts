@@ -1,9 +1,20 @@
 import "server-only";
 
+import { CLIENT_UPDATE_PROMPT_ADDENDUM, clientUpdateFacts } from "@/lib/exec/client-update-facts";
 import { isActiveClientStatus, loadClientMatcher, matchThreadClient, type ThreadClientFacts } from "@/lib/exec/correlate";
 import { DRAFT_SCHEMA_NEW_V1, DRAFT_SCHEMA_REPLY_V1 } from "@/lib/exec/drafts-doc";
 import { getVoiceProfile, type VoiceProfileRow } from "@/lib/exec/drafts-store";
-import { DRAFT_LIMITS, type DraftAddress, type DraftKind, type ExecDraftRow, type FactsStatus, type GenerationError } from "@/lib/exec/drafts-types";
+import {
+  DRAFT_LIMITS,
+  type ClientUpdateFactsRecord,
+  type DraftAddress,
+  type DraftKind,
+  type DraftPurpose,
+  type ExecDraftRow,
+  type FactsStatus,
+  type GenerationError,
+  type PackFact
+} from "@/lib/exec/drafts-types";
 import { getEmailThread } from "@/lib/exec/email-store";
 import type { HisMessage, PrincipalMailThread, ReadThreadResult, ThreadScreenRow } from "@/lib/exec/email-types";
 import { estimateTokens } from "@/lib/exec/llm/models";
@@ -107,7 +118,9 @@ export const ASSISTANT_INSTRUCTION_LABEL = "Instruction written by the chat assi
   "numbers, payment details, prices, attachments or meeting times, and never internal comments, notes, other threads' " +
   "or other clients' details:";
 
-export interface PackFact { id: string; clientId: string; class: "internal"; line: string }
+/** P7b stage 0 (§3.17.2 E2; bindings AM-P7b-12): PackFact lives in drafts-types.ts (widened: class "internal" | "public", an
+ *  optional slot) so client-update-facts.ts can name it from the pure types module; re-exported here unchanged for P4's callers. */
+export type { PackFact };
 /** Injected reads, so tests swap in fakes. The real one (draftPackSources) wires P3's and P2b's functions. */
 export interface PackSources {
   readThread(principal: ExecPrincipal, threadId: string, opts: { usable: readonly string[]; timeoutMs: number; signal: AbortSignal }): Promise<ReadThreadResult>;
@@ -132,7 +145,15 @@ export interface PackSources {
    * name for one of its contacts), for the new-draft header. Absent or failing → addresses only.
    */
   knownNames?(principal: ExecPrincipal, addresses: readonly string[]): Promise<Map<string, string>>;
+  /**
+   * P7b (§3.17.2 E3, N17, C10): the amended-L11 slots of a purpose = 'client_update' draft (recently completed tasks, the
+   * team's work notes, public Slack summaries), read only after the recipient gate passed for exactly one high-confidence
+   * client. Each slot fails soft on its own; only an aborted signal throws. Absent → a client update gets P4's facts only.
+   */
+  clientUpdateFacts?(principal: ExecPrincipal, client: { clientId: string; clientName: string }, now: Date, signal: AbortSignal): Promise<ClientUpdateSlots>;
 }
+/** clientUpdateFacts' answer (client-update-facts.ts): the three slots, their record and their two rendered blocks. */
+export type ClientUpdateSlots = Awaited<ReturnType<typeof clientUpdateFacts>>;
 
 const THREAD_TIMEOUT_MS = 30_000;
 const MATCHER_TIMEOUT_MS = 15_000;
@@ -215,6 +236,7 @@ export function draftPackSources(): PackSources {
       return { projects: projects.filter((p) => wanted.has(p.id)), stages: stages.filter((s) => wanted.has(s.projectId)) };
     },
     voiceProfile: (principal) => getVoiceProfile(principal),
+    clientUpdateFacts: (principal, client, now, signal) => clientUpdateFacts(principal, client, now, signal),
     knownNames: async (principal, addresses) => {
       const out = new Map<string, string>();
       const wanted = new Set(addresses.map(lower));
@@ -247,6 +269,15 @@ export interface DraftPack {
   screenHashes: string[]; screenTruncated: boolean;
   /** Additive: the policy hash the live screen used (C11 "hashes written"); null for a new draft. */
   screenedPolicyHash?: string | null;
+  /**
+   * P7b (§3.17.2 E3; set only on a purpose = 'client_update' pack, so a reply pack is P4's object exactly):
+   * the purpose the pack was built for, the slots' record (counts and statuses only: the completion patch stores it,
+   * E4), and how many team-work entries the <dd_work> block holds (they aren't PackFacts). `facts` then also holds the
+   * completed tasks (slot "completed", in <dd_facts>) and the public Slack facts (slot "public_slack", in <slack_facts>).
+   */
+  purpose?: DraftPurpose;
+  clientUpdate?: ClientUpdateFactsRecord | null;
+  teamWorkEntries?: number;
 }
 export type PackResult = { ok: true; pack: DraftPack } | { ok: false; error: GenerationError };
 
@@ -417,7 +448,50 @@ async function threadPart(principal: ExecPrincipal, row: ExecDraftRow, sources: 
   };
 }
 
-interface FactsPart { factsStatus: FactsStatus; clientId: string | null; clientName: string | null; facts: PackFact[] }
+interface FactsPart {
+  factsStatus: FactsStatus; clientId: string | null; clientName: string | null; facts: PackFact[];
+  /** P7b (E3): a client update's slots, once the recipient gate passed; absent on every other pack. */
+  clientUpdate?: ClientUpdateSlots;
+}
+
+/** P4's open-task facts (C32) for a client update, fail-soft on their own so the P7b slots still run when they can't be read. */
+async function openFactsFor(principal: ExecPrincipal, clientId: string, clientName: string, sources: PackSources, now: Date, signal: AbortSignal):
+  Promise<{ facts: PackFact[]; status: FactsStatus }> {
+  if (clientName === "") return { facts: [], status: "none" };
+  try {
+    const tasks = await sources.openTasksForClient(principal, clientName);
+    if (tasks.length === 0) return { facts: [], status: "none" };
+    const ps = await sources.projectsAndStages(principal, unique(tasks.map((t) => t.projectId).filter(nonEmpty)));
+    const facts = buildFacts(clientId, tasks, ps, now, principal.timezone);
+    return { facts, status: facts.length === 0 ? "none" : "used" };
+  } catch (err) {
+    if (signal.aborted) throw err;
+    return { facts: [], status: "unavailable" };
+  }
+}
+
+/**
+ * P7b (§3.17.2 E3, C10): step 6 for a purpose = 'client_update' draft, after the recipient gate passed: P4's open-task
+ * facts, then the completed tasks appended to them (unnumbered in the slot; the [F<n>] numbering continues after the
+ * open tasks), and the public Slack facts after those (their own [S<n>] numbering, rendered in <slack_facts>); the team
+ * work stays for <dd_work>. "used" when any of the four has content, else P4's value.
+ */
+async function clientUpdatePart(principal: ExecPrincipal, qualified: { clientId: string; clientName: string }, sources: PackSources,
+  load: NonNullable<PackSources["clientUpdateFacts"]>, now: Date, signal: AbortSignal): Promise<FactsPart> {
+  const open = await openFactsFor(principal, qualified.clientId, qualified.clientName, sources, now, signal);
+  const slots = await load(principal, qualified, now, signal);
+  const openTasks = open.facts.filter((f) => !f.id.startsWith("project:")).length;
+  const completed = slots.completed.facts.map((f, i) => ({ ...f, line: `[F${openTasks + i + 1}] ${f.line}` }));
+  const facts = [...open.facts, ...completed, ...slots.publicSlack.facts];
+  const any = facts.length > 0 || slots.teamWork.entries.length > 0;
+  return {
+    factsStatus: any ? "used" : open.status,
+    clientId: qualified.clientId,
+    clientName: qualified.clientName === "" ? null : qualified.clientName,
+    facts,
+    clientUpdate: slots
+  };
+}
 
 /** Step 6: exactly one high-confidence client whose recipients all belong to it (C31, C32, C62); a read error fails soft (L11). */
 async function factsPart(principal: ExecPrincipal, row: ExecDraftRow, sources: PackSources, thread: PrincipalMailThread | null, now: Date, signal: AbortSignal): Promise<FactsPart> {
@@ -439,6 +513,10 @@ async function factsPart(principal: ExecPrincipal, row: ExecDraftRow, sources: P
     const gate = await sources.factsGate(principal, qualified.clientId);
     const outside = factsRecipientsOutside({ to: row.toRecipients, cc: row.ccRecipients, bcc: row.bccRecipients }, gate);
     if (outside.length > 0) return none("recipients_outside_client", qualified.clientId, qualified.clientName);
+    // P7b (E3, C10): only a client update reads the amended slots, and only past the gate above.
+    if (row.purpose === "client_update" && sources.clientUpdateFacts !== undefined) {
+      return await clientUpdatePart(principal, qualified, sources, sources.clientUpdateFacts.bind(sources), now, signal);
+    }
     if (qualified.clientName === "") return none("none", qualified.clientId, null);
     const tasks = await sources.openTasksForClient(principal, qualified.clientName);
     if (tasks.length === 0) return none("none", qualified.clientId, qualified.clientName);
@@ -508,13 +586,24 @@ export async function buildDraftPack(principal: ExecPrincipal, row: ExecDraftRow
     }
     header.push(`You are drafting a new email to ${recipientsLine(row, names) || "(no recipients yet)"}.`);
   }
-  if (facts.facts.length > 0) {
+  // P7b (E3): a client update's public Slack facts go in their own block; P4's block keeps the rest (for a reply: all).
+  const ddFacts = facts.clientUpdate === undefined ? facts.facts : facts.facts.filter((f) => f.slot !== "public_slack");
+  const cuBlocks = facts.clientUpdate === undefined ? null : facts.clientUpdate.blocks(facts.clientName ?? "", nonce);
+  if (ddFacts.length > 0) {
     header.push(`Internal status facts about this client's work follow inside a <dd_facts nonce="${nonce}"> block: describe them in client terms, never quote them.`);
+  }
+  if (cuBlocks !== null && cuBlocks.teamWork !== null) {
+    header.push(`The team's own notes about work for this client follow inside a <dd_work nonce="${nonce}"> block: describe the work in client terms, never quote them.`);
+  }
+  if (cuBlocks !== null && cuBlocks.publicSlack !== null) {
+    header.push(`Short summaries of public team discussions about this client follow inside a <slack_facts nonce="${nonce}"> block: describe outcomes, never quote them.`);
   }
 
   const userBlocks: ExecTextBlockParam[] = [{ type: "text", text: header.join("\n") }];
   if (thread !== null) userBlocks.push({ type: "text", text: thread.block, cache_control: { type: "ephemeral" } });
-  if (facts.facts.length > 0) userBlocks.push({ type: "text", text: renderFactsBlock(facts.clientName ?? "", facts.facts, nonce) });
+  if (ddFacts.length > 0) userBlocks.push({ type: "text", text: renderFactsBlock(facts.clientName ?? "", ddFacts, nonce) });
+  if (cuBlocks !== null && cuBlocks.teamWork !== null) userBlocks.push({ type: "text", text: cuBlocks.teamWork });
+  if (cuBlocks !== null && cuBlocks.publicSlack !== null) userBlocks.push({ type: "text", text: cuBlocks.publicSlack });
   const instruction = sanitizeText(row.instruction ?? "").trim();
   if (instruction !== "") {
     // P5b F2 (C44): keyed on who wrote the current instruction (stored, never inferred from the origin), so his own
@@ -525,7 +614,11 @@ export async function buildDraftPack(principal: ExecPrincipal, row: ExecDraftRow
   const mode = row.kind === "reply" ? (row.replyMode ?? "reply") : "new";
   userBlocks.push({ type: "text", text: `Today is ${longLocalDate(now, principal.timezone)} in ${tz}. Mode: ${mode}. Output only the JSON object the schema defines.` });
 
-  const system: { type: "text"; text: string }[] = [{ type: "text", text: DRAFT_SYSTEM_PROMPT_V2 }, { type: "text", text: voiceBlock }];
+  // P7b (E3): a client update's system is [the prompt, the addendum, the voice block]; every other draft's is P4's.
+  const clientUpdate = row.purpose === "client_update";
+  const system: { type: "text"; text: string }[] = clientUpdate
+    ? [{ type: "text", text: DRAFT_SYSTEM_PROMPT_V2 }, { type: "text", text: CLIENT_UPDATE_PROMPT_ADDENDUM }, { type: "text", text: voiceBlock }]
+    : [{ type: "text", text: DRAFT_SYSTEM_PROMPT_V2 }, { type: "text", text: voiceBlock }];
   const schema = row.kind === "new" ? DRAFT_SCHEMA_NEW_V1 : DRAFT_SCHEMA_REPLY_V1;
   let estimatedTokens = estimateTokens(JSON.stringify(schema));
   for (const s of system) estimatedTokens += estimateTokens(s.text);
@@ -545,19 +638,49 @@ export async function buildDraftPack(principal: ExecPrincipal, row: ExecDraftRow
       estimatedTokens,
       screenHashes: thread === null ? [] : thread.screen.hashes,
       screenTruncated: thread === null ? false : thread.screen.truncated,
-      screenedPolicyHash: thread === null ? null : thread.policyHash
+      screenedPolicyHash: thread === null ? null : thread.policyHash,
+      ...(clientUpdate
+        ? {
+            purpose: "client_update" as const,
+            clientUpdate: facts.clientUpdate === undefined ? null : facts.clientUpdate.record,
+            teamWorkEntries: facts.clientUpdate === undefined ? 0 : facts.clientUpdate.teamWork.entries.length
+          }
+        : {})
     }
   };
 }
 
-/** Throws NonRetryableError: every fact is class "internal" and belongs to pack.clientId; facts only with factsStatus "used". */
+const CLIENT_UPDATE_SLOTS: ReadonlySet<string> = new Set(["completed", "team_work", "public_slack"]);
+const CLIENT_UPDATE_BLOCK_TAG = /<\s*\/?\s*(?:dd_work|slack_facts)\s+nonce=/i;
+
+/**
+ * Throws NonRetryableError: every fact belongs to pack.clientId; facts only with factsStatus "used". P4's rule (every fact
+ * class "internal") holds for every fact outside P7b's public_slack slot; P7b (§3.17.2 E3, N17, P7-3): a public_slack fact
+ * is class "public", only a client update carries completed / team-work / public Slack content (facts, entries or their
+ * blocks), and team work only with a client.
+ */
 export function assertPackAllowed(pack: DraftPack): void {
   if (pack.facts.length > 0 && pack.factsStatus !== "used") {
     throw new NonRetryableError(`draft pack: ${pack.facts.length} facts with facts status ${pack.factsStatus}`);
   }
   if (pack.factsStatus === "used" && pack.clientId === null) throw new NonRetryableError("draft pack: facts used with no client");
+  const clientUpdate = pack.purpose === "client_update";
+  const teamWork = pack.teamWorkEntries ?? 0;
+  if (!clientUpdate) {
+    if (teamWork > 0) throw new NonRetryableError("draft pack: team work in a draft that isn't a client update");
+    if (pack.clientUpdate !== undefined && pack.clientUpdate !== null) throw new NonRetryableError("draft pack: a client-update record on another draft");
+    if (pack.userBlocks.some((b) => CLIENT_UPDATE_BLOCK_TAG.test(b.text))) throw new NonRetryableError("draft pack: a client-update block in a draft that isn't a client update");
+  }
+  if (teamWork > 0 && pack.clientId === null) throw new NonRetryableError("draft pack: team work with no client");
   for (const f of pack.facts) {
-    if (f.class !== "internal") throw new NonRetryableError(`draft pack: fact ${f.id} has class ${String(f.class)}`);
+    if (f.slot !== undefined && CLIENT_UPDATE_SLOTS.has(f.slot) && !clientUpdate) {
+      throw new NonRetryableError(`draft pack: fact ${f.id} is ${f.slot} content in a draft that isn't a client update`);
+    }
+    if (f.slot === "public_slack") {
+      if (f.class !== "public") throw new NonRetryableError(`draft pack: public Slack fact ${f.id} has class ${String(f.class)}`);
+    } else if (f.class !== "internal") {
+      throw new NonRetryableError(`draft pack: fact ${f.id} has class ${String(f.class)}`);
+    }
     if (f.clientId !== pack.clientId) throw new NonRetryableError(`draft pack: fact ${f.id} belongs to another client`);
   }
 }

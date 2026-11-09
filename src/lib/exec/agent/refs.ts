@@ -114,6 +114,11 @@ export function targetKey(t: RefTarget): string {
       return `approval:${t.mechanism}:${t.id ?? ""}`;
     case "page":
       return `page:${t.path}`;
+    // P7b (§3.17.3 D4; stage-0 seed, forced by the exhaustive switch): the frozen key formats.
+    case "slack_message":
+      return `slack_message:${t.channelId}:${t.ts}`;
+    case "slack_digest":
+      return `slack_digest:${t.channelId}:${t.localDate}:${t.rebuilds}`;
   }
 }
 
@@ -146,6 +151,7 @@ function ddPathOf(r: SourceRef): { path: string; query: boolean; fromId: boolean
  *  (id = thread id); anything else → page. */
 export function targetFromSourceRef(r: SourceRef): RefTarget {
   if (r.system === "outlook") return { type: "email_thread", id: r.id };
+  if (r.system === "slack") return slackTargetOf(r);
   if (r.system !== "dd") return { type: "page", path: typeof r.url === "string" ? r.url : r.id };
   const at = ddPathOf(r);
   if (at === null) return { type: "page", path: r.id };
@@ -169,6 +175,24 @@ export function targetFromSourceRef(r: SourceRef): RefTarget {
     }
   }
   return { type: "page", path: r.id.startsWith("/") ? r.id : at.path };
+}
+
+const SLACK_CHANNEL = /^[CGD][A-Z0-9]{2,30}$/;
+const SLACK_TS = /^[0-9]{1,12}\.[0-9]{1,8}$/;
+const SLACK_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** P7b (§3.15.2 Refs, D4): a Slack SourceRef's id "<C>:<ts>" (slackMessageRef) → slack_message (no item id: get_source
+ *  then says it was read live), "<C>:d:<YYYY-MM-DD>" (slackDigestRef) → slack_digest with rebuilds -1 (a SourceRef doesn't
+ *  carry the generation: get_source reads the day's current row); anything else stays a page. */
+function slackTargetOf(r: SourceRef): RefTarget {
+  const parts = typeof r.id === "string" ? r.id.split(":") : [];
+  if (parts.length === 2 && SLACK_CHANNEL.test(parts[0]) && SLACK_TS.test(parts[1])) {
+    return { type: "slack_message", channelId: parts[0], ts: parts[1], itemId: null };
+  }
+  if (parts.length === 3 && SLACK_CHANNEL.test(parts[0]) && parts[1] === "d" && SLACK_DATE.test(parts[2])) {
+    return { type: "slack_digest", channelId: parts[0], localDate: parts[2], rebuilds: -1 };
+  }
+  return { type: "page", path: typeof r.url === "string" ? r.url : r.id };
 }
 
 /** The email thread a target carries data from, or null (C19). */

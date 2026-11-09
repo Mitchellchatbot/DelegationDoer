@@ -63,6 +63,7 @@ import { DEFAULT_SETTINGS, loadSettingsSnapshot, principalFromRows } from "@/lib
 import { SETTINGS_FIELDS } from "@/lib/exec/settings-fields";
 import { SLACK_COPY } from "@/lib/exec/slack-copy";
 import { getActiveInstallation, getLatestInstallation, getReadingHalf, lastReadingEventAt, slackReadingSchemaReady, slackSchemaReady, SlackStoreError } from "@/lib/exec/slack-install";
+import { SLACK_INTEL_COPY } from "@/lib/exec/slack-intel-copy";
 import { SLACK_READ_COPY } from "@/lib/exec/slack-read-copy";
 import { SlackReadStoreError, countChannels, countOpenItems, countPendingTriage, lastSweepAt, listPickerChannels } from "@/lib/exec/slack-read-store";
 import { SLACK_CAP_FEATURES, effectiveSlackCapUsd, type ChannelRow, type ReadingHalf } from "@/lib/exec/slack-read-types";
@@ -464,6 +465,28 @@ describe("SlackReadingSection: every state's words (§3.16, §3.17)", () => {
 // ---------------------------------------------------------------------------
 // The controls: the enable confirm, Stop, the settings (§3.16, N20, C47)
 // ---------------------------------------------------------------------------
+
+describe("P7b fixer ui-3: the switch's disclosure covers P7b's digests and live reads", () => {
+  const notice = (days: number) => fill(SLACK_INTEL_COPY.readingIntelNotice, { days });
+  it("not_consented, paused and on show it with the Slack retention; the enable confirm repeats it", () => {
+    for (const view of [slackReadingView({ ...ON_VIEW, state: "not_consented", switchOn: false }), PAUSED_VIEW, ON_VIEW]) {
+      const html = section(view);
+      expect(html, view.state).toContain("data-reading-intel-notice");
+      expect(textOf(html), view.state).toContain(notice(60));
+    }
+    expect(SLACK_INTEL_COPY.readingIntelNotice).toMatch(/daily digest of each watched conversation/);
+    expect(SLACK_INTEL_COPY.readingIntelNotice).toMatch(/sent to Anthropic's Claude/);
+    expect(SLACK_INTEL_COPY.readingIntelNotice).toMatch(/read up to 3 watched conversations live/);
+    const confirm = section(PAUSED_VIEW, { initialDialog: "enable" });
+    const block = /<div[^>]*data-reading-enable-confirm[^]*?<\/div>\s*<\/div>/.exec(confirm)?.[0] ?? "";
+    expect(textOf(block)).toContain(SLACK_READ_COPY.enableConfirmBody);
+    expect(textOf(block)).toContain(notice(60));
+    expect(block).toMatch(/aria-describedby="[^"]*-b [^"]*-x"/);
+    // P7a's controls alone (no extra) render as before.
+    const bare = renderToStaticMarkup(createElement(SlackReadingControls, { view: PAUSED_VIEW, initialDialog: "enable" }));
+    expect(bare).not.toContain("data-reading-enable-intel");
+  });
+});
 
 describe("SlackReadingControls (§3.16)", () => {
   it("SU08 / SU17 the enable confirm: title, body, the required checkbox attesting to the checklist; Turn on disabled until it is ticked", () => {

@@ -9,6 +9,7 @@ import { purgeFinishedJobs } from "@/lib/exec/jobs";
 import type { ScheduledWork } from "@/lib/exec/scheduler";
 import { purgeUnpurgedRevocations } from "@/lib/exec/handlers/slack-uninstall";
 import { deleteExpiredOAuthStates, deleteOldSlackEvents } from "@/lib/exec/slack-install";
+import { purgeExpiredSlackIntel } from "@/lib/exec/slack-intel-store";
 import { purgeExpiredSlack } from "@/lib/exec/slack-read-store";
 import { SLACK_LIMITS } from "@/lib/exec/slack-types";
 import type { JobHandler } from "@/lib/exec/types";
@@ -75,6 +76,14 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 //                         purgeExpiredSlack (exec_slack_purge_expired, principal-agnostic so P8
 //                         moves it to its system purge unchanged). Tolerates the P7a migration not
 //                         being applied yet (counts 0).
+//   Slack intel (P7b)     one step after P7a's (contract §2.3): exec_slack_digests past their own
+//                         expires_at (the end of the digest's local day + retention_days_slack, set by
+//                         the app), in chunks of 1,000 by id, and digests still 'building' 30 minutes
+//                         after they were requested marked 'failed' (a crashed build; the nightly plan
+//                         retries them): purgeExpiredSlackIntel. Channel and message links have no TTL
+//                         of their own: message links cascade with P7a's message rows, channel links
+//                         and digests with P7a's channel rows. Tolerates the P7b migration not being
+//                         applied yet (counts 0).
 //
 // The deletes are global, not per principal. Rows with no principal (system
 // jobs, access attempts that never resolved to a principal) have to age out
@@ -141,6 +150,9 @@ export interface PurgeCounts {
   slackLog: number;
   slackChannels: number;
   slackAttention: number;
+  /** P7b (purgeExpiredSlackIntel, contract §2.3): expired digests deleted, and stale 'building' digests marked failed. */
+  slackDigests: number;
+  slackDigestsFailed: number;
 }
 
 function errMessage(err: unknown): string {
@@ -218,7 +230,9 @@ export async function runPurge(signal?: AbortSignal, now: Date = new Date()): Pr
     slackMarkers: 0,
     slackLog: 0,
     slackChannels: 0,
-    slackAttention: 0
+    slackAttention: 0,
+    slackDigests: 0,
+    slackDigestsFailed: 0
   };
   const one = (key: keyof PurgeCounts, run: () => Promise<number>) => async (): Promise<Partial<PurgeCounts>> => ({ [key]: await run() });
   const steps: readonly [string, () => Promise<Partial<PurgeCounts>>][] = [
@@ -273,6 +287,15 @@ export async function runPurge(signal?: AbortSignal, now: Date = new Date()): Pr
           slackAttention: n("attention")
         };
       }
+    ],
+    // P7b (§2.3): after P7a's step; the store answers zeros when the P7b migration isn't applied.
+    [
+      "slackIntel",
+      async () => {
+        const c = await purgeExpiredSlackIntel(now, { signal });
+        const n = (v: unknown) => (typeof v === "number" && Number.isSafeInteger(v) && v > 0 ? v : 0);
+        return { slackDigests: n(c?.digests), slackDigestsFailed: n(c?.failedBuilds) };
+      }
     ]
   ];
 
@@ -298,7 +321,8 @@ export async function runPurge(signal?: AbortSignal, now: Date = new Date()): Pr
       `chatConversations=${counts.chatConversations} chatMessages=${counts.chatMessages} chatStaleFailed=${counts.chatStaleFailed} ` +
       `slackEvents=${counts.slackEvents} oauthStates=${counts.oauthStates} slackRevocationsPurged=${counts.slackRevocationsPurged} ` +
       `slackItems=${counts.slackItems} slackMessages=${counts.slackMessages} slackThreads=${counts.slackThreads} ` +
-      `slackMarkers=${counts.slackMarkers} slackLog=${counts.slackLog} slackChannels=${counts.slackChannels} slackAttention=${counts.slackAttention}` +
+      `slackMarkers=${counts.slackMarkers} slackLog=${counts.slackLog} slackChannels=${counts.slackChannels} slackAttention=${counts.slackAttention} ` +
+      `slackDigests=${counts.slackDigests} slackDigestsFailed=${counts.slackDigestsFailed}` +
       `${failures.length > 0 ? ` failed=${failures.length}` : ""}`
   );
   if (failures.length > 0) {

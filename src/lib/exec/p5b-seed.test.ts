@@ -26,9 +26,11 @@ describe("P5b seed: agent/types.ts", () => {
     expect([...CHAT_TOOL_NAMES]).toEqual([
       "get_overview", "list_attention", "team_progress", "search_tasks", "get_task", "project_health",
       "pending_approvals", "recurring_issues", "client_overview", "search_email", "get_email_thread",
-      "list_commitments", "get_eod_reports", "propose_task", "create_draft", "get_source"
+      "list_commitments", "get_eod_reports", "propose_task", "create_draft", "get_source",
+      // P7b stage 0 (§3.15, N16): tools 17-19, appended.
+      "search_slack", "slack_digest", "prepare_client_update"
     ]);
-    expect(new Set(CHAT_TOOL_NAMES).size).toBe(16);
+    expect(new Set(CHAT_TOOL_NAMES).size).toBe(19);
   });
 });
 

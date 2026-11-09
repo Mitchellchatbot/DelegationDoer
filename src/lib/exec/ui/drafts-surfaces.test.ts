@@ -170,7 +170,8 @@ describe("UI07: the kit stays server-side, no raw HTML, and the drafts islands a
   });
 
   it("the client files of components/exec/drafts import nothing server-only", () => {
-    const SERVER_ONLY = /from "@\/lib\/exec\/(?!drafts-types|drafts-links|refs|format|safe-markdown)[^"]*"|from "@\/lib\/supabase|from "server-only"/;
+    // P7b (§3.17.2 E5): DraftPanel's client-update line takes its copy from slack-intel-copy.ts, which B-P7b-8 keeps pure.
+    const SERVER_ONLY = /from "@\/lib\/exec\/(?!drafts-types|drafts-links|refs|format|safe-markdown|slack-intel-copy")[^"]*"|from "@\/lib\/supabase|from "server-only"/;
     for (const f of filesUnder(path.join(KIT, "drafts"))) {
       const src = readFileSync(f, "utf8");
       for (const line of src.split("\n").filter((l) => /^import /.test(l) && !/^import type /.test(l))) {

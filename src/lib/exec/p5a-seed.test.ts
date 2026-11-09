@@ -166,7 +166,8 @@ describe("P5a seed: constants (§3.1.4, §3.3.1, §3.9, §3.11.1, §3.12)", () =
   it("RATE_BUCKETS registers the four P5a buckets, P5b's two, P6's two and P7a's two (and loading http.ts runs no stub)", () => {
     expect(Object.keys(RATE_BUCKETS).sort()).toEqual([
       "assess", "attention_action", "attention_feedback", "chat", "proposal", "settings_update", "slack_channels", "slack_connect",
-      "slack_disconnect", "slack_reading"
+      // P7b stage 0 (§0.2 step 5): the tag route's and the digest route's buckets.
+      "slack_digest_build", "slack_disconnect", "slack_links", "slack_reading"
     ]);
     for (const def of Object.values(RATE_BUCKETS)) expect(typeof def.nthNewestAt).toBe("function");
   });

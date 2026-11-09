@@ -198,6 +198,15 @@ export function isDdTemplate(blocks: unknown, attachments: unknown): boolean {
   return false;
 }
 
+/** P7b (§0.6.1 R6b, N3; seeded at P7b stage 0 with its frozen body, P7a-5): a DD post = DD's app id, the DD bot user, or a DD
+ *  template (isDdTemplate), whatever the author. P7b drops these from digests and live search before any text is kept; P7a's
+ *  sweepVerdict anchor branch calls it too (P7a-5), so a sweep's anchors and P7b's dropped posts are the same messages (the
+ *  IG twin test). A null arm of ddBot (identity unknown) never matches; the template arm always applies. */
+export function isDdPost(m: Pick<import("@/lib/exec/sources/slack").SlackReadMessage, "appId" | "user" | "blocks" | "attachments">,
+  ddBot: { userId: string | null; appId: string | null }): boolean {
+  return (ddBot.appId !== null && m.appId === ddBot.appId) || (ddBot.userId !== null && m.user === ddBot.userId) || isDdTemplate(m.blocks, m.attachments);
+}
+
 const ANGLE_LINK = /<(https?:\/\/[^|<>\s]+)(?:\|[^<>]*)?>/g;
 const PLAIN_HOST = /^[a-z0-9.-]{1,253}$/;
 
@@ -493,10 +502,8 @@ export function sweepVerdict(m: import("@/lib/exec/sources/slack").SlackReadMess
   optedOut: ReadonlySet<string>;
   hePostedInThread: (rootTs: string) => boolean }): SweepVerdict {
   if (isTombstone(m)) return { role: "deleted" };
-  const isDd = isDdTemplate(m.blocks, m.attachments)
-    || (ctx.ddBot.userId !== null && m.user === ctx.ddBot.userId)
-    || (ctx.ddBot.appId !== null && m.appId === ctx.ddBot.appId);
-  if (isDd) return { role: "anchor", ddPaths: ddPathsOfMessage(m.text, m.blocks, m.attachments) };
+  // N3 (P7b P7a-5): the one DD-post rule, shared with P7b's digests and live search (isDdPost, above).
+  if (isDdPost(m, ctx.ddBot)) return { role: "anchor", ddPaths: ddPathsOfMessage(m.text, m.blocks, m.attachments) };
   if (isBotMessage({ bot_id: m.botId, bot_profile: m.botProfile ? {} : undefined, subtype: m.subtype, user: m.user })) {
     return { role: "ignore", reason: "bot" };
   }

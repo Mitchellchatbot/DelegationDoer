@@ -193,6 +193,33 @@ export async function featureSpentTodayUsd(
   throw new Error(`exec_ai_usage: over ${PAGE_SIZE * MAX_PAGES} rows today; not guessing the spend`);
 }
 
+/**
+ * P8 (§3.21.1, C40; Area E): how many of the principal's model calls since `sinceIso` ended with stop_reason
+ * "refusal" (the System card's "Model refusals in 24 hours"). One exact count over exec_ai_usage, no rows read.
+ * Throws on a read error (the card says "couldn't load", never a zero); the error names the table and the
+ * database's code only.
+ */
+export async function refusalsSince(principalId: string, sinceIso: string, opts: { signal?: AbortSignal } = {}): Promise<number> {
+  if (typeof principalId !== "string" || principalId.length === 0) throw new TypeError("refusalsSince: a principal id is required");
+  if (typeof sinceIso !== "string" || !Number.isFinite(Date.parse(sinceIso))) throw new TypeError("refusalsSince: sinceIso must be an ISO time");
+  let query = getSupabaseAdmin()
+    .from("exec_ai_usage")
+    .select("id", { count: "exact", head: true })
+    .eq("principal_id", principalId)
+    .eq("stop_reason", "refusal")
+    .gte("created_at", new Date(Date.parse(sinceIso)).toISOString());
+  if (opts.signal) query = query.abortSignal(opts.signal);
+  const { count: n, error } = await query;
+  if (error) {
+    const code = typeof (error as { code?: unknown }).code === "string" && /^[A-Z0-9]{2,10}$/.test((error as { code: string }).code)
+      ? ` (${(error as { code: string }).code})`
+      : "";
+    throw new Error(`exec_ai_usage read failed${code}`);
+  }
+  if (typeof n !== "number" || !Number.isSafeInteger(n) || n < 0) throw new Error("exec_ai_usage read failed: no count in the response");
+  return n;
+}
+
 export interface BudgetStatus {
   spentUsd: number;
   capUsd: number;

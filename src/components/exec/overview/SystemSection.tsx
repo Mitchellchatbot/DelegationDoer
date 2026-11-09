@@ -1,7 +1,8 @@
 import { ServerCog } from "lucide-react";
+import { BRIEF_COPY, fillBrief } from "@/lib/exec/brief-copy";
 import { formatCount, formatInZone } from "@/lib/exec/format";
 import type { MailSummary } from "@/lib/exec/email-view";
-import type { JobKindHealth, OverviewDraftsSystem, OverviewSection, OverviewSystem, OverviewTokenVerdict } from "@/lib/exec/overview";
+import type { JobKindHealth, OverviewBriefSystem, OverviewDraftsSystem, OverviewSection, OverviewSystem, OverviewTokenVerdict } from "@/lib/exec/overview";
 import type { SlackReadingSummary, SlackSystemSummary } from "@/lib/exec/slack-types";
 import { reasonWords, sendTokenReasonWords, voiceErrorWords } from "../drafts/copy";
 import { cn } from "@/lib/utils";
@@ -34,7 +35,18 @@ const JOB_LABELS: Readonly<Record<string, string>> = {
   "exec.email-attention": "Email Needs Attention refresh",
   "exec.draft-generate": "Drafting",
   "exec.draft-reconcile": "Draft checks",
-  "exec.voice-refresh": "Voice profile"
+  "exec.voice-refresh": "Voice profile",
+  // P8: the morning brief's jobs (only exec.brief is tracked; the others show when they ran or failed).
+  "exec.brief": "Morning brief",
+  "exec.brief-deliver": "Morning brief delivery",
+  "exec.brief-fallback": "Morning brief backup",
+  "exec.brief-prep": "Morning brief Slack check",
+  "exec.brief-sweep": "Morning brief upkeep",
+  "exec.brief-health": "Check-in token check",
+  "exec.checkin-send": "Check-in send",
+  "exec.checkin-rewrite": "Check-in rewrite",
+  "exec.ops-watch": "Job watch",
+  "exec.access-alert": "Sign-in alert"
 };
 
 const TOKEN_WARN_MS = 30 * 86_400_000;
@@ -244,6 +256,121 @@ export function SlackReadingRow({ reading, now, tz }: { reading: SlackReadingSum
   );
 }
 
+// ---------------------------------------------------------------------------
+// P8 (contract §3.17.6, M12, C19, C40): the morning brief, the check-in token and the AI rows
+// ---------------------------------------------------------------------------
+
+const BRIEF_NONE_TEXT = "Not built yet today";
+const CHECKIN_ORDER: readonly (keyof OverviewBriefSystem["checkins"])[] = ["proposed", "sending", "sent", "unknown", "failed", "expired"];
+const PAGE_ONLY_KEYS: ReadonlySet<string> = new Set(Object.keys(BRIEF_COPY.pageOnlyReason));
+const usd2 = (n: number) => (Number.isFinite(n) ? n.toFixed(2) : "—");
+
+/** "<owner> · <status line> · <channel> · <mode>" (M12), its tone, and a second line: the DD brief's day and the check-ins. */
+export function briefSystemLines(b: OverviewBriefSystem, now: string, tz: string): { value: string; tone: Tone; detail: string | null } {
+  const sys = BRIEF_COPY.system;
+  const parts: string[] = [sys.owner[b.owner] ?? sys.owner.unknown];
+  if (b.status === "none") parts.push(BRIEF_NONE_TEXT);
+  else {
+    let line: string =
+      b.status === "delivered" ? fillBrief(BRIEF_COPY.status.delivered, { time: formatInZone(b.deliveredAt, tz, "time", now) }) : BRIEF_COPY.status[b.status];
+    if (b.status === "page_only" && b.statusReason !== null && PAGE_ONLY_KEYS.has(b.statusReason)) {
+      const reason: string = BRIEF_COPY.pageOnlyReason[b.statusReason as keyof typeof BRIEF_COPY.pageOnlyReason];
+      // after_cutoff names a time this row doesn't carry; the Brief tab's status line has it.
+      if (!reason.includes("{")) line = `${line} ${reason}`;
+    }
+    if (b.fallbackSentAt !== null) line = `${line} ${fillBrief(BRIEF_COPY.status.fallback, { time: formatInZone(b.fallbackSentAt, tz, "time", now) })}`;
+    parts.push(line);
+  }
+  parts.push(sys.channel[b.channel] ?? sys.channel.unknown);
+  if (b.mode === "ai") parts.push(BRIEF_COPY.modeAi);
+  else if (b.mode === "deterministic") {
+    const key = b.modeReason !== null && b.modeReason in BRIEF_COPY.modeReason ? b.modeReason : "model_error";
+    parts.push(fillBrief(BRIEF_COPY.modeDeterministic, { reason: BRIEF_COPY.modeReason[key] }));
+  }
+  if (b.fallbackErrorCode !== null) parts.push(`backup failed (${b.fallbackErrorCode})`);
+  const detail: string[] = [];
+  if (b.legacyDeliveredToday !== null) detail.push(fillBrief(sys.legacyToday, { state: b.legacyDeliveredToday ? sys.legacySent : sys.legacyNotSent }));
+  const counts = CHECKIN_ORDER.filter((k) => (b.checkins?.[k] ?? 0) > 0).map((k) => `${formatCount(b.checkins[k])} ${k}`);
+  if (counts.length > 0) detail.push(`Check-ins: ${counts.join(", ")}`);
+  const tone: Tone =
+    b.status === "failed" || b.fallbackErrorCode !== null
+      ? "rose"
+      : b.status === "delivery_unknown" || b.owner === "unknown" || b.fallbackSentAt !== null
+        ? "amber"
+        : "ok";
+  return { value: parts.join(" · "), tone, detail: detail.length > 0 ? detail.join(" · ") : null };
+}
+
+/** The check-in token row (C19): BRIEF_COPY.system.tokenState in words. The stored verdict carries no error code, so the
+ *  " ({code})" part is left out rather than shown unfilled. */
+export function userTokenLine(t: NonNullable<OverviewSystem["userToken"]>, now: string, tz: string): { value: string; tone: Tone } {
+  const words: string = BRIEF_COPY.system.tokenState[t.state] ?? BRIEF_COPY.system.tokenState.unchecked;
+  const value = fillBrief(words.replace(" ({code})", ""), { time: formatInZone(t.checkedAt, tz, "datetime", now) });
+  const tone: Tone =
+    t.state === "ok" ? "ok" : t.state === "mismatch" || t.state === "revoked" ? "rose" : t.state === "missing" || t.state === "error" ? "amber" : "muted";
+  return { value, tone };
+}
+
+/** The two AI lines (C40): spend against the cap (amber from 80 %, rose at the cap) with the per-feature split as its
+ *  title, and the refusals of the last 24 hours (amber when any). */
+export function aiLines(ai: NonNullable<OverviewSystem["ai"]>): { spend: { value: string; tone: Tone; title: string }; refusals: { value: string; tone: Tone } } {
+  const sys = BRIEF_COPY.system;
+  const ratio = ai.capUsd > 0 ? ai.spentTodayUsd / ai.capUsd : ai.spentTodayUsd > 0 ? 1 : 0;
+  const title = Object.entries(ai.byFeature)
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([feature, usd]) => `${feature} $${usd2(usd)}`)
+    .join(", ");
+  return {
+    spend: { value: fillBrief(sys.spend, { spent: usd2(ai.spentTodayUsd), cap: usd2(ai.capUsd) }), tone: ratio >= 1 ? "rose" : ratio >= 0.8 ? "amber" : "ok", title },
+    refusals: { value: fillBrief(sys.refusals, { n: formatCount(ai.refusals24h) }), tone: ai.refusals24h > 0 ? "amber" : "ok" }
+  };
+}
+
+const UNAVAILABLE_LINE: { value: string; tone: Tone } = { value: "couldn't load", tone: "amber" };
+
+/** P8: the brief, token and AI rows; nothing at all for a part the overview didn't read (undefined). */
+export function BriefSystemRows({ system, now, tz }: { system: OverviewSystem; now: string; tz: string }) {
+  const { brief, userToken, ai } = system;
+  if (brief === undefined && userToken === undefined && ai === undefined) return null;
+  const b = brief === undefined ? undefined : brief === null ? { ...UNAVAILABLE_LINE, detail: null } : briefSystemLines(brief, now, tz);
+  const t = userToken === undefined ? undefined : userToken === null ? UNAVAILABLE_LINE : userTokenLine(userToken, now, tz);
+  const a = ai === undefined ? undefined : ai === null ? null : aiLines(ai);
+  return (
+    <ul data-brief-system className="divide-y divide-slate-100 border-t border-slate-100">
+      {b !== undefined && (
+        <li data-brief-system-row="brief" className="space-y-0.5 px-4 py-2 text-[12px]">
+          <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
+            <span className="font-medium text-ink">{BRIEF_COPY.system.brief}</span>
+            <span className={cn("min-w-0 break-words text-right", TONE_CLASS[b.tone])}>{b.value}</span>
+          </div>
+          {b.detail !== null && <p className="text-right text-[11.5px] text-muted">{b.detail}</p>}
+        </li>
+      )}
+      {t !== undefined && (
+        <li data-brief-system-row="token" className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 px-4 py-2 text-[12px]">
+          <span className="font-medium text-ink">{BRIEF_COPY.system.token}</span>
+          <span className={cn("min-w-0 break-words text-right", TONE_CLASS[t.tone])}>{t.value}</span>
+        </li>
+      )}
+      {a === null && (
+        <li data-brief-system-row="ai" className="px-4 py-2 text-[12px] font-medium text-amber-700">
+          Couldn&apos;t load today&apos;s AI spend.
+        </li>
+      )}
+      {a !== null && a !== undefined && (
+        <>
+          <li data-brief-system-row="spend" title={a.spend.title} className={cn("px-4 py-2 text-[12px]", TONE_CLASS[a.spend.tone])}>
+            {a.spend.value}
+          </li>
+          <li data-brief-system-row="refusals" className={cn("px-4 py-2 text-[12px]", TONE_CLASS[a.refusals.tone])}>
+            {a.refusals.value}
+          </li>
+        </>
+      )}
+    </ul>
+  );
+}
+
 /** The mail sync line (P3, when email is on): what reconcile and the live socket last reported. */
 function MailLine({ mail, now }: { mail: OverviewSection<MailSummary>; now: string }) {
   if (!mail.ok) {
@@ -336,6 +463,7 @@ export function SystemSection({
       {mail !== null && <MailLine mail={mail} now={now} />}
       {system.data.drafts !== undefined && <DraftsRows drafts={system.data.drafts} now={now} tz={tz} />}
       <SlackRow slack={system.data.slack} now={now} tz={tz} />
+      <BriefSystemRows system={system.data} now={now} tz={tz} />
     </SectionCard>
   );
 }

@@ -1,3 +1,5 @@
+import { BRIEF_COPY, fillBrief } from "@/lib/exec/brief-copy";
+import type { BriefSettingsPatch, BriefSettingsView } from "@/lib/exec/brief-settings";
 import type { SettingsPatch } from "@/lib/exec/settings-fields";
 import { SLACK_COPY } from "@/lib/exec/slack-copy";
 import { SLACK_READ_COPY } from "@/lib/exec/slack-read-copy";
@@ -13,7 +15,9 @@ import { retryAfterOf, tooManyMessage } from "./feed-api";
 // §3.13) adds POST /api/exec/slack/disconnect; P7a (contract §3.16, §3.10.5-8)
 // adds POST /api/exec/slack/reading/stop, PATCH /api/exec/slack/channels/:id
 // and PUT /api/exec/slack/watch-mode, the "slack_reading_notice" confirmation
-// on the settings PATCH, and Disconnect's reading-half answers (C47). Pure and
+// on the settings PATCH, and Disconnect's reading-half answers (C47); P8 (contract
+// §3.17.3, §3.17.5, §3.21.4) adds POST /api/exec/briefs/regenerate (Regenerate)
+// and PATCH /api/exec/briefs/settings (the Brief section). Pure and
 // client-safe: fetch with credentials "same-origin", JSON in and out, nothing
 // server-only (boundary rule 16). Statuses become the words he sees.
 
@@ -352,4 +356,141 @@ export async function setWatchMode(watchMode: WatchMode, expectedVersion: string
   if (res.status === 200) return { kind: "saved", slack };
   if (res.status === 409 && json?.error === "conflict") return { kind: "conflict", slack, message: SETTINGS_COPY.conflict };
   return { kind: "failed", status: res.status, message: settingsMessageFor(res.status, json, res.headers) };
+}
+
+// ---------------------------------------------------------------------------
+// P8: Regenerate and the brief settings (contract §3.17.3, §3.17.5, §3.21.4)
+// ---------------------------------------------------------------------------
+
+export const BRIEF_REGENERATE_PATH = "/api/exec/briefs/regenerate";
+export const BRIEF_SETTINGS_PATH = "/api/exec/briefs/settings";
+
+export type RegenerateResult =
+  | { kind: "queued"; rev: number }
+  | { kind: "busy" }
+  /** 409 conflict: the brief changed since the page loaded (rev = the current one, when the answer carried it). */
+  | { kind: "conflict"; rev: number | null }
+  | { kind: "rate_limited"; retryAfterSeconds: number | null }
+  | { kind: "failed"; status: number };
+
+/** The words for a Regenerate answer (§3.17.3): queued, busy, conflict, the rate limit in whole minutes (at least 1), else failed. */
+export function regenerateMessageFor(r: RegenerateResult): string {
+  switch (r.kind) {
+    case "queued":
+      return BRIEF_COPY.regenerateQueued;
+    case "busy":
+      return BRIEF_COPY.regenerateBusy;
+    case "conflict":
+      return BRIEF_COPY.regenerateConflict;
+    case "rate_limited": {
+      const sec = r.retryAfterSeconds;
+      const n = typeof sec === "number" && Number.isFinite(sec) && sec > 0 ? Math.max(1, Math.ceil(sec / 60)) : 60;
+      return fillBrief(BRIEF_COPY.regenerateRateLimited, { n });
+    }
+    default:
+      return BRIEF_COPY.regenerateFailed;
+  }
+}
+
+const isRev = (v: unknown): v is number => typeof v === "number" && Number.isSafeInteger(v) && v >= 1;
+
+/** POST { expectedRev } (the rev the page showed); the route re-checks the strong sign-in, the origin, the body and the claim. */
+export async function regenerateBrief(expectedRev: number, fetchImpl?: FetchLike): Promise<RegenerateResult> {
+  if (!isRev(expectedRev)) return { kind: "failed", status: 0 };
+  let res: Response;
+  try {
+    res = await fetcher(fetchImpl)(BRIEF_REGENERATE_PATH, {
+      method: "POST",
+      credentials: "same-origin",
+      cache: "no-store",
+      headers: { "content-type": "application/json", accept: "application/json" },
+      body: JSON.stringify({ expectedRev })
+    });
+  } catch {
+    return { kind: "failed", status: 0 };
+  }
+  const json = asObject(await readJson(res));
+  const code = json && typeof json.error === "string" ? json.error : null;
+  if (res.status === 202 && json?.status === "queued") return { kind: "queued", rev: isRev(json.rev) ? json.rev : expectedRev };
+  if (res.status === 409 && code === "busy") return { kind: "busy" };
+  if (res.status === 409 && code === "conflict") return { kind: "conflict", rev: isRev(json?.rev) ? (json?.rev as number) : null };
+  if (res.status === 429) return { kind: "rate_limited", retryAfterSeconds: retryAfterOf(json, res.headers) };
+  return { kind: "failed", status: res.status };
+}
+
+/** Enough of a BriefSettingsView to show. */
+export function isBriefSettingsView(v: unknown): v is BriefSettingsView {
+  const o = asObject(v);
+  return (
+    o !== null &&
+    typeof o.enabled === "boolean" &&
+    typeof o.time === "string" &&
+    (o.timezone === null || typeof o.timezone === "string") &&
+    typeof o.effectiveTz === "string" &&
+    typeof o.workTz === "string" &&
+    typeof o.checkinsEnabled === "boolean" &&
+    typeof o.supersede === "boolean" &&
+    (o.version === null || typeof o.version === "string")
+  );
+}
+
+export type BriefSettingsSaveResult =
+  | { kind: "saved"; settings: BriefSettingsView; sameDayDelivery: boolean; message: string }
+  /** 409 conflict: the latest values (null when the answer carried none). */
+  | { kind: "conflict"; settings: BriefSettingsView | null; message: string }
+  | { kind: "confirmation_required" }
+  | { kind: "failed"; status: number; message: string };
+
+/** PATCH { patch, expectedVersion, confirm? } (confirm only as "supersede_legacy_brief"); the route validates, audits and
+ *  re-checks the CAS. saved → BRIEF_COPY.settings.saved (+ sameDay when today's brief is being sent now). */
+export async function updateBriefSettings(
+  body: { patch: BriefSettingsPatch; expectedVersion: string | null; confirm?: "supersede_legacy_brief" },
+  fetchImpl?: FetchLike
+): Promise<BriefSettingsSaveResult> {
+  const copy = BRIEF_COPY.settings;
+  const payload: Json = { patch: body.patch, expectedVersion: body.expectedVersion };
+  if (body.confirm === "supersede_legacy_brief") payload.confirm = body.confirm;
+  let res: Response;
+  try {
+    res = await fetcher(fetchImpl)(BRIEF_SETTINGS_PATH, {
+      method: "PATCH",
+      credentials: "same-origin",
+      cache: "no-store",
+      headers: { "content-type": "application/json", accept: "application/json" },
+      body: JSON.stringify(payload)
+    });
+  } catch {
+    return { kind: "failed", status: 0, message: copy.failed };
+  }
+  const json = asObject(await readJson(res));
+  if (res.status === 200 && json && isBriefSettingsView(json.settings)) {
+    const sameDay = json.sameDayDelivery === true;
+    return { kind: "saved", settings: json.settings, sameDayDelivery: sameDay, message: sameDay ? `${copy.saved} ${copy.sameDay}` : copy.saved };
+  }
+  if (res.status === 409 && json?.error === "conflict") {
+    return { kind: "conflict", settings: isBriefSettingsView(json.settings) ? json.settings : null, message: copy.conflict };
+  }
+  if (res.status === 400 && json?.error === "confirmation_required") return { kind: "confirmation_required" };
+  if (res.status === 429) return { kind: "failed", status: 429, message: tooManyMessage(retryAfterOf(json, res.headers)) };
+  return { kind: "failed", status: res.status, message: copy.failed };
+}
+
+/**
+ * P8 fixer ui-8: the Brief section and P5a's settings card CAS on the same exec_settings version (updated_at). A 409 whose
+ * current values for the five brief fields still equal what this form last saved means only another card's columns moved the
+ * version: not a conflict for these fields, so the same patch is sent once more on the new version. Anything else is returned
+ * as is (a real conflict resets the form to the current values).
+ */
+export async function saveBriefSettingsRetryingVersion(
+  body: { patch: BriefSettingsPatch; expectedVersion: string | null; confirm?: "supersede_legacy_brief" },
+  saved: { enabled: boolean; time: string; timezone: string | null; checkinsEnabled: boolean; supersede: boolean },
+  call: (b: typeof body) => Promise<BriefSettingsSaveResult> = (b) => updateBriefSettings(b)
+): Promise<BriefSettingsSaveResult> {
+  const first = await call(body);
+  if (first.kind !== "conflict" || first.settings === null) return first;
+  const now = first.settings;
+  const same = now.enabled === saved.enabled && now.time === saved.time && now.timezone === saved.timezone
+    && now.checkinsEnabled === saved.checkinsEnabled && now.supersede === saved.supersede;
+  if (!same) return first;
+  return call({ ...body, expectedVersion: now.version });
 }

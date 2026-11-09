@@ -523,11 +523,12 @@ describe("UI08: a failed section is 'Couldn't load' for that card only", () => {
 
 describe("UI09: ExecTabs", () => {
   it("Overview, Email, Slack, Team, Projects, Chat in order, then Settings; Slack current on the Slack page", () => {
-    expect(EXEC_TABS.map((t) => t.label)).toEqual(["Overview", "Email", "Slack", "Team", "Projects", "Chat"]);
+    // P8 (AM-P8-23, forced): the Brief tab comes right after Overview; Slack keeps its place after Email.
+    expect(EXEC_TABS.map((t) => t.label)).toEqual(["Overview", "Brief", "Email", "Slack", "Team", "Projects", "Chat"]);
     expect(EXEC_TABS.find((t) => t.key === "slack")).toEqual({ key: "slack", href: "/executive/slack", label: SLACK_INTEL_COPY.tabLabel });
     const out = html(createElement(ExecTabs, { active: "slack", tabs: EXEC_TABS }));
     expect([...out.matchAll(/href="([^"]*)"/g)].map((m) => m[1])).toEqual([
-      "/executive", "/executive/email", "/executive/slack", "/executive/team", "/executive/projects", "/executive/chat", "/executive/settings"
+      "/executive", "/executive/brief", "/executive/email", "/executive/slack", "/executive/team", "/executive/projects", "/executive/chat", "/executive/settings"
     ]);
     expect(out.match(/aria-current="page"/g)).toHaveLength(1);
     expect(out).toMatch(/<a[^>]*aria-current="page"[^>]*href="\/executive\/slack"|<a[^>]*href="\/executive\/slack"[^>]*aria-current="page"/);

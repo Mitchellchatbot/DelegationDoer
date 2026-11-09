@@ -1,6 +1,16 @@
 import "server-only";
 
 import { isExecEnabled } from "@/lib/exec/access";
+import { checkinPostKeys, isBriefSchemaMissing, lastDeliveredBriefAt } from "@/lib/exec/brief-store";
+import { accessAlertJobHandler } from "@/lib/exec/handlers/access-alert";
+import { briefJobHandler, briefScheduledWork } from "@/lib/exec/handlers/brief";
+import { briefDeliverJobHandler } from "@/lib/exec/handlers/brief-deliver";
+import { briefFallbackJobHandler } from "@/lib/exec/handlers/brief-fallback";
+import { briefHealthJobHandler, briefHealthScheduledWork } from "@/lib/exec/handlers/brief-health";
+import { briefPrepJobHandler, briefPrepScheduledWork } from "@/lib/exec/handlers/brief-prep";
+import { briefSweepJobHandler, briefSweepScheduledWork } from "@/lib/exec/handlers/brief-sweep";
+import { checkinRewriteJobHandler } from "@/lib/exec/handlers/checkin-rewrite";
+import { checkinSendJobHandler } from "@/lib/exec/handlers/checkin-send";
 import { ddAttentionJobHandler, ddAttentionScheduledWork } from "@/lib/exec/handlers/dd-attention";
 import { ddtextJobHandler, ddtextScheduledWork } from "@/lib/exec/handlers/ddtext-triage";
 import { draftGenerateJobHandler } from "@/lib/exec/handlers/draft-generate";
@@ -8,7 +18,8 @@ import { draftReconcileJobHandler, draftReconcileScheduledWork } from "@/lib/exe
 import { emailAttentionJobHandler, emailAttentionScheduledWork } from "@/lib/exec/handlers/email-attention";
 import { emailReconcileJobHandler, emailReconcileScheduledWork } from "@/lib/exec/handlers/email-reconcile";
 import { emailTriageJobHandler } from "@/lib/exec/handlers/email-triage";
-import { purgeJobHandler, purgeScheduledWork } from "@/lib/exec/handlers/purge";
+import { opsWatchJobHandler, opsWatchSystemWork } from "@/lib/exec/handlers/ops-watch";
+import { purgeJobHandler, purgeSystemWork } from "@/lib/exec/handlers/purge";
 import { slackActionJobHandler } from "@/lib/exec/handlers/slack-action";
 import { slackAttentionJobHandler, slackAttentionScheduledWork } from "@/lib/exec/handlers/slack-attention";
 import { slackCardJobHandler } from "@/lib/exec/handlers/slack-card";
@@ -39,9 +50,19 @@ import { slackUserCheckJobHandler } from "@/lib/exec/handlers/slack-user-check";
 import { voiceRefreshJobHandler, voiceRefreshScheduledWork } from "@/lib/exec/handlers/voice-refresh";
 import { JOB_LANES, getJobHandler, registerJobHandler, runWorkerPass, type WorkerPassSummary } from "@/lib/exec/jobs";
 import { ensureMailHook, recordSocketHealth } from "@/lib/exec/mail-hook";
-import { getScheduledWork, registerScheduledWork, runSchedulerTick, type ScheduledWork } from "@/lib/exec/scheduler";
+import {
+  getScheduledWork,
+  getSystemScheduledWork,
+  registerScheduledWork,
+  registerSystemScheduledWork,
+  runSchedulerTick,
+  type ScheduledWork,
+  type SystemScheduledWork
+} from "@/lib/exec/scheduler";
+import { setSinceLastBriefResolver } from "@/lib/exec/slack-digests";
 import { refreshGateCache } from "@/lib/exec/slack-gate-cache";
-import type { JobHandler, JobLane } from "@/lib/exec/types";
+import { registerAnsweredExclusion } from "@/lib/exec/slack-reading";
+import type { ExecPrincipal, JobHandler, JobLane } from "@/lib/exec/types";
 
 // Entry points the schedulers call: cron-bootstrap's exec-worker (10 s) and
 // exec-scheduler (60 s) loops on Railway, and /api/cron/exec-tick for an
@@ -75,6 +96,13 @@ import type { JobHandler, JobLane } from "@/lib/exec/types";
 // digest build (no schedule: the plan, the tool, the route and rebuilds enqueue it), the 00:30 digest plan (same gate)
 // and the deletion sweep (10 minutes, gated on the P7a schema only: it removes data, so it runs with reading off).
 // Registered unconditionally, as P6's and P7a's are. There is no purge hook (C32: the sweep follows P7a's outbox).
+// P8 the morning brief (contract §3.15): the build, delivery, watchdog, pre-brief sweep, 5-minute brief sweep, token
+// health and the two check-in actions, plus the two system jobs' handlers (ops-watch) and the new-network alert.
+// Registered unconditionally (P6 C35); each scheduled brief handler checks briefSchemaReady() itself and skips cheaply.
+// exec.purge is SYSTEM work now (M10, C17): daily at 03:30 UTC with principal_id null, in BUILT_IN_SYSTEM_SCHEDULE
+// beside exec.ops-watch (C18). Per-principal exec.purge rows queued before the deploy still run once (idempotent).
+// Two hooks: P7a's answered-exclusion (A6, the check-in posts aren't answers by him) and P7b's since-last-brief
+// resolver (B4); registered once, each skipped if it can't register. No purge hook (A7): the brief sweep reads the log.
 const BUILT_IN_HANDLERS: readonly JobHandler[] = [
   purgeJobHandler,
   ddAttentionJobHandler,
@@ -105,10 +133,19 @@ const BUILT_IN_HANDLERS: readonly JobHandler[] = [
   slackCorrelateJobHandler,
   slackDigestJobHandler,
   slackDigestPlanJobHandler,
-  slackIntelSweepJobHandler
+  slackIntelSweepJobHandler,
+  briefJobHandler,
+  briefDeliverJobHandler,
+  briefFallbackJobHandler,
+  briefPrepJobHandler,
+  briefSweepJobHandler,
+  briefHealthJobHandler,
+  checkinSendJobHandler,
+  checkinRewriteJobHandler,
+  opsWatchJobHandler,
+  accessAlertJobHandler
 ];
 const BUILT_IN_SCHEDULE: readonly ScheduledWork[] = [
-  purgeScheduledWork,
   ddAttentionScheduledWork,
   emailReconcileScheduledWork,
   emailAttentionScheduledWork,
@@ -124,8 +161,14 @@ const BUILT_IN_SCHEDULE: readonly ScheduledWork[] = [
   slackReadRecheckScheduledWork,
   slackCorrelateScheduledWork,
   slackDigestPlanScheduledWork,
-  slackIntelSweepScheduledWork
+  slackIntelSweepScheduledWork,
+  briefScheduledWork,
+  briefPrepScheduledWork,
+  briefSweepScheduledWork,
+  briefHealthScheduledWork
 ];
+/** P8 (M10, C17, C18): principal_id null, keyed `${kind}:system:…`, enqueued before the principals are listed. */
+const BUILT_IN_SYSTEM_SCHEDULE: readonly SystemScheduledWork[] = [purgeSystemWork, opsWatchSystemWork];
 
 // The cron route's whole run has to fit well inside its 60 s maxDuration.
 const MAX_CRON_BUDGET_MS = 45_000;
@@ -152,7 +195,52 @@ export function ensureExecRuntime(): void {
   for (const work of BUILT_IN_SCHEDULE) {
     if (!getScheduledWork(work.kind)) registerScheduledWork(work);
   }
+  for (const work of BUILT_IN_SYSTEM_SCHEDULE) {
+    if (!getSystemScheduledWork(work.kind)) registerSystemScheduledWork(work);
+  }
+  registerBriefHooks();
   g[READY_KEY] = true;
+}
+
+/**
+ * A6: P7a's attention pass hands the answered stamps it found; the ones that are the principal's own check-in posts (P8
+ * exec_brief_checkins, by channel and ts) are not answers by him, so they go back to be un-stamped. A brief schema that
+ * isn't installed yet answers "none of them"; any other read error propagates (P7a's pass then fails before its sync).
+ */
+export async function briefAnsweredExclusion(principal: ExecPrincipal, rows: readonly { channelId: string; respondedTs: string }[]):
+  Promise<{ channelId: string; respondedTs: string }[]> {
+  if (rows.length === 0) return [];
+  let hit: Set<string>;
+  try {
+    hit = await checkinPostKeys(principal, rows.map((r) => ({ channelId: r.channelId, ts: r.respondedTs })));
+  } catch (err) {
+    if (isBriefSchemaMissing(err)) return [];
+    throw err;
+  }
+  return rows.filter((r) => hit.has(`${r.channelId}:${r.respondedTs}`));
+}
+
+/** B4: P7b's "since the last brief" = the latest delivered_at / fallback_sent_at of his briefs; null → P7b's default. */
+export async function briefSinceLastResolver(principal: ExecPrincipal): Promise<Date | null> {
+  const at = await lastDeliveredBriefAt(principal);
+  if (at === null) return null;
+  const d = new Date(at);
+  return Number.isFinite(d.getTime()) ? d : null;
+}
+
+/** The two P8 hooks, each on its own: one that can't register (a missing export, a throw) is skipped and logged by name. */
+function registerBriefHooks(): void {
+  const hooks: [string, () => void][] = [
+    ["answered-exclusion", () => registerAnsweredExclusion(briefAnsweredExclusion)],
+    ["since-last-brief", () => setSinceLastBriefResolver(briefSinceLastResolver)]
+  ];
+  for (const [name, register] of hooks) {
+    try {
+      register();
+    } catch (err) {
+      console.warn(`[exec-runtime] the ${name} hook was not registered (${err instanceof Error && /^[A-Za-z]{1,40}$/.test(err.name) ? err.name : "error"})`);
+    }
+  }
 }
 
 /** Test seam: let ensureExecRuntime register again (pair it with the jobs/scheduler resets). */

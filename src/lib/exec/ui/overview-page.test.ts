@@ -55,7 +55,8 @@ describe("/executive page", () => {
     const out = renderToStaticMarkup(await Page()).split(NNBSP).join(" ");
 
     expect(requireExecPrincipalForPage).toHaveBeenCalledWith("GET /executive");
-    expect(getOverview).toHaveBeenCalledWith(principal);
+    // P8 (§3.17.2, forced): the page asks for the brief card too, at its own clock.
+    expect(getOverview).toHaveBeenCalledWith(principal, expect.any(Date), { brief: true });
     expect(vi.mocked(requireExecPrincipalForPage).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(getOverview).mock.invocationCallOrder[0]);
     expect(out).toContain("Executive AI Assistant");
     // 15:00Z is 8 PM in Karachi.

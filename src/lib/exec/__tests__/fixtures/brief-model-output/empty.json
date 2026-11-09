@@ -1,0 +1,8 @@
+{
+  "_note": "Model output fixture (P8 contract §5.7; lead, stage 0). refs and top3 entries written \"@fp:<fingerprint>\" are replaced by the alias assembleSections assigned to that fingerprint (brief-assert.ts resolveFixtureAliases); any other string is used as it is.",
+  "output": {
+    "headline": "",
+    "sections": [],
+    "top3": []
+  }
+}

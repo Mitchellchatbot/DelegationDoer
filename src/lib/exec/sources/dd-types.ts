@@ -76,6 +76,11 @@ export interface ApprovalBucket {
   count: number;
   /** created_at (or equivalent) of the oldest pending item, ISO; null when count = 0 or unknown. */
   oldestAt: string | null;
+  /**
+   * P8 (M14, §3.21.2): checkins only. "exec" = the assistant's morning brief owns today and the count is its proposed
+   * check-ins; absent (or "legacy") = the legacy daily brief's pending messages, exactly as before P8.
+   */
+  source?: "exec" | "legacy";
 }
 
 // ---------------------------------------------------------------------------

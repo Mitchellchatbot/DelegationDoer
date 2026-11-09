@@ -314,7 +314,8 @@ describe("requireExecPrincipal", () => {
         principal_id: "ep_1",
         auth_user_id: OWNER_AUTH_ID,
         session_id: "sess-1",
-        ip: "203.0.113.7",
+        // P8 C21 (NA12): the right-most X-Forwarded-For hop of "203.0.113.7, 10.0.0.2" (was the first entry).
+        ip: "10.0.0.2",
         user_agent: "Mozilla/5.0 Test",
         route: ROUTE,
         surface: "web"
@@ -421,17 +422,20 @@ describe("logAccess", () => {
   });
 });
 
+// P8 (contract §3.19 C21, §5.15 NA12): clientIp now takes the RIGHT-most X-Forwarded-For entry (the hop Railway's proxy
+// appends; a client can only write the front of the header) and no longer reads X-Real-IP. These three tests asserted the
+// first entry and the X-Real-IP fallback (P2a); updated with this reference. The full NA01 set is access-clientip.test.ts.
 describe("clientIp", () => {
   const ip = (headers: Record<string, string>) => clientIp(new Request("https://x.test/", { headers }));
 
-  it("uses the first X-Forwarded-For entry, trimmed", () => {
-    expect(ip({ "x-forwarded-for": "203.0.113.7, 10.0.0.2" })).toBe("203.0.113.7");
-    expect(ip({ "x-forwarded-for": "  2001:db8::1  ,10.0.0.2", "x-real-ip": "198.51.100.1" })).toBe("2001:db8::1");
+  it("uses the right-most X-Forwarded-For entry, trimmed (P8 C21)", () => {
+    expect(ip({ "x-forwarded-for": "203.0.113.7, 10.0.0.2" })).toBe("10.0.0.2");
+    expect(ip({ "x-forwarded-for": "10.0.0.2,  2001:db8::1  ", "x-real-ip": "198.51.100.1" })).toBe("2001:db8::1");
   });
 
-  it("falls back to X-Real-IP when X-Forwarded-For is absent or empty", () => {
-    expect(ip({ "x-real-ip": " 198.51.100.1 " })).toBe("198.51.100.1");
-    expect(ip({ "x-forwarded-for": " , 10.0.0.2", "x-real-ip": "198.51.100.1" })).toBe("198.51.100.1");
+  it("never reads X-Real-IP (P8 C21): absent or empty X-Forwarded-For is null", () => {
+    expect(ip({ "x-real-ip": " 198.51.100.1 " })).toBeNull();
+    expect(ip({ "x-forwarded-for": "10.0.0.2 , ", "x-real-ip": "198.51.100.1" })).toBe("10.0.0.2");
   });
 
   it("is null when neither header is usable", () => {

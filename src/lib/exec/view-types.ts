@@ -10,6 +10,7 @@
 import type { MatchConfidence, StoredAnsweredState } from "@/lib/exec/email-types";
 import type { ProjectHealth } from "@/lib/exec/analysis/projects";
 import type { FeedbackReason } from "@/lib/exec/attention-types";
+import type { BriefSettingsView } from "@/lib/exec/brief-settings";
 import type { VoiceProfileRow } from "@/lib/exec/drafts-store";
 import type { SettingsSchemaKey } from "@/lib/exec/settings-fields";
 import type { ProjectSlackSection } from "@/lib/exec/slack-projects";
@@ -218,4 +219,9 @@ export interface SettingsView {
    * the view itself fails soft (a read that failed shows schema true, state "not_connected").
    */
   slack: SlackSettingsView;
+  /**
+   * P8 (contract §3.17.5, §3.21.4, C22): the Brief section (settings.ts briefSettingsViewOf, from the same snapshot).
+   * getSettingsView always fills it; optional in the type so the earlier phases' fixtures compile unchanged.
+   */
+  brief?: BriefSettingsView;
 }

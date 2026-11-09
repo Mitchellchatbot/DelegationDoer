@@ -288,6 +288,9 @@ export function principalFromRows(p: PrincipalRow, u: UserRow, s: SettingsRow | 
     email: u.email.trim().toLowerCase(),
     name: (u.name ?? "").trim() || u.email.trim(),
     timezone: resolveTimezone(s?.brief_timezone ?? null, u.work_timezone),
+    // P8 (§3.5, stage-0 seed): the brief's zone (identical to timezone today) and the work zone (never the brief zone).
+    briefTimezone: resolveTimezone(s?.brief_timezone ?? null, u.work_timezone),
+    workTimezone: resolveTimezone(null, u.work_timezone),
     mailAccountIds: Array.isArray(p.mail_account_ids) ? p.mail_account_ids.filter((x) => typeof x === "string" && x) : [],
     slackTeamId: p.slack_team_id ?? null,
     slackUserId: p.slack_user_id ?? null
@@ -466,6 +469,83 @@ export async function loadSettings(principalId: string): Promise<ExecSettings> {
 export async function loadSettingsSnapshot(principalId: string): Promise<SettingsSnapshot> {
   const read = await fetchSettingsRow(principalId);
   return snapshotFromRow(read.row as Record<string, unknown> | null, principalId, read.schema);
+}
+
+// ---------------------------------------------------------------------------
+// P8 (contract §3.5, M1, C1): the legacy brief's gate reads the owner's brief settings without a principal
+// ---------------------------------------------------------------------------
+
+/** Scalars only: never a principal (rule 4), never a token or a name. */
+export interface LegacyOwnerBriefRow {
+  principalId: string; enabled: boolean; briefEnabled: boolean; supersede: boolean; checkinsEnabled: boolean;
+  briefLocalTime: string; briefTimezone: string;
+}
+export type LegacyOwnerBriefRead = { state: "not_installed" } | { state: "no_principal" } | { state: "ok"; row: LegacyOwnerBriefRow };
+
+/** 42P01 / PGRST205 (a relation) and 42703 / PGRST204 (a column): the exec schema isn't there (M1: legacy owns). */
+const LEGACY_SCHEMA_MISSING: ReadonlySet<string> = new Set(["42P01", "PGRST205", "42703", "PGRST204"]);
+const LEGACY_BRIEF_SETTINGS_COLS = "principal_id,brief_enabled,brief_local_time,brief_timezone,supersede_legacy_brief,checkins_enabled";
+
+/** An exact, case-insensitive ILIKE pattern: the LIKE metacharacters \ % _ escaped with a backslash. */
+function exactIlikePattern(email: string): string {
+  return email.replace(/[\\%_]/g, (c) => `\\${c}`);
+}
+
+/**
+ * M1/C1, principal-free (rule 4 allows it: it returns no principal). users by email case-insensitively
+ * (PostgREST ilike with \ % _ escaped; more than one row → throw), exec_principals by user_id (any enabled state), exec_settings
+ * base columns. A missing exec_principals/exec_settings relation (42P01, PGRST205) → not_installed; no user or no principal row →
+ * no_principal; any other error throws.
+ *
+ * The brief zone follows principalFromRows exactly (settings.brief_timezone → users.work_timezone → America/New_York), so
+ * the legacy gate and the exec side always agree on the day. An email PostgREST would read as a pattern (`*`) throws
+ * rather than match loosely (the runner then skips its tick, fail closed). Errors carry the table and the code only.
+ */
+export async function loadOwnerBriefRowForLegacy(ownerEmail: string): Promise<LegacyOwnerBriefRead> {
+  const email = typeof ownerEmail === "string" ? ownerEmail.trim().toLowerCase() : "";
+  if (email.length === 0) return { state: "no_principal" };
+  if (email.includes("*")) throw new TypeError("loadOwnerBriefRowForLegacy: the owner email can't be matched exactly");
+  const db = getSupabaseAdmin();
+  const codeOf = (error: unknown): string | null => {
+    const code = (error as DbErrorLike | null)?.code;
+    return typeof code === "string" ? code : null;
+  };
+
+  const users = await db.from("users").select("id,email,work_timezone").ilike("email", exactIlikePattern(email)).limit(2);
+  if (users.error) throw new Error(`users read failed (${codeOf(users.error) ?? "error"})`);
+  const userRows = (users.data as UserRow[] | null) ?? [];
+  if (userRows.length > 1) throw new Error("users read: more than one row matches the owner email");
+  const u = userRows[0];
+  if (!u || typeof u.id !== "string" || u.id.length === 0) return { state: "no_principal" };
+
+  const p = await db.from("exec_principals").select("id,enabled").eq("user_id", u.id).maybeSingle();
+  if (p.error) {
+    const code = codeOf(p.error);
+    if (code !== null && LEGACY_SCHEMA_MISSING.has(code)) return { state: "not_installed" };
+    throw new Error(`exec_principals read failed (${code ?? "error"})`);
+  }
+  const pRow = (p.data as Pick<PrincipalRow, "id" | "enabled"> | null) ?? null;
+  if (!pRow || typeof pRow.id !== "string" || pRow.id.length === 0) return { state: "no_principal" };
+
+  const s = await db.from("exec_settings").select(LEGACY_BRIEF_SETTINGS_COLS).eq("principal_id", pRow.id).maybeSingle();
+  if (s.error) {
+    const code = codeOf(s.error);
+    if (code !== null && LEGACY_SCHEMA_MISSING.has(code)) return { state: "not_installed" };
+    throw new Error(`exec_settings read failed (${code ?? "error"})`);
+  }
+  const settings = settingsFromRow((s.data as SettingsRow | null) ?? null, pRow.id);
+  return {
+    state: "ok",
+    row: {
+      principalId: pRow.id,
+      enabled: pRow.enabled === true,
+      briefEnabled: settings.briefEnabled === true,
+      supersede: settings.supersedeLegacyBrief === true,
+      checkinsEnabled: settings.checkinsEnabled === true,
+      briefLocalTime: settings.briefLocalTime,
+      briefTimezone: resolveTimezone((s.data as SettingsRow | null)?.brief_timezone ?? null, u.work_timezone)
+    }
+  };
 }
 
 /**

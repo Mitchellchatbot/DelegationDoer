@@ -4,6 +4,8 @@ import { addressMatches, type RestrictedSenderRule } from "@/lib/restricted-send
 import { addDaysToYmd, eodToday } from "@/lib/shift";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { DEFAULT_TIMEZONE, isValidTimeZone } from "@/lib/exec/principal";
+import { isExecEnabled } from "@/lib/exec/access";
+import { checkinApprovalSource } from "@/lib/exec/brief-ownership-load";
 import type {
   ApprovalBucket,
   ApprovalItem,
@@ -937,7 +939,25 @@ interface BriefingRow {
 // still have their Send button. Older briefs' buttons work too but aren't
 // live, so they don't count. Each message carries its draft text; only the
 // status is read, and only the count leaves here.
-async function checkinBucket(etToday: string, signal: AbortSignal | undefined): Promise<ApprovalBucket> {
+//
+// P8 (M14, C46, §3.21.2): when the assistant's morning brief owns today (the
+// M1 verdict "exec", from brief-ownership-load's fresh reads), the bucket
+// counts the assistant's proposed, unexpired check-ins of today's brief
+// (brief zone) instead, with source "exec"; otherwise the legacy count above.
+// The legacy bucket carries no source key (its shape, and so its attention
+// item's state, stay exactly P2b's). With EXEC_ENABLED off the verdict is
+// always legacy (M1 row 1), so nothing of the brief's is read. A failed
+// ownership or count read throws, as every approvals read does (no silent
+// zero, UI18).
+async function checkinBucket(principal: ExecPrincipal, now: Date, etToday: string, signal: AbortSignal | undefined): Promise<ApprovalBucket> {
+  if (isExecEnabled()) {
+    const src = await checkinApprovalSource(principal, now, { signal });
+    if (src.source === "exec") return { mechanism: "checkins", count: src.count, oldestAt: src.oldestAt, source: "exec" };
+  }
+  return legacyCheckinBucket(etToday, signal);
+}
+
+async function legacyCheckinBucket(etToday: string, signal: AbortSignal | undefined): Promise<ApprovalBucket> {
   const rows = await pageAll<BriefingRow>(
     "daily_briefings",
     () => from("daily_briefings", "id,created_at,messages").eq("brief_date", etToday),
@@ -966,7 +986,8 @@ async function checkinBucket(etToday: string, signal: AbortSignal | undefined): 
  *                  the author; see emailDraftBucket)
  *   unrouted_mail  routing_decisions needing review with no task yet
  *   eod_reviews    submitted, not reviewed, from the last 7 ET days
- *   checkins       pending messages on today's (ET) daily brief
+ *   checkins       pending messages on today's (ET) daily brief; P8 (M14): the
+ *                  assistant's proposed check-ins while its brief owns today
  * oldestAt is when the oldest one started waiting. Any failed read throws:
  * a bucket that silently read zero would hide a decision.
  */
@@ -988,7 +1009,7 @@ export async function getPendingApprovals(principal: ExecPrincipal, now: Date, o
       (q) => q.not("submitted_at", "is", null).is("reviewed_at", null).gte("note_date", eodWindowStart),
       signal
     ),
-    checkinBucket(etToday, signal)
+    checkinBucket(principal, now, etToday, signal)
   ]);
 }
 
@@ -1788,7 +1809,7 @@ export async function listPendingApprovalItems(
   }
   const { signal } = opts;
   if (mechanism === "checkins") {
-    const bucket = await checkinBucket(eodToday(now), signal);
+    const bucket = await checkinBucket(principal, now, eodToday(now), signal);
     return { mechanism, mode: "count_only", items: [], total: bucket.count, truncated: false };
   }
   let rows: PendingItem[];

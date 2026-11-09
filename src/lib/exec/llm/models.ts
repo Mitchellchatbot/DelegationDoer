@@ -31,7 +31,9 @@ export const EXEC_MODELS: Readonly<Record<ExecLlmFeature, ExecModelId>> = Object
   // P5a (contract §3.12.1): DD text triage.
   ddtext: HAIKU_MODEL,
   // P7a (contract §3.20.1): Slack triage. Not streamed, not cached by default.
-  slack_triage: HAIKU_MODEL
+  slack_triage: HAIKU_MODEL,
+  // P8 (contract §3.21.1; stage-0 seed, then Area C's): the brief's check-in notes. Not streamed, not cached by default.
+  checkin: OPUS_MODEL
 });
 
 // Set explicitly on every request: both 5.5 models default to "medium", and a
@@ -45,7 +47,8 @@ export const FEATURE_EFFORT: Readonly<Record<ExecLlmFeature, Effort>> = Object.f
   voice: "low",
   ddtext: "low",
   slack_triage: "low",
-  brief: "high"
+  brief: "high",
+  checkin: "medium"
 });
 
 // Output ceilings, not spend: a call bills only what it generates. Thinking is
@@ -64,7 +67,8 @@ export const FEATURE_MAX_TOKENS: Readonly<Record<ExecLlmFeature, number>> = Obje
   digest: 4000,
   spike: 4000,
   ddtext: 4000,
-  slack_triage: 4000
+  slack_triage: 4000,
+  checkin: 4000
 });
 
 /** USD per million tokens. */

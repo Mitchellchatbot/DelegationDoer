@@ -2,16 +2,18 @@ import "server-only";
 
 import { logAccess } from "@/lib/exec/access";
 import { listScreenedAttention } from "@/lib/exec/attention-read";
+import { getBriefHomeLine } from "@/lib/exec/brief-view";
 import type { AttentionFeedItem, ScreenedAttentionPage } from "@/lib/exec/attention-types";
 import { SecretUnavailableError } from "@/lib/exec/crypto";
 import { DDTEXT_AI_KINDS } from "@/lib/exec/ddtext-types";
 import { getEmailTab, type EmailTabView } from "@/lib/exec/email-view";
 import { appOrigin, isAllowedLinkUrl } from "@/lib/exec/refs";
+import { loadSettings } from "@/lib/exec/principal";
 import { dmSetHome, errLabel, ownSignal } from "@/lib/exec/slack-dm";
 import { openInstallationById, recordSlackError } from "@/lib/exec/slack-install";
 import { SLACK_JOB_KINDS, SLACK_LIMITS, SLACK_RE } from "@/lib/exec/slack-types";
 import type { SlackHomePayload } from "@/lib/exec/slack-types";
-import { renderNeutralHome, renderOwnerHome, type OwnerHomeInput } from "@/lib/exec/slack-ui";
+import { renderNeutralHome, renderOwnerHome, type OwnerHomeBrief, type OwnerHomeInput } from "@/lib/exec/slack-ui";
 import { NonRetryableError, type ExecPrincipal, type JobContext, type JobHandler } from "@/lib/exec/types";
 
 // exec.slack-home (P6 contract §3.11.4, K13, C28-C30, C40; Area D): App Home
@@ -104,6 +106,15 @@ function emailRead(principal: ExecPrincipal, now: Date): (signal: AbortSignal) =
   };
 }
 
+/** P8: getBriefHomeLine takes no signal; raced against the 8 s timer like the email read (a late failure is swallowed). */
+function briefRead(principal: ExecPrincipal, now: Date): (signal: AbortSignal) => Promise<OwnerHomeBrief> {
+  return () => {
+    const read = loadSettings(principal.id).then((settings) => getBriefHomeLine(principal, settings, now));
+    read.catch(() => undefined);
+    return read;
+  };
+}
+
 async function runHome(ctx: JobContext): Promise<SlackHomeResult> {
   const principal = ctx.principal;
   if (!principal) return { skipped: "no_principal" };
@@ -141,16 +152,19 @@ async function runHome(ctx: JobContext): Promise<SlackHomeResult> {
     slackEventId: null
   });
   const now = new Date();
-  const [attention, email] = await Promise.all([
+  const [attention, email, brief] = await Promise.all([
     // P7a (§3.14, §3.20.3): App Home is a Slack surface, so finance items stay off it.
     bounded("attention", (signal) => listScreenedAttention(principal, { status: "default", limit: SLACK_LIMITS.homeItems }, { now, signal, surface: "slack" }), SLACK_LIMITS.homeSectionTimeoutMs),
-    bounded("email", emailRead(principal, now), SLACK_LIMITS.homeSectionTimeoutMs)
+    bounded("email", emailRead(principal, now), SLACK_LIMITS.homeSectionTimeoutMs),
+    // P8 (§3.21.3, K13): the brief's line inside the same 8 s section budget; a failure renders P6's neutral line (null).
+    bounded("brief", briefRead(principal, now), SLACK_LIMITS.homeSectionTimeoutMs)
   ]);
   const input: OwnerHomeInput = {
     attention: attentionSection(attention),
     email: emailSection(email),
     updatedAt: now.toISOString(),
-    timezone: principal.timezone
+    timezone: principal.timezone,
+    brief: brief.ok ? brief.value : null
   };
   // 5.
   await dmSetHome(inst, inst.row.userId, renderOwnerHome(input), { signal: ownSignal() });

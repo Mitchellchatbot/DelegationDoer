@@ -1,0 +1,48 @@
+{
+  "_note": "Model output fixture (P8 contract §5.7; lead, stage 0). refs and top3 entries written \"@fp:<fingerprint>\" are replaced by the alias assembleSections assigned to that fingerprint (brief-assert.ts resolveFixtureAliases); any other string is used as it is.",
+  "output": {
+    "headline": "Two lines below: one cites an alias that was never given and must be dropped whole (BC06).",
+    "sections": [
+      {
+        "key": "emails",
+        "items": [
+          {
+            "text": "This line cites a real item.",
+            "refs": [
+              "@fp:email:thread:th_imp1:msg_i1"
+            ],
+            "kind": "fact"
+          },
+          {
+            "text": "This line cites a real item and an invented one, so the whole line is dropped.",
+            "refs": [
+              "@fp:email:thread:th_imp1:msg_i1",
+              "i999"
+            ],
+            "kind": "fact"
+          },
+          {
+            "text": "This line cites nothing, so it is dropped.",
+            "refs": [],
+            "kind": "fact"
+          },
+          {
+            "text": "This line cites six refs (more than five), so it is dropped.",
+            "refs": [
+              "@fp:email:thread:th_imp1:msg_i1",
+              "@fp:email:thread:th_escal2:msg_e2",
+              "@fp:email:thread:th_dec3:msg_d3",
+              "@fp:email:commitment:th_com4:cm_9",
+              "@fp:email:satisfaction:cl_zeta",
+              "@fp:email:health:cl_zeta"
+            ],
+            "kind": "fact"
+          }
+        ]
+      }
+    ],
+    "top3": [
+      "@fp:dd:incident:task:t_incident7"
+    ]
+  }
+}

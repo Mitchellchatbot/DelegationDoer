@@ -140,7 +140,8 @@ describe("getDdBotIdentity (§3.6.2)", () => {
     sf.forEachChild((n) => {
       if (ts.isImportDeclaration(n) && ts.isStringLiteral(n.moduleSpecifier)) specs.push(n.moduleSpecifier.text);
     });
-    expect(specs.sort()).toEqual(["@/lib/exec/slack-read-store", "@/lib/exec/slack-read-types", "@/lib/exec/slack-types", "@/lib/exec/sources/slack", "server-only"].sort());
+    // P8 (Area D, §3.13.3): postDdBotDm / deleteDdBotDm add @/lib/exec/types (NonRetryableError, ExecPrincipal).
+    expect(specs.sort()).toEqual(["@/lib/exec/slack-read-store", "@/lib/exec/slack-read-types", "@/lib/exec/slack-types", "@/lib/exec/sources/slack", "@/lib/exec/types", "server-only"].sort());
     expect(specs.some((s) => s === "@/lib/slack" || s.endsWith("/lib/slack"))).toBe(false);
     expect(text).toContain("process.env.SLACK_BOT_TOKEN");
     expect(text).not.toContain("slack.com/api");

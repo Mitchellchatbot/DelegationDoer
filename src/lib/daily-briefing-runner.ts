@@ -23,6 +23,12 @@
 //     delivered_at set means we already ran; skip.
 // opts.force bypasses both (for manual /api/cron/daily-briefing?force=1 runs);
 // opts.dryRun renders + returns the payload without storing or DMing.
+//
+// Executive AI (P8 M1): while EXEC_ENABLED=true, the assistant's own morning
+// brief may own the day. Before anything else (force and dryRun included) the
+// runner asks @/lib/exec/brief-legacy-gate, imported lazily and only on the
+// Node.js runtime; it skips when the assistant owns or already delivered today,
+// skips the tick when that can't be read, and asks again right before posting.
 
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { getAllTasks, getAllUsersLight } from "@/lib/server-data";
@@ -66,7 +72,11 @@ export interface DailyBriefingRow {
   update_text: string;
   needle_mover: string | null;
   messages: BriefingMessage[];
-  meta: { activeTasks?: number; inboxThreads?: number; prettyDate?: string };
+  /** ranWhileSuperseded (P8 C37): set when this brief ran while the Executive AI brief was on and set to supersede it, so
+   *  its check-in buttons stay valid even after the exec brief delivers that day. */
+  /** postingAt (P8 fixer security-3): stamped with the upsert, before the late gate and the post, so the Executive AI brief
+   *  treats a legacy brief that may post any second now as delivered (never two morning DMs); cleared when this run doesn't post. */
+  meta: { activeTasks?: number; inboxThreads?: number; prettyDate?: string; ranWhileSuperseded?: boolean; postingAt?: string };
 }
 
 export type DailyBriefingOutcome =
@@ -513,6 +523,27 @@ async function gatherRecentlyMessaged(
 export async function runDailyBriefing(
   opts: { force?: boolean; dryRun?: boolean } = {}
 ): Promise<DailyBriefingOutcome> {
+  // P8 M1: the Executive AI brief may own today's delivery. Checked first, before force, dryRun and the target hour.
+  // The exec module is imported lazily inside a compile-time NEXT_RUNTIME branch, so the Edge build of the
+  // instrumentation hook (which imports this file through cron-bootstrap.ts) never contains exec I/O.
+  // EXEC_ENABLED off → no exec read at all; any gate failure → skip this tick (fail closed; the next tick asks again).
+  let ranWhileSuperseded = false;
+  if (process.env.EXEC_ENABLED === "true") {
+    if (process.env.NEXT_RUNTIME === "nodejs") {
+      let gate: { run: boolean; reason: string; ranWhileSuperseded?: boolean };
+      try {
+        const { legacyBriefGate } = await import("@/lib/exec/brief-legacy-gate");
+        gate = await legacyBriefGate(OWNER_EMAIL, new Date());
+      } catch {
+        return { ok: false, reason: "exec-ownership-unknown" };
+      }
+      if (!gate.run) return { ok: true, skipped: gate.reason === "exec_delivered" ? "exec-delivered-today" : "superseded-by-exec" };
+      ranWhileSuperseded = gate.ranWhileSuperseded === true;
+    } else {
+      return { ok: false, reason: "exec-ownership-unknown" };
+    }
+  }
+
   const now = nowInTz(DEFAULT_TZ);
   // Deliver at the FIRST tick from the target hour onward (not only exactly at
   // it), so a missed/late tick or a deploy restart during the target hour
@@ -627,7 +658,12 @@ export async function runDailyBriefing(
     update_text: drafted.daily_update,
     needle_mover: drafted.needle_mover || null,
     messages,
-    meta: { activeTasks: tasks.length, inboxThreads: inbox.items.length, prettyDate: prettyDate() }
+    meta: {
+      activeTasks: tasks.length,
+      inboxThreads: inbox.items.length,
+      prettyDate: prettyDate(),
+      ...(ranWhileSuperseded ? { ranWhileSuperseded: true } : {})
+    }
   };
 
   const { blocks, text } = buildBriefingBlocks(row);
@@ -638,16 +674,46 @@ export async function runDailyBriefing(
 
   // Persist BEFORE posting so the Send buttons' {b,m} references resolve the
   // moment the DM lands.
+  // P8 fixer security-3: meta.postingAt marks this brief as about to post (the Executive AI side reads an undelivered row
+  // stamped in the last 10 minutes as delivered), written BEFORE the late gate so a switch to the assistant made after that
+  // gate's read still sees it. Cleared below when this run decides not to post.
   const { error: upsertErr } = await supabase.from("daily_briefings").upsert({
     id: row.id,
     brief_date: row.brief_date,
     update_text: row.update_text,
     needle_mover: row.needle_mover,
     messages: row.messages,
-    meta: row.meta
+    meta: process.env.EXEC_ENABLED === "true" ? { ...row.meta, postingAt: new Date().toISOString() } : row.meta
   });
   if (upsertErr) {
     return { ok: false, reason: `DB upsert failed: ${upsertErr.message}` };
+  }
+  /** Best effort: a marker left behind only holds the assistant's same-day DM back for 10 minutes (fail closed). */
+  const clearPosting = async (): Promise<void> => {
+    try {
+      await supabase.from("daily_briefings").update({ meta: row.meta }).eq("id", row.id);
+    } catch { /* the marker lapses on its own */ }
+  };
+
+  // P8 C38: the Executive AI brief may have taken today over while this one was being written (the model call takes a
+  // while). Ask again right before posting; the row stays stored and undelivered.
+  if (process.env.EXEC_ENABLED === "true") {
+    if (process.env.NEXT_RUNTIME === "nodejs") {
+      try {
+        const { legacyBriefGate } = await import("@/lib/exec/brief-legacy-gate");
+        const late = await legacyBriefGate(OWNER_EMAIL, new Date());
+        if (!late.run) {
+          await clearPosting();
+          return { ok: true, skipped: "superseded-by-exec-late" };
+        }
+      } catch {
+        await clearPosting();
+        return { ok: false, reason: "exec-ownership-unknown" };
+      }
+    } else {
+      await clearPosting();
+      return { ok: false, reason: "exec-ownership-unknown" };
+    }
   }
 
   // Deliver to Mitchell's Slack DM.

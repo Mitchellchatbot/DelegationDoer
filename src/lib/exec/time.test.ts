@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  addLocalDays,
+  endOfLocalDateUtc,
   intervalBucket,
   isLocalTimeReached,
   isoWeekKey,
   localDateString,
   localMinutes,
+  localTimeToUtc,
   parseLocalTime,
   startOfLocalDayUtc,
   tzOffsetMinutes,
@@ -281,5 +284,82 @@ describe("intervalBucket", () => {
     expect(intervalBucket(t, 0)).toBe(intervalBucket(t, 1));
     expect(intervalBucket(t, -5)).toBe(intervalBucket(t, 1));
     expect(intervalBucket(t, 1)).toBe(29_896_563);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P8 (contract §3.6, §5.4 SC01-SC05): localTimeToUtc, addLocalDays, endOfLocalDateUtc
+// ---------------------------------------------------------------------------
+
+describe("localTimeToUtc (P8)", () => {
+  it("SC01 08:00 in New York: 13:00Z in winter (EST), 12:00Z in summer (EDT)", () => {
+    expect(iso(localTimeToUtc("2026-11-06", "08:00", NY))).toBe("2026-11-06T13:00:00.000Z");
+    expect(iso(localTimeToUtc("2026-07-06", "08:00", NY))).toBe("2026-07-06T12:00:00.000Z");
+    expect(iso(localTimeToUtc("2026-11-06", "00:00", NY))).toBe("2026-11-06T05:00:00.000Z");
+    expect(iso(localTimeToUtc("2026-11-06", "23:59", NY))).toBe("2026-11-07T04:59:00.000Z");
+  });
+
+  it("SC02 a zone east of UTC (Manila, +8) and a half-hour offset (Kolkata, +5:30), across the UTC date line", () => {
+    expect(iso(localTimeToUtc("2026-11-06", "08:00", "Asia/Manila"))).toBe("2026-11-06T00:00:00.000Z");
+    expect(iso(localTimeToUtc("2026-11-06", "06:00", "Asia/Manila"))).toBe("2026-11-05T22:00:00.000Z");
+    expect(iso(localTimeToUtc("2026-11-06", "08:00", "Asia/Kolkata"))).toBe("2026-11-06T02:30:00.000Z");
+    expect(iso(localTimeToUtc("2026-11-06", "03:00", "Asia/Kolkata"))).toBe("2026-11-05T21:30:00.000Z");
+    expect(iso(localTimeToUtc("2026-11-06", "08:00", KHI))).toBe("2026-11-06T03:00:00.000Z");
+    expect(iso(localTimeToUtc("2026-11-06", "08:00", "UTC"))).toBe("2026-11-06T08:00:00.000Z");
+  });
+
+  it("SC03 spring forward (2027-03-14): 02:30 doesn't exist and maps to 03:00 EDT = 07:00Z, as isLocalTimeReached does", () => {
+    const t = localTimeToUtc("2027-03-14", "02:30", NY);
+    expect(iso(t)).toBe("2027-03-14T07:00:00.000Z");
+    expect(localDateString(t, NY)).toBe("2027-03-14");
+    expect(localMinutes(t, NY)).toBe(180);
+    // The scheduler finds 02:30 due at that same instant and not a minute before.
+    expect(isLocalTimeReached(t, NY, "02:30")).toBe(true);
+    expect(isLocalTimeReached(new Date(t.getTime() - 60_000), NY, "02:30")).toBe(false);
+    // The hour around the gap: 01:59 EST and 03:00 EDT are one minute apart.
+    expect(iso(localTimeToUtc("2027-03-14", "01:59", NY))).toBe("2027-03-14T06:59:00.000Z");
+    expect(iso(localTimeToUtc("2027-03-14", "03:00", NY))).toBe("2027-03-14T07:00:00.000Z");
+    expect(iso(localTimeToUtc("2026-03-08", "02:00", NY))).toBe("2026-03-08T07:00:00.000Z");
+  });
+
+  it("SC04 fall back (2026-11-01): 01:30 happens twice and maps to its first occurrence, 05:30Z (EDT)", () => {
+    expect(iso(localTimeToUtc("2026-11-01", "01:30", NY))).toBe("2026-11-01T05:30:00.000Z");
+    expect(iso(localTimeToUtc("2026-11-01", "00:59", NY))).toBe("2026-11-01T04:59:00.000Z");
+    expect(iso(localTimeToUtc("2026-11-01", "02:00", NY))).toBe("2026-11-01T07:00:00.000Z");
+    expect(iso(localTimeToUtc("2026-11-01", "08:00", NY))).toBe("2026-11-01T13:00:00.000Z");
+  });
+
+  it("refuses a malformed date or time (RangeError)", () => {
+    for (const [d, t] of [["2026-11-31", "08:00"], ["2026-11-6", "08:00"], ["2026-11-06", "8:00"], ["2026-11-06", "24:00"], ["2026-02-29", "08:00"]]) {
+      expect(() => localTimeToUtc(d, t, NY), `${d} ${t}`).toThrow(RangeError);
+    }
+    expect(iso(localTimeToUtc("2028-02-29", "08:00", NY))).toBe("2028-02-29T13:00:00.000Z");
+  });
+});
+
+describe("addLocalDays and endOfLocalDateUtc (P8)", () => {
+  it("SC05 addLocalDays crosses month and year ends and leap days, both ways", () => {
+    expect(addLocalDays("2026-11-30", 1)).toBe("2026-12-01");
+    expect(addLocalDays("2026-12-31", 1)).toBe("2027-01-01");
+    expect(addLocalDays("2027-01-01", -1)).toBe("2026-12-31");
+    expect(addLocalDays("2028-02-28", 1)).toBe("2028-02-29");
+    expect(addLocalDays("2028-02-29", 1)).toBe("2028-03-01");
+    expect(addLocalDays("2027-02-28", 1)).toBe("2027-03-01");
+    expect(addLocalDays("2026-11-06", 0)).toBe("2026-11-06");
+    expect(addLocalDays("2026-10-15", 180)).toBe("2027-04-13");
+    expect(() => addLocalDays("2026-11-06", 1.5)).toThrow(RangeError);
+    expect(() => addLocalDays("2026-13-01", 1)).toThrow(RangeError);
+  });
+
+  it("SC05 endOfLocalDateUtc on both DST days: a 23-hour and a 25-hour local day", () => {
+    const spring = "2027-03-14";
+    expect(iso(endOfLocalDateUtc(spring, NY))).toBe("2027-03-15T04:00:00.000Z");
+    expect(endOfLocalDateUtc(spring, NY).getTime() - localTimeToUtc(spring, "00:00", NY).getTime()).toBe(23 * 3_600_000);
+    const fall = "2026-11-01";
+    expect(iso(endOfLocalDateUtc(fall, NY))).toBe("2026-11-02T05:00:00.000Z");
+    expect(endOfLocalDateUtc(fall, NY).getTime() - localTimeToUtc(fall, "00:00", NY).getTime()).toBe(25 * 3_600_000);
+    // The end of a day is the start of the next, by startOfLocalDayUtc too.
+    expect(iso(endOfLocalDateUtc("2026-11-06", NY))).toBe(iso(startOfLocalDayUtc(at("2026-11-07T12:00:00Z"), NY)));
+    expect(iso(endOfLocalDateUtc("2026-11-06", "Asia/Kolkata"))).toBe("2026-11-06T18:30:00.000Z");
   });
 });

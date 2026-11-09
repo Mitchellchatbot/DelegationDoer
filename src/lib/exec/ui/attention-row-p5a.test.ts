@@ -80,8 +80,9 @@ describe("ExecTabs (test 71)", () => {
   const hrefs = (markup: string) => [...markup.matchAll(/href="([^"]*)"/g)].map((m) => m[1]);
 
   it("Overview, Email, Team, Projects, in order (and P5b's Chat after them), then the Settings link", () => {
-    expect(EXEC_TABS.map((t) => t.label)).toEqual(["Overview", "Email", "Slack", "Team", "Projects", "Chat"]);
-    expect(hrefs(html("overview"))).toEqual(["/executive", "/executive/email", "/executive/slack", "/executive/team", "/executive/projects", "/executive/chat", "/executive/settings"]);
+    // P8 (AM-P8-23, forced): the Brief tab comes right after Overview.
+    expect(EXEC_TABS.map((t) => t.label)).toEqual(["Overview", "Brief", "Email", "Slack", "Team", "Projects", "Chat"]);
+    expect(hrefs(html("overview"))).toEqual(["/executive", "/executive/brief", "/executive/email", "/executive/slack", "/executive/team", "/executive/projects", "/executive/chat", "/executive/settings"]);
     expect(tagWith(html("overview"), 'href="/executive/settings"')).toContain('aria-label="Settings"');
     expect(tagWith(html("overview"), 'href="/executive/settings"')).not.toContain("aria-current");
   });

@@ -2,6 +2,8 @@ import "server-only";
 
 import { createCipheriv, createDecipheriv, createHash, createHmac, hkdfSync, randomBytes, timingSafeEqual } from "node:crypto";
 
+import { SLACK_VALUE_RE } from "@/lib/exec/slack-types";
+
 // AES-256-GCM for the credentials the assistant stores: the Slack bot and user
 // tokens in exec_slack_installations (P6). The pattern is onboarding-vault.ts
 // with three additions:
@@ -276,4 +278,80 @@ export function verifyState(purpose: StatePurpose, token: string): string | null
     if (want.length === given.length && timingSafeEqual(want, given)) valid = true;
   }
   return valid ? payload : null;
+}
+
+// ---------------------------------------------------------------------------
+// P8 check-in MAC (contract §3.12.3, C6; stage-0 compile-only placeholders, Area D writes the bodies)
+//
+// mac = the first 32 hex characters of HMAC-SHA256(K, "exec-checkin:v1\n" + checkinId + "\n" + rev + "\n" +
+// recipientUserId + "\n" + recipientSlackId + "\n" + sha256hex(text.normalize("NFC"))), K = HKDF-SHA256(EXEC_TOKEN_KEY
+// bytes, salt empty, info "exec-mac:v1:brief-checkin", 32 bytes): stateMac's derivation with its own info. Always computed
+// from the STORED row, never from a button's payload.
+// ---------------------------------------------------------------------------
+
+export interface CheckinMacFields { checkinId: string; rev: number; recipientUserId: string; recipientSlackId: string; text: string }
+
+const CHECKIN_MAC_INFO = "exec-mac:v1:brief-checkin";
+const CHECKIN_MAC_HEX = 32;
+const CHECKIN_MAC = /^[0-9a-f]{32}$/;
+const CHECKIN_ID = /^ebc_[0-9a-f]{32}$/;
+
+/** The C6 message: every field is a plain string or a whole number, joined by "\n" (none may hold a newline: ids are shaped). */
+function checkinMacMessage(f: CheckinMacFields): string {
+  if (!f || typeof f.checkinId !== "string" || typeof f.recipientUserId !== "string" || typeof f.recipientSlackId !== "string" ||
+    typeof f.text !== "string" || typeof f.rev !== "number" || !Number.isSafeInteger(f.rev) || f.rev < 0) {
+    throw new TypeError("checkinMac: the stored check-in row's id, rev, recipients and text are required");
+  }
+  if ([f.checkinId, f.recipientUserId, f.recipientSlackId].some((s) => /[\r\n]/.test(s))) throw new TypeError("checkinMac: an id holds a newline");
+  const textHash = createHash("sha256").update(f.text.normalize("NFC"), "utf8").digest("hex");
+  return `exec-checkin:v1\n${f.checkinId}\n${f.rev}\n${f.recipientUserId}\n${f.recipientSlackId}\n${textHash}`;
+}
+
+function checkinMacWith(key: Key, message: string): string {
+  const k = Buffer.from(hkdfSync("sha256", key.bytes, Buffer.alloc(0), CHECKIN_MAC_INFO, 32));
+  return createHmac("sha256", k).update(message, "utf8").digest("hex").slice(0, CHECKIN_MAC_HEX);
+}
+
+/** 32 hex of HMAC-SHA256(HKDF(EXEC_TOKEN_KEY, info "exec-mac:v1:brief-checkin"), the C6 message). SecretUnavailableError propagates. */
+export function checkinMac(f: CheckinMacFields): string {
+  const message = checkinMacMessage(f);
+  const { current } = keyring();
+  return checkinMacWith(current, message);
+}
+
+/** Current key, then EXEC_TOKEN_KEY_PREVIOUS; timingSafeEqual on equal-length buffers; a non-32-hex mac → false. */
+export function verifyCheckinMac(f: CheckinMacFields, mac: string): boolean {
+  // The key config first (as verifyState): a broken config is an outage to report, not a bad click.
+  const { all } = keyring();
+  if (typeof mac !== "string" || !CHECKIN_MAC.test(mac)) return false;
+  let message: string;
+  try {
+    message = checkinMacMessage(f);
+  } catch {
+    return false;
+  }
+  const given = Buffer.from(mac, "ascii");
+  let valid = false;
+  // Every key is checked (no early exit), so the timing doesn't say which key matched.
+  for (const key of all) {
+    const want = Buffer.from(checkinMacWith(key, message), "ascii");
+    if (want.length === given.length && timingSafeEqual(want, given)) valid = true;
+  }
+  return valid;
+}
+
+/** "c1.<checkinId>.<rev>.<checkinMac(f)>"; parseCheckinValue is its inverse (null on any mismatch with SLACK_VALUE_RE.checkin). */
+export function checkinButtonValue(f: CheckinMacFields): string {
+  if (!f || typeof f.checkinId !== "string" || !CHECKIN_ID.test(f.checkinId)) throw new TypeError("checkinButtonValue: a check-in id (ebc_…) is required");
+  if (typeof f.rev !== "number" || !Number.isSafeInteger(f.rev) || f.rev < 0 || f.rev > 9999) throw new TypeError("checkinButtonValue: rev must be 0..9999");
+  return `c1.${f.checkinId}.${f.rev}.${checkinMac(f)}`;
+}
+
+export function parseCheckinValue(value: string): { checkinId: string; rev: number; mac: string } | null {
+  if (typeof value !== "string" || value.length > 200) return null;
+  const m = SLACK_VALUE_RE.checkin.exec(value);
+  if (!m) return null;
+  const rev = Number(m[2]);
+  if (!Number.isSafeInteger(rev)) return null;
+  return { checkinId: m[1], rev, mac: m[3] };
 }

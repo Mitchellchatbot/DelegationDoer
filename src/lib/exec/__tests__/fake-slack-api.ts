@@ -155,7 +155,7 @@ export const SLACK_RECORDED = Object.freeze({
   }),
   lookupByEmail: () => ({
     ok: true,
-    user: { id: "U0MITCH", team_id: "T0SCALED", name: "mitchell", deleted: false, is_bot: false, is_app_user: false }
+    user: { id: "U0MITCH", team_id: "T0SCALED", name: "mitchell", deleted: false, is_bot: false, is_app_user: false, is_restricted: false, is_ultra_restricted: false }
   }),
   conversationsOpen: () => ({ ok: true, channel: { id: "D0MITCH" } }),
   postMessage: (ts = "1793977201.000100") => ({
@@ -352,3 +352,178 @@ export const SLACK_READ_RECORDED = Object.freeze({
     bot_id: "B0DDBOT", is_enterprise_install: false
   })
 });
+
+// --- P8 (§5.19; Area D): a stateful workspace for the brief's DMs ------------------------------------------------------------
+//
+// Handlers that keep the messages they were sent, keyed by the bearer token that sent them:
+//   * chat.postMessage records { channel, ts, token, text, blocks, metadata } and answers its ts; chat.update / chat.delete
+//     act only on a message that token posted (message_not_found otherwise, and once deleted);
+//   * conversations.history answers the channel's messages (newest first, ts >= oldest when inclusive) with their metadata
+//     only when include_all_metadata=true, as Slack does, paged by `limit` with a next_cursor;
+//   * conversations.open answers the IM between the token's user and `users` (a stable D... id per pair);
+//   * auth.test answers per token; users.lookupByEmail answers the seeded users with the guest flags;
+//   * failNext(method, failure) queues one answer: "pass" (run normally), our timeout (a hung call), a network drop, HTTP 503, a rate limit with
+//     Retry-After, a Slack error code, or "posted but ..." (the message is stored, then the call fails), for DL04-DL06.
+//
+//   const ws = fakeSlackWorkspace({ tokens: { [BOT]: { userId: "U0BOT", teamId: "T0SCALED", botId: "B0BOT" } } });
+//   const slack = installFakeSlack(ws.handlers);
+
+export interface FakeSlackStoredMessage {
+  channel: string; ts: string; token: string; text: unknown; blocks: unknown; metadata: Record<string, unknown> | null; deleted: boolean; updates: number;
+}
+export type FakeSlackFailure =
+  | "pass" | "timeout" | "network" | "http_503" | "posted_timeout" | "posted_network" | "posted_503"
+  | { ratelimited: number } | { error: string };
+export interface FakeSlackIdentity { userId: string; teamId: string; botId?: string | null }
+export interface FakeSlackUser { id: string; teamId?: string; deleted?: boolean; isBot?: boolean; isRestricted?: boolean; isUltraRestricted?: boolean }
+export interface FakeSlackWorkspace {
+  handlers: Partial<Record<SlackMethod, FakeSlackHandler>>;
+  messages: FakeSlackStoredMessage[];
+  /** Per token: auth.test's answer, or a Slack error code. Mutable. */
+  tokens: Map<string, FakeSlackIdentity | { error: string }>;
+  /** By e-mail address (lower-cased). Mutable. */
+  users: Map<string, FakeSlackUser>;
+  failNext(method: SlackMethod, failure: FakeSlackFailure): void;
+  /** The IM conversations.open answers for (token, user). */
+  imFor(token: string, userId: string): string;
+  /** Messages stored in a channel (deleted ones included). */
+  inChannel(channel: string): FakeSlackStoredMessage[];
+}
+
+const bearerOf = (headers: Headers): string => (headers.get("authorization") ?? "").replace(/^Bearer\s+/i, "");
+
+export function fakeSlackWorkspace(seed: { tokens?: Record<string, FakeSlackIdentity | { error: string }>; users?: Record<string, FakeSlackUser>;
+  ims?: Record<string, string>; firstTs?: number } = {}): FakeSlackWorkspace {
+  const messages: FakeSlackStoredMessage[] = [];
+  const tokens = new Map(Object.entries(seed.tokens ?? {}));
+  const users = new Map(Object.entries(seed.users ?? {}).map(([email, u]) => [email.toLowerCase(), u] as const));
+  const ims = new Map(Object.entries(seed.ims ?? {}));
+  const failures = new Map<string, FakeSlackFailure[]>();
+  let seq = 0;
+  /** Slack-like ts values at the (possibly faked) current time, strictly increasing. */
+  const nextTs = () => `${seed.firstTs ?? Math.floor(Date.now() / 1000)}.${String(100 + ++seq).padStart(6, "0")}`;
+  const imFor = (token: string, userId: string): string => {
+    const key = `${token}|${userId}`;
+    let id = ims.get(key);
+    if (!id) {
+      id = `D0IM${String(ims.size + 1).padStart(3, "0")}`;
+      ims.set(key, id);
+    }
+    return id;
+  };
+  const error = (code: string) => ({ ok: false, error: code });
+  const hang = (): Promise<never> => new Promise<never>(() => undefined);
+  /** The injected failure for this call, if any: a Response, a thrown TypeError, a hang, or null (run normally). */
+  const injected = (method: SlackMethod, store: () => void): Promise<Response | object> | Response | object | null => {
+    const queue = failures.get(method);
+    const f = queue?.shift();
+    if (f === undefined || f === "pass") return null;
+    if (typeof f === "object" && "ratelimited" in f) return new Response("", { status: 429, headers: { "retry-after": String(f.ratelimited) } });
+    if (typeof f === "object" && "error" in f) return error(f.error);
+    if (f.startsWith("posted_")) store();
+    if (f === "timeout" || f === "posted_timeout") return hang();
+    if (f === "http_503" || f === "posted_503") return new Response("", { status: 503 });
+    throw new TypeError("fetch failed");
+  };
+  const tokenError = (headers: Headers): string | null => {
+    const id = tokens.get(bearerOf(headers));
+    if (id === undefined) return "invalid_auth";
+    return "error" in id ? id.error : null;
+  };
+
+  const handlers: Partial<Record<SlackMethod, FakeSlackHandler>> = {
+    "auth.test": (_body, headers) => {
+      const failure = injected("auth.test", () => undefined);
+      if (failure !== null) return failure;
+      const bad = tokenError(headers);
+      if (bad !== null) return error(bad);
+      const id = tokens.get(bearerOf(headers)) as FakeSlackIdentity;
+      return { ok: true, url: "https://scaledai.slack.com/", team: "ScaledAI", user: "someone", team_id: id.teamId, user_id: id.userId,
+        ...(id.botId ? { bot_id: id.botId } : {}), is_enterprise_install: false };
+    },
+    "users.lookupByEmail": (body, headers) => {
+      const failure = injected("users.lookupByEmail", () => undefined);
+      if (failure !== null) return failure;
+      const bad = tokenError(headers);
+      if (bad !== null) return error(bad);
+      const u = users.get(String(body.email ?? "").toLowerCase());
+      if (!u) return error("users_not_found");
+      return { ok: true, user: { id: u.id, team_id: u.teamId ?? "T0SCALED", name: "member", deleted: u.deleted === true, is_bot: u.isBot === true,
+        is_app_user: false, is_restricted: u.isRestricted === true, is_ultra_restricted: u.isUltraRestricted === true } };
+    },
+    "conversations.open": (body, headers) => {
+      const failure = injected("conversations.open", () => undefined);
+      if (failure !== null) return failure;
+      const bad = tokenError(headers);
+      if (bad !== null) return error(bad);
+      return { ok: true, channel: { id: imFor(bearerOf(headers), String(body.users ?? "")) } };
+    },
+    "chat.postMessage": (body, headers) => {
+      const token = bearerOf(headers);
+      const ts = nextTs();
+      const store = () => {
+        messages.push({ channel: String(body.channel), ts, token, text: body.text, blocks: body.blocks,
+          metadata: body.metadata && typeof body.metadata === "object" ? structuredClone(body.metadata as Record<string, unknown>) : null, deleted: false, updates: 0 });
+      };
+      const failure = injected("chat.postMessage", store);
+      if (failure !== null) return failure;
+      const bad = tokenError(headers);
+      if (bad !== null) return error(bad);
+      store();
+      return { ok: true, channel: body.channel, ts, message: { type: "message", ts, text: body.text } };
+    },
+    "chat.update": (body, headers) => {
+      const failure = injected("chat.update", () => undefined);
+      if (failure !== null) return failure;
+      const bad = tokenError(headers);
+      if (bad !== null) return error(bad);
+      const m = messages.find((x) => x.channel === body.channel && x.ts === body.ts && x.token === bearerOf(headers) && !x.deleted);
+      if (!m) return error("message_not_found");
+      m.text = body.text;
+      m.blocks = body.blocks;
+      m.updates += 1;
+      return { ok: true, channel: body.channel, ts: body.ts };
+    },
+    "chat.delete": (body, headers) => {
+      const failure = injected("chat.delete", () => undefined);
+      if (failure !== null) return failure;
+      const bad = tokenError(headers);
+      if (bad !== null) return error(bad);
+      const m = messages.find((x) => x.channel === body.channel && x.ts === body.ts && x.token === bearerOf(headers) && !x.deleted);
+      if (!m) return error("message_not_found");
+      m.deleted = true;
+      return { ok: true, channel: body.channel, ts: body.ts };
+    },
+    "conversations.history": (body, headers) => {
+      const failure = injected("conversations.history", () => undefined);
+      if (failure !== null) return failure;
+      const bad = tokenError(headers);
+      if (bad !== null) return error(bad);
+      const withMeta = body.include_all_metadata === "true";
+      const oldest = typeof body.oldest === "string" ? Number(body.oldest) : 0;
+      const inclusive = body.inclusive === "true";
+      const rows = messages.filter((m) => m.channel === body.channel && !m.deleted && (inclusive ? Number(m.ts) >= oldest : Number(m.ts) > oldest))
+        .sort((a, b) => Number(b.ts) - Number(a.ts));
+      const limit = Math.max(1, Number(body.limit ?? 100));
+      const start = typeof body.cursor === "string" && /^[0-9]+$/.test(body.cursor) ? Number(body.cursor) : 0;
+      const page = rows.slice(start, start + limit);
+      const more = start + limit < rows.length;
+      return {
+        ok: true,
+        messages: page.map((m) => ({ type: "message", ts: m.ts, text: m.text, ...(withMeta && m.metadata ? { metadata: structuredClone(m.metadata) } : {}) })),
+        has_more: more,
+        response_metadata: { next_cursor: more ? String(start + limit) : "" }
+      };
+    }
+  };
+
+  return {
+    handlers, messages, tokens, users, imFor,
+    failNext(method, failure) {
+      const q = failures.get(method) ?? [];
+      q.push(failure);
+      failures.set(method, q);
+    },
+    inChannel: (channel) => messages.filter((m) => m.channel === channel)
+  };
+}

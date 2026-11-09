@@ -64,18 +64,22 @@ export const SLACK_RE = Object.freeze({
   trigger: /^[A-Za-z0-9.]{1,200}$/, installationId: /^esi_[0-9a-f]{32}$/
 });
 
+/** P8 (§3.21.3, stage-0 seed): ea_ci_send / ea_ci_rewrite, the brief's check-in buttons. P8's RPC 2 v2 enqueues them as
+ *  exec.checkin-send / exec.checkin-rewrite (never exec.slack-action). */
 export type SlackActionId =
-  | "ea_draft_save" | "ea_draft_regen" | "ea_card_refresh" | "ea_task_create" | "ea_task_dismiss" | "ea_fb_up" | "ea_fb_down";
+  | "ea_draft_save" | "ea_draft_regen" | "ea_card_refresh" | "ea_task_create" | "ea_task_dismiss" | "ea_fb_up" | "ea_fb_down"
+  | "ea_ci_send" | "ea_ci_rewrite";
 /** URL buttons: acked by the route, never enqueued. */
 export type SlackLinkActionId = "ea_open_dd";
 export const SLACK_ACTION_IDS: readonly SlackActionId[] =
-  ["ea_draft_save", "ea_draft_regen", "ea_card_refresh", "ea_task_create", "ea_task_dismiss", "ea_fb_up", "ea_fb_down"];
+  ["ea_draft_save", "ea_draft_regen", "ea_card_refresh", "ea_task_create", "ea_task_dismiss", "ea_fb_up", "ea_fb_down", "ea_ci_send", "ea_ci_rewrite"];
 
-/** C14 value formats. */
+/** C14 value formats. P8 (C6): checkin = "c1.<ebc_ id>.<rev>.<32-hex MAC>" (≤ 90 characters). */
 export const SLACK_VALUE_RE = Object.freeze({
   draft: /^d1\.(ed_[0-9a-f]{32})\.([0-9]{1,9})$/,          // v2: no ".p" suffix (C15)
   proposal: /^t1\.(etp_[0-9a-f]{32})\.([0-9a-f]{64})$/,
-  feedback: /^f1\.(ecm_[0-9a-f]{32})$/
+  feedback: /^f1\.(ecm_[0-9a-f]{32})$/,
+  checkin: /^c1\.(ebc_[0-9a-f]{32})\.([0-9]{1,4})\.([0-9a-f]{32})$/
 });
 
 export type ReplyState = "queued" | "started" | "placeholder" | "answered" | "failed" | "skipped" | "swept";

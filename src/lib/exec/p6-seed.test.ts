@@ -44,7 +44,8 @@ describe("P6 seed: slack-types.ts (§3.1)", () => {
       reply: "exec.slack-reply", action: "exec.slack-action", card: "exec.slack-card", home: "exec.slack-home",
       uninstall: "exec.slack-uninstall", sweep: "exec.slack-sweep", dmPurge: "exec.slack-dm-purge"
     });
-    expect([...SLACK_ACTION_IDS]).toEqual(["ea_draft_save", "ea_draft_regen", "ea_card_refresh", "ea_task_create", "ea_task_dismiss", "ea_fb_up", "ea_fb_down"]);
+    // P8 stage 0 (§3.21.3, p8-bindings.md AM-P8-31): the brief's two check-in buttons follow P6's seven (enqueued by P8's v2).
+    expect([...SLACK_ACTION_IDS]).toEqual(["ea_draft_save", "ea_draft_regen", "ea_card_refresh", "ea_task_create", "ea_task_dismiss", "ea_fb_up", "ea_fb_down", "ea_ci_send", "ea_ci_rewrite"]);
     expect(Object.isFrozen(SLACK_LIMITS) && Object.isFrozen(SLACK_RE) && Object.isFrozen(SLACK_VALUE_RE) && Object.isFrozen(SLACK_JOB_KINDS)).toBe(true);
   });
 
@@ -85,7 +86,8 @@ describe("P6 seed: slack-copy.ts (§3.14)", () => {
     expect(SLACK_COPY.connectResult.wrong_user).toContain("{who}");
     // The fixer's copy (ui-2, ui-7, ui-8, ui-9).
     expect([SLACK_COPY.aiAssessed, SLACK_COPY.homeBrief, SLACK_COPY.settingsReadFailed]).toEqual([
-      "AI-assessed", "The assistant's morning brief isn't set up yet.", "Couldn't load the Slack connection. Reload the page."
+      // P8 (AM-P8-15): homeBrief now says the brief line couldn't be read (the brief exists; null means only that).
+      "AI-assessed", "Morning brief: couldn't load its status here. It's in Executive AI in DD.", "Couldn't load the Slack connection. Reload the page."
     ]);
     expect(SLACK_COPY.connectResult.wrong_host).toBe("You started from a different DD address, so you've been moved to operations.scaledai.org. Press Connect Slack again here.");
     for (const v of [SLACK_COPY, SLACK_COPY.notes, SLACK_COPY.draftStatus, SLACK_COPY.proposalStatus, SLACK_COPY.bandLabels, SLACK_COPY.revokeReasons, SLACK_COPY.connectResult]) {
@@ -118,7 +120,9 @@ describe("P6 seed: slack-copy.ts (§3.14)", () => {
 // connectResult.wrong_host (ui-9). Before them: 4e0c72db47501447a956b434f7af6f0a568c60a13db92bb010c2157a9ea8807a.
 // P7a stage -1 (lead, P7a contract §3.17): connectResult spreads SLACK_READ_COPY.connectResult's five read codes after
 // P6's nineteen. P6's final value before them: 0ea2f1cc6c0c1780c0ead58faeb11db9bd66720fa6d7cbe53cd1e96039627ec7.
-const SLACK_COPY_SHA256 = "9535d534ec69e337c33974fab29235e2cdd3338caf5ccac9a6cd54e51585b435";
+// P8 (Area D, AM-P8-15): homeBrief became "Morning brief: couldn't load its status here. It's in Executive AI in DD." (the null
+// case of the App Home's brief line). P7a's value before it: 9535d534ec69e337c33974fab29235e2cdd3338caf5ccac9a6cd54e51585b435.
+const SLACK_COPY_SHA256 = "2f43473a257d6f13b2092cf4d734e54fe976c3120ba8bec8d9eec8c09c7be7d7";
 
 interface RoutingRow {
   name: string;

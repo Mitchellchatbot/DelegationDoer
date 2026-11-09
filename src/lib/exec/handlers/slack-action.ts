@@ -39,14 +39,19 @@ const PROPOSAL_RATE_LIMIT = 30;
 const PROPOSAL_RATE_WINDOW_MS = 600_000;
 
 type Family = "draft" | "proposal" | "feedback";
-const FAMILY: Readonly<Record<SlackActionId, Family>> = Object.freeze({
+// P8 (stage-0 seed, §3.21.3): the check-in buttons are SlackActionIds too, but they never reach exec.slack-action (P8's
+// RPC 2 v2 enqueues exec.checkin-send / exec.checkin-rewrite), so they have no family here and a payload naming one is
+// refused like an unknown action.
+const FAMILY: Readonly<Record<SlackActionId, Family | null>> = Object.freeze({
   ea_draft_save: "draft",
   ea_draft_regen: "draft",
   ea_card_refresh: "draft",
   ea_task_create: "proposal",
   ea_task_dismiss: "proposal",
   ea_fb_up: "feedback",
-  ea_fb_down: "feedback"
+  ea_fb_down: "feedback",
+  ea_ci_send: null,
+  ea_ci_rewrite: null
 });
 
 /** The payload RPC 2 wrote, shape-checked; null for anything else. */
@@ -55,6 +60,7 @@ export function parseActionPayload(raw: unknown): SlackActionPayload | null {
   const p = raw as Record<string, unknown>;
   if (typeof p.installation_id !== "string" || !SLACK_RE.installationId.test(p.installation_id)) return null;
   if (typeof p.action_id !== "string" || !(SLACK_ACTION_IDS as readonly string[]).includes(p.action_id)) return null;
+  if (FAMILY[p.action_id as SlackActionId] === null) return null;
   if (typeof p.value !== "string" || typeof p.channel_id !== "string" || !SLACK_RE.dm.test(p.channel_id)) return null;
   if (typeof p.message_ts !== "string" || !SLACK_RE.ts.test(p.message_ts)) return null;
   return { installation_id: p.installation_id, action_id: p.action_id as SlackActionId, value: p.value, channel_id: p.channel_id, message_ts: p.message_ts };
@@ -69,6 +75,7 @@ type ParsedValue =
 export function parseActionValue(actionId: SlackActionId, value: string): ParsedValue | null {
   if (typeof value !== "string" || value.length === 0 || value.length > SLACK_LIMITS.actionValueChars) return null;
   const family = FAMILY[actionId];
+  if (family === null) return null;
   if (family === "draft") {
     const m = SLACK_VALUE_RE.draft.exec(value);
     if (!m) return null;

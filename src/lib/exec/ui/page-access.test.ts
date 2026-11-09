@@ -179,7 +179,8 @@ describe("requireExecPrincipalForPage", () => {
     expect(logRows[0]).toMatchObject({
       principal_id: "ep_1",
       auth_user_id: OWNER_AUTH_ID,
-      ip: "203.0.113.7",
+      // P8 C21 (§5.15 NA12): the right-most X-Forwarded-For hop (was the first entry); X-Real-IP is no longer read.
+      ip: "10.0.0.2",
       user_agent: "Mozilla/5.0 Test",
       route: ROUTE,
       surface: "web"
@@ -187,14 +188,15 @@ describe("requireExecPrincipalForPage", () => {
     expect(JSON.stringify(logRows[0])).not.toContain("not-for-the-log");
   });
 
-  it("falls back to x-real-ip, and logs nulls when the headers are absent", async () => {
+  // P8 C21 (§5.15 NA12): X-Real-IP is no longer read (a client can set it); it used to be the fallback.
+  it("no longer falls back to x-real-ip, and logs nulls when the headers are absent", async () => {
     fakeServer();
     const { logRows } = fakeAdmin();
     newRequest({ "x-real-ip": "198.51.100.9" });
     await requireExecPrincipalForPage(ROUTE);
     newRequest();
     await requireExecPrincipalForPage(ROUTE);
-    expect(logRows[0]).toMatchObject({ ip: "198.51.100.9", user_agent: null });
+    expect(logRows[0]).toMatchObject({ ip: null, user_agent: null });
     expect(logRows[1]).toMatchObject({ ip: null, user_agent: null });
   });
 

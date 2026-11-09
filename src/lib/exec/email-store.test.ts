@@ -413,6 +413,8 @@ describe("applyThreadProposal: the tombstone procedure", () => {
       "delete exec_commitments",
       "delete exec_email_signals",
       "rpc exec_drafts_purge_restricted",
+      // P8 X1 (contract §3.21.1, ST06): the brief scrub right after P4's drafts purge.
+      "rpc exec_brief_scrub_threads",
       "attention delete"
     ]);
     const purge = db.requests.find((r) => r.kind === "rpc" && r.target === "exec_drafts_purge_restricted");
@@ -524,7 +526,8 @@ describe("applyThreadProposal: the tombstone procedure", () => {
     });
     const out = await applyThreadProposal(P, SETTINGS, "th_1", { kind: "tombstone", snapshot: null, hashes: null, truncated: null, policyHash: H }, ctx);
     expect(out).toEqual({ result: "skipped", reason: "noop", commitments: [] });
-    expect(db.log).toEqual(["select exec_email_threads", "delete exec_commitments", "delete exec_email_signals", "rpc exec_drafts_purge_restricted", "attention delete"]);
+    expect(db.log).toEqual(["select exec_email_threads", "delete exec_commitments", "delete exec_email_signals", "rpc exec_drafts_purge_restricted",
+      "rpc exec_brief_scrub_threads", "attention delete"]);
     expect(db.tables.exec_email_signals).toEqual([]);
   });
 
@@ -570,7 +573,7 @@ describe("applyThreadProposal: the tombstone procedure", () => {
     expect(db.log).not.toContain("attention delete");
     const retry = await applyThreadProposal(P, SETTINGS, "th_1", tombstone, ctx);
     expect(retry).toEqual({ result: "skipped", reason: "noop", commitments: [] });
-    expect(db.log.slice(-2)).toEqual(["rpc exec_drafts_purge_restricted", "attention delete"]);
+    expect(db.log.slice(-3)).toEqual(["rpc exec_drafts_purge_restricted", "rpc exec_brief_scrub_threads", "attention delete"]);
   });
 
   it("dd_only behaves exactly as hidden: the default loader screens under the hidden policy hash and the restricted read tombstones", async () => {
@@ -609,7 +612,8 @@ describe("the P5b chat steps of the tombstone procedure (T72, contract §3.18)",
     logChat();
     const signal = new AbortController().signal;
     expect((await applyThreadProposal(P, SETTINGS, "th_1", tombstone, ctx, { signal })).result).toBe("tombstoned");
-    expect(db.log.slice(-5)).toEqual(["rpc exec_drafts_purge_restricted", "attention delete", "chat redact", "chat draft ids", "chat drafts purge"]);
+    expect(db.log.slice(-6)).toEqual(["rpc exec_drafts_purge_restricted", "rpc exec_brief_scrub_threads", "attention delete", "chat redact", "chat draft ids",
+      "chat drafts purge"]);
     expect(fakeChat.redactChatForThreads).toHaveBeenCalledWith(P, ["th_1"], { signal });
     expect(fakeChat.listChatDraftIdsForThreads).toHaveBeenCalledWith(P, ["th_1"], { signal });
     expect(fakeF.purgeDraftsByIds).toHaveBeenCalledWith(P, chatDraftIds, { signal });
@@ -682,7 +686,8 @@ describe("the attention step (Area E's deleteEmailAttentionForThreads)", () => {
     db.log.length = 0;
     const retry = await applyThreadProposal(P, SETTINGS, "th_1", tombstone, ctx);
     expect(retry).toEqual({ result: "skipped", reason: "noop", commitments: [] });
-    expect(db.log).toEqual(["select exec_email_threads", "delete exec_commitments", "delete exec_email_signals", "rpc exec_drafts_purge_restricted", "attention delete"]);
+    expect(db.log).toEqual(["select exec_email_threads", "delete exec_commitments", "delete exec_email_signals", "rpc exec_drafts_purge_restricted",
+      "rpc exec_brief_scrub_threads", "attention delete"]);
     expect(fakeE.deleteEmailAttentionForThreads).toHaveBeenLastCalledWith(P, ["th_1"], expect.anything());
   });
 });

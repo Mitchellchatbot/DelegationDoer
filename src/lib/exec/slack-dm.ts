@@ -5,7 +5,7 @@ import { getDraftView } from "@/lib/exec/drafts";
 import type { DraftView } from "@/lib/exec/drafts-types";
 import { enqueueJob } from "@/lib/exec/jobs";
 import { getProposalView } from "@/lib/exec/proposals";
-import { deleteInDm, postInDm, setHomeView, SlackApiError, updateInDm, type SlackCallOptions } from "@/lib/exec/sources/slack";
+import { deleteInDm, postInDm, setHomeView, SlackApiError, updateInDm, type SlackCallOptions, type SlackMessageMetadata } from "@/lib/exec/sources/slack";
 import { clearSlackError, deleteSlackPostRecord, enqueueRevokeCheck, recordSlackError, recordSlackPost } from "@/lib/exec/slack-install";
 import { SLACK_JOB_KINDS, SLACK_LIMITS, SLACK_RE } from "@/lib/exec/slack-types";
 import type { DmTarget, OpenInstallation, SlackCardPayload, SlackHomeView, SlackMessageParts, SlackPostLedger } from "@/lib/exec/slack-types";
@@ -81,13 +81,16 @@ async function onSlackSuccess(inst: OpenInstallation): Promise<void> {
   await clearSlackError(inst.row.id);
 }
 
-/** chat.postMessage in his DM (in the thread when threadTs is set), then the ledger row (C43). */
+/** chat.postMessage in his DM (in the thread when threadTs is set), then the ledger row (C43). P8 (§3.21.3): opts.metadata is
+ *  passed to postInDm as Slack message metadata (ids and numbers only); the transport options go on unchanged. */
 export async function dmPost(principal: ExecPrincipal, inst: OpenInstallation, threadTs: string | null, parts: SlackMessageParts,
-  ledger: SlackPostLedger, opts?: SlackCallOptions): Promise<{ ts: string }> {
+  ledger: SlackPostLedger, opts?: SlackCallOptions & { metadata?: SlackMessageMetadata }): Promise<{ ts: string }> {
   const channel = inst.row.dmChannelId;
+  const { metadata, ...callOpts } = opts ?? {};
   let posted: { ts: string };
   try {
-    posted = await postInDm(inst.target, { channel, threadTs, blocks: parts.blocks, text: parts.text }, opts);
+    posted = await postInDm(inst.target, { channel, threadTs, blocks: parts.blocks, text: parts.text, ...(metadata ? { metadata } : {}) },
+      opts === undefined ? undefined : callOpts);
   } catch (err) {
     await onSlackFailure(inst, err);
     throw err;

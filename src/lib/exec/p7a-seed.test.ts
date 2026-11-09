@@ -196,7 +196,8 @@ describe("P7a seed: additive changes to earlier phases' files (§0.2 step 5, §3
   it("SyncSource \"slack\" and the three reading leases are in the types (Area A adds the runtime source check)", () => {
     const src = read("sync-state.ts");
     // P7b stage 0: SyncSource gains "slack-intel" after "slack" (expectation change, P7b bindings).
-    expect(src).toMatch(/export type SyncSource = [^;]*"slack"(?: \| "slack-intel")?;/);
+    // P8 stage 0: and "brief" after it (expectation change, p8-bindings.md).
+    expect(src).toMatch(/export type SyncSource = [^;]*"slack"(?: \| "slack-intel")?(?: \| "brief")?;/);
     for (const k of ["slack-discover-lease", "slack-sweep-lease", "slack-attention-lease"]) expect(src).toContain(`"${k}": "slack"`);
   });
 

@@ -6,6 +6,8 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { DEFAULT_TIMEZONE, isValidTimeZone } from "@/lib/exec/principal";
 import type {
   ApprovalBucket,
+  ApprovalItem,
+  ApprovalItemList,
   ApprovalMechanism,
   ClientHealthLabel,
   DdActivity,
@@ -17,15 +19,21 @@ import type {
   DdIncidentLog,
   DdProject,
   DdProjectStage,
+  DdProjectTask,
   DdSatisfactionSignal,
   DdSiteHealthAlert,
   DdStatusEntry,
+  DdStatusTransition,
   DdTask,
   DdTaskExtension,
+  DdTaskHours,
   DdTaskMessage,
   DdTaskNotification,
+  DdTaskThreadLink,
   DdTimeEntry,
+  DdUpdateReply,
   DdUser,
+  DdUserSchedule,
   ProjectStageStatus,
   TaskNotificationKind,
   TaskPriority,
@@ -1249,4 +1257,563 @@ export async function listOpenTasksForClient(principal: ExecPrincipal, clientNam
   if (typeof clientName !== "string" || clientName.trim() === "") return [];
   const rows = await pageAll<TaskRow>("tasks", () => whereOpenTask(from("tasks", TASK_COLS)).eq("client_name", clientName), opts);
   return rows.map(taskFromRow);
+}
+
+// ---------------------------------------------------------------------------
+// P5a (contract §3.8). Same rules as every read above: explicit columns,
+// paged, ids chunked, fail closed, never free text. listStatusTransitions is
+// the second first-line-only parse of activity_logs.detail (A4): the text
+// after the "{from} → {to}" line never leaves it. listTaskThreadLinks and
+// listPendingApprovalItems are importable only by intake-screen.ts (boundary
+// rule 15): their consumers go through the restricted-sender screen there.
+// ---------------------------------------------------------------------------
+
+// users also holds plaintext Slack and Google tokens: the schedule read names
+// its columns, like USER_COLS.
+const SCHEDULE_COLS =
+  "id,daily_capacity,weekly_schedule,work_hours_start,work_hours_end,daily_prompts_enabled,daily_prompts_required,clock_enabled,created_at";
+
+interface ScheduleRow {
+  id: string;
+  daily_capacity: number | string | null;
+  weekly_schedule: unknown;
+  work_hours_start: string | null;
+  work_hours_end: string | null;
+  daily_prompts_enabled: boolean | null;
+  daily_prompts_required: boolean | null;
+  clock_enabled: boolean | null;
+  created_at: string;
+}
+
+type ScheduleDay = "mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun";
+const SCHEDULE_DAYS: ReadonlySet<string> = new Set(["mon", "tue", "wed", "thu", "fri", "sat", "sun"]);
+const SCHEDULE_TIME = /^([01]?\d|2[0-3]):[0-5]\d$/;
+
+/**
+ * users.weekly_schedule as DD's editor writes it: day key → { start, end }
+ * ("HH:MM") or null. Anything else (not an object, an unknown key, a block
+ * without two valid times) is malformed, and a malformed schedule reads as
+ * {} ("no explicit schedule": weekdays at daily_capacity), never as a guess.
+ */
+function weeklyScheduleOf(raw: unknown): DdUserSchedule["weeklySchedule"] {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return {};
+  const out: DdUserSchedule["weeklySchedule"] = {};
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!SCHEDULE_DAYS.has(key)) return {};
+    const day = key as ScheduleDay;
+    if (value === null) {
+      out[day] = null;
+      continue;
+    }
+    if (typeof value !== "object" || Array.isArray(value)) return {};
+    const { start, end } = value as { start?: unknown; end?: unknown };
+    if (typeof start !== "string" || typeof end !== "string" || !SCHEDULE_TIME.test(start.trim()) || !SCHEDULE_TIME.test(end.trim())) {
+      return {};
+    }
+    out[day] = { start: start.trim(), end: end.trim() };
+  }
+  return out;
+}
+
+/**
+ * Every user's schedule and ritual flags (A3): daily capacity, the validated
+ * weekly schedule, flat work hours, the SOD/EOD flags and created_at. Never a
+ * token column.
+ */
+export async function listUserSchedules(principal: ExecPrincipal, opts: DdReadOptions = {}): Promise<DdUserSchedule[]> {
+  requirePrincipal(principal);
+  const rows = await pageAll<ScheduleRow>("users", () => from("users", SCHEDULE_COLS), opts);
+  return rows.map((r) => {
+    const capacity = Number(r.daily_capacity);
+    return {
+      userId: r.id,
+      dailyCapacity: Number.isFinite(capacity) ? capacity : 0,
+      weeklySchedule: weeklyScheduleOf(r.weekly_schedule),
+      workHoursStart: typeof r.work_hours_start === "string" ? r.work_hours_start : null,
+      workHoursEnd: typeof r.work_hours_end === "string" ? r.work_hours_end : null,
+      // The columns are NOT NULL with these defaults; a missing value reads as the default.
+      dailyPromptsEnabled: r.daily_prompts_enabled !== false,
+      dailyPromptsRequired: r.daily_prompts_required === true,
+      clockEnabled: r.clock_enabled !== false,
+      createdAt: r.created_at
+    };
+  });
+}
+
+interface TaskHoursRow {
+  id: string;
+  estimated_hours: number | string | null;
+  actual_hours: number | string | null;
+  actual_hours_override: number | string | null;
+}
+
+/** The hour columns of these tasks (capacity.ts's load math). */
+export async function listTaskHours(principal: ExecPrincipal, taskIds: readonly string[], opts: DdReadOptions = {}): Promise<DdTaskHours[]> {
+  requirePrincipal(principal);
+  const rows = await pageAllByIds<TaskHoursRow>(
+    "tasks",
+    taskIds,
+    (chunk) => from("tasks", "id,estimated_hours,actual_hours,actual_hours_override").in("id", chunk),
+    opts
+  );
+  const num = (v: unknown) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  };
+  return rows.map((r) => {
+    const override = numOrNull(r.actual_hours_override);
+    return {
+      taskId: r.id,
+      estimatedHours: num(r.estimated_hours),
+      actualHours: num(r.actual_hours),
+      actualHoursOverride: override !== null && Number.isFinite(override) ? override : null
+    };
+  });
+}
+
+/** EOD status (never text) for the ET dates fromYmd..toYmd inclusive (eod_notes_date_idx). */
+export async function listEodNotesBetween(principal: ExecPrincipal, fromYmd: string, toYmd: string, opts: DdReadOptions = {}): Promise<DdEodNote[]> {
+  requirePrincipal(principal);
+  const first = ymdParam("fromYmd", fromYmd);
+  const last = ymdParam("toYmd", toYmd);
+  if (first > last) throw new TypeError("sources/dd: fromYmd is after toYmd");
+  // (user_id, note_date) is unique.
+  const rows = await pageAll<EodNoteRow>(
+    "eod_notes",
+    () => from("eod_notes", "user_id,note_date,submitted_at,reviewed_at").gte("note_date", first).lte("note_date", last),
+    { ...opts, orderBy: ["note_date", "user_id"] }
+  );
+  return rows.map((r) => ({
+    userId: r.user_id,
+    noteDate: r.note_date,
+    submittedAt: r.submitted_at ?? null,
+    reviewedAt: r.reviewed_at ?? null
+  }));
+}
+
+/** Due-date extensions of these tasks, any age, without reasons (task_extensions(task_id)). */
+export async function listTaskExtensionsForTasks(
+  principal: ExecPrincipal,
+  taskIds: readonly string[],
+  opts: DdReadOptions = {}
+): Promise<DdTaskExtension[]> {
+  requirePrincipal(principal);
+  const rows = await pageAllByIds<ExtensionRow>(
+    "task_extensions",
+    taskIds,
+    (chunk) => from("task_extensions", "id,task_id,user_id,previous_due_date,new_due_date,created_at").in("task_id", chunk),
+    opts
+  );
+  return rows.map((r) => ({
+    id: r.id,
+    taskId: r.task_id,
+    userId: r.user_id,
+    previousDueDate: r.previous_due_date ?? null,
+    newDueDate: r.new_due_date,
+    createdAt: r.created_at
+  }));
+}
+
+/**
+ * Every task of these projects in ANY state: drafts, deleted rows and
+ * rejected drafts included (A4 approves the deleted rows: the project flow
+ * still waits on them), with their batch columns. Callers check the flags.
+ */
+export async function listProjectTasksAllStates(
+  principal: ExecPrincipal,
+  projectIds: readonly string[],
+  opts: DdReadOptions = {}
+): Promise<DdProjectTask[]> {
+  requirePrincipal(principal);
+  const rows = await pageAllByIds<TaskRow & { parallel_group: number | string | null; stage_position: number | string | null }>(
+    "tasks",
+    projectIds,
+    (chunk) => from("tasks", `${TASK_COLS},parallel_group,stage_position`).in("project_id", chunk),
+    opts
+  );
+  return rows.map((r) => {
+    const group = numOrNull(r.parallel_group);
+    const position = numOrNull(r.stage_position);
+    return {
+      ...taskFromRow(r),
+      parallelGroup: group !== null && Number.isFinite(group) ? group : null,
+      stagePosition: position !== null && Number.isFinite(position) ? position : null
+    };
+  });
+}
+
+interface TransitionRow {
+  id: string;
+  task_id: string;
+  user_id: string;
+  detail: string | null;
+  created_at: string;
+}
+
+/**
+ * The status_change rows of these tasks since `sinceIso`, each reduced to its
+ * first line's "{from} → {to}". Like listStatusChangeEntries this reads
+ * activity_logs.detail, and the text (any comment after the first line)
+ * never leaves the function. A row whose first line doesn't parse is
+ * dropped. Oldest first.
+ */
+export async function listStatusTransitions(
+  principal: ExecPrincipal,
+  taskIds: readonly string[],
+  sinceIso: string,
+  opts: DdReadOptions = {}
+): Promise<DdStatusTransition[]> {
+  requirePrincipal(principal);
+  const since = isoParam("sinceIso", sinceIso);
+  const rows = await pageAllByIds<TransitionRow>(
+    "activity_logs",
+    taskIds,
+    (chunk) =>
+      from("activity_logs", "id,task_id,user_id,detail,created_at").eq("action", "status_change").in("task_id", chunk).gte("created_at", since),
+    opts
+  );
+  const out: DdStatusTransition[] = [];
+  for (const row of rows) {
+    const match = typeof row.detail === "string" ? STATUS_TRANSITION.exec(row.detail.split("\n", 1)[0]) : null;
+    if (!match) continue;
+    out.push({ id: row.id, taskId: row.task_id, userId: row.user_id, from: match[1], to: match[2], at: row.created_at });
+  }
+  return out.sort((a, b) => Date.parse(a.at) - Date.parse(b.at) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+}
+
+/** One user's replies on these EOD notes (target_type 'eod'): ids and times, never the body. */
+export async function listUpdateRepliesByUser(
+  principal: ExecPrincipal,
+  userId: string,
+  targetIds: readonly string[],
+  opts: DdReadOptions = {}
+): Promise<DdUpdateReply[]> {
+  requirePrincipal(principal);
+  if (typeof userId !== "string" || userId.length === 0) throw new TypeError("sources/dd: userId is required");
+  const rows = await pageAllByIds<{ id: string; target_id: string; user_id: string; created_at: string }>(
+    "update_replies",
+    targetIds,
+    (chunk) => from("update_replies", "id,target_id,user_id,created_at").eq("target_type", "eod").eq("user_id", userId).in("target_id", chunk),
+    opts
+  );
+  return rows.map((r) => ({ id: r.id, targetId: r.target_id, userId: r.user_id, createdAt: r.created_at }));
+}
+
+const THREAD_URL_MARK = "?thread=";
+
+/** The clone thread id a missive_thread_url names ("…?thread=<encodeURIComponent(id)>"), or null. */
+function threadIdOfUrl(url: string | null): string | null {
+  if (typeof url !== "string") return null;
+  const at = url.lastIndexOf(THREAD_URL_MARK);
+  if (at < 0) return null;
+  let id: string;
+  try {
+    id = decodeURIComponent(url.slice(at + THREAD_URL_MARK.length));
+  } catch {
+    return null;
+  }
+  // The same shape P3's store accepts; anything else can't be in his store.
+  return id.length > 0 && id.length <= MAX_THREAD_ID && !/[\x00-\x1f\x7f]/.test(id) ? id : null;
+}
+
+/**
+ * C25 (coherence-1, a-correct-2). Each task's links to the mail it came from,
+ * both ways P3's listTasksForThread reads them, in the other direction:
+ *   - tasks.missive_thread_url naming "?thread=<id>" (the URL email intake and
+ *     "Create task from thread" write), and tasks.client_email (the sender
+ *     intake records);
+ *   - email_intake_log rows with this task_id. That table has no task_id
+ *     index, so the read scans it; it is one row per intake thread.
+ * No tag filter: a task made from a thread by hand carries the thread and the
+ * sender but not the email-intake tag. Tasks with neither a thread nor a
+ * client_email are absent. The values are never logged. Importable only by
+ * intake-screen.ts (boundary rule 15).
+ */
+export async function listTaskThreadLinks(
+  principal: ExecPrincipal,
+  taskIds: readonly string[],
+  opts: DdReadOptions = {}
+): Promise<DdTaskThreadLink[]> {
+  requirePrincipal(principal);
+  const ids = uniqueIds(taskIds);
+  if (ids.length === 0) return [];
+  const linkRows = await pageAllByIds<{ id: string; missive_thread_url: string | null; client_email: string | null }>(
+    "tasks",
+    ids,
+    (chunk) => from("tasks", "id,missive_thread_url,client_email").in("id", chunk),
+    opts
+  );
+  const intake = await pageAllByIds<{ thread_id: string; task_id: string | null }>(
+    "email_intake_log",
+    ids,
+    (chunk) => from("email_intake_log", "thread_id,task_id").in("task_id", chunk),
+    { ...opts, orderBy: ["thread_id"] }
+  );
+
+  const links = new Map<string, { threads: Set<string>; clientEmail: string | null }>();
+  const linkOf = (taskId: string) => {
+    let link = links.get(taskId);
+    if (!link) {
+      link = { threads: new Set(), clientEmail: null };
+      links.set(taskId, link);
+    }
+    return link;
+  };
+  for (const r of linkRows) {
+    const threadId = threadIdOfUrl(r.missive_thread_url);
+    const email = typeof r.client_email === "string" && r.client_email.trim() !== "" ? r.client_email.trim() : null;
+    if (threadId === null && email === null) continue;
+    const link = linkOf(r.id);
+    if (threadId !== null) link.threads.add(threadId);
+    if (email !== null) link.clientEmail = email;
+  }
+  for (const r of intake) {
+    if (typeof r.task_id !== "string" || typeof r.thread_id !== "string") continue;
+    if (r.thread_id.length === 0 || r.thread_id.length > MAX_THREAD_ID || /[\x00-\x1f\x7f]/.test(r.thread_id)) continue;
+    linkOf(r.task_id).threads.add(r.thread_id);
+  }
+  return [...links.entries()]
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([taskId, link]) => ({ taskId, threadIds: [...link.threads].sort(), clientEmail: link.clientEmail }));
+}
+
+const DEFAULT_APPROVAL_ITEMS = 50;
+const MAX_APPROVAL_ITEMS = 200;
+
+/** Rows of one mechanism before the limit, each with its sort key. */
+type PendingItem = ApprovalItem & { sortMs: number };
+
+function pendingItem(item: ApprovalItem): PendingItem {
+  const ms = item.waitingSince === null ? Number.NaN : Date.parse(item.waitingSince);
+  return { ...item, sortMs: Number.isFinite(ms) ? ms : Number.POSITIVE_INFINITY };
+}
+
+// Same predicate as approvalBucket("draft_tasks"). The task's title is DD's own
+// record (an intake draft's title is model-written from the mail; the
+// consumer screens restricted mail through listScreenedApprovalItems).
+async function draftTaskItems(signal: AbortSignal | undefined): Promise<PendingItem[]> {
+  const rows = await pageAll<{ id: string; title: string; creator_id: string; created_at: string; department_id: string | null; client_name: string | null }>(
+    "tasks",
+    () => from("tasks", "id,title,creator_id,created_at,department_id,client_name").eq("is_draft", true).is("deleted_at", null),
+    { signal }
+  );
+  return rows.map((r) =>
+    pendingItem({
+      mechanism: "draft_tasks",
+      id: r.id,
+      title: r.title,
+      requesterId: r.creator_id ?? null,
+      waitingSince: r.created_at,
+      waitingSinceIsLowerBound: false,
+      approver: { kind: "leaders_or_department_heads", departmentIds: r.department_id ? [r.department_id] : [] },
+      taskId: r.id,
+      clientName: r.client_name ?? null,
+      departmentId: r.department_id ?? null
+    })
+  );
+}
+
+// Same predicate as fbProofBucket: the task sits in pending_approval. The
+// proof's submitted_at is when it started waiting (a resubmit overwrites it);
+// without an fb_proof row, last_activity_at is a lower bound.
+async function fbProofItems(signal: AbortSignal | undefined): Promise<PendingItem[]> {
+  const tasks = await pageAll<{ id: string; title: string; assignee_id: string | null; last_activity_at: string; department_id: string | null; client_name: string | null }>(
+    "tasks",
+    () => from("tasks", "id,title,assignee_id,last_activity_at,department_id,client_name").eq("status", "pending_approval").is("deleted_at", null),
+    { signal }
+  );
+  const proofs = await pageAllByIds<{ task_id: string; submitted_by: string | null; submitted_at: string | null }>(
+    "fb_proof",
+    tasks.map((t) => t.id),
+    (chunk) => from("fb_proof", "task_id,submitted_by,submitted_at").in("task_id", chunk),
+    { signal, orderBy: ["task_id"] }
+  );
+  const proofByTask = new Map(proofs.map((p) => [p.task_id, p]));
+  return tasks.map((t) => {
+    const proof = proofByTask.get(t.id);
+    const submittedBy = proof?.submitted_by ?? null;
+    const submittedAt = typeof proof?.submitted_at === "string" ? proof.submitted_at : null;
+    return pendingItem({
+      mechanism: "fb_proofs",
+      id: t.id,
+      title: t.title,
+      requesterId: submittedBy ?? t.assignee_id ?? null,
+      waitingSince: submittedAt ?? t.last_activity_at,
+      waitingSinceIsLowerBound: submittedAt === null,
+      approver: { kind: "fb_managers_or_leaders", excludeUserId: submittedBy },
+      taskId: t.id,
+      clientName: t.client_name ?? null,
+      departmentId: t.department_id ?? null
+    });
+  });
+}
+
+/**
+ * An email draft's client name, or null. DD's email intake writes the
+ * SENDER'S ADDRESS into email_drafts.client_name when it couldn't match the
+ * sender to a client (src/lib/email-intake.ts, `clientName ?? fromEmail`), so
+ * the column is trusted only when the draft is linked to a client row and the
+ * name holds no "@" (C19: an approval item never carries a mail address).
+ */
+function emailDraftClientName(d: { client_id: string | null; client_name: string | null }): string | null {
+  if (typeof d.client_id !== "string" || d.client_id === "") return null;
+  if (typeof d.client_name !== "string") return null;
+  const name = d.client_name.trim();
+  return name === "" || name.includes("@") ? null : name;
+}
+
+// Same predicate and waiting rule as emailDraftBucket. Never the subject, the
+// body or the recipients: the title is a fixed label (C19).
+async function emailDraftItems(signal: AbortSignal | undefined): Promise<PendingItem[]> {
+  const drafts = await pageAll<{ id: string; author_id: string; client_id: string | null; client_name: string | null; department_id: string | null; created_at: string }>(
+    "email_drafts",
+    () => from("email_drafts", "id,author_id,client_id,client_name,department_id,created_at").eq("status", "pending").is("dismissed_at", null),
+    { signal }
+  );
+  const waitingSince = new Map(drafts.map((d) => [d.id, d.created_at]));
+  for (const chunk of chunked(drafts.map((d) => d.id))) {
+    const resubmits = await pageAll<{ draft_id: string; created_at: string }>(
+      "email_draft_events",
+      () => from("email_draft_events", "draft_id,created_at").eq("type", "resubmitted").in("draft_id", chunk),
+      { signal }
+    );
+    for (const e of resubmits) {
+      const since = waitingSince.get(e.draft_id);
+      if (since !== undefined && Date.parse(e.created_at) > Date.parse(since)) waitingSince.set(e.draft_id, e.created_at);
+    }
+  }
+  return drafts.map((d) => {
+    const client = emailDraftClientName(d);
+    return pendingItem({
+      mechanism: "email_drafts",
+      id: d.id,
+      title: client === null ? "Email draft" : `Email draft for ${client}`,
+      requesterId: d.author_id ?? null,
+      waitingSince: waitingSince.get(d.id) ?? d.created_at,
+      waitingSinceIsLowerBound: false,
+      approver: { kind: "email_approvers_or_department_head", departmentId: d.department_id ?? null },
+      taskId: null,
+      clientName: client,
+      departmentId: d.department_id ?? null
+    });
+  });
+}
+
+// Same predicate as approvalBucket("unrouted_mail"). Never the classifier
+// output, reason or thread: the title is a fixed label (C19).
+async function unroutedMailItems(signal: AbortSignal | undefined): Promise<PendingItem[]> {
+  const rows = await pageAll<{ id: string; created_at: string }>(
+    "routing_decisions",
+    () => from("routing_decisions", "id,created_at").eq("needs_review", true).is("task_id", null),
+    { signal }
+  );
+  return rows.map((r) =>
+    pendingItem({
+      mechanism: "unrouted_mail",
+      id: r.id,
+      title: "Email waiting to be routed",
+      requesterId: null,
+      waitingSince: r.created_at,
+      waitingSinceIsLowerBound: false,
+      approver: { kind: "leaders_or_any_department_head" },
+      taskId: null,
+      clientName: null,
+      departmentId: null
+    })
+  );
+}
+
+// Same predicate as approvalBucket("eod_reviews"). A department head may
+// review the EODs of anyone in a department they head (eod/review route), so
+// the approver names the author's departments, primary first.
+async function eodReviewItems(now: Date, signal: AbortSignal | undefined): Promise<PendingItem[]> {
+  const windowStart = addDaysToYmd(eodToday(now), -(EOD_REVIEW_WINDOW_DAYS - 1));
+  const notes = await pageAll<{ id: string; user_id: string; note_date: string; submitted_at: string }>(
+    "eod_notes",
+    () =>
+      from("eod_notes", "id,user_id,note_date,submitted_at").not("submitted_at", "is", null).is("reviewed_at", null).gte("note_date", windowStart),
+    { signal }
+  );
+  const memberships = await pageAllByIds<MembershipRow>(
+    "department_members",
+    notes.map((n) => n.user_id),
+    (chunk) => from("department_members", "user_id,department_id").in("user_id", chunk),
+    { signal, orderBy: ["created_at", "department_id", "user_id"] }
+  );
+  const departmentsOf = new Map<string, string[]>();
+  for (const m of memberships) {
+    const list = departmentsOf.get(m.user_id);
+    if (list) list.push(m.department_id);
+    else departmentsOf.set(m.user_id, [m.department_id]);
+  }
+  return notes.map((n) => {
+    const departmentIds = departmentsOf.get(n.user_id) ?? [];
+    return pendingItem({
+      mechanism: "eod_reviews",
+      id: n.id,
+      title: `EOD for ${n.note_date}`,
+      requesterId: n.user_id,
+      waitingSince: n.submitted_at,
+      waitingSinceIsLowerBound: false,
+      approver: { kind: "leaders_or_department_heads", departmentIds },
+      taskId: null,
+      clientName: null,
+      departmentId: departmentIds[0] ?? null
+    });
+  });
+}
+
+/**
+ * S5, raw: what waits on one approval mechanism, as items, oldest waiting
+ * first (an unknown wait last), at most `limit` (1-200, default 50). `total`
+ * counts everything pending under getPendingApprovals' own predicate, so it
+ * equals that bucket's count on the same rows. Check-ins stay count-only:
+ * each message carries its draft text. Titles are task titles or fixed
+ * labels (C19), never mail content. Importable only by intake-screen.ts
+ * (boundary rule 15): consumers call listScreenedApprovalItems, which
+ * withholds tasks that come from restricted mail.
+ */
+export async function listPendingApprovalItems(
+  principal: ExecPrincipal,
+  mechanism: ApprovalMechanism,
+  now: Date,
+  opts: DdReadOptions & { limit?: number } = {}
+): Promise<ApprovalItemList> {
+  requirePrincipal(principal);
+  if (!(now instanceof Date) || Number.isNaN(now.getTime())) throw new TypeError("sources/dd: now must be a valid Date");
+  const limit = opts.limit ?? DEFAULT_APPROVAL_ITEMS;
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_APPROVAL_ITEMS) {
+    throw new TypeError(`sources/dd: limit must be 1-${MAX_APPROVAL_ITEMS}`);
+  }
+  const { signal } = opts;
+  if (mechanism === "checkins") {
+    const bucket = await checkinBucket(eodToday(now), signal);
+    return { mechanism, mode: "count_only", items: [], total: bucket.count, truncated: false };
+  }
+  let rows: PendingItem[];
+  switch (mechanism) {
+    case "draft_tasks":
+      rows = await draftTaskItems(signal);
+      break;
+    case "fb_proofs":
+      rows = await fbProofItems(signal);
+      break;
+    case "email_drafts":
+      rows = await emailDraftItems(signal);
+      break;
+    case "unrouted_mail":
+      rows = await unroutedMailItems(signal);
+      break;
+    case "eod_reviews":
+      rows = await eodReviewItems(now, signal);
+      break;
+    default:
+      throw new TypeError("sources/dd: unknown approval mechanism");
+  }
+  rows.sort((a, b) => a.sortMs - b.sortMs || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  const items = rows.slice(0, limit).map(({ sortMs, ...item }) => {
+    void sortMs;
+    return item;
+  });
+  return { mechanism, mode: "items", items, total: rows.length, truncated: rows.length > items.length };
 }

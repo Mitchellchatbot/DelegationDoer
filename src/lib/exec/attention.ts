@@ -7,7 +7,9 @@ import type {
   AttentionItem,
   AttentionSource,
   AttentionStatus,
+  AttentionStatusFilter,
   FactBasis,
+  OwnerAction,
   PriorityBand,
   PriorityResult
 } from "@/lib/exec/attention-types";
@@ -1124,20 +1126,404 @@ export async function listAttention(
  * principal's items of that source, or null when it has none. A sync that
  * finds nothing at all leaves no row to stamp, so this is "last saw an item",
  * not "last ran"; the job history has the run times.
+ *
+ * P5a (contract §3.3.1, a-correct-16): `kinds` narrows it to one producer's
+ * kinds (.in("kind", kinds)). Two producers share source "dd" (the DD rules
+ * and DD text triage), so the DD freshness line passes DD_ATTENTION_KINDS:
+ * the ddtext job's own last_seen_at bumps never make a dead exec.dd-attention
+ * look fresh. Without it, unchanged.
  */
-export async function lastAttentionRefresh(principal: ExecPrincipal, source: AttentionSource): Promise<string | null> {
+export async function lastAttentionRefresh(
+  principal: ExecPrincipal,
+  source: AttentionSource,
+  opts?: { kinds?: readonly string[] }
+): Promise<string | null> {
   oneOf<AttentionSource>(SOURCES, source, "source");
-  const { data, error } = await getSupabaseAdmin()
-    .from(TABLE)
-    .select("last_seen_at")
-    .eq("principal_id", principal.id)
-    .eq("source", source)
-    .order("last_seen_at", { ascending: false })
-    .limit(1);
+  const kinds = opts?.kinds;
+  if (kinds !== undefined) {
+    if (!Array.isArray(kinds) || kinds.length === 0) invalid("lastAttentionRefresh needs at least one kind when kinds is given");
+    for (const kind of kinds) if (typeof kind !== "string" || !KIND_PATTERN.test(kind)) invalid(`lastAttentionRefresh kind ${shown(kind)} is not a kind`);
+  }
+  let query = getSupabaseAdmin().from(TABLE).select("last_seen_at").eq("principal_id", principal.id).eq("source", source);
+  if (kinds !== undefined) query = query.in("kind", [...kinds]);
+  const { data, error } = await query.order("last_seen_at", { ascending: false }).limit(1);
   if (error) throw new Error(`${TABLE} read failed: ${error.message}`);
   if (!Array.isArray(data)) throw new Error(`${TABLE} read failed: no rows array in the response`);
   if (data.length === 0) return null;
   const iso = isoOrNull((data[0] as { last_seen_at?: unknown }).last_seen_at);
   if (iso === null) throw new Error(`${TABLE} read failed: last_seen_at is not a timestamp`);
   return iso;
+}
+
+// ---------------------------------------------------------------------------
+// P5a (contract §3.3; Area A): the store reads behind the screened accessor
+// (attention-read.ts) and the owner-action writer. listAttention above stays
+// as P2b wrote it (C26); only attention-read.ts may call it (boundary rule 11).
+// ---------------------------------------------------------------------------
+
+/** exec_attention_items.id (exec_attention.sql: 'ea_' || a uuid without dashes). */
+export const ATTENTION_ITEM_ID = /^ea_[0-9a-f]{32}$/;
+
+/**
+ * A timestamp as PostgREST prints timestamptz (or as toISOString writes it):
+ * the form a cursor key, a version token or a since-filter may take before it
+ * goes into a filter string.
+ */
+const FEED_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?(Z|[+-]\d{2}:?\d{2})$/;
+const MAX_VERSION = 64;
+const MAX_PAGE_QUERY_LIMIT = 101;
+const SNOOZE_MIN_AHEAD_MS = 60_000;
+const SNOOZE_MAX_AHEAD_MS = 90 * 86_400_000;
+
+/** C6: the status filter → the statuses he sees ("open" includes snoozes that have run out). */
+const STATUS_FILTER_SETS: Readonly<Record<AttentionStatusFilter, readonly AttentionStatus[]>> = {
+  default: FEED_STATUSES,
+  open: ["open"],
+  seen: ["seen"],
+  snoozed: ["snoozed"],
+  dismissed: ["dismissed"],
+  resolved: ["resolved"]
+};
+
+/** A version token, cursor key or since-filter value of the shape C3/C5 allow (PostgREST timestamptz or toISOString). Pure. */
+export const isFeedTimestamp = (v: unknown): v is string => typeof v === "string" && FEED_TIMESTAMP.test(v) && Number.isFinite(Date.parse(v));
+
+function statusSetFor(statuses: AttentionStatusFilter): ReadonlySet<AttentionStatus> {
+  if (typeof statuses !== "string" || !Object.prototype.hasOwnProperty.call(STATUS_FILTER_SETS, statuses)) invalid(`unknown status filter ${shown(statuses)}`);
+  return new Set(STATUS_FILTER_SETS[statuses]);
+}
+
+export interface AttentionCursorKey {
+  score: number;
+  firstSeenRaw: string;
+  id: string;
+}
+
+/** True for a keyset position that may go into a filter: score 0..100, a PostgREST timestamp, an item id. */
+export function isAttentionCursorKey(key: unknown): key is AttentionCursorKey {
+  if (!isRecord(key)) return false;
+  return (
+    typeof key.score === "number" &&
+    Number.isInteger(key.score) &&
+    key.score >= 0 &&
+    key.score <= 100 &&
+    isFeedTimestamp(key.firstSeenRaw) &&
+    typeof key.id === "string" &&
+    ATTENTION_ITEM_ID.test(key.id)
+  );
+}
+
+export interface AttentionPageQuery {
+  /** mapped to P2b's statusFilter */
+  statuses: AttentionStatusFilter;
+  category?: AttentionCategory;
+  band?: PriorityBand;
+  source?: AttentionSource;
+  kind?: string;
+  firstSeenAfter?: string;
+  updatedAfter?: string;
+  after: AttentionCursorKey | null;
+  /** 1..101 (the accessor asks limit+1) */
+  limit: number;
+  now: Date;
+}
+
+export interface AttentionPageRow {
+  /** The item as stored (not effective(): a run-out snooze still says snoozed). */
+  item: AttentionItem;
+  /** updated_at exactly as PostgREST printed it: the CAS token (C3). */
+  version: string;
+  /** first_seen_at exactly as PostgREST printed it: the cursor key (C5). */
+  firstSeenRaw: string;
+}
+
+/**
+ * C5: the feed's one PostgREST `or` filter. Without a cursor, the status terms
+ * (P2b's statusFilter: "open" includes snoozes that have run out); with one,
+ * those AND the keyset position after `after` in (priority_score desc,
+ * first_seen_at desc, id asc) order:
+ *   and(or(<status>),or(priority_score.lt.S,and(priority_score.eq.S,first_seen_at.lt."F"),
+ *       and(priority_score.eq.S,first_seen_at.eq."F",id.gt.I)))
+ * F is the raw first_seen_at (microseconds kept), quoted. Every value is
+ * checked before it goes in: S an integer 0..100, F a timestamp, I an item id,
+ * nowIso a timestamp. Throws NonRetryableError otherwise. Pure.
+ */
+export function feedOrFilter(statuses: AttentionStatusFilter, nowIso: string, after: AttentionCursorKey | null): string {
+  const wanted = statusSetFor(statuses);
+  if (!isFeedTimestamp(nowIso)) invalid("feedOrFilter: now must be a timestamp");
+  const terms = statusFilter(wanted, nowIso);
+  if (after === null) return terms;
+  if (!isAttentionCursorKey(after)) invalid("feedOrFilter: the cursor key is malformed");
+  const s = after.score;
+  const f = `"${after.firstSeenRaw}"`;
+  return (
+    `and(or(${terms}),or(priority_score.lt.${s},` +
+    `and(priority_score.eq.${s},first_seen_at.lt.${f}),` +
+    `and(priority_score.eq.${s},first_seen_at.eq.${f},id.gt.${after.id})))`
+  );
+}
+
+/** Rows with their raw version and first_seen_at strings (itemFromRow rounds both to the millisecond). */
+function pageRowsFrom(data: unknown): AttentionPageRow[] {
+  const items = itemsFrom(data);
+  const raw = data as Record<string, unknown>[];
+  return items.map((item, i) => {
+    const version = raw[i].updated_at;
+    const firstSeenRaw = raw[i].first_seen_at;
+    if (typeof version !== "string" || typeof firstSeenRaw !== "string") throw new Error(`${TABLE} read failed: row ${item.id}: timestamps are not strings`);
+    return { item, version, firstSeenRaw };
+  });
+}
+
+function sinceFilter(v: unknown, what: string): string {
+  if (!isFeedTimestamp(v)) invalid(`${what} must be a timestamp`);
+  return v;
+}
+
+/**
+ * One page in (priority_score desc, first_seen_at desc, id asc) order (C5).
+ * Status and cursor terms go in ONE .or() built by feedOrFilter();
+ * category/band/source/kind are .eq(); the since-filters .gte(). Items come
+ * back as stored, each with its raw version and first_seen_at. Throws
+ * NonRetryableError on a bad query and an Error on a database error.
+ */
+export async function listAttentionPage(
+  principal: ExecPrincipal,
+  q: AttentionPageQuery,
+  opts: { signal?: AbortSignal } = {}
+): Promise<AttentionPageRow[]> {
+  if (!isRecord(q)) invalid("listAttentionPage needs a query");
+  const now = validNow(q.now);
+  if (!Number.isSafeInteger(q.limit) || q.limit < 1 || q.limit > MAX_PAGE_QUERY_LIMIT) invalid(`listAttentionPage limit must be 1-${MAX_PAGE_QUERY_LIMIT}`);
+  const filter = feedOrFilter(q.statuses, now.toISOString(), q.after);
+  opts.signal?.throwIfAborted();
+  let query = getSupabaseAdmin().from(TABLE).select(ITEM_COLUMNS).eq("principal_id", principal.id).or(filter);
+  if (q.category !== undefined) query = query.eq("category", oneOf<AttentionCategory>(CATEGORIES, q.category, "category"));
+  if (q.band !== undefined) query = query.eq("priority_band", oneOf<PriorityBand>(BANDS, q.band, "band"));
+  if (q.source !== undefined) query = query.eq("source", oneOf<AttentionSource>(SOURCES, q.source, "source"));
+  if (q.kind !== undefined) {
+    if (typeof q.kind !== "string" || !KIND_PATTERN.test(q.kind)) invalid(`kind ${shown(q.kind)} is not a kind`);
+    query = query.eq("kind", q.kind);
+  }
+  if (q.firstSeenAfter !== undefined) query = query.gte("first_seen_at", sinceFilter(q.firstSeenAfter, "firstSeenAfter"));
+  if (q.updatedAfter !== undefined) query = query.gte("updated_at", sinceFilter(q.updatedAfter, "updatedAfter"));
+  let ordered = query
+    .order("priority_score", { ascending: false })
+    .order("first_seen_at", { ascending: false })
+    .order("id", { ascending: true })
+    .limit(q.limit);
+  if (opts.signal) ordered = ordered.abortSignal(opts.signal);
+  const { data, error } = await ordered;
+  if (error) throw failure("read", error, opts.signal);
+  return pageRowsFrom(data);
+}
+
+/**
+ * fingerprint → stored status for these fingerprints (identity columns only;
+ * a fingerprint with no row is absent). Throws NonRetryableError on a
+ * malformed fingerprint and an Error on a database error.
+ */
+export async function listAttentionStatusByFingerprints(
+  principal: ExecPrincipal,
+  fingerprints: readonly string[],
+  opts: { signal?: AbortSignal } = {}
+): Promise<Map<string, AttentionStatus>> {
+  if (!Array.isArray(fingerprints)) invalid("listAttentionStatusByFingerprints needs a list of fingerprints");
+  const unique = [...new Set(fingerprints)];
+  for (const fp of unique) {
+    if (!isCleanId(fp, MAX_FINGERPRINT) || !FINGERPRINT_CHARS.test(fp)) invalid(`fingerprint ${shown(fp)} is malformed`);
+  }
+  const out = new Map<string, AttentionStatus>();
+  for (const chunk of urlListChunks(unique)) {
+    opts.signal?.throwIfAborted();
+    // At most WRITE_CHUNK fingerprints, each unique per principal: one page.
+    let query = getSupabaseAdmin().from(TABLE).select("fingerprint,status").eq("principal_id", principal.id).in("fingerprint", chunk).order("fingerprint");
+    if (opts.signal) query = query.abortSignal(opts.signal);
+    const { data, error } = await query;
+    if (error) throw failure("read", error, opts.signal);
+    if (!Array.isArray(data)) throw new Error(`${TABLE} read failed: no rows array in the response`);
+    for (const row of data as unknown[]) {
+      if (!isRecord(row) || typeof row.fingerprint !== "string") throw new Error(`${TABLE} read failed: malformed row`);
+      out.set(row.fingerprint, oneOf<AttentionStatus>(STATUSES, row.status, "status"));
+    }
+  }
+  return out;
+}
+
+/** The raw item by id (no screen), with its raw version and first_seen_at, or null. A malformed id is null without a read. */
+export async function getAttentionItemRow(
+  principal: ExecPrincipal,
+  itemId: string,
+  opts: { signal?: AbortSignal } = {}
+): Promise<AttentionPageRow | null> {
+  if (typeof itemId !== "string" || !ATTENTION_ITEM_ID.test(itemId)) return null;
+  opts.signal?.throwIfAborted();
+  let query = getSupabaseAdmin().from(TABLE).select(ITEM_COLUMNS).eq("principal_id", principal.id).eq("id", itemId).limit(1);
+  if (opts.signal) query = query.abortSignal(opts.signal);
+  const { data, error } = await query;
+  if (error) throw failure("read", error, opts.signal);
+  return pageRowsFrom(data)[0] ?? null;
+}
+
+/** An item's identity (no content): what feedback records about it. */
+export interface AttentionItemIdentity {
+  id: string;
+  fingerprint: string;
+  source: AttentionSource;
+  kind: string;
+}
+
+/** The item's identity columns by id, or null (a malformed id is null without a read). Throws on a database error. */
+export async function getAttentionItemIdentity(
+  principal: ExecPrincipal,
+  itemId: string,
+  opts: { signal?: AbortSignal } = {}
+): Promise<AttentionItemIdentity | null> {
+  if (typeof itemId !== "string" || !ATTENTION_ITEM_ID.test(itemId)) return null;
+  opts.signal?.throwIfAborted();
+  let query = getSupabaseAdmin().from(TABLE).select("id,fingerprint,source,kind").eq("principal_id", principal.id).eq("id", itemId).limit(1);
+  if (opts.signal) query = query.abortSignal(opts.signal);
+  const { data, error } = await query;
+  if (error) throw failure("read", error, opts.signal);
+  if (!Array.isArray(data)) throw new Error(`${TABLE} read failed: no rows array in the response`);
+  const row: unknown = data[0];
+  if (row === undefined) return null;
+  if (!isRecord(row) || row.id !== itemId || typeof row.fingerprint !== "string" || typeof row.kind !== "string" || !KIND_PATTERN.test(row.kind)) {
+    throw new Error(`${TABLE} read failed: malformed row`);
+  }
+  return { id: row.id, fingerprint: row.fingerprint, source: oneOf<AttentionSource>(SOURCES, row.source, "source"), kind: row.kind };
+}
+
+/** The status he sees at `now` (a snoozed item whose snooze has run out is open, with no snooze shown). Pure. */
+export function effectiveAttentionItem<T extends AttentionItem>(item: T, now: Date): T {
+  return effective(item, validNow(now).getTime()) as T;
+}
+
+// --- The owner-action writer (A1, C2, K2) -------------------------------------------
+
+export type OwnerActionResult =
+  | { outcome: "applied"; row: AttentionPageRow }
+  | { outcome: "unchanged"; row: AttentionPageRow }
+  | { outcome: "conflict"; row: AttentionPageRow }
+  | { outcome: "invalid_transition"; row: AttentionPageRow }
+  | { outcome: "not_found" };
+
+/** Where a row stands for an owner action: its effective status, with resolved split by who resolved it. */
+export type OwnerActionState = "open" | "seen" | "snoozed" | "dismissed" | "resolved_owner" | "resolved_auto";
+type TransitionVerdict = "write" | "noop" | "invalid";
+
+const OWNER_ACTIONS: ReadonlySet<string> = new Set<OwnerAction>(["seen", "snooze", "dismiss", "resolve", "reopen"]);
+
+/** §3.3.2's table: action × effective state → write, no-op or invalid. */
+export const OWNER_ACTION_TRANSITIONS: Readonly<Record<OwnerAction, Readonly<Record<OwnerActionState, TransitionVerdict>>>> = {
+  seen: { open: "write", seen: "noop", snoozed: "invalid", dismissed: "invalid", resolved_owner: "invalid", resolved_auto: "invalid" },
+  snooze: { open: "write", seen: "write", snoozed: "write", dismissed: "invalid", resolved_owner: "invalid", resolved_auto: "invalid" },
+  dismiss: { open: "write", seen: "write", snoozed: "write", dismissed: "noop", resolved_owner: "invalid", resolved_auto: "invalid" },
+  resolve: { open: "write", seen: "write", snoozed: "write", dismissed: "write", resolved_owner: "noop", resolved_auto: "write" },
+  // An auto-resolved row isn't his to reopen: the producers reopen it whenever the situation returns (C2).
+  reopen: { open: "noop", seen: "write", snoozed: "write", dismissed: "write", resolved_owner: "write", resolved_auto: "invalid" }
+};
+
+/** The row's state for an owner action at `now` (a run-out snooze is open). Pure. */
+export function ownerActionState(item: AttentionItem, now: Date): OwnerActionState {
+  const e = effective(item, validNow(now).getTime());
+  if (e.status === "resolved") return e.resolution === "owner" ? "resolved_owner" : "resolved_auto";
+  return e.status;
+}
+
+/**
+ * The columns an owner action writes. Every one sets updated_at (the
+ * producers' compare-and-set reads it) and none sets last_seen_at, `seen`
+ * included: that column is when a producer last saw the situation (K2,
+ * applyPlan's comment, lastAttentionRefresh). Each satisfies the table's
+ * status / snooze_until / resolution CHECKs.
+ */
+export function ownerActionPatch(action: OwnerAction, nowIso: string, snoozeUntil: string | null): Record<string, unknown> {
+  switch (action) {
+    case "seen":
+      return { status: "seen", snooze_until: null, updated_at: nowIso };
+    case "snooze":
+      if (snoozeUntil === null) invalid("a snooze needs snoozeUntil");
+      return { status: "snoozed", snooze_until: snoozeUntil, updated_at: nowIso };
+    case "dismiss":
+      return { status: "dismissed", snooze_until: null, updated_at: nowIso };
+    case "resolve":
+      return { status: "resolved", resolution: "owner", resolved_at: nowIso, snooze_until: null, updated_at: nowIso };
+    case "reopen":
+      return { status: "open", snooze_until: null, resolution: null, resolved_at: null, updated_at: nowIso };
+    default:
+      return invalid(`unknown owner action ${shown(action)}`);
+  }
+}
+
+/** C4: a snooze ends more than 60 s from now and no more than 90 days out. Returns it as ISO, or throws NonRetryableError. */
+export function checkSnoozeUntil(snoozeUntil: unknown, now: Date): string {
+  if (typeof snoozeUntil !== "string" || snoozeUntil.length > MAX_VERSION || !isFeedTimestamp(snoozeUntil)) invalid("snoozeUntil must be a timestamp");
+  const until = Date.parse(snoozeUntil);
+  const nowMs = validNow(now).getTime();
+  if (!(until > nowMs + SNOOZE_MIN_AHEAD_MS) || until > nowMs + SNOOZE_MAX_AHEAD_MS) invalid("snoozeUntil must be more than a minute and at most 90 days ahead");
+  return new Date(until).toISOString();
+}
+
+/**
+ * A1: one owner action on one item, as a compare-and-set on the row's exact
+ * updated_at (C3) and the status it was read with.
+ *   1. read the row; none → not_found;
+ *   2. its raw updated_at ≠ expectedUpdatedAt → conflict (with the row);
+ *   3. the transition table on the effective state → unchanged (no write) or
+ *      invalid_transition (no write);
+ *   4. the patch, fenced on principal, id, updated_at = expectedUpdatedAt and
+ *      the stored status: one row → applied (with it); none → re-read →
+ *      conflict, or not_found when the row is gone.
+ * The producers' content and reopen updates fence on status + updated_at too
+ * (applyPlan), so his action wins a race with a sync, and a sync's change
+ * since his read makes him retry (409). Bad input (an unknown action, a
+ * malformed version, a snooze end outside C4) throws NonRetryableError: the
+ * routes validate first, so it never comes from HTTP.
+ */
+export async function applyOwnerAction(
+  principal: ExecPrincipal,
+  itemId: string,
+  action: OwnerAction,
+  opts: { snoozeUntil?: string; expectedUpdatedAt: string; now?: Date; signal?: AbortSignal }
+): Promise<OwnerActionResult> {
+  if (!isRecord(opts)) invalid("applyOwnerAction needs options");
+  const now = validNow(opts.now ?? new Date());
+  if (typeof action !== "string" || !OWNER_ACTIONS.has(action)) invalid(`unknown owner action ${shown(action)}`);
+  const expected = opts.expectedUpdatedAt;
+  if (typeof expected !== "string" || expected.length > MAX_VERSION || !isFeedTimestamp(expected)) invalid("expectedUpdatedAt must be a timestamp");
+  let snoozeUntil: string | null = null;
+  if (action === "snooze") snoozeUntil = checkSnoozeUntil(opts.snoozeUntil, now);
+  else if (opts.snoozeUntil !== undefined) invalid("snoozeUntil goes with snooze only");
+  if (typeof itemId !== "string" || !ATTENTION_ITEM_ID.test(itemId)) return { outcome: "not_found" };
+
+  const signal = opts.signal;
+  const row = await getAttentionItemRow(principal, itemId, { signal });
+  if (row === null) return { outcome: "not_found" };
+  if (row.version !== expected) return { outcome: "conflict", row };
+  const verdict = OWNER_ACTION_TRANSITIONS[action][ownerActionState(row.item, now)];
+  if (verdict === "invalid") return { outcome: "invalid_transition", row };
+  if (verdict === "noop") return { outcome: "unchanged", row };
+
+  signal?.throwIfAborted();
+  let query = getSupabaseAdmin()
+    .from(TABLE)
+    .update(ownerActionPatch(action, now.toISOString(), snoozeUntil))
+    .eq("principal_id", principal.id)
+    .eq("id", itemId)
+    .eq("updated_at", expected)
+    .eq("status", row.item.status)
+    .select(ITEM_COLUMNS);
+  if (signal) query = query.abortSignal(signal);
+  const { data, error } = await query;
+  if (error) throw failure("update", error, signal);
+  const written = pageRowsFrom(data);
+  if (written.length === 1) {
+    console.log(`[exec-attention] ${action} applied to ${itemId} for ${principal.id}`);
+    return { outcome: "applied", row: written[0] };
+  }
+  if (written.length > 1) throw new Error(`${TABLE} update failed: ${written.length} rows matched one id`);
+  // The fence stopped it: someone (a sync, another tab) changed the row since the read.
+  const current = await getAttentionItemRow(principal, itemId, { signal });
+  return current === null ? { outcome: "not_found" } : { outcome: "conflict", row: current };
 }

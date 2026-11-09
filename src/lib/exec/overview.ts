@@ -1,9 +1,12 @@
 import "server-only";
 
+import { mergeTaskReads } from "@/lib/exec/analysis/project-detail";
 import { projectsHealth, type ProjectHealth } from "@/lib/exec/analysis/projects";
 import { dailyCounts, isAutoArchived, isIncident, isOverdue, upcomingDeadlines, type DailyCount } from "@/lib/exec/analysis/tasks";
-import { lastAttentionRefresh, listAttention } from "@/lib/exec/attention";
-import type { AttentionItem } from "@/lib/exec/attention-types";
+import { lastAttentionRefresh } from "@/lib/exec/attention";
+import { listScreenedAttention } from "@/lib/exec/attention-read";
+import type { AttentionFeedItem, EmailScreenState } from "@/lib/exec/attention-types";
+import { ddtextLastRunAt } from "@/lib/exec/ddtext-store";
 import {
   listBucketRows,
   listCommitments,
@@ -18,23 +21,20 @@ import {
   bucketize,
   commitmentView,
   draftsOnFor,
-  emailItemThreadIds,
   loadEmailGate,
   pinnedRowMap,
   pinnedRows,
   screenCommitments,
-  screenEmailAttention,
   screenRows,
   signalMessageIds,
   summarizeMail,
   type CommitmentView,
   type EmailGate,
-  type EmailItemScreen,
   type MailSummary,
   type ScreeningPolicy
 } from "@/lib/exec/email-view";
-import type { ThreadScreenRow } from "@/lib/exec/email-types";
 import { EMAIL_ATTENTION_JOB_KIND, EMAIL_RECONCILE_JOB_KIND, EMAIL_TRIAGE_JOB_KIND } from "@/lib/exec/jobs";
+import { DD_ATTENTION_KINDS } from "@/lib/exec/producers/dd";
 import { listAllReplyArtifacts, loadScreeningPolicy } from "@/lib/exec/sources/mail";
 import { getSyncState, parseAccountsState, parseEaTokenState, parseSendTokenState, parseSocketState } from "@/lib/exec/sync-state";
 import {
@@ -70,8 +70,10 @@ import { isTeamTask } from "@/lib/task-team";
 // built from it.
 //
 // Nothing here writes, and nothing runs the attention producers: the feed
-// shows what the 10-minute job last stored. Every read is bounded (sources/dd
-// pages in 1000s ordered by a unique key; the feed is capped at 20), and the
+// shows what the 10-minute job last stored, read through the one screened
+// accessor (attention-read.ts, P5a S3/K8), which withholds email items the
+// restricted-sender screen can't clear. Every read is bounded (sources/dd
+// pages in 1000s ordered by a unique key; the feed is one page of 20), and the
 // whole pass shares one deadline, so a hung query costs its sections, not the
 // page.
 //
@@ -123,22 +125,45 @@ export interface OverviewTiles {
 }
 
 export interface OverviewAttention {
-  /** Highest priority first, at most `limit`. */
-  items: AttentionItem[];
+  /** Highest priority first (then newest first, C5), screened, at most `limit`; each with its CAS version (C3). */
+  items: AttentionFeedItem[];
   limit: number;
   /**
    * When the feed was last known to be checked (ISO), or null if never: the
-   * DD pass's time, or while email is on the older of it and the email pass's.
+   * DD pass's time (its own kinds' stamps or its job's last success, never the
+   * DD text job's stamps, a-correct-16), or while email is on the older of it
+   * and the email pass's.
    */
   checkedAt: string | null;
   /**
    * Email items were left out because the restricted-sender check couldn't
-   * run (settings, rules or thread rows unreadable). They are hidden, not
-   * shown unchecked; the card says so.
+   * run (settings, rules or thread rows unreadable): emailScreen ===
+   * "unavailable", kept for P3's card. They are hidden, not shown unchecked;
+   * the card says so.
    */
   emailUnchecked: boolean;
   /** P4 (Y9): assistant drafting is on, so email items offer "Draft reply". Absent while it isn't. */
   draftsEnabled?: boolean;
+  /** More active items exist than the card shows (P5a). */
+  hasMore: boolean;
+  /** Email items the restricted-sender screen withheld on this read: restricted, gone, no row, unparseable, unscreenable (P5a). */
+  hiddenEmail: number;
+  /** "none": no email item was examined; "unavailable": the screen couldn't run, so email items were withheld (C7). */
+  emailScreen: EmailScreenState;
+  /** When DD text triage last ran, while it is switched on (a-correct-16); null otherwise or when that can't be read. */
+  ddtextCheckedAt: string | null;
+  /**
+   * Review ui-5: present (false) only when the settings read shows the P5a
+   * migration isn't applied (ddtextSchemaReady false), so exec_attention_feedback
+   * doesn't exist and rows offer no feedback controls. Absent: offer them.
+   */
+  feedbackAvailable?: false;
+}
+
+/** The card's freshness lines, as the full feed page shows them too (§3.13.1). */
+export interface AttentionFreshness {
+  checkedAt: string | null;
+  ddtextCheckedAt: string | null;
 }
 
 /** The Email tab's bucket counts, after the restricted-sender screen. */
@@ -289,11 +314,10 @@ export interface ExecOverview {
 
 const HOUR_MS = 3_600_000;
 
+// One page of the screened feed. The accessor refills what the
+// restricted-sender screen takes out (or every email item while email is
+// off), so the card isn't left short of DD items that rank below them.
 const ATTENTION_LIMIT = 20;
-// The feed is read deeper than it is shown: email items the restricted-sender
-// screen takes out (or every email item while email is off) must not leave
-// the card short of DD items that rank below them.
-const ATTENTION_READ_LIMIT = 40;
 const EMAIL_COMMITMENT_DAYS = 7;
 const EMAIL_COMMITMENT_LIMIT = 6;
 const DEADLINE_DAYS = 7;
@@ -318,9 +342,12 @@ const JOB_MAX_PAGES = 20;
 
 // Job kinds the System card always lists, so one that stops running shows as
 // "no success" instead of quietly disappearing. They match the handlers'
-// kinds (handlers/dd-attention.ts, handlers/purge.ts PURGE_JOB_KIND).
+// kinds (handlers/dd-attention.ts, handlers/purge.ts PURGE_JOB_KIND,
+// handlers/ddtext-triage.ts DDTEXT_JOB_KIND). The DD text job runs whether
+// or not triage is on (off, it deletes its own data), so it is always listed.
 const DD_ATTENTION_JOB = "exec.dd-attention";
-export const TRACKED_JOB_KINDS: readonly string[] = [DD_ATTENTION_JOB, "exec.purge"];
+const DDTEXT_JOB = "exec.ddtext-triage";
+export const TRACKED_JOB_KINDS: readonly string[] = [DD_ATTENTION_JOB, "exec.purge", DDTEXT_JOB];
 // Listed too while email is on (P3): its triage, reconcile and attention jobs.
 export const EMAIL_TRACKED_JOB_KINDS: readonly string[] = [EMAIL_TRIAGE_JOB_KIND, EMAIL_RECONCILE_JOB_KIND, EMAIL_ATTENTION_JOB_KIND];
 
@@ -506,16 +533,6 @@ function deadlineRow(t: DdTask, people: ReadonlyMap<string, string>, teams: Read
   };
 }
 
-/**
- * Open tasks plus recent completions, one row per id. The two reads aren't one
- * snapshot, so a task finished between them can come back from both; the
- * open copy is kept.
- */
-function mergeTasks(open: readonly DdTask[], completed: readonly DdTask[]): DdTask[] {
-  const seen = new Set(open.map((t) => t.id));
-  return [...open, ...completed.filter((t) => !seen.has(t.id))];
-}
-
 // ---------------------------------------------------------------------------
 // System (exec_jobs)
 // ---------------------------------------------------------------------------
@@ -634,6 +651,37 @@ function olderIso(a: string | null, b: string | null): string | null {
   return Date.parse(b) < Date.parse(a) ? b : a;
 }
 
+/**
+ * When the feed was last known to be checked. The DD pass: the later of the
+ * newest last_seen_at among its own kinds (a refresh that finds nothing
+ * stamps no row) and its job's last success; never the DD text job's stamps
+ * (a-correct-16). While email is on (emailCheckedAt defined), the older of
+ * that and the email pass's time, so a stalled pass shows as behind (ui-10).
+ */
+function feedCheckedAt(ddRefresh: string | null, jobs: Settled<JobRows>, emailCheckedAt: string | null | undefined): string | null {
+  const lastRun = jobs.ok ? (lastSuccessByKind(jobs.value).get(DD_ATTENTION_JOB) ?? null) : null;
+  const ddCheckedAt = laterIso(ddRefresh, lastRun);
+  return emailCheckedAt === undefined ? ddCheckedAt : olderIso(ddCheckedAt, emailCheckedAt);
+}
+
+/** The DD freshness read: the newest last_seen_at among the DD producer's own kinds (DD_ATTENTION_KINDS). */
+function ddAttentionRefresh(principal: ExecPrincipal): Promise<string | null> {
+  return lastAttentionRefresh(principal, "dd", { kinds: DD_ATTENTION_KINDS });
+}
+
+/**
+ * When DD text triage last ran (ddtext-store's ddtextLastRunAt), while it is
+ * switched on; null when it is off, the settings can't be read, or the read
+ * fails (the second freshness line just doesn't show).
+ */
+function ddtextFreshness(principal: ExecPrincipal, read: OverviewRead, gateRead: Promise<Settled<EmailGate>>): Promise<string | null> {
+  return gateRead.then(async (gate) => {
+    if (!gate.ok || !gate.value.settings.ddtextEnabled) return null;
+    const last = await read("ddtext freshness", (o) => ddtextLastRunAt(principal, o));
+    return last.ok ? last.value : null;
+  });
+}
+
 // ---------------------------------------------------------------------------
 // The overview
 // ---------------------------------------------------------------------------
@@ -667,12 +715,15 @@ export async function getOverview(principal: ExecPrincipal, now: Date = new Date
   const departments = read("departments", (o) => listDepartments(principal, o));
   const projects = read("projects", (o) => listProjects(principal, o));
   const approvals = read("approvals", (o) => getPendingApprovals(principal, now, o));
-  const attentionItems = read("attention items", () => listAttention(principal, { limit: ATTENTION_READ_LIMIT, now }));
-  const attentionRefresh = read("attention refresh", () => lastAttentionRefresh(principal, "dd"));
+  // The feed: one screened page (S3). Email items are screened inside the
+  // accessor against the rules and their threads' rows (K8, A2).
+  const attentionPage = read("attention items", (o) => listScreenedAttention(principal, { limit: ATTENTION_LIMIT }, { now, signal: o.signal }));
+  const attentionRefresh = read("attention refresh", () => ddAttentionRefresh(principal));
   const jobs = read("jobs", (o) => readJobs(principal, now, o.signal));
   // Email (P3): the gate first; no email table is read unless it says on.
   const emailGate = read("email settings", () => loadEmailGate(principal));
   const email = emailReads(principal, now, read, emailGate);
+  const ddtextCheckedAt = ddtextFreshness(principal, read, emailGate);
 
   const tiles = (async (): Promise<OverviewSection<OverviewTiles>> => {
     const nowMs = now.getTime();
@@ -729,31 +780,34 @@ export async function getOverview(principal: ExecPrincipal, now: Date = new Date
   })();
 
   const attention = build("attention", async (): Promise<OverviewAttention> => {
-    const items = need(await attentionItems);
+    // Screened in the accessor (A2): an email item whose thread is now a
+    // tombstone, gone, or matched by a current rule is never shown, even in
+    // the minutes before the attention pass removes it.
+    const page = need(await attentionPage);
     const refreshedAt = need(await attentionRefresh);
-    // Email items are screened at render time (A2): one whose thread is now
-    // a tombstone, gone, or matched by a current rule is never shown, even
-    // in the minutes before the attention pass removes it.
-    const screened = screenEmailAttention(items, await email.itemScreen(items));
     // A refresh that finds nothing stamps no row, so the item timestamps alone
     // can't say a check ran. The refresh job's last success can; without the
     // job history the feed falls back to its own timestamps (older, never newer).
     const jobsRead = await jobs;
-    const lastRun = jobsRead.ok ? (lastSuccessByKind(jobsRead.value).get(DD_ATTENTION_JOB) ?? null) : null;
     // While email is on, its items share this feed and come from their own
     // pass: the card is only as fresh as the older of the two, so a stalled
     // email pass shows as "may be behind" instead of hiding behind the DD
     // pass's time (ui-10).
     const emailCheckedAt = await email.itemsCheckedAt(jobsRead);
-    const ddCheckedAt = laterIso(refreshedAt, lastRun);
     const gate = await emailGate;
     const draftsEnabled = gate.ok && gate.value.kind === "on" && draftsOnFor(gate.value.settings);
+    const feedbackMissing = gate.ok && !gate.value.settings.ddtextSchemaReady;
     return {
-      items: screened.items.slice(0, ATTENTION_LIMIT),
+      items: page.items.slice(0, ATTENTION_LIMIT),
       limit: ATTENTION_LIMIT,
-      checkedAt: emailCheckedAt === undefined ? ddCheckedAt : olderIso(ddCheckedAt, emailCheckedAt),
-      emailUnchecked: screened.unchecked,
-      ...(draftsEnabled ? { draftsEnabled: true } : {})
+      checkedAt: feedCheckedAt(refreshedAt, jobsRead, emailCheckedAt),
+      emailUnchecked: page.emailScreen === "unavailable",
+      hasMore: page.nextCursor !== null,
+      hiddenEmail: page.hiddenEmail,
+      emailScreen: page.emailScreen,
+      ddtextCheckedAt: await ddtextCheckedAt,
+      ...(draftsEnabled ? { draftsEnabled: true } : {}),
+      ...(feedbackMissing ? { feedbackAvailable: false as const } : {})
     };
   });
 
@@ -788,7 +842,8 @@ export async function getOverview(principal: ExecPrincipal, now: Date = new Date
       untilAborted(listProjectStages(principal, [...ids], { signal }), signal),
       untilAborted(listStatusChangeEntries(principal, waiting, "waiting_on_client", { signal }), signal)
     ]);
-    const health = projectsHealth(listed, stages, mergeTasks(open, recent), now, {
+    // Open tasks plus recent completions, one row per id (the open copy kept): analysis/project-detail.ts.
+    const health = projectsHealth(listed, stages, mergeTaskReads(open, recent), now, {
       waitingSince: new Map(entries.map((e) => [e.taskId, e.enteredAt]))
     });
     return { items: health.slice(0, PROJECT_LIMIT), total: health.length, limit: PROJECT_LIMIT };
@@ -894,8 +949,6 @@ type OverviewRead = <T>(what: string, run: (opts: { signal: AbortSignal }) => Pr
 interface OverviewEmailReads {
   /** The email section. */
   section: Promise<OverviewSection<OverviewEmail>>;
-  /** What screenEmailAttention needs for these feed items. Never rejects. */
-  itemScreen: (items: readonly AttentionItem[]) => Promise<EmailItemScreen>;
   /**
    * When the email attention pass last refreshed the feed's email items
    * (ISO, null = never), or undefined while email is off (its items aren't
@@ -909,10 +962,8 @@ const SKIPPED: Settled<never> = { ok: false };
 /**
  * The Overview's email reads (contract §3.14, A2, coherence-9), all under
  * the page's deadline. Nothing past exec_settings is read unless the gate
- * says email is on; when it is, each part fails on its own, and the feed's
- * email items are screened against the rules and their threads' rows. A
- * failed gate, rules or row read hides every email item (never shown
- * unchecked) and leaves the rest of the page alone.
+ * says email is on; when it is, each part fails on its own. The feed's email
+ * items are screened by the accessor (attention-read.ts, P5a K8), not here.
  */
 function emailReads(principal: ExecPrincipal, now: Date, read: OverviewRead, gateRead: Promise<Settled<EmailGate>>): OverviewEmailReads {
   const on = gateRead.then((g) => g.ok && g.value.kind === "on");
@@ -970,22 +1021,6 @@ function emailReads(principal: ExecPrincipal, now: Date, read: OverviewRead, gat
     return { state: "on", counts, restricted, commitments: due, mail };
   });
 
-  const itemScreen = async (items: readonly AttentionItem[]): Promise<EmailItemScreen> => {
-    const gate = await gateRead;
-    // An unreadable gate can't say email is off: treat its items as unchecked.
-    if (!gate.ok) return { emailOn: true, policy: null, rowsByThread: null };
-    if (gate.value.kind !== "on") return { emailOn: false, policy: null, rowsByThread: null };
-    const ids = emailItemThreadIds(items);
-    const [p, r] = await Promise.all([
-      policy,
-      ids.length === 0
-        ? Promise.resolve<Settled<Map<string, ThreadScreenRow>>>({ ok: true, value: new Map<string, ThreadScreenRow>() })
-        : // An item about a thread of a mailbox no longer pinned links to a 404: left out like one with no row (ui-3).
-          read("email item threads", async (o) => pinnedRowMap(principal, await listThreadScreenRows(principal, ids, o)))
-    ]);
-    return { emailOn: true, policy: p.ok ? p.value : null, rowsByThread: r.ok ? r.value : null };
-  };
-
   const itemsCheckedAt = async (jobs: Settled<JobRows>): Promise<string | null | undefined> => {
     const gate = await gateRead;
     if (!gate.ok || gate.value.kind !== "on") return undefined;
@@ -993,5 +1028,42 @@ function emailReads(principal: ExecPrincipal, now: Date, read: OverviewRead, gat
     return laterIso(need(await refresh), lastRun);
   };
 
-  return { section, itemScreen, itemsCheckedAt };
+  return { section, itemsCheckedAt };
+}
+
+// ---------------------------------------------------------------------------
+// The feed's freshness for the full feed page (P5a §3.13.1, a-correct-16)
+// ---------------------------------------------------------------------------
+
+/**
+ * The Needs Attention card's two freshness lines, computed exactly as
+ * getOverview computes them (feedCheckedAt, ddtextFreshness), for the full
+ * feed page at /executive/attention, so the two surfaces never disagree:
+ * checkedAt from the DD producer's own kinds and its job's last success (and
+ * the email pass's while email is on); ddtextCheckedAt while DD text triage is
+ * on. { ok: false } when the DD refresh or, with email on, the email refresh
+ * can't be read (never a wrong time). Never throws for a failed read.
+ */
+export async function getAttentionFreshness(principal: ExecPrincipal, now: Date = new Date()): Promise<OverviewSection<AttentionFreshness>> {
+  if (!principal || typeof principal.id !== "string" || principal.id.length === 0) {
+    throw new TypeError("exec attention freshness: an ExecPrincipal is required");
+  }
+  if (!(now instanceof Date) || Number.isNaN(now.getTime())) throw new TypeError("exec attention freshness: now must be a valid Date");
+  const signal = AbortSignal.timeout(READ_TIMEOUT_MS);
+  const read: OverviewRead = (what, run) => settle(what, signal, run);
+  const refresh = read("attention refresh", () => ddAttentionRefresh(principal));
+  const jobs = read("jobs", (o) => readJobs(principal, now, o.signal));
+  const gateRead = read("email settings", () => loadEmailGate(principal));
+  const emailRefresh = gateRead.then((g) => (g.ok && g.value.kind === "on" ? read("email attention refresh", () => lastAttentionRefresh(principal, "email")) : SKIPPED));
+  const ddtext = ddtextFreshness(principal, read, gateRead);
+  return build("attention freshness", async (): Promise<AttentionFreshness> => {
+    const ddRefresh = need(await refresh);
+    const jobsRead = await jobs;
+    const gate = await gateRead;
+    // As emailReads' itemsCheckedAt: email counts only while it is on (its items show only then).
+    const emailOn = gate.ok && gate.value.kind === "on";
+    const lastEmailRun = jobsRead.ok ? (lastSuccessByKind(jobsRead.value).get(EMAIL_ATTENTION_JOB_KIND) ?? null) : null;
+    const emailCheckedAt = emailOn ? laterIso(need(await emailRefresh), lastEmailRun) : undefined;
+    return { checkedAt: feedCheckedAt(ddRefresh, jobsRead, emailCheckedAt), ddtextCheckedAt: await ddtext };
+  });
 }

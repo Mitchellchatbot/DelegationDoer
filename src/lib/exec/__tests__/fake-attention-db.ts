@@ -1,9 +1,9 @@
 // Test support for attention.ts: an in-memory public.exec_attention_items
 // behind exactly the chainable calls attention.ts makes:
 //
-//   from(t).select(cols).eq().neq().in().or().order().range().limit()[.abortSignal()]
+//   from(t).select(cols).eq().neq().lte().gte().in().or().order().range().limit()[.abortSignal()]
 //   from(t).upsert(rows, { onConflict: "principal_id,fingerprint", ignoreDuplicates }).select("id")[.abortSignal()]
-//   from(t).update(patch, { count }).eq().neq().lte().in()[.abortSignal()]
+//   from(t).update(patch, { count }).eq().neq().lte().gte().in()[.select(cols)][.abortSignal()]
 //
 // It behaves like the real table where attention.ts depends on it:
 //   - writes are checked against the migration's NOT NULLs and CHECKs (enums,
@@ -15,7 +15,15 @@
 //     "2026-11-04T12:00:00+00:00", with microseconds kept when a write had
 //     them ("…:00.123456+00:00", what a now() in SQL leaves);
 //   - timestamp filters compare instants to the microsecond, as timestamptz
-//     does, whatever format the value was sent in;
+//     does, whatever format the value was sent in: in eq/neq/lt/lte/gt/gte
+//     filters, inside or()/and() logic terms, and in ORDER BY;
+//   - a logic-term value may be double-quoted, as PostgREST allows
+//     (first_seen_at.lt."2026-…+00:00", with \" and \\ escapes); it is matched
+//     unquoted;
+//   - a column whose stored value is a number compares numerically, so
+//     priority_score.lt.55 is false for 100 (not a string comparison);
+//   - an update with .select(cols) returns the rows it changed (P5a's
+//     owner-action writer, a-build-11);
 //   - a request whose abort signal has fired resolves with an AbortError
 //     result instead of throwing, like postgrest-js.
 // Every request is recorded. `fail` injects an error into a request, and
@@ -24,7 +32,7 @@
 //   vi.mocked(getSupabaseAdmin).mockReturnValue(db.client as SupabaseClient)
 
 export type Row = Record<string, unknown>;
-export type Filter = ["eq" | "neq" | "lte", string, unknown] | ["in", string, unknown[]] | ["or", string];
+export type Filter = ["eq" | "neq" | "lt" | "lte" | "gt" | "gte", string, unknown] | ["in", string, unknown[]] | ["or", string];
 
 export interface FakeCall {
   op: "select" | "upsert" | "update";
@@ -183,30 +191,92 @@ function checkRow(r: Row): void {
   if ((r.status === "snoozed") !== (r.snooze_until !== null && r.snooze_until !== undefined)) violation("exec_attention_items_snooze_check");
 }
 
-function compare(a: unknown, b: unknown): number {
-  if (typeof a === "number" && typeof b === "number") return a - b;
+/**
+ * How Postgres orders two values of one column: timestamptz by instant (to the
+ * microsecond), numbers numerically (the other side coerced, as a filter value
+ * arrives as text), everything else as text.
+ */
+function compareCol(col: string, a: unknown, b: unknown): number {
+  if (TIMESTAMPS.has(col)) {
+    const ia = instantMicros(a);
+    const ib = instantMicros(b);
+    if (!Number.isFinite(ia) || !Number.isFinite(ib)) {
+      throw new Error(`fake-attention-db: ${col} compared with a non-timestamp ${JSON.stringify(Number.isFinite(ia) ? b : a)}`);
+    }
+    return ia - ib;
+  }
+  if (typeof a === "number" || typeof b === "number") {
+    const na = Number(a);
+    const nb = Number(b);
+    if (!Number.isFinite(na) || !Number.isFinite(nb)) throw new Error(`fake-attention-db: ${col} compared with a non-number`);
+    return na - nb;
+  }
   const sa = String(a);
   const sb = String(b);
-  const ta = Date.parse(sa);
-  const tb = Date.parse(sb);
-  if (/^\d{4}-\d{2}-\d{2}T/.test(sa) && /^\d{4}-\d{2}-\d{2}T/.test(sb) && Number.isFinite(ta) && Number.isFinite(tb)) return ta - tb;
   return sa < sb ? -1 : sa > sb ? 1 : 0;
 }
 
-/** Split at commas that aren't inside parentheses. */
+function compareOp(op: string, c: number): boolean {
+  switch (op) {
+    case "eq":
+      return c === 0;
+    case "neq":
+      return c !== 0;
+    case "lt":
+      return c < 0;
+    case "lte":
+      return c <= 0;
+    case "gt":
+      return c > 0;
+    case "gte":
+      return c >= 0;
+    default:
+      throw new Error(`fake-attention-db: unsupported operator ${op}`);
+  }
+}
+
+/** Split at commas that aren't inside parentheses or double quotes. */
 function topLevel(s: string): string[] {
   const out: string[] = [];
   let depth = 0;
+  let quoted = false;
   let start = 0;
   for (let i = 0; i < s.length; i++) {
-    if (s[i] === "(") depth++;
-    else if (s[i] === ")") depth--;
-    else if (s[i] === "," && depth === 0) {
+    const ch = s[i];
+    if (quoted) {
+      if (ch === "\\") i++;
+      else if (ch === '"') quoted = false;
+      continue;
+    }
+    if (ch === '"') quoted = true;
+    else if (ch === "(") depth++;
+    else if (ch === ")") depth--;
+    else if (ch === "," && depth === 0) {
       out.push(s.slice(start, i));
       start = i + 1;
     }
   }
   out.push(s.slice(start));
+  return out;
+}
+
+/** A logic-term value: a double-quoted one has its quotes and backslash escapes removed, as PostgREST reads it. */
+export function unquoteTermValue(raw: string): string {
+  if (!raw.startsWith('"')) return raw;
+  if (raw.length < 2 || !raw.endsWith('"')) throw new Error(`fake-attention-db: unterminated quoted value ${raw}`);
+  let out = "";
+  for (let i = 1; i < raw.length - 1; i++) {
+    const ch = raw[i];
+    if (ch === "\\") {
+      i++;
+      if (i >= raw.length - 1) throw new Error(`fake-attention-db: dangling escape in ${raw}`);
+      out += raw[i];
+    } else if (ch === '"') {
+      throw new Error(`fake-attention-db: stray quote in ${raw}`);
+    } else {
+      out += ch;
+    }
+  }
   return out;
 }
 
@@ -221,15 +291,16 @@ function matchesTerm(row: Row, term: string): boolean {
   switch (op) {
     case "in": {
       if (!raw.startsWith("(") || !raw.endsWith(")")) throw new Error(`fake-attention-db: bad in-list ${raw}`);
-      return raw.slice(1, -1).split(",").includes(String(v));
+      return topLevel(raw.slice(1, -1))
+        .map(unquoteTermValue)
+        .includes(String(v));
     }
     case "is":
       if (raw !== "null") throw new Error(`fake-attention-db: unsupported is.${raw}`);
       return v === null || v === undefined;
     default: {
       if (v === null || v === undefined) return false; // SQL: a comparison with NULL is never true
-      const c = compare(v, raw);
-      return op === "eq" ? c === 0 : op === "neq" ? c !== 0 : op === "lt" ? c < 0 : op === "lte" ? c <= 0 : op === "gt" ? c > 0 : c >= 0;
+      return compareOp(op, compareCol(col, v, unquoteTermValue(raw)));
     }
   }
 }
@@ -240,16 +311,8 @@ function matches(row: Row, filters: Filter[]): boolean {
     const v = row[f[1]];
     if (f[0] === "in") return f[2].some((x) => String(x) === String(v));
     if (v === null || v === undefined) return false;
-    if (TIMESTAMPS.has(f[1])) {
-      // timestamptz compares instants: the row's microseconds count, the format sent doesn't.
-      const a = instantMicros(v);
-      const b = instantMicros(f[2]);
-      if (!Number.isFinite(b)) throw new Error(`fake-attention-db: ${f[1]} compared with a non-timestamp ${JSON.stringify(f[2])}`);
-      return f[0] === "eq" ? a === b : f[0] === "neq" ? a !== b : a <= b;
-    }
-    if (f[0] === "lte") return compare(v, f[2]) <= 0;
-    const same = String(v) === String(f[2]);
-    return f[0] === "eq" ? same : !same;
+    // timestamptz compares instants (the row's microseconds count, the format sent doesn't); numbers numerically.
+    return compareOp(f[0], compareCol(f[1], v, f[2]));
   });
 }
 
@@ -325,7 +388,7 @@ export function createFakeAttentionDb(opts: { now?: () => string } = {}): FakeAt
             // Postgres: NULLS LAST ascending, NULLS FIRST descending.
             if (av === null || av === undefined) return ascending ? 1 : -1;
             if (bv === null || bv === undefined) return ascending ? -1 : 1;
-            const c = compare(av, bv);
+            const c = compareCol(col, av, bv);
             if (c !== 0) return ascending ? c : -c;
           }
           return 0;
@@ -362,7 +425,11 @@ export function createFakeAttentionDb(opts: { now?: () => string } = {}): FakeAt
       });
       const byId = new Map(updated.map((r) => [r.id, r]));
       db.rows = db.rows.map((r) => byId.get(r.id) ?? r);
-      return { data: null, error: null, count: call.options?.count === "exact" ? updated.length : null };
+      return {
+        data: call.columns === null ? null : updated.map((r) => pick(r, call.columns)),
+        error: null,
+        count: call.options?.count === "exact" ? updated.length : null
+      };
     } catch (err) {
       const e = err as { message?: string; code?: string };
       return { data: null, error: { message: e.message ?? String(err), code: e.code } };
@@ -373,7 +440,10 @@ export function createFakeAttentionDb(opts: { now?: () => string } = {}): FakeAt
     const b = {
       eq: (col: string, v: unknown) => (call.filters.push(["eq", col, v]), b),
       neq: (col: string, v: unknown) => (call.filters.push(["neq", col, v]), b),
+      lt: (col: string, v: unknown) => (call.filters.push(["lt", col, v]), b),
       lte: (col: string, v: unknown) => (call.filters.push(["lte", col, v]), b),
+      gt: (col: string, v: unknown) => (call.filters.push(["gt", col, v]), b),
+      gte: (col: string, v: unknown) => (call.filters.push(["gte", col, v]), b),
       in: (col: string, vs: unknown[]) => (call.filters.push(["in", col, [...vs]]), b),
       or: (expr: string) => (call.filters.push(["or", expr]), b),
       order: (col: string, o?: { ascending?: boolean }) => (call.orders.push([col, o?.ascending !== false]), b),

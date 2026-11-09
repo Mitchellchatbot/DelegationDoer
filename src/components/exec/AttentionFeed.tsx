@@ -5,8 +5,10 @@ import { formatInZone } from "@/lib/exec/format";
 import { AttentionRow } from "./AttentionRow";
 import { EmptyState } from "./EmptyState";
 
-// The Needs Attention list, in the order given (listAttention sorts by
-// priority, then recency). Read-only in P2b; filters and actions arrive in P5.
+// The Needs Attention list, read-only, in the order given (the screened
+// accessor sorts by priority, then newest first, P5a C5). The Overview card and
+// the full feed render the client FeedList instead, which adds the row actions
+// (P5a C24); this server list stays for server callers, with P4's Draft reply.
 //
 // An empty list only says "nothing needs you" when a check is known to have
 // run (checkedAt). Before the first scan the same empty list means "not

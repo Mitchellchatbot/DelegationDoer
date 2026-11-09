@@ -253,6 +253,34 @@ describe("spentTodayUsd", () => {
     await expect(spentTodayUsd("ep_1", "UTC")).rejects.toThrow("exec_ai_usage read failed: connection refused");
   });
 
+  // P5a test 62b (C29): one feature's spend, for the DD text ceiling and P5b's chat sub-cap.
+  it("with opts.feature adds .eq(\"feature\", …) after the principal; without it the query is P2a's exactly", async () => {
+    const db = fakeDb({ pages: [{ data: [{ id: 1, cost_usd: "0.004" }], error: null }] });
+    useDb(db);
+    const now = new Date("2026-11-04T15:00:00Z");
+    expect(await spentTodayUsd("ep_1", "America/New_York", now, { feature: "ddtext" })).toBeCloseTo(0.004, 9);
+    expect(db.calls).toEqual([
+      { table: "exec_ai_usage", op: "select", args: ["id,cost_usd"] },
+      { table: "exec_ai_usage", op: "eq", args: ["principal_id", "ep_1"] },
+      { table: "exec_ai_usage", op: "eq", args: ["feature", "ddtext"] },
+      { table: "exec_ai_usage", op: "gte", args: ["created_at", "2026-11-04T05:00:00.000Z"] },
+      { table: "exec_ai_usage", op: "gt", args: ["id", 0] },
+      { table: "exec_ai_usage", op: "order", args: ["id", { ascending: true }] },
+      { table: "exec_ai_usage", op: "limit", args: [1000] }
+    ]);
+
+    const plain = fakeDb();
+    useDb(plain);
+    await spentTodayUsd("ep_1", "America/New_York", now, {});
+    expect(plain.calls.some((c) => c.op === "eq" && c.args[0] === "feature")).toBe(false);
+    expect(plain.calls.map((c) => c.op)).toEqual(["select", "eq", "gte", "gt", "order", "limit"]);
+  });
+
+  it("with opts.feature keeps failing closed on a read error", async () => {
+    useDb(fakeDb({ pages: [{ data: null, error: { message: "connection refused" } }] }));
+    await expect(spentTodayUsd("ep_1", "UTC", new Date(), { feature: "ddtext" })).rejects.toThrow("exec_ai_usage read failed: connection refused");
+  });
+
   it("refuses to guess past 50 full pages", async () => {
     const db = fakeDb({
       pages: (call) => ({ data: Array.from({ length: 1000 }, (_, i) => ({ id: call * 1000 + i + 1, cost_usd: 0 })), error: null })

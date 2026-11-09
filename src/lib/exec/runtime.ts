@@ -2,6 +2,7 @@ import "server-only";
 
 import { isExecEnabled } from "@/lib/exec/access";
 import { ddAttentionJobHandler, ddAttentionScheduledWork } from "@/lib/exec/handlers/dd-attention";
+import { ddtextJobHandler, ddtextScheduledWork } from "@/lib/exec/handlers/ddtext-triage";
 import { draftGenerateJobHandler } from "@/lib/exec/handlers/draft-generate";
 import { draftReconcileJobHandler, draftReconcileScheduledWork } from "@/lib/exec/handlers/draft-reconcile";
 import { emailAttentionJobHandler, emailAttentionScheduledWork } from "@/lib/exec/handlers/email-attention";
@@ -28,6 +29,9 @@ import type { JobHandler, JobLane } from "@/lib/exec/types";
 // P4 drafts (contract §3.11, §3.15 Y5): generation (event, interactive), the
 // draft reconcile sweep (every 5 minutes while the drafts schema is installed
 // and a row is due; kicks run interactive) and the weekly voice refresh.
+// P5a DD text triage (contract §3.12.6, K17): its own kind on the same
+// 10-minute buckets as the DD attention refresh, bulk lane, ungated (turned
+// off, it deletes its own items and attention rows; not installed, it skips).
 const BUILT_IN_HANDLERS: readonly JobHandler[] = [
   purgeJobHandler,
   ddAttentionJobHandler,
@@ -36,7 +40,8 @@ const BUILT_IN_HANDLERS: readonly JobHandler[] = [
   emailAttentionJobHandler,
   draftGenerateJobHandler,
   draftReconcileJobHandler,
-  voiceRefreshJobHandler
+  voiceRefreshJobHandler,
+  ddtextJobHandler
 ];
 const BUILT_IN_SCHEDULE: readonly ScheduledWork[] = [
   purgeScheduledWork,
@@ -44,7 +49,8 @@ const BUILT_IN_SCHEDULE: readonly ScheduledWork[] = [
   emailReconcileScheduledWork,
   emailAttentionScheduledWork,
   draftReconcileScheduledWork,
-  voiceRefreshScheduledWork
+  voiceRefreshScheduledWork,
+  ddtextScheduledWork
 ];
 
 // The cron route's whole run has to fit well inside its 60 s maxDuration.

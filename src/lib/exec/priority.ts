@@ -30,7 +30,13 @@ export type AttentionKind =
   | "decision_ask"
   | "overdue_commitment"
   | "client_satisfaction_drop"
-  | "client_health_drop";
+  | "client_health_drop"
+  // DD text triage (P5a, producers/ddtext.ts). The first three are a model's
+  // reading of DD text; a mention is found by code.
+  | "ddtext_blocker"
+  | "ddtext_waiting"
+  | "ddtext_decision"
+  | "ddtext_mention";
 
 /** An email's urgency as triage assessed it (email-types Urgency). */
 export type UrgencyFactor = "critical" | "high" | "normal" | "low";
@@ -69,7 +75,11 @@ const BASE: Readonly<Record<AttentionKind, number>> = Object.freeze({
   client_health_drop: 35,
   important_email: 30,
   overdue_commitment: 30,
-  client_satisfaction_drop: 30
+  client_satisfaction_drop: 30,
+  ddtext_blocker: 60,
+  ddtext_decision: 55,
+  ddtext_mention: 50,
+  ddtext_waiting: 45
 });
 
 const KIND_LABEL: Readonly<Record<AttentionKind, string>> = Object.freeze({
@@ -87,7 +97,11 @@ const KIND_LABEL: Readonly<Record<AttentionKind, string>> = Object.freeze({
   client_health_drop: "Client health drop",
   important_email: "Important email",
   overdue_commitment: "Overdue commitment",
-  client_satisfaction_drop: "Client satisfaction drop"
+  client_satisfaction_drop: "Client satisfaction drop",
+  ddtext_blocker: "Blocker in DD text (AI-assessed)",
+  ddtext_waiting: "Waiting in DD text (AI-assessed)",
+  ddtext_decision: "Decision asked in DD text (AI-assessed)",
+  ddtext_mention: "Mention of you in a comment"
 });
 
 interface Contribution {
@@ -133,7 +147,7 @@ function days(n: number): string {
   return n === 1 ? "1 day" : `${n} days`;
 }
 
-/** The age addition, which depends on the kind: only waiting matters for these. */
+/** The age addition, which depends on the kind: only waiting matters for these. None for the ddtext kinds (C17). */
 function ageContribution(kind: AttentionKind, ageDays: number): Contribution | null {
   switch (kind) {
     case "unanswered_mention":

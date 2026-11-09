@@ -24,9 +24,12 @@ vi.mock("@/lib/exec/sources/dd", () => ({
   listClients: vi.fn(),
   listClientMeetings: vi.fn()
 }));
+// P5a (K8): the feed comes through the screened accessor (attention-read.ts),
+// which runs for real here over a stubbed store read, so these tests still
+// cover the email screen end to end.
 vi.mock("@/lib/exec/attention", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/exec/attention")>()),
-  listAttention: vi.fn(),
+  listAttentionPage: vi.fn(),
   lastAttentionRefresh: vi.fn(),
   syncAttention: vi.fn()
 }));
@@ -53,7 +56,8 @@ vi.mock("@/lib/exec/sync-state", async (importOriginal) => ({
 }));
 
 import { OverviewView } from "@/components/exec/overview/OverviewView";
-import { lastAttentionRefresh, listAttention } from "@/lib/exec/attention";
+import { fakeAttentionPage } from "@/lib/exec/__tests__/fake-attention-page";
+import { lastAttentionRefresh, listAttentionPage } from "@/lib/exec/attention";
 import type { AttentionItem } from "@/lib/exec/attention-types";
 import { listBucketRows, listCommitments, listSignalsForMessages, listThreadScreenRows, listTombstonedThreadIds, type BucketRow } from "@/lib/exec/email-store";
 import type { ExecCommitment, ThreadScreenRow } from "@/lib/exec/email-types";
@@ -242,11 +246,16 @@ function fakeAdmin() {
 
 let syncValues: Record<string, unknown>;
 
+/** The stored feed the accessor reads (through a stubbed listAttentionPage). */
+function feedOf(items: AttentionItem[]): void {
+  vi.mocked(listAttentionPage).mockImplementation(fakeAttentionPage(items));
+}
+
 function wire() {
   jobsByStatus = {};
   vi.mocked(getSupabaseAdmin).mockReturnValue(fakeAdmin() as unknown as SupabaseClient);
   for (const fn of Object.values(dd)) if (typeof fn === "function" && "mockResolvedValue" in fn) (fn as ReturnType<typeof vi.fn>).mockResolvedValue([]);
-  vi.mocked(listAttention).mockResolvedValue(FEED);
+  feedOf(FEED);
   vi.mocked(lastAttentionRefresh).mockResolvedValue(daysAgo(0));
   vi.mocked(loadSettings).mockResolvedValue(settings());
   vi.mocked(loadScreeningPolicy).mockResolvedValue({ rules: [RULE], hash: H });
@@ -349,7 +358,10 @@ describe("getOverview: email on", () => {
     const a = data(o.sections.attention);
     expect(a.items.map((i) => i.id)).toEqual(["ea_dd", "ea_ok", "ea_sat"]);
     expect(a.emailUnchecked).toBe(false);
-    expect(listAttention).toHaveBeenCalledWith(principal, { limit: 40, now: NOW });
+    expect(a.hiddenEmail).toBe(3);
+    expect(a.emailScreen).toBe("ok");
+    // One screened page of 20: the store read asks for 20 + the probe row.
+    expect(listAttentionPage).toHaveBeenCalledWith(principal, expect.objectContaining({ statuses: "default", after: null, limit: 21, now: NOW }), { signal: expect.any(AbortSignal) });
     const threadIdsAsked = vi.mocked(listThreadScreenRows).mock.calls.map((c) => [...c[1]].sort());
     expect(threadIdsAsked).toContainEqual(["t_gone", "t_ok", "t_restricted", "t_tomb"]);
   });
@@ -361,8 +373,10 @@ describe("getOverview: email on", () => {
   });
 
   it("reads the feed deep and shows the top 20 after the screen", async () => {
-    const many = [...Array.from({ length: 10 }, (_, i) => item(`ea_r${i}`, `email:thread:t_restricted:m${i}`, "email", 90)), ...Array.from({ length: 25 }, (_, i) => item(`ea_d${i}`, `dd:x:${i}`, "dd", 40))];
-    vi.mocked(listAttention).mockResolvedValue(many);
+    // Real item ids (the accessor's cursor carries the last one it examined).
+    const hexId = (n: number) => `ea_${n.toString(16).padStart(32, "0")}`;
+    const many = [...Array.from({ length: 10 }, (_, i) => item(hexId(i + 1), `email:thread:t_restricted:m${i}`, "email", 90)), ...Array.from({ length: 25 }, (_, i) => item(hexId(i + 100), `dd:x:${i}`, "dd", 40))];
+    feedOf(many);
     const a = data((await getOverview(principal, NOW)).sections.attention);
     expect(a.items).toHaveLength(20);
     expect(a.items.every((i) => i.source === "dd")).toBe(true);
@@ -384,7 +398,7 @@ describe("getOverview: only the mailboxes pinned to him now (ui-3)", () => {
       ["t_old", screenRow("t_old", { accountId: "acc_old" })]
     ]);
     vi.mocked(listThreadScreenRows).mockImplementation(async (_p, ids) => new Map([...rows].filter(([k]) => ids.includes(k))));
-    vi.mocked(listAttention).mockResolvedValue([item("ea_ok", "email:thread:t_ok:t_ok_m"), item("ea_old", "email:thread:t_old:x"), item("ea_old_c", "email:commitment:t_old:ec_old")]);
+    feedOf([item("ea_ok", "email:thread:t_ok:t_ok_m"), item("ea_old", "email:thread:t_old:x"), item("ea_old_c", "email:commitment:t_old:ec_old")]);
     const o = await getOverview(principal, NOW);
     const e = await emailOn(o);
     expect(e.counts).toEqual({ ok: true, data: { reply: 1, urgent: 0, important: 0, waiting: 0, filtered: 0, decisionAsks: 1 } });
@@ -442,20 +456,23 @@ describe("getOverview: email failures stay in their parts", () => {
     const o = await getOverview(principal, NOW);
     expect(o.sections.email).toEqual(UNAVAILABLE);
     const a = data(o.sections.attention);
+    // It can't tell whether email is on, so every email item is withheld.
     expect(a.items.map((i) => i.id)).toEqual(["ea_dd"]);
     expect(a.emailUnchecked).toBe(true);
+    expect(a.emailScreen).toBe("unavailable");
     for (const s of [o.sections.tiles, o.sections.approvals, o.sections.system, o.sections.deadlines, o.sections.projects]) expect(s.ok).toBe(true);
     for (const fn of EMAIL_TABLE_READS) expect(fn).not.toHaveBeenCalled();
   });
 
-  it("rules unreadable: counts, restricted count and commitments can't load; email items hidden, flagged", async () => {
+  it("rules unreadable: counts, restricted count and commitments can't load; email thread items hidden, flagged", async () => {
     vi.mocked(loadScreeningPolicy).mockRejectedValue(new Error("restricted-sender rules unavailable"));
     const o = await getOverview(principal, NOW);
     const e = await emailOn(o);
     expect([e.counts, e.restricted, e.commitments]).toEqual([UNAVAILABLE, UNAVAILABLE, UNAVAILABLE]);
     expect(e.mail.ok).toBe(true);
-    expect(data(o.sections.attention)).toMatchObject({ emailUnchecked: true });
-    expect(data(o.sections.attention).items.map((i) => i.id)).toEqual(["ea_dd"]);
+    expect(data(o.sections.attention)).toMatchObject({ emailUnchecked: true, emailScreen: "unavailable" });
+    // P5a C7: a satisfaction (or health) item isn't about a thread and was screened when it was made: it still shows.
+    expect(data(o.sections.attention).items.map((i) => i.id)).toEqual(["ea_dd", "ea_sat"]);
   });
 
   it("the feed items' thread rows unreadable: email items hidden, flagged; counts still load", async () => {
@@ -519,7 +536,7 @@ describe("OverviewView with email", () => {
   it("says when email items are hidden because they couldn't be checked", async () => {
     vi.mocked(loadScreeningPolicy).mockRejectedValue(new Error("rules unavailable"));
     const text = textOf(render(await getOverview(principal, NOW)));
-    expect(text).toContain("Email items are hidden right now: the check that keeps restricted senders out couldn't run.");
+    expect(text).toContain("Email items are hidden: the restricted-sender check couldn't run. Reload to try again.");
     expect(text).toContain("Couldn't load your email counts.");
     expect(text).toContain("Decisions asked by email");
     expect(text).toContain("Couldn't load");

@@ -29,7 +29,8 @@ describe("feature tables", () => {
       voice: "claude-haiku-5-5",
       spike: "claude-opus-5-5",
       triage: "claude-haiku-5-5",
-      digest: "claude-haiku-5-5"
+      digest: "claude-haiku-5-5",
+      ddtext: "claude-haiku-5-5"
     });
     expect(FEATURE_EFFORT).toEqual({
       triage: "low",
@@ -38,6 +39,7 @@ describe("feature tables", () => {
       chat: "medium",
       draft: "medium",
       voice: "low",
+      ddtext: "low",
       brief: "high"
     });
     expect(FEATURE_MAX_TOKENS).toEqual({
@@ -47,9 +49,24 @@ describe("feature tables", () => {
       voice: 4000,
       triage: 4000,
       digest: 4000,
-      spike: 4000
+      spike: 4000,
+      ddtext: 4000
     });
     expect(HAIKU_MAX_PROMPT_TOKENS).toBe(90_000);
+  });
+
+  // P5a test 64 (§3.12.1): every feature has all three, and DD text triage is Haiku, effort low, 4,000 tokens.
+  it("gives every feature a model, an effort and an output cap; ddtext is Haiku / low / 4000", () => {
+    const features = Object.keys(EXEC_MODELS).sort();
+    expect(Object.keys(FEATURE_EFFORT).sort()).toEqual(features);
+    expect(Object.keys(FEATURE_MAX_TOKENS).sort()).toEqual(features);
+    for (const f of features as (keyof typeof EXEC_MODELS)[]) {
+      expect(isPricedModel(EXEC_MODELS[f])).toBe(true);
+      expect(["low", "medium", "high", "xhigh", "max"]).toContain(FEATURE_EFFORT[f]);
+      expect(Number.isSafeInteger(FEATURE_MAX_TOKENS[f]) && FEATURE_MAX_TOKENS[f] > 0).toBe(true);
+    }
+    expect(features).toContain("ddtext");
+    expect([EXEC_MODELS.ddtext, FEATURE_EFFORT.ddtext, FEATURE_MAX_TOKENS.ddtext]).toEqual([HAIKU_MODEL, "low", 4000]);
   });
 
   it("is frozen, so no caller can repoint a feature at runtime", () => {

@@ -5,7 +5,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OverviewView } from "@/components/exec/overview/OverviewView";
-import type { AttentionItem } from "@/lib/exec/attention-types";
+import type { AttentionFeedItem } from "@/lib/exec/attention-types";
 import type { ProjectHealth } from "@/lib/exec/analysis/projects";
 import type {
   DeadlineRow,
@@ -43,8 +43,9 @@ const hrefs = (markup: string) => [...markup.matchAll(/href="([^"]*)"/g)].map((m
 const ok = <T>(data: T): OverviewSection<T> => ({ ok: true, data });
 const FAILED = { ok: false, error: "unavailable" } as const;
 
-function item(id: string, over: Partial<AttentionItem> = {}): AttentionItem {
+function item(id: string, over: Partial<AttentionFeedItem> = {}): AttentionFeedItem {
   return {
+    version: "2026-11-04T14:50:00.123456+00:00",
     id,
     principalId: "ep_owner",
     fingerprint: `dd:overdue:assignee:${id}`,
@@ -94,7 +95,7 @@ const TILES: OverviewTiles = {
   hoursLogged: ok({ hours: 23.5, clockedIn: 3, basis: "derived" })
 };
 
-const ATTENTION: OverviewAttention = { items: [item("ea_1"), item("ea_2")], limit: 20, checkedAt: "2026-11-04T14:50:00Z", emailUnchecked: false };
+const ATTENTION: OverviewAttention = { items: [item("ea_1"), item("ea_2")], limit: 20, checkedAt: "2026-11-04T14:50:00Z", emailUnchecked: false, hasMore: false, hiddenEmail: 0, emailScreen: "none", ddtextCheckedAt: null };
 
 const APPROVALS: OverviewApprovals = {
   total: 7,
@@ -225,7 +226,7 @@ const EMPTY = overview({
     eodSubmitted: ok({ count: 0, basis: "record" }),
     hoursLogged: ok({ hours: 0, clockedIn: 0, basis: "derived" })
   }),
-  attention: ok({ items: [], limit: 20, checkedAt: null, emailUnchecked: false }),
+  attention: ok({ items: [], limit: 20, checkedAt: null, emailUnchecked: false, hasMore: false, hiddenEmail: 0, emailScreen: "none", ddtextCheckedAt: null }),
   approvals: ok({ total: 0, buckets: APPROVALS.buckets.map((b) => ({ ...b, count: 0, oldestAt: null })) }),
   deadlines: ok({ items: [], total: 0, days: 7, limit: 10 }),
   projects: ok({ items: [], total: 0, limit: 8 }),
@@ -394,7 +395,7 @@ describe("OverviewView: empty", () => {
   });
 
   it("says nothing needs him only when a check has run", () => {
-    const checked = textOf(render(overview({ attention: ok({ items: [], limit: 20, checkedAt: "2026-11-04T14:55:00Z", emailUnchecked: false }) })));
+    const checked = textOf(render(overview({ attention: ok({ items: [], limit: 20, checkedAt: "2026-11-04T14:55:00Z", emailUnchecked: false, hasMore: false, hiddenEmail: 0, emailScreen: "none", ddtextCheckedAt: null }) })));
     expect(checked).toContain("Nothing needs you right now.");
     expect(checked).toContain("Checked 5 min ago");
   });

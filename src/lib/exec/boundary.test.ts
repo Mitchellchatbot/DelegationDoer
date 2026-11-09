@@ -951,7 +951,8 @@ const isP4ContentFile = (p: string) =>
   p.startsWith("src/app/api/exec/drafts/") ||
   p.startsWith("src/app/(main)/executive/email/drafts/");
 const isP4Handler = (p: string) => /^src\/lib\/exec\/handlers\/(?:draft|voice)-[^/]*\.ts$/.test(p);
-const vocabFor = (p: string): Vocabulary => (isP4ContentFile(p) ? P4_VOCAB : P3_VOCAB);
+// P5a 9b: the DD text files take the wider DD text vocabulary (P5_VOCAB, below).
+const vocabFor = (p: string): Vocabulary => (isP4ContentFile(p) ? P4_VOCAB : isDdTextFile(p) ? P5_VOCAB : P3_VOCAB);
 
 /** B8: rule 9 over the P4 file class with the P4 vocabulary; the handler-return check covers the P4 handlers. */
 function p4ContentOffenses(file: string, f: MailFacts): string[] {
@@ -1375,6 +1376,360 @@ function payloadOffensesOf(file: string, f: P4Facts): string[] {
   return isP4ContentFile(file) ? f.payloadOffenses.map((at) => `${file}:${at}`) : [];
 }
 
+// --- P5a rules 9b-16 (P5a contract §3.14.3) ----------------------------------------------------
+//
+//   9b  (S4, K22) The DD text files (isDdTextFile: the ddtext triage, store, producer and handlers,
+//       sources/dd-text.ts, intake-screen.ts, text/**, agent/**, the chat route) never hand a
+//       content-named value to console.* or notifyOps, and the ddtext job handlers never return one,
+//       under P3's words plus DD text's (detail, comment, note, description, brief, risk, message,
+//       summary, client_email, …): P5_VOCAB.
+//   10  (S4, K3, K29) Only triage/ddtext.ts, handlers/ddtext-triage.ts, agent/** and projects-view.ts
+//       (value names ⊆ {listMeetingBriefRisks}) reference sources/dd-text, in any form but a type-only
+//       import (a type carries no text); nobody takes it whole.
+//   11  (S3) Only attention.ts and attention-read.ts name listAttention: every other feed read goes
+//       through the screened accessor.
+//   12  (A4) No exec file names projects_updates_seen_at or the string /api/projects/updates.
+//   13  (S1, S2) Every exported HTTP handler under src/app/api/exec/** calls
+//       requireExecPrincipal(…, { requireStrongSignIn: true }) in the route file; every one but GET,
+//       HEAD and OPTIONS also calls assertSameOrigin( or isSameOriginRequest( there. A handler the
+//       scan can't read (re-exported, or a wrapper's return value) fails. And http.ts is the only exec
+//       file that names the sec-fetch-site header: one same-origin implementation.
+//   14  (a-correct-1) Only ddtext-store.ts and handlers/purge.ts name exec_ddtext_*; only
+//       attention-feedback.ts names exec_attention_feedback; only settings.ts and principal.ts write
+//       exec_settings; only attention.ts, email-store.ts, handlers/purge.ts and ddtext-store.ts write
+//       exec_attention_items; only drafts-store.ts writes exec_voice_profile. A write is
+//       .insert/.update/.upsert/.delete called on .from(<table>) (a literal, a const bound to one, or a
+//       local `() => ….from(<table>)` factory).
+//   15  (C25, S5) Only sources/dd.ts and intake-screen.ts name listTaskThreadLinks and
+//       listPendingApprovalItems.
+//   16  (a-build-6) No "use client" file under src/components/exec/** or src/lib/exec/ui/** reaches,
+//       through value imports followed within src (type-only imports skipped: they're erased), a
+//       module with `import "server-only"`; settings-fields.ts, view-types.ts, attention-types.ts,
+//       ddtext-types.ts and drafts-links.ts are held to the same walk.
+// Names decide (as in rule 9); comments and strings don't count except where a rule is about a
+// string (12, 13's header, 14's table names).
+
+const P5_VOCAB: Vocabulary = {
+  words: new Set([
+    ...CONTENT_WORDS,
+    "detail", "details", "blockers", "comment", "comments", "note", "notes", "description", "descriptions",
+    "brief", "briefs", "risk", "risks", "message", "messages", "summary", "summaries"
+  ]),
+  names: new Set([...CONTENT_NAMES, "clientemail", "client_email"])
+};
+
+const isDdTextFile = (p: string) =>
+  isExecCode(p) &&
+  (p === "src/lib/exec/triage/ddtext.ts" ||
+    p === "src/lib/exec/sources/dd-text.ts" ||
+    p === "src/lib/exec/ddtext-store.ts" ||
+    p === "src/lib/exec/producers/ddtext.ts" ||
+    /^src\/lib\/exec\/handlers\/ddtext[^/]*\.ts$/.test(p) ||
+    p === "src/lib/exec/intake-screen.ts" ||
+    p.startsWith("src/lib/exec/text/") ||
+    p.startsWith("src/lib/exec/agent/") ||
+    p.startsWith("src/app/api/exec/chat/"));
+const isDdtextHandler = (p: string) => /^src\/lib\/exec\/handlers\/ddtext[^/]*\.ts$/.test(p);
+
+const DD_TEXT_MODULE = "src/lib/exec/sources/dd-text";
+const DD_TEXT_IMPORTERS: ReadonlySet<string> = new Set(["src/lib/exec/triage/ddtext.ts", "src/lib/exec/handlers/ddtext-triage.ts"]);
+const PROJECTS_VIEW_FILE = "src/lib/exec/projects-view.ts";
+const PROJECTS_VIEW_DD_TEXT_NAMES: ReadonlySet<string> = new Set(["listMeetingBriefRisks"]);
+const LIST_ATTENTION_FILES: ReadonlySet<string> = new Set(["src/lib/exec/attention.ts", "src/lib/exec/attention-read.ts"]);
+const INTAKE_ONLY_NAMES: ReadonlySet<string> = new Set(["listTaskThreadLinks", "listPendingApprovalItems"]);
+const INTAKE_ONLY_FILES: ReadonlySet<string> = new Set(["src/lib/exec/sources/dd.ts", "src/lib/exec/intake-screen.ts"]);
+const GUARDED_IDENTS: ReadonlySet<string> = new Set(["listAttention", ...INTAKE_ONLY_NAMES, "projects_updates_seen_at"]);
+const HTTP_FILE = "src/lib/exec/http.ts";
+const SAME_ORIGIN_HEADER = "sec-fetch-site";
+const SAME_ORIGIN_CALLS = ["assertSameOrigin", "isSameOriginRequest"] as const;
+const READ_METHODS: ReadonlySet<string> = new Set(["GET", "HEAD", "OPTIONS"]);
+const isExecRouteFile = (p: string) => /^src\/app\/api\/exec\/(?:.*\/)?route\.[cm]?[jt]sx?$/.test(p);
+const DDTEXT_TABLE_TEXT = /exec_ddtext_(?:items|signals|replace_item)/;
+const DDTEXT_TABLE_FILES: ReadonlySet<string> = new Set(["src/lib/exec/ddtext-store.ts", "src/lib/exec/handlers/purge.ts"]);
+const FEEDBACK_TABLE_TEXT = /exec_attention_feedback/;
+const FEEDBACK_TABLE_FILES: ReadonlySet<string> = new Set(["src/lib/exec/attention-feedback.ts"]);
+const WRITE_METHODS: ReadonlySet<string> = new Set(["insert", "update", "upsert", "delete"]);
+const TABLE_WRITERS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ["exec_settings", new Set(["src/lib/exec/settings.ts", "src/lib/exec/principal.ts"])],
+  [
+    "exec_attention_items",
+    new Set(["src/lib/exec/attention.ts", "src/lib/exec/email-store.ts", "src/lib/exec/handlers/purge.ts", "src/lib/exec/ddtext-store.ts"])
+  ],
+  ["exec_voice_profile", new Set(["src/lib/exec/drafts-store.ts"])]
+]);
+const PROJECTS_UPDATES_TEXT = /projects_updates_seen_at|\/api\/projects\/updates/;
+const CLIENT_SAFE_MODULES = [
+  "src/lib/exec/settings-fields.ts",
+  "src/lib/exec/view-types.ts",
+  "src/lib/exec/attention-types.ts",
+  "src/lib/exec/ddtext-types.ts",
+  "src/lib/exec/drafts-links.ts"
+];
+const isClientRoot = (p: string) => p.startsWith("src/components/exec/") || p.startsWith("src/lib/exec/ui/");
+// What rule 9b-16 look for in strings: everything else in a string is ignored.
+const GUARDED_TEXT = /exec_ddtext_|exec_attention_feedback|projects_updates_seen_at|\/api\/projects\/updates|sec-fetch-site/i;
+
+interface P5Ref {
+  /** Resolved repo path without extension, lowercased; null for a bare specifier. */
+  target: string | null;
+  line: number;
+  /** Value names imported or re-exported by name ("default" for a default import). */
+  names: string[];
+  /** Namespace import, export *, import(), require(), import-equals. */
+  whole: boolean;
+  /** `import type`, all-type named imports, `export type`, import("…") types: erased at runtime. */
+  typeOnly: boolean;
+}
+interface P5Handler {
+  name: string;
+  line: number;
+  /** A function body the scan can read (not re-exported, not a wrapper's return value). */
+  readable: boolean;
+  strongGate: boolean;
+  sameOrigin: boolean;
+}
+interface P5Facts {
+  refs: P5Ref[];
+  /** `import "server-only"` */
+  serverOnly: boolean;
+  /** A "use client" directive in the prologue. */
+  useClient: boolean;
+  /** GUARDED_IDENTS named in code (identifiers, and string keys of element access). */
+  idents: { name: string; line: number }[];
+  /** String and template texts that touch GUARDED_TEXT. */
+  texts: { text: string; line: number }[];
+  /** Supabase writes: .insert/.update/.upsert/.delete on .from(<table>). */
+  writes: { table: string; method: string; line: number }[];
+  /** Exported HTTP handlers (rule 13). */
+  handlers: P5Handler[];
+}
+
+function hasUseClient(sf: ts.SourceFile): boolean {
+  for (const s of sf.statements) {
+    if (!ts.isExpressionStatement(s) || !ts.isStringLiteral(s.expression)) return false;
+    if (s.expression.text === "use client") return true;
+  }
+  return false;
+}
+
+function analyzeP5(sf: ts.SourceFile): P5Facts {
+  const lineOf = (n: ts.Node) => sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1;
+  const facts: P5Facts = { refs: [], serverOnly: false, useClient: hasUseClient(sf), idents: [], texts: [], writes: [], handlers: [] };
+  const addRef = (spec: string, node: ts.Node, names: string[], whole: boolean, typeOnly: boolean) => {
+    const abs = resolveSpecifier(sf.fileName, spec);
+    facts.refs.push({ target: abs === null ? null : relPath(stripExt(abs)).toLowerCase(), line: lineOf(node), names, whole, typeOnly });
+  };
+
+  // Tables named by a const in this file, and local `() => ….from(T)` factories.
+  const consts = new Map<string, string>();
+  const factories = new Map<string, string>();
+  const tableOf = (e: ts.Expression | undefined): string | null => {
+    if (e === undefined) return null;
+    if (ts.isStringLiteralLike(e)) return e.text;
+    if (ts.isIdentifier(e)) return consts.get(e.text) ?? null;
+    return null;
+  };
+  const fromTable = (e: ts.Expression): string | null => {
+    if (!ts.isCallExpression(e)) return null;
+    const callee = e.expression;
+    if (ts.isPropertyAccessExpression(callee) && callee.name.text === "from") return tableOf(e.arguments[0]);
+    if (ts.isIdentifier(callee) && factories.has(callee.text) && e.arguments.length === 0) return factories.get(callee.text) ?? null;
+    return null;
+  };
+  const collectBindings = (n: ts.Node): void => {
+    if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.initializer) {
+      const init = n.initializer;
+      if (ts.isStringLiteralLike(init)) consts.set(n.name.text, init.text);
+    }
+    ts.forEachChild(n, collectBindings);
+  };
+  const collectFactories = (n: ts.Node): void => {
+    if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.initializer && ts.isArrowFunction(n.initializer) && !ts.isBlock(n.initializer.body)) {
+      const t = fromTable(n.initializer.body);
+      if (t !== null) factories.set(n.name.text, t);
+    }
+    ts.forEachChild(n, collectFactories);
+  };
+  collectBindings(sf);
+  collectFactories(sf);
+
+  const handlerOf = (name: string, line: number, body: ts.Node | undefined): P5Handler => {
+    const gate = body === undefined ? null : findCall(body, "requireExecPrincipal");
+    return {
+      name,
+      line,
+      readable: body !== undefined,
+      strongGate: gate !== null && gate.arguments.some((a) => hasTrueProperty(a, "requireStrongSignIn")),
+      sameOrigin: body !== undefined && SAME_ORIGIN_CALLS.some((c) => findCall(body, c) !== null)
+    };
+  };
+
+  const visit = (node: ts.Node): void => {
+    if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
+      const clause = node.importClause;
+      if (!clause && node.moduleSpecifier.text === "server-only") facts.serverOnly = true;
+      const bindings = clause?.namedBindings;
+      const named = bindings && ts.isNamedImports(bindings) ? bindings.elements : undefined;
+      const valueNamed = named ? named.filter((el) => !el.isTypeOnly).map((el) => (el.propertyName ?? el.name).text) : [];
+      const names = [...(clause?.name && !clause.isTypeOnly ? ["default"] : []), ...(clause?.isTypeOnly ? [] : valueNamed)];
+      const namespace = !!bindings && ts.isNamespaceImport(bindings);
+      const typeOnly = !!clause && (clause.isTypeOnly || (!clause.name && !namespace && named !== undefined && named.length > 0 && named.every((el) => el.isTypeOnly)));
+      addRef(node.moduleSpecifier.text, node, names, namespace, typeOnly);
+    } else if (ts.isExportDeclaration(node) && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) {
+      const clause = node.exportClause;
+      const named = clause && ts.isNamedExports(clause) ? clause.elements : undefined;
+      const typeOnly = node.isTypeOnly || (named !== undefined && named.length > 0 && named.every((el) => el.isTypeOnly));
+      const names = named ? named.filter((el) => !el.isTypeOnly).map((el) => (el.propertyName ?? el.name).text) : [];
+      addRef(node.moduleSpecifier.text, node, names, !clause || ts.isNamespaceExport(clause), typeOnly);
+    } else if (ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference) && ts.isStringLiteral(node.moduleReference.expression)) {
+      addRef(node.moduleReference.expression.text, node, [], true, node.isTypeOnly);
+    } else if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument) && ts.isStringLiteral(node.argument.literal)) {
+      addRef(node.argument.literal.text, node, [], true, true);
+    } else if (ts.isCallExpression(node)) {
+      const callee = node.expression;
+      const isLoader = callee.kind === ts.SyntaxKind.ImportKeyword || (ts.isIdentifier(callee) && callee.text === "require");
+      const [arg] = node.arguments;
+      if (isLoader && arg && ts.isStringLiteralLike(arg)) addRef(arg.text, node, [], true, false);
+      if (ts.isPropertyAccessExpression(callee) && WRITE_METHODS.has(callee.name.text)) {
+        const table = fromTable(callee.expression);
+        if (table !== null) facts.writes.push({ table, method: callee.name.text, line: lineOf(node) });
+      }
+    }
+
+    if (ts.isIdentifier(node) && GUARDED_IDENTS.has(node.text)) facts.idents.push({ name: node.text, line: lineOf(node) });
+    if (ts.isElementAccessExpression(node) && ts.isStringLiteralLike(node.argumentExpression) && GUARDED_IDENTS.has(node.argumentExpression.text)) {
+      facts.idents.push({ name: node.argumentExpression.text, line: lineOf(node) });
+    }
+    if ((ts.isStringLiteralLike(node) || ts.isTemplateHead(node) || ts.isTemplateMiddle(node) || ts.isTemplateTail(node)) && GUARDED_TEXT.test(node.text)) {
+      facts.texts.push({ text: node.text, line: lineOf(node) });
+    }
+
+    if (ts.isFunctionDeclaration(node) && node.name && HTTP_METHODS.has(node.name.text) && hasExportModifier(node)) {
+      facts.handlers.push(handlerOf(node.name.text, lineOf(node), node.body));
+    }
+    if (ts.isVariableStatement(node) && hasExportModifier(node)) {
+      for (const d of node.declarationList.declarations) {
+        if (!ts.isIdentifier(d.name) || !HTTP_METHODS.has(d.name.text)) continue;
+        const init = d.initializer;
+        const fn = init && (ts.isArrowFunction(init) || ts.isFunctionExpression(init)) ? init : undefined;
+        facts.handlers.push(handlerOf(d.name.text, lineOf(d), fn?.body));
+      }
+    }
+    if (ts.isExportDeclaration(node) && node.exportClause && ts.isNamedExports(node.exportClause)) {
+      for (const el of node.exportClause.elements) {
+        if (HTTP_METHODS.has(el.name.text)) facts.handlers.push(handlerOf(el.name.text, lineOf(el), undefined));
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return facts;
+}
+
+/** 9b: content in logs, alerts and ddtext handler returns, in the DD text files (P5_VOCAB). */
+function ddTextContentOffenses(file: string, f: MailFacts): string[] {
+  if (!isDdTextFile(file)) return [];
+  return [...f.contentLogs.map((at) => `${file}:${at}`), ...(isDdtextHandler(file) ? f.contentReturns.map((at) => `${file}:${at}`) : [])];
+}
+
+/** 10: references to sources/dd-text outside its importers (type-only ones aside). */
+function ddTextImportOffenses(file: string, f: P5Facts): string[] {
+  const out: string[] = [];
+  for (const r of f.refs) {
+    if (r.target !== DD_TEXT_MODULE || r.typeOnly || file === "src/lib/exec/sources/dd-text.ts") continue;
+    if (r.whole) {
+      out.push(`${file}:${r.line}: takes sources/dd-text whole`);
+      continue;
+    }
+    if (DD_TEXT_IMPORTERS.has(file) || file.startsWith("src/lib/exec/agent/")) continue;
+    if (file === PROJECTS_VIEW_FILE) {
+      for (const name of r.names) if (!PROJECTS_VIEW_DD_TEXT_NAMES.has(name)) out.push(`${file}:${r.line}: imports ${name} from sources/dd-text`);
+      continue;
+    }
+    out.push(`${file}:${r.line}: imports sources/dd-text`);
+  }
+  return out;
+}
+
+/** 11: listAttention named outside attention.ts and attention-read.ts. */
+function listAttentionOffenses(file: string, f: P5Facts): string[] {
+  if (LIST_ATTENTION_FILES.has(file)) return [];
+  return f.idents.filter((i) => i.name === "listAttention").map((i) => `${file}:${i.line}: names listAttention`);
+}
+
+/** 12: DD's project-updates read marker, in exec code. */
+function projectsUpdatesOffenses(file: string, f: P5Facts): string[] {
+  if (!isExecCode(file)) return [];
+  return [
+    ...f.idents.filter((i) => i.name === "projects_updates_seen_at").map((i) => `${file}:${i.line}: names projects_updates_seen_at`),
+    ...f.texts.filter((t) => PROJECTS_UPDATES_TEXT.test(t.text)).map((t) => `${file}:${t.line}: names ${JSON.stringify(t.text)}`)
+  ];
+}
+
+/** 13: every exec route handler gates with the step-up; mutations check same-origin; one header reader. */
+function execRouteOffenses(file: string, f: P5Facts): string[] {
+  const out: string[] = [];
+  if (isExecCode(file) && file !== HTTP_FILE) {
+    for (const t of f.texts) if (t.text.toLowerCase().includes(SAME_ORIGIN_HEADER)) out.push(`${file}:${t.line}: names the ${SAME_ORIGIN_HEADER} header (only http.ts may)`);
+  }
+  if (!isExecRouteFile(file)) return out;
+  for (const h of f.handlers) {
+    if (!h.readable) {
+      out.push(`${file}:${h.line}: ${h.name} isn't a function the scan can read`);
+      continue;
+    }
+    if (!h.strongGate) out.push(`${file}:${h.line}: ${h.name} doesn't call requireExecPrincipal with requireStrongSignIn: true`);
+    if (!READ_METHODS.has(h.name) && !h.sameOrigin) out.push(`${file}:${h.line}: ${h.name} calls neither assertSameOrigin nor isSameOriginRequest`);
+  }
+  return out;
+}
+
+/** 14: the P5a tables' names and the guarded tables' writers. */
+function tableOffenses(file: string, f: P5Facts): string[] {
+  const out: string[] = [];
+  for (const t of f.texts) {
+    if (DDTEXT_TABLE_TEXT.test(t.text) && !DDTEXT_TABLE_FILES.has(file)) out.push(`${file}:${t.line}: names ${JSON.stringify(t.text)}`);
+    if (FEEDBACK_TABLE_TEXT.test(t.text) && !FEEDBACK_TABLE_FILES.has(file)) out.push(`${file}:${t.line}: names ${JSON.stringify(t.text)}`);
+  }
+  for (const w of f.writes) {
+    const writers = TABLE_WRITERS.get(w.table);
+    if (writers !== undefined && !writers.has(file)) out.push(`${file}:${w.line}: ${w.method}s ${w.table}`);
+  }
+  return out;
+}
+
+/** 15: the raw intake-link and approval-item reads named outside sources/dd.ts and intake-screen.ts. */
+function intakeOnlyOffenses(file: string, f: P5Facts): string[] {
+  if (INTAKE_ONLY_FILES.has(file)) return [];
+  return f.idents.filter((i) => INTAKE_ONLY_NAMES.has(i.name)).map((i) => `${file}:${i.line}: names ${i.name}`);
+}
+
+/** 16: the first server-only module a file reaches through value imports within src, as a chain; null when none. */
+function serverOnlyChain(start: string, startFacts: P5Facts, factsByFile: ReadonlyMap<string, { p5: P5Facts }>, moduleFiles: ReadonlyMap<string, string>): string[] | null {
+  const seen = new Set<string>([start]);
+  const queue: { file: string; facts: P5Facts; chain: string[] }[] = [{ file: start, facts: startFacts, chain: [start] }];
+  while (queue.length > 0) {
+    const { facts, chain } = queue.shift() as { file: string; facts: P5Facts; chain: string[] };
+    if (facts.serverOnly) return chain;
+    for (const r of facts.refs) {
+      if (r.typeOnly || r.target === null) continue;
+      const next = moduleFiles.get(r.target) ?? moduleFiles.get(`${r.target}/index`);
+      if (next === undefined || seen.has(next)) continue;
+      seen.add(next);
+      const nextFacts = factsByFile.get(next)?.p5;
+      if (nextFacts) queue.push({ file: next, facts: nextFacts, chain: [...chain, next] });
+    }
+  }
+  return null;
+}
+
+/** Repo path without extension (lowercased) → the scanned file. */
+function moduleIndex(files: Iterable<string>): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const file of files) out.set(stripExt(file).toLowerCase(), file);
+  return out;
+}
+
 // --- the program --------------------------------------------------------------------
 
 function compilerOptions(): ts.CompilerOptions {
@@ -1417,6 +1772,8 @@ interface FileFacts extends ImportFacts {
   mail: MailFacts;
   /** P4 rules B1-B13, BD14, BD15 */
   p4: P4Facts;
+  /** P5a rules 10-16 */
+  p5: P5Facts;
 }
 
 interface Scan {
@@ -1469,7 +1826,8 @@ function scanTree(probes: ReadonlyMap<string, string>, exportProbes: readonly st
       mints: findMints(sf, checker, brand),
       bidi: bidiLines(sf.text),
       mail: analyzeMail(sf, vocabFor(file)),
-      p4: analyzeP4(sf)
+      p4: analyzeP4(sf),
+      p5: analyzeP5(sf)
     });
   }
   const nextConfigPath = path.join(ROOT, NEXT_CONFIG_FILE);
@@ -1620,9 +1978,10 @@ const exportProbe = probe(
 
 // One program for the tree and the probes: building it is most of the cost.
 let scan: Scan;
+// The tree keeps growing and the host may be busy: building the program can take minutes.
 beforeAll(() => {
   scan = scanTree(probes, [exportProbe]);
-}, 180_000);
+}, 600_000);
 
 const factsOf = (file: string): FileFacts => {
   const facts = scan.facts.get(file);
@@ -2413,5 +2772,311 @@ describe("P4 boundary detectors (B13 self-tests, BD14-BD16)", () => {
     expect(p4ContentOffenses("src/lib/exec/handlers/draft-generate.ts", mailAt("src/lib/exec/handlers/draft-generate.ts", handler))).toHaveLength(1);
     const clean = 'export const h = { kind: "exec.draft-generate", lane: "interactive", timeoutMs: 1, run: async (ctx) => ({ draftId, outcome: "ok", costUsd: 0.1 }) };';
     expect(p4ContentOffenses("src/lib/exec/handlers/draft-generate.ts", mailAt("src/lib/exec/handlers/draft-generate.ts", clean))).toEqual([]);
+  });
+});
+
+// --- P5a rules 9b-16 (real source tree) ------------------------------------------------------
+
+const p5Offenses = (check: (file: string, f: P5Facts) => string[]) => [...scan.facts].flatMap(([file, facts]) => check(file, facts.p5));
+
+describe("P5a boundary (real source tree)", () => {
+  it("knows the DD text class, the exec routes and the client roots", () => {
+    for (const p of [
+      "src/lib/exec/triage/ddtext.ts",
+      "src/lib/exec/sources/dd-text.ts",
+      "src/lib/exec/ddtext-store.ts",
+      "src/lib/exec/producers/ddtext.ts",
+      "src/lib/exec/handlers/ddtext-triage.ts",
+      "src/lib/exec/intake-screen.ts",
+      "src/lib/exec/text/untrusted.ts",
+      "src/lib/exec/agent/tools.ts",
+      "src/app/api/exec/chat/route.ts"
+    ]) {
+      expect(isDdTextFile(p)).toBe(true);
+    }
+    for (const p of ["src/lib/exec/sources/dd.ts", "src/lib/exec/triage/email-text.ts", "src/lib/exec/producers/dd.ts", "src/lib/ddtext.ts"]) expect(isDdTextFile(p)).toBe(false);
+    expect(isDdtextHandler("src/lib/exec/handlers/ddtext-triage.ts")).toBe(true);
+    expect(isDdtextHandler("src/lib/exec/handlers/dd-attention.ts")).toBe(false);
+    expect(isExecRouteFile("src/app/api/exec/attention/[id]/feedback/route.ts")).toBe(true);
+    expect(isExecRouteFile("src/app/api/exec/drafts/[id]/send/route.ts")).toBe(true);
+    expect(isExecRouteFile("src/app/api/exec/route.ts")).toBe(true);
+    expect(isExecRouteFile("src/app/api/cron/exec-tick/route.ts")).toBe(false);
+    expect(isExecRouteFile("src/app/api/exec/attention/helpers.ts")).toBe(false);
+    // The P5a files the rules are about are in the scan.
+    for (const f of ["src/lib/exec/attention-read.ts", "src/lib/exec/http.ts", "src/app/api/exec/attention/route.ts", "src/app/api/exec/attention/[id]/route.ts"]) {
+      expect(scan.files).toContain(f);
+    }
+  });
+
+  it("9b no DD text file logs, alerts or (from a ddtext handler) returns DD text, under the wider vocabulary", () => {
+    expect(p3Offenses(ddTextContentOffenses)).toEqual([]);
+  });
+
+  it("10 sources/dd-text is referenced only by the triage, its handler, agent/** and projects-view (listMeetingBriefRisks only)", () => {
+    expect(p5Offenses(ddTextImportOffenses)).toEqual([]);
+  });
+
+  it("11 only attention.ts and attention-read.ts name listAttention", () => {
+    expect(factsOf("src/lib/exec/attention.ts").p5.idents.some((i) => i.name === "listAttention")).toBe(true);
+    expect(p5Offenses(listAttentionOffenses)).toEqual([]);
+  });
+
+  it("12 no exec file names projects_updates_seen_at or /api/projects/updates", () => {
+    expect(p5Offenses(projectsUpdatesOffenses)).toEqual([]);
+  });
+
+  it("13 every exec route handler gates with the step-up, every mutation checks same-origin, and only http.ts names the header", () => {
+    const routes = [...scan.facts].filter(([file]) => isExecRouteFile(file));
+    expect(routes.length).toBeGreaterThanOrEqual(12);
+    // The detector sees the real handlers (P3's assess route, P4's drafts routes, P5a's attention routes).
+    for (const file of ["src/app/api/exec/email/threads/[threadId]/assess/route.ts", "src/app/api/exec/drafts/[id]/send/route.ts", "src/app/api/exec/attention/[id]/route.ts"]) {
+      const handlers = factsOf(file).p5.handlers;
+      expect(handlers.length).toBeGreaterThan(0);
+      expect(handlers.filter((h) => !h.readable || !h.strongGate || (!READ_METHODS.has(h.name) && !h.sameOrigin)).map((h) => `${file}#${h.name}`)).toEqual([]);
+      expect(handlers.some((h) => !READ_METHODS.has(h.name) && h.sameOrigin)).toBe(true);
+    }
+    expect(factsOf(HTTP_FILE).p5.texts.some((t) => t.text.toLowerCase() === SAME_ORIGIN_HEADER)).toBe(true);
+    expect(p5Offenses(execRouteOffenses)).toEqual([]);
+  });
+
+  it("14 the P5a tables are named only by their modules, and the guarded tables written only by theirs", () => {
+    expect(factsOf("src/lib/exec/attention.ts").p5.writes.map((w) => `${w.method} ${w.table}`)).toEqual(
+      expect.arrayContaining(["upsert exec_attention_items", "update exec_attention_items", "delete exec_attention_items"])
+    );
+    expect(factsOf("src/lib/exec/handlers/purge.ts").p5.writes.some((w) => w.table === "exec_attention_items" && w.method === "delete")).toBe(true);
+    expect(factsOf("src/lib/exec/drafts-store.ts").p5.writes.some((w) => w.table === "exec_voice_profile")).toBe(true);
+    expect(factsOf("src/lib/exec/attention-feedback.ts").p5.texts.some((t) => t.text === "exec_attention_feedback")).toBe(true);
+    expect(p5Offenses(tableOffenses)).toEqual([]);
+  });
+
+  it("15 only sources/dd.ts and intake-screen.ts name listTaskThreadLinks and listPendingApprovalItems", () => {
+    expect(p5Offenses(intakeOnlyOffenses)).toEqual([]);
+  });
+
+  it("16 no client file reaches a server-only module through value imports; the shared type and link modules are client-safe", () => {
+    const modules = moduleIndex(scan.facts.keys());
+    const roots = [...scan.facts].filter(([file, facts]) => isClientRoot(file) && facts.p5.useClient);
+    expect(roots.length).toBeGreaterThan(0);
+    const offenders = roots.flatMap(([file, facts]) => {
+      const chain = serverOnlyChain(file, facts.p5, scan.facts, modules);
+      return chain === null ? [] : [chain.join(" → ")];
+    });
+    expect(offenders).toEqual([]);
+    for (const file of CLIENT_SAFE_MODULES) {
+      expect(scan.files).toContain(file);
+      expect(serverOnlyChain(file, factsOf(file).p5, scan.facts, modules)).toBeNull();
+    }
+    // The walk does reach server-only modules on real code: the server feed accessor is one.
+    expect(serverOnlyChain("src/lib/exec/overview.ts", factsOf("src/lib/exec/overview.ts").p5, scan.facts, modules)).not.toBeNull();
+  });
+
+  it("integrator: each area's boundary requests hold on the real tree", () => {
+    // B (13): the settings routes, and A's feedback route, gate with the step-up; their mutations check same-origin.
+    for (const file of ["src/app/api/exec/settings/route.ts", "src/app/api/exec/settings/voice-reset/route.ts", "src/app/api/exec/attention/[id]/feedback/route.ts", "src/app/api/exec/attention/route.ts"]) {
+      const handlers = factsOf(file).p5.handlers;
+      expect(handlers.length).toBeGreaterThan(0);
+      for (const h of handlers) {
+        expect(`${file}#${h.name}:${h.readable && h.strongGate}`).toBe(`${file}#${h.name}:true`);
+        if (!READ_METHODS.has(h.name)) expect(`${file}#${h.name}:${h.sameOrigin}`).toBe(`${file}#${h.name}:true`);
+      }
+    }
+    expect(factsOf("src/app/api/exec/settings/route.ts").p5.handlers.map((h) => h.name).sort()).toEqual(["GET", "PATCH"]);
+    // B (14): settings.ts writes exec_settings; purge.ts names no P5a table (its steps go through ddtext-store and attention-feedback).
+    expect(factsOf("src/lib/exec/settings.ts").p5.writes.some((w) => w.table === "exec_settings")).toBe(true);
+    expect(factsOf("src/lib/exec/handlers/purge.ts").p5.texts.filter((x) => DDTEXT_TABLE_TEXT.test(x.text) || FEEDBACK_TABLE_TEXT.test(x.text))).toEqual([]);
+    // D (14): ddtext-store.ts deletes ddtext attention rows itself (the orphan purge, deleteAllDdtextData).
+    expect(factsOf("src/lib/exec/ddtext-store.ts").p5.writes.some((w) => w.table === "exec_attention_items" && w.method === "delete")).toBe(true);
+    // C (10): projects-view takes exactly listMeetingBriefRisks from sources/dd-text.
+    const pv = factsOf(PROJECTS_VIEW_FILE).p5.refs.filter((r) => r.target === DD_TEXT_MODULE && !r.typeOnly);
+    expect(pv.flatMap((r) => r.names)).toEqual(["listMeetingBriefRisks"]);
+    // C/D (15): the ddtext handler screens intake tasks through intake-screen, never the raw link read.
+    const handlerRefs = factsOf("src/lib/exec/handlers/ddtext-triage.ts").p5.refs;
+    expect(handlerRefs.some((r) => r.target === "src/lib/exec/intake-screen" && r.names.includes("restrictedIntakeTaskIds"))).toBe(true);
+    expect(handlerRefs.some((r) => r.names.includes("listTaskThreadLinks") || r.names.includes("listPendingApprovalItems"))).toBe(false);
+    // C (9b): intake-screen.ts is in the DD text class and in the scan.
+    expect(scan.files).toContain("src/lib/exec/intake-screen.ts");
+    // E (16): the four client islands are rule-16 roots.
+    const roots = new Set([...scan.facts].filter(([file, facts]) => isClientRoot(file) && facts.p5.useClient).map(([file]) => file));
+    for (const file of ["src/components/exec/feed/FeedList.tsx", "src/components/exec/team/TeamTable.tsx", "src/components/exec/settings/SettingsForm.tsx", "src/components/exec/settings/VoiceResetButton.tsx"]) {
+      expect(roots.has(file)).toBe(true);
+    }
+  });
+});
+
+describe("P5a boundary detectors (test 21: rules 9b-16 on probes)", () => {
+  const kindOf = (file: string) => (file.endsWith(".tsx") ? ts.ScriptKind.TSX : /\.[cm]?js$/.test(file) ? ts.ScriptKind.JS : ts.ScriptKind.TS);
+  const sourceAt = (file: string, code: string) => ts.createSourceFile(path.join(ROOT, file), code, ts.ScriptTarget.Latest, true, kindOf(file));
+  const p5At = (file: string, code: string) => analyzeP5(sourceAt(file, code));
+  const mailAt = (file: string, code: string) => analyzeMail(sourceAt(file, code), vocabFor(file));
+
+  // 9b
+  it.each([
+    ["src/lib/exec/triage/ddtext.ts", "console.log(c.detail);"],
+    ["src/lib/exec/triage/ddtext.ts", "console.error(`[exec-ddtext] ${err.message}`);"],
+    ["src/lib/exec/sources/dd-text.ts", "console.warn(row.blockers);"],
+    ["src/lib/exec/ddtext-store.ts", 'void notifyOps({ key: "k", title: "t", detail: signal.summary });'],
+    ["src/lib/exec/intake-screen.ts", "console.log(task.clientEmail);"],
+    ["src/lib/exec/text/untrusted.ts", "console.log(entry.text);"],
+    ["src/lib/exec/agent/tools.ts", "console.log(meeting.risks);"],
+    ["src/app/api/exec/chat/route.ts", "console.info(note);"],
+    ["src/lib/exec/producers/ddtext.ts", "console.log(comments.map((c) => c.id));"]
+  ])("9b flags content handed to a log in %s: %s", (file, code) => {
+    expect(ddTextContentOffenses(file, mailAt(file, code))).toHaveLength(1);
+  });
+
+  it.each([
+    ["src/lib/exec/triage/ddtext.ts", "console.log(`[exec-ddtext] ${principal.id}: items=${itemCount} calls=${callCount} deferred=${deferred}`);"],
+    ["src/lib/exec/ddtext-store.ts", "console.warn(`[exec-ddtext] write failed: ${error.code}`, { sourceId, kind });"],
+    ["src/lib/exec/handlers/ddtext-triage.ts", "// console.log(comment.text)\nconsole.log(noteCount, commentIds.length, summaryLength);"]
+  ])("9b does not flag ids, counts and codes in %s: %s", (file, code) => {
+    expect(ddTextContentOffenses(file, mailAt(file, code))).toEqual([]);
+  });
+
+  it("9b checks only the DD text files, and a ddtext handler's returns", () => {
+    expect(ddTextContentOffenses("src/lib/exec/team.ts", mailAt("src/lib/exec/team.ts", "console.log(note);"))).toEqual([]);
+    const handler = (ret: string) => `export const h = { kind: "exec.ddtext-triage", lane: "bulk", timeoutMs: 1, run: async (ctx) => (${ret}) };`;
+    expect(ddTextContentOffenses("src/lib/exec/handlers/ddtext-triage.ts", mailAt("src/lib/exec/handlers/ddtext-triage.ts", handler("{ summary: s.summary }")))).toHaveLength(1);
+    expect(ddTextContentOffenses("src/lib/exec/handlers/ddtext-triage.ts", mailAt("src/lib/exec/handlers/ddtext-triage.ts", handler("{ comments: batch }")))).toHaveLength(1);
+    expect(ddTextContentOffenses("src/lib/exec/handlers/ddtext-triage.ts", mailAt("src/lib/exec/handlers/ddtext-triage.ts", handler("{ items: 3, signals: 1, outcome: \"ok\" }")))).toEqual([]);
+  });
+
+  // 10
+  it.each([
+    ["src/lib/exec/team.ts", 'import { listSubmittedNoteBlockersSince } from "@/lib/exec/sources/dd-text";'],
+    ["src/lib/exec/projects-view.ts", 'import { listMeetingBriefRisks, listActivityTextSince } from "@/lib/exec/sources/dd-text";'],
+    ["src/lib/exec/triage/ddtext.ts", 'import * as text from "@/lib/exec/sources/dd-text";'],
+    ["src/lib/exec/overview.ts", 'const m = await import("./sources/dd-text");'],
+    ["src/lib/exec/ddtext-store.ts", 'export { listActivityTextByIds } from "./sources/dd-text";'],
+    ["src/components/exec/X.tsx", 'import { listEarlierCommentText } from "../../lib/exec/sources/dd-text";']
+  ])("10 flags %s: %s", (file, code) => {
+    expect(ddTextImportOffenses(file, p5At(file, code))).toHaveLength(1);
+  });
+
+  it.each([
+    ["src/lib/exec/triage/ddtext.ts", 'import { listActivityTextSince, listEarlierCommentText } from "@/lib/exec/sources/dd-text";'],
+    ["src/lib/exec/handlers/ddtext-triage.ts", 'import { listActivityTextByIds } from "./../sources/dd-text";'],
+    ["src/lib/exec/agent/tools.ts", 'import { listMeetingBriefRisks, listActivityTextSince } from "@/lib/exec/sources/dd-text";'],
+    ["src/lib/exec/projects-view.ts", 'import { listMeetingBriefRisks } from "@/lib/exec/sources/dd-text";'],
+    ["src/lib/exec/team.ts", 'import type { DdTextActivity } from "@/lib/exec/sources/dd-text";'],
+    ["src/lib/exec/team.ts", 'import { type DdNoteBlockers } from "@/lib/exec/sources/dd-text";'],
+    ["src/lib/exec/team.ts", 'import { listX } from "@/lib/exec/sources/dd-text-extra";']
+  ])("10 allows %s: %s", (file, code) => {
+    expect(ddTextImportOffenses(file, p5At(file, code))).toEqual([]);
+  });
+
+  // 11
+  it("11 flags listAttention outside attention.ts and attention-read.ts, in any form but a comment or string", () => {
+    const named = (file: string, code: string) => listAttentionOffenses(file, p5At(file, code));
+    expect(named("src/lib/exec/overview.ts", 'import { listAttention } from "@/lib/exec/attention";')).toHaveLength(1);
+    expect(named("src/lib/exec/agent/tools.ts", "const items = await attention.listAttention(principal);")).toHaveLength(1);
+    expect(named("src/lib/exec/agent/tools.ts", 'const items = await attention["listAttention"](principal);')).toHaveLength(1);
+    expect(named("src/lib/exec/attention-read.ts", 'import { listAttention } from "@/lib/exec/attention";')).toEqual([]);
+    expect(named("src/lib/exec/overview.ts", '// listAttention is gone\nconst s = "listAttention";\nconst x = listAttentionPage;')).toEqual([]);
+  });
+
+  // 12
+  it("12 flags the project-updates marker and route in exec code only", () => {
+    const named = (file: string, code: string) => projectsUpdatesOffenses(file, p5At(file, code));
+    expect(named("src/lib/exec/projects-view.ts", 'await db.from("users").select("id,projects_updates_seen_at");')).toHaveLength(1);
+    expect(named("src/components/exec/projects/X.tsx", 'await fetch("/api/projects/updates/seen", { method: "POST" });')).toHaveLength(1);
+    expect(named("src/lib/exec/projects-view.ts", "const href = `/api/projects/updates?since=${x}`;")).toHaveLength(1);
+    expect(named("src/app/(main)/projects/page.tsx", 'await fetch("/api/projects/updates/seen");')).toEqual([]);
+    expect(named("src/lib/exec/projects-view.ts", 'const href = "/api/projects/" + id;')).toEqual([]);
+  });
+
+  // 13
+  const route = (file: string, code: string) => execRouteOffenses(file, p5At(file, code));
+  const ATTN = "src/app/api/exec/attention/[id]/route.ts";
+  it("13 flags a mutation with neither same-origin call, and a gate without the step-up", () => {
+    expect(
+      route(ATTN, 'export async function PATCH(req: Request) { const gate = await requireExecPrincipal(req, "R", { requireStrongSignIn: true }); if (!gate.ok) return gate.response; return go(); }')
+    ).toHaveLength(1);
+    expect(route(ATTN, 'export async function GET(req: Request) { const gate = await requireExecPrincipal(req, "R"); return go(gate); }')).toHaveLength(1);
+    expect(route(ATTN, 'export async function GET(req: Request) { const gate = await requireExecPrincipal(req, "R", { requireStrongSignIn: false }); return go(gate); }')).toHaveLength(1);
+    expect(route(ATTN, "export async function DELETE(req: Request) { return go(req); }")).toHaveLength(2);
+    expect(route(ATTN, 'export const POST = async (req: Request) => { if (!isSameOriginRequest(req)) return x; return go(); };')).toHaveLength(1);
+  });
+
+  it("13 flags a handler it can't read (a wrapper's return value, a re-export)", () => {
+    expect(route(ATTN, "export const POST = withGate(handler);")).toHaveLength(1);
+    expect(route(ATTN, "async function handler(req: Request) { return go(); }\nexport { handler as PATCH };")).toHaveLength(1);
+  });
+
+  it("13 passes P5a's assertSameOrigin, P4's isSameOriginRequest, and a GET without a same-origin check", () => {
+    expect(
+      route(ATTN, 'export async function PATCH(req: Request) { const gate = await requireExecPrincipal(req, "R", { requireStrongSignIn: true }); if (!gate.ok) return gate.response; const o = assertSameOrigin(req); if (!o.ok) return o.response; return go(); }')
+    ).toEqual([]);
+    expect(
+      route("src/app/api/exec/drafts/[id]/save/route.ts", 'export async function POST(req: Request) { const gate = await requireExecPrincipal(req, R, { requireStrongSignIn: true }); if (!gate.ok) return gate.response; if (!isSameOriginRequest(req)) return jsonError(403, "forbidden"); return go(); }')
+    ).toEqual([]);
+    expect(route("src/app/api/exec/attention/route.ts", 'export async function GET(req: Request) { const gate = await requireExecPrincipal(req, R, { requireStrongSignIn: true }); return go(gate); }')).toEqual([]);
+    // Outside the exec routes the rule doesn't apply.
+    expect(route("src/app/api/tasks/route.ts", "export async function POST(req: Request) { return go(); }")).toEqual([]);
+  });
+
+  it("13 flags a second file naming the sec-fetch-site header; http.ts may", () => {
+    expect(route("src/lib/exec/email-assess.ts", 'const site = req.headers.get("sec-fetch-site");')).toHaveLength(1);
+    expect(route("src/components/exec/X.tsx", "const h = { 'Sec-Fetch-Site': 'same-origin' };")).toHaveLength(1);
+    expect(route(HTTP_FILE, 'const site = req.headers.get("sec-fetch-site");')).toEqual([]);
+    expect(route("src/lib/exec/email-assess.ts", "// the Sec-Fetch-Site header is http.ts's business")).toEqual([]);
+  });
+
+  // 14
+  it("14 flags writes to the guarded tables outside their writers, by literal, const or factory", () => {
+    const writes = (file: string, code: string) => tableOffenses(file, p5At(file, code));
+    expect(writes("src/lib/exec/overview.ts", 'await getSupabaseAdmin().from("exec_attention_items").delete().eq("id", id);')).toHaveLength(1);
+    expect(writes("src/lib/exec/team.ts", 'const T = "exec_attention_items";\nawait admin.from(T).update({ status: "seen" }).eq("id", id);')).toHaveLength(1);
+    expect(writes("src/lib/exec/team.ts", 'const T = "exec_attention_items";\nconst db = () => getSupabaseAdmin().from(T);\nawait db().upsert(rows);')).toHaveLength(1);
+    expect(writes("src/lib/exec/overview.ts", 'await admin.from("exec_settings").update({ ddtext_enabled: true });')).toHaveLength(1);
+    expect(writes("src/lib/exec/settings.ts", 'await admin.from("exec_voice_profile").delete().eq("principal_id", p.id);')).toHaveLength(1);
+    expect(writes("src/lib/exec/team.ts", 'await admin.from("exec_settings").insert({ principal_id: p.id });')).toHaveLength(1);
+  });
+
+  it("14 allows the writers, reads anywhere, and other tables", () => {
+    const writes = (file: string, code: string) => tableOffenses(file, p5At(file, code));
+    expect(writes("src/lib/exec/attention.ts", 'await getSupabaseAdmin().from("exec_attention_items").delete().eq("id", id);')).toEqual([]);
+    expect(writes("src/lib/exec/ddtext-store.ts", 'await admin.from("exec_attention_items").delete().in("kind", K);')).toEqual([]);
+    expect(writes("src/lib/exec/settings.ts", 'await admin.from("exec_settings").update(patch).eq("principal_id", p.id);')).toEqual([]);
+    expect(writes("src/lib/exec/drafts-store.ts", 'await admin.from("exec_voice_profile").delete().eq("principal_id", p.id);')).toEqual([]);
+    expect(writes("src/lib/exec/overview.ts", 'await admin.from("exec_attention_items").select("id").eq("id", id);')).toEqual([]);
+    expect(writes("src/lib/exec/overview.ts", "const m = new Map(); m.delete(key); set.delete(x);")).toEqual([]);
+    expect(writes("src/lib/exec/overview.ts", 'await admin.from("exec_jobs").update({ status: "queued" });')).toEqual([]);
+  });
+
+  it("14 flags the P5a tables named outside their modules", () => {
+    const named = (file: string, code: string) => tableOffenses(file, p5At(file, code));
+    expect(named("src/lib/exec/team.ts", 'await admin.from("exec_ddtext_signals").select("summary");')).toHaveLength(1);
+    expect(named("src/lib/exec/projects-view.ts", 'await admin.rpc("exec_ddtext_replace_item", args);')).toHaveLength(1);
+    expect(named("src/lib/exec/settings.ts", 'await admin.from("exec_attention_feedback").select("vote");')).toHaveLength(1);
+    expect(named("src/lib/exec/ddtext-store.ts", 'await admin.from("exec_ddtext_items").delete();')).toEqual([]);
+    expect(named("src/lib/exec/handlers/purge.ts", 'await admin.from("exec_ddtext_items").delete();')).toEqual([]);
+    expect(named("src/lib/exec/attention-feedback.ts", 'const TABLE = "exec_attention_feedback";')).toEqual([]);
+    expect(named("src/lib/exec/settings.ts", "// exec_attention_feedback totals come from attention-feedback.ts")).toEqual([]);
+  });
+
+  // 15
+  it("15 flags the raw intake-link and approval-item reads outside sources/dd.ts and intake-screen.ts", () => {
+    const named = (file: string, code: string) => intakeOnlyOffenses(file, p5At(file, code));
+    expect(named("src/lib/exec/team.ts", 'import { listTaskThreadLinks } from "@/lib/exec/sources/dd";')).toHaveLength(1);
+    expect(named("src/lib/exec/agent/tools.ts", "const items = await dd.listPendingApprovalItems(p, m, now);")).toHaveLength(1);
+    expect(named("src/lib/exec/intake-screen.ts", 'import { listTaskThreadLinks, listPendingApprovalItems } from "@/lib/exec/sources/dd";')).toEqual([]);
+    expect(named("src/lib/exec/agent/tools.ts", 'import { listScreenedApprovalItems, restrictedIntakeTaskIds } from "@/lib/exec/intake-screen";')).toEqual([]);
+  });
+
+  // 16
+  it("16 flags a client component whose value imports reach server-only; passes the client-safe ones", () => {
+    const modules = moduleIndex(scan.facts.keys());
+    const chainOf = (code: string, file = "src/components/exec/settings/Probe.tsx") => serverOnlyChain(file, p5At(file, code), scan.facts, modules);
+    expect(chainOf('"use client";\nimport { updateSettings } from "@/lib/exec/settings";')).toEqual(["src/components/exec/settings/Probe.tsx", "src/lib/exec/settings.ts"]);
+    expect(chainOf('"use client";\nimport { SETTINGS_FIELDS, validateSettingsField } from "@/lib/exec/settings-fields";')).toBeNull();
+    expect(chainOf('"use client";\nimport type { UpdateSettingsResult } from "@/lib/exec/settings";')).toBeNull();
+    expect(chainOf('"use client";\nimport { type UpdateSettingsResult } from "@/lib/exec/settings";')).toBeNull();
+    expect(chainOf('"use client";\nimport type { SettingsView } from "@/lib/exec/view-types";\nimport { draftReplyHrefFor } from "@/lib/exec/drafts-links";')).toBeNull();
+    // Transitively: a client module importing a client-safe-looking module that imports server code.
+    expect(chainOf('"use client";\nimport { listScreenedAttention } from "../../../lib/exec/attention-read";')?.[1]).toBe("src/lib/exec/attention-read.ts");
+    expect(chainOf('"use client";\nexport { getOverview } from "@/lib/exec/overview";')).not.toBeNull();
+    expect(chainOf('"use client";\nimport "server-only";')).toEqual(["src/components/exec/settings/Probe.tsx"]);
+    expect(p5At("src/components/exec/settings/Probe.tsx", '"use client";\nimport x from "y";').useClient).toBe(true);
+    expect(p5At("src/components/exec/settings/Probe.tsx", 'import x from "y";\n"use client";').useClient).toBe(false);
   });
 });

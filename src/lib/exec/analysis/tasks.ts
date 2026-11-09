@@ -1,5 +1,5 @@
 import { localDateString } from "@/lib/exec/time";
-import type { DdActivity, DdTask, TaskPriority } from "@/lib/exec/sources/dd-types";
+import type { DdActivity, DdStatusTransition, DdTask, TaskPriority } from "@/lib/exec/sources/dd-types";
 import { addDaysToYmd } from "@/lib/shift";
 import { isTeamTask } from "@/lib/task-team";
 
@@ -161,10 +161,10 @@ export function workloadByPerson(tasks: readonly DdTask[], now: Date): Map<strin
       out.set(key, w);
     }
     w.open += 1;
-    if (isOverdue(t, now) && !isIncident(t)) w.overdue += 1;
+    if (isOverdueWork(t, now)) w.overdue += 1;
     const due = toMs(t.dueDate);
     if (due >= nowMs && due < weekEnd) w.dueNext7Days += 1;
-    if (isStalled(t, now)) w.stalled += 1;
+    if (isStalledWork(t, now)) w.stalled += 1;
     if (t.status === "waiting_on_client") w.waitingOnClient += 1;
     if (t.status === "pending_approval") w.pendingApproval += 1;
   }
@@ -276,4 +276,96 @@ export function dailyCounts(isoTimestamps: readonly (string | null | undefined)[
     if (count !== undefined) counts.set(date, count + 1);
   }
   return [...counts].map(([date, count]) => ({ date, count }));
+}
+
+// ---------------------------------------------------------------------------
+// P5a (contract §3.9.1, A3, C15, C30): the one stalled and overdue predicates
+// every surface shares (the feed's producer, the Team tab, project health and
+// P5b's tools), and the manual-stage-close detector.
+// ---------------------------------------------------------------------------
+
+/** proof_approved (fb-proof.ts): an FB proof approval logs this, not a status change (C30). */
+export const STAGE_CLOSE_GUARD_ACTIONS: readonly string[] = Object.freeze(["proof_approved"]);
+
+/**
+ * THE stalled predicate (A3): the feed's stalled_tasks rule, used everywhere.
+ * Idle `days`+ (isStalled, so open and not archived), and not parked for a
+ * reason that has its own signal: overdue work is overdue, an incident is its
+ * own signal, a task waiting on the client has the waiting rule, and a proof
+ * waiting for its review is on the approvals queue.
+ */
+export function isStalledWork(t: DdTask, now: Date, days = 7): boolean {
+  return (
+    isStalled(t, now, days) &&
+    !isOverdue(t, now) &&
+    !isIncident(t) &&
+    t.status !== "waiting_on_client" &&
+    t.status !== "pending_approval"
+  );
+}
+
+/**
+ * THE per-person overdue predicate (C15, a-correct-5): open and past due,
+ * not an incident (due the minute it's reported), and not waiting for its
+ * proof review (it has been handed in; only the reviewer can move it, so it
+ * shows on the approval queue as past due instead). Auto-archived work counts.
+ */
+export function isOverdueWork(t: DdTask, now: Date): boolean {
+  return isOverdue(t, now) && !isIncident(t) && t.status !== "pending_approval";
+}
+
+// A transition or a proof approval this close to a completion is what
+// completed the task (both are written in the same request as completed_at).
+const STAGE_CLOSE_COVER_MS = 2 * 60_000;
+
+/**
+ * C30 (a-correct-6). The ids of completed stage tasks closed by a manual
+ * stage close. DD's "complete stage" marks every not-done task of the stage
+ * done with one shared completed_at and writes no activity row, so such a
+ * task is: a stage task (stageId set), done with a completedAt; with no
+ * transition to "done" and no proof_approved row of its own within ±2 min of
+ * completedAt; and either another task of the same stage has the same
+ * completedAt instant (Date.parse equality) or the task has no status_change
+ * row at all. `transitions` must cover each task since its created_at;
+ * `approvals` are proof_approved rows (task and time only).
+ */
+export function closedWithStage(
+  completedStageTasks: readonly DdTask[],
+  transitions: readonly DdStatusTransition[],
+  approvals: readonly Pick<DdActivity, "taskId" | "createdAt">[]
+): Set<string> {
+  const doneAt = new Map<string, number[]>();
+  const anyTransition = new Set<string>();
+  for (const tr of transitions) {
+    anyTransition.add(tr.taskId);
+    if (tr.to !== "done") continue;
+    const list = doneAt.get(tr.taskId);
+    if (list) list.push(toMs(tr.at));
+    else doneAt.set(tr.taskId, [toMs(tr.at)]);
+  }
+  const approvedAt = new Map<string, number[]>();
+  for (const a of approvals) {
+    const list = approvedAt.get(a.taskId);
+    if (list) list.push(toMs(a.createdAt));
+    else approvedAt.set(a.taskId, [toMs(a.createdAt)]);
+  }
+  const covers = (times: readonly number[] | undefined, at: number) =>
+    (times ?? []).some((ms) => Number.isFinite(ms) && Math.abs(ms - at) <= STAGE_CLOSE_COVER_MS);
+
+  const candidates = completedStageTasks.filter(
+    (t) => t.stageId != null && t.status === "done" && Number.isFinite(toMs(t.completedAt))
+  );
+  // Completions per stage and instant, to find the tasks a close stamped together.
+  const sameInstant = new Map<string, number>();
+  const instantKey = (t: DdTask) => `${t.stageId}\u0000${toMs(t.completedAt)}`;
+  for (const t of candidates) sameInstant.set(instantKey(t), (sameInstant.get(instantKey(t)) ?? 0) + 1);
+
+  const out = new Set<string>();
+  for (const t of candidates) {
+    const at = toMs(t.completedAt);
+    if (covers(doneAt.get(t.id), at) || covers(approvedAt.get(t.id), at)) continue;
+    const withSibling = (sameInstant.get(instantKey(t)) ?? 0) > 1;
+    if (withSibling || !anyTransition.has(t.id)) out.add(t.id);
+  }
+  return out;
 }

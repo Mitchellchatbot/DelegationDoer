@@ -102,3 +102,48 @@ export interface AttentionItem extends AttentionCandidate {
   resolution: "auto" | "owner" | null;
   updatedAt: string;
 }
+
+// ---------------------------------------------------------------------------
+// P5a (contract §3.1.1; lead seed): the feed as the owner acts on it. Nothing
+// above changes.
+// ---------------------------------------------------------------------------
+
+/** An item as the feed shows it: the stored item plus the CAS token for owner actions. */
+export interface AttentionFeedItem extends AttentionItem {
+  /** exec_attention_items.updated_at exactly as PostgREST printed it (C3). Opaque to clients. */
+  version: string;
+}
+export type AttentionStatusFilter = "default" | "open" | "seen" | "snoozed" | "dismissed" | "resolved";
+export interface AttentionFilters {
+  /** "default" (absent) = open + seen, open including snoozes that have run out (C6). */
+  status?: AttentionStatusFilter;
+  category?: AttentionCategory;
+  band?: PriorityBand;
+  source?: AttentionSource;
+  /** Format-checked (/^[a-z][a-z0-9_]{0,63}$/), not enum-checked. */
+  kind?: string;
+  /** ISO; first_seen_at >= it (P5b "what did I miss"). */
+  firstSeenAfter?: string;
+  /** ISO; updated_at >= it. */
+  updatedAfter?: string;
+  /** From a previous page's nextCursor. */
+  cursor?: string | null;
+  /** 1..100, default 50. */
+  limit?: number;
+}
+export type EmailScreenState = "none" | "ok" | "unavailable";
+export interface ScreenedAttentionPage {
+  items: AttentionFeedItem[];
+  nextCursor: string | null;
+  /** Email items withheld on this page: restricted, gone, missing or unscreenable (C7, K24). */
+  hiddenEmail: number;
+  /** "none": no email item was examined; "unavailable": the screen couldn't run, so every email thread/commitment item was withheld. */
+  emailScreen: EmailScreenState;
+}
+/** getScreenedAttentionItem (coherence-9). "withheld": restricted, gone, missing thread row or unparseable fingerprint;
+ *  "screen_unavailable": an email thread/commitment item while the rules or screen rows can't be read. */
+export type ScreenedItemResult =
+  | { ok: true; item: AttentionFeedItem }
+  | { ok: false; reason: "missing" | "withheld" | "screen_unavailable" };
+export type OwnerAction = "seen" | "snooze" | "dismiss" | "resolve" | "reopen";
+export type FeedbackReason = "useful" | "not_relevant" | "wrong_priority" | "already_handled" | "duplicate" | "wrong_facts" | "other";

@@ -24,9 +24,10 @@ vi.mock("@/lib/exec/sources/dd", () => ({
   listClients: vi.fn(),
   listClientMeetings: vi.fn()
 }));
+// P5a (K8): the feed comes through the real screened accessor over a stubbed store read.
 vi.mock("@/lib/exec/attention", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/exec/attention")>()),
-  listAttention: vi.fn(),
+  listAttentionPage: vi.fn(),
   lastAttentionRefresh: vi.fn(),
   syncAttention: vi.fn()
 }));
@@ -58,7 +59,8 @@ vi.mock("@/lib/exec/drafts-store", async (importOriginal) => ({
 }));
 
 import { DraftsRows } from "@/components/exec/overview/SystemSection";
-import { lastAttentionRefresh, listAttention } from "@/lib/exec/attention";
+import { fakeAttentionPage } from "@/lib/exec/__tests__/fake-attention-page";
+import { lastAttentionRefresh, listAttentionPage } from "@/lib/exec/attention";
 import type { AttentionItem } from "@/lib/exec/attention-types";
 import { countDraftsForSystem, getVoiceProfile, type DraftSystemCounts, type VoiceProfileRow } from "@/lib/exec/drafts-store";
 import { DRAFT_JOB_KINDS } from "@/lib/exec/drafts-types";
@@ -175,7 +177,7 @@ beforeEach(() => {
   tablesRead = [];
   vi.mocked(getSupabaseAdmin).mockReturnValue(fakeAdmin() as unknown as SupabaseClient);
   for (const fn of Object.values(dd)) if (typeof fn === "function" && "mockResolvedValue" in fn) (fn as ReturnType<typeof vi.fn>).mockResolvedValue([]);
-  vi.mocked(listAttention).mockResolvedValue([emailItem]);
+  vi.mocked(listAttentionPage).mockImplementation(fakeAttentionPage([emailItem]));
   vi.mocked(lastAttentionRefresh).mockResolvedValue(minutesAgo(1));
   vi.mocked(loadSettings).mockResolvedValue(settings(DRAFTS_ON));
   vi.mocked(loadScreeningPolicy).mockResolvedValue({ rules: [], hash: H });

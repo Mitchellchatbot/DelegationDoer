@@ -8,7 +8,9 @@ import {
   isIncident,
   isOpen,
   isOverdue,
+  isOverdueWork,
   isStalled,
+  isStalledWork,
   overdueDays,
   PROOF_ACTIONS,
   proofHandedInAt
@@ -172,6 +174,20 @@ function keyPart(key: string): string {
     .replace(/^-+|-+$/g, "");
   const hash = createHash("sha256").update(key).digest("hex").slice(0, 12);
   return slug ? `${slug}-${hash}` : hash;
+}
+
+/**
+ * keyPart, exported for the ddtext fingerprints (P5a C1:
+ * dd:ddtext:<kind>:<source_type>:<ddFingerprintKey(source_id)>). No behaviour
+ * change: every DD fingerprint key still goes through keyPart.
+ */
+export function ddFingerprintKey(key: string): string {
+  return keyPart(key);
+}
+
+/** The unanswered_mention item's fingerprint for a task (P5a C18 checks whether one is live). */
+export function ddMentionFingerprint(taskId: string): string {
+  return `dd:mention:task:${keyPart(taskId)}`;
 }
 
 interface ItemState {
@@ -535,17 +551,12 @@ function criticalOverdue(ctx: Ctx, t: DdTask): AttentionCandidate {
   });
 }
 
-/**
- * Overdue work its owner can still move. A task waiting for its proof review
- * has been handed in, and only the reviewer can move it, so it is left to the
- * proof queue's approval item, which counts it as past due (pastDueProofs).
- */
-function isOverdueWork(ctx: Ctx, t: DdTask): boolean {
-  return isOverdue(t, ctx.now) && !isIncident(t) && t.status !== "pending_approval";
-}
-
+// Overdue work its owner can still move (isOverdueWork, analysis/tasks.ts). A
+// task waiting for its proof review has been handed in, and only the reviewer
+// can move it, so it is left to the proof queue's approval item, which counts
+// it as past due (pastDueProofs).
 function overdueCandidates(ctx: Ctx, openTasks: readonly DdTask[]): AttentionCandidate[] {
-  const overdue = openTasks.filter((t) => isOverdueWork(ctx, t)).sort(byTime((t) => t.dueDate));
+  const overdue = openTasks.filter((t) => isOverdueWork(t, ctx.now)).sort(byTime((t) => t.dueDate));
   const critical = overdue.filter((t) => t.priority === "critical").map((t) => criticalOverdue(ctx, t));
   const groups = groupBy(
     overdue.filter((t) => t.priority !== "critical"),
@@ -634,15 +645,8 @@ function lateCandidates(ctx: Ctx, late: readonly DdTask[], proofEvents: readonly
 // ---------------------------------------------------------------------------
 
 function stalledCandidates(ctx: Ctx, openTasks: readonly DdTask[]): AttentionCandidate[] {
-  const stalled = openTasks.filter(
-    (t) =>
-      t.assigneeId !== null &&
-      isStalled(t, ctx.now) &&
-      !isOverdue(t, ctx.now) &&
-      !isIncident(t) &&
-      t.status !== "waiting_on_client" &&
-      t.status !== "pending_approval"
-  );
+  // The one stalled rule (isStalledWork, analysis/tasks.ts), on assigned work.
+  const stalled = openTasks.filter((t) => t.assigneeId !== null && isStalledWork(t, ctx.now));
   return groupBy(stalled, (t) => t.assigneeId)
     .filter(([, tasks]) => tasks.length >= MIN_STALLED)
     .map(([userId, group]) => {
@@ -1125,7 +1129,7 @@ function mentionCandidates(
 
     out.push(
       candidate({
-        fingerprint: `dd:mention:task:${keyPart(task.id)}`,
+        fingerprint: ddMentionFingerprint(task.id),
         kind: "unanswered_mention",
         category: "my_action",
         title:

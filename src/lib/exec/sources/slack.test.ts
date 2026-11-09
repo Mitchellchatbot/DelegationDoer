@@ -321,7 +321,10 @@ describe("transport (§3.5 HTTP rules)", () => {
       isEnterpriseInstall: false,
       enterprisePresent: false,
       authedUserId: "U0MITCH",
-      authedUserToken: null
+      authedUserToken: null,
+      // P7a (AM-P7a-5): the user half's two fields, null when Slack issued no user token.
+      authedUserTokenType: null,
+      authedUserScope: null
     });
   });
 

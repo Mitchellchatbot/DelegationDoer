@@ -12,6 +12,7 @@ import {
   purgeInstallation,
   revokeInstallation
 } from "@/lib/exec/slack-install";
+import { purgeReading } from "@/lib/exec/slack-read-store";
 import { SLACK_JOB_KINDS, SLACK_LIMITS, SLACK_RE } from "@/lib/exec/slack-types";
 import type { SlackUninstallPayload } from "@/lib/exec/slack-types";
 import { NonRetryableError, type JobContext, type JobHandler } from "@/lib/exec/types";
@@ -27,6 +28,10 @@ import { NonRetryableError, type JobContext, type JobHandler } from "@/lib/exec/
 //   mode "purge" (C18): RPC 4 nulls the token and deletes the installation's
 //     events, ledger and Slack conversations; the first purge of a row raises
 //     the ops alert and the system audit row (ids and counts only).
+//     P7a (contract §3.20.3, AM-P7a-15): FIRST the reading purge (P7a's RPC 14:
+//     the reading half's rows), on both purge paths (this job and the daily
+//     backstop); null (the P7a schema isn't installed) is fine, and a second
+//     call purges nothing.
 
 export type SlackUninstallResult =
   | { skipped: string }
@@ -74,6 +79,8 @@ async function check(id: string, eventTime: number | undefined, signal: AbortSig
 }
 
 async function purge(id: string): Promise<SlackUninstallResult> {
+  // P7a: the reading half first (null = P7a not installed). A failure throws: the job retries, and so does the backstop.
+  await purgeReading(id);
   const before = await getInstallationForSystem(id);
   const counts = await purgeInstallation(id);
   if (counts === null) throw new NonRetryableError("not_installed");

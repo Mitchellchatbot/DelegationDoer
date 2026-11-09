@@ -6,6 +6,7 @@ import { SLACK_RE, type SlackConnectResult, type SlackSettingsView } from "@/lib
 import { cn } from "@/lib/utils";
 import { SectionCard } from "../SectionCard";
 import { SlackConnectControls } from "./SlackConnectControls";
+import { SlackReadingSection } from "./SlackReadingSection";
 
 // The Settings page's Slack section (P6 contract §3.13, K15, C45, C48; Area
 // E). Server and presentational: everything comes from the SlackSettingsView
@@ -25,6 +26,9 @@ import { SlackConnectControls } from "./SlackConnectControls";
 //     revoked         settingsRevoked (date, reason), Connect
 //   Off the canonical host every Connect / Reconnect link becomes
 //   settingsWrongHost (SlackConnectControls, C45).
+//   P7a (contract §3.16): while connected (or error), the reading half
+//   (SlackReadingSection, from view.reading) below the installation's rows and
+//   their controls; nothing when the view carries none.
 //
 // Pure: no server-only import, so the page, tests and the static screenshot
 // harness render it the same way.
@@ -53,6 +57,9 @@ export function parseSlackWho(v: unknown): string | null {
 
 const fill = (template: string, key: string, value: string) => template.split(`{${key}}`).join(value);
 
+/** P7a fixer ui-10: the reading states whose data a Disconnect also deletes (the confirm says so). */
+const READING_LIVE: ReadonlySet<string> = new Set(["discovering", "paused", "on", "error"]);
+
 /** The banner's words: connectResult[code], with {who} filled by a valid Slack user id (else "—"). */
 export function slackResultText(result: SlackConnectResult, who: string | null | undefined): string {
   return fill(SLACK_COPY.connectResult[result], "who", parseSlackWho(who) ?? MISSING);
@@ -78,11 +85,17 @@ export function slackSectionState(view: SlackSettingsView): "read_failed" | "not
  *   - "connected" only while the section shows a connection (connected or error);
  *   - never over a failed read (the section can't say what is true);
  *   - not when it would repeat the body: not_installed / not_configured over the same state, and wrong_host off the
- *     canonical host (settingsWrongHost already stands in for the link there).
+ *     canonical host (settingsWrongHost already stands in for the link there);
+ *   - P7a (fixer ui-4), by the reading half's state: "read_connected" only while it is still true and still asks him to
+ *     act (discovering or paused: "turn reading on below"), and the read failure codes only while reading isn't set up
+ *     (not discovering, paused or on). Without a reading state (no reading view) the read codes keep the P6 rule.
  */
-export function slackResultBannerShown(result: SlackConnectResult, state: ReturnType<typeof slackSectionState>, onCanonicalHost: boolean): boolean {
+export function slackResultBannerShown(result: SlackConnectResult, state: ReturnType<typeof slackSectionState>, onCanonicalHost: boolean,
+  readingState?: NonNullable<SlackSettingsView["reading"]>["state"] | null): boolean {
   if (state === "read_failed") return false;
   if (result === "connected") return state === "connected" || state === "error";
+  if (result === "read_connected") return readingState === undefined || readingState === null || readingState === "discovering" || readingState === "paused";
+  if (READ_FAILURE_RESULTS.has(result) && (readingState === "discovering" || readingState === "paused" || readingState === "on")) return false;
   if (result === "not_installed" && state === "not_installed") return false;
   if (result === "not_configured" && state === "not_configured") return false;
   if (result === "wrong_host" && !onCanonicalHost) return false;
@@ -98,8 +111,14 @@ function Fact({ label, children, mono = false }: { label: string; children: Reac
   );
 }
 
+/** The read consent's failure codes (P7a §3.17): stale once reading is set up. */
+const READ_FAILURE_RESULTS: ReadonlySet<SlackConnectResult> = new Set<SlackConnectResult>(["read_not_connected", "missing_user_scopes", "extra_user_scopes", "read_taken"]);
+
+/** The success codes (P7a fixer ui-4: read_connected is a success, not a warning). */
+export const slackResultIsOk = (result: SlackConnectResult): boolean => result === "connected" || result === "read_connected";
+
 function ResultBanner({ result, who }: { result: SlackConnectResult; who: string | null | undefined }) {
-  const ok = result === "connected";
+  const ok = slackResultIsOk(result);
   const Icon = ok ? CircleCheck : TriangleAlert;
   return (
     <div
@@ -127,7 +146,8 @@ export function SlackSection({
   onCanonicalHost = true,
   tz,
   now,
-  confirmOpen = false
+  confirmOpen = false,
+  readingInitial = {}
 }: {
   view: SlackSettingsView;
   /** The validated ?slack= code (parseSlackResult); null or unknown shows no banner. */
@@ -141,10 +161,14 @@ export function SlackSection({
   now: string;
   /** Static renders only (tests, screenshots): the Disconnect confirm open. */
   confirmOpen?: boolean;
+  /** P7a, static renders only: a reading confirm open ("enable" / "stop"), its checkbox ticked, the finance confirm for a channel. */
+  readingInitial?: { dialog?: "enable" | "stop" | null; checked?: boolean; financeConfirm?: string | null };
 }) {
   const state = slackSectionState(view);
   const banner =
-    result !== null && parseSlackResult(result) !== null && slackResultBannerShown(result, state, onCanonicalHost) ? <ResultBanner result={result} who={who} /> : null;
+    result !== null && parseSlackResult(result) !== null && slackResultBannerShown(result, state, onCanonicalHost, view.reading?.state ?? null)
+      ? <ResultBanner result={result} who={who} />
+      : null;
 
   let body: ReactNode;
   if (state === "read_failed") body = <Note tone="body">{SLACK_COPY.settingsReadFailed}</Note>;
@@ -188,7 +212,24 @@ export function SlackSection({
             <span className="min-w-0 break-words">{fill(SLACK_COPY.settingsError, "code", view.lastErrorCode ?? MISSING)}</span>
           </div>
         )}
-        <SlackConnectControls mode="manage" installationId={view.installationId} onCanonicalHost={onCanonicalHost} initialConfirm={confirmOpen} />
+        <SlackConnectControls
+          mode="manage"
+          installationId={view.installationId}
+          onCanonicalHost={onCanonicalHost}
+          initialConfirm={confirmOpen}
+          readingLive={view.reading !== undefined && READING_LIVE.has(view.reading.state)}
+        />
+        {view.reading !== undefined && (
+          <SlackReadingSection
+            view={view.reading}
+            tz={tz}
+            now={now}
+            onCanonicalHost={onCanonicalHost}
+            initialDialog={readingInitial.dialog ?? null}
+            initialChecked={readingInitial.checked === true}
+            initialFinanceConfirm={readingInitial.financeConfirm ?? null}
+          />
+        )}
       </div>
     );
   }

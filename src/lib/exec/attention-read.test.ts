@@ -290,7 +290,8 @@ describe("listScreenedAttention: keyset paging with refills (a-build-3, test 8)"
     expect(page.nextCursor).toBeNull();
     expect(page.emailScreen).toBe("none");
     db.rows = [];
-    expect(await listScreenedAttention(principal, {}, { now: NOW })).toEqual({ items: [], nextCursor: null, hiddenEmail: 0, emailScreen: "none" });
+    // P7a (AS12): every page also carries the Slack screen's count and state.
+    expect(await listScreenedAttention(principal, {}, { now: NOW })).toEqual({ items: [], nextCursor: null, hiddenEmail: 0, emailScreen: "none", hiddenSlack: 0, slackScreen: "none" });
   });
 
   it("with every row withheld, stops after 5 reads with a cursor and an empty page", async () => {

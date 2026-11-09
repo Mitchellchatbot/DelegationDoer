@@ -2074,10 +2074,19 @@ function entryPointOffenses(file: string, f: P5bFacts): string[] {
 //   B-P6-8 The Slack client components under src/components/exec/settings/Slack* are held to P5a's rule 16.
 // Names decide in B-P6-5 as in rule 9; comments never count anywhere.
 
-const isSlackFile = (p: string) => isExecCode(p) && /slack/i.test(p);
+// P7a B-P7a-1: the files whose path lacks "slack" but that handle Slack metadata: the DD bot's identity, and sources/dd.ts
+// (it reads the lead-channel names). Every handlers/slack-*.ts, triage/slack.ts and producers/slack.ts are in through /slack/i.
+const P7A_SLACK_CLASS_FILES: ReadonlySet<string> = new Set(["src/lib/exec/dd-bot.ts", "src/lib/exec/sources/dd.ts"]);
+const isSlackFile = (p: string) => isExecCode(p) && (/slack/i.test(p) || P7A_SLACK_CLASS_FILES.has(p));
 const isSlackHandler = (p: string) => /^src\/lib\/exec\/handlers\/slack-[^/]*\.ts$/.test(p);
 const SLACK_WORDS = ["token", "tokens", "secret", "secrets", "signature", "challenge", "blocks"];
-const SLACK_NAMES = ["oauthcode", "oauthstate", "rawstate", "triggerid", "trigger_id", "responseurl", "response_url"];
+const SLACK_NAMES = [
+  "oauthcode", "oauthstate", "rawstate", "triggerid", "trigger_id", "responseurl", "response_url",
+  // P7a B-P7a-1: his user token, its sealed column, a channel's and an author's display names (their snake_case twins too).
+  "usertoken", "user_token", "usertokenenc", "user_token_enc", "channelname", "channel_name", "authorlabel", "author_label",
+  // P7a §3.10.4 (integrator): the read callback holds the user token only in a local named oauthUserToken.
+  "oauthusertoken"
+];
 const slackVocabs = new Map<Vocabulary, Vocabulary>();
 /** B-P6-5: a Slack file's vocabulary, built once per base vocabulary. */
 function slackVocabulary(base: Vocabulary): Vocabulary {
@@ -2090,6 +2099,9 @@ function slackVocabulary(base: Vocabulary): Vocabulary {
 }
 
 const OPS_FILE = "src/lib/exec/ops.ts";
+// P7a B-P7a-4 (N3): the DD bot's identity module reads the DD bot's token itself.
+const DD_BOT_FILE = "src/lib/exec/dd-bot.ts";
+const BOT_TOKEN_READERS: ReadonlySet<string> = new Set([OPS_FILE, DD_BOT_FILE]);
 const SLACK_CLIENT_FILE = "src/lib/exec/sources/slack.ts";
 const SLACK_CONFIG_FILE = "src/lib/exec/slack-config.ts";
 const SLACK_INSTALL_FILE = "src/lib/exec/slack-install.ts";
@@ -2103,8 +2115,35 @@ const SLACK_METHOD_STRINGS: ReadonlySet<string> = new Set([
   "auth.revoke",
   "oauth.v2.access",
   "conversations.history",
-  "conversations.replies"
+  "conversations.replies",
+  // P7a B-P7a-5 (§3.6.1): the reads with his user token.
+  "conversations.list",
+  "users.conversations",
+  "conversations.info",
+  "users.list",
+  "users.info",
+  "bots.info",
+  "chat.getPermalink"
 ]);
+// P7a B-P7a-5: a metered method's name used as a limiter key is a budget key, not a Web API call (MeteredMethod values have
+// no other spelling): a literal handed straight to the limiter (paced, takeSlackBudget, noteSlackRateLimited and the store's
+// rateTake / rateBlock; syntactic, so probes see it too), or, in the real tree, any literal whose contextual type is
+// slack-read-types.ts's MeteredMethod (a typed key list, a typed variable, a MeteredMethod parameter; the checker decides).
+// The base URL is never exempt: no call can reach the Web API without it or sources/slack.ts.
+const LIMITER_CALLS: ReadonlySet<string> = new Set(["paced", "takeSlackBudget", "noteSlackRateLimited", "rateTake", "rateBlock"]);
+const METERED_METHOD_TYPE = "MeteredMethod";
+function isMeteredMethodKey(node: ts.Node, checker: ts.TypeChecker | undefined): boolean {
+  if (checker === undefined || !ts.isExpression(node)) return false;
+  let t: ts.Type | undefined;
+  try {
+    t = checker.getContextualType(node);
+  } catch {
+    return false;
+  }
+  const alias = t?.aliasSymbol;
+  return alias !== undefined && alias.getName() === METERED_METHOD_TYPE
+    && (alias.declarations ?? []).some((d) => path.basename(d.getSourceFile().fileName) === "slack-read-types.ts");
+}
 const EXEC_SLACK_ENV = /^EXEC_SLACK_/;
 const P6_TABLES = ["exec_slack_installations", "exec_slack_events", "exec_oauth_states", "exec_chat_feedback", "exec_slack_posts"];
 const P6_RPCS = [
@@ -2117,7 +2156,8 @@ const P6_RPCS = [
   "exec_slack_redaction_followups"
 ];
 const P6_STORE_TEXT = new RegExp(`(?<![A-Za-z0-9_])(${[...P6_TABLES, ...P6_RPCS].join("|")})(?![A-Za-z0-9_.:])`, "g");
-const SLACK_CLIENT_ALLOWED_TARGETS: ReadonlySet<string> = new Set(["src/lib/exec/types", "src/lib/exec/slack-types"]);
+// P7a stage -1 (lead): + slack-read-types (pure, type-only: ReadTarget, ConversationMeta, ConvType for the §3.6.1 reads).
+const SLACK_CLIENT_ALLOWED_TARGETS: ReadonlySet<string> = new Set(["src/lib/exec/types", "src/lib/exec/slack-types", "src/lib/exec/slack-read-types"]);
 
 interface P6Facts {
   /** B-P6-4: strings naming the Web API (the base URL, or one of SLACK_METHOD_STRINGS). */
@@ -2128,19 +2168,28 @@ interface P6Facts {
   storeNames: { name: string; line: number }[];
 }
 
-function analyzeP6(sf: ts.SourceFile): P6Facts {
+function analyzeP6(sf: ts.SourceFile, checker?: ts.TypeChecker): P6Facts {
   const lineOf = (n: ts.Node) => sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1;
   const facts: P6Facts = { slackStrings: [], envNames: [], storeNames: [] };
   const isProcessEnv = (e: ts.Node): boolean =>
     ts.isPropertyAccessExpression(e) && ts.isIdentifier(e.expression) && e.expression.text === "process" && e.name.text === "env";
   const isTargetValue = (n: ts.Node): boolean =>
     ts.isPropertyAssignment(n.parent) && n.parent.initializer === n && propertyNameText(n.parent.name) === "target";
+  const isLimiterKey = (n: ts.Node): boolean => {
+    const call = n.parent;
+    if (!ts.isCallExpression(call) || !call.arguments.some((a) => a === n)) return false;
+    const callee = call.expression;
+    const name = ts.isIdentifier(callee) ? callee.text : ts.isPropertyAccessExpression(callee) ? callee.name.text : null;
+    return name !== null && LIMITER_CALLS.has(name);
+  };
   const visit = (node: ts.Node): void => {
     // A type's string literal names no call and reads no table; a module specifier is a path.
     if (ts.isTypeNode(node) || ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) return;
     if (ts.isStringLiteralLike(node) || ts.isTemplateHead(node) || ts.isTemplateMiddle(node) || ts.isTemplateTail(node)) {
       const text = node.text;
-      if (SLACK_METHOD_STRINGS.has(text) || text.includes(SLACK_API_TEXT)) facts.slackStrings.push({ text, line: lineOf(node) });
+      if ((SLACK_METHOD_STRINGS.has(text) && !isLimiterKey(node) && !isMeteredMethodKey(node, checker)) || text.includes(SLACK_API_TEXT)) {
+        facts.slackStrings.push({ text, line: lineOf(node) });
+      }
       if (!isTargetValue(node)) for (const m of text.matchAll(P6_STORE_TEXT)) facts.storeNames.push({ name: m[1], line: lineOf(node) });
     }
     if (ts.isPropertyAccessExpression(node) && isProcessEnv(node.expression)) facts.envNames.push({ name: node.name.text, line: lineOf(node) });
@@ -2165,14 +2214,17 @@ function slackLiteralOffenses(file: string, f: P6Facts): string[] {
   return f.slackStrings.map((s) => `${file}:${s.line}: names the Slack Web API (${JSON.stringify(s.text.slice(0, 60))}); only ${SLACK_CLIENT_FILE} may`);
 }
 
-/** B-P6-4: EXEC_SLACK_* outside slack-config.ts (anywhere in src); SLACK_BOT_TOKEN outside ops.ts, SLACK_USER_TOKEN and SLACK_SIGNING_SECRET anywhere, in exec code. */
+/** B-P6-4: EXEC_SLACK_* outside slack-config.ts (anywhere in src); SLACK_BOT_TOKEN outside ops.ts, SLACK_USER_TOKEN and SLACK_SIGNING_SECRET anywhere, in exec code.
+ *  B-P7a-4: dd-bot.ts is SLACK_BOT_TOKEN's second exec reader; SLACK_OUTBOUND_CHANNEL is read in exec code by slack-config.ts only. */
 function slackEnvOffenses(file: string, f: P6Facts): string[] {
   const out: string[] = [];
   for (const e of f.envNames) {
     if (EXEC_SLACK_ENV.test(e.name)) {
       if (file !== SLACK_CONFIG_FILE) out.push(`${file}:${e.line}: reads process.env.${e.name}; only ${SLACK_CONFIG_FILE} may`);
-    } else if (isExecCode(file) && e.name === "SLACK_BOT_TOKEN" && file !== OPS_FILE) {
-      out.push(`${file}:${e.line}: reads process.env.SLACK_BOT_TOKEN; only ${OPS_FILE} may`);
+    } else if (isExecCode(file) && e.name === "SLACK_BOT_TOKEN" && !BOT_TOKEN_READERS.has(file)) {
+      out.push(`${file}:${e.line}: reads process.env.SLACK_BOT_TOKEN; only ${[...BOT_TOKEN_READERS].join(" and ")} may`);
+    } else if (isExecCode(file) && e.name === "SLACK_OUTBOUND_CHANNEL" && file !== SLACK_CONFIG_FILE) {
+      out.push(`${file}:${e.line}: reads process.env.SLACK_OUTBOUND_CHANNEL; only ${SLACK_CONFIG_FILE} may`);
     } else if (isExecCode(file) && (e.name === "SLACK_USER_TOKEN" || e.name === "SLACK_SIGNING_SECRET")) {
       out.push(`${file}:${e.line}: reads process.env.${e.name}; exec code never does`);
     }
@@ -2248,6 +2300,8 @@ interface FileFacts extends ImportFacts {
   p5b: P5bFacts;
   /** P6 rules B-P6-4, B-P6-6 */
   p6: P6Facts;
+  /** P7a rules B-P7a-2, -3, -6, -7, -9 */
+  p7a: P7aFacts;
 }
 
 interface Scan {
@@ -2303,7 +2357,8 @@ function scanTree(probes: ReadonlyMap<string, string>, exportProbes: readonly st
       p4: analyzeP4(sf),
       p5: analyzeP5(sf),
       p5b: analyzeP5b(sf),
-      p6: analyzeP6(sf)
+      p6: analyzeP6(sf, isExecCode(file) ? checker : undefined),
+      p7a: analyzeP7a(sf, isExecCode(file) ? checker : null)
     });
   }
   const nextConfigPath = path.join(ROOT, NEXT_CONFIG_FILE);
@@ -3812,7 +3867,12 @@ describe("P5b boundary detectors (probes; tests 101-105)", () => {
 // --- P6 (contract §0.4, §5.9 BD01-BD09) ----------------------------------------------------------------------
 
 const p6Offenses = (check: (file: string, f: P6Facts) => string[]) => [...scan.facts].flatMap(([file, facts]) => check(file, facts.p6));
-const SLACK_COMPONENT_FILES = ["src/components/exec/settings/SlackConnectControls.tsx", "src/components/exec/settings/SlackSection.tsx"];
+const SLACK_COMPONENT_FILES = [
+  "src/components/exec/settings/SlackConnectControls.tsx", "src/components/exec/settings/SlackSection.tsx",
+  // P7a B-P7a-8 (AM-P7a-12, integrator): Area E's three reading components are rule-16 roots too.
+  "src/components/exec/settings/SlackReadingSection.tsx", "src/components/exec/settings/SlackReadingControls.tsx",
+  "src/components/exec/settings/SlackChannelPicker.tsx"
+];
 
 describe("P6 boundary (real source tree; contract §0.4, BD01-BD09)", () => {
   it("BD01 isExecCode covers the Slack app's routes; the legacy DD Slack routes stay outside", () => {
@@ -4074,5 +4134,557 @@ describe("P6 boundary detectors (probes; BD02-BD06, BD09)", () => {
     expect(chainOf('"use client";\nimport type { SlackSettingsView } from "@/lib/exec/slack-settings";')).toBeNull();
     expect(p4At(SLACK_CLIENT_FILE, 'import "server-only";\nimport { createHmac } from "node:crypto";\nimport { x } from "@/lib/exec/refs";').specifiers.map((s) => s.spec)).toEqual(["server-only", "node:crypto", "@/lib/exec/refs"]);
     expect(slackClientImportOffenses(SLACK_CLIENT_FILE, p4At(SLACK_CLIENT_FILE, 'import "server-only";\nimport { x } from "@/lib/exec/refs";'))).toHaveLength(1);
+  });
+});
+
+// --- P7a (contract §0.4 B-P7a-1..9, §5.12 BR01-BR10; Area B owns this section, other areas request additions) -------------
+//
+//   B-P7a-1 Rule 9 / B-P6-5's content class also covers dd-bot.ts and sources/dd.ts (P7A_SLACK_CLASS_FILES, above), and
+//           the Slack-only exact names gain usertoken, user_token, usertokenenc, channelname, authorlabel (and their
+//           snake / camel twins).
+//   B-P7a-2 Only slack-read-store.ts names the nine P7a tables and the twenty-five P7a functions in a string (tests and the
+//           migration aside), except exec_slack_fb_lead_channels, which only sources/dd.ts names. Whole tokens, as B-P6-6.
+//   B-P7a-3 No exec file names the DD table fb_onboarding (or an fb_onboarding_* object) or the key
+//           access.notify.slack_channels in a string, and none imports DD's fb-onboarding modules: the lead-channel list is
+//           read only through exec_slack_fb_lead_channels() (N1).
+//   B-P7a-4 SLACK_BOT_TOKEN in exec code: ops.ts and dd-bot.ts; SLACK_OUTBOUND_CHANNEL: slack-config.ts (slackEnvOffenses, above).
+//   B-P7a-5 The seven read methods join B-P6-4's strings (SLACK_METHOD_STRINGS, above); a metered method handed straight to
+//           the limiter is a budget key, not a call (LIMITER_CALLS, above).
+//   B-P7a-6 In a Slack file, an object-literal property or an assignment target named excerpt appears only in
+//           slack-read-store.ts (the writer), triage/slack.ts (excerptFor's caller) and slack-read-types.ts (the row type);
+//           no exec file imports or re-exports excerptFor (it lives in triage/slack.ts).
+//   B-P7a-7 No exec file but slack-install.ts names user_token_enc (string, identifier or key); a ReadTarget (or a value
+//           holding one, a ReadingInstallation) is never spread, stringified, logged or placed in an object literal outside
+//           slack-read.ts (and slack-install.ts, which builds it): the checker resolves each value's type.
+//   B-P7a-8 The P7a Slack client components (settings/SlackReading*, settings/SlackChannelPicker*) are rule-16 roots.
+//   B-P7a-9 Only slack-classes.ts exports a never-watch decision; only handlers/slack-discover.ts and
+//           handlers/slack-classify.ts import classifyConversation (a whole-module import of slack-classes counts).
+// Comments never count; names in types never count.
+
+const P7A_TABLES = [
+  "exec_slack_channels", "exec_slack_threads", "exec_slack_messages", "exec_slack_items", "exec_slack_deleted", "exec_slack_rate",
+  "exec_slack_dd_bot", "exec_slack_purge_log", "exec_slack_author_optouts"
+];
+/** §2.10's twenty-five functions, in its order (the P7a fixer added exec_slack_save_thread_watermark). */
+const P7A_FUNCTIONS = [
+  "exec_slack_ingest_check", "exec_slack_lead_name", "exec_slack_fb_lead_channels", "exec_slack_kick_attention", "exec_slack_record_event",
+  "exec_slack_note_messages", "exec_slack_note_from_him", "exec_slack_save_thread_watermark", "exec_slack_mark_deleted", "exec_slack_purge_conversation", "exec_slack_accept_event_v2",
+  "exec_slack_write_items", "exec_slack_apply_classes", "exec_slack_finish_discovery", "exec_slack_purge_reading", "exec_slack_user_revoke",
+  "exec_slack_rate_take", "exec_slack_rate_block", "exec_slack_rekey_channel", "exec_slack_purge_expired", "exec_slack_set_watch",
+  "exec_slack_finance_name", "exec_slack_item_source_class", "exec_slack_dd_paths_ok", "exec_slack_purge_author"
+];
+const SLACK_READ_STORE_FILE = "src/lib/exec/slack-read-store.ts";
+const FB_LEAD_FUNCTION = "exec_slack_fb_lead_channels";
+const DD_SOURCE_FILE = "src/lib/exec/sources/dd.ts";
+const P7A_STORE_TEXT = new RegExp(`(?<![A-Za-z0-9_])(${[...P7A_TABLES, ...P7A_FUNCTIONS].join("|")})(?![A-Za-z0-9_.:])`, "g");
+const LEAD_KEY_TEXT = /(?<![A-Za-z0-9_])fb_onboarding|access\.notify\.slack_channels/g;
+const FB_ONBOARDING_MODULE = /^src\/lib\/fb-onboarding/;
+const EXCERPT_FILES: ReadonlySet<string> = new Set(["src/lib/exec/slack-read-store.ts", "src/lib/exec/triage/slack.ts", "src/lib/exec/slack-read-types.ts"]);
+const EXCERPT_FOR = "excerptFor";
+const USER_TOKEN_COLUMN = "user_token_enc";
+const USER_TOKEN_COLUMN_TEXT = /(?<![A-Za-z0-9_])user_token_enc(?![A-Za-z0-9_])/;
+const READ_TARGET_FILES: ReadonlySet<string> = new Set(["src/lib/exec/slack-read.ts", "src/lib/exec/slack-install.ts"]);
+const READ_TYPES_FILE = "slack-read-types.ts";
+const CLASSIFIER_MODULE = "src/lib/exec/slack-classes";
+const CLASSIFIER_FILE = "src/lib/exec/slack-classes.ts";
+const NEVER_WATCH_DECISION = "classifyConversation";
+const CLASSIFIER_CALLERS: ReadonlySet<string> = new Set(["src/lib/exec/handlers/slack-discover.ts", "src/lib/exec/handlers/slack-classify.ts"]);
+const P7A_SLACK_COMPONENT_RE = /^src\/components\/exec\/settings\/(?:SlackReading|SlackChannelPicker)[^/]*\.tsx?$/;
+/** The three files §0.5 names (E's). B-P7a-8 scans whatever matches the pattern; the integrator checks all three exist. */
+const P7A_SLACK_COMPONENT_FILES = [
+  "src/components/exec/settings/SlackReadingSection.tsx",
+  "src/components/exec/settings/SlackReadingControls.tsx",
+  "src/components/exec/settings/SlackChannelPicker.tsx"
+];
+
+interface P7aFacts {
+  /** B-P7a-2: P7a table and function names in strings. */
+  storeNames: { name: string; line: number }[];
+  /** B-P7a-3: fb_onboarding / the lead-channel key in strings. */
+  leadKeyNames: { name: string; line: number }[];
+  /** B-P7a-6: lines with an object-literal property or an assignment target named excerpt. */
+  excerptProps: number[];
+  /** B-P7a-7: lines naming user_token_enc (a string, an identifier or a key). */
+  userTokenColumn: number[];
+  /** B-P7a-6, B-P7a-9: re-exports of excerptFor / classifyConversation, and local exports of those names. */
+  decisionExports: { name: string; line: number }[];
+  /** B-P7a-7: "line: how" for a ReadTarget spread, stringified, logged or placed in an object literal (checker; exec code only). */
+  readTargetLeaks: string[];
+}
+
+const EXCERPT = "excerpt";
+
+/** Is `t` the ReadTarget of slack-read-types.ts (or a union holding it)? Resolved by the checker, so an alias can't hide it. */
+function isReadTargetType(t: ts.Type, depth = 0): boolean {
+  if (depth > 4) return false;
+  if (t.isUnionOrIntersection()) return t.types.some((x) => isReadTargetType(x, depth + 1));
+  const prop = t.getProperty("userToken");
+  return prop !== undefined && (prop.declarations ?? []).some((d) => path.basename(d.getSourceFile().fileName) === READ_TYPES_FILE);
+}
+
+/** A ReadTarget, or an object one property of which is one (ReadingInstallation). */
+function holdsReadTarget(t: ts.Type, checker: ts.TypeChecker, at: ts.Node): boolean {
+  if (isReadTargetType(t)) return true;
+  const parts = t.isUnionOrIntersection() ? t.types : [t];
+  for (const part of parts) {
+    for (const p of part.getProperties()) {
+      const decl = p.valueDeclaration ?? p.declarations?.[0];
+      const pt = decl ? checker.getTypeOfSymbolAtLocation(p, decl) : checker.getTypeOfSymbolAtLocation(p, at);
+      if (isReadTargetType(pt)) return true;
+    }
+  }
+  return false;
+}
+
+function analyzeP7a(sf: ts.SourceFile, checker: ts.TypeChecker | null): P7aFacts {
+  const lineOf = (n: ts.Node) => sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1;
+  const facts: P7aFacts = { storeNames: [], leadKeyNames: [], excerptProps: [], userTokenColumn: [], decisionExports: [], readTargetLeaks: [] };
+  const isTargetValue = (n: ts.Node): boolean =>
+    ts.isPropertyAssignment(n.parent) && n.parent.initializer === n && propertyNameText(n.parent.name) === "target";
+  const typeOf = (n: ts.Node): ts.Type | null => {
+    if (checker === null) return null;
+    try {
+      return checker.getTypeAtLocation(n);
+    } catch {
+      return null;
+    }
+  };
+  const leak = (n: ts.Node, how: string, holding: boolean) => {
+    if (checker === null) return;
+    const t = typeOf(n);
+    if (t === null) return;
+    if (holding ? holdsReadTarget(t, checker, n) : isReadTargetType(t)) facts.readTargetLeaks.push(`${lineOf(n)}: ${how}`);
+  };
+  const visit = (node: ts.Node): void => {
+    if (ts.isTypeNode(node)) return;
+    if (ts.isImportDeclaration(node)) return;
+    if (ts.isExportDeclaration(node)) {
+      const clause = node.exportClause;
+      if (clause && ts.isNamedExports(clause)) {
+        for (const el of clause.elements) {
+          const name = (el.propertyName ?? el.name).text;
+          if (name === EXCERPT_FOR || name === NEVER_WATCH_DECISION) facts.decisionExports.push({ name, line: lineOf(el) });
+        }
+      }
+      return;
+    }
+    if (ts.isStringLiteralLike(node) || ts.isTemplateHead(node) || ts.isTemplateMiddle(node) || ts.isTemplateTail(node)) {
+      const text = node.text;
+      if (!isTargetValue(node)) for (const m of text.matchAll(P7A_STORE_TEXT)) facts.storeNames.push({ name: m[1], line: lineOf(node) });
+      for (const m of text.matchAll(LEAD_KEY_TEXT)) facts.leadKeyNames.push({ name: m[0], line: lineOf(node) });
+      if (USER_TOKEN_COLUMN_TEXT.test(text)) facts.userTokenColumn.push(lineOf(node));
+    }
+    if (ts.isIdentifier(node) && node.text === USER_TOKEN_COLUMN) facts.userTokenColumn.push(lineOf(node));
+    // B-P7a-6: { excerpt: … }, { excerpt }, { "excerpt": … }, x.excerpt = …, x["excerpt"] = …
+    if ((ts.isPropertyAssignment(node) || ts.isShorthandPropertyAssignment(node)) && propertyNameText(node.name) === EXCERPT) {
+      facts.excerptProps.push(lineOf(node));
+    }
+    if (ts.isBinaryExpression(node) && node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && node.operatorToken.kind <= ts.SyntaxKind.LastAssignment) {
+      const left = node.left;
+      const named = ts.isPropertyAccessExpression(left) ? left.name.text
+        : ts.isElementAccessExpression(left) && ts.isStringLiteralLike(left.argumentExpression) ? left.argumentExpression.text : null;
+      if (named === EXCERPT) facts.excerptProps.push(lineOf(node));
+    }
+    // B-P7a-9 / B-P7a-6: a local export of either name.
+    if ((ts.isFunctionDeclaration(node) || ts.isVariableStatement(node)) && node.modifiers?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword)) {
+      const names = ts.isFunctionDeclaration(node) ? [node.name?.text ?? ""]
+        : node.declarationList.declarations.map((d) => (ts.isIdentifier(d.name) ? d.name.text : ""));
+      for (const name of names) if (name === EXCERPT_FOR || name === NEVER_WATCH_DECISION) facts.decisionExports.push({ name, line: lineOf(node) });
+    }
+    // B-P7a-7: a ReadTarget spread, stringified, logged or put in an object literal.
+    if (checker !== null) {
+      if (ts.isSpreadAssignment(node) || ts.isSpreadElement(node)) leak(node.expression, "spread", true);
+      if (ts.isPropertyAssignment(node) && ts.isObjectLiteralExpression(node.parent)
+          && (ts.isIdentifier(node.initializer) || ts.isPropertyAccessExpression(node.initializer) || ts.isElementAccessExpression(node.initializer))) {
+        leak(node.initializer, "placed in an object literal", false);
+      }
+      if (ts.isShorthandPropertyAssignment(node)) leak(node.name, "placed in an object literal", false);
+      if (ts.isTemplateSpan(node)) leak(node.expression, "stringified in a template", true);
+      if (ts.isCallExpression(node)) {
+        const callee = node.expression;
+        const isJson = ts.isPropertyAccessExpression(callee) && ts.isIdentifier(callee.expression) && callee.expression.text === "JSON" && callee.name.text === "stringify";
+        const isString = ts.isIdentifier(callee) && callee.text === "String";
+        const logged = logCallee(node);
+        if (isJson || isString || logged) for (const a of node.arguments) leak(a, isJson ? "JSON.stringify" : isString ? "String()" : `${logged}`, true);
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return facts;
+}
+
+const p7aOffenses = (check: (file: string, f: FileFacts) => string[]) => [...scan.facts].flatMap(([file, facts]) => check(file, facts));
+
+/** B-P7a-2: the P7a tables and functions named outside slack-read-store.ts (exec_slack_fb_lead_channels: sources/dd.ts only). */
+function p7aStoreOffenses(file: string, f: FileFacts): string[] {
+  return f.p7a.storeNames
+    .filter((s) => (s.name === FB_LEAD_FUNCTION ? file !== DD_SOURCE_FILE : file !== SLACK_READ_STORE_FILE))
+    .map((s) => `${file}:${s.line}: names ${s.name}; only ${s.name === FB_LEAD_FUNCTION ? DD_SOURCE_FILE : SLACK_READ_STORE_FILE} may`);
+}
+
+/** B-P7a-3: fb_onboarding and the lead-channel key in exec code, and DD's fb-onboarding modules imported by it. */
+function leadKeyOffenses(file: string, f: FileFacts): string[] {
+  if (!isExecCode(file)) return [];
+  return [
+    ...f.p7a.leadKeyNames.map((s) => `${file}:${s.line}: names ${s.name}; the lead channels are read only through ${FB_LEAD_FUNCTION}()`),
+    ...f.mail.modules.filter((m) => FB_ONBOARDING_MODULE.test(m.target)).map((m) => `${file}:${m.line}: imports ${m.target}`)
+  ];
+}
+
+/** B-P7a-6: excerpt properties in a Slack file outside the three allowed files; excerptFor imported or re-exported anywhere. */
+function excerptOffenses(file: string, f: FileFacts): string[] {
+  const out: string[] = [];
+  if (isSlackFile(file) && !EXCERPT_FILES.has(file)) out.push(...f.p7a.excerptProps.map((line) => `${file}:${line}: sets a property named excerpt`));
+  if (isExecCode(file)) {
+    for (const m of f.mail.modules) if (m.names.includes(EXCERPT_FOR)) out.push(`${file}:${m.line}: imports ${EXCERPT_FOR}`);
+    for (const e of f.p7a.decisionExports) {
+      if (e.name === EXCERPT_FOR && file !== "src/lib/exec/triage/slack.ts") out.push(`${file}:${e.line}: exports ${EXCERPT_FOR}`);
+    }
+  }
+  return out;
+}
+
+/** B-P7a-7: user_token_enc outside slack-install.ts; ReadTarget leaks outside slack-read.ts / slack-install.ts. */
+function readTargetOffenses(file: string, f: FileFacts): string[] {
+  if (!isExecCode(file)) return [];
+  return [
+    ...(file === SLACK_INSTALL_FILE ? [] : f.p7a.userTokenColumn.map((line) => `${file}:${line}: names ${USER_TOKEN_COLUMN}; only ${SLACK_INSTALL_FILE} may`)),
+    ...(READ_TARGET_FILES.has(file) ? [] : f.p7a.readTargetLeaks.map((at) => `${file}:${at} a ReadTarget`))
+  ];
+}
+
+/** B-P7a-9: classifyConversation exported outside slack-classes.ts, re-exported anywhere, or imported outside the two handlers. */
+function neverWatchOffenses(file: string, f: FileFacts): string[] {
+  if (!isExecCode(file)) return [];
+  const out: string[] = [];
+  for (const e of f.p7a.decisionExports) {
+    if (e.name === NEVER_WATCH_DECISION && file !== CLASSIFIER_FILE) out.push(`${file}:${e.line}: exports ${NEVER_WATCH_DECISION}`);
+  }
+  if (!CLASSIFIER_CALLERS.has(file)) {
+    for (const m of f.mail.modules) {
+      if (m.target === CLASSIFIER_MODULE && m.whole) out.push(`${file}:${m.line}: takes slack-classes whole`);
+      else if (m.names.includes(NEVER_WATCH_DECISION)) out.push(`${file}:${m.line}: imports ${NEVER_WATCH_DECISION}`);
+    }
+  }
+  return out;
+}
+
+describe("P7a boundary (real source tree; contract §0.4, BR01-BR09)", () => {
+  it("BR01 B-P7a-1: dd-bot.ts and sources/dd.ts are in the Slack content class, with the new exact names; the real tree passes", () => {
+    for (const p of ["src/lib/exec/dd-bot.ts", "src/lib/exec/sources/dd.ts", "src/lib/exec/producers/slack.ts", "src/lib/exec/triage/slack.ts",
+      "src/lib/exec/handlers/slack-triage.ts", "src/lib/exec/slack-read-store.ts", "src/lib/exec/slack-ingest.ts"]) {
+      expect(isSlackFile(p), p).toBe(true);
+    }
+    expect(isSlackHandler("src/lib/exec/handlers/slack-read-sweep.ts")).toBe(true);
+    for (const p of ["src/lib/exec/jobs.ts", "src/lib/exec/sources/dd-text.ts", "src/lib/exec/attention-read.ts"]) expect(isSlackFile(p), p).toBe(false);
+    for (const name of ["userToken", "user_token", "userTokenEnc", "user_token_enc", "channelName", "channel_name", "authorLabel", "author_label"]) {
+      expect(isContentName(name, vocabFor("src/lib/exec/dd-bot.ts")), name).toBe(true);
+    }
+    expect(isContentName("channelName", vocabFor("src/lib/exec/jobs.ts"))).toBe(false);
+    expect(scan.files).toContain("src/lib/exec/dd-bot.ts");
+    expect(p3Offenses(slackContentOffenses)).toEqual([]);
+  });
+
+  it("BR02 B-P7a-2: the P7a tables and functions are named only by slack-read-store.ts; exec_slack_fb_lead_channels only by sources/dd.ts", () => {
+    expect(P7A_TABLES).toHaveLength(9);
+    expect(P7A_FUNCTIONS).toHaveLength(25);
+    expect(new Set(P7A_FUNCTIONS).size).toBe(25);
+    // Every function the migration creates is in the list (the P7a fixer added exec_slack_save_thread_watermark).
+    const created = [...readFileSync("supabase/migrations/20261109100000_exec_slack_reading.sql", "utf8").matchAll(/create or replace function public[.](exec_slack_[a-z0-9_]+)[(]/g)].map((m) => m[1]);
+    expect([...created].sort()).toEqual([...P7A_FUNCTIONS].sort());
+    expect(p7aOffenses(p7aStoreOffenses)).toEqual([]);
+  });
+
+  it("BR04 B-P7a-3: no exec file names fb_onboarding or the lead-channel key, or imports DD's fb-onboarding modules", () => {
+    expect(p7aOffenses(leadKeyOffenses)).toEqual([]);
+  });
+
+  it("BR05 B-P7a-4: SLACK_BOT_TOKEN is read in exec code by ops.ts and dd-bot.ts only; SLACK_OUTBOUND_CHANNEL by slack-config.ts only", () => {
+    expect(factsOf(DD_BOT_FILE).p6.envNames.map((e) => e.name)).toContain("SLACK_BOT_TOKEN");
+    expect(factsOf(SLACK_CONFIG_FILE).p6.envNames.map((e) => e.name)).toContain("SLACK_OUTBOUND_CHANNEL");
+    expect(p6Offenses(slackEnvOffenses)).toEqual([]);
+  });
+
+  it("BR06 B-P7a-5: the seven read methods live in sources/slack.ts only", () => {
+    const own = factsOf(SLACK_CLIENT_FILE).p6.slackStrings.map((s) => s.text);
+    for (const m of ["conversations.list", "users.conversations", "conversations.info", "users.list", "users.info", "bots.info", "chat.getPermalink"]) {
+      expect(SLACK_METHOD_STRINGS.has(m), m).toBe(true);
+      expect(own, m).toContain(m);
+    }
+    expect(p6Offenses(slackLiteralOffenses)).toEqual([]);
+  });
+
+  it("BR03 / EX02 B-P7a-6: excerpt properties only in the writer, excerptFor's caller and the row type; excerptFor imported nowhere", () => {
+    expect(p7aOffenses(excerptOffenses)).toEqual([]);
+  });
+
+  it("BR07 B-P7a-7: user_token_enc only in slack-install.ts; no ReadTarget spread, stringified or put in an object literal elsewhere", () => {
+    expect(p7aOffenses(readTargetOffenses)).toEqual([]);
+  });
+
+  it("BR08 B-P7a-8: the P7a Slack client components are rule-16 roots; every one present is scanned and reaches no server-only module", () => {
+    for (const file of P7A_SLACK_COMPONENT_FILES) {
+      expect(isClientRoot(file), file).toBe(true);
+      expect(P7A_SLACK_COMPONENT_RE.test(file), file).toBe(true);
+    }
+    const modules = moduleIndex(scan.facts.keys());
+    // Integrator (stage 2): Area E's three components exist, so the check is strict and never vacuous.
+    const present = scan.files.filter((f) => P7A_SLACK_COMPONENT_RE.test(f));
+    for (const file of present) {
+      const facts = factsOf(file).p5;
+      if (facts.useClient) expect(serverOnlyChain(file, facts, scan.facts, modules), file).toBeNull();
+    }
+    for (const file of P7A_SLACK_COMPONENT_FILES) {
+      expect(existsSync(path.join(ROOT, file)), file).toBe(true);
+      expect(present, file).toContain(file);
+    }
+    expect(factsOf("src/components/exec/settings/SlackReadingSection.tsx").p5.useClient).toBe(false);
+    expect(factsOf("src/components/exec/settings/SlackReadingControls.tsx").p5.useClient).toBe(true);
+    expect(factsOf("src/components/exec/settings/SlackChannelPicker.tsx").p5.useClient).toBe(true);
+  });
+
+  it("BR09 B-P7a-9: only slack-classes.ts exports classifyConversation; only the discover and classify handlers import it", () => {
+    expect(factsOf(CLASSIFIER_FILE).p7a.decisionExports.map((e) => e.name)).toContain(NEVER_WATCH_DECISION);
+    expect(p7aOffenses(neverWatchOffenses)).toEqual([]);
+  });
+});
+
+describe("P7a boundary detectors (probes; BR01-BR10)", () => {
+  const kindOf = (file: string) => (file.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+  const sourceAt = (file: string, code: string) => ts.createSourceFile(path.join(ROOT, file), code, ts.ScriptTarget.Latest, true, kindOf(file));
+  const mailAt = (file: string, code: string) => analyzeMail(sourceAt(file, code), vocabFor(file));
+  const p6At = (file: string, code: string) => analyzeP6(sourceAt(file, code));
+  const p5At = (file: string, code: string) => analyzeP5(sourceAt(file, code));
+  /** Syntax-only facts for a probe (the ReadTarget rule needs the checker: see the probe program below). */
+  const factsAt = (file: string, code: string): FileFacts => {
+    const sf = sourceAt(file, code);
+    return { mail: analyzeMail(sf, vocabFor(file)), p7a: analyzeP7a(sf, null) } as unknown as FileFacts;
+  };
+  const HANDLER = "src/lib/exec/handlers/slack-triage.ts";
+  const PRODUCER = "src/lib/exec/producers/slack.ts";
+
+  it("BR01 the new exact names and the two files: a log of userToken, channelName or authorLabel in dd-bot.ts / sources/dd.ts is flagged", () => {
+    for (const file of [DD_BOT_FILE, DD_SOURCE_FILE, HANDLER]) {
+      for (const code of ["console.log(userToken);", "console.warn(ch.channelName);", "console.log({ authorLabel });", "console.error(row.user_token_enc);",
+        "console.log(text);", "void notifyOps({ key: \"k\", title: \"t\", detail: summary });"]) {
+        expect(slackContentOffenses(file, mailAt(file, code)), `${file}: ${code}`).toHaveLength(1);
+      }
+      for (const code of ["console.log(channelId, ts, count);", "console.warn(err.code, { teamId, userId, botId });"]) {
+        expect(slackContentOffenses(file, mailAt(file, code)), `${file}: ${code}`).toEqual([]);
+      }
+    }
+    // A non-Slack exec file keeps its own vocabulary.
+    expect(slackContentOffenses("src/lib/exec/jobs.ts", mailAt("src/lib/exec/jobs.ts", "console.log(channelName);"))).toEqual([]);
+  });
+
+  it("BR02 the P7a table and function names, in RPC calls and SQL text; index names, contexts, audit targets, types and comments aren't", () => {
+    const store = (file: string, code: string) => p7aStoreOffenses(file, factsAt(file, code));
+    for (const name of [...P7A_TABLES, ...P7A_FUNCTIONS]) {
+      const code = `await db.rpc(${JSON.stringify(name)}, {});`;
+      expect(store(HANDLER, code), name).toHaveLength(1);
+      if (name === FB_LEAD_FUNCTION) {
+        expect(store(DD_SOURCE_FILE, code)).toEqual([]);
+        expect(store(SLACK_READ_STORE_FILE, code)).toHaveLength(1);
+      } else {
+        expect(store(SLACK_READ_STORE_FILE, code), name).toEqual([]);
+        expect(store(DD_SOURCE_FILE, code), name).toHaveLength(1);
+      }
+    }
+    expect(store(HANDLER, "const sql = `delete from exec_slack_items where ts = ${ts}`;")).toHaveLength(1);
+    expect(store(HANDLER, 'if (m.includes("exec_slack_items_external_check")) x();')).toEqual([]);
+    expect(store(HANDLER, 'await auditEvent(p, { action: "slack.read", target: "exec_slack_channels:" + id });')).toEqual([]);
+    expect(store(HANDLER, 'const t = { target: "exec_slack_channels" };')).toEqual([]);
+    expect(store(HANDLER, 'type T = "exec_slack_items";\n// exec_slack_messages rows')).toEqual([]);
+    // v2 is its own name: P6's v1 rule doesn't see it, P7a's does.
+    expect(slackStoreOffenses(HANDLER, p6At(HANDLER, 'await db.rpc("exec_slack_accept_event_v2", a);'))).toEqual([]);
+    expect(store(HANDLER, 'await db.rpc("exec_slack_accept_event_v2", a);')).toHaveLength(1);
+  });
+
+  it("BR04 fb_onboarding, its key and DD's fb-onboarding modules in exec code are flagged; DD's own code isn't", () => {
+    const lead = (file: string, code: string) => leadKeyOffenses(file, factsAt(file, code));
+    expect(lead(HANDLER, 'await db.from("fb_onboarding").select("state");')).toHaveLength(1);
+    expect(lead(DD_SOURCE_FILE, 'await db.rpc("fb_onboarding_set", {});')).toHaveLength(1);
+    expect(lead(HANDLER, "const k = 'access.notify.slack_channels';")).toHaveLength(1);
+    expect(lead(HANDLER, 'import { SLACK_CHANNELS_KEY } from "@/lib/fb-onboarding";')).toHaveLength(1);
+    expect(lead(HANDLER, 'const m = await import("@/lib/fb-onboarding-data");')).toHaveLength(1);
+    expect(lead(DD_SOURCE_FILE, 'await db.rpc("exec_slack_fb_lead_channels");')).toEqual([]);
+    expect(lead(HANDLER, "// fb_onboarding is read through exec_slack_fb_lead_channels()")).toEqual([]);
+    expect(lead("src/lib/fb-onboarding-data.ts", 'await db.from("fb_onboarding").select("state");')).toEqual([]);
+  });
+
+  it("BR05 SLACK_BOT_TOKEN outside ops.ts / dd-bot.ts and SLACK_OUTBOUND_CHANNEL outside slack-config.ts are flagged in exec code", () => {
+    const env = (file: string, code: string) => slackEnvOffenses(file, p6At(file, code));
+    const bot = "const t = process.env.SLACK_BOT_TOKEN;";
+    expect(env(DD_BOT_FILE, bot)).toEqual([]);
+    expect(env(OPS_FILE, bot)).toEqual([]);
+    expect(env(HANDLER, bot)).toHaveLength(1);
+    const outbound = "const c = process.env.SLACK_OUTBOUND_CHANNEL;";
+    expect(env(SLACK_CONFIG_FILE, outbound)).toEqual([]);
+    expect(env(DD_BOT_FILE, outbound)).toHaveLength(1);
+    expect(env("src/lib/exec/slack-classes.ts", 'const c = process.env["SLACK_OUTBOUND_CHANNEL"];')).toHaveLength(1);
+    expect(env("src/lib/outbound-slack.ts", outbound)).toEqual([]);
+  });
+
+  it("BR06 the read methods outside sources/slack.ts are flagged, except as a key handed straight to the limiter", () => {
+    const lit = (file: string, code: string) => slackLiteralOffenses(file, p6At(file, code));
+    for (const m of ["conversations.list", "users.conversations", "conversations.info", "users.list", "users.info", "bots.info", "chat.getPermalink"]) {
+      expect(lit(HANDLER, `await call(${JSON.stringify(m)}, {});`), m).toHaveLength(1);
+      expect(lit(SLACK_CLIENT_FILE, `await call(${JSON.stringify(m)}, {});`), m).toEqual([]);
+    }
+    expect(lit(HANDLER, 'const page = await paced(ri, "conversations.history", "sweep", () => readHistory(ri.target, q));')).toEqual([]);
+    expect(lit(HANDLER, 'await takeSlackBudget(team, "users.info", "triage");')).toEqual([]);
+    expect(lit(HANDLER, 'await noteSlackRateLimited(team, "conversations.replies", 5000);')).toEqual([]);
+    expect(lit(HANDLER, 'const m = "conversations.history"; await paced(ri, m, "sweep", f);')).toHaveLength(1);
+    expect(lit(HANDLER, 'await paced(ri, "conversations.history", "sweep", () => fetch("https://slack.com/api/conversations.history"));')).toHaveLength(1);
+    expect(lit(HANDLER, 'type M = "users.list" | "bots.info";')).toEqual([]);
+  });
+
+  it("BR03 / EX02 an excerpt property in a Slack file outside the three is flagged, the producer's SourceRef included (mutants N23, N52)", () => {
+    const ex = (file: string, code: string) => excerptOffenses(file, factsAt(file, code));
+    for (const code of [
+      "const ref = slackMessageRef({ channelId, ts, isPrivate: true, excerpt: item.excerpt });",
+      "const ref = { system: \"slack\", id, excerpt };",
+      "const ref = { \"excerpt\": e };",
+      "ref.excerpt = item.excerpt;",
+      "ref[\"excerpt\"] = e;",
+      "row.excerpt ??= e;"
+    ]) {
+      expect(ex(PRODUCER, code), code).toHaveLength(1);
+      expect(ex("src/lib/exec/slack-read-store.ts", code), code).toEqual([]);
+      expect(ex("src/lib/exec/triage/slack.ts", code), code).toEqual([]);
+    }
+    expect(ex(PRODUCER, "const n = item.excerpt === null ? 0 : 1; const { excerpt: _e, ...rest } = item;")).toEqual([]);
+    expect(ex(PRODUCER, "interface R { excerpt: string | null }")).toEqual([]);
+    expect(ex("src/lib/exec/attention.ts", "if (excerpt) out.excerpt = excerpt;")).toEqual([]);
+    expect(ex(HANDLER, 'import { excerptFor } from "@/lib/exec/triage/slack";')).toHaveLength(1);
+    expect(ex("src/lib/exec/slack-reading.ts", 'export { excerptFor } from "@/lib/exec/triage/slack";')).toHaveLength(2);
+    expect(ex(HANDLER, 'import { runSlackTriageModel } from "@/lib/exec/triage/slack";')).toEqual([]);
+  });
+
+  it("BR07 user_token_enc outside slack-install.ts is flagged as a string, a key or a name", () => {
+    const tok = (file: string, code: string) => readTargetOffenses(file, factsAt(file, code));
+    expect(tok(SLACK_READ_STORE_FILE, 'await db.from("x").select("id,user_token_enc");')).toHaveLength(1);
+    expect(tok(HANDLER, "const row = { user_token_enc: sealed };")).toHaveLength(1);
+    expect(tok(HANDLER, "const v = row.user_token_enc;")).toHaveLength(1);
+    expect(tok(SLACK_INSTALL_FILE, 'await db.from("x").select("id,user_token_enc");')).toEqual([]);
+    expect(tok(HANDLER, "const ctx = `exec_slack_installations.user_token:${id}`;")).toEqual([]);
+  });
+
+  it("BR08 a server import in a P7a client component is flagged; the client-safe types pass", () => {
+    const modules = moduleIndex(scan.facts.keys());
+    for (const file of P7A_SLACK_COMPONENT_FILES) {
+      const chainOf = (code: string) => serverOnlyChain(file, p5At(file, code), scan.facts, modules);
+      expect(chainOf('"use client";\nimport { getSlackReadingView } from "@/lib/exec/slack-reading-settings";'), file).toEqual([file, "src/lib/exec/slack-reading-settings.ts"]);
+      expect(chainOf('"use client";\nimport { setWatch } from "@/lib/exec/slack-read-store";'), file).toEqual([file, "src/lib/exec/slack-read-store.ts"]);
+      expect(chainOf('"use client";\nimport { SLACK_READ_COPY } from "@/lib/exec/slack-read-copy";\nimport type { PickerRow, SlackReadingView } from "@/lib/exec/slack-types";'), file).toBeNull();
+      expect(chainOf('"use client";\nimport type { SlackReadingView } from "@/lib/exec/slack-reading-settings";'), file).toBeNull();
+    }
+  });
+
+  it("BR09 classifyConversation: exported or re-exported elsewhere, or imported outside the two handlers, is flagged", () => {
+    const nw = (file: string, code: string) => neverWatchOffenses(file, factsAt(file, code));
+    const imp = 'import { classifyConversation } from "@/lib/exec/slack-classes";';
+    expect(nw("src/lib/exec/handlers/slack-discover.ts", imp)).toEqual([]);
+    expect(nw("src/lib/exec/handlers/slack-classify.ts", imp)).toEqual([]);
+    expect(nw("src/lib/exec/handlers/slack-read-sweep.ts", imp)).toHaveLength(1);
+    expect(nw("src/lib/exec/slack-read.ts", 'import * as C from "@/lib/exec/slack-classes";')).toHaveLength(1);
+    expect(nw("src/lib/exec/slack-read.ts", 'const c = await import("@/lib/exec/slack-classes");')).toHaveLength(1);
+    expect(nw("src/lib/exec/slack-read.ts", 'import { isLeadName, leadSlugsFrom } from "@/lib/exec/slack-classes";')).toEqual([]);
+    expect(nw("src/lib/exec/slack-reading.ts", 'export { classifyConversation } from "@/lib/exec/slack-classes";')).toHaveLength(2);
+    expect(nw("src/lib/exec/slack-gate-cache.ts", "export function classifyConversation() { return null; }")).toHaveLength(1);
+    expect(nw(CLASSIFIER_FILE, "export function classifyConversation() { return null; }")).toEqual([]);
+  });
+
+  it("BR10 the planted probes: console.log(text) in a Slack handler, a notifyOps with summary, a handler returning { excerpt }", () => {
+    expect(slackContentOffenses(HANDLER, mailAt(HANDLER, "console.log(text);"))).toHaveLength(1);
+    expect(slackContentOffenses(HANDLER, mailAt(HANDLER, 'void notifyOps({ key: "exec-slack-triage", title: "t", detail: summary });'))).toHaveLength(1);
+    const handler = (ret: string) => `export const h = { kind: "exec.slack-triage", lane: "bulk", timeoutMs: 1, run: async (ctx) => (${ret}) };`;
+    expect(slackContentOffenses(HANDLER, mailAt(HANDLER, handler("{ excerpt }")))).toHaveLength(1);
+    expect(slackContentOffenses(HANDLER, mailAt(HANDLER, handler("{ outcome: \"assessed\", items: 2, channel, ts }")))).toEqual([]);
+    expect(slackContentOffenses(PRODUCER, mailAt(PRODUCER, "console.warn(item.summary);"))).toHaveLength(1);
+    expect(slackContentOffenses(DD_BOT_FILE, mailAt(DD_BOT_FILE, "console.log(token);"))).toHaveLength(1);
+  });
+});
+
+describe("P7a boundary detectors with the checker: ReadTarget values (B-P7a-7) and MeteredMethod keys (B-P7a-5)", () => {
+  // In-memory probes next to slack-read-types.ts, type-checked against the real ReadTarget / ReadingInstallation / MeteredMethod.
+  const PROBE_HEADER = [
+    'import type { MeteredMethod, ReadTarget, ReadingInstallation } from "./slack-read-types";',
+    "declare const t: ReadTarget;",
+    "declare const ri: ReadingInstallation;",
+    "declare const other: { userId: string; teamId: string };",
+    "declare function readHistory(t: ReadTarget, q: object): void;",
+    "type Alias = ReadTarget;",
+    "declare const aliased: Alias;",
+    ""
+  ].join("\n");
+  const LEAKS = [
+    "const copy = { ...t };",
+    "const copy = { ...ri };",
+    "const o = { target: t };",
+    "const o = { target: ri.target };",
+    "const target = t; const o = { target };",
+    "const s = JSON.stringify(t);",
+    "const s = JSON.stringify(ri);",
+    "const s = `${aliased}`;",
+    "console.log(ri);",
+    "const s = String(t);"
+  ];
+  const HARMLESS = [
+    "readHistory(t, { channel: \"C0X\" });",
+    "readHistory(ri.target, {});",
+    "const team = { teamId: t.teamId, userId: ri.target.userId };",
+    "const o = { ...other };",
+    "const s = JSON.stringify({ team: t.teamId });",
+    "console.log(t.teamId);"
+  ];
+  /** [code, method strings the B-P6-4 scan still reports] */
+  const METHOD_KEYS: readonly (readonly [string, number])[] = [
+    ['const METHODS: readonly MeteredMethod[] = ["conversations.history", "users.info", "chat.getPermalink"];', 0],
+    ['const m: MeteredMethod = "users.list";', 0],
+    ['declare function budget(m: MeteredMethod): void; budget("conversations.list");', 0],
+    ['const m: string = "users.info";', 1],
+    ['const ms = ["conversations.history", "bots.info"];', 2],
+    ['declare function call(m: string): void; call("users.conversations");', 1],
+    ['const m: MeteredMethod = "users.info"; const u = "https://slack.com/api/" + m;', 1]
+  ];
+  let leaks: Map<string, string[]>;
+  let methodStrings: Map<string, string[]>;
+  beforeAll(() => {
+    const files = new Map<string, string>();
+    const all = [...LEAKS, ...HARMLESS, ...METHOD_KEYS.map(([code]) => code)];
+    all.forEach((code, i) => files.set(path.join(EXEC, `__boundary_p7a_probe_${i}__.ts`), PROBE_HEADER + code));
+    const program = createProgram([...files.keys()], files);
+    const checker = program.getTypeChecker();
+    leaks = new Map();
+    methodStrings = new Map();
+    all.forEach((code, i) => {
+      const sf = program.getSourceFile(path.join(EXEC, `__boundary_p7a_probe_${i}__.ts`));
+      if (!sf) throw new Error("probe missing from the program");
+      leaks.set(code, analyzeP7a(sf, checker).readTargetLeaks);
+      methodStrings.set(code, analyzeP6(sf, checker).slackStrings.map((x) => x.text));
+    });
+  }, 600_000);
+
+  it.each(METHOD_KEYS.map(([code, n]) => [code, n] as const))("B-P7a-5 with the checker: %s → %i reported", (code, n) => {
+    expect(methodStrings.get(code)).toHaveLength(n);
+  });
+
+  it.each(LEAKS.map((c) => [c]))("flags %s", (code) => {
+    expect(leaks.get(code)?.length ?? 0).toBeGreaterThanOrEqual(1);
+  });
+
+  it.each(HARMLESS.map((c) => [c]))("does not flag %s", (code) => {
+    expect(leaks.get(code)).toEqual([]);
+  });
+
+  it("slack-read.ts and slack-install.ts may hold it; any other exec file is flagged", () => {
+    const facts = { mail: { modules: [] }, p7a: { storeNames: [], leadKeyNames: [], excerptProps: [], userTokenColumn: [], decisionExports: [],
+      readTargetLeaks: ["3: spread"] } } as unknown as FileFacts;
+    expect(readTargetOffenses("src/lib/exec/slack-read.ts", facts)).toEqual([]);
+    expect(readTargetOffenses(SLACK_INSTALL_FILE, facts)).toEqual([]);
+    expect(readTargetOffenses("src/lib/exec/handlers/slack-read-sweep.ts", facts)).toHaveLength(1);
+    expect(readTargetOffenses("src/lib/slack.ts", facts)).toEqual([]);
   });
 });

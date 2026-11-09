@@ -44,7 +44,7 @@ describe("the ddtext source", () => {
       await putSyncState(principal, source, "k", { a: 1 });
       expect(stored(source, "k")?.cursor).toEqual({ a: 1, rev: 1 });
     }
-    await expect(getSyncState(principal, "slack" as "ddtext", "k", parseAny)).rejects.toBeInstanceOf(NonRetryableError);
+    await expect(getSyncState(principal, "bogus" as "ddtext", "k", parseAny)).rejects.toBeInstanceOf(NonRetryableError);
   });
 });
 

@@ -36,7 +36,13 @@ export type AttentionKind =
   | "ddtext_blocker"
   | "ddtext_waiting"
   | "ddtext_decision"
-  | "ddtext_mention";
+  | "ddtext_mention"
+  // Slack reading (P7a, producers/slack.ts; contract §3.13, C19). Stage -1 seed:
+  // the kinds, bases and labels; the Slack age lines in ageContribution are Area D's.
+  | "slack_decision"
+  | "slack_request"
+  | "slack_commitment"
+  | "slack_unassessed";
 
 /** An email's urgency as triage assessed it (email-types Urgency). */
 export type UrgencyFactor = "critical" | "high" | "normal" | "low";
@@ -79,7 +85,11 @@ const BASE: Readonly<Record<AttentionKind, number>> = Object.freeze({
   ddtext_blocker: 60,
   ddtext_decision: 55,
   ddtext_mention: 50,
-  ddtext_waiting: 45
+  ddtext_waiting: 45,
+  slack_decision: 45,
+  slack_request: 40,
+  slack_commitment: 30,
+  slack_unassessed: 40
 });
 
 const KIND_LABEL: Readonly<Record<AttentionKind, string>> = Object.freeze({
@@ -101,7 +111,11 @@ const KIND_LABEL: Readonly<Record<AttentionKind, string>> = Object.freeze({
   ddtext_blocker: "Blocker in DD text (AI-assessed)",
   ddtext_waiting: "Waiting in DD text (AI-assessed)",
   ddtext_decision: "Decision asked in DD text (AI-assessed)",
-  ddtext_mention: "Mention of you in a comment"
+  ddtext_mention: "Mention of you in a comment",
+  slack_decision: "Decision asked of you in Slack",
+  slack_request: "Slack message to you",
+  slack_commitment: "Slack commitment",
+  slack_unassessed: "Slack message (not assessed)"
 });
 
 interface Contribution {
@@ -164,6 +178,14 @@ function ageContribution(kind: AttentionKind, ageDays: number): Contribution | n
     case "client_escalation":
       // An unhappy client gets angrier faster than an ordinary email ages.
       return { text: `Client waiting ${days(ageDays)}`, points: Math.min(15, 3 * ageDays) };
+    // Slack reading (P7a contract §3.13, C19). For a commitment the producer passes the days overdue as ageDays.
+    case "slack_decision":
+      return { text: `Decision waiting ${days(ageDays)}`, points: Math.min(15, 2 * ageDays) };
+    case "slack_request":
+    case "slack_unassessed":
+      return { text: `Unanswered for ${days(ageDays)}`, points: Math.min(20, 2 * ageDays) };
+    case "slack_commitment":
+      return { text: `Follow-up overdue ${days(ageDays)}`, points: Math.min(15, 2 * ageDays) };
     default:
       return null;
   }

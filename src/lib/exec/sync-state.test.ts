@@ -114,7 +114,7 @@ describe("getSyncState", () => {
 
   it("refuses an unknown source or a bad key", async () => {
     setup();
-    await expect(getSyncState(principal, "slack" as "mail", "k", parseAny)).rejects.toBeInstanceOf(NonRetryableError);
+    await expect(getSyncState(principal, "bogus" as "mail", "k", parseAny)).rejects.toBeInstanceOf(NonRetryableError);
     await expect(getSyncState(principal, "mail", "", parseAny)).rejects.toBeInstanceOf(NonRetryableError);
   });
 });

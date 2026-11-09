@@ -1,0 +1,110 @@
+// P7a Slack reading: every fixed string (P7a contract §3.17; stage 0, lead
+// seed, frozen). Pure and client-safe: no import at all. P6's SLACK_COPY
+// re-exports connectResult from here (never re-typed); every P7a surface
+// (Settings, the attention producer, the routes' banners) reads its words
+// from this object. Areas change nothing here. (P7a fixer, lead copy changes
+// to confirm: readingNotice and enableConfirmBody say what reaches Anthropic
+// besides the message itself (ui-6); checklist[4] names the pre-enable live
+// checks (ui-5); readFailed (ui-3), pickerShowing (ui-8) and
+// disconnectAlsoStops (ui-10) are new.)
+
+export const SLACK_READ_COPY = Object.freeze({
+  readingHeading: "Reading Slack",
+  readingNotInstalled: "Slack reading isn't installed yet (the P7a database update hasn't been applied).",
+  readingIntro: "Let the assistant read your Slack so it can tell you which messages need you. Nothing is read until you allow it here and turn reading on.",
+  readingWhat: Object.freeze([
+    "Channels you're a member of, and your private channels.",
+    "Your direct messages and group DMs, if you allow them on Slack's screen.",
+    "Public channels you haven't joined, only if you choose \"Active public channels\" below.",
+    "Never: lead and patient-intake channels, your DMs with bots (including DD's bot), notes to yourself, or DD's own announcement channels."
+  ]),
+  readingNotice: "Messages addressed to you, with up to 8 earlier messages of the same thread or DM and your own replies for context, are sent to Anthropic's Claude for a short summary. Summaries and short quotes are kept in DD for {days} days. You can stop at any time.",
+  allowReading: "Allow the assistant to read your Slack",
+  discovering: "Finding and sorting your conversations. Nothing is read until this finishes.",
+  discoveringCount: "{n} conversations sorted so far.",
+  paused: "Reading is set up but turned off.",
+  checklistTitle: "Before turning reading on",
+  checklist: Object.freeze([
+    "Legal has signed off on client-channel data going to Anthropic (addiction-treatment intake, 42 CFR Part 2) and confirmed whether the Anthropic BAA/DPA covers it.",
+    "The employee notice says the assistant reads Slack.",
+    "Slack Connect partners have been told.",
+    "There is a runbook for deleting one person's messages on request.",
+    "The team ran the pre-enable live checks, including a test lead channel that stays unread."
+  ]),
+  fieldReadingLabel: "Read Slack",
+  fieldReadingHelp: "Reads messages addressed to you and turns them into Needs Attention items.",
+  fieldCapLabel: "Slack daily budget",
+  fieldCapHelp: "Slack summaries pause for the day at this amount (and at most a fifth of the daily AI budget). Direct messages and mentions still show, marked not assessed.",
+  fieldRetentionLabel: "Keep Slack items for (days)",
+  fieldRetentionHelp: "Applies to items saved from now on.",
+  enableConfirmTitle: "Turn on Slack reading?",
+  enableConfirmBody: "The assistant will read the conversations shown as Watched and send messages addressed to you, with the messages just before them in the same thread or DM and your replies, to Anthropic for a summary.",
+  enableConfirmCheck: "The checklist above is done.",
+  statusLastEvent: "Last Slack event: {time}",
+  statusLastSweep: "Last check of your conversations: {time}",
+  statusPending: "{n} messages waiting for a summary",
+  statusOpen: "{n} Slack items need you",
+  statusSpend: "Today: ${spent} of ${cap}",
+  none: "None yet",
+  revoked: "Reading stopped on {date} ({reason}). The Slack data DD kept has been deleted.",
+  revokeReasons: Object.freeze({ stopped: "you stopped it", tokens_revoked: "Slack revoked access", disconnected: "Slack was disconnected", app_uninstalled: "the app was removed in Slack", installation_revoked: "the app's access ended" }),
+  error: "Slack rejected the reading permission ({code}). Allow reading again to fix it.",
+  readFailed: "Couldn't load the Slack reading settings. Reload the page.",
+  stopReading: "Stop reading Slack",
+  stopTitle: "Stop reading Slack?",
+  stopBody: "The assistant stops reading Slack and DD deletes the Slack items, summaries and conversation list it kept. The assistant's own direct message keeps working.",
+  stopRevokeFailed: "Reading stopped and DD deleted the Slack data it kept, but Slack couldn't be reached to cancel the permission. Remove the assistant's access in Slack's app settings to finish.",
+  stopFailed: "Couldn't stop reading. Try again.",
+  disconnectHalf: "Reading was stopped and its data deleted, but Slack couldn't be reached to remove the app. Try Disconnect again.",
+  disconnectRevokeFailed: "Slack was disconnected and DD deleted the Slack data it kept, but Slack couldn't be reached to cancel the reading permission. Remove the assistant in Slack's app settings to finish.",
+  disconnectAlsoStops: "Reading also stops, and DD deletes the Slack items, summaries and conversation list it kept.",
+  framed: "Changes are off in an embedded view.",
+  watchModeMember: "Only conversations I'm in",
+  watchModeActive: "Also active public channels",
+  watchModeHelp: "Active means at least 10 messages from people in the last 30 days.",
+  watchModeLabel: "Which conversations to read",
+  pickerFilter: "Filter channels",
+  pickerDms: "Direct messages: {watched} of {total} read",
+  pickerGroupDms: "Group DMs: {watched} of {total} read",
+  pickerNever: "{n} conversations are never read",
+  pickerShowing: "Showing {shown} of {total} channels: watched and muted ones first.",
+  neverReasons: Object.freeze({ assistant_dm: "this assistant's DM", dd_bot_dm: "DD's bot", self_dm: "notes to yourself", bot_im: "bots and apps", fb_list: "lead channels", lead_name: "lead channels" }),
+  badgeHub: "DD channel: links only", badgePrivate: "Private", badgeExternal: "Slack Connect", badgeFinance: "Finance", badgeNotMember: "Not a member",
+  activity: "{n} messages in 30 days",
+  watchLabel: "Watch", muteLabel: "Mute", unwatchLabel: "Don't watch",
+  financeConfirmTitle: "Watch a finance channel?",
+  financeConfirmBody: "Items from this channel are shown only in DD, never in Slack or in drafts. Until you watch it, nothing in it is read, not even messages to you.",
+  pickerConflict: "This channel changed since the page loaded. Its current setting is shown.",
+  pickerFailed: "Couldn't change this channel. Try again.",
+  connectResult: Object.freeze({
+    read_connected: "The assistant can now read your Slack. It's sorting your conversations; turn reading on below when the checklist is done.",
+    read_not_connected: "Connect Slack first, then allow reading.",
+    missing_user_scopes: "Slack didn't grant the channel permissions reading needs. Try again and allow them.",
+    extra_user_scopes: "Slack granted permissions the assistant doesn't use. Ask the team to check the app. Nothing was saved.",
+    read_taken: "Someone else already lets the assistant read this Slack workspace. Nothing was saved."
+  }),
+  attention: Object.freeze({
+    titleDm: "Slack DM from {author}",
+    titleGroupDm: "{author} in a Slack group DM",
+    titleMention: "{author} mentioned you in {place}",
+    titleThread: "{author} replied in your thread in {place}",
+    titleDecision: "{author} asked you to decide ({place})",
+    titleCommitmentYours: "You said you'd follow up with {author} ({place})",
+    titleCommitmentTheirs: "{author} owes you a follow-up ({place})",
+    suffixNotAssessed: " (not assessed)",
+    titleFinance: "A message in a finance channel needs you",
+    financeWhat: "Open DD to read it. Finance channels are never shown in Slack.",
+    notAssessed: "Not assessed: the daily Slack budget was reached, or the assistant couldn't assess it.",
+    whyRequest: "It was sent to you and hasn't been answered.",
+    whyDecision: "A decision is waiting on you.",
+    whyCommitment: "A follow-up date has passed.",
+    replyInSlack: "Reply in Slack.",
+    decideInSlack: "Decide and reply in Slack.",
+    factSent: "Sent {time} in {place}",
+    factUnanswered: "Unanswered for {n} day(s)",
+    factOverdue: "Overdue {n} day(s)",
+    factReacted: "You reacted to it in Slack",
+    placeDm: "a direct message", placeGroupDm: "a group DM", placeChannel: "#{name}", placeUnknown: "a Slack conversation",
+    authorUnknown: "Slack member", authorExternal: "External member"
+  })
+});

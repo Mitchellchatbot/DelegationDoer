@@ -196,9 +196,9 @@ export function validateBody<T>(value: unknown, schema: ZodType<T, ZodTypeDef, u
 }
 
 /** P5b added "chat" (his questions, any surface) and "proposal" (his confirms and dismisses); P6 (§3.15.2) the Slack
- *  connect start and the Slack disconnect. */
+ *  connect start and the Slack disconnect; P7a (§3.10.1) Stop reading and the picker / watch mode. */
 export type RateBucket = "attention_action" | "attention_feedback" | "settings_update" | "assess" | "chat" | "proposal"
-  | "slack_connect" | "slack_disconnect";
+  | "slack_connect" | "slack_disconnect" | "slack_reading" | "slack_channels";
 export interface RateBucketDef {
   /** created_at of the n-th newest counted row at or after sinceIso, or null when there are fewer than n. Throws on a read error. */
   nthNewestAt: (principal: ExecPrincipal, sinceIso: string, n: number, signal?: AbortSignal) => Promise<string | null>;
@@ -290,7 +290,11 @@ export const RATE_BUCKETS: Readonly<Record<RateBucket, RateBucketDef>> = Object.
   proposal: { nthNewestAt: rowNthNewestAt("exec_task_proposals", "decided_at", null) },
   // P6 (§3.15.2; seeded at stage 0, final): the OAuth start (10 per 10 minutes) and Disconnect (10 per 10 minutes).
   slack_connect: { nthNewestAt: auditNthNewestAt(["slack.oauth.start"]) },
-  slack_disconnect: { nthNewestAt: auditNthNewestAt(["slack.disconnect"]) }
+  slack_disconnect: { nthNewestAt: auditNthNewestAt(["slack.disconnect"]) },
+  // P7a (§3.10.1; seeded at stage 0, then Area C's): Stop reading (10 per 10 minutes) and the picker plus the watch
+  // mode (60 per 10 minutes).
+  slack_reading: { nthNewestAt: auditNthNewestAt(["slack.read_stop"]) },
+  slack_channels: { nthNewestAt: auditNthNewestAt(["slack.channel_watch", "settings.watch_mode"]) }
 });
 
 /**

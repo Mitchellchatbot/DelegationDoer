@@ -4,6 +4,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Link2Off, RefreshCw, Unplug } from "lucide-react";
 import { SLACK_COPY } from "@/lib/exec/slack-copy";
+import { SLACK_READ_COPY } from "@/lib/exec/slack-read-copy";
 import { disconnectSlack } from "@/lib/exec/ui/settings-api";
 import { useIsTopWindow } from "../drafts/frame-guard";
 
@@ -21,6 +22,13 @@ import { useIsTopWindow } from "../drafts/frame-guard";
 //     Disconnect button), then POST /api/exec/slack/disconnect. Success drops
 //     ?slack= / ?who= from the address bar and refreshes the page, which
 //     re-reads the section on the server.
+//   * P7a (contract §3.10.8, C47): Disconnect also stops reading first. A 200
+//     with warning "revoke_failed" (disconnected, the reading permission maybe
+//     still live in Slack) shows disconnectRevokeFailed and offers nothing
+//     more instead of refreshing (a refresh would replace this island and drop
+//     the words); a 503 slack_unavailable whose answer carries the view
+//     (reading already stopped and deleted, the bot revoke failed) shows
+//     disconnectHalf and refreshes, so the reading half shows it stopped.
 //
 // Imports only client-safe modules (boundary rule B-P6-8 / P5a rule 16):
 // slack-copy, the pure settings-api, the frame guard. No server module, not
@@ -31,18 +39,35 @@ export const SLACK_START_PATH = "/api/integrations/exec-slack/start";
 /**
  * The confirmed Disconnect: POST it; on success refresh the page (the server re-reads the section) and return null,
  * otherwise return the words to show (disconnectSlackDown for 503 slack_unavailable, else disconnectFailed).
+ * P7a (C47): see disconnectOutcome.
  */
 export async function disconnectThenRefresh(
   installationId: string,
   refresh: () => void,
   disconnect: typeof disconnectSlack = disconnectSlack
 ): Promise<string | null> {
+  return (await disconnectOutcome(installationId, refresh, disconnect)).message;
+}
+
+/**
+ * The confirmed Disconnect's outcome. done = Slack is disconnected (nothing more to offer here). A plain success
+ * refreshes and has no words; a success with the reading warning (disconnectRevokeFailed) keeps the page as it is so
+ * the words stay; a failure that already stopped reading (disconnectHalf) refreshes and keeps its words; any other
+ * failure only has its words.
+ */
+export async function disconnectOutcome(
+  installationId: string,
+  refresh: () => void,
+  disconnect: typeof disconnectSlack = disconnectSlack
+): Promise<{ message: string | null; done: boolean }> {
   const result = await disconnect(installationId);
   if (result.kind === "disconnected") {
+    if (typeof result.message === "string") return { message: result.message, done: true };
     refresh();
-    return null;
+    return { message: null, done: true };
   }
-  return result.message;
+  if (result.readingStopped === true) refresh();
+  return { message: result.message, done: false };
 }
 
 /** The page's URL without the OAuth result params (?slack=, ?who=), or null when it has neither. The banner they name
@@ -66,8 +91,9 @@ export function confirmKeyAction(key: string, pending: boolean): "close" | null 
   return key === "Escape" && !pending ? "close" : null;
 }
 
-/** Drop ?slack= / ?who= from the address bar (null state, so Next's router follows the new URL), then refresh. */
-function refreshWithoutResult(refresh: () => void): void {
+/** Drop ?slack= / ?who= from the address bar (null state, so Next's router follows the new URL), then refresh. Exported (P7a
+ *  fixer ui-4) so every reading action (enable, save, stop, the picker's mode) drops a banner that reported an earlier step. */
+export function refreshWithoutResult(refresh: () => void): void {
   try {
     const next = urlWithoutSlackResult(window.location.href);
     if (next !== null) window.history.replaceState(null, "", next);
@@ -86,7 +112,8 @@ export function SlackConnectControls({
   mode,
   installationId = null,
   onCanonicalHost = true,
-  initialConfirm = false
+  initialConfirm = false,
+  readingLive = false
 }: {
   /** connect: the Connect link (not connected, revoked). manage: Reconnect + Disconnect (connected, error). */
   mode: "connect" | "manage";
@@ -96,12 +123,15 @@ export function SlackConnectControls({
   onCanonicalHost?: boolean;
   /** Opens the Disconnect confirm on first render (static renders: tests and screenshots). The page never passes it. */
   initialConfirm?: boolean;
+  /** P7a (fixer ui-10): a reading half is set up, so the confirm also says Disconnect stops reading and deletes its data. */
+  readingLive?: boolean;
 }) {
   const isTop = useIsTopWindow();
   const router = useRouter();
   const [confirming, setConfirming] = useState(initialConfirm);
   const [pending, setPending] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [done, setDone] = useState(false);
   const titleRef = useRef<HTMLParagraphElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const wasConfirming = useRef(confirming);
@@ -124,7 +154,7 @@ export function SlackConnectControls({
     );
   }
 
-  const canDisconnect = mode === "manage" && typeof installationId === "string" && installationId.length > 0;
+  const canDisconnect = !done && mode === "manage" && typeof installationId === "string" && installationId.length > 0;
   // The confirm only exists while there is an installation to disconnect.
   const open = confirming && canDisconnect;
 
@@ -132,10 +162,11 @@ export function SlackConnectControls({
     if (pending || !canDisconnect) return;
     setPending(true);
     setMessage(null);
-    const failure = await disconnectThenRefresh(installationId as string, () => refreshWithoutResult(() => router.refresh()));
+    const outcome = await disconnectOutcome(installationId as string, () => refreshWithoutResult(() => router.refresh()));
     setPending(false);
     setConfirming(false);
-    setMessage(failure);
+    setMessage(outcome.message);
+    if (outcome.done) setDone(true);
   }
 
   const link = onCanonicalHost ? (
@@ -158,7 +189,7 @@ export function SlackConnectControls({
 
   return (
     <div data-slack-controls={mode} className="space-y-2">
-      {!open && (
+      {!open && !done && (
         <div className="flex flex-wrap items-center gap-2">
           {link}
           {canDisconnect && (
@@ -198,6 +229,7 @@ export function SlackConnectControls({
           </p>
           <p id={bodyId} className="text-[12.5px] leading-relaxed text-rose-950">
             {SLACK_COPY.disconnectConfirmBody}
+            {readingLive && <span data-slack-confirm-reading>{` ${SLACK_READ_COPY.disconnectAlsoStops}`}</span>}
           </p>
           <div className="flex flex-wrap gap-2">
             <button

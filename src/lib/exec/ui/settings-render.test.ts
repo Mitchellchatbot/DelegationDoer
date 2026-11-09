@@ -46,10 +46,12 @@ describe("SettingsForm, top-level (test 75)", () => {
   it("every registry field renders with its label and a control", () => {
     // P5b (contract §3.19.12): the chat fields render in their own section, and only once
     // P5b's migration is applied (before it, the section is one sentence with no control).
-    const chatInstalled = settingsView({ schema: { email: true, drafts: true, ddtext: true, chat: true }, settings: settings({ chatSchemaReady: true, chatEnabled: true }) });
+    const chatInstalled = settingsView({ schema: { email: true, drafts: true, ddtext: true, chat: true, slack: false }, settings: settings({ chatSchemaReady: true, chatEnabled: true }) });
+    // P7a (§3.16, §3.20.2, SU12): the three section "slack" fields render in the Slack section's reading controls instead.
+    const formFields = SETTINGS_FIELDS.filter((d) => d.section !== "slack");
     for (const [view, fields] of [
-      [settingsView(), SETTINGS_FIELDS.filter((d) => d.group !== "chat")],
-      [chatInstalled, SETTINGS_FIELDS]
+      [settingsView(), formFields.filter((d) => d.group !== "chat")],
+      [chatInstalled, formFields]
     ] as const) {
       const html = form(view);
       for (const def of fields) {
@@ -63,7 +65,7 @@ describe("SettingsForm, top-level (test 75)", () => {
   });
 
   it("a field whose migration isn't applied is disabled, with the copy", () => {
-    const html = form(settingsView({ schema: { email: true, drafts: false, ddtext: false, chat: false } }));
+    const html = form(settingsView({ schema: { email: true, drafts: false, ddtext: false, chat: false, slack: false } }));
     for (const key of ["ddtextEnabled", "retentionDaysDdtext", "voiceEnabled"]) {
       const f = fieldOf(html, key);
       expect(textOf(f), key).toContain("Not available yet: the team needs to apply the database update.");
@@ -257,6 +259,7 @@ describe("SettingsPageView (test 75)", () => {
 
   it("feedback kinds read as words; an unknown kind keeps its name, spaced", () => {
     expect(feedbackKindLabel("ddtext_blocker")).toBe("Possible blocker in DD text");
+    expect(feedbackKindLabel("slack_request")).toBe("Slack message to you");   // P7a (integrator)
     expect(feedbackKindLabel("email_reply")).toBe("Email reply");
   });
 

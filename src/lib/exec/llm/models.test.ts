@@ -30,7 +30,9 @@ describe("feature tables", () => {
       spike: "claude-opus-5-5",
       triage: "claude-haiku-5-5",
       digest: "claude-haiku-5-5",
-      ddtext: "claude-haiku-5-5"
+      ddtext: "claude-haiku-5-5",
+      // P7a stage -1 (contract §3.20.1): Slack triage.
+      slack_triage: "claude-haiku-5-5"
     });
     expect(FEATURE_EFFORT).toEqual({
       triage: "low",
@@ -40,6 +42,7 @@ describe("feature tables", () => {
       draft: "medium",
       voice: "low",
       ddtext: "low",
+      slack_triage: "low",
       brief: "high"
     });
     expect(FEATURE_MAX_TOKENS).toEqual({
@@ -50,7 +53,8 @@ describe("feature tables", () => {
       triage: 4000,
       digest: 4000,
       spike: 4000,
-      ddtext: 4000
+      ddtext: 4000,
+      slack_triage: 4000
     });
     expect(HAIKU_MAX_PROMPT_TOKENS).toBe(90_000);
   });

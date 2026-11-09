@@ -15,9 +15,23 @@ import type {
   SlackEventDecision,
   SlackEventFacts,
   SlackPostKind,
+  SlackReadingSummary,
   SlackSystemSummary
 } from "@/lib/exec/slack-types";
 import { SLACK_JOB_KINDS, SLACK_LIMITS, SLACK_RE } from "@/lib/exec/slack-types";
+import type {
+  ReadingHalf,
+  ReadingInstallation,
+  ReadingState,
+  ReadTarget,
+  SlackReadingViewState,
+  SlackUserScope,
+  UserRevokeReason
+} from "@/lib/exec/slack-read-types";
+import { SLACK_READ_JOB_KINDS, SLACK_USER_SCOPES_OPTIONAL, SLACK_USER_SCOPES_REQUIRED } from "@/lib/exec/slack-read-types";
+import { loadSettings } from "@/lib/exec/principal";
+import { v2MissingWithSchemaAt } from "@/lib/exec/slack-gate-cache";
+import { countPendingTriage, lastSweepAt, rateBlocks, SlackReadStoreError } from "@/lib/exec/slack-read-store";
 import type { ExecPrincipal } from "@/lib/exec/types";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 
@@ -440,8 +454,10 @@ export async function clearSlackError(installationId: string): Promise<void> {
 // OAuth states (C1)
 // ---------------------------------------------------------------------------
 
-/** C1. Deletes the principal's other slack states and every expired state, then inserts. */
-export async function issueOAuthState(principal: ExecPrincipal, s: { nonceHash: string; authUserId: string; sessionId: string; ttlSeconds: number }): Promise<void> {
+/** C1. Deletes the principal's other slack states and every expired state, then inserts.
+ *  P7a (§3.7, additive): `purpose` is written only when "read" (so P6 works before the P7a migration: an install flow never
+ *  names the column; the database default is "install"). */
+export async function issueOAuthState(principal: ExecPrincipal, s: { nonceHash: string; authUserId: string; sessionId: string; ttlSeconds: number } & { purpose?: "install" | "read" }): Promise<void> {
   const pid = requirePrincipal(principal);
   if (!s || typeof s.nonceHash !== "string" || !HEX64.test(s.nonceHash)) throw new TypeError("exec slack store: issueOAuthState: the nonce hash must be 64 lowercase hex");
   if (typeof s.authUserId !== "string" || s.authUserId.length < 1 || s.authUserId.length > 128) throw new TypeError("exec slack store: issueOAuthState: malformed auth user id");
@@ -449,6 +465,7 @@ export async function issueOAuthState(principal: ExecPrincipal, s: { nonceHash: 
   if (!Number.isInteger(s.ttlSeconds) || s.ttlSeconds < 1 || s.ttlSeconds > OAUTH_STATE_TTL_MAX_SEC) {
     throw new TypeError(`exec slack store: issueOAuthState: the TTL must be 1-${OAUTH_STATE_TTL_MAX_SEC} seconds`);
   }
+  if (s.purpose !== undefined && s.purpose !== "install" && s.purpose !== "read") throw new TypeError("exec slack store: issueOAuthState: unknown purpose");
   const now = Date.now();
   const nowIso = new Date(now).toISOString();
   // One live flow at a time: the principal's earlier states go, and so does every expired one.
@@ -463,17 +480,31 @@ export async function issueOAuthState(principal: ExecPrincipal, s: { nonceHash: 
     auth_user_id: s.authUserId,
     session_id: s.sessionId,
     created_at: nowIso,
-    expires_at: new Date(now + s.ttlSeconds * 1000).toISOString()
+    expires_at: new Date(now + s.ttlSeconds * 1000).toISOString(),
+    ...(s.purpose === "read" ? { purpose: "read" } : {})
   });
   if (error) throw failure("issueOAuthState", error);
 }
 
 /** C1 v2: delete … where nonce_hash = $1 returning principal_id, auth_user_id, session_id, expires_at (PostgREST
  *  .delete().eq("nonce_hash", h).select(...)). Single use whether expired or not; null only when no row exists (replayed,
- *  never issued, or already swept by issueOAuthState / the purge). The caller decides expiry from expiresAt. */
-export async function consumeOAuthState(nonceHash: string): Promise<{ principalId: string; authUserId: string; sessionId: string; expiresAt: string } | null> {
+ *  never issued, or already swept by issueOAuthState / the purge). The caller decides expiry from expiresAt.
+ *  P7a (§3.7, additive): also reads `purpose` and returns "install" | "read". The purpose is read first, by a plain select
+ *  of the one row (a missing column, 42703 / PGRST204, before the P7a migration → "install"), then the row is consumed by
+ *  P6's delete … returning, unchanged: a failed read never costs the state its single use (the purpose never changes
+ *  after the insert, so reading it first is safe). */
+export async function consumeOAuthState(nonceHash: string): Promise<{ principalId: string; authUserId: string; sessionId: string; expiresAt: string; purpose: "install" | "read" } | null> {
   // No row can have another shape (exec_oauth_states_hash_check), so there is nothing to delete.
   if (typeof nonceHash !== "string" || !HEX64.test(nonceHash)) return null;
+  let purpose: "install" | "read" = "install";
+  const read = await db().from(STATES).select("purpose").eq("nonce_hash", nonceHash).eq("provider", "slack").limit(1);
+  if (read.error) {
+    if (!COLUMN_MISSING_CODES.has(pgCodeOf(read.error) ?? "")) throw failure("consumeOAuthState", read.error);
+  } else {
+    const p = Array.isArray(read.data) ? (read.data[0] as Row | undefined)?.purpose : undefined;
+    if (p !== undefined && p !== null && p !== "install" && p !== "read") throw new SlackStoreError("consumeOAuthState: malformed row", null);
+    if (p === "read") purpose = "read";
+  }
   const { data, error } = await db()
     .from(STATES)
     .delete()
@@ -488,7 +519,7 @@ export async function consumeOAuthState(nonceHash: string): Promise<{ principalI
   const sessionId = str(r.session_id);
   const expiresAt = str(r.expires_at);
   if (!principalId || !authUserId || !sessionId || !isTime(expiresAt)) throw new SlackStoreError("consumeOAuthState: malformed row", null);
-  return { principalId, authUserId, sessionId, expiresAt };
+  return { principalId, authUserId, sessionId, expiresAt, purpose };
 }
 
 // ---------------------------------------------------------------------------
@@ -930,7 +961,7 @@ export async function deleteExpiredOAuthStates(now: Date, opts?: { signal?: Abor
   return typeof count === "number" && count > 0 ? count : 0;
 }
 
-/** null = schema missing. */
+/** null = schema missing. P7a (§3.20.3, M12): `reading` is the reading half's row (null = nothing to show; never fails the card). */
 export async function slackSystemSummary(principal: ExecPrincipal): Promise<SlackSystemSummary | null> {
   let row: InstallationRow | null;
   try {
@@ -941,5 +972,385 @@ export async function slackSystemSummary(principal: ExecPrincipal): Promise<Slac
   }
   if (!row) return { state: "not_connected", lastDmAt: null, lastErrorCode: null, revokedAt: null };
   if (row.revokedAt !== null) return { state: "revoked", lastDmAt: row.lastDmAt, lastErrorCode: row.lastErrorCode, revokedAt: row.revokedAt };
-  return { state: row.lastErrorCode !== null ? "error" : "connected", lastDmAt: row.lastDmAt, lastErrorCode: row.lastErrorCode, revokedAt: null };
+  const state = row.lastErrorCode !== null ? "error" : "connected";
+  const base: SlackSystemSummary = { state, lastDmAt: row.lastDmAt, lastErrorCode: row.lastErrorCode, revokedAt: null };
+  // The reading row only when there is one to show (absent = null, AM-P7a-4).
+  const reading = await readingSummary(principal, state);
+  return reading === null ? base : { ...base, reading };
+}
+
+// ---------------------------------------------------------------------------
+// P7a: the user (reading) half (P7a contract §3.7). B-P6-6 keeps the
+// installation and OAuth-state table names in this file, so the user-half
+// functions live here; the P7a tables are slack-read-store.ts's (B-P7a-2).
+//
+//   * The sealed user token never leaves this module unopened (B-P7a-7): the
+//     ReadingHalf carries hasToken only, and openReading* hand back a frozen
+//     ReadTarget whose JSON / inspect forms leave the token out.
+//   * The user token's sealing context is
+//     exec_slack_installations.user_token:<principalId>, distinct from the bot
+//     token's, so neither blob opens as the other.
+//   * Before the P7a migration is applied the reading columns don't exist:
+//     slackReadingSchemaReady answers false, the reads below throw a
+//     SlackStoreError carrying the database's code (42703 / PGRST204), and the
+//     gate listing falls back to P6's columns (reading state "none").
+// ---------------------------------------------------------------------------
+
+const READING_COLS =
+  `${INSTALLATION_COLS},user_token_enc,user_key_id,user_scopes,user_installed_at,user_revoked_at,user_revoke_reason,` +
+  "user_last_error_code,user_last_error_at,reading_state,discovered_at,reading_purged_at";
+const READING_STATES: readonly ReadingState[] = ["none", "discovering", "ready", "revoked"];
+const USER_REVOKE_REASONS: readonly UserRevokeReason[] = ["stopped", "tokens_revoked", "disconnected", "app_uninstalled", "installation_revoked"];
+const USER_SCOPES: readonly SlackUserScope[] = [...SLACK_USER_SCOPES_REQUIRED, ...SLACK_USER_SCOPES_OPTIONAL];
+const COLUMN_MISSING_CODES: ReadonlySet<string> = new Set(["42703", "PGRST204"]);
+const READING_MISSING_CODES: ReadonlySet<string> = new Set(["42703", "PGRST204", "42P01", "PGRST205"]);
+const GATE_LIMIT = 1000;
+const REVOKED_READING_LIMIT = 100;
+
+const userTokenContext = (principalId: string) => `exec_slack_installations.user_token:${principalId}`;
+
+function toReadingHalf(r: Row): ReadingHalf {
+  const state = READING_STATES.find((s) => s === r.reading_state) ?? "none";
+  const reason = USER_REVOKE_REASONS.find((s) => s === r.user_revoke_reason) ?? null;
+  const scopes = Array.isArray(r.user_scopes)
+    ? USER_SCOPES.filter((s) => (r.user_scopes as unknown[]).includes(s))
+    : [];
+  return {
+    state,
+    scopes,
+    installedAt: str(r.user_installed_at),
+    revokedAt: str(r.user_revoked_at),
+    revokeReason: reason,
+    discoveredAt: str(r.discovered_at),
+    purgedAt: str(r.reading_purged_at),
+    lastErrorCode: str(r.user_last_error_code),
+    lastErrorAt: str(r.user_last_error_at),
+    hasToken: typeof r.user_token_enc === "string" && r.user_token_enc.length > 0
+  };
+}
+
+/**
+ * The only object that carries a usable user token. Frozen; its JSON form and its util.inspect form leave the token out,
+ * so a job payload, a result or a log line that picks it up by mistake can't carry it.
+ */
+function readTarget(userToken: string, teamId: string, userId: string): ReadTarget {
+  const target = { userToken, teamId, userId };
+  Object.defineProperty(target, "toJSON", { value: () => ({ teamId, userId }), enumerable: false });
+  Object.defineProperty(target, Symbol.for("nodejs.util.inspect.custom"), {
+    value: () => `ReadTarget { teamId: '${teamId}', userId: '${userId}' }`,
+    enumerable: false
+  });
+  return Object.freeze(target);
+}
+
+/** A live reading half: active bot row, a user token, reading_state discovering|ready. SecretUnavailableError propagates. */
+function openReadingRow(raw: Row, op: string): ReadingInstallation | null {
+  const row = toInstallationRow(raw, op);
+  const reading = toReadingHalf(raw);
+  const blob = raw.user_token_enc;
+  if (row.revokedAt !== null || typeof blob !== "string" || blob.length === 0) return null;
+  if (reading.state !== "discovering" && reading.state !== "ready") return null;
+  const token = openSecret(blob, userTokenContext(row.principalId));
+  return Object.freeze({ row, reading, target: readTarget(token, row.teamId, row.userId) });
+}
+
+async function activeReadingRaw(principalId: string, op: string, signal?: AbortSignal): Promise<Row | null> {
+  const q = db().from(INSTALLATIONS).select(READING_COLS).eq("principal_id", principalId).is("revoked_at", null)
+    .order("installed_at", { ascending: false }).limit(1);
+  return firstRow(op, await withSignal(q, signal), signal);
+}
+
+async function readingByIdRaw(installationId: string, op: string, signal?: AbortSignal): Promise<Row | null> {
+  if (typeof installationId !== "string" || !SLACK_RE.installationId.test(installationId)) return null;
+  return firstRow(op, await withSignal(db().from(INSTALLATIONS).select(READING_COLS).eq("id", installationId).limit(1), signal), signal);
+}
+
+export interface ReadingConsentInput extends NewInstallation { userTokenSealed: string; userKeyId: string; userScopes: SlackUserScope[] }
+
+function checkReadingConsent(input: ReadingConsentInput): void {
+  checkNewInstallation(input);
+  const bad = (what: string) => new TypeError(`exec slack store: saveReadingConsent: ${what}`);
+  // Never a plaintext token: only sealSecret's output, sealed under the key it names.
+  const sealed = typeof input.userTokenSealed === "string" ? SEALED_BLOB.exec(input.userTokenSealed) : null;
+  if (!sealed) throw bad("userTokenSealed is not a sealed secret");
+  if (typeof input.userKeyId !== "string" || !KEY_ID.test(input.userKeyId) || input.userKeyId !== sealed[1]) {
+    throw bad("userKeyId must be the sealed blob's key id");
+  }
+  if (!Array.isArray(input.userScopes) || input.userScopes.length > USER_SCOPES.length) throw bad("malformed user scopes");
+  const scopes = new Set<string>(input.userScopes);
+  if (scopes.size !== input.userScopes.length || ![...scopes].every((s) => (USER_SCOPES as readonly string[]).includes(s))) {
+    throw bad("a user scope outside the nine (or a duplicate)");
+  }
+  if (!SLACK_USER_SCOPES_REQUIRED.every((s) => scopes.has(s))) throw bad("a required user scope is missing");
+}
+
+/** N4: updates the principal's ACTIVE row in place — P6's bot fields exactly as saveInstallation's update, plus user_token_enc,
+ *  user_key_id, user_scopes, user_installed_at = now, user_revoked_at = null, user_revoke_reason = null, user_last_error_* = null,
+ *  reading_state = 'discovering', reading_purged_at = null (discovered_at unchanged). The row must exist with user_id = input.userId.
+ *  23505 on exec_slack_installations_reading_key → "taken" (C7). */
+export async function saveReadingConsent(principal: ExecPrincipal, input: ReadingConsentInput):
+  Promise<{ outcome: "saved"; id: string; installedAtMs: number } | { outcome: "no_installation" } | { outcome: "taken" }> {
+  const pid = requirePrincipal(principal);
+  checkReadingConsent(input);
+  const nowIso = new Date().toISOString();
+  const order = USER_SCOPES.filter((s) => input.userScopes.includes(s));
+  const fields = {
+    team_id: input.teamId,
+    app_id: input.appId,
+    bot_user_id: input.botUserId,
+    bot_id: input.botId,
+    bot_token_enc: input.botTokenSealed,
+    key_id: input.keyId,
+    bot_scopes: [...input.botScopes],
+    user_id: input.userId,
+    slack_dm_channel_id: input.dmChannelId,
+    installed_at: nowIso,
+    updated_at: nowIso,
+    last_error_code: null,
+    last_error_at: null,
+    user_token_enc: input.userTokenSealed,
+    user_key_id: input.userKeyId,
+    user_scopes: order,
+    user_installed_at: nowIso,
+    user_revoked_at: null,
+    user_revoke_reason: null,
+    user_last_error_code: null,
+    user_last_error_at: null,
+    reading_state: "discovering",
+    reading_purged_at: null
+  };
+  const { data, error } = await db()
+    .from(INSTALLATIONS)
+    .update(fields)
+    .eq("principal_id", pid)
+    .is("revoked_at", null)
+    .eq("user_id", input.userId)
+    .select("id,installed_at");
+  if (error) {
+    // C7: another principal's live reading half holds this workspace and app. (A unique violation on any other key can't
+    // come from an in-place update of the principal's own active row except the DM channel; that one is a real failure.)
+    const message = typeof (error as DbError).message === "string" ? ((error as DbError).message as string) : "";
+    if (pgCodeOf(error) === "23505" && (message === "" || message.includes("exec_slack_installations_reading_key"))) return { outcome: "taken" };
+    throw failure("saveReadingConsent", error);
+  }
+  const r = Array.isArray(data) ? (data[0] as Row | undefined) : undefined;
+  if (!r) return { outcome: "no_installation" };
+  const id = str(r.id);
+  const installedAt = str(r.installed_at);
+  if (!id || !isTime(installedAt)) throw new SlackStoreError("saveReadingConsent: malformed answer", null);
+  return { outcome: "saved", id, installedAtMs: Date.parse(installedAt) };
+}
+
+/** The active P6 row with its user half, or null. */
+export async function getReadingHalf(principal: ExecPrincipal, opts?: { signal?: AbortSignal }): Promise<{ row: InstallationRow; reading: ReadingHalf } | null> {
+  const pid = requirePrincipal(principal);
+  const raw = await activeReadingRaw(pid, "getReadingHalf", opts?.signal);
+  if (!raw || raw.principal_id !== pid) return null;
+  return { row: toInstallationRow(raw, "getReadingHalf"), reading: toReadingHalf(raw) };
+}
+
+/** Any state, by id (system jobs and the recheck). */
+export async function getInstallationReading(installationId: string, opts?: { signal?: AbortSignal }): Promise<{ row: InstallationRow; reading: ReadingHalf } | null> {
+  const raw = await readingByIdRaw(installationId, "getInstallationReading", opts?.signal);
+  return raw ? { row: toInstallationRow(raw, "getInstallationReading"), reading: toReadingHalf(raw) } : null;
+}
+
+/** Active row, principal match, a user token, reading_state discovering|ready; openSecret(user_token_enc,
+ *  "exec_slack_installations.user_token:" + principalId). null otherwise. SecretUnavailableError propagates. */
+export async function openReadingInstallation(principal: ExecPrincipal, installationId?: string, opts?: { signal?: AbortSignal }): Promise<ReadingInstallation | null> {
+  const pid = requirePrincipal(principal);
+  const raw =
+    installationId === undefined
+      ? await activeReadingRaw(pid, "openReadingInstallation", opts?.signal)
+      : await readingByIdRaw(installationId, "openReadingInstallation", opts?.signal);
+  if (!raw || raw.principal_id !== pid) return null;
+  return openReadingRow(raw, "openReadingInstallation");
+}
+
+export async function openReadingForSystem(installationId: string, opts?: { signal?: AbortSignal }): Promise<ReadingInstallation | null> {
+  const raw = await readingByIdRaw(installationId, "openReadingForSystem", opts?.signal);
+  return raw ? openReadingRow(raw, "openReadingForSystem") : null;
+}
+
+/** user_last_error_* (never throws; logs id and code). */
+export async function recordUserTokenError(installationId: string, code: string): Promise<void> {
+  const c = healthCode(code);
+  try {
+    if (typeof installationId !== "string" || !SLACK_RE.installationId.test(installationId)) {
+      console.warn(`[exec-slack] reading health not recorded (malformed installation id, code ${c})`);
+      return;
+    }
+    const nowIso = new Date().toISOString();
+    const { error } = await db()
+      .from(INSTALLATIONS)
+      .update({ user_last_error_code: c, user_last_error_at: nowIso, updated_at: nowIso })
+      .eq("id", installationId);
+    if (error) console.error(`[exec-slack] reading health not recorded (${installationId}, code ${c}): ${pgCodeOf(error) ?? "error"}`);
+  } catch (err) {
+    console.error(`[exec-slack] reading health not recorded (${logId(installationId, SLACK_RE.installationId)}, code ${c}): ${err instanceof Error ? err.name : "error"}`);
+  }
+}
+
+/** A successful reading call clears the user-half error. Never throws (logs the id). */
+export async function clearUserTokenError(installationId: string): Promise<void> {
+  try {
+    if (typeof installationId !== "string" || !SLACK_RE.installationId.test(installationId)) return;
+    const { error } = await db()
+      .from(INSTALLATIONS)
+      .update({ user_last_error_code: null, user_last_error_at: null, updated_at: new Date().toISOString() })
+      .eq("id", installationId)
+      .not("user_last_error_code", "is", null);
+    if (error) console.error(`[exec-slack] reading health not cleared (${installationId}): ${pgCodeOf(error) ?? "error"}`);
+  } catch (err) {
+    console.error(`[exec-slack] reading health not cleared (${logId(installationId, SLACK_RE.installationId)}): ${err instanceof Error ? err.name : "error"}`);
+  }
+}
+
+/** C25: enqueue exec.slack-user-check { installation_id, event_time: nowSec }, bulk, maxAttempts 3,
+ *  dedupe `slack-user-check:auth:<installationId>:<yyyymmddhh UTC>`. Never throws. */
+export async function enqueueUserCheck(installationId: string, now: Date): Promise<void> {
+  const where = logId(installationId, SLACK_RE.installationId);
+  try {
+    if (!SLACK_RE.installationId.test(String(installationId)) || !(now instanceof Date) || !Number.isFinite(now.getTime())) {
+      console.warn(`[exec-slack] user check not enqueued (${where}): bad input`);
+      return;
+    }
+    const hour = now.toISOString().slice(0, 13).replace(/[-T]/g, "");
+    await enqueueJob({
+      kind: SLACK_READ_JOB_KINDS.userCheck,
+      lane: "bulk",
+      principalId: null,
+      payload: { installation_id: installationId, event_time: Math.floor(now.getTime() / 1000) },
+      dedupeKey: `slack-user-check:auth:${installationId}:${hour}`,
+      maxAttempts: 3
+    });
+  } catch (err) {
+    console.error(`[exec-slack] user check not enqueued (${where}): ${err instanceof Error ? err.name : "error"}`);
+  }
+}
+
+/** Ids of installations whose reading data may remain: (reading_state = 'revoked' or revoked_at is not null)
+ *  and reading_state <> 'none' and reading_purged_at is null, for EVERY principal (N13/M10: a disabled principal's revoked
+ *  installation is re-checked too; ≤ 100 per call, oldest first). Schema missing → []. */
+export async function listRevokedReadingInstallations(): Promise<string[]> {
+  const { data, error } = await db()
+    .from(INSTALLATIONS)
+    .select("id,reading_state,revoked_at,user_revoked_at,updated_at")
+    .neq("reading_state", "none")
+    .is("reading_purged_at", null)
+    .order("updated_at", { ascending: true })
+    .limit(GATE_LIMIT);
+  if (error) {
+    const code = pgCodeOf(error);
+    if (code !== null && READING_MISSING_CODES.has(code)) return [];
+    throw failure("listRevokedReadingInstallations", error);
+  }
+  const at = (r: Row) => {
+    const times = [r.revoked_at, r.user_revoked_at].filter(isTime).map((t) => Date.parse(t));
+    return times.length > 0 ? Math.min(...times) : Number.POSITIVE_INFINITY;
+  };
+  return (Array.isArray(data) ? (data as Row[]) : [])
+    .filter((r) => r.reading_state === "revoked" || r.revoked_at !== null)
+    .filter((r) => typeof r.id === "string" && SLACK_RE.installationId.test(r.id))
+    .sort((a, b) => at(a) - at(b) || String(a.id).localeCompare(String(b.id)))
+    .slice(0, REVOKED_READING_LIMIT)
+    .map((r) => String(r.id));
+}
+
+/** select reading_state from exec_slack_installations limit 0 → true; 42703/PGRST204/42P01/PGRST205 → false; other errors throw. */
+export async function slackReadingSchemaReady(opts?: { signal?: AbortSignal }): Promise<boolean> {
+  const signal = opts?.signal;
+  const { error } = await withSignal(db().from(INSTALLATIONS).select("reading_state").limit(0), signal);
+  if (!error) return true;
+  const code = pgCodeOf(error);
+  if (code !== null && READING_MISSING_CODES.has(code)) return false;
+  throw failure("slackReadingSchemaReady", error, signal);
+}
+
+/** max(received_at) of this installation's exec_slack_events rows with decision in (ingest, lifecycle), or null. */
+export async function lastReadingEventAt(installationId: string): Promise<string | null> {
+  if (typeof installationId !== "string" || !SLACK_RE.installationId.test(installationId)) return null;
+  const { data, error } = await db()
+    .from(EVENTS)
+    .select("received_at")
+    .eq("installation_id", installationId)
+    .in("decision", ["ingest", "lifecycle"])
+    .order("received_at", { ascending: false })
+    .limit(1);
+  if (error) {
+    if (missing(error)) return null;
+    throw failure("lastReadingEventAt", error);
+  }
+  return Array.isArray(data) ? str((data[0] as Row | undefined)?.received_at) : null;
+}
+
+/** Gate cache rows (§3.9.3): every active installation's id, team, dm channel, reading_state, discovered_at, principal id.
+ *  The token itself never leaves (hasUserToken only). Before the P7a migration (its columns missing) the P6 columns answer,
+ *  with reading_state "none": the assistant DMs still reach the gate. */
+export async function listGateInstallations(): Promise<{ id: string; principalId: string; teamId: string; dmChannelId: string;
+  readingState: ReadingState; discoveredAt: string | null; hasUserToken: boolean }[]> {
+  const read = (cols: string) => db().from(INSTALLATIONS).select(cols).is("revoked_at", null).order("installed_at", { ascending: true }).limit(GATE_LIMIT);
+  let { data, error } = await read("id,principal_id,team_id,slack_dm_channel_id,reading_state,discovered_at,user_token_enc");
+  if (error && COLUMN_MISSING_CODES.has(pgCodeOf(error) ?? "")) ({ data, error } = await read("id,principal_id,team_id,slack_dm_channel_id"));
+  if (error) throw failure("listGateInstallations", error);
+  const out: { id: string; principalId: string; teamId: string; dmChannelId: string; readingState: ReadingState; discoveredAt: string | null; hasUserToken: boolean }[] = [];
+  for (const r of Array.isArray(data) ? (data as unknown as Row[]) : []) {
+    const id = str(r.id);
+    const principalId = str(r.principal_id);
+    const teamId = str(r.team_id);
+    const dmChannelId = str(r.slack_dm_channel_id);
+    if (!id || !principalId || !teamId || !dmChannelId) continue;
+    out.push({
+      id,
+      principalId,
+      teamId,
+      dmChannelId,
+      readingState: READING_STATES.find((s) => s === r.reading_state) ?? "none",
+      discoveredAt: str(r.discovered_at),
+      hasUserToken: typeof r.user_token_enc === "string" && r.user_token_enc.length > 0
+    });
+  }
+  return out;
+}
+
+/** M12 (§3.20.3): the System card's reading row. null = nothing to show (no P7a schema, no live bot, never consented) or the
+ *  read failed (logged by code; the card keeps its P6 row). */
+async function readingSummary(principal: ExecPrincipal, botState: SlackSystemSummary["state"]): Promise<SlackReadingSummary | null> {
+  try {
+    if (botState === "not_connected" || botState === "revoked") return null;
+    if (!(await slackReadingSchemaReady())) return null;
+    const half = await getReadingHalf(principal);
+    if (!half) return null;
+    const { row, reading } = half;
+    if (reading.state === "none") return null;
+    const settings = await loadSettings(principal.id);
+    const state: SlackReadingViewState =
+      reading.state === "revoked" ? "revoked"
+        : reading.lastErrorCode !== null ? "error"
+          : reading.discoveredAt === null ? "discovering"
+            : settings.slackReadingEnabled ? "on" : "paused";
+    const [lastEventAt, lastSweep, blocks, pending] = await Promise.all([
+      lastReadingEventAt(row.id),
+      lastSweepAt(principal),
+      rateBlocks(row.teamId),
+      countPendingTriage(principal)
+    ]);
+    let v2Missing = false;
+    try {
+      const at = v2MissingWithSchemaAt();
+      v2Missing = typeof at === "number" && Number.isFinite(at) && Date.now() - at <= 3_600_000;
+    } catch {
+      v2Missing = false;
+    }
+    return {
+      state, lastEventAt, lastSweepAt: lastSweep, blockedMethods: blocks.length, pendingTriage: pending, userErrorCode: reading.lastErrorCode, v2Missing,
+      // §3.20.4's "Stopped {date}": the date rides along on the revoked state only.
+      ...(state === "revoked" ? { revokedAt: reading.revokedAt } : {})
+    };
+  } catch (err) {
+    const code = err instanceof SlackStoreError || err instanceof SlackReadStoreError ? (err.pgCode ?? "error") : err instanceof Error ? err.name : "error";
+    // A P7a column or table missing is the "not installed" answer, not a failure (P6 code running on a P6-only database).
+    if (!READING_MISSING_CODES.has(code)) console.error(`[exec-slack] reading summary not read: ${code}`);
+    return null;
+  }
 }

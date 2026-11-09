@@ -31,7 +31,9 @@ export type FakeSlackHandler = (body: Record<string, unknown>, headers: Headers)
 const SLACK_API = "https://slack.com/api/";
 const METHODS: ReadonlySet<string> = new Set<SlackMethod>([
   "oauth.v2.access", "auth.test", "auth.revoke", "users.lookupByEmail", "conversations.open", "conversations.history",
-  "conversations.replies", "chat.postMessage", "chat.update", "chat.delete", "views.publish"
+  "conversations.replies", "chat.postMessage", "chat.update", "chat.delete", "views.publish",
+  // P7a (§5.15; Area B): the seven reads.
+  "conversations.list", "users.conversations", "conversations.info", "users.list", "users.info", "bots.info", "chat.getPermalink"
 ]);
 
 function abortError(signal: AbortSignal): unknown {
@@ -167,4 +169,186 @@ export const SLACK_RECORDED = Object.freeze({
   viewsPublish: () => ({ ok: true, view: { id: "V0HOME", type: "home" } }),
   revoke: () => ({ ok: true, revoked: true }),
   error: (code: string) => ({ ok: false, error: code })
+});
+
+// --- P7a (§5.15; Area B): the seven reads, their recorded shapes, and per-call error injection ---------------------------
+//
+// Shapes from p7/slackdocs (conversations.list / users.conversations / conversations.info: the CL / UC / CI examples, with
+// is_member, is_ext_shared, is_pending_ext_shared and IM rows carrying `user`; conversations.history / replies: CH / CR,
+// pages with has_more + response_metadata.next_cursor; chat.getPermalink: the GP examples; users.info: the UI example).
+// users.list and bots.info aren't in slackdocs: their shapes follow Slack's method pages (members[] of user objects;
+// { ok, bot: { id, deleted, name, updated, app_id, user_id, icons } }). Ids are ROUTING_INSTALLATION's (team T0SCALED, him
+// U0MITCH, the assistant DM D0MITCH, its bot U0BOT / B0BOT) plus the DD bot (U0DDBOT / B0DDBOT / A0DDAPP).
+//
+//   installFakeSlack({ "conversations.list": slackSequence(SLACK_READ_RECORDED.conversationsListPage1(), slackRateLimitedAfter(7)) });
+
+/** One recorded answer per call, in order; the last one repeats. A plain object is copied per call and a handler is called per
+ *  call; a Response is handed over as is, so it answers once (pass a handler, like slackRateLimitedAfter, to repeat one: a cloned
+ *  Response's body would keep P6's discardBody waiting on the other branch of the tee). */
+export function slackSequence(...answers: (Response | object | FakeSlackHandler)[]): FakeSlackHandler {
+  if (answers.length === 0) throw new Error("slackSequence: at least one answer");
+  let i = 0;
+  return (body, headers) => {
+    const answer = answers[Math.min(i, answers.length - 1)];
+    i++;
+    if (typeof answer === "function") return (answer as FakeSlackHandler)(body, headers);
+    return answer instanceof Response ? answer : structuredClone(answer);
+  };
+}
+
+/** A handler answering HTTP 429 with Retry-After (seconds), Slack's rate-limit answer; a fresh Response per call. */
+export function slackRateLimitedAfter(retryAfterSec = 30): FakeSlackHandler {
+  return () => new Response("", { status: 429, headers: { "retry-after": String(retryAfterSec) } });
+}
+
+/** { ok: false, error } for the codes the reads must handle: not_in_channel, channel_not_found, invalid_auth, missing_scope,
+ *  invalid_types, ratelimited (as an ok:false body), thread_not_found, user_not_found, bot_not_found, message_not_found. */
+export const slackReadError = (code: string): { ok: false; error: string } => ({ ok: false, error: code });
+
+/** A Slack message as conversations.history / replies return it (the CH / CR shape); `extra` overrides or adds fields. */
+export function slackHistoryMessage(ts: string, extra: Record<string, unknown> = {}): Record<string, unknown> {
+  return { type: "message", user: "U0JANE", text: "SENTINEL-SLACK-TEXT-7f3a", ts, team: "T0SCALED", ...extra };
+}
+
+export const SLACK_READ_RECORDED = Object.freeze({
+  /** conversations.list, first page: a public channel he is in, a public one he isn't, a private channel, a Slack Connect
+   *  channel, a pending share, an MPIM, two IMs (a colleague, a deleted user), and a malformed name; next_cursor set. */
+  conversationsListPage1: () => ({
+    ok: true,
+    channels: [
+      { id: "C0GENERAL", name: "general", is_channel: true, is_group: false, is_im: false, created: 1449252889, creator: "U0JANE",
+        is_archived: false, is_general: true, unlinked: 0, name_normalized: "general", is_shared: false, is_ext_shared: false,
+        is_org_shared: false, pending_shared: [], is_pending_ext_shared: false, is_member: true, is_private: false, is_mpim: false,
+        updated: 1678229664302, topic: { value: "SENTINEL-TOPIC-7f3a", creator: "", last_set: 0 },
+        purpose: { value: "SENTINEL-TOPIC-7f3a", creator: "", last_set: 0 }, previous_names: [], num_members: 4 },
+      { id: "C0RANDOM", name: "random-public", is_channel: true, is_group: false, is_im: false, created: 1449252889, creator: "U0JANE",
+        is_archived: false, is_general: false, unlinked: 0, name_normalized: "random-public", is_shared: false, is_ext_shared: false,
+        is_org_shared: false, pending_shared: [], is_pending_ext_shared: false, is_member: false, is_private: false, is_mpim: false,
+        updated: 1678229664302, topic: { value: "SENTINEL-TOPIC-7f3a", creator: "", last_set: 0 },
+        purpose: { value: "", creator: "", last_set: 0 }, previous_names: [], num_members: 9 },
+      { id: "G0PRIV", name: "private-ops", is_channel: false, is_group: true, is_im: false, created: 1449252889, creator: "U0JANE",
+        is_archived: false, is_general: false, unlinked: 0, name_normalized: "private-ops", is_shared: false, is_ext_shared: false,
+        is_org_shared: false, pending_shared: [], is_pending_ext_shared: false, is_member: true, is_private: true, is_mpim: false,
+        updated: 1678229664302, topic: { value: "SENTINEL-TOPIC-7f3a", creator: "", last_set: 0 },
+        purpose: { value: "", creator: "", last_set: 0 }, previous_names: [] },
+      { id: "C0SHARED", name: "partner-collab", is_channel: true, is_group: false, is_im: false, created: 1449252889, creator: "U0JANE",
+        is_archived: false, is_general: false, unlinked: 0, name_normalized: "partner-collab", is_shared: true, is_ext_shared: true,
+        is_org_shared: false, pending_shared: [], is_pending_ext_shared: false, is_member: true, is_private: false, is_mpim: false,
+        updated: 1678229664302, topic: { value: "SENTINEL-TOPIC-7f3a", creator: "", last_set: 0 },
+        purpose: { value: "", creator: "", last_set: 0 }, previous_names: [] },
+      { id: "C0PENDING", name: "partner-pending", is_channel: true, is_group: false, is_im: false, created: 1449252889, creator: "U0JANE",
+        is_archived: false, is_general: false, unlinked: 0, name_normalized: "partner-pending", is_shared: false, is_ext_shared: false,
+        is_org_shared: false, pending_shared: ["T0PARTNER"], is_pending_ext_shared: true, is_member: true, is_private: false, is_mpim: false,
+        updated: 1678229664302, topic: { value: "", creator: "", last_set: 0 }, purpose: { value: "", creator: "", last_set: 0 },
+        previous_names: [] },
+      { id: "G0MPIM", name: "mpdm-mitchell--jane--bob-1", is_channel: false, is_group: true, is_im: false, created: 1493657761,
+        creator: "U0JANE", is_archived: false, is_general: false, unlinked: 0, name_normalized: "mpdm-mitchell--jane--bob-1",
+        is_shared: false, is_ext_shared: false, is_org_shared: false, pending_shared: [], is_pending_ext_shared: false,
+        is_member: true, is_private: true, is_mpim: true, is_open: true, updated: 1678229664302,
+        topic: { value: "Group messaging", creator: "U0JANE", last_set: 1493657761 },
+        purpose: { value: "SENTINEL-TOPIC-7f3a", creator: "U0JANE", last_set: 1493657761 }, priority: 0 },
+      { id: "D0JANE", created: 1498500348, is_im: true, is_org_shared: false, user: "U0JANE", is_user_deleted: false, priority: 0 },
+      { id: "D0GONE", created: 1498511030, is_im: true, is_org_shared: false, user: "U0GONE", is_user_deleted: true, priority: 0 },
+      { id: "C0BADNAME", name: "Bad Name!", is_channel: true, is_group: false, is_im: false, is_archived: false, is_ext_shared: false,
+        is_pending_ext_shared: false, is_member: true, is_private: false, is_mpim: false }
+    ],
+    response_metadata: { next_cursor: "dGVhbTpDMDYxRkE1UEI=" }
+  }),
+  /** conversations.list, last page: an archived channel and the assistant DM; next_cursor "". */
+  conversationsListPage2: () => ({
+    ok: true,
+    channels: [
+      { id: "C0OLD", name: "old-project", is_channel: true, is_group: false, is_im: false, is_archived: true, is_ext_shared: false,
+        is_pending_ext_shared: false, is_member: true, is_private: false, is_mpim: false },
+      { id: "D0MITCH", created: 1498500348, is_im: true, is_org_shared: false, user: "U0BOT", is_user_deleted: false, priority: 0 }
+    ],
+    response_metadata: { next_cursor: "" }
+  }),
+  /** users.conversations: the conversations he is a member of (UC shape; ids are all that is kept). */
+  usersConversations: () => ({
+    ok: true,
+    channels: [
+      { id: "C0GENERAL", name: "general", is_channel: true, is_group: false, is_im: false, is_archived: false, is_ext_shared: false,
+        is_private: false, is_mpim: false, topic: { value: "SENTINEL-TOPIC-7f3a", creator: "", last_set: 0 } },
+      { id: "G0PRIV", name: "private-ops", is_channel: false, is_group: true, is_im: false, is_private: true, is_mpim: false },
+      { id: "D0JANE", created: 1498500348, is_im: true, user: "U0JANE", is_user_deleted: false, priority: 0 }
+    ],
+    response_metadata: { next_cursor: "" }
+  }),
+  /** conversations.info for a public channel (CI's first example, with our ids). */
+  conversationsInfoChannel: () => ({
+    ok: true,
+    channel: { id: "C0GENERAL", name: "general", is_channel: true, is_group: false, is_im: false, is_mpim: false, is_private: false,
+      created: 1654868334, is_archived: false, is_general: true, unlinked: 0, name_normalized: "general", is_shared: false,
+      is_frozen: false, is_org_shared: false, is_pending_ext_shared: false, pending_shared: [], context_team_id: "T0SCALED",
+      updated: 1723130875818, parent_conversation: null, creator: "U0JANE", is_ext_shared: false, shared_team_ids: ["T0SCALED"],
+      pending_connected_team_ids: [], topic: { value: "SENTINEL-TOPIC-7f3a", creator: "U0JANE", last_set: 1449709364 },
+      purpose: { value: "SENTINEL-TOPIC-7f3a", creator: "U0JANE", last_set: 1449709364 }, previous_names: [], is_member: true }
+  }),
+  /** conversations.info for an IM (CI's IM example, with our ids; `latest` carries text that must never leave). */
+  conversationsInfoIm: () => ({
+    ok: true,
+    channel: { id: "D0JANE", created: 1507235627, is_im: true, is_org_shared: false, user: "U0JANE", last_read: "1513718191.000038",
+      latest: { type: "message", user: "U0JANE", text: "SENTINEL-SLACK-TEXT-7f3a", ts: "1513718191.000038" }, unread_count: 0,
+      unread_count_display: 0, is_open: true, locale: "en-US", priority: 0.043016851216706 }
+  }),
+  /** users.list: a human (with every profile field a sentinel), a bot, a deleted bot, Slackbot; next_cursor "". */
+  usersList: () => ({
+    ok: true,
+    members: [
+      { id: "U0JANE", team_id: "T0SCALED", name: "jane", deleted: false, real_name: "Sentinel Slackauthor", is_bot: false, is_app_user: false,
+        profile: { real_name: "Sentinel Slackauthor", display_name: "Sentinel Slackauthor", email: "jane@scaledai.org", title: "SENTINEL-TOPIC-7f3a" } },
+      { id: "U0ZAP", team_id: "T0SCALED", name: "zapier", deleted: false, is_bot: true, is_app_user: false,
+        profile: { real_name: "Zapier", bot_id: "B0ZAP", api_app_id: "A0ZAP" } },
+      { id: "U0OLDBOT", team_id: "T0SCALED", name: "oldbot", deleted: true, is_bot: true, is_app_user: false, profile: { real_name: "Old bot" } },
+      { id: "USLACKBOT", team_id: "T0SCALED", name: "slackbot", deleted: false, is_bot: false, is_app_user: false, profile: { real_name: "Slackbot" } }
+    ],
+    cache_ts: 1498777272,
+    response_metadata: { next_cursor: "" }
+  }),
+  /** users.info (UI's example, with our ids; the label fields hold the author sentinel). */
+  usersInfo: (id = "U0JANE", teamId = "T0SCALED") => ({
+    ok: true,
+    user: { id, team_id: teamId, name: "jane", deleted: false, color: "9f69e7", real_name: "Sentinel Slackauthor", tz: "America/New_York",
+      tz_label: "Eastern Standard Time", tz_offset: -18000,
+      profile: { avatar_hash: "ge3b51ca72de", status_text: "SENTINEL-TOPIC-7f3a", status_emoji: ":books:", real_name: "Sentinel Slackauthor",
+        display_name: "Sentinel Slackauthor", real_name_normalized: "Sentinel Slackauthor", display_name_normalized: "Sentinel Slackauthor",
+        email: "jane@scaledai.org", team: teamId },
+      is_admin: false, is_owner: false, is_primary_owner: false, is_restricted: false, is_ultra_restricted: false, is_bot: false,
+      updated: 1502138686, is_app_user: false, has_2fa: false }
+  }),
+  /** conversations.history page (CH shape, newest first). */
+  history: (messages: readonly Record<string, unknown>[], opts: { hasMore?: boolean; nextCursor?: string } = {}) => ({
+    ok: true,
+    messages: messages.map((m) => structuredClone(m)),
+    has_more: opts.hasMore === true,
+    pin_count: 0,
+    response_metadata: { next_cursor: opts.nextCursor ?? "" }
+  }),
+  /** conversations.replies page (CR shape, parent first). */
+  replies: (messages: readonly Record<string, unknown>[], opts: { hasMore?: boolean; nextCursor?: string } = {}) => ({
+    ok: true,
+    messages: messages.map((m) => structuredClone(m)),
+    has_more: opts.hasMore === true,
+    response_metadata: { next_cursor: opts.nextCursor ?? "" }
+  }),
+  /** chat.getPermalink (GP's two examples: a top-level message and a reply). */
+  permalink: (channel = "C0GENERAL", reply = false) => ({
+    ok: true,
+    channel,
+    permalink: reply
+      ? `https://scaledai.slack.com/archives/${channel}/p1794150001000101?thread_ts=1794150000.000100&cid=${channel}`
+      : `https://scaledai.slack.com/archives/${channel}/p1794150001000101`
+  }),
+  /** bots.info for the DD bot (with its app id and bot user). */
+  botsInfo: (botId = "B0DDBOT", appId: string | null = "A0DDAPP", userId: string | null = "U0DDBOT") => ({
+    ok: true,
+    bot: { id: botId, deleted: false, name: "Scaled Operations", updated: 1449272004, app_id: appId, user_id: userId,
+      icons: { image_36: "https://a.slack-edge.com/x36.png", image_48: "https://a.slack-edge.com/x48.png", image_72: "https://a.slack-edge.com/x72.png" } }
+  }),
+  /** auth.test with the DD bot's token (DD's own app, not the assistant's). */
+  ddBotAuthTest: (teamId = "T0SCALED") => ({
+    ok: true, url: "https://scaledai.slack.com/", team: "ScaledAI", user: "scaled-operations", team_id: teamId, user_id: "U0DDBOT",
+    bot_id: "B0DDBOT", is_enterprise_install: false
+  })
 });

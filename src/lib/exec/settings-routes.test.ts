@@ -237,7 +237,8 @@ describe("PATCH /api/exec/settings (test 25)", () => {
     ["not JSON", "{patch:", 400, { error: "invalid", detail: "body" }],
     ["not an object", JSON.stringify([1, 2]), 400, { error: "invalid", detail: "body" }],
     ["an unknown top-level key", JSON.stringify({ ...GOOD, force: true }), 400, { error: "invalid", detail: "body" }],
-    ["an unknown setting", JSON.stringify({ patch: { retentionDaysSlack: 30 }, expectedVersion: V1 }), 400, { error: "invalid", detail: "patch" }],
+    // (P7a made retentionDaysSlack a registry field; briefLocalTime is still not one.)
+    ["an unknown setting", JSON.stringify({ patch: { briefLocalTime: "09:00" }, expectedVersion: V1 }), 400, { error: "invalid", detail: "patch" }],
     ["an empty patch", JSON.stringify({ patch: {}, expectedVersion: V1 }), 400, { error: "invalid", detail: "patch" }],
     ["a wrong type", JSON.stringify({ patch: { retentionDaysChat: "30" }, expectedVersion: V1 }), 400, { error: "invalid", detail: "patch.retentionDaysChat" }],
     ["a null value", JSON.stringify({ patch: { voiceEnabled: null }, expectedVersion: V1 }), 400, { error: "invalid", detail: "patch.voiceEnabled" }],

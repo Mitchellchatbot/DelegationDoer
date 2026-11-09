@@ -34,6 +34,12 @@ vi.mock("@/lib/exec/slack-settings", async (orig) => {
   const real = await orig<typeof import("@/lib/exec/slack-settings")>();
   return { ...real, getSlackSettingsView: vi.fn(real.getSlackSettingsView) };
 });
+// P7a (§3.16, AM-P7a-4): the reading half at its module boundary (ui/slack-reading-settings.test.ts covers it); once
+// P6's reads succeed the view carries it as `reading`.
+vi.mock("@/lib/exec/slack-reading-settings", async () => {
+  const { slackReadingView } = await import("../__tests__/p5a-ui-fixtures");
+  return { getSlackReadingView: vi.fn(async () => slackReadingView()) };
+});
 vi.mock("@/lib/exec/access", async (orig) => {
   const real = await orig<typeof import("@/lib/exec/access")>();
   return { ...real, requireExecPrincipalForPage: vi.fn() };
@@ -76,7 +82,8 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { headers } from "next/headers";
 import { useRouter } from "next/navigation";
 import { createFakeSlackDb, type FakeSlackDb, type Row } from "../__tests__/fake-slack-db";
-import { NNBSP, NOW, TZ, settingsView, slackSettingsView, textOf } from "../__tests__/p5a-ui-fixtures";
+import { NNBSP, NOW, TZ, settingsView, slackReadingView, slackSettingsView, textOf } from "../__tests__/p5a-ui-fixtures";
+import { getSlackReadingView } from "@/lib/exec/slack-reading-settings";
 import { SENTINELS, findSentinel } from "../__tests__/slack-assert";
 
 // P6 contract §5.9 SE01-SE12 (Area E; §3.13, §3.15.2, §3.15.3, K15, C24, C25, C45, C48): the Settings page's Slack
@@ -236,7 +243,9 @@ describe("SlackSection: each state (SE01-SE06)", () => {
 const ALL_RESULTS: SlackConnectResult[] = [
   "connected", "denied", "state_invalid", "state_expired", "not_configured", "not_installed", "session_unbound",
   "rate_limited", "unavailable", "slack_unavailable", "exchange_failed", "enterprise", "wrong_team", "wrong_app",
-  "missing_scopes", "identity_not_found", "wrong_user", "wrong_host", "extra_scopes"
+  "missing_scopes", "identity_not_found", "wrong_user", "wrong_host", "extra_scopes",
+  // P7a (§3.10.4, §3.17): the five read-consent codes, from SLACK_READ_COPY.connectResult.
+  "read_connected", "read_not_connected", "missing_user_scopes", "extra_user_scopes", "read_taken"
 ];
 
 describe("The result banner (SE07)", () => {
@@ -570,9 +579,11 @@ function useDb(rows: Row[], seed: Partial<Parameters<typeof createFakeSlackDb>[0
 }
 
 const VIEW_KEYS = [
-  "configured", "dmChannelId", "installationId", "installedAt", "lastDmAt", "lastErrorAt", "lastErrorCode", "revokeReason", "revokedAt",
+  "configured", "dmChannelId", "installationId", "installedAt", "lastDmAt", "lastErrorAt", "lastErrorCode", "reading", "revokeReason", "revokedAt",
   "schema", "scopes", "state", "teamId", "userId"
 ];
+/** P7a: a view as getSlackSettingsView returns it once P6's reads succeeded (the reading half, mocked above). */
+const withReading = (v: SlackSettingsView): SlackSettingsView => ({ ...v, reading: slackReadingView() });
 
 describe("getSlackSettingsView (§3.13)", () => {
   let errors: MockInstance<typeof console.error>;
@@ -585,7 +596,7 @@ describe("getSlackSettingsView (§3.13)", () => {
   it("connected: his active installation's ids, scopes and times; never the sealed token or its key id", async () => {
     useDb([installation({ last_dm_at: LAST_DM })]);
     const view = await getSlackSettingsView(P);
-    expect(view).toEqual(connectedView({ lastDmAt: LAST_DM, scopes: [...SLACK_BOT_SCOPES] }));
+    expect(view).toEqual(withReading(connectedView({ lastDmAt: LAST_DM, scopes: [...SLACK_BOT_SCOPES] })));
     expect(Object.keys(view).sort()).toEqual(VIEW_KEYS);
     expect(JSON.stringify(view)).not.toContain(SEALED);
     expect(JSON.stringify(view)).not.toContain("0a1b2c3d");
@@ -594,7 +605,7 @@ describe("getSlackSettingsView (§3.13)", () => {
 
   it("error: the active installation with a last error code", async () => {
     useDb([installation({ last_error_code: "invalid_auth", last_error_at: "2026-11-06T13:00:00.000Z" })]);
-    expect(await getSlackSettingsView(P)).toEqual(errorView());
+    expect(await getSlackSettingsView(P)).toEqual(withReading(errorView()));
   });
 
   it("revoked: no active installation and the newest one revoked (date and reason)", async () => {
@@ -606,14 +617,14 @@ describe("getSlackSettingsView (§3.13)", () => {
     useDb([revokedRow(), installation({ installed_at: "2026-11-02T00:00:00.000Z" })]);
     expect((await getSlackSettingsView(P)).state).toBe("connected");
     useDb([]);
-    expect(await getSlackSettingsView(P)).toEqual(slackSettingsView());
+    expect(await getSlackSettingsView(P)).toEqual(withReading(slackSettingsView()));
     useDb([installation({ principal_id: "ep_other" }), revokedRow({ principal_id: "ep_other" })]);
-    expect(await getSlackSettingsView(P)).toEqual(slackSettingsView());
+    expect(await getSlackSettingsView(P)).toEqual(withReading(slackSettingsView()));
   });
 
   it("the P6 migration not applied: schema false, not_connected, no installation read", async () => {
     useDb([], { missing: ["exec_slack_installations"] });
-    expect(await getSlackSettingsView(P)).toEqual(slackSettingsView({ schema: false }));
+    expect(await getSlackSettingsView(P)).toEqual(withReading(slackSettingsView({ schema: false })));
     expect(getActiveInstallation).not.toHaveBeenCalled();
     expect(errors).not.toHaveBeenCalled();
   });
@@ -674,6 +685,8 @@ describe("getSlackSettingsView (§3.13)", () => {
     const selects = db.calls.filter((c) => c.kind === "select");
     expect(selects.length).toBe(2);
     for (const c of selects) expect(c.signal).toBe(signal);
+    // P7a: the reading half gets the same signal.
+    expect(vi.mocked(getSlackReadingView).mock.calls.at(-1)?.[2]).toEqual({ signal });
     const ac = new AbortController();
     ac.abort();
     expect(await getSlackSettingsView(P, { signal: ac.signal })).toEqual(FAILED);
@@ -683,7 +696,7 @@ describe("getSlackSettingsView (§3.13)", () => {
   it("getSettingsView carries it as view.slack, under the page's deadline (fail soft: the other sections don't matter)", async () => {
     useDb([installation()]);
     const view = await getSettingsView(P, new Date(NOW), { snapshot: { settings: { principalId: PRINCIPAL_ID, ...DEFAULT_SETTINGS }, version: null } });
-    expect(view.slack).toEqual(connectedView());
+    expect(view.slack).toEqual(withReading(connectedView()));
     expect(getSlackSettingsView).toHaveBeenCalledTimes(1);
     expect(vi.mocked(getSlackSettingsView).mock.calls[0][0]).toBe(P);
     expect(vi.mocked(getSlackSettingsView).mock.calls[0][1]?.signal).toBeInstanceOf(AbortSignal);

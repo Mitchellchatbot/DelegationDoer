@@ -44,3 +44,12 @@ export function slackSigningSecret(): string | null {
 
 /** CANONICAL_ORIGIN + "/api/integrations/exec-slack/callback" (src/lib/canonical-origin.ts), never appOrigin(): K3. */
 export const SLACK_REDIRECT_URI: string = `${CANONICAL_ORIGIN}/api/integrations/exec-slack/callback`;
+
+/** P7a (contract §3.6.3; Area B): SLACK_OUTBOUND_CHANNEL trimmed when it matches ^[CG][A-Z0-9]{2,30}$, else null (N1 hub).
+ *  The only reader of SLACK_OUTBOUND_CHANNEL in exec code (B-P7a-4). Re-read on every call; never throws, never logs. */
+export function ddOutboundChannelId(): string | null {
+  const raw = process.env.SLACK_OUTBOUND_CHANNEL;
+  if (typeof raw !== "string") return null;
+  const value = raw.trim();
+  return /^[CG][A-Z0-9]{2,30}$/.test(value) ? value : null;
+}

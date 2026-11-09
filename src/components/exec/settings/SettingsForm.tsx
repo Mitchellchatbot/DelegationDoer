@@ -28,6 +28,11 @@ import { useIsTopWindow } from "../drafts/frame-guard";
 // daily AI budget) and "Use the assistant for Ask AI", which stays disabled
 // while Chat is off. Before P5b's migration the section is one sentence and
 // no control.
+//
+// P7a (contract §3.16, §3.20.2, C30): the fields with section "slack" (Read
+// Slack, the Slack daily budget, Keep Slack items for) are not rendered here:
+// the Slack section's reading controls (SlackReadingControls) own them, with
+// the reading switch's own confirmation and checklist.
 
 type FieldKey = keyof SettingsPatch;
 type Status = { field: FieldKey; tone: "ok" | "error"; text: string } | null;
@@ -68,10 +73,13 @@ function sentence(detail: string): string {
   return detail.length > 0 ? `${detail[0].toUpperCase()}${detail.slice(1)}.` : SETTINGS_COPY.failed;
 }
 
+/** P7a: a field the Slack reading controls render instead (section "slack"). */
+export const isSlackSectionField = (def: Pick<SettingsFieldDef, "section">): boolean => def.section === "slack";
+
 const GROUPS: readonly { title: string; test: (def: SettingsFieldDef) => boolean }[] = [
-  { title: "Assistant switches", test: (d) => d.group !== "chat" && d.kind === "boolean" },
-  { title: "Retention", test: (d) => d.group !== "chat" && d.kind === "int" },
-  { title: "Daily AI budget", test: (d) => d.group !== "chat" && d.kind === "money" }
+  { title: "Assistant switches", test: (d) => d.group !== "chat" && !isSlackSectionField(d) && d.kind === "boolean" },
+  { title: "Retention", test: (d) => d.group !== "chat" && !isSlackSectionField(d) && d.kind === "int" },
+  { title: "Daily AI budget", test: (d) => d.group !== "chat" && !isSlackSectionField(d) && d.kind === "money" }
 ];
 
 /** P5b's section: its fields in the order §3.19.12 lists them. */

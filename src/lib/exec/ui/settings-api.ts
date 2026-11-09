@@ -1,12 +1,19 @@
 import type { SettingsPatch } from "@/lib/exec/settings-fields";
 import { SLACK_COPY } from "@/lib/exec/slack-copy";
+import { SLACK_READ_COPY } from "@/lib/exec/slack-read-copy";
+import type { MuteSource, WatchState } from "@/lib/exec/slack-read-types";
+import type { PickerRow, SlackSettingsView } from "@/lib/exec/slack-types";
+import type { WatchMode } from "@/lib/exec/types";
 import type { SettingsView } from "@/lib/exec/view-types";
 import { retryAfterOf, tooManyMessage } from "./feed-api";
 
 // The Settings page's calls from the browser (P5a contract §3.7.3,
 // §3.7.4, §3.13.2): PATCH /api/exec/settings (one change, CAS on the version
 // the page loaded) and POST /api/exec/settings/voice-reset; P6 (contract
-// §3.13) adds POST /api/exec/slack/disconnect. Pure and
+// §3.13) adds POST /api/exec/slack/disconnect; P7a (contract §3.16, §3.10.5-8)
+// adds POST /api/exec/slack/reading/stop, PATCH /api/exec/slack/channels/:id
+// and PUT /api/exec/slack/watch-mode, the "slack_reading_notice" confirmation
+// on the settings PATCH, and Disconnect's reading-half answers (C47). Pure and
 // client-safe: fetch with credentials "same-origin", JSON in and out, nothing
 // server-only (boundary rule 16). Statuses become the words he sees.
 
@@ -90,13 +97,17 @@ export type SettingsSaveResult =
 export const SETTINGS_PATH = "/api/exec/settings";
 export const VOICE_RESET_PATH = "/api/exec/settings/voice-reset";
 
-/** PATCH one change with the version the page loaded; the route validates, audits and checks the CAS again. */
+/** The confirmations the settings PATCH takes: DD text triage's notice (P5a) and Slack reading's (P7a N20). */
+export type SettingsConfirm = "ddtext_notice" | "slack_reading_notice";
+
+/** PATCH one change with the version the page loaded; the route validates, audits and checks the CAS again.
+ *  P7a: confirm may also be "slack_reading_notice" (turning Slack reading on). Any other value is never sent. */
 export async function patchSettings(
-  body: { patch: SettingsPatch; expectedVersion: string | null; confirm?: "ddtext_notice" },
+  body: { patch: SettingsPatch; expectedVersion: string | null; confirm?: SettingsConfirm },
   fetchImpl?: FetchLike
 ): Promise<SettingsSaveResult> {
   const payload: Json = { patch: body.patch, expectedVersion: body.expectedVersion };
-  if (body.confirm === "ddtext_notice") payload.confirm = "ddtext_notice";
+  if (body.confirm === "ddtext_notice" || body.confirm === "slack_reading_notice") payload.confirm = body.confirm;
   let res: Response;
   try {
     res = await fetcher(fetchImpl)(SETTINGS_PATH, {
@@ -151,12 +162,19 @@ export async function resetVoice(fetchImpl?: FetchLike): Promise<VoiceResetResul
 
 export const SLACK_DISCONNECT_PATH = "/api/exec/slack/disconnect";
 
-export type SlackDisconnectResult = { kind: "disconnected" } | { kind: "failed"; status: number; message: string };
+/** P7a (C47): `message` on a 200 that carries warning "revoke_failed" (disconnected, the reading permission maybe still
+ *  live in Slack); `readingStopped` on a 503 slack_unavailable whose answer carries the view (reading was stopped and
+ *  its data deleted before the bot revoke failed): the page refreshes to show it. */
+export type SlackDisconnectResult =
+  | { kind: "disconnected"; message?: string }
+  | { kind: "failed"; status: number; message: string; readingStopped?: true };
 
-/** The words for a refused or failed Disconnect: 503 slack_unavailable (Slack unreachable, nothing changed) has its own; every other answer is the general one. */
+/** The words for a refused or failed Disconnect: 503 slack_unavailable (Slack unreachable, nothing changed) has its own,
+ *  and (P7a, C47) disconnectHalf when the answer carries the view (reading already stopped and purged); every other
+ *  answer is the general one. */
 export function slackDisconnectMessageFor(status: number, body: unknown): string {
   const obj = asObject(body);
-  if (status === 503 && obj?.error === "slack_unavailable") return SLACK_COPY.disconnectSlackDown;
+  if (status === 503 && obj?.error === "slack_unavailable") return asObject(obj.slack) !== null ? SLACK_READ_COPY.disconnectHalf : SLACK_COPY.disconnectSlackDown;
   return SLACK_COPY.disconnectFailed;
 }
 
@@ -179,6 +197,159 @@ export async function disconnectSlack(installationId: string, fetchImpl?: FetchL
     return { kind: "failed", status: 0, message: SLACK_COPY.disconnectFailed };
   }
   const json = await readJson(res);
-  if (res.status === 200) return { kind: "disconnected" };
-  return { kind: "failed", status: res.status, message: slackDisconnectMessageFor(res.status, json) };
+  if (res.status === 200) {
+    return asObject(json)?.warning === "revoke_failed" ? { kind: "disconnected", message: SLACK_READ_COPY.disconnectRevokeFailed } : { kind: "disconnected" };
+  }
+  const message = slackDisconnectMessageFor(res.status, json);
+  return message === SLACK_READ_COPY.disconnectHalf ? { kind: "failed", status: res.status, message, readingStopped: true } : { kind: "failed", status: res.status, message };
+}
+
+// ---------------------------------------------------------------------------
+// P7a: Stop reading, the picker, the watch mode (contract §3.16, §3.10.5-7)
+// ---------------------------------------------------------------------------
+
+export const SLACK_STOP_READING_PATH = "/api/exec/slack/reading/stop";
+export const SLACK_WATCH_MODE_PATH = "/api/exec/slack/watch-mode";
+/** The picker's PATCH path for one public (C…) or private (G…) channel. */
+export const slackChannelPath = (channelId: string): string => `/api/exec/slack/channels/${encodeURIComponent(channelId)}`;
+const PICKER_CHANNEL = /^[CG][A-Z0-9]{2,30}$/;
+const INSTALLATION_ID = /^esi_[0-9a-f]{32}$/;
+const WATCH_STATES: readonly WatchState[] = ["watched", "muted", "unwatched"];
+const MUTE_SOURCES: readonly MuteSource[] = ["owner", "default_finance", "slack"];
+const PICKER_CLASSES: readonly PickerRow["class"][] = ["standard", "external", "finance", "hub", "unclassified"];
+
+/** C47: "stopped" (warning revoke_failed: reading stopped and its data deleted, the permission maybe still live in Slack). */
+export type StopReadingResult = { kind: "stopped"; warning: "revoke_failed" | null } | { kind: "failed"; status: number; message: string };
+
+/** The words for a refused or failed Stop reading: stopFailed, or the rate-limit line (§3.16). */
+export function stopReadingMessageFor(status: number, body: unknown, headers: Pick<Headers, "get"> | null): string {
+  if (status === 429) return tooManyMessage(retryAfterOf(asObject(body), headers));
+  return SLACK_READ_COPY.stopFailed;
+}
+
+/**
+ * POST { installationId, confirm: "stop_reading" } (the route re-checks the strong sign-in, the origin, the body and
+ * that this is his live reading half). 200 → stopped, with warning "revoke_failed" when Slack couldn't be reached to
+ * cancel the permission (the caller shows stopRevokeFailed and refreshes); anything else → failed with its words.
+ */
+export async function stopReading(installationId: string, fetchImpl?: FetchLike): Promise<StopReadingResult> {
+  if (typeof installationId !== "string" || !INSTALLATION_ID.test(installationId)) return { kind: "failed", status: 0, message: SLACK_READ_COPY.stopFailed };
+  let res: Response;
+  try {
+    res = await fetcher(fetchImpl)(SLACK_STOP_READING_PATH, {
+      method: "POST",
+      credentials: "same-origin",
+      cache: "no-store",
+      headers: { "content-type": "application/json", accept: "application/json" },
+      body: JSON.stringify({ installationId, confirm: "stop_reading" })
+    });
+  } catch {
+    return { kind: "failed", status: 0, message: SLACK_READ_COPY.stopFailed };
+  }
+  const json = asObject(await readJson(res));
+  if (res.status === 200) return { kind: "stopped", warning: json?.warning === "revoke_failed" ? "revoke_failed" : null };
+  return { kind: "failed", status: res.status, message: stopReadingMessageFor(res.status, json, res.headers) };
+}
+
+const isNullableString = (v: unknown): v is string | null => v === null || typeof v === "string";
+const isNullableCount = (v: unknown): v is number | null => v === null || (typeof v === "number" && Number.isFinite(v) && v >= 0);
+
+/** A picker row as the channels route answers it (§3.16 PickerRow), checked field by field; anything else is not one. */
+export function isPickerRow(v: unknown): v is PickerRow {
+  const o = asObject(v);
+  return (
+    o !== null &&
+    typeof o.channelId === "string" &&
+    PICKER_CHANNEL.test(o.channelId) &&
+    typeof o.name === "string" &&
+    (o.kind === "public" || o.kind === "private") &&
+    typeof o.class === "string" &&
+    (PICKER_CLASSES as readonly string[]).includes(o.class) &&
+    typeof o.financeName === "boolean" &&
+    typeof o.watchState === "string" &&
+    (WATCH_STATES as readonly string[]).includes(o.watchState) &&
+    (o.muteSource === null || (typeof o.muteSource === "string" && (MUTE_SOURCES as readonly string[]).includes(o.muteSource))) &&
+    typeof o.isMember === "boolean" &&
+    isNullableCount(o.activity30d) &&
+    isNullableString(o.lastActivityAt) &&
+    typeof o.version === "string" &&
+    typeof o.canChange === "boolean"
+  );
+}
+
+export type ChannelWatchResult =
+  | { kind: "updated"; channel: PickerRow }
+  /** 409 conflict: the row as it is now (null when the answer carried none); the picker re-renders it and says so. */
+  | { kind: "conflict"; channel: PickerRow | null; message: string }
+  /** 400 confirmation_required: a finance channel (class finance, or a finance-named Slack Connect channel) needs confirm "finance_channel". */
+  | { kind: "confirmation_required" }
+  | { kind: "failed"; status: number; message: string };
+
+/**
+ * PATCH { watchState, expectedVersion, confirm? } for one picker row (the route re-checks everything; SQL refuses a
+ * never-read, hub or unclassified conversation and asks for the finance confirmation). confirm is sent only as
+ * "finance_channel".
+ */
+export async function setChannelWatch(
+  channelId: string,
+  body: { watchState: WatchState; expectedVersion: string; confirm?: "finance_channel" },
+  fetchImpl?: FetchLike
+): Promise<ChannelWatchResult> {
+  if (typeof channelId !== "string" || !PICKER_CHANNEL.test(channelId)) return { kind: "failed", status: 0, message: SLACK_READ_COPY.pickerFailed };
+  const payload: Json = { watchState: body.watchState, expectedVersion: body.expectedVersion };
+  if (body.confirm === "finance_channel") payload.confirm = "finance_channel";
+  let res: Response;
+  try {
+    res = await fetcher(fetchImpl)(slackChannelPath(channelId), {
+      method: "PATCH",
+      credentials: "same-origin",
+      cache: "no-store",
+      headers: { "content-type": "application/json", accept: "application/json" },
+      body: JSON.stringify(payload)
+    });
+  } catch {
+    return { kind: "failed", status: 0, message: SLACK_READ_COPY.pickerFailed };
+  }
+  const json = asObject(await readJson(res));
+  if (res.status === 200 && json && isPickerRow(json.channel) && json.channel.channelId === channelId) return { kind: "updated", channel: json.channel };
+  if (res.status === 409 && json?.error === "conflict") {
+    const row = isPickerRow(json.channel) && json.channel.channelId === channelId ? json.channel : null;
+    return { kind: "conflict", channel: row, message: SLACK_READ_COPY.pickerConflict };
+  }
+  if (res.status === 400 && json?.error === "confirmation_required") return { kind: "confirmation_required" };
+  if (res.status === 429) return { kind: "failed", status: 429, message: tooManyMessage(retryAfterOf(json, res.headers)) };
+  return { kind: "failed", status: res.status, message: SLACK_READ_COPY.pickerFailed };
+}
+
+/** Enough of a SlackSettingsView to use: its state and, when present, its reading half as an object. */
+function isSlackView(v: unknown): v is SlackSettingsView {
+  const o = asObject(v);
+  return o !== null && typeof o.state === "string" && (o.reading === undefined || asObject(o.reading) !== null);
+}
+
+export type WatchModeResult =
+  | { kind: "saved"; slack: SlackSettingsView | null }
+  | { kind: "conflict"; slack: SlackSettingsView | null; message: string }
+  | { kind: "failed"; status: number; message: string };
+
+/** PUT { watchMode, expectedVersion } (the settings CAS token); the route re-checks everything. */
+export async function setWatchMode(watchMode: WatchMode, expectedVersion: string | null, fetchImpl?: FetchLike): Promise<WatchModeResult> {
+  if (watchMode !== "member_only" && watchMode !== "active_public") return { kind: "failed", status: 0, message: SETTINGS_COPY.failed };
+  let res: Response;
+  try {
+    res = await fetcher(fetchImpl)(SLACK_WATCH_MODE_PATH, {
+      method: "PUT",
+      credentials: "same-origin",
+      cache: "no-store",
+      headers: { "content-type": "application/json", accept: "application/json" },
+      body: JSON.stringify({ watchMode, expectedVersion: typeof expectedVersion === "string" ? expectedVersion : null })
+    });
+  } catch {
+    return { kind: "failed", status: 0, message: SETTINGS_COPY.failed };
+  }
+  const json = asObject(await readJson(res));
+  const slack = json && isSlackView(json.slack) ? json.slack : null;
+  if (res.status === 200) return { kind: "saved", slack };
+  if (res.status === 409 && json?.error === "conflict") return { kind: "conflict", slack, message: SETTINGS_COPY.conflict };
+  return { kind: "failed", status: res.status, message: settingsMessageFor(res.status, json, res.headers) };
 }

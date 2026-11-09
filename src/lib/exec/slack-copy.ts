@@ -6,6 +6,12 @@
 // Fixed copy never carries a link or a link label inside a sentence: "Open DD"
 // and "Open in DD" are their own keys, passed to slackLink as labels (rule 9).
 // Renderers put every value here through escapeMrkdwn (rule 2).
+//
+// P7a stage -1 (lead, P7a contract §3.17): connectResult gains the five read
+// codes, re-exported from SLACK_READ_COPY.connectResult (never re-typed), so
+// SlackConnectResult and this object keep one message per code.
+
+import { SLACK_READ_COPY } from "@/lib/exec/slack-read-copy";
 
 export { CHAT_PAUSED_TEXT, FAILED_TEXT, PROPOSAL_PRIVACY_NOTICE } from "@/lib/exec/chat/copy";
 
@@ -121,6 +127,7 @@ export const SLACK_COPY = Object.freeze({
     identity_not_found: "Slack has no member with your DD email address. Ask the team to check your Slack account's email.",
     wrong_user: "Slack says Slack member {who} approved this install, not you. Nothing was saved. Sign in to Slack as yourself and try again.",
     wrong_host: "You started from a different DD address, so you've been moved to operations.scaledai.org. Press Connect Slack again here.",
-    extra_scopes: "The Slack app has more permissions than the assistant uses. Ask the team to remove them, and uninstall the app first if it was installed with them. Nothing was saved."
+    extra_scopes: "The Slack app has more permissions than the assistant uses. Ask the team to remove them, and uninstall the app first if it was installed with them. Nothing was saved.",
+    ...SLACK_READ_COPY.connectResult
   })
 });

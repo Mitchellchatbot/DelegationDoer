@@ -33,9 +33,9 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 /**
  * mail (P3 reconcile), email (P3 attention), clone-ea (P4: the EA and send
  * token verdicts, §2.3), ddtext (P5a: the DD text triage's cursor and lease,
- * contract §2.5).
+ * contract §2.5), slack (P7a: the reading jobs' leases, contract §3.20.1).
  */
-export type SyncSource = "mail" | "email" | "clone-ea" | "ddtext";
+export type SyncSource = "mail" | "email" | "clone-ea" | "ddtext" | "slack";
 
 export interface SyncStateOptions {
   signal?: AbortSignal;
@@ -75,7 +75,7 @@ function parseRev(text: string | null): number | null {
 }
 
 function checkRow(source: unknown, key: unknown): asserts source is SyncSource {
-  if (source !== "mail" && source !== "email" && source !== "clone-ea" && source !== "ddtext") {
+  if (source !== "mail" && source !== "email" && source !== "clone-ea" && source !== "ddtext" && source !== "slack") {
     throw new NonRetryableError(`exec_sync_state: unknown source ${JSON.stringify(source)}`);
   }
   if (typeof key !== "string" || key.length === 0 || key.length > MAX_KEY_CHARS) {
@@ -285,12 +285,15 @@ export async function putSyncStateByPrincipalId(principalId: string, source: "ma
 // (P3's attention pass) and ddtext/ddtext-lease (P5a's DD text triage).
 // ---------------------------------------------------------------------------
 
-/** The leases there are, each stored under its own source (P5a §3.12.8). */
-export type LeaseKey = "attention-lease" | "ddtext-lease";
+/** The leases there are, each stored under its own source (P5a §3.12.8). P7a (§3.20.1) adds the three Slack reading leases. */
+export type LeaseKey = "attention-lease" | "ddtext-lease" | "slack-discover-lease" | "slack-sweep-lease" | "slack-attention-lease";
 
 const LEASE_SOURCES: Readonly<Record<LeaseKey, SyncSource>> = Object.freeze({
   "attention-lease": "email",
-  "ddtext-lease": "ddtext"
+  "ddtext-lease": "ddtext",
+  "slack-discover-lease": "slack",
+  "slack-sweep-lease": "slack",
+  "slack-attention-lease": "slack"
 });
 
 /** The source a lease is stored under; an unknown key is a bug (NonRetryableError). */

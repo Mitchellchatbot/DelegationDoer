@@ -189,7 +189,7 @@ describe("the page links (§3.19.11)", () => {
 describe("Settings: the Chat section (§3.19.12)", () => {
   const form = (view = settingsView()) => renderToStaticMarkup(createElement(SettingsForm, { view }));
   const installed = (over: Parameters<typeof settings>[0] = {}) =>
-    settingsView({ schema: { email: true, drafts: true, ddtext: true, chat: true }, settings: settings({ chatSchemaReady: true, chatEnabled: true, askAiUsesExec: false, chatDailyCapUsd: 9, ...over }), effectiveChatCapUsd: 9 });
+    settingsView({ schema: { email: true, drafts: true, ddtext: true, chat: true, slack: false }, settings: settings({ chatSchemaReady: true, chatEnabled: true, askAiUsesExec: false, chatDailyCapUsd: 9, ...over }), effectiveChatCapUsd: 9 });
   const fieldOf = (html: string, key: string) => {
     const at = html.indexOf(`data-setting="${key}"`);
     const next = html.indexOf("data-setting=", at + 10);

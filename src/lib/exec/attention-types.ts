@@ -132,6 +132,8 @@ export interface AttentionFilters {
   limit?: number;
 }
 export type EmailScreenState = "none" | "ok" | "unavailable";
+/** P7a (contract §3.14, C20): the Slack screen's state on a page, ranked like EmailScreenState. */
+export type SlackScreenState = "none" | "ok" | "unavailable";
 export interface ScreenedAttentionPage {
   items: AttentionFeedItem[];
   nextCursor: string | null;
@@ -139,6 +141,15 @@ export interface ScreenedAttentionPage {
   hiddenEmail: number;
   /** "none": no email item was examined; "unavailable": the screen couldn't run, so every email thread/commitment item was withheld. */
   emailScreen: EmailScreenState;
+  /**
+   * P7a (§3.14, C20): Slack items withheld on this page (reading off, a never-read, hub or unclassified
+   * conversation, a deleted message, a muted or unwatched conversation, a finance item on a Slack surface, or an
+   * unscreenable batch). Optional in the type so every earlier page literal compiles; listScreenedAttention always
+   * sets it.
+   */
+  hiddenSlack?: number;
+  /** P7a: "none": no Slack item was examined; "unavailable": the Slack screen rows couldn't be read, so every Slack item was withheld. Always set by the accessor. */
+  slackScreen?: SlackScreenState;
 }
 /** getScreenedAttentionItem (coherence-9). "withheld": restricted, gone, missing thread row or unparseable fingerprint;
  *  "screen_unavailable": an email thread/commitment item while the rules or screen rows can't be read. */

@@ -1,6 +1,6 @@
 import type { AttentionFeedItem } from "@/lib/exec/attention-types";
 import type { ProjectHealth } from "@/lib/exec/analysis/projects";
-import type { SlackSettingsView } from "@/lib/exec/slack-types";
+import type { PickerRow, SlackReadingView, SlackSettingsView } from "@/lib/exec/slack-types";
 import type { ExecSettings, SourceRef } from "@/lib/exec/types";
 import type {
   CountsValue,
@@ -434,6 +434,10 @@ export function settings(over: Partial<ExecSettings> = {}): ExecSettings {
     askAiUsesExec: false,
     chatDailyCapUsd: 9,
     chatSchemaReady: false,
+    // P7a stage -1: Slack reading not installed (the earlier pages render as before).
+    slackReadingEnabled: false,
+    slackDailyCapUsd: 2,
+    slackReadingSchemaReady: false,
     ...over
   };
 }
@@ -480,6 +484,56 @@ export function slackSettingsView(over: Partial<SlackSettingsView> = {}): SlackS
   };
 }
 
+/** P7a (§3.16): the Slack reading view. Default: the P7a migration not applied (nothing read, the default settings). */
+export function slackReadingView(over: Partial<SlackReadingView> = {}): SlackReadingView {
+  return {
+    state: "not_installed",
+    switchOn: false,
+    settingsVersion: null,
+    watchMode: "member_only",
+    installationId: null,
+    scopes: [],
+    dmsGranted: false,
+    groupDmsGranted: false,
+    consentedAt: null,
+    discoveredAt: null,
+    revokedAt: null,
+    revokeReason: null,
+    lastErrorCode: null,
+    counts: { watched: 0, muted: 0, unwatched: 0, never: 0, neverByReason: {}, hubs: 0, dms: { watched: 0, total: 0 }, groupDms: { watched: 0, total: 0 } },
+    channels: [],
+    lastEventAt: null,
+    lastSweepAt: null,
+    pendingTriage: 0,
+    openItems: 0,
+    // DEFAULT_SETTINGS: a $2 Slack budget under a $15 daily AI budget (a fifth is $3), so $2 applies (C17).
+    capUsd: 2,
+    effectiveCapUsd: 2,
+    spentTodayUsd: null,
+    retentionDaysSlack: 90,
+    ...over
+  };
+}
+
+/** P7a (§3.16): one picker row. Default: a public channel he is in, watched. */
+export function pickerRow(over: Partial<PickerRow> = {}): PickerRow {
+  return {
+    channelId: "C0GENERAL",
+    name: "general",
+    kind: "public",
+    class: "standard",
+    financeName: false,
+    watchState: "watched",
+    muteSource: null,
+    isMember: true,
+    activity30d: null,
+    lastActivityAt: null,
+    version: "2026-11-05T12:00:00.123456+00:00",
+    canChange: true,
+    ...over
+  };
+}
+
 export function settingsView(over: Partial<SettingsView> = {}): SettingsView {
   return {
     generatedAt: NOW,
@@ -487,7 +541,8 @@ export function settingsView(over: Partial<SettingsView> = {}): SettingsView {
     version: "2026-11-05T12:00:00.123456+00:00",
     settings: settings(),
     // P5b: chat not installed (the settings() fixture above), so the view says so.
-    schema: { email: true, drafts: true, ddtext: true, chat: false },
+    // P7a: reading not installed either (settings() has slackReadingSchemaReady false).
+    schema: { email: true, drafts: true, ddtext: true, chat: false, slack: false },
     pinnedMailbox: { ok: true, data: { accountIds: ["acc_1"], emails: ["mitchell@scaledai.org"] } },
     spend: { ok: true, data: { totalUsd: 0.42, capUsd: 15, byFeature: [{ feature: "triage", usd: 0.31 }, { feature: "draft", usd: 0.11 }] } },
     recentAccess: {

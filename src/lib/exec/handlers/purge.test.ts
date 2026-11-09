@@ -15,6 +15,9 @@ vi.mock("@/lib/exec/chat-store", () => ({ purgeExpiredChatRows: vi.fn() }));
 vi.mock("@/lib/exec/slack-install", () => ({ deleteOldSlackEvents: vi.fn(), deleteExpiredOAuthStates: vi.fn() }));
 // The C18 backstop step's own purge is covered in slack-uninstall.test.ts (UN-B) against fake-slack-db.
 vi.mock("@/lib/exec/handlers/slack-uninstall", () => ({ purgeUnpurgedRevocations: vi.fn() }));
+// P7a's Slack reading step (PG01): purgeExpiredSlack's own mapping is covered in slack-read-store.test.ts (PG02) and the
+// SQL suite (RQ19); PG01 also runs the real store function against fake-slack-read-db.
+vi.mock("@/lib/exec/slack-read-store", () => ({ purgeExpiredSlack: vi.fn() }));
 
 import { createFakeExecDb, type FakeExecDb } from "@/lib/exec/__tests__/fake-exec-db";
 import { purgeOldFeedback } from "@/lib/exec/attention-feedback";
@@ -25,6 +28,7 @@ import { purgeExpiredEmailRows } from "@/lib/exec/email-store";
 import { RETENTION_DAYS, runPurge } from "@/lib/exec/handlers/purge";
 import { purgeUnpurgedRevocations } from "@/lib/exec/handlers/slack-uninstall";
 import { deleteExpiredOAuthStates, deleteOldSlackEvents } from "@/lib/exec/slack-install";
+import { purgeExpiredSlack } from "@/lib/exec/slack-read-store";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 
 // exec.purge with the P3 email step (contract §3.13 "Retention", coherence-18),
@@ -56,6 +60,8 @@ beforeEach(() => {
   vi.mocked(deleteExpiredOAuthStates).mockResolvedValue(18);
   vi.mocked(purgeUnpurgedRevocations).mockReset();
   vi.mocked(purgeUnpurgedRevocations).mockResolvedValue(19);
+  vi.mocked(purgeExpiredSlack).mockReset();
+  vi.mocked(purgeExpiredSlack).mockResolvedValue({ items: 20, messages: 21, threads: 22, markers: 23, log: 24, channels: 25, attention: 26 });
   vi.spyOn(console, "log").mockImplementation(() => undefined);
   vi.spyOn(console, "error").mockImplementation(() => undefined);
 });
@@ -66,7 +72,8 @@ const FULL_LOG =
   "draftsContentPurged=7 draftsDeleted=8 draftsClosedIdle=9 draftsChecksScheduled=10 " +
   "ddtextItems=11 ddtextAttention=12 attentionFeedback=13 " +
   "chatConversations=14 chatMessages=15 chatStaleFailed=16 " +
-  "slackEvents=17 oauthStates=18 slackRevocationsPurged=19";
+  "slackEvents=17 oauthStates=18 slackRevocationsPurged=19 " +
+  "slackItems=20 slackMessages=21 slackThreads=22 slackMarkers=23 slackLog=24 slackChannels=25 slackAttention=26";
 
 describe("exec.purge: the email and drafts steps", () => {
   it("run after the P2a/P2b steps with the run's clock and signal, and report their counts", async () => {
@@ -93,7 +100,14 @@ describe("exec.purge: the email and drafts steps", () => {
       chatStaleFailed: 16,
       slackEvents: 17,
       oauthStates: 18,
-      slackRevocationsPurged: 19
+      slackRevocationsPurged: 19,
+      slackItems: 20,
+      slackMessages: 21,
+      slackThreads: 22,
+      slackMarkers: 23,
+      slackLog: 24,
+      slackChannels: 25,
+      slackAttention: 26
     });
     expect(purgeExpiredEmailRows).toHaveBeenCalledWith(NOW, { signal });
     expect(purgeExpiredDrafts).toHaveBeenCalledWith(NOW, { signal });
@@ -105,7 +119,7 @@ describe("exec.purge: the email and drafts steps", () => {
   it("an email step failure doesn't stop the others (the drafts step still runs), and still fails the run (the job retries)", async () => {
     vi.mocked(purgeExpiredEmailRows).mockRejectedValue(new Error("exec email store: exec_email_threads purge failed: lock timeout"));
     await expect(runPurge(undefined, NOW)).rejects.toThrow(
-      "exec.purge: 1 of 14 steps failed: email: exec email store: exec_email_threads purge failed: lock timeout"
+      "exec.purge: 1 of 15 steps failed: email: exec email store: exec_email_threads purge failed: lock timeout"
     );
     expect(db.deletes).toHaveLength(5);
     expect(purgeExpiredDrafts).toHaveBeenCalledTimes(1);
@@ -116,16 +130,16 @@ describe("exec.purge: the email and drafts steps", () => {
   it("PX11: a drafts step failure fails the run after every other step ran", async () => {
     vi.mocked(purgeExpiredDrafts).mockRejectedValue(new Error("exec drafts store: exec_drafts_purge_expired failed: lock timeout"));
     await expect(runPurge(undefined, NOW)).rejects.toThrow(
-      "exec.purge: 1 of 14 steps failed: drafts: exec drafts store: exec_drafts_purge_expired failed: lock timeout"
+      "exec.purge: 1 of 15 steps failed: drafts: exec drafts store: exec_drafts_purge_expired failed: lock timeout"
     );
     expect(db.deletes).toHaveLength(5);
     expect(purgeExpiredEmailRows).toHaveBeenCalledTimes(1);
-    expect(console.log).toHaveBeenCalledWith(expect.stringContaining("draftsContentPurged=0 draftsDeleted=0 draftsClosedIdle=0 draftsChecksScheduled=0 ddtextItems=11 ddtextAttention=12 attentionFeedback=13 chatConversations=14 chatMessages=15 chatStaleFailed=16 slackEvents=17 oauthStates=18 slackRevocationsPurged=19 failed=1"));
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining("draftsContentPurged=0 draftsDeleted=0 draftsClosedIdle=0 draftsChecksScheduled=0 ddtextItems=11 ddtextAttention=12 attentionFeedback=13 chatConversations=14 chatMessages=15 chatStaleFailed=16 slackEvents=17 oauthStates=18 slackRevocationsPurged=19 slackItems=20 slackMessages=21 slackThreads=22 slackMarkers=23 slackLog=24 slackChannels=25 slackAttention=26 failed=1"));
   });
 
   it("another step failing doesn't skip the email or drafts steps", async () => {
     db.deleteResult = (d) => (d.table === "exec_access_log" ? { count: null, error: { message: "statement timeout" } } : { count: 1, error: null });
-    await expect(runPurge(undefined, NOW)).rejects.toThrow("exec.purge: 1 of 14 steps failed: accessLog");
+    await expect(runPurge(undefined, NOW)).rejects.toThrow("exec.purge: 1 of 15 steps failed: accessLog");
     expect(purgeExpiredEmailRows).toHaveBeenCalledTimes(1);
     expect(purgeExpiredDrafts).toHaveBeenCalledTimes(1);
   });
@@ -173,13 +187,13 @@ describe("exec.purge: the P5b chat step (T71, contract §3.21)", () => {
   it("a chat step failure fails the run after every other step ran; another step failing doesn't skip it", async () => {
     vi.mocked(purgeExpiredChatRows).mockRejectedValue(new Error("exec chat store: exec_conversations purge failed: lock timeout (55P03)"));
     await expect(runPurge(undefined, NOW)).rejects.toThrow(
-      "exec.purge: 1 of 14 steps failed: chat: exec chat store: exec_conversations purge failed: lock timeout (55P03)"
+      "exec.purge: 1 of 15 steps failed: chat: exec chat store: exec_conversations purge failed: lock timeout (55P03)"
     );
     expect(purgeOldFeedback).toHaveBeenCalledTimes(1);
-    expect(console.log).toHaveBeenCalledWith(expect.stringContaining("chatConversations=0 chatMessages=0 chatStaleFailed=0 slackEvents=17 oauthStates=18 slackRevocationsPurged=19 failed=1"));
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining("chatConversations=0 chatMessages=0 chatStaleFailed=0 slackEvents=17 oauthStates=18 slackRevocationsPurged=19 slackItems=20 slackMessages=21 slackThreads=22 slackMarkers=23 slackLog=24 slackChannels=25 slackAttention=26 failed=1"));
     vi.mocked(purgeExpiredChatRows).mockResolvedValue({ conversations: 1, messages: 2, staleFailed: 3 });
     vi.mocked(purgeOldFeedback).mockRejectedValue(new Error("exec_attention_feedback purge failed: down"));
-    await expect(runPurge(undefined, NOW)).rejects.toThrow("exec.purge: 1 of 14 steps failed: attentionFeedback");
+    await expect(runPurge(undefined, NOW)).rejects.toThrow("exec.purge: 1 of 15 steps failed: attentionFeedback");
     expect(purgeExpiredChatRows).toHaveBeenCalledTimes(2);
   });
 });
@@ -234,10 +248,10 @@ describe("exec.purge: the P5a DD text and feedback steps (test 28)", () => {
 
   it("a failing expiry step doesn't skip the orphan sweep or the feedback step, and still fails the run", async () => {
     vi.mocked(purgeExpiredDdtext).mockRejectedValue(new Error("exec ddtext store: purge failed: lock timeout"));
-    await expect(runPurge(undefined, NOW)).rejects.toThrow("exec.purge: 1 of 14 steps failed: ddtextItems: exec ddtext store: purge failed: lock timeout");
+    await expect(runPurge(undefined, NOW)).rejects.toThrow("exec.purge: 1 of 15 steps failed: ddtextItems: exec ddtext store: purge failed: lock timeout");
     expect(purgeOrphanDdtextAttention).toHaveBeenCalledTimes(1);
     expect(purgeOldFeedback).toHaveBeenCalledTimes(1);
-    expect(console.log).toHaveBeenCalledWith(expect.stringContaining("ddtextItems=0 ddtextAttention=12 attentionFeedback=13 chatConversations=14 chatMessages=15 chatStaleFailed=16 slackEvents=17 oauthStates=18 slackRevocationsPurged=19 failed=1"));
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining("ddtextItems=0 ddtextAttention=12 attentionFeedback=13 chatConversations=14 chatMessages=15 chatStaleFailed=16 slackEvents=17 oauthStates=18 slackRevocationsPurged=19 slackItems=20 slackMessages=21 slackThreads=22 slackMarkers=23 slackLog=24 slackChannels=25 slackAttention=26 failed=1"));
   });
 
   it("P2b's 90-day resolved-row step is unchanged: resolved rows of every kind, by resolved_at and last_seen_at only", async () => {
@@ -286,23 +300,75 @@ describe("exec.purge: the P6 Slack steps (contract §2.6; PU01-PU03)", () => {
 
   it("PU02: a Slack step's real failure is reported like any step's: the others still run and the run fails", async () => {
     vi.mocked(deleteOldSlackEvents).mockRejectedValue(new Error("exec slack store: deleteOldSlackEvents failed (57014)"));
-    await expect(runPurge(undefined, NOW)).rejects.toThrow("exec.purge: 1 of 14 steps failed: slackEvents: exec slack store: deleteOldSlackEvents failed (57014)");
+    await expect(runPurge(undefined, NOW)).rejects.toThrow("exec.purge: 1 of 15 steps failed: slackEvents: exec slack store: deleteOldSlackEvents failed (57014)");
     expect(deleteExpiredOAuthStates).toHaveBeenCalledTimes(1);
-    expect(console.log).toHaveBeenCalledWith(expect.stringContaining("slackEvents=0 oauthStates=18 slackRevocationsPurged=19 failed=1"));
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining("slackEvents=0 oauthStates=18 slackRevocationsPurged=19 slackItems=20 slackMessages=21 slackThreads=22 slackMarkers=23 slackLog=24 slackChannels=25 slackAttention=26 failed=1"));
   });
 
   it("PU03: the summary log line carries both counts, after the chat counts", async () => {
     await runPurge(undefined, NOW);
     expect(console.log).toHaveBeenCalledWith(FULL_LOG);
-    expect(FULL_LOG.endsWith("chatStaleFailed=16 slackEvents=17 oauthStates=18 slackRevocationsPurged=19")).toBe(true);
+    expect(FULL_LOG.endsWith("chatStaleFailed=16 slackEvents=17 oauthStates=18 slackRevocationsPurged=19 slackItems=20 slackMessages=21 slackThreads=22 slackMarkers=23 slackLog=24 slackChannels=25 slackAttention=26")).toBe(true);
   });
 
-  it("PU04 (fixer correctness-5): the C18 backstop runs last, with the run's clock and signal, and its failure fails the run like any step", async () => {
+  // P7a: the backstop is P6's last step; P7a's slack step (PG01) runs after it.
+  it("PU04 (fixer correctness-5): the C18 backstop runs last of P6's steps, with the run's clock and signal, and its failure fails the run like any step", async () => {
     const signal = new AbortController().signal;
     await expect(runPurge(signal, NOW)).resolves.toMatchObject({ slackRevocationsPurged: 19 });
     expect(purgeUnpurgedRevocations).toHaveBeenCalledWith(NOW, { signal });
     expect(order(deleteExpiredOAuthStates)).toBeLessThan(order(purgeUnpurgedRevocations));
+    expect(order(purgeUnpurgedRevocations)).toBeLessThan(order(purgeExpiredSlack));
     vi.mocked(purgeUnpurgedRevocations).mockRejectedValue(new Error("exec slack store: purgeInstallation failed (57014)"));
-    await expect(runPurge(undefined, NOW)).rejects.toThrow("exec.purge: 1 of 14 steps failed: slackRevocationsPurged: exec slack store: purgeInstallation failed (57014)");
+    await expect(runPurge(undefined, NOW)).rejects.toThrow("exec.purge: 1 of 15 steps failed: slackRevocationsPurged: exec slack store: purgeInstallation failed (57014)");
+  });
+});
+
+describe("exec.purge: the P7a Slack reading step (contract §3.15; PG01)", () => {
+  const order = (fn: unknown) => (fn as { mock: { invocationCallOrder: number[] } }).mock.invocationCallOrder[0];
+
+  it("PG01: runs after every P6 step with the run's clock and signal, maps the seven counts into the summary line", async () => {
+    const signal = new AbortController().signal;
+    const counts = await runPurge(signal, NOW);
+    expect(purgeExpiredSlack).toHaveBeenCalledTimes(1);
+    expect(purgeExpiredSlack).toHaveBeenCalledWith(NOW, { signal });
+    expect(order(purgeUnpurgedRevocations)).toBeLessThan(order(purgeExpiredSlack));
+    expect(counts).toMatchObject({ slackItems: 20, slackMessages: 21, slackThreads: 22, slackMarkers: 23, slackLog: 24, slackChannels: 25, slackAttention: 26 });
+    expect(console.log).toHaveBeenCalledWith(FULL_LOG);
+  });
+
+  it("PG01: a missing RPC (P7a not applied) reports zeros and the run succeeds: the real store function against fake-slack-read-db", async () => {
+    const real = await vi.importActual<typeof import("@/lib/exec/slack-read-store")>("@/lib/exec/slack-read-store");
+    const { createFakeSlackReadDb } = await import("@/lib/exec/__tests__/fake-slack-read-db");
+    const readDb = createFakeSlackReadDb({ missing: ["exec_slack_purge_expired"] });
+    const execClient = db.client as { from(t: string): unknown; rpc(fn: string, args?: unknown): unknown };
+    const routed = {
+      ...execClient,
+      rpc: (fn: string, args?: unknown) =>
+        fn === "exec_slack_purge_expired" ? (readDb.client as { rpc(fn: string, args?: unknown): unknown }).rpc(fn, args) : execClient.rpc(fn, args)
+    };
+    vi.mocked(getSupabaseAdmin).mockReturnValue(routed as unknown as SupabaseClient);
+    vi.mocked(purgeExpiredSlack).mockImplementation(real.purgeExpiredSlack);
+    await expect(runPurge(undefined, NOW)).resolves.toMatchObject({
+      slackItems: 0, slackMessages: 0, slackThreads: 0, slackMarkers: 0, slackLog: 0, slackChannels: 0, slackAttention: 0, slackRevocationsPurged: 19
+    });
+    expect(readDb.calls.map((c) => `${c.kind} ${c.target}`)).toEqual(["rpc exec_slack_purge_expired"]);
+    expect(readDb.calls[0].payload).toEqual({ p_now: NOW.toISOString() });
+    expect(console.error).not.toHaveBeenCalled();
+  });
+
+  it("PG01: a failing slack step fails the run after every other step ran; another step failing doesn't skip it", async () => {
+    vi.mocked(purgeExpiredSlack).mockRejectedValue(new Error("exec slack reading store: purgeExpiredSlack failed (57014)"));
+    await expect(runPurge(undefined, NOW)).rejects.toThrow("exec.purge: 1 of 15 steps failed: slack: exec slack reading store: purgeExpiredSlack failed (57014)");
+    expect(purgeUnpurgedRevocations).toHaveBeenCalledTimes(1);
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining("slackRevocationsPurged=19 slackItems=0 slackMessages=0 slackThreads=0 slackMarkers=0 slackLog=0 slackChannels=0 slackAttention=0 failed=1"));
+    vi.mocked(purgeExpiredSlack).mockResolvedValue({ items: 1, messages: 1, threads: 0, markers: 0, log: 0, channels: 0, attention: 1 });
+    vi.mocked(purgeUnpurgedRevocations).mockRejectedValue(new Error("exec slack store: purgeInstallation failed (57014)"));
+    await expect(runPurge(undefined, NOW)).rejects.toThrow("exec.purge: 1 of 15 steps failed: slackRevocationsPurged");
+    expect(purgeExpiredSlack).toHaveBeenCalledTimes(2);
+  });
+
+  it("PG01: an answer's non-numeric or negative count reads as 0", async () => {
+    vi.mocked(purgeExpiredSlack).mockResolvedValue({ items: -1, messages: Number.NaN, threads: 2 } as Record<string, number>);
+    await expect(runPurge(undefined, NOW)).resolves.toMatchObject({ slackItems: 0, slackMessages: 0, slackThreads: 2, slackMarkers: 0 });
   });
 });

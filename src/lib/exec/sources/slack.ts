@@ -2,6 +2,7 @@ import "server-only";
 
 import { SLACK_LIMITS, SLACK_RE } from "@/lib/exec/slack-types";
 import type { DmTarget, SlackHomeView, SlackMessageParts, SlackMethod } from "@/lib/exec/slack-types";
+import type { ConversationMeta, ConvType, ReadTarget } from "@/lib/exec/slack-read-types";
 import type { ErrorClass } from "@/lib/exec/types";
 
 // P6 Slack Web API client (contract §3.5, K14; Area B; server-only). The one
@@ -66,7 +67,9 @@ const AUTH_CODES: ReadonlySet<string> = new Set([
 const FATAL_CODES: ReadonlySet<string> = new Set([
   "channel_not_found", "not_in_channel", "msg_too_long", "invalid_blocks", "invalid_arguments", "message_not_found",
   "cant_update_message", "edit_window_closed", "invalid_auth_code", "invalid_code", "bad_redirect_uri", "bad_client_secret",
-  "oauth_authorization_url_mismatch", "invalid_team_for_non_distributed_app"
+  "oauth_authorization_url_mismatch", "invalid_team_for_non_distributed_app",
+  // P7a (§3.6.1; documentation: an unlisted code is fatal anyway, C26).
+  "invalid_types", "thread_not_found", "user_not_found", "bot_not_found", "invalid_cursor", "is_archived"
 ]);
 /** Slack's transient codes, plus this module's own transport codes. */
 const RETRYABLE_CODES: ReadonlySet<string> = new Set([
@@ -273,6 +276,9 @@ export interface OAuthAccessResult {
   ok: true; accessToken: string; tokenType: string; scope: string[]; botUserId: string | null; appId: string | null;
   teamId: string | null; isEnterpriseInstall: boolean; enterprisePresent: boolean;
   authedUserId: string | null; authedUserToken: string | null;   // present only if Slack issued one (K1: revoked at once)
+  /** P7a (§3.6.1): authed_user.token_type and authed_user.scope split on "," (trimmed, deduplicated), null when Slack sent none.
+   *  Optional in the type so P6's literals compile; exchangeOAuthCode always fills both, and undefined reads as "not issued". */
+  authedUserTokenType?: string | null; authedUserScope?: string[] | null;
 }
 
 /** oauth.v2.access with HTTP Basic (clientId:clientSecret), form body code + redirect_uri; never a bearer header. */
@@ -298,7 +304,11 @@ export async function exchangeOAuthCode(input: { clientId: string; clientSecret:
     isEnterpriseInstall: json.is_enterprise_install === true,
     enterprisePresent: json.enterprise !== null && json.enterprise !== undefined && json.enterprise !== false,
     authedUserId: authed ? str(authed.id) : null,
-    authedUserToken: authed ? str(authed.access_token) : null
+    authedUserToken: authed ? str(authed.access_token) : null,
+    authedUserTokenType: authed ? str(authed.token_type) : null,
+    authedUserScope: authed && typeof authed.scope === "string"
+      ? [...new Set(authed.scope.split(",").map((x) => x.trim()).filter((x) => x.length > 0))]
+      : null
   };
 }
 
@@ -488,4 +498,314 @@ export async function revokeToken(token: string, opts?: SlackCallOptions): Promi
   }
   if (json.revoked === true) return "revoked";
   throw badResponse(method);
+}
+
+// --- P7a reads with his user token (P7a contract §3.6.1; Area B) -------------------------------
+// The method literals of these reads live in this file only (B-P7a-5). HTTP rules as P6's: form-encoded with the bearer
+// header, nothing logged, the 1 MiB body cap. Every read is read-only (§0.3 rule 8): no write method takes the user token.
+// What leaves a read is ids, ts values, enums, booleans and counts, plus (readHistory / readReplies only) the message text,
+// blocks and attachments the triage job reads in memory; users.list returns bot ids only, users.info one clipped label.
+
+const CHANNEL_ID = /^[CGD][A-Z0-9]{2,30}$/;
+const TEAM_ID = /^[TE][A-Z0-9]{2,30}$/;
+const CHANNEL_NAME = /^[a-z0-9][a-z0-9._-]{0,79}$/;
+/** An id-like value (a bot or app id) we keep as is; any other truthy value still marks the message as a bot's / an app's. */
+const ID_LIKE = /^[A-Z0-9]{2,40}$/;
+const SUBTYPE_SHAPE = /^[a-z0-9_]{1,60}$/;
+const REACTED_MAX = 50;
+const LABEL_MAX = 80;
+const PERMALINK_MAX = 500;
+/** exec_slack_items_permalink_check's shape, anchored, plus the two parameters chat.getPermalink adds to a reply (thread_ts, cid).
+ *  Every URL it accepts is one refs.ts#isAllowedLinkUrl accepts too (https, a well-formed slack.com subdomain, /archives/, only
+ *  those parameters); §3.5 keeps refs.ts out of this file, so SR09 runs both on the same fixtures. */
+const PERMALINK_RE =
+  /^https:\/\/[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.slack\.com\/archives\/[CGD][A-Z0-9]{2,30}\/p[0-9]{10,20}(?:\?(?:thread_ts=[0-9]{1,12}\.[0-9]{1,8}(?:&cid=[CGD][A-Z0-9]{2,30})?|cid=[CGD][A-Z0-9]{2,30}(?:&thread_ts=[0-9]{1,12}\.[0-9]{1,8})?))?$/;
+/** conversations.list / users.conversations types for a ConvType. */
+const SLACK_TYPE: Readonly<Record<ConvType, string>> = Object.freeze({ channel: "public_channel", group: "private_channel", im: "im", mpim: "mpim" });
+const NOT_FOUND_CODES: ReadonlySet<string> = new Set(["channel_not_found"]);
+const PERMALINK_GONE_CODES: ReadonlySet<string> = new Set(["message_not_found", "channel_not_found"]);
+const BOTS_INFO_NULL_CODES: ReadonlySet<string> = new Set(["bot_not_found", "missing_scope"]);
+
+/** A page size: a whole number in [1, max], always sent (never Slack's default). */
+function pageLimit(limit: unknown, max: number): string {
+  const n = typeof limit === "number" && Number.isFinite(limit) ? Math.floor(limit) : max;
+  return String(Math.min(max, Math.max(1, n)));
+}
+
+function typesParam(types: readonly ConvType[]): string | null {
+  const out: string[] = [];
+  for (const t of Array.isArray(types) ? types : []) {
+    const s = SLACK_TYPE[t as ConvType];
+    if (s !== undefined && !out.includes(s)) out.push(s);
+  }
+  return out.length > 0 ? out.join(",") : null;
+}
+
+const strOf = (v: unknown, re: RegExp): string | null => (typeof v === "string" && re.test(v) ? v : null);
+const nextCursorOf = (json: Json): string | null => (isRecord(json.response_metadata) ? str(json.response_metadata.next_cursor) : null);
+const tsArg = (v: string | null | undefined): FormValue => (typeof v === "string" && SLACK_RE.ts.test(v) ? v : undefined);
+
+/** A conversation object (conversations.list / conversations.info) → its metadata, or null when it has no usable id.
+ *  The type comes from is_im / is_mpim / is_private (an MPIM also says is_group, so it is checked first). */
+function conversationOf(c: unknown): SlackConversation | null {
+  if (!isRecord(c)) return null;
+  const id = strOf(c.id, CHANNEL_ID);
+  if (id === null) return null;
+  const convType: ConvType = c.is_im === true ? "im" : c.is_mpim === true ? "mpim" : c.is_private === true || c.is_group === true ? "group" : "channel";
+  const named = convType === "channel" || convType === "group";
+  return {
+    id,
+    convType,
+    name: named ? strOf(c.name, CHANNEL_NAME) : null,
+    // An IM always holds him; anything else says so itself.
+    isMember: convType === "im" ? true : c.is_member === true,
+    isPrivate: convType === "channel" ? c.is_private === true : true,
+    isExtShared: c.is_ext_shared === true,
+    isPendingExtShared: c.is_pending_ext_shared === true,
+    isArchived: c.is_archived === true,
+    imUser: convType === "im" ? strOf(c.user, SLACK_RE.user) : null,
+    imUserDeleted: convType === "im" && c.is_user_deleted === true
+  };
+}
+
+export interface SlackConversation extends ConversationMeta { imUserDeleted: boolean }
+/** conversations.list (Tier 2): types channel→public_channel, group→private_channel, im, mpim; limit ≤ 200; exclude_archived.
+ *  name only for channel/group and only when it matches /^[a-z0-9][a-z0-9._-]{0,79}$/ (else null); imUser for im. */
+export async function listConversations(t: ReadTarget, q: { types: readonly ConvType[]; cursor?: string | null; limit: number;
+  excludeArchived: boolean }, opts?: SlackCallOptions): Promise<{ items: SlackConversation[]; nextCursor: string | null }> {
+  const method: SlackMethod = "conversations.list";
+  const types = typesParam(q.types);
+  // No type asked: nothing to list (Slack's default would be public channels nobody requested).
+  if (types === null) return { items: [], nextCursor: null };
+  const wanted = new Set<ConvType>(q.types);
+  const json = await callSlack(method, bearer(method, t.userToken), {
+    form: { types, limit: pageLimit(q.limit, 200), exclude_archived: q.excludeArchived === true ? "true" : "false", cursor: str(q.cursor) }
+  }, opts);
+  const items: SlackConversation[] = [];
+  for (const c of Array.isArray(json.channels) ? json.channels : []) {
+    const conv = conversationOf(c);
+    // A type the caller didn't ask for is never classified (C26).
+    if (conv !== null && wanted.has(conv.convType)) items.push(conv);
+  }
+  return { items, nextCursor: nextCursorOf(json) };
+}
+
+/** users.conversations (Tier 3): ids only. */
+export async function listMemberConversationIds(t: ReadTarget, q: { types: readonly ConvType[]; cursor?: string | null; limit: number;
+  excludeMuted: boolean }, opts?: SlackCallOptions): Promise<{ ids: string[]; nextCursor: string | null }> {
+  const method: SlackMethod = "users.conversations";
+  const types = typesParam(q.types);
+  if (types === null) return { ids: [], nextCursor: null };
+  const json = await callSlack(method, bearer(method, t.userToken), {
+    form: { types, limit: pageLimit(q.limit, 200), exclude_muted: q.excludeMuted === true ? "true" : "false", cursor: str(q.cursor) }
+  }, opts);
+  const ids: string[] = [];
+  for (const c of Array.isArray(json.channels) ? json.channels : []) {
+    const id = isRecord(c) ? strOf(c.id, CHANNEL_ID) : null;
+    if (id !== null && !ids.includes(id)) ids.push(id);
+  }
+  return { ids, nextCursor: nextCursorOf(json) };
+}
+
+/** conversations.info (Tier 3). channel_not_found → null. */
+export async function getConversationInfo(t: ReadTarget, channel: string, opts?: SlackCallOptions): Promise<SlackConversation | null> {
+  const method: SlackMethod = "conversations.info";
+  if (typeof channel !== "string" || !CHANNEL_ID.test(channel)) throw new SlackApiError(method, "invalid_arguments", { errorClass: "fatal" });
+  let json: Json;
+  try {
+    json = await callSlack(method, bearer(method, t.userToken), { form: { channel } }, opts);
+  } catch (err) {
+    if (err instanceof SlackApiError && NOT_FOUND_CODES.has(err.code)) return null;
+    throw err;
+  }
+  const conv = conversationOf(json.channel);
+  if (conv === null || conv.id !== channel) throw badResponse(method);
+  return conv;
+}
+
+/** users.list (Tier 2), limit ≤ 200: ONLY the ids of members with is_bot (and USLACKBOT); no other field leaves the function. */
+export async function listBotUserIds(t: ReadTarget, q: { cursor?: string | null; limit: number }, opts?: SlackCallOptions):
+  Promise<{ botUserIds: string[]; nextCursor: string | null }> {
+  const method: SlackMethod = "users.list";
+  const json = await callSlack(method, bearer(method, t.userToken), { form: { limit: pageLimit(q.limit, 200), cursor: str(q.cursor) } }, opts);
+  const botUserIds: string[] = [];
+  for (const m of Array.isArray(json.members) ? json.members : []) {
+    if (!isRecord(m)) continue;
+    const id = strOf(m.id, SLACK_RE.user);
+    if (id !== null && (m.is_bot === true || id === "USLACKBOT") && !botUserIds.includes(id)) botUserIds.push(id);
+  }
+  return { botUserIds, nextCursor: nextCursorOf(json) };
+}
+
+/** Code points a label never carries: C0 / C1 controls and DEL, the bidi marks and embeddings / isolates (U+061C,
+ *  U+200E–U+200F, U+202A–U+202E, U+2066–U+2069), zero-width and invisible formatting (U+200B–U+200D, U+2060–U+2064,
+ *  U+FEFF), line / paragraph separators (U+2028–U+2029), interlinear annotation (U+FFF9–U+FFFB) and tag characters
+ *  (U+E0000–U+E007F). Compared as numbers: no escape sequence is typed anywhere. */
+function isStrippedCodePoint(c: number): boolean {
+  return c <= 0x1f || (c >= 0x7f && c <= 0x9f) || c === 0x061c || (c >= 0x200b && c <= 0x200f) || (c >= 0x2028 && c <= 0x202e)
+    || (c >= 0x2060 && c <= 0x2064) || (c >= 0x2066 && c <= 0x2069) || c === 0xfeff || (c >= 0xfff9 && c <= 0xfffb)
+    || (c >= 0xe0000 && c <= 0xe007f);
+}
+
+/** A display label: controls and bidi stripped, whitespace collapsed, clipped to 80 UTF-16 units without splitting a code point. */
+function cleanLabel(raw: unknown): string {
+  if (typeof raw !== "string") return "";
+  let kept = "";
+  for (const ch of raw) {
+    const c = ch.codePointAt(0) as number;
+    if (!isStrippedCodePoint(c)) kept += ch;
+  }
+  const collapsed = kept.replace(/\s+/g, " ").trim();
+  let out = "";
+  for (const ch of collapsed) {
+    if (out.length + ch.length > LABEL_MAX) break;
+    out += ch;
+  }
+  return out.trim();
+}
+
+/** users.info (Tier 4). user_not_found → null. label = profile.display_name || profile.real_name || name, control/bidi stripped,
+ *  clipped to 80; teamId from user.team_id. */
+export async function getUserBrief(t: ReadTarget, userId: string, opts?: SlackCallOptions):
+  Promise<{ id: string; isBot: boolean; deleted: boolean; teamId: string | null; label: string } | null> {
+  const method: SlackMethod = "users.info";
+  if (typeof userId !== "string" || !SLACK_RE.user.test(userId)) throw new SlackApiError(method, "invalid_arguments", { errorClass: "fatal" });
+  let json: Json;
+  try {
+    json = await callSlack(method, bearer(method, t.userToken), { form: { user: userId } }, opts);
+  } catch (err) {
+    if (err instanceof SlackApiError && err.code === "user_not_found") return null;
+    throw err;
+  }
+  const user = isRecord(json.user) ? json.user : null;
+  const id = user ? strOf(user.id, SLACK_RE.user) : null;
+  if (user === null || id === null || id !== userId) throw badResponse(method);
+  const profile = isRecord(user.profile) ? user.profile : {};
+  const label = cleanLabel(profile.display_name) || cleanLabel(profile.real_name) || cleanLabel(user.name);
+  return { id, isBot: user.is_bot === true, deleted: user.deleted === true, teamId: strOf(user.team_id, TEAM_ID), label };
+}
+
+export interface SlackReadMessage {
+  ts: string; threadTs: string | null; user: string | null; userTeam: string | null; botId: string | null; botProfile: boolean;
+  appId: string | null; subtype: string | null; hidden: boolean; text: string | null; blocks: unknown[] | null;
+  attachments: unknown[] | null; replyCount: number; latestReply: string | null; parentUserId: string | null;
+  editedTs: string | null; reactedUserIds: string[] /* ≤ 50, SLACK_RE.user */; fileCount: number;
+}
+
+/** A truthy id field: kept when well-formed or id-like, else the fallback, so a malformed value still marks a bot's / app's message. */
+function idFlag(v: unknown, re: RegExp, fallback: string): string | null {
+  if (!v) return null;
+  if (typeof v === "string" && (re.test(v) || ID_LIKE.test(v))) return v;
+  return fallback;
+}
+
+/** One history / replies message → SlackReadMessage, or null when it has no usable ts. File names are never read. */
+function readMessageOf(m: unknown): SlackReadMessage | null {
+  if (!isRecord(m)) return null;
+  const ts = strOf(m.ts, SLACK_RE.ts);
+  if (ts === null) return null;
+  const reacted: string[] = [];
+  for (const r of Array.isArray(m.reactions) ? m.reactions : []) {
+    if (!isRecord(r)) continue;
+    for (const u of Array.isArray(r.users) ? r.users : []) {
+      if (reacted.length >= REACTED_MAX) break;
+      if (typeof u === "string" && SLACK_RE.user.test(u) && !reacted.includes(u)) reacted.push(u);
+    }
+  }
+  const subtype = typeof m.subtype === "string" && m.subtype.length > 0 ? (SUBTYPE_SHAPE.test(m.subtype) ? m.subtype : "unknown") : null;
+  return {
+    ts,
+    threadTs: strOf(m.thread_ts, SLACK_RE.ts),
+    user: strOf(m.user, SLACK_RE.user),
+    userTeam: strOf(m.user_team, TEAM_ID) ?? strOf(m.team, TEAM_ID),
+    botId: idFlag(m.bot_id, SLACK_RE.bot, "B00"),
+    botProfile: m.bot_profile !== undefined && m.bot_profile !== null,
+    appId: idFlag(m.app_id, SLACK_RE.app, "A00"),
+    subtype,
+    hidden: m.hidden === true,
+    text: typeof m.text === "string" ? m.text : null,
+    blocks: Array.isArray(m.blocks) ? m.blocks : null,
+    attachments: Array.isArray(m.attachments) ? m.attachments : null,
+    replyCount: typeof m.reply_count === "number" && Number.isSafeInteger(m.reply_count) && m.reply_count > 0 ? m.reply_count : 0,
+    latestReply: strOf(m.latest_reply, SLACK_RE.ts),
+    parentUserId: strOf(m.parent_user_id, SLACK_RE.user),
+    editedTs: isRecord(m.edited) ? strOf(m.edited.ts, SLACK_RE.ts) : null,
+    reactedUserIds: reacted,
+    fileCount: Array.isArray(m.files) ? m.files.length : 0
+  };
+}
+
+function pageOf(json: Json): { messages: SlackReadMessage[]; hasMore: boolean; nextCursor: string | null; isLimited: boolean } {
+  const messages: SlackReadMessage[] = [];
+  for (const m of messagesOf(json)) {
+    const msg = readMessageOf(m);
+    if (msg !== null) messages.push(msg);
+  }
+  return { messages, hasMore: json.has_more === true, nextCursor: nextCursorOf(json), isLimited: json.is_limited === true };
+}
+
+function windowForm(q: { channel: string; oldest?: string | null; latest?: string | null; inclusive?: boolean; limit: number; cursor?: string | null }):
+  Record<string, FormValue> {
+  return {
+    channel: q.channel,
+    oldest: tsArg(q.oldest),
+    latest: tsArg(q.latest),
+    inclusive: typeof q.inclusive === "boolean" ? (q.inclusive ? "true" : "false") : undefined,
+    limit: pageLimit(q.limit, 200),
+    cursor: str(q.cursor)
+  };
+}
+
+/** conversations.history / conversations.replies (Tier 3), limit ≤ 200, explicit always; never persists cursors. */
+export async function readHistory(t: ReadTarget, q: { channel: string; oldest?: string | null; latest?: string | null;
+  inclusive?: boolean; limit: number; cursor?: string | null }, opts?: SlackCallOptions):
+  Promise<{ messages: SlackReadMessage[]; hasMore: boolean; nextCursor: string | null; isLimited: boolean }> {
+  const method: SlackMethod = "conversations.history";
+  if (typeof q.channel !== "string" || !CHANNEL_ID.test(q.channel)) throw new SlackApiError(method, "invalid_arguments", { errorClass: "fatal" });
+  return pageOf(await callSlack(method, bearer(method, t.userToken), { form: windowForm(q) }, opts));
+}
+
+export async function readReplies(t: ReadTarget, q: { channel: string; ts: string; oldest?: string | null; latest?: string | null;
+  inclusive?: boolean; limit: number; cursor?: string | null }, opts?: SlackCallOptions):
+  Promise<{ messages: SlackReadMessage[]; hasMore: boolean; nextCursor: string | null; isLimited: boolean }> {
+  const method: SlackMethod = "conversations.replies";
+  if (typeof q.channel !== "string" || !CHANNEL_ID.test(q.channel) || typeof q.ts !== "string" || !SLACK_RE.ts.test(q.ts)) {
+    throw new SlackApiError(method, "invalid_arguments", { errorClass: "fatal" });
+  }
+  const form = windowForm(q);
+  return pageOf(await callSlack(method, bearer(method, t.userToken), { form: { channel: form.channel, ts: q.ts, ...form } }, opts));
+}
+
+/** chat.getPermalink (special tier, no scope) with the user token; message_not_found / channel_not_found → null; a URL that fails
+ *  isAllowedLinkUrl or the exec_slack_items_permalink_check shape → null. */
+export async function getPermalink(t: ReadTarget, channel: string, ts: string, opts?: SlackCallOptions): Promise<string | null> {
+  const method: SlackMethod = "chat.getPermalink";
+  if (typeof channel !== "string" || !CHANNEL_ID.test(channel) || typeof ts !== "string" || !SLACK_RE.ts.test(ts)) {
+    throw new SlackApiError(method, "invalid_arguments", { errorClass: "fatal" });
+  }
+  let json: Json;
+  try {
+    json = await callSlack(method, bearer(method, t.userToken), { form: { channel, message_ts: ts } }, opts);
+  } catch (err) {
+    if (err instanceof SlackApiError && PERMALINK_GONE_CODES.has(err.code)) return null;
+    throw err;
+  }
+  const url = json.permalink;
+  return typeof url === "string" && url.length <= PERMALINK_MAX && PERMALINK_RE.test(url) ? url : null;
+}
+
+/** bots.info with a bot token (the DD bot's). bot_not_found / missing_scope → null (never throws for those). */
+export async function botsInfo(botToken: string, botId: string, opts?: SlackCallOptions): Promise<{ appId: string | null; userId: string | null } | null> {
+  const method: SlackMethod = "bots.info";
+  if (typeof botId !== "string" || !SLACK_RE.bot.test(botId)) throw new SlackApiError(method, "invalid_arguments", { errorClass: "fatal" });
+  let json: Json;
+  try {
+    json = await callSlack(method, bearer(method, botToken), { form: { bot: botId } }, opts);
+  } catch (err) {
+    if (err instanceof SlackApiError && BOTS_INFO_NULL_CODES.has(err.code)) return null;
+    throw err;
+  }
+  const bot = isRecord(json.bot) ? json.bot : null;
+  if (bot === null) throw badResponse(method);
+  return { appId: strOf(bot.app_id, SLACK_RE.app), userId: strOf(bot.user_id, SLACK_RE.user) };
 }

@@ -19,6 +19,8 @@ import {
   runTriageModel,
   triageContentHash,
   triagePromptTokens,
+  dueDateToUtcIso,
+  verbatimEvidence,
   type PrefilterInput
 } from "@/lib/exec/triage/email";
 import { renderTriageInput, type RenderedTriageInput } from "@/lib/exec/triage/email-text";
@@ -781,5 +783,27 @@ describe("runTriageModel", () => {
     controller.abort(reason);
     mockCall.mockRejectedValue(reason);
     await expect(runTriageModel(principal, rendered(), { firstTriage: false, signal: controller.signal })).rejects.toBe(reason);
+  });
+});
+
+// P7a (contract §3.20.1): the two helpers Slack triage reuses, exported unchanged in behaviour.
+describe("P7a exports: verbatimEvidence and dueDateToUtcIso", () => {
+  it("verbatimEvidence returns the message's own span, folds typographic quotes, and refuses short or absent quotes", () => {
+    const rsq = String.fromCodePoint(0x2019);
+    expect(verbatimEvidence(`I${rsq}ll send the deck by Friday`, "I'll send the deck")).toEqual({ excerpt: `I${rsq}ll send the deck`, code: null });
+    expect(verbatimEvidence("I will send it", "send")).toEqual({ excerpt: null, code: "too_short" });
+    expect(verbatimEvidence("I will send it", "")).toEqual({ excerpt: null, code: "empty" });
+    expect(verbatimEvidence("I will send it", "we will mail it")).toEqual({ excerpt: null, code: "not_found" });
+  });
+
+  it("dueDateToUtcIso: 17:00 in his zone inside [sent - 1 day, sent + 400 days]; anything else null", () => {
+    const sent = Date.parse("2026-11-08T15:00:00.000Z");
+    expect(dueDateToUtcIso("2026-11-12", sent, "America/New_York")).toBe("2026-11-12T22:00:00.000Z");
+    expect(dueDateToUtcIso("2026-11-07", sent, "America/New_York")).toBe("2026-11-07T22:00:00.000Z");
+    expect(dueDateToUtcIso("2026-11-06", sent, "America/New_York")).toBeNull();
+    expect(dueDateToUtcIso("2028-01-01", sent, "America/New_York")).toBeNull();
+    expect(dueDateToUtcIso("2026-02-30", sent, "UTC")).toBeNull();
+    expect(dueDateToUtcIso("next week", sent, "UTC")).toBeNull();
+    expect(dueDateToUtcIso("2026-11-12", Number.NaN, "UTC")).toBeNull();
   });
 });
